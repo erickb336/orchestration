@@ -721,37 +721,37 @@ The lead owns the docs, README, PROJECT_SPEC, the ORC-005 note, scripts/real-run
 
 
 ## Touched files
-- /Users/erickb336/workspace/Orchestration/src/domain/types.ts
-- /Users/erickb336/workspace/Orchestration/src/domain/model.ts
-- /Users/erickb336/workspace/Orchestration/src/domain/commands.ts
-- /Users/erickb336/workspace/Orchestration/src/domain/seed.ts
-- /Users/erickb336/workspace/Orchestration/server/store.ts
-- /Users/erickb336/workspace/Orchestration/server/envelope.ts
-- /Users/erickb336/workspace/Orchestration/server/scheduler.ts
-- /Users/erickb336/workspace/Orchestration/server/runtimes/fake.ts
-- /Users/erickb336/workspace/Orchestration/server/testing/scripted.ts
-- /Users/erickb336/workspace/Orchestration/src/ui/App.tsx
-- /Users/erickb336/workspace/Orchestration/src/ui/LeadDrawer.tsx (new)
-- /Users/erickb336/workspace/Orchestration/src/ui/SteeringChanges.tsx (new)
-- /Users/erickb336/workspace/Orchestration/src/ui/Conversation.tsx
-- /Users/erickb336/workspace/Orchestration/src/ui/Board.tsx
-- /Users/erickb336/workspace/Orchestration/src/ui/TaskDetail.tsx
-- /Users/erickb336/workspace/Orchestration/src/ui/Overview.tsx
-- /Users/erickb336/workspace/Orchestration/src/ui/Settings.tsx
-- /Users/erickb336/workspace/Orchestration/src/ui/common.tsx
-- /Users/erickb336/workspace/Orchestration/src/ui/notifications.ts
-- /Users/erickb336/workspace/Orchestration/src/ui/styles.css
-- /Users/erickb336/workspace/Orchestration/src/domain/steering.test.ts (new)
-- /Users/erickb336/workspace/Orchestration/server/steering.test.ts (new)
-- /Users/erickb336/workspace/Orchestration/server/teamloop.test.ts (envelope assertions at ~line 290)
-- /Users/erickb336/workspace/Orchestration/server/service.test.ts (simulated steering case)
-- /Users/erickb336/workspace/Orchestration/src/domain/model.test.ts (column/label/dispatch-order cases)
-- /Users/erickb336/workspace/Orchestration/scripts/real-run-test.mjs (--lead mode)
-- /Users/erickb336/workspace/Orchestration/docs/tasks/ORC-009.md (new)
-- /Users/erickb336/workspace/Orchestration/docs/tasks/ORC-005.md (appended supersession note only; executed text unchanged)
-- /Users/erickb336/workspace/Orchestration/docs/PROJECT_SPEC.md (Deferred state)
-- /Users/erickb336/workspace/Orchestration/README.md (steering capability and prompt-injection note)
-- /Users/erickb336/workspace/Orchestration/evidence/ (real Claude-led and Codex-led steering evidence JSON)
+- src/domain/types.ts
+- src/domain/model.ts
+- src/domain/commands.ts
+- src/domain/seed.ts
+- server/store.ts
+- server/envelope.ts
+- server/scheduler.ts
+- server/runtimes/fake.ts
+- server/testing/scripted.ts
+- src/ui/App.tsx
+- src/ui/LeadDrawer.tsx (new)
+- src/ui/SteeringChanges.tsx (new)
+- src/ui/Conversation.tsx
+- src/ui/Board.tsx
+- src/ui/TaskDetail.tsx
+- src/ui/Overview.tsx
+- src/ui/Settings.tsx
+- src/ui/common.tsx
+- src/ui/notifications.ts
+- src/ui/styles.css
+- src/domain/steering.test.ts (new)
+- server/steering.test.ts (new)
+- server/teamloop.test.ts (envelope assertions at ~line 290)
+- server/service.test.ts (simulated steering case)
+- src/domain/model.test.ts (column/label/dispatch-order cases)
+- scripts/real-run-test.mjs (--lead mode)
+- docs/tasks/ORC-009.md (new)
+- docs/tasks/ORC-005.md (appended supersession note only; executed text unchanged)
+- docs/PROJECT_SPEC.md (Deferred state)
+- README.md (steering capability and prompt-injection note)
+- evidence/ (real Claude-led and Codex-led steering evidence JSON)
 
 ## Test plan
 ## Harness
