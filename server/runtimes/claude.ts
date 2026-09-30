@@ -65,7 +65,37 @@ function mcpServerOf(toolName: string): string | undefined {
 const normalizeServer = (name: string) => name.replace(/[^A-Za-z0-9_-]/g, "_");
 
 export const CLAUDE_AUTH_MESSAGE =
-  "Claude needs an Anthropic API key: set ANTHROPIC_API_KEY (or Bedrock/Vertex credentials) and restart the service. Claude.ai subscription login cannot be used by third-party apps.";
+  "Claude could not sign in. Set ANTHROPIC_API_KEY (or Bedrock, Vertex, or Foundry credentials), or opt in to your own subscription token with ORCHESTRATION_CLAUDE_AUTH=subscription and CLAUDE_CODE_OAUTH_TOKEN (see the README), then restart the service.";
+
+/**
+ * Opt-in: the user's own Claude subscription token (`claude setup-token`) for their personal use.
+ * Anthropic's Agent SDK docs say third-party apps may not offer claude.ai login unless approved, so
+ * this is never a default: it needs both variables, and Settings quotes the rule when it is on.
+ */
+export const CLAUDE_AUTH_SWITCH = "ORCHESTRATION_CLAUDE_AUTH";
+export const CLAUDE_SUBSCRIPTION_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN";
+const ANTHROPIC_RULE =
+  "Anthropic's Agent SDK docs say tools built on it may not offer claude.ai login unless Anthropic approved it; using your own token here is your decision.";
+
+export function claudeAuthMode(env: NodeJS.ProcessEnv): "subscription" | "default" {
+  return env[CLAUDE_AUTH_SWITCH]?.trim().toLowerCase() === "subscription" ? "subscription" : "default";
+}
+
+/**
+ * The environment a Claude worker or lead run receives. Exactly one way of signing in is passed on:
+ * in subscription mode the token (API key and cloud-provider flags removed), otherwise everything
+ * except the token, so a token set for other scripts is never used by accident. GitHub tokens are
+ * always removed: only the service talks to GitHub.
+ */
+export function claudeWorkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out = withoutGitHubTokens(env);
+  if (claudeAuthMode(env) === "subscription") {
+    delete out.ANTHROPIC_API_KEY;
+    delete out.ANTHROPIC_AUTH_TOKEN;
+    for (const [flag] of CLOUD_PROVIDER_FLAGS) delete out[flag];
+  } else delete out[CLAUDE_SUBSCRIPTION_TOKEN];
+  return out;
+}
 
 export const CLAUDE_MODEL_ALIASES: CatalogModel[] = [
   { id: "sonnet", label: "Claude Sonnet (latest alias)" },
@@ -444,6 +474,20 @@ export class ClaudeAdapter implements RuntimeAdapter {
           checkedAt,
         };
       }
+      if (claudeAuthMode(this.env) === "subscription") {
+        if (isTruthyFlag(this.env[CLAUDE_SUBSCRIPTION_TOKEN])) {
+          return {
+            status: "ready",
+            detail: `${this.label} with your own Claude subscription (${CLAUDE_SUBSCRIPTION_TOKEN}; you opted in with ${CLAUDE_AUTH_SWITCH}=subscription). For personal use: runs count against your plan's usage limits, shared with your own Claude Code, and cost figures are estimates you are not billed for. ${ANTHROPIC_RULE} Any API key or cloud setting is not passed to workers. The token is checked on the first run.`,
+            checkedAt,
+          };
+        }
+        return {
+          status: "not-configured",
+          detail: `${CLAUDE_AUTH_SWITCH}=subscription is set, but ${CLAUDE_SUBSCRIPTION_TOKEN} is not. Run \`claude setup-token\`, set ${CLAUDE_SUBSCRIPTION_TOKEN} in the environment the service starts from, and restart it.`,
+          checkedAt,
+        };
+      }
       if (isTruthyFlag(this.env.ANTHROPIC_API_KEY)) {
         return {
           status: "ready",
@@ -462,8 +506,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       }
       return {
         status: "not-configured",
-        detail:
-          "Claude workers need an Anthropic API key: set ANTHROPIC_API_KEY (or enable Bedrock, Vertex, or Foundry credentials) and restart the service. Claude.ai subscription login cannot be used by third-party apps.",
+        detail: isTruthyFlag(this.env[CLAUDE_SUBSCRIPTION_TOKEN])
+          ? `${CLAUDE_SUBSCRIPTION_TOKEN} is set but not used. To run Claude on your own subscription (personal use), also set ${CLAUDE_AUTH_SWITCH}=subscription and restart. ${ANTHROPIC_RULE} Otherwise set ANTHROPIC_API_KEY (or Bedrock, Vertex, or Foundry credentials).`
+          : `Claude workers need an Anthropic API key: set ANTHROPIC_API_KEY (or enable Bedrock, Vertex, or Foundry credentials) and restart the service. To use your own Claude subscription instead, see the README (opt-in, personal use).`,
         checkedAt,
       };
     } catch (err) {
@@ -591,9 +636,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       canUseTool,
       hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
       // Env REPLACES the child environment (per sdk.d.ts), so pass everything through, plus our flags.
-      // GitHub tokens are removed: only the service talks to GitHub.
+      // One way of signing in is passed on, and GitHub tokens are removed (see claudeWorkerEnv).
       env: {
-        ...withoutGitHubTokens(this.env),
+        ...claudeWorkerEnv(this.env),
         CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: "1",
         CLAUDE_AGENT_SDK_CLIENT_APP: "orchestration/0.1.0",
       },

@@ -10,11 +10,13 @@ import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   CLAUDE_AUTH_MESSAGE,
   ClaudeAdapter,
+  claudeWorkerEnv,
   type ClaudeAdapterOptions,
   type ClaudeQueryFn,
   createWorkspaceGuard,
   toolPolicy,
 } from "./claude";
+import { redact } from "../redact";
 import type { AdapterEvent, Assignment } from "./types";
 
 // --- scripted fake SDK stream ----------------------------------------------------------------
@@ -225,6 +227,30 @@ describe("ClaudeAdapter", () => {
       expect(calls[0].options.env?.ANTHROPIC_API_KEY).toBe("sk-ant-test");
       await adapter.shutdown();
     }
+  });
+
+  it("passes exactly one way of signing in: the subscription token only when opted in (ORC-010)", async () => {
+    const base = { ANTHROPIC_API_KEY: "sk-ant-key", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-token", CLAUDE_CODE_USE_BEDROCK: "1", PATH: "/usr/bin" };
+    const sub = claudeWorkerEnv({ ...base, ORCHESTRATION_CLAUDE_AUTH: "subscription", ANTHROPIC_AUTH_TOKEN: "x" });
+    expect(sub.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-token");
+    expect([sub.ANTHROPIC_API_KEY, sub.ANTHROPIC_AUTH_TOKEN, sub.CLAUDE_CODE_USE_BEDROCK]).toEqual([undefined, undefined, undefined]);
+    const def = claudeWorkerEnv(base);
+    expect(def.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined(); // a token set for other scripts is never used by accident
+    expect(def.ANTHROPIC_API_KEY).toBe("sk-ant-key");
+    // And the adapter really hands that environment to the run.
+    const { adapter, calls } = setup({ env: { ...base, ORCHESTRATION_CLAUDE_AUTH: "Subscription", GH_TOKEN: "g" } });
+    adapter.start(assignment());
+    await waitFor(() => calls.length === 1);
+    const env = calls[0].options.env ?? {};
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("sk-ant-oat01-token");
+    expect([env.ANTHROPIC_API_KEY, env.CLAUDE_CODE_USE_BEDROCK, env.GH_TOKEN]).toEqual([undefined, undefined, undefined]);
+    await adapter.shutdown();
+  });
+
+  it("masks a subscription token in any text shown or logged (ORC-010)", () => {
+    const token = "sk-ant-oat01-AbCdEfGhIjKlMnOp_qrstuv";
+    expect(redact(`auth failed for ${token}`, { CLAUDE_CODE_OAUTH_TOKEN: token })).toBe("auth failed for ***");
+    expect(redact(`auth failed for ${token}`, {})).toBe("auth failed for ***"); // by its shape, even if unset
   });
 
   it("runs to completion with usage, activity, and one terminal event", async () => {
@@ -603,6 +629,35 @@ describe("ClaudeAdapter", () => {
       expect(h.detail).toContain("ANTHROPIC_API_KEY");
       expect(h.detail).toMatch(/subscription/i);
       expect(calls).toHaveLength(0);
+    });
+
+    it("ready on the user's own subscription only with both the switch and the token, without printing the token (ORC-010)", async () => {
+      const { query, calls } = fakeQuery();
+      const token = "sk-ant-oat01-secret-token-value";
+      const h = await new ClaudeAdapter({ query, env: { ORCHESTRATION_CLAUDE_AUTH: "subscription", CLAUDE_CODE_OAUTH_TOKEN: token, ANTHROPIC_API_KEY: "sk-ant-other" } }).health();
+      expect(h.status).toBe("ready");
+      expect(h.detail).toMatch(/your own Claude subscription/);
+      expect(h.detail).toMatch(/usage limits/);
+      expect(h.detail).toMatch(/Anthropic/);
+      expect(h.detail).not.toContain(token);
+      expect(h.detail).not.toContain("sk-ant-other");
+      expect(calls).toHaveLength(0);
+    });
+
+    it("not-configured with the switch but no token, pointing to claude setup-token (ORC-010)", async () => {
+      const { query } = fakeQuery();
+      const h = await new ClaudeAdapter({ query, env: { ORCHESTRATION_CLAUDE_AUTH: "subscription", ANTHROPIC_API_KEY: "sk-ant-key" } }).health();
+      expect(h.status).toBe("not-configured"); // an API key does not stand in: the user chose the subscription
+      expect(h.detail).toContain("claude setup-token");
+    });
+
+    it("not-configured with a token but no switch, explaining the switch (ORC-010)", async () => {
+      const { query } = fakeQuery();
+      const token = "sk-ant-oat01-another-secret";
+      const h = await new ClaudeAdapter({ query, env: { CLAUDE_CODE_OAUTH_TOKEN: token } }).health();
+      expect(h.status).toBe("not-configured");
+      expect(h.detail).toContain("ORCHESTRATION_CLAUDE_AUTH=subscription");
+      expect(h.detail).not.toContain(token);
     });
 
     it("unavailable when the SDK cannot be imported", async () => {
