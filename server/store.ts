@@ -11,7 +11,7 @@ import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { buildSeed } from "../src/domain/seed";
 import { ControlError, DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
 
-export const STATE_FORMAT = 10;
+export const STATE_FORMAT = 11;
 
 /** In-place upgrades of the state document, keyed by the format they upgrade from. */
 const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
@@ -63,6 +63,24 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     const project = doc.project as Record<string, unknown>;
     project.prDelivery ??= structuredClone(DEFAULT_PR_DELIVERY);
     doc.version = 10;
+    return doc;
+  },
+  // ORC-009: steering by conversation. Priorities the user set with the Set control are pinned from
+  // their events (before ORC-009 only the user could reprioritize). Priorities chosen in the New task
+  // form cannot be told apart from its default, so they are not pinned. Existing lead runs get no
+  // visionRev: one that completes after the upgrade has its steering refused.
+  10: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    doc.steering ??= [];
+    project.steeringMode ??= "apply";
+    const re = /^Priority P\d+ → P\d+$/;
+    const tasks = (doc.tasks ?? []) as { id: string; userSet?: { priority?: string; run?: string } }[];
+    for (const e of (doc.events ?? []) as { actor: string; kind: string; taskId?: string; message: string; at: string }[]) {
+      if (e.actor !== "user" || e.kind !== "control" || !e.taskId || !re.test(e.message)) continue;
+      const t = tasks.find((x) => x.id === e.taskId);
+      if (t) (t.userSet ??= {}).priority = e.at;
+    }
+    doc.version = 11;
     return doc;
   },
 };

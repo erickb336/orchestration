@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
-import { AUTOPILOT, PROVIDERS, ROLES, type Autonomy, type WorkflowTemplate } from "../domain/types";
+import { AUTOPILOT, PROVIDERS, ROLES, STEERING_MODES, type Autonomy, type SteeringMode, type WorkflowTemplate } from "../domain/types";
 import { BUILT_IN_TEMPLATES, PROJECT_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
 import { DeliverySettings } from "./DeliverySettings";
 import { PipelineEditor } from "./PipelineEditor";
@@ -101,6 +101,7 @@ export function Settings() {
         <div>
           <Providers />
           <DeliverySettings />
+          <SteeringCard />
           <AutonomyCard />
           <NotificationsCard />
           <DataCard />
@@ -375,11 +376,46 @@ function InvolvementCard() {
   );
 }
 
+const STEERING_CHOICES: Record<SteeringMode, { label: string; detail: string }> = {
+  apply: { label: "Apply changes; undo any of them", detail: "The lead changes the focus, reorders and defers work, and drops its own unstarted proposals. Every change is listed under its reply with Undo." },
+  "apply-own": { label: "Apply to the lead's own proposals; suggest for my tasks", detail: "Tasks you created only get suggestions, with Apply and Dismiss. The lead's own proposals change right away." },
+  suggest: { label: "Only suggest", detail: "Nothing changes until you press Apply on a suggestion." },
+};
+
+/** ORC-009: how far the lead may go when the user gives direction in the conversation. Separate from Autonomy. */
+function SteeringCard() {
+  const { state, send, disabled } = useStore();
+  const mode = state.project.steeringMode;
+  return (
+    <section className="card" aria-labelledby="steer-h">
+      <h2 id="steer-h">When you steer the lead in conversation</h2>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        Whatever you choose: priorities and pauses you set by hand are never overridden (the lead's change becomes a suggestion), the lead never pauses, stops or resumes running work, and it never edits specs, pipelines,
+        pins, delivery or settings. The current choice is shown on the composer.
+      </p>
+      <fieldset className="plain-fieldset" disabled={disabled}>
+        {STEERING_MODES.map((m) => (
+          <label key={m} className="row" style={{ gap: "0.45rem", alignItems: "flex-start", marginBottom: "0.5rem" }}>
+            <input type="radio" name="steering-mode" checked={mode === m} onChange={() => void send("setSteeringMode", { mode: m })} style={{ marginTop: "0.3rem" }} />
+            <span>
+              <strong style={{ fontWeight: 560 }}>{STEERING_CHOICES[m].label}</strong>
+              <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
+                {STEERING_CHOICES[m].detail}
+              </span>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+    </section>
+  );
+}
+
 function AutonomyCard() {
   const { state, send, disabled } = useStore();
   const a = state.project.autonomy;
   const lastPlanning = state.project.lastPlanningAt;
   const openProposals = M.openLeadProposals(state).length;
+  const deferredProposals = M.deferredLeadRoots(state).length;
   const [enabled, setEnabled] = useState(a.enabled);
   const [interval, setIntervalMinutes] = useState(String(a.planningIntervalMinutes));
   const [perCycle, setPerCycle] = useState(String(a.maxProposalsPerCycle));
@@ -426,7 +462,7 @@ function AutonomyCard() {
       </div>
       <p className="muted" style={{ fontSize: "0.85rem", marginTop: "0.4rem" }}>
         Fine-tune the choice above. When planning is on, the lead may propose up to {n} task{n === 1 ? "" : "s"} per planning run; they run through their pipelines without further prompting unless held. The lead never
-        edits existing tasks or your pinned choices.
+        edits specs or your pinned choices. When you give direction in the conversation, it may change the focus, reorder and defer work, and drop its own unstarted proposals; every change is listed with Undo.
       </p>
       <form
         onSubmit={(e) => {
@@ -498,7 +534,9 @@ function AutonomyCard() {
         </fieldset>
       </form>
       <p className="muted" style={{ fontSize: "0.82rem", margin: "0.6rem 0 0" }}>
-        Open lead proposals: {openProposals} of {a.maxOpenProposals}. Planning waits while the project is paused.{" "}
+        Open lead proposals: {openProposals} of {a.maxOpenProposals}
+        {deferredProposals ? `; deferred lead proposals: ${deferredProposals} of at most ${a.maxOpenProposals} (they do not count as open, but planning stops when they reach the cap)` : ""}. Planning waits while the
+        project is paused.{" "}
         {lastPlanning ? (
           <>
             Last planning run: <span title={fmtTime(lastPlanning)}>{relTime(lastPlanning)}</span>.

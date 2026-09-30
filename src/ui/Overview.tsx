@@ -1,12 +1,92 @@
 import { useState } from "react";
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
+import { diffLines } from "../domain/diff";
 import { useStore } from "./store";
 import { ROLE_LABEL, fmtTime, involvementOf, relTime, selectionText } from "./common";
 import { PrChip } from "./Delivery";
 import { Conversation } from "./Conversation";
 import { Onboarding } from "./Onboarding";
-import { PROVIDERS, type Attempt, type ProviderId, type State } from "../domain/types";
+import { PROVIDERS, type Attempt, type ProviderId, type State, type VisionRevision } from "../domain/types";
+
+/** Who made a vision revision and from what, in a few words. */
+function revisionSource(v: VisionRevision): string {
+  if (v.source?.undoOf) return `${v.author} · undo of the lead's change`;
+  if (v.source?.changeSetId) return v.author === "lead" ? "lead · from your message" : `${v.author} · applied the lead's suggestion`;
+  return v.author;
+}
+
+/** The revision chip, Undo for a lead focus change, a diff against the previous revision, and the history. */
+function VisionProvenance({ state }: { state: State }) {
+  const { send, disabled } = useStore();
+  const [busy, setBusy] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const visions = state.project.visions;
+  const v = visions[visions.length - 1];
+  const prev = visions.length > 1 ? visions[visions.length - 2] : undefined;
+  const change = M.currentFocusChange(state);
+  const msg = v.source?.messageIds?.[0];
+  const diff = prev ? diffLines([`Focus: ${prev.focus}`, ...prev.text.split("\n")], [`Focus: ${v.focus}`, ...v.text.split("\n")]).filter((d) => d.kind !== "same") : [];
+  return (
+    <>
+      <div className="row" style={{ gap: "0.4rem", marginBottom: "0.4rem" }}>
+        <span className="chip">
+          r{v.rev} · {revisionSource(v)} · {fmtTime(v.at)}
+        </span>
+        {msg && (
+          <button className="link" style={{ fontSize: "0.85rem" }} onClick={() => document.getElementById(`msg-${msg}`)?.scrollIntoView({ block: "center" })}>
+            Show the message
+          </button>
+        )}
+        {change && (
+          <button
+            className="small"
+            disabled={disabled || busy}
+            onClick={async () => {
+              setBusy(true);
+              await send("undoSteering", { changeSetId: change.set.id, changeId: change.change.id });
+              setBusy(false);
+            }}
+          >
+            Undo the lead's focus change
+          </button>
+        )}
+        {visions.length > 1 && (
+          <button className="link" style={{ fontSize: "0.85rem" }} onClick={() => setShowHistory(!showHistory)} aria-expanded={showHistory}>
+            {showHistory ? "Hide history" : `History (${visions.length})`}
+          </button>
+        )}
+      </div>
+      {prev && diff.length > 0 && (
+        <details style={{ marginBottom: "0.5rem" }}>
+          <summary className="muted" style={{ fontSize: "0.85rem" }}>
+            What changed from r{prev.rev}: {v.reason}
+          </summary>
+          <div className="diff" aria-label={`Differences between r${prev.rev} and r${v.rev}`}>
+            {diff.map((d, i) => (
+              <div key={i} className={d.kind}>
+                {d.text}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {showHistory && (
+        <ul className="events" style={{ marginBottom: "0.6rem" }}>
+          {[...visions].reverse().map((r) => (
+            <li key={r.rev}>
+              <span className="mono">r{r.rev}</span>
+              <span className="actor">{revisionSource(r)}</span>
+              <span>
+                {r.reason} <span className="muted">· focus: “{r.focus}” · {fmtTime(r.at)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
 
 export function Overview() {
   const { state, send, disabled, status, service } = useStore();
@@ -43,12 +123,8 @@ export function Overview() {
       <div className="grid-2">
         <div>
           <section className="card" aria-labelledby="vision-h">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <h2 id="vision-h">Vision</h2>
-              <span className="chip">
-                r{vision.rev} · {vision.author} · {fmtTime(vision.at)}
-              </span>
-            </div>
+            <h2 id="vision-h">Vision</h2>
+            <VisionProvenance state={state} />
             {editing ? (
               <form
                 onSubmit={async (e) => {

@@ -83,11 +83,35 @@ export class ScriptedAdapter implements RuntimeAdapter {
     const block = opts.chosen ? { outputs, chosen: opts.chosen } : { outputs };
     this.emit({ type: "completed", attemptId: id, finalText: `All done.\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\``, usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 }, model: `${a.model}-actual` });
   }
-  /** Answer a lead run with a reply and proposals (raw objects, validated by the service). */
-  reply(id: string, reply: string, proposals: unknown[] = []) {
-    this.emit({ type: "completed", attemptId: id, finalText: `${reply}\n\`\`\`json\n${JSON.stringify({ reply, proposals })}\n\`\`\`` });
+  /** Answer a lead run with a reply, proposals and (ORC-009) a steering block, all raw and validated by the service. `steer` is written only when given. */
+  reply(id: string, reply: string, proposals: unknown[] = [], steer?: unknown) {
+    const block: Record<string, unknown> = { reply, proposals };
+    if (steer !== undefined) block.steer = steer;
+    this.emit({ type: "completed", attemptId: id, finalText: `${reply}\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`` });
+  }
+  /** A reply with no JSON block at all. */
+  replyText(id: string, text: string) {
+    this.emit({ type: "completed", attemptId: id, finalText: text });
   }
 }
+
+/** A valid steering block (tests override fields). */
+export function steer(over: Record<string, unknown> = {}) {
+  return {
+    focus: "Get every app building and running locally end to end; deployment automation waits.",
+    reason: "You asked to focus on local builds over automating deployment.",
+    tasks: [] as unknown[],
+    ...over,
+  };
+}
+
+/** Steering items in the lead's output shape. */
+export const st = {
+  priority: (id: string, priority: number, why = "serves the focus") => ({ id, priority, why }),
+  defer: (id: string, why = "no longer fits the focus") => ({ id, defer: true, why }),
+  undefer: (id: string, why = "fits the focus again") => ({ id, defer: false, why }),
+  drop: (id: string, why = "my proposal no longer fits") => ({ id, drop: true, why }),
+};
 
 /** A complete, valid lead proposal (tests override fields). */
 export function proposal(over: Record<string, unknown> = {}) {

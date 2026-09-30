@@ -1,8 +1,10 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import * as M from "../domain/model";
 import type { LeadRun, Message, State } from "../domain/types";
 import { useStore } from "./store";
-import { fmtTime, relTime, selectionText } from "./common";
+import { PREF_LEAD_SEEN, fmtTime, relTime, selectionText, writePref } from "./common";
+import { useLeadContext } from "./LeadDrawer";
+import { SteeringChanges } from "./SteeringChanges";
 
 const MAX_LENGTH = 8000;
 
@@ -10,35 +12,54 @@ function runLabel(r: LeadRun) {
   return selectionText({ provider: r.provider, model: r.actualModel ?? r.model });
 }
 
-/** The lead conversation: messages, what the lead is doing now, and a composer. */
-export function Conversation() {
+/** How far the lead may go, as shown on the composer. */
+const MODE_SHORT = { apply: "applies changes; undo any of them", "apply-own": "applies changes to its own proposals, suggests for yours", suggest: "only suggests changes" } as const;
+
+/**
+ * The lead conversation: messages, where each of yours stands, what the lead changed (with Undo),
+ * and a composer. One instance lives on the Overview; the Lead drawer shows another on every other page.
+ */
+export function Conversation({ variant = "inline", onClose, focusOnMount }: { variant?: "inline" | "drawer"; onClose?: () => void; focusOnMount?: boolean }) {
   const { state, service, send, disabled } = useStore();
+  const lead = useLeadContext();
   const simulated = service.runtime === "fake";
   const messages = state.conversation;
   const listRef = useRef<HTMLOListElement>(null);
   // Follow new messages only while the reader is at the bottom; scrolling up to read history is not interrupted.
   const stick = useRef(true);
+  const headingId = useId();
+  const contextTask = lead.context.taskId ? state.tasks.find((t) => t.id === lead.context.taskId) : undefined;
 
   useLayoutEffect(() => {
     const el = listRef.current;
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [messages.length]);
+  // Whatever is on screen counts as seen (the Lead button's badge counts newer replies).
+  useEffect(() => {
+    const last = [...messages].reverse().find((m) => m.author === "lead");
+    if (last) writePref(PREF_LEAD_SEEN, last.at);
+  }, [messages]);
 
   return (
-    <section className="card" aria-labelledby="lead-h">
+    <section className={variant === "drawer" ? "lead-panel" : "card"} aria-labelledby={headingId} id={variant === "inline" ? "lead-inline" : undefined}>
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 id="lead-h" style={{ margin: 0 }}>
+        <h2 id={headingId} style={{ margin: 0 }}>
           Lead
         </h2>
         <span className="row" style={{ gap: "0.35rem" }}>
           <span className="chip strong">{selectionText(state.project.leadSelection)}</span>
           {simulated && <span className="chip">simulated replies</span>}
+          {onClose && (
+            <button className="small" onClick={onClose} aria-label="Close the lead panel">
+              Close
+            </button>
+          )}
         </span>
       </div>
       <p className="muted" style={{ fontSize: "0.82rem", margin: "0.3rem 0 0.6rem" }}>
         {simulated
-          ? "Fake runtime: lead replies and proposals are simulated, not written by a model."
-          : "Replies come from a real lead run. The lead can reply and propose new tasks; it never edits existing tasks."}
+          ? "Fake runtime: lead replies and steering are simulated, not written by a model."
+          : "When you give direction, the lead can change the focus, reorder and defer work, and drop its own unstarted proposals. Every change is listed with Undo. It never pauses or stops running work."}
       </p>
 
       {messages.length === 0 ? (
@@ -57,36 +78,72 @@ export function Conversation() {
           }}
         >
           {messages.map((m) => (
-            <MessageItem key={m.id} state={state} message={m} simulated={simulated} />
+            <MessageItem key={m.id} state={state} message={m} simulated={simulated} blocked={service.leadBlocked} />
           ))}
         </ol>
       )}
 
       <LeadStatus state={state} blocked={service.leadBlocked} />
+      {contextTask && (
+        <div className="row" style={{ marginBottom: "0.3rem" }}>
+          <span className="chip strong">
+            About {contextTask.id} {M.currentSpec(contextTask).content.title.slice(0, 40)}
+            <button className="link" style={{ marginLeft: "0.35rem" }} onClick={lead.clearContext} aria-label={`Stop referring to ${contextTask.id}`}>
+              ×
+            </button>
+          </span>
+        </div>
+      )}
       <Composer
         disabled={disabled}
+        placeholder={lead.context.placeholder}
+        focusOnMount={focusOnMount}
+        mode={MODE_SHORT[state.project.steeringMode]}
         onSend={async (text) => {
           stick.current = true;
-          return (await send("postMessage", { text })).ok;
+          const r = await send("postMessage", contextTask ? { text, taskId: contextTask.id } : { text });
+          if (r.ok) lead.clearContext();
+          return r.ok;
         }}
       />
     </section>
   );
 }
 
-function MessageItem({ state, message: m, simulated }: { state: State; message: Message; simulated: boolean }) {
+function MessageItem({ state, message: m, simulated, blocked }: { state: State; message: Message; simulated: boolean; blocked?: string }) {
+  const { send, disabled } = useStore();
   const run = m.leadRunId ? state.leadRuns.find((r) => r.id === m.leadRunId) : undefined;
   const who = m.author === "user" ? "You" : m.author === "lead" ? (simulated ? "Lead (simulated)" : "Lead") : "System";
+  const status = m.author === "user" ? M.messageStatus(state, m, { blocked, nowMs: Date.now() }) : undefined;
+  const set = m.changeSetId ? state.steering.find((cs) => cs.id === m.changeSetId) : undefined;
+  const about = m.taskId ? state.tasks.find((t) => t.id === m.taskId) : undefined;
   return (
-    <li className={`msg ${m.author}`}>
+    <li className={`msg ${m.author}`} id={`msg-${m.id}`}>
       <div className="msg-head">
         <strong>{who}</strong>
         {m.author === "lead" && run && <span className="muted">{runLabel(run)}</span>}
+        {about && (
+          <a href={`#/task/${encodeURIComponent(about.id)}`} className="chip" title={M.currentSpec(about).content.title}>
+            About {about.id}
+          </a>
+        )}
         <time dateTime={m.at} title={fmtTime(m.at)} className="muted">
           {relTime(m.at)}
         </time>
       </div>
       <div className="msg-text">{m.text}</div>
+      {status && status.kind !== "answered" && (
+        <div className="msg-status muted" role="status">
+          <span className={status.kind === "working" || status.kind === "stopping-planning" || status.kind === "restarting" ? "dot running" : undefined} aria-hidden="true" />
+          <span style={status.kind === "blocked" || status.text.includes("Control failure") ? { color: "var(--s-blocked)" } : undefined}>{status.text}</span>
+          {status.kind === "queued-behind-reply" && (
+            <button className="small" disabled={disabled} onClick={() => void send("stopLeadReply")} title="Stop the reply being written so one run answers everything you sent">
+              Answer together now
+            </button>
+          )}
+        </div>
+      )}
+      {set && <SteeringChanges set={set} />}
       {!!m.proposedTaskIds?.length && (
         <div className="msg-extra">
           <span className="muted">Proposed:</span>
@@ -104,7 +161,7 @@ function MessageItem({ state, message: m, simulated }: { state: State; message: 
       )}
       {!!m.rejected?.length && (
         <div className="msg-extra muted">
-          Not created:
+          Not applied:
           <ul className="plain">
             {m.rejected.map((r, i) => (
               <li key={i}>{r}</li>
@@ -116,47 +173,50 @@ function MessageItem({ state, message: m, simulated }: { state: State; message: 
   );
 }
 
+/** What the lead is doing now, in the words of the newest waiting message (never "working" while a message is queued). */
 function LeadStatus({ state, blocked }: { state: State; blocked?: string }) {
   const run = M.activeLeadRun(state);
-  const pending = M.pendingMessages(state).length;
+  const pending = M.pendingMessages(state);
   const last = state.leadRuns.length ? state.leadRuns[state.leadRuns.length - 1] : undefined;
   let text: string | null = null;
   let live = false;
-  if (run) {
+  let danger = false;
+  if (pending.length) {
+    const st = M.messageStatus(state, pending[pending.length - 1], { blocked, nowMs: Date.now() });
+    text = pending.length > 1 ? `${pending.length} messages waiting. ${st.text}` : st.text;
+    live = st.kind === "stopping-planning" || st.kind === "restarting";
+    danger = st.kind === "blocked" || st.text.includes("Control failure");
+  } else if (run) {
     live = true;
     text =
       run.outcome === "stopping"
         ? `Stopping the lead run (${runLabel(run)})…${run.note?.startsWith("Control failure") ? ` ${run.note}` : ""}`
         : `Lead is working (${runLabel(run)})…${run.activity ? ` ${run.activity}` : ""}`;
+    danger = !!run.note?.startsWith("Control failure");
   } else if (last && (last.outcome === "failed" || last.outcome === "lost")) {
-    text = `The last lead run ${last.outcome === "lost" ? "was lost" : "failed"}${last.note ? `: ${last.note}` : "."}${pending ? ` ${pending} message${pending === 1 ? "" : "s"} still waiting.` : ""}`;
-  } else if (pending) {
-    const n = `${pending} message${pending === 1 ? "" : "s"}`;
-    text = state.project.hold ? `Project paused — the lead answers ${n} after you resume.` : `Waiting to answer ${n}.`;
+    text = `The last lead run ${last.outcome === "lost" ? "was lost" : "failed"}${last.note ? `: ${last.note}` : "."}`;
   }
-  const controlFailure = run?.outcome === "stopping" && run.note?.startsWith("Control failure");
-  // A blocked lead matters only when nothing is running; an active run already says what the lead is doing.
-  const showBlocked = !!blocked && !run;
   return (
     <div className="convo-status" role="status">
       {text && (
         <>
           {live && <span className={`dot ${run?.outcome === "stopping" ? "paused" : "running"}`} aria-hidden="true" />}
-          <span style={controlFailure ? { color: "var(--s-blocked)" } : undefined}>{text}</span>
+          <span style={danger ? { color: "var(--s-blocked)" } : undefined}>{text}</span>
+          {danger && blocked && <a href="#/settings">Settings</a>}
         </>
-      )}
-      {showBlocked && (
-        <span style={{ color: "var(--s-blocked)" }}>
-          {text ? " " : ""}The lead can't run: {blocked} <a href="#/settings">Settings</a>
-        </span>
       )}
     </div>
   );
 }
 
-function Composer({ disabled, onSend }: { disabled: boolean; onSend: (text: string) => Promise<boolean> }) {
+function Composer({ disabled, placeholder, focusOnMount, mode, onSend }: { disabled: boolean; placeholder?: string; focusOnMount?: boolean; mode: string; onSend: (text: string) => Promise<boolean> }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const id = useId();
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (focusOnMount) ref.current?.focus();
+  }, [focusOnMount]);
   const tooLong = text.trim().length > MAX_LENGTH;
   const blocked = disabled || sending || !text.trim() || tooLong;
   const submit = async () => {
@@ -175,14 +235,15 @@ function Composer({ disabled, onSend }: { disabled: boolean; onSend: (text: stri
         void submit();
       }}
     >
-      <label htmlFor="lead-message" className="sr-only">
+      <label htmlFor={id} className="sr-only">
         Message to the lead
       </label>
       <textarea
-        id="lead-message"
+        id={id}
+        ref={ref}
         value={text}
-        placeholder="Ask the lead or give direction…"
-        aria-describedby="lead-message-hint"
+        placeholder={placeholder ?? "Ask the lead or give direction…"}
+        aria-describedby={`${id}-hint`}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
@@ -192,8 +253,9 @@ function Composer({ disabled, onSend }: { disabled: boolean; onSend: (text: stri
         }}
       />
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <span id="lead-message-hint" className="muted" style={{ fontSize: "0.8rem" }}>
+        <span id={`${id}-hint`} className="muted" style={{ fontSize: "0.8rem" }}>
           {tooLong ? `Messages are limited to ${MAX_LENGTH} characters.` : disabled ? "Offline: messages cannot be sent." : "⌘/Ctrl + Enter to send"}
+          {" · "}Steering: the lead {mode} (<a href="#/settings">Settings</a>)
         </span>
         <button type="submit" className="primary" disabled={blocked}>
           {sending ? "Sending…" : "Send"}

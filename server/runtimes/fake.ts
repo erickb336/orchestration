@@ -21,10 +21,42 @@ interface Proc {
   interruptAt?: number;
   /** Lead runs answer with a reply (and, when planning, one proposal) instead of step outputs. */
   lead?: "planning" | "message";
+  /** The lead envelope, kept so a simulated message run can steer from what it was shown. */
+  prompt?: string;
 }
 
-/** A simulated lead reply in the required JSON shape. Planning runs propose one small task. */
-export function fakeLeadText(attemptId: string, trigger: "planning" | "message"): string {
+/** Words that make the simulated lead treat a message as a change of direction. */
+const DIRECTION_RE = /\bfocus\b| vs |\binstead\b|rather than/i;
+
+/**
+ * ORC-009: a simulated steering block, built only from the envelope: the newest message that reads
+ * like a change of direction becomes the focus (labelled simulated), and the lowest-priority open task
+ * whose "may:" list includes defer is deferred. Nothing else is touched.
+ */
+export function fakeSteer(prompt: string): Record<string, unknown> | undefined {
+  const section = /## Messages to answer now\n([\s\S]*?)\n\n## /.exec(prompt)?.[1] ?? "";
+  const messages = section
+    .split("\n")
+    .filter((l) => l.startsWith("- "))
+    .map((l) => l.slice(2).replace(/^\(sent from [^)]*\) /, ""));
+  const direction = [...messages].reverse().find((m) => DIRECTION_RE.test(m));
+  if (!direction) return undefined;
+  const focus = `(Simulated) ${direction.length > 200 ? `${direction.slice(0, 199)}…` : direction}`;
+  let candidate: { id: string; priority: number } | undefined;
+  for (const m of prompt.matchAll(/^- (\S+) \[[^\]]*\] P(\d+).*· may: ([^·\n]*)/gm)) {
+    if (!m[3].split(",").some((a) => a.trim() === "defer")) continue;
+    const p = Number(m[2]);
+    if (!candidate || p > candidate.priority) candidate = { id: m[1], priority: p };
+  }
+  return {
+    focus,
+    reason: "(Simulated) Taken from your message; a real lead would weigh the board.",
+    tasks: candidate ? [{ id: candidate.id, defer: true, why: "(Simulated) lowest-priority work that no longer fits the focus" }] : [],
+  };
+}
+
+/** A simulated lead reply in the required JSON shape. Planning runs propose one small task; message runs may steer. */
+export function fakeLeadText(attemptId: string, trigger: "planning" | "message", prompt = ""): string {
   const proposals =
     trigger === "planning"
       ? [
@@ -49,11 +81,14 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message")
           },
         ]
       : [];
+  const steer = trigger === "message" ? fakeSteer(prompt) : undefined;
   const reply =
     trigger === "planning"
       ? "(Simulated lead) I reviewed the board and proposed one small task."
-      : "(Simulated lead) Noted. In live mode the lead answers here using the board and the repository.";
-  return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals }, null, 2)}\n\`\`\`\n`;
+      : steer
+        ? "(Simulated lead) Noted the new direction. The service lists below what changed; in live mode a real lead weighs the board first."
+        : "(Simulated lead) Noted. In live mode the lead answers here using the board and the repository.";
+  return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals, ...(steer ? { steer } : {}) }, null, 2)}\n\`\`\`\n`;
 }
 
 function jitter(id: string) {
@@ -130,7 +165,7 @@ export class FakeAdapter implements RuntimeAdapter {
   start(a: Assignment) {
     if (a.role === "lead" && a.stepId === "LEAD") {
       if (this.procs.has(a.attemptId)) return;
-      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : "message" });
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : "message", prompt: a.prompt });
       this.emit({ type: "started", attemptId: a.attemptId });
       return;
     }
@@ -196,7 +231,7 @@ export class FakeAdapter implements RuntimeAdapter {
       p.progress = Math.min(100, p.progress + this.config.progressPerTick + jitter(id));
       if (p.progress >= 100) {
         this.procs.delete(id);
-        this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead) : fakeFinalText(id, p.outputs, p.stepId) });
+        this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt) : fakeFinalText(id, p.outputs, p.stepId) });
       } else this.emit({ type: "progress", attemptId: id, percent: p.progress });
     }
   }

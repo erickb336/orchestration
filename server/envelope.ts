@@ -5,7 +5,7 @@
 import * as D from "../src/domain/delivery";
 import * as M from "../src/domain/model";
 import { INTERNAL_TEMPLATE_IDS } from "../src/domain/templates";
-import type { LeadRun, OutputDef, RoleId, State, Step, Task } from "../src/domain/types";
+import type { LeadRun, OutputDef, RoleId, State, SteerAction, SteeringMode, Step, Task } from "../src/domain/types";
 
 const ROLE_BRIEFS: Record<RoleId, string> = {
   lead: "You are the lead. Verify the work against the acceptance criteria using the inputs, and decide whether it is ready to integrate. Do not change files.",
@@ -213,23 +213,118 @@ export function parseOutputs(finalText: string, declared: OutputDef[]): ParsedOu
 
 const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
 
-/** Everything the lead sees: vision, board, outcomes, conflicts, conversation, and the rules. */
+const MAX_OPEN_ROWS = 80;
+const STEER_ACTIONS: SteerAction[] = ["priority", "defer", "undefer", "drop"];
+
+/** One open root task as the lead sees it, ending with what it may do to it (from `steerPermission`, the same function that enforces it). */
+function openWorkLine(state: State, t: Task, mode: SteeringMode): string {
+  const c = M.currentSpec(t).content;
+  const kids = M.childTasks(state, t).filter((k) => k.lifecycle !== "cancelled");
+  const notes = [
+    t.dependsOn.length && `depends on ${t.dependsOn.join(", ")}`,
+    t.holdBeforeStart && t.lifecycle !== "active" && "held before start",
+    t.hold && (t.holdReason ? "paused for review" : "paused by the user"),
+    t.controlFailure && "control failure",
+    t.userSet?.run && "the user asked it to keep running",
+    t.deferral && `deferred by ${t.deferral.by === "lead" ? "you" : "the user"}: ${clip(t.deferral.reason, 80)}`,
+  ].filter(Boolean);
+  const may: string[] = [];
+  const suggest: string[] = [];
+  const not: string[] = [];
+  for (const action of STEER_ACTIONS) {
+    const v = M.steerPermission(state, t, action, mode);
+    if (v.v === "apply") may.push(action);
+    else if (v.v === "suggest") suggest.push(action);
+    else if (v.v === "skip" || v.v === "reject") not.push(`${action} (${v.why})`);
+    else if (action === "defer") not.push("defer (already deferred)");
+  }
+  const perms = [may.length && `may: ${may.join(", ")}`, suggest.length && `suggest: ${suggest.join(", ")}`, not.length && `not: ${not.join(", ")}`].filter(Boolean).join(" · ") || "not steerable";
+  return `- ${t.id} [${M.stateLabel(state, t)}] P${t.priority}${t.userSet?.priority ? " (set by you)" : ""} "${clip(c.title, 90)}" area:${clip(c.area, 30)} · by ${t.specs[0].author}${kids.length ? ` · ${kids.length} child task${kids.length === 1 ? "" : "s"}` : ""}${notes.length ? ` · notes: ${notes.join(" | ")}` : ""} · ${perms}`;
+}
+
+/** The last 5 vision revisions: who set the focus and from what (a message, an undo, or a hand edit). */
+function focusHistory(state: State): string {
+  const revs = state.project.visions.slice(-5).reverse();
+  return revs
+    .map((v) => {
+      const src = v.source?.undoOf ? `undo of ${v.source.undoOf}` : v.source?.changeSetId ? `${v.author === "lead" ? "the user's message" : "applied suggestion"} ${v.source.messageIds?.join(", ") ?? v.source.changeSetId}` : v.author === "user" ? "hand edit" : "set up";
+      return `- r${v.rev} by ${v.author} (${src}, ${v.at}): ${clip(v.reason, 120)} — focus: "${clip(v.focus, 200)}"`;
+    })
+    .join("\n");
+}
+
+/** The last 5 change sets, one line per row with its status, so the lead sees what the user undid or dismissed. */
+function recentSteering(state: State): string {
+  const sets = state.steering.slice(-5).reverse();
+  if (!sets.length) return "- None yet.";
+  const lines: string[] = [];
+  let held = false;
+  for (const cs of sets) {
+    if (cs.refused) {
+      lines.push(`- ${cs.id} (${cs.at}): refused — ${cs.refused}`);
+      continue;
+    }
+    if (cs.heldBecause) held = true;
+    for (const c of cs.changes) {
+      const what =
+        c.kind === "focus"
+          ? `focus → "${clip(String(c.after ?? ""), 100)}"`
+          : c.kind === "priority"
+            ? `${c.taskId} P${String(c.before)} → P${String(c.after)}`
+            : c.kind === "defer"
+              ? `${c.taskId} deferred`
+              : c.kind === "undefer"
+                ? `${c.taskId} deferral lifted`
+                : c.kind === "drop"
+                  ? `${c.taskId} dropped`
+                  : `${c.taskId ?? "?"} (unreadable entry)`;
+      const status =
+        c.status === "applied"
+          ? c.appliedBy === "user"
+            ? "applied by the user"
+            : "applied"
+          : c.status === "undone"
+            ? "undone by the user"
+            : c.status === "suggested"
+              ? cs.heldBecause
+                ? "held (the user wrote again)"
+                : "suggested"
+              : c.status;
+      const left = c.note?.includes("left as is on undo") ? "; left as is on undo" : "";
+      lines.push(`- ${c.id} (${cs.at}): ${what} — ${status}${left}${c.note && c.status !== "applied" ? ` (${clip(c.note, 100)})` : ""}`);
+    }
+    if (!cs.changes.length) lines.push(`- ${cs.id} (${cs.at}): no changes`);
+  }
+  if (held) lines.push("Held suggestions: re-issue the ones that still fit the newest message.");
+  return lines.join("\n");
+}
+
+/** Everything the lead sees: vision, open work with what it may do, outcomes, conflicts, conversation, and the rules. */
 export function buildLeadEnvelope(state: State, run: LeadRun, access: "read"): string {
   const p = state.project;
   const vision = M.currentVision(state);
   const maxProposals = p.autonomy.maxProposalsPerCycle;
-  const tasks = [...state.tasks].sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
-  const board = tasks.length
-    ? tasks
-        .slice(0, 60)
-        .map((t) => {
-          const c = M.currentSpec(t).content;
-          const sel = c.options.find((o) => o.id === c.selectedOptionId);
-          const integ = t.integration ? `; integration ${t.integration.status}` : "";
-          return `- ${t.id} [${M.stateLabel(state, t)}${integ}] P${t.priority} ${clip(c.title, 90)} — approach ${sel?.id}: ${clip(sel?.name ?? "", 60)} (by ${t.specs[0].author})`;
-        })
-        .join("\n")
-    : "- The board is empty.";
+  // Steering is available only to runs that answer user messages, never decided by the trigger.
+  const canSteer = run.messageIds.length > 0;
+  const mode = p.steeringMode;
+  const roots = state.tasks.filter((t) => !t.parentTaskId);
+  // Review finding 1: the review and fix tasks the service creates for a pull request are delivery's, not
+  // steerable, and not the lead's to see on its board (`steerPermission` rejects them as well).
+  const openRoots = roots.filter((t) => t.lifecycle !== "done" && t.lifecycle !== "cancelled" && !t.reviewTarget && !t.deliverInto).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+  const board = openRoots.length
+    ? [...openRoots.slice(0, MAX_OPEN_ROWS).map((t) => openWorkLine(state, t, mode)), ...(openRoots.length > MAX_OPEN_ROWS ? [`${openRoots.length - MAX_OPEN_ROWS} more open tasks not shown (lowest priority)`] : [])].join("\n")
+    : "- No open work.";
+  const finished = roots
+    .filter((t) => t.lifecycle === "done" || t.lifecycle === "cancelled")
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 10)
+    .map((t) => {
+      const note = t.dropped ? `dropped by the lead on ${t.dropped.at.slice(0, 10)}; the user can restore it; do not re-propose` : "finished; not steerable";
+      return `- ${t.id} [${M.stateLabel(state, t)}${t.integration ? `; integration ${t.integration.status}` : ""}] "${clip(M.currentSpec(t).content.title, 90)}" (${note})`;
+    })
+    .join("\n");
+  const deferredLead = M.deferredLeadRoots(state).length;
+  const focusLine = vision.author === "lead" && vision.source?.changeSetId ? `\nr${vision.rev} by lead (from the user's message ${vision.source.messageIds?.join(", ") ?? ""} at ${vision.at}): ${clip(vision.reason, 300)}` : "";
   const recent = state.artifacts
     .filter((a) => a.kind === "review-findings" || a.kind === "verification" || a.kind === "report")
     .slice(-10)
@@ -241,18 +336,60 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read"): s
     .map((m) => `${m.author === "user" ? "User" : m.author === "lead" ? "Lead" : "System"} (${m.at}): ${clip(m.text, 1200)}`)
     .join("\n\n");
   const pending = state.conversation.filter((m) => run.messageIds.includes(m.id));
+  const fromTask = (m: { taskId?: string }) => {
+    const t = m.taskId ? state.tasks.find((x) => x.id === m.taskId) : undefined;
+    return t ? `(sent from ${t.id} "${clip(M.currentSpec(t).content.title, 60)}" [${M.stateLabel(state, t)}]) ` : "";
+  };
   const templates = p.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id)).map((t) => `- ${t.id}: ${t.name} — ${t.description}`).join("\n");
+  const steerRules = canSteer
+    ? `
+## Steering rules
+- Steer only when the user's messages ask for a change of direction, and change only what they imply.
+- "focus" replaces the current-focus line. You cannot change the vision text.
+- Steer root tasks only; child tasks follow their root.
+- "priority" is 1–99, and lower starts sooner. It changes only which queued work takes the next free worker slot. Running work continues.
+- "defer": true lets the current step finish, and then nothing new starts on that task. "defer": false lifts a deferral you set.
+- Prefer "defer" to "drop". "drop" works only on your own unstarted proposals.
+- Only actions listed under "may" take effect. Everything else becomes a suggestion or is not applied.
+- Never try to resume, pause or release work. Settings, delivery and integration are out of reach.
+- Do not redo a change listed as undone or dismissed unless a newer message asks for it.
+- Do not claim changes in "reply". The service lists what was applied and what was only suggested, with Undo.
+- For a direction change you need not read the repository. The board is enough.
+`
+    : `
+## Steering
+Planning runs cannot steer. Serve the current focus; do not re-propose deferred or recently dropped work.
+`;
+  const steerContract = canSteer
+    ? `,
+  "steer": {
+    "focus": "<the new current focus, or omit>",
+    "reason": "<why, in the user's words>",
+    "tasks": [
+      { "id": "<root task id>", "priority": 1, "why": "..." },
+      { "id": "<root task id>", "defer": true, "why": "..." },
+      { "id": "<your own unstarted proposal>", "drop": true, "why": "..." }
+    ]
+  }`
+    : "";
 
-  return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : "reply to the user"})
+  return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : "reply to the user"})${canSteer ? `\nSteering mode: ${mode}` : ""}
 
 You are the lead of the project "${p.name}". You own the backlog within the vision below: you decide what is worth doing next, specify it clearly, and pick the approach. Workers (designers, coders, reviewers on Claude or Codex) carry tasks out through each task's pipeline. You do not edit files: ${access === "read" ? "your working directory is a read-only checkout of the repository, which you may read to ground your proposals" : "you have no workspace"}.
 
 ## Vision (r${vision.rev})
 ${vision.text || "(not written yet)"}
-Current focus: ${vision.focus || "(none)"}
+Current focus: ${vision.focus || "(none)"}${focusLine}
+Focus history (newest first):
+${focusHistory(state)}
 
-## Board
+## Open work (root tasks by priority; child tasks follow their root)
 ${board}
+
+## Recently finished
+${finished || "- None yet."}
+
+Deferred lead proposals: ${deferredLead} of at most ${p.autonomy.maxOpenProposals}${deferredLead ? " — drop those that no longer fit so planning can continue." : "."}
 
 ## Recent outcomes and findings
 ${recent || "- None yet."}
@@ -260,11 +397,14 @@ ${recent || "- None yet."}
 ## Integration conflicts
 ${conflicts.length ? conflicts.join("\n") : "- None."}
 ${deliveryNote(state)}
+## Recent steering (what you changed, and what the user undid or dismissed)
+${recentSteering(state)}
+
 ## Conversation (most recent last)
 ${convo || "(no messages yet)"}
 
 ## ${pending.length ? "Messages to answer now" : "This run"}
-${pending.length ? pending.map((m) => `- ${clip(m.text, 2000)}`).join("\n") : run.trigger === "planning" ? "Planning check: propose the most useful next work, or nothing if nothing is clearly worth doing." : "No new messages."}
+${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).join("\n") : run.trigger === "planning" ? "Planning check: propose the most useful next work, or nothing if nothing is clearly worth doing." : "No new messages."}
 
 ## Rules for proposals
 - Propose at most ${maxProposals} task(s). Proposing nothing is fine when nothing is clearly worth doing; say why in your reply.
@@ -274,9 +414,9 @@ ${pending.length ? pending.map((m) => `- ${clip(m.text, 2000)}`).join("\n") : ru
 - Give concrete, observable acceptance checks.
 - Pick "templateId" from:
 ${templates}
-
+${steerRules}
 ## Required final output
-End your final message with exactly one fenced JSON block:
+End your final message with exactly one fenced JSON block${canSteer ? ' (leave "steer" out when the user only asked a question)' : ""}:
 
 \`\`\`json
 {
@@ -301,7 +441,7 @@ End your final message with exactly one fenced JSON block:
       "templateId": "<template id>",
       "priority": 3
     }
-  ]
+  ]${steerContract}
 }
 \`\`\`
 `;
@@ -349,13 +489,17 @@ ${last.length ? `The user's latest notes on landed work:\n${last.map((x) => x.li
 `;
 }
 
-/** Parse the lead's final message. A reply without a JSON block is still a reply (with no proposals). */
-export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; problem?: string } {
+/**
+ * Parse the lead's final message. A reply without a JSON block is still a reply (with no proposals).
+ * ORC-009: the steering block is passed through as found (a missing value or null becomes undefined);
+ * type checks happen in the domain, which treats it as untrusted data.
+ */
+export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; problem?: string } {
   const obj = lastJsonObject(finalText);
   if (!obj) return { reply: clip(finalText.trim(), 4000), proposals: [], problem: "no JSON block; treated the message as a reply without proposals" };
   const reply = typeof obj.reply === "string" ? clip(obj.reply, 8000) : "";
   const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
-  return { reply, proposals };
+  return { reply, proposals, ...(obj.steer !== undefined && obj.steer !== null ? { steer: obj.steer } : {}) };
 }
 
 /** A step that reads best-of candidates must choose one. */

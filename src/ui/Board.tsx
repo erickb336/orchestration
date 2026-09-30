@@ -7,6 +7,8 @@ import { newIdOf, useStore } from "./store";
 import { PrChip } from "./Delivery";
 import { COLUMN_LABEL, ROLE_LABEL, StatePill, currentWork, hasNewDecision, latestEvent, relTime } from "./common";
 import { isSettledTask, pipelineSummary } from "./fanout";
+import { useLeadContext } from "./LeadDrawer";
+import { FocusDiff } from "./SteeringChanges";
 
 type View = "list" | "board";
 type Sort = "priority" | "activity";
@@ -41,7 +43,8 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     whyNow: "",
     approach: "",
     acceptance: "",
-    priority: "3",
+    // "auto": priority 3, not pinned, so the lead may reorder it when you steer. A number is your choice and stays.
+    priority: "auto",
     templateId: templates.find((t) => t.id === "change")?.id ?? templates[0]?.id ?? "",
     holdBeforeStart: true,
   });
@@ -70,7 +73,8 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
           whyNow: f.whyNow,
           approach: f.approach,
           acceptance: f.acceptance.split("\n"),
-          priority: Number(f.priority) || 3,
+          priority: f.priority === "auto" ? 3 : Number(f.priority) || 3,
+          priorityPinned: f.priority !== "auto",
           holdBeforeStart: f.holdBeforeStart,
           templateId: f.templateId,
         });
@@ -108,7 +112,14 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
         </label>
         <label className="field">
           <span>Priority</span>
-          <input type="number" min={1} value={f.priority} onChange={(e) => set("priority", e.target.value)} style={{ width: "5rem" }} />
+          <select value={f.priority} onChange={(e) => set("priority", e.target.value)}>
+            <option value="auto">Auto (P3; the lead may reorder it)</option>
+            {Array.from({ length: 9 }, (_, i) => (
+              <option key={i + 1} value={String(i + 1)}>
+                P{i + 1} (pinned: the lead may not change it)
+              </option>
+            ))}
+          </select>
         </label>
       </div>
       {tpl && (
@@ -132,8 +143,53 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** ORC-009: the current focus when the lead set it from your message, with a diff and Undo. */
+function FocusBanner() {
+  const { state, send, disabled } = useStore();
+  const [showDiff, setShowDiff] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const v = M.currentVision(state);
+  const change = M.currentFocusChange(state);
+  if (!change) return null;
+  const msg = change.set.messageIds[0];
+  return (
+    <div className="banner neutral focus-banner" role="note">
+      <span>
+        <strong>Focus r{v.rev}</strong> · set by the lead from your message · {relTime(v.at)}:
+      </span>
+      <span className="quote">“{v.focus}”</span>
+      <span className="row" style={{ gap: "0.3rem", marginLeft: "auto" }}>
+        <button className="small" onClick={() => setShowDiff(!showDiff)} aria-expanded={showDiff}>
+          What changed
+        </button>
+        <button
+          className="small"
+          disabled={disabled || busy}
+          onClick={async () => {
+            setBusy(true);
+            await send("undoSteering", { changeSetId: change.set.id, changeId: change.change.id });
+            setBusy(false);
+          }}
+        >
+          Undo
+        </button>
+        <a className="button-link" style={{ padding: "0.15rem 0.55rem", fontSize: "0.85rem" }} href="#/overview" title={msg ? `Set from message ${msg}` : undefined}>
+          History
+        </a>
+      </span>
+      {showDiff && (
+        <div style={{ flexBasis: "100%" }}>
+          <FocusDiff before={String(change.change.before ?? "")} after={String(change.change.after ?? "")} />
+          {change.set.reason && <div className="muted" style={{ fontSize: "0.82rem" }}>Reason: {change.set.reason}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Board() {
   const { state, send, disabled } = useStore();
+  const lead = useLeadContext();
   const [view, setView] = usePref<View>("orchestration.view", "list");
   const [sort, setSort] = usePref<Sort>("orchestration.sort", "priority");
   const [area, setArea] = useState("");
@@ -170,6 +226,9 @@ export function Board() {
           <button className="small" disabled={disabled} onClick={() => setCreating(true)}>
             New task
           </button>
+          <button className="small" disabled={disabled} onClick={() => lead.openLead({ placeholder: "Tell the lead what to focus on…" })} title="Message the lead: it can change the focus, reorder and defer work, and drop its own unstarted proposals">
+            Steer
+          </button>
         </span>
         {newCount > 0 && (
           <span className="row">
@@ -181,6 +240,7 @@ export function Board() {
         )}
       </div>
       {creating && <NewTaskForm onClose={() => setCreating(false)} />}
+      <FocusBanner />
       <div className="toolbar" role="search">
         <div className="segmented" role="group" aria-label="View">
           <button aria-pressed={view === "list"} onClick={() => setView("list")}>
@@ -304,6 +364,7 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
   const open = () => (location.hash = `#/task/${encodeURIComponent(task.id)}`);
   const children = M.childTasks(state, task);
   const childrenDone = children.filter(isSettledTask).length;
+  const prio = M.priorityProvenance(state, task);
   return (
     <div
       className="task-row"
@@ -335,6 +396,21 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
             </span>
           )}
           <span className="chip">spec r{M.currentSpec(task).rev}</span>
+          {prio.kind === "lead" && (
+            <span className="chip" title="The lead set this priority when you gave direction; Undo is under its reply">
+              P{task.priority} · set by lead (was P{prio.was})
+            </span>
+          )}
+          {prio.kind === "user" && (
+            <span className="chip" title="You set this priority; the lead may not change it">
+              Pinned P{task.priority}
+            </span>
+          )}
+          {prio.kind === "child" && (
+            <span className="chip" title="Child tasks run at their root's priority unless you pin their own">
+              runs at {prio.rootId}'s P{prio.priority}
+            </span>
+          )}
           {task.legacySpecUnavailable && <span className="chip">legacy spec unavailable</span>}
           {task.specs[0]?.author === "lead" && (
             <span className="chip" title="Proposed by the lead">

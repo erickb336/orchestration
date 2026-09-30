@@ -27,6 +27,71 @@ export interface VisionRevision {
   text: string;
   focus: string;
   reason: string;
+  /**
+   * ORC-009: where a revision came from when it was not typed by hand. A lead focus change names its
+   * change set, run and the user's messages; an Undo names the set it undid; an applied suggestion
+   * names its set only.
+   */
+  source?: { changeSetId?: string; leadRunId?: string; messageIds?: string[]; undoOf?: string };
+}
+
+// ---------- steering by conversation (ORC-009) ----------
+
+/** How far the lead may go when the user gives direction in the conversation. */
+export type SteeringMode = "apply" | "apply-own" | "suggest";
+export const STEERING_MODES: SteeringMode[] = ["apply", "apply-own", "suggest"];
+
+/** Dispatch-only: no new step starts on this task or its descendants. Never a hold; nothing is interrupted. */
+export interface Deferral {
+  by: "lead" | "user";
+  at: string;
+  reason: string;
+  /** The change set that deferred it (lead deferrals and applied suggestions). */
+  changeSetId?: string;
+}
+
+export type SteerAction = "priority" | "defer" | "undefer" | "drop";
+export type SteeringValue = string | number | Deferral | null;
+
+export interface SteeringChange {
+  /** `${setId}.${n}` */
+  id: string;
+  /** "invalid": an entry the service could not read as one of the four actions (always rejected). */
+  kind: "focus" | "priority" | "defer" | "undefer" | "drop" | "invalid";
+  taskId?: string;
+  /** focus text | priority | deferral | lifecycle */
+  before: SteeringValue;
+  after: SteeringValue;
+  /** The lead's reason (plain text, at most 300 characters). */
+  why: string;
+  status: "applied" | "suggested" | "skipped" | "rejected" | "undone" | "dismissed" | "superseded";
+  /** Service reason: why suggested, skipped or rejected; "left as is on undo: …". */
+  note?: string;
+  appliedBy?: "lead" | "user";
+  /** focus: the revision created (applied) or based on (suggested). */
+  visionRev?: number;
+  /** undo / apply / dismiss / supersede time */
+  resolvedAt?: string;
+}
+
+/** What one lead reply changed, suggested, skipped or rejected. Written by the service, never by the lead's prose. */
+export interface SteeringChangeSet {
+  /** `cs-${leadRunId}` */
+  id: string;
+  leadRunId: string;
+  messageIds: string[];
+  at: string;
+  /** The project's steering mode in force at completion. */
+  mode: SteeringMode;
+  basedOnVisionRev: number;
+  reason: string;
+  /** The whole block was refused (a planning run, a run from before steering existed, not an object). */
+  refused?: string;
+  /** Newer direction arrived while the lead worked: every applicable item became a suggestion. */
+  heldBecause?: string;
+  /** Set-level notes (reason ignored, tasks not a list, …). */
+  notes: string[];
+  changes: SteeringChange[];
 }
 
 export interface Project {
@@ -50,6 +115,8 @@ export interface Project {
   /** Bounds applied to every real run attempt. */
   runLimits: RunLimits;
   autonomy: Autonomy;
+  /** ORC-009: apply the lead's steering, apply it to the lead's own work only, or only suggest. Default "apply". */
+  steeringMode: SteeringMode;
   /** Last planning run start (for the planning interval). */
   lastPlanningAt?: string;
   /** Automatic delivery state: retried until the delivery branch contains all integrated work. */
@@ -370,6 +437,12 @@ export interface Task {
   revertOf?: { taskId: string; commit: string };
   /** Who cancelled the task. A dedicated review the user cancelled is not started again by the service. */
   cancelledBy?: Actor;
+  /** ORC-009: explicit user choices the lead must not override (ISO time the user made them). */
+  userSet?: { priority?: string; run?: string };
+  /** ORC-009, dispatch-only: no new step starts on this task or its descendants. Never a hold. */
+  deferral?: Deferral;
+  /** ORC-009: the lead dropped (cancelled) its own unstarted proposal; what reopen restores. */
+  dropped?: { changeSetId: string; lifecycle: "proposed" | "ready"; at: string };
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
   legacySpecUnavailable?: boolean;
@@ -405,7 +478,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 10;
+  version: 11;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -414,6 +487,8 @@ export interface State {
   events: ActivityEvent[];
   conversation: Message[];
   leadRuns: LeadRun[];
+  /** ORC-009: the last 200 steering change sets; events keep the full record. */
+  steering: SteeringChangeSet[];
 }
 
 /** One entry in the lead conversation. */
@@ -428,6 +503,10 @@ export interface Message {
   proposedTaskIds?: string[];
   /** Proposals the service rejected, with reasons. */
   rejected?: string[];
+  /** ORC-009, lead messages: the steering change set this reply carried. */
+  changeSetId?: string;
+  /** ORC-009, user messages: the task page the message was sent from. */
+  taskId?: string;
 }
 
 export type LeadTrigger = "message" | "planning";
@@ -449,6 +528,10 @@ export interface LeadRun {
   actualModel?: string;
   usage?: Attempt["usage"];
   note?: string;
+  /** ORC-009: the vision revision the run started from. Absent on runs from before steering existed (they cannot steer). */
+  visionRev?: number;
+  /** ORC-009: the change set this run's reply produced. */
+  changeSetId?: string;
 }
 
 /** Bounds on the lead's own initiative. Off until the user turns it on. */

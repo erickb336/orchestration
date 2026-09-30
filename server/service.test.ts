@@ -226,6 +226,23 @@ describe("scheduler with fake runtime", () => {
     expect(M.activeAttempts(after, "EX-002")).toHaveLength(0);
   });
 
+  it("ORC-009: a simulated message run that reads like a change of direction steers, labelled as simulated", () => {
+    const store = open();
+    const { scheduler } = make(store, { progressPerTick: 60 });
+    // The sample project cannot run a live lead; a real project with the fake runtime can.
+    store.command("initProject", { name: "P", repoPath: "/tmp/x", vision: "v", focus: "Deployment first" }, k(), iso(T0));
+    store.command("createTask", { title: "Automate deploy", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 5, holdBeforeStart: true, templateId: "change" }, k(), iso(T0));
+    store.command("postMessage", { text: "focus more on building out the apps working locally vs automating the deployment process" }, k(), iso(T0 + 10));
+    for (let t = 1; t <= 4; t++) scheduler.tick(T0 + t * 1000);
+    const s = store.read().state;
+    const set = s.steering[0];
+    expect(set).toBeDefined();
+    expect(set.refused).toBeUndefined();
+    expect(M.currentVision(s).focus.startsWith("(Simulated) ")).toBe(true);
+    expect(set.changes.find((c) => c.kind === "defer")).toMatchObject({ taskId: "T-001", status: "applied" });
+    expect(s.conversation.filter((m) => m.author === "lead").pop()!.text).toMatch(/^\(Simulated lead\)/);
+  });
+
   it("drives tasks to completion with artifacts and never exceeds the worker limit", () => {
     const store = open();
     const { scheduler } = make(store, { progressPerTick: 40 });

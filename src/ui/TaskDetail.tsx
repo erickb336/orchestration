@@ -11,6 +11,7 @@ import { DeliveryCard } from "./Delivery";
 import { SpecEditor } from "./SpecEditor";
 import { PipelineEditor } from "./PipelineEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
+import { useLeadContext } from "./LeadDrawer";
 
 export function TaskDetail({ id }: { id: string }) {
   const { state } = useStore();
@@ -84,12 +85,20 @@ export function TaskDetail({ id }: { id: string }) {
 
 function Controls({ state, task, editing, onEdit }: { state: State; task: Task; editing: boolean; onEdit: () => void }) {
   const { send, disabled } = useStore();
+  const lead = useLeadContext();
   const [prio, setPrio] = useState(String(task.priority));
   useEffect(() => setPrio(String(task.priority)), [task.priority]);
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
+  const provenance = M.priorityProvenance(state, task);
+  const askLead = (
+    <button onClick={() => lead.openLead({ taskId: task.id })} title="Your message carries this task as context">
+      Ask the lead about this task
+    </button>
+  );
   if (!open) {
     return (
       <div className="controls">
+        {askLead}
         {task.lifecycle === "done" && (
           <button
             disabled={disabled}
@@ -124,14 +133,52 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
       <button onClick={onEdit} disabled={editing}>
         Edit spec
       </button>
-      <label className="row" style={{ gap: "0.3rem" }}>
-        <span className="muted" style={{ fontSize: "0.85rem" }}>
-          Priority
+      {askLead}
+      <span className="row" style={{ gap: "0.3rem" }}>
+        <label className="row" style={{ gap: "0.3rem" }}>
+          <span className="muted" style={{ fontSize: "0.85rem" }}>
+            Priority
+          </span>
+          <input type="number" min={1} value={prio} onChange={(e) => setPrio(e.target.value)} style={{ width: "4rem" }} />
+          <button className="small" disabled={disabled || Number(prio) === task.priority} onClick={() => void send("setPriority", { taskId: task.id, priority: Number(prio) })}>
+            Set
+          </button>
+        </label>
+        <span className="provenance">
+          {provenance.kind === "user" && (
+            <>
+              set by you ·{" "}
+              <button className="link" disabled={disabled} onClick={() => void send("setPriorityPin", { taskId: task.id, pinned: false })}>
+                Let the lead reorder this
+              </button>
+            </>
+          )}
+          {provenance.kind === "lead" && (
+            <>
+              set by the lead (was P{provenance.was}) ·{" "}
+              <button className="link" disabled={disabled} onClick={() => void send("undoSteering", { changeSetId: provenance.changeSetId, changeId: provenance.changeId })}>
+                Undo
+              </button>{" "}
+              ·{" "}
+              <button className="link" disabled={disabled} title="The lead may not reorder it again" onClick={() => void send("setPriorityPin", { taskId: task.id, pinned: true })}>
+                Keep P{task.priority}
+              </button>
+            </>
+          )}
+          {provenance.kind === "auto" && (
+            <>
+              Auto: the lead may reorder it when you steer ·{" "}
+              <button className="link" disabled={disabled} title="The lead may not reorder it" onClick={() => void send("setPriorityPin", { taskId: task.id, pinned: true })}>
+                Pin P{task.priority}
+              </button>
+            </>
+          )}
+          {provenance.kind === "child" && `Runs at ${provenance.rootId}'s priority (P${provenance.priority}); Set pins its own`}
         </span>
-        <input type="number" min={1} value={prio} onChange={(e) => setPrio(e.target.value)} style={{ width: "4rem" }} />
-        <button className="small" disabled={disabled || Number(prio) === task.priority} onClick={() => void send("setPriority", { taskId: task.id, priority: Number(prio) })}>
-          Set
-        </button>
+      </span>
+      <label className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }} title="The lead may not defer this task when you steer">
+        <input type="checkbox" checked={!!task.userSet?.run} disabled={disabled} onChange={(e) => void send("setRunPin", { taskId: task.id, pinned: e.target.checked })} />
+        Keep running whatever the focus
       </label>
       <button
         className="danger"
@@ -251,6 +298,43 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
         Held before start: this task will not be dispatched until you release it.
       </div>,
     );
+  // ORC-009: a deferral is not a pause. The running step finishes and its result is kept; then nothing new starts.
+  const deferral = task.lifecycle !== "done" && task.lifecycle !== "cancelled" ? M.deferredBy(state, task) : undefined;
+  if (deferral) {
+    const own = deferral.task.id === task.id;
+    const set = deferral.deferral.changeSetId ? state.steering.find((cs) => cs.id === deferral.deferral.changeSetId) : undefined;
+    const row = set?.changes.find((c) => c.kind === "defer" && c.taskId === deferral.task.id && c.status === "applied" && c.appliedBy === "lead");
+    const runningNow = active.some((a) => a.outcome === "running");
+    out.push(
+      <div className="banner neutral" role="status" key="deferral">
+        <strong>
+          {own ? (deferral.deferral.by === "lead" ? "Deferred by the lead from your message" : "Deferred by you") : `Deferred with ${deferral.task.id}`}
+          {deferral.deferral.reason ? `: ${deferral.deferral.reason}` : ""}.
+        </strong>{" "}
+        {runningNow ? "This step finishes and its result is kept, then nothing new starts." : "Nothing new starts on this task until it runs again."}
+        {task.holdBeforeStart && task.lifecycle !== "active" ? " It also still needs its hold before start released." : ""}{" "}
+        {own ? (
+          <button className="small" disabled={disabled} onClick={() => void send("undeferTask", { taskId: task.id })} title="Lift the deferral and keep this task running whatever the focus">
+            Run now
+          </button>
+        ) : (
+          <>
+            Run <a href={`#/task/${encodeURIComponent(deferral.task.id)}`}>{deferral.task.id}</a> now to continue.
+          </>
+        )}{" "}
+        {own && row && set && (
+          <button className="small" disabled={disabled} onClick={() => void send("undoSteering", { changeSetId: set.id, changeId: row.id })}>
+            Undo
+          </button>
+        )}{" "}
+        {runningNow && !task.hold && (
+          <button className="small" disabled={disabled} onClick={() => void send("pauseTask", { taskId: task.id })} title="Interrupt the running step now; it shows Pausing until the runtime confirms">
+            Pause now
+          </button>
+        )}
+      </div>,
+    );
+  }
   if (task.lifecycle === "done") {
     const integ = task.integration;
     if (integ?.status === "conflict")

@@ -16,6 +16,7 @@ export const COLUMN_LABEL: Record<M.Column, string> = {
   running: "Running",
   reviewing: "Reviewing",
   paused: "Paused",
+  deferred: "Deferred",
   blocked: "Blocked",
   done: "Done",
   cancelled: "Cancelled",
@@ -43,7 +44,7 @@ export function StatePill({ state, task }: { state: State; task: Task }) {
   const label = M.stateLabel(state, task);
   const col = M.column(state, task);
   const transitional = label === "Pausing" || label === "Cancelling" || label.startsWith("Stopping");
-  const cls = label === "Control failure" ? "failure" : label === "Pausing" ? "paused" : col;
+  const cls = label === "Control failure" ? "failure" : label === "Pausing" ? "paused" : label.includes("deferred after this step") ? "deferred" : col;
   return <span className={`pill ${cls}${transitional ? " transition" : ""}`}>{label}</span>;
 }
 
@@ -143,6 +144,8 @@ export function autonomyArgs(a: Autonomy, patch: Partial<Autonomy>): Autonomy {
 export const PREF_ONBOARDING_DISMISSED = "orchestration.onboarding.dismissed";
 export const PREF_INVOLVEMENT_CHOSEN = "orchestration.involvement.chosen";
 export const PREF_NOTIFY = "orchestration.notify";
+/** The `at` of the newest lead reply this browser has shown (the Lead button counts newer ones). */
+export const PREF_LEAD_SEEN = "orchestration.lead.seenAt";
 
 /** Fallback when browser storage is blocked: the preference lasts for this page only. */
 const memoryPrefs = new Map<string, string | null>();

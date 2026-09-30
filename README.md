@@ -15,9 +15,11 @@ A single Claude Code or Codex chat is one agent, one conversation, and one provi
 | The agent that wrote the code also checks it. | An independent reviewer checks every change, from the other provider if you choose (Codex writes, Claude reviews, or the reverse). Repairs repeat until the review is clean. |
 | You prompt for every next step. | A lead plans toward your vision, writes a spec for each task, and keeps work moving on a cadence and within limits you set. |
 | Work lives in a transcript and is gone when the chat ends. | Every task keeps its spec, the decision and why, the artifacts, and what was verified. You can come back days later and see all of it. |
-| To correct course, you interrupt and re-explain. | You pause any step, edit what it produced (a design, the findings, a breakdown), and resubmit. Later steps follow your version. |
+| To change direction, you interrupt and re-explain. | You tell the lead in one sentence, from any page, while work continues. It changes the focus, reorders the board, and defers what no longer fits. It lists each change, and you can undo any of them. |
+| To correct one piece of work, you interrupt and re-explain. | You pause any step, edit what it produced (a design, the findings, a breakdown), and resubmit. Later steps follow your version. |
 | A big goal has to fit in one context. | A goal is broken into child tasks that run in parallel, are evaluated, and are planned again until the goal is met. |
-| You copy results into your branch yourself. | Verified work is merged in order and delivered to your branch, only when that is safe. |
+| You copy results into your branch yourself. | Verified work is merged in order and delivered to your branch or as GitHub pull requests. A pull request can wait for you, or merge by itself once an independent review is clean and your required checks pass. |
+| You read everything before it lands, or you do not look at all. | Everything that landed sits in a review-later list. Look at it when you like, mark it reviewed, or send it back as a fix or a revert. The list never blocks delivery. |
 | The way of working is whatever you typed this time. | Pipelines are workflows you edit once and reuse: design → implement → review → repair → verify, or any shape you build. |
 
 In short: a chat is one pair of hands on one track. Orchestrator is a team on many tracks, with a lead, a process, a record, and one place to see how each track is going. You decide how involved to be, from approving each task to letting it run end to end.
@@ -38,10 +40,19 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
   - **Only when I ask.**
 
   Independently of these, you can add review gates to single steps, or turn on step-by-step review for a task. Pause always works, and "Paused" is shown only after the runtime confirms the stop.
+- **Steering by conversation.**
+  - You can message the lead from any page while work continues. A message stops a planning run in progress, so yours is answered next.
+  - From its reply the lead can change the focus, reprioritise open tasks, defer work that no longer fits (the current step finishes first), and drop its own proposals that have not started.
+  - Every change is listed under the reply with Undo. Choices you made by hand are never overridden: a change to one of them becomes a suggestion.
+  - A setting limits the lead to its own work, or to suggestions only.
 - **Scale.**
   - Claude and Codex run concurrently: up to 16 workers, with separate limits per provider.
   - Failed steps can be retried automatically.
-  - Verified work is merged serially into an integration branch and, if you want, fast-forwarded into your branch.
+- **Delivery, three ways** (Settings → Delivery, one at a time, off by default).
+  - **Off:** verified work is merged serially into an integration branch for you to merge.
+  - **Local branch:** that branch is fast-forwarded into a branch of your repository, only when that is safe.
+  - **GitHub pull requests:** one pull request per finished task. It is either held for you, or merged automatically after an independent review and passing required checks.
+- **Review after it lands.** The Review page lists the pull requests that need you and everything that has landed. For each landed item you can read the summary, the agent review, the checks, and the diff. You can mark it reviewed, leave a note, or send it back as a fix or a revert.
 - **Truthful and durable.**
   - Every change is a transaction in a local SQLite database.
   - A restart reconciles instead of guessing.
@@ -49,11 +60,27 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
 
 ## Screenshots
 
-All screenshots show the built-in sample project on the simulated runtime (no agents running).
+All screenshots show the built-in sample project on the simulated runtime: no agents are running, and the pull requests are simulated.
 
 **Tasks board.** Every task has a spec, a pipeline, and a truthful state. Child tasks link to the goal they came from.
 
 ![Tasks board](docs/screenshots/board.png)
+
+**Steering by conversation.** You tell the lead what to focus on, from any page, while work continues. The reply lists exactly what changed (here a new focus and one deferred task), and each change has an Undo.
+
+![Steering the lead from the board](docs/screenshots/steering.png)
+
+**Pull requests that need you.** Each finished task becomes one pull request. The card shows the independent review and a checklist of what must hold before it merges. Here the pull request is held for you.
+
+![Review page: pull requests that need you](docs/screenshots/review.png)
+
+**Review after it lands.** Everything that landed is listed with its summary, agent review, and checks. You can mark it reviewed, leave a note, or send it back as a fix or a revert.
+
+![Review page: landed work](docs/screenshots/landed.png)
+
+**Delivery settings.** Choose one: off, a local branch, or GitHub pull requests. With pull requests, choose whether each one is held for you or merged automatically after an independent review and passing checks.
+
+![Delivery settings](docs/screenshots/delivery-settings.png)
 
 **A large goal broken into child tasks.** The Goal template plans the work as child tasks and waits for them. Then it evaluates the result and plans the next round.
 
@@ -196,6 +223,7 @@ docs/         the project specification, research, and one versioned spec per bu
 - **Connections:** MCP servers and plugins you allow run with your permissions and are not sandboxed.
 - **GitHub:** only the service runs `gh` and `git push`. It never uses `--admin`, GitHub's own auto-merge, a forced push, a branch deletion or the merge API; the only merge is `gh pr merge --merge --match-head-commit <sha>`. A change to CI workflow files is not pushed until you allow it for that pull request, and a change to other protected files is never merged automatically. A worker environment set to "local", or Claude workers with a shell, can reach your GitHub sign-in: automatic merging is refused for local environments unless you allow it, and both are listed as warnings in Settings → Delivery. An agent review is not a human review; the required checks, the protected paths, the daily cap and the Review list are the independent layers.
 - **Autopilot:** the lead reads summaries that workers wrote, and on Autopilot its proposals start without review. Treat repositories and connections you do not trust accordingly. Use "check in before work starts", or review gates, when that matters.
+- **Steering by conversation (ORC-009):** when you give direction in the conversation, the lead may change the focus, reorder and defer open root tasks, and drop its own unstarted proposals. Only runs that answer your messages may steer, so worker-written summaries cannot steer through a planning run; a reply run still reads them. The damage is bounded: four verbs, at most 20 task changes and one focus change per reply, nothing is interrupted, nothing you created or started is cancelled, settings, specs and pins are out of reach, and every change is listed with Undo. The lead cannot steer the app's own delivery work: the review and fix tasks it creates for a pull request are rejected as not steerable and are left off the lead's board. Choices you made by hand (a priority, a pause) are never overridden. Settings can limit the lead to its own proposals or to suggestions only. Steering has been exercised only with scripted and simulated leads, not with real Claude or Codex lead runs.
 
 ## Status
 
@@ -210,8 +238,9 @@ This is a personal tool under active development. It is built in milestones (see
 | Reliability, autopilot, human editing, import/export, and CI | ORC-006 |
 | Fan-out: parallel agents per step, iteration loops, breakdowns into child tasks | ORC-007 |
 | Pull-request delivery, independent review and automatic merge, review-later list | ORC-008 |
+| Steering by conversation: focus, priorities, defer and drop, with undo | ORC-009 |
 
-Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test runs Claude and Codex workers concurrently against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost.
+Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test runs Claude and Codex workers concurrently against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost. Steering by conversation (ORC-009) has been exercised only with scripted and simulated leads; no real Claude or Codex lead run has steered yet.
 
 Pull-request delivery is covered by tests that never contact GitHub: a local bare repository stands in for the remote and a fake stands in for the GitHub API. `node scripts/pr-sandbox-check.mjs --repo <owner>/<throwaway-repo> --yes` records evidence against a real repository. It refuses to run without both arguments, never defaults to a repository, and creates branches, pull requests, a ruleset and a workflow there, so use a repository made for it. That run passed on 2026-09-30 against a sandbox repository with scripted agents standing in for Claude and Codex (25 of 25 checks; see `docs/tasks/ORC-008.md`). It has not been run with real Claude and Codex workers.
 

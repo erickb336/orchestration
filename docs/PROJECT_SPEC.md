@@ -45,7 +45,7 @@ Show a short editable vision, current focus, project run state, latest meaningfu
 
 ### Task board
 
-Provide a compact list by default and an optional board view. Group by Proposed, Ready, Running, Reviewing, Paused, Blocked, and Done; cancelled work lives in history. Each card shows its title, intended user benefit, priority, state, current role and provider, latest activity, and chosen approach summary. Make the attached spec accessible in one click.
+Provide a compact list by default and an optional board view. Group by Proposed, Ready, Running, Reviewing, Paused, Deferred, Blocked, and Done; cancelled work lives in history. Deferred (ORC-009) means nothing new starts on the task or its child tasks; a running step finishes and its result is kept, so it is never shown as Paused. Each card shows its title, intended user benefit, priority, state, current role and provider, latest activity, and chosen approach summary. Make the attached spec accessible in one click.
 
 Filters: app/area, status, role, provider, and tasks changed since the user's last visit. Sorting: priority or latest activity. New proposals appear as soon as their first valid spec is published. A badge identifies decisions made since the user's last visit; viewing does not approve or pause a task.
 

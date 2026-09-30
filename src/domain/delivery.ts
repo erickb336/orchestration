@@ -751,6 +751,12 @@ function finishedReview(s: State, pr: PrDelivery, rv: Task): ReviewView {
   if (rv.lifecycle !== "done") {
     const blocked = rv.steps.find((x) => x.state === "blocked");
     if (blocked) return { state: "blocked", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} cannot run: ${blocked.blockedReason ?? "its step is blocked"}`) };
+    // ORC-009 review finding 1: steering rejects delivery tasks, but a deferral reached by any other path
+    // must be reported as what it is: nothing starts on the review until the deferral is lifted.
+    const deferred = !M.activeAttempts(s, rv.id).length && M.deferredBy(s, rv);
+    if (deferred) {
+      return { state: "blocked", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is deferred${deferred.task.id !== rv.id ? ` with ${deferred.task.id}` : ""}, so it does not run. Run it now to continue, or merge it yourself.`) };
+    }
     const how = M.activeAttempts(s, rv.id).length ? "running" : rv.hold || rv.holdBeforeStart ? "paused" : "queued";
     return { state: "pending", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is ${how}.`) };
   }
