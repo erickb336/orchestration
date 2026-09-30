@@ -2,11 +2,12 @@ import { useEffect, useState } from "react";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
 import { toDef } from "../domain/pipeline";
-import { ROLES, type Attempt, type State, type Task } from "../domain/types";
+import { ROLES, type Artifact, type Attempt, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } from "./common";
 import { SpecEditor } from "./SpecEditor";
 import { PipelineEditor } from "./PipelineEditor";
+import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
 
 export function TaskDetail({ id }: { id: string }) {
   const { state } = useStore();
@@ -36,6 +37,11 @@ export function TaskDetail({ id }: { id: string }) {
             <span className="chip">spec r{spec.rev}</span>
             {task.legacySpecUnavailable && <span className="chip">legacy spec unavailable</span>}
             <span className="chip">{task.specs[0]?.author === "lead" ? "Proposed by the lead" : "Created by you"}</span>
+            {task.parentTaskId && (
+              <span className="chip">
+                part of <a href={`#/task/${encodeURIComponent(task.parentTaskId)}`}>{task.parentTaskId}</a>
+              </span>
+            )}
             {task.followUpOf && (
               <span className="chip">
                 follow-up of <a href={`#/task/${task.followUpOf}`}>{task.followUpOf}</a>
@@ -55,6 +61,7 @@ export function TaskDetail({ id }: { id: string }) {
         <div className="grid-2">
           <div>
             <OutcomeCard task={task} />
+            <ChildTasksCard state={state} task={task} />
             <OptionsCard task={task} />
             <DetailsCard task={task} />
             <StepsCard state={state} task={task} />
@@ -210,7 +217,13 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
   else if (task.hold && !stopping.length)
     out.push(
       <div className="banner neutral" key="hold">
-        Paused by you. Edits keep it paused; it runs again only after you resume it.
+        {task.pausedWith ? (
+          <>
+            Paused with <a href={`#/task/${task.pausedWith}`}>{task.pausedWith}</a>. Resuming {task.pausedWith} resumes this task too, or resume it on its own.
+          </>
+        ) : (
+          "Paused by you. Edits keep it paused; it runs again only after you resume it."
+        )}
       </div>,
     );
   if (task.holdBeforeStart && task.lifecycle !== "active")
@@ -541,6 +554,15 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                         </span>
                       </>
                     )}
+                    {stepChips(state, task, st).map((c) => (
+                      <span key={c.text}>
+                        {" "}
+                        <span className={`chip${c.strong ? " strong" : ""}`} title={c.title}>
+                          {c.text}
+                        </span>
+                      </span>
+                    ))}
+                    <BestOfChoice task={task} stepId={st.id} />
                     <div className="muted" style={{ fontSize: "0.8rem" }}>
                       {st.dependsOn.length ? `after ${st.dependsOn.join(", ")}` : "first"} · config r{st.revision}
                     </div>
@@ -784,7 +806,16 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                 {a.stepId}.{a.name} v{a.version}
               </span>
               <span>
-                <span className="chip">{a.kind}</span> {edited && <span className="chip edited">edited by you</span>} <span style={{ whiteSpace: "pre-wrap" }}>{a.summary}</span>
+                <span className="chip">{a.kind}</span> {edited && <span className="chip edited">edited by you</span>}{" "}
+                {notChosen(task, a.stepId) && (
+                  <>
+                    <span className="chip" title="Another candidate was chosen; this one's work stays visible and on its branch">
+                      not chosen
+                    </span>{" "}
+                  </>
+                )}
+                <span style={{ whiteSpace: "pre-wrap" }}>{a.summary}</span>
+                {a.kind === "breakdown" && <BreakdownChildren state={state} task={task} artifact={a} />}
                 {a.ref && (
                   <div className="mono" style={{ fontSize: "0.78rem" }}>
                     {a.ref}
@@ -819,6 +850,7 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
   const [summary, setSummary] = useState(found?.summary ?? "");
   const [findings, setFindings] = useState(String(found?.openFindings ?? 0));
   const [ref, setRef] = useState("");
+  const [items, setItems] = useState(JSON.stringify(found?.items ?? [], null, 2));
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   if (!found) return null;
@@ -827,7 +859,18 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
   const isFindings = base.kind === "review-findings";
   const isCode = base.kind === "code-change";
   const findingsOk = !isFindings || (/^\d+$/.test(findings.trim()) && Number(findings) >= 0);
-  const canSave = !disabled && !saving && summary.trim() !== "" && reason.trim() !== "" && findingsOk;
+  const isBreakdown = base.kind === "breakdown";
+  let parsedItems: unknown[] | null = null;
+  if (isBreakdown) {
+    try {
+      const v: unknown = JSON.parse(items);
+      parsedItems = Array.isArray(v) ? v : null;
+    } catch {
+      parsedItems = null;
+    }
+  }
+  const refOk = !isCode || !ref.trim() || /^[0-9a-f]{7,40}$/i.test(ref.trim());
+  const canSave = !disabled && !saving && summary.trim() !== "" && reason.trim() !== "" && findingsOk && refOk && (!isBreakdown || parsedItems !== null);
   const readers = task.steps.filter((d) => d.inputs.some((r) => r.step === base.stepId && r.output === base.name)).map((d) => d.id);
   const idp = `edit-${artifactId}`;
   return (
@@ -841,6 +884,7 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
         const args: Record<string, unknown> = { artifactId, summary, reason };
         if (isFindings) args.openFindings = Number(findings);
         if (isCode && ref.trim()) args.ref = ref.trim();
+        if (isBreakdown && parsedItems) args.items = parsedItems;
         const r = await send("editArtifact", args);
         setSaving(false);
         if (r.ok) onClose();
@@ -866,11 +910,23 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
       )}
       {isCode && (
         <label className="field" style={{ margin: 0 }}>
-          <span>Use this commit or branch instead (optional)</span>
-          <input type="text" className="mono" value={ref} placeholder={base.ref ?? "commit SHA or branch"} onChange={(e) => setRef(e.target.value)} />
+          <span>Use this commit instead (optional)</span>
+          <input type="text" className="mono" value={ref} placeholder={base.ref ?? "commit hash"} onChange={(e) => setRef(e.target.value)} aria-invalid={!refOk} />
+          {!refOk && <span style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>Use a commit hash (7–40 hex characters).</span>}
           <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
             Point it at your own commit to replace the worker's change. Leave empty to keep {base.ref ? <span className="mono">{base.ref}</span> : "the current reference"}.
           </span>
+        </label>
+      )}
+      {isBreakdown && (
+        <label className="field" style={{ margin: 0 }}>
+          <span>Work items (each becomes a child task)</span>
+          <textarea className="mono" style={{ minHeight: "10rem" }} value={items} onChange={(e) => setItems(e.target.value)} aria-invalid={parsedItems === null} />
+          <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
+            A JSON list of {`{ "title", "outcome", "approach", "acceptance": [...], "templateId", "priority", "dependsOn": [index] }`}.
+            {task.pendingBreakdowns?.length ? " Child tasks are created from this list when you resume." : ""}
+          </span>
+          {parsedItems === null && <span style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>Not a valid JSON list.</span>}
         </label>
       )}
       <label className="field" style={{ margin: 0 }}>
@@ -899,6 +955,12 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
         <details key={a.id} className="stack" style={{ borderBottom: "1px solid var(--border)", padding: "0.4rem 0" }}>
           <summary>
             <span className="mono">{a.id}</span> · {a.stepId} · {selectionText(a.snapshot)} · <strong>{a.outcome}</strong>
+            {notChosen(task, a.stepId) && a.outcome === "completed" && (
+              <>
+                {" "}
+                <span className="chip">not chosen</span>
+              </>
+            )}
             {(a.outcome === "running" || a.outcome === "stopping") && a.progress > 0 && (
               <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`} style={{ marginTop: "0.3rem" }}>
                 <div style={{ width: `${a.progress}%` }} />
@@ -1072,5 +1134,105 @@ function RevisionsCard({ task }: { task: Task }) {
         </>
       )}
     </section>
+  );
+}
+
+/** On the first member of a best-of group, which candidate the comparing step chose. */
+function BestOfChoice({ task, stepId }: { task: Task; stepId: string }) {
+  const { send, disabled } = useStore();
+  const st = task.steps.find((x) => x.id === stepId);
+  const g = st && copyGroup(task, st);
+  if (!g || g.mode !== "best-of" || g.index !== 1) return null;
+  const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
+  const finished = g.members.filter((m) => m.state === "done");
+  return (
+    <div className="muted" style={{ fontSize: "0.8rem" }}>
+      Best of {g.members.length} ({g.members.map((x) => x.id).join(", ")}):{" "}
+      {g.chosen ? (
+        <strong style={{ color: "var(--text)" }}>
+          Chosen: {g.chosen}
+          {g.byUser ? " (your choice; it stands until that candidate re-runs)" : ""}
+        </strong>
+      ) : (
+        "the next step that reads them chooses one; only the chosen work goes further"
+      )}
+      {open && finished.length > 0 && (
+        <span className="row" style={{ gap: "0.3rem", marginTop: "0.25rem" }}>
+          <span>{g.chosen ? "Change to:" : "Or choose yourself:"}</span>
+          {finished
+            .filter((m) => m.id !== g.chosen)
+            .map((m) => (
+              <button key={m.id} className="small" disabled={disabled} onClick={() => void send("chooseCandidate", { taskId: task.id, group: m.copyOf, stepId: m.id })}>
+                {m.id}
+              </button>
+            ))}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ChildLink({ state, child }: { state: State; child: Task }) {
+  return (
+    <span className="child-link">
+      <a href={`#/task/${encodeURIComponent(child.id)}`} className="mono">
+        {child.id}
+      </a>{" "}
+      {M.currentSpec(child).content.title} <StatePill state={state} task={child} />
+    </span>
+  );
+}
+
+/** Tasks created by this task's breakdown steps. */
+function ChildTasksCard({ state, task }: { state: State; task: Task }) {
+  const children = M.childTasks(state, task);
+  const plansBreakdown = task.steps.some((st) => st.outputs.some((o) => o.kind === "breakdown"));
+  if (!children.length && !plansBreakdown) return null;
+  const finished = children.filter(isSettledTask);
+  const cancelled = children.filter((c) => c.lifecycle === "cancelled").length;
+  return (
+    <section className="card" aria-labelledby="children-h">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 id="children-h">Child tasks</h2>
+        {children.length > 0 && (
+          <span className="chip">
+            {finished.length} of {children.length} finished{cancelled ? ` (${cancelled} cancelled)` : ""}
+          </span>
+        )}
+      </div>
+      {!children.length ? (
+        <p className="muted">None yet. When a breakdown step completes, each item it lists becomes a child task here.</p>
+      ) : (
+        <ul className="plain stack">
+          {children.map((c) => (
+            <li key={c.id}>
+              <ChildLink state={state} child={c} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function BreakdownChildren({ state, task, artifact }: { state: State; task: Task; artifact: Artifact }) {
+  const children = childrenOfArtifact(state, task, artifact);
+  if (!children.length)
+    return (
+      <div className="muted" style={{ fontSize: "0.8rem" }}>
+        {artifact.author === "user" ? "Your edit did not create child tasks." : "No child tasks came from this version."}
+      </div>
+    );
+  return (
+    <div style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
+      Created {children.length} child task{children.length === 1 ? "" : "s"}:
+      <ul className="plain">
+        {children.map((c) => (
+          <li key={c.id}>
+            <ChildLink state={state} child={c} />
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

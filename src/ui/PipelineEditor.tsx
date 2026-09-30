@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { nextStepId, upstreamOf, validatePipeline } from "../domain/pipeline";
-import { ARTIFACT_KINDS, ROLES, type ArtifactKind, type InputRef, type RoleId, type StepDef, type WorkflowTemplate } from "../domain/types";
+import * as M from "../domain/model";
+import { ARTIFACT_KINDS, PROVIDERS, ROLES, type ArtifactKind, type InputRef, type ProviderId, type RoleId, type StepDef, type WorkflowTemplate } from "../domain/types";
 import { ROLE_LABEL } from "./common";
 
 const refKey = (r: InputRef) => `${r.step}.${r.output}`;
@@ -42,6 +43,17 @@ export function PipelineEditor({
   const errors = issues.filter((i) => i.severity === "error");
 
   const update = (i: number, patch: Partial<StepDef>) => setDefs((ds) => ds.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+  /** Set or clear an optional field (cleared fields are removed, not left as undefined). */
+  const setOpt = <K extends "iterate" | "parallel" | "waitForChildren">(i: number, key: K, value: StepDef[K] | undefined) =>
+    setDefs((ds) =>
+      ds.map((d, j) => {
+        if (j !== i) return d;
+        const next = { ...d };
+        if (value === undefined) delete next[key];
+        else next[key] = value;
+        return next;
+      }),
+    );
   const move = (i: number, dir: -1 | 1) =>
     setDefs((ds) => {
       const next = [...ds];
@@ -55,12 +67,17 @@ export function PipelineEditor({
       // Drop references to the removed step so the draft stays close to valid.
       return ds
         .filter((_, j) => j !== i)
-        .map((d) => ({
-          ...d,
-          dependsOn: d.dependsOn.filter((x) => x !== gone),
-          inputs: d.inputs.filter((r) => r.step !== gone),
-          runIf: d.runIf?.filter((r) => r.step !== gone),
-        }));
+        .map((d) => {
+          const next: StepDef = {
+            ...d,
+            dependsOn: d.dependsOn.filter((x) => x !== gone),
+            inputs: d.inputs.filter((r) => r.step !== gone),
+            runIf: d.runIf?.filter((r) => r.step !== gone),
+          };
+          // A loop that started at the removed step loses its start; repeat must be set again.
+          if (next.iterate?.from === gone) delete next.iterate;
+          return next;
+        });
     });
   const add = () =>
     setDefs((ds) => {
@@ -190,6 +207,11 @@ export function PipelineEditor({
                       <option key={kind}>{kind}</option>
                     ))}
                   </select>
+                  {o.kind === "breakdown" && (
+                    <span className="muted" style={{ fontSize: "0.8rem" }}>
+                      Each listed item becomes a child task.
+                    </span>
+                  )}
                   <button type="button" className="small" aria-label={`Remove ${d.id} output ${o.name}`} onClick={() => update(i, { outputs: d.outputs.filter((_, j) => j !== k) })}>
                     Remove
                   </button>
@@ -237,6 +259,8 @@ export function PipelineEditor({
                 (you can read or edit its artifacts before the next step starts)
               </span>
             </label>
+
+            <FanOutFields defs={defs} index={i} setOpt={setOpt} />
 
             {stepIssues.length > 0 && (
               <ul className="plain" style={{ fontSize: "0.85rem" }}>
@@ -293,5 +317,154 @@ export function PipelineEditor({
         )}
       </div>
     </form>
+  );
+}
+
+const PARALLEL_COUNTS = [2, 3, 4, 5];
+
+/** Per-step fan-out settings: parallel agents, repeat (loop), and waiting for child tasks. */
+function FanOutFields({
+  defs,
+  index,
+  setOpt,
+}: {
+  defs: StepDef[];
+  index: number;
+  setOpt: <K extends "iterate" | "parallel" | "waitForChildren">(i: number, key: K, value: StepDef[K] | undefined) => void;
+}) {
+  const d = defs[index];
+  const loopTargets = defs.slice(0, index + 1);
+  const isBreakdown = d.outputs.some((o) => o.kind === "breakdown");
+  const expanded = !!d.copyOf; // already split into copies on a running task
+  const isCopy = !!d.copyOf && d.copyOf !== d.id;
+  const summary = [d.parallel && `parallel ×${d.parallel.count}`, d.iterate && `repeats ×${d.iterate.max}`, d.waitForChildren && "waits for child tasks"].filter(Boolean).join(" · ");
+  const setParallel = (patch: Partial<NonNullable<StepDef["parallel"]>>) => {
+    const cur = d.parallel ?? { count: 2, mode: "copies" as const };
+    const next = { ...cur, ...patch };
+    if (!next.providers?.length) delete next.providers;
+    setOpt(index, "parallel", next);
+  };
+  const toggleProvider = (p: ProviderId, on: boolean) => {
+    const cur = d.parallel?.providers ?? [];
+    const set = on ? [...cur, p] : cur.filter((x) => x !== p);
+    // Keep a stable order so round-robin assignment is predictable.
+    setParallel({ providers: PROVIDERS.filter((x) => set.includes(x)) });
+  };
+  const iterateDefault = () => ({ from: d.runIf?.[0]?.step && loopTargets.some((x) => x.id === d.runIf![0].step) ? d.runIf[0].step : d.id, max: 3 });
+  return (
+    <details className="advanced" open={!!(d.parallel || d.iterate || d.waitForChildren || d.copyOf)} style={{ marginBottom: "0.6rem" }}>
+      <summary style={{ fontSize: "0.9rem" }}>
+        Parallel agents, repeat, child tasks{summary && <span className="muted"> · {summary}</span>}
+      </summary>
+      <div className="stack" style={{ padding: "0.5rem 0 0 0.2rem", fontSize: "0.9rem" }}>
+        {isCopy ? (
+          <p className="muted" style={{ margin: 0 }}>
+            This step is a parallel copy of <span className="mono">{d.copyOf}</span>. Its settings follow that group.
+          </p>
+        ) : (
+          <div className="field" style={{ margin: 0 }}>
+            <span>Run as parallel agents</span>
+            <div className="row">
+              <select
+                aria-label={`${d.id} parallel agents`}
+                value={d.parallel ? String(d.parallel.count) : ""}
+                disabled={expanded}
+                onChange={(e) => (e.target.value ? setParallel({ count: Number(e.target.value) }) : setOpt(index, "parallel", undefined))}
+              >
+                <option value="">Off (one agent)</option>
+                {PARALLEL_COUNTS.map((n) => (
+                  <option key={n} value={n}>
+                    {n} agents
+                  </option>
+                ))}
+              </select>
+              {d.parallel && (
+                <>
+                  <label className="row" style={{ gap: "0.25rem" }}>
+                    <input type="radio" name={`${d.id}-mode`} checked={d.parallel.mode === "copies"} disabled={expanded} onChange={() => setParallel({ mode: "copies" })} />
+                    Copies
+                  </label>
+                  <label className="row" style={{ gap: "0.25rem" }}>
+                    <input type="radio" name={`${d.id}-mode`} checked={d.parallel.mode === "best-of"} disabled={expanded} onChange={() => setParallel({ mode: "best-of" })} />
+                    Best of {d.parallel.count}
+                  </label>
+                  <span className="muted" style={{ fontSize: "0.8rem" }}>
+                    Providers:
+                  </span>
+                  {PROVIDERS.map((p) => (
+                    <label key={p} className="row" style={{ gap: "0.25rem" }}>
+                      <input type="checkbox" checked={!!d.parallel?.providers?.includes(p)} disabled={expanded} onChange={(e) => toggleProvider(p, e.target.checked)} />
+                      {M.providerLabel(p)}
+                    </label>
+                  ))}
+                </>
+              )}
+            </div>
+            {d.parallel && (
+              <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
+                {d.parallel.mode === "copies"
+                  ? "Copies: every agent's output goes forward; review findings are summed."
+                  : "Best of N: agents work separately and a later step that reads this output must choose one; only the chosen work goes further."}{" "}
+                {d.parallel.providers?.length
+                  ? `Agents alternate between ${d.parallel.providers.map((p) => M.providerLabel(p)).join(" and ")}.`
+                  : "Every agent uses this step's model."}
+                {expanded && " Already split into agents on this task, so these settings no longer change."}
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className="field" style={{ margin: 0 }}>
+          <label className="row" style={{ gap: "0.35rem" }}>
+            <input type="checkbox" checked={!!d.iterate} onChange={(e) => setOpt(index, "iterate", e.target.checked ? iterateDefault() : undefined)} />
+            Repeat
+          </label>
+          {d.iterate && (
+            <>
+              <div className="row">
+                <label className="row" style={{ gap: "0.3rem" }}>
+                  from
+                  <select aria-label={`${d.id} repeat from`} value={d.iterate.from} onChange={(e) => setOpt(index, "iterate", { ...d.iterate!, from: e.target.value })}>
+                    {!loopTargets.some((x) => x.id === d.iterate!.from) && <option value={d.iterate.from}>{d.iterate.from} (not earlier)</option>}
+                    {loopTargets.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.id}
+                        {x.id === d.id ? " (this step)" : ""} {x.purpose}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="row" style={{ gap: "0.3rem" }}>
+                  up to
+                  <input
+                    type="number"
+                    aria-label={`${d.id} repeat rounds`}
+                    min={1}
+                    max={10}
+                    step={1}
+                    value={Number.isFinite(d.iterate.max) ? d.iterate.max : ""}
+                    style={{ width: "4rem" }}
+                    onChange={(e) => setOpt(index, "iterate", { ...d.iterate!, max: e.target.value === "" ? NaN : Number(e.target.value) })}
+                  />
+                  rounds
+                </label>
+              </div>
+              <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
+                Repeats from {d.iterate.from} through this step until this step is skipped (e.g. no open findings) or {Number.isFinite(d.iterate.max) ? d.iterate.max : "N"} rounds
+                {isBreakdown ? "; because this is a breakdown step, until it lists no more items." : "; for a breakdown step, until it lists no more items."}
+              </span>
+            </>
+          )}
+        </div>
+
+        <label className="row" style={{ gap: "0.35rem" }}>
+          <input type="checkbox" checked={!!d.waitForChildren} onChange={(e) => setOpt(index, "waitForChildren", e.target.checked ? true : undefined)} />
+          Wait for child tasks
+          <span className="muted" style={{ fontSize: "0.8rem" }}>
+            Use after a breakdown step: waits until every child task has finished.
+          </span>
+        </label>
+      </div>
+    </details>
   );
 }

@@ -3,6 +3,7 @@ import * as M from "../domain/model";
 import { AUTOPILOT, PROVIDERS, ROLES, type Autonomy, type WorkflowTemplate } from "../domain/types";
 import { BUILT_IN_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
 import { PipelineEditor } from "./PipelineEditor";
+import { pipelineSummary } from "./fanout";
 import type { CapabilityMap } from "../runtime/adapter";
 import { useStore } from "./store";
 import { ModelPicker, PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, ROLE_LABEL, autonomyArgs, fmtTime, involvementOf, relTime, usePref } from "./common";
@@ -340,7 +341,7 @@ function InvolvementCard() {
             <h3 style={{ margin: 0 }}>Check in before work starts</h3>
             {current("checkin")}
           </div>
-          <p className="muted choice-text">The lead plans on its own, but each task it proposes waits for you to release it. Everything after that runs by itself.</p>
+          <p className="muted choice-text">The lead plans on its own, but each task it proposes (and each child task a breakdown creates) waits for you to release it. Everything after that runs by itself.</p>
           <button disabled={disabled || mode === "checkin"} onClick={() => void choose(autonomyArgs(a, { enabled: true, holdLeadProposals: true }))}>
             Use check-in
           </button>
@@ -351,7 +352,7 @@ function InvolvementCard() {
             <h3 style={{ margin: 0 }}>Only when I ask</h3>
             {current("manual")}
           </div>
-          <p className="muted choice-text">The lead answers your messages and runs the tasks you create or release. It does not plan new work on its own.</p>
+          <p className="muted choice-text">The lead answers your messages and runs the tasks you create or release. It does not plan new work on its own, and child tasks from breakdowns wait for you to start them.</p>
           <button disabled={disabled || mode === "manual"} onClick={() => void choose(autonomyArgs(a, { enabled: false }))}>
             Use manual
           </button>
@@ -826,7 +827,7 @@ function Templates() {
                 {t.description}
               </div>
               <div className="mono muted" style={{ fontSize: "0.78rem" }}>
-                {t.steps.map((st) => `${st.id} ${st.purpose}${st.runIf?.length ? " (if findings)" : ""}`).join(" → ")}
+                {pipelineSummary(t.steps)}
               </div>
             </span>
             <span className="row" style={{ alignItems: "flex-start" }}>

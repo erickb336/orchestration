@@ -153,8 +153,8 @@ export type StepState =
   | "blocked"
   | "pipeline";
 
-export type ArtifactKind = "brief" | "design" | "plan" | "code-change" | "review-findings" | "verification" | "report" | "handoff";
-export const ARTIFACT_KINDS: ArtifactKind[] = ["brief", "design", "plan", "code-change", "review-findings", "verification", "report", "handoff"];
+export type ArtifactKind = "brief" | "design" | "plan" | "code-change" | "review-findings" | "verification" | "report" | "handoff" | "breakdown";
+export const ARTIFACT_KINDS: ArtifactKind[] = ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff"];
 
 /** An artifact a step produces. Name is unique within the step. */
 export interface OutputDef {
@@ -180,6 +180,25 @@ export interface StepDef {
   runIf?: InputRef[];
   /** Pause the task after this step completes, so a person can review or edit its artifacts. */
   gate?: boolean;
+  /**
+   * Loop: set on the LAST step of a loop body that starts at `from`. When this step completes
+   * (and, for a breakdown step, created new child tasks), the service appends the next iteration of
+   * the body as new steps, up to `max` iterations. A loop ends early when its last step is skipped
+   * (for example a repair with no open findings).
+   */
+  iterate?: { from: string; max: number };
+  /**
+   * Run this step as `count` parallel agents. "copies": every copy's output goes forward (review
+   * findings are summed). "best-of": the next step that reads them must choose one; only the chosen
+   * copy's work goes further. `providers` assigns copies round-robin (e.g. one Claude, one Codex).
+   */
+  parallel?: { count: number; mode: "copies" | "best-of"; providers?: ProviderId[] };
+  /** Do not start this step until every child task created by this task's breakdowns has settled. */
+  waitForChildren?: boolean;
+  /** Set by expansion: the parallel group (original step id) this copy belongs to. */
+  copyOf?: string;
+  /** Set by expansion: which loop iteration this step belongs to (first = 1). */
+  iteration?: number;
 }
 
 export interface WorkflowTemplate {
@@ -207,6 +226,8 @@ export interface Artifact {
   /** A durable reference, e.g. the commit SHA and branch holding a code change. */
   ref?: string;
   createdAt: string;
+  /** Breakdown artifacts: the work items (each becomes a child task). */
+  items?: unknown[];
   /** "user" when a person edited or replaced this output (attemptId is then "edit"). */
   author?: "user";
   /** Why the person changed it. */
@@ -317,6 +338,19 @@ export interface Task {
   integration?: Integration;
   /** Pause after every step for review (optional step-by-step mode). */
   reviewEveryStep?: boolean;
+  /** Set when a breakdown step of another task created this task. */
+  parentTaskId?: string;
+  /** The breakdown step and artifact that created this task. */
+  parentStepId?: string;
+  parentArtifactId?: string;
+  /** Breakdowns waiting at a review gate: children are created from the latest version on resume. */
+  pendingBreakdowns?: { stepId: string; output: string }[];
+  /** Best-of groups: the copy (step id) chosen by the step that compared them. */
+  bestOf?: Record<string, string>;
+  /** Best-of groups a person chose (group → when). A later comparison does not override them. */
+  bestOfByUser?: Record<string, string>;
+  /** Set when this task was paused because an ancestor was paused; resuming that ancestor resumes it. */
+  pausedWith?: string;
   /** Why the task is held, when a review gate (not a person) paused it. */
   holdReason?: string;
   followUpOf?: string;

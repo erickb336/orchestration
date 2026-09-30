@@ -42,6 +42,8 @@ const feature: StepDef[] = [
     inputs: [ref("S2", "change"), ref("S3", "findings"), ref("S4", "findings")],
     outputs: [{ name: "change", kind: "code-change" }],
     runIf: [ref("S3", "findings"), ref("S4", "findings")],
+    // Review → repair repeats until the reviews find nothing (at most 3 rounds).
+    iterate: { from: "S3", max: 3 },
   },
   {
     id: "S6",
@@ -74,6 +76,7 @@ const change: StepDef[] = [
     inputs: [ref("S1", "change"), ref("S2", "findings")],
     outputs: [{ name: "change", kind: "code-change" }],
     runIf: [ref("S2", "findings")],
+    iterate: { from: "S2", max: 3 },
   },
   {
     id: "S4",
@@ -107,6 +110,7 @@ const bugfix: StepDef[] = [
     inputs: [ref("S2", "change"), ref("S3", "findings")],
     outputs: [{ name: "change", kind: "code-change" }],
     runIf: [ref("S3", "findings")],
+    iterate: { from: "S3", max: 3 },
   },
   {
     id: "S5",
@@ -142,6 +146,7 @@ const design: StepDef[] = [
     inputs: [ref("S1", "design"), ref("S2", "findings")],
     outputs: [{ name: "design", kind: "design" }],
     runIf: [ref("S2", "findings")],
+    iterate: { from: "S2", max: 3 },
   },
   {
     id: "S4",
@@ -153,7 +158,35 @@ const design: StepDef[] = [
   },
 ];
 
+/**
+ * Large goals: plan a breakdown into child tasks (each runs its own pipeline in parallel), wait for
+ * them, then evaluate. The evaluation may break the remaining work down again, up to five rounds.
+ */
+const goal: StepDef[] = [
+  { id: "S1", purpose: "Plan the goal and break it into independent tasks", role: "designer", dependsOn: [], inputs: [], outputs: [{ name: "plan", kind: "breakdown" }] },
+  {
+    id: "S2",
+    purpose: "Evaluate the finished tasks against the goal; list any remaining work",
+    role: "lead",
+    dependsOn: ["S1"],
+    inputs: [ref("S1", "plan")],
+    outputs: [{ name: "next", kind: "breakdown" }],
+    waitForChildren: true,
+    iterate: { from: "S2", max: 5 },
+  },
+  {
+    id: "S3",
+    purpose: "Report the outcome of the goal",
+    role: "lead",
+    dependsOn: ["S2"],
+    inputs: [ref("S1", "plan"), ref("S2", "next")],
+    outputs: [{ name: "report", kind: "verification" }],
+    waitForChildren: true,
+  },
+];
+
 export const BUILT_IN_TEMPLATES: WorkflowTemplate[] = [
+  { id: "goal", name: "Goal", description: "Large goal: break it into parallel child tasks, evaluate, and iterate until the goal is met.", builtIn: true, rev: 1, steps: goal },
   { id: "feature", name: "Feature", description: "User-facing change: design, implement, independent code and UX review, repair if needed, verify.", builtIn: true, rev: 1, steps: feature },
   { id: "change", name: "Change", description: "Code change without interaction design: implement, review, repair if needed, verify.", builtIn: true, rev: 1, steps: change },
   { id: "bugfix", name: "Bug fix", description: "Reproduce first, fix, review, repair if needed, verify the reproduction no longer fails.", builtIn: true, rev: 1, steps: bugfix },

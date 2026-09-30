@@ -48,6 +48,8 @@ export function buildEnvelope({ state, task, step, attemptId, access }: Envelope
     .map((o) => {
       if (o.kind === "review-findings") return `    "${o.name}": { "summary": "<findings, each with file:line and a suggested fix>", "openFindings": <number of unresolved findings> }`;
       if (o.kind === "code-change") return `    "${o.name}": { "summary": "<what you changed and why, and what you verified>" }`;
+      if (o.kind === "breakdown")
+        return `    "${o.name}": { "summary": "<the plan in a few sentences>", "items": [ { "title": "...", "outcome": "...", "approach": "...", "acceptance": ["..."], "templateId": "change", "priority": 3, "dependsOn": [0] } ] }`;
       return `    "${o.name}": { "summary": "<your ${o.kind}>" }`;
     })
     .join(",\n");
@@ -77,7 +79,7 @@ ${list(c.acceptance)}
 ## Inputs from earlier steps
 ${inputText}
 
-## Workspace rules
+${bestOfNote(state, task, step)}${childrenNote(state, task, step)}## Workspace rules
 - Your working directory is an isolated git worktree created for this run. ${access === "write" ? "Edit files only inside it." : "It is read-only for you: do not create, modify, or delete any file."}
 - Do not commit, push, create branches, or change git configuration; the orchestration service records your work.
 - Do not start sub-agents or delegate; this run is tracked and bounded by the orchestration service.
@@ -97,7 +99,9 @@ ${outputSpec}
 }
 
 export interface ParsedOutputs {
-  outputs: { name: string; summary: string; openFindings?: number }[];
+  outputs: { name: string; summary: string; openFindings?: number; items?: unknown[] }[];
+  /** Best-of choice reported by a comparing step. */
+  chosen?: string;
   /** Why parsing failed or which declared outputs are missing. Empty when everything was reported. */
   problems: string[];
 }
@@ -143,6 +147,14 @@ export function parseOutputs(finalText: string, declared: OutputDef[]): ParsedOu
       continue;
     }
     const out: ParsedOutputs["outputs"][number] = { name: d.name, summary: summary.slice(0, 4000) };
+    if (d.kind === "breakdown") {
+      const items = entry!.items;
+      if (!Array.isArray(items)) {
+        problems.push(`Output "${d.name}" needs an "items" list (it may be empty).`);
+        continue;
+      }
+      out.items = items.slice(0, 50);
+    }
     if (d.kind === "review-findings") {
       const n = Number(entry!.openFindings);
       if (!Number.isInteger(n) || n < 0) {
@@ -153,7 +165,8 @@ export function parseOutputs(finalText: string, declared: OutputDef[]): ParsedOu
     }
     outputs.push(out);
   }
-  return { outputs, problems };
+  const chosen = typeof parsed.chosen === "string" ? parsed.chosen.slice(0, 40) : undefined;
+  return { outputs, problems, ...(chosen ? { chosen } : {}) };
 }
 
 // ---------- the lead ----------
@@ -261,4 +274,40 @@ export function parseLeadOutput(finalText: string): { reply: string; proposals: 
   const reply = typeof obj.reply === "string" ? clip(obj.reply, 8000) : "";
   const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
   return { reply, proposals };
+}
+
+/** A step that reads best-of candidates must choose one. */
+function bestOfNote(_state: State, task: Task, step: Step): string {
+  const groups = [...new Set(step.inputs.map((r) => task.steps.find((x) => x.id === r.step)?.copyOf).filter((g): g is string => !!g))].filter(
+    (g) => task.steps.find((x) => x.id === g)?.parallel?.mode === "best-of" && !task.bestOf?.[g],
+  );
+  if (!groups.length) return "";
+  const lines = groups.map((g) => `- ${g}: candidates ${task.steps.filter((x) => x.copyOf === g && x.state === "done").map((x) => x.id).join(", ")}`);
+  return `## Choose the best candidate
+Several agents produced alternatives. Compare them and choose one; only the chosen one goes further.
+${lines.join("\n")}
+Add \`"chosen": "<step id>"\` at the top level of your JSON block.
+
+`;
+}
+
+/** A step that waits for child tasks sees how each of them ended. */
+function childrenNote(state: State, task: Task, step: Step): string {
+  if (!step.waitForChildren) return "";
+  const kids = M.childTasks(state, task);
+  if (!kids.length) return "## Child tasks\n- None were created.\n\n";
+  const lines = kids.map((c) => {
+    const spec = M.currentSpec(c).content;
+    const results = state.artifacts
+      .filter((a) => a.taskId === c.id && (a.kind === "verification" || a.kind === "code-change" || a.kind === "report"))
+      .slice(-2)
+      .map((a) => `${a.kind}: ${a.summary.replace(/\n/g, " ").slice(0, 300)}`)
+      .join(" | ");
+    return `- ${c.id} [${M.stateLabel(state, c)}${c.integration ? `, integration ${c.integration.status}` : ""}] ${spec.title}${results ? ` — ${results}` : ""}`;
+  });
+  return `## Child tasks (results of the breakdown)
+${lines.join("\n")}
+If the goal is not met yet, your breakdown output may list the next items; an empty list means the goal is met.
+
+`;
 }

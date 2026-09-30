@@ -173,7 +173,9 @@ describe("review regressions (ORC-002)", () => {
 
   it("run-if ignores findings from a step that was later skipped or is re-running", () => {
     const defs: StepDef[] = [
-      ...templateSteps("change").slice(0, 3),
+      ...templateSteps("change")
+        .slice(0, 3)
+        .map((d) => ({ ...d, iterate: undefined })),
       { id: "S5", purpose: "Re-review", role: "code_reviewer", dependsOn: ["S3"], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], runIf: [{ step: "S2", output: "findings" }] },
       { id: "S6", purpose: "Second repair", role: "coder", dependsOn: ["S5"], inputs: [{ step: "S5", output: "findings" }], outputs: [{ name: "change", kind: "code-change" }], runIf: [{ step: "S5", output: "findings" }] },
       { id: "S7", purpose: "Verify", role: "lead", dependsOn: ["S6"], inputs: [], outputs: [{ name: "verification", kind: "verification" }] },

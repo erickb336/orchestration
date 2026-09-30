@@ -10,6 +10,11 @@ export function toDef(st: StepDef): StepDef {
   const d: StepDef = { id: st.id, purpose: st.purpose, role: st.role, dependsOn: [...st.dependsOn], inputs: structuredClone(st.inputs), outputs: structuredClone(st.outputs) };
   if (st.runIf?.length) d.runIf = structuredClone(st.runIf);
   if (st.gate) d.gate = true;
+  if (st.iterate) d.iterate = { ...st.iterate };
+  if (st.parallel) d.parallel = { ...st.parallel, ...(st.parallel.providers ? { providers: [...st.parallel.providers] } : {}) };
+  if (st.waitForChildren) d.waitForChildren = true;
+  if (st.copyOf) d.copyOf = st.copyOf;
+  if (st.iteration && st.iteration > 1) d.iteration = st.iteration;
   return d;
 }
 
@@ -23,6 +28,9 @@ export function structuralKey(st: StepDef): string {
     inputs: refs(st.inputs),
     outputs: st.outputs.map((o) => `${o.name}:${o.kind}`).sort(),
     runIf: refs(st.runIf),
+    iterate: st.iterate ?? null,
+    parallel: st.parallel ?? null,
+    waitForChildren: !!st.waitForChildren,
   });
 }
 
@@ -101,6 +109,33 @@ export function validatePipeline(defs: StepDef[]): PipelineIssue[] {
     for (const r of d.runIf ?? []) {
       const out = checkRef(r, "is conditioned on");
       if (out && out.kind !== "review-findings") err(d.id, `${d.id} can only be conditioned on review findings; ${r.step}.${r.output} is ${out.kind}.`);
+    }
+    if (d.iterate) {
+      const fromIdx = defs.findIndex((x) => x.id === d.iterate!.from);
+      if (fromIdx < 0 || fromIdx > i) err(d.id, `${d.id} loops back to ${d.iterate.from}, which must be this step or an earlier one.`);
+      if (!Number.isInteger(d.iterate.max) || d.iterate.max < 1 || d.iterate.max > 10) err(d.id, `${d.id} can loop 1–10 times.`);
+    }
+    if (d.parallel) {
+      if (!Number.isInteger(d.parallel.count) || d.parallel.count < 2 || d.parallel.count > 5) err(d.id, `${d.id} can run 2–5 parallel agents.`);
+      if (d.parallel.mode !== "copies" && d.parallel.mode !== "best-of") err(d.id, `${d.id} parallel mode must be "copies" or "best-of".`);
+      const chooser = defs.slice(i + 1).find((x) => x.inputs.some((r) => r.step === d.id));
+      if (d.parallel.mode === "best-of" && !chooser) err(d.id, `${d.id} is best-of, so a later step must read its output to choose one.`);
+      if (d.parallel.mode === "best-of" && d.runIf?.length) err(d.id, `${d.id} is best-of, so it must always run (remove its condition).`);
+      if (d.parallel.mode === "best-of" && chooser?.runIf?.length) err(chooser.id, `${chooser.id} chooses among ${d.id}'s candidates, so it must always run (remove its condition).`);
+      if (d.parallel.mode === "best-of" && chooser?.parallel) err(chooser.id, `${chooser.id} chooses among ${d.id}'s candidates, so it cannot itself run in parallel.`);
+      if (d.parallel.mode === "copies" && d.outputs.some((o) => o.kind === "code-change")) err(d.id, `${d.id} changes code, and parallel copies cannot all be merged; use best-of to pick one.`);
+      if (d.outputs.some((o) => o.kind === "breakdown")) err(d.id, `${d.id} creates child tasks, so it cannot run in parallel.`);
+    }
+    if (d.iterate) {
+      // Loop bodies: no parallel steps inside (their copies cannot be repeated), and no overlaps.
+      const fromIdx = defs.findIndex((x) => x.id === d.iterate!.from);
+      if (fromIdx >= 0 && fromIdx <= i) {
+        const body = defs.slice(fromIdx, i + 1);
+        const par = body.find((x) => x.parallel || (x.copyOf && x.copyOf !== x.id));
+        if (par) err(d.id, `${d.id}'s loop contains ${par.id}, which runs in parallel; parallel steps cannot be inside a loop.`);
+        const other = body.find((x) => x !== d && x.iterate);
+        if (other) err(d.id, `${d.id}'s loop overlaps ${other.id}'s loop; loops cannot overlap or nest.`);
+      }
     }
     if (REVIEW_ROLES.includes(d.role) && d.inputs.length === 0) issues.push({ step: d.id, severity: "warning", message: `${d.id} is a review with no inputs, so it has nothing specific to review.` });
     if (d.outputs.length === 0) issues.push({ step: d.id, severity: "warning", message: `${d.id} produces no artifacts, so later steps cannot use its work.` });
