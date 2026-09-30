@@ -252,15 +252,61 @@ describe("security review of step 2 (M3): nothing a command started outlives the
     expect(r.exitCode).toBe(143);
   }, 20_000);
 
-  it("killGroup signals the process group after its leader exited: a leftover in the group is still reached (mutation check)", async () => {
+  it("review L10: killGroup signals nothing once the leader has exited (its pid, and so the group id, may be reused); leftovers are the reaper's business", async () => {
     const pidFile = join(dir, "orphan.pid");
     const leader = spawn(node, ["-e", `const c = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" }); require("node:fs").writeFileSync(process.argv[1], String(c.pid)); c.unref();`, pidFile], { detached: true, stdio: "ignore" });
     await new Promise((r) => leader.once("exit", r));
     const pid = Number(readFileSync(pidFile, "utf8"));
     expect(() => process.kill(pid, 0)).not.toThrow(); // it outlived its leader
-    killGroup(leader, "SIGTERM"); // ignored by the child
+    killGroup(leader, "SIGTERM");
     killGroup(leader, "SIGKILL");
     await new Promise((r) => setTimeout(r, 300));
-    expect(() => process.kill(pid, 0)).toThrow();
+    expect(() => process.kill(pid, 0)).not.toThrow(); // untouched: the group id is no longer known to be the leader's
+    process.kill(pid, "SIGKILL");
+    // A live leader's group is still signalled.
+    const live = spawn(node, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+    await new Promise((r) => setTimeout(r, 200));
+    killGroup(live, "SIGKILL");
+    await new Promise((r) => live.once("exit", r));
+    expect(live.signalCode).toBe("SIGKILL");
+  });
+});
+
+describe("review finding M5: the exit status comes from the reaper alone, never from anything the command can write", () => {
+  /**
+   * The command forges a status file where the old reaper wrote it, prints a test-runner-looking line,
+   * and then kills either the group leader (its parent) or the reaper itself (its grandparent).
+   */
+  const forge = (who: "leader" | "reaper") =>
+    script(
+      `forge-${who}.js`,
+      `const fs = require("node:fs"); const { execFileSync } = require("node:child_process");
+       fs.writeFileSync(require("node:path").join(process.env.TMPDIR, "k.status"), JSON.stringify({ code: 0 }));
+       fs.writeSync(1, "3 failing\\n");
+       const leader = process.ppid;
+       const target = ${who === "leader" ? "leader" : 'Number(execFileSync("ps", ["-o", "ppid=", "-p", String(leader)], { encoding: "utf8" }).trim())'};
+       setTimeout(() => { process.kill(target, "SIGKILL"); setInterval(() => {}, 1000); }, 150);`,
+    );
+
+  it("a command that writes a fake status, prints '3 failing' and kills the reaper is recorded as failed (mutation check: the reaper's own exit status)", async () => {
+    mkdirSync(join(dir, "tmp"), { recursive: true });
+    for (const who of ["leader", "reaper"] as const) {
+      const events = await runToEnd(new DirectChecks({ graceMs: 300 }), assignment([cmd("k", [node, forge(who)])], { attemptId: `run-${who}`, logDir: join(dir, "logs", `run-${who}`) }));
+      const r = completed(events).checks!.results[0];
+      expect(r.status, who).toBe("failed");
+      expect(r.exitCode, who).not.toBe(0);
+      expect(r.excerpt, who).toContain("3 failing");
+      expect(r.excerpt, who).toMatch(/the check process was killed/i);
+      expect(existsSync(join(dir, "tmp", "k.status")), who).toBe(true); // the forged file is simply never read
+    }
+  }, 20_000);
+
+  it("a command ended by a signal reports 128 plus the signal; the reaper's exit is the command's own code otherwise", async () => {
+    const killed = script("selfkill2.js", "process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1000);");
+    const events = await runToEnd(new DirectChecks({ graceMs: 300 }), assignment([cmd("k", [node, killed]), cmd("seven", [node, "-e", "process.exit(7)"])]));
+    const [k, seven] = completed(events).checks!.results;
+    expect(k).toMatchObject({ status: "failed", exitCode: 143 });
+    expect(seven).toMatchObject({ status: "failed", exitCode: 7 });
+    expect(k.excerpt).not.toMatch(/check process was killed/);
   });
 });

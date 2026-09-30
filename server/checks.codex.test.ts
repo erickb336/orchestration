@@ -5,10 +5,11 @@
 // stop, the private CODEX_HOME and project_doc_max_bytes=0 on the spawn, and the probe's decision
 // table. A real-sandbox probe runs only with ORC_TEST_REAL_SANDBOX=1 on the user's machine.
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { NETWORK_RULE } from "../src/domain/checks";
 import { CodexSandboxChecks, NO_SCRIPTS_ENV, OUTPUT_CAP, REAPER, checkEnv, probeVerdict, type CheckAssignment } from "./checks";
 import { APP_SERVER_ARGS, ISOLATION_CONFIG_ARGS, ISOLATION_FEATURE_ARGS, PROJECT_DOC_ARGS } from "./runtimes/codex";
 import type { AdapterEvent } from "./runtimes/types";
@@ -76,21 +77,25 @@ describe("CodexSandboxChecks (§6.5.2)", () => {
     expect(rows[1].method).toBe("initialize");
     const execs = rows.filter((x) => x.method === "command/exec").map((x) => x.params as Record<string, unknown>);
     expect(execs).toHaveLength(2);
+    // A prepare command that is not an allowlisted download (review H1) runs offline, and the record says so.
     expect(execs[0]).toMatchObject({
-      command: [node, REAPER, "--status-file", join(dir, "tmp", "install.status"), "--", node, "-e", "1"],
+      command: [node, REAPER, "--", node, "-e", "1"],
       processId: "run-1:install",
       cwd: a.workspace,
       timeoutMs: 1234,
       outputBytesCap: OUTPUT_CAP,
-      sandboxPolicy: { type: "workspaceWrite", writableRoots: [a.workspace, a.tmpDir, a.cacheDir], networkAccess: true, excludeTmpdirEnvVar: true, excludeSlashTmp: true },
+      sandboxPolicy: { type: "workspaceWrite", writableRoots: [a.workspace, a.tmpDir, a.cacheDir], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true },
     });
-    expect(execs[1]).toMatchObject({ command: [node, REAPER, "--status-file", join(dir, "tmp", "test.status"), "--", node, "-e", 'console.log("hi")'], processId: "run-1:test", timeoutMs: 10_000, sandboxPolicy: { type: "workspaceWrite", networkAccess: false } });
+    expect((events.find((e) => e.type === "activity" && /Running install/.test(e.note)) as { note: string }).note).toBe(`Running install (${node} -e 1) offline: ${NETWORK_RULE}.`);
+    expect(c.checks!.results[0].excerpt).toBe(`[The network was refused for this command: ${NETWORK_RULE}.]\n`);
+    expect(execs[1]).toMatchObject({ command: [node, REAPER, "--", node, "-e", 'console.log("hi")'], processId: "run-1:test", timeoutMs: 10_000, sandboxPolicy: { type: "workspaceWrite", networkAccess: false } });
     expect((execs[1].env as Record<string, string>).GH_TOKEN).toBeUndefined();
     expect((execs[1].env as Record<string, string>).TMPDIR).toBe(a.tmpDir);
-    // Prepare gets the network only when the setting allows it.
-    rmSync(logFile, { force: true });
-    await runToEnd(runner(), assignment([cmd("install", [node, "-e", "1"], { kind: "prepare" })], { attemptId: "run-2", prepareNetwork: false, logDir: join(dir, "logs", "run-2") }));
-    expect((requests().find((x) => x.method === "command/exec")!.params as { sandboxPolicy: { networkAccess: boolean } }).sandboxPolicy.networkAccess).toBe(false);
+    // An allowlisted download gets the network only when the setting allows it.
+    const b = { attemptId: "x", workspace: a.workspace, env: a.env, tmpDir: a.tmpDir, cacheDir: a.cacheDir };
+    const install = { id: "i", label: "i", kind: "prepare" as const, argv: ["npm", "ci", "--ignore-scripts"], timeoutMs: 1000 };
+    expect((CodexSandboxChecks.execParams({ ...b, prepareNetwork: true }, install).sandboxPolicy as { networkAccess: boolean }).networkAccess).toBe(true);
+    expect((CodexSandboxChecks.execParams({ ...b, prepareNetwork: false }, install).sandboxPolicy as { networkAccess: boolean }).networkAccess).toBe(false);
     // The app-server is gone after the run.
     await new Promise((res) => setTimeout(res, 200));
     expect(r.ids()).toEqual([]);
@@ -171,10 +176,33 @@ describe("security review of step 2 in the sandbox path (H1, L5)", () => {
     const npm = CodexSandboxChecks.execParams(b, planned(["npm", "ci"]));
     expect(npm.command.slice(-3)).toEqual(["npm", "ci", "--ignore-scripts"]);
     expect(npm.env).toMatchObject(NO_SCRIPTS_ENV);
+    expect(NO_SCRIPTS_ENV.YARN_IGNORE_PATH).toBe("1");
     expect((npm.sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(true);
-    // Already flagged: not doubled; Yarn Berry's own flag is recognised.
-    expect(CodexSandboxChecks.execParams(b, planned(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"])).command.filter((x) => x === "--ignore-scripts")).toHaveLength(1);
+    // Already flagged: not doubled; pnpm gets --ignore-pnpmfile too; Yarn Berry's own flag is recognised; contradictions are dropped (review H1, L11).
+    const pnpm = CodexSandboxChecks.execParams(b, planned(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"]));
+    expect(pnpm.command.filter((x) => x === "--ignore-scripts")).toHaveLength(1);
+    expect(pnpm.command.slice(-5)).toEqual(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"]);
     expect(CodexSandboxChecks.execParams(b, planned(["yarn", "install", "--immutable", "--mode=skip-build"])).command).not.toContain("--ignore-scripts");
+    const contradicted = CodexSandboxChecks.execParams(b, planned(["npm", "ci", "--ignore-scripts", "--no-ignore-scripts", "--ignore-scripts=false"]));
+    expect(contradicted.command.slice(-3)).toEqual(["npm", "ci", "--ignore-scripts"]);
+    expect((contradicted.sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(true);
+    // Not on the allowlist: bun, and every other setup command, run offline whatever the settings say (mutation check: the allowlist).
+    for (const argv of [["bun", "install", "--frozen-lockfile", "--ignore-scripts"], ["make", "deps"], ["bundle", "install"], ["python3", "-m", "pip", "install", "-e", "."], ["uv", "sync"], ["cargo", "fetch"]]) {
+      const p = CodexSandboxChecks.execParams(b, planned(argv));
+      expect((p.sandboxPolicy as { networkAccess?: boolean }).networkAccess, argv.join(" ")).toBe(false);
+      expect(p.command.slice(-argv.length), argv.join(" ")).toEqual(argv);
+      expect((p.env as Record<string, string>).npm_config_ignore_scripts, argv.join(" ")).toBeUndefined();
+    }
+    // A yarn whose own configuration runs repository JavaScript is refused the network, read from the copy the install runs in.
+    const ws2 = join(dir, "ws-yarn");
+    mkdirSync(ws2, { recursive: true });
+    writeFileSync(join(ws2, ".yarnrc.yml"), "yarnPath: .yarn/releases/yarn-4.0.0.cjs\nnodeLinker: node-modules\n");
+    const yarnrc = CodexSandboxChecks.execParams({ ...b, workspace: ws2 }, planned(["yarn", "install", "--immutable", "--mode=skip-build"]));
+    expect((yarnrc.sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(false);
+    writeFileSync(join(ws2, ".yarnrc.yml"), "nodeLinker: node-modules\n");
+    expect((CodexSandboxChecks.execParams({ ...b, workspace: ws2 }, planned(["yarn", "install", "--immutable", "--mode=skip-build"])).sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(true);
+    writeFileSync(join(ws2, ".yarnrc"), 'yarn-path "./.yarn/releases/yarn-1.22.19.cjs"\n');
+    expect((CodexSandboxChecks.execParams({ ...b, workspace: ws2 }, planned(["yarn", "install", "--ignore-scripts"])).sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(false);
     // The offline way to run install scripts: no network, no flag, no no-scripts environment.
     const rebuild = CodexSandboxChecks.execParams(b, planned(["npm", "rebuild"]));
     expect((rebuild.sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(false);
@@ -187,14 +215,40 @@ describe("security review of step 2 in the sandbox path (H1, L5)", () => {
     expect(off.command.slice(-2)).toEqual(["npm", "ci"]);
     // A check command never gets the network, whatever the settings say.
     expect((CodexSandboxChecks.execParams(b, planned(["npm", "test"], "check")).sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(false);
-    // Through the fake app-server: the request a networked prepare command carries has the no-scripts environment.
-    await runToEnd(runner(), assignment([cmd("install", [node, "-e", "1"], { kind: "prepare" }), cmd("test", [node, "-e", "1"])]));
+    // Through the fake app-server: a prepare command that is not an allowlisted download runs offline, without the no-scripts environment, and its record says why.
+    const ev = await runToEnd(runner(), assignment([cmd("setup", [node, "-e", 'console.log("ran")'], { kind: "prepare" }), cmd("test", [node, "-e", "1"])]));
     const execs = requests().filter((x) => x.method === "command/exec").map((x) => x.params as { env: Record<string, string>; sandboxPolicy: { networkAccess: boolean } });
-    expect(execs[0].env).toMatchObject(NO_SCRIPTS_ENV);
-    expect((execs[0].sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(true);
+    expect(execs[0].env.npm_config_ignore_scripts).toBeUndefined();
+    expect((execs[0].sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(false);
+    expect(completed(ev).checks!.results[0]).toMatchObject({ status: "passed", excerpt: `[The network was refused for this command: ${NETWORK_RULE}.]\nran\n` });
     expect(execs[1].env.npm_config_ignore_scripts).toBeUndefined();
     expect((execs[1].sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(false);
   });
+
+  it("review M5, sandbox path: a command that forges a status file, prints '3 failing' and kills the reaper or its leader is recorded as failed (mutation check: the reaper's own exit status)", async () => {
+    const forge = (who: "leader" | "reaper") => {
+      const p = join(dir, `forge-${who}.js`);
+      writeFileSync(
+        p,
+        `const fs = require("node:fs"); const { execFileSync } = require("node:child_process");
+         fs.writeFileSync(require("node:path").join(process.env.TMPDIR, "k.status"), JSON.stringify({ code: 0 }));
+         fs.writeSync(1, "3 failing\\n");
+         const leader = process.ppid;
+         const target = ${who === "leader" ? "leader" : 'Number(execFileSync("ps", ["-o", "ppid=", "-p", String(leader)], { encoding: "utf8" }).trim())'};
+         setTimeout(() => { process.kill(target, "SIGKILL"); setInterval(() => {}, 1000); }, 150);`,
+      );
+      return p;
+    };
+    for (const who of ["leader", "reaper"] as const) {
+      const a = assignment([cmd("k", [node, forge(who)])], { attemptId: `run-${who}`, logDir: join(dir, "logs", `run-${who}`) });
+      mkdirSync(a.tmpDir, { recursive: true });
+      const r = completed(await runToEnd(runner(), a)).checks!.results[0];
+      expect(r.status, who).toBe("failed");
+      expect(r.exitCode, who).not.toBe(0);
+      expect(r.excerpt, who).toContain("3 failing");
+      expect(r.excerpt, who).toMatch(/the check process was killed/i);
+    }
+  }, 20_000);
 
   it("H1: the probe requires this machine's own loopback to be refused; a sandbox that lets a command reach it is unavailable (mutation check: no fallback)", async () => {
     // The fake has no sandbox. A read-only $HOME makes the write-outside probe an honest EACCES refusal, so the probe reaches the loopback step,

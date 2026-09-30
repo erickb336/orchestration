@@ -63,12 +63,44 @@ const INLINE_FLAGS = ["-e", "--eval", "-p", "--print", "-c", "-r", "--require", 
 /** Short flags whose value is attached (`-Werror`, `-Ilib`): not a cluster of single-letter flags. */
 const ATTACHED_VALUE: Record<string, RegExp> = { python: /^-[WX]/, python3: /^-[WX]/, ruby: /^-[CEFIKTW0x]/, node: /^-C/ };
 /**
- * How each package manager is told not to run lifecycle scripts (review finding H1: repository code
- * never runs while the network is on). Yarn Berry has no --ignore-scripts; it takes --mode=skip-build.
+ * Flags that take the NEXT argument as their value when nothing is attached (review finding L11):
+ * `python -W x -c …`, `ruby -I lib -e …`, `node --input-type module -e …`. The value is skipped, so
+ * the scan reaches the inline flag behind it instead of taking the value for the script's name.
  */
-export const IGNORE_SCRIPTS_FLAGS: Record<string, string[]> = { npm: ["--ignore-scripts"], pnpm: ["--ignore-scripts"], yarn: ["--ignore-scripts", "--mode=skip-build"], bun: ["--ignore-scripts"] };
+const PY_SEPARATE = ["-W", "-X", "--check-hash-based-pycs"];
+const NODE_SEPARATE = [
+  "-C", "--conditions", "--input-type", "--env-file", "--env-file-if-exists", "--title", "--unhandled-rejections", "--stack-trace-limit", "--experimental-default-type", "--dns-result-order", "--watch-path",
+  "--test-name-pattern", "--test-reporter", "--test-reporter-destination", "--test-skip-pattern", "--test-shard", "--disable-warning", "--redirect-warnings", "--openssl-config", "--icu-data-dir", "--tls-cipher-list",
+  "--tls-keylog", "--secure-heap", "--secure-heap-min", "--heapsnapshot-signal", "--diagnostic-dir", "--report-directory", "--report-dir", "--report-filename", "--report-signal", "--max-http-header-size",
+  "--inspect-port", "--trace-event-categories", "--trace-event-file-pattern", "--cpu-prof-dir", "--cpu-prof-name", "--cpu-prof-interval", "--heap-prof-dir", "--heap-prof-name", "--heap-prof-interval",
+  "--snapshot-blob", "--build-snapshot-config", "--experimental-sea-config", "--localstorage-file", "--run", "--experimental-config-file", "--trace-require-module", "--v8-pool-size",
+];
+const SEPARATE_VALUE: Record<string, Set<string>> = { python: new Set(PY_SEPARATE), python3: new Set(PY_SEPARATE), ruby: new Set(["-C", "-E", "-F", "-I", "-K", "--encoding", "--external-encoding", "--internal-encoding", "--dump", "--backtrace-limit", "--crash-report"]), node: new Set(NODE_SEPARATE) };
+/**
+ * The only commands the network is given to (review finding H1: repository code never runs while the
+ * network is on): dependency downloads by npm, pnpm and yarn with every hook that runs repository code
+ * switched off. Each entry lists what the command must carry; any flag of an inner list satisfies it.
+ * bun is not here: bun install has hooks beyond lifecycle scripts (bunfig.toml) that could not be
+ * ruled out, so its installs run offline. Every other prepare command (pip, uv, poetry, bundle,
+ * gradle, mix, swift, cargo, go, make, …) runs offline too; the user prefetches in their own environment.
+ */
+export const NETWORK_INSTALL_FLAGS: Record<string, string[][]> = {
+  npm: [["--ignore-scripts", "--ignore-scripts=true"]],
+  pnpm: [
+    ["--ignore-scripts", "--ignore-scripts=true"],
+    ["--ignore-pnpmfile", "--ignore-pnpmfile=true"],
+  ],
+  // Yarn 1 takes --ignore-scripts; Yarn Berry has no such flag and takes --mode=skip-build.
+  yarn: [["--ignore-scripts", "--mode=skip-build"]],
+};
+/** Flags that switch those protections back on. Refused wherever they appear next to an install that may use the network (L11: contradicting flags). */
+const CONTRADICTING_FLAG = /^--(no-ignore-scripts|ignore-scripts=(?!true$).*|no-ignore-pnpmfile|ignore-pnpmfile=(?!true$).*|mode=(?!skip-build$).*)$/;
+export const NETWORK_RULE = "downloads the network may be used for: npm, pnpm, yarn installs only; other setup commands run offline";
 /** Names a check environment never takes from the settings (§6.6 sets or drops them itself). */
 const RESERVED_ENV = new Set(["PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD"]);
+/** Prefixes a check environment never takes from the settings, whatever the case (L11): package-manager configuration. */
+export const BLOCKED_ENV_PREFIXES = ["NPM_CONFIG_", "YARN_", "PNPM_"];
+export const blockedEnvName = (n: string) => BLOCKED_ENV_PREFIXES.some((p) => n.toUpperCase().startsWith(p));
 
 const inRange = (n: unknown, lo: number, hi: number) => typeof n === "number" && Number.isInteger(n) && n >= lo && n <= hi;
 
@@ -76,8 +108,47 @@ const inRange = (n: unknown, lo: number, hi: number) => typeof n === "number" &&
 export const isInstall = (argv: string[]) => PACKAGE_MANAGERS.has(argv[0]) && INSTALL_SUBCOMMANDS.has(argv[1] ?? "");
 /** A package manager's offline "run the install scripts" command (`npm rebuild`, …). */
 export const isRebuild = (argv: string[]) => PACKAGE_MANAGERS.has(argv[0]) && REBUILD_SUBCOMMANDS.has(argv[1] ?? "");
-/** Does an install command carry its package manager's "no scripts" flag? */
-export const ignoresScripts = (argv: string[]) => (IGNORE_SCRIPTS_FLAGS[argv[0]] ?? []).some((f) => argv.includes(f));
+/** The flags an install carries that switch a protection off again (`--no-ignore-scripts`, `--ignore-scripts=false`, `--mode=update-lockfile`, …). */
+export const contradictingFlags = (argv: string[]) => argv.slice(1).filter((a) => CONTRADICTING_FLAG.test(a));
+/** The protections an install lacks: one list of alternatives per missing requirement. */
+export const missingInstallFlags = (argv: string[]) => (NETWORK_INSTALL_FLAGS[argv[0]] ?? []).filter((alternatives) => !alternatives.some((f) => argv.includes(f)));
+
+/**
+ * Why a prepare command is refused the network, or undefined when it is on the allowlist with every
+ * protection in place. The runner refuses the network on this alone (the command then runs offline);
+ * the validator turns a flags problem into an error the user can fix.
+ */
+export function networkRefusal(argv: string[]): string | undefined {
+  if (!isInstall(argv)) return `${NETWORK_RULE}.`;
+  const program = argv[0];
+  if (!NETWORK_INSTALL_FLAGS[program]) return `${program} installs run offline: ${program} has hooks beyond install scripts that cannot be switched off, so ${NETWORK_RULE}.`;
+  const contradicting = contradictingFlags(argv);
+  if (contradicting.length) return `${contradicting.join(" ")} would let repository code run while the network is on.`;
+  const missing = missingInstallFlags(argv);
+  if (missing.length) return `an install that may use the network must carry ${missing.map((m) => m.map((f) => `"${f}"`).join(" or ")).join(" and ")}.`;
+  return undefined;
+}
+
+/** The install as the runner starts it (H1): contradicting flags dropped and every missing protection appended, whatever the settings say. */
+export function hardenedInstall(argv: string[]): string[] {
+  if (!isInstall(argv) || !NETWORK_INSTALL_FLAGS[argv[0]]) return argv;
+  const kept = argv.filter((a, i) => i === 0 || !CONTRADICTING_FLAG.test(a));
+  return [...kept, ...missingInstallFlags(kept).map((m) => m[0])];
+}
+
+/**
+ * Yarn runs repository JavaScript from its own configuration, whatever the scripts setting: `.yarnrc.yml`
+ * `plugins` and `yarnPath`, and Yarn 1's `.yarnrc` `yarn-path`. A yarn install in a copy that has any of
+ * these is refused the network. The files are read from the copy the install runs in, just before it
+ * runs, because that is what yarn itself reads there; the trusted base says nothing about the copy.
+ */
+export function yarnrcRefusal(files: { yarnrcYml?: string; yarnrc?: string }): string | undefined {
+  const yml = files.yarnrcYml ?? "";
+  const keys = ["plugins", "yarnPath"].filter((k) => new RegExp(`^${k}\\s*:`, "m").test(yml));
+  if (keys.length) return `.yarnrc.yml sets ${keys.join(" and ")}, which runs repository JavaScript; the install runs offline.`;
+  if (/^\s*yarn-path\b/m.test(files.yarnrc ?? "")) return ".yarnrc sets yarn-path, which runs repository JavaScript; the install runs offline.";
+  return undefined;
+}
 
 /**
  * Why a command is not allowed, or undefined. Shared by the whole configuration's validation and the
@@ -101,16 +172,25 @@ export function validateCommand(c: CheckCommand, o: { networked?: boolean } = {}
     if (c.kind === "check" && !CHECK_SUBCOMMANDS.has(sub)) return `${c.id}: a check with ${program} is "${program} test", "${program} run <script>" or "${program} run-script <script>"; "${program} ${sub}" is not allowed.`;
     // H1: an install that may use the network never runs the repository's install scripts (they could
     // reach this machine's own control API). Scripts that are needed run offline in a "rebuild" step.
-    if (c.kind === "prepare" && o.networked && isInstall(c.argv) && !ignoresScripts(c.argv))
-      return `${c.id}: an install that may use the network must not run install scripts: add ${IGNORE_SCRIPTS_FLAGS[program].map((f) => `"${f}"`).join(" or ")} to it. Scripts your project needs can run offline afterwards in a separate "${program} rebuild" prepare command.`;
+    // bun and everything that is not npm, pnpm or yarn simply run offline (the runner refuses the network).
+    if (c.kind === "prepare" && o.networked && isInstall(c.argv) && NETWORK_INSTALL_FLAGS[program]) {
+      const why = networkRefusal(c.argv);
+      if (why) return `${c.id}: ${why} Repository code must not run while the network is on; scripts your project needs can run offline afterwards in a separate "${program} rebuild" prepare command.`;
+    }
   }
   if (INTERPRETERS.has(program)) {
     if (program === "deno" && c.argv[1] === "eval") return `${c.id}: deno eval runs inline code; run a script or module from the repository instead.`;
     const attached = ATTACHED_VALUE[program];
+    const separate = SEPARATE_VALUE[program];
     for (let i = 1; i < c.argv.length; i++) {
       const a = c.argv[i];
       // What follows "--", "-m <module>" or the script's own name belongs to the script, not the interpreter.
       if (a === "--" || a === "-m" || !a.startsWith("-")) break;
+      // A flag whose value is the next argument: the value is neither a flag nor the script.
+      if (separate?.has(a)) {
+        i++;
+        continue;
+      }
       const flag = a.split("=")[0];
       const refuse = () => `${c.id}: ${program} may not run inline code or preload modules (${a}); run a script or module from the repository instead.`;
       if (INLINE_FLAGS.includes(flag)) return refuse();
@@ -153,7 +233,9 @@ export function validateChecks(cfg: ChecksConfig, opts: { acknowledged?: boolean
   for (const n of cfg.passEnv) {
     if (typeof n !== "string" || !ENV_NAME_RE.test(n)) return `"${String(n).slice(0, 40)}" is not a variable name (uppercase letters, digits and underscores).`;
     if (SECRET_NAME.test(n)) return `${n} looks like a secret and is never passed to a check.`;
-    if (RESERVED_ENV.has(n) || n.startsWith("DYLD_")) return `${n} is set by the service itself and cannot be passed through.`;
+    if (RESERVED_ENV.has(n) || n.toUpperCase().startsWith("DYLD_")) return `${n} is set by the service itself and cannot be passed through.`;
+    // L11: package-manager configuration (NPM_CONFIG_*, YARN_*, PNPM_*) could switch install scripts back on, whatever the case of the name.
+    if (blockedEnvName(n)) return `${n} configures a package manager and cannot be passed through.`;
   }
   return undefined;
 }
@@ -184,8 +266,8 @@ export function suggestChecks(files: RepoFile[]): CheckCommand[] {
       /* not JSON: no scripts */
     }
     const pm = file("pnpm-lock.yaml") ? "pnpm" : file("yarn.lock") ? "yarn" : file("bun.lock") || file("bun.lockb") ? "bun" : "npm";
-    // Installs never run install scripts (H1); a project that needs them adds an offline "rebuild" step.
-    const install: Record<string, string[]> = { npm: ["npm", "ci", "--ignore-scripts"], pnpm: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], yarn: ["yarn", "install", "--immutable", "--mode=skip-build"], bun: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"] };
+    // Installs never run install scripts or pnpmfiles (H1); a project that needs scripts adds an offline "rebuild" step. bun installs run offline.
+    const install: Record<string, string[]> = { npm: ["npm", "ci", "--ignore-scripts"], pnpm: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"], yarn: ["yarn", "install", "--immutable", "--mode=skip-build"], bun: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"] };
     if (pm !== "npm" || file("package-lock.json")) out.push({ id: "install", label: "Install dependencies", kind: "prepare", argv: install[pm] });
     for (const name of CHECK_SCRIPTS) {
       if (typeof scripts[name] !== "string") continue;
@@ -201,14 +283,23 @@ export function suggestChecks(files: RepoFile[]): CheckCommand[] {
 
 // ---------- what a Checks step runs (§6.4) ----------
 
-export type PlannedCommand = { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number; offline?: true };
+export type PlannedCommand = { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number; offline?: true; offlineReason?: string };
 
-/** The commands a step runs: every prepare command, and the checks its `only` names (all of them without `only`). A rebuild step is marked offline. */
+/**
+ * The commands a step runs: every prepare command, and the checks its `only` names (all of them without
+ * `only`). A prepare command that is not an allowlisted download is marked offline with the reason (H1);
+ * the runner decides the rest (yarn's own configuration) just before the command runs.
+ */
 export function commandsFor(cfg: ChecksConfig, st: Pick<StepDef, "checks">): PlannedCommand[] {
   const only = st.checks?.only?.length ? new Set(st.checks.only) : undefined;
   return cfg.commands
     .filter((c) => c.kind === "prepare" || !only || only.has(c.id))
-    .map((c) => ({ id: c.id, label: c.label, kind: c.kind, argv: [...c.argv], timeoutMs: (c.timeoutMinutes ?? cfg.commandTimeoutMinutes) * 60_000, ...(c.kind === "prepare" && isRebuild(c.argv) ? { offline: true as const } : {}) }));
+    .map((c) => {
+      // Flags the runner re-adds are not a reason; a program that is not an allowlisted installer is.
+      const why = c.kind === "prepare" && !isRebuild(c.argv) ? networkRefusal(hardenedInstall(c.argv)) : undefined;
+      const offline = c.kind === "prepare" && (isRebuild(c.argv) || !!why);
+      return { id: c.id, label: c.label, kind: c.kind, argv: [...c.argv], timeoutMs: (c.timeoutMinutes ?? cfg.commandTimeoutMinutes) * 60_000, ...(offline ? { offline: true as const } : {}), ...(why ? { offlineReason: why } : {}) };
+    });
 }
 
 /** The ids of the configured check commands (the ones a step's `only` may name). */
@@ -548,20 +639,25 @@ export function checkEvidence(s: State, sha: string): CheckEvidence {
   const failing = failedResults(run);
   // M2: evidence means every configured check passed on this commit, not only the ones a step chose to run.
   const missing = configuredCheckIds(cfg).filter((id) => run.results.find((r) => r.id === id)?.status !== "passed" && !failing.some((r) => r.id === id));
+  // Review finding M6: a check that did not run is judged before any acceptance. Accepting failures
+  // covers the failures the user saw, never checks that never ran.
+  if (missing.length) return { ok: false, ...base, reason: `The run on ${h} did not run every configured check (missing: ${missing.join(", ")}).` };
   const unresolved = F.unresolved(s, best);
-  if (!failing.length && !missing.length && unresolved === 0) return { ok: true, ...base, reason: `${run.results.filter((r) => r.kind === "check").map((r) => r.label).join(", ") || "The checks"} passed on ${h}${run.sandbox === "codex" ? "" : " (no sandbox)"}${run.simulated ? " (simulated)" : ""}.` };
+  if (!failing.length && unresolved === 0) return { ok: true, ...base, reason: `${run.results.filter((r) => r.kind === "check").map((r) => r.label).join(", ") || "The checks"} passed on ${h}${run.sandbox === "codex" ? "" : " (no sandbox)"}${run.simulated ? " (simulated)" : ""}.` };
   const accepted = s.decisions.find((d) => d.kind === "final-checks" && d.artifactId === best!.id && d.status === "accept");
   if (accepted) return { ok: true, ...base, acceptedByUser: true, reason: `You accepted failing checks on ${h} (${failing.map((r) => r.label).join(", ")}).` };
-  if (missing.length) return { ok: false, ...base, reason: `The run on ${h} did not run every configured check (missing: ${missing.join(", ")}).` };
   if (failing.length) return { ok: false, ...base, reason: `${failing.map((r) => r.label).join(", ")} failed on ${h}.` };
   return { ok: false, ...base, reason: `${unresolved} finding${unresolved === 1 ? "" : "s"} of the check run on ${h} need${unresolved === 1 ? "s" : ""} a decision.` };
 }
 
-/** Flags for a landed item (§6.9): checks the user accepted failing, or no check evidence for the landed change while checks are on. */
+/**
+ * Flags for a landed item (§6.9): checks the user accepted failing, and no check evidence for the landed
+ * change while checks are on. Both can hold (review M6): an acceptance never covers a check that did not run.
+ */
 export function landedCheckFlags(s: State, t: Task, changeSha: string | undefined): LandedFlag[] {
   const out: LandedFlag[] = [];
   if (acceptedFailingChecks(s, t.id)) out.push("checks-accepted-failing");
-  else if (checksOn(s.project.checks) && (!changeSha || !checkEvidence(s, changeSha).ok)) out.push("checks-not-run");
+  if (checksOn(s.project.checks) && (!changeSha || !checkEvidence(s, changeSha).ok)) out.push("checks-not-run");
   return out;
 }
 

@@ -253,7 +253,9 @@ describe("hold and notify (scenario 1)", () => {
     await ticks(3, 31_000);
     expect(fake.count("merge")).toBe(0);
     expect(pr(id).attention?.code).toBe("checks-skipped"); // ORC-013: it needs a person, not a fix task
-    fake.setCheck(1, "SUCCESS");
+    // A person re-runs it on GitHub and it passes; GitHub shows the new attempt in place of the skipped one
+    // (review M3: a skipped run next to a later success would stay red).
+    fake.setCheck(1, "SUCCESS", "check", { replace: true });
     await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(1);
     expect(pr(id).phase).toBe("merged");
@@ -919,24 +921,21 @@ describe("CI triage (ORC-013 step 3)", () => {
     expect(JSON.stringify(fake.calls)).not.toMatch(/--admin|--auto|--force/);
   }, 30_000);
 
-  it("cancelled twice: the second cancellation needs a person (ci-infra); no second re-run and no fix task", async () => {
+  it("cancelled twice: the second cancellation, after the re-run, is the code's (review M4); one fix task, no second re-run", async () => {
     await prModeOn();
     const id = await autoPr("Cancelled twice", "c2.txt");
     fake.setCheck(1, "CANCELLED");
     await until("the re-run was requested", () => reruns().length === 1, 5000, 60);
     fake.setCheck(1, "CANCELLED"); // the new run is cancelled too
-    await until("it needs a person", () => pr(id).attention?.code === "ci-infra", 31_000, 30);
-    expect(pr(id).attention!.message).toMatch(/GitHub cancelled check on [0-9a-f]{12}, and its re-run is used \(1 of 1\)\. Re-run it on GitHub, or merge it yourself\./);
+    await until("a fix task starts", () => repairTasks(id).length === 1, 31_000, 30);
+    expect(pr(id).attention?.code).toBe("checks-failed");
+    expect(pr(id).attention!.message).toMatch(/check: cancelled \(the code: cancelled again after its re-run, github-actions/);
     await ticks(6, 61_000);
     expect(reruns()).toHaveLength(1);
-    expect(repairTasks(id)).toHaveLength(0);
+    expect(repairTasks(id)).toHaveLength(1);
     expect(fake.count("merge")).toBe(0);
-    expect(D.needsYou(st(), now)).toBe(1);
-    // A person re-runs it on GitHub and it passes: the name is green and the merge follows.
-    fake.setCheck(1, "SUCCESS");
-    await until("it merged", () => pr(id).phase === "merged", 5000, 60);
-    expect(reruns()).toHaveLength(1);
   }, 30_000);
+
 
   it("a review bot's failing check is bot-check, and a skipped required check is checks-skipped: no fix task and no re-run for either", async () => {
     await prModeOn();

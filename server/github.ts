@@ -95,13 +95,15 @@ const atLeast = (v: [number, number, number], major: number, minor: number) => v
 
 /** Arguments the app never passes to gh. Checked before every spawn. */
 const FORBIDDEN_ARGS = new Set(["--admin", "--auto", "-d", "--delete-branch", "--force", "--show-token", "--disable-auto", "--squash", "--rebase", "-s", "-r"]);
+/** The gh subcommands the app uses (ORC-013 review M2). Everything else (`pr review`, `run rerun`, `workflow run`, …) is refused before it is spawned. */
+const ALLOWED_GH = new Set(["--version", "api", "pr list", "pr create", "pr merge", "pr close"]);
 
 /**
  * The part of a request body that GitHub executes: the GraphQL query. A REST body (a comment's text,
  * for example) is data and is not scanned, so a note that mentions a mutation by name can be posted.
  */
-function executable(args: string[], stdin: string): string {
-  if (args[1] !== "graphql") return "";
+function executable(endpoint: string | undefined, stdin: string): string {
+  if (endpoint !== "graphql") return "";
   try {
     const doc = JSON.parse(stdin) as { query?: unknown };
     if (doc && typeof doc === "object" && typeof doc.query === "string") return doc.query;
@@ -111,39 +113,91 @@ function executable(args: string[], stdin: string): string {
   return stdin;
 }
 
-/** The only two shapes of endpoint the app ever POSTs to (ORC-013 narrowed this from "any non-merge path"). */
+/** The only REST endpoints the app ever POSTs to (ORC-013 narrowed this from "any non-merge path"); graphql is the third, scanned for mutations. */
 const POST_ENDPOINTS = [/^repos\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/issues\/\d+\/comments$/, /^repos\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/actions\/jobs\/\d+\/rerun$/];
-/** gh api flags that take a value: the value is never the endpoint. */
-const API_VALUE_FLAGS = new Set(["-X", "--method", "--jq", "-q", "--input", "-f", "--raw-field", "-F", "--field", "-H", "--header", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
+/** gh api flags that carry a request body: gh sends such a request as a POST unless told otherwise, and the guard treats it as one whatever it is told. */
+const API_BODY_FLAGS = new Set(["-f", "--raw-field", "-F", "--field", "--input"]);
+/** Other gh api flags that take a value (separately, or attached as `-Hx`, `--jq=x`): the value is never the endpoint. */
+const API_VALUE_FLAGS = new Set(["--jq", "-q", "-H", "--header", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
 
-/** The endpoint of a `gh api` invocation: its first argument that is not a flag or a flag's value. */
-function apiEndpoint(args: string[]): string | undefined {
-  for (let i = 1; i < args.length; i++) {
-    if (args[i].startsWith("-")) {
-      if (API_VALUE_FLAGS.has(args[i])) i++;
-      continue;
-    }
-    return args[i];
-  }
-  return undefined;
+export interface ApiCall {
+  /** Upper case. The last -X / --method wins; a body makes it POST when nothing is given. */
+  method: string;
+  /** A body flag is present: gh would send the request as a POST unless a method is given, and the guard treats it as a write either way. */
+  hasBody: boolean;
+  endpoint?: string;
+  /** The value of --input, if given: only "-" (stdin) is allowed, so the body is what the guard sees. */
+  input?: string;
 }
 
-/** Throws when a gh invocation could bypass rules, force, delete a branch, merge by API, or reveal a token. */
+/** How gh reads a `gh api` invocation: `-X POST`, `-XPOST`, `--method POST` and `--method=POST` all set the method, the last one wins, and fields or --input carry a body. */
+export function parseApiCall(args: string[]): ApiCall {
+  let method: string | undefined;
+  let hasBody = false;
+  let endpoint: string | undefined;
+  let input: string | undefined;
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith("-") || a === "-") {
+      endpoint ??= a;
+      continue;
+    }
+    if (a === "-X" || a === "--method") {
+      method = args[++i];
+      continue;
+    }
+    if (a.startsWith("-X")) {
+      method = a.slice(2);
+      continue;
+    }
+    if (a.startsWith("--method=")) {
+      method = a.slice("--method=".length);
+      continue;
+    }
+    if (API_BODY_FLAGS.has(a)) {
+      hasBody = true;
+      const v = args[++i];
+      if (a === "--input") input = v;
+      continue;
+    }
+    if (a.startsWith("--input=")) {
+      hasBody = true;
+      input = a.slice("--input=".length);
+      continue;
+    }
+    if (a.startsWith("--field=") || a.startsWith("--raw-field=") || a.startsWith("-f") || a.startsWith("-F")) {
+      hasBody = true;
+      continue;
+    }
+    if (API_VALUE_FLAGS.has(a)) {
+      i++;
+      continue;
+    }
+    // `-Hx`, `--jq=x`, and boolean flags (--paginate, --silent, -i, --verbose, --slurp): no endpoint here.
+  }
+  return { method: (method ?? (hasBody ? "POST" : "GET")).toUpperCase(), hasBody, ...(endpoint !== undefined ? { endpoint } : {}), ...(input !== undefined ? { input } : {}) };
+}
+
+/** Throws when a gh invocation is not one the app makes, or could bypass rules, force, delete a branch, merge by API, or reveal a token. */
 export function assertAllowedGh(args: string[], stdin = "") {
   for (const a of args) if (FORBIDDEN_ARGS.has(a)) throw new GhError("rejected", `refusing to run gh with ${a}`);
   if (args[0] === "auth") throw new GhError("rejected", "refusing to run gh auth: the app never reads or changes the sign-in");
+  const sub = args[0] === "pr" ? `pr ${args[1] ?? ""}` : (args[0] ?? "");
+  if (!ALLOWED_GH.has(sub)) throw new GhError("rejected", `refusing to run gh ${args.slice(0, 2).join(" ")}: the app runs only gh api, gh pr list, gh pr create, gh pr merge and gh pr close`);
   if (args[0] === "api") {
-    // Only the endpoint and the query are scanned, never the text of a body.
-    const text = `${args.join(" ")} ${executable(args, stdin)}`;
+    const call = parseApiCall(args);
+    const endpoint = call.endpoint ?? "";
+    // Only the endpoint, the flags and the query are scanned, never the text of a body.
+    const text = `${args.join(" ")} ${executable(call.endpoint, stdin)}`;
     if (/\/pulls\/\d+\/merge\b/.test(text) || /\/merges\b/.test(text)) throw new GhError("rejected", "refusing to call a GitHub merge endpoint");
     if (/mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|deleteRef|updateRef/.test(text)) throw new GhError("rejected", "refusing to send a merge or ref mutation");
-    const x = args.indexOf("-X") >= 0 ? args[args.indexOf("-X") + 1] : args.indexOf("--method") >= 0 ? args[args.indexOf("--method") + 1] : undefined;
-    if (x && x.toUpperCase() !== "POST" && x.toUpperCase() !== "GET") throw new GhError("rejected", `refusing to call the GitHub API with ${x}`);
-    // A POST goes only to the two endpoints the app writes to: a pull request's comments, or a job re-run.
-    if (x && x.toUpperCase() === "POST") {
-      const endpoint = apiEndpoint(args) ?? "";
-      if (!POST_ENDPOINTS.some((re) => re.test(endpoint))) throw new GhError("rejected", `refusing to POST to ${endpoint || "an unknown endpoint"}: the app writes only comments and job re-runs`);
-    }
+    // The app sends no GraphQL mutation at all: any mutation is refused, whether it comes on stdin or in a field.
+    if (endpoint === "graphql" && /\bmutation\b/i.test(text)) throw new GhError("rejected", "refusing to send a GraphQL mutation: the app sends none");
+    if (call.input !== undefined && call.input !== "-") throw new GhError("rejected", "refusing to send a request body from a file: bodies go on stdin");
+    if (call.method === "GET" && !call.hasBody) return;
+    if (call.method !== "POST" && call.method !== "GET") throw new GhError("rejected", `refusing to call the GitHub API with ${call.method}`);
+    // A write (a POST, or any request with a body) goes only where the app writes: a pull request's comments, a job re-run, or the scanned graphql query.
+    if (endpoint !== "graphql" && !POST_ENDPOINTS.some((re) => re.test(endpoint))) throw new GhError("rejected", `refusing to POST to ${endpoint || "an unknown endpoint"}: the app writes only comments and job re-runs`);
   }
   if (args[0] === "pr" && args[1] === "merge" && (!args.includes("--merge") || !args.includes("--match-head-commit"))) throw new GhError("rejected", "refusing to merge without --merge and --match-head-commit");
 }
@@ -184,7 +238,8 @@ export interface RollupNode {
   /** CheckRun: the check run's id (a GitHub Actions job id when the app is github-actions). */
   databaseId?: number;
   startedAt?: string | null;
-  checkSuite?: { app?: { slug?: string } | null; workflowRun?: { databaseId?: number } | null } | null;
+  completedAt?: string | null;
+  checkSuite?: { app?: { slug?: string } | null; workflowRun?: { databaseId?: number; event?: string | null; workflow?: { databaseId?: number; name?: string | null } | null } | null } | null;
   /** StatusContext: who posted it. */
   creator?: { login?: string } | null;
 }
@@ -192,20 +247,27 @@ export interface RollupNode {
 /** A whole-second UTC time, as GitHub reports `startedAt`: the only form supersession trusts. */
 const WHOLE_SECOND = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const startedMs = (c: CheckObs): number | undefined => (c.kind === "run" && c.startedAt && WHOLE_SECOND.test(c.startedAt) ? Date.parse(c.startedAt) : undefined);
+/** The workflow a run belongs to: its id, else its name and the triggering event; unknown when neither is reported. */
+const workflowKey = (c: CheckObs): string | undefined => (c.workflowId !== undefined ? `id:${c.workflowId}` : c.workflowName && c.event ? `name:${c.workflowName}|${c.event}` : undefined);
+/** Two runs of one job name from the same app and the same workflow: the only pair where the newer can stand for the older. */
+const sameOrigin = (a: CheckObs, b: CheckObs) => !!a.app && a.app === b.app && workflowKey(a) !== undefined && workflowKey(a) === workflowKey(b);
 
 /**
  * One rollup → checks, one per name. No rollup at all means nothing has reported.
  *
- * When a name reports more than once (ORC-013 §7.1), the newest run wins: the group is represented by
- * its newest dated check run when that run is a success or still going, and every other run that is
- * not a success is completed, has a whole-second `startedAt`, and started strictly before it. A
- * cancelled run therefore no longer stays red next to a later green re-run, and a re-run still going
- * keeps the name pending rather than red. In every other case the worst wins, as in ORC-008: an
- * undated or tied run keeps the name red, an older pending run keeps it pending, and a status context
- * is never grouped or superseded (GitHub reports one state per context). A passing run never hides a
- * failing one it cannot be shown to have replaced, and a newer run never hides a newer failure.
+ * When a name reports more than once (ORC-013 §7.1, tightened by review finding M3), a newer run
+ * supersedes an older one only when the older one is a check run GitHub CANCELLED, both come from
+ * the same app and the same workflow (the workflow's id, or its name and event) with the same job
+ * name, the older one is completed with a whole-second `startedAt` strictly before the newer one's,
+ * and the newer one started no later than `nowMs`. The group is then represented by the newest run
+ * when it is a success or still going: a cancelled run no longer stays red next to a later green
+ * re-run, and a re-run still going keeps the name pending rather than red. Every other non-success
+ * (a failure, a skipped or a stale run, a cancelled run from another workflow or app, an undated,
+ * tied, out-of-order or future-dated run) wins, as in ORC-008, and a status context is never grouped
+ * or superseded (GitHub reports one state per context). A passing run never hides a failing one it
+ * cannot be shown to have replaced, and a newer run never hides a newer failure.
  */
-export function parseChecks(rollup: { contexts?: { nodes?: RollupNode[] } } | null | undefined): CheckObs[] {
+export function parseChecks(rollup: { contexts?: { nodes?: RollupNode[] } } | null | undefined, nowMs = Date.now()): CheckObs[] {
   const groups = new Map<string, CheckObs[]>();
   for (const n of rollup?.contexts?.nodes ?? []) {
     let c: CheckObs;
@@ -214,8 +276,13 @@ export function parseChecks(rollup: { contexts?: { nodes?: RollupNode[] } } | nu
       const login = n.creator?.login?.replace(/\[bot\]$/, "");
       c = { name: n.context ?? "", required: !!n.isRequired, status: done ? "COMPLETED" : "PENDING", conclusion: done ? n.state! : null, ...(n.targetUrl ? { url: n.targetUrl } : {}), kind: "status", ...(login ? { app: login } : {}) };
     } else {
-      const jobId = Number.isInteger(n.databaseId) && n.databaseId! > 0 ? n.databaseId : undefined;
-      const runId = Number.isInteger(n.checkSuite?.workflowRun?.databaseId) && n.checkSuite!.workflowRun!.databaseId! > 0 ? n.checkSuite!.workflowRun!.databaseId : undefined;
+      const id = (v: unknown) => (Number.isInteger(v) && (v as number) > 0 ? (v as number) : undefined);
+      const jobId = id(n.databaseId);
+      const wr = n.checkSuite?.workflowRun;
+      const runId = id(wr?.databaseId);
+      const workflowId = id(wr?.workflow?.databaseId);
+      const workflowName = typeof wr?.workflow?.name === "string" && wr.workflow.name ? wr.workflow.name : undefined;
+      const event = typeof wr?.event === "string" && wr.event ? wr.event : undefined;
       const app = n.checkSuite?.app?.slug;
       c = {
         name: n.name ?? "",
@@ -227,7 +294,11 @@ export function parseChecks(rollup: { contexts?: { nodes?: RollupNode[] } } | nu
         ...(app ? { app } : {}),
         ...(jobId !== undefined ? { jobId } : {}),
         ...(runId !== undefined ? { runId } : {}),
+        ...(workflowId !== undefined ? { workflowId } : {}),
+        ...(workflowName ? { workflowName } : {}),
+        ...(event ? { event } : {}),
         ...(typeof n.startedAt === "string" && n.startedAt ? { startedAt: n.startedAt } : {}),
+        ...(typeof n.completedAt === "string" && n.completedAt ? { completedAt: n.completedAt } : {}),
       };
     }
     if (!c.name) continue;
@@ -237,16 +308,19 @@ export function parseChecks(rollup: { contexts?: { nodes?: RollupNode[] } } | nu
   const out: CheckObs[] = [];
   for (const [, runs] of groups) {
     const required = runs.some((c) => c.required);
-    // Newest run wins: the newest dated check run, when it is a success or still going (never a
-    // failure), and every other non-success is a completed, dated check run that started strictly before it.
+    // Newest run wins only over cancelled runs of the same origin: the newest dated check run, when it
+    // is a success or still going (never a failure) and not dated in the future, and every other
+    // non-success is a completed, dated, CANCELLED check run from the same app and workflow that
+    // started strictly before it.
     const newest = runs.filter((c) => startedMs(c) !== undefined).sort((a, b) => startedMs(b)! - startedMs(a)!)[0];
     const superseded =
       !!newest &&
       (newest.conclusion === "SUCCESS" || newest.conclusion === null) &&
+      startedMs(newest)! <= nowMs &&
       runs.every((c) => {
         if (c === newest || c.conclusion === "SUCCESS") return true;
         const t = startedMs(c);
-        return c.kind === "run" && c.status === "COMPLETED" && t !== undefined && t < startedMs(newest)!;
+        return c.kind === "run" && c.conclusion === "CANCELLED" && c.status === "COMPLETED" && t !== undefined && t < startedMs(newest)! && sameOrigin(c, newest);
       });
     if (superseded) {
       out.push({ ...newest, required });
@@ -267,7 +341,7 @@ export function parseChecks(rollup: { contexts?: { nodes?: RollupNode[] } } | nu
 
 const contexts = (n?: number) => {
   const req = n === undefined ? "" : ` isRequired(pullRequestNumber:${n})`;
-  return `statusCheckRollup{contexts(first:50){nodes{__typename ... on CheckRun{name status conclusion detailsUrl databaseId startedAt checkSuite{app{slug} workflowRun{databaseId}}${req}} ... on StatusContext{context state targetUrl creator{login}${req}}}}}`;
+  return `statusCheckRollup{contexts(first:50){nodes{__typename ... on CheckRun{name status conclusion detailsUrl databaseId startedAt completedAt checkSuite{app{slug} workflowRun{databaseId event workflow{databaseId name}}}${req}} ... on StatusContext{context state targetUrl creator{login}${req}}}}}`;
 };
 
 /** The one batched read: an alias per pull request and per landed commit, plus the rate limit. */
@@ -288,7 +362,7 @@ export function buildObserveQuery(repo: RepoRef, prs: number[], commits: string[
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-export function parseObserveResponse(json: string, prs: number[], commits: string[]): Observations {
+export function parseObserveResponse(json: string, prs: number[], commits: string[], nowMs = Date.now()): Observations {
   let doc: any;
   try {
     doc = JSON.parse(json);
@@ -315,7 +389,7 @@ export function parseObserveResponse(json: string, prs: number[], commits: strin
       mergeStateStatus: String(p.mergeStateStatus ?? "UNKNOWN"),
       reviewDecision: p.reviewDecision ?? null,
       labels: (p.labels?.nodes ?? []).map((l: any) => String(l.name)),
-      checks: parseChecks(commit?.statusCheckRollup),
+      checks: parseChecks(commit?.statusCheckRollup, nowMs),
       checksFor: String(commit?.oid ?? ""),
       ...(p.mergedAt ? { mergedAt: String(p.mergedAt) } : {}),
       ...(p.mergeCommit?.oid ? { mergeCommit: String(p.mergeCommit.oid) } : {}),
@@ -325,7 +399,7 @@ export function parseObserveResponse(json: string, prs: number[], commits: strin
   }
   commits.forEach((oid, k) => {
     const c = r[`c${k}`];
-    if (c) out.commits.push({ oid, checks: parseChecks(c.statusCheckRollup) });
+    if (c) out.commits.push({ oid, checks: parseChecks(c.statusCheckRollup, nowMs) });
   });
   if (typeof doc?.data?.rateLimit?.remaining === "number") out.rateRemaining = doc.data.rateLimit.remaining;
   if (doc?.data?.rateLimit?.resetAt) out.rateResetAt = String(doc.data.rateLimit.resetAt);

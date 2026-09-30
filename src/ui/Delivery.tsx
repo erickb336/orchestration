@@ -274,12 +274,20 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
             <dd>
               {reruns.map((u) => (
                 <div key={`${u.opId}:${u.check}`}>
-                  Re-ran {u.check} at {fmtTime(u.at)}: GitHub had cancelled it (job {u.jobId}).{" "}
-                  <span className="muted">{pr.op?.id === u.opId ? "Sent; waiting for GitHub to report the new run." : (u.seen ?? 0) >= D.PR_LIMITS.rerunObservations ? "The new run did not appear; judged by what GitHub shows." : ""}</span>
+                  {u.refused ? (
+                    <>
+                      GitHub refused the re-run of {u.check} asked for at {fmtTime(u.at)} (job {u.jobId}): <span className="muted">{u.refused}</span>
+                    </>
+                  ) : (
+                    <>
+                      Re-ran {u.check} at {fmtTime(u.at)}: GitHub had cancelled it (job {u.jobId}).{" "}
+                      <span className="muted">{pr.op?.id === u.opId ? "Sent; waiting for GitHub to report the new run." : (u.seen ?? 0) >= D.PR_LIMITS.rerunObservations ? "The new run did not appear; judged by what GitHub shows." : ""}</span>
+                    </>
+                  )}
                 </div>
               ))}
               <div className="muted">
-                {reruns.length} of {D.PR_LIMITS.reruns} re-runs used for this pull request; {cfg.rerunBudget} per check per head.
+                {reruns.length} on this head ({cfg.rerunBudget} per check per head); {pr.counters.reruns ?? 0} of {D.PR_LIMITS.reruns} re-runs used for this pull request over all its heads.
               </div>
             </dd>
           </>

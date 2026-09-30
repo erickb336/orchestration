@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { GhCliHost, GhError, assertAllowedGh, buildObserveQuery, classifyGhError, parseChecks, parseGitHubRemote, parseObserveResponse, parsePrUrl, shortError } from "./github";
+import { GhCliHost, GhError, assertAllowedGh, buildObserveQuery, classifyGhError, parseApiCall, parseChecks, parseGitHubRemote, parseObserveResponse, parsePrUrl, shortError } from "./github";
 
 const FAKE_GH = resolve(__dirname, "testing/fake-gh.mjs");
 const REPO = { owner: "octo", name: "app" };
@@ -502,21 +502,39 @@ describe("errors", () => {
 
 describe("ORC-013 step 3: CI triage in the adapter", () => {
   const T = (s: string) => `2026-09-30T12:${s}Z`;
-  const run = (name: string, conclusion: string | null, o: { startedAt?: string | null; id?: number; app?: string; status?: string; isRequired?: boolean } = {}) => ({
+  /** The observation's own time: every dated run below started before it unless a test says otherwise. */
+  const NOW = Date.parse("2026-09-30T13:00:00Z");
+  const run = (name: string, conclusion: string | null, o: { startedAt?: string | null; completedAt?: string; id?: number; app?: string; status?: string; isRequired?: boolean; workflowId?: number | null; workflowName?: string | null; event?: string | null } = {}) => ({
     __typename: "CheckRun",
     name,
     status: o.status ?? (conclusion ? "COMPLETED" : "IN_PROGRESS"),
     conclusion,
     databaseId: o.id ?? 1,
     startedAt: o.startedAt === undefined ? null : o.startedAt,
-    checkSuite: { app: { slug: o.app ?? "github-actions" }, workflowRun: { databaseId: 77 } },
+    ...(o.completedAt ? { completedAt: o.completedAt } : {}),
+    checkSuite: { app: { slug: o.app ?? "github-actions" }, workflowRun: { databaseId: 77, event: o.event === undefined ? "pull_request" : o.event, workflow: { databaseId: o.workflowId === undefined ? 5 : o.workflowId, name: o.workflowName === undefined ? "CI" : o.workflowName } } },
     isRequired: o.isRequired ?? false,
   });
-  const one = (nodes: unknown[], name = "check") => parseChecks({ contexts: { nodes: nodes as never } }).find((c) => c.name === name)!;
+  const one = (nodes: unknown[], name = "check", nowMs = NOW) => parseChecks({ contexts: { nodes: nodes as never } }, nowMs).find((c) => c.name === name)!;
 
-  it("parseChecks: the newest run wins only when every other non-success is a completed, dated run that started strictly before it (mutation check: the strict 'before')", () => {
+  it("parseChecks: a newer run wins only over a completed, dated CANCELLED run of the same app, workflow and job name that started strictly before it and not in the future (review M3; mutation check: the strict 'before')", () => {
     // Cancelled, then a later success: green, carrying the winning run's ids.
-    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, isRequired: true }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "SUCCESS", jobId: 2, runId: 77, required: true, startedAt: T("05:00") });
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, isRequired: true }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "SUCCESS", jobId: 2, runId: 77, workflowId: 5, workflowName: "CI", event: "pull_request", required: true, startedAt: T("05:00") });
+    // Only a cancelled run is superseded: a failure, a skipped or a stale run next to a later success stays (review M3).
+    for (const older of ["FAILURE", "TIMED_OUT", "SKIPPED", "STALE", "NEUTRAL", "ACTION_REQUIRED"]) expect(one([run("check", older, { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })]).conclusion, older).toBe(older);
+    // The same workflow, by id; or by name and event when the id is missing; never across workflows or apps.
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, workflowId: 6 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2, workflowId: 5 })])).toMatchObject({ conclusion: "CANCELLED", jobId: 1 });
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, workflowId: null }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2, workflowId: null })])).toMatchObject({ conclusion: "SUCCESS" }); // name "CI" + event agree
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, workflowId: null, event: "push" }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2, workflowId: null })])).toMatchObject({ conclusion: "CANCELLED" });
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, workflowId: null, workflowName: "Nightly" }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2, workflowId: null })])).toMatchObject({ conclusion: "CANCELLED" });
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, workflowId: null, workflowName: null, event: null }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2, workflowId: null, workflowName: null, event: null })])).toMatchObject({ conclusion: "CANCELLED" }); // nothing known: fail closed
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, app: "circleci" }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "CANCELLED" });
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), { ...run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 }), checkSuite: { app: null, workflowRun: null } }])).toMatchObject({ conclusion: "CANCELLED" });
+    // A success dated in the future (after the observation) supersedes nothing (mutation check).
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })], "check", Date.parse(T("04:59")))).toMatchObject({ conclusion: "CANCELLED" });
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })], "check", Date.parse(T("05:00")))).toMatchObject({ conclusion: "SUCCESS" });
+    // completedAt is carried for the timing rule (review M4).
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), completedAt: T("30:00"), id: 1 })])).toMatchObject({ conclusion: "CANCELLED", startedAt: T("00:00"), completedAt: T("30:00") });
     // A success, then a later cancel: red (the cancel is newer).
     expect(one([run("check", "SUCCESS", { startedAt: T("00:00"), id: 1 }), run("check", "CANCELLED", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "CANCELLED", jobId: 2 });
     // A tie at whole-second resolution, or an undated run: the worst wins (fail closed).
@@ -536,9 +554,9 @@ describe("ORC-013 step 3: CI triage in the adapter", () => {
     expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), run("check", null, { startedAt: null, id: 2 })])).toMatchObject({ conclusion: "CANCELLED" });
     // A failure that is not completed (GitHub's status says so) does not count as superseded.
     expect(one([run("check", "FAILURE", { startedAt: T("00:00"), id: 1, status: "IN_PROGRESS" }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "FAILURE" });
-    // SKIPPED and NEUTRAL are never green; a later success does supersede them like any completed run.
+    // SKIPPED and NEUTRAL are never green, and a later success does not supersede them (only a cancelled run is superseded).
     expect(one([run("check", "SKIPPED", { startedAt: T("00:00"), id: 1 })])).toMatchObject({ conclusion: "SKIPPED" });
-    expect(one([run("check", "SKIPPED", { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "SUCCESS" });
+    expect(one([run("check", "SKIPPED", { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "SKIPPED" });
     // Status contexts are never superseded: one state per context.
     expect(one([{ __typename: "StatusContext", context: "check", state: "FAILURE", creator: { login: "ci-bot[bot]" } }, run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "FAILURE", kind: "status", app: "ci-bot" });
     // Among equal failures the newer run is kept (the one a re-run would target).
@@ -551,14 +569,76 @@ describe("ORC-013 step 3: CI triage in the adapter", () => {
 
   it("the observe query asks for the fields triage needs; parseObserveResponse carries them", async () => {
     const q = buildObserveQuery(REPO, [12], []);
-    expect(q).toContain("databaseId startedAt checkSuite{app{slug} workflowRun{databaseId}}");
+    expect(q).toContain("databaseId startedAt completedAt checkSuite{app{slug} workflowRun{databaseId event workflow{databaseId name}}}");
     expect(q).toContain("creator{login}");
     const o = parseObserveResponse(
-      JSON.stringify({ data: { repository: { p12: { number: 12, state: "OPEN", headRefOid: SHA, commits: { nodes: [{ commit: { oid: SHA, statusCheckRollup: { contexts: { nodes: [run("build", "CANCELLED", { startedAt: T("00:00"), id: 4242, isRequired: true })] } } } }] } } } } }),
+      JSON.stringify({ data: { repository: { p12: { number: 12, state: "OPEN", headRefOid: SHA, commits: { nodes: [{ commit: { oid: SHA, statusCheckRollup: { contexts: { nodes: [run("build", "CANCELLED", { startedAt: T("00:00"), completedAt: T("01:00"), id: 4242, isRequired: true })] } } } }] } } } } }),
       [12],
       [],
+      NOW,
     );
-    expect(o.prs[0].checks).toEqual([{ name: "build", required: true, status: "COMPLETED", conclusion: "CANCELLED", kind: "run", app: "github-actions", jobId: 4242, runId: 77, startedAt: T("00:00") }]);
+    expect(o.prs[0].checks).toEqual([{ name: "build", required: true, status: "COMPLETED", conclusion: "CANCELLED", kind: "run", app: "github-actions", jobId: 4242, runId: 77, workflowId: 5, workflowName: "CI", event: "pull_request", startedAt: T("00:00"), completedAt: T("01:00") }]);
+  });
+
+  it("review M2: gh is allow-listed by subcommand; a gh api write goes only to comments, job re-runs and the scanned graphql, whatever way the method or body is spelled", () => {
+    // The app's own invocations.
+    for (const args of [
+      ["--version"],
+      ["api", "user", "--jq", ".login"],
+      ["api", "repos/octo/app/rules/branches/main"],
+      ["api", "repos/octo/app/issues/5/comments", "--paginate", "--jq", ".[] | .html_url"],
+      ["api", "-X", "POST", "repos/octo/app/issues/5/comments", "--input", "-"],
+      ["api", "-X", "POST", "repos/octo/app/actions/jobs/123/rerun"],
+      ["api", "graphql", "--input", "-"],
+      ["pr", "list", "-R", "octo/app", "--head", "x", "--state", "all", "--json", "number", "--limit", "10"],
+      ["pr", "create", "-R", "octo/app", "--base", "main", "--head", "x", "--title", "t", "--body-file", "-"],
+      ["pr", "merge", "5", "-R", "octo/app", "--merge", "--match-head-commit", SHA, "--subject", "s", "--body-file", "-"],
+      ["pr", "close", "5", "-R", "octo/app", "--comment", "c"],
+    ]) {
+      expect(() => assertAllowedGh(args, args.includes("graphql") ? JSON.stringify({ query: "query{viewer{login}}" }) : "{}"), args.join(" ")).not.toThrow();
+    }
+    // Subcommands the app never runs.
+    for (const args of [["pr", "review", "5", "--approve"], ["run", "rerun", "1"], ["workflow", "run", "ci.yml"], ["pr", "edit", "5"], ["pr", "ready", "5"], ["repo", "delete"], ["release", "create"], ["gist", "create"], ["pr"], []]) {
+      expect(() => assertAllowedGh(args), args.join(" ")).toThrow(/refusing to run gh/);
+    }
+    // The bypasses the reviewer probed: every spelling of a write, to an endpoint the app never writes to.
+    for (const args of [
+      ["api", "repos/o/r/pulls/1/reviews", "-f", "event=APPROVE"],
+      ["api", "repos/o/r/pulls/1/reviews", "--input", "-"],
+      ["api", "-XPOST", "repos/o/r/pulls/1/reviews"],
+      ["api", "--method=POST", "repos/o/r/pulls/1/reviews"],
+      ["api", "-XDELETE", "repos/o/r/git/refs/heads/main"],
+      ["api", "--method=PATCH", "repos/o/r/pulls/1"],
+      ["api", "-X", "GET", "-X", "POST", "repos/o/r/pulls/1/reviews"],
+      ["api", "-X", "POST", "-X", "GET", "repos/o/r/pulls/1/reviews", "-f", "event=APPROVE"], // a body is a write whatever the method says
+      ["api", "repos/o/r/pulls/1/reviews", "-F", "event=APPROVE"],
+      ["api", "repos/o/r/pulls/1/reviews", "--field", "event=APPROVE"],
+      ["api", "repos/o/r/pulls/1/reviews", "--field=event=APPROVE"],
+      ["api", "repos/o/r/pulls/1/reviews", "--raw-field", "body=x"],
+      ["api", "repos/o/r/pulls/1/reviews", "-fevent=APPROVE"],
+      ["api", "--input=/tmp/body.json", "repos/o/r/issues/1/comments"], // a body from a file is never sent
+      ["api", "-X", "PUT", "repos/o/r/actions/jobs/1/rerun"],
+      ["api", "-X", "POST", "repos/o/r/actions/runs/1/rerun"],
+      ["api", "-X", "POST", "--paginate", "repos/o/r/pulls/1/reviews"],
+      ["api", "-H", "Accept: x", "-X", "POST", "repos/o/r/pulls/1/reviews"],
+    ]) {
+      expect(() => assertAllowedGh(args), args.join(" ")).toThrow(GhError);
+    }
+    // GraphQL: the app sends no mutation at all; a query is fine, and a mutation named only in a variable is data.
+    expect(() => assertAllowedGh(["api", "graphql", "--input", "-"], JSON.stringify({ query: "query{viewer{login}}" }))).not.toThrow();
+    expect(() => assertAllowedGh(["api", "graphql", "--input", "-"], JSON.stringify({ query: "mutation{addComment(input:{}){clientMutationId}}" }))).toThrow(/refusing to send a GraphQL mutation/);
+    expect(() => assertAllowedGh(["api", "graphql", "--input", "-"], "mutation { x }")).toThrow(/mutation/);
+    expect(() => assertAllowedGh(["api", "graphql", "-f", "query=mutation{addComment(input:{}){clientMutationId}}"])).toThrow(/mutation/);
+    expect(() => assertAllowedGh(["api", "-X", "POST", "graphql", "-f", "query=query{viewer{login}}"])).not.toThrow();
+    expect(() => assertAllowedGh(["api", "graphql", "--input", "-"], JSON.stringify({ query: "query{viewer{login}}", variables: { text: "mutation mergePullRequest" } }))).not.toThrow();
+    // How the guard reads an invocation.
+    expect(parseApiCall(["api", "repos/o/r", "--jq", ".x"])).toEqual({ method: "GET", hasBody: false, endpoint: "repos/o/r" });
+    expect(parseApiCall(["api", "-X", "GET", "-X", "POST", "repos/o/r"])).toMatchObject({ method: "POST", endpoint: "repos/o/r" });
+    expect(parseApiCall(["api", "-XDELETE", "repos/o/r"])).toMatchObject({ method: "DELETE" });
+    expect(parseApiCall(["api", "--method=patch", "repos/o/r"])).toMatchObject({ method: "PATCH" });
+    expect(parseApiCall(["api", "repos/o/r", "-f", "a=b"])).toMatchObject({ method: "POST", hasBody: true, endpoint: "repos/o/r" });
+    expect(parseApiCall(["api", "--input", "-", "graphql"])).toMatchObject({ method: "POST", hasBody: true, endpoint: "graphql", input: "-" });
+    expect(parseApiCall(["api", "-H", "Accept: x", "-q", ".y", "repos/o/r"])).toMatchObject({ endpoint: "repos/o/r" });
   });
 
   it("rerunJob sends exactly `api -X POST repos/o/r/actions/jobs/<id>/rerun`, checks the id first, and the guard allows nothing else to be POSTed", async () => {

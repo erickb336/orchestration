@@ -164,7 +164,7 @@ describe("automatic merge (scenario 2)", () => {
     // It passes. The merge is sent once, bound to the exact head; while GitHub's answer is slow the
     // pull request is "merging", never "merged".
     const release = fake.hold("merge", "after");
-    fake.setCheck(1, "SUCCESS");
+    fake.setCheck(1, "SUCCESS", "check", { replace: true }); // GitHub shows the passing attempt in place of the skipped one (review M3)
     for (let i = 0; i < 60 && pr(id).op?.kind !== "merge"; i++) {
       now += 5000;
       scheduler.tick(now); // do not wait: the merge stays in flight
@@ -450,8 +450,9 @@ describe("a failing required check (scenario 7)", () => {
     expect(lead).toContain("## Delivery");
     expect(lead).toMatch(new RegExp(`- ${id} PR #1 needs attention \\(checks-failed\\)`));
     expect(lead).toContain("You cannot merge, push, comment, close a pull request, send work back or mark anything reviewed");
-    // A re-run that passes makes the gate ready again, for the exact head.
-    fake.setCheck(1, "SUCCESS");
+    // A re-run that passes makes the gate ready again, for the exact head. GitHub shows the passing attempt in
+    // place of the failed one: a failure next to a later success stays red (review M3).
+    fake.setCheck(1, "SUCCESS", "check", { replace: true });
     await until("it merges", () => pr(id).phase === "merged");
     expect(merges()).toEqual([expect.objectContaining({ number: 1, headSha: heads[2] })]);
     expect(remote("show", "main:f.txt")).toBe("v2");

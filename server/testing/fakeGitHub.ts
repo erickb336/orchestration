@@ -89,7 +89,8 @@ export class FakeGitHub extends SimulatedGitHub {
     return new Date(RUNS_T0 + ++this.stampSeq * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
   }
   private refresh(number: number) {
-    this.pr(number).checks = parseChecks({ contexts: { nodes: this.runs.get(number) ?? [] } });
+    // "Now" is after the newest stamp: no run is dated in the future.
+    this.pr(number).checks = parseChecks({ contexts: { nodes: this.runs.get(number) ?? [] } }, RUNS_T0 + (this.stampSeq + 1) * 1000);
   }
   /** The raw check runs on the pull request's current head, newest last. */
   runsOf(number: number): RollupNode[] {
@@ -98,9 +99,12 @@ export class FakeGitHub extends SimulatedGitHub {
   /**
    * Report a check on the pull request's current head. `conclusion` null means still running. A run
    * that is still going completes in place; a completed check reported again is a new run of that
-   * name (a re-run), started strictly later. `app`: the check suite's app (github-actions by default).
+   * name (a re-run), started strictly later, from the same workflow ("ci", on pull_request) and app.
+   * `app`: the check suite's app (github-actions by default). `replace`: GitHub replaced the completed
+   * check run instead (a person re-ran the job and the rollup shows the new attempt only), so no older
+   * run remains next to it.
    */
-  setCheck(number: number, conclusion: string | null, name = "check", o: { app?: string } = {}) {
+  setCheck(number: number, conclusion: string | null, name = "check", o: { app?: string; replace?: boolean } = {}) {
     const p = this.pr(number);
     const head = this.headOf(p);
     if (this.checksHead.get(number) !== head) {
@@ -110,9 +114,13 @@ export class FakeGitHub extends SimulatedGitHub {
     this.checksHead.set(number, head);
     const runs = this.runs.get(number) ?? [];
     const last = [...runs].reverse().find((r) => r.name === name);
-    if (last && last.status !== "COMPLETED") {
+    if (last && (last.status !== "COMPLETED" || o.replace)) {
       last.status = conclusion ? "COMPLETED" : "IN_PROGRESS";
       last.conclusion = conclusion;
+      if (o.replace) {
+        last.databaseId = ++this.jobSeq;
+        last.startedAt = this.stamp();
+      }
     } else {
       runs.push({
         __typename: "CheckRun",
@@ -123,7 +131,7 @@ export class FakeGitHub extends SimulatedGitHub {
         startedAt: this.stamp(),
         detailsUrl: `https://github.com/test/repo/actions/runs/${number}`,
         isRequired: this.requiredChecks.includes(name),
-        checkSuite: { app: { slug: o.app ?? "github-actions" }, workflowRun: { databaseId: number } },
+        checkSuite: { app: { slug: o.app ?? "github-actions" }, workflowRun: { databaseId: number, event: "pull_request", workflow: { databaseId: 1, name: "ci" } } },
       });
     }
     this.runs.set(number, runs);

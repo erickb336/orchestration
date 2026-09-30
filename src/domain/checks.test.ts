@@ -147,7 +147,7 @@ describe("suggestChecks (§6.2)", () => {
 
   it("pnpm, cargo, go and pytest fixtures; everything suggested passes validation; nothing without evidence", () => {
     const pnpm = C.suggestChecks([{ path: "package.json", text: JSON.stringify({ scripts: { lint: "eslint .", test: "vitest" } }) }, { path: "pnpm-lock.yaml", text: "" }]);
-    expect(pnpm.map((c) => c.argv)).toEqual([["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], ["pnpm", "run", "lint"], ["pnpm", "test"]]);
+    expect(pnpm.map((c) => c.argv)).toEqual([["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"], ["pnpm", "run", "lint"], ["pnpm", "test"]]);
     const rust = C.suggestChecks([{ path: "Cargo.toml", text: "[package]" }, { path: "go.mod", text: "module x" }, { path: "pyproject.toml", text: "[tool.pytest.ini_options]" }]);
     expect(rust.map((c) => c.argv)).toEqual([["cargo", "build"], ["cargo", "test"], ["go", "vet", "./..."], ["go", "test", "./..."], ["python3", "-m", "pytest"]]);
     for (const list of [pnpm, rust]) expect(C.validateChecks(cfg({ commands: list }), { acknowledged: true })).toBeUndefined();
@@ -375,6 +375,26 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
     expect(task(done, id).lifecycle).toBe("done");
   });
 
+  it("review M6: accepting failing checks never covers a configured check that did not run; the missing-check rule is applied first (mutation check)", () => {
+    const { s, id } = blockedFinal();
+    const d = s.decisions.find((x) => x.kind === "final-checks")!;
+    const accepted = F.decideFinding(s, d.id, "accept", "ship it", at(52));
+    expect(C.checkEvidence(accepted, SHA)).toMatchObject({ ok: true, acceptedByUser: true });
+    // The same acceptance, with a configured check the run never ran (the settings revision is unchanged): not evidence.
+    const wider = structuredClone(accepted);
+    wider.project.checks.commands.push(cmd("lint", ["npm", "run", "lint"]));
+    expect(C.checkEvidence(wider, SHA)).toMatchObject({ ok: false, attemptId: expect.any(String), reason: `The run on ${SHA.slice(0, 12)} did not run every configured check (missing: lint).` });
+    expect(C.checkEvidence(wider, SHA)).not.toHaveProperty("acceptedByUser");
+    expect(C.landedCheckFlags(wider, task(wider, id), SHA)).toEqual(["checks-accepted-failing", "checks-not-run"]);
+    expect(C.landedCheckFlags(accepted, task(accepted, id), SHA)).toEqual(["checks-accepted-failing"]);
+    // A run that recorded the check as not-run (a failed prepare left it) is the same case.
+    const notRun = structuredClone(accepted);
+    const art = notRun.artifacts.find((a) => a.kind === "check-results" && a.checkRun && C.sameSha(a.checkRun.sha, SHA))!;
+    art.checkRun!.results.push({ id: "lint", label: "lint", kind: "check", status: "not-run", durationMs: 0, excerpt: "", bytes: 0, truncated: false });
+    notRun.project.checks.commands.push(cmd("lint", ["npm", "run", "lint"]));
+    expect(C.checkEvidence(notRun, SHA)).toMatchObject({ ok: false, reason: expect.stringMatching(/missing: lint/) });
+  });
+
   it("a fix round (user or lead) appends fix → review → final checks after the blocked step, rewires what follows, and is limited to two", () => {
     const { s, id } = blockedFinal("lead");
     const d = s.decisions.find((x) => x.kind === "final-checks")!;
@@ -479,15 +499,16 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     artifacts: [...s.artifacts, { id: "art-x", taskId: "EX-006", stepId: "C2", attemptId: "run-x", name: "final", kind: "check-results" as const, version: 1, summary: "s", createdAt: at(1), checkRun: rec, findings: C.findingsFromRun(rec), openFindings: C.findingsFromRun(rec).length }],
   });
 
-  it("H1: an install that may use the network must carry its package manager's no-scripts flag; offline it need not; a rebuild step is allowed and marked offline (mutation check)", () => {
-    for (const argv of [["npm", "ci"], ["npm", "install"], ["pnpm", "install", "--frozen-lockfile"], ["yarn", "install", "--immutable"], ["bun", "install"]]) {
-      bad(cfg({ prepareNetwork: true, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }), /must not run install scripts/);
+  it("H1: an install that may use the network must carry its package manager's no-scripts flags; offline it need not; a rebuild step is allowed and marked offline (mutation check)", () => {
+    for (const argv of [["npm", "ci"], ["npm", "install"], ["pnpm", "install", "--frozen-lockfile"], ["pnpm", "install", "--ignore-scripts"], ["yarn", "install", "--immutable"]]) {
+      bad(cfg({ prepareNetwork: true, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }), /must carry/);
       ok(cfg({ prepareNetwork: false, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }));
     }
-    for (const argv of [["npm", "ci", "--ignore-scripts"], ["pnpm", "install", "--ignore-scripts", "--frozen-lockfile"], ["yarn", "install", "--immutable", "--mode=skip-build"], ["yarn", "install", "--ignore-scripts"], ["bun", "install", "--frozen-lockfile", "--ignore-scripts"]]) {
+    for (const argv of [["npm", "ci", "--ignore-scripts"], ["pnpm", "install", "--ignore-scripts", "--ignore-pnpmfile", "--frozen-lockfile"], ["yarn", "install", "--immutable", "--mode=skip-build"], ["yarn", "install", "--ignore-scripts"]]) {
       ok(cfg({ prepareNetwork: true, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }));
     }
-    expect(C.validateCommand(cmd("i", ["npm", "ci"], "prepare"), { networked: true })).toMatch(/add "--ignore-scripts" to it\. Scripts your project needs can run offline afterwards in a separate "npm rebuild" prepare command/);
+    expect(C.validateCommand(cmd("i", ["npm", "ci"], "prepare"), { networked: true })).toMatch(/must carry "--ignore-scripts" or "--ignore-scripts=true"\. Repository code must not run while the network is on; scripts your project needs can run offline afterwards in a separate "npm rebuild" prepare command/);
+    expect(C.validateCommand(cmd("i", ["pnpm", "i"], "prepare"), { networked: true })).toMatch(/"--ignore-scripts" or "--ignore-scripts=true" and "--ignore-pnpmfile" or "--ignore-pnpmfile=true"/);
     // The offline way to run install scripts.
     ok(cfg({ prepareNetwork: true, commands: [cmd("i", ["npm", "ci", "--ignore-scripts"], "prepare"), cmd("s", ["npm", "rebuild"], "prepare"), cmd("t", ["npm", "test"])] }));
     ok(cfg({ prepareNetwork: true, commands: [cmd("s", ["pnpm", "rebuild"], "prepare"), cmd("t", ["pnpm", "test"])] }));
@@ -496,11 +517,85 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     expect(plannedCommands.map((c) => [c.id, c.offline])).toEqual([["i", undefined], ["s", true], ["t", undefined]]);
     expect(C.isInstall(["npm", "ci"])).toBe(true);
     expect(C.isRebuild(["yarn", "rebuild"])).toBe(true);
-    expect(C.ignoresScripts(["yarn", "install", "--mode=skip-build"])).toBe(true);
+    expect(C.networkRefusal(["yarn", "install", "--mode=skip-build"])).toBeUndefined();
     // Suggestions carry the flags; a project that needs scripts adds the offline step itself.
     const sug = C.suggestChecks([{ path: "package.json", text: JSON.stringify({ scripts: { test: "vitest" } }) }, { path: "yarn.lock", text: "" }]);
     expect(sug[0].argv).toEqual(["yarn", "install", "--immutable", "--mode=skip-build"]);
     expect(C.validateChecks({ ...cfg(), prepareNetwork: true, commands: sug }, { acknowledged: true })).toBeUndefined();
+    expect(C.suggestChecks([{ path: "package.json", text: "{}" }, { path: "pnpm-lock.yaml", text: "" }])[0].argv).toEqual(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"]);
+  });
+
+  it("review H1: the network goes only to npm, pnpm and yarn installs with every repository-code hook off; everything else runs offline with the reason (mutation check: the allowlist)", () => {
+    // Not on the allowlist: allowed as prepare commands, but marked offline with the rule, whatever the settings say.
+    for (const argv of [["make", "deps"], ["./gradlew", "dependencies"], ["bundle", "install"], ["node", "scripts/setup.js"], ["python3", "-m", "pip", "install", "-e", "."], ["uv", "sync"], ["poetry", "install"], ["mix", "deps.get"], ["swift", "package", "resolve"], ["cargo", "fetch"], ["go", "mod", "download"]]) {
+      expect(C.networkRefusal(argv), argv.join(" ")).toBe(`${C.NETWORK_RULE}.`);
+      const planned = C.commandsFor(cfg({ prepareNetwork: true, commands: [cmd("p", argv, "prepare"), cmd("t", ["npm", "test"])] }), {});
+      expect(planned[0], argv.join(" ")).toMatchObject({ id: "p", offline: true, offlineReason: `${C.NETWORK_RULE}.` });
+      expect(planned[1].offline).toBeUndefined();
+    }
+    ok(cfg({ prepareNetwork: true, commands: [cmd("p", ["make", "deps"], "prepare"), cmd("t", ["npm", "test"])] }));
+    // bun: its hooks beyond lifecycle scripts could not be ruled out, so its installs run offline even with --ignore-scripts.
+    expect(C.networkRefusal(["bun", "install", "--frozen-lockfile", "--ignore-scripts"])).toMatch(/^bun installs run offline: bun has hooks beyond install scripts/);
+    expect(C.commandsFor(cfg({ prepareNetwork: true, commands: [cmd("i", ["bun", "install", "--ignore-scripts"], "prepare"), cmd("t", ["bun", "test"])] }), {})[0]).toMatchObject({ offline: true, offlineReason: expect.stringMatching(/bun installs run offline/) });
+    ok(cfg({ prepareNetwork: true, commands: [cmd("i", ["bun", "install"], "prepare"), cmd("t", ["bun", "test"])] })); // no flag needed: it never gets the network
+    // On the allowlist, with every hook off.
+    expect(C.networkRefusal(["npm", "ci", "--ignore-scripts"])).toBeUndefined();
+    expect(C.networkRefusal(["npm", "install", "--ignore-scripts=true"])).toBeUndefined();
+    expect(C.networkRefusal(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"])).toBeUndefined();
+    expect(C.networkRefusal(["yarn", "install", "--immutable", "--mode=skip-build"])).toBeUndefined();
+    expect(C.networkRefusal(["yarn", "install", "--ignore-scripts"])).toBeUndefined();
+    expect(C.commandsFor(cfg({ prepareNetwork: true, commands: [cmd("i", ["npm", "ci", "--ignore-scripts"], "prepare")] }), {})[0].offlineReason).toBeUndefined();
+    // pnpm's .pnpmfile.cjs runs even under --ignore-scripts: --ignore-pnpmfile is required too.
+    expect(C.networkRefusal(["pnpm", "install", "--ignore-scripts"])).toMatch(/must carry "--ignore-pnpmfile" or "--ignore-pnpmfile=true"/);
+    // The runner re-adds what is missing and drops what contradicts, whatever the settings say.
+    expect(C.hardenedInstall(["npm", "ci"])).toEqual(["npm", "ci", "--ignore-scripts"]);
+    expect(C.hardenedInstall(["pnpm", "install", "--frozen-lockfile"])).toEqual(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"]);
+    expect(C.hardenedInstall(["pnpm", "install", "--ignore-scripts", "--no-ignore-scripts", "--ignore-pnpmfile=false"])).toEqual(["pnpm", "install", "--ignore-scripts", "--ignore-pnpmfile"]);
+    expect(C.hardenedInstall(["yarn", "install", "--immutable"])).toEqual(["yarn", "install", "--immutable", "--ignore-scripts"]);
+    expect(C.hardenedInstall(["yarn", "install", "--mode=skip-build", "--mode=update-lockfile"])).toEqual(["yarn", "install", "--mode=skip-build"]);
+    expect(C.hardenedInstall(["bun", "install"])).toEqual(["bun", "install"]); // offline anyway
+    expect(C.hardenedInstall(["npm", "rebuild"])).toEqual(["npm", "rebuild"]);
+    // Yarn's own configuration runs repository JavaScript: such a copy is refused the network, from the copy the install runs in.
+    expect(C.yarnrcRefusal({})).toBeUndefined();
+    expect(C.yarnrcRefusal({ yarnrcYml: "nodeLinker: node-modules\nenableGlobalCache: true\n" })).toBeUndefined();
+    expect(C.yarnrcRefusal({ yarnrcYml: "yarnPath: .yarn/releases/yarn-4.0.0.cjs\n" })).toBe(".yarnrc.yml sets yarnPath, which runs repository JavaScript; the install runs offline.");
+    expect(C.yarnrcRefusal({ yarnrcYml: "plugins:\n  - path: .yarn/plugins/x.cjs\n" })).toMatch(/sets plugins, which runs repository JavaScript/);
+    expect(C.yarnrcRefusal({ yarnrcYml: "plugins: []\nyarnPath: x\n" })).toMatch(/sets plugins and yarnPath/);
+    expect(C.yarnrcRefusal({ yarnrcYml: "# plugins: none\nsomething: plugins\n" })).toBeUndefined(); // only a top-level key counts
+    expect(C.yarnrcRefusal({ yarnrc: 'yarn-path "./.yarn/releases/yarn-1.22.19.cjs"\n' })).toBe(".yarnrc sets yarn-path, which runs repository JavaScript; the install runs offline.");
+    expect(C.yarnrcRefusal({ yarnrc: 'registry "https://registry.npmjs.org"\n' })).toBeUndefined();
+  });
+
+  it("review L11: contradicting flags are refused; NPM_CONFIG_*, YARN_* and PNPM_* never pass through; interpreter flags with a separate value are skipped (mutation check)", () => {
+    for (const argv of [
+      ["npm", "ci", "--ignore-scripts", "--no-ignore-scripts"],
+      ["npm", "ci", "--ignore-scripts=false"],
+      ["npm", "ci", "--ignore-scripts", "--ignore-scripts=false"],
+      ["pnpm", "install", "--ignore-scripts", "--ignore-pnpmfile", "--no-ignore-pnpmfile"],
+      ["pnpm", "install", "--ignore-scripts", "--ignore-pnpmfile=false"],
+      ["yarn", "install", "--mode=skip-build", "--mode=update-lockfile"],
+      ["yarn", "install", "--ignore-scripts", "--no-ignore-scripts"],
+    ]) {
+      bad(cfg({ prepareNetwork: true, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }), /would let repository code run while the network is on/);
+      expect(C.networkRefusal(argv), argv.join(" ")).toMatch(/would let repository code run/);
+    }
+    expect(C.contradictingFlags(["npm", "ci", "--ignore-scripts", "--no-ignore-scripts", "--ignore-scripts=false"])).toEqual(["--no-ignore-scripts", "--ignore-scripts=false"]);
+    // Variable names: package-manager configuration is blocked whatever its case (the name rule is uppercase; the block is case-insensitive).
+    for (const n of ["NPM_CONFIG_IGNORE_SCRIPTS", "NPM_CONFIG_REGISTRY", "YARN_ENABLE_SCRIPTS", "YARN_IGNORE_PATH", "PNPM_HOME"]) bad(cfg({ passEnv: [n] }), /configures a package manager and cannot be passed through/);
+    for (const n of ["npm_config_x", "Yarn_X", "pnpm_home"]) expect(C.blockedEnvName(n), n).toBe(true);
+    ok(cfg({ passEnv: ["MY_TOOL_HOME", "YARNX"] }));
+    // A flag whose value is the next argument does not hide the inline flag behind it.
+    bad(cfg({ commands: [cmd("c", ["python", "-W", "x", "-c", "print(1)"])] }), /inline code or preload/);
+    bad(cfg({ commands: [cmd("c", ["python3", "-X", "dev", "-c", "print(1)"])] }), /inline code or preload/);
+    bad(cfg({ commands: [cmd("c", ["ruby", "-I", "lib", "-e", "puts 1"])] }), /inline code or preload/);
+    bad(cfg({ commands: [cmd("c", ["node", "--input-type", "module", "-e", "1"])] }), /inline code or preload/);
+    bad(cfg({ commands: [cmd("c", ["node", "-C", "x", "-e", "1"])] }), /inline code or preload/);
+    bad(cfg({ commands: [cmd("c", ["node", "--env-file", ".env", "--require", "x"])] }), /inline code or preload/);
+    // The value itself is never mistaken for a flag or the script.
+    ok(cfg({ commands: [cmd("c", ["python", "-W", "error", "-m", "pytest"])] }));
+    ok(cfg({ commands: [cmd("c", ["ruby", "-I", "lib", "test.rb", "-e"])] }));
+    ok(cfg({ commands: [cmd("c", ["node", "--input-type", "module", "scripts/check.mjs", "-e"])] }));
+    ok(cfg({ commands: [cmd("c", ["node", "-C", "development", "scripts/check.mjs"])] }));
   });
 
   it("L6: interpreter flags are matched by prefix and in clusters, deno eval is refused, and scanning stops at -m, -- or the script (mutation check)", () => {

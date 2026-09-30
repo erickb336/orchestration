@@ -1094,7 +1094,13 @@ export interface CheckObs {
   /** ORC-013: the check run's database id (a GitHub Actions job id when app is "github-actions"). */
   jobId?: number;
   runId?: number;
+  /** ORC-013 review M3: the workflow the run belongs to (its id, or its name and the triggering event); supersession needs the same one. */
+  workflowId?: number;
+  workflowName?: string;
+  event?: string;
   startedAt?: string;
+  /** ORC-013 review M4: with `startedAt`, how long the job ran (a cancelled job that ran to GitHub's time limit failed on the code). */
+  completedAt?: string;
 }
 
 export type PrAttentionCode =
@@ -1219,7 +1225,7 @@ export interface PrDelivery {
    * since the request that still showed the cancelled run; after 2 (or 5 minutes) the check is
    * judged as observed.
    */
-  ciReruns?: { headSha: string; used: { check: string; jobId: number; at: string; opId: string; seen?: number }[] };
+  ciReruns?: { headSha: string; used: { check: string; jobId: number; at: string; opId: string; seen?: number; refused?: string }[] };
   /** Backoff after a failed operation. */
   nextAt?: string;
   /** When headSha was first observed on GitHub (check timeouts). */

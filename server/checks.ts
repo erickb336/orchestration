@@ -18,7 +18,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, st
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type Server as NetServer } from "node:net";
-import { IGNORE_SCRIPTS_FLAGS, isInstall, isRebuild } from "../src/domain/checks";
+import { blockedEnvName, hardenedInstall, isRebuild, networkRefusal, yarnrcRefusal } from "../src/domain/checks";
 import type { CheckResult, ChecksConfig, ChecksHealth } from "../src/domain/types";
 import { killGroup, trackLive } from "./processes";
 import { SECRET_NAME, redact } from "./redact";
@@ -39,33 +39,57 @@ export interface PlannedCheck {
   kind: "prepare" | "check";
   argv: string[];
   timeoutMs: number;
-  /** A prepare command that runs install scripts in the copy: it never gets the network. */
+  /** A prepare command that never gets the network: a rebuild step, or a download that is not on the allowlist (H1). */
   offline?: true;
+  /** Why the network was refused to this prepare command, when the settings would have allowed it. */
+  offlineReason?: string;
   /** Variables set for this one command on top of the run's environment (the "no scripts" settings). */
   env?: Record<string, string>;
 }
 
 /**
- * H1: repository code never runs while the network is on. An install command that may use the network
- * is run with its package manager's "no scripts" flag and environment; a rebuild command (the offline
- * way to run install scripts) never gets the network. The result is what the runner starts.
+ * H1: repository code never runs while the network is on. The network goes only to npm, pnpm and yarn
+ * installs with every hook that runs repository code switched off (the flags, re-added here whatever
+ * the settings say, and this environment); a rebuild command (the offline way to run install scripts)
+ * and every other prepare command run offline. The result is what the runner starts.
  */
 export const NO_SCRIPTS_ENV: Record<string, string> = {
   // npm and pnpm read npm_config_*; Yarn Berry reads YARN_ENABLE_SCRIPTS (documented); Yarn classic reads YARN_IGNORE_SCRIPTS (best effort).
   npm_config_ignore_scripts: "true",
   YARN_ENABLE_SCRIPTS: "0",
   YARN_IGNORE_SCRIPTS: "true",
+  // Both yarns: never run the repository's own copy of yarn (.yarnrc.yml yarnPath, .yarnrc yarn-path).
+  YARN_IGNORE_PATH: "1",
 };
-export function hardenCommand(c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">): PlannedCheck {
+/** Yarn's own configuration files in the copy the install runs in, as `yarnrcRefusal` reads them. */
+export type YarnRc = { yarnrcYml?: string; yarnrc?: string };
+export function hardenCommand(c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">, rc: YarnRc = {}): PlannedCheck {
   if (c.kind !== "prepare") return c;
   if (c.offline || isRebuild(c.argv)) return { ...c, offline: true };
   if (!a.prepareNetwork) return c;
-  const flags = IGNORE_SCRIPTS_FLAGS[c.argv[0]];
-  const argv = flags && isInstall(c.argv) && !flags.some((f) => c.argv.includes(f)) ? [...c.argv, flags[0]] : c.argv;
+  // An allowlisted install gets its flags re-added and contradictions dropped whatever the settings say;
+  // anything else (bun, every other program, a yarn whose own configuration runs repository code) runs offline.
+  const argv = hardenedInstall(c.argv);
+  const why = networkRefusal(argv) ?? (argv[0] === "yarn" ? yarnrcRefusal(rc) : undefined);
+  if (why) return { ...c, argv, offline: true, offlineReason: why };
   return { ...c, argv, env: { ...(c.env ?? {}), ...NO_SCRIPTS_ENV } };
 }
-/** Does this command get the network: only a prepare command that is not offline, when the settings allow it. */
-export const networkFor = (c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">) => c.kind === "prepare" && a.prepareNetwork && !c.offline && !isRebuild(c.argv);
+/** Does this command get the network: only a hardened prepare command on the allowlist, when the settings allow it. */
+export const networkFor = (c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">) => c.kind === "prepare" && a.prepareNetwork && !c.offline && !isRebuild(c.argv) && networkRefusal(c.argv) === undefined;
+
+/** Yarn's configuration files from the copy, read just before a yarn install runs there (at most 64 KB each). */
+export function readYarnRc(workspace: string): YarnRc {
+  const read = (name: string) => {
+    try {
+      return readFileSync(join(workspace, name), "utf8").slice(0, 64 * 1024);
+    } catch {
+      return undefined;
+    }
+  };
+  const yml = read(".yarnrc.yml");
+  const rc = read(".yarnrc");
+  return { ...(yml !== undefined ? { yarnrcYml: yml } : {}), ...(rc !== undefined ? { yarnrc: rc } : {}) };
+}
 
 export interface CheckAssignment {
   attemptId: string;
@@ -123,7 +147,8 @@ export const REAPER = fileURLToPath(new URL("./check-reaper.mjs", import.meta.ur
 export const CHECK_ENV_COPIED = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "JAVA_HOME", "GOPATH", "GOROOT", "CARGO_HOME", "RUSTUP_HOME", "PYENV_ROOT", "VOLTA_HOME", "NVM_DIR", "ASDF_DATA_DIR", "DEVELOPER_DIR", "SDKROOT"];
 /** Never present, whatever the settings say. */
 const NEVER_PASSED = new Set(["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "SSH_AUTH_SOCK", "NODE_OPTIONS", "LD_PRELOAD"]);
-const NEVER_PREFIXES = ["AWS_", "DYLD_", "ORCHESTRATION_", "GIT_", "npm_config_"];
+/** Compared case-insensitively (L11): NPM_CONFIG_*, YARN_* and PNPM_* configure the package managers whatever their case. */
+const NEVER_PREFIXES = ["AWS_", "DYLD_", "ORCHESTRATION_", "GIT_", "NPM_CONFIG_", "YARN_", "PNPM_"];
 
 /** The environment a check command sees: an allowlist copied from `base`, plus what the service sets. Secrets never pass. */
 export function checkEnv(base: NodeJS.ProcessEnv, cfg: Pick<ChecksConfig, "passEnv">, dirs: { tmp: string; cache: string }): Record<string, string> {
@@ -132,7 +157,7 @@ export function checkEnv(base: NodeJS.ProcessEnv, cfg: Pick<ChecksConfig, "passE
     const v = base[k];
     if (v === undefined) continue;
     // Defence in depth: the settings were validated, but nothing secret-looking or reserved ever passes.
-    if (SECRET_NAME.test(k) || NEVER_PASSED.has(k) || NEVER_PREFIXES.some((p) => k.startsWith(p))) continue;
+    if (SECRET_NAME.test(k) || NEVER_PASSED.has(k) || NEVER_PREFIXES.some((p) => k.toUpperCase().startsWith(p)) || blockedEnvName(k)) continue;
     out[k] = v;
   }
   out.CI = "1";
@@ -160,6 +185,8 @@ interface Captured {
   ended: boolean;
   /** Bytes the command produced on both streams, including what the cap discarded (when known). */
   produced?: number;
+  /** The check process (the reaper) was ended by this signal instead of reporting an exit (M5): the run is failed, whatever the output says. */
+  killed?: string;
 }
 
 /** The excerpt kept in the state: the whole text when short, else its head, a gap marker and its tail. */
@@ -169,7 +196,8 @@ export function excerptOf(text: string): string {
 }
 
 function resultOf(c: PlannedCheck, cap: Captured, durationMs: number, env: NodeJS.ProcessEnv, logDir: string, attemptId: string): CheckResult {
-  const raw = `${cap.stdout}${cap.stderr ? `${cap.stdout && !cap.stdout.endsWith("\n") ? "\n" : ""}--- stderr ---\n${cap.stderr}` : ""}`;
+  const stderr = `${cap.stderr}${cap.killed ? `${cap.stderr && !cap.stderr.endsWith("\n") ? "\n" : ""}The check process was killed (${cap.killed}); no exit status was reported.\n` : ""}`;
+  const raw = `${cap.stdout}${stderr ? `${cap.stdout && !cap.stdout.endsWith("\n") ? "\n" : ""}--- stderr ---\n${stderr}` : ""}`;
   const text = redact(raw, env).slice(0, OUTPUT_CAP);
   let log: string | undefined;
   try {
@@ -181,7 +209,8 @@ function resultOf(c: PlannedCheck, cap: Captured, durationMs: number, env: NodeJ
   } catch {
     /* no log file: the excerpt still records the result */
   }
-  const status: CheckResult["status"] = cap.timedOut ? "timed-out" : cap.exitCode === 0 ? "passed" : "failed";
+  // M5: the exit status is the reaper's own; a reaper ended by a signal reported none, so the command failed.
+  const status: CheckResult["status"] = cap.timedOut ? "timed-out" : cap.exitCode === 0 && !cap.killed ? "passed" : "failed";
   return {
     id: c.id,
     label: c.label,
@@ -352,15 +381,19 @@ abstract class BaseChecks implements CheckRunner {
     }
     for (const planned of a.commands) {
       // What runs is the hardened command (H1); the record keeps the id and label the settings gave it.
-      const c = hardenCommand(planned, a);
+      // Yarn's own configuration is read from the copy just before the install runs there.
+      const c = hardenCommand(planned, a, planned.argv[0] === "yarn" ? readYarnRc(a.workspace) : {});
       if (run.done || run.stopRequested) break;
       if (prepareFailed) {
         run.results.push(notRun(c));
         continue;
       }
-      this.emit({ type: "activity", attemptId: a.attemptId, note: `Running ${c.label} (${c.argv.join(" ")})`.slice(0, 200) });
+      // Only a sandbox can refuse the network; without one the reason is not claimed.
+      const refused = a.sandbox === "codex" && c.offlineReason ? `The network was refused for this command: ${c.offlineReason}` : undefined;
+      this.emit({ type: "activity", attemptId: a.attemptId, note: `Running ${c.label} (${c.argv.join(" ")})${refused ? ` offline: ${c.offlineReason}` : ""}`.slice(0, 200) });
       const t0 = Date.now();
-      const cap = await this.exec(run, c);
+      const cap0 = await this.exec(run, c);
+      const cap = refused ? { ...cap0, stdout: `[${refused}]\n${cap0.stdout}` } : cap0;
       if (run.done) return;
       if (run.stopRequested || cap.ended) break;
       const r = resultOf(c, cap, Date.now() - t0, this.baseEnv, a.logDir, a.attemptId);
@@ -404,33 +437,8 @@ abstract class BaseChecks implements CheckRunner {
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
 /** The reaper's arguments: its options, then "--", then the command's argv exactly as given. */
-export function reaperArgs(argv: string[], o: { pidFile?: string; statusFile?: string } = {}): string[] {
-  return [REAPER, ...(o.pidFile ? ["--pid-file", o.pidFile] : []), ...(o.statusFile ? ["--status-file", o.statusFile] : []), "--", ...argv];
-}
-
-/**
- * The command's own exit, as the reaper wrote it before its final group kill (M3). Undefined when
- * there is no status file: the reaper itself was ended, so what the runner saw stands.
- */
-export function readStatus(statusFile: string | undefined): { exitCode: number | undefined } | undefined {
-  if (!statusFile) return undefined;
-  try {
-    const s = JSON.parse(readFileSync(statusFile, "utf8")) as { code?: unknown; signal?: unknown };
-    // A command ended by a signal exits 128 plus the signal number, as a shell would report it.
-    if (typeof s.signal === "string") return { exitCode: 128 + (SIGNUM[s.signal] ?? 0) };
-    return { exitCode: typeof s.code === "number" ? s.code : undefined };
-  } catch {
-    return undefined;
-  }
-}
-const SIGNUM: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGABRT: 6, SIGKILL: 9, SIGSEGV: 11, SIGTERM: 15 };
-
-/** Where the reaper writes a command's exit: inside the run's temp directory, a writable root under the sandbox. */
-const statusFileFor = (a: Pick<CheckAssignment, "tmpDir">, c: Pick<PlannedCheck, "id">) => join(a.tmpDir, `${c.id}.status`);
-/** The status file a `command/exec` request named, if any. */
-function statusFileOf(params: CommandExecParams): string | undefined {
-  const i = params.command.indexOf("--status-file");
-  return i >= 0 ? params.command[i + 1] : undefined;
+export function reaperArgs(argv: string[], o: { pidFile?: string } = {}): string[] {
+  return [REAPER, ...(o.pidFile ? ["--pid-file", o.pidFile] : []), "--", ...argv];
 }
 
 /**
@@ -445,8 +453,8 @@ export function probeVerdict(stdout: string, exitCode: number | undefined, succe
 }
 
 /** Start argv through the reaper (its own process group) and capture its output up to the cap. */
-function spawnReaper(spawnFn: SpawnFn, argv: string[], o: { cwd: string; env: NodeJS.ProcessEnv; pidFile?: string; statusFile?: string }): { child: ChildProcess; done: Promise<Captured> } {
-  const child = spawnFn(process.execPath, reaperArgs(argv, { pidFile: o.pidFile, statusFile: o.statusFile }), {
+function spawnReaper(spawnFn: SpawnFn, argv: string[], o: { cwd: string; env: NodeJS.ProcessEnv; pidFile?: string }): { child: ChildProcess; done: Promise<Captured> } {
+  const child = spawnFn(process.execPath, reaperArgs(argv, { pidFile: o.pidFile }), {
     cwd: o.cwd,
     env: o.env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -475,17 +483,16 @@ function spawnReaper(spawnFn: SpawnFn, argv: string[], o: { cwd: string; env: No
   child.stderr?.on("data", (d: Buffer) => (errBytes = take(err, errBytes, d)));
   const done = new Promise<Captured>((resolveDone) => {
     let settled = false;
-    const settle = (code: number | null, error?: Error) => {
+    const settle = (code: number | null, signal: NodeJS.Signals | null, error?: Error) => {
       if (settled) return;
       settled = true;
-      // The reaper ends its own group (itself included) after the command exited: the command's real
-      // exit is in the status file. Without one, the reaper was ended from outside and nothing is assumed.
-      const status = code === null ? readStatus(o.statusFile) : undefined;
-      const exitCode = code ?? status?.exitCode;
-      resolveDone({ exitCode, stdout: Buffer.concat(out).toString("utf8"), stderr: `${Buffer.concat(err).toString("utf8")}${error ? `\n${error.message}` : ""}`, timedOut: false, capped, ended: false, produced });
+      // M5: the exit status is the reaper's own (it exits with the command's code, or 128 plus the
+      // signal). A reaper that was itself ended by a signal reported nothing: the run is failed.
+      const killed = code === null && !error ? (signal ?? "signal") : undefined;
+      resolveDone({ exitCode: code ?? undefined, stdout: Buffer.concat(out).toString("utf8"), stderr: `${Buffer.concat(err).toString("utf8")}${error ? `\n${error.message}` : ""}`, timedOut: false, capped, ended: false, produced, ...(killed ? { killed } : {}) });
     };
-    child.on("error", (e) => settle(null, e));
-    child.on("close", (code) => settle(code));
+    child.on("error", (e) => settle(null, null, e));
+    child.on("close", (code, signal) => settle(code, signal));
   });
   return { child, done };
 }
@@ -504,10 +511,8 @@ export class DirectChecks extends BaseChecks {
   protected async exec(run: Run, c: PlannedCheck): Promise<Captured> {
     const { a } = run;
     let started: ReturnType<typeof spawnReaper>;
-    const statusFile = statusFileFor(a, c);
     try {
-      rmSync(statusFile, { force: true });
-      started = spawnReaper(this.spawnFn, c.argv, { cwd: a.workspace, env: { ...a.env, ...(c.env ?? {}) }, statusFile });
+      started = spawnReaper(this.spawnFn, c.argv, { cwd: a.workspace, env: { ...a.env, ...(c.env ?? {}) } });
     } catch (e) {
       return { exitCode: undefined, stdout: "", stderr: `could not start ${c.argv[0]}: ${e instanceof Error ? e.message : String(e)}`, timedOut: false, capped: false, ended: false };
     }
@@ -663,11 +668,12 @@ export class CodexSandboxChecks extends BaseChecks {
 
   /**
    * The `command/exec` request for one command: argv through the reaper, the run's directories
-   * writable, network only for a prepare command that downloads (never for a rebuild), when allowed.
-   * The command is hardened here too (H1), whatever the caller passed.
+   * writable, network only for an allowlisted download (never for a rebuild or anything else), when
+   * allowed. The command is hardened here too (H1), whatever the caller passed, with yarn's own
+   * configuration read from the copy the install runs in.
    */
-  static execParams(a: Pick<CheckAssignment, "attemptId" | "workspace" | "prepareNetwork" | "env" | "tmpDir" | "cacheDir">, c0: PlannedCheck, o: { pidFile?: string; statusFile?: string } = {}): CommandExecParams {
-    const c = hardenCommand(c0, a);
+  static execParams(a: Pick<CheckAssignment, "attemptId" | "workspace" | "prepareNetwork" | "env" | "tmpDir" | "cacheDir">, c0: PlannedCheck, o: { pidFile?: string } = {}): CommandExecParams {
+    const c = hardenCommand(c0, a, c0.argv[0] === "yarn" ? readYarnRc(a.workspace) : {});
     const policy: SandboxPolicy = {
       type: "workspaceWrite",
       writableRoots: [a.workspace, a.tmpDir, a.cacheDir],
@@ -676,7 +682,7 @@ export class CodexSandboxChecks extends BaseChecks {
       excludeSlashTmp: true,
     };
     return {
-      command: [process.execPath, ...reaperArgs(c.argv, { pidFile: o.pidFile, statusFile: o.statusFile })],
+      command: [process.execPath, ...reaperArgs(c.argv, { pidFile: o.pidFile })],
       processId: `${a.attemptId}:${c.id}`,
       cwd: a.workspace,
       env: { ...a.env, ...(c.env ?? {}) },
@@ -689,9 +695,6 @@ export class CodexSandboxChecks extends BaseChecks {
   /** Run one command on a server. Resolves with what was captured; a stop or the watchdog ends it. */
   private async execOn(server: Server, params: CommandExecParams, c: PlannedCheck, hold: { current?: () => void; run?: Run }): Promise<Captured> {
     const t0 = Date.now();
-    // A status file from an earlier command of the same id must never be read as this one's.
-    const statusFile = statusFileOf(params);
-    if (statusFile) rmSync(statusFile, { force: true });
     let timedOut = false;
     let ended = false;
     let killed = false;
@@ -728,16 +731,19 @@ export class CodexSandboxChecks extends BaseChecks {
     const elapsed = Date.now() - t0;
     if (elapsed >= c.timeoutMs) timedOut = true;
     if (!answer) return { exitCode: undefined, stdout: "", stderr: error ?? "no answer", timedOut, capped: false, ended };
-    // The reaper ends its own group (itself included) once the command exited; the command's real exit is in its status file.
+    // M5: the app-server reports the reaper's own exit status: the command's code, or 128 plus a signal
+    // when the command died of one. The same shape is what a reaper killed from outside leaves, so a
+    // signal-shaped status that the runner did not cause is recorded as the check process being killed.
     const reported = typeof answer.exitCode === "number" ? answer.exitCode : undefined;
-    const status = reported === undefined || reported >= 128 ? readStatus(statusFileOf(params)) : undefined;
+    const bySignal = reported !== undefined && reported > 128 && !ended && !timedOut ? `signal ${reported - 128}` : undefined;
     return {
-      exitCode: status ? status.exitCode : reported,
+      exitCode: reported,
       stdout: answer.stdout ?? "",
       stderr: answer.stderr ?? "",
       timedOut,
       capped: (answer.stdout?.length ?? 0) >= OUTPUT_CAP || (answer.stderr?.length ?? 0) >= OUTPUT_CAP,
       ended,
+      ...(bySignal ? { killed: bySignal } : {}),
     };
   }
 
@@ -745,7 +751,7 @@ export class CodexSandboxChecks extends BaseChecks {
     const server = servers.get(run);
     if (!server) return { exitCode: undefined, stdout: "", stderr: "no app-server for this run", timedOut: false, capped: false, ended: true };
     const hold: { current?: () => void } = {};
-    const p = this.execOn(server, CodexSandboxChecks.execParams(run.a, c, { statusFile: statusFileFor(run.a, c) }), c, hold);
+    const p = this.execOn(server, CodexSandboxChecks.execParams(run.a, c), c, hold);
     run.current = () => hold.current?.();
     const cap = await p;
     run.current = undefined;
@@ -784,7 +790,7 @@ export class CodexSandboxChecks extends BaseChecks {
     try {
       server = await this.startServer(env, scratch);
       const base = { attemptId: `probe-${rand}`, workspace: scratch, prepareNetwork: false, env, tmpDir: tmp, cacheDir: cache };
-      const runIt = (id: string, argv: string[], pidFile?: string) => this.execOn(server!, CodexSandboxChecks.execParams(base, { id, label: id, kind: "check", argv, timeoutMs: 20_000 }, { pidFile, statusFile: statusFileFor(base, { id }) }), { id, label: id, kind: "check", argv, timeoutMs: 20_000 }, {});
+      const runIt = (id: string, argv: string[], pidFile?: string) => this.execOn(server!, CodexSandboxChecks.execParams(base, { id, label: id, kind: "check", argv, timeoutMs: 20_000 }, { pidFile }), { id, label: id, kind: "check", argv, timeoutMs: 20_000 }, {});
       const node = process.execPath;
       const unavailable = (detail: string): ChecksHealth => ({ sandbox, status: "unavailable", detail, checkedAt, probes });
       // 1. A write inside the writable root must succeed.

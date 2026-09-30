@@ -116,6 +116,70 @@ describe("triageCheck (§7.2)", () => {
     expect(D.triageCheck(custom, job("FAILURE", { app: "my-linter" }))).toBe("bot");
     expect(D.triageCheck(custom, job("FAILURE", { app: "coderabbitai" }))).toBe("code");
   });
+
+  it("review M4: a cancelled or skipped job is the code's when another job of the same workflow run failed, when it was cancelled again after its re-run, or when it ran to GitHub's job limit (mutation check)", () => {
+    const cfg = prMode().project.prDelivery;
+    const inRun = (conclusion: string | null, name: string, runId: number, o: Parameters<typeof job>[1] = {}): CheckObs => ({ ...job(conclusion, { name, ...o }), runId });
+    // A fail-fast matrix: one leg failed, GitHub cancelled the other leg of the same run.
+    const legs = [inRun("FAILURE", "test (18)", 7, { jobId: 1 }), inRun("CANCELLED", "test (20)", 7, { jobId: 2 })];
+    expect(D.triageCheck(cfg, legs[1], { all: legs })).toBe("code");
+    expect(D.codeWhy(legs[1], { all: legs })).toBe("another job of the same workflow run failed");
+    // An aggregator skipped because a job it needs failed.
+    const agg = [inRun("FAILURE", "unit", 8, { jobId: 3 }), inRun("SKIPPED", "all-green", 8, { jobId: 4 })];
+    expect(D.triageCheck(cfg, agg[1], { all: agg })).toBe("code");
+    // Another workflow run's failure says nothing about this run; a cancelled sibling says nothing either; a status context is never a sibling.
+    expect(D.triageCheck(cfg, inRun("CANCELLED", "b", 9), { all: [inRun("FAILURE", "a", 10), inRun("CANCELLED", "b", 9)] })).toBe("provider");
+    expect(D.triageCheck(cfg, inRun("CANCELLED", "b", 9), { all: [inRun("CANCELLED", "a", 9), inRun("CANCELLED", "b", 9)] })).toBe("provider");
+    expect(D.triageCheck(cfg, inRun("SKIPPED", "b", 9), { all: [inRun("SKIPPED", "b", 9), { ...job("FAILURE", { name: "ctx", kind: "status" }), runId: 9 }] })).toBe("not-run");
+    expect(D.triageCheck(cfg, job("CANCELLED"), { all: [job("CANCELLED"), job("FAILURE", { name: "other" })] })).toBe("provider"); // no run id: nothing is known
+    // Cancelled again after its re-run.
+    expect(D.triageCheck(cfg, job("CANCELLED"), { reran: true })).toBe("code");
+    expect(D.codeWhy(job("CANCELLED"), { reran: true })).toBe("cancelled again after its re-run");
+    expect(D.triageCheck(cfg, job("SKIPPED"), { reran: true })).toBe("not-run"); // only a cancellation is "again"
+    // Ran to GitHub's default job limit (the workflow's own timeout-minutes is not in the API: documented in JOB_TIMEOUT_MS).
+    const long = { ...job("CANCELLED", { startedAt: "2026-09-30T00:00:00Z" }), completedAt: "2026-09-30T05:58:00Z" };
+    expect(D.triageCheck(cfg, long)).toBe("code");
+    expect(D.codeWhy(long)).toBe("ran to GitHub's 360-minute job limit");
+    expect(D.triageCheck(cfg, { ...long, completedAt: "2026-09-30T04:00:00Z" })).toBe("provider");
+    expect(D.triageCheck(cfg, { ...job("CANCELLED"), completedAt: "2026-09-30T05:58:00Z", startedAt: undefined })).toBe("provider"); // no timing: nothing is known
+    // A bot's verdict stays a bot's, whatever the siblings say; a plain failure needs no reason.
+    expect(D.triageCheck(cfg, job("CANCELLED", { app: "coderabbitai" }), { reran: true })).toBe("bot");
+    expect(D.codeWhy(job("FAILURE"))).toBeUndefined();
+    // Through the gate: a fail-fast leg on the head starts the fix task for the leg that failed and the leg GitHub cancelled; no re-run.
+    const s = opened(built(prMode({ requiredChecks: ["test (18)", "test (20)"] })), { checks: legs });
+    expect(item(s, "checks")).toMatchObject({ state: "blocked", code: "checks-failed" });
+    expect(item(s, "checks").detail).toContain("test (20): cancelled (the code: another job of the same workflow run failed, github-actions");
+    expect(D.repairCause(s, task(s, ID))).toEqual({ kind: "checks", checks: [{ name: "test (18)", url: URL }, { name: "test (20)", url: URL }] });
+    expect(plan(s, 30)?.kind).not.toBe("rerun");
+    expect(repairTasks(D.advanceDelivery(s, at(22)))).toHaveLength(1);
+  });
+
+  it("review L7: the gate never says a re-run is impossible when one is planned or waiting; each reason is the true one", () => {
+    // Another required check still running: the re-run waits for it (a wait, not a block).
+    const running = cancelled({}, { checks: [job("CANCELLED"), job(null, { name: "lint", jobId: 102 })] });
+    expect(item(running, "checks")).toMatchObject({ state: "waiting" });
+    expect(item(running, "checks").detail).toMatch(/^GitHub cancelled check on cccccccccccc\. It is re-run once lint has finished \(0 of 1 per check used on this head\)\./);
+    expect(item(running, "checks").detail).not.toMatch(/cannot be re-run/);
+    // The per-pull-request cap.
+    const capped = structuredClone(cancelled());
+    prOf(capped).counters.reruns = 5;
+    expect(item(capped, "checks")).toMatchObject({ state: "blocked", code: "ci-infra" });
+    expect(item(capped, "checks").detail).toMatch(/^GitHub cancelled check on cccccccccccc, and the 5 re-runs of this pull request are used\. Re-run it on GitHub, or merge it yourself\./);
+    // No app, no job id, another app, re-runs off.
+    expect(item(cancelled({}, { checks: [bare("CANCELLED")] }), "checks").detail).toMatch(/; this check has no re-run\./);
+    expect(item(cancelled({}, { checks: [{ ...job("CANCELLED"), jobId: undefined }] }), "checks").detail).toMatch(/; GitHub reported no job id to re-run\./);
+    expect(item(cancelled({}, { checks: [job("CANCELLED", { app: "circleci" })] }), "checks").detail).toMatch(/; circleci has no re-run\./);
+    expect(item(cancelled({ cfg: { rerunBudget: 0 } }), "checks").detail).toMatch(/; re-runs are off \(Settings → Delivery\)\./);
+    // Paused: the re-run is still the plan (the pause is the gate's own "Not paused" item), so it says so.
+    const paused = M.pauseProject(cancelled(), at(20));
+    expect(item(paused, "checks")).toMatchObject({ state: "waiting" });
+    expect(item(paused, "checks").detail).toMatch(/It is re-run \(0 of 1 per check used on this head\)/);
+    expect(item(paused, "not-paused").ok).toBe(false);
+    // Two cancelled jobs, one of them without a job id: the one that cannot be re-run is named.
+    const mixed = cancelled({}, { checks: [job("CANCELLED"), { ...job("CANCELLED", { name: "lint" }), jobId: undefined }] });
+    expect(item(mixed, "checks").detail).toMatch(/^GitHub cancelled lint on cccccccccccc; GitHub reported no job id to re-run\./);
+    for (const s of [running, capped, paused, mixed]) expect(item(s, "checks").detail).not.toMatch(/cannot be re-run/);
+  });
 });
 
 describe("re-running a cancelled job (§7.3)", () => {
@@ -179,9 +243,10 @@ describe("re-running a cancelled job (§7.3)", () => {
     expect(D.nextPrOp(fresh(s, 40), ms(40))?.kind).not.toBe("rerun");
     expect(D.beginPrOp(fresh(s, 40), { ...op, id: "again" }, at(40)).started).toBe(false);
     // The result: the observation right after the request still shows the cancelled run; the op is over, the check waits.
+    // That read never counts toward the wait (review L8): GitHub has had no time to publish the new run.
     const after = D.reportPrOp(s, { op, observed: { prs: [observation({ checks: [job("CANCELLED")] })], commits: [], at: at(31) } }, at(31));
     expect(prOf(after).op).toBeUndefined();
-    expect(prOf(after).ciReruns!.used[0].seen).toBe(1);
+    expect(prOf(after).ciReruns!.used[0].seen).toBeUndefined();
     expect(item(after, "checks", 32)).toMatchObject({ state: "waiting" });
     expect(item(after, "checks", 32).detail).toMatch(/Re-running check on cccccccccccc \(GitHub had cancelled it\); waiting for the new run/);
     expect(D.prLabel(after, task(after, ID), ms(32))!.text).toBe("PR #12 re-running check");
@@ -192,23 +257,28 @@ describe("re-running a cancelled job (§7.3)", () => {
     prOf(capped).counters.reruns = 5;
     expect(item(capped, "checks")).toMatchObject({ state: "blocked", code: "ci-infra" });
     expect(plan(capped, 30)?.kind).not.toBe("rerun");
-    // With a budget of 2 the same name may be re-run once more after the wait is over.
+    // With a budget of 2 the same name may be re-run once more after the wait is over (two reads after the driver's own).
     const two = rerunBegun(cancelled({ cfg: { rerunBudget: 2 } })).state;
-    const seen2 = see(see(two, 31, { checks: [job("CANCELLED")] }, { opId: two.tasks.find((t) => t.id === ID)!.integration!.pr!.op!.id }), 32, { checks: [job("CANCELLED")] });
+    const own2 = see(two, 31, { checks: [job("CANCELLED")] }, { opId: two.tasks.find((t) => t.id === ID)!.integration!.pr!.op!.id });
+    const seen2 = see(see(own2, 32, { checks: [job("CANCELLED")] }), 33, { checks: [job("CANCELLED")] });
     expect(plan(seen2, 40)).toMatchObject({ kind: "rerun", jobs: [{ check: "check", jobId: 101 }] });
   });
 
-  it("the wait for the new run lasts at most 2 observations or 5 minutes; then the check is judged as observed and needs a person", () => {
+  it("the wait for the new run lasts at most 2 observations after the driver's own read, or 5 minutes; then the check is judged as observed and needs a person", () => {
     const { state: s, op } = rerunBegun(cancelled());
     const one = see(s, 31, { checks: [job("CANCELLED")] }, { opId: op.id });
+    expect(prOf(one).ciReruns!.used[0].seen).toBeUndefined(); // the driver's own read (review L8, mutation check)
     expect(item(one, "checks", 32)).toMatchObject({ state: "waiting" });
-    // Two observations still showing the same run: judged.
-    const two = see(one, 32, { checks: [job("CANCELLED")] });
+    // One later observation still showing the same run: still waiting. Two: judged.
+    const mid = see(one, 32, { checks: [job("CANCELLED")] });
+    expect(prOf(mid).ciReruns!.used[0].seen).toBe(1);
+    expect(item(mid, "checks", 33)).toMatchObject({ state: "waiting" });
+    const two = see(mid, 33, { checks: [job("CANCELLED")] });
     expect(prOf(two).ciReruns!.used[0].seen).toBe(2);
-    expect(item(two, "checks", 33)).toMatchObject({ state: "blocked", code: "ci-infra" });
-    expect(item(two, "checks", 33).detail).toMatch(/GitHub cancelled check on cccccccccccc, and its re-run is used \(1 of 1\)\. Re-run it on GitHub, or merge it yourself\./);
+    expect(item(two, "checks", 34)).toMatchObject({ state: "blocked", code: "ci-infra" });
+    expect(item(two, "checks", 34).detail).toMatch(/GitHub cancelled check on cccccccccccc, and its re-run is used \(1 of 1\)\. Re-run it on GitHub, or merge it yourself\./);
     expect(prOf(two).attention).toMatchObject({ code: "ci-infra" });
-    expect(repairTasks(D.advanceDelivery(two, at(34)))).toHaveLength(0);
+    expect(repairTasks(D.advanceDelivery(two, at(35)))).toHaveLength(0);
     // Or five minutes, whichever comes first.
     expect(item(one, "checks", 31 + 5 * 60 + 1)).toMatchObject({ state: "blocked", code: "ci-infra" });
     // A new run that appears (another job id) is judged at once: green makes the name green, and the gate says it was re-run.
@@ -216,10 +286,20 @@ describe("re-running a cancelled job (§7.3)", () => {
     expect(item(green, "checks", 33)).toMatchObject({ state: "ok" });
     expect(item(green, "checks", 33).detail).toMatch(/check passed on cccccccccccc\. check was re-run after GitHub cancelled it\./);
     expect(prOf(green).attention).toBeUndefined();
-    // A new run cancelled again: the budget is used, a person is needed, no fix task.
+    // A new run cancelled again after its re-run is the code's (review M4): a fix task, not a person, and no second re-run.
     const again = see(one, 32, { checks: [job("CANCELLED", { jobId: 102, startedAt: "2026-09-30T12:00:31Z" })] });
-    expect(item(again, "checks", 33)).toMatchObject({ state: "blocked", code: "ci-infra" });
-    expect(repairTasks(D.advanceDelivery(again, at(34)))).toHaveLength(0);
+    expect(item(again, "checks", 33)).toMatchObject({ state: "blocked", code: "checks-failed" });
+    expect(item(again, "checks", 33).detail).toBe(`check: cancelled (the code: cancelled again after its re-run, github-actions, ${URL})`);
+    expect(D.repairCause(again, task(again, ID))).toEqual({ kind: "checks", checks: [{ name: "check", url: URL }] });
+    expect(repairTasks(D.advanceDelivery(again, at(34)))).toHaveLength(1);
+    expect(plan(again, 40)?.kind).not.toBe("rerun");
+    // With budget left (2), a second cancellation is still the provider's and takes the second re-run first.
+    const { state: b2, op: op2 } = rerunBegun(cancelled({ cfg: { rerunBudget: 2 } }));
+    const after2 = D.reportPrOp(b2, { op: op2, observed: { prs: [observation({ checks: [job("CANCELLED")] })], commits: [], at: at(31) } }, at(31));
+    const again2 = see(after2, 32, { checks: [job("CANCELLED", { jobId: 102, startedAt: "2026-09-30T12:00:31Z" })] });
+    expect(item(again2, "checks", 33)).toMatchObject({ state: "waiting" });
+    expect(item(again2, "checks", 33).detail).toMatch(/It is re-run \(1 of 2 per check used on this head\)/);
+    expect(plan(again2, 40)).toMatchObject({ kind: "rerun", jobs: [{ check: "check", jobId: 102 }] });
   });
 
   it("an interrupted re-run is observed after its timeout and grace, never sent again; a refused request ends the wait at once", () => {
@@ -236,6 +316,7 @@ describe("re-running a cancelled job (§7.3)", () => {
     const refused = D.reportPrOp(s, { op, actError: { code: "rejected", message: "HTTP 403: Resource not accessible" }, observed: { prs: [observation({ checks: [job("CANCELLED")] })], commits: [], at: at(31) } }, at(31));
     expect(prOf(refused).op).toBeUndefined();
     expect(prOf(refused).ciReruns!.used[0].seen).toBe(D.PR_LIMITS.rerunObservations);
+    expect(prOf(refused).ciReruns!.used[0].refused).toBe("HTTP 403: Resource not accessible"); // review L9: the record says GitHub refused it, never "re-ran"
     expect(item(refused, "checks", 32)).toMatchObject({ state: "blocked", code: "ci-infra" });
     expect(refused.events.some((e) => /the re-run of check was not accepted by GitHub \(HTTP 403/.test(e.message))).toBe(true);
     // A network failure is not definite: the intent stays until the grace time, then it is observed.
@@ -246,8 +327,8 @@ describe("re-running a cancelled job (§7.3)", () => {
 
   it("a new head resets the re-run budget", () => {
     const { state: s, op } = rerunBegun(cancelled());
-    const judged = see(see(s, 31, { checks: [job("CANCELLED")] }, { opId: op.id }), 32, { checks: [job("CANCELLED")] });
-    expect(item(judged, "checks", 33)).toMatchObject({ state: "blocked", code: "ci-infra" });
+    const judged = see(see(see(s, 31, { checks: [job("CANCELLED")] }, { opId: op.id }), 32, { checks: [job("CANCELLED")] }), 33, { checks: [job("CANCELLED")] });
+    expect(item(judged, "checks", 34)).toMatchObject({ state: "blocked", code: "ci-infra" });
     // A fix is pushed onto the pull request (the head moves): the old head's re-runs are forgotten.
     const pending = structuredClone(fresh(judged, 40));
     prOf(pending).pendingHead = { sha: HEAD2, changeSha: HEAD2, changeTaskId: "EX-006-F1", changeAuthor: "codex", baseSha: SHA_A, kind: "repair" };

@@ -13,7 +13,7 @@ import { useStore } from "./store";
 type Draft = Omit<ChecksConfig, "rev">;
 
 const ON_TEXT =
-  "Turn checks on?\n\nChecks run the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote.\n\nThe Codex sandbox blocks writes outside a temporary copy of the change, and blocks the network except for the dependency download. It does not stop that code from reading your files. Install scripts never run while the network is on.\n\nTurn checks on only for repositories whose agents' work you are willing to run.";
+  "Turn checks on?\n\nChecks run the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote.\n\nThe Codex sandbox blocks writes outside a temporary copy of the change, and blocks the network for everything except npm, pnpm and yarn dependency downloads, which run with every install hook off. It does not stop that code from reading your files.\n\nTurn checks on only for repositories whose agents' work you are willing to run.";
 const NO_SANDBOX_TEXT =
   "Run checks without a sandbox?\n\nEvery check will run with your permissions: it can read and write anywhere you can and reach the network. Code an agent wrote will run that way. The app never chooses this by itself; every such run is labelled as unsandboxed.\n\nChoose this only if the Codex sandbox cannot work on this computer and you accept the risk.";
 
@@ -114,8 +114,8 @@ export function ChecksSettings() {
       </p>
       <p style={{ fontSize: "0.85rem" }}>
         Checks run the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote. With the Codex sandbox, that code cannot write outside a throwaway copy of the change and
-        cannot use the network, except for the dependency download. The sandbox does not stop it from reading your files. Install scripts never run while the network is on: a download runs with scripts off, and scripts your project
-        needs run afterwards, offline, in a separate step. Turn checks on only for repositories whose agents' work you are willing to run.
+        cannot use the network; the one exception is a dependency download by npm, pnpm or yarn, which runs with every install hook off, so no repository code runs while the network is on. The sandbox does not stop that code from
+        reading your files. Turn checks on only for repositories whose agents' work you are willing to run.
       </p>
       {sampleBlocked && <div className="banner">This is the sample project: it has no repository, so its checks cannot be turned on. Start a project of your own in Settings → Project.</div>}
       {!real && <div className="banner neutral">Fake runtime: check runs are simulated. Nothing is run and nothing is spawned; the results say so.</div>}
@@ -173,11 +173,12 @@ export function ChecksSettings() {
         {next.sandbox === "none" && <div className="banner danger">No sandbox: checks run with your permissions. Code an agent wrote can read and write anywhere you can and reach the network. Every such run is labelled "no sandbox".</div>}
         <label className="row" style={{ gap: "0.4rem", marginTop: "0.4rem", fontSize: "0.9rem" }}>
           <input type="checkbox" checked={next.prepareNetwork} onChange={(e) => patch({ prepareNetwork: e.target.checked })} />
-          Prepare commands (dependency installs) may use the network
+          Prepare commands may use the network for dependency downloads
         </label>
         <p className="muted" style={{ fontSize: "0.82rem", margin: "0.2rem 0 0 1.5rem" }}>
-          An install that may use the network runs with install scripts off (the "--ignore-scripts" flag is required on it, and set again by the service), so repository code never runs while the network is on. If your project needs
-          its install scripts, add the offline step below: it runs them afterwards in the throwaway copy, with no network.
+          Downloads the network may be used for: npm, pnpm, yarn installs only; other setup commands run offline (prefetch what they need in your own environment). Such an install runs with every hook that could run repository code
+          off: "--ignore-scripts" (npm, pnpm, yarn 1) or "--mode=skip-build" (yarn 2+), plus "--ignore-pnpmfile" for pnpm, all required on the command and set again by the service; yarn never runs the repository's own yarn
+          copy or plugins, and is kept offline when .yarnrc.yml sets yarnPath or plugins. If your project needs its install scripts, add the offline step below: it runs them afterwards in the throwaway copy, with no network.
         </p>
         {!next.commands.some((c) => c.kind === "prepare" && c.argv[1] === "rebuild") && (
           <button

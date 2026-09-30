@@ -409,9 +409,10 @@ The re-run's envelope carries "Coverage: your previous run reported no findings 
     "python", "python3", "pytest", "uv", "poetry", "tox", "ruby", "bundle", "rake", "mix", "dotnet", "swift",
     "xcodebuild", "./gradlew", "./mvnw", "gradle", "mvn", "tsc", "eslint", "ruff", "mypy", "vitest", "jest"];
   ```
-- **Package managers** (`npm`, `pnpm`, `yarn`, `bun`): `argv[1]` must be `ci`, `install` or `i` for `prepare`, and `test`, `t`, `run` or `run-script` for `check`. So `exec`, `x`, `publish`, `login`, `config` and `token` are refused.
-- **Interpreters** (`node`, `deno`, `python`, `python3`, `ruby`): refused with inline-code or preload flags: `-e`, `--eval`, `-p`, `--print`, `-c`, `-r`, `--require`, `--import`, `--loader`, `--experimental-loader`.
-- **Limits.** Timeouts and `maxConcurrent` outside their ranges; more than 30 protected inputs (each ≤200 characters); more than 20 `passEnv` names; a name not matching `/^[A-Z_][A-Z0-9_]{0,63}$/`, matching `SECRET_NAME` (from `server/redact.ts`, moved to `src/domain` so the domain can use it), or equal to `PATH`, `HOME`, `NODE_OPTIONS`, `LD_PRELOAD` or `DYLD_*`.
+- **Package managers** (`npm`, `pnpm`, `yarn`, `bun`): `argv[1]` must be `ci`, `install`, `i` or `rebuild` for `prepare`, and `test`, `t`, `run` or `run-script` for `check`. So `exec`, `x`, `publish`, `login`, `config` and `token` are refused.
+- **The network (review H1).** With `prepareNetwork`, an npm, pnpm or yarn install must carry every hook-off flag (`NETWORK_INSTALL_FLAGS`: `--ignore-scripts` or `--ignore-scripts=true`, or yarn's `--mode=skip-build`; pnpm also `--ignore-pnpmfile`), and no flag that switches a hook back on (`--no-ignore-scripts`, `--ignore-scripts=false`, `--no-ignore-pnpmfile`, `--ignore-pnpmfile=false`, `--mode=<anything else>`). Any other prepare command, bun included, is accepted and simply runs offline (`commandsFor` marks it `offline` with `offlineReason`; `networkRefusal` is the one rule).
+- **Interpreters** (`node`, `deno`, `python`, `python3`, `ruby`): refused with inline-code or preload flags: `-e`, `--eval`, `-p`, `--print`, `-c`, `-r`, `--require`, `--import`, `--loader`, `--experimental-loader`. A flag whose value is the next argument (`python -W x`, `ruby -I lib`, `node --input-type module`, `node -C x`: `SEPARATE_VALUE`) is skipped with its value, so the scan reaches what follows.
+- **Limits.** Timeouts and `maxConcurrent` outside their ranges; more than 30 protected inputs (each ≤200 characters); more than 20 `passEnv` names; a name not matching `/^[A-Z_][A-Z0-9_]{0,63}$/`, matching `SECRET_NAME` (from `server/redact.ts`, moved to `src/domain` so the domain can use it), equal to `PATH`, `HOME`, `NODE_OPTIONS`, `LD_PRELOAD` or `DYLD_*`, or starting with `NPM_CONFIG_`, `YARN_` or `PNPM_` in any case (review L11).
 - **Sandbox.** `sandbox: "none"` without `acknowledgeUnsandboxed: true` on the command.
 
 The allowlist catches mistakes and obvious misuse. It is **not** a security boundary: `npm test` runs whatever the `test` script says, and the change under test can edit that. §6.7 and §13 cover what bounds it.
@@ -534,11 +535,11 @@ export class SimulatedChecks implements CheckRunner { constructor(script?: (a: C
      "sandboxPolicy": { "type": "workspaceWrite", "writableRoots": ["<worktree>", "<tmp>", "<cache>"],
                         "networkAccess": false, "excludeTmpdirEnvVar": true, "excludeSlashTmp": true } } }
    ```
-   - `networkAccess` is `true` only for `prepare` commands when `prepareNetwork` is on.
-   - `check-reaper.mjs` is a small service-owned script, installed read-only under the data directory. It runs the argv in a new process group, forwards SIGTERM and SIGINT to the group, and kills the group when its own stdin closes (its parent is gone). It never takes a shell string.
+   - `networkAccess` is `true` only for a `prepare` command that is an npm, pnpm or yarn install, hardened (`hardenCommand`: the hook-off flags re-added, contradictions dropped, `NO_SCRIPTS_ENV` including `YARN_IGNORE_PATH=1`), when `prepareNetwork` is on. Just before a yarn install runs, `.yarnrc.yml` and `.yarnrc` are read from the copy it runs in (what yarn itself reads; the trusted base says nothing about the copy): `yarnPath`, `plugins` or `yarn-path` keep it offline. A rebuild step, bun, and every other prepare command run offline; the record's excerpt starts with "[The network was refused for this command: …]" and the activity event says "offline: …" (review H1).
+   - `check-reaper.mjs` is a small service-owned script, installed read-only under the data directory. It never takes a shell string. Two processes (review M5, L10): the reaper starts a leader (`--leader`) detached, so the leader heads a new process group holding the command and everything it starts; the leader passes the output through and reports the command's exit on a pipe only it holds (fd 3); the reaper then ends the group (SIGTERM, 1.5 s, SIGKILL) while the leader is still alive, so the group id cannot have been reused, and exits with the command's code, or 128 plus the signal. A leader that dies without reporting (killed by the command) makes the reaper exit 128 plus that signal. SIGTERM, SIGINT and SIGHUP to the reaper go to the group; when the reaper's stdin-side control pipe closes (the reaper was killed), the leader kills the group itself. No status file: nothing the command can write is read.
    - An activity event is sent per command: "Running test (npm test)".
 3. **Results.**
-   - `exitCode 0` → `passed`; otherwise `failed`.
+   - The reaper's own exit status: `0` → `passed`; otherwise `failed`. A reaper ended by a signal (the direct runner sees the signal; the sandbox reports a status above 128 that the runner did not cause) is `failed` with "The check process was killed" in the excerpt, whatever the output says.
    - Elapsed time ≥ the timeout, or no answer within timeout + 15 s → `timed-out`. After 15 s the runner sends `command/exec/terminate`; 5 s later it kills the app-server's group and ends the run, and the remaining commands are `not-run`.
    - A failed prepare makes the remaining commands `not-run`.
 4. **Output.**
@@ -579,7 +580,7 @@ export class SimulatedChecks implements CheckRunner { constructor(script?: (a: C
   - `CI=1`, `NO_COLOR=1`, `FORCE_COLOR=0`, `TERM=dumb`
   - `TMPDIR=<tmp>`, `XDG_CACHE_HOME=<cache>`, `npm_config_cache=<cache>/npm`, `npm_config_update_notifier=false`
   - `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`
-- **Never present:** `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CODEX_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `AWS_*`, `SSH_AUTH_SOCK`, `NODE_OPTIONS`, `ORCHESTRATION_*`, `GIT_*`, every `npm_config_*` from the user's environment, `LD_PRELOAD`, `DYLD_*`.
+- **Never present:** `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `CODEX_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `AWS_*`, `SSH_AUTH_SOCK`, `NODE_OPTIONS`, `ORCHESTRATION_*`, `GIT_*`, every `npm_config_*`, `NPM_CONFIG_*`, `YARN_*` and `PNPM_*` from the user's environment (compared without regard to case, review L11), `LD_PRELOAD`, `DYLD_*`.
 
 Directories:
 
@@ -684,13 +685,13 @@ Local delivery, and no delivery: there is no gate. `recordLanded` flags `checks-
   - on `StatusContext`: `creator{login}`.
 - `CheckObs` carries `kind`, `app` (the check suite's app slug, or the status creator's login without `[bot]`), `jobId` (the check run's `databaseId`, a GitHub Actions job id when `app === "github-actions"`), `runId` and `startedAt`.
 
-**`parseChecks` judges a name by its newest run** (firstmate's rule; the ORC-008 "worst wins" rule is kept as the fallback):
+**`parseChecks` judges a name by its newest run only over cancelled runs of the same origin** (firstmate's rule, narrowed by review finding M3; the ORC-008 "worst wins" rule is the fallback):
 
 - Status contexts are never grouped or superseded; GitHub reports one state per context.
-- Check runs are grouped by name; unnamed runs are dropped, as today.
-- A group is represented by its newest `SUCCESS` run when **every** run that is not `SUCCESS` is `COMPLETED`, has a whole-second UTC `startedAt`, and started **strictly before** the newest `SUCCESS` run.
-- Otherwise the worst run wins, as today. A pending, undated or tied run therefore keeps the name red or pending.
-- `NEUTRAL` and `SKIPPED` are never green for a required check (unchanged from ORC-008).
+- Check runs are grouped by name; unnamed runs are dropped, as today. Each carries `workflowId`, `workflowName`, `event` and `completedAt` besides `app`, `jobId`, `runId` and `startedAt`.
+- A group is represented by its newest dated run, when that run is `SUCCESS` or still going, started no later than the observation (`nowMs`), and **every** other run that is not `SUCCESS` is a `COMPLETED`, `CANCELLED` check run from the **same app and the same workflow** (the workflow's id, or its name and event when the id is missing) with a whole-second UTC `startedAt` **strictly before** it.
+- Otherwise the worst run wins, as today. A failure, a skipped or stale run, a cancelled run from another workflow or app, and a pending, undated, tied, out-of-order or future-dated run therefore keep the name red or pending.
+- `NEUTRAL` and `SKIPPED` are never green for a required check (unchanged from ORC-008), and are never superseded either.
 
 ### 7.2 Classification (`D.triageCheck`, pure)
 
@@ -699,13 +700,15 @@ For a required check on the exact head whose conclusion is not `SUCCESS`:
 | Class | When | What happens |
 | --- | --- | --- |
 | `bot` | `app` (or the status creator) is in `prDelivery.reviewBotApps`, whatever the conclusion | attention `bot-check`: "The review bot coderabbitai reports failure on abc123. A bot's opinion is not fixed automatically. Read it on GitHub, then merge, or choose Fix this PR." No automatic repair. The user's **Fix this PR** passes the check's name and link (no text) |
-| `provider` | conclusion `CANCELLED` | Re-run, when rerunnable and budget is left (§7.3). Otherwise attention `ci-infra`: "GitHub cancelled build on abc123, and its re-run is used. Re-run it on GitHub, or merge it yourself." No repair |
-| `not-run` | conclusion `SKIPPED`, `NEUTRAL` or `STALE` | attention `checks-skipped`: "The required check build did not run on abc123, so nothing shows this head passes. Re-run it on GitHub, or merge it yourself." No repair. **ORC-008 started a repair here; this is a fix** |
+| `code` (review M4) | conclusion `CANCELLED`, `SKIPPED`, `NEUTRAL` or `STALE` when (a) another job of the **same workflow run** (`runId`) has a code conclusion (a fail-fast matrix leg GitHub cancelled, an aggregator skipped by a failed `needs:`), or, for `CANCELLED`, (b) the run appeared after the re-runs for its name on this head were spent (cancelled again after its re-run), or (c) `completedAt − startedAt` ≥ 355 minutes (it ran to GitHub's default 360-minute job limit; a workflow's own shorter `timeout-minutes` is not in the API, so such a cancellation takes the re-run first and becomes `code` on the second) | As `code` below; `codeWhy` names the reason in the gate line |
+| `provider` | conclusion `CANCELLED`, otherwise | Re-run, when rerunnable and budget is left (§7.3). Otherwise attention `ci-infra` with the true reason (review L7): "…, and its re-run is used (1 of 1)", "; re-runs are off (Settings → Delivery)", "; circleci has no re-run", "; GitHub reported no job id to re-run", "…, and the 5 re-runs of this pull request are used". When a re-run is merely not planned yet (another required check still running, a conflict, the pause), the item **waits**: "It is re-run once lint has finished (0 of 1 per check used on this head)". Never "cannot be re-run". No repair |
+| `not-run` | conclusion `SKIPPED`, `NEUTRAL` or `STALE`, otherwise | attention `checks-skipped`: "The required check build did not run on abc123, so nothing shows this head passes. Re-run it on GitHub, or merge it yourself." No repair. **ORC-008 started a repair here; this is a fix** |
 | `code` | everything else (`FAILURE`, `TIMED_OUT`, `ERROR`, `ACTION_REQUIRED`, `STARTUP_FAILURE`, unknown) | As today: `checks-failed`; an automatic repair in auto mode (≤2) |
 
+- `triageCheck(cfg, check, { all, reran })` is pure; `classOf` builds the context from the observation and the head's re-run record.
 - `repairCause(kind: "checks")` lists only `code` failures.
 - Any `code` failure suppresses re-runs for that head: a fix is needed anyway.
-- Gate item 6's detail names each failing check's class and app.
+- Gate item 6's detail names each failing check's class, the reason for a `code` cancellation, and the app.
 
 ### 7.3 Re-running a cancelled job
 
@@ -722,18 +725,19 @@ For a required check on the exact head whose conclusion is not `SUCCESS`:
   - the usual mutation guards pass: no pause, no `userHold`, no `foreignHead`, `nextAt` has passed, pacing allows it.
 
   The op is `{ id, kind: "rerun", taskId, n, headSha, jobs: [{check, jobId}] }`, with at most 5 jobs.
-- **Waiting for the re-run.** After a re-run is requested for a check at time T, an observation that still shows a run of that name with `startedAt ≤ T` counts as **pending**. That lasts for at most 2 observations or 5 minutes; after that the check is judged as observed. A provider that accepts a re-run and never publishes it therefore cannot stall the pull request.
+- **Waiting for the re-run.** After a re-run is requested for a check at time T, an observation that still shows the same run of that name (the same job id, or `startedAt ≤ T`) counts as **pending**. That lasts for at most 2 observations after the driver's own read that follows the request (that read never counts, review L8: GitHub has had no time to publish the new run) or 5 minutes; after that the check is judged as observed. A provider that accepts a re-run and never publishes it therefore cannot stall the pull request. A new run (a new job id) is judged at once.
 - **Intent.** `beginPrOp(rerun)` re-checks the guards and the head inside the transaction. It records `pr.op` and **spends the budget** (appends to `ciReruns.used` and raises `counters.reruns`) before anything is sent.
 - **Act.** `PrDriver.run(rerun)`:
   - For each job: `host.rerunJob({repo, jobId})` = `gh api -X POST repos/<o>/<r>/actions/jobs/<jobId>/rerun`. The job id is checked as an integer before use.
   - Then one `observe` of the pull request.
   - The result is `{op, actError?, observed}`, and the exit code records nothing.
-- **Reconcile.** An interrupted `rerun` intent (no operation in flight, older than its timeout plus the grace time) is **observed**, never sent again.
-- **Guard (I1).** Today `assertAllowedGh` allows any POST that is not a merge endpoint. It is narrowed to exactly two POST path shapes:
+- **Reconcile.** An interrupted `rerun` intent (no operation in flight, older than its timeout plus the grace time) is **observed**, never sent again. A definite refusal by GitHub is recorded on the re-run entry (`refused`), and the Review page says "GitHub refused the re-run of build …", never "Re-ran" (review L9). The page shows the per-head count against the per-check budget and the per-pull-request count against the cap of 5, separately.
+- **Guard (I1, review M2).** `assertAllowedGh` allow-lists the subcommands the app runs: `--version`, `api`, `pr list`, `pr create`, `pr merge` (with `--merge` and `--match-head-commit`) and `pr close`; `pr review`, `run rerun`, `workflow run` and everything else are refused. For `gh api`, `parseApiCall` reads the method the way gh does (`-X POST`, `-XPOST`, `--method POST`, `--method=POST`; the last one wins) and treats `-f`, `-F`, `--field`, `--raw-field` and `--input` (also attached and `=` forms) as a write whatever the method says. A write goes only to:
   - the existing issue-comments path;
-  - `^repos/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/actions/jobs/\d+/rerun$`.
+  - `^repos/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/actions/jobs/\d+/rerun$`;
+  - `graphql`, whose query (stdin or a field) may contain no `mutation` at all: the app sends none.
 
-  Everything else ORC-008 refuses stays refused: merge endpoints, the ref and merge mutations, `--admin`, `--auto`, `--force`, `-d`.
+  `--input` accepts only `-` (the body the guard sees). `DELETE`, `PATCH` and `PUT` are refused. Everything else ORC-008 refuses stays refused: merge endpoints, the ref and merge mutations, `--admin`, `--auto`, `--force`, `-d`.
 
 ### 7.4 No CI declared
 
@@ -945,14 +949,15 @@ New bodies go in new files; existing files get mount points, as in ORC-008.
 | Weakening the checks from inside the change (editing `package.json` scripts, test config, lockfiles) | `protectedInputs` makes it an `ask-user` finding on every such change. ORC-008's `protectedPaths` keep such pull requests from merging automatically | A change to an unprotected helper file can still weaken a test. Review is the other layer |
 | Hangs and runaway processes | Per-command and per-run limits; the reaper's process group is killed on stop, timeout, lease loss and service exit; one run at a time | A process that leaves its group (`setsid`) can outlive the run. The probe checks the common case |
 | Damage to the repository | Detached worktree. The git directory is outside the writable roots in the sandbox. The service's own git runs with hooks and fsmonitor disabled. The worktree is removed after the run | With `sandbox: "none"`, a check can write anywhere the user can |
-| Dependency installs with network (prepare) | Only `prepare` commands, only with `prepareNetwork`; still write-limited; lockfiles are protected inputs | Install scripts from the registry run (normal development risk). The shared cache can be written by one run and read by the next; lockfile integrity checks limit this |
+| Dependency installs with network (prepare) | Only npm, pnpm and yarn installs, only with `prepareNetwork`, with every hook that runs repository code off (`--ignore-scripts` / `--mode=skip-build`, `--ignore-pnpmfile`, `YARN_IGNORE_PATH=1`, a yarn with `yarnPath` or `plugins` kept offline); every other prepare command runs offline; still write-limited; lockfiles are protected inputs | Packages are downloaded but no install script runs; a project that needs scripts runs them in an offline `rebuild` step. The shared cache can be written by one run and read by the next; lockfile integrity checks limit this |
+| A command forging its own result | The exit status is the reaper's own exit (the leader reports the command's exit on a pipe only it holds); no status file; a reaper or leader ended by a signal is a failure | A hostile command can still print whatever it likes; the status is not taken from the output |
 | The sample project, or a service without a repository | `setChecks {enabled: true}` is refused for the sample in real mode; the fake runtime spawns nothing | — |
 | State and log growth | 8 KB per command in the state, 1 MiB per log, logs pruned after 14 days or above 200 MiB | — |
 
 Honest summary for the UI and README:
 
 - Checks run the repository's code on this computer.
-- With the Codex sandbox, that code cannot use the network (outside prepare) or write outside a throwaway copy, but it can read your files.
+- With the Codex sandbox, that code cannot use the network (the one exception is an npm, pnpm or yarn dependency download with every install hook off) or write outside a throwaway copy, but it can read your files.
 - Turn checks on only for repositories whose agents' work you are willing to run.
 
 ## 14. Tests
@@ -1044,7 +1049,7 @@ No test contacts GitHub, runs a model, or uses the network. All run in vitest wi
   - `noCi`: the user's Merge with zero checks works; automatic merging is still blocked; reported checks are honoured; without `noCi` an empty list is never green; the main check is not watched.
 - **`server/prdelivery.test.ts` scenarios with `FakeGitHub`** (it gains check runs with `startedAt`, apps, job ids, and a `rerun` that appends a new run):
   - A cancelled required check → one re-run → green → merged, with no fix task.
-  - Cancelled twice → `ci-infra`, no fix task.
+  - Cancelled twice → the second cancellation is the code's (review M4): one fix task, no second re-run.
   - A review-bot failure → `bot-check`.
   - A skipped required check → `checks-skipped`.
   - A restart during a re-run intent → observed, not re-sent.
@@ -1072,6 +1077,7 @@ Reverting each of these must make a test fail:
 - The empty-list rule without `noCi`.
 - `project_doc_max_bytes=0` on the Codex spawn.
 - Conventions read from the base rather than the worktree.
+- Review of steps 1–3: the network allowlist (`networkRefusal`: only npm, pnpm and yarn installs); the runner re-adding the hook-off flags; the yarn configuration refusal; contradicting flags refused; the `gh` subcommand allowlist and body-as-write rule (`-X GET -X POST`, `-f`, `--input -`); supersession only over CANCELLED runs of the same app and workflow, never future-dated; a same-run failure, a second cancellation and the job limit as `code`; the reaper's own exit status (a forged status file and a killed leader or reaper are failures); `killGroup` silent after the leader exited; the missing-check rule before acceptance; the driver's own read not counting toward the re-run wait; the case-insensitive `NPM_CONFIG_*`/`YARN_*`/`PNPM_*` block; separate-value interpreter flags.
 
 Also: `npm run typecheck`, `npm test`, `npm run build`, and a browser pass on the simulated runtime (Settings → Checks, a task with a failing and then passing check loop, a decision from the Overview, Settings → Delivery).
 

@@ -1060,7 +1060,6 @@ export function repairCause(s: State, t: Task, o: { byUser?: boolean } = {}): Re
   const pr = livePr(t);
   if (!pr || pr.pendingHead || (pr.phase !== "built" && pr.phase !== "open")) return undefined;
   const ob = pr.observed;
-  const cfg = s.project.prDelivery;
   if (pr.baseConflict?.headSha === pr.headSha && pr.baseConflict.baseSha === s.project.github?.base?.sha) return { kind: "conflict", files: pr.baseConflict.files.slice(0, 20) };
   if (ob && ob.state === "OPEN" && ob.headSha === pr.headSha && (ob.mergeable === "CONFLICTING" || ob.mergeStateStatus === "DIRTY")) return { kind: "conflict", files: [] };
   if (ob && ob.state === "OPEN" && ob.checksFor === pr.headSha) {
@@ -1068,7 +1067,7 @@ export function repairCause(s: State, t: Task, o: { byUser?: boolean } = {}): Re
       .map((n) => ob.checks.find((c) => c.name === n))
       .filter((c): c is CheckObs => !!c && c.conclusion !== null && c.conclusion !== "SUCCESS")
       .filter((c) => {
-        const cls = triageCheck(cfg, c);
+        const cls = classOf(s, pr, ob, c);
         return cls === "code" || (cls === "bot" && !!o.byUser);
       });
     // Names and links only: CI log text is untrusted input and never reaches an agent.
@@ -1334,20 +1333,66 @@ export function requiredCheckNames(s: State, pr: PrDelivery): string[] {
  */
 export type CiClass = "bot" | "provider" | "not-run" | "code";
 
+/**
+ * GitHub cancels a job that reaches its time limit, and reports it CANCELLED, not TIMED_OUT. The limit
+ * a workflow sets is not in the API; only GitHub's default (360 minutes) can be recognised, so a
+ * cancelled job that ran at least this long failed on the code. A shorter `timeout-minutes` cannot be
+ * told from a cancellation and takes the re-run first.
+ */
+export const JOB_TIMEOUT_MS = 360 * 60_000;
+const NEAR_TIMEOUT_MS = 5 * 60_000;
+const NOT_CODE = new Set(["SUCCESS", "CANCELLED", "SKIPPED", "NEUTRAL", "STALE"]);
+/** A conclusion that says the code failed (FAILURE, TIMED_OUT, ERROR, ACTION_REQUIRED, STARTUP_FAILURE, anything unknown). */
+const codeConclusion = (c: CheckObs) => c.conclusion !== null && !NOT_CODE.has(c.conclusion);
+const ranMs = (c: CheckObs) => (c.startedAt && c.completedAt ? Date.parse(c.completedAt) - Date.parse(c.startedAt) : undefined);
+
+export interface TriageContext {
+  /** Every check observed on the head: a failure elsewhere in the same workflow run makes a cancelled or skipped job a code failure (review M4). */
+  all?: CheckObs[];
+  /** This run appeared after the re-runs for its name on this head were spent: cancelled again is a code failure (review M4). */
+  reran?: boolean;
+}
+
+/**
+ * Why a cancelled or skipped check is nonetheless the code's fault (review finding M4), or undefined:
+ * another job of the same workflow run failed (a fail-fast matrix leg GitHub cancelled, an aggregator
+ * skipped by a failed `needs:`), it was cancelled again after its re-run, or it ran to GitHub's time limit.
+ */
+export function codeWhy(c: CheckObs, o: TriageContext = {}): string | undefined {
+  if (c.conclusion === null || codeConclusion(c)) return undefined;
+  if (c.kind !== "status" && c.runId !== undefined && (o.all ?? []).some((x) => x.name !== c.name && x.kind !== "status" && x.runId === c.runId && codeConclusion(x))) return "another job of the same workflow run failed";
+  if (c.conclusion === "CANCELLED") {
+    if (o.reran) return "cancelled again after its re-run";
+    const ran = ranMs(c);
+    if (ran !== undefined && ran >= JOB_TIMEOUT_MS - NEAR_TIMEOUT_MS) return `ran to GitHub's ${Math.round(JOB_TIMEOUT_MS / 60_000)}-minute job limit`;
+  }
+  return undefined;
+}
+
 /** Pure: classify one required check on the exact head whose conclusion is not SUCCESS. */
-export function triageCheck(cfg: PrDeliveryConfig, c: CheckObs): CiClass {
+export function triageCheck(cfg: PrDeliveryConfig, c: CheckObs, o: TriageContext = {}): CiClass {
   if (c.app && cfg.reviewBotApps.includes(c.app)) return "bot";
+  if (codeWhy(c, o)) return "code";
   if (c.conclusion === "CANCELLED") return "provider";
   if (c.conclusion === "SKIPPED" || c.conclusion === "NEUTRAL" || c.conclusion === "STALE") return "not-run";
   return "code";
 }
 
+/** The context `triageCheck` needs for a check observed on this head: the head's other checks, and whether this run came after its name's re-runs were spent. */
+function triageContext(s: State, pr: PrDelivery, ob: { checks: CheckObs[] }, c: CheckObs): TriageContext {
+  const used = rerunsUsed(pr, c.name);
+  const reran = used.length > 0 && used.length >= s.project.prDelivery.rerunBudget && !used.some((u) => staleAfterRerun(c, u));
+  return { all: ob.checks, reran };
+}
+const classOf = (s: State, pr: PrDelivery, ob: { checks: CheckObs[] }, c: CheckObs) => triageCheck(s.project.prDelivery, c, triageContext(s, pr, ob, c));
+
 const CLASS_WORD: Record<CiClass, string> = { bot: "review bot", provider: "cancelled by GitHub", "not-run": "did not run", code: "the code" };
 
 /** "build: cancelled (cancelled by GitHub, github-actions, https://…)" — one failing check, with its class and app. */
-function checkLine(cfg: PrDeliveryConfig, c: CheckObs): string {
-  const cls = triageCheck(cfg, c);
-  const parts = [cls === "bot" ? `review bot ${c.app}` : CLASS_WORD[cls], ...(cls !== "bot" && c.app ? [c.app] : []), ...(c.url && GITHUB_URL.test(c.url) ? [c.url] : [])];
+function checkLine(cfg: PrDeliveryConfig, c: CheckObs, o: TriageContext = {}): string {
+  const cls = triageCheck(cfg, c, o);
+  const why = cls === "code" ? codeWhy(c, o) : undefined;
+  const parts = [cls === "bot" ? `review bot ${c.app}` : `${CLASS_WORD[cls]}${why ? `: ${why}` : ""}`, ...(cls !== "bot" && c.app ? [c.app] : []), ...(c.url && GITHUB_URL.test(c.url) ? [c.url] : [])];
   return `${c.name}: ${(c.conclusion ?? "running").toLowerCase().replace(/_/g, " ")} (${parts.join(", ")})`;
 }
 
@@ -1385,11 +1430,24 @@ function awaitingRerun(pr: PrDelivery, c: CheckObs, nowMs: number): boolean {
   return (u.seen ?? 0) < PR_LIMITS.rerunObservations && nowMs - Date.parse(u.at) < PR_LIMITS.rerunWaitMs;
 }
 
-/** Can this failing check be re-run: a GitHub-cancelled Actions job with an id, budget left for its name and for the pull request. */
-function rerunnable(s: State, pr: PrDelivery, c: CheckObs): boolean {
+/**
+ * Why this GitHub-cancelled check cannot be re-run by the app, or undefined when it can (review
+ * finding L7: the gate names the true reason). The clause continues "GitHub cancelled X on <sha>".
+ */
+function rerunBlocker(s: State, pr: PrDelivery, c: CheckObs): string | undefined {
   const cfg = s.project.prDelivery;
-  if (triageCheck(cfg, c) !== "provider" || c.app !== "github-actions" || !Number.isInteger(c.jobId) || c.jobId! <= 0) return false;
-  return rerunsUsed(pr, c.name).length < cfg.rerunBudget && (pr.counters.reruns ?? 0) < PR_LIMITS.reruns;
+  if (cfg.rerunBudget === 0) return "; re-runs are off (Settings → Delivery)";
+  if (c.app !== "github-actions") return `; ${c.app ?? "this check"} has no re-run`;
+  if (!Number.isInteger(c.jobId) || c.jobId! <= 0) return "; GitHub reported no job id to re-run";
+  const spent = rerunsUsed(pr, c.name).length;
+  if (spent >= cfg.rerunBudget) return `, and its re-run is used (${spent} of ${cfg.rerunBudget})`;
+  if ((pr.counters.reruns ?? 0) >= PR_LIMITS.reruns) return `, and the ${PR_LIMITS.reruns} re-runs of this pull request are used`;
+  return undefined;
+}
+
+/** Can this failing check be re-run: a GitHub-cancelled Actions job with an id, budget left for its name and for the pull request. */
+function rerunnable(s: State, pr: PrDelivery, ob: { checks: CheckObs[] }, c: CheckObs): boolean {
+  return classOf(s, pr, ob, c) === "provider" && rerunBlocker(s, pr, c) === undefined;
 }
 
 /**
@@ -1408,7 +1466,7 @@ export function rerunPlan(s: State, pr: PrDelivery, nowMs: number): { check: str
   const checks = names.map((n) => ob.checks.find((c) => c.name === n));
   if (!checks.length || checks.some((c) => !c || c.conclusion === null || awaitingRerun(pr, c, nowMs))) return undefined;
   const failed = checks.filter((c): c is CheckObs => !!c && c.conclusion !== "SUCCESS");
-  if (!failed.length || failed.some((c) => !rerunnable(s, pr, c))) return undefined;
+  if (!failed.length || failed.some((c) => !rerunnable(s, pr, ob, c))) return undefined;
   const jobs = failed.map((c) => ({ check: c.name, jobId: c.jobId! }));
   if ((pr.counters.reruns ?? 0) + jobs.length > PR_LIMITS.reruns) return undefined;
   return jobs.slice(0, PR_LIMITS.reruns);
@@ -1495,8 +1553,8 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
     const pending = names.filter((n) => !of(n) || of(n)!.conclusion === null || awaitingRerun(pr, of(n)!, nowMs));
     if (failed.length) {
       const checks = failed.map((n) => of(n)!);
-      const classes = checks.map((c) => triageCheck(cfg, c));
-      const lines = checks.map((c) => checkLine(cfg, c)).join("; ");
+      const classes = checks.map((c) => classOf(s, pr, ob, c));
+      const lines = checks.map((c) => checkLine(cfg, c, triageContext(s, pr, ob, c))).join("; ");
       const first = (cls: CiClass) => checks[classes.indexOf(cls)];
       if (classes.includes("code")) add("checks", "Required checks", "blocked", lines, "checks-failed");
       else if (classes.includes("bot")) {
@@ -1509,9 +1567,18 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
         const used = rerunsUsed(pr).length;
         add("checks", "Required checks", "waiting", `GitHub cancelled ${checks.map((c) => c.name).join(", ")} on ${h12}. It is re-run (${used} of ${cfg.rerunBudget} per check used on this head). ${lines}`);
       } else {
-        const c = first("provider");
-        const spent = rerunsUsed(pr, c.name).length;
-        add("checks", "Required checks", "blocked", `GitHub cancelled ${c.name} on ${h12}${spent ? `, and its re-run is used (${spent} of ${cfg.rerunBudget})` : cfg.rerunBudget === 0 ? "; re-runs are off (Settings → Delivery)" : c.app !== "github-actions" ? `; ${c.app ?? "this check"} has no re-run` : "; it cannot be re-run"}. Re-run it on GitHub, or merge it yourself. ${lines}`, "ci-infra");
+        // Every failed check was cancelled by GitHub and no re-run is planned right now (review L7):
+        // the reason is the true one. A check that cannot be re-run needs a person; a re-run that
+        // waits for something (another required check, the pause, a conflict) is a wait, not a block.
+        const blocked = checks.map((c) => [c, rerunBlocker(s, pr, c)] as const).find(([, why]) => why);
+        if (blocked) {
+          const [c, why] = blocked;
+          add("checks", "Required checks", "blocked", `GitHub cancelled ${c.name} on ${h12}${why}. Re-run it on GitHub, or merge it yourself. ${lines}`, "ci-infra");
+        } else {
+          const conflict = ob.mergeable === "CONFLICTING" || ob.mergeStateStatus === "DIRTY" || (pr.baseConflict?.headSha === pr.headSha && pr.baseConflict.baseSha === s.project.github?.base?.sha);
+          const when = pending.length ? `once ${pending.join(", ")} has finished` : conflict ? `once the conflict with ${pr.base} is resolved` : s.project.hold || pr.userHold || pr.closeRequested ? "when the pause ends" : pr.pendingHead || pr.foreignHead ? "once the head is settled" : "next";
+          add("checks", "Required checks", "waiting", `GitHub cancelled ${checks.map((c) => c.name).join(", ")} on ${h12}. It is re-run ${when} (${rerunsUsed(pr).length} of ${cfg.rerunBudget} per check used on this head). ${lines}`);
+        }
       }
     } else if (pending.length) {
       const reported = names.some((n) => !!of(n));
@@ -2181,7 +2248,10 @@ export function reportObservations(state: State, obs: Observations, now: string,
     }
     // ORC-013 §7.3: observations after a re-run request that still show the cancelled run are counted;
     // after 2 (or 5 minutes) the check is judged as observed. The observation, not the request, decides.
-    if (o.checksFor === pr.headSha) {
+    // The driver's own read right after the request never counts (review L8): GitHub has had no time
+    // to publish the new run, so that read says nothing about it.
+    const ownRerunRead = pr.op?.kind === "rerun" && ctx.opId === pr.op.id;
+    if (o.checksFor === pr.headSha && !ownRerunRead) {
       for (const u of rerunsUsed(pr)) {
         const c = o.checks.find((x) => x.name === u.check);
         if (c && staleAfterRerun(c, u)) u.seen = (u.seen ?? 0) + 1;
@@ -2193,9 +2263,15 @@ export function reportObservations(state: State, obs: Observations, now: string,
       if (own || graceOver) {
         const mine = rerunsUsed(pr).filter((u) => u.opId === pr.op!.id);
         delete pr.op;
-        // A definite refusal means the re-run did not happen: the wait is over at once. The budget stays spent (I7).
+        // A definite refusal means the re-run did not happen: the wait is over at once, and the record
+        // says GitHub refused it (review L9). The budget stays spent (I7).
         const definite = !!ctx.actError && !["network", "timeout", "unknown"].includes(ctx.actError.code);
-        if (definite) for (const u of mine) u.seen = PR_LIMITS.rerunObservations;
+        if (definite) {
+          for (const u of mine) {
+            u.seen = PR_LIMITS.rerunObservations;
+            u.refused = clip(ctx.actError!.message, 200);
+          }
+        }
         if (ctx.actError) {
           pr.message = clip(ctx.actError.message, 300);
           event(s, now, "system", "blocked", `${prName(pr)}: the re-run of ${mine.map((u) => u.check).join(", ") || "the cancelled job"} was not accepted by GitHub (${clip(ctx.actError.message, 200)}); it is not sent again`, t.id);
