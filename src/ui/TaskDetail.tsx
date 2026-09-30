@@ -292,6 +292,14 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
         )}
       </div>,
     );
+  // ORC-012 review 2: the roadmap's hold and the user's hold before start are different things and shown as such.
+  if (task.heldForShaping && task.lifecycle !== "active")
+    out.push(
+      <div className="banner neutral" key="hfs">
+        Planned while shaping: it waits until you start building{task.holdBeforeStart ? ", and then for your release" : state.project.autonomy.enabled && !state.project.autonomy.holdLeadProposals ? ", then starts on Autopilot" : ", then waits for your release (your involvement setting)"}. Changing its hold below takes it out of the roadmap hold.{" "}
+        <a href="#/overview">Shape the vision</a>
+      </div>,
+    );
   if (task.holdBeforeStart && task.lifecycle !== "active")
     out.push(
       <div className="banner neutral" key="hbs">

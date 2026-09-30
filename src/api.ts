@@ -72,3 +72,23 @@ export interface ChangeResponse {
 export interface ChangeError extends CommandError {
   url?: string;
 }
+
+/**
+ * Body of POST /api/vision-docs (ORC-014): one file per request. The service checks it, keeps a copy
+ * by content hash outside any repository, and records it with the `addVisionDoc` command under the
+ * given idempotency key. Rejections come back as a CommandError with a plain reason.
+ */
+export interface VisionDocUpload {
+  /** Relative path, folder structure included (a folder upload keeps its paths). */
+  path: string;
+  /** The file's bytes, base64-encoded. At most 2 MB decoded. */
+  content: string;
+  idempotencyKey: string;
+}
+
+export interface VisionDocUploadOk {
+  version: number;
+  docId: string;
+  /** The id of the document at the same path this one replaced in the current set, if any. */
+  replaced?: string;
+}

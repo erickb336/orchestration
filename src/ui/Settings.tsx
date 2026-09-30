@@ -740,7 +740,8 @@ function ProjectSetup() {
   const [vision, setVision] = useState("");
   const [focus, setFocus] = useState("");
   // ORC-012: shape the vision with the lead first (the vision may stay empty), or start building now.
-  const [stage, setStage] = useState<"shaping" | "building">("building");
+  // Review 7: the form starts from the stage the project is in, so it never resets an earlier choice.
+  const [stage, setStage] = useState<"shaping" | "building">(state.project.stage);
   const repoOk = service.repo?.ok;
   return (
     <section className="card" aria-labelledby="setup-h">

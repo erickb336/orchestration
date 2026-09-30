@@ -132,6 +132,15 @@ export const COMMANDS = {
   ),
   dismissVisionDraft: same((s, now, a) => M.dismissVisionDraft(s, str(a, "draftId"), now)),
 
+  // vision documents (ORC-014)
+  /** Record a document whose copy the service stored (sent by POST /api/vision-docs, never by the UI directly). Returns { docId, replaced? }. */
+  addVisionDoc: (s, now, a) => {
+    const r = M.addVisionDoc(s, { path: str(a, "path"), size: num(a, "size"), hash: str(a, "hash"), text: bool(a, "text") }, now);
+    return { state: r.state, result: { docId: r.docId, ...(r.replaced ? { replaced: r.replaced } : {}) } };
+  },
+  /** Remove a document from the current set; earlier revisions keep it. */
+  removeVisionDoc: same((s, now, a) => M.removeVisionDoc(s, str(a, "docId"), now)),
+
   // specs
   editSpec: same((s, now, a) => M.editSpec(s, str(a, "taskId"), num(a, "expectedRev"), specContent(a.content), str(a, "reason"), "user", now)),
   overrideSelection: same((s, now, a) => M.overrideSelection(s, str(a, "taskId"), num(a, "expectedRev"), str(a, "optionId"), str(a, "reason"), now)),

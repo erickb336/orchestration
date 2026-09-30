@@ -4,7 +4,7 @@
 // and controls are disabled. Only pure view preferences live in browser storage.
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { CLIENT_HEADER, type AckMode, type CommandError, type CommandOk, type CommandRequest, type ServiceInfo, type StatePayload } from "../api";
+import { CLIENT_HEADER, type AckMode, type CommandError, type CommandOk, type CommandRequest, type ServiceInfo, type StatePayload, type VisionDocUpload, type VisionDocUploadOk } from "../api";
 import type { CommandName } from "../domain/commands";
 import type { State } from "../domain/types";
 
@@ -260,6 +260,50 @@ export function useServiceStore() {
     [fetchState, goOffline],
   );
 
+  /**
+   * ORC-014: attach one file to the vision. The file is read in the browser, sent base64-encoded with
+   * its relative path and its own idempotency key, and recorded by the service once its copy is stored.
+   * A rejection (over a limit, duplicate, unsafe name) comes back as the reason, for the per-file list,
+   * not as a global notice; only an unreachable service raises one.
+   */
+  const uploadVisionDoc = useCallback(
+    async (path: string, file: Blob): Promise<{ ok: true; body: VisionDocUploadOk } | { ok: false; error: string }> => {
+      let content: string;
+      try {
+        content = await readBase64(file);
+      } catch {
+        return { ok: false, error: "The file could not be read." };
+      }
+      const body: VisionDocUpload = { path, content, idempotencyKey: idempotencyKey() };
+      let res: Response;
+      try {
+        res = await fetch("/api/vision-docs", { method: "POST", headers: POST_HEADERS, body: JSON.stringify(body) });
+      } catch {
+        goOffline();
+        setNotice({ kind: "error", message: UNREACHABLE });
+        return { ok: false, error: "The service is unreachable." };
+      }
+      if (res.ok) {
+        let ok: Partial<VisionDocUploadOk> = {};
+        try {
+          ok = (await res.json()) as VisionDocUploadOk;
+        } catch {
+          /* no body: refresh below */
+        }
+        if (typeof ok.version !== "number" || (current.current?.version ?? -1) < ok.version) await fetchState();
+        return { ok: true, body: { version: ok.version ?? 0, docId: ok.docId ?? "", ...(ok.replaced ? { replaced: ok.replaced } : {}) } };
+      }
+      const err = await readError(res);
+      if (!err) {
+        goOffline();
+        setNotice({ kind: "error", message: UNREACHABLE });
+        return { ok: false, error: "The service is unreachable." };
+      }
+      return { ok: false, error: err.error };
+    },
+    [fetchState, goOffline],
+  );
+
   const setSim = useCallback((patch: { auto?: boolean; ackMode?: AckMode }) => postSim("/api/sim", patch), [postSim]);
   /** Re-check provider credentials and binaries now (never starts a model run). */
   const refreshHealth = useCallback(() => postSim("/api/health/refresh", {}), [postSim]);
@@ -286,9 +330,24 @@ export function useServiceStore() {
     step,
     reset,
     postJson,
+    uploadVisionDoc,
     notice,
     setNotice,
   };
+}
+
+/** A file's bytes as base64 (the data-URL body), read in the browser. */
+function readBase64(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const url = String(reader.result ?? "");
+      const comma = url.indexOf(",");
+      resolve(comma >= 0 ? url.slice(comma + 1) : "");
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 export type ServiceStore = ReturnType<typeof useServiceStore>;

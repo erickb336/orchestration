@@ -115,11 +115,11 @@ describe("A. shaping end to end", () => {
     expect(M.currentVision(s).rev).toBe(1); // the draft changed nothing
     expect(lastReply().visionDraftId).toBe(d.id);
     const [planned] = M.roadmapTasks(s);
-    expect(planned).toMatchObject({ holdBeforeStart: true, fromShaping: true });
+    expect(planned).toMatchObject({ heldForShaping: true, holdBeforeStart: false, fromShaping: true });
     tick();
     tick();
     expect(M.activeAttempts(state())).toHaveLength(0); // still nothing runs, the user task included
-    expect(M.stateLabel(state(), task(planned.id))).toBe("Held before start");
+    expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start building");
     expect(state().leadRuns.filter((x) => x.trigger === "planning")).toHaveLength(0);
 
     const refused = failure(() => cmd("startBuilding"));
@@ -244,7 +244,7 @@ describe("C. back to shaping stops nothing", () => {
     expect(M.activeAttempts(state())[0].stepId).not.toBe(a.stepId);
   });
 
-  it("the stage survives a restart, and a run left running across it still finishes normally", async () => {
+  it("the stage survives a restart; a run left running across it is lost (no process survives), its step goes back to pending, and it runs again only after Start building", async () => {
     init("building", "Ship the apps.");
     const id = createTask("Survives", 1);
     tick();
@@ -289,8 +289,8 @@ describe("D. migration and the simulated lead", () => {
     raw.close();
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(12);
-    expect(s.version).toBe(12);
+    expect(STATE_FORMAT).toBe(13);
+    expect(s.version).toBe(13);
     expect(s.project.stage).toBe("building");
     expect(s.visionDrafts).toEqual([]);
     expect(s.tasks.every((t) => t.fromShaping === undefined)).toBe(true);
@@ -298,7 +298,7 @@ describe("D. migration and the simulated lead", () => {
     expect(upgraded.read().state.project.stage).toBe("shaping");
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(12);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(13);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_11_%'").get()).toBeDefined();
     check.close();
   });

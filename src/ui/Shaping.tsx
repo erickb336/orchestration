@@ -8,6 +8,7 @@ import * as M from "../domain/model";
 import { SHAPING_AREAS, SHAPING_AREA_LABEL, type LeadQuestion, type State, type VisionDraft } from "../domain/types";
 import { useStore } from "./store";
 import { fmtTime, relTime } from "./common";
+import { VisionDocsList } from "./VisionDocs";
 
 const COVERAGE_LABEL = { clear: "clear", partial: "partly clear", open: "open" } as const;
 
@@ -125,24 +126,49 @@ export function ShapingBanner() {
   );
 }
 
-/** A draft next to the current vision: the diff, and Accept, Edit and accept, and Dismiss (compare-and-set on the vision revision). */
-export function VisionDraftCard({ state, draft }: { state: State; draft: VisionDraft }) {
+/**
+ * The draft to show: the open one, or, while its editor is open, the draft the user started editing even
+ * after a newer draft replaced it (review 4), so edits are never dropped silently. Keyed on the draft.
+ */
+export function OpenDraft() {
+  const { state } = useStore();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const open = M.openVisionDraft(state);
+  const draft = (editingId ? state.visionDrafts.find((d) => d.id === editingId) : undefined) ?? open;
+  if (!draft) return null;
+  return <VisionDraftCard key={draft.id} state={state} draft={draft} onEditing={setEditingId} />;
+}
+
+/**
+ * A draft next to the current vision: the diff, and Accept, Edit and accept, and Dismiss. Every accept is
+ * compare-and-set on the vision revision the user saw when they started (review 4): the editor keeps its
+ * base revision and draft id, and says so when the vision moved or the draft was replaced meanwhile.
+ */
+export function VisionDraftCard({ state, draft, onEditing }: { state: State; draft: VisionDraft; onEditing?: (draftId: string | null) => void }) {
   const { send, disabled } = useStore();
   const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState(false);
+  /** The editing session: the vision revision and draft it started from. */
+  const [editing, setEditing] = useState<{ draftId: string; baseRev: number } | null>(null);
   const [text, setText] = useState(draft.text);
   const [focus, setFocus] = useState(draft.focus);
   const vision = M.currentVision(state);
   const diff = diffLines([`Focus: ${vision.focus}`, ...vision.text.split("\n")], [`Focus: ${draft.focus}`, ...draft.text.split("\n")]);
   const changed = diff.filter((d) => d.kind !== "same").length;
   const moved = draft.basedOnVisionRev !== vision.rev;
-  const run = async (name: "acceptVisionDraft" | "dismissVisionDraft", args: object) => {
+  const gone = draft.status !== "open";
+  const stale = !!editing && editing.baseRev !== vision.rev;
+  const stopEditing = () => {
+    setEditing(null);
+    onEditing?.(null);
+  };
+  const run = async (name: "acceptVisionDraft" | "dismissVisionDraft" | "editVision", args: object) => {
     setBusy(true);
     const r = await send(name, args);
     setBusy(false);
-    if (r.ok) setEditing(false);
+    if (r.ok) stopEditing();
   };
   const off = disabled || busy;
+  const goneWhy = draft.status === "superseded" ? "A newer draft from the lead replaced this one" : draft.status === "accepted" ? `This draft was accepted meanwhile (as r${draft.visionRev})` : draft.status === "dismissed" ? "This draft was dismissed meanwhile" : "";
   return (
     <div className="banner review" role="region" aria-label={`Vision draft ${draft.id}`} style={{ marginBottom: "0.8rem" }}>
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -164,9 +190,29 @@ export function VisionDraftCard({ state, draft }: { state: State; draft: VisionD
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            void run("acceptVisionDraft", { draftId: draft.id, expectedRev: vision.rev, text, focus });
+            if (gone || stale) return;
+            void run("acceptVisionDraft", { draftId: editing.draftId, expectedRev: editing.baseRev, text, focus });
           }}
         >
+          {gone && (
+            <div className="banner danger" role="alert">
+              {goneWhy} while you were editing, so it can no longer be accepted. Your text is kept: save it as your own revision, or discard it.{" "}
+              <button type="button" className="small" disabled={off || !text.trim()} onClick={() => void run("editVision", { expectedRev: vision.rev, text, focus, reason: `Edited the lead's draft ${draft.id} after it was ${draft.status}` })}>
+                Save as r{vision.rev + 1} by hand
+              </button>{" "}
+              <button type="button" className="small" disabled={busy} onClick={stopEditing}>
+                Discard
+              </button>
+            </div>
+          )}
+          {!gone && stale && (
+            <div className="banner danger" role="alert">
+              The vision changed to r{vision.rev} ({vision.author}: {vision.reason}) while you were editing. Your text is kept.{" "}
+              <button type="button" className="small" onClick={() => setEditing({ ...editing, baseRev: vision.rev })}>
+                Accept over r{vision.rev} anyway
+              </button>
+            </div>
+          )}
           <label className="field">
             <span>Vision</span>
             <textarea value={text} onChange={(e) => setText(e.target.value)} required style={{ minHeight: "9rem" }} />
@@ -176,10 +222,10 @@ export function VisionDraftCard({ state, draft }: { state: State; draft: VisionD
             <input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} />
           </label>
           <div className="row">
-            <button type="submit" className="primary" disabled={off || !text.trim()}>
-              Accept as r{vision.rev + 1}
+            <button type="submit" className="primary" disabled={off || !text.trim() || gone || stale}>
+              Accept as r{editing.baseRev + 1}
             </button>
-            <button type="button" disabled={busy} onClick={() => setEditing(false)}>
+            <button type="button" disabled={busy} onClick={stopEditing}>
               Cancel
             </button>
           </div>
@@ -202,7 +248,8 @@ export function VisionDraftCard({ state, draft }: { state: State; draft: VisionD
               onClick={() => {
                 setText(draft.text);
                 setFocus(draft.focus);
-                setEditing(true);
+                setEditing({ draftId: draft.id, baseRev: vision.rev });
+                onEditing?.(draft.id);
               }}
             >
               Edit and accept
@@ -227,7 +274,8 @@ export function StartBuildingButton({ className = "primary" }: { className?: str
   const roadmap = M.roadmapTasks(state).length;
   const release = a.enabled && !a.holdLeadProposals;
   const open = M.openAreas(state);
-  const stillOpen = open.length ? `Still open: ${open.map((x) => SHAPING_AREA_LABEL[x].toLowerCase()).join(", ")}.` : "";
+  // Review 8: no coverage reported means every area is still open, and the confirmation says so.
+  const stillOpen = !M.coverageOf(state) ? "The lead has not reported which areas are clear yet, so all nine count as open." : open.length ? `Still open: ${open.map((x) => SHAPING_AREA_LABEL[x].toLowerCase()).join(", ")}.` : "";
   const outcome = roadmap ? (release ? `On Autopilot the ${roadmap} planned task${roadmap === 1 ? " starts" : "s start"} right away.` : `The ${roadmap} planned task${roadmap === 1 ? "" : "s"} wait${roadmap === 1 ? "s" : ""} for you to release ${roadmap === 1 ? "it" : "them"} (your involvement setting).`) : "";
   return (
     <span className="row" style={{ gap: "0.5rem" }}>
@@ -374,6 +422,10 @@ export function ShapingPanel() {
         <HandEdit />
       </div>
 
+      <div style={{ marginBottom: "0.8rem" }}>
+        <VisionDocsList compact />
+      </div>
+
       {asked && (
         <div key={asked.message.id} style={{ marginBottom: "0.8rem" }}>
           <QuestionsForm questions={asked.questions} />
@@ -383,7 +435,7 @@ export function ShapingPanel() {
       <CoverageChecklist state={state} />
 
       {draft ? (
-        <VisionDraftCard state={state} draft={draft} />
+        <OpenDraft />
       ) : last ? (
         <p className="muted" style={{ fontSize: "0.85rem" }}>
           Latest draft {last.id}: {last.status === "accepted" ? `accepted as r${last.visionRev}` : last.status === "dismissed" ? "dismissed" : last.status} · {fmtTime(last.resolvedAt ?? last.at)}. Ask the lead for another when you are ready.
@@ -399,7 +451,8 @@ export function ShapingPanel() {
         <ul className="plain" style={{ marginBottom: "0.6rem" }}>
           {roadmap.map((t) => (
             <li key={t.id}>
-              <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="chip">P{t.priority}</span> <span className="chip">held until building</span>
+              <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="chip">P{t.priority}</span>{" "}
+              <span className="chip">{t.heldForShaping ? (t.holdBeforeStart ? "held until building, then for your release" : "held until building") : t.holdBeforeStart ? "held before start by you" : "starts when building starts"}</span>
             </li>
           ))}
         </ul>

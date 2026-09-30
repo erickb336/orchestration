@@ -31,8 +31,37 @@ export interface VisionRevision {
    * ORC-009: where a revision came from when it was not typed by hand. A lead focus change names its
    * change set, run and the user's messages; an Undo names the set it undid; an applied suggestion
    * names its set only. ORC-012: an accepted vision draft names the draft, its run and messages.
+   * ORC-014: a document attached or removed names it (`docAdded` / `docRemoved`; a replacement names both).
    */
-  source?: { changeSetId?: string; leadRunId?: string; messageIds?: string[]; undoOf?: string; draftId?: string };
+  source?: { changeSetId?: string; leadRunId?: string; messageIds?: string[]; undoOf?: string; draftId?: string; docAdded?: string; docRemoved?: string };
+  /**
+   * ORC-014: the vision documents that applied at this revision (ids into `Project.visionDocs`), so
+   * history stays truthful. Absent on revisions from before documents existed: none applied.
+   */
+  docIds?: string[];
+}
+
+// ---------- vision documents (ORC-014) ----------
+
+/**
+ * A file the user attached to the vision. The state holds metadata only; the content is a copy stored
+ * by hash under the service's data directory, never in a repository or worktree. Never removed from
+ * the registry: an old revision may still refer to it.
+ */
+export interface VisionDoc {
+  /** `doc-${seq}` */
+  id: string;
+  /** The file name (the last path segment). */
+  name: string;
+  /** Relative path with `/` separators, as attached (a folder upload keeps its structure). */
+  path: string;
+  /** Bytes. */
+  size: number;
+  /** SHA-256 of the content, hex: the stored copy's name. */
+  hash: string;
+  /** Readable as text (valid UTF-8 without NUL bytes, and not a known binary format): its content reaches the lead and designers. */
+  text: boolean;
+  addedAt: string;
 }
 
 // ---------- shaping the vision with the lead first (ORC-012) ----------
@@ -159,6 +188,8 @@ export interface Project {
   /** Managed repository path; user-configured. */
   repoPath: string;
   visions: VisionRevision[];
+  /** ORC-014: every document ever attached to the vision (the current set is the current revision's `docIds`). */
+  visionDocs: VisionDoc[];
   enabledProviders: ProviderId[];
   /** Sample catalog per provider. A real catalog comes from the connected provider. */
   catalog: Record<ProviderId, CatalogModel[]>;
@@ -175,6 +206,8 @@ export interface Project {
   steeringMode: SteeringMode;
   /** ORC-012: shaping (talk it through with the lead; nothing runs) or building (everything runs). */
   stage: ProjectStage;
+  /** ORC-012 review 8: when the current shaping session began; coverage reported before it is not reused. */
+  shapingSince?: string;
   /** Last planning run start (for the planning interval). */
   lastPlanningAt?: string;
   /** Automatic delivery state: retried until the delivery branch contains all integrated work. */
@@ -503,6 +536,12 @@ export interface Task {
   dropped?: { changeSetId: string; lifecycle: "proposed" | "ready"; at: string };
   /** ORC-012: proposed while shaping (the roadmap). Held until the user starts building; released then on Autopilot. */
   fromShaping?: boolean;
+  /**
+   * ORC-012 review 2: the roadmap's own hold, distinct from the user's `holdBeforeStart`. Set on
+   * proposals made while shaping; cleared by Start building (which then applies the involvement
+   * setting) and by any hold change the user makes on the task.
+   */
+  heldForShaping?: boolean;
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
   legacySpecUnavailable?: boolean;
@@ -538,7 +577,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 12;
+  version: 13;
   seq: number;
   project: Project;
   tasks: Task[];

@@ -6,10 +6,11 @@
 import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
-import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CommandError, type ServiceInfo, type StatePayload } from "../src/api";
+import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CommandError, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
 import { exportMarkdown } from "../src/domain/model";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
+import type { VisionDocStore } from "./visiondocs";
 import type { WorkspaceManager } from "./workspaces";
 import { CommandFailure, type Store } from "./store";
 
@@ -19,6 +20,8 @@ export interface HttpOptions {
   /** Shared simulation settings of the fake adapters (fake mode only). */
   fakeConfig?: FakeRuntimeConfig;
   workspaces?: WorkspaceManager;
+  /** ORC-014: where POST /api/vision-docs keeps copies of the user's documents. Without it uploads are refused. */
+  visionDocs?: VisionDocStore;
   startedAt: string;
   /** host:port values accepted in the Host header (the service's own address plus the dev UI). */
   allowedHosts: string[];
@@ -221,12 +224,28 @@ export function createHttpServer(opts: HttpOptions): Server {
       if (path === "/api/commands") {
         if (typeof body.name !== "string" || typeof body.idempotencyKey !== "string") return fail(res, 400, "invalid", "name and idempotencyKey are required");
         if (real && body.name === "resetSampleData") return fail(res, 400, "control", "Sample data is only available with the fake runtime.");
+        // A document is recorded only once its copy is stored: the upload endpoint does both.
+        if (body.name === "addVisionDoc") return fail(res, 400, "invalid", "Attach documents through POST /api/vision-docs, which stores the file first.");
         // A sample project never contacts GitHub.
         if (real && body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr" && store.read().state.project.sample)
           return fail(res, 400, "control", "This is the sample project; pull-request delivery needs a project of your own. Start a new project in Settings.");
         const r = store.command(body.name, body.args, body.idempotencyKey, new Date().toISOString());
         if (body.name === "resetSampleData") scheduler.resetRuntime();
         return send(res, 200, { version: r.version, result: r.result });
+      }
+      // ORC-014: one file per request. The same host, origin and client-header checks as every other
+      // state change already ran above; the body cap (MAX_BODY) bounds the base64 upload.
+      if (path === "/api/vision-docs") {
+        if (typeof body.path !== "string" || typeof body.content !== "string" || typeof body.idempotencyKey !== "string") return fail(res, 400, "invalid", "path, content and idempotencyKey are required");
+        if (!opts.visionDocs) return fail(res, 400, "control", "This service has no place to keep documents.");
+        // A retry of a recorded upload replays its outcome (the store compares the key and the file;
+        // a different file under the same key is refused there). A new one is checked against the
+        // project and its copy stored before the command records it.
+        const upload = opts.visionDocs.inspect(body.path, body.content);
+        const input = store.recorded(body.idempotencyKey) ? upload.input : opts.visionDocs.admit(store.read().state, upload);
+        const r = store.command("addVisionDoc", input, body.idempotencyKey, new Date().toISOString());
+        const result = (r.result ?? {}) as { docId?: string; replaced?: string };
+        return send(res, 200, { version: r.version, docId: result.docId ?? "", ...(result.replaced ? { replaced: result.replaced } : {}) } satisfies VisionDocUploadOk);
       }
       if (path.startsWith("/api/sim") && (real || !fakeConfig)) return fail(res, 400, "control", "Simulation controls are only available with the fake runtime.");
       if (path === "/api/maintenance/prune") {

@@ -11,7 +11,7 @@ import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { buildSeed } from "../src/domain/seed";
 import { ControlError, DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
 
-export const STATE_FORMAT = 12;
+export const STATE_FORMAT = 13;
 
 /** In-place upgrades of the state document, keyed by the format they upgrade from. */
 const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
@@ -89,6 +89,27 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     project.stage ??= "building";
     doc.visionDrafts ??= [];
     doc.version = 12;
+    return doc;
+  },
+  // ORC-014: vision documents. No project has any yet; existing revisions record none (`docIds` absent).
+  // ORC-012 review 6: a project of the user's own with an empty vision cannot be building; it shapes first.
+  // ORC-012 review 2: the roadmap's hold while shaping becomes its own flag; the user's hold before start
+  // then follows the involvement setting, as a lead proposal's would.
+  12: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.visionDocs ??= [];
+    const visions = (project.visions ?? []) as { text?: unknown }[];
+    const text = String(visions[visions.length - 1]?.text ?? "");
+    if (!project.sample && !text.trim()) project.stage = "shaping";
+    if (project.stage === "shaping") {
+      const a = (project.autonomy ?? {}) as { enabled?: boolean; holdLeadProposals?: boolean };
+      for (const t of (doc.tasks ?? []) as { fromShaping?: boolean; holdBeforeStart?: boolean; heldForShaping?: boolean; lifecycle?: string }[]) {
+        if (!t.fromShaping || !t.holdBeforeStart || (t.lifecycle !== "proposed" && t.lifecycle !== "ready")) continue;
+        t.heldForShaping = true;
+        t.holdBeforeStart = !a.enabled || !!a.holdLeadProposals;
+      }
+    }
+    doc.version = 13;
     return doc;
   },
 };
@@ -248,6 +269,12 @@ export class Store {
   read(): { version: number; state: State } {
     const { version, state } = this.load();
     return { version, state };
+  }
+
+  /** The command already recorded under an idempotency key, if any (its args as sent), so a retry is not re-validated as a new request. */
+  recorded(idempotencyKey: string): { name: string; args: unknown } | undefined {
+    const row = this.db.prepare("SELECT name, args FROM commands WHERE idempotency_key = ?").get(idempotencyKey) as { name: string; args: string } | undefined;
+    return row ? { name: row.name, args: JSON.parse(row.args) as unknown } : undefined;
   }
 
   /**

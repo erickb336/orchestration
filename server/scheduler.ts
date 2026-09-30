@@ -16,6 +16,7 @@ import { PrDriver } from "./prdelivery";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
+import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
 
 export const SCHEDULER_LEASE = "scheduler";
@@ -34,6 +35,8 @@ export interface SchedulerOptions {
   github?: GitHubHost;
   /** True when Claude workers run with shell access; shown as a GitHub posture warning. */
   workerShell?: boolean;
+  /** ORC-014: where the user's vision documents are kept; their text goes into the lead's and designers' envelopes. */
+  visionDocs?: VisionDocStore;
 }
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
@@ -62,6 +65,7 @@ export class Scheduler {
   private readonly store: Store;
   readonly adapters: Record<ProviderId, RuntimeAdapter>;
   private readonly workspaces?: WorkspaceManager;
+  private readonly visionDocs?: VisionDocStore;
   private queue: AdapterEvent[] = [];
   private launched = new Map<string, Launched>();
   private healthState: Partial<Record<ProviderId, ProviderHealth>> = {};
@@ -76,6 +80,7 @@ export class Scheduler {
     this.store = store;
     this.adapters = adapters;
     this.workspaces = opts.workspaces;
+    this.visionDocs = opts.visionDocs;
     this.leaseMs = opts.leaseMs ?? 15000;
     this.ackTimeoutMs = opts.ackTimeoutMs ?? (this.isFake ? 8000 : 45000);
     this.log = opts.log ?? (() => {});
@@ -408,7 +413,8 @@ export class Scheduler {
   private integrateNext(nowMs: number, lease: { name: string; holder: string; nowMs: number }) {
     const now = new Date(nowMs).toISOString();
     const { state } = this.store.read();
-    if (state.project.hold) return;
+    // ORC-012 review 1: integration is delivery work; none starts while shaping (nothing is paused).
+    if (state.project.hold || state.project.stage === "shaping") return;
     const t = M.nextIntegration(state, nowMs);
     if (!t) return;
     // Fake runs produce code-change artifacts without commits; simulate their integration.
@@ -547,7 +553,7 @@ export class Scheduler {
         workspace: { path: workspace?.path ?? "", access: "read" },
         environment: state.project.workerEnvironment[run.provider],
         connections: state.project.workerConnections[run.provider],
-        prompt: buildLeadEnvelope(state, run, "read"),
+        prompt: buildLeadEnvelope(state, run, "read", this.visionDocs?.reader(state.project.id)),
         outputs: [],
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
@@ -636,7 +642,7 @@ export class Scheduler {
         workspace: { path: workspace?.path ?? a.snapshot.workspace, access },
         environment: a.snapshot.environment ?? "isolated",
         connections: a.snapshot.connections ?? [],
-        prompt: buildEnvelope({ state, task, step, attemptId, access, seed: workspace?.seed, changeUnderReview }),
+        prompt: buildEnvelope({ state, task, step, attemptId, access, seed: workspace?.seed, changeUnderReview, docs: this.visionDocs?.reader(state.project.id) }),
         outputs: step.outputs,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });

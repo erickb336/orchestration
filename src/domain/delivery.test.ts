@@ -44,9 +44,9 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
 }
 
 describe("data model", () => {
-  it("a new project is format 12 with pull-request delivery off and nothing observed", () => {
+  it("a new project is format 13 with pull-request delivery off and nothing observed", () => {
     for (const s of [seed(), buildEmptyProject(T0)]) {
-      expect(s.version).toBe(12);
+      expect(s.version).toBe(13);
       expect(s.project.prDelivery).toEqual(DEFAULT_PR_DELIVERY);
       expect(s.project.prDelivery).toMatchObject({ enabled: false, merge: "hold" });
       expect(s.project.github).toBeUndefined();

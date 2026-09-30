@@ -7,13 +7,16 @@ import { ROLE_LABEL, fmtTime, involvementOf, relTime, selectionText } from "./co
 import { PrChip } from "./Delivery";
 import { Conversation } from "./Conversation";
 import { Onboarding } from "./Onboarding";
-import { ShapingPanel, VisionDraftCard } from "./Shaping";
+import { OpenDraft, ShapingPanel } from "./Shaping";
+import { RevisionDocs, VisionDocsList } from "./VisionDocs";
 import { PROVIDERS, type Attempt, type ProviderId, type State, type VisionRevision } from "../domain/types";
 
 /** Who made a vision revision and from what, in a few words. */
-function revisionSource(v: VisionRevision): string {
+export function revisionSource(v: VisionRevision): string {
   if (v.source?.undoOf) return `${v.author} · undo of the lead's change`;
   if (v.source?.draftId) return `${v.author} · accepted the lead's draft`;
+  if (v.source?.docAdded) return `${v.author} · ${v.source.docRemoved ? "replaced a document" : "attached a document"}`;
+  if (v.source?.docRemoved) return `${v.author} · removed a document`;
   if (v.source?.changeSetId) return v.author === "lead" ? "lead · from your message" : `${v.author} · applied the lead's suggestion`;
   return v.author;
 }
@@ -80,7 +83,7 @@ function VisionProvenance({ state }: { state: State }) {
               <span className="mono">r{r.rev}</span>
               <span className="actor">{revisionSource(r)}</span>
               <span>
-                {r.reason} <span className="muted">· focus: “{r.focus}” · {fmtTime(r.at)}</span>
+                {r.reason} <span className="muted">· focus: “{r.focus}” · {fmtTime(r.at)}</span> <RevisionDocs state={state} rev={r} />
               </span>
             </li>
           ))}
@@ -133,7 +136,7 @@ export function Overview() {
           <section className="card" aria-labelledby="vision-h">
             <h2 id="vision-h">Vision</h2>
             <VisionProvenance state={state} />
-            {openDraft && !editing && <VisionDraftCard state={state} draft={openDraft} />}
+            {openDraft && !editing && <OpenDraft />}
             {editing ? (
               <form
                 onSubmit={async (e) => {
@@ -207,6 +210,7 @@ export function Overview() {
                 </button>
               </>
             )}
+            <VisionDocsList />
           </section>
           )}
 

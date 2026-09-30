@@ -264,11 +264,15 @@ describe("S6 the roadmap and Start building", () => {
   it("proposals made while shaping are held and marked, even on Autopilot; while building they start as usual", () => {
     const { state: s } = leadReply(shaping(autopilot(seed())), { proposals: [proposal()] });
     const [t] = M.roadmapTasks(s);
-    expect(t).toMatchObject({ holdBeforeStart: true, fromShaping: true, lifecycle: "proposed" });
+    // Review 2: the roadmap's hold is its own flag; the hold before start follows the involvement setting (Autopilot: none).
+    expect(t).toMatchObject({ heldForShaping: true, holdBeforeStart: false, fromShaping: true, lifecycle: "proposed" });
     const promoted = M.dispatchEligible(M.leadPromoteProposals(s, at(4)), at(4));
     expect(task(promoted, t.id).lifecycle).toBe("ready");
-    expect(M.stateLabel(promoted, task(promoted, t.id))).toBe("Held before start");
+    expect(M.stateLabel(promoted, task(promoted, t.id))).toBe("Planned; waits until you start building");
     expect(running(promoted, t.id)).toHaveLength(0);
+    // Even while building, a task still under the roadmap hold never dispatches: only Start building lifts it.
+    const forced = { ...promoted, project: { ...promoted.project, stage: "building" as const } };
+    expect(running(M.dispatchEligible(forced, at(5)), t.id)).toHaveLength(0);
     const { state: b } = leadReply(autopilot(seed()), { proposals: [proposal()] });
     const made = b.tasks.find((x) => x.createdAt === at(3))!;
     expect(made.holdBeforeStart).toBe(false);
@@ -293,7 +297,11 @@ describe("S6 the roadmap and Start building", () => {
     const onAuto = M.startBuilding(plan(shaping(autopilot(seed()))), at(5));
     for (const t of onAuto.tasks.filter((x) => x.fromShaping)) expect(t.holdBeforeStart).toBe(false);
     expect(M.roadmapTasks(onAuto).map((t) => M.currentSpec(t).content.title)).toEqual(["Roadmap A", "Roadmap B"]);
-    expect(running(M.dispatchEligible(M.leadPromoteProposals(onAuto, at(6)), at(6))).length).toBeGreaterThan(running(seed()).length);
+    // Review 11: the roadmap tasks themselves are among what runs, not merely more runs than before
+    // (the sample's two active runs plus both roadmap tasks need four worker slots).
+    const roadmapIds = M.roadmapTasks(onAuto).map((t) => t.id);
+    const runningIds = running(M.dispatchEligible(M.leadPromoteProposals(M.setWorkerLimit(onAuto, 5, at(6)), at(6)), at(6))).map((a) => a.taskId);
+    expect(runningIds).toEqual(expect.arrayContaining(roadmapIds));
     // Check-in: planning is on, but lead proposals wait for the user.
     const onCheckin = M.startBuilding(plan(shaping(checkin(seed()))), at(5));
     for (const t of onCheckin.tasks.filter((x) => x.fromShaping)) expect(t.holdBeforeStart).toBe(true);
