@@ -1,8 +1,26 @@
-# Orchestration
+# Orchestrator
 
 A local orchestrator for teams of AI coding agents. You talk to one **lead**; it plans the work, writes a specification for every task (options, trade-offs, the approach it chose), and runs each task through an editable pipeline of **Claude** and **Codex** workers: designers, coders, and independent reviewers, running concurrently. You can let it run on autopilot or step in anywhere: pause, read and edit any artifact, and resubmit it through the rest of the pipeline.
 
 **Default: one implementation, then independent review.** Choose Claude or Codex and a model for each step. Using both providers does not require building the same change twice. Competing implementations (Best of N) are an optional experiment, off in all built-in templates.
+
+## What you get that a single chat does not
+
+A single Claude Code or Codex chat is one agent, one conversation, and one provider. It stops when the chat stops, and its only reviewer is the agent that wrote the code. Orchestrator changes that:
+
+| In a single chat | With Orchestrator |
+| --- | --- |
+| One thread of work. To know where things stand, you scroll the transcript or ask. | A board shows every feature's progress at once: what is proposed, running, in review, waiting for you, or done. You can look into any track without interrupting the others. |
+| One agent works on one thing at a time. | A team works at once: up to 16 workers across many tasks, each in its own copy of your repository. |
+| The agent that wrote the code also checks it. | An independent reviewer checks every change, from the other provider if you choose (Codex writes, Claude reviews, or the reverse). Repairs repeat until the review is clean. |
+| You prompt for every next step. | A lead plans toward your vision, writes a spec for each task, and keeps work moving on a cadence and within limits you set. |
+| Work lives in a transcript and is gone when the chat ends. | Every task keeps its spec, the decision and why, the artifacts, and what was verified. You can come back days later and see all of it. |
+| To correct course, you interrupt and re-explain. | You pause any step, edit what it produced (a design, the findings, a breakdown), and resubmit. Later steps follow your version. |
+| A big goal has to fit in one context. | A goal is broken into child tasks that run in parallel, are evaluated, and are planned again until the goal is met. |
+| You copy results into your branch yourself. | Verified work is merged in order and delivered to your branch, only when that is safe. |
+| The way of working is whatever you typed this time. | Pipelines are workflows you edit once and reuse: design → implement → review → repair → verify, or any shape you build. |
+
+In short: a chat is one pair of hands on one track. Orchestrator is a team on many tracks, with a lead, a process, a record, and one place to see how each track is going. You decide how involved to be, from approving each task to letting it run end to end.
 
 ## Why this exists
 
@@ -61,25 +79,19 @@ All screenshots show the built-in sample project on the simulated runtime (no ag
 
 ![Settings](docs/screenshots/settings.png)
 
-## When it helps, and when it does not
+## When a plain chat is the better tool
 
-A single Claude Code or Codex session is already strong. It can plan, use sub-agents, work for a long time, and run tasks in parallel inside one provider. Orchestration is worth its overhead when you want things a single session does not give you:
+For one small, focused change, use a single chat. It is faster and cheaper, because a pipeline spends extra tokens on the spec, the review, and any repair round.
 
-- **Both providers on one goal.** Claude and Codex work on the same goal concurrently, and each checks the other's work (for example, Codex implements and Claude reviews).
-- **Durable records.** Specs, decisions, and artifacts outlast any single chat. You can come back days later and see what was decided, why, and what was verified.
-- **Control at every step.** You can pause any step (with confirmation), edit what it produced, and resubmit it through the rest of the pipeline.
-- **Explicit, repeatable workflows.** Pipelines, loops (review → repair until clean), parallel candidates (best of N), and breakdowns into child tasks are workflows you can edit and reuse.
-- **Always-on, bounded autonomy.** A lead can keep proposing and shipping work toward a vision within limits you set, and integrate it serially.
-
-It is **not** a net win for a single focused change. There, a plain chat is faster and cheaper, because the pipelines spend extra tokens on specs, reviews, and iterations. The benefits have not yet been measured against real runs. The honest way to decide is to give the same goal to a single session and to Orchestration, then compare the elapsed time, the cost, and how many problems each result has.
+Orchestrator pays off when the work is bigger than one sitting: many tasks, more than one day, or work you want to keep moving while you are away. These benefits come from how it is built. They have not yet been measured against real runs, so try it on a real goal next to a plain chat and compare the time, the cost, and the problems in each result.
 
 ## Install
 
 Requires Node.js 22.13 or newer (it uses the built-in `node:sqlite`) and git.
 
 ```bash
-git clone https://github.com/erickb336/orchestration.git
-cd orchestration
+git clone https://github.com/erickb336/orchestrator.git
+cd orchestrator
 npm install
 npm start
 ```
@@ -95,7 +107,7 @@ ORCHESTRATION_RUNTIME=real npm start
 1. **Credentials.** Set them in the environment the service starts from. Settings → Providers shows each provider's status; checking never starts a model run.
    - **Claude:** `ANTHROPIC_API_KEY`, or Bedrock/Vertex/Foundry settings. Anthropic does not allow third-party Agent SDK apps to use a Claude.ai subscription login.
    - **Codex:** your local Codex sign-in (`npx codex login`) or an API key (`printenv OPENAI_API_KEY | npx codex login --with-api-key`).
-2. **Project.** In Settings → Project, point Orchestration at a git repository with at least one commit, and write a vision.
+2. **Project.** In Settings → Project, point Orchestrator at a git repository with at least one commit, and write a vision.
 3. **Involvement.** Choose how involved you want to be (Autopilot, check in before work starts, or only when I ask), then message the lead or create a task.
 
 What real runs do on your machine:
@@ -106,7 +118,7 @@ What real runs do on your machine:
   - Finished work is merged, one task at a time, into `orchestration/<project>/integration`.
   - With automatic delivery on, that branch is fast-forwarded into your chosen branch, but only when your working tree is clean. Your latest commits are merged into the integration branch first.
 - **GitHub pull requests** (Settings → Delivery, off by default, **not verified against GitHub yet**) are a third delivery mode, never on together with local delivery:
-  - Each finished task becomes one pull request on a branch the app owns (`orchestration/<project>/pr/<task>-<n>`), opened with your own `gh` sign-in. The app never reads or stores a token, never forces a push, and publishes only commits Orchestration made.
+  - Each finished task becomes one pull request on a branch the app owns (`orchestration/<project>/pr/<task>-<n>`), opened with your own `gh` sign-in. The app never reads or stores a token, never forces a push, and publishes only commits Orchestrator made.
   - **Hold and notify** (default): an independent agent reviews the change, the app watches the required checks, and tells you once when the pull request is ready. You merge it on GitHub or with Merge in the app, which is tied to the commit you saw.
   - **Merge automatically** (a separate, explicit setting): the app merges one pull request at a time, and only when an independent review is clean for exactly that change, every required check passed on its exact head, GitHub reports it mergeable, it touches no protected file, and nothing is paused. It first brings the pull request up to date with the base and waits for the checks again, so what lands is what was tested.
   - The review is the task's own review when it provably saw the final change and ran on another provider than the writer. Otherwise the app starts one dedicated review task. It never swaps in another provider by itself.

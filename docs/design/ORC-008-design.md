@@ -33,7 +33,7 @@ Every must-fix item from both judges is mapped in §19. Deviations from the judg
 
 - **I1 No bypass, no force.** No `gh` call contains `--admin`, `--auto`, `-d`, `--delete-branch` or `--force`. No `gh api` call targets a merge endpoint (`/pulls/<n>/merge`) or sends a `mergePullRequest` or `enablePullRequestAutoMerge` mutation. No `git push` contains `--force`, `--force-with-lease`, `--mirror`, `--all`, `--tags`, `--delete` or a `+` refspec. `GhCliHost.gh()` and `WorkspaceManager.pushHead()` assert this before spawning.
 - **I2 Namespace.** The only push destination is `refs/heads/orchestration/<pid>/pr/<taskId>-<n>`, checked against `^refs/heads/orchestration/[A-Za-z0-9._-]+/pr/[A-Za-z0-9._-]+-\d+$`. Fetches write only `refs/orchestration/<pid>/*`. The user's branches, `refs/remotes/*` and working copy are never written.
-- **I3 Only Orchestration's commits are published.** Before every push, every commit in `<base>..<head>` must have author name `Orchestration` and email `orchestration@localhost`. Otherwise nothing is pushed.
+- **I3 Only Orchestrator's commits are published.** Before every push, every commit in `<base>..<head>` must have author name `Orchestration` and email `orchestration@localhost`. Otherwise nothing is pushed.
 - **I4 Only the app's own PRs.** The app acts on a PR only if it recorded the number from its own create, or found it by `--head <its branch>` with its body marker, and the PR is not cross-repository.
 - **I5 Merge binding.** The only merge path is `gh pr merge <n> -R <o/r> --merge --match-head-commit <pr.headSha>`. Review, checks and GitHub's mergeable state must all be observed for that SHA.
 - **I6 Credentials.** The app never reads, stores, prints or sets a token. It never runs `gh auth token` or passes `--show-token`.
@@ -109,7 +109,8 @@ export interface PrDelivery {
   simulated?: boolean;
   changeSha: string;                         // newest agent-authored commit: what the review must cover
   changeTaskId: string;                      // task whose finalChange is changeSha (the source task, or the latest repair)
-  changeAuthor: ProviderId | "user";         // provider of the attempt that produced changeSha
+  changeAuthor: ProviderId | "user" | "unknown"; // who wrote changeSha. "user" only when their edit supplied another commit; "unknown" (run not on record) fails closed
+  changeAuthors: (ProviderId | "user" | "unknown")[]; // everyone who authored a commit the PR holds: the task's coder runs and every fix pushed onto it. Only grows.
   headSha: string;                           // what the app pushed: changeSha, or a service merge of the base into it
   baseSha: string;                           // base tip contained in headSha
   pendingHead?: { sha: string; changeSha: string; changeTaskId: string; changeAuthor: ProviderId | "user";
@@ -151,7 +152,7 @@ export interface ReviewEvidence {
 
 // ---- per task: Integration.landed (the review-later item) ----
 export interface Landed {
-  at: string; via: "pr" | "local"; target: string;     // "erickb336/orchestration main" | "main"
+  at: string; via: "pr" | "local"; target: string;     // "erickb336/orchestrator main" | "main"
   commit: string;                                      // full SHA: GitHub merge commit, or the task's integration merge commit
   simulated?: boolean;
   by: "app" | "person"; mergedBy?: string;
@@ -259,7 +260,7 @@ When `project.prDelivery.enabled`:
 - `github.base` missing: `reportIntegrationError("waiting for the first fetch of <remote>/<base>")`; the existing 60 s retry applies.
 - Otherwise `workspaces.preparePrHead({repoPath, projectId, taskId, n, baseRef, sha})`, which is local and synchronous:
   1. `git rev-parse --verify --end-of-options <sha>^{commit}`.
-  2. **Authorship guard (I3).** `git log --format=%an%x00%ae --end-of-options <baseSha>..<sha>`. Any line other than `Orchestration\0orchestration@localhost` → `{status:"conflict", message:"contains N commit(s) not made by Orchestration (authors: …); nothing was pushed"}`.
+  2. **Authorship guard (I3).** `git log --format=%an%x00%ae --end-of-options <baseSha>..<sha>`. Any line other than `Orchestration\0orchestration@localhost` → `{status:"conflict", message:"contains N commit(s) not made by Orchestrator (authors: …); nothing was pushed"}`.
   3. **Conflict pre-check.** `git merge-tree --write-tree --name-only --no-messages <baseSha> <sha>`. Exit 1 → `{status:"conflict", message:"conflicts with <base> in a, b"}` (≤20 files).
   4. **Change facts.** `git diff --no-ext-diff --no-textconv --numstat -M <merge-base> <sha>` → `changed`. `protectedHits` = paths matching `protectedPaths`. `workflowHits` = paths under `.github/workflows/`.
   5. **Pin.** `git update-ref refs/orchestration/<pid>/pr/<taskId>-<n> <sha>`, so the object survives garbage collection.
@@ -286,7 +287,7 @@ When `project.prDelivery.enabled`:
 
 - `abortAll()` increments `gen`, kills the child process group (SIGTERM, then SIGKILL after 5 s) and clears the queue. Results from before a lease loss are therefore never written.
 - Local git inside an operation (building a base-update commit) is synchronous and capped, like `integrate()` today. Everything that touches the network is async: gh 60 s timeout, git 120 s, `maxBuffer` 5 MB.
-- **Merge freshness.** The planner emits `merge` only when `observed.at` is ≤15 s old. If the gate is ready but the observation is older, it emits an `observe` for that PR first. `beginPrOp(merge)` then re-reads the hold and re-runs the gate inside the transaction, and `gh pr merge` starts in the same tick. The time between the last check of GitHub and the merge is at most about 16 s; a pause or hold is honoured up to the moment of the spawn.
+- **Merge freshness.** `observed.at` is the time GitHub was read, stamped by the driver before the request is sent, not the time the result is applied. The planner emits `merge` only when `observed.at` is ≤15 s old. If the gate is ready but the observation is older, it emits an `observe` for that PR first. `beginPrOp(merge)` then re-reads the hold and re-runs the gate inside the transaction, and `gh pr merge` starts in the same tick. The time between the last check of GitHub and the merge is at most about 16 s; a pause or hold is honoured up to the moment of the spawn.
 
 ### 6.4 `D.nextPrOp(state, nowMs)`: order, cadence and bounds
 
@@ -309,6 +310,8 @@ First match wins.
    4. `publish` for the oldest `built` PR, while open PRs < `maxOpenPrs` and the path policy allows (§9.6).
    5. `comment` for a note with `comment.status = "pending"`.
    6. `close` for `closeRequested`.
+
+A prepared base update (`pendingHead {kind:"update"}`) is pushed only for the merge candidate. When the PR stops being it before the push (switched to hold, held, blocked), the prepared head is dropped and does not count against the cap.
 
 **The merge candidate** is the oldest open PR (by `integration.at`) with policy `auto`, no `userHold`, no `foreignHead`, no `pendingHead`, `review.ok`, and no attention that needs the user. Only the candidate is ever updated to the base or auto-merged. A PR that becomes blocked drops out, so the next one proceeds. Other ready PRs show "Waiting behind PR #n".
 
@@ -343,7 +346,7 @@ First match wins.
   - it has no `pr` and was integrated before PR mode was switched on.
 
   A prerequisite whose PR is open shows "Waiting for T-012's PR #34 to merge". One whose PR was closed gives a `blockedReason`: "T-012's PR #34 was closed without merging". The same predicate is used by `childrenSettled` for `waitForChildren` steps. Dedicated review and repair tasks are created with `dependsOn: []`, so they do not wait on their own PR.
-- **Seeds (`WorkspaceManager.prepare({… seed})`).** After `worktree add`, as Orchestration:
+- **Seeds (`WorkspaceManager.prepare({… seed})`).** After `worktree add`, as Orchestrator:
   - `{kind:"merge", ref}` → `git merge --no-ff --no-commit <ref>`;
   - `{kind:"revert", commit}` → `git revert --no-commit [-m 1] <commit>` (`-m 1` when `git rev-list --parents -n 1` shows two parents).
 
@@ -421,13 +424,13 @@ Tests inject one of three things:
 | **Fetch base** | `git -C <repo> fetch --quiet --no-tags --no-write-fetch-head --no-recurse-submodules <remote> +refs/heads/<base>:refs/orchestration/<pid>/base` then `rev-parse refs/orchestration/<pid>/base^{commit}`. This is the only `+` refspec, and its destination is a private local ref. |
 | **Publish** | (1) Re-check the push URL. (2) `git -C <repo> ls-remote --refs <remote> refs/heads/<branch>`: equal to `headSha` → skip; absent, or an ancestor of `headSha` → push; anything else → attention `remote-diverged`, never forced. (3) `git -C <repo> push --porcelain --no-verify <remote> <headSha>:refs/heads/<branch>`. (4) `gh pr list -R <o/r> --head <branch> --state all --json number,url,state,body,isCrossRepository --limit 10`; adopt the one carrying the marker. (5) Otherwise `gh pr create -R <o/r> --base <base> --head <branch> --title "<taskId>: <title>" --body-file -`; stdout is the URL, and the number is parsed from `/pull/(\d+)`. |
 | **Observe** | `gh api graphql --input -` with one alias per PR: `p<n>: pullRequest(number:n){number state isDraft isCrossRepository url mergedAt mergedBy{login} mergeCommit{oid} headRefName headRefOid baseRefName mergeable mergeStateStatus reviewDecision labels(first:20){nodes{name}} timelineItems(last:1,itemTypes:[CLOSED_EVENT]){nodes{... on ClosedEvent{actor{login}}}} commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:50){nodes{__typename ... on CheckRun{name status conclusion detailsUrl isRequired(pullRequestNumber:n)} ... on StatusContext{context state targetUrl isRequired(pullRequestNumber:n)}}}}}}}}`, plus `c<k>: object(oid:"<sha>"){... on Commit{statusCheckRollup{contexts(first:50){…}}}}` for each pending main check, plus `rateLimit{remaining resetAt}`. Numbers and oids are validated as integers and hex before they are placed in the query. The legacy `commits/<sha>/status` endpoint is never used. About 1 point per query. |
-| **Base update** (local, then push) | `git merge-tree --write-tree --name-only --no-messages <headSha> <baseSha>` (exit 1 → attention `conflict`) → `git -c user.name=Orchestration -c user.email=orchestration@localhost commit-tree <tree> -p <headSha> -p <baseSha> -m "Merge <base> into <branch>"` → `update-ref refs/orchestration/<pid>/pr/<taskId>-<n> <new> <headSha>` → recorded as `pendingHead {kind:"update"}` → the push above. The new commit descends from the old head, so the push is a plain fast-forward. |
+| **Base update** (local, then push) | `git merge-tree --write-tree --name-only --no-messages <headSha> <baseSha>` (exit 1 → attention `conflict`) → `git -c user.name=Orchestration -c user.email=orchestration@localhost commit-tree <tree> -p <headSha> -p <baseSha> -m "Merge <base> into <branch>"` → `update-ref refs/orchestration/<pid>/pr/<taskId>-<n> <new> <headSha>` → recorded as `pendingHead {kind:"update"}` → the push above. A commit already pinned there is reused only when its parents, its author and its tree equal this merge. The new commit descends from the old head, so the push is a plain fast-forward. |
 | **Merge** | `gh pr merge <n> -R <o/r> --merge --match-head-commit <headSha> --subject "<taskId>: <title> (#<n>)" --body-file -`. The body names the review evidence and the checks. An `observe` always follows; the exit code records nothing. |
 | **Comment** (user notes only) | Before any post: `gh api repos/<o>/<r>/issues/<n>/comments --paginate --jq '.[] \| select(.body \| contains("<marker>")) \| .html_url'`. If absent: `gh api -X POST repos/<o>/<r>/issues/<n>/comments --input -` with `{"body": "<note>\n\n<!-- orchestration:note:<pid>/<noteId> -->"}` → `.html_url`. `gh pr comment --edit-last` is never used. |
-| **Close** | `gh pr close <n> -R <o/r> --comment "Closed from Orchestration."`, then `observe`. The remote branch is not deleted. |
+| **Close** | `gh pr close <n> -R <o/r> --comment "Closed from Orchestrator."`, then `observe`. The remote branch is not deleted. |
 | **Diff for the viewer** | `git -C <repo> diff --no-color --no-ext-diff --no-textconv -M --stat --patch <c>^1 <c>`. |
 
-**PR body.** The spec outcome and acceptance; the review evidence when it exists ("Automated review by Orchestration (Claude · <model>), not a human review: 0 open findings on <sha12>"); "Opened by Orchestration using this GitHub account"; and the marker `<!-- orchestration:pr:<pid>/<taskId>/<n> -->`. It is redacted and capped at 6,000 characters. The repository may be public, so agent-written text becomes public.
+**PR body.** The spec outcome and acceptance; the review evidence when it exists ("Automated review by Orchestrator (Claude · <model>), not a human review: 0 open findings on <sha12>"); "Opened by Orchestrator using this GitHub account"; and the marker `<!-- orchestration:pr:<pid>/<taskId>/<n> -->`. It is redacted and capped at 6,000 characters. The repository may be public, so agent-written text becomes public.
 
 ## 9. Review and the merge gate
 
@@ -438,7 +441,7 @@ Evaluated when the PR is built, on every head change, and whenever a review or r
 1. **Pipeline review (no extra run).** Let `c = getTask(pr.changeTaskId)` and `fc = finalChange(s, c)`. It requires `sha(fc) === pr.changeSha`. `covering` = the accepted `review-findings` outputs of done steps of `c` whose producing attempt has `fc.id` in `snapshot.inputs` (for a version the user edited, the attempt of the latest non-edit version). It passes when all of these hold:
    - `covering` is not empty, and at least one comes from a `code_reviewer` attempt with `outcome === "completed"`. Otherwise the reason is "no review saw the final change <sha12>". This catches the confirmed defect where the repair loop runs out and the last repair is never reviewed.
    - every covering artifact has `openFindings === 0`. A value the user edited to 0 passes with `clearedByUser`.
-   - with `reviewer: "other-provider"`, that attempt's `snapshot.provider !== pr.changeAuthor`. A change the user made by editing counts any agent as independent.
+   - with `reviewer: "other-provider"`, that attempt's `snapshot.provider` is none of `pr.changeAuthors`: every provider that authored a commit the pull request holds, not only the author of the newest one. A fix pushed by another provider never makes the first provider independent of its own work. A commit the user supplied constrains nobody. When every provider is an author, or an author is unknown, no agent review counts and none is started: the pull request needs the user (`review-blocked`), or the "any agent" setting. No provider reviews its own work.
 2. **Dedicated review.** A done task with `reviewTarget {taskId, n, headSha === pr.changeSha}` whose `code_reviewer` attempt completed with `snapshot.reviewedSha === pr.changeSha`, accepted findings `openFindings === 0`, and the same independence test.
 3. Otherwise `ok: false` with the reason.
 
@@ -453,6 +456,8 @@ Created when coverage fails for a reason a review can cure (no covering review, 
 - It runs through the normal `dispatchEligible`: worker and provider limits, pause, cancel, model edits and stale-result discard all apply. It has no code change, so it finishes with `integration: not-needed`.
 - **Provider and model (`resolveStep`).** Order: step pin → task role override → **independence** → project role default → project default. For `independentOf: "writer"` with `reviewer: "other-provider"` and no pin or override: if the role default's provider equals `pr.changeAuthor`, pick the other provider when it is enabled, with model `"auto"`, `source: "independence"` and reason "Claude: other provider than the writer (Codex)". If it is not enabled, the result is `{ok:false, reason:"Independent review needs Claude, which is not enabled"}`: the step blocks, the PR gets `review-blocked`, and nothing is substituted. A user pin wins; if it is the writer's provider, the gate reports "not independent" and holds. The service never writes a step pin, so a user's pin and the system's choice stay distinguishable.
 - A head change cancels review tasks for older `changeSha` values (`cancelTask`), so a late completion is stopped and never counted.
+- A dedicated review the user cancels is not "missing": the service starts no other. The pull request shows `review-blocked` ("ask for a review, or merge it yourself") until the user does one of the two.
+- Independence is resolved against `pr.changeAuthors`. When no provider is left that wrote none of the pull request, the step does not resolve and nothing is substituted.
 
 Findings are ordinary `review-findings` artifacts: versioned, editable while the review task is open, and already shown to the lead in "Recent outcomes and findings".
 
@@ -552,7 +557,7 @@ Item 12 means the tree the required checks ran on is the tree that lands, which 
 | A person merges on GitHub | observed `MERGED` without an intent | `landed {by:"person"}`; counted unreviewed like any item |
 | A person closes the PR | observed `CLOSED` | `phase = "closed"`, `closedBy`; one notification; lead envelope line; dependents get a blocked reason; Deliver again creates `n+1` |
 | Retargeted, draft, hold label, changes requested | observation | attention with the reason; nothing is merged |
-| GitHub `BLOCKED` with green required checks | gate item 7 | `approval-required`: "GitHub requires an approval the app cannot give. This may be the ruleset's `require_extra_approval_for_unattributed_changes` applied to commits authored by Orchestration. Merge on GitHub, approve from another account, or change the ruleset." Never bypassed |
+| GitHub `BLOCKED` with green required checks | gate item 7 | `approval-required`: "GitHub requires an approval the app cannot give. This may be the ruleset's `require_extra_approval_for_unattributed_changes` applied to commits authored by Orchestrator. Merge on GitHub, approve from another account, or change the ruleset." Never bypassed |
 | Merge refused by GitHub | gh error, then observe shows `OPEN` | `merge-rejected` with GitHub's reason after 2 attempts per head |
 | Authentication lost | exit 4, HTTP 401, push 403 | `github.problem = auth`, `ok = false`. Every operation stops; phases do not change; each PR shows "Waiting: GitHub sign-in needed (run `gh auth login`)". Preflight retries every 5 → 30 min and recovers by itself |
 | gh or git missing or too old; remote not GitHub; no push permission | preflight | `github.problem` with the fix; nothing is pushed; Check again |
@@ -560,7 +565,7 @@ Item 12 means the tree the required checks ran on is the tree that lands, which 
 | Network down, timeout | timeout or DNS error | the outcome is unknown → reconcile, then per-PR backoff. The age of the last observation is shown |
 | Restart or crash mid-operation | `pr.op` present with nothing in flight | after timeout + 30 s: publish/push → re-run (it checks `ls-remote` and finds the PR by head and marker first); merge/close → observe: `MERGED` → landed `by:"app"`; still `OPEN` → clear the intent, `mergeAttempts + 1`, re-evaluate; comment → marker search, then post |
 | Lease lost mid-operation | `LeaseLostError` or `deactivate` | child killed, result dropped by `gen`; the new holder reconciles as above. Duplicates are prevented by find-by-head (create), `--match-head-commit` plus observe (merge) and the marker (comment) |
-| Mode switched | `setDeliveryMode` | PR → off or local: open PRs stay open and are observed read-only until merged or closed; nothing new is pushed, merged or commented; their tasks are skipped by local delivery. Local → PR: preflight warns when the local branch has Orchestration commits that are not on the remote; the app does not push them |
+| Mode switched | `setDeliveryMode` | PR → off or local: open PRs stay open and are observed read-only until merged or closed; nothing new is pushed, merged or commented; their tasks are skipped by local delivery. Local → PR: preflight warns when the local branch has Orchestrator commits that are not on the remote; the app does not push them |
 | Only one provider enabled | independence rung | `review-blocked`: "Independent review needs Codex"; or the user chooses "any agent" |
 
 ## 13. Pause, cancel and stale results
@@ -593,7 +598,7 @@ New `detectEvents` cases compare `prev` and `next` and are keyed on transitions,
 
 The existing local-delivery event is re-keyed to `deliver:<task>:<status>:<message>`.
 
-Settings copy: "Notifications appear only while an Orchestration page is open, and merges happen only while the service is running. GitHub is not expected to notify you about pull requests opened with your own account, so the Review badge keeps the count."
+Settings copy: "Notifications appear only while an Orchestrator page is open, and merges happen only while the service is running. GitHub is not expected to notify you about pull requests opened with your own account, so the Review badge keeps the count."
 
 ## 15. UI changes, per file
 
@@ -619,7 +624,7 @@ Posture items, from preflight (each ok / warn / fail / unverified):
 - Required checks: the names read from the rules.
 - "You can bypass these rules (admin, always). The app never does, but your own account and anything using it could. Consider narrowing the bypass on the ruleset."
 - "Repository auto-merge is off. It is not needed: the app merges only after its own gate."
-- "`require_extra_approval_for_unattributed_changes` is on. Pull requests whose commits are authored by Orchestration may need an approval from a second account. Unverified."
+- "`require_extra_approval_for_unattributed_changes` is on. Pull requests whose commits are authored by Orchestrator may need an approval from a second account. Unverified."
 - Merge commits allowed; branches deleted on merge; no merge queue.
 - "A worker environment set to 'local' may expose your GitHub sign-in or a GitHub MCP server to agents."
 - "Claude workers have shell access" (when `workerShell`).
@@ -664,7 +669,7 @@ No test contacts GitHub. All run in vitest with deterministic time (`tick(ms)`),
 2. **Auto mode.** No person involved; exactly one merge; the merge is recorded only after observe; the main check is watched.
 3. **Same-provider reviewer.** A dedicated review task is created and resolved to the other provider with the diff in its envelope; clean → merge.
 4. **Exhausted repair loop.** No merge; a dedicated review runs.
-5. **Base moves.** A commit is pushed to the bare `main`; the candidate gets a two-parent Orchestration merge commit pushed as a fast-forward; checks run on the new head; the review is not repeated; merge. The main tree equals the tree the checks ran on.
+5. **Base moves.** A commit is pushed to the bare `main`; the candidate gets a two-parent Orchestrator merge commit pushed as a fast-forward; checks run on the new head; the review is not repeated; merge. The main tree equals the tree the checks ran on.
 6. **Sibling conflict.** Auto: a seeded-merge repair resolves it, is pushed onto the same PR and merges. Leftover markers are refused.
 7. **Failing check.** Auto: a repair task pushes onto the same PR; a third failure needs the user.
 8. **Foreign push** to the PR branch in the bare repository: sticky hold; no push or merge afterwards.
@@ -685,7 +690,7 @@ No test contacts GitHub. All run in vitest with deterministic time (`tick(ms)`),
 
 **Mutation checks.** Reverting each of these makes a test fail: the authorship guard; the `SKIPPED`-is-not-a-pass rule; the `UNKNOWN` rule; the intent-before-side-effect check; the `opId` guard; the coverage rule for the exhausted loop; the dependency rule; the forbidden-flag guard; the notification keys.
 
-**Real GitHub (only with the user's consent, never against `erickb336/orchestration`).** `scripts/pr-sandbox-check.mjs` is a dry run by default and needs `--yes --repo <sandbox>`. It saves commands and redacted outputs under `evidence/ORC-008/` and records: (a) preflight posture; (b) hold mode end to end; (c) auto mode with a slow check, including what `mergeStateStatus` a bypass actor sees while the check is pending and that a manual push is rejected by `--match-head-commit`; (d) whether the unattributed-changes rule blocks Orchestration-authored commits; (e) a comment on a merged PR and its marker reconcile; (f) a revert delivered as a PR; (g) a restart during a merge; (h) a mixed-provider run, Codex writing with Claude reviewing and the reverse.
+**Real GitHub (only with the user's consent, never against `erickb336/orchestrator`, formerly `erickb336/orchestration`).** `scripts/pr-sandbox-check.mjs` is a dry run by default and needs `--yes --repo <sandbox>`. It saves commands and redacted outputs under `evidence/ORC-008/` and records: (a) preflight posture; (b) hold mode end to end; (c) auto mode with a slow check, including what `mergeStateStatus` a bypass actor sees while the check is pending and that a manual push is rejected by `--match-head-commit`; (d) whether the unattributed-changes rule blocks Orchestrator-authored commits; (e) a comment on a merged PR and its marker reconcile; (f) a revert delivered as a PR; (g) a restart during a merge; (h) a mixed-provider run, Codex writing with Claude reviewing and the reverse.
 
 ## 18. Build order
 
@@ -773,7 +778,7 @@ J1 = first judge's list (0–27), J2 = second judge's (0–16).
 
 ## 21. Open risks
 
-1. **`require_extra_approval_for_unattributed_changes`.** It may keep every Orchestration-authored PR `BLOCKED` with green checks. If so, auto-merge cannot work on that repository until the user changes the rule. Unverified.
+1. **`require_extra_approval_for_unattributed_changes`.** It may keep every Orchestrator-authored PR `BLOCKED` with green checks. If so, auto-merge cannot work on that repository until the user changes the rule. Unverified.
 2. **The user's account bypasses the ruleset ("always").** For merges the app makes, its own gate is the only barrier, and gh does not refuse an `UNKNOWN` state. What `mergeStateStatus` a bypass actor sees while a check is pending is unverified.
 3. **The review is advisory evidence.** `openFindings` is self-reported; diffs over 60 KB are truncated; PR content could mislead a reviewer. Required checks, protected paths, the daily cap, the main check and the queue are the independent layers.
 4. **Agents can weaken the checks that gate them** through files outside the default protected paths (lockfiles, test helpers). The list is editable.
@@ -790,13 +795,13 @@ J1 = first judge's list (0–27), J2 = second judge's (0–16).
 
 ## 22. What needs the user
 
-The GitHub reader found these facts about `erickb336/orchestration` (read-only, 2026-09-30). The managed repository may differ; preflight reads each repository's own rules.
+The GitHub reader found these facts about `erickb336/orchestrator` (then named `erickb336/orchestration`; read-only, 2026-09-30). The managed repository may differ; preflight reads each repository's own rules.
 
 | Fact | What it means | Action |
 | --- | --- | --- |
 | "allow_auto_merge is FALSE" | GitHub's native auto-merge is off | **None.** The app does not use it. Leave it off |
 | Ruleset 24227602 "Protect main": "required_status_checks: \"check\", non-strict, not pinned to any app" | One required check exists, so auto mode is available. Non-strict is fine: the app updates the candidate itself | None |
-| "pull_request: 0 required approvals; require_extra_approval_for_unattributed_changes is TRUE" | Orchestration commits use `orchestration@localhost`, which is linked to no GitHub account. PRs may need an approval from a second account. Unverified | If the sandbox run shows PRs stuck, **the user decides**: turn that ruleset option off, or merge held PRs by hand. The app cannot and will not change it |
+| "pull_request: 0 required approvals; require_extra_approval_for_unattributed_changes is TRUE" | Orchestrator commits use `orchestration@localhost`, which is linked to no GitHub account. PRs may need an approval from a second account. Unverified | If the sandbox run shows PRs stuck, **the user decides**: turn that ruleset option off, or merge held PRs by hand. The app cannot and will not change it |
 | "RepositoryRole admin bypass with bypass_mode \"always\", and current_user_can_bypass is \"always\"" | The user's account can merge past the required check. The app never does | **Recommended:** narrow or remove the bypass. Optional |
 | "delete_branch_on_merge is true"; merge, squash and rebase all allowed | The app needs merge commits allowed and handles deleted branches | Keep merge commits allowed |
 | "gh is logged in as erickb336 with the token in the keyring … scopes gist, read:org, repo and workflow"; "git pushes to github.com already authenticate through `gh auth git-credential`" | No credential setup is needed | If sign-in lapses: `gh auth login` in a terminal |
@@ -806,5 +811,5 @@ Decisions and consent:
 
 1. **Consent and a throwaway repository** for the real-GitHub evidence run (§17). Until it passes, the feature is labelled "not verified against GitHub".
 2. **Turning it on.** PR mode and automatic merging are separate, explicit choices in Settings. No preset turns them on.
-3. **Should the queue also list PRs merged into `main` that Orchestration did not open** (for example PR #1)? Not in r1.
+3. **Should the queue also list PRs merged into `main` that Orchestrator did not open** (for example PR #1)? Not in r1.
 4. **Which repository** this is first used on, so its rules can be checked with a read-only preflight.

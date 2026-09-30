@@ -13,7 +13,7 @@ export type ConnectionStatus = "connecting" | "online" | "offline";
 export type SendResult = { ok: true; result?: unknown } | { ok: false };
 
 const POST_HEADERS = { "Content-Type": "application/json", [CLIENT_HEADER]: "1" };
-const UNREACHABLE = "The Orchestration service is unreachable, so this change was not confirmed. Check the state again once it reconnects.";
+const UNREACHABLE = "The Orchestrator service is unreachable, so this change was not confirmed. Check the state again once it reconnects.";
 const MAX_RECONNECT_DELAY = 10_000;
 /** The service sends a ping every 5 s; silence this long means the connection is dead even if it looks open. */
 const STREAM_SILENCE_MS = 12_000;

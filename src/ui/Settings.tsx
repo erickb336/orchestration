@@ -539,7 +539,7 @@ function NotificationsCard() {
       </label>
       <p className="muted" style={{ fontSize: "0.85rem", margin: "0.4rem 0 0" }}>
         {supported
-          ? "While a page of this app is open, you get one notification per event: a task done, work delivered, a pull request that is ready for you or needs you, a pull request merged or closed on GitHub, GitHub sign-in needed, a step that needs you or a run that failed, a control failure, an integration conflict, and lead replies. Clicking one opens the task. Notifications appear only while an Orchestration page is open, and deliveries and merges happen only while the service is running. GitHub is not expected to notify you about pull requests opened with your own account, so the Review badge keeps the count."
+          ? "While a page of this app is open, you get one notification per event: a task done, work delivered, a pull request that is ready for you or needs you, a pull request merged or closed on GitHub, GitHub sign-in needed, a step that needs you or a run that failed, a control failure, an integration conflict, and lead replies. Clicking one opens the task. Notifications appear only while an Orchestrator page is open, and deliveries and merges happen only while the service is running. GitHub is not expected to notify you about pull requests opened with your own account, so the Review badge keeps the count."
           : "This browser does not support notifications."}
       </p>
       {message && (

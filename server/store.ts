@@ -172,8 +172,8 @@ export class Store {
       }
       if (row && row.format > STATE_FORMAT) {
         throw new Error(
-          `The database at ${this.path} uses state format ${row.format}, which is newer than this version of Orchestration supports (${STATE_FORMAT}). ` +
-            "Update Orchestration, or set ORCHESTRATION_DB to use a different database.",
+          `The database at ${this.path} uses state format ${row.format}, which is newer than this version of Orchestrator supports (${STATE_FORMAT}). ` +
+            "Update Orchestrator, or set ORCHESTRATION_DB to use a different database.",
         );
       }
       if (row) {

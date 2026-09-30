@@ -507,7 +507,7 @@ export class CodexAdapter implements RuntimeAdapter {
         return;
       case "collabAgentToolCall":
       case "subAgentActivity":
-        note("Native Codex subagent activity observed (not tracked by Orchestration)");
+        note("Native Codex subagent activity observed (not tracked by Orchestrator)");
         return;
       default:
         return;
@@ -526,7 +526,7 @@ export class CodexAdapter implements RuntimeAdapter {
         return;
       case "execCommandApproval":
       case "applyPatchApproval":
-        run.rpc.respond(r.id, { decision: { denied: { rejection: "Orchestration runs unattended; approvals are declined." } } });
+        run.rpc.respond(r.id, { decision: { denied: { rejection: "Orchestrator runs unattended; approvals are declined." } } });
         note();
         return;
       case "item/permissions/requestApproval":
@@ -546,7 +546,7 @@ export class CodexAdapter implements RuntimeAdapter {
         note();
         return;
       default:
-        run.rpc.respondError(r.id, -32601, `Orchestration does not handle ${r.method}`);
+        run.rpc.respondError(r.id, -32601, `Orchestrator does not handle ${r.method}`);
         note();
     }
   }
@@ -768,12 +768,12 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 
   private initializeParams(): InitializeParams {
-    return { clientInfo: { name: "orchestration", title: "Orchestration", version: "0.1.0" }, capabilities: null };
+    return { clientInfo: { name: "orchestration", title: "Orchestrator", version: "0.1.0" }, capabilities: null };
   }
 
   private spawnFailure(e: unknown) {
     const code = (e as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT") return `Codex CLI not found at ${this.codexPath}. Run \`npm install\` in the Orchestration directory.`;
+    if (code === "ENOENT") return `Codex CLI not found at ${this.codexPath}. Run \`npm install\` in the Orchestrator directory.`;
     return truncate(`Could not start the Codex CLI at ${this.codexPath}: ${this.clean(e instanceof Error ? e.message : String(e))}`, 300);
   }
 

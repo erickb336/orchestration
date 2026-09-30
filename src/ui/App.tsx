@@ -56,18 +56,18 @@ function Gate() {
   return (
     <main>
       <section className="card connect" aria-live="polite">
-        <h1>Orchestration</h1>
+        <h1>Orchestrator</h1>
         {loadFailed ? (
           <>
             <p>
-              The Orchestration service is not running. Start it with <code>npm run dev</code> (development) or <code>npm start</code>.
+              The Orchestrator service is not running. Start it with <code>npm run dev</code> (development) or <code>npm start</code>.
             </p>
             <button className="primary" onClick={retry}>
               Retry
             </button>
           </>
         ) : (
-          <p className="muted">Connecting to the Orchestration service…</p>
+          <p className="muted">Connecting to the Orchestrator service…</p>
         )}
       </section>
     </main>
@@ -92,7 +92,7 @@ function Shell() {
       <ConnectionBanner />
       <header className="top">
         <div className="brand">
-          Orchestration
+          Orchestrator
           <ProjectName />
         </div>
         <nav className="tabs" aria-label="Main">

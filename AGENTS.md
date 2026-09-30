@@ -1,4 +1,4 @@
-# Orchestration project instructions
+# Orchestrator project instructions
 
 Read README.md, docs/PROJECT_SPEC.md, and docs/TEAM.md before working. Use docs/task-spec-template.md for task specifications.
 

@@ -1,4 +1,4 @@
-# Orchestration team roles
+# Orchestrator team roles
 
 The lead selects these roles when delegating. These are reusable role briefs, not installed custom Codex agent configurations or permanently running processes. Include the relevant brief and task context in the worker assignment. Roles are independent of provider: Claude or Codex may fill any role, including lead. Provider/model assignments are explicit run settings in the future application, not an instruction to override the models of agents in the current editing session.
 

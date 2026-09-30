@@ -55,9 +55,18 @@ function prMode(merge: "hold" | "auto" = "hold"): State {
   return merge === "auto" ? D.setPrDelivery(s, { merge: "auto" }, at(2)) : s;
 }
 
+/** A task whose one-step pipeline wrote the commit on Codex and had no review at all. */
+function unreviewedChange(s: State, id: string, sha: string): State {
+  const next = reviewedChange(s, id, sha, at(2), { writer: "codex" });
+  task(next, id).steps = task(next, id).steps.filter((x) => x.role === "coder");
+  next.attempts = next.attempts.filter((a) => a.id !== `fx-review-${id}`);
+  next.artifacts = next.artifacts.filter((a) => a.id !== `fx-findings-${id}`);
+  return next;
+}
+
 /** A done task with its head prepared as a pull request. `review: null`: its pipeline had no review at all. */
 function built(s: State, id = ID, sha = HEAD, review: ReviewedOptions | null = {}, changed: Partial<PrDelivery["changed"]> = {}): State {
-  const next = review ? reviewedChange(s, id, sha, at(2), review) : structuredClone(s);
+  const next = review ? reviewedChange(s, id, sha, at(2), review) : unreviewedChange(s, id, sha);
   task(next, id).lifecycle = "done";
   task(next, id).hold = false;
   task(next, id).integration = { status: "pending" };
@@ -164,6 +173,7 @@ describe("reviewCoverage (design §9.1)", () => {
     // A change the user supplied counts any agent as independent.
     const byUser = structuredClone(s);
     prOf(byUser).changeAuthor = "user";
+    prOf(byUser).changeAuthors = ["user"];
     expect(D.reviewCoverage(byUser, task(byUser, ID)).ok).toBe(true);
   });
 
@@ -342,8 +352,10 @@ describe("ensureReview (design §9.2)", () => {
     let s = D.advanceDelivery(built(prMode(), ID, HEAD, null), at(4));
     for (let k = 1; k <= 3; k++) {
       expect(reviewTasks(s)).toHaveLength(k);
-      // The review is cancelled by the user before it finishes: the change is still unreviewed.
-      s = D.advanceDelivery(M.cancelTask(s, `${ID}-RV${k}`, at(4 + k)), at(5 + k));
+      // The review finishes, but its run read another commit: the change is still unreviewed.
+      s = runToDone(s, `${ID}-RV${k}`, 4 + k);
+      s.attempts.find((a) => a.taskId === `${ID}-RV${k}`)!.snapshot.reviewedSha = SHA_B;
+      s = D.advanceDelivery(s, at(5 + k));
     }
     expect(reviewTasks(s)).toHaveLength(3);
     expect(prOf(s).counters.reviews).toBe(3);
@@ -533,8 +545,8 @@ describe("the merge queue of one (design §6.4)", () => {
     // Merged only from the observation, and attributed to the app's automatic merge.
     const merged = D.reportPrOp(begun.state, { op, observed: { prs: [observation({ state: "MERGED", mergeCommit: MERGE, mergedBy: "me" })], commits: [] } }, at(24));
     expect(task(merged, ID).integration).toMatchObject({ pr: { phase: "merged" }, landed: { by: "app", commit: MERGE, flags: [], mainCheck: { state: "pending" }, review: { ok: true, forSha: HEAD } } });
-    expect(merged.events.some((e) => e.message.includes("merged into main by Orchestration, automatically"))).toBe(true);
-    expect(D.mergeBody(begun.state, task(begun.state, ID))).toMatch(/^Merged automatically by Orchestration/);
+    expect(merged.events.some((e) => e.message.includes("merged into main by Orchestrator, automatically"))).toBe(true);
+    expect(D.mergeBody(begun.state, task(begun.state, ID))).toMatch(/^Merged automatically by Orchestrator/);
   });
 
   it("mutation check (stale base): after a merge, the next pull request does not merge until the base was fetched again and it was brought up to date", () => {
@@ -596,7 +608,7 @@ describe("the base update (design §8)", () => {
     expect(D.nextPrOp(D.reportBaseFetched(running, SHA_B, at(32)), ms(33))).toBeUndefined();
     const green = D.reportBaseFetched(D.reportObservations(pushed, { prs: [observation({ headSha: UPDATE, checksFor: UPDATE })], commits: [] }, at(31)), SHA_B, at(32));
     expect(D.nextPrOp(green, ms(33))).toMatchObject({ kind: "merge", headSha: UPDATE });
-    expect(D.mergeBody(green, task(green, ID))).toMatch(/reviewed change cccccccccccc with main \(bbbbbbbbbbbb\) merged into it by Orchestration/);
+    expect(D.mergeBody(green, task(green, ID))).toMatch(/reviewed change cccccccccccc with main \(bbbbbbbbbbbb\) merged into it by Orchestrator/);
   });
 
   it("a stale update result changes nothing; a conflict is recorded for that base and head, blocks, and clears when the base moves again", () => {
@@ -677,7 +689,7 @@ describe("repair into the open pull request (design §9.3)", () => {
     expect(task(stale, fix).integration).toMatchObject({ status: "not-needed" });
     expect(prOf(stale).pendingHead).toBeUndefined();
     const ready = D.reportRepairHead(s, fix, { n: 1, sha: HEAD2, baseSha: SHA_A, changed: CHANGED, descends: true }, at(31));
-    expect(prOf(ready).pendingHead).toEqual({ sha: HEAD2, changeSha: HEAD2, changeTaskId: fix, changeAuthor: "codex", baseSha: SHA_A, kind: "repair" });
+    expect(prOf(ready).pendingHead).toEqual({ sha: HEAD2, changeSha: HEAD2, changeTaskId: fix, changeAuthor: "codex", changeAuthors: ["codex"], baseSha: SHA_A, kind: "repair" });
     expect(task(ready, fix).integration).toMatchObject({ status: "integrated", sha: HEAD2 });
     expect(task(ready, fix).integration!.pr).toBeUndefined(); // it opens no pull request of its own
     expect(D.deliveredInto(task(ready, fix))).toBe(true);

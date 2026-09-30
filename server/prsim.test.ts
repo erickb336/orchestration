@@ -107,12 +107,12 @@ describe("fake runtime (scenario 19)", () => {
     expect(pr).toMatchObject({ phase: "merged", simulated: true, policy: "auto" });
     // Its one-step pipeline had no review: exactly one dedicated review ran, on the other provider.
     const reviews = st().tasks.filter((t) => t.reviewTarget?.taskId === id);
-    expect(reviews.length).toBeGreaterThanOrEqual(1);
+    expect(reviews).toHaveLength(1);
     const evidence = task(id).integration!.landed!.review!;
     expect(evidence).toMatchObject({ ok: true, source: "dedicated", forSha: pr.changeSha });
     expect(evidence.provider).not.toBe(pr.changeAuthor);
     expect(task(id).integration!.landed).toMatchObject({ simulated: true, by: "app", via: "pr" });
-    expect(st().events.some((e) => e.message.includes("merged into main by Orchestration, automatically") && e.message.includes("(simulated)"))).toBe(true);
+    expect(st().events.some((e) => e.message.includes("merged into main by Orchestrator, automatically") && e.message.includes("(simulated)"))).toBe(true);
     expect(spawned.calls).toEqual([]);
   });
 

@@ -368,6 +368,8 @@ export interface Task {
   reviewTarget?: { taskId: string; n: number; headSha: string; baseSha: string };
   /** A revert of that task's landed commit: the first writer's worktree starts with the revert prepared. */
   revertOf?: { taskId: string; commit: string };
+  /** Who cancelled the task. A dedicated review the user cancelled is not started again by the service. */
+  cancelledBy?: Actor;
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
   legacySpecUnavailable?: boolean;
@@ -634,6 +636,12 @@ export type PrAttentionCode =
   | "publish-failed";
 
 /** Per task: Integration.pr. Desired state, intent and observed state are separate fields. */
+/**
+ * Who wrote a change. "user": a person supplied the commit. "unknown": the run that produced it is not
+ * on record; nothing is assumed about it, so no agent's review counts as independent of it.
+ */
+export type ChangeAuthor = ProviderId | "user" | "unknown";
+
 export interface PrDelivery {
   /** 1; +1 on redeliver (the branch suffix). */
   n: number;
@@ -647,13 +655,19 @@ export interface PrDelivery {
   changeSha: string;
   /** Task whose final change is changeSha (the source task, or the latest repair). */
   changeTaskId: string;
-  /** Provider of the attempt that produced changeSha. */
-  changeAuthor: ProviderId | "user";
+  /** Who wrote changeSha: the provider of the run that produced it, the user, or unknown. */
+  changeAuthor: ChangeAuthor;
+  /**
+   * Everyone who authored a change this pull request holds: the task's own coder runs and every fix
+   * pushed onto it. A review counts as independent only when its provider is none of them. Absent on
+   * records made before the set was kept (then it is `changeAuthor` alone).
+   */
+  changeAuthors?: ChangeAuthor[];
   /** What the app pushed: changeSha, or a service merge of the base into it. */
   headSha: string;
   /** Base tip contained in headSha. */
   baseSha: string;
-  pendingHead?: { sha: string; changeSha: string; changeTaskId: string; changeAuthor: ProviderId | "user"; baseSha: string; kind: "update" | "repair" };
+  pendingHead?: { sha: string; changeSha: string; changeTaskId: string; changeAuthor: ChangeAuthor; changeAuthors?: ChangeAuthor[]; baseSha: string; kind: "update" | "repair" };
   /** paths: at most 50. */
   changed: { files: number; additions: number; deletions: number; paths: string[]; protectedHits: string[]; workflowHits: string[] };
   // desired

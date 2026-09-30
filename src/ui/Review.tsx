@@ -8,7 +8,7 @@ import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import type { Task } from "../domain/types";
 import { LandedChips, LandedSection, PrChip, PrPanel } from "./Delivery";
-import { fmtTime, relTime } from "./common";
+import { fmtTime, relTime, resumeAutoMergeText } from "./common";
 import { useStore } from "./store";
 
 type Filter = "unreviewed" | "all" | "sent-back";
@@ -65,7 +65,9 @@ export function Review() {
         <div className="banner danger" role="alert">
           <strong>Automatic merging is paused:</strong> {gh.autoMergePaused.reason}. {gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} Nothing is reverted automatically: send the landed
           item back as a fix or a revert below if it should be undone.{" "}
-          <button className="small" disabled={disabled} onClick={() => void send("resumeAutoMerge")}>
+          <button className="small" disabled={disabled} onClick={() => {
+              if (confirm(resumeAutoMergeText(gh?.autoMergePaused?.reason))) void send("resumeAutoMerge");
+            }}>
             Resume automatic merging
           </button>
         </div>

@@ -1,5 +1,5 @@
 {
-  "name": "orchestration",
+  "name": "orchestrator",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -36,6 +36,6 @@
   "author": "Erick Benitez-Ramos",
   "repository": {
     "type": "git",
-    "url": "https://github.com/erickb336/orchestration.git"
+    "url": "https://github.com/erickb336/orchestrator.git"
   }
 }

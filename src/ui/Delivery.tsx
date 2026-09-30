@@ -10,7 +10,7 @@ import * as D from "../domain/delivery";
 import { diffLineClasses } from "../domain/diff";
 import * as M from "../domain/model";
 import type { Landed, LandedFlag, PrDelivery, State, Task } from "../domain/types";
-import { ROLE_LABEL, fmtTime, relTime } from "./common";
+import { ROLE_LABEL, fmtTime, relTime, resumeAutoMergeText } from "./common";
 import { newIdOf, useStore } from "./store";
 
 const FLAG_LABEL: Record<LandedFlag, string> = {
@@ -32,7 +32,7 @@ export async function fetchChange(taskId: string): Promise<ChangeResult> {
     if (res.ok && typeof body.diff === "string") return { ok: true, change: body as ChangeResponse };
     return { ok: false, error: typeof body.error === "string" ? body.error : `The service answered ${res.status}.`, url: body.url };
   } catch {
-    return { ok: false, error: "The Orchestration service is unreachable, so the changes could not be loaded." };
+    return { ok: false, error: "The Orchestrator service is unreachable, so the changes could not be loaded." };
   }
 }
 
@@ -171,7 +171,9 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
       {auto && live && paused && (
         <div className="banner neutral" role="status" style={{ margin: 0 }}>
           <strong>Automatic merging is paused:</strong> {paused.reason}. {paused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} Nothing is reverted automatically. You can merge this one yourself.{" "}
-          <button className="small" disabled={disabled} onClick={() => void send("resumeAutoMerge")}>
+          <button className="small" disabled={disabled} onClick={() => {
+              if (confirm(resumeAutoMergeText(paused.reason))) void send("resumeAutoMerge");
+            }}>
             Resume automatic merging
           </button>
         </div>
@@ -214,7 +216,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
           {pr.headSha !== pr.changeSha && (
             <span className="muted">
               {" "}
-              the reviewed change <span className="mono">{pr.changeSha.slice(0, 12)}</span> with {pr.base} (<span className="mono">{pr.baseSha.slice(0, 12)}</span>) merged into it by Orchestration
+              the reviewed change <span className="mono">{pr.changeSha.slice(0, 12)}</span> with {pr.base} (<span className="mono">{pr.baseSha.slice(0, 12)}</span>) merged into it by Orchestrator
             </span>
           )}
         </dd>
@@ -233,7 +235,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
           {pr.review.ok && (
             <div className="muted">
               Automated review, not a human one. Reviewed commit <span className="mono">{(pr.review.forSha ?? pr.changeSha).slice(0, 12)}</span>
-              {pr.review.provider ? ` · ${M.providerLabel(pr.review.provider)}${pr.review.model ? ` · ${pr.review.model}` : ""}` : ""} · written by {pr.changeAuthor === "user" ? "you" : M.providerLabel(pr.changeAuthor)} ·{" "}
+              {pr.review.provider ? ` · ${M.providerLabel(pr.review.provider)}${pr.review.model ? ` · ${pr.review.model}` : ""}` : ""} · written by {M.authorsLabel(M.prAuthors(pr))} ·{" "}
               {pr.review.source === "dedicated" ? "a dedicated review task" : "the task's own review step"}
               {pr.review.taskId && pr.review.taskId !== task.id ? (
                 <>
@@ -443,7 +445,7 @@ export function LandedSection({ state, task }: { state: State; task: Task }) {
   const reviews = D.landedReviews(state, task);
   const change = M.finalChange(state, task);
   const where = landed.via === "pr" ? `pull request${landed.pr ? ` #${landed.pr.number}` : ""} into ${landed.target}` : `local delivery to ${landed.target}`;
-  const who = landed.by === "app" ? "Orchestration" : (landed.mergedBy ?? "a person");
+  const who = landed.by === "app" ? "Orchestrator" : (landed.mergedBy ?? "a person");
 
   return (
     <div className="stack">
@@ -599,7 +601,7 @@ export function LandedSection({ state, task }: { state: State; task: Task }) {
             Save note
           </button>{" "}
           <span className="muted" style={{ fontSize: "0.85rem" }}>
-            Notes stay in Orchestration unless you choose to post one. A note does not mark the item reviewed.
+            Notes stay in Orchestrator unless you choose to post one. A note does not mark the item reviewed.
           </span>
         </form>
       </div>

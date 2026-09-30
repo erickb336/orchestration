@@ -139,7 +139,7 @@ describe("CodexAdapter runs", () => {
     const recv = log.filter((l) => l.recv).map((l) => l.recv);
     expect(recv.map((m) => m.method)).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
     expect(recv.every((m) => !("jsonrpc" in m))).toBe(true);
-    expect(recv[0].params.clientInfo).toEqual({ name: "orchestration", title: "Orchestration", version: "0.1.0" });
+    expect(recv[0].params.clientInfo).toEqual({ name: "orchestration", title: "Orchestrator", version: "0.1.0" });
     expect(recv[2].params).toEqual({ model: "stub-model", cwd: dir, approvalPolicy: "never", sandbox: "workspace-write" });
     expect(recv[3].params).toEqual({
       threadId: "thr_stub_1",

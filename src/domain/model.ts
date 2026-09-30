@@ -12,6 +12,8 @@ import {
   type Artifact,
   type Attempt,
   type CatalogModel,
+  type ChangeAuthor,
+  type PrDelivery,
   type RunLimits,
   type Autonomy,
   type Integration,
@@ -135,11 +137,52 @@ export type Resolution =
   | { ok: true; selection: ModelSelection; source: SelectionSource; reason: string }
   | { ok: false; reason: string };
 
+/** The commit a code-change artifact names ("<sha> on <branch>", or the hash a person typed). */
+const commitOf = (a: Artifact) => a.ref?.trim().split(" ")[0] ?? "";
+const sameCommit = (a: Artifact, b: Artifact) => {
+  const [x, y] = [commitOf(a).toLowerCase(), commitOf(b).toLowerCase()];
+  return x === y || (x.length >= 7 && y.length >= 7 && (x.startsWith(y) || y.startsWith(x)));
+};
+
 /**
- * The provider that wrote the change a step reviews: the pull request's change for a dedicated review
- * task, else the newest code change among the step's inputs. "user" when a person supplied it.
+ * Who wrote the commit a code-change artifact names. A version a person edited is theirs only when the
+ * edit supplied another commit; an edit of the summary alone leaves the commit with the run that made
+ * it. A run that is not on record is "unknown", never "user": nothing is assumed about it.
  */
-export function writerOf(s: State, t: Task, st: StepDef): ProviderId | "user" | undefined {
+export function artifactAuthor(s: State, art: Artifact): ChangeAuthor {
+  let made = art;
+  if (art.author === "user") {
+    const run = s.artifacts
+      .filter((a) => a.taskId === art.taskId && a.stepId === art.stepId && a.name === art.name && a.version < art.version && a.author !== "user")
+      .sort((a, b) => a.version - b.version)
+      .pop();
+    if (!run) return commitOf(art) ? "user" : "unknown";
+    if (!sameCommit(run, art)) return "user";
+    made = run;
+  }
+  return s.attempts.find((a) => a.id === made.attemptId)?.snapshot.provider ?? "unknown";
+}
+
+/** Everyone who authored a change a pull request holds. Records from before the set was kept name only the newest author. */
+export const prAuthors = (pr: PrDelivery): ChangeAuthor[] => (pr.changeAuthors?.length ? pr.changeAuthors : [pr.changeAuthor]);
+
+/** The providers whose review counts as independent of these authors: none of them wrote any of it. Empty when an author is unknown. */
+export function independentProviders(authors: ChangeAuthor[]): ProviderId[] {
+  if (authors.includes("unknown")) return [];
+  return (["claude", "codex"] as ProviderId[]).filter((p) => !authors.includes(p));
+}
+
+/** "Claude", "Claude and Codex", "you and Codex", "an unknown author". */
+export function authorsLabel(authors: ChangeAuthor[]): string {
+  const names = [...new Set(authors)].map((a) => (a === "user" ? "you" : a === "unknown" ? "an unknown author" : providerLabel(a)));
+  return names.length <= 1 ? (names[0] ?? "an unknown author") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * The provider that wrote the change a step reviews: the pull request's newest change for a dedicated
+ * review task, else the newest code change among the step's inputs. "user" when a person supplied it.
+ */
+export function writerOf(s: State, t: Task, st: StepDef): ChangeAuthor | undefined {
   if (t.reviewTarget) {
     const pr = s.tasks.find((x) => x.id === t.reviewTarget!.taskId)?.integration?.pr;
     return pr && pr.n === t.reviewTarget.n ? pr.changeAuthor : undefined;
@@ -149,17 +192,29 @@ export function writerOf(s: State, t: Task, st: StepDef): ProviderId | "user" | 
     const art = s.artifacts.find((x) => x.id === i.artifactId);
     if (art?.kind === "code-change" && (!best || art.createdAt > best.createdAt)) best = art;
   }
-  if (!best) return undefined;
-  return best.author === "user" ? "user" : s.attempts.find((a) => a.id === best.attemptId)?.snapshot.provider;
+  return best ? artifactAuthor(s, best) : undefined;
+}
+
+/**
+ * Everyone a step's review must be independent of. For a dedicated review task that is every author of
+ * the pull request (the task's own coder runs and every fix pushed onto it), not only the newest.
+ */
+export function writersOf(s: State, t: Task, st: StepDef): ChangeAuthor[] {
+  if (t.reviewTarget) {
+    const pr = s.tasks.find((x) => x.id === t.reviewTarget!.taskId)?.integration?.pr;
+    return pr && pr.n === t.reviewTarget.n ? prAuthors(pr) : [];
+  }
+  const w = writerOf(s, t, st);
+  return w ? [w] : [];
 }
 
 /**
  * Resolution order: step pin → task role override → independence → project role default → project
  * default. Independence applies to a step marked `independentOf: "writer"` while the project asks for
- * a reviewer from another provider: when the default would be the writer's own provider, the other
- * provider is chosen, and when that one is not enabled the step does not resolve. Nothing is ever
- * substituted, and a pin or override the user set always wins (the merge gate then reports a review
- * that is not independent).
+ * a reviewer from another provider: when the default would be one of the writers' own providers, a
+ * provider that wrote none of the change is chosen, and when that one is not enabled, or none exists,
+ * the step does not resolve. Nothing is ever substituted, no provider reviews its own work, and a pin
+ * or override the user set always wins (the merge gate then reports a review that is not independent).
  */
 export function resolveStep(s: State, t: Task, st: Step): Resolution {
   const p = s.project;
@@ -171,14 +226,20 @@ export function resolveStep(s: State, t: Task, st: Step): Resolution {
   else if (t.roleOverrides[st.role]) [selection, source] = [t.roleOverrides[st.role]!, "task-role"];
   else {
     [selection, source] = fallback();
-    const writer = st.independentOf === "writer" && p.prDelivery.reviewer === "other-provider" ? writerOf(s, t, st) : undefined;
-    if (writer && writer !== "user" && selection.provider === writer) {
-      const other: ProviderId = writer === "claude" ? "codex" : "claude";
+    // A person's own commit constrains nobody: any agent is independent of it.
+    const writers = (st.independentOf === "writer" && p.prDelivery.reviewer === "other-provider" ? writersOf(s, t, st) : []).filter((w) => w !== "user");
+    if (writers.includes("unknown") || writers.includes(selection.provider)) {
+      const free = independentProviders(writers);
+      if (free.length === 0) {
+        const why = writers.includes("unknown") ? "who wrote this change is not on record" : `${authorsLabel(writers)} each wrote part of this change`;
+        return { ok: false, reason: `No agent's review would be independent: ${why}, and no provider reviews its own work. Merge it yourself, or let any agent count as the reviewer (Settings → Delivery). Nothing was substituted.` };
+      }
+      const other = free[0];
       if (!p.enabledProviders.includes(other)) {
         return { ok: false, reason: `Independent review needs ${providerLabel(other)}, which is not enabled. Enable it in Settings, or let any agent count as the reviewer (Settings → Delivery). Nothing was substituted.` };
       }
       [selection, source] = [{ provider: other, model: "auto" }, "independence"];
-      independence = `${providerLabel(other)}: other provider than the writer (${providerLabel(writer)})`;
+      independence = `${providerLabel(other)}: other provider than the writer (${authorsLabel(writers)})`;
     }
   }
 
@@ -571,6 +632,7 @@ export function cancelTask(state: State, taskId: string, now: string, by?: { act
   const t = getTask(s, taskId);
   assertOpen(t, "Cancelling");
   t.lifecycle = "cancelled";
+  t.cancelledBy = by?.actor ?? "user";
   touch(t, now);
   const active = activeAttempts(s, t.id);
   event(s, now, by?.actor ?? "user", "control", `Cancelled${by ? ` (${by.reason})` : ""}; spec and partial artifacts retained${active.length ? `; stopping ${active.length} run(s)` : ""}`, t.id);
@@ -579,6 +641,7 @@ export function cancelTask(state: State, taskId: string, now: string, by?: { act
   const children = descendants(s, t).filter(isOpen);
   for (const c of children) {
     c.lifecycle = "cancelled";
+    c.cancelledBy = by?.actor ?? "user";
     touch(c, now);
     const runs = activeAttempts(s, c.id);
     event(s, now, "user", "control", `Cancelled with ${t.id}${runs.length ? `; stopping ${runs.length} run(s)` : ""}`, c.id);
@@ -2075,7 +2138,7 @@ export function exportMarkdown(s: State): string {
   const v = currentVision(s);
   return `# ${s.project.name}
 
-Generated by Orchestration on ${new Date().toISOString()}. Exported for visibility; edit tasks in Orchestration.
+Generated by Orchestrator on ${new Date().toISOString()}. Exported for visibility; edit tasks in Orchestrator.
 
 ## Vision (r${v.rev})
 

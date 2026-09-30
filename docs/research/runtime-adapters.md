@@ -32,10 +32,10 @@ This note gathers source-cited findings for the Milestone 3 Claude and Codex ada
 - **Subagents:** on by default, and they can be triggered by AGENTS.md delegation text. Disable them with `agents.enabled=false`, or observe them via `collabToolCall` items. [subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)
 - **`codex exec --json` fallback:** no steering and no approvals. SIGINT triggers an internal interrupt; SIGTERM just kills the process.
 
-## Implications for Orchestration
+## Implications for Orchestrator
 
 1. **Authentication blocks the public-distribution goal as stated.** "Anyone with Claude or Codex installed" cannot rely on a Claude.ai subscription through the Agent SDK. Claude workers need an Anthropic API key or cloud credentials. For Codex, reusing a ChatGPT login is permitted for the CLI; whether it is permitted for a third-party local orchestrator is unclear. **The user decides the supported authentication modes.**
 2. **Pause semantics:** Codex gives a real acknowledgment (`turn/completed: interrupted`). For Claude the adapter must confirm the stop itself: stream end or process exit after `interrupt()`, with a timeout that escalates to a process kill. Both map onto the existing `stopping → stopped | control failure` model.
-3. **Workers must disable native subagents** (Claude: disable the built-in agent and the Agent tool; Codex: `agents.enabled=false`), so that every child is tracked by the Orchestration scheduler, as PROJECT_SPEC.md requires.
+3. **Workers must disable native subagents** (Claude: disable the built-in agent and the Agent tool; Codex: `agents.enabled=false`), so that every child is tracked by the Orchestrator scheduler, as PROJECT_SPEC.md requires.
 4. **Model catalogs:** Codex can list its models. Claude cannot, so Claude needs a configured allowlist.
 5. **Sandboxing:** run each writer in its own git worktree. For Codex, restrict writable roots to that worktree. For Claude, use `cwd` plus a permission mode or tool allowlist, since the SDK has no equivalent OS sandbox by default.

@@ -123,7 +123,7 @@ export function networkEnv(remoteUrl?: string): NodeJS.ProcessEnv {
 export class ForeignCommitsError extends Error {
   authors: string[];
   constructor(authors: string[]) {
-    super(`contains ${authors.length} commit(s) not made by Orchestration (authors: ${[...new Set(authors)].slice(0, 5).join(", ")}); nothing was pushed`);
+    super(`contains ${authors.length} commit(s) not made by Orchestrator (authors: ${[...new Set(authors)].slice(0, 5).join(", ")}); nothing was pushed`);
     this.name = "ForeignCommitsError";
     this.authors = authors;
   }
@@ -625,7 +625,7 @@ export class WorkspaceManager {
     if (foreign.length) {
       return {
         status: "blocked",
-        message: `${integration} contains ${foreign.length} commit(s) not made by Orchestration (for example from another branch it started from); delivering would add them to ${target}. Automatic delivery is paused.`,
+        message: `${integration} contains ${foreign.length} commit(s) not made by Orchestrator (for example from another branch it started from); delivering would add them to ${target}. Automatic delivery is paused.`,
       };
     }
 
@@ -758,7 +758,7 @@ export class WorkspaceManager {
       .filter((l) => l && l !== ORCHESTRATION_AUTHOR);
     if (foreign.length) {
       const authors = [...new Set(foreign.map((l) => l.split("\0")[0] || "unknown"))].slice(0, 5).join(", ");
-      return { status: "conflict", message: `contains ${foreign.length} commit(s) not made by Orchestration (authors: ${authors}); nothing was pushed` };
+      return { status: "conflict", message: `contains ${foreign.length} commit(s) not made by Orchestrator (authors: ${authors}); nothing was pushed` };
     }
     // Conflict pre-check against the base, without touching any worktree.
     // A fix for an open pull request skips this: a conflict with the base is then the pull request's own state.
@@ -824,18 +824,21 @@ export class WorkspaceManager {
       if (this.status(["-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", `${c}^{commit}`]).status !== 0) throw new Error(`commit ${c.slice(0, 12)} is no longer in the repository`);
     }
     if (this.status(["-C", repo, "merge-base", "--is-ancestor", o.baseSha, o.headSha]).status === 0) return { status: "updated", sha: o.headSha };
+    const mt = this.status(["-C", repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", o.headSha, o.baseSha]);
+    if (mt.status === 1) return { status: "conflict", files: mt.stdout.split("\n").slice(1).filter(Boolean).slice(0, 20) };
+    const tree = mt.stdout.split("\n")[0].trim();
+    if (mt.status !== 0 || !hex.test(tree)) throw new Error("could not merge the base into the pull request head");
     // An earlier, interrupted attempt may already have made this exact merge: use it, do not make another.
+    // "This exact merge" includes its content: the pinned commit is adopted only when its tree is the
+    // tree git computes for the merge now. Parents and author alone do not say what it contains.
     const pinned = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", `${pin}^{commit}`]);
     if (pinned.status === 0) {
       const sha = pinned.stdout.trim();
       const parents = this.git(repo, ["rev-list", "--parents", "-n", "1", sha]).split(" ").slice(1);
       const author = this.git(repo, ["log", "-1", "--format=%an%x00%ae", sha]);
-      if (parents.length === 2 && parents[0] === o.headSha && parents[1] === o.baseSha && author === ORCHESTRATION_AUTHOR) return { status: "updated", sha };
+      const pinnedTree = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", `${sha}^{tree}`]);
+      if (parents.length === 2 && parents[0] === o.headSha && parents[1] === o.baseSha && author === ORCHESTRATION_AUTHOR && pinnedTree.status === 0 && pinnedTree.stdout.trim() === tree) return { status: "updated", sha };
     }
-    const mt = this.status(["-C", repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", o.headSha, o.baseSha]);
-    if (mt.status === 1) return { status: "conflict", files: mt.stdout.split("\n").slice(1).filter(Boolean).slice(0, 20) };
-    const tree = mt.stdout.split("\n")[0].trim();
-    if (mt.status !== 0 || !hex.test(tree)) throw new Error("could not merge the base into the pull request head");
     const sha = this.run(["-C", repo, "-c", "user.name=Orchestration", "-c", "user.email=orchestration@localhost", "commit-tree", tree, "-p", o.headSha, "-p", o.baseSha, "-m", `Merge ${o.base} into ${branch}`]);
     if (!hex.test(sha)) throw new Error("could not record the merge of the base");
     this.git(repo, ["update-ref", pin, sha]);

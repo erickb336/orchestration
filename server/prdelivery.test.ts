@@ -194,7 +194,7 @@ describe("hold and notify (scenario 1)", () => {
     const created = fake.calls.find((c) => c.method === "createPr")!.args as { head: string; base: string; title: string; body: string };
     expect(created).toMatchObject({ head: branch, base: "main", title: `${id}: Adds a greeting` });
     expect(created.body).toContain(`<!-- orchestration:pr:${st().project.id}/${id}/1 -->`);
-    expect(created.body).toContain("Opened by Orchestration using this GitHub account");
+    expect(created.body).toContain("Opened by Orchestrator using this GitHub account");
     expect(pr(id)).toMatchObject({ phase: "open", number: 1, url: "https://github.com/test/repo/pull/1" });
     expect(pr(id).op).toBeUndefined();
 
@@ -233,7 +233,7 @@ describe("hold and notify (scenario 1)", () => {
     expect(landed.commit).toBe(remote("rev-parse", "main"));
     expect(remote("rev-parse", `${landed.commit}^2`)).toBe(pr(id).headSha);
     expect(landed.checks).toEqual([expect.objectContaining({ name: "check", conclusion: "SUCCESS" })]);
-    expect(events("merged into main by Orchestration, at your request")).toHaveLength(1);
+    expect(events("merged into main by Orchestrator, at your request")).toHaveLength(1);
 
     expect(D.unreviewedCount(st())).toBe(1);
     cmd("markLandedReviewed", { taskIds: [id], reviewed: true });
@@ -254,7 +254,7 @@ describe("hold and notify (scenario 1)", () => {
     expect(fake.count("merge")).toBe(0);
     expect(pr(id).attention?.code).toBe("checks-failed");
     fake.setCheck(1, "SUCCESS");
-    await ticks(4, 31_000);
+    await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(1);
     expect(pr(id).phase).toBe("merged");
   });
@@ -294,13 +294,13 @@ describe("what is never published", () => {
     codex.finish(r.id, { write: ["w.txt", "w\n"] });
     await ticks(6, 2000);
     expect(task(id).integration).toMatchObject({ status: "conflict" });
-    expect(task(id).integration!.message).toMatch(/contains 1 commit\(s\) not made by Orchestration \(authors: u\); nothing was pushed/);
+    expect(task(id).integration!.message).toMatch(/contains 1 commit\(s\) not made by Orchestrator \(authors: u\); nothing was pushed/);
     expect(branches()).toEqual([]);
     expect(fake.count("createPr")).toBe(0);
     // The guard is checked again before any push, whatever prepared the head.
     const sha = M.finalChange(st(), task(id))!.ref!.split(" ")[0];
     const full = git("rev-parse", sha);
-    await expect(workspaces.pushHead({ repoPath: repo, projectId: st().project.id, remote: "origin", branch: `orchestration/${st().project.id}/pr/${id}-1`, sha: full })).rejects.toThrow(/not made by Orchestration/);
+    await expect(workspaces.pushHead({ repoPath: repo, projectId: st().project.id, remote: "origin", branch: `orchestration/${st().project.id}/pr/${id}-1`, sha: full })).rejects.toThrow(/not made by Orchestrator/);
     expect(branches()).toEqual([]);
   });
 
@@ -437,7 +437,7 @@ describe("people on GitHub", () => {
     expect(fake.count("merge")).toBe(0);
     // Once GitHub reports it clean, the user's merge goes through.
     fake.pr(1).mergeStateStatus = "CLEAN";
-    await ticks(4, 31_000);
+    await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(pr(id).phase).toBe("merged");
   });
 
@@ -448,7 +448,7 @@ describe("people on GitHub", () => {
     fake.failNext("merge", new GhError("rejected", "Pull request is not mergeable: the base branch policy prohibits the merge"));
     fake.failNext("merge", new GhError("rejected", "Pull request is not mergeable: the base branch policy prohibits the merge"));
     cmd("requestPrMerge", { taskId: id, headSha: pr(id).headSha });
-    await ticks(40, 31_000);
+    await ticks(125, 10_000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(2);
     expect(pr(id)).toMatchObject({ phase: "open", attention: { code: "merge-rejected" }, counters: { mergeAttempts: 2 } });
     expect(pr(id).attention!.message).toContain("base branch policy prohibits");
@@ -497,7 +497,7 @@ describe("pause and hold (scenario 12)", () => {
     expect(pr(id).userHold).toMatchObject({ reason: "want to read it first" });
     expect(fake.count("merge")).toBe(0);
     cmd("releasePr", { taskId: id });
-    await ticks(4, 31_000);
+    await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(1);
     expect(pr(id).phase).toBe("merged");
   });

@@ -183,7 +183,7 @@ describe("automatic merge (scenario 2)", () => {
     expect(landed).toMatchObject({ via: "pr", by: "app", status: "unreviewed", flags: [], pr: { number: 1, repo: "test/repo" }, review: { ok: true, provider: "claude", forSha: head }, mainCheck: { state: "pending" } });
     expect(landed.commit).toBe(remote("rev-parse", "main"));
     expect(remote("rev-parse", `${landed.commit}^2`)).toBe(head);
-    expect(events("merged into main by Orchestration, automatically")).toHaveLength(1);
+    expect(events("merged into main by Orchestrator, automatically")).toHaveLength(1);
     expect(st().project.github!.autoMerges).toMatchObject({ count: 1 });
     expect(D.unreviewedCount(st())).toBe(1);
 
@@ -305,7 +305,7 @@ describe("the independent review (scenarios 3 and 4)", () => {
 });
 
 describe("the base moves (scenario 5)", () => {
-  it("the candidate gets a two-parent merge of the base made by Orchestration, pushed as a fast-forward; the checks run again; the review is not repeated; what lands is what was checked", async () => {
+  it("the candidate gets a two-parent merge of the base made by Orchestrator, pushed as a fast-forward; the checks run again; the review is not repeated; what lands is what was checked", async () => {
     await prModeOn();
     const id = await openPr("Behind", { write: () => ["feature.txt", "feature\n"] });
     const first = pr(id).headSha;
@@ -475,7 +475,7 @@ describe("a failing required check (scenario 7)", () => {
     expect(st().tasks.some((t) => t.revertOf)).toBe(false); // nothing is reverted automatically
     // The check passes when it runs again: the pause ends and the next pull request merges.
     fake.baseChecks.set(landed, [{ name: "check", required: true, status: "COMPLETED", conclusion: "SUCCESS" }]);
-    await until("the second merges", () => pr(b).phase === "merged", 31_000, 40);
+    await until("the second merges", () => pr(b).phase === "merged", 10_000, 120); // fine ticks: a merge needs a read of GitHub at most 15 s old
     expect(st().project.github!.autoMergePaused).toBeUndefined();
     expect(merges()).toHaveLength(2);
   });
@@ -626,7 +626,7 @@ describe("step 2 review: M2, a base that cannot be fetched", () => {
 });
 
 describe("step 2 leftovers", () => {
-  it("switching from local delivery to pull requests warns about Orchestration commits the remote does not have, and never pushes them", async () => {
+  it("switching from local delivery to pull requests warns about Orchestrator commits the remote does not have, and never pushes them", async () => {
     cmd("setDeliveryMode", { mode: "local", branch: "main" });
     const id = newTask("Delivered locally");
     await drive([id], { write: () => ["local.txt", "local\n"] });
@@ -637,7 +637,7 @@ describe("step 2 leftovers", () => {
     await ticks(4);
     const item = st().project.github!.posture.find((x) => x.id === "unpushed-local")!;
     expect(item).toMatchObject({ status: "warn" });
-    expect(item.label).toMatch(/^\d+ Orchestration commits? on main (is|are) not on origin\/main$/);
+    expect(item.label).toMatch(/^\d+ Orchestrator commits? on main (is|are) not on origin\/main$/);
     expect(item.detail).toMatch(/The app does not push (it|them)/);
     expect(remote("rev-parse", "main")).toBe(before); // nothing was pushed
     expect(branches()).toEqual([]);
@@ -647,5 +647,59 @@ describe("step 2 leftovers", () => {
     expect(st().project.github!.posture.some((x) => x.id === "unpushed-local")).toBe(true);
     git("push", "-q", "origin", "main");
     await until("the warning is gone", () => !st().project.github!.posture.some((x) => x.id === "unpushed-local"), 61_000, 20);
+  });
+});
+
+describe("step 3 review: findings 4 and 5", () => {
+  it("finding 4: an observation is stamped when GitHub was read, not when its result is applied; a merge waits for a fresh read", async () => {
+    await prModeOn("auto");
+    const id = await openPr("Slow read");
+    await until("its own review covers it", () => pr(id).review.ok, 2000, 30);
+    // The next read of GitHub sees the green check at once, and its answer arrives two minutes later.
+    const release = fake.hold("observe", "after");
+    fake.setCheck(pr(id).number!, "SUCCESS");
+    const before = fake.count("observe");
+    for (let i = 0; i < 80 && fake.count("observe") === before; i++) {
+      now += 5000;
+      scheduler.tick(now);
+      await Promise.race([scheduler.prIdle(), new Promise((r) => setTimeout(r, 100))]);
+    }
+    expect(fake.count("observe")).toBe(before + 1);
+    const readAt = new Date(now).toISOString(); // the tick that sent the read
+    now += 120_000;
+    scheduler.tick(now); // time passes while the read is in flight
+    release();
+    await scheduler.prIdle();
+    await tick(1000); // its result is applied here, 121 s after the read
+    expect(pr(id).observed).toMatchObject({ at: readAt, checks: [{ name: "check", conclusion: "SUCCESS" }] });
+    expect(Date.parse(pr(id).observed!.at)).toBe(now - 121_000);
+    expect(merges()).toEqual([]); // nothing merges on a read that old
+    // A fresh read, then the merge.
+    await until("it merges on a fresh read", () => pr(id).phase === "merged", 5000, 60);
+    expect(merges()).toHaveLength(1);
+    expect(fake.count("observe")).toBeGreaterThan(before + 1);
+  });
+
+  it("finding 5: a pinned commit with the right parents and author but another tree is not adopted as the base update", async () => {
+    await prModeOn("hold");
+    const id = await openPr("Update me");
+    const head = pr(id).headSha;
+    commit("other.txt", "other\n", "someone else's work");
+    git("push", "-q", "origin", "main");
+    const baseSha = git("rev-parse", "HEAD");
+    const o = { repoPath: repo, projectId: st().project.id, taskId: id, n: 1, base: "main", headSha: head, baseSha };
+    const pin = `refs/orchestration/${pr(id).branch.slice("orchestration/".length)}`;
+    const expected = git("merge-tree", "--write-tree", "--no-messages", head, baseSha).split("\n")[0];
+    // Same parents, same author, and the tree of the head alone: the base's changes are missing from it.
+    const bogus = git("-c", "user.name=Orchestration", "-c", "user.email=orchestration@localhost", "commit-tree", git("rev-parse", `${head}^{tree}`), "-p", head, "-p", baseSha, "-m", "not the merge");
+    git("update-ref", pin, bogus);
+    const r = workspaces.baseUpdate(o);
+    expect(r.status).toBe("updated");
+    const sha = (r as { sha: string }).sha;
+    expect(sha).not.toBe(bogus);
+    expect(git("rev-parse", `${sha}^{tree}`)).toBe(expected);
+    expect(git("rev-parse", pin)).toBe(sha);
+    // The real merge, once pinned, is reused: repeating it makes no second commit.
+    expect(workspaces.baseUpdate(o)).toEqual({ status: "updated", sha });
   });
 });

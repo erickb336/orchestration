@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import type { PostureItem, PrDeliveryConfig } from "../domain/types";
-import { fmtTime, relTime } from "./common";
+import { fmtTime, relTime, resumeAutoMergeText } from "./common";
 import { useStore } from "./store";
 
 const MODE_LABEL: Record<D.DeliveryMode, string> = { off: "Off", local: "Local branch", pr: "GitHub pull requests" };
@@ -77,7 +77,7 @@ export function DeliverySettings() {
     ...(local.length && !localOk ? [`A worker environment is set to "local" (${local.map(M.providerLabel).join(", ")}), so nothing merges automatically until it is isolated or you allow local workers below.`] : []),
     ...(local.length && localOk ? [`Local worker environments (${local.map(M.providerLabel).join(", ")}) may expose your GitHub sign-in or a GitHub MCP server to agents, and you allow automatic merging anyway.`] : []),
     ...(posture("bypass") ? ["Your GitHub account can bypass the branch rules. The app never does, so for merges the app makes, its own checks are the only barrier."] : []),
-    ...(posture("unattributed") ? ["The ruleset may demand an approval from a second account for commits authored by Orchestration. If it does, pull requests wait with \"approval required\"; the app never bypasses it. Unverified."] : []),
+    ...(posture("unattributed") ? ["The ruleset may demand an approval from a second account for commits authored by Orchestrator. If it does, pull requests wait with \"approval required\"; the app never bypasses it. Unverified."] : []),
     ...(posture("worker-shell") ? ["Claude workers have shell access, so the app cannot claim that only the service reaches GitHub."] : []),
     ...(!update ? ["Without \"bring up to date before merging\", a pull request can merge on a base its checks never ran on."] : []),
     ...(!gh?.simulated && real ? ["Not verified against GitHub yet: it has run only against a simulated GitHub in tests. Watch the first merges."] : []),
@@ -98,7 +98,7 @@ export function DeliverySettings() {
         </span>
       </div>
       <p className="muted" style={{ fontSize: "0.85rem", marginTop: "0.4rem" }}>
-        How finished work leaves Orchestration. One mode at a time. Everything that lands is listed on the <a href="#/review">Review</a> page, which never blocks anything.
+        How finished work leaves Orchestrator. One mode at a time. Everything that lands is listed on the <a href="#/review">Review</a> page, which never blocks anything.
       </p>
 
       <form
@@ -181,7 +181,9 @@ export function DeliverySettings() {
             <div className="banner danger" role="alert" style={{ margin: "0.5rem 0" }}>
               <strong>Automatic merging is paused:</strong> {gh.autoMergePaused.reason}. {gh.autoMergePaused.sticky ? "It is the second failure within a day, so it stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} Nothing is reverted automatically; pull
               requests wait, and you can merge them yourself.{" "}
-              <button className="small" disabled={disabled} onClick={() => void send("resumeAutoMerge")}>
+              <button className="small" disabled={disabled} onClick={() => {
+              if (confirm(resumeAutoMergeText(gh?.autoMergePaused?.reason))) void send("resumeAutoMerge");
+            }}>
                 Resume automatic merging
               </button>
             </div>
@@ -191,11 +193,32 @@ export function DeliverySettings() {
               e.preventDefault();
               // Consent: turning automatic merging on (or loosening what guards it) is confirmed, with what it means.
               const turningOn = merge === "auto" && cfg.merge !== "auto";
-              const loosening = merge === "auto" && ((localOk && !cfg.allowLocalWorkers) || (reviewer === "any-agent" && cfg.reviewer !== "any-agent") || (!update && cfg.updateBeforeMerge));
+              // Protected files that are no longer protected, and a higher daily cap, loosen it too.
+              const unprotected = cfg.protectedPaths.filter((x) => !pathList.includes(x));
+              const capRaised = Number(perDay) > cfg.maxAutoMergesPerDay;
+              const loosening =
+                merge === "auto" && ((localOk && !cfg.allowLocalWorkers) || (reviewer === "any-agent" && cfg.reviewer !== "any-agent") || (!update && cfg.updateBeforeMerge) || unprotected.length > 0 || capRaised);
+              // The project's choice also applies to every pull request that is already open and follows it.
+              const following = D.trackedPrTasks(state).filter((t) => t.integration!.pr!.policySource === "project");
               if (turningOn || loosening) {
                 const text = [
                   turningOn ? "Merge pull requests automatically?" : "Save these changes to automatic merging?",
                   "",
+                  ...(turningOn
+                    ? [
+                        following.length
+                          ? `This applies to new pull requests and to the ${following.length} pull request${following.length === 1 ? "" : "s"} already open (${following
+                              .slice(0, 8)
+                              .map((t) => (t.integration!.pr!.number ? `#${t.integration!.pr!.number}` : t.id))
+                              .join(", ")}${following.length > 8 ? ", …" : ""}): ${following.length === 1 ? "it" : "they"} will merge by ${following.length === 1 ? "itself" : "themselves"} too. Hold any you want to merge yourself.`
+                          : "This applies to new pull requests and to any pull request already open that follows the project's setting.",
+                        "",
+                      ]
+                    : []),
+                  ...(!turningOn && unprotected.length
+                    ? [`No longer protected: ${unprotected.join(", ")}. Pull requests that touch ${unprotected.length === 1 ? "it" : "them"}, including ones already open, may then merge automatically.`, ""]
+                    : []),
+                  ...(!turningOn && capRaised ? [`The daily limit goes from ${cfg.maxAutoMergesPerDay} to ${Number(perDay)} automatic merges. Pull requests that were waiting for tomorrow may merge today.`, ""] : []),
                   "The app will merge a pull request by itself, under your GitHub account, only when all of this holds for the exact commit:",
                   `- an independent agent review is clean (${reviewer === "any-agent" ? "by any agent" : "by another provider than the one that wrote the change"});`,
                   "- every check the repository requires has passed;",

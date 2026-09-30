@@ -68,7 +68,7 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
       const sim = pr.simulated ? " (simulated)" : "";
       const at = (x: typeof pr) => Date.parse(x.observed?.at ?? next.project.github?.observedAt ?? t.updatedAt);
       if (D.prReady(next, t, at(pr)) && !(ppr && ppr.headSha === pr.headSha && D.prReady(prev, p, at(ppr))))
-        out.push({ key: `pr-ready:${t.id}:${pr.headSha}`, title: `${n} is ready for you${sim}`, body: clip(`${name}: required checks passed and the independent review is clean. Merge it in Orchestration or on GitHub.`), taskId: t.id });
+        out.push({ key: `pr-ready:${t.id}:${pr.headSha}`, title: `${n} is ready for you${sim}`, body: clip(`${name}: required checks passed and the independent review is clean. Merge it in Orchestrator or on GitHub.`), taskId: t.id });
       if (pr.attention && (pr.attention.code !== ppr?.attention?.code || pr.attention.headSha !== ppr?.attention?.headSha)) {
         // While the app's own fix task is working on it, it is news, not a request.
         const fixing = !!D.openRepair(next, pr);

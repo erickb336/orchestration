@@ -127,7 +127,7 @@ describe("what the app never runs", () => {
     await h.merge({ repo: REPO, number: 12, headSha: SHA, subject: "T-1: A title (#12)", body: "Merge body" });
     expect(await h.findComment({ repo: REPO, number: 12, marker: "<!-- orchestration:note:p1/note-3 -->" })).toBeUndefined();
     expect(await h.comment({ repo: REPO, number: 12, body: "A note\n\n<!-- orchestration:note:p1/note-3 -->" })).toEqual({ url: "https://github.com/octo/app/pull/12#issuecomment-1" });
-    await h.close({ repo: REPO, number: 12, comment: "Closed from Orchestration." });
+    await h.close({ repo: REPO, number: 12, comment: "Closed from Orchestrator." });
 
     const all = calls();
     expect(all.length).toBeGreaterThanOrEqual(13);
@@ -161,7 +161,7 @@ describe("what the app never runs", () => {
     expect(find("--paginate").argv).toEqual(["api", "repos/octo/app/issues/12/comments", "--paginate", "--jq", '.[] | select(.body | contains("<!-- orchestration:note:p1/note-3 -->")) | .html_url']);
     expect(find("-X POST").argv).toEqual(["api", "-X", "POST", "repos/octo/app/issues/12/comments", "--input", "-"]);
     expect(JSON.parse(find("-X POST").stdin)).toEqual({ body: "A note\n\n<!-- orchestration:note:p1/note-3 -->" });
-    expect(find("pr close").argv).toEqual(["pr", "close", "12", "-R", "octo/app", "--comment", "Closed from Orchestration."]);
+    expect(find("pr close").argv).toEqual(["pr", "close", "12", "-R", "octo/app", "--comment", "Closed from Orchestrator."]);
     expect(all.some((c) => c.argv.join(" ").includes("edit-last"))).toBe(false);
   });
 });

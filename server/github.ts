@@ -481,7 +481,7 @@ export class GhCliHost implements GitHubHost {
     );
     if (bypass) item("bypass", "warn", "You can bypass these rules", `You can bypass these rules (${bypass}). The app never does, but your own account and anything using it could. Consider narrowing the bypass on the ruleset.`);
     item("auto-merge", "ok", facts.autoMerge ? "Repository auto-merge is on" : "Repository auto-merge is off", "It is not needed: the app never uses GitHub's auto-merge and merges only after its own checks.");
-    if (unattributed) item("unattributed", "unverified", `${UNATTRIBUTED} is on`, `${UNATTRIBUTED} is on. Pull requests whose commits are authored by Orchestration may need an approval from a second account. Unverified.`);
+    if (unattributed) item("unattributed", "unverified", `${UNATTRIBUTED} is on`, `${UNATTRIBUTED} is on. Pull requests whose commits are authored by Orchestrator may need an approval from a second account. Unverified.`);
     if (approvals > 0) item("approvals", "warn", `${approvals} approving review${approvals === 1 ? "" : "s"} required`, "GitHub will not merge a pull request until a person approves it. The app cannot approve; it holds the pull request and says so.");
     item("merge-commits", facts.mergeCommit ? "ok" : "fail", facts.mergeCommit ? "Merge commits are allowed" : "Merge commits are not allowed", facts.mergeCommit ? "The app merges with a merge commit, so each task has one commit to show and to revert." : "The app merges only with merge commits. Allow them in the repository settings, or merge on GitHub.");
     item("delete-on-merge", "ok", facts.deleteOnMerge ? "Branches are deleted on merge" : "Branches are kept after a merge", "The app never deletes a branch itself.");

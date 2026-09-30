@@ -187,3 +187,14 @@ export function usePref(key: string): [string | null, (v: string | null) => void
   );
   return [value, set];
 }
+
+/** What the user confirms before automatic merging continues after the base branch failed. */
+export function resumeAutoMergeText(reason?: string): string {
+  return [
+    "Resume automatic merging?",
+    "",
+    `It was paused because ${reason ?? "the check on the base branch failed after a merge the app made"}.`,
+    "Once you resume, the app merges pull requests by itself again, under your GitHub account, including the ones already open and waiting. Nothing was reverted: if the base branch is still failing, more work lands on top of it.",
+    "The count of failures that keeps it paused starts over.",
+  ].join("\n");
+}

@@ -22,7 +22,7 @@ const port = Number(process.env.ORCHESTRATION_PORT ?? 5319);
 const dbPath = process.env.ORCHESTRATION_DB ?? join(homedir(), ".orchestration", "orchestration.db");
 const staticDir = process.env.ORCHESTRATION_STATIC;
 const devUi = process.env.ORCHESTRATION_DEV_UI;
-const log = (msg: string) => console.log(`[orchestration] ${msg}`);
+const log = (msg: string) => console.log(`[orchestrator] ${msg}`);
 const mode = process.env.ORCHESTRATION_RUNTIME === "real" ? "real" : "fake";
 if (process.env.ORCHESTRATION_RUNTIME && !["real", "fake"].includes(process.env.ORCHESTRATION_RUNTIME)) {
   log(`Unknown ORCHESTRATION_RUNTIME "${process.env.ORCHESTRATION_RUNTIME}"; use "fake" or "real".`);
@@ -75,7 +75,7 @@ const server = createHttpServer({
 
 
 server.on("error", (e: NodeJS.ErrnoException) => {
-  if (e.code === "EADDRINUSE") log(`Port ${port} is already in use. Another Orchestration service may be running; stop it or set ORCHESTRATION_PORT.`);
+  if (e.code === "EADDRINUSE") log(`Port ${port} is already in use. Another Orchestrator service may be running; stop it or set ORCHESTRATION_PORT.`);
   else log(`Server error: ${e.message}`);
   void scheduler.stop(); // releases the lease if it was taken
   store.close();

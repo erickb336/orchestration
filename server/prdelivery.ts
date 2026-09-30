@@ -59,6 +59,8 @@ export class PrDriver {
   private readonly log: (msg: string) => void;
   private readonly ctx: D.ReportContext;
   private gen = 0;
+  /** The time of the latest tick: the driver's clock. A read is never stamped later than it happened. */
+  private clockMs = 0;
   private inflight: Promise<void> | undefined;
   private results: { gen: number; result: D.PrOpResult }[] = [];
 
@@ -88,6 +90,7 @@ export class PrDriver {
   /** One step of the driver. Throws LeaseLostError when the scheduler no longer holds its lease. */
   tick(nowMs: number, lease: Lease) {
     const now = new Date(nowMs).toISOString();
+    this.clockMs = nowMs;
     // 1. Apply finished operations. A result from before abortAll() belongs to an earlier generation.
     for (const r of this.results.splice(0)) {
       if (r.gen !== this.gen) continue;
@@ -171,6 +174,16 @@ export class PrDriver {
     if (!r || `${r.owner}/${r.name}` !== repoSlug) throw new RemoteChangedError(`The remote ${state.project.prDelivery.remote} no longer points at ${repoSlug}; nothing was fetched or pushed.`);
   }
 
+  /**
+   * Read GitHub and stamp the observation with the time of the read, not the time its result is
+   * applied (a later tick): "observed at most 15 s ago" then means what it says. The stamp is taken
+   * before the request is sent, so it is never later than what GitHub answered.
+   */
+  private async observe(host: GitHubHost, a: Parameters<GitHubHost["observe"]>[0]): Promise<D.Observations> {
+    const at = new Date(this.clockMs).toISOString();
+    return { ...(await host.observe(a)), at };
+  }
+
   private async run(op: D.PrOp, state: State): Promise<D.PrOpResult> {
     const host = this.host;
     const p = state.project;
@@ -222,7 +235,7 @@ export class PrDriver {
       case "observe": {
         // One repository per read: the one that was checked. Pull requests opened elsewhere are not in it.
         if (op.repo && op.repo !== p.github?.repo) return { op, error: { code: "remote", message: `The remote no longer points at ${op.repo}; nothing was read.` } };
-        return { op, observed: await host.observe({ repo: this.repoOf(state), prs: op.prs.map((x) => x.number), commits: host.simulated ? op.commits : op.commits.filter((c) => /^[0-9a-f]{40,64}$/.test(c)) }) };
+        return { op, observed: await this.observe(host, { repo: this.repoOf(state), prs: op.prs.map((x) => x.number), commits: host.simulated ? op.commits : op.commits.filter((c) => /^[0-9a-f]{40,64}$/.test(c)) }) };
       }
       case "update": {
         const t = state.tasks.find((x) => x.id === op.taskId)!;
@@ -276,7 +289,7 @@ export class PrDriver {
         }
         // The exit code records nothing: what GitHub reports afterwards does.
         try {
-          return { op, actError, observed: await host.observe({ repo, prs: [pr.number!], commits: [] }) };
+          return { op, actError, observed: await this.observe(host, { repo, prs: [pr.number!], commits: [] }) };
         } catch (e) {
           return { op, actError, error: opError(e) };
         }
@@ -291,12 +304,12 @@ export class PrDriver {
         if (number === undefined) return { op, nothingOpen: true };
         let actError: D.OpError | undefined;
         try {
-          await host.close({ repo, number, comment: "Closed from Orchestration." });
+          await host.close({ repo, number, comment: "Closed from Orchestrator." });
         } catch (e) {
           actError = opError(e);
         }
         try {
-          return { op, actError, ...(found ? { adopted: found } : {}), observed: await host.observe({ repo, prs: [number], commits: [] }) };
+          return { op, actError, ...(found ? { adopted: found } : {}), observed: await this.observe(host, { repo, prs: [number], commits: [] }) };
         } catch (e) {
           return { op, actError, error: opError(e) };
         }

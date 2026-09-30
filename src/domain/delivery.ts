@@ -18,6 +18,7 @@ import {
   type PrAttentionCode,
   type PrDelivery,
   type PrDeliveryConfig,
+  type ChangeAuthor,
   type ProviderId,
   type RoleId,
   type ReviewEvidence,
@@ -439,6 +440,8 @@ export interface PrObservation {
 }
 
 export interface Observations {
+  /** When GitHub was read (stamped by the driver). An observation is as old as its read, not as its arrival. */
+  at?: string;
   prs: PrObservation[];
   commits: { oid: string; checks: CheckObs[] }[];
   rateRemaining?: number;
@@ -582,16 +585,36 @@ function safePrUrl(pr: PrDelivery, number: number, url: string): string {
 
 // ---------- independent review (design §9.1, §9.2) ----------
 
-/** Does a review by this provider count as independent of the change's author? */
+/**
+ * Does a review by this provider count as independent? Judged against everyone who authored a change
+ * the pull request holds, not only the author of its newest commit: a fix pushed by another provider
+ * never makes the first provider independent of its own work. An unknown author fails closed.
+ */
 function independent(s: State, pr: PrDelivery, provider: ProviderId | undefined): boolean {
-  return s.project.prDelivery.reviewer === "any-agent" || pr.changeAuthor === "user" || (!!provider && provider !== pr.changeAuthor);
+  if (s.project.prDelivery.reviewer === "any-agent") return true;
+  return !!provider && M.independentProviders(M.prAuthors(pr)).includes(provider);
+}
+
+/** No agent's review can be independent: every provider wrote part of the pull request, or an author is unknown. */
+function nobodyIndependent(s: State, pr: PrDelivery): boolean {
+  return s.project.prDelivery.reviewer !== "any-agent" && M.independentProviders(M.prAuthors(pr)).length === 0;
+}
+
+const NEEDS_USER = "Merge it yourself, or let any agent count as the reviewer (Settings → Delivery).";
+function nobodyReason(pr: PrDelivery): string {
+  const authors = M.prAuthors(pr);
+  return authors.includes("unknown")
+    ? `Who wrote part of this pull request is not on record, so no agent's review of ${sha12(pr.changeSha)} can be shown to be independent. ${NEEDS_USER}`
+    : `${M.authorsLabel(authors)} each wrote part of this pull request, so no agent's review of ${sha12(pr.changeSha)} is independent, and no provider reviews its own work. ${NEEDS_USER}`;
 }
 
 /**
  * Where the independent review of a pull request's change stands.
  * "missing" and "not-independent": a dedicated review can cure it and none exists yet.
  * "pending": a dedicated review is queued or running. "findings": the review that saw the change
- * reported open findings. "blocked": the dedicated review cannot run, or ran on the writer's provider.
+ * reported open findings. "blocked": it needs the user. The dedicated review cannot run, ran on a
+ * provider that wrote part of the pull request, or was cancelled by the user; or no provider is left
+ * that wrote none of it (or an author is unknown), so no agent's review could be independent.
  * "limit": the service already started as many dedicated reviews as it may.
  */
 export type ReviewState = "ok" | "pending" | "missing" | "not-independent" | "findings" | "blocked" | "limit";
@@ -643,9 +666,15 @@ function judge(s: State, pr: PrDelivery, covering: Covering[], source: "pipeline
   const by = code.find((x) => independent(s, pr, x.run.snapshot.provider));
   if (!by) {
     const who = code[0].run.snapshot.provider;
+    const authors = M.prAuthors(pr);
+    const why = authors.includes("unknown")
+      ? "and who wrote part of this pull request is not on record"
+      : authors.filter((a) => a !== "user").length > 1
+        ? `which wrote part of this pull request (written by ${M.authorsLabel(authors)})`
+        : "the provider that wrote the change";
     return {
       state: "not-independent",
-      evidence: { ok: false, ...base, attemptId: code[0].run.id, provider: who, model: modelOf(code[0].run), reason: `The review of ${h} was done by ${M.providerLabel(who)}, the provider that wrote the change, so it does not count as independent.` },
+      evidence: { ok: false, ...base, attemptId: code[0].run.id, provider: who, model: modelOf(code[0].run), reason: `The review of ${h} was done by ${M.providerLabel(who)}, ${why}, so it does not count as independent.` },
     };
   }
   const cleared = covering.some((x) => x.art.author === "user");
@@ -687,14 +716,37 @@ function pipelineReview(s: State, pr: PrDelivery): ReviewView {
   return judge(s, pr, covering, "pipeline", c.id);
 }
 
-/** The dedicated review tasks of this pull request for the change it holds now, oldest first. */
-function reviewTasksFor(s: State, t: Task, pr: PrDelivery): Task[] {
-  return s.tasks.filter((x) => x.reviewTarget?.taskId === t.id && x.reviewTarget.n === pr.n && x.reviewTarget.headSha === pr.changeSha && x.lifecycle !== "cancelled");
+/**
+ * The dedicated review tasks of this pull request for the change it holds now, oldest first.
+ * `withCancelled`: also the ones a person cancelled (never the ones the service cancelled itself).
+ */
+function reviewTasksFor(s: State, t: Task, pr: PrDelivery, withCancelled = false): Task[] {
+  return s.tasks.filter(
+    (x) => x.reviewTarget?.taskId === t.id && x.reviewTarget.n === pr.n && x.reviewTarget.headSha === pr.changeSha && (x.lifecycle !== "cancelled" || (withCancelled && x.cancelledBy !== "system")),
+  );
 }
 
 function dedicatedReview(s: State, t: Task, pr: PrDelivery): ReviewView | undefined {
-  const rv = reviewTasksFor(s, t, pr).pop();
-  if (!rv) return undefined;
+  const all = reviewTasksFor(s, t, pr, true);
+  const last = all[all.length - 1];
+  if (!last) return undefined;
+  if (last.lifecycle === "cancelled") {
+    // An earlier review that finished clean still stands. Otherwise the cancellation is the user's
+    // word: the review is not missing, and the service does not start another behind their back.
+    const earlier = all.filter((x) => x.lifecycle === "done").pop();
+    const v = earlier && finishedReview(s, pr, earlier);
+    if (v?.state === "ok") return v;
+    return {
+      state: "blocked",
+      reviewTaskId: last.id,
+      evidence: noReview(pr, `The independent review ${last.id} of ${sha12(pr.changeSha)} was cancelled${last.cancelledBy === "lead" ? " by the lead" : " by you"}, so no other is started. Ask for a review, or merge it yourself.`),
+    };
+  }
+  return finishedReview(s, pr, last);
+}
+
+/** Where one dedicated review task (not cancelled) stands. */
+function finishedReview(s: State, pr: PrDelivery, rv: Task): ReviewView {
   const h = sha12(pr.changeSha);
   if (rv.lifecycle !== "done") {
     const blocked = rv.steps.find((x) => x.state === "blocked");
@@ -726,6 +778,8 @@ export function reviewView(s: State, t: Task): ReviewView {
   if (dedicated && dedicated.state !== "missing") return dedicated;
   if (own.state === "findings") return own;
   const base = dedicated ?? own;
+  // Every provider wrote part of it (or an author is unknown): no review can cure that, so none is started.
+  if (nobodyIndependent(s, pr)) return { ...base, state: "blocked", evidence: { ...base.evidence, ok: false, reason: nobodyReason(pr) } };
   if (pr.counters.reviews >= PR_LIMITS.reviews) {
     return { ...base, state: "limit", evidence: { ...base.evidence, reason: `${base.evidence.reason} ${PR_LIMITS.reviews} dedicated reviews were already started for this pull request. Ask for another yourself, or merge it yourself.` } };
   }
@@ -802,6 +856,8 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
 export function ensureReview(state: State, taskId: string, now: string): State {
   const { task, pr } = prTask(state, taskId);
   if (pr.phase !== "built" && pr.phase !== "open") return state;
+  // Nothing new is started while delivery is off, the project is paused or the pull request is held.
+  if (!mayStartWork(state, pr)) return state;
   const v = reviewView(state, task);
   if (v.state !== "missing" && v.state !== "not-independent") return state;
   const s = structuredClone(state);
@@ -814,6 +870,11 @@ export function ensureReview(state: State, taskId: string, now: string): State {
   return s;
 }
 
+/** May the service start a review or a fix for this pull request now? Not while anything is paused, held, taken over or closing. */
+function mayStartWork(s: State, pr: PrDelivery): boolean {
+  return s.project.prDelivery.enabled && !s.project.hold && !pr.userHold && !pr.foreignHead && !pr.closeRequested && !stuck(pr) && !wrongRepo(s, pr);
+}
+
 /** The user asks for a dedicated review now. They may exceed the service's cap; one at a time per change. */
 export function requestPrReview(state: State, taskId: string, now: string): State {
   const s = structuredClone(state);
@@ -821,6 +882,8 @@ export function requestPrReview(state: State, taskId: string, now: string): Stat
   if (!s.project.prDelivery.enabled) throw new ControlError("Pull-request delivery is off, so no review is started. Switch the delivery mode back on first.");
   const open = reviewTasksFor(s, task, pr).find((x) => x.lifecycle !== "done");
   if (open) throw new ControlError(`${open.id} is already reviewing this change.`);
+  // A review that could never count is not started: no provider reviews its own work.
+  if (nobodyIndependent(s, pr)) throw new ControlError(nobodyReason(pr));
   startReview(s, task, pr, now, "user");
   pr.review = reviewView(s, task).evidence;
   refreshAttention(s, task, now);
@@ -960,17 +1023,14 @@ export function advanceDelivery(state: State, now: string): State {
   if (trackedPrTasks(state).length === 0) return state;
   let s = structuredClone(state);
   for (const id of trackedPrTasks(s).map((t) => t.id)) {
+    dropStaleUpdate(s, getTask(s, id), now);
+    getTask(s, id).integration!.pr!.review = reviewView(s, getTask(s, id)).evidence;
+    // The one dedicated review the change needs (it returns the same state when none is needed or allowed).
+    s = ensureReview(s, id, now);
     let t = getTask(s, id);
     let pr = t.integration!.pr!;
-    let v = reviewView(s, t);
     const cfg = s.project.prDelivery;
-    const may = cfg.enabled && !s.project.hold && !pr.userHold && !pr.foreignHead && !pr.closeRequested && !stuck(pr) && !wrongRepo(s, pr);
-    pr.review = v.evidence;
-    if (may && (v.state === "missing" || v.state === "not-independent")) {
-      startReview(s, t, pr, now, "system");
-      v = reviewView(s, t);
-      pr.review = v.evidence;
-    }
+    const may = mayStartWork(s, pr);
     if (may && pr.policy === "auto" && cfg.autoRepair && pr.counters.repairs < PR_LIMITS.repairs && !openRepair(s, pr) && !pr.pendingHead) {
       const cause = repairCause(s, t);
       if (cause) {
@@ -994,6 +1054,22 @@ export function autoQueue(s: State): Task[] {
     const pr = t.integration!.pr!;
     return pr.policy === "auto" && pr.number !== undefined && !pr.userHold && !pr.foreignHead && !pr.closeRequested && !pr.attention && !wrongRepo(s, pr) && pr.review.ok && pr.review.forSha === pr.changeSha;
   });
+}
+
+/**
+ * A base update is prepared only for the merge candidate. When the pull request stops being it (it was
+ * switched to hold, held, or blocked) before the prepared head was pushed, the head is dropped: nothing
+ * the user did not ask for is pushed onto a pull request they now merge themselves. Mutates the draft.
+ */
+function dropStaleUpdate(s: State, t: Task, now: string) {
+  const pr = livePr(t);
+  if (!pr || pr.pendingHead?.kind !== "update" || pr.op?.kind === "push") return;
+  if (autoQueue(s)[0]?.id === t.id) return;
+  const dropped = pr.pendingHead;
+  delete pr.pendingHead;
+  // It was never pushed, so it does not count against the cap.
+  pr.counters.baseUpdates = Math.max(0, pr.counters.baseUpdates - 1);
+  event(s, now, "system", "integration", `The prepared update of ${prName(pr)} (${sha12(dropped.sha)}) was dropped and not pushed: it no longer merges automatically next`, t.id);
 }
 
 /** The only pull request that is ever brought up to date with the base or merged automatically. */
@@ -1038,7 +1114,7 @@ export interface Gate {
 }
 
 const APPROVAL_TEXT =
-  "GitHub requires an approval the app cannot give. This may be the ruleset's require_extra_approval_for_unattributed_changes applied to commits authored by Orchestration. Merge on GitHub, approve from another account, or change the ruleset.";
+  "GitHub requires an approval the app cannot give. This may be the ruleset's require_extra_approval_for_unattributed_changes applied to commits authored by Orchestrator. Merge on GitHub, approve from another account, or change the ruleset.";
 
 /** The names of the required checks for a pull request: from the repository's rules and from GitHub's own marking. */
 export function requiredCheckNames(s: State, pr: PrDelivery): string[] {
@@ -1088,7 +1164,7 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   else add("github", "GitHub reachable", "ok", `${gh.repo ?? pr.repo}${gh.login ? ` as ${gh.login}` : ""}.`);
 
   // 4. It is our pull request
-  if (pr.foreignHead) add("ours", "Only Orchestration's commits", "blocked", `Someone else pushed ${sha12(pr.foreignHead.sha)} to this branch. The app will not push to it or merge it again; merge it on GitHub, or close it and deliver again.`, "foreign-push");
+  if (pr.foreignHead) add("ours", "Only Orchestrator's commits", "blocked", `Someone else pushed ${sha12(pr.foreignHead.sha)} to this branch. The app will not push to it or merge it again; merge it on GitHub, or close it and deliver again.`, "foreign-push");
   else if (!ob) add("ours", "Open on GitHub", "waiting", pr.phase === "built" ? "Not opened yet." : "Not seen on GitHub yet.");
   else if (ob.state !== "OPEN") add("ours", "Open on GitHub", "waiting", `GitHub reports it ${ob.state.toLowerCase()}.`);
   else if (ob.crossRepo) add("ours", "Open on GitHub", "blocked", "GitHub reports this pull request as coming from another repository; the app only acts on its own.", "foreign-push");
@@ -1290,8 +1366,8 @@ export function prBody(s: State, t: Task): string {
     c.outcome,
     "",
     ...(c.acceptance.length ? ["Acceptance:", ...c.acceptance.map((a) => `- ${a}`), ""] : []),
-    ...(pr.review.ok ? [`Automated review by Orchestration (${pr.review.provider ? M.providerLabel(pr.review.provider) : "agent"}${pr.review.model ? ` · ${pr.review.model}` : ""}), not a human review: 0 open findings on ${sha12(pr.changeSha)}.`, ""] : []),
-    "Opened by Orchestration using this GitHub account.",
+    ...(pr.review.ok ? [`Automated review by Orchestrator (${pr.review.provider ? M.providerLabel(pr.review.provider) : "agent"}${pr.review.model ? ` · ${pr.review.model}` : ""}), not a human review: 0 open findings on ${sha12(pr.changeSha)}.`, ""] : []),
+    "Opened by Orchestrator using this GitHub account.",
   ];
   return `${clip(lines.join("\n"), 5800)}\n\n${prMarker(s.project.id, t.id, pr.n)}`;
 }
@@ -1307,10 +1383,10 @@ export function mergeBody(s: State, t: Task): string {
   const byUser = pr.mergeRequested?.headSha === pr.headSha;
   const reviewer = pr.review.provider ? ` (${M.providerLabel(pr.review.provider)}${pr.review.model ? ` · ${pr.review.model}` : ""})` : "";
   return [
-    byUser ? `Merged from Orchestration at the user's request, for head ${sha12(pr.headSha)}.` : `Merged automatically by Orchestration, for head ${sha12(pr.headSha)}.`,
+    byUser ? `Merged from Orchestrator at the user's request, for head ${sha12(pr.headSha)}.` : `Merged automatically by Orchestrator, for head ${sha12(pr.headSha)}.`,
     checks.length ? `Required checks passed on that head: ${checks.join(", ")}.` : "",
-    pr.review.ok ? `Automated review by Orchestration${reviewer}, not a human review: 0 open findings on ${sha12(pr.changeSha)}.` : "",
-    pr.headSha !== pr.changeSha ? `The head is the reviewed change ${sha12(pr.changeSha)} with ${pr.base} (${sha12(pr.baseSha)}) merged into it by Orchestration.` : "",
+    pr.review.ok ? `Automated review by Orchestrator${reviewer}, not a human review: 0 open findings on ${sha12(pr.changeSha)}.` : "",
+    pr.headSha !== pr.changeSha ? `The head is the reviewed change ${sha12(pr.changeSha)} with ${pr.base} (${sha12(pr.baseSha)}) merged into it by Orchestrator.` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1345,6 +1421,7 @@ export function reportPrHead(state: State, taskId: string, f: PrHeadFacts, now: 
     changeSha: f.sha,
     changeTaskId: t.id,
     changeAuthor: author,
+    changeAuthors: changeAuthorsOf(state, t),
     headSha: f.sha,
     baseSha: f.baseSha,
     changed: f.changed,
@@ -1364,10 +1441,31 @@ export function reportPrHead(state: State, taskId: string, f: PrHeadFacts, now: 
   return s;
 }
 
-/** Who wrote a task's final change: the provider of the run that produced it, or the user. */
-function changeAuthorOf(s: State, t: Task): ProviderId | "user" {
+/**
+ * Who wrote a task's final change: the provider of the run that produced the commit; the user only
+ * when their edit supplied another commit; "unknown" when the run is not on record (never "user":
+ * an unknown author gets no pass on the independent review).
+ */
+function changeAuthorOf(s: State, t: Task): ChangeAuthor {
   const change = M.finalChange(s, t) ?? s.artifacts.filter((a) => a.taskId === t.id && a.kind === "code-change").pop();
-  return change?.author === "user" ? "user" : (s.attempts.find((a) => a.id === change?.attemptId)?.snapshot.provider ?? "user");
+  return change ? M.artifactAuthor(s, change) : "unknown";
+}
+
+/**
+ * Everyone who authored a commit of a task's change: every run that produced a code change in it (an
+ * earlier coder step, a repair round, a run that was done again on another provider), and the user
+ * where they supplied a commit. Candidates of a best-of step that were not chosen are not part of it.
+ */
+function changeAuthorsOf(s: State, t: Task): ChangeAuthor[] {
+  const unchosen = (stepId: string) => {
+    const g = t.steps.find((x) => x.id === stepId)?.copyOf;
+    if (!g) return false;
+    return t.bestOf?.[g] ? t.bestOf[g] !== stepId : t.steps.find((x) => x.id === g)?.parallel?.mode === "best-of" && stepId !== g;
+  };
+  const out = new Set<ChangeAuthor>();
+  for (const a of s.artifacts) if (a.taskId === t.id && a.kind === "code-change" && !unchosen(a.stepId)) out.add(M.artifactAuthor(s, a));
+  out.add(changeAuthorOf(s, t));
+  return [...out];
 }
 
 /**
@@ -1388,7 +1486,9 @@ export function reportRepairHead(state: State, repairTaskId: string, f: PrHeadFa
   const rt = getTask(s, repairTaskId);
   const t = getTask(s, target.task.id);
   const pr = t.integration!.pr!;
-  pr.pendingHead = { sha: f.sha, changeSha: f.sha, changeTaskId: rt.id, changeAuthor: changeAuthorOf(s, rt), baseSha: f.baseSha, kind: "repair" };
+  // The fix adds its authors to the pull request's; it never replaces them. The pull request still
+  // holds the earlier commits, so a review must be independent of everyone who wrote any of it.
+  pr.pendingHead = { sha: f.sha, changeSha: f.sha, changeTaskId: rt.id, changeAuthor: changeAuthorOf(s, rt), changeAuthors: [...new Set([...M.prAuthors(pr), ...changeAuthorsOf(s, rt)])], baseSha: f.baseSha, kind: "repair" };
   // What the pull request will hold once the fix is pushed. A fix that touches CI workflow files is
   // never pushed on an earlier permission: it is asked for again.
   pr.changed = f.changed;
@@ -1406,11 +1506,14 @@ function promoteHead(s: State, taskId: string, now: string): State {
   const pr = t.integration!.pr!;
   const p = pr.pendingHead;
   if (!p) return s;
+  const before = pr.changeAuthor;
   pr.headSha = p.sha;
   pr.baseSha = p.baseSha;
   pr.changeSha = p.changeSha;
   pr.changeTaskId = p.changeTaskId;
   pr.changeAuthor = p.changeAuthor;
+  // Only ever grows: every author of a commit the pull request holds stays an author.
+  pr.changeAuthors = [...new Set([...M.prAuthors({ ...pr, changeAuthor: before }), ...(p.changeAuthors ?? [p.changeAuthor])])];
   delete pr.pendingHead;
   // Everything that was bound to the old head is void: the Merge click, the attempts, what GitHub showed.
   delete pr.mergeRequested;
@@ -1590,10 +1693,10 @@ export function reportBaseFetched(state: State, sha: string, now: string, unpush
       g.posture.push({
         id: UNPUSHED_ID,
         status: "warn",
-        label: `${unpushed.count} Orchestration commit${unpushed.count === 1 ? "" : "s"} on ${unpushed.branch} ${unpushed.count === 1 ? "is" : "are"} not on ${cfg.remote}/${cfg.base}`,
+        label: `${unpushed.count} Orchestrator commit${unpushed.count === 1 ? "" : "s"} on ${unpushed.branch} ${unpushed.count === 1 ? "is" : "are"} not on ${cfg.remote}/${cfg.base}`,
         detail: `Local delivery put ${unpushed.count === 1 ? "it" : "them"} on your branch ${unpushed.branch}. The app does not push ${unpushed.count === 1 ? "it" : "them"}, and new work starts from ${cfg.remote}/${cfg.base}, which does not have ${unpushed.count === 1 ? "it" : "them"}. Push ${unpushed.branch} yourself if pull requests should build on that work.`,
       });
-      if (!had) event(s, now, "system", "config", `${unpushed.count} Orchestration commit(s) on ${unpushed.branch} are not on ${cfg.remote}/${cfg.base}; the app does not push them`);
+      if (!had) event(s, now, "system", "config", `${unpushed.count} Orchestrator commit(s) on ${unpushed.branch} are not on ${cfg.remote}/${cfg.base}; the app does not push them`);
     }
   }
   if (first) event(s, now, "system", "integration", `Fetched ${cfg.remote}/${cfg.base} (${sha12(sha)}); new work starts from it`);
@@ -1622,6 +1725,8 @@ function mainCheckState(names: string[], checks: CheckObs[]): "pending" | "succe
 export function reportObservations(state: State, obs: Observations, now: string, ctx: { opId?: string; actError?: OpError; requested?: { taskId: string; number: number }[]; repo?: string } = {}): State {
   const s = structuredClone(state);
   const nowMs = Date.parse(now);
+  // The time GitHub was read, never later than now: the freshness checks are about the read.
+  const readAt = obs.at && Date.parse(obs.at) <= nowMs ? obs.at : now;
   const gh = s.project.github;
   const repo = ctx.repo ?? gh?.repo;
   const seen = new Set<string>();
@@ -1641,7 +1746,7 @@ export function reportObservations(state: State, obs: Observations, now: string,
     }
     const wasReady = prReady(s, t, nowMs);
     pr.observed = {
-      at: now,
+      at: readAt,
       state: o.state,
       isDraft: o.isDraft,
       crossRepo: o.crossRepo,
@@ -1684,7 +1789,7 @@ export function reportObservations(state: State, obs: Observations, now: string,
       ];
       pr.phase = "merged";
       settle();
-      const who = byApp ? (auto ? "Orchestration, automatically: independent review clean and required checks passed on that head" : "Orchestration, at your request") : (o.mergedBy ?? "a person");
+      const who = byApp ? (auto ? "Orchestrator, automatically: independent review clean and required checks passed on that head" : "Orchestrator, at your request") : (o.mergedBy ?? "a person");
       event(s, now, "system", "integration", `${prName(pr)} merged into ${pr.base} by ${who}${pr.simulated ? " (simulated)" : ""}`, t.id);
       recordLanded(
         s,
@@ -1712,7 +1817,7 @@ export function reportObservations(state: State, obs: Observations, now: string,
       pr.phase = "closed";
       if (asked) pr.closedByRequest = true;
       settle();
-      event(s, now, "system", asked ? "integration" : "blocked", asked ? `${prName(pr)} closed from Orchestration; the branch is kept` : `${prName(pr)} was closed on GitHub without merging${o.closedBy ? ` by ${o.closedBy}` : ""}`, t.id);
+      event(s, now, "system", asked ? "integration" : "blocked", asked ? `${prName(pr)} closed from Orchestrator; the branch is kept` : `${prName(pr)} was closed on GitHub without merging${o.closedBy ? ` by ${o.closedBy}` : ""}`, t.id);
       cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds], reason: `${prName(pr)} was closed` });
       continue;
     }
@@ -1968,6 +2073,8 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
   // 6.2 Push a pending head (a fix, or the candidate brought up to date) onto its pull request.
   for (const t of open) {
     const pr = t.integration!.pr!;
+    // A head brought up to date is pushed only for the pull request that merges next.
+    if (pr.pendingHead?.kind === "update" && autoQueue(s)[0]?.id !== t.id) continue;
     if (pr.pendingHead && !pr.op && pushable(pr) && rested(pr)) return { id, kind: "push", taskId: t.id, n: pr.n, headSha: pr.headSha };
   }
   // 6.3 Bring the merge candidate, and only it, up to date with the base (local; the push follows).
@@ -2035,6 +2142,8 @@ export function beginPrOp(state: State, op: PrOp, now: string): { state: State; 
         if (openPrTasks(s).length >= p.prDelivery.maxOpenPrs) return no;
       } else if (op.kind === "push") {
         if (pr.phase !== "open" || !pr.pendingHead || !publishAllowed(pr) || stuck(pr)) return no;
+        // Re-checked inside the transaction: the pull request may have been switched to hold since it was planned.
+        if (pr.pendingHead.kind === "update" && autoQueue(s)[0]?.id !== t.id) return no;
       } else {
         if (pr.phase !== "open" || pr.number === undefined || pr.pendingHead) return no;
         if (!pr.observed || nowMs - Date.parse(pr.observed.at) > PR_LIMITS.observeFreshMs) return no;
@@ -2102,10 +2211,10 @@ export function reportPrOp(state: State, r: PrOpResult, now: string, ctx: Report
       pr.baseSha = r.updated.baseSha;
       delete pr.baseConflict;
     } else if (r.updated) {
-      pr.pendingHead = { sha: r.updated.sha, changeSha: pr.changeSha, changeTaskId: pr.changeTaskId, changeAuthor: pr.changeAuthor, baseSha: r.updated.baseSha, kind: "update" };
+      pr.pendingHead = { sha: r.updated.sha, changeSha: pr.changeSha, changeTaskId: pr.changeTaskId, changeAuthor: pr.changeAuthor, changeAuthors: M.prAuthors(pr), baseSha: r.updated.baseSha, kind: "update" };
       pr.counters.baseUpdates += 1;
       delete pr.baseConflict;
-      event(s, now, "system", "integration", `${pr.base} moved to ${sha12(r.updated.baseSha)}: prepared ${sha12(r.updated.sha)}, a merge of it into ${prName(pr)} made by Orchestration (${pr.counters.baseUpdates} of ${PR_LIMITS.baseUpdates}); it is pushed next, never forced`, t.id);
+      event(s, now, "system", "integration", `${pr.base} moved to ${sha12(r.updated.baseSha)}: prepared ${sha12(r.updated.sha)}, a merge of it into ${prName(pr)} made by Orchestrator (${pr.counters.baseUpdates} of ${PR_LIMITS.baseUpdates}); it is pushed next, never forced`, t.id);
     } else if (r.conflict) {
       pr.baseConflict = { baseSha: op.baseSha, headSha: pr.headSha, files: r.conflict.files.slice(0, 20) };
       refreshAttention(s, t, now);
@@ -2282,6 +2391,7 @@ export function setPrDelivery(state: State, patch: Partial<PrDeliveryConfig>, no
       pr.policy = next.merge;
       if (next.merge === "auto") delete pr.mergeRequested;
     }
+    dropStaleUpdate(s, t, now);
     pr.review = reviewCoverage(s, t);
     refreshAttention(s, t, now);
   }
@@ -2322,6 +2432,7 @@ export function holdPr(state: State, taskId: string, reason: string | undefined,
   const { task, pr } = openPr(s, taskId, "hold");
   if (pr.userHold) return state;
   pr.userHold = { at: now, ...(reason?.trim() ? { reason: clip(reason.trim(), 200) } : {}) };
+  dropStaleUpdate(s, task, now);
   // A hold withdraws a merge request that has not been sent yet.
   if (!pr.op) delete pr.mergeRequested;
   event(s, now, "user", "integration", `${prName(pr)} held by you${pr.op ? "; the operation already sent to GitHub cannot be interrupted" : ""}`, task.id);
@@ -2356,6 +2467,7 @@ export function setPrPolicy(state: State, taskId: string, policy: "hold" | "auto
   pr.policy = next;
   pr.policySource = source;
   if (next === "auto") delete pr.mergeRequested;
+  dropStaleUpdate(s, task, now);
   event(s, now, "user", "integration", `${prName(pr)}: ${next === "auto" ? "merges automatically after an independent review and passing required checks" : "hold and notify"}${policy === null ? " (follows the project)" : ""}`, task.id);
   refreshAttention(s, task, now);
   return s;

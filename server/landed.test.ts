@@ -400,7 +400,7 @@ describe("send back as a revert, local delivery (scenario 17)", () => {
 });
 
 describe("workspace seeds", () => {
-  it("a prepared merge is concluded as a two-parent commit by Orchestration", () => {
+  it("a prepared merge is concluded as a two-parent commit by Orchestrator", () => {
     git("switch", "-q", "-c", "side");
     commit("side.txt", "side\n", "side work");
     const side = git("rev-parse", "HEAD");

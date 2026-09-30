@@ -9,10 +9,15 @@
 //   --fake   the same scenarios against a local bare repository and the in-process fake GitHub, on a
 //            simulated clock. Contacts nothing. Used to check the script itself.
 //
-// NOT VERIFIED: the real mode of this file has never been run against GitHub.
+// The real mode stops at once, before anything is written, when the repository cannot take the
+// sandbox ruleset (for example a private repository on a plan without rulesets). Any failed setup
+// command is fatal. A scenario whose prerequisite failed is skipped, not waited on. It is safe to run
+// again on a repository that an earlier run used: the project id, the branches and the files are new.
+//
+// NOT VERIFIED: the real mode of this file has never passed against GitHub.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as D from "../../src/domain/delivery";
 import * as M from "../../src/domain/model";
@@ -26,8 +31,8 @@ import { WorkspaceManager, networkEnv } from "../workspaces";
 import { FakeGitHub } from "./fakeGitHub";
 import { ScriptedAdapter } from "./scripted";
 
-/** Repositories this run never touches, whatever is asked. */
-const NEVER = ["erickb336/orchestration"];
+/** Repositories this run never touches, whatever is asked: the project's own, under its current and its former name. */
+const NEVER = ["erickb336/orchestrator", "erickb336/orchestration"];
 const RULESET = "orc-sandbox-protect-main";
 const WORKFLOW = ".github/workflows/orc-sandbox-check.yml";
 const REPO = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/;
@@ -61,6 +66,12 @@ const fail = (message: string): never => {
   console.error(`[pr-sandbox] ${message}`);
   process.exit(2);
 };
+const slugOf = (url: string) => ((/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(url.trim()) ?? [])[1] ?? "").toLowerCase();
+/** The repository this checkout's `origin` points at ("" when there is none). Never used for the run. */
+function ownOrigin(): string {
+  const r = spawnSync("git", ["-C", resolve(import.meta.dirname, "..", ".."), "remote", "get-url", "origin"], { encoding: "utf8" });
+  return r.status === 0 ? slugOf(String(r.stdout)) : "";
+}
 
 // ---------- refusals (repeated here: this file must be safe even when started by hand) ----------
 
@@ -68,6 +79,7 @@ if (!opts.fake) {
   if (!opts.repo) fail("No repository given. Pass --repo <owner>/<name> of a throwaway repository. There is no default.");
   if (!REPO.test(opts.repo)) fail(`"${opts.repo}" is not an <owner>/<name> repository.`);
   if (NEVER.includes(opts.repo.toLowerCase())) fail(`${opts.repo} is never used for this run. Use a repository made for it.`);
+  if (ownOrigin() === opts.repo.toLowerCase()) fail(`${opts.repo} is the repository this checkout belongs to. Use a throwaway repository.`);
   if (!process.argv.includes("--yes")) fail("Not confirmed. Pass --yes to let this run write to the repository.");
   if (process.env.ORC_SANDBOX_CONFIRMED !== opts.repo) fail("Start this run through scripts/pr-sandbox-check.mjs, which confirms the repository.");
 }
@@ -76,6 +88,8 @@ if (!opts.fake) {
 
 const started = new Date();
 const stamp = started.toISOString().replace(/[:.]/g, "-");
+/** Names this run's files apart from an earlier run's in the same repository. */
+const runTag = started.getTime().toString(36);
 const out = resolve(import.meta.dirname, "..", "..", "evidence", "ORC-008", `${opts.fake ? "fake" : "run"}-${stamp}`);
 mkdirSync(out, { recursive: true });
 const commandLog = join(out, "commands.log");
@@ -130,6 +144,10 @@ const commitFile = (file: string, text: string, message: string) => {
   git("-c", "user.name=Orchestration sandbox setup", "-c", "user.email=sandbox-setup@localhost", "commit", "-q", "-m", message);
 };
 
+/** A failed setup command. Always fatal: the run stops with this message and no scenario is started. */
+class SetupError extends Error {}
+const lastLine = (text: string) => redact(text).trim().split("\n").filter(Boolean).pop() ?? "";
+
 /** The run's own gh calls (setup and teardown of the sandbox). The application never makes these. */
 function rawGh(args: string[], stdin?: string): { ok: boolean; stdout: string; stderr: string } {
   const r = spawnSync("gh", args, { encoding: "utf8", env: networkEnv(), input: stdin ?? "", cwd: join(work, "gh-setup") });
@@ -137,7 +155,7 @@ function rawGh(args: string[], stdin?: string): { ok: boolean; stdout: string; s
   return { ok: r.status === 0, stdout: String(r.stdout ?? ""), stderr: redact(String(r.stderr ?? "")) };
 }
 
-const workflow = (seconds: number) => `# Created by Orchestration's scripts/pr-sandbox-check.mjs. One slow required check named "check".
+const workflow = (seconds: number) => `# Created by Orchestrator's scripts/pr-sandbox-check.mjs. One slow required check named "check".
 name: orc-sandbox-check
 on:
   pull_request:
@@ -152,10 +170,10 @@ jobs:
       - run: test ! -f FAIL_CHECK
 `;
 
-const rulesetBody = (unattributed: boolean) => ({
+const rulesetBody = (unattributed: boolean, enforcement: "active" | "disabled" = "active") => ({
   name: RULESET,
   target: "branch",
-  enforcement: "active",
+  enforcement,
   conditions: { ref_name: { include: ["refs/heads/main"], exclude: [] } },
   // The posture of the user's own repository: an admin can bypass, always. The application never does.
   bypass_actors: [{ actor_id: 5, actor_type: "RepositoryRole", bypass_mode: "always" }],
@@ -189,44 +207,146 @@ function setupFake() {
   fake = new FakeGitHub(bare);
 }
 
-function setupReal() {
+/** A read of the GitHub API by the run itself that must succeed and return JSON. Anything else is fatal. */
+function ghJson<T>(args: string[], what: string, stdin?: string): T {
+  const r = rawGh(args, stdin);
+  if (!r.ok) throw new SetupError(`${what} failed: ${lastLine(r.stderr) || lastLine(r.stdout) || "gh returned an error"}`);
+  try {
+    return JSON.parse(r.stdout) as T;
+  } catch {
+    throw new SetupError(`${what} failed: GitHub's answer was not JSON`);
+  }
+}
+
+interface Ruleset {
+  id: number;
+  name: string;
+  enforcement: string;
+  conditions?: { ref_name?: { include?: string[] } };
+  rules?: { type: string; parameters?: { required_status_checks?: { context: string }[]; required_approving_review_count?: number } }[];
+}
+
+/** Read the sandbox ruleset back and check it is what this run needs. Throws a SetupError otherwise. */
+function verifyRuleset(id: string, enforcement?: "active" | "disabled"): Ruleset {
+  const r = ghJson<Ruleset>(["api", `repos/${opts.repo}/rulesets/${id}`], "Reading the sandbox ruleset back");
+  const problems: string[] = [];
+  if (String(r.id) !== id || r.name !== RULESET) problems.push("it is not the sandbox ruleset");
+  if (enforcement ? r.enforcement !== enforcement : r.enforcement !== "active" && r.enforcement !== "disabled") problems.push(`its enforcement is "${r.enforcement}"${enforcement ? `, not "${enforcement}"` : ""}`);
+  if (!r.conditions?.ref_name?.include?.some((x) => x === "refs/heads/main" || x === "~DEFAULT_BRANCH")) problems.push("it does not apply to main");
+  if (!r.rules?.some((x) => x.type === "required_status_checks" && x.parameters?.required_status_checks?.some((c) => c.context === "check"))) problems.push('it does not require the status check "check"');
+  if (!r.rules?.some((x) => x.type === "pull_request" && (x.parameters?.required_approving_review_count ?? 0) === 0)) problems.push("it does not require a pull request with 0 approvals");
+  if (problems.length) throw new SetupError(`The sandbox ruleset (id ${id}) was read back and is not as needed: ${problems.join("; ")}.`);
+  return r;
+}
+
+/** Replace the sandbox ruleset's content, read it back and verify it. */
+function putRuleset(enforcement: "active" | "disabled", unattributed = false) {
+  if (!rulesetId) throw new SetupError("There is no sandbox ruleset to change.");
+  ghJson<Ruleset>(["api", "-X", "PUT", `repos/${opts.repo}/rulesets/${rulesetId}`, "--input", "-"], `Setting the sandbox ruleset to "${enforcement}"`, JSON.stringify(rulesetBody(unattributed, enforcement)));
+  verifyRuleset(rulesetId, enforcement);
+}
+
+/**
+ * Preconditions, checked before anything is pushed: the repository is a throwaway one this account
+ * administers, it is not the project's own (by its canonical name, so a renamed repository that
+ * redirects is caught), and the sandbox ruleset can be created, read back and verified. It is created
+ * switched off, so the workflow can still be pushed to main; setupReal switches it on afterwards.
+ */
+function preconditions() {
   mkdirSync(join(work, "gh-setup"), { recursive: true });
-  // Read-only first: who is signed in, and is this a repository this account administers?
-  const repo = rawGh(["api", `repos/${opts.repo}`, "--jq", "{private:.private,archived:.archived,fork:.fork,default_branch:.default_branch,admin:.permissions.admin,push:.permissions.push,stars:.stargazers_count}"]);
-  if (!repo.ok) throw new Error(`The repository ${opts.repo} could not be read with your gh sign-in: ${repo.stderr.trim().split("\n").pop()}`);
-  const facts = JSON.parse(repo.stdout) as { private: boolean; archived: boolean; fork: boolean; default_branch: string; admin: boolean; push: boolean; stars: number };
+  const facts = ghJson<{ full_name: string; private: boolean; archived: boolean; fork: boolean; default_branch: string; admin: boolean; push: boolean; stars: number }>(
+    ["api", `repos/${opts.repo}`, "--jq", "{full_name:.full_name,private:.private,archived:.archived,fork:.fork,default_branch:.default_branch,admin:.permissions.admin,push:.permissions.push,stars:.stargazers_count}"],
+    `Reading the repository ${opts.repo} with your gh sign-in`,
+  );
   fact("repository", facts);
-  if (facts.archived || !facts.push || !facts.admin) throw new Error(`${opts.repo} must be a repository you administer (needed to create and remove the sandbox ruleset), and not archived.`);
-  if (facts.stars > 0 || facts.fork) throw new Error(`${opts.repo} has stars or is a fork: it does not look like a throwaway repository. Nothing was changed.`);
+  // The name GitHub knows the repository by. A former name redirects, so the name given proves nothing.
+  const canonical = String(facts.full_name ?? "").toLowerCase();
+  if (!REPO.test(canonical)) throw new SetupError(`GitHub did not report the canonical name of ${opts.repo}. Nothing was changed.`);
+  const own = ownOrigin();
+  // The origin may itself be a former name: ask GitHub what it is called now (read-only; best effort).
+  const ownNow = own ? rawGh(["api", `repos/${own}`, "--jq", ".full_name"]) : undefined;
+  const ownCanonical = ownNow?.ok ? ownNow.stdout.trim().toLowerCase() : "";
+  if (NEVER.includes(canonical) || (own && canonical === own) || (ownCanonical && canonical === ownCanonical))
+    throw new SetupError(`${opts.repo} is ${facts.full_name}, the project's own repository${canonical !== opts.repo.toLowerCase() ? " under a former name" : ""}. It is never used for this run. Nothing was changed.`);
+  if (canonical !== opts.repo.toLowerCase()) throw new SetupError(`${opts.repo} is now named ${facts.full_name}. Pass the repository by its current name. Nothing was changed.`);
+  if (facts.archived || !facts.push || !facts.admin) throw new SetupError(`${opts.repo} must be a repository you administer (needed to create and remove the sandbox ruleset), and not archived. Nothing was changed.`);
+  if (facts.stars > 0 || facts.fork) throw new SetupError(`${opts.repo} has stars or is a fork: it does not look like a throwaway repository. Nothing was changed.`);
+  if ((facts.default_branch ?? "main") !== "main") throw new SetupError(`${opts.repo}'s default branch is ${facts.default_branch}; this run needs it to be main. Nothing was changed.`);
   if (!facts.private) log("NOTE: the repository is public. Pull request titles, descriptions and comments made by this run are public.");
+
+  // Rulesets: list (read-only), then create, read back and verify. Without a required check nothing
+  // in this run can pass, so any failure here ends the run before a single commit is pushed.
+  const noRulesets = (r: { stdout: string; stderr: string }) =>
+    /upgrade to github|make this repository public/i.test(`${r.stdout} ${r.stderr}`) || (facts.private && /HTTP 403/.test(r.stderr))
+      ? `this repository is private on a plan without rulesets; make it public or use a plan that supports them. Nothing was changed. (GitHub said: ${lastLine(r.stderr) || lastLine(r.stdout)})`
+      : undefined;
+  const list = rawGh(["api", `repos/${opts.repo}/rulesets`]);
+  if (!list.ok) throw new SetupError(noRulesets(list) ?? `The rulesets of ${opts.repo} could not be read: ${lastLine(list.stderr) || lastLine(list.stdout)}. Nothing was changed.`);
+  let all: { id: number; name: string }[];
+  try {
+    all = JSON.parse(list.stdout) as { id: number; name: string }[];
+    if (!Array.isArray(all)) throw new Error("not a list");
+  } catch {
+    throw new SetupError(`The rulesets of ${opts.repo} could not be read: GitHub's answer was not a list. Nothing was changed.`);
+  }
+  const existing = all.find((x) => x.name === RULESET);
+  if (existing) {
+    // Left by an earlier run (--keep, or a run that was interrupted): it is used again.
+    if (!/^\d+$/.test(String(existing.id))) throw new SetupError("The existing sandbox ruleset has no usable id. Nothing was changed.");
+    rulesetId = String(existing.id);
+    fact("ruleset", { id: rulesetId, name: RULESET, reused: true });
+    // Put into the state this run starts from, which also proves it can be changed, read back and verified.
+    putRuleset("disabled");
+    return;
+  }
+  const made = rawGh(["api", "-X", "POST", `repos/${opts.repo}/rulesets`, "--input", "-"], JSON.stringify(rulesetBody(false, "disabled")));
+  if (!made.ok) throw new SetupError(noRulesets(made) ?? `The sandbox ruleset could not be created: ${lastLine(made.stderr) || lastLine(made.stdout)}. Nothing else was changed.`);
+  let id = "";
+  try {
+    id = String((JSON.parse(made.stdout) as { id?: number }).id ?? "");
+  } catch {
+    id = "";
+  }
+  if (!/^\d+$/.test(id)) throw new SetupError("The sandbox ruleset could not be created: GitHub's answer carried no ruleset id. Look at the repository's rulesets before running this again.");
+  rulesetId = id;
+  evidence.created.push(`ruleset "${RULESET}" (id ${rulesetId}) on main`);
+  fact("ruleset", { id: rulesetId, name: RULESET, reused: false });
+  verifyRuleset(rulesetId, "disabled");
+}
+
+function setupReal() {
+  preconditions();
 
   const clone = spawnSync("git", ["clone", "-q", `https://github.com/${opts.repo}.git`, repoPath], { encoding: "utf8", env: networkEnv() });
   record("git", ["clone", `https://github.com/${opts.repo}.git`], `${clone.stdout ?? ""}${clone.stderr ?? ""}`);
-  if (clone.status !== 0) throw new Error(`git could not clone ${opts.repo}: ${redact(String(clone.stderr)).trim().split("\n").pop()}`);
+  if (clone.status !== 0) throw new SetupError(`git could not clone ${opts.repo}: ${lastLine(String(clone.stderr))}`);
   const hasMain = spawnSync("git", ["-C", repoPath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/main"]).status === 0;
   if (hasMain) git("checkout", "-q", "-B", "main", "origin/main");
   else git("checkout", "-q", "-b", "main");
-  // The one required check, slow on purpose. Pushed directly to main BEFORE the ruleset exists.
-  if (!existsSync(join(repoPath, WORKFLOW)) || !hasMain) {
-    commitFile(WORKFLOW, workflow(opts.checkSeconds), "Orchestration sandbox: add the slow required check");
+  // The one required check, slow on purpose. A workflow an earlier run left is used as it is.
+  const present = hasMain && existsSync(join(repoPath, WORKFLOW)) ? readFileSync(join(repoPath, WORKFLOW), "utf8") : "";
+  const sleeps = /^\s*- run: sleep (\d+)\s*$/m.exec(present);
+  if (sleeps && /^\s{2}check:\s*$/m.test(present)) {
+    const seconds = Number(sleeps[1]);
+    if (seconds !== opts.checkSeconds) log(`NOTE: the workflow already in the repository sleeps ${seconds} s (not ${opts.checkSeconds}); it is used as it is, and the waits follow it.`);
+    opts.checkSeconds = Math.max(1, Math.min(600, seconds));
+    fact("workflow", { file: WORKFLOW, reused: true, checkSeconds: opts.checkSeconds });
+  } else {
+    // Pushed directly to main while the ruleset is switched off.
+    commitFile(WORKFLOW, workflow(opts.checkSeconds), "Orchestrator sandbox: add the slow required check");
     git("push", "-q", "origin", "main");
     evidence.created.push(`commit on main adding ${WORKFLOW}`);
+    fact("workflow", { file: WORKFLOW, reused: false, checkSeconds: opts.checkSeconds });
   }
-  const existing = rawGh(["api", `repos/${opts.repo}/rulesets`, "--jq", `.[] | select(.name == "${RULESET}") | .id`]);
-  rulesetId = existing.stdout.trim().split("\n").filter(Boolean)[0];
-  if (!rulesetId) {
-    const made = rawGh(["api", "-X", "POST", `repos/${opts.repo}/rulesets`, "--input", "-"], JSON.stringify(rulesetBody(false)));
-    if (!made.ok) throw new Error(`The sandbox ruleset could not be created: ${made.stderr.trim().split("\n").pop()}`);
-    rulesetId = String((JSON.parse(made.stdout) as { id: number }).id);
-    evidence.created.push(`ruleset "${RULESET}" (id ${rulesetId}) on main`);
-  }
-  fact("ruleset", { id: rulesetId, name: RULESET });
+  // Switched on, read back and verified: from here on main takes changes only through pull requests with the check passed.
+  putRuleset("active");
+  log(`The sandbox ruleset (id ${rulesetId}) is active and verified: a pull request and the status check "check" are required on main.`);
 }
 
 function teardownReal() {
   if (opts.keep || !rulesetId) return;
   const gone = rawGh(["api", "-X", "DELETE", `repos/${opts.repo}/rulesets/${rulesetId}`]);
-  check("teardown: the sandbox ruleset was removed", gone.ok, gone.ok ? undefined : gone.stderr.trim().split("\n").pop());
+  check("teardown: the sandbox ruleset was removed", gone.ok, gone.ok ? undefined : lastLine(gone.stderr));
 }
 
 // ---------- the application under test ----------
@@ -273,7 +393,7 @@ function driveAgents() {
     if (!ad.runs.has(a.id)) continue;
     const t = task(a.taskId);
     const role = t.steps.find((x) => x.id === a.stepId)?.role;
-    if (role === "coder" && !t.revertOf) ad.finish(a.id, { write: [`orc-sandbox-${a.taskId}.txt`, `${a.taskId} by ${a.snapshot.provider}\n`] });
+    if (role === "coder" && !t.revertOf) ad.finish(a.id, { write: [`orc-sandbox-${runTag}-${a.taskId}.txt`, `${a.taskId} by ${a.snapshot.provider} (run ${runTag})\n`] });
     else if (role === "code_reviewer" || role === "ux_reviewer") ad.finish(a.id, { findings: 0 });
     else ad.finish(a.id);
   }
@@ -317,7 +437,26 @@ async function until(what: string, pred: () => boolean, timeoutS: number): Promi
   }
 }
 
-const CHECK_WAIT = () => opts.checkSeconds + (opts.fake ? 600 : 900);
+/**
+ * How long each wait may take, in seconds of the run's clock. Sized to what is waited for, so that a
+ * run that cannot work ends in minutes: the service reads GitHub every 30 s while something is urgent
+ * and every 2 min otherwise, and a hosted check needs a runner before it starts to sleep.
+ */
+const WAIT = {
+  preflight: 120,
+  /** A scripted task: two or three runs that finish at once. Real agents take as long as they take. */
+  taskDone: () => (opts.realAgents ? 1800 : 120),
+  /** Push, open, and the first read of GitHub. */
+  prOpen: 180,
+  /** The required check on a new head: a runner, the sleep, and the next read. */
+  check: () => opts.checkSeconds + 300,
+  /** A merge, a close or a comment the service was asked for: the next read, then the command, then a read. */
+  act: 150,
+  /** Something a person did on GitHub, noticed at the slow cadence. */
+  notice: 300,
+  /** An automatic merge: the check, then perhaps one update to the base and the check again. */
+  autoMerge: () => 2 * (opts.checkSeconds + 300),
+};
 
 function createTask(title: string): string {
   const id = (cmd("createTask", { title, area: "Sandbox", outcome: `${title}: a small file is added`, benefit: "Evidence", whyNow: "Evidence run", approach: "Add one small file", acceptance: ["The file exists"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
@@ -328,8 +467,8 @@ function createTask(title: string): string {
 /** A task run to its pull request, open and seen on GitHub. */
 async function openPullRequest(title: string): Promise<string> {
   const id = createTask(title);
-  await until(`${id} is done`, () => task(id).lifecycle === "done", opts.realAgents ? 1800 : 300);
-  await until(`${id}'s pull request is open and seen`, () => task(id).integration?.pr?.phase === "open" && !!pr(id).observed, 600);
+  await until(`${id} is done`, () => task(id).lifecycle === "done", WAIT.taskDone());
+  await until(`${id}'s pull request is open and seen`, () => task(id).integration?.pr?.phase === "open" && !!pr(id).observed, WAIT.prOpen);
   evidence.created.push(`branch ${pr(id).branch} and pull request #${pr(id).number}`);
   return id;
 }
@@ -339,9 +478,23 @@ const remoteHead = (branch: string) => {
   return String(r.stdout).split(/\s+/)[0] ?? "";
 };
 const selected = (name: string) => opts.only.length === 0 || opts.only.includes(name);
-async function scenario(name: string, title: string, run: () => Promise<void>) {
-  if (!selected(name)) {
+/**
+ * Run one scenario. `needs` names what it cannot run without and returns why that is missing, if it is:
+ * the scenario is then skipped at once (and counted as not passed), never started and waited on.
+ * `always`: part of the setup of every other scenario, so --only does not leave it out.
+ */
+async function scenario(name: string, title: string, run: () => Promise<void>, o: { needs?: () => string | undefined; always?: boolean } = {}) {
+  if (!selected(name) && !o.always) {
     evidence.skipped[name] = "not selected (--only)";
+    return;
+  }
+  const missing = o.needs?.();
+  if (missing) {
+    evidence.skipped[name] = `prerequisite failed: ${missing}`;
+    log(`SKIP (${name}) ${title}: ${missing}`);
+    // Selected and impossible is a failure of the run, reported once, without waiting for anything.
+    check(`(${name}) ${title}`, false, `skipped: ${missing}`);
+    save();
     return;
   }
   log(`--- (${name}) ${title}`);
@@ -349,6 +502,9 @@ async function scenario(name: string, title: string, run: () => Promise<void>) {
     await run();
   } catch (e) {
     check(`(${name}) ${title}`, false, e instanceof Error ? e.message : String(e));
+    save();
+    // The sandbox itself is no longer as it must be: nothing after this could be trusted.
+    if (e instanceof SetupError) throw e;
   }
   save();
 }
@@ -361,7 +517,7 @@ let beforeHold = "";
 async function scenarios() {
   await scenario("a", "the read-only repository check and what it found", async () => {
     cmd("setDeliveryMode", { mode: "pr" });
-    await until("the repository is checked and the base fetched", () => !!st().project.github?.checkedAt && (!!st().project.github?.base || !!st().project.github?.problem), 180);
+    await until("the repository is checked and the base fetched", () => !!st().project.github?.checkedAt && (!!st().project.github?.base || !!st().project.github?.problem), WAIT.preflight);
     const gh = st().project.github!;
     fact("preflight", { ok: gh.ok, repo: gh.repo, login: gh.login, ghVersion: gh.ghVersion, requiredChecks: gh.requiredChecks, autoMergeBlockers: gh.autoMergeBlockers, problem: gh.problem?.message });
     fact("posture", gh.posture.map((p) => `${p.status}: ${p.label}`));
@@ -369,8 +525,17 @@ async function scenarios() {
     check("(a) automatic merging is available here", gh.autoMergeBlockers.length === 0, gh.autoMergeBlockers);
     if (!opts.fake) check("(a) the account's bypass of the rules is reported", gh.posture.some((p) => p.id === "bypass"));
     if (!gh.ok) throw new Error("the repository check did not pass; the remaining scenarios cannot run");
-  });
-  if (!st().project.github?.ok) return;
+  }, { always: true });
+  // What the other scenarios cannot run without. Each is skipped at once when it is missing.
+  const checked = () => {
+    const gh = st().project.github;
+    if (!gh?.ok) return `the repository check did not pass${gh?.problem ? ` (${gh.problem.message})` : ""}`;
+    if (!gh.requiredChecks.includes("check")) return 'the application found no required check named "check" on main, so no pull request could ever become ready';
+    if (!gh.base) return "the base branch was not fetched";
+    return undefined;
+  };
+  const auto = () => checked() ?? (st().project.github!.autoMergeBlockers.length ? `automatic merging is not available here: ${st().project.github!.autoMergeBlockers.join("; ")}` : undefined);
+  const landed = () => checked() ?? (landedHold ? undefined : "scenario (b) did not land a pull request");
 
   await scenario("b", "hold and notify, end to end", async () => {
     beforeHold = remoteHead("main");
@@ -378,25 +543,24 @@ async function scenarios() {
     const head = pr(id).headSha;
     check("(b) the branch on the remote holds exactly the task's final commit", remoteHead(pr(id).branch) === head, { branch: pr(id).branch, head });
     check("(b) nothing merges by itself in hold mode", pr(id).policy === "hold" && pr(id).phase === "open");
-    await until("the pull request is ready for the user", () => D.prReady(st(), task(id), nowMs()), CHECK_WAIT());
-    await until("the ready notice was written", () => st().events.some((e) => e.taskId === id && e.message.includes("is ready for you")), 120);
+    await until("the pull request is ready for the user", () => D.prReady(st(), task(id), nowMs()), WAIT.check());
+    await until("the ready notice was written", () => st().events.some((e) => e.taskId === id && e.message.includes("is ready for you")), 60);
     check("(b) the user is told once that it is ready", st().events.filter((e) => e.taskId === id && e.message.includes("is ready for you")).length === 1);
     fact("(b) independent review", pr(id).review);
     cmd("requestPrMerge", { taskId: id, headSha: head });
-    await until("it merges", () => pr(id).phase !== "open", 300);
+    await until("it merges", () => pr(id).phase !== "open", WAIT.act);
     const landed = task(id).integration?.landed;
     check("(b) merged by the app at the user's request, recorded from what GitHub reported", pr(id).phase === "merged" && landed?.by === "app", { phase: pr(id).phase, by: landed?.by, commit: landed?.commit });
     check("(b) GitHub's merge commit is the tip of main", !!landed && remoteHead("main") === landed.commit);
     landedHold = pr(id).phase === "merged" ? id : undefined;
-  });
+  }, { needs: checked });
 
   await scenario("e", "a note posted as a comment on the merged pull request, and found again by its marker", async () => {
-    if (!landedHold) throw new Error("scenario (b) did not land a pull request");
-    const id = landedHold;
+    const id = landedHold!;
     const number = task(id).integration!.landed!.pr!.number;
     cmd("addLandedNote", { taskId: id, text: "Evidence run: a note posted from the Review list.", postToGitHub: true });
     const first = () => task(id).integration!.landed!.notes[0];
-    await until("the note is posted", () => first().comment?.status !== "pending", 300);
+    await until("the note is posted", () => first().comment?.status !== "pending", WAIT.act);
     check("(e) the note is posted only with its address", first().comment?.status === "posted" && !!first().comment?.url, first().comment);
     // An earlier, interrupted attempt already posted the comment: the app must find it, not post again.
     cmd("pauseProject");
@@ -405,26 +569,25 @@ async function scenarios() {
     const marker = D.noteMarker(st().project.id, second.id);
     await host.comment({ repo: repoRef(), number, body: `${second.text}\n\n${marker}` });
     cmd("resumeProject");
-    await until("the second note is reconciled", () => task(id).integration!.landed!.notes[1].comment?.status !== "pending", 300);
+    await until("the second note is reconciled", () => task(id).integration!.landed!.notes[1].comment?.status !== "pending", WAIT.act);
     const found = await host.findComment({ repo: repoRef(), number, marker });
     check("(e) the comment that already existed is adopted by its marker", task(id).integration!.landed!.notes[1].comment?.url === found?.url, task(id).integration!.landed!.notes[1].comment);
     if (fake) check("(e) exactly one comment carries the marker", fake.pr(number).comments.filter((c) => c.body.includes(marker)).length === 1);
-  });
+  }, { needs: landed });
 
   await scenario("f", "a revert delivered as a pull request", async () => {
-    if (!landedHold) throw new Error("scenario (b) did not land a pull request");
-    const r = cmd("sendBackLanded", { taskId: landedHold, kind: "revert", note: "Evidence run: undo it again.", holdBeforeStart: false }).result as { newId: string };
-    await until(`${r.newId} is done`, () => task(r.newId).lifecycle === "done", 600);
-    await until("the revert's pull request is open", () => task(r.newId).integration?.pr?.phase === "open" && !!pr(r.newId).observed, 600);
+    const r = cmd("sendBackLanded", { taskId: landedHold!, kind: "revert", note: "Evidence run: undo it again.", holdBeforeStart: false }).result as { newId: string };
+    await until(`${r.newId} is done`, () => task(r.newId).lifecycle === "done", WAIT.taskDone() + 120);
+    await until("the revert's pull request is open", () => task(r.newId).integration?.pr?.phase === "open" && !!pr(r.newId).observed, WAIT.prOpen);
     evidence.created.push(`branch ${pr(r.newId).branch} and pull request #${pr(r.newId).number}`);
-    await until("it is ready", () => D.prReady(st(), task(r.newId), nowMs()), CHECK_WAIT());
+    await until("it is ready", () => D.prReady(st(), task(r.newId), nowMs()), WAIT.check());
     cmd("requestPrMerge", { taskId: r.newId, headSha: pr(r.newId).headSha });
-    await until("the revert merges", () => pr(r.newId).phase !== "open", 300);
+    await until("the revert merges", () => pr(r.newId).phase !== "open", WAIT.act);
     check("(f) the revert merged", pr(r.newId).phase === "merged");
     git("fetch", "-q", "origin", "main");
     const tree = (rev: string) => git("rev-parse", `${rev}^{tree}`);
     check("(f) main holds the files it held before the reverted change", tree("FETCH_HEAD") === tree(beforeHold), { before: beforeHold.slice(0, 12), now: remoteHead("main").slice(0, 12) });
-  });
+  }, { needs: landed });
 
   await scenario("c", "automatic merge with a slow check, and a push by someone else", async () => {
     // First, a push by someone else to a pull request branch: the merge command is bound to the head it
@@ -433,7 +596,7 @@ async function scenarios() {
     const old = pr(held).headSha;
     git("fetch", "-q", "origin", pr(held).branch);
     git("checkout", "-q", "--detach", "FETCH_HEAD");
-    commitFile(`orc-sandbox-foreign-${held}.txt`, "pushed by a person\n", "A person's commit on the pull request branch");
+    commitFile(`orc-sandbox-${runTag}-foreign-${held}.txt`, "pushed by a person\n", "A person's commit on the pull request branch");
     git("push", "-q", "origin", `HEAD:refs/heads/${pr(held).branch}`);
     git("checkout", "-q", "main");
     let refusal = "the merge was NOT refused";
@@ -443,10 +606,10 @@ async function scenarios() {
       refusal = e instanceof GhError ? `${e.code}: ${e.message}` : String(e);
     }
     check("(c) a merge bound to the old head is refused by --match-head-commit", refusal !== "the merge was NOT refused", refusal);
-    await until("the app sees the foreign push", () => !!pr(held).foreignHead, 600);
+    await until("the app sees the foreign push", () => !!pr(held).foreignHead, WAIT.notice);
     check("(c) the app holds that pull request for good", pr(held).attention?.code === "foreign-push" && pr(held).phase === "open");
     cmd("closePr", { taskId: held });
-    await until("it is closed", () => pr(held).phase === "closed", 300);
+    await until("it is closed", () => pr(held).phase === "closed", WAIT.act);
 
     cmd("setPrDelivery", { config: { merge: "auto" } });
     const id = await openPullRequest("Merged automatically");
@@ -461,7 +624,7 @@ async function scenarios() {
         if (!pending.some((x) => JSON.stringify(x) === JSON.stringify(s))) pending.push(s);
       }
     };
-    await until("it merges by itself", () => (sample(), pr(id).phase !== "open"), CHECK_WAIT() + 600);
+    await until("it merges by itself", () => (sample(), pr(id).phase !== "open"), WAIT.autoMerge());
     fact("(c) what GitHub reported for the pull request over time (bypass account)", pending);
     const before = pending.filter((x) => x.check !== "SUCCESS");
     const landed = task(id).integration?.landed;
@@ -470,39 +633,48 @@ async function scenarios() {
     check("(c) merged by the app, automatically, with a clean independent review for that change", landed?.by === "app" && !!landed.review?.ok && landed.review.forSha === pr(id).changeSha, landed?.review);
     check("(c) the writer and the reviewer are different providers", !!landed?.review?.provider && landed.review.provider !== pr(id).changeAuthor, { writer: pr(id).changeAuthor, reviewer: landed?.review?.provider });
     check("(c) the merged head is the head the checks passed on", !!landed && git("rev-parse", "--verify", "--quiet", `${head}^{commit}`) === head && landed.checks?.every((c) => c.conclusion === "SUCCESS") === true, landed?.checks);
-    await until("the check on main after the merge is recorded", () => task(id).integration!.landed!.mainCheck?.state !== "pending", CHECK_WAIT());
+    await until("the check on main after the merge is recorded", () => task(id).integration!.landed!.mainCheck?.state !== "pending", WAIT.check());
     fact("(c) the check on main after the merge", task(id).integration!.landed!.mainCheck);
-    cmd("setPrDelivery", { config: { merge: "hold" } });
-  });
+  }, { needs: auto });
+  // Whatever happened in (c), the scenarios after it start from hold mode.
+  if (st().project.prDelivery.merge !== "hold") cmd("setPrDelivery", { config: { merge: "hold" } });
 
   await scenario("d", "the ruleset's extra approval for unattributed changes", async () => {
     if (opts.fake || !rulesetId) {
       evidence.skipped.d = "needs a real repository and its ruleset";
       return;
     }
+    if (!/^\d+$/.test(rulesetId)) throw new Error("the sandbox ruleset has no usable id");
     const on = rawGh(["api", "-X", "PUT", `repos/${opts.repo}/rulesets/${rulesetId}`, "--input", "-"], JSON.stringify(rulesetBody(true)));
     if (!on.ok) {
-      evidence.skipped.d = `GitHub did not accept the option on a ruleset: ${on.stderr.trim().split("\n").pop()}`;
+      evidence.skipped.d = `GitHub did not accept the option on a ruleset: ${lastLine(on.stderr)}`;
       log(`skipped (d): ${evidence.skipped.d}`);
       return;
     }
     try {
       const id = await openPullRequest("With the unattributed-changes rule");
-      await until("the required check passed or the app reports why it cannot merge", () => !!pr(id).attention || D.prReady(st(), task(id), nowMs()), CHECK_WAIT());
+      await until("the required check passed or the app reports why it cannot merge", () => !!pr(id).attention || D.prReady(st(), task(id), nowMs()), WAIT.check());
       const o = pr(id).observed;
-      fact("(d) with the rule on, a pull request of commits authored by Orchestration", { mergeStateStatus: o?.mergeStateStatus, reviewDecision: o?.reviewDecision, attention: pr(id).attention?.code, ready: D.prReady(st(), task(id), nowMs()) });
+      fact("(d) with the rule on, a pull request of commits authored by Orchestrator", { mergeStateStatus: o?.mergeStateStatus, reviewDecision: o?.reviewDecision, attention: pr(id).attention?.code, ready: D.prReady(st(), task(id), nowMs()) });
       check("(d) the app either may merge, or holds with the reason and never bypasses", D.prReady(st(), task(id), nowMs()) || pr(id).attention?.code === "approval-required" || pr(id).attention?.code === "github-blocked", pr(id).attention);
       cmd("closePr", { taskId: id });
-      await until("it is closed", () => pr(id).phase === "closed", 300);
+      await until("it is closed", () => pr(id).phase === "closed", WAIT.act);
     } finally {
-      const off = rawGh(["api", "-X", "PUT", `repos/${opts.repo}/rulesets/${rulesetId}`, "--input", "-"], JSON.stringify(rulesetBody(false)));
-      check("(d) the ruleset was put back", off.ok);
+      let back = "";
+      try {
+        putRuleset("active", false);
+      } catch (e) {
+        back = e instanceof Error ? e.message : String(e);
+      }
+      check("(d) the ruleset was put back, read back and verified", !back, back || undefined);
+      // Without the ruleset as it was, nothing after this can be trusted: the run stops here.
+      if (back) throw new SetupError(back);
     }
-  });
+  }, { needs: checked });
 
   await scenario("g", "a restart while a merge is in flight", async () => {
     const id = await openPullRequest("Restart during the merge");
-    await until("it is ready", () => D.prReady(st(), task(id), nowMs()), CHECK_WAIT());
+    await until("it is ready", () => D.prReady(st(), task(id), nowMs()), WAIT.check());
     const mainBefore = remoteHead("main");
     cmd("requestPrMerge", { taskId: id, headSha: pr(id).headSha });
     // Tick without waiting until the merge intent is recorded, then stop the service at once.
@@ -513,12 +685,12 @@ async function scenarios() {
     scheduler = newScheduler();
     await scheduler.refreshHealth();
     // The new service reconciles with GitHub before doing anything again (after the grace time).
-    await until("the merge is recorded, or made once", () => pr(id).phase !== "open", (D.OP_TIMEOUT_MS.merge + D.PR_LIMITS.graceMs) / 1000 + 900);
+    await until("the merge is recorded, or made once", () => pr(id).phase !== "open", (D.OP_TIMEOUT_MS.merge + D.PR_LIMITS.graceMs) / 1000 + 2 * WAIT.act);
     git("fetch", "-q", "origin", "main");
     const mergesOfThisPr = git("log", "--merges", "--format=%H %P", `${mainBefore}..FETCH_HEAD`).split("\n").filter((l) => l.includes(pr(id).headSha));
     check("(g) exactly one merge of that pull request is on main", pr(id).phase === "merged" && mergesOfThisPr.length === 1, { merges: mergesOfThisPr.length, by: task(id).integration?.landed?.by });
     check("(g) it is attributed to the app", task(id).integration?.landed?.by === "app");
-  });
+  }, { needs: checked });
 
   await scenario("h", "mixed providers: Codex writes and Claude reviews, then the reverse", async () => {
     cmd("setPrDelivery", { config: { merge: "auto" } });
@@ -526,13 +698,13 @@ async function scenarios() {
       cmd("setRoleDefault", { role: "coder", selection: { provider: writer, model: "auto" } });
       cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: reviewer, model: "auto" } });
       const id = await openPullRequest(`${M.providerLabel(writer)} writes, ${M.providerLabel(reviewer)} reviews`);
-      await until("it merges by itself", () => pr(id).phase !== "open", CHECK_WAIT() + 600);
+      await until("it merges by itself", () => pr(id).phase !== "open", WAIT.autoMerge());
       const review = task(id).integration?.landed?.review;
       check(`(h) ${writer} wrote, ${reviewer} reviewed, merged with no person`, pr(id).phase === "merged" && pr(id).changeAuthor === writer && review?.provider === reviewer && task(id).integration?.landed?.by === "app", { writer: pr(id).changeAuthor, reviewer: review?.provider, source: review?.source });
     }
     if (!opts.realAgents) evidence.skipped["h (real agents)"] = "scripted agents stood in for Claude and Codex; pass --real-agents to use the real ones (this costs usage)";
     cmd("setPrDelivery", { config: { merge: "hold" } });
-  });
+  }, { needs: auto });
 }
 
 // ---------- run ----------
@@ -550,10 +722,12 @@ async function main() {
   } else adapters = { claude: new ScriptedAdapter("claude"), codex: new ScriptedAdapter("codex") };
   scheduler = newScheduler();
   await scheduler.refreshHealth();
-  cmd("initProject", { name: "PR sandbox", repoPath, vision: "Evidence for pull-request delivery.", focus: "Small files only." });
+  // A new store for every run, so the project id, and with it every branch name, is new.
+  cmd("initProject", { name: `PR sandbox ${runTag}`, repoPath, vision: "Evidence for pull-request delivery.", focus: "Small files only." });
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "auto" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "auto" } });
   cmd("setLeadSelection", { selection: { provider: "claude", model: "auto" } });
+  fact("project", { id: st().project.id, branches: `orchestration/${st().project.id}/pr/<task>-<n>`, files: `orc-sandbox-${runTag}-<task>.txt` });
   try {
     await scenarios();
   } finally {
@@ -574,7 +748,10 @@ async function main() {
 }
 
 main().catch((e) => {
-  check("the run itself", false, e instanceof Error ? e.message : String(e));
+  const message = e instanceof Error ? e.message : String(e);
+  check("the run itself", false, message);
+  console.error(`[pr-sandbox] Stopped: ${message}`);
+  evidence.finishedAt = new Date().toISOString();
   save();
   try {
     if (!opts.fake) teardownReal();
