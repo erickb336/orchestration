@@ -19,6 +19,7 @@ Success means the lead can explain why it chose a task and an approach, the user
 - Designer, coding, code-review, and UX-review roles collaborate under the lead.
 - Claude and Codex must run concurrently on the same project. Roles are provider-independent, and either provider can supply the lead. One active lead owns the project at a time.
 - Provider and model are configurable independently for every workflow step, including planning, design, implementation, review, and repair. Support mixed providers and different models within one task.
+- Default to one implementation per task, followed by independent review and repair if needed. Using Claude and Codex together means assigning providers per step or to distinct tasks. Competing implementations and best-of selection are optional, off by default, and enabled only when the user chooses a comparison experiment. Do not duplicate implementation to fill provider capacity.
 - Tasks accumulate over time and remain visible with stable identifiers.
 - Every task has an attached specification with options, tradeoffs, a recommendation, and an explicit selected approach decided by the agent unless overridden by the user.
 - Reviewing specifications is optional. Their existence is not an approval gate. Human-in-the-loop is optional throughout (user direction, 2026-09-29): the tool must be able to run end to end on autopilot at large scale, while every control (pause, review gates, artifact edits, resubmission) remains available.

@@ -2,6 +2,8 @@
 
 A local orchestrator for teams of AI coding agents. You talk to one **lead**; it plans the work, writes a specification for every task (options, trade-offs, the approach it chose), and runs each task through an editable pipeline of **Claude** and **Codex** workers: designers, coders, and independent reviewers, running concurrently. You can let it run on autopilot or step in anywhere: pause, read and edit any artifact, and resubmit it through the rest of the pipeline.
 
+**Default: one implementation, then independent review.** Choose Claude or Codex and a model for each step. Using both providers does not require building the same change twice. Competing implementations (Best of N) are an optional experiment, off in all built-in templates.
+
 ## Why this exists
 
 I wanted my own agent orchestration tool, one I can quickly edit and extend with features and fixes whenever I need them, instead of adapting my work to someone else's product. The goal is to keep improving it and tailoring it to myself and my own workflows. It is deliberately small, local, and readable, so that changing it is cheap. If you use it, treat it the same way: fork it and make it yours.
@@ -39,7 +41,7 @@ All screenshots show the built-in sample project on the simulated runtime (no ag
 
 ![Goal task with child tasks](docs/screenshots/goal-task.png)
 
-**Best of two, then review → repair until clean.** Codex and Claude each implement, and the review chooses one. A repair round runs, and the second review comes back clean, so the loop stops.
+**Optional comparison example: best of two.** This screenshot demonstrates an explicitly enabled experiment, not the default workflow. Codex and Claude each implement, and the review chooses one. Normally a single agent implements, followed by independent review and repair only if needed.
 
 ![Best-of pipeline with an iteration](docs/screenshots/best-of-pipeline.png)
 
@@ -128,13 +130,14 @@ Environment variables:
 To get the most out of your Claude and Codex capacity:
 
 1. **Give the lead the whole goal.** Write it in the vision, or say it in the conversation. The lead breaks it into specified tasks. Raise "max proposals per run" and "max open lead proposals" in Settings → Autonomy for bigger goals.
-2. **Keep both providers busy.**
-   - Raise the worker limit.
-   - Set per-provider limits to match your plans.
+2. **Assign providers where they are useful.**
+   - Set worker and per-provider limits to match your workload and budget.
+   - Parallelize distinct tasks; avoid duplicate implementations merely to keep both providers busy.
    - Give each role the provider and model that suit it. For example, Codex for implementation, Claude for design and independent review, or the reverse. Every step can be pinned individually.
 3. **Parallelise inside tasks.**
    - Pipelines are graphs: steps with no dependency between them (for example code review and UX review) run at the same time.
-   - Any step can run as **2–5 agents at once**. **Copies** (for example three reviewers, one per provider) all contribute: review findings are added together. **Best of N** (for example a Claude and a Codex implementation) lets the next step choose one; you can change the choice yourself.
+   - Every built-in step starts with **one agent**. Keep the pipeline editor’s **Run as parallel agents → Off (one agent)** for ordinary implementation.
+   - Optionally enable **2–5 agents** for a specific step. **Copies** combine contributions such as independent review findings. **Best of N** runs competing alternatives and selects one; use it only when you explicitly want that comparison and its extra cost. Provider/model selection remains independent of agent count.
 4. **Break big goals into child tasks.** The **Goal** template plans the goal as a list of child tasks, which run concurrently with their own pipelines. When they finish, it evaluates the result and plans the next round (up to 5 rounds), then reports. You can edit the list at a review gate before any child task exists.
 5. **Let work iterate.** Built-in templates repeat review → repair until the review is clean (up to 3 rounds), and you can set loops on any step in the pipeline editor.
 6. **Use Autopilot** for continuous planning, automatic retries, and automatic delivery. Add review gates only where you want to look. Outside Autopilot, child tasks wait for you to start them, like the lead's proposals.

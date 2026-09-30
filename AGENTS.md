@@ -25,3 +25,6 @@ Verify behavior appropriate to each change, especially state races, persistence,
 Claude and Codex concurrency is a first-release requirement, not a future extension. Separate roles from providers, support either as lead, and use separate runtime adapters under one scheduler. The application owns shared state and dispatch; do not assume native subagent tools span providers. Enforce common pause/revision controls and isolated writer workspaces. Verify both adapters with real mixed-provider runs before claiming support.
 
 Provider/model choice must be configurable per workflow step, with project role defaults and task/step overrides. Preserve explicit user choices, record resolved configurations per attempt, and reconcile active workers before a model change. Do not treat a role-level provider selector as satisfying per-step configuration.
+
+
+Default to one implementation per bounded task. Use providers across distinct tasks or sequential design, implementation and review steps. Do not create competing Claude/Codex implementations unless the user explicitly enables that comparison. Best-of mode remains optional; provider concurrency does not require duplicate work.
