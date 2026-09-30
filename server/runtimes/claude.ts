@@ -351,7 +351,8 @@ export class ClaudeAdapter implements RuntimeAdapter {
   private readonly env: NodeJS.ProcessEnv;
   private readonly interruptGraceMs: number;
   private readonly killSettleMs: number;
-  private readonly allowShell: boolean;
+  /** Whether writers get a shell (off by default). Read by the service for the GitHub posture warning. */
+  readonly allowShell: boolean;
   private readonly claudeConfigPath: string;
   private readonly log: (msg: string) => void;
   private readonly runs = new Map<string, Run>();

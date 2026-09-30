@@ -5,6 +5,7 @@
 // landed item's `status` changes only through markLandedReviewed and sendBackLanded.
 
 import * as M from "./model";
+import { instantiate, toDef, validatePipeline } from "./pipeline";
 import { templateSteps } from "./templates";
 import {
   ControlError,
@@ -19,6 +20,9 @@ import {
   type PrDeliveryConfig,
   type ProviderId,
   type RoleId,
+  type ReviewEvidence,
+  type Artifact,
+  type Attempt,
   type SpecContent,
   type State,
   type StepDef,
@@ -55,8 +59,9 @@ export type DeliveryMode = "off" | "local" | "pr";
 
 export const MAX_NOTE_CHARS = 4000;
 export const MAX_NOTES_PER_ITEM = 200;
-const BRANCH = /^[A-Za-z0-9._/-]{1,100}$/;
-const REMOTE = /^[A-Za-z0-9._-]{1,100}$/;
+// Neither may start with "-": a name is never read as an option by git or gh.
+const BRANCH = /^[A-Za-z0-9._][A-Za-z0-9._/-]{0,99}$/;
+const REMOTE = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,99}$/;
 const GITHUB_URL = /^https:\/\/github\.com\//;
 
 export function deliveryMode(s: State): DeliveryMode {
@@ -66,7 +71,8 @@ export function deliveryMode(s: State): DeliveryMode {
 
 /** Done tasks whose work is on the integration branch but has not reached the delivery branch. */
 export function undeliveredTasks(s: State): Task[] {
-  return s.tasks.filter((t) => t.integration?.status === "integrated" && !t.integration.pr && t.integration.delivered?.status !== "delivered");
+  // A fix that was pushed onto another task's pull request is delivered there, never on its own.
+  return s.tasks.filter((t) => t.integration?.status === "integrated" && !t.integration.pr && !t.deliverInto && t.integration.delivered?.status !== "delivered");
 }
 
 /**
@@ -141,7 +147,7 @@ export function needsYou(s: State, nowMs = Date.now()): number {
   let n = 0;
   for (const t of s.tasks) {
     const i = t.integration;
-    if (i?.pr && i.status === "integrated" && (i.pr.phase === "built" || i.pr.phase === "open") && (i.pr.attention || prReady(s, t, nowMs))) n++;
+    if (i?.pr && i.status === "integrated" && (i.pr.phase === "built" || i.pr.phase === "open") && ((i.pr.attention && !openRepair(s, i.pr)) || prReady(s, t, nowMs))) n++;
     if (i?.landed?.status === "unreviewed" && i.landed.flags.length) n++;
   }
   if (s.project.github?.problem && (s.project.prDelivery.enabled || openPrTasks(s).length > 0)) n++;
@@ -219,11 +225,32 @@ export function addLandedNote(state: State, taskId: string, text: string, postTo
   const s = structuredClone(state);
   const { task, landed } = getLanded(s, taskId);
   if (landed.notes.length >= MAX_NOTES_PER_ITEM) throw new ControlError(`An item holds at most ${MAX_NOTES_PER_ITEM} notes.`);
-  if (postToGitHub && (landed.via !== "pr" || !landed.pr || landed.simulated)) throw new ControlError("Only work that landed through a real pull request can take a comment on GitHub.");
+  if (postToGitHub) {
+    const why = cannotPostNote(s, task);
+    if (why) throw new ControlError(why);
+  }
   s.seq += 1;
   landed.notes.push({ id: `note-${s.seq}`, at: now, text: body, ...(postToGitHub ? { comment: { status: "pending" as const, attempts: 0 } } : {}) });
   event(s, now, "user", "integration", `Note on landed work: ${clip(body, 160)}`, task.id);
   return s;
+}
+
+/**
+ * Why a note on this landed item cannot be posted as a comment on GitHub right now, or undefined when
+ * it can. A note is never left waiting for a post that will not be made.
+ */
+export function cannotPostNote(s: State, task: Task): string | undefined {
+  const landed = task.integration?.landed;
+  if (!landed || landed.via !== "pr" || !landed.pr || landed.simulated) return "Only work that landed through a real pull request can take a comment on GitHub.";
+  if (!s.project.prDelivery.enabled) return "Pull-request delivery is off, so nothing is posted on GitHub. Save the note without posting it, or switch pull-request delivery on first.";
+  const repo = landedRepo(task);
+  if (repo && s.project.github?.repo && repo !== s.project.github.repo) return `This pull request is in ${repo}, but the remote now points at ${s.project.github.repo}. The app does not post there.`;
+  return undefined;
+}
+
+/** The repository a landed pull request lives in. */
+export function landedRepo(task: Task): string | undefined {
+  return task.integration?.landed?.pr?.repo ?? task.integration?.pr?.repo;
 }
 
 /** An unfinished revert of this landed commit, if one exists. */
@@ -311,8 +338,11 @@ export function sendBackLanded(state: State, a: { taskId: string; kind: "fix" | 
 // `project.github`) are separate fields. "Merged", "posted" and "closed" are written only from an
 // observation. Everything here is pure; the service's PrDriver performs the operations this plans.
 //
-// Step 3 (independent review coverage, the dedicated review task, repair, automatic merge, base update
-// and the main-red breaker) is not built: the seams are marked "step 3" below.
+// Independent review coverage, the dedicated review task, bounded repair, the automatic merge of one
+// candidate at a time, the base update and the pause when the base branch fails are step 3 (below).
+// Automatic merging happens only when the pull request's policy is "auto", an independent review is
+// clean for the exact change, every required check passed on the exact head, GitHub reports it
+// mergeable, and nothing is paused or held.
 // ====================================================================================================
 
 const MIN = 60_000;
@@ -334,6 +364,21 @@ export const PR_LIMITS = {
   observeBatch: 20,
   /** An orphaned child of an earlier service process may still finish this long after its timeout. */
   graceMs: 30_000,
+  /** Times the service brings one pull request up to date with the base before it asks the user. */
+  baseUpdates: 3,
+  /** Fix tasks per pull request. */
+  repairs: 2,
+  /** Dedicated reviews the service starts per pull request (the user may ask for more). */
+  reviews: 3,
+  /** An automatic merge needs the base fetched this recently. */
+  baseFreshMs: 2 * MIN,
+  /** Failed attempts to push and open a pull request before it waits for the user. */
+  publishFailures: 6,
+  /** A closed pull request is still looked at this long, in case it is reopened and merged on GitHub. */
+  closedWatchMs: 24 * 60 * MIN,
+  closedWatchEveryMs: 10 * MIN,
+  /** A paused automatic merge watches the failing commit this long for a check that passes on a re-run. */
+  pausedWatchMs: 24 * 60 * MIN,
 };
 
 /** How long each operation may run (the driver's timeouts, summed over its network calls). */
@@ -410,9 +455,13 @@ export interface PreflightReport {
   requiredChecks: string[];
   autoMergeBlockers: string[];
   posture: PostureItem[];
+  /** The base branch requires a merge queue. */
+  mergeQueue?: boolean;
+  /** false: merge commits are not allowed in this repository. */
+  mergeCommitsAllowed?: boolean;
 }
 
-export type OpErrorCode = "auth" | "not-found" | "head-mismatch" | "rejected" | "rate-limit" | "network" | "timeout" | "unknown" | "remote" | "diverged" | "foreign-commits";
+export type OpErrorCode = "auth" | "not-found" | "head-mismatch" | "rejected" | "rate-limit" | "network" | "timeout" | "unknown" | "remote" | "diverged" | "foreign-commits" | "git" | "conflict";
 export interface OpError {
   code: OpErrorCode;
   /** Redacted, at most 300 characters. */
@@ -420,15 +469,20 @@ export interface OpError {
   retryAt?: string;
 }
 
-/** One operation of the driver. "publish", "merge", "close" and "comment" write to GitHub. */
+/**
+ * One operation of the driver. "publish", "push", "merge", "close" and "comment" write to the remote
+ * or to GitHub. "update" is local: it builds the commit that brings a pull request up to date with the
+ * base; the push that follows publishes it. `repo` on "observe": the one repository that is read.
+ */
 export type PrOp =
   | { id: string; kind: "preflight" }
   | { id: string; kind: "fetch" }
-  | { id: string; kind: "observe"; prs: { taskId: string; number: number }[]; commits: string[] }
-  | { id: string; kind: "publish" | "merge" | "close"; taskId: string; n: number; headSha: string }
+  | { id: string; kind: "observe"; repo?: string; prs: { taskId: string; number: number }[]; commits: string[] }
+  | { id: string; kind: "publish" | "push" | "merge" | "close"; taskId: string; n: number; headSha: string }
+  | { id: string; kind: "update"; taskId: string; n: number; headSha: string; baseSha: string }
   | { id: string; kind: "comment"; taskId: string; noteId: string };
 
-export const opMutates = (op: PrOp) => op.kind === "publish" || op.kind === "merge" || op.kind === "close" || op.kind === "comment";
+export const opMutates = (op: PrOp) => op.kind === "publish" || op.kind === "push" || op.kind === "merge" || op.kind === "close" || op.kind === "comment";
 
 export interface PrOpResult {
   op: PrOp;
@@ -437,7 +491,14 @@ export interface PrOpResult {
   /** merge, close: what the gh command itself reported. It records nothing; the observation does. */
   actError?: OpError;
   preflight?: PreflightReport;
-  base?: { sha: string };
+  /** fetch. `unpushed`: Orchestration's commits on the local delivery branch that the remote base lacks. */
+  base?: { sha: string; unpushed?: { branch: string; count: number } };
+  /** update: the service's merge of the base into the head, built locally and not pushed yet. */
+  updated?: { sha: string; baseSha: string };
+  /** update: the base does not merge cleanly into the head. */
+  conflict?: { files: string[] };
+  /** push: the pending head is on the remote branch. */
+  pushed?: { sha: string };
   observed?: Observations;
   published?: { number: number; url: string };
   /** close: no pull request was ever opened for this head. */
@@ -479,12 +540,28 @@ export function writersHeld(s: State): string | undefined {
   return cfg.enabled && !s.project.github?.base ? `waiting for the first fetch of ${cfg.remote}/${cfg.base}` : undefined;
 }
 
-/** Integrated work that never reached a branch: it can be delivered as pull requests. */
+/**
+ * A revert in pull-request mode starts from the remote base as fetched after the work it undoes
+ * landed (and after the revert was asked for): never from a stale base, never from a local branch.
+ */
+export function revertWaitsForBase(s: State, t: Task): boolean {
+  if (!t.revertOf || !s.project.prDelivery.enabled) return false;
+  const fetchedAt = s.project.github?.base?.fetchedAt;
+  const landedAt = s.tasks.find((x) => x.id === t.revertOf!.taskId)?.integration?.landed?.at ?? "";
+  return !fetchedAt || fetchedAt < landedAt || fetchedAt < t.createdAt;
+}
+
+/**
+ * Integrated work that never reached a branch: it can be delivered (again). With pull-request delivery
+ * on, as a pull request. With it off, only work whose pull request was closed or abandoned: it goes
+ * through the current mode instead, so nothing is stranded by a mode switch.
+ */
 export function redeliverable(s: State): Task[] {
+  const prOn = s.project.prDelivery.enabled;
   return s.tasks.filter((t) => {
     const i = t.integration;
-    if (t.lifecycle !== "done" || !i || i.landed || i.status !== "integrated") return false;
-    if (i.pr ? i.pr.phase !== "closed" : i.delivered?.status === "delivered") return false;
+    if (t.lifecycle !== "done" || !i || i.landed || i.status !== "integrated" || deliveredInto(t)) return false;
+    if (i.pr ? i.pr.phase !== "closed" : !prOn || i.delivered?.status === "delivered") return false;
     return s.artifacts.some((a) => a.taskId === t.id && a.kind === "code-change");
   });
 }
@@ -503,16 +580,457 @@ function safePrUrl(pr: PrDelivery, number: number, url: string): string {
   return REPO.test(pr.repo) ? `https://github.com/${pr.repo}/pull/${number}` : "";
 }
 
-// ---------- the merge gate (design §9.5; items 9–12 belong to automatic merging, step 3) ----------
+// ---------- independent review (design §9.1, §9.2) ----------
+
+/** Does a review by this provider count as independent of the change's author? */
+function independent(s: State, pr: PrDelivery, provider: ProviderId | undefined): boolean {
+  return s.project.prDelivery.reviewer === "any-agent" || pr.changeAuthor === "user" || (!!provider && provider !== pr.changeAuthor);
+}
+
+/**
+ * Where the independent review of a pull request's change stands.
+ * "missing" and "not-independent": a dedicated review can cure it and none exists yet.
+ * "pending": a dedicated review is queued or running. "findings": the review that saw the change
+ * reported open findings. "blocked": the dedicated review cannot run, or ran on the writer's provider.
+ * "limit": the service already started as many dedicated reviews as it may.
+ */
+export type ReviewState = "ok" | "pending" | "missing" | "not-independent" | "findings" | "blocked" | "limit";
+export interface ReviewView {
+  state: ReviewState;
+  evidence: ReviewEvidence;
+  /** The dedicated review task this is about, if any. */
+  reviewTaskId?: string;
+}
+
+function lastCompletedRun(s: State, taskId: string, stepId: string): Attempt | undefined {
+  let run: Attempt | undefined;
+  for (const a of s.attempts) if (a.taskId === taskId && a.stepId === stepId && a.outcome === "completed") run = a;
+  return run;
+}
+
+interface Covering {
+  art: Artifact;
+  run: Attempt;
+  role: RoleId;
+}
+
+const modelOf = (run: Attempt) => run.actualModel ?? run.snapshot.model;
+const findingsText = (n: number) => `${n} open finding${n === 1 ? "" : "s"}`;
+
+/** The finished review steps of a task whose accepted findings satisfy `covers`. */
+function reviewsOf(s: State, c: Task, covers: (run: Attempt) => boolean): Covering[] {
+  const out: Covering[] = [];
+  for (const st of c.steps) {
+    if (st.state !== "done" || !REVIEW_ROLES.includes(st.role)) continue;
+    for (const o of st.outputs) {
+      if (o.kind !== "review-findings") continue;
+      const art = M.acceptedOutput(s, c, st.id, o.name);
+      // For findings a person edited, the run is the one whose output they edited.
+      const run = lastCompletedRun(s, c.id, st.id);
+      if (art && run && covers(run)) out.push({ art, run, role: st.role });
+    }
+  }
+  return out;
+}
+
+/** Evidence from a set of reviews that saw the change: open findings, then independence. */
+function judge(s: State, pr: PrDelivery, covering: Covering[], source: "pipeline" | "dedicated", taskId: string): ReviewView {
+  const h = sha12(pr.changeSha);
+  const base = { source, forSha: pr.changeSha, taskId, artifactIds: covering.map((x) => x.art.id) };
+  const open = covering.reduce((n, x) => n + (x.art.openFindings ?? 0), 0);
+  if (open > 0) return { state: "findings", evidence: { ok: false, ...base, reason: `The review of ${h} reported ${findingsText(open)}.` } };
+  const code = covering.filter((x) => x.role === "code_reviewer");
+  const by = code.find((x) => independent(s, pr, x.run.snapshot.provider));
+  if (!by) {
+    const who = code[0].run.snapshot.provider;
+    return {
+      state: "not-independent",
+      evidence: { ok: false, ...base, attemptId: code[0].run.id, provider: who, model: modelOf(code[0].run), reason: `The review of ${h} was done by ${M.providerLabel(who)}, the provider that wrote the change, so it does not count as independent.` },
+    };
+  }
+  const cleared = covering.some((x) => x.art.author === "user");
+  return {
+    state: "ok",
+    evidence: {
+      ok: true,
+      ...base,
+      attemptId: by.run.id,
+      provider: by.run.snapshot.provider,
+      model: modelOf(by.run),
+      reason: `Clean review of ${h} by ${M.providerLabel(by.run.snapshot.provider)}${cleared ? " (findings cleared by you)" : ""}.`,
+      ...(cleared ? { clearedByUser: true } : {}),
+    },
+  };
+}
+
+const noReview = (pr: PrDelivery, reason: string): ReviewEvidence => ({ ok: false, source: "none", reason, forSha: pr.changeSha, artifactIds: [] });
+
+/**
+ * The task's own review counts only when it provably covers the final change: a finished code review
+ * whose run received exactly the final change as an input. A finished task alone proves nothing (when
+ * a repair loop runs out, its last repair is never reviewed).
+ */
+function pipelineReview(s: State, pr: PrDelivery): ReviewView {
+  const h = sha12(pr.changeSha);
+  const missing: ReviewView = { state: "missing", evidence: noReview(pr, `No review saw the final change ${h}.`) };
+  const c = s.tasks.find((x) => x.id === pr.changeTaskId);
+  if (!c) return missing;
+  // Simulated runs make code-change artifacts without commits: the newest one stands for the final change.
+  const fc = M.finalChange(s, c) ?? (pr.simulated ? s.artifacts.filter((a) => a.taskId === c.id && a.kind === "code-change").pop() : undefined);
+  if (!fc) return missing;
+  if (!pr.simulated) {
+    const ref = fc.ref?.split(" ")[0] ?? "";
+    if (ref.length < 7 || !pr.changeSha.startsWith(ref)) return missing;
+  }
+  const covering = reviewsOf(s, c, (run) => run.snapshot.inputs.some((i) => i.artifactId === fc.id));
+  if (!covering.some((x) => x.role === "code_reviewer")) return missing;
+  return judge(s, pr, covering, "pipeline", c.id);
+}
+
+/** The dedicated review tasks of this pull request for the change it holds now, oldest first. */
+function reviewTasksFor(s: State, t: Task, pr: PrDelivery): Task[] {
+  return s.tasks.filter((x) => x.reviewTarget?.taskId === t.id && x.reviewTarget.n === pr.n && x.reviewTarget.headSha === pr.changeSha && x.lifecycle !== "cancelled");
+}
+
+function dedicatedReview(s: State, t: Task, pr: PrDelivery): ReviewView | undefined {
+  const rv = reviewTasksFor(s, t, pr).pop();
+  if (!rv) return undefined;
+  const h = sha12(pr.changeSha);
+  if (rv.lifecycle !== "done") {
+    const blocked = rv.steps.find((x) => x.state === "blocked");
+    if (blocked) return { state: "blocked", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} cannot run: ${blocked.blockedReason ?? "its step is blocked"}`) };
+    const how = M.activeAttempts(s, rv.id).length ? "running" : rv.hold || rv.holdBeforeStart ? "paused" : "queued";
+    return { state: "pending", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is ${how}.`) };
+  }
+  // A dedicated review counts only when its run read a worktree detached at exactly this commit.
+  const all = reviewsOf(s, rv, () => true);
+  if (!all.some((x) => x.role === "code_reviewer") || all.some((x) => x.run.snapshot.reviewedSha !== pr.changeSha)) {
+    return { state: "missing", reviewTaskId: rv.id, evidence: noReview(pr, `The review ${rv.id} did not read ${h}, so it does not count.`) };
+  }
+  const v = judge(s, pr, all, "dedicated", rv.id);
+  if (v.state === "not-independent") {
+    // The reviewer was the user's own choice (a pin or an override). Nothing is substituted and no second review is started.
+    return { state: "blocked", reviewTaskId: rv.id, evidence: { ...v.evidence, reason: `${v.evidence.reason} Choose another reviewer and ask for a new review, or let any agent count (Settings → Delivery).` } };
+  }
+  return { ...v, reviewTaskId: rv.id };
+}
+
+/** Where the independent review of this pull request's change stands now. Pure. */
+export function reviewView(s: State, t: Task): ReviewView {
+  const pr = t.integration?.pr;
+  if (!pr) return { state: "missing", evidence: { ok: false, source: "none", reason: "No pull request.", artifactIds: [] } };
+  const own = pipelineReview(s, pr);
+  if (own.state === "ok") return own;
+  // A dedicated review of this exact change, once one exists, is the newer word.
+  const dedicated = dedicatedReview(s, t, pr);
+  if (dedicated && dedicated.state !== "missing") return dedicated;
+  if (own.state === "findings") return own;
+  const base = dedicated ?? own;
+  if (pr.counters.reviews >= PR_LIMITS.reviews) {
+    return { ...base, state: "limit", evidence: { ...base.evidence, reason: `${base.evidence.reason} ${PR_LIMITS.reviews} dedicated reviews were already started for this pull request. Ask for another yourself, or merge it yourself.` } };
+  }
+  return base;
+}
+
+/**
+ * Review evidence for a pull request's change (design §9.1): the task's own review when it provably
+ * covers the final change and was done by another provider than the author, else a finished dedicated
+ * review of exactly that change. Evidence always names the change it is for.
+ */
+export function reviewCoverage(s: State, t: Task): ReviewEvidence {
+  return reviewView(s, t).evidence;
+}
+
+/** A project template's steps for the dedicated review, falling back to the built-in when the edited one cannot review. */
+function reviewSteps(s: State): StepDef[] {
+  const usable = (d: StepDef[]) => d.some((x) => x.role === "code_reviewer" && x.outputs.some((o) => o.kind === "review-findings")) && !validatePipeline(d, { reviewTarget: true }).some((i) => i.severity === "error");
+  const mine = stepsOf(s, "delivery-review").map(toDef);
+  return usable(mine) ? mine : templateSteps("delivery-review");
+}
+
+/** Create the dedicated review task. Mutates the draft `s`. */
+function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "user" | "system"): string {
+  const h = sha12(pr.changeSha);
+  const ids = new Set(s.tasks.map((x) => x.id));
+  let k = 1;
+  while (ids.has(`${t.id}-RV${k}`)) k++;
+  const id = `${t.id}-RV${k}`;
+  const defs = reviewSteps(s);
+  let named = false;
+  for (const d of defs) {
+    if (d.role !== "code_reviewer") continue;
+    // The independence rule is not the template's to drop.
+    d.independentOf = "writer";
+    if (!named) d.purpose = `Review ${t.id} for merge into ${pr.base} at ${h}`;
+    named = true;
+  }
+  const content: SpecContent = structuredClone(M.currentSpec(t).content);
+  const title = content.title;
+  content.title = `Review for merge: ${title}`;
+  content.whyNow = `${pr.review.reason} A pull request merges only after a review by ${s.project.prDelivery.reviewer === "any-agent" ? "an agent" : "another provider than the one that wrote the change"}.`;
+  content.benefit = "The change is looked at independently before it reaches the base branch.";
+  const selected = content.options.find((o) => o.id === content.selectedOptionId);
+  if (selected) selected.approach = `Review the change ${h} of ${t.id} against its specification. This is a review, not a second implementation. Original approach: ${clip(selected.approach, 600)}`;
+  s.tasks.push({
+    id,
+    priority: t.priority,
+    lifecycle: "ready",
+    hold: false,
+    holdBeforeStart: false,
+    specs: [{ rev: 1, at: now, author: "system", reason: `Independent review of ${t.id} (${h}) before it merges into ${pr.base}`, content }],
+    steps: instantiate(defs),
+    roleOverrides: {},
+    dependsOn: [],
+    createdAt: now,
+    updatedAt: now,
+    decisionAt: now,
+    reviewTarget: { taskId: t.id, n: pr.n, headSha: pr.changeSha, baseSha: pr.baseSha },
+    pipelineRev: 1,
+    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery review template", steps: defs.map(toDef) }],
+  });
+  pr.reviewTaskIds.push(id);
+  pr.counters.reviews += 1;
+  event(s, now, actor, "integration", `Independent review ${id} created for ${prName(pr)} at ${h}: ${clip(pr.review.reason, 200)}`, t.id);
+  return id;
+}
+
+/**
+ * Make sure one dedicated review exists when the change needs one (design §9.2): coverage failed for a
+ * reason a review can cure, and no review of this change exists or is running. Never for open
+ * findings (those go to repair), never a second one for the same change, never past the cap.
+ */
+export function ensureReview(state: State, taskId: string, now: string): State {
+  const { task, pr } = prTask(state, taskId);
+  if (pr.phase !== "built" && pr.phase !== "open") return state;
+  const v = reviewView(state, task);
+  if (v.state !== "missing" && v.state !== "not-independent") return state;
+  const s = structuredClone(state);
+  const t = getTask(s, taskId);
+  const p = t.integration!.pr!;
+  p.review = v.evidence;
+  startReview(s, t, p, now, "system");
+  p.review = reviewView(s, t).evidence;
+  refreshAttention(s, t, now);
+  return s;
+}
+
+/** The user asks for a dedicated review now. They may exceed the service's cap; one at a time per change. */
+export function requestPrReview(state: State, taskId: string, now: string): State {
+  const s = structuredClone(state);
+  const { task, pr } = openPr(s, taskId, "review");
+  if (!s.project.prDelivery.enabled) throw new ControlError("Pull-request delivery is off, so no review is started. Switch the delivery mode back on first.");
+  const open = reviewTasksFor(s, task, pr).find((x) => x.lifecycle !== "done");
+  if (open) throw new ControlError(`${open.id} is already reviewing this change.`);
+  startReview(s, task, pr, now, "user");
+  pr.review = reviewView(s, task).evidence;
+  refreshAttention(s, task, now);
+  return s;
+}
+
+// ---------- repair into the open pull request (design §9.3) ----------
+
+export type RepairCause = { kind: "checks"; checks: { name: string; url?: string }[] } | { kind: "findings"; summaries: string[] } | { kind: "conflict"; files: string[] };
+
+/** A fix task of this pull request that is still working, or finished and not yet placed on the pull request. */
+export function openRepair(s: State, pr: PrDelivery): Task | undefined {
+  return s.tasks.find((x) => pr.repairTaskIds.includes(x.id) && x.lifecycle !== "cancelled" && (x.lifecycle !== "done" || x.integration?.status === "pending"));
+}
+
+/** A repair that was pushed onto another task's pull request: it is delivered there and has no delivery of its own. */
+export const deliveredInto = (t: Task) => !!t.deliverInto && t.integration?.status === "integrated" && !t.integration.pr;
+
+/** The live pull request a finished repair task belongs on, if it is still there. */
+export function repairTarget(s: State, repair: Task): { task: Task; pr: PrDelivery } | undefined {
+  const d = repair.deliverInto;
+  const task = d && s.tasks.find((x) => x.id === d.taskId);
+  const pr = task && livePr(task);
+  return task && pr && pr.n === d!.n && (pr.phase === "built" || pr.phase === "open") && !pr.foreignHead && !pr.closeRequested ? { task, pr } : undefined;
+}
+
+/** What is wrong with the current head that a fix task could cure: a conflict, a failed required check, or open findings. */
+export function repairCause(s: State, t: Task): RepairCause | undefined {
+  const pr = livePr(t);
+  if (!pr || pr.pendingHead || (pr.phase !== "built" && pr.phase !== "open")) return undefined;
+  const ob = pr.observed;
+  if (pr.baseConflict?.headSha === pr.headSha && pr.baseConflict.baseSha === s.project.github?.base?.sha) return { kind: "conflict", files: pr.baseConflict.files.slice(0, 20) };
+  if (ob && ob.state === "OPEN" && ob.headSha === pr.headSha && (ob.mergeable === "CONFLICTING" || ob.mergeStateStatus === "DIRTY")) return { kind: "conflict", files: [] };
+  if (ob && ob.state === "OPEN" && ob.checksFor === pr.headSha) {
+    const failed = requiredCheckNames(s, pr)
+      .map((n) => ob.checks.find((c) => c.name === n))
+      .filter((c): c is CheckObs => !!c && c.conclusion !== null && c.conclusion !== "SUCCESS");
+    // Names and links only: CI log text is untrusted input and never reaches an agent.
+    if (failed.length) return { kind: "checks", checks: failed.map((c) => ({ name: c.name, ...(c.url && GITHUB_URL.test(c.url) ? { url: c.url } : {}) })) };
+  }
+  const v = reviewView(s, t);
+  if (v.state === "findings") {
+    const arts = s.artifacts.filter((a) => v.evidence.artifactIds.includes(a.id) && (a.openFindings ?? 0) > 0);
+    return { kind: "findings", summaries: arts.map((a) => clip(a.summary, 1200)) };
+  }
+  return undefined;
+}
+
+/** Create the fix task and link it. Returns the new state (a fresh object) and the task's id. */
+function startRepair(state: State, taskId: string, cause: RepairCause, now: string, actor: "user" | "system"): { state: State; newId: string } {
+  const origin = getTask(state, taskId);
+  const pr0 = origin.integration!.pr!;
+  const title = M.currentSpec(origin).content.title;
+  const h = sha12(pr0.headSha);
+  const r = M.createFollowUp(state, taskId, now, {
+    steps: stepsOf(state, "change"),
+    holdBeforeStart: false,
+    author: actor,
+    dependsOn: [],
+    fields: { deliverInto: { taskId, n: pr0.n, mergeBase: cause.kind === "conflict" } },
+  });
+  const content: SpecContent = structuredClone(M.currentSpec(getTask(r.state, r.newId)).content);
+  const selected = content.options.find((o) => o.id === content.selectedOptionId);
+  const what =
+    cause.kind === "checks"
+      ? `the required check${cause.checks.length === 1 ? "" : "s"} ${cause.checks.map((c) => c.name).join(", ")} failed on ${h}`
+      : cause.kind === "findings"
+        ? `the review of ${sha12(pr0.changeSha)} reported open findings`
+        : `it conflicts with ${pr0.base}`;
+  content.title = `Fix ${prName(pr0)}: ${title}`;
+  content.whyNow = `${prName(pr0)} of ${taskId} cannot merge: ${what}.`;
+  content.outcome = cause.kind === "conflict" ? `The pull request of ${taskId} merges cleanly into ${pr0.base}, with both sides' work kept.` : `The pull request of ${taskId} passes its required checks and its review, with its original outcome intact.`;
+  content.scopeIncluded =
+    cause.kind === "checks"
+      ? cause.checks.map((c) => `Make the required check "${c.name}" pass${c.url ? ` (${c.url})` : ""}. Find the cause in the code; do not weaken tests, CI or build scripts.`)
+      : cause.kind === "findings"
+        ? cause.summaries.map((x) => `Open review finding: ${x}`)
+        : [`Resolve the conflict with ${pr0.base}${cause.files.length ? ` in ${cause.files.join(", ")}` : ""}, keeping the work of both sides.`];
+  content.scopeExcluded = ["Any change beyond what is needed to fix this pull request", "Weakening tests, CI or build scripts"];
+  content.successCriteria = [];
+  content.acceptance = [cause.kind === "conflict" ? "No conflict markers remain and both sides' behaviour is kept" : "The reported problem is fixed", `The original outcome still holds: ${clip(M.currentSpec(origin).content.outcome, 300)}`];
+  if (selected) selected.approach = `Fix the pull request of ${taskId} on top of its current head ${h}: ${what}. The result is pushed onto the same pull request and reviewed again.`;
+  const s = structuredClone(M.editSpec(r.state, r.newId, 1, content, `Fix for ${prName(pr0)} of ${taskId}`, actor, now));
+  const t = getTask(s, taskId);
+  const pr = t.integration!.pr!;
+  pr.repairTaskIds.push(r.newId);
+  pr.counters.repairs += 1;
+  event(s, now, actor, "integration", `Fix task ${r.newId} created for ${prName(pr)} (${pr.counters.repairs} of ${PR_LIMITS.repairs}): ${what}. Its result is pushed onto the same pull request.`, taskId);
+  return { state: s, newId: r.newId };
+}
+
+/**
+ * One bounded fix task whose result is pushed onto the same pull request (design §9.3). At most
+ * PR_LIMITS.repairs per pull request and one at a time. `byUser`: the Fix this PR button; it does not
+ * need automatic repair to be on, and it counts against the same cap.
+ */
+export function createRepair(state: State, taskId: string, cause: RepairCause, now: string, o: { byUser?: boolean } = {}): { state: State; newId: string } {
+  const { pr } = prTask(state, taskId);
+  if (pr.phase !== "built" && pr.phase !== "open") throw new ControlError(`${taskId}'s pull request is ${pr.phase}; there is nothing to fix.`);
+  if (pr.foreignHead) throw new ControlError("Someone else pushed to this pull request; the app does not push to it again.");
+  if (pr.counters.repairs >= PR_LIMITS.repairs) throw new ControlError(`${PR_LIMITS.repairs} fix tasks already ran for this pull request. Fix it yourself on GitHub, or close it and deliver again.`);
+  const open = openRepair(state, pr);
+  if (open) throw new ControlError(`${open.id} is already fixing this pull request.`);
+  if (pr.pendingHead?.kind === "repair") throw new ControlError("A fix is waiting to be pushed onto this pull request.");
+  if (!o.byUser && (pr.policy !== "auto" || !state.project.prDelivery.autoRepair)) throw new ControlError("Automatic repair runs only for pull requests that merge automatically.");
+  const r = startRepair(state, taskId, cause, now, o.byUser ? "user" : "system");
+  refreshAttention(r.state, getTask(r.state, taskId), now);
+  return r;
+}
+
+/** The Fix this PR button: a fix task for what is wrong with the pull request now. */
+export function repairPr(state: State, taskId: string, now: string): { state: State; newId: string } {
+  const { task } = openPr(state, taskId, "fix");
+  if (!state.project.prDelivery.enabled) throw new ControlError("Pull-request delivery is off, so a fix could not be pushed. Switch the delivery mode back on first.");
+  const cause = repairCause(state, task);
+  if (!cause) throw new ControlError("Nothing a fix task could cure was found: no failed required check, no open review finding and no conflict on this head.");
+  return createRepair(state, taskId, cause, now, { byUser: true });
+}
+
+function cancelLinked(state: State, ids: string[], now: string, reason: string): State {
+  let s = state;
+  for (const id of ids) {
+    const x = s.tasks.find((t) => t.id === id);
+    if (x && x.lifecycle !== "done" && x.lifecycle !== "cancelled") s = M.cancelTask(s, id, now, { actor: "system", reason });
+  }
+  return s;
+}
+
+/**
+ * Keep every tracked pull request's review and repair moving: record the review evidence for the
+ * change it holds, start the one dedicated review it needs, start a bounded fix when it merges
+ * automatically, and refresh what it is waiting for. The service calls this every cycle; it changes
+ * nothing when nothing changed. New tasks are created only while pull-request delivery is on and
+ * neither the project nor the pull request is paused.
+ */
+export function advanceDelivery(state: State, now: string): State {
+  if (trackedPrTasks(state).length === 0) return state;
+  let s = structuredClone(state);
+  for (const id of trackedPrTasks(s).map((t) => t.id)) {
+    let t = getTask(s, id);
+    let pr = t.integration!.pr!;
+    let v = reviewView(s, t);
+    const cfg = s.project.prDelivery;
+    const may = cfg.enabled && !s.project.hold && !pr.userHold && !pr.foreignHead && !pr.closeRequested && !stuck(pr) && !wrongRepo(s, pr);
+    pr.review = v.evidence;
+    if (may && (v.state === "missing" || v.state === "not-independent")) {
+      startReview(s, t, pr, now, "system");
+      v = reviewView(s, t);
+      pr.review = v.evidence;
+    }
+    if (may && pr.policy === "auto" && cfg.autoRepair && pr.counters.repairs < PR_LIMITS.repairs && !openRepair(s, pr) && !pr.pendingHead) {
+      const cause = repairCause(s, t);
+      if (cause) {
+        s = startRepair(s, id, cause, now, "system").state;
+        t = getTask(s, id);
+        pr = t.integration!.pr!;
+      }
+    }
+    refreshAttention(s, t, now);
+    // A review that finishes after the checks passed makes a held pull request ready between two reads of GitHub.
+    announceReady(s, t, now);
+  }
+  return s;
+}
+
+// ---------- the merge queue: one candidate at a time (design §6.4) ----------
+
+/** Pull requests that may merge automatically, oldest first. Blocked ones drop out, so the next proceeds. */
+export function autoQueue(s: State): Task[] {
+  return openPrTasks(s).filter((t) => {
+    const pr = t.integration!.pr!;
+    return pr.policy === "auto" && pr.number !== undefined && !pr.userHold && !pr.foreignHead && !pr.closeRequested && !pr.attention && !wrongRepo(s, pr) && pr.review.ok && pr.review.forSha === pr.changeSha;
+  });
+}
+
+/** The only pull request that is ever brought up to date with the base or merged automatically. */
+export function mergeCandidate(s: State): Task | undefined {
+  return s.project.prDelivery.enabled && !s.project.hold ? autoQueue(s)[0] : undefined;
+}
+
+/** The pull request this one waits behind in the merge queue, if any. */
+export function queueAhead(s: State, t: Task): Task | undefined {
+  const q = autoQueue(s);
+  const i = q.indexOf(q.find((x) => x.id === t.id)!);
+  return i > 0 ? q[0] : undefined;
+}
+
+function autoMergesToday(gh: GitHubStatus | undefined, nowMs: number): number {
+  const day = new Date(nowMs).toISOString().slice(0, 10);
+  return gh?.autoMerges?.day === day ? gh.autoMerges.count : 0;
+}
+
+/** The pull request was opened in another repository than the one the remote names now. */
+function wrongRepo(s: State, pr: PrDelivery): boolean {
+  const now = s.project.github?.repo;
+  return !!now && !!pr.repo && pr.repo !== now;
+}
+
+// ---------- the merge gate (design §9.5) ----------
 
 export interface GateItem {
-  id: "policy" | "not-paused" | "github" | "ours" | "head" | "checks" | "mergeable" | "no-stop" | "attempts";
+  id: "policy" | "not-paused" | "github" | "ours" | "head" | "checks" | "mergeable" | "no-stop" | "review" | "paths" | "auto" | "up-to-date" | "attempts";
   label: string;
   ok: boolean;
   detail: string;
   state: "ok" | "waiting" | "blocked";
   /** The reason shown as "needs you" when this item blocks. */
   code?: PrAttentionCode;
+  /** Shown and reported, but a user's own merge does not wait for it (the user replaces the agent review). */
+  advisory?: boolean;
 }
 export interface Gate {
   status: "ready" | "waiting" | "blocked";
@@ -528,17 +1046,21 @@ export function requiredCheckNames(s: State, pr: PrDelivery): string[] {
 }
 
 /**
- * May this pull request be merged now? Evaluated for `pr.headSha`. `byUser`: the user's Merge click,
- * which replaces the agent review and never GitHub's checks or rules. Without it (automatic merging)
- * the gate is never ready in this version.
+ * May this pull request be merged now? Evaluated for `pr.headSha`. Pure; the UI shows the same list.
+ * `byUser`: the user's Merge click. It replaces the agent review and the rules that belong to
+ * automatic merging (items 9 to 12), and never GitHub's checks or rules. Without it the gate is the
+ * automatic one: the policy must be "auto", an independent review must be clean for exactly this
+ * change, and nothing may be paused.
  */
 export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean }): Gate {
   const pr = livePr(task);
   if (!pr) return { status: "blocked", items: [] };
   const gh = s.project.github;
+  const cfg = s.project.prDelivery;
   const ob = pr.observed;
   const items: GateItem[] = [];
-  const add = (id: GateItem["id"], label: string, state: GateItem["state"], detail: string, code?: PrAttentionCode) => items.push({ id, label, ok: state === "ok", detail, state, code });
+  const add = (id: GateItem["id"], label: string, state: GateItem["state"], detail: string, code?: PrAttentionCode, advisory?: boolean) =>
+    items.push({ id, label, ok: state === "ok", detail, state, ...(code ? { code } : {}), ...(advisory ? { advisory } : {}) });
   const headAge = pr.headSince ? nowMs - Date.parse(pr.headSince) : 0;
   const h12 = sha12(pr.headSha);
 
@@ -546,7 +1068,8 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   if (o.byUser) {
     if (pr.mergeRequested?.headSha === pr.headSha) add("policy", "Merge requested", "ok", `You asked to merge ${h12}.`);
     else add("policy", "You merge this pull request", "waiting", `Hold and notify: it merges when you choose Merge for ${h12}, or merge it on GitHub.`);
-  } else add("policy", "Automatic merging", "blocked", "Automatic merging is not available in this version; pull requests are held for you.", "auto-unavailable");
+  } else if (pr.policy === "auto") add("policy", "Merges automatically", "ok", "It merges by itself once everything below holds for this exact commit.");
+  else add("policy", "You merge this pull request", "waiting", `Hold and notify: it merges when you choose Merge for ${h12}, or merge it on GitHub.`);
 
   // 2. Not paused
   if (s.project.hold) add("not-paused", "Not paused", "waiting", "The project is paused: nothing is pushed, opened, merged or commented.");
@@ -554,9 +1077,14 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   else if (pr.closeRequested) add("not-paused", "Not paused", "waiting", "You asked to close this pull request.");
   else add("not-paused", "Not paused", "ok", "No pause or hold.");
 
-  // 3. GitHub reachable
-  if (!gh?.ok) add("github", "GitHub reachable", "waiting", gh?.problem ? gh.problem.message : "The repository has not been checked yet.");
+  // 3. GitHub reachable, the same repository, and a repository the app can merge in
+  if (wrongRepo(s, pr))
+    add("github", "GitHub reachable", "blocked", `This pull request was opened in ${pr.repo}, but the remote ${pr.remote} now points at ${gh!.repo}. The app does not read, push, merge or close it there. Point the remote back at ${pr.repo}, or close this delivery and deliver again.`, "repo-changed");
+  else if (!gh?.ok) add("github", "GitHub reachable", "waiting", gh?.problem ? gh.problem.message : "The repository has not been checked yet.");
   else if (!gh.checkedAt || nowMs - Date.parse(gh.checkedAt) > PR_LIMITS.preflightMaxAgeMs) add("github", "GitHub reachable", "waiting", "The repository check is more than 6 hours old; it is being repeated.");
+  else if (gh.mergeQueue)
+    add("github", "GitHub reachable", "blocked", `${pr.base} requires a merge queue. A merge from the app would enqueue the pull request or switch on GitHub's own auto-merge, which the app never uses. Merge it on GitHub.`, "github-blocked");
+  else if (gh.mergeCommitsAllowed === false) add("github", "GitHub reachable", "blocked", "This repository does not allow merge commits, and the app merges only with a merge commit. Allow them in the repository settings, or merge on GitHub.", "github-blocked");
   else add("github", "GitHub reachable", "ok", `${gh.repo ?? pr.repo}${gh.login ? ` as ${gh.login}` : ""}.`);
 
   // 4. It is our pull request
@@ -570,7 +1098,7 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
 
   // 5. Head matches
   if (!ob) add("head", "The commit you saw", "waiting", "Not seen on GitHub yet.");
-  else if (pr.pendingHead) add("head", "The commit you saw", "waiting", "A newer head is being pushed.");
+  else if (pr.pendingHead) add("head", "The commit you saw", "waiting", pr.pendingHead.kind === "update" ? `A newer head (${sha12(pr.pendingHead.sha)}), brought up to date with ${pr.base}, is being pushed.` : `A fix (${sha12(pr.pendingHead.sha)}) is being pushed onto it.`);
   else if (ob.headSha !== pr.headSha) add("head", "The commit you saw", "blocked", `GitHub shows ${sha12(ob.headSha)}, not ${h12}.`, "foreign-push");
   else add("head", "The commit you saw", "ok", `GitHub shows ${h12}.`);
 
@@ -602,6 +1130,7 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   }
 
   // 7. GitHub's own view
+  const updates = !o.byUser && cfg.updateBeforeMerge;
   if (!ob) add("mergeable", "GitHub says it can merge", "waiting", "Not seen on GitHub yet.");
   else if (ob.mergeable === "CONFLICTING" || ob.mergeStateStatus === "DIRTY") add("mergeable", "GitHub says it can merge", "blocked", `It conflicts with ${pr.base}. Resolve it on GitHub, or close it and deliver again.`, "conflict");
   else if (ob.mergeable !== "MERGEABLE" || ob.mergeStateStatus === "UNKNOWN") add("mergeable", "GitHub says it can merge", "waiting", "GitHub has not worked out yet whether it can merge.");
@@ -609,9 +1138,10 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   else if (ob.mergeStateStatus === "UNSTABLE") {
     if (headAge > PR_LIMITS.nonRequiredMs) add("mergeable", "GitHub says it can merge", "blocked", "Checks that are not required are failing or still running after 30 minutes. Merge on GitHub if that is acceptable.", "non-required-failing");
     else add("mergeable", "GitHub says it can merge", "waiting", "Checks that are not required are failing or still running.");
-  } else if (ob.mergeStateStatus === "BEHIND")
-    add("mergeable", "GitHub says it can merge", "blocked", `GitHub requires it to be up to date with ${pr.base}. This version does not update pull requests; merge on GitHub, or close it and deliver again.`, "github-blocked");
-  else if (ob.mergeStateStatus === "BLOCKED") {
+  } else if (ob.mergeStateStatus === "BEHIND") {
+    if (updates) add("mergeable", "GitHub says it can merge", "waiting", `GitHub requires it to be up to date with ${pr.base}; the app brings it up to date before it merges.`);
+    else add("mergeable", "GitHub says it can merge", "blocked", `GitHub requires it to be up to date with ${pr.base}. The app brings a pull request up to date only when it merges it automatically with "update before merge" on; merge on GitHub, or close it and deliver again.`, "github-blocked");
+  } else if (ob.mergeStateStatus === "BLOCKED") {
     if (!checksOk) add("mergeable", "GitHub says it can merge", "waiting", "GitHub is waiting for its required checks.");
     else if (ob.reviewDecision === "REVIEW_REQUIRED") add("mergeable", "GitHub says it can merge", "blocked", APPROVAL_TEXT, "approval-required");
     else if (headAge > PR_LIMITS.githubBlockedMs) add("mergeable", "GitHub says it can merge", "blocked", `GitHub blocks the merge although the required checks passed. ${APPROVAL_TEXT}`, "github-blocked");
@@ -625,27 +1155,89 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   else if (ob.labels.includes("orchestration:hold")) add("no-stop", "No stop on GitHub", "blocked", "The label orchestration:hold is set on GitHub. Remove it there to continue.", "hold-label");
   else add("no-stop", "No stop on GitHub", "ok", "No requested changes and no hold label.");
 
-  // 9–12: independent review, paths and workers, auto-merge availability, up to date (step 3; a user merge skips them).
+  // 9. Independent review, bound to the exact change. For a user merge it is shown and does not gate.
+  const rv = reviewView(s, task);
+  const recorded = pr.review.ok && pr.review.forSha === pr.changeSha;
+  const REVIEW = "Independent review";
+  const advisory = o.byUser;
+  const note = advisory ? " You can still merge it yourself: your Merge replaces the agent review." : "";
+  if (rv.state === "ok" && recorded) add("review", REVIEW, "ok", rv.evidence.reason, undefined, advisory);
+  else if (rv.state === "findings") add("review", REVIEW, "blocked", `${rv.evidence.reason}${note}`, "review-findings", advisory);
+  else if (rv.state === "blocked") add("review", REVIEW, "blocked", `${rv.evidence.reason}${note}`, "review-blocked", advisory);
+  else if (rv.state === "limit") add("review", REVIEW, "blocked", rv.evidence.reason, "review-limit", advisory);
+  else if (rv.state === "pending") add("review", REVIEW, "waiting", rv.evidence.reason, undefined, advisory);
+  else if (rv.state === "ok") add("review", REVIEW, "waiting", "The review result is being recorded.", undefined, advisory);
+  else add("review", REVIEW, "waiting", `${rv.evidence.reason} One dedicated review is started for it${cfg.enabled && !s.project.hold && !pr.userHold ? "" : " once nothing is paused"}.`, undefined, advisory);
+
+  if (!o.byUser) {
+    // 10. Paths and workers
+    const local = s.project.enabledProviders.filter((p) => s.project.workerEnvironment[p] === "local");
+    if (pr.changed.protectedHits.length)
+      add("paths", "Protected files and workers", "blocked", `It touches protected files (${pr.changed.protectedHits.slice(0, 5).join(", ")}), which control the checks or the build, so it is never merged automatically. Look at it and merge it yourself.`, "protected-path");
+    else if (local.length && !cfg.allowLocalWorkers)
+      add("paths", "Protected files and workers", "blocked", `A worker environment is set to "local" (${local.map(M.providerLabel).join(", ")}), which may expose your GitHub sign-in or a GitHub MCP server to agents. Automatic merging is off until the environment is isolated, or you allow local workers in Settings → Delivery. You can merge it yourself.`, "local-workers");
+    else add("paths", "Protected files and workers", "ok", local.length ? "No protected file is touched. Local worker environments are allowed by your setting." : "No protected file is touched, and workers run isolated.");
+
+    // 11. Automatic merging is available
+    const used = autoMergesToday(gh, nowMs);
+    if (gh?.autoMergeBlockers.length) add("auto", "Automatic merging available", "blocked", `Automatic merging is not available in this repository: ${gh.autoMergeBlockers.join("; ")}. Merge it yourself.`, "auto-unavailable");
+    else if (gh?.autoMergePaused)
+      add("auto", "Automatic merging available", "waiting", `Automatic merging is paused: ${gh.autoMergePaused.reason}. ${gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} You can merge this one yourself.`);
+    else if (used >= cfg.maxAutoMergesPerDay) add("auto", "Automatic merging available", "blocked", `The limit of ${cfg.maxAutoMergesPerDay} automatic merge${cfg.maxAutoMergesPerDay === 1 ? "" : "s"} per day (UTC) is reached. It continues tomorrow; merge it yourself, or raise the limit in Settings → Delivery.`, "limit");
+    else add("auto", "Automatic merging available", "ok", `${used} of ${cfg.maxAutoMergesPerDay} automatic merges used today.`);
+
+    // 12. Up to date with the base, so the tree the checks ran on is the tree that lands
+    const ahead = queueAhead(s, task);
+    const UP = `Up to date with ${pr.base}`;
+    if (ahead) add("up-to-date", UP, "waiting", `Waiting behind ${prName(ahead.integration!.pr!)}: pull requests merge one at a time, and only the first in line is brought up to date.`);
+    else if (!cfg.updateBeforeMerge) add("up-to-date", UP, "ok", "Not required by your setting: the repository's own rule decides.");
+    else if (!gh?.base) add("up-to-date", UP, "waiting", `${pr.base} has not been fetched yet.`);
+    else if (s.tasks.some((x) => x.integration?.landed?.via === "pr" && x.integration.landed.at > gh.base!.fetchedAt))
+      // The app knows the base moved (a pull request merged after the last fetch): what it fetched is stale.
+      add("up-to-date", UP, "waiting", `${pr.base} changed after it was last fetched (a pull request merged); it is fetched again before anything else merges.`);
+    else if (pr.baseConflict?.headSha === pr.headSha && pr.baseConflict.baseSha === gh.base.sha)
+      add("up-to-date", UP, "blocked", `It conflicts with ${pr.base} (${sha12(gh.base.sha)})${pr.baseConflict.files.length ? ` in ${pr.baseConflict.files.slice(0, 10).join(", ")}` : ""}. Nothing was pushed.`, "conflict");
+    else if (pr.baseSha !== gh.base.sha) {
+      if (pr.counters.baseUpdates >= PR_LIMITS.baseUpdates)
+        add("up-to-date", UP, "blocked", `${pr.base} moved again after the app brought this pull request up to date ${PR_LIMITS.baseUpdates} times. Merge it yourself, or close it and deliver again.`, "limit");
+      else add("up-to-date", UP, "waiting", `${pr.base} is at ${sha12(gh.base.sha)}; this pull request is brought up to date with it, then its checks run again.`);
+    } else if (nowMs - Date.parse(gh.base.fetchedAt) > PR_LIMITS.baseFreshMs) add("up-to-date", UP, "waiting", `${pr.base} is being fetched again before the merge.`);
+    else add("up-to-date", UP, "ok", `Contains ${pr.base} at ${sha12(gh.base.sha)}.`);
+  }
 
   // 13. Attempts
   if (pr.counters.mergeAttempts >= PR_LIMITS.mergeAttempts)
-    add("attempts", "Merge attempts", "blocked", `GitHub refused the merge ${pr.counters.mergeAttempts} times${pr.message ? `: ${pr.message}` : ""}. Merge on GitHub, or close it and deliver again.`, "merge-rejected");
-  else add("attempts", "Merge attempts", "ok", pr.counters.mergeAttempts ? `${pr.counters.mergeAttempts} of ${PR_LIMITS.mergeAttempts} used.` : "None used.");
+    add("attempts", "Merge attempts", "blocked", `GitHub refused the merge ${pr.counters.mergeAttempts} times${pr.message ? `: ${pr.message}` : ""}. Choose Merge to try once more, or merge on GitHub.`, "merge-rejected");
+  else add("attempts", "Merge attempts", "ok", pr.counters.mergeAttempts ? `GitHub refused ${pr.counters.mergeAttempts} of ${PR_LIMITS.mergeAttempts}.` : "None refused.");
 
-  const status = items.some((i) => i.state === "blocked") ? "blocked" : items.every((i) => i.ok) ? "ready" : "waiting";
+  const gating = items.filter((i) => !i.advisory);
+  const status = gating.some((i) => i.state === "blocked") ? "blocked" : gating.every((i) => i.ok) ? "ready" : "waiting";
   return { status, items };
 }
 
-/** Hold mode: everything except the user's own Merge click is satisfied. */
+/** Does the user's own merge apply to this pull request right now? Otherwise the automatic gate does. */
+const userGate = (pr: PrDelivery) => pr.policy === "hold" || pr.mergeRequested?.headSha === pr.headSha;
+
+/** Hold mode: GitHub's side is satisfied and the independent review is clean; only the user's Merge is missing. */
 export function prReady(s: State, task: Task, nowMs: number): boolean {
   const pr = livePr(task);
   if (!pr || pr.phase !== "open" || pr.policy !== "hold" || pr.op) return false;
   return prGate(s, task, nowMs, { byUser: true }).items.every((i) => i.ok || i.id === "policy");
 }
 
+/** Say once per head that a held pull request is ready: its checks passed and its review is clean. */
+function announceReady(s: State, t: Task, now: string) {
+  const pr = livePr(t);
+  // Judged at the time GitHub was last read, like everything that depends on what it showed.
+  if (!pr || !prReady(s, t, Date.parse(pr.observed?.at ?? now))) return;
+  const msg = `${prName(pr)} is ready for you: required checks passed on ${sha12(pr.headSha)}`;
+  if (!s.events.some((e) => e.taskId === t.id && e.message === msg)) event(s, now, "system", "integration", msg, t.id);
+}
+
 /** Reasons a head is never pushed: they end only when the delivery is closed (and delivered again). */
 const STICKY: PrAttentionCode[] = ["remote-diverged", "foreign-commits"];
 const stuck = (pr: PrDelivery) => !!pr.attention && STICKY.includes(pr.attention.code);
+const REPAIRABLE: PrAttentionCode[] = ["checks-failed", "review-findings", "conflict"];
 
 /** Set or clear `pr.attention` from the current facts. `since` moves only when the reason or the head changes. */
 function refreshAttention(s: State, t: Task, now: string) {
@@ -655,12 +1247,22 @@ function refreshAttention(s: State, t: Task, now: string) {
   if (pr.phase === "merged" || pr.phase === "closed") next = undefined;
   else if (pr.foreignHead) next = { code: "foreign-push", message: `Someone else pushed ${sha12(pr.foreignHead.sha)} to ${pr.branch}. The app will not push to it or merge it again.` };
   else if (pr.attention && STICKY.includes(pr.attention.code)) next = pr.attention; // only closing or delivering again clears it
-  else if (pr.phase === "built") {
-    if (pr.changed.workflowHits.length && !pr.workflowPushAllowed)
-      next = { code: "workflow-change", message: `It changes CI workflow files (${pr.changed.workflowHits.slice(0, 5).join(", ")}), so it is not pushed until you allow it.` };
-  } else {
-    const blocking = prGate(s, t, Date.parse(now), { byUser: pr.policy === "hold" }).items.find((i) => i.state === "blocked" && i.code);
+  else if (wrongRepo(s, pr))
+    next = { code: "repo-changed", message: `This pull request was opened in ${pr.repo}, but the remote ${pr.remote} now points at ${s.project.github!.repo}. The app does not read, push, merge or close it there. Point the remote back, or close this delivery and deliver again.` };
+  else if (pr.changed.workflowHits.length && !pr.workflowPushAllowed && (pr.phase === "built" || pr.pendingHead))
+    next = { code: "workflow-change", message: `It changes CI workflow files (${pr.changed.workflowHits.slice(0, 5).join(", ")}), so it is not pushed until you allow it.` };
+  else if (pr.phase === "built" && pr.counters.failures >= PR_LIMITS.publishFailures)
+    next = { code: "publish-failed", message: `Pushing the branch and opening the pull request failed ${pr.counters.failures} times${pr.message ? `: ${pr.message}` : ""}. Hold and release it to try again, or close it and deliver again.` };
+  else {
+    // Judged at the time GitHub was last read: a timeout is never declared for a period nobody looked.
+    const blocking = prGate(s, t, Date.parse(pr.observed?.at ?? now), { byUser: userGate(pr) }).items.find((i) => i.state === "blocked" && i.code && (pr.phase === "open" || i.id === "review"));
     if (blocking) next = { code: blocking.code!, message: blocking.detail };
+  }
+  if (next && pr.policy === "auto" && REPAIRABLE.includes(next.code)) {
+    const fixing = openRepair(s, pr);
+    if (fixing) next = { code: next.code, message: `${next.message} ${fixing.id} is fixing it; its result is pushed onto this pull request.` };
+    else if (pr.pendingHead?.kind === "repair") next = { code: next.code, message: `${next.message} A fix is being pushed onto this pull request.` };
+    else if (pr.counters.repairs >= PR_LIMITS.repairs) next = { code: next.code, message: `${next.message} ${PR_LIMITS.repairs} fix tasks already ran, so it needs you.` };
   }
   if (!next) {
     delete pr.attention;
@@ -702,10 +1304,13 @@ export function mergeSubject(t: Task): string {
 export function mergeBody(s: State, t: Task): string {
   const pr = t.integration!.pr!;
   const checks = requiredCheckNames(s, pr);
+  const byUser = pr.mergeRequested?.headSha === pr.headSha;
+  const reviewer = pr.review.provider ? ` (${M.providerLabel(pr.review.provider)}${pr.review.model ? ` · ${pr.review.model}` : ""})` : "";
   return [
-    `Merged from Orchestration at the user's request, for head ${sha12(pr.headSha)}.`,
+    byUser ? `Merged from Orchestration at the user's request, for head ${sha12(pr.headSha)}.` : `Merged automatically by Orchestration, for head ${sha12(pr.headSha)}.`,
     checks.length ? `Required checks passed on that head: ${checks.join(", ")}.` : "",
-    pr.review.ok ? `Automated review by Orchestration, not a human review: 0 open findings on ${sha12(pr.changeSha)}.` : "",
+    pr.review.ok ? `Automated review by Orchestration${reviewer}, not a human review: 0 open findings on ${sha12(pr.changeSha)}.` : "",
+    pr.headSha !== pr.changeSha ? `The head is the reviewed change ${sha12(pr.changeSha)} with ${pr.base} (${sha12(pr.baseSha)}) merged into it by Orchestration.` : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -728,8 +1333,7 @@ export function reportPrHead(state: State, taskId: string, f: PrHeadFacts, now: 
   const t = getTask(state, taskId);
   const p = state.project;
   const cfg = p.prDelivery;
-  const change = M.finalChange(state, t) ?? state.artifacts.filter((a) => a.taskId === t.id && a.kind === "code-change").pop();
-  const author = change?.author === "user" ? "user" : (state.attempts.find((a) => a.id === change?.attemptId)?.snapshot.provider ?? "user");
+  const author = changeAuthorOf(state, t);
   const branch = prBranch(p.id, t.id, f.n);
   const pr: PrDelivery = {
     n: f.n,
@@ -744,30 +1348,130 @@ export function reportPrHead(state: State, taskId: string, f: PrHeadFacts, now: 
     headSha: f.sha,
     baseSha: f.baseSha,
     changed: f.changed,
-    // Automatic merging is step 3: every pull request is held for the user.
-    policy: "hold",
+    // The project's choice; the user can change it for this one pull request.
+    policy: cfg.merge,
     policySource: "project",
     phase: "built",
-    review: { ok: false, source: "none", reason: "Independent review coverage is not evaluated in this version.", artifactIds: [] },
+    review: { ok: false, source: "none", reason: "Not evaluated yet.", forSha: f.sha, artifactIds: [] },
     reviewTaskIds: [],
     repairTaskIds: [],
     counters: { mergeAttempts: 0, baseUpdates: 0, repairs: 0, reviews: 0, failures: 0 },
   };
   const s = structuredClone(M.reportIntegration(state, taskId, { status: "integrated", sha: f.sha, ref: `${sha12(f.sha)} on ${branch}`, pr }, now));
-  refreshAttention(s, getTask(s, taskId), now);
+  const built = getTask(s, taskId);
+  if (built.integration?.pr) built.integration.pr.review = reviewCoverage(s, built);
+  refreshAttention(s, built, now);
   return s;
+}
+
+/** Who wrote a task's final change: the provider of the run that produced it, or the user. */
+function changeAuthorOf(s: State, t: Task): ProviderId | "user" {
+  const change = M.finalChange(s, t) ?? s.artifacts.filter((a) => a.taskId === t.id && a.kind === "code-change").pop();
+  return change?.author === "user" ? "user" : (s.attempts.find((a) => a.id === change?.attemptId)?.snapshot.provider ?? "user");
+}
+
+/**
+ * A finished fix task's final commit becomes the pending head of the pull request it repairs (design
+ * §6.2, §9.3). Nothing is pushed here. `descends`: the commit contains the pull request's current head,
+ * so the push is a plain fast-forward; otherwise the fix is stale and is not delivered.
+ */
+export function reportRepairHead(state: State, repairTaskId: string, f: PrHeadFacts & { descends: boolean }, now: string): State {
+  const repair = getTask(state, repairTaskId);
+  if (repair.lifecycle !== "done" || repair.integration?.status !== "pending") return state;
+  const target = repairTarget(state, repair);
+  // The pull request is gone (merged, closed, taken over): the caller delivers the fix on its own.
+  if (!target) return state;
+  if (!f.descends) return M.reportIntegration(state, repairTaskId, { status: "not-needed", message: `stale: the head of ${prName(target.pr)} moved after this fix started, so it was not pushed` }, now);
+  // A push in flight decides the head first.
+  if (target.pr.op) return M.reportIntegrationError(state, repairTaskId, `waiting for an operation on ${prName(target.pr)} to finish`, now);
+  const s = structuredClone(state);
+  const rt = getTask(s, repairTaskId);
+  const t = getTask(s, target.task.id);
+  const pr = t.integration!.pr!;
+  pr.pendingHead = { sha: f.sha, changeSha: f.sha, changeTaskId: rt.id, changeAuthor: changeAuthorOf(s, rt), baseSha: f.baseSha, kind: "repair" };
+  // What the pull request will hold once the fix is pushed. A fix that touches CI workflow files is
+  // never pushed on an earlier permission: it is asked for again.
+  pr.changed = f.changed;
+  if (f.changed.workflowHits.length) delete pr.workflowPushAllowed;
+  delete pr.nextAt;
+  rt.integration = { status: "integrated", at: now, sha: f.sha, ref: `${sha12(f.sha)} → ${prName(pr)} of ${t.id}` };
+  event(s, now, "system", "integration", `Fix ${sha12(f.sha)} is ready for ${prName(pr)} of ${t.id}; it is pushed onto that pull request, not opened as its own`, rt.id);
+  refreshAttention(s, t, now);
+  return s;
+}
+
+/** The pending head is on the remote branch: it becomes the pull request's head. Mutates the draft; returns the state to continue with. */
+function promoteHead(s: State, taskId: string, now: string): State {
+  const t = getTask(s, taskId);
+  const pr = t.integration!.pr!;
+  const p = pr.pendingHead;
+  if (!p) return s;
+  pr.headSha = p.sha;
+  pr.baseSha = p.baseSha;
+  pr.changeSha = p.changeSha;
+  pr.changeTaskId = p.changeTaskId;
+  pr.changeAuthor = p.changeAuthor;
+  delete pr.pendingHead;
+  // Everything that was bound to the old head is void: the Merge click, the attempts, what GitHub showed.
+  delete pr.mergeRequested;
+  delete pr.headSince;
+  delete pr.observed;
+  delete pr.baseConflict;
+  delete pr.message;
+  delete pr.nextAt;
+  pr.counters.mergeAttempts = 0;
+  pr.counters.failures = 0;
+  if (p.kind === "update") {
+    event(s, now, "system", "integration", `Brought ${prName(pr)} up to date with ${pr.base} (${sha12(p.baseSha)}): pushed ${sha12(p.sha)} as a fast-forward. Its checks run again; the reviewed change ${sha12(pr.changeSha)} is unchanged, so the review is not repeated`, t.id);
+  } else {
+    event(s, now, "system", "integration", `Pushed the fix from ${p.changeTaskId} onto ${prName(pr)} (${sha12(p.sha)}) as a fast-forward. It is reviewed and checked again`, t.id);
+  }
+  let out = s;
+  if (p.kind === "repair") {
+    // Reviews of the change this pull request no longer holds must never count, and need not finish.
+    const stale = s.tasks.filter((x) => x.reviewTarget?.taskId === t.id && x.reviewTarget.n === pr.n && x.reviewTarget.headSha !== pr.changeSha).map((x) => x.id);
+    out = cancelLinked(s, stale, now, `${prName(pr)} holds a newer change`);
+  }
+  const t2 = getTask(out, taskId);
+  t2.integration!.pr!.review = reviewCoverage(out, t2);
+  refreshAttention(out, t2, now);
+  return out;
 }
 
 // ---------- reports from the service ----------
 
-function setProblem(s: State, code: NonNullable<GitHubStatus["problem"]>["code"], message: string, now: string, retryAt?: string) {
+/**
+ * Record a problem with the connection. `since` names when it began: it stays the same while the same
+ * problem lasts or comes back (`recurring`), so it is announced once, not once per retry.
+ */
+function setProblem(s: State, code: NonNullable<GitHubStatus["problem"]>["code"], message: string, now: string, retryAt?: string, recurring?: { since: string }) {
   const prev = s.project.github;
   const gh: GitHubStatus = prev ?? { ok: false, requiredChecks: [], autoMergeBlockers: [], posture: [] };
   const same = prev?.problem?.code === code;
   gh.ok = false;
-  gh.problem = { code, message: clip(message, 300), since: same ? prev!.problem!.since : now, ...(retryAt ? { retryAt } : {}) };
+  gh.problem = { code, message: clip(message, 300), since: recurring ? recurring.since : same ? prev!.problem!.since : now, ...(retryAt ? { retryAt } : {}) };
   s.project.github = gh;
-  if (!same) event(s, now, "system", "blocked", `GitHub delivery stopped: ${clip(message, 300)}`);
+  if (!same && (!recurring || recurring.since === now)) event(s, now, "system", "blocked", `GitHub delivery stopped: ${clip(message, 300)}`);
+}
+
+const FETCH_BACKOFF_MIN = [1, 2, 5, 15, 30];
+
+/**
+ * The fetch of the base failed although the repository check may pass (the branch is missing, or git
+ * cannot sign in over its own transport while gh can). Counted and backed off separately: a passing
+ * check does not reset it, so it cannot flap between "fine" and "failed" every cycle.
+ */
+function fetchFailed(s: State, e: OpError, now: string) {
+  const cfg = s.project.prDelivery;
+  const gh: GitHubStatus = s.project.github ?? { ok: false, requiredChecks: [], autoMergeBlockers: [], posture: [] };
+  s.project.github = gh;
+  const prev = gh.fetchFailures;
+  const count = (prev?.count ?? 0) + 1;
+  const nextAt = e.code === "rate-limit" && e.retryAt ? e.retryAt : new Date(Date.parse(now) + FETCH_BACKOFF_MIN[Math.min(count, FETCH_BACKOFF_MIN.length) - 1] * MIN).toISOString();
+  const message = `Fetching ${cfg.remote}/${cfg.base} failed${count > 1 ? ` ${count} times in a row` : ""}: ${e.message}`;
+  gh.fetchFailures = { count, since: prev?.since ?? now, nextAt, message: clip(message, 300) };
+  const code = e.code === "auth" ? "auth" : e.code === "rate-limit" ? "rate-limit" : e.code === "remote" || e.code === "git" ? "remote" : "network";
+  setProblem(s, code, code === "auth" ? `GitHub sign-in needed (run \`gh auth login\` in a terminal). ${message}` : message, now, nextAt, { since: gh.fetchFailures.since });
 }
 
 /** A failure that is about the connection, not about one pull request. */
@@ -775,11 +1479,12 @@ function projectProblem(s: State, e: OpError, now: string) {
   const at = (ms: number) => new Date(Date.parse(now) + ms).toISOString();
   if (e.code === "auth") setProblem(s, "auth", `GitHub sign-in needed (run \`gh auth login\` in a terminal). ${e.message}`, now);
   else if (e.code === "rate-limit") setProblem(s, "rate-limit", `GitHub's rate limit was reached; waiting. ${e.message}`, now, e.retryAt ?? at(5 * MIN));
-  else if (e.code === "remote") setProblem(s, "remote", e.message, now, at(5 * MIN));
+  // git's own transport (an SSH key, a credential helper) is not gh's sign-in: `gh auth login` would not help.
+  else if (e.code === "remote" || e.code === "git") setProblem(s, "remote", e.message, now, at(5 * MIN));
   else setProblem(s, "network", `GitHub could not be reached. ${e.message}`, now, at(MIN));
 }
 
-const isProjectError = (e: OpError) => e.code === "auth" || e.code === "rate-limit";
+const isProjectError = (e: OpError) => e.code === "auth" || e.code === "rate-limit" || e.code === "git";
 
 /** Posture the app knows without asking GitHub. */
 function localPosture(s: State, ctx: ReportContext): PostureItem[] {
@@ -827,10 +1532,24 @@ export function reportPreflight(state: State, r: PreflightReport, now: string, c
     ghVersion: r.ghVersion,
     requiredChecks: [...r.requiredChecks],
     autoMergeBlockers: [...r.autoMergeBlockers],
-    posture: [...r.posture, ...(r.simulated ? [] : localPosture(s, ctx))],
+    // What the last fetch found on the local delivery branch stays listed until the next fetch.
+    posture: [...r.posture, ...(r.simulated ? [] : localPosture(s, ctx)), ...(prev?.posture.filter((x) => x.id === UNPUSHED_ID) ?? [])],
   };
+  if (r.mergeQueue) gh.mergeQueue = true;
+  else delete gh.mergeQueue;
+  if (r.mergeCommitsAllowed === false) gh.mergeCommitsAllowed = false;
+  else delete gh.mergeCommitsAllowed;
+  // A failing fetch keeps its own counter and wait. A passing check does not reset it, and while the
+  // fetch is what fails the problem stays until a fetch works (the next one is tried right away when
+  // the user asked for this check).
+  if (gh.fetchFailures && repoChanged) delete gh.fetchFailures;
+  const fetchProblem = !!gh.fetchFailures && prev?.problem?.since === gh.fetchFailures.since && prev.problem.code !== "remote";
+  if (fetchProblem) {
+    if (prev?.recheck) gh.fetchFailures = { ...gh.fetchFailures!, nextAt: now };
+    gh.ok = false;
+    gh.problem = { ...prev!.problem!, retryAt: gh.fetchFailures!.nextAt };
+  } else delete gh.problem;
   delete gh.recheck;
-  delete gh.problem;
   if (r.simulated) gh.simulated = true;
   else delete gh.simulated;
   // The fetched base belongs to the repository it was fetched from.
@@ -840,14 +1559,44 @@ export function reportPreflight(state: State, r: PreflightReport, now: string, c
   return s;
 }
 
-/** The delivery base was fetched into the app's private ref. */
-export function reportBaseFetched(state: State, sha: string, now: string): State {
+const UNPUSHED_ID = "unpushed-local";
+
+/**
+ * The delivery base was fetched into the app's private ref. `unpushed`: Orchestration's own commits on
+ * the local delivery branch that the remote base does not have (local delivery put them there). The
+ * app never pushes them; it says so.
+ */
+export function reportBaseFetched(state: State, sha: string, now: string, unpushed?: { branch: string; count: number }): State {
   const gh = state.project.github;
   if (!gh) return state;
   const s = structuredClone(state);
+  const g = s.project.github!;
+  const cfg = s.project.prDelivery;
   const first = !gh.base;
-  s.project.github!.base = { sha, fetchedAt: now };
-  if (first) event(s, now, "system", "integration", `Fetched ${s.project.prDelivery.remote}/${s.project.prDelivery.base} (${sha12(sha)}); new work starts from it`);
+  g.base = { sha, fetchedAt: now };
+  if (g.fetchFailures) {
+    const recovered = g.problem?.since === g.fetchFailures.since;
+    delete g.fetchFailures;
+    // The problem was the fetch itself: it is over.
+    if (recovered) {
+      delete g.problem;
+      g.ok = true;
+    }
+  }
+  if (unpushed) {
+    const had = g.posture.some((x) => x.id === UNPUSHED_ID);
+    g.posture = g.posture.filter((x) => x.id !== UNPUSHED_ID);
+    if (unpushed.count > 0) {
+      g.posture.push({
+        id: UNPUSHED_ID,
+        status: "warn",
+        label: `${unpushed.count} Orchestration commit${unpushed.count === 1 ? "" : "s"} on ${unpushed.branch} ${unpushed.count === 1 ? "is" : "are"} not on ${cfg.remote}/${cfg.base}`,
+        detail: `Local delivery put ${unpushed.count === 1 ? "it" : "them"} on your branch ${unpushed.branch}. The app does not push ${unpushed.count === 1 ? "it" : "them"}, and new work starts from ${cfg.remote}/${cfg.base}, which does not have ${unpushed.count === 1 ? "it" : "them"}. Push ${unpushed.branch} yourself if pull requests should build on that work.`,
+      });
+      if (!had) event(s, now, "system", "config", `${unpushed.count} Orchestration commit(s) on ${unpushed.branch} are not on ${cfg.remote}/${cfg.base}; the app does not push them`);
+    }
+  }
+  if (first) event(s, now, "system", "integration", `Fetched ${cfg.remote}/${cfg.base} (${sha12(sha)}); new work starts from it`);
   return s;
 }
 
@@ -867,18 +1616,29 @@ function mainCheckState(names: string[], checks: CheckObs[]): "pending" | "succe
 /**
  * What GitHub reports about the app's pull requests and landed commits. MERGED and CLOSED are
  * terminal evidence and always apply; everything else is bound to the head it was observed for.
- * `ctx.opId` names the merge or close operation that asked for this observation.
+ * `ctx.opId` names the merge or close operation that asked for this observation. `ctx.repo`: the
+ * repository that was read; a number is matched only to a pull request the app opened there.
  */
-export function reportObservations(state: State, obs: Observations, now: string, ctx: { opId?: string; actError?: OpError; requested?: { taskId: string; number: number }[] } = {}): State {
+export function reportObservations(state: State, obs: Observations, now: string, ctx: { opId?: string; actError?: OpError; requested?: { taskId: string; number: number }[]; repo?: string } = {}): State {
   const s = structuredClone(state);
   const nowMs = Date.parse(now);
   const gh = s.project.github;
+  const repo = ctx.repo ?? gh?.repo;
   const seen = new Set<string>();
+  /** Review and fix tasks that belong to a pull request which merged, closed or was taken over. */
+  const cancel: { ids: string[]; reason: string }[] = [];
   for (const o of obs.prs) {
-    const t = s.tasks.find((x) => livePr(x)?.number === o.number && livePr(x)!.phase === "open");
+    const t = s.tasks.find((x) => {
+      const p = livePr(x);
+      return p?.number === o.number && (p.phase === "open" || p.phase === "closed") && (!repo || !p.repo || p.repo === repo);
+    });
     const pr = t && livePr(t);
     if (!t || !pr) continue;
     seen.add(t.id);
+    if (pr.phase === "closed") {
+      // A closed pull request is only watched for one thing: someone reopened and merged it on GitHub.
+      if (o.state !== "MERGED" || !o.mergeCommit) continue;
+    }
     const wasReady = prReady(s, t, nowMs);
     pr.observed = {
       at: now,
@@ -909,14 +1669,23 @@ export function reportObservations(state: State, obs: Observations, now: string,
     if (o.state === "MERGED") {
       // Truthful records: "merged" needs the merge commit GitHub made.
       if (!o.mergeCommit) continue;
-      const byApp = pr.op?.kind === "merge" && pr.op.headSha === o.headSha;
+      // Attributed by the merge the app sent for this head: the intent in flight, or the last one it
+      // sent when GitHub reports the merge only after the command had seemed to fail.
+      const late = !!pr.lastMergeIntent && pr.lastMergeIntent.headSha === o.headSha && !!o.mergedBy && o.mergedBy === gh?.login;
+      const byApp = (pr.op?.kind === "merge" && pr.op.headSha === o.headSha) || late;
+      const auto = byApp && !!pr.lastMergeIntent?.auto && pr.lastMergeIntent.headSha === o.headSha;
       const names = requiredCheckNames(s, pr);
       const required = o.checks.filter((c) => names.includes(c.name));
       const clean = o.headSha === pr.headSha && !pr.foreignHead && o.checksFor === o.headSha && names.length > 0 && names.every((n) => required.find((c) => c.name === n)?.conclusion === "SUCCESS");
-      const flags: LandedFlag[] = [...(clean ? [] : (["merged-without-clean-gate"] as const)), ...(pr.changed.protectedHits.length ? (["protected-paths"] as const) : [])];
+      const flags: LandedFlag[] = [
+        ...(clean ? [] : (["merged-without-clean-gate"] as const)),
+        ...(pr.review.ok && pr.review.clearedByUser ? (["findings-cleared-by-user"] as const) : []),
+        ...(pr.changed.protectedHits.length ? (["protected-paths"] as const) : []),
+      ];
       pr.phase = "merged";
       settle();
-      event(s, now, "system", "integration", `${prName(pr)} merged into ${pr.base} by ${byApp ? "Orchestration, at your request" : (o.mergedBy ?? "a person")}${pr.simulated ? " (simulated)" : ""}`, t.id);
+      const who = byApp ? (auto ? "Orchestration, automatically: independent review clean and required checks passed on that head" : "Orchestration, at your request") : (o.mergedBy ?? "a person");
+      event(s, now, "system", "integration", `${prName(pr)} merged into ${pr.base} by ${who}${pr.simulated ? " (simulated)" : ""}`, t.id);
       recordLanded(
         s,
         t,
@@ -927,7 +1696,7 @@ export function reportObservations(state: State, obs: Observations, now: string,
           by: byApp ? "app" : "person",
           ...(o.mergedBy ? { mergedBy: o.mergedBy } : {}),
           ...(pr.simulated ? { simulated: true } : {}),
-          pr: { number: o.number, url: pr.url ?? safePrUrl(pr, o.number, o.url) },
+          pr: { number: o.number, url: pr.url ?? safePrUrl(pr, o.number, o.url), ...(pr.repo ? { repo: pr.repo } : {}) },
           review: structuredClone(pr.review),
           checks: required.map((c) => ({ ...c })),
           mainCheck: { state: "pending", at: now },
@@ -935,14 +1704,16 @@ export function reportObservations(state: State, obs: Observations, now: string,
         },
         now,
       );
-      // Step 3: cancel open review and repair tasks of this pull request here.
+      cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds], reason: `${prName(pr)} merged` });
       continue;
     }
     if (o.state === "CLOSED") {
       const asked = !!pr.closeRequested;
       pr.phase = "closed";
+      if (asked) pr.closedByRequest = true;
       settle();
       event(s, now, "system", asked ? "integration" : "blocked", asked ? `${prName(pr)} closed from Orchestration; the branch is kept` : `${prName(pr)} was closed on GitHub without merging${o.closedBy ? ` by ${o.closedBy}` : ""}`, t.id);
+      cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds], reason: `${prName(pr)} was closed` });
       continue;
     }
     // OPEN
@@ -951,16 +1722,25 @@ export function reportObservations(state: State, obs: Observations, now: string,
       // Sticky: the app never pushes to or merges this pull request again.
       pr.foreignHead = { sha: o.headSha, at: now };
       delete pr.mergeRequested;
+      delete pr.pendingHead;
+      cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds], reason: `someone else pushed to ${prName(pr)}` });
     }
     if (pr.op && (pr.op.kind === "merge" || pr.op.kind === "close")) {
       const own = ctx.opId === pr.op.id;
       const graceOver = nowMs - Date.parse(pr.op.at) >= OP_TIMEOUT_MS[pr.op.kind] + PR_LIMITS.graceMs;
-      if ((own && ctx.actError) || graceOver) {
+      // A command that failed for a reason that says nothing about GitHub's answer (the network, a
+      // timeout) may still have gone through: its intent stays until the grace time has passed.
+      const definite = !!ctx.actError && !["network", "timeout", "unknown"].includes(ctx.actError.code);
+      if ((own && definite) || graceOver) {
         const what = pr.op.kind;
         pr.message = clip(ctx.actError?.message ?? `The ${what} did not happen: GitHub still shows the pull request open.`, 300);
         if (what === "merge") {
-          pr.counters.mergeAttempts += 1;
+          // Only a refusal counts as a refusal. A sign-in, rate-limit or network failure is tried again.
+          const refused = own && (ctx.actError?.code === "rejected" || ctx.actError?.code === "head-mismatch");
+          if (refused) pr.counters.mergeAttempts += 1;
           if (ctx.actError?.code === "head-mismatch") delete pr.mergeRequested;
+          // A spent request is withdrawn, so Merge can be chosen again deliberately.
+          if (pr.counters.mergeAttempts >= PR_LIMITS.mergeAttempts) delete pr.mergeRequested;
         }
         delete pr.op;
         backoff(pr, now);
@@ -968,10 +1748,7 @@ export function reportObservations(state: State, obs: Observations, now: string,
       }
     }
     refreshAttention(s, t, now);
-    if (!wasReady && prReady(s, t, nowMs)) {
-      const msg = `${prName(pr)} is ready for you: required checks passed on ${sha12(pr.headSha)}`;
-      if (!s.events.some((e) => e.taskId === t.id && e.message === msg)) event(s, now, "system", "integration", msg, t.id);
-    }
+    if (!wasReady) announceReady(s, t, now);
   }
   // An interrupted merge or close whose pull request GitHub did not return: never wait on it forever.
   for (const r of ctx.requested ?? []) {
@@ -984,12 +1761,25 @@ export function reportObservations(state: State, obs: Observations, now: string,
     backoff(pr, now);
   }
 
-  // The check on the base branch after a merge (informational here; the pause and breaker are step 3).
+  // The check on the base branch after a merge. A failure after a merge the app made pauses automatic
+  // merging; a second one within a day keeps it paused until the user resumes it. Nothing is reverted.
+  const DAY = 24 * 60 * MIN;
   for (const t of s.tasks) {
     const l = t.integration?.landed;
-    if (!l || l.via !== "pr" || l.mainCheck?.state !== "pending") continue;
+    if (!l || l.via !== "pr") continue;
+    const paused = gh?.autoMergePaused;
+    // While a pause that may end by itself lasts, the commit that caused it is looked at again: a re-run may pass.
+    const rewatch = !!paused && !paused.sticky && paused.taskId === t.id && l.mainCheck?.state === "failure";
+    if (l.mainCheck?.state !== "pending" && !rewatch) continue;
     const c = obs.commits.find((x) => x.oid === l.commit);
     const stateNow = c ? mainCheckState(gh?.requiredChecks ?? [], c.checks) : "pending";
+    if (rewatch) {
+      if (stateNow === "success") {
+        l.mainCheck = { state: "success", at: now };
+        event(s, now, "system", "integration", `The check on ${l.target} passed when it ran again`, t.id);
+      }
+      continue;
+    }
     if (stateNow === "pending") {
       if (nowMs - Date.parse(l.at) > PR_LIMITS.mainCheckMs) l.mainCheck = { state: "unknown", at: now };
       continue;
@@ -998,7 +1788,28 @@ export function reportObservations(state: State, obs: Observations, now: string,
     l.mainCheck = { state: stateNow, at: now, ...(stateNow === "failure" && url && GITHUB_URL.test(url) ? { url } : {}) };
     if (stateNow === "failure") {
       if (!l.flags.includes("main-check-failed")) l.flags.push("main-check-failed");
-      event(s, now, "system", "blocked", `The check on ${l.target} failed after ${l.pr ? `PR #${l.pr.number}` : "this change"} landed`, t.id);
+      const what = l.pr ? `PR #${l.pr.number}` : "this change";
+      event(s, now, "system", "blocked", `The check on ${l.target} failed after ${what} landed`, t.id);
+      if (l.by === "app" && gh) {
+        const breaks = [...(gh.mainBreaks ?? []).filter((x) => nowMs - Date.parse(x) < DAY), now];
+        gh.mainBreaks = breaks;
+        const sticky = breaks.length >= 2;
+        gh.autoMergePaused = { since: now, reason: `the check on ${l.target} is failing after ${what}`, sticky, taskId: t.id };
+        event(s, now, "system", "blocked", `Automatic merging is paused: the check on ${l.target} is failing after ${what}. ${sticky ? "It is the second failure within a day, so it stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} Nothing is reverted automatically.`);
+      }
+    }
+  }
+  // A pause that is not sticky ends when the newest landed commit's check passes.
+  if (gh?.autoMergePaused && !gh.autoMergePaused.sticky) {
+    const since = gh.autoMergePaused.since;
+    const newest = s.tasks
+      .map((t) => t.integration?.landed)
+      .filter((l): l is Landed => !!l && l.via === "pr")
+      .sort((a, b) => a.at.localeCompare(b.at))
+      .pop();
+    if (newest?.mainCheck?.state === "success" && newest.mainCheck.at >= since) {
+      delete gh.autoMergePaused;
+      event(s, now, "system", "integration", `Automatic merging resumed: the check on ${newest.target} passes again`);
     }
   }
 
@@ -1007,7 +1818,9 @@ export function reportObservations(state: State, obs: Observations, now: string,
     if (obs.rateRemaining !== undefined) gh.rateRemaining = obs.rateRemaining;
     if (obs.rateRemaining === 0) setProblem(s, "rate-limit", "GitHub's rate limit was reached; waiting until it resets.", now, obs.rateResetAt ?? new Date(nowMs + 15 * MIN).toISOString());
   }
-  return s;
+  let out = s;
+  for (const c of cancel) out = cancelLinked(out, c.ids, now, c.reason);
+  return out;
 }
 
 // ---------- the planner ----------
@@ -1020,6 +1833,8 @@ function mutationsThisHour(gh: GitHubStatus | undefined, nowMs: number): number 
 /** Does anything need a fresh base now: a writer about to start, a head to build, or a merge just seen? */
 function needsBase(s: State): boolean {
   const fetchedAt = s.project.github?.base?.fetchedAt ?? "";
+  // The merge candidate is merged only onto a base that was fetched moments ago.
+  if (mergeCandidate(s)) return true;
   return s.tasks.some((t) => {
     if (t.lifecycle === "done") return t.integration?.status === "pending" || (t.integration?.landed?.via === "pr" && t.integration.landed.at > fetchedAt);
     if ((t.lifecycle !== "ready" && t.lifecycle !== "active") || t.hold || t.holdBeforeStart) return false;
@@ -1031,6 +1846,9 @@ function pendingComment(s: State, nowMs: number): { task: Task; noteId: string }
   for (const t of s.tasks) {
     const l = t.integration?.landed;
     if (!l?.pr || l.simulated) continue;
+    // Only in the repository the pull request lives in.
+    const repo = landedRepo(t);
+    if (repo && s.project.github?.repo && repo !== s.project.github.repo) continue;
     const next = t.integration?.pr?.nextAt;
     if (next && Date.parse(next) > nowMs) continue;
     const n = l.notes.find((x) => x.comment?.status === "pending");
@@ -1050,17 +1868,34 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
   const cfg = p.prDelivery;
   const gh = p.github;
   const tracked = trackedPrTasks(s);
-  const open = tracked.filter((t) => t.integration!.pr!.phase === "open" && t.integration!.pr!.number !== undefined);
-  const mainChecks = s.tasks.filter((t) => t.integration?.landed?.via === "pr" && t.integration.landed.mainCheck?.state === "pending");
-  // Nothing is watched once pull-request delivery is off and no pull request or main check is tracked.
-  if (!cfg.enabled && open.length === 0 && mainChecks.length === 0) return undefined;
-  const id = `prop-${s.seq + 1}`;
+  // Only pull requests in the repository the remote names now are read or written.
+  const here = (t: Task) => !wrongRepo(s, t.integration!.pr!);
+  const open = tracked.filter((t) => t.integration!.pr!.phase === "open" && t.integration!.pr!.number !== undefined && here(t));
   const age = (iso?: string) => (iso ? nowMs - Date.parse(iso) : Number.POSITIVE_INFINITY);
+  const paused = gh?.autoMergePaused;
+  const mainChecks = s.tasks.filter((t) => {
+    const l = t.integration?.landed;
+    if (!l || l.via !== "pr") return false;
+    const repo = landedRepo(t);
+    if (repo && gh?.repo && repo !== gh.repo) return false;
+    // A pause that may end by itself keeps looking at the commit that caused it, for a bounded time.
+    return l.mainCheck?.state === "pending" || (!!paused && !paused.sticky && paused.taskId === t.id && l.mainCheck?.state === "failure" && age(paused.since) < PR_LIMITS.pausedWatchMs);
+  });
+  // A closed pull request may still be reopened and merged on GitHub: it is looked at, slowly, for a day.
+  const closedWatch = s.tasks.filter((t) => {
+    const pr = livePr(t);
+    return !!pr && pr.phase === "closed" && pr.number !== undefined && !t.integration?.landed && !wrongRepo(s, pr) && pr.observed?.state === "CLOSED" && age(pr.observed.at) < PR_LIMITS.closedWatchMs;
+  });
+  // Nothing is watched once pull-request delivery is off and no pull request or main check is tracked.
+  if (!cfg.enabled && open.length === 0 && mainChecks.length === 0 && closedWatch.length === 0) return undefined;
+  const id = `prop-${s.seq + 1}`;
 
-  // 1. A known problem: wait for its retry time, then only the read-only check, backing off 5 → 30 min.
+  // 1. A known problem: wait for its retry time, then only a read, backing off 5 → 30 min. When the
+  //    problem is a fetch that keeps failing, the fetch itself is what is tried again.
   if (gh?.problem) {
     if (gh.recheck) return { id, kind: "preflight" };
-    if (gh.problem.retryAt) return Date.parse(gh.problem.retryAt) > nowMs ? undefined : { id, kind: "preflight" };
+    const fetchProblem = !!gh.fetchFailures && gh.problem.since === gh.fetchFailures.since && gh.problem.code !== "remote";
+    if (gh.problem.retryAt) return Date.parse(gh.problem.retryAt) > nowMs ? undefined : fetchProblem && cfg.enabled ? { id, kind: "fetch" } : { id, kind: "preflight" };
     const wait = Math.min(30 * MIN, Math.max(5 * MIN, Date.parse(gh.checkedAt ?? gh.problem.since) - Date.parse(gh.problem.since)));
     return age(gh.checkedAt) >= wait ? { id, kind: "preflight" } : undefined;
   }
@@ -1068,56 +1903,86 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
   if (!gh || gh.recheck || !gh.checkedAt || age(gh.checkedAt) > PR_LIMITS.preflightMaxAgeMs) return { id, kind: "preflight" };
   if (!gh.ok) return undefined;
 
-  const observe = (): PrOp => ({
+  const observe = (withClosed = false): PrOp => ({
     id,
     kind: "observe",
-    prs: open.slice(0, PR_LIMITS.observeBatch).map((t) => ({ taskId: t.id, number: t.integration!.pr!.number! })),
+    ...(gh.repo ? { repo: gh.repo } : {}),
+    prs: [...open, ...(withClosed ? closedWatch : [])].slice(0, PR_LIMITS.observeBatch).map((t) => ({ taskId: t.id, number: t.integration!.pr!.number! })),
     commits: mainChecks.slice(0, PR_LIMITS.observeBatch).map((t) => t.integration!.landed!.commit),
   });
   const canWrite = !p.hold && cfg.enabled && age(gh.lastMutationAt) >= PR_LIMITS.mutationGapMs && mutationsThisHour(gh, nowMs) < PR_LIMITS.mutationsPerHour;
   const rested = (pr: PrDelivery) => !pr.nextAt || Date.parse(pr.nextAt) <= nowMs;
+  const pushable = (pr: PrDelivery) => !pr.userHold && !pr.foreignHead && !pr.closeRequested && !stuck(pr) && publishAllowed(pr);
 
   // 3. Interrupted intents: reconcile before anything is tried again, and only after the grace time.
   for (const t of tracked) {
     const pr = t.integration!.pr!;
+    if (!here(t)) continue;
     if (!pr.op || age(pr.op.at) < OP_TIMEOUT_MS[pr.op.kind] + PR_LIMITS.graceMs) continue;
     if ((pr.op.kind === "merge" || pr.op.kind === "close") && pr.number !== undefined) return observe();
     // publish, push, or a close that never had a number: the operation itself checks the remote first.
-    const kind = pr.op.kind === "close" || pr.closeRequested ? "close" : "publish";
+    const kind = pr.op.kind === "close" || pr.closeRequested ? "close" : pr.op.kind === "push" ? "push" : "publish";
     if (kind === "close" ? canWrite : canWrite && !pr.userHold && !pr.foreignHead && !stuck(pr)) return { id, kind, taskId: t.id, n: pr.n, headSha: pr.headSha };
   }
 
   // 4. The delivery base.
-  if (cfg.enabled) {
+  if (cfg.enabled && (!gh.fetchFailures || Date.parse(gh.fetchFailures.nextAt) <= nowMs)) {
     const fetched = age(gh.base?.fetchedAt);
-    if (!gh.base || (fetched >= MIN && needsBase(s)) || fetched >= 10 * MIN) return { id, kind: "fetch" };
+    // A merge the app has seen moved the base: what it fetched before is stale, so it fetches at once.
+    const movedSince = !!gh.base && s.tasks.some((t) => t.integration?.landed?.via === "pr" && t.integration.landed.at > gh.base!.fetchedAt);
+    if (!gh.base || movedSince || (fetched >= MIN && needsBase(s)) || fetched >= 10 * MIN) return { id, kind: "fetch" };
   }
 
   // 5. Observe: one batched read.
-  if (open.length || mainChecks.length) {
-    const urgent = open.some((t) => t.integration!.pr!.mergeRequested || t.integration!.pr!.op);
-    const interval = p.hold || (gh.rateRemaining ?? 5000) < 300 ? 5 * MIN : urgent ? 30_000 : open.length ? 2 * MIN : MIN;
-    if (age(gh.observedAt) >= interval) return observe();
+  const candidate = mergeCandidate(s);
+  if (open.length || mainChecks.length || closedWatch.length) {
+    const unseen = open.some((t) => !t.integration!.pr!.observed);
+    const urgent = !!candidate || unseen || open.some((t) => t.integration!.pr!.mergeRequested || t.integration!.pr!.op);
+    const interval = p.hold || (gh.rateRemaining ?? 5000) < 300 ? 5 * MIN : urgent ? 30_000 : open.length ? 2 * MIN : mainChecks.length ? MIN : PR_LIMITS.closedWatchEveryMs;
+    // Closed pull requests ride along once per ten-minute slot.
+    const slot = (ms: number) => Math.floor(ms / PR_LIMITS.closedWatchEveryMs);
+    const withClosed = closedWatch.length > 0 && (!gh.observedAt || slot(nowMs) !== slot(Date.parse(gh.observedAt)));
+    if (age(gh.observedAt) >= interval && (open.length || mainChecks.length || withClosed)) return observe(withClosed);
   }
 
   // 6. Writes.
   if (!canWrite) return undefined;
-  // 6.1 The user's merge, bound to the head they saw. (Step 3 adds the automatic merge candidate here.)
-  for (const t of open) {
+  // 6.1 A merge: the user's, bound to the head they saw; else the one candidate of automatic merging.
+  const mergeOf = (t: Task, byUser: boolean): PrOp | undefined => {
     const pr = t.integration!.pr!;
-    if (!pr.mergeRequested || pr.op || pr.userHold || pr.foreignHead || pr.closeRequested || !rested(pr)) continue;
-    if (prGate(s, t, nowMs, { byUser: true }).status !== "ready") continue;
+    if (pr.op || pr.userHold || pr.foreignHead || pr.closeRequested || pr.pendingHead || !rested(pr)) return undefined;
+    if (prGate(s, t, nowMs, { byUser }).status !== "ready") return undefined;
     // Merge freshness: GitHub is looked at again right before the merge.
     if (age(pr.observed?.at) > PR_LIMITS.observeFreshMs) return observe();
     return { id, kind: "merge", taskId: t.id, n: pr.n, headSha: pr.headSha };
+  };
+  for (const t of open) {
+    if (t.integration!.pr!.mergeRequested?.headSha !== t.integration!.pr!.headSha) continue;
+    const op = mergeOf(t, true);
+    if (op) return op;
   }
-  // 6.2 push a pending head, 6.3 update the merge candidate to the base: step 3.
+  if (candidate && here(candidate)) {
+    const op = mergeOf(candidate, false);
+    if (op) return op;
+  }
+  // 6.2 Push a pending head (a fix, or the candidate brought up to date) onto its pull request.
+  for (const t of open) {
+    const pr = t.integration!.pr!;
+    if (pr.pendingHead && !pr.op && pushable(pr) && rested(pr)) return { id, kind: "push", taskId: t.id, n: pr.n, headSha: pr.headSha };
+  }
+  // 6.3 Bring the merge candidate, and only it, up to date with the base (local; the push follows).
+  if (candidate && cfg.updateBeforeMerge && gh.base) {
+    const pr = candidate.integration!.pr!;
+    const conflicted = pr.baseConflict?.headSha === pr.headSha && pr.baseConflict.baseSha === gh.base.sha;
+    if (!pr.simulated && !pr.op && !pr.pendingHead && rested(pr) && pr.baseSha !== gh.base.sha && !conflicted && pr.counters.baseUpdates < PR_LIMITS.baseUpdates && pr.observed?.headSha === pr.headSha)
+      return { id, kind: "update", taskId: candidate.id, n: pr.n, headSha: pr.headSha, baseSha: gh.base.sha };
+  }
   // 6.4 Publish the oldest built head.
   const openCount = tracked.filter((t) => t.integration!.pr!.phase === "open").length;
   for (const t of tracked) {
     const pr = t.integration!.pr!;
-    if (pr.phase !== "built" || pr.op || pr.userHold || pr.foreignHead || pr.closeRequested || !rested(pr)) continue;
-    if (stuck(pr) || !publishAllowed(pr)) continue;
+    if (pr.phase !== "built" || pr.op || !pushable(pr) || !rested(pr) || !here(t)) continue;
+    if (pr.counters.failures >= PR_LIMITS.publishFailures) continue;
     if (openCount >= cfg.maxOpenPrs) break;
     return { id, kind: "publish", taskId: t.id, n: pr.n, headSha: pr.headSha };
   }
@@ -1127,7 +1992,7 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
   // 6.6 Close.
   for (const t of tracked) {
     const pr = t.integration!.pr!;
-    if (pr.closeRequested && !pr.op && rested(pr)) return { id, kind: "close", taskId: t.id, n: pr.n, headSha: pr.headSha };
+    if (pr.closeRequested && !pr.op && rested(pr) && here(t)) return { id, kind: "close", taskId: t.id, n: pr.n, headSha: pr.headSha };
   }
   return undefined;
 }
@@ -1153,9 +2018,11 @@ export function beginPrOp(state: State, op: PrOp, now: string): { state: State; 
     const note = l?.notes.find((x) => x.id === op.noteId);
     if (!l?.pr || l.simulated || note?.comment?.status !== "pending") return no;
     note.comment.attempts += 1;
-  } else if (op.kind === "publish" || op.kind === "merge" || op.kind === "close") {
+  } else if (op.kind === "publish" || op.kind === "push" || op.kind === "merge" || op.kind === "close") {
     const pr = livePr(t);
     if (!pr || pr.n !== op.n || pr.headSha !== op.headSha) return no;
+    // The app acts on a pull request only in the repository it opened it in.
+    if (wrongRepo(s, pr)) return no;
     // A recorded intent may still be running (in an orphaned process) until its timeout and the grace time have passed.
     if (pr.op && nowMs - Date.parse(pr.op.at) < OP_TIMEOUT_MS[pr.op.kind] + PR_LIMITS.graceMs) return no;
     if (pr.nextAt && Date.parse(pr.nextAt) > nowMs) return no;
@@ -1166,10 +2033,22 @@ export function beginPrOp(state: State, op: PrOp, now: string): { state: State; 
       if (op.kind === "publish") {
         if (pr.phase !== "built" || !publishAllowed(pr) || stuck(pr)) return no;
         if (openPrTasks(s).length >= p.prDelivery.maxOpenPrs) return no;
+      } else if (op.kind === "push") {
+        if (pr.phase !== "open" || !pr.pendingHead || !publishAllowed(pr) || stuck(pr)) return no;
       } else {
-        if (pr.phase !== "open" || pr.number === undefined || pr.mergeRequested?.headSha !== pr.headSha) return no;
+        if (pr.phase !== "open" || pr.number === undefined || pr.pendingHead) return no;
         if (!pr.observed || nowMs - Date.parse(pr.observed.at) > PR_LIMITS.observeFreshMs) return no;
-        if (prGate(s, t, nowMs, { byUser: true }).status !== "ready") return no;
+        // The user's Merge for exactly this head, or the one candidate of automatic merging. Both
+        // re-run the whole gate here, inside the transaction.
+        const byUser = pr.mergeRequested?.headSha === pr.headSha;
+        if (!byUser && (pr.policy !== "auto" || mergeCandidate(s)?.id !== t.id)) return no;
+        if (prGate(s, t, nowMs, { byUser }).status !== "ready") return no;
+        pr.lastMergeIntent = { at: now, headSha: pr.headSha, auto: !byUser };
+        if (!byUser) {
+          const day = now.slice(0, 10);
+          const g0 = s.project.github!;
+          g0.autoMerges = { day, count: g0.autoMerges?.day === day ? g0.autoMerges.count + 1 : 1 };
+        }
       }
     }
     pr.op = { id: op.id, kind: op.kind, at: now, headSha: pr.headSha };
@@ -1202,8 +2081,40 @@ export function reportPrOp(state: State, r: PrOpResult, now: string, ctx: Report
     const message = code === "auth" ? `GitHub sign-in needed (run \`gh auth login\` in a terminal). ${e.message}` : e.message;
     return reportPreflight(state, { ok: false, problem: { code, message, ...(code === "rate-limit" && e.retryAt ? { retryAt: e.retryAt } : {}) }, requiredChecks: [], autoMergeBlockers: [], posture: [] }, now, ctx);
   }
-  if (op.kind === "fetch") return r.base ? reportBaseFetched(state, r.base.sha, now) : fail(r.error ?? unknown);
-  if (op.kind === "observe") return r.observed ? reportObservations(state, r.observed, now, { requested: op.prs }) : fail(r.error ?? unknown);
+  if (op.kind === "fetch") {
+    if (r.base) return reportBaseFetched(state, r.base.sha, now, r.base.unpushed);
+    const s = structuredClone(state);
+    fetchFailed(s, r.error ?? unknown, now);
+    return s;
+  }
+  if (op.kind === "observe") return r.observed ? reportObservations(state, r.observed, now, { requested: op.prs, repo: op.repo }) : fail(r.error ?? unknown);
+
+  if (op.kind === "update") {
+    // Built locally; nothing was pushed. It applies only to the head and the base it was built for.
+    const cur = state.tasks.find((x) => x.id === op.taskId);
+    const curPr = cur && livePr(cur);
+    if (!curPr || curPr.n !== op.n || curPr.headSha !== op.headSha || curPr.pendingHead || curPr.op || curPr.phase !== "open") return state;
+    const s = structuredClone(state);
+    const t = getTask(s, op.taskId);
+    const pr = t.integration!.pr!;
+    if (r.updated && r.updated.sha === pr.headSha) {
+      // The head already contains this base tip: nothing to push.
+      pr.baseSha = r.updated.baseSha;
+      delete pr.baseConflict;
+    } else if (r.updated) {
+      pr.pendingHead = { sha: r.updated.sha, changeSha: pr.changeSha, changeTaskId: pr.changeTaskId, changeAuthor: pr.changeAuthor, baseSha: r.updated.baseSha, kind: "update" };
+      pr.counters.baseUpdates += 1;
+      delete pr.baseConflict;
+      event(s, now, "system", "integration", `${pr.base} moved to ${sha12(r.updated.baseSha)}: prepared ${sha12(r.updated.sha)}, a merge of it into ${prName(pr)} made by Orchestration (${pr.counters.baseUpdates} of ${PR_LIMITS.baseUpdates}); it is pushed next, never forced`, t.id);
+    } else if (r.conflict) {
+      pr.baseConflict = { baseSha: op.baseSha, headSha: pr.headSha, files: r.conflict.files.slice(0, 20) };
+      refreshAttention(s, t, now);
+    } else {
+      pr.message = clip((r.error ?? unknown).message, 300);
+      backoff(pr, now);
+    }
+    return s;
+  }
 
   if (op.kind === "comment") {
     const s = structuredClone(state);
@@ -1229,7 +2140,7 @@ export function reportPrOp(state: State, r: PrOpResult, now: string, ctx: Report
     return s;
   }
 
-  // publish, merge, close: the stale-result guard.
+  // publish, push, merge, close: the stale-result guard.
   const cur = state.tasks.find((x) => x.id === op.taskId);
   const curPr = cur && livePr(cur);
   if (!curPr || curPr.op?.id !== op.id || curPr.n !== op.n || curPr.headSha !== op.headSha) return state;
@@ -1256,6 +2167,22 @@ export function reportPrOp(state: State, r: PrOpResult, now: string, ctx: Report
   const s = structuredClone(state);
   const t = s.tasks.find((x) => x.id === op.taskId)!;
   const pr = t.integration!.pr!;
+  if (op.kind === "push") {
+    delete pr.op;
+    // "Pushed" needs the remote branch to hold exactly the pending head.
+    if (r.pushed && pr.pendingHead && r.pushed.sha === pr.pendingHead.sha) return promoteHead(s, t.id, now);
+    const e = r.error ?? unknown;
+    pr.message = clip(e.message, 300);
+    if (e.code === "diverged") {
+      pr.attention = { code: "remote-diverged", message: `The branch ${pr.branch} on ${pr.remote} holds commits the app did not push. Nothing was pushed and nothing is forced; merge it on GitHub, or close this delivery and deliver again.`, headSha: pr.headSha, since: now };
+      event(s, now, "system", "blocked", `${prName(pr)} needs you: ${pr.attention.message}`, t.id);
+    } else if (e.code === "foreign-commits") {
+      pr.attention = { code: "foreign-commits", message: clip(e.message, 600), headSha: pr.headSha, since: now };
+      event(s, now, "system", "blocked", `${prName(pr)} needs you: ${clip(e.message, 300)}`, t.id);
+    } else if (isProjectError(e) || e.code === "remote") projectProblem(s, e, now);
+    else backoff(pr, now);
+    return s;
+  }
   if (op.kind === "publish") {
     delete pr.op;
     if (r.published) {
@@ -1265,7 +2192,7 @@ export function reportPrOp(state: State, r: PrOpResult, now: string, ctx: Report
       pr.counters.failures = 0;
       delete pr.nextAt;
       delete pr.message;
-      event(s, now, "system", "integration", `Opened pull request #${pr.number} for ${pr.branch} into ${pr.base}${pr.simulated ? " (simulated)" : ""}; it is held for you`, t.id);
+      event(s, now, "system", "integration", `Opened pull request #${pr.number} for ${pr.branch} into ${pr.base}${pr.simulated ? " (simulated)" : ""}; ${pr.policy === "auto" ? "it merges by itself after an independent review and passing required checks" : "it is held for you"}`, t.id);
       refreshAttention(s, t, now);
       return s;
     }
@@ -1278,7 +2205,11 @@ export function reportPrOp(state: State, r: PrOpResult, now: string, ctx: Report
       pr.attention = { code: "foreign-commits", message: clip(e.message, 600), headSha: pr.headSha, since: now };
       event(s, now, "system", "blocked", `${prName(pr)} needs you: ${clip(e.message, 300)}`, t.id);
     } else if (isProjectError(e) || e.code === "remote") projectProblem(s, e, now);
-    else backoff(pr, now);
+    else {
+      // Bounded: after enough failures it waits for the user instead of trying forever.
+      backoff(pr, now);
+      refreshAttention(s, t, now);
+    }
     return s;
   }
   if (op.kind === "close" && r.nothingOpen) {
@@ -1309,8 +2240,6 @@ export function setPrDelivery(state: State, patch: Partial<PrDeliveryConfig>, no
   if (!REMOTE.test(next.remote)) throw new ControlError("Choose a valid remote name.");
   if (!BRANCH.test(next.base)) throw new ControlError("Choose a valid base branch name.");
   if (next.merge !== "hold" && next.merge !== "auto") throw new ControlError("Choose hold or auto.");
-  // Step 3 builds the independent review and the automatic gate; until then nothing merges by itself.
-  if (next.merge === "auto") throw new ControlError("Automatic merging is not available in this version yet. Pull requests are held for you to merge.");
   if (next.reviewer !== "other-provider" && next.reviewer !== "any-agent") throw new ControlError("Choose which reviewer counts as independent.");
   if (next.protectedPaths.length > 20 || next.protectedPaths.some((x) => x.length > 200)) throw new ControlError("At most 20 protected paths of at most 200 characters each.");
   if (!int(next.maxOpenPrs, 1, 20)) throw new ControlError("Open pull requests: between 1 and 20.");
@@ -1325,9 +2254,48 @@ export function setPrDelivery(state: State, patch: Partial<PrDeliveryConfig>, no
     if (gh) {
       gh.recheck = true;
       delete gh.base;
+      delete gh.fetchFailures;
     }
   }
-  event(s, now, "user", "config", `Pull-request settings: ${next.remote}/${next.base}, hold and notify, at most ${next.maxOpenPrs} open`);
+  event(
+    s,
+    now,
+    "user",
+    "config",
+    `Pull-request settings: ${next.remote}/${next.base}, ${next.merge === "auto" ? `merge automatically after an independent review (${next.reviewer === "any-agent" ? "any agent" : "another provider than the writer"}) and passing required checks, at most ${next.maxAutoMergesPerDay} a day` : "hold and notify"}, at most ${next.maxOpenPrs} open`,
+  );
+  // Another rule for who may review: a dedicated review that could not start is tried again under it.
+  if (next.reviewer !== cur.reviewer) {
+    for (const t of s.tasks) {
+      if (!t.reviewTarget || t.lifecycle === "done" || t.lifecycle === "cancelled") continue;
+      for (const st of t.steps) {
+        if (st.state !== "blocked") continue;
+        st.state = "pending";
+        delete st.blockedReason;
+      }
+    }
+  }
+  // The project's choice applies to the pull requests that follow it; one the user set by hand keeps its own.
+  for (const t of trackedPrTasks(s)) {
+    const pr = t.integration!.pr!;
+    if (pr.policySource === "project" && pr.policy !== next.merge) {
+      pr.policy = next.merge;
+      if (next.merge === "auto") delete pr.mergeRequested;
+    }
+    pr.review = reviewCoverage(s, t);
+    refreshAttention(s, t, now);
+  }
+  return s;
+}
+
+/** Automatic merging continues: the user has looked at the failing base branch. Clears the pause and the day's count of failures. */
+export function resumeAutoMerge(state: State, now: string): State {
+  const gh = state.project.github;
+  if (!gh?.autoMergePaused && !gh?.mainBreaks?.length) return state;
+  const s = structuredClone(state);
+  delete s.project.github!.autoMergePaused;
+  delete s.project.github!.mainBreaks;
+  event(s, now, "user", "config", "Automatic merging resumed by you");
   return s;
 }
 
@@ -1365,20 +2333,31 @@ export function releasePr(state: State, taskId: string, now: string): State {
   const { task, pr } = openPr(s, taskId, "release");
   if (!pr.userHold) return state;
   delete pr.userHold;
+  // A release is also "try again": the wait after failed attempts to open it starts over.
+  if (pr.phase === "built") {
+    pr.counters.failures = 0;
+    delete pr.nextAt;
+  }
   event(s, now, "user", "integration", `${prName(pr)} released`, task.id);
+  refreshAttention(s, task, now);
   return s;
 }
 
-/** Per pull request: follow the project (null), hold, or (step 3) auto. */
+/**
+ * Per pull request: follow the project (null), hold it for the user, or let it merge automatically.
+ * "auto" only chooses who merges; the same gate still has to pass for the exact commit.
+ */
 export function setPrPolicy(state: State, taskId: string, policy: "hold" | "auto" | null, now: string): State {
-  if (policy === "auto") throw new ControlError("Automatic merging is not available in this version yet. Pull requests are held for you to merge.");
   const s = structuredClone(state);
   const { task, pr } = openPr(s, taskId, "change");
   const source = policy === null ? "project" : "user";
-  if (pr.policy === "hold" && pr.policySource === source) return state;
-  pr.policy = "hold";
+  const next = policy ?? s.project.prDelivery.merge;
+  if (pr.policy === next && pr.policySource === source) return state;
+  pr.policy = next;
   pr.policySource = source;
-  event(s, now, "user", "integration", `${prName(pr)}: hold and notify${policy === null ? " (follows the project)" : ""}`, task.id);
+  if (next === "auto") delete pr.mergeRequested;
+  event(s, now, "user", "integration", `${prName(pr)}: ${next === "auto" ? "merges automatically after an independent review and passing required checks" : "hold and notify"}${policy === null ? " (follows the project)" : ""}`, task.id);
+  refreshAttention(s, task, now);
   return s;
 }
 
@@ -1394,10 +2373,14 @@ export function requestPrMerge(state: State, taskId: string, headSha: string, no
   if (headSha !== pr.headSha || pr.pendingHead) throw new ControlError("The pull request changed since you looked. Look at it again, then merge.");
   if (pr.foreignHead) throw new ControlError("Someone else pushed to this pull request; the app will not merge it. Merge it on GitHub.");
   if (pr.closeRequested) throw new ControlError("You asked to close this pull request.");
+  if (wrongRepo(s, pr)) throw new ControlError(`This pull request is in ${pr.repo}, but the remote now points at ${s.project.github!.repo}. The app does not merge it there.`);
   if (pr.mergeRequested?.headSha === headSha) return state;
   pr.mergeRequested = { at: now, headSha };
+  // A new, deliberate request starts the count of refusals over.
+  pr.counters.mergeAttempts = 0;
   delete pr.nextAt;
   event(s, now, "user", "integration", `Merge requested for ${prName(pr)} at ${sha12(headSha)}; it merges once GitHub's checks and rules pass for that commit`, task.id);
+  refreshAttention(s, task, now);
   return s;
 }
 
@@ -1419,12 +2402,20 @@ export function closePr(state: State, taskId: string, now: string): State {
   const { task, pr } = openPr(s, taskId, "close");
   if (pr.closeRequested) return state;
   delete pr.mergeRequested;
+  if (wrongRepo(s, pr)) {
+    // The pull request lives in another repository than the remote names now: nothing is sent there.
+    pr.phase = "closed";
+    delete pr.attention;
+    delete pr.op;
+    event(s, now, "user", "integration", `Delivery of ${pr.branch} abandoned here. ${prName(pr)} in ${pr.repo} was not touched: the remote now points at ${s.project.github!.repo}. Close it on GitHub if it should not stay open`, task.id);
+    return cancelLinked(s, [...pr.reviewTaskIds, ...pr.repairTaskIds], now, "the delivery was abandoned");
+  }
   if (pr.phase === "built" && !pr.op && pr.counters.failures === 0 && pr.number === undefined) {
     // Nothing was ever sent to GitHub for this head.
     pr.phase = "closed";
     delete pr.attention;
     event(s, now, "user", "integration", `Delivery of ${pr.branch} abandoned before anything was pushed`, task.id);
-    return s;
+    return cancelLinked(s, [...pr.reviewTaskIds, ...pr.repairTaskIds], now, "the delivery was abandoned");
   }
   pr.closeRequested = { at: now };
   delete pr.nextAt;
@@ -1436,16 +2427,33 @@ export function closePr(state: State, taskId: string, now: string): State {
 export function redeliver(state: State, taskIds: string[], now: string): State {
   if (taskIds.length === 0) throw new ControlError("Choose at least one task.");
   if (taskIds.length > 20) throw new ControlError("At most 20 tasks can be delivered again at once.");
-  if (!state.project.prDelivery.enabled) throw new ControlError("Switch the delivery mode to GitHub pull requests first.");
+  const prOn = state.project.prDelivery.enabled;
   const s = structuredClone(state);
   const ok = new Set(redeliverable(s).map((t) => t.id));
   for (const id of new Set(taskIds)) {
     const t = getTask(s, id);
-    if (!ok.has(id)) throw new ControlError(`${id} cannot be delivered again: it must be done, have a code change, not have landed, and have no open pull request.`);
+    if (!ok.has(id))
+      throw new ControlError(
+        prOn
+          ? `${id} cannot be delivered again: it must be done, have a code change, not have landed, and have no open pull request.`
+          : `${id} cannot be delivered again while pull-request delivery is off: only work whose pull request was closed or abandoned can go through the current mode. Switch the delivery mode to GitHub pull requests for anything else.`,
+      );
     const prev = t.integration!.pr;
     // The closed pull request stays on the record only so the next one takes the next number.
     t.integration = { status: "pending", ...(prev ? { pr: prev } : {}) };
-    event(s, now, "user", "integration", prev ? `Deliver again: a new pull request (${prBranch(s.project.id, t.id, prev.n + 1)}) will be prepared` : "Deliver as a pull request", t.id);
+    const mode = deliveryMode(s);
+    event(
+      s,
+      now,
+      "user",
+      "integration",
+      !prOn
+        ? `Deliver through the current mode (${mode === "local" ? `local branch ${s.project.autonomy.autoDeliver.branch}` : "off: the integration branch only"}): its pull request stays closed`
+        : prev
+          ? `Deliver again: a new pull request (${prBranch(s.project.id, t.id, prev.n + 1)}) will be prepared`
+          : "Deliver as a pull request",
+      t.id,
+    );
   }
   return s;
 }
@@ -1471,7 +2479,7 @@ export interface PrLabel {
   tone: "plain" | "strong" | "done" | "danger";
 }
 
-/** One short, truthful label for a task's delivery. */
+/** One short, truthful label for a task's delivery: what it is doing, or exactly what it waits for. */
 export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
   const i = t.integration;
   const pr = i?.pr;
@@ -1479,24 +2487,60 @@ export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
   const sim = pr.simulated ? " (simulated)" : "";
   if (i.status !== "integrated") return { text: `preparing pull request ${pr.n + 1}`, tone: "plain" };
   const name = pr.number ? `PR #${pr.number}` : "PR";
+  const plain = (what: string): PrLabel => ({ text: `${name} ${what}${sim}`, tone: "plain" });
   if (pr.phase === "merged") return { text: i.landed?.status === "unreviewed" ? `merged · review${sim}` : `merged${sim}`, tone: "done" };
   if (pr.phase === "closed") return { text: `${name} closed${sim}`, tone: "danger" };
   if (pr.op?.kind === "merge") return { text: `${name} merging${sim}`, tone: "strong" };
-  if (pr.attention) return { text: `${name} needs you${sim}`, tone: "danger" };
-  if (pr.userHold) return { text: `${name} held by you${sim}`, tone: "plain" };
-  if (pr.phase === "built") return { text: `${name} preparing${sim}`, tone: "plain" };
+  if (pr.attention) {
+    const fixing = openRepair(s, pr);
+    if (fixing || pr.pendingHead?.kind === "repair") return plain("being fixed");
+    return { text: `${name} needs you${sim}`, tone: "danger" };
+  }
+  if (pr.userHold) return plain("held by you");
+  if (pr.phase === "built") return plain(!s.project.prDelivery.enabled ? "not opened: delivery is off" : s.project.hold ? "not opened: paused" : "preparing");
   if (prReady(s, t, nowMs)) return { text: `${name} waiting for you${sim}`, tone: "strong" };
-  if (pr.mergeRequested) return { text: `${name} merge requested${sim}`, tone: "strong" };
-  return { text: `${name} checks${sim}`, tone: "plain" };
+  const byUser = userGate(pr);
+  const waits = prGate(s, t, nowMs, { byUser }).items.find((x) => !x.ok && x.id !== "policy");
+  if (!waits) return pr.policy === "auto" && !byUser ? { text: `${name} merging next${sim}`, tone: "strong" } : pr.mergeRequested ? { text: `${name} merge requested${sim}`, tone: "strong" } : plain("open");
+  switch (waits.id) {
+    case "not-paused":
+      return plain(pr.closeRequested ? "closing" : "paused");
+    case "github":
+      return plain("waiting for GitHub");
+    case "ours":
+      return plain("not seen on GitHub yet");
+    case "head":
+      return plain(pr.pendingHead?.kind === "update" ? "updating" : pr.pendingHead ? "fix being pushed" : "not seen on GitHub yet");
+    case "checks":
+      return plain("checks");
+    case "mergeable":
+      return plain(pr.observed?.mergeStateStatus === "BEHIND" ? "behind the base" : "waiting on GitHub");
+    case "review":
+      return plain("review");
+    case "auto":
+      return plain("auto-merge paused");
+    case "up-to-date": {
+      const ahead = queueAhead(s, t);
+      return plain(ahead ? `queued behind #${ahead.integration!.pr!.number}` : "updating");
+    }
+    default:
+      return plain(pr.mergeRequested ? "merge requested" : "waiting");
+  }
 }
 
 /** What is in flight or wanted for this pull request, in plain words. Undefined when nothing is. */
 export function prIntentLine(pr: PrDelivery): string | undefined {
   const n = prName(pr);
+  if (pr.phase === "merged" || pr.phase === "closed") return undefined;
   if (pr.op?.kind === "merge") return `Merging ${n} (already sent to GitHub; cannot be interrupted). It shows as merged once GitHub reports it.`;
   if (pr.op?.kind === "close") return `Closing ${n} (already sent to GitHub). It shows as closed once GitHub reports it.`;
+  if (pr.op?.kind === "push") return `Pushing ${pr.pendingHead ? sha12(pr.pendingHead.sha) : "a newer head"} onto ${n} as a fast-forward.`;
   if (pr.op) return `Pushing ${pr.branch} and opening the pull request.`;
   if (pr.closeRequested) return `You asked to close ${n}; not sent yet.`;
-  if (pr.mergeRequested) return `You asked to merge ${sha12(pr.mergeRequested.headSha)}; it is sent once GitHub's checks and rules pass.`;
+  if (pr.mergeRequested) {
+    const refused = pr.counters.mergeAttempts;
+    return `You asked to merge ${sha12(pr.mergeRequested.headSha)}; it is sent once GitHub's checks and rules pass.${refused ? ` GitHub refused ${refused} of ${PR_LIMITS.mergeAttempts} attempts${pr.message ? ` (${pr.message})` : ""}; it is tried once more.` : pr.message ? ` The last attempt did not go through (${pr.message}); it is tried again.` : ""}`;
+  }
+  if (pr.pendingHead) return pr.pendingHead.kind === "update" ? `A newer head (${sha12(pr.pendingHead.sha)}), brought up to date with ${pr.base}, waits to be pushed.` : `A fix (${sha12(pr.pendingHead.sha)}) waits to be pushed onto ${n}.`;
   return undefined;
 }

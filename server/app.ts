@@ -40,10 +40,14 @@ const fakeConfig = defaultFakeConfig();
 let adapters: Record<ProviderId, RuntimeAdapter>;
 let workspaces: WorkspaceManager | undefined;
 let github: GitHubHost | undefined;
+/** True when Claude workers run with shell access: the app then cannot claim that only the service reaches GitHub. */
+let workerShell = false;
 if (mode === "real") {
   // Loaded only in real mode, so the simulated service never loads provider SDKs.
   const [{ ClaudeAdapter }, { CodexAdapter }] = await Promise.all([import("./runtimes/claude"), import("./runtimes/codex")]);
-  adapters = { claude: new ClaudeAdapter({ log }), codex: new CodexAdapter({ log }) };
+  const claude = new ClaudeAdapter({ log });
+  adapters = { claude, codex: new CodexAdapter({ log }) };
+  workerShell = claude.allowShell;
   workspaces = new WorkspaceManager(join(dirname(dbPath), "worktrees"));
   // Pull-request delivery uses the user's own gh sign-in, from an empty directory the service owns.
   // Nothing is contacted until the user switches the delivery mode to pull requests.
@@ -54,7 +58,7 @@ if (mode === "real") {
   adapters = { claude: new FakeAdapter("claude", fakeConfig, catalog.claude), codex: new FakeAdapter("codex", fakeConfig, catalog.codex) };
 }
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
-const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell: false });
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell });
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
 

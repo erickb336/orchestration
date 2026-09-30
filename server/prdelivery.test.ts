@@ -81,11 +81,30 @@ const finishTask = async (title: string, file: string, text: string) => {
   await tick(); // the task is done and its head is prepared
   return id;
 };
-/** …and its pull request is opened and seen once on GitHub. */
+/**
+ * The one dedicated review of a task's pull request (its own one-step pipeline had none) runs on the
+ * other provider than the writer and reports no open findings.
+ */
+const reviewed = async (id: string, findings = 0) => {
+  for (let i = 0; i < 8; i++) {
+    const rv = st().tasks.find((t) => t.reviewTarget?.taskId === id && t.reviewTarget.headSha === pr(id).changeSha && t.lifecycle !== "done" && t.lifecycle !== "cancelled");
+    const r = rv && M.activeAttempts(st(), rv.id)[0];
+    if (r && claude.runs.has(r.id)) {
+      claude.finish(r.id, { findings });
+      await ticks(3);
+      return rv!.id;
+    }
+    await tick();
+  }
+  throw new Error(`no dedicated review of ${id} started`);
+};
+/** …and its pull request is opened, seen once on GitHub, and independently reviewed. */
 const openPr = async (title: string, file: string, text: string) => {
   const id = await finishTask(title, file, text);
   for (let i = 0; i < 6 && !pr(id).observed; i++) await tick(2000);
   expect(pr(id).phase).toBe("open");
+  await reviewed(id);
+  expect(pr(id).review).toMatchObject({ ok: true, source: "dedicated", provider: "claude", forSha: pr(id).changeSha });
   return id;
 };
 /** The required check passes and the app sees it. */
@@ -186,6 +205,11 @@ describe("hold and notify (scenario 1)", () => {
 
     expect(events("is ready for you")).toHaveLength(0);
     await green(id);
+    // Green checks alone are not "ready": the change has not been reviewed independently yet.
+    expect(D.prReady(st(), task(id), now)).toBe(false);
+    expect(events("is ready for you")).toHaveLength(0);
+    await reviewed(id);
+    await seen();
     expect(D.prReady(st(), task(id), now)).toBe(true);
     expect(D.needsYou(st(), now)).toBe(1);
     expect(events("is ready for you").map((e) => e.message)).toEqual([`PR #1 is ready for you: required checks passed on ${pr(id).headSha.slice(0, 12)}`]);
@@ -374,8 +398,10 @@ describe("people on GitHub", () => {
     expect(task(b).integration!.landed).toBeUndefined();
     const calls = fake.calls.length;
     await ticks(4, 121_000);
-    // Nothing is pushed, reopened, or even watched for the closed one (the landed commit's check still is).
-    expect(fake.calls.slice(calls).every((c) => c.method === "preflight" || (c.method === "observe" && !(c.args as { prs: number[] }).prs.includes(n)))).toBe(true);
+    // Nothing is pushed or reopened for the closed one. It is only read, slowly, in case someone reopens
+    // and merges it on GitHub (the landed commit's check is still read too).
+    expect(fake.calls.slice(calls).every((c) => c.method === "preflight" || c.method === "observe")).toBe(true);
+    expect(fake.calls.slice(calls).filter((c) => c.method === "observe" && (c.args as { prs: number[] }).prs.includes(n)).length).toBeLessThanOrEqual(1); // once per ten minutes
     expect(() => cmd("requestPrMerge", { taskId: b, headSha: pr(b).headSha })).toThrow(/closed/);
 
     cmd("redeliver", { taskIds: [b] });

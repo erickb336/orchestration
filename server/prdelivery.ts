@@ -37,9 +37,11 @@ function opError(e: unknown): D.OpError {
   if (e instanceof GhError) return { code: e.code, message: clean(e.message), ...(e.retryAt ? { retryAt: e.retryAt } : {}) };
   if (e instanceof ForeignCommitsError) return { code: "foreign-commits", message: clean(e.message) };
   const message = clean(e instanceof Error ? e.message : String(e));
-  // git's own network failures (fetch, ls-remote, push).
-  if (/authentication failed|could not read username|permission denied|HTTP 40[13]|returned error: 40[13]/i.test(message)) return { code: "auth", message };
+  // git's own network failures (fetch, ls-remote, push). git signs in by itself (an SSH key, a
+  // credential helper): when that fails, `gh auth login` is not the fix, and the message says so.
   if (/couldn't find remote ref|does not appear to be a git repository|no such remote|repository not found/i.test(message)) return { code: "remote", message };
+  if (/authentication failed|could not read username|permission denied|publickey|HTTP 40[13]|returned error: 40[13]/i.test(message))
+    return { code: "git", message: `git could not sign in to the remote: ${message.slice(0, 160)}. This is git's own sign-in for this remote (an SSH key or a credential helper), not gh's.` };
   if (/timed out|was stopped/i.test(message)) return { code: "timeout", message };
   if (/could not resolve host|unable to access|connection|network/i.test(message)) return { code: "network", message };
   return { code: "unknown", message };
@@ -91,6 +93,9 @@ export class PrDriver {
       if (r.gen !== this.gen) continue;
       this.store.update((s) => D.reportPrOp(s, r.result, now, this.ctx), now, lease);
     }
+    // 1b. Reviews and repairs of tracked pull requests: evidence recorded, the one dedicated review or
+    //     bounded fix task created. Pure state; nothing is contacted. Changes nothing when nothing changed.
+    this.store.update((s) => (this.workspaces && s.project.sample ? s : D.advanceDelivery(s, now)), now, lease);
     // 2. Single flight.
     if (this.inflight) return;
     // 3. Samples never contact GitHub (with the fake runtime nothing is contacted anyway).
@@ -140,11 +145,22 @@ export class PrDriver {
     }
   }
 
+  /** The repository that was checked: the only one anything is read from or written to. */
   private repoOf(state: State): RepoRef {
     const slug = state.project.github?.repo ?? "";
     const [owner, name] = slug.split("/");
     if (!owner || !name) throw new GhError("unknown", "the repository has not been checked yet");
     return { owner, name };
+  }
+
+  /**
+   * The repository a pull request lives in. The app acts on a pull request only there: when the
+   * remote now names another repository, the same number is someone else's pull request.
+   */
+  private repoFor(state: State, slug: string | undefined): RepoRef {
+    const checked = state.project.github?.repo ?? "";
+    if (!slug || slug !== checked) throw new GhError("rejected", `this pull request is in ${slug || "an unknown repository"}, but the remote now points at ${checked || "an unchecked repository"}; nothing was sent`);
+    return this.repoOf(state);
   }
 
   /** The push URL must still name the repository that was checked: nothing is pushed anywhere else. */
@@ -181,19 +197,60 @@ export class PrDriver {
             return { op, preflight: { ok: false, problem: { code: "remote", message: `The repository has no remote named ${cfg.remote}. Add it, or choose another remote in Settings.` }, requiredChecks: [], autoMergeBlockers: [], posture: [] } };
           }
         }
-        return { op, preflight: await host.preflight({ remoteUrl, base: cfg.base }) };
+        const report = await host.preflight({ remoteUrl, base: cfg.base });
+        if (!report.ok || !this.workspaces) return { op, preflight: report };
+        // gh answering is not enough: git must reach the remote by its own transport, and the base
+        // branch must exist there, or every fetch after a passing check would fail. Read-only.
+        try {
+          const tip = await this.workspaces.lsRemote({ repoPath: p.repoPath, remote: cfg.remote, branch: cfg.base });
+          if (!tip) return { op, preflight: { ...report, ok: false, problem: { code: "remote", message: `The branch ${cfg.base} does not exist on ${cfg.remote} (${report.repo ?? "the repository"}). Choose the base branch in Settings → Delivery.` } } };
+        } catch (e) {
+          const err = opError(e);
+          return { op, preflight: { ...report, ok: false, problem: { code: err.code === "network" || err.code === "timeout" ? "network" : "remote", message: err.code === "git" ? err.message : `git could not read ${cfg.remote}: ${err.message}` } } };
+        }
+        return { op, preflight: report };
       }
       case "fetch": {
         if (!this.workspaces) return { op, base: { sha: "sim-base" } };
         this.assertSameRemote(state, host, p.github?.repo ?? "");
-        return { op, base: await this.workspaces.fetchBase({ repoPath: p.repoPath, projectId: p.id, remote: cfg.remote, base: cfg.base }) };
+        const base = await this.workspaces.fetchBase({ repoPath: p.repoPath, projectId: p.id, remote: cfg.remote, base: cfg.base });
+        // Local delivery may have left Orchestration's commits on the user's branch that the remote lacks.
+        const branch = p.autonomy.autoDeliver.branch;
+        const count = this.workspaces.unpushedOrchestration({ repoPath: p.repoPath, projectId: p.id, branch });
+        return { op, base: { ...base, ...(count !== undefined ? { unpushed: { branch, count } } : {}) } };
       }
-      case "observe":
+      case "observe": {
+        // One repository per read: the one that was checked. Pull requests opened elsewhere are not in it.
+        if (op.repo && op.repo !== p.github?.repo) return { op, error: { code: "remote", message: `The remote no longer points at ${op.repo}; nothing was read.` } };
         return { op, observed: await host.observe({ repo: this.repoOf(state), prs: op.prs.map((x) => x.number), commits: host.simulated ? op.commits : op.commits.filter((c) => /^[0-9a-f]{40,64}$/.test(c)) }) };
+      }
+      case "update": {
+        const t = state.tasks.find((x) => x.id === op.taskId)!;
+        const pr = t.integration!.pr!;
+        if (!this.workspaces) return { op, error: { code: "unknown", message: "There is no repository to update the pull request in." } };
+        // Local and synchronous: a two-parent merge of the base into the head, made by Orchestration.
+        const r = this.workspaces.baseUpdate({ repoPath: p.repoPath, projectId: p.id, taskId: t.id, n: pr.n, base: pr.base, headSha: op.headSha, baseSha: op.baseSha });
+        return r.status === "updated" ? { op, updated: { sha: r.sha, baseSha: op.baseSha } } : { op, conflict: { files: r.files } };
+      }
+      case "push": {
+        const t = state.tasks.find((x) => x.id === op.taskId)!;
+        const pr = t.integration!.pr!;
+        const pending = pr.pendingHead;
+        if (!pending) return { op, error: { code: "unknown", message: "There is no newer head to push." } };
+        const repo = this.repoFor(state, pr.repo);
+        if (this.workspaces) {
+          // The same guards as the first push: the push URL, the authorship of every commit, what the
+          // remote branch holds. A fast-forward or nothing.
+          this.assertSameRemote(state, host, pr.repo);
+          const pushed = await this.workspaces.pushHead({ repoPath: p.repoPath, projectId: p.id, remote: pr.remote, branch: pr.branch, sha: pending.sha });
+          if (pushed === "diverged") return { op, error: { code: "diverged", message: `${pr.branch} on ${pr.remote} holds commits the app did not push; nothing was pushed` } };
+        } else host.pushed?.({ repo, number: pr.number!, headSha: pending.sha });
+        return { op, pushed: { sha: pending.sha } };
+      }
       case "publish": {
         const t = state.tasks.find((x) => x.id === op.taskId)!;
         const pr = t.integration!.pr!;
-        const repo = this.repoOf(state);
+        const repo = this.repoFor(state, pr.repo);
         if (this.workspaces) {
           // (1) the push URL, (2) what the remote branch holds, (3) the push. Never forced.
           this.assertSameRemote(state, host, pr.repo);
@@ -210,7 +267,7 @@ export class PrDriver {
       case "merge": {
         const t = state.tasks.find((x) => x.id === op.taskId)!;
         const pr = t.integration!.pr!;
-        const repo = this.repoOf(state);
+        const repo = this.repoFor(state, pr.repo);
         let actError: D.OpError | undefined;
         try {
           await host.merge({ repo, number: pr.number!, headSha: op.headSha, subject: redact(D.mergeSubject(t)), body: redact(D.mergeBody(state, t)) });
@@ -227,7 +284,7 @@ export class PrDriver {
       case "close": {
         const t = state.tasks.find((x) => x.id === op.taskId)!;
         const pr = t.integration!.pr!;
-        const repo = this.repoOf(state);
+        const repo = this.repoFor(state, pr.repo);
         // An interrupted publish may have opened it without the number being recorded: find the app's own.
         const found = pr.number === undefined ? await host.findPr({ repo, head: pr.branch, marker: D.prMarker(p.id, t.id, pr.n) }) : undefined;
         const number = pr.number ?? found?.number;
@@ -248,7 +305,7 @@ export class PrDriver {
         const t = state.tasks.find((x) => x.id === op.taskId)!;
         const landed = t.integration!.landed!;
         const note = landed.notes.find((n) => n.id === op.noteId)!;
-        const repo = this.repoOf(state);
+        const repo = this.repoFor(state, D.landedRepo(t));
         const marker = D.noteMarker(p.id, note.id);
         // The marker makes the post idempotent: an earlier, interrupted attempt is found, not repeated.
         const found = await host.findComment({ repo, number: landed.pr!.number, marker });

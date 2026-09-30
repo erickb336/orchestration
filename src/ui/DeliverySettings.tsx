@@ -1,10 +1,12 @@
 // Settings → Delivery: how finished work leaves Orchestration. One mode at a time (off, a local
 // branch, or GitHub pull requests), the pull-request options, and the read-only list of what the app
-// found on GitHub. Turning pull requests on only reads from GitHub; nothing merges by itself.
+// found on GitHub. Turning pull requests on only reads from GitHub. Merging automatically is a
+// separate, explicit choice with its own warnings; no preset makes it.
 
 import { useEffect, useState } from "react";
 import * as D from "../domain/delivery";
-import type { PostureItem } from "../domain/types";
+import * as M from "../domain/model";
+import type { PostureItem, PrDeliveryConfig } from "../domain/types";
 import { fmtTime, relTime } from "./common";
 import { useStore } from "./store";
 
@@ -26,6 +28,12 @@ export function DeliverySettings() {
   const [base, setBase] = useState(cfg.base);
   const [maxOpen, setMaxOpen] = useState(String(cfg.maxOpenPrs));
   const [paths, setPaths] = useState(cfg.protectedPaths.join("\n"));
+  const [merge, setMerge] = useState<PrDeliveryConfig["merge"]>(cfg.merge);
+  const [reviewer, setReviewer] = useState<PrDeliveryConfig["reviewer"]>(cfg.reviewer);
+  const [update, setUpdate] = useState(cfg.updateBeforeMerge);
+  const [repair, setRepair] = useState(cfg.autoRepair);
+  const [localOk, setLocalOk] = useState(cfg.allowLocalWorkers);
+  const [perDay, setPerDay] = useState(String(cfg.maxAutoMergesPerDay));
   // Follow the live values when they change elsewhere.
   useEffect(() => setPick(mode), [mode]);
   useEffect(() => setBranch(p.autonomy.autoDeliver.branch), [p.autonomy.autoDeliver.branch]);
@@ -35,12 +43,45 @@ export function DeliverySettings() {
     setBase(cfg.base);
     setMaxOpen(String(cfg.maxOpenPrs));
     setPaths(pathsKey);
-  }, [cfg.remote, cfg.base, cfg.maxOpenPrs, pathsKey]);
+    setMerge(cfg.merge);
+    setReviewer(cfg.reviewer);
+    setUpdate(cfg.updateBeforeMerge);
+    setRepair(cfg.autoRepair);
+    setLocalOk(cfg.allowLocalWorkers);
+    setPerDay(String(cfg.maxAutoMergesPerDay));
+  }, [cfg.remote, cfg.base, cfg.maxOpenPrs, pathsKey, cfg.merge, cfg.reviewer, cfg.updateBeforeMerge, cfg.autoRepair, cfg.allowLocalWorkers, cfg.maxAutoMergesPerDay]);
 
   const sampleBlocked = real && p.sample;
   const modeChanged = pick !== mode || (pick === "local" && branch.trim() !== p.autonomy.autoDeliver.branch);
   const pathList = paths.split("\n").map((x) => x.trim()).filter(Boolean);
-  const optionsChanged = remote.trim() !== cfg.remote || base.trim() !== cfg.base || Number(maxOpen) !== cfg.maxOpenPrs || pathList.join("\n") !== pathsKey;
+  const optionsChanged =
+    remote.trim() !== cfg.remote ||
+    base.trim() !== cfg.base ||
+    Number(maxOpen) !== cfg.maxOpenPrs ||
+    pathList.join("\n") !== pathsKey ||
+    merge !== cfg.merge ||
+    reviewer !== cfg.reviewer ||
+    update !== cfg.updateBeforeMerge ||
+    repair !== cfg.autoRepair ||
+    localOk !== cfg.allowLocalWorkers ||
+    Number(perDay) !== cfg.maxAutoMergesPerDay;
+  // What stands in the way of automatic merging, or makes it less safe, as the app sees it now.
+  const local = p.enabledProviders.filter((x) => p.workerEnvironment[x] === "local");
+  const posture = (id: string) => gh?.posture.find((x) => x.id === id);
+  const autoWarnings: string[] = [
+    ...(gh?.autoMergeBlockers.length ? [`It cannot merge in this repository yet: ${gh.autoMergeBlockers.join("; ")}. Pull requests will wait for you.`] : []),
+    ...(reviewer === "other-provider" && p.enabledProviders.length < 2
+      ? [`Only ${p.enabledProviders.map(M.providerLabel).join(", ") || "no provider"} is enabled. An independent review needs the other provider: every pull request will wait with "review cannot run" until you enable it or let any agent count.`]
+      : []),
+    ...(reviewer === "any-agent" ? ["With \"any agent\", the provider that wrote a change may also be the one that reviews it."] : []),
+    ...(local.length && !localOk ? [`A worker environment is set to "local" (${local.map(M.providerLabel).join(", ")}), so nothing merges automatically until it is isolated or you allow local workers below.`] : []),
+    ...(local.length && localOk ? [`Local worker environments (${local.map(M.providerLabel).join(", ")}) may expose your GitHub sign-in or a GitHub MCP server to agents, and you allow automatic merging anyway.`] : []),
+    ...(posture("bypass") ? ["Your GitHub account can bypass the branch rules. The app never does, so for merges the app makes, its own checks are the only barrier."] : []),
+    ...(posture("unattributed") ? ["The ruleset may demand an approval from a second account for commits authored by Orchestration. If it does, pull requests wait with \"approval required\"; the app never bypasses it. Unverified."] : []),
+    ...(posture("worker-shell") ? ["Claude workers have shell access, so the app cannot claim that only the service reaches GitHub."] : []),
+    ...(!update ? ["Without \"bring up to date before merging\", a pull request can merge on a base its checks never ran on."] : []),
+    ...(!gh?.simulated && real ? ["Not verified against GitHub yet: it has run only against a simulated GitHub in tests. Watch the first merges."] : []),
+  ];
   const undelivered = D.redeliverable(state).filter((t) => !t.integration?.pr);
   const open = D.trackedPrTasks(state).length;
   const canReset = mode !== "pr" && (d?.status === "blocked" || !!d?.lastSha);
@@ -84,7 +125,7 @@ export function DeliverySettings() {
           )}
           <label style={{ display: "block", marginBottom: "0.35rem" }}>
             <input type="radio" name="delivery-mode" checked={pick === "pr"} disabled={sampleBlocked} onChange={() => setPick("pr")} /> <strong>GitHub pull requests.</strong> One pull request per finished task, on a
-            branch the app owns. It is held for you: you merge it here or on GitHub.
+            branch the app owns. It is held for you to merge, unless you choose automatic merging below.
           </label>
           {sampleBlocked && (
             <p className="muted" style={{ fontSize: "0.82rem", margin: "0 0 0.4rem 1.4rem" }}>
@@ -94,7 +135,7 @@ export function DeliverySettings() {
           {pick === "pr" && mode !== "pr" && (
             <p className="muted" style={{ fontSize: "0.82rem", margin: "0 0 0.5rem 1.4rem" }}>
               {real
-                ? "Switching this on only reads from GitHub, using your own gh sign-in. After that, each finished task is pushed to its own branch and opened as a pull request under your account. Nothing merges by itself. Not verified against GitHub yet."
+                ? "Switching this on only reads from GitHub, using your own gh sign-in. After that, each finished task is pushed to its own branch and opened as a pull request under your account. Nothing merges by itself unless you also choose automatic merging, which is a separate setting. Not verified against GitHub yet."
                 : "With the simulated runtime nothing is sent to GitHub: pull requests, checks and merges are simulated and labelled so."}
             </p>
           )}
@@ -136,10 +177,39 @@ export function DeliverySettings() {
       {mode === "pr" && (
         <>
           <h3 style={{ marginTop: "1rem" }}>Pull-request options</h3>
+          {gh?.autoMergePaused && (
+            <div className="banner danger" role="alert" style={{ margin: "0.5rem 0" }}>
+              <strong>Automatic merging is paused:</strong> {gh.autoMergePaused.reason}. {gh.autoMergePaused.sticky ? "It is the second failure within a day, so it stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} Nothing is reverted automatically; pull
+              requests wait, and you can merge them yourself.{" "}
+              <button className="small" disabled={disabled} onClick={() => void send("resumeAutoMerge")}>
+                Resume automatic merging
+              </button>
+            </div>
+          )}
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              void send("setPrDelivery", { config: { remote: remote.trim(), base: base.trim(), maxOpenPrs: Number(maxOpen), protectedPaths: pathList } });
+              // Consent: turning automatic merging on (or loosening what guards it) is confirmed, with what it means.
+              const turningOn = merge === "auto" && cfg.merge !== "auto";
+              const loosening = merge === "auto" && ((localOk && !cfg.allowLocalWorkers) || (reviewer === "any-agent" && cfg.reviewer !== "any-agent") || (!update && cfg.updateBeforeMerge));
+              if (turningOn || loosening) {
+                const text = [
+                  turningOn ? "Merge pull requests automatically?" : "Save these changes to automatic merging?",
+                  "",
+                  "The app will merge a pull request by itself, under your GitHub account, only when all of this holds for the exact commit:",
+                  `- an independent agent review is clean (${reviewer === "any-agent" ? "by any agent" : "by another provider than the one that wrote the change"});`,
+                  "- every check the repository requires has passed;",
+                  "- GitHub reports it mergeable;",
+                  "- it touches no protected file, and nothing is paused or held.",
+                  "",
+                  "It never bypasses branch rules, never uses GitHub's own auto-merge and never forces a push. An agent review is not a human review.",
+                  ...(autoWarnings.length ? ["", "Before you confirm:", ...autoWarnings.map((w) => `- ${w}`)] : []),
+                ].join("\n");
+                if (!confirm(text)) return;
+              }
+              void send("setPrDelivery", {
+                config: { remote: remote.trim(), base: base.trim(), maxOpenPrs: Number(maxOpen), protectedPaths: pathList, merge, reviewer, updateBeforeMerge: update, autoRepair: repair, allowLocalWorkers: localOk, maxAutoMergesPerDay: Number(perDay) },
+              });
             }}
           >
             <fieldset className="plain-fieldset" disabled={disabled}>
@@ -159,22 +229,60 @@ export function DeliverySettings() {
               </div>
               <label className="field">
                 <span>When a pull request is ready</span>
-                <select value="hold" onChange={() => undefined} aria-describedby="merge-mode-note">
+                <select value={merge} onChange={(e) => setMerge(e.target.value as PrDeliveryConfig["merge"])} aria-describedby="merge-mode-note">
                   <option value="hold">Hold and notify me</option>
-                  <option value="auto" disabled>
-                    Merge automatically after an independent review and passing required checks (not available yet)
-                  </option>
+                  <option value="auto">Merge automatically after an independent review and passing required checks</option>
                 </select>
               </label>
               <p id="merge-mode-note" className="muted" style={{ fontSize: "0.82rem", margin: "-0.3rem 0 0.6rem" }}>
-                You merge each pull request, here or on GitHub. A Merge click here is tied to the commit you saw and goes through only once GitHub's required checks and rules pass. Automatic merging is not built yet.
+                {merge === "auto"
+                  ? "The app merges a pull request by itself, one at a time, only when an independent review is clean for exactly that change, every required check passed on its head, GitHub reports it mergeable, and it touches no protected file. It never bypasses branch rules, never uses GitHub's own auto-merge and never forces. You can hold or merge any pull request yourself at any time."
+                  : "You merge each pull request, here or on GitHub. A Merge click here is tied to the commit you saw and goes through only once GitHub's required checks and rules pass. Each pull request is still reviewed by an independent agent, and you are told once when it is ready."}
               </p>
+              {merge === "auto" && autoWarnings.length > 0 && (
+                <div className="banner neutral" role="note" style={{ margin: "0 0 0.6rem" }}>
+                  <strong>Before you rely on automatic merging:</strong>
+                  <ul style={{ margin: "0.3rem 0 0", paddingLeft: "1.1rem" }}>
+                    {autoWarnings.map((w) => (
+                      <li key={w}>{w}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <label className="field">
+                <span>Which review counts as independent</span>
+                <select value={reviewer} onChange={(e) => setReviewer(e.target.value as PrDeliveryConfig["reviewer"])}>
+                  <option value="other-provider">A review by another provider than the one that wrote the change</option>
+                  <option value="any-agent">A review by any agent</option>
+                </select>
+              </label>
+              <p className="muted" style={{ fontSize: "0.82rem", margin: "-0.3rem 0 0.6rem" }}>
+                The task's own review counts when it saw the final change. Otherwise one dedicated review task is started for the pull request. The app never swaps in another provider by itself: if the other provider is not enabled, the pull request waits and says so.
+              </p>
+              {merge === "auto" && (
+                <>
+                  <label style={{ display: "block", marginBottom: "0.35rem" }}>
+                    <input type="checkbox" checked={update} onChange={(e) => setUpdate(e.target.checked)} /> Bring a pull request up to date with {base.trim() || cfg.base} before merging it, and run its checks again (what lands is what was tested; one merge per check run)
+                  </label>
+                  <label style={{ display: "block", marginBottom: "0.35rem" }}>
+                    <input type="checkbox" checked={repair} onChange={(e) => setRepair(e.target.checked)} /> Repair automatically: when a required check fails, a review finds problems or the pull request conflicts, create one fix task whose result is pushed onto the same pull request (at most {D.PR_LIMITS.repairs} per
+                    pull request, then it asks you)
+                  </label>
+                  <label style={{ display: "block", marginBottom: "0.35rem" }}>
+                    <input type="checkbox" checked={localOk} onChange={(e) => setLocalOk(e.target.checked)} /> Allow automatic merging while a worker environment is "local" (agents may then reach your GitHub sign-in)
+                  </label>
+                  <label className="field">
+                    <span>Automatic merges per day at most (0 to 100)</span>
+                    <input type="number" min={0} max={100} value={perDay} onChange={(e) => setPerDay(e.target.value)} style={{ width: "5rem" }} />
+                  </label>
+                </>
+              )}
               <label className="field">
                 <span>Protected files (one pattern per line)</span>
                 <textarea value={paths} onChange={(e) => setPaths(e.target.value)} style={{ minHeight: "5.5rem" }} className="mono" />
               </label>
               <p className="muted" style={{ fontSize: "0.82rem", margin: "-0.3rem 0 0.6rem" }}>
-                A pull request that touches these is marked. A change to CI workflow files (.github/workflows/) is not pushed until you allow it for that pull request.
+                A pull request that touches these is never merged automatically: you merge it. A change to CI workflow files (.github/workflows/) is not pushed until you allow it for that pull request.
               </p>
               <button type="submit" disabled={!optionsChanged}>
                 Save pull-request options
@@ -256,7 +364,7 @@ export function DeliverySettings() {
       )}
 
       <p className="muted" style={{ fontSize: "0.82rem", margin: "0.8rem 0 0" }}>
-        Deliveries and merges happen only while this service is running. No preset turns on publishing or merging.
+        Deliveries, reviews and merges happen only while this service is running. No preset turns on publishing or automatic merging.
       </p>
     </section>
   );

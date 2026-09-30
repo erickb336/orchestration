@@ -1,5 +1,5 @@
 // The Review page. "Needs you": pull requests waiting for your merge or your attention. "Waiting":
-// pull requests the app is still opening or whose checks are running. "Landed": work that already
+// pull requests the app is still opening, reviewing, fixing, or merging in turn. "Landed": work that already
 // landed, to look over whenever you like. The landed list never blocks anything, and an item becomes
 // "reviewed" only through Mark reviewed, never by opening it.
 
@@ -37,7 +37,8 @@ export function Review() {
   const gh = state.project.github;
   const tracked = D.trackedPrTasks(state);
   const closed = state.tasks.filter((t) => D.livePr(t)?.phase === "closed" && !t.integration?.landed);
-  const needs = tracked.filter((t) => t.integration!.pr!.attention || D.prReady(state, t, now));
+  // A pull request the app is already fixing does not wait for you.
+  const needs = tracked.filter((t) => (t.integration!.pr!.attention && !D.openRepair(state, t.integration!.pr!)) || D.prReady(state, t, now));
   const waiting = tracked.filter((t) => !needs.includes(t));
   const showGitHub = mode === "pr" || tracked.length > 0;
 
@@ -58,6 +59,15 @@ export function Review() {
       {showGitHub && state.project.hold && (
         <div className="banner neutral" role="status">
           Paused: watching GitHub only; nothing will be pushed, opened, merged or commented.
+        </div>
+      )}
+      {showGitHub && gh?.autoMergePaused && (
+        <div className="banner danger" role="alert">
+          <strong>Automatic merging is paused:</strong> {gh.autoMergePaused.reason}. {gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} Nothing is reverted automatically: send the landed
+          item back as a fix or a revert below if it should be undone.{" "}
+          <button className="small" disabled={disabled} onClick={() => void send("resumeAutoMerge")}>
+            Resume automatic merging
+          </button>
         </div>
       )}
       {showGitHub && (

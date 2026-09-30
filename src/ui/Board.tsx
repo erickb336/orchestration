@@ -355,6 +355,16 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
               {childrenDone < children.length ? ` · ${childrenDone} finished` : " · all finished"}
             </span>
           )}
+          {task.reviewTarget && (
+            <span className="chip" title={`An independent review of ${task.reviewTarget.taskId}'s pull request at ${task.reviewTarget.headSha.slice(0, 12)}, created by the service`}>
+              PR review · {task.reviewTarget.taskId}
+            </span>
+          )}
+          {task.deliverInto && (
+            <span className="chip" title={`A fix whose result is pushed onto ${task.deliverInto.taskId}'s pull request, created ${task.specs[0]?.author === "user" ? "by you" : "by the service"}`}>
+              PR repair · {task.deliverInto.taskId}
+            </span>
+          )}
           {task.lifecycle === "done" && <IntegrationChip state={state} task={task} />}
         </div>
       </div>
@@ -381,6 +391,8 @@ function IntegrationChip({ state, task }: { state: State; task: Task }) {
   if (i?.pr && i.status !== "conflict") return <PrChip state={state} task={task} />;
   switch (i?.status) {
     case "integrated":
+      // A fix that was pushed onto another task's pull request lands with that pull request.
+      if (D.deliveredInto(task)) return <span className="chip done">pushed onto {task.deliverInto!.taskId}'s PR</span>;
       if (i.landed) return <span className="chip done">{i.landed.status === "unreviewed" ? "delivered · review" : "delivered"}</span>;
       return <span className="chip done">integrated</span>;
     case "conflict":

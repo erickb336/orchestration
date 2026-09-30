@@ -5,6 +5,9 @@
 //   FAKE_GH_SCRIPT  JSON file: [{ "match": "<substring of the argv joined by spaces>", "stdout": "",
 //                   "stderr": "", "code": 0, "sleepMs": 0 }, …]; the first matching rule answers.
 //                   "$GH_TOKEN" in stderr is replaced by the variable's value, to test redaction.
+//   FAKE_GH_REPO    "owner/name": the one repository this fake serves. A call that names another one
+//                   (by -R, in a repos/<owner>/<name> path, or in a GraphQL repository(...) selector)
+//                   fails like GitHub would: "Not Found (HTTP 404)", exit 1.
 // Without a matching rule it prints nothing and exits 0.
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
@@ -21,6 +24,22 @@ process.stdin.on("end", () => {
   if (process.env.FAKE_GH_LOG) appendFileSync(process.env.FAKE_GH_LOG, `${JSON.stringify({ argv, stdin, cwd: process.cwd(), env })}\n`);
   const script = process.env.FAKE_GH_SCRIPT && existsSync(process.env.FAKE_GH_SCRIPT) ? JSON.parse(readFileSync(process.env.FAKE_GH_SCRIPT, "utf8")) : [];
   const line = argv.join(" ");
+  const served = process.env.FAKE_GH_REPO;
+  if (served) {
+    const named = [];
+    const r = argv.indexOf("-R");
+    if (r >= 0) named.push(argv[r + 1]);
+    for (const a of argv) {
+      const m = /^repos\/([^/]+\/[^/]+)/.exec(a);
+      if (m) named.push(m[1]);
+    }
+    const q = /repository\(owner:\\?"([^"\\]+)\\?",\s*name:\\?"([^"\\]+)\\?"\)/.exec(stdin);
+    if (q) named.push(`${q[1]}/${q[2]}`);
+    if (named.some((n) => n !== served)) {
+      process.stderr.write("gh: Not Found (HTTP 404)\n");
+      process.exit(1);
+    }
+  }
   const rule = script.find((r) => line.includes(r.match)) ?? {};
   const answer = () => {
     if (rule.stdout) process.stdout.write(rule.stdout);

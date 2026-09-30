@@ -135,15 +135,52 @@ export type Resolution =
   | { ok: true; selection: ModelSelection; source: SelectionSource; reason: string }
   | { ok: false; reason: string };
 
-/** Resolution order: step pin → task role override → project role default → project default. */
+/**
+ * The provider that wrote the change a step reviews: the pull request's change for a dedicated review
+ * task, else the newest code change among the step's inputs. "user" when a person supplied it.
+ */
+export function writerOf(s: State, t: Task, st: StepDef): ProviderId | "user" | undefined {
+  if (t.reviewTarget) {
+    const pr = s.tasks.find((x) => x.id === t.reviewTarget!.taskId)?.integration?.pr;
+    return pr && pr.n === t.reviewTarget.n ? pr.changeAuthor : undefined;
+  }
+  let best: Artifact | undefined;
+  for (const i of consumedInputs(s, t, st)) {
+    const art = s.artifacts.find((x) => x.id === i.artifactId);
+    if (art?.kind === "code-change" && (!best || art.createdAt > best.createdAt)) best = art;
+  }
+  if (!best) return undefined;
+  return best.author === "user" ? "user" : s.attempts.find((a) => a.id === best.attemptId)?.snapshot.provider;
+}
+
+/**
+ * Resolution order: step pin → task role override → independence → project role default → project
+ * default. Independence applies to a step marked `independentOf: "writer"` while the project asks for
+ * a reviewer from another provider: when the default would be the writer's own provider, the other
+ * provider is chosen, and when that one is not enabled the step does not resolve. Nothing is ever
+ * substituted, and a pin or override the user set always wins (the merge gate then reports a review
+ * that is not independent).
+ */
 export function resolveStep(s: State, t: Task, st: Step): Resolution {
   const p = s.project;
   let selection: ModelSelection;
   let source: SelectionSource;
+  let independence: string | undefined;
+  const fallback = (): [ModelSelection, SelectionSource] => (p.roleDefaults[st.role] ? [p.roleDefaults[st.role]!, "project-role"] : [p.defaultSelection, "project-default"]);
   if (st.selection) [selection, source] = [st.selection, "step"];
   else if (t.roleOverrides[st.role]) [selection, source] = [t.roleOverrides[st.role]!, "task-role"];
-  else if (p.roleDefaults[st.role]) [selection, source] = [p.roleDefaults[st.role]!, "project-role"];
-  else [selection, source] = [p.defaultSelection, "project-default"];
+  else {
+    [selection, source] = fallback();
+    const writer = st.independentOf === "writer" && p.prDelivery.reviewer === "other-provider" ? writerOf(s, t, st) : undefined;
+    if (writer && writer !== "user" && selection.provider === writer) {
+      const other: ProviderId = writer === "claude" ? "codex" : "claude";
+      if (!p.enabledProviders.includes(other)) {
+        return { ok: false, reason: `Independent review needs ${providerLabel(other)}, which is not enabled. Enable it in Settings, or let any agent count as the reviewer (Settings → Delivery). Nothing was substituted.` };
+      }
+      [selection, source] = [{ provider: other, model: "auto" }, "independence"];
+      independence = `${providerLabel(other)}: other provider than the writer (${providerLabel(writer)})`;
+    }
+  }
 
   if (!p.enabledProviders.includes(selection.provider)) {
     return { ok: false, reason: `${providerLabel(selection.provider)} is not enabled. Enable it in Settings or choose another provider for this step.` };
@@ -155,7 +192,7 @@ export function resolveStep(s: State, t: Task, st: Step): Resolution {
       ok: true,
       selection: { provider: selection.provider, model: catalog[0].id },
       source,
-      reason: `Auto: ${catalog[0].id}, the first model in the ${providerLabel(selection.provider)} catalog`,
+      reason: independence ?? `Auto: ${catalog[0].id}, the first model in the ${providerLabel(selection.provider)} catalog`,
     };
   }
   if (!catalog.some((m) => m.id === selection.model)) {
@@ -528,14 +565,15 @@ export function setHoldBeforeStart(state: State, taskId: string, value: boolean,
   return s;
 }
 
-export function cancelTask(state: State, taskId: string, now: string): State {
+/** Cancel a task. `by`: the service cancels its own review and fix tasks when their pull request moves on. */
+export function cancelTask(state: State, taskId: string, now: string, by?: { actor: Actor; reason: string }): State {
   const s = draft(state);
   const t = getTask(s, taskId);
   assertOpen(t, "Cancelling");
   t.lifecycle = "cancelled";
   touch(t, now);
   const active = activeAttempts(s, t.id);
-  event(s, now, "user", "control", `Cancelled; spec and partial artifacts retained${active.length ? `; stopping ${active.length} run(s)` : ""}`, t.id);
+  event(s, now, by?.actor ?? "user", "control", `Cancelled${by ? ` (${by.reason})` : ""}; spec and partial artifacts retained${active.length ? `; stopping ${active.length} run(s)` : ""}`, t.id);
   for (const a of active) requestStop(s, a, "cancel", now);
   // Unfinished child tasks exist only for this task's goal: cancel them too.
   const children = descendants(s, t).filter(isOpen);
@@ -771,6 +809,8 @@ export interface DispatchOptions {
    * coder steps that continue no earlier change are not dispatched. Nothing is blocked or failed.
    */
   holdWriters?: string;
+  /** Tasks whose first writer must wait for a fresh base (a revert, before the base was fetched again). */
+  staleBase?: (t: Task) => boolean;
 }
 
 export function dispatchEligible(state: State, now: string, opts: DispatchOptions = {}): State {
@@ -803,7 +843,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       if (!depsDone) continue;
       if (st.waitForChildren && !childrenSettled(s, t)) continue;
       if (awaitingChoice(s, t, st)) continue;
-      if (opts.holdWriters && st.role === "coder" && !consumedInputs(s, t, st).some((i) => s.artifacts.find((x) => x.id === i.artifactId)?.kind === "code-change")) continue;
+      if ((opts.holdWriters || opts.staleBase?.(t)) && st.role === "coder" && !consumedInputs(s, t, st).some((i) => s.artifacts.find((x) => x.id === i.artifactId)?.kind === "code-change")) continue;
       if ((st.iteration ?? 1) > 1 && st.dependsOn.length && st.dependsOn.every((d) => getStep(t, d).state === "skipped")) {
         // The previous iteration ended without work to repeat (for example after a re-run came back clean).
         st.state = "skipped";
@@ -853,6 +893,8 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           connections: [...s.project.workerConnections[r.selection.provider]],
           purpose: st.purpose,
           inputs: consumedInputs(s, t, st),
+          // A dedicated delivery review reads a worktree detached at exactly this commit.
+          ...(t.reviewTarget ? { reviewedSha: t.reviewTarget.headSha } : {}),
         },
         startedAt: now,
         outcome: "running",
@@ -1233,7 +1275,7 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
     if (!prev) return { ...instantiate([def])[0], state: t.hold ? "paused" : "pending" };
     const st: Step = { ...prev, ...def };
     // The new definition is the whole truth: optional settings it leaves out are removed.
-    for (const k of ["runIf", "gate", "iterate", "parallel", "waitForChildren", "copyOf", "iteration"] as const) if (def[k] === undefined) delete st[k];
+    for (const k of ["runIf", "gate", "iterate", "parallel", "waitForChildren", "independentOf", "copyOf", "iteration"] as const) if (def[k] === undefined) delete st[k];
     if (!affected.has(d.id)) return st;
     st.revision = prev.revision + 1;
     if (stopped.has(d.id)) st.state = "stopping";
@@ -1444,7 +1486,29 @@ export function pendingMessages(s: State): Message[] {
 
 /** Lead-proposed tasks (including child tasks from breakdowns) that are not finished yet: the autonomy cap counts these. */
 export function openLeadProposals(s: State): Task[] {
-  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && t.lifecycle !== "done" && t.lifecycle !== "cancelled");
+  // Review and fix tasks the service creates for a pull request are never the lead's proposals.
+  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && t.lifecycle !== "done" && t.lifecycle !== "cancelled" && !t.reviewTarget && !t.deliverInto);
+}
+
+/** Pull-request codes that wake the lead when they are new. */
+const LEAD_WAKE_CODES = new Set(["checks-failed", "review-findings", "conflict", "foreign-push"]);
+
+/**
+ * Did delivery produce something the lead should see since `since`: a pull request that newly needs
+ * attention for a failed check, review findings, a conflict or a foreign push; a pull request a person
+ * closed; a failed check on the base branch; or a new note on landed work?
+ */
+export function deliveryNews(s: State, since: string): boolean {
+  return s.tasks.some((t) => {
+    const i = t.integration;
+    const pr = i?.status === "integrated" ? i.pr : undefined;
+    if (pr?.attention && LEAD_WAKE_CODES.has(pr.attention.code) && pr.attention.since > since) return true;
+    // Closed on GitHub by a person: a close the user asked the app for is marked `closedByRequest`.
+    if (pr?.phase === "closed" && pr.observed?.state === "CLOSED" && !pr.closedByRequest && pr.observed.at > since) return true;
+    const l = i?.landed;
+    if (l?.mainCheck?.state === "failure" && l.mainCheck.at > since) return true;
+    return !!l?.notes.some((n) => n.at > since);
+  });
 }
 
 export function postMessage(state: State, text: string, now: string): State {
@@ -1490,9 +1554,11 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
   if (openLeadProposals(s).length >= a.maxOpenProposals) return null;
   const last = s.project.lastPlanningAt ? Date.parse(s.project.lastPlanningAt) : 0;
   // Completions, integration conflicts, and blocked work since the last plan wake the lead sooner.
-  const completedSince = s.tasks.some(
-    (t) => t.updatedAt > (s.project.lastPlanningAt ?? "") && (t.lifecycle === "done" || t.integration?.status === "conflict" || t.steps.some((st) => st.state === "blocked")),
-  );
+  // Delivery wakes it too: a pull request that needs attention, one a person closed, a failed check on
+  // the base branch, or a new note on landed work. The same caps apply.
+  const completedSince =
+    s.tasks.some((t) => t.updatedAt > (s.project.lastPlanningAt ?? "") && (t.lifecycle === "done" || t.integration?.status === "conflict" || t.steps.some((st) => st.state === "blocked"))) ||
+    deliveryNews(s, s.project.lastPlanningAt ?? "");
   // Never more than 48 planning runs in 24 hours, whatever else wakes the lead.
   const dayAgo = new Date(nowMs - 24 * 60 * 60_000).toISOString();
   if (s.leadRuns.filter((r) => r.trigger === "planning" && r.startedAt > dayAgo).length >= 48) return null;
@@ -1872,7 +1938,9 @@ export function reportIntegration(state: State, taskId: string, result: Integrat
         : `Integrated into the integration branch (${result.ref})`
       : result.status === "conflict"
         ? `Integration conflict: ${result.message}`
-        : "Nothing to integrate (no code change)";
+        : result.message
+          ? `Not delivered: ${result.message}`
+          : "Nothing to integrate (no code change)";
   event(s, now, "lead", result.status === "conflict" ? "blocked" : "integration", msg, t.id);
   return s;
 }
@@ -1946,7 +2014,8 @@ export function reportDeliveryResult(state: State, result: { status: "delivered"
   if (result.status === "blocked") s.project.autonomy.autoDeliver = { ...s.project.autonomy.autoDeliver, enabled: false };
   for (const t of s.tasks) {
     const i = t.integration;
-    if (i?.status !== "integrated" || i.pr || i.delivered?.status === "delivered") continue;
+    // A fix pushed onto another task's pull request is delivered there, never by local delivery.
+    if (i?.status !== "integrated" || i.pr || t.deliverInto || i.delivered?.status === "delivered") continue;
     if (i.delivered?.status !== result.status || i.delivered.message !== result.message) i.delivered = { status: result.status, at: now, message: result.message };
     // Work integrated before its merge commit was recorded cannot be shown later, so it is not listed.
     if (result.status === "delivered" && i.sha) recordLanded(s, t, { via: "local", target: branch, commit: i.sha, by: "app" }, now);

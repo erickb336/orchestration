@@ -8,6 +8,7 @@ import * as M from "./model";
 import { diffLineClasses } from "./diff";
 import { buildEmptyProject, buildSeed } from "./seed";
 import { BUILT_IN_TEMPLATES, templateSteps } from "./templates";
+import { reviewedChange, type ReviewedOptions } from "./testing/reviewed";
 import { ControlError, DEFAULT_PR_DELIVERY, type CheckObs, type Integration, type PrDelivery, type State } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -144,7 +145,9 @@ describe("delivery mode", () => {
     expect(on.project.github).toMatchObject({ ok: false, recheck: true });
     expect(on.project.prDelivery.merge).toBe("hold");
     expect(D.nextPrOp(on, T0 + 2000)).toMatchObject({ kind: "preflight" });
-    expect(() => runCommand(on, "setPrDelivery", { config: { merge: "auto" } }, at(2))).toThrow(/Automatic merging is not available/);
+    // Automatic merging is a separate, explicit choice: a command the user sends, never a side effect.
+    expect(runCommand(on, "setPrDelivery", { config: { merge: "auto" } }, at(2)).state.project.prDelivery.merge).toBe("auto");
+    expect(M.applyAutopilot(on, "main", at(2)).project.prDelivery).toMatchObject({ enabled: true, merge: "hold" });
     expect(() => runCommand(seed(), "setDeliveryMode", { mode: "sideways" }, at(1))).toThrow(/mode must be/);
     expect(D.deliveryMode(runCommand(seed(), "setDeliveryMode", { mode: "local", branch: "main" }, at(1)).state)).toBe("local");
   });
@@ -446,9 +449,12 @@ function prMode(requiredChecks = ["check"]): State {
 /** The next operation at `second`, with the base just fetched (so the periodic fetch is not what is planned). */
 const planned = (s: State, second: number) => D.nextPrOp(D.reportBaseFetched(s, SHA_A, at(second - 1)), ms(second));
 
-/** EX-006 done with its head prepared as a pull request (phase "built"). */
-function built(s = prMode(), id = "EX-006", sha = HEAD, changed: Partial<PrDelivery["changed"]> = {}): State {
-  const next = structuredClone(s);
+/**
+ * EX-006 done with its head prepared as a pull request (phase "built"). Its own pipeline reviewed
+ * exactly that change, clean, on the other provider (`review: null` leaves the task without one).
+ */
+function built(s = prMode(), id = "EX-006", sha = HEAD, changed: Partial<PrDelivery["changed"]> = {}, review: ReviewedOptions | null = {}): State {
+  const next = review ? reviewedChange(s, id, sha, at(2), review) : structuredClone(s);
   task(next, id).lifecycle = "done";
   task(next, id).integration = { status: "pending" };
   return D.reportPrHead(next, id, { n: 1, sha, baseSha: SHA_A, changed: { files: 1, additions: 1, deletions: 0, paths: ["a.txt"], protectedHits: [], workflowHits: [], ...changed } }, at(3));
@@ -474,8 +480,9 @@ describe("pull-request settings", () => {
     expect(() => D.setPrDelivery(s, { remote: "bad remote" }, at(3))).toThrow(/valid remote/);
     expect(() => D.setPrDelivery(s, { base: "bad branch" }, at(3))).toThrow(/valid base/);
     expect(() => D.setPrDelivery(s, { protectedPaths: Array.from({ length: 21 }, (_, i) => `p${i}`) }, at(3))).toThrow(/At most 20/);
-    expect(() => D.setPrDelivery(s, { merge: "auto" }, at(3))).toThrow(/not available/);
-    expect(() => D.setPrPolicy(opened(), "EX-006", "auto", at(30))).toThrow(/not available/);
+    expect(() => D.setPrDelivery(s, { merge: "sometimes" } as never, at(3))).toThrow(/hold or auto/);
+    expect(() => D.setPrDelivery(s, { remote: "-origin" }, at(3))).toThrow(/valid remote/); // never read as an option
+    expect(() => D.setPrDelivery(s, { base: "-f" }, at(3))).toThrow(/valid base/);
     expect(D.setPrDelivery(s, {}, at(3))).toBe(s);
     const next = D.setPrDelivery(s, { base: "release", maxOpenPrs: 2, enabled: false } as never, at(3));
     expect(next.project.prDelivery).toMatchObject({ enabled: true, base: "release", maxOpenPrs: 2, merge: "hold" });
@@ -505,10 +512,13 @@ describe("prGate (items 1–8 and 13)", () => {
     expect(D.prReady(s, task(s, "EX-006"), ms(21))).toBe(true);
     expect(D.needsYou(s, ms(21))).toBe(1);
     expect(gate(requested(s)).status).toBe("ready");
-    expect(gate(requested(s)).items.map((i) => i.id)).toEqual(["policy", "not-paused", "github", "ours", "head", "checks", "mergeable", "no-stop", "attempts"]);
-    // Without the user (automatic merging) the gate is never ready in this version.
-    expect(gate(requested(s), 21, false).status).toBe("blocked");
-    expect(gate(requested(s), 21, false).items[0]).toMatchObject({ id: "policy", ok: false, code: "auto-unavailable" });
+    // The review is shown to the user and does not gate their own merge.
+    expect(gate(requested(s)).items.map((i) => i.id)).toEqual(["policy", "not-paused", "github", "ours", "head", "checks", "mergeable", "no-stop", "review", "attempts"]);
+    expect(item(s, "review")).toMatchObject({ ok: true, advisory: true });
+    // A pull request that is held never passes the automatic gate: its policy says the user merges.
+    expect(gate(s, 21, false).status).toBe("waiting");
+    expect(gate(s, 21, false).items[0]).toMatchObject({ id: "policy", ok: false });
+    expect(D.mergeCandidate(s)).toBeUndefined();
   });
 
   it("1: a merge request for another head does not count, and cannot be made", () => {
@@ -715,10 +725,12 @@ describe("nextPrOp and beginPrOp", () => {
     // Still inside the grace time an observation of OPEN proves nothing.
     const early = D.reportObservations(begun, { prs: [observation()], commits: [] }, at(23 + 40));
     expect(prOf(early).op).toBeDefined();
-    // After it: still open means the merge did not happen. The intent is cleared and counted.
+    // After it: still open means the merge did not happen. The intent is cleared. Nothing says GitHub
+    // refused it, so it is not counted as a refusal and is tried again.
     const open = D.reportObservations(begun, { prs: [observation()], commits: [] }, at(23 + grace + 2));
     expect(prOf(open).op).toBeUndefined();
-    expect(prOf(open).counters.mergeAttempts).toBe(1);
+    expect(prOf(open).counters.mergeAttempts).toBe(0);
+    expect(prOf(open).mergeRequested).toBeDefined();
     expect(task(open, "EX-006").integration!.landed).toBeUndefined();
     // Merged: it landed, and the intent shows the app asked for it.
     const merged = D.reportObservations(begun, { prs: [observation({ state: "MERGED", mergeCommit: MERGE, mergedBy: "me" })], commits: [] }, at(23 + grace + 2));
@@ -766,7 +778,7 @@ describe("observations are the only source of merged, closed and posted", () => 
       commit: MERGE,
       by: "person",
       mergedBy: "octocat",
-      pr: { number: 12, url: "https://github.com/o/r/pull/12" },
+      pr: { number: 12, url: "https://github.com/o/r/pull/12", repo: "o/r" },
       review: prOf(s).review,
       checks: [check("SUCCESS")],
       mainCheck: { state: "pending", at: at(30) },
@@ -898,7 +910,11 @@ describe("dependencies in pull-request mode", () => {
     expect(prOf(rebuilt).number).toBeUndefined();
     // Not everything can be delivered again.
     expect(() => D.redeliver(opened(), ["EX-006"], at(40))).toThrow(/cannot be delivered again/);
-    expect(() => D.redeliver(D.setDeliveryMode(closed, { mode: "off" }, at(39)), ["EX-006"], at(40))).toThrow(/Switch the delivery mode/);
+    // With pull-request delivery off, closed work goes through the current mode instead of being stranded;
+    // work that never had a pull request still needs the mode switched on.
+    const off = D.setDeliveryMode(closed, { mode: "off" }, at(39));
+    expect(task(D.redeliver(off, ["EX-006"], at(40)), "EX-006").integration).toMatchObject({ status: "pending" });
+    expect(() => D.redeliver(D.setDeliveryMode(integrated(prMode(), "EX-005"), { mode: "off" }, at(39)), ["EX-005"], at(40))).toThrow(/while pull-request delivery is off/);
     // A conflict on the second attempt keeps the number, so a retry does not reuse branch 1.
     const conflict = M.reportIntegration(again, "EX-006", { status: "conflict", message: "conflicts with the base in a.txt" }, at(42));
     expect(task(M.retryIntegration(conflict, "EX-006", at(43)), "EX-006").integration).toMatchObject({ status: "pending", pr: { n: 1 } });

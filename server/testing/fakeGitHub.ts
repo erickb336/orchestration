@@ -28,6 +28,14 @@ export class FakeGitHub extends SimulatedGitHub {
   private aborts = 0;
   readonly bare: string;
   readonly baseBranch: string;
+  /** Remotes this fake serves (a bare repository path → "owner/name"). */
+  private readonly remotes = new Map<string, string>();
+  /** The repository each pull request was opened in. */
+  private readonly prRepo = new Map<number, string>();
+  /** The head each pull request's checks were reported for: a new head starts without checks, like CI does. */
+  private readonly checksHead = new Map<number, string>();
+  /** Per-pull-request calls that named another repository than the one the pull request lives in. */
+  wrongRepoCalls: { method: Method; repo: string; number: number }[] = [];
 
   constructor(bare: string, baseBranch = "main") {
     super();
@@ -35,6 +43,20 @@ export class FakeGitHub extends SimulatedGitHub {
     this.baseBranch = baseBranch;
     this.nextNumber = 1;
     this.login = "tester";
+    this.remotes.set(this.bare, "test/repo");
+  }
+
+  /** Serve another bare repository as another GitHub repository. */
+  addRemote(path: string, slug: string) {
+    this.remotes.set(resolve(path), slug);
+  }
+
+  /** The repository argument is honoured: a pull request exists only in the repository it was opened in. */
+  private inRepo(method: Method, repo: RepoRef, number: number) {
+    const slug = `${repo.owner}/${repo.name}`;
+    if (this.prRepo.get(number) === slug) return;
+    this.wrongRepoCalls.push({ method, repo: slug, number });
+    throw new GhError("not-found", `pull request #${number} not found in ${slug}`);
   }
 
   private git(...args: string[]): string {
@@ -57,6 +79,9 @@ export class FakeGitHub extends SimulatedGitHub {
   /** Report a check on the pull request's current head. `conclusion` null means still running. */
   setCheck(number: number, conclusion: string | null, name = "check") {
     const p = this.pr(number);
+    const head = this.headOf(p);
+    if (this.checksHead.get(number) !== head) p.checks = [];
+    this.checksHead.set(number, head);
     p.checks = [...p.checks.filter((c) => c.name !== name), { name, required: this.requiredChecks.includes(name), status: conclusion ? "COMPLETED" : "IN_PROGRESS", conclusion, url: `https://github.com/test/repo/actions/runs/${number}` }];
   }
   /** The next call of `method` fails with this error. */
@@ -107,7 +132,16 @@ export class FakeGitHub extends SimulatedGitHub {
   }
 
   override parseRemote(url: string): RepoRef | undefined {
-    return resolve(url) === this.bare ? { owner: "test", name: "repo" } : undefined;
+    const slug = this.remotes.get(resolve(url));
+    if (!slug) return undefined;
+    const [owner, name] = slug.split("/");
+    return { owner, name };
+  }
+  /** Checks belong to the head they ran on: after a push, none have reported yet. */
+  protected override observation(p: SimPr) {
+    const head = this.headOf(p);
+    if (p.checks.length && this.checksHead.get(p.number) !== undefined && this.checksHead.get(p.number) !== head) p.checks = [];
+    return super.observation(p);
   }
   protected override prUrl(n: number): string {
     return `https://github.com/test/repo/pull/${n}`;
@@ -138,32 +172,53 @@ export class FakeGitHub extends SimulatedGitHub {
   override preflight(a: { remoteUrl: string; base: string }): Promise<PreflightResult> {
     return this.call("preflight", a, async () => {
       if (this.preflightProblem) return { ok: false, problem: this.preflightProblem, requiredChecks: [], autoMergeBlockers: [], posture: [] };
-      if (!this.parseRemote(a.remoteUrl)) return { ok: false, problem: { code: "remote", message: "The remote is not the test repository." }, requiredChecks: [], autoMergeBlockers: [], posture: [] };
-      return { ok: true, repo: "test/repo", login: this.login, ghVersion: "2.101.0", requiredChecks: [...this.requiredChecks], autoMergeBlockers: [], posture: [{ id: "required-checks", status: "ok", label: `Required checks: ${this.requiredChecks.join(", ")}`, detail: "From the fake." }] };
+      const repo = this.parseRemote(a.remoteUrl);
+      if (!repo) return { ok: false, problem: { code: "remote", message: "The remote is not the test repository." }, requiredChecks: [], autoMergeBlockers: [], posture: [] };
+      return { ok: true, repo: `${repo.owner}/${repo.name}`, login: this.login, ghVersion: "2.101.0", requiredChecks: [...this.requiredChecks], autoMergeBlockers: [], posture: [{ id: "required-checks", status: "ok", label: `Required checks: ${this.requiredChecks.join(", ")}`, detail: "From the fake." }] };
     });
   }
   override findPr(a: { repo: RepoRef; head: string; marker: string }) {
-    return this.call("findPr", a, () => super.findPr(a));
+    const slug = `${a.repo.owner}/${a.repo.name}`;
+    return this.call("findPr", a, async () => {
+      const found = await super.findPr(a);
+      return found && this.prRepo.get(found.number) === slug ? found : undefined;
+    });
   }
   override createPr(a: { repo: RepoRef; base: string; head: string; title: string; body: string; headSha?: string }) {
     return this.call("createPr", a, async () => {
       if (!this.headOf({ head: a.head } as SimPr)) throw new GhError("rejected", `head ${a.head} does not exist on the remote`);
-      return super.createPr(a);
+      const made = await super.createPr(a);
+      this.prRepo.set(made.number, `${a.repo.owner}/${a.repo.name}`);
+      return made;
     });
   }
   override observe(a: { repo: RepoRef; prs: number[]; commits: string[] }): Promise<Observations> {
-    return this.call("observe", a, () => super.observe(a));
+    // Only pull requests of the repository that was asked about are returned.
+    const slug = `${a.repo.owner}/${a.repo.name}`;
+    return this.call("observe", a, () => super.observe({ ...a, prs: a.prs.filter((n) => this.prRepo.get(n) === slug) }));
   }
   override merge(a: { repo: RepoRef; number: number; headSha: string; subject: string; body: string }) {
-    return this.call("merge", a, () => super.merge(a));
+    return this.call("merge", a, async () => {
+      this.inRepo("merge", a.repo, a.number);
+      return super.merge(a);
+    });
   }
   override findComment(a: { repo: RepoRef; number: number; marker: string }) {
-    return this.call("findComment", a, () => super.findComment(a));
+    return this.call("findComment", a, async () => {
+      this.inRepo("findComment", a.repo, a.number);
+      return super.findComment(a);
+    });
   }
   override comment(a: { repo: RepoRef; number: number; body: string }) {
-    return this.call("comment", a, () => super.comment(a));
+    return this.call("comment", a, async () => {
+      this.inRepo("comment", a.repo, a.number);
+      return super.comment(a);
+    });
   }
   override close(a: { repo: RepoRef; number: number; comment: string }) {
-    return this.call("close", a, () => super.close(a));
+    return this.call("close", a, async () => {
+      this.inRepo("close", a.repo, a.number);
+      return super.close(a);
+    });
   }
 }

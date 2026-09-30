@@ -68,9 +68,12 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
       const sim = pr.simulated ? " (simulated)" : "";
       const at = (x: typeof pr) => Date.parse(x.observed?.at ?? next.project.github?.observedAt ?? t.updatedAt);
       if (D.prReady(next, t, at(pr)) && !(ppr && ppr.headSha === pr.headSha && D.prReady(prev, p, at(ppr))))
-        out.push({ key: `pr-ready:${t.id}:${pr.headSha}`, title: `${n} is ready for you${sim}`, body: clip(`${name}: required checks passed. Merge it in Orchestration or on GitHub.`), taskId: t.id });
-      if (pr.attention && (pr.attention.code !== ppr?.attention?.code || pr.attention.headSha !== ppr?.attention?.headSha))
-        out.push({ key: `pr-needs-you:${t.id}:${pr.attention.code}:${pr.attention.headSha ?? ""}`, title: `${n} needs you${sim}`, body: clip(`${name}: ${pr.attention.message}`), taskId: t.id });
+        out.push({ key: `pr-ready:${t.id}:${pr.headSha}`, title: `${n} is ready for you${sim}`, body: clip(`${name}: required checks passed and the independent review is clean. Merge it in Orchestration or on GitHub.`), taskId: t.id });
+      if (pr.attention && (pr.attention.code !== ppr?.attention?.code || pr.attention.headSha !== ppr?.attention?.headSha)) {
+        // While the app's own fix task is working on it, it is news, not a request.
+        const fixing = !!D.openRepair(next, pr);
+        out.push({ key: `pr-needs-you:${t.id}:${pr.attention.code}:${pr.attention.headSha ?? ""}`, title: fixing ? `${n} is being fixed${sim}` : `${n} needs you${sim}`, body: clip(`${name}: ${pr.attention.message}`), taskId: t.id });
+      }
       if (pr.phase === "merged" && ppr?.phase !== "merged") {
         const by = t.integration?.landed?.by === "person" ? ` by ${t.integration.landed.mergedBy ?? "a person"}` : "";
         out.push({ key: `pr-merged:${t.id}:${pr.n}`, title: `${n} merged${by}; review it when you like${sim}`, body: name, taskId: t.id });
@@ -101,6 +104,10 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
       });
     }
   }
+
+  const paused = next.project.github?.autoMergePaused;
+  if (paused && paused.since !== prev.project.github?.autoMergePaused?.since)
+    out.push({ key: `auto-merge-paused:${paused.since}`, title: "Automatic merging is paused", body: clip(`${paused.reason}. ${paused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}`), ...(paused.taskId ? { taskId: paused.taskId } : {}) });
 
   const problem = next.project.github?.problem;
   if (problem && (problem.code !== prev.project.github?.problem?.code || problem.since !== prev.project.github?.problem?.since))

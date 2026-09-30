@@ -240,6 +240,15 @@ export const COMMANDS = {
   allowWorkflowPush: same((s, now, a) => D.allowWorkflowPush(s, str(a, "taskId"), now)),
   closePr: same((s, now, a) => D.closePr(s, str(a, "taskId"), now)),
   redeliver: same((s, now, a) => D.redeliver(s, array<unknown>(a.taskIds, "taskIds").map((x) => String(x)), now)),
+  /** Fix this PR: one bounded fix task whose result is pushed onto the same pull request. Returns { newId }. */
+  repairPr: (s, now, a) => {
+    const r = D.repairPr(s, str(a, "taskId"), now);
+    return { state: r.state, result: { newId: r.newId } };
+  },
+  /** Ask for a dedicated independent review of the pull request's current change now. */
+  requestPrReview: same((s, now, a) => D.requestPrReview(s, str(a, "taskId"), now)),
+  /** Automatic merging continues after a failing base branch paused it. */
+  resumeAutoMerge: same((s, now) => D.resumeAutoMerge(s, now)),
   retryLandedComment: same((s, now, a) => D.retryLandedComment(s, str(a, "taskId"), str(a, "noteId"), now)),
   /** The only way a landed item becomes reviewed (or unreviewed again). */
   markLandedReviewed: same((s, now, a) => D.markLandedReviewed(s, array<unknown>(a.taskIds, "taskIds").map((x) => String(x)), bool(a, "reviewed"), now)),
@@ -266,7 +275,7 @@ export const COMMANDS = {
     const templateId = str(a, "templateId");
     const tpl = s.project.templates.find((t) => t.id === templateId);
     if (!tpl) throw new InvalidCommandError(`Unknown template ${templateId}`);
-    if (INTERNAL_TEMPLATE_IDS.includes(templateId)) throw new InvalidCommandError(`The ${tpl.name} template is used by Send back only.`);
+    if (INTERNAL_TEMPLATE_IDS.includes(templateId)) throw new InvalidCommandError(templateId === "revert" ? `The ${tpl.name} template is used by Send back only.` : `The ${tpl.name} template is used by the service only.`);
     const r = M.createTask(
       s,
       {

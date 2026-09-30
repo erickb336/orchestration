@@ -237,8 +237,20 @@ Use deterministic fake-runtime tests for state races and failure recovery, plus 
 
 Recommended first build: Milestone 1. Use the task detail and specification editor as the central interaction, then add reliable runtime control behind it. Do not build a general graph editor or cloud deployment before the core review-and-steer loop is usable.
 
+## Delivery of finished work (ORC-008)
+
+Finished work leaves Orchestration through one delivery mode at a time: off (the integration branch only), a local branch (fast-forward), or GitHub pull requests. Pull-request delivery is external publishing, so it is a separate capability: off by default, switched on explicitly, and never turned on by a preset. Automatic merging is a second explicit choice on top of it.
+
+- Desired state (the mode, holds, merge requests), intent (the operation sent) and observed state (what GitHub reports) are separate. "Merged", "closed" and "posted" are recorded only from an observation.
+- The app merges only when its own gate passes for the exact commit: an independent review of exactly that change, by another provider than its writer unless the user chose otherwise; every required check passed on the exact head; GitHub reporting it mergeable; no protected file touched; nothing paused or held. It never bypasses branch rules, never uses GitHub's own auto-merge and never forces a push.
+- The review is a review, not a second implementation: the task's own review when it provably covers the final change, otherwise one dedicated review task. A provider is never substituted silently.
+- Repair is bounded: at most two fix tasks per pull request, pushed onto the same pull request.
+- Everything that lands is listed for review later. The list is informational and never blocks dispatch, integration or merging.
+- The lead sees delivery (pull requests that need attention, the unreviewed count, the user's notes) and may propose tasks. It cannot merge, push, comment, close, send work back or mark anything reviewed.
+- Real GitHub behaviour is unverified until the consented sandbox run (`scripts/pr-sandbox-check.mjs`) has passed; the interface says so until then.
+
 ## Assumptions to revisit
 
 The first version is local, single-user, and supports both Claude and Codex as first-class concurrent runtimes. Orchestration is the project name. The exact scheduling cadence and execution budget are not selected. The project lives at this repository, separate from the SimpleApps consumer apps. SimpleApps is its first managed repository.
 
-The autonomous lead may create and execute ordinary reversible product work within the recorded vision. External publishing, purchases, destructive actions, and other actions outside existing authorization remain separate capabilities. No scheduling or external deployment is enabled by writing this spec.
+The autonomous lead may create and execute ordinary reversible product work within the recorded vision. External publishing, purchases, destructive actions, and other actions outside existing authorization remain separate capabilities. Pull-request delivery is such a capability: the user switches it on, and switches automatic merging on separately. No scheduling or external deployment is enabled by writing this spec.

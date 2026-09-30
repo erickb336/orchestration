@@ -485,6 +485,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
           initial={task.steps.map(toDef)}
           reservedIds={task.pipelineHistory.flatMap((p) => p.steps.map((x) => x.id))}
           templates={state.project.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id))}
+          reviewTarget={!!task.reviewTarget}
           saveLabel={`Save pipeline r${task.pipelineRev + 1}`}
           saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : disabled ? "The service is offline" : undefined}
           requireReason

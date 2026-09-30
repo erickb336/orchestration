@@ -105,6 +105,15 @@ What real runs do on your machine:
   - Every other role gets a read-only checkout.
   - Finished work is merged, one task at a time, into `orchestration/<project>/integration`.
   - With automatic delivery on, that branch is fast-forwarded into your chosen branch, but only when your working tree is clean. Your latest commits are merged into the integration branch first.
+- **GitHub pull requests** (Settings → Delivery, off by default, **not verified against GitHub yet**) are a third delivery mode, never on together with local delivery:
+  - Each finished task becomes one pull request on a branch the app owns (`orchestration/<project>/pr/<task>-<n>`), opened with your own `gh` sign-in. The app never reads or stores a token, never forces a push, and publishes only commits Orchestration made.
+  - **Hold and notify** (default): an independent agent reviews the change, the app watches the required checks, and tells you once when the pull request is ready. You merge it on GitHub or with Merge in the app, which is tied to the commit you saw.
+  - **Merge automatically** (a separate, explicit setting): the app merges one pull request at a time, and only when an independent review is clean for exactly that change, every required check passed on its exact head, GitHub reports it mergeable, it touches no protected file, and nothing is paused. It first brings the pull request up to date with the base and waits for the checks again, so what lands is what was tested.
+  - The review is the task's own review when it provably saw the final change and ran on another provider than the writer. Otherwise the app starts one dedicated review task. It never swaps in another provider by itself.
+  - In automatic mode a failed required check, open review findings or a conflict get one fix task, pushed onto the same pull request, at most two per pull request.
+  - If the check on the base branch fails after a merge the app made, automatic merging pauses; a second failure within a day keeps it paused until you resume it. Nothing is reverted automatically.
+  - Everything that lands is listed on the Review page, which never blocks anything. From there you can mark it reviewed, leave a note, or send it back as a fix or a revert.
+  - Pull requests are opened, reviewed and merged only while the service is running. There are no webhooks.
 - **Worker environment** is set per provider:
   - **Isolated** (default): workers see none of your settings, plugins, or web tools, and use only the MCP connections you tick.
   - **Use my local setup:** workers get your user-level Claude or Codex configuration, including all its MCP servers and plugins.
@@ -173,6 +182,7 @@ docs/         the project specification, research, and one versioned spec per bu
 - **Claude workers:** file tools are confined to their worktree, with no shell unless you enable it.
 - **Codex workers:** they run in Codex's sandbox. Writes are limited to their worktree and a private temp directory, and network access for commands is off. **They can still read files elsewhere on your machine.**
 - **Connections:** MCP servers and plugins you allow run with your permissions and are not sandboxed.
+- **GitHub:** only the service runs `gh` and `git push`. It never uses `--admin`, GitHub's own auto-merge, a forced push, a branch deletion or the merge API; the only merge is `gh pr merge --merge --match-head-commit <sha>`. A change to CI workflow files is not pushed until you allow it for that pull request, and a change to other protected files is never merged automatically. A worker environment set to "local", or Claude workers with a shell, can reach your GitHub sign-in: automatic merging is refused for local environments unless you allow it, and both are listed as warnings in Settings → Delivery. An agent review is not a human review; the required checks, the protected paths, the daily cap and the Review list are the independent layers.
 - **Autopilot:** the lead reads summaries that workers wrote, and on Autopilot its proposals start without review. Treat repositories and connections you do not trust accordingly. Use "check in before work starts", or review gates, when that matters.
 
 ## Status
@@ -187,8 +197,11 @@ This is a personal tool under active development. It is built in milestones (see
 | Lead conversation, autonomy, and integration queue | ORC-005 |
 | Reliability, autopilot, human editing, import/export, and CI | ORC-006 |
 | Fan-out: parallel agents per step, iteration loops, breakdowns into child tasks | ORC-007 |
+| Pull-request delivery, independent review and automatic merge, review-later list | ORC-008 (not verified against GitHub yet) |
 
 Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test runs Claude and Codex workers concurrently against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost.
+
+Pull-request delivery is covered by tests that never contact GitHub: a local bare repository stands in for the remote and a fake stands in for the GitHub API. `node scripts/pr-sandbox-check.mjs --repo <owner>/<throwaway-repo> --yes` records evidence against a real repository. It refuses to run without both arguments, never defaults to a repository, and creates branches, pull requests, a ruleset and a workflow there, so use a repository made for it. Until that run has passed, the feature stays labelled "not verified against GitHub".
 
 ## License
 

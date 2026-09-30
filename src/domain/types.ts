@@ -590,6 +590,12 @@ export interface GitHubStatus {
   /** Times (at most 24 h old) a merge made by the app was followed by a failed check on the base branch. */
   mainBreaks?: string[];
   autoMergePaused?: { since: string; reason: string; sticky: boolean; taskId?: string };
+  /** The base branch requires a merge queue: `gh pr merge` would enqueue or enable GitHub's own auto-merge, so the app never merges here. */
+  mergeQueue?: boolean;
+  /** false: the repository does not allow merge commits, the only way the app merges. */
+  mergeCommitsAllowed?: boolean;
+  /** Fetches of the base that failed in a row. A passing repository check does not reset it; a fetch that works does. */
+  fetchFailures?: { count: number; since: string; nextAt: string; message: string };
 }
 
 export interface CheckObs {
@@ -623,7 +629,9 @@ export type PrAttentionCode =
   | "protected-path"
   | "local-workers"
   | "auto-unavailable"
-  | "limit";
+  | "limit"
+  | "repo-changed"
+  | "publish-failed";
 
 /** Per task: Integration.pr. Desired state, intent and observed state are separate fields. */
 export interface PrDelivery {
@@ -655,8 +663,12 @@ export interface PrDelivery {
   userHold?: { at: string; reason?: string };
   /** The user's Merge click, bound to the head they saw. */
   mergeRequested?: { at: string; headSha: string };
+  /** The last merge the app sent for a head. Kept after the intent is cleared, so a merge GitHub reports late is still attributed to the app. */
+  lastMergeIntent?: { at: string; headSha: string; auto: boolean };
   workflowPushAllowed?: boolean;
   closeRequested?: { at: string };
+  /** The pull request was closed from the app at the user's request (not by someone on GitHub). */
+  closedByRequest?: boolean;
   // intent
   phase: "built" | "open" | "merged" | "closed";
   op?: { id: string; kind: "publish" | "push" | "merge" | "close"; at: string; headSha: string };
@@ -686,6 +698,8 @@ export interface PrDelivery {
   repairTaskIds: string[];
   /** Sticky: someone else pushed to the branch. */
   foreignHead?: { sha: string; at: string };
+  /** The service could not merge this base tip into this head cleanly (a local check; nothing was pushed). */
+  baseConflict?: { baseSha: string; headSha: string; files: string[] };
   attention?: { code: PrAttentionCode; message: string; headSha?: string; since: string };
   counters: { mergeAttempts: number; baseUpdates: number; repairs: number; reviews: number; failures: number };
   /** Backoff after a failed operation. */
@@ -733,7 +747,8 @@ export interface Landed {
   simulated?: boolean;
   by: "app" | "person";
   mergedBy?: string;
-  pr?: { number: number; url: string };
+  /** `repo`: the repository the pull request lives in ("owner/name"); the app acts on it only there. */
+  pr?: { number: number; url: string; repo?: string };
   /** As it stood at merge. */
   review?: ReviewEvidence;
   /** Required checks on the merged head. */

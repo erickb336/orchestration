@@ -94,6 +94,28 @@ describe("fake runtime (scenario 19)", () => {
     expect(spawned.calls).toEqual(["execFileSync git"]);
   });
 
+  it("automatic merging on the simulated GitHub: reviewed, merged by itself, still zero processes and every record simulated", async () => {
+    cmd("setDeliveryMode", { mode: "pr" });
+    cmd("setPrDelivery", { config: { merge: "auto" } });
+    cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "auto" } });
+    cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "auto" } });
+    const id = (cmd("createTask", { title: "Simulated automatic change", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
+    cmd("setPipeline", { taskId: id, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+    cmd("setPriority", { taskId: id, priority: 1 });
+    for (let i = 0; i < 400 && task(id).integration?.pr?.phase !== "merged"; i++) await tick(2000);
+    const pr = task(id).integration!.pr!;
+    expect(pr).toMatchObject({ phase: "merged", simulated: true, policy: "auto" });
+    // Its one-step pipeline had no review: exactly one dedicated review ran, on the other provider.
+    const reviews = st().tasks.filter((t) => t.reviewTarget?.taskId === id);
+    expect(reviews.length).toBeGreaterThanOrEqual(1);
+    const evidence = task(id).integration!.landed!.review!;
+    expect(evidence).toMatchObject({ ok: true, source: "dedicated", forSha: pr.changeSha });
+    expect(evidence.provider).not.toBe(pr.changeAuthor);
+    expect(task(id).integration!.landed).toMatchObject({ simulated: true, by: "app", via: "pr" });
+    expect(st().events.some((e) => e.message.includes("merged into main by Orchestration, automatically") && e.message.includes("(simulated)"))).toBe(true);
+    expect(spawned.calls).toEqual([]);
+  });
+
   it("a real service that was started without a GitHub connection says so instead of doing anything", async () => {
     // (Still no process: the driver reports the missing connection from the repository check.)
     const { PrDriver } = await import("./prdelivery");

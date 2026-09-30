@@ -123,13 +123,33 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
     );
   const now = Date.now();
   const live = pr.phase === "built" || pr.phase === "open";
-  const gate = live ? D.prGate(state, task, now, { byUser: true }) : null;
+  const cfg = state.project.prDelivery;
+  const gh = state.project.github;
+  const auto = pr.policy === "auto";
+  // The user's own merge (hold, or a Merge click for this head) or the automatic gate: the same function the service uses.
+  const byUser = !auto || pr.mergeRequested?.headSha === pr.headSha;
+  const gate = live ? D.prGate(state, task, now, { byUser }) : null;
   const intent = D.prIntentLine(pr);
   const label = D.prLabel(state, task, now);
-  const prOn = state.project.prDelivery.enabled;
+  const prOn = cfg.enabled;
   const h12 = pr.headSha.slice(0, 12);
-  const canAskMerge = pr.phase === "open" && prOn && !pr.foreignHead && !pr.closeRequested && !pr.userHold && !pr.op && pr.mergeRequested?.headSha !== pr.headSha;
+  const elsewhere = !!gh?.repo && !!pr.repo && pr.repo !== gh.repo;
+  const canAskMerge = pr.phase === "open" && prOn && !elsewhere && !pr.foreignHead && !pr.closeRequested && !pr.userHold && !pr.op && !pr.pendingHead && pr.mergeRequested?.headSha !== pr.headSha;
+  const refused = pr.counters.mergeAttempts >= D.PR_LIMITS.mergeAttempts;
   const onGitHub = !pr.simulated && pr.url?.startsWith("https://github.com/");
+  const review = live ? D.reviewView(state, task) : null;
+  const linked = (ids: string[]) => ids.map((id) => state.tasks.find((x) => x.id === id)).filter((x): x is Task => !!x);
+  const reviews = linked(pr.reviewTaskIds);
+  const repairs = linked(pr.repairTaskIds);
+  const fixing = live ? D.openRepair(state, pr) : undefined;
+  const openReview = reviews.find((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled" && x.reviewTarget?.headSha === pr.changeSha);
+  const cause = live && prOn && !elsewhere ? D.repairCause(state, task) : undefined;
+  const canFix = !!cause && !fixing && !pr.foreignHead && pr.counters.repairs < D.PR_LIMITS.repairs && pr.pendingHead?.kind !== "repair";
+  const canAskReview = live && prOn && !elsewhere && !openReview && !pr.foreignHead && review?.state !== "ok";
+  const queue = auto && live ? D.autoQueue(state) : [];
+  const place = queue.findIndex((x) => x.id === task.id);
+  const paused = gh?.autoMergePaused;
+  const causeText = cause?.kind === "checks" ? `the failed check${cause.checks.length === 1 ? "" : "s"} ${cause.checks.map((c) => c.name).join(", ")}` : cause?.kind === "findings" ? "the open review findings" : `the conflict with ${pr.base}`;
   return (
     <div className="stack">
       <div className="row">
@@ -143,15 +163,36 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
       )}
       {live && !prOn && (
         <div className="banner neutral" role="status" style={{ margin: 0 }}>
-          Pull-request delivery is off. This pull request is only watched: nothing is pushed, merged or commented. Merge or close it on GitHub, or switch the delivery mode back on.
+          {pr.phase === "built"
+            ? "Pull-request delivery is off, so this pull request was prepared but never opened: nothing was pushed. Switch the delivery mode back on to open it, or abandon it and deliver the work through the current mode."
+            : "Pull-request delivery is off. This pull request is only watched: nothing is pushed, merged or commented. Merge or close it on GitHub, or switch the delivery mode back on."}
+        </div>
+      )}
+      {auto && live && paused && (
+        <div className="banner neutral" role="status" style={{ margin: 0 }}>
+          <strong>Automatic merging is paused:</strong> {paused.reason}. {paused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} Nothing is reverted automatically. You can merge this one yourself.{" "}
+          <button className="small" disabled={disabled} onClick={() => void send("resumeAutoMerge")}>
+            Resume automatic merging
+          </button>
         </div>
       )}
       <dl className="kv">
         <dt>You</dt>
         <dd>
-          Hold and notify: you merge it, here or on GitHub.
+          {auto ? "Merge automatically after an independent review and passing required checks, for exactly the commit shown." : "Hold and notify: you merge it, here or on GitHub."}{" "}
+          <span className="muted">{pr.policySource === "user" ? "Your choice for this pull request." : "The project's setting."}</span>
           {pr.userHold ? ` Held by you${pr.userHold.reason ? ` (${pr.userHold.reason})` : ""}.` : ""}
         </dd>
+        {auto && live && place >= 0 && (
+          <>
+            <dt>Merge queue</dt>
+            <dd>
+              {place === 0
+                ? `First in line: the one pull request that is brought up to date with ${pr.base} and merged.`
+                : `Waiting behind PR #${queue[0].integration!.pr!.number} (place ${place + 1} of ${queue.length}). Pull requests merge one at a time, so what lands is what the checks tested.`}
+            </dd>
+          </>
+        )}
         {intent && (
           <>
             <dt>In flight</dt>
@@ -168,7 +209,15 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
           {pr.branch} → {pr.base}
         </dd>
         <dt>Head commit</dt>
-        <dd className="mono">{h12}</dd>
+        <dd>
+          <span className="mono">{h12}</span>
+          {pr.headSha !== pr.changeSha && (
+            <span className="muted">
+              {" "}
+              the reviewed change <span className="mono">{pr.changeSha.slice(0, 12)}</span> with {pr.base} (<span className="mono">{pr.baseSha.slice(0, 12)}</span>) merged into it by Orchestration
+            </span>
+          )}
+        </dd>
         <dt>Changes</dt>
         <dd>
           {pr.changed.files} file{pr.changed.files === 1 ? "" : "s"}, +{pr.changed.additions} −{pr.changed.deletions}
@@ -176,7 +225,35 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
           {pr.changed.protectedHits.length > 0 && <div>Touches protected files: {pr.changed.protectedHits.slice(0, 5).join(", ")}</div>}
         </dd>
         <dt>Independent review</dt>
-        <dd>{pr.review.ok ? `Clean on ${pr.changeSha.slice(0, 12)}` : `${pr.review.reason} The task's own reviews are listed with its steps.`}</dd>
+        <dd>
+          <span className={pr.review.ok ? "chip done" : review?.state === "pending" || review?.state === "missing" || review?.state === "not-independent" ? "chip" : "chip danger"}>
+            {pr.review.ok ? "clean" : review?.state === "pending" ? "running" : review?.state === "findings" ? "open findings" : review?.state === "blocked" ? "cannot run" : review?.state === "limit" ? "limit reached" : "not reviewed yet"}
+          </span>{" "}
+          {pr.review.reason}
+          {pr.review.ok && (
+            <div className="muted">
+              Automated review, not a human one. Reviewed commit <span className="mono">{(pr.review.forSha ?? pr.changeSha).slice(0, 12)}</span>
+              {pr.review.provider ? ` · ${M.providerLabel(pr.review.provider)}${pr.review.model ? ` · ${pr.review.model}` : ""}` : ""} · written by {pr.changeAuthor === "user" ? "you" : M.providerLabel(pr.changeAuthor)} ·{" "}
+              {pr.review.source === "dedicated" ? "a dedicated review task" : "the task's own review step"}
+              {pr.review.taskId && pr.review.taskId !== task.id ? (
+                <>
+                  {" "}
+                  (<a href={`#/task/${encodeURIComponent(pr.review.taskId)}`}>{pr.review.taskId}</a>)
+                </>
+              ) : null}
+            </div>
+          )}
+          {reviews.map((x) => (
+            <div key={x.id}>
+              Review task <a href={`#/task/${encodeURIComponent(x.id)}`}>{x.id}</a> <span className="muted">{M.stateLabel(state, x)}{x.reviewTarget?.headSha !== pr.changeSha ? " · for an earlier change, not counted" : ""}</span>
+            </div>
+          ))}
+          {repairs.map((x) => (
+            <div key={x.id}>
+              Fix task <a href={`#/task/${encodeURIComponent(x.id)}`}>{x.id}</a> <span className="muted">{M.stateLabel(state, x)}</span>
+            </div>
+          ))}
+        </dd>
         {pr.message && live && (
           <>
             <dt>Last problem</dt>
@@ -186,7 +263,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
       </dl>
 
       {gate && pr.phase === "open" && (
-        <ul className="checklist" aria-label="Before this pull request can merge">
+        <ul className="checklist" aria-label={byUser ? "Before this pull request can merge" : "Before this pull request merges by itself"}>
           {gate.items.map((it) => (
             <li key={it.id} className={it.ok ? "done" : undefined}>
               <span className="check" aria-hidden="true">
@@ -195,6 +272,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
               <span>
                 <span className="label">{it.label}</span>
                 <span className="sr-only">{it.ok ? " (met)" : it.state === "blocked" ? " (blocked)" : " (waiting)"}</span>
+                {it.advisory && <span className="muted"> (shown for you; your own merge does not wait for it)</span>}
                 <div className="detail muted">{it.detail}</div>
               </span>
             </li>
@@ -212,7 +290,48 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
               if (confirm(`Merge PR #${pr.number} at ${h12} into ${pr.base}? It merges only once GitHub's required checks and rules pass for that commit.`)) void send("requestPrMerge", { taskId: task.id, headSha: pr.headSha });
             }}
           >
-            Merge {h12}
+            {refused ? `Try merging ${h12} again` : auto ? `Merge ${h12} myself` : `Merge ${h12}`}
+          </button>
+        )}
+        {live && prOn && !elsewhere && !pr.foreignHead && !pr.closeRequested && (auto ? (
+          <button disabled={disabled} onClick={() => void send("setPrPolicy", { taskId: task.id, policy: "hold" })}>
+            Hold this one for me
+          </button>
+        ) : (
+          <button
+            disabled={disabled}
+            title="Only chooses who merges: the same checks still have to pass for this exact commit"
+            onClick={() => {
+              if (
+                confirm(
+                  `Let PR ${pr.number ? `#${pr.number}` : "for this task"} merge by itself? It merges only when an independent review is clean for exactly this change, every required check passed on its head, GitHub reports it mergeable, and it touches no protected file. The app never bypasses branch rules. Not verified against GitHub yet.`,
+                )
+              )
+                void send("setPrPolicy", { taskId: task.id, policy: "auto" });
+            }}
+          >
+            Merge this one automatically
+          </button>
+        ))}
+        {live && pr.policySource === "user" && pr.policy !== cfg.merge && (
+          <button disabled={disabled} onClick={() => void send("setPrPolicy", { taskId: task.id, policy: null })}>
+            Follow the project setting
+          </button>
+        )}
+        {canFix && (
+          <button
+            disabled={disabled}
+            title="One fix task; its result is pushed onto this pull request and reviewed again"
+            onClick={() => {
+              if (confirm(`Create a fix task for ${causeText}? An agent works on top of ${h12}; its result is pushed onto this pull request and reviewed again. ${pr.counters.repairs} of ${D.PR_LIMITS.repairs} fix tasks used.`)) void send("repairPr", { taskId: task.id });
+            }}
+          >
+            Fix this PR
+          </button>
+        )}
+        {canAskReview && (
+          <button disabled={disabled} title="One dedicated review task for the change this pull request holds now" onClick={() => void send("requestPrReview", { taskId: task.id })}>
+            Ask for a review
           </button>
         )}
         {live && (pr.userHold ? (
@@ -244,9 +363,13 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
             {pr.phase === "open" ? "Close pull request" : "Abandon delivery"}
           </button>
         )}
-        {pr.phase === "closed" && prOn && (
-          <button disabled={disabled} onClick={() => void send("redeliver", { taskIds: [task.id] })}>
-            Deliver again
+        {pr.phase === "closed" && !integration.landed && (
+          <button
+            disabled={disabled}
+            title={prOn ? "Opens a new pull request; the closed one is never reopened" : "Pull-request delivery is off: the work goes through the current delivery mode instead"}
+            onClick={() => void send("redeliver", { taskIds: [task.id] })}
+          >
+            {prOn ? "Deliver again" : "Deliver through the current mode"}
           </button>
         )}
         {live && !pr.simulated && (
@@ -312,7 +435,10 @@ export function LandedSection({ state, task }: { state: State; task: Task }) {
   const [note, setNote] = useState("");
   const [post, setPost] = useState(false);
   if (!landed) return null;
-  const canPost = landed.via === "pr" && !!landed.pr && !landed.simulated;
+  // Offered only when the note would really be posted: never left "waiting" for a post that cannot happen.
+  const postBlocked = D.cannotPostNote(state, task);
+  const canPost = !postBlocked;
+  const couldPost = landed.via === "pr" && !!landed.pr && !landed.simulated;
   const spec = M.currentSpec(task).content;
   const reviews = D.landedReviews(state, task);
   const change = M.finalChange(state, task);
@@ -425,7 +551,7 @@ export function LandedSection({ state, task }: { state: State; task: Task }) {
               </span>
               {n.comment && (
                 <span className={n.comment.status === "failed" ? "chip danger" : "chip"} style={{ marginLeft: "0.4rem" }} title={n.comment.error}>
-                  {n.comment.status === "posted" ? "posted on GitHub" : n.comment.status === "pending" ? "waiting to post on GitHub" : "not posted on GitHub"}
+                  {n.comment.status === "posted" ? "posted on GitHub" : n.comment.status === "pending" ? (postBlocked ? "not posted: pull-request delivery is off" : "waiting to post on GitHub") : "not posted on GitHub"}
                 </span>
               )}
               {n.comment?.status === "posted" && n.comment.url?.startsWith("https://github.com/") && (
@@ -462,10 +588,11 @@ export function LandedSection({ state, task }: { state: State; task: Task }) {
             <span>Add a note</span>
             <textarea value={note} maxLength={D.MAX_NOTE_CHARS} onChange={(e) => setNote(e.target.value)} style={{ minHeight: "3rem" }} />
           </label>
-          {canPost && (
+          {couldPost && (
             <label style={{ display: "block", marginBottom: "0.4rem" }}>
-              <input type="checkbox" checked={post} onChange={(e) => setPost(e.target.checked)} /> Also post this note as a comment on PR #{landed.pr!.number}, under your GitHub account (public if the repository is
+              <input type="checkbox" checked={canPost && post} disabled={!canPost} onChange={(e) => setPost(e.target.checked)} /> Also post this note as a comment on PR #{landed.pr!.number}, under your GitHub account (public if the repository is
               public)
+              {!canPost && <span className="muted"> Not available now: {postBlocked}</span>}
             </label>
           )}
           <button type="submit" className="small" disabled={disabled || !note.trim()}>

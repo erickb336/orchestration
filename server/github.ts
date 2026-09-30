@@ -56,6 +56,8 @@ export interface GitHubHost {
   findComment(a: { repo: RepoRef; number: number; marker: string }): Promise<{ url: string } | undefined>;
   comment(a: { repo: RepoRef; number: number; body: string }): Promise<{ url: string }>;
   close(a: { repo: RepoRef; number: number; comment: string }): Promise<void>;
+  /** Simulated hosts only (no git runs there): the pull request's branch now holds this commit. */
+  pushed?(a: { repo: RepoRef; number: number; headSha: string }): void;
   abortAll(): void;
 }
 
@@ -86,12 +88,28 @@ const atLeast = (v: [number, number, number], major: number, minor: number) => v
 /** Arguments the app never passes to gh. Checked before every spawn. */
 const FORBIDDEN_ARGS = new Set(["--admin", "--auto", "-d", "--delete-branch", "--force", "--show-token", "--disable-auto", "--squash", "--rebase", "-s", "-r"]);
 
+/**
+ * The part of a request body that GitHub executes: the GraphQL query. A REST body (a comment's text,
+ * for example) is data and is not scanned, so a note that mentions a mutation by name can be posted.
+ */
+function executable(args: string[], stdin: string): string {
+  if (args[1] !== "graphql") return "";
+  try {
+    const doc = JSON.parse(stdin) as { query?: unknown };
+    if (doc && typeof doc === "object" && typeof doc.query === "string") return doc.query;
+  } catch {
+    /* not JSON: the whole body is treated as the query */
+  }
+  return stdin;
+}
+
 /** Throws when a gh invocation could bypass rules, force, delete a branch, merge by API, or reveal a token. */
 export function assertAllowedGh(args: string[], stdin = "") {
   for (const a of args) if (FORBIDDEN_ARGS.has(a)) throw new GhError("rejected", `refusing to run gh with ${a}`);
   if (args[0] === "auth") throw new GhError("rejected", "refusing to run gh auth: the app never reads or changes the sign-in");
   if (args[0] === "api") {
-    const text = `${args.join(" ")} ${stdin}`;
+    // Only the endpoint and the query are scanned, never the text of a body.
+    const text = `${args.join(" ")} ${executable(args, stdin)}`;
     if (/\/pulls\/\d+\/merge\b/.test(text) || /\/merges\b/.test(text)) throw new GhError("rejected", "refusing to call a GitHub merge endpoint");
     if (/mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|deleteRef|updateRef/.test(text)) throw new GhError("rejected", "refusing to send a merge or ref mutation");
     const x = args.indexOf("-X") >= 0 ? args[args.indexOf("-X") + 1] : args.indexOf("--method") >= 0 ? args[args.indexOf("--method") + 1] : undefined;
@@ -102,7 +120,11 @@ export function assertAllowedGh(args: string[], stdin = "") {
 
 /** Redacted, last two lines, at most 300 characters: the only form in which child output is kept. */
 export function shortError(stderr: string): string {
-  return redact(stderr).trim().split("\n").map((l) => l.trim()).filter(Boolean).slice(-2).join(" ").slice(0, 300);
+  const lines = redact(stderr).trim().split("\n").map((l) => l.trim()).filter(Boolean);
+  // gh's own hints ("use --auto", "use --admin") name ways around the rules the app never takes: they
+  // are not the problem, and are never shown as one.
+  const real = lines.filter((l) => !/--auto\b|--admin\b|--disable-auto\b/.test(l));
+  return (real.length ? real : lines.length ? ["GitHub refused the request."] : []).slice(-2).join(" ").slice(0, 300);
 }
 
 /** What kind of failure a gh (or git) exit was. The message is already redacted and cut. */
@@ -130,14 +152,24 @@ interface RollupNode {
   isRequired?: boolean;
 }
 
-/** One rollup → checks, one per name (the newest wins). No rollup at all means nothing has reported. */
+/**
+ * One rollup → checks, one per name. When a name reports more than once, the worst wins: anything
+ * that is not a success beats a run that is still going, which beats a success. A passing run never
+ * hides a failing one of the same name. No rollup at all means nothing has reported.
+ */
 export function parseChecks(rollup: { contexts?: { nodes?: RollupNode[] } } | null | undefined): CheckObs[] {
   const out = new Map<string, CheckObs>();
+  const rank = (c: CheckObs) => (c.conclusion === null ? 1 : c.conclusion === "SUCCESS" ? 0 : 2);
+  const put = (c: CheckObs) => {
+    const prev = out.get(c.name);
+    if (!prev || rank(c) >= rank(prev)) out.set(c.name, { ...c, required: c.required || !!prev?.required });
+    else if (c.required) prev.required = true;
+  };
   for (const n of rollup?.contexts?.nodes ?? []) {
     if (n.__typename === "StatusContext" || n.context !== undefined) {
       const done = n.state === "SUCCESS" || n.state === "FAILURE" || n.state === "ERROR";
-      out.set(n.context ?? "", { name: n.context ?? "", required: !!n.isRequired, status: done ? "COMPLETED" : "PENDING", conclusion: done ? n.state! : null, ...(n.targetUrl ? { url: n.targetUrl } : {}) });
-    } else out.set(n.name ?? "", { name: n.name ?? "", required: !!n.isRequired, status: n.status ?? "PENDING", conclusion: n.conclusion ?? null, ...(n.detailsUrl ? { url: n.detailsUrl } : {}) });
+      put({ name: n.context ?? "", required: !!n.isRequired, status: done ? "COMPLETED" : "PENDING", conclusion: done ? n.state! : null, ...(n.targetUrl ? { url: n.targetUrl } : {}) });
+    } else put({ name: n.name ?? "", required: !!n.isRequired, status: n.status ?? "PENDING", conclusion: n.conclusion ?? null, ...(n.detailsUrl ? { url: n.detailsUrl } : {}) });
   }
   out.delete("");
   return [...out.values()];
@@ -406,16 +438,34 @@ export class GhCliHost implements GitHubHost {
       if (g && (g.code === "auth" || g.code === "rate-limit" || g.code === "network" || g.code === "timeout")) return fail(e, "reading the branch protection");
       // 404: the branch has no classic protection. 403: this account cannot read it.
     }
-    let bypass: string | undefined;
+    // Approvals required by classic branch protection count like the ones a ruleset requires.
     try {
-      const ids = (await this.gh(["api", `repos/${slug}/rulesets`, "--jq", ".[].id"])).split("\n").map((x) => x.trim()).filter((x) => /^\d+$/.test(x)).slice(0, 10);
-      for (const id of ids) {
-        const rs = (await this.json(["api", `repos/${slug}/rulesets/${id}`, "--jq", "{name,enforcement,current_user_can_bypass}"])) as { name?: string; enforcement?: string; current_user_can_bypass?: string };
-        if (rs.enforcement === "active" && rs.current_user_can_bypass && rs.current_user_can_bypass !== "never") bypass = `${rs.name ?? id} (${rs.current_user_can_bypass})`;
+      const n = Number((await this.gh(["api", `repos/${slug}/branches/${base}/protection/required_pull_request_reviews`, "--jq", ".required_approving_review_count"])).trim());
+      if (Number.isInteger(n) && n > 0) {
+        prRequired = true;
+        approvals = Math.max(approvals, n);
       }
     } catch (e) {
       const g = e instanceof GhError ? e : undefined;
+      if (g && (g.code === "auth" || g.code === "rate-limit" || g.code === "network" || g.code === "timeout")) return fail(e, "reading the branch protection");
+    }
+    let bypass: string | undefined;
+    let ids: string[] = [];
+    try {
+      ids = (await this.gh(["api", `repos/${slug}/rulesets`, "--jq", ".[].id"])).split("\n").map((x) => x.trim()).filter((x) => /^\d+$/.test(x)).slice(0, 10);
+    } catch (e) {
+      const g = e instanceof GhError ? e : undefined;
       if (g && (g.code === "auth" || g.code === "rate-limit" || g.code === "network" || g.code === "timeout")) return fail(e, "reading the rulesets");
+    }
+    for (const id of ids) {
+      // One ruleset that cannot be read (deleted meanwhile, or not visible) does not hide the others.
+      try {
+        const rs = (await this.json(["api", `repos/${slug}/rulesets/${id}`, "--jq", "{name,enforcement,current_user_can_bypass}"])) as { name?: string; enforcement?: string; current_user_can_bypass?: string };
+        if (rs.enforcement === "active" && rs.current_user_can_bypass && rs.current_user_can_bypass !== "never") bypass = `${rs.name ?? id} (${rs.current_user_can_bypass})`;
+      } catch (e) {
+        const g = e instanceof GhError ? e : undefined;
+        if (g && (g.code === "auth" || g.code === "rate-limit" || g.code === "network" || g.code === "timeout")) return fail(e, "reading the rulesets");
+      }
     }
 
     const requiredChecks = [...required].sort();
@@ -435,7 +485,7 @@ export class GhCliHost implements GitHubHost {
     if (approvals > 0) item("approvals", "warn", `${approvals} approving review${approvals === 1 ? "" : "s"} required`, "GitHub will not merge a pull request until a person approves it. The app cannot approve; it holds the pull request and says so.");
     item("merge-commits", facts.mergeCommit ? "ok" : "fail", facts.mergeCommit ? "Merge commits are allowed" : "Merge commits are not allowed", facts.mergeCommit ? "The app merges with a merge commit, so each task has one commit to show and to revert." : "The app merges only with merge commits. Allow them in the repository settings, or merge on GitHub.");
     item("delete-on-merge", "ok", facts.deleteOnMerge ? "Branches are deleted on merge" : "Branches are kept after a merge", "The app never deletes a branch itself.");
-    if (mergeQueue) item("merge-queue", "fail", "A merge queue is required", "A merge queue is not supported: the app cannot merge here. Merge on GitHub.");
+    if (mergeQueue) item("merge-queue", "fail", "A merge queue is required", "A merge queue is not supported: a merge from the app would enqueue the pull request or switch on GitHub's own auto-merge, which the app never uses. It merges nothing here, by itself or at your click. Merge on GitHub.");
     if (facts.private === false) item("public", "warn", "This repository is public", "This repository is public: PR titles, descriptions and review summaries are public.");
 
     const autoMergeBlockers = [
@@ -444,7 +494,7 @@ export class GhCliHost implements GitHubHost {
       ...(facts.mergeCommit ? [] : ["merge commits are not allowed"]),
       ...(approvals > 0 ? [`${approvals} approving review(s) required`] : []),
     ];
-    return { ok: true, repo: slug, login, ghVersion, requiredChecks, autoMergeBlockers, posture };
+    return { ok: true, repo: slug, login, ghVersion, requiredChecks, autoMergeBlockers, posture, ...(mergeQueue ? { mergeQueue: true } : {}), ...(facts.mergeCommit ? {} : { mergeCommitsAllowed: false }) };
   }
 
   async findPr(a: { repo: RepoRef; head: string; marker: string }): Promise<{ number: number; url: string } | undefined> {
@@ -633,6 +683,11 @@ export class SimulatedGitHub implements GitHubHost {
 
   protected mergeCommitFor(p: SimPr): string {
     return `sim-merge-${p.number}`;
+  }
+
+  pushed(a: { repo: RepoRef; number: number; headSha: string }): void {
+    const p = this.prs.get(a.number);
+    if (p) p.headSha = a.headSha;
   }
 
   async merge(a: { repo: RepoRef; number: number; headSha: string; subject: string; body: string }): Promise<void> {

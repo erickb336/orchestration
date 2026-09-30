@@ -29,7 +29,8 @@ export function Overview() {
   const unreviewed = D.unreviewedCount(state);
   const nowMs = Date.now();
   const gh = state.project.github;
-  const prNeeds = D.trackedPrTasks(state).filter((t) => t.integration!.pr!.attention || D.prReady(state, t, nowMs));
+  // A pull request the app is already fixing does not wait for you.
+  const prNeeds = D.trackedPrTasks(state).filter((t) => (t.integration!.pr!.attention && !D.openRepair(state, t.integration!.pr!)) || D.prReady(state, t, nowMs));
   const flagged = D.landedTasks(state).filter((t) => t.integration!.landed!.status === "unreviewed" && t.integration!.landed!.flags.length > 0);
   const ghProblem = gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0) ? gh.problem : undefined;
   const outcomes = state.tasks.filter((t) => t.lifecycle === "done").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
@@ -158,7 +159,8 @@ export function Overview() {
                 )}
                 {gh?.autoMergePaused && (
                   <li>
-                    <span className="chip danger">paused</span> Automatic merging is paused: {gh.autoMergePaused.reason}
+                    <span className="chip danger">paused</span> Automatic merging is paused: {gh.autoMergePaused.reason}. {gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}{" "}
+                    <a href="#/review">Review</a>
                   </li>
                 )}
                 {prNeeds.map((t) => (
@@ -292,7 +294,7 @@ function ModeSummary({ state }: { state: State }) {
   switch (mode) {
     case "autopilot":
       pill = "Autopilot on";
-      text = prMode ? `opening verified work as GitHub pull requests into ${pr.remote}/${pr.base}, held for you to merge` : `delivering verified work to ${a.autoDeliver.branch}`;
+      text = prMode ? `opening verified work as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "held for you to merge"}` : `delivering verified work to ${a.autoDeliver.branch}`;
       break;
     case "checkin":
       pill = "Check-in";
@@ -308,7 +310,7 @@ function ModeSummary({ state }: { state: State }) {
   }
   // Manual and check-in say nothing about delivery by themselves: name the mode when it is on.
   if (mode === "manual" || mode === "checkin") {
-    if (prMode) text += `; finished work is opened as GitHub pull requests into ${pr.remote}/${pr.base}, held for you`;
+    if (prMode) text += `; finished work is opened as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "held for you"}`;
     else if (a.autoDeliver.enabled) text += `; finished work is delivered to ${a.autoDeliver.branch}`;
   }
   return (

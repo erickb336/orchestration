@@ -65,13 +65,23 @@ export function assertSafePush(args: string[]) {
   const i = args.indexOf("push");
   if (i < 0) throw new Error("not a push");
   const rest = args.slice(i + 1);
-  for (const a of rest) if (FORBIDDEN_PUSH.has(a) || a.startsWith("--force") || a.startsWith("--delete") || a.startsWith("--mirror")) throw new Error(`refusing to run git push with ${a}`);
+  for (const a of rest) if (FORBIDDEN_PUSH.has(a) || a.startsWith("--force") || a.startsWith("--delete") || a.startsWith("--mirror") || a === "--follow-tags" || a.startsWith("--recurse-submodules")) throw new Error(`refusing to run git push with ${a}`);
+  // Nothing after the options may be read as one: the remote's name never starts with "-".
+  const eoo = rest.indexOf("--end-of-options");
+  const ALLOWED = new Set(["--porcelain", "--no-verify", "--no-follow-tags", "--no-recurse-submodules", "--quiet", "-q", "--end-of-options"]);
+  for (const a of eoo >= 0 ? rest.slice(0, eoo) : rest) if (a.startsWith("-") && !ALLOWED.has(a)) throw new Error(`refusing to run git push with ${a}`);
+  const positional = eoo >= 0 ? rest.slice(eoo + 1) : rest.filter((a) => !a.startsWith("-"));
+  if (eoo >= 0 && positional.length !== 2) throw new Error("refusing to run git push with anything but a remote and one refspec");
+  if (positional.some((a) => !a.includes(":") && !/^[A-Za-z0-9._][A-Za-z0-9._-]{0,99}$/.test(a))) throw new Error("refusing to run git push to a remote with that name");
   const refspecs = rest.filter((a) => a.includes(":"));
   if (refspecs.length !== 1) throw new Error("refusing to run git push without exactly one refspec");
   const [src, dst] = refspecs[0].split(":");
   if (src.startsWith("+") || !/^[0-9a-f]{40,64}$/.test(src)) throw new Error("refusing to push anything but one commit, without force");
   if (!PR_BRANCH_REF.test(dst)) throw new Error(`refusing to push to ${dst}: not one of the app's pull-request branches`);
 }
+
+/** Largest diff handed to a reviewer in its assignment. */
+export const MAX_REVIEW_DIFF_BYTES = 60 * 1024;
 
 /** Largest diff returned to the changes viewer. */
 export const MAX_CHANGE_DIFF_BYTES = 512 * 1024;
@@ -700,7 +710,26 @@ export class WorkspaceManager {
     const remote = await this.lsRemote(o);
     if (remote === o.sha) return "already";
     if (remote && this.status(["-C", repo, "merge-base", "--is-ancestor", remote, o.sha]).status !== 0) return "diverged";
-    const args = ["-C", repo, "push", "--porcelain", "--no-verify", o.remote, `${o.sha}:${dst}`];
+    // Exactly one ref is published, whatever the user's git configuration says: no tags that happen to
+    // be reachable (push.followTags), no submodules (push.recurseSubmodules), no signing prompt.
+    const args = [
+      "-c",
+      "push.followTags=false",
+      "-c",
+      "push.recurseSubmodules=no",
+      "-c",
+      "push.gpgSign=false",
+      "-C",
+      repo,
+      "push",
+      "--porcelain",
+      "--no-verify",
+      "--no-follow-tags",
+      "--no-recurse-submodules",
+      "--end-of-options",
+      o.remote,
+      `${o.sha}:${dst}`,
+    ];
     assertSafePush(args);
     await this.runAsync(args, this.remoteUrl(o.repoPath, o.remote));
     return "pushed";
@@ -710,7 +739,7 @@ export class WorkspaceManager {
    * Prepare a finished task's final commit as a pull-request head. Local and synchronous; nothing is
    * pushed. The head is the task's commit itself: it is only checked, measured and pinned.
    */
-  preparePrHead(o: { repoPath: string; projectId: string; taskId: string; n: number; baseRef: string; sha: string; protectedPaths: string[] }): PrHeadResult {
+  preparePrHead(o: { repoPath: string; projectId: string; taskId: string; n: number; baseRef: string; sha: string; protectedPaths: string[]; skipConflictCheck?: boolean }): PrHeadResult {
     const check = this.check(o.repoPath);
     if (!check.ok) throw new Error(check.reason);
     const repo = this.repoDir(o.repoPath);
@@ -732,7 +761,8 @@ export class WorkspaceManager {
       return { status: "conflict", message: `contains ${foreign.length} commit(s) not made by Orchestration (authors: ${authors}); nothing was pushed` };
     }
     // Conflict pre-check against the base, without touching any worktree.
-    const mt = this.status(["-C", repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", base, sha]);
+    // A fix for an open pull request skips this: a conflict with the base is then the pull request's own state.
+    const mt = o.skipConflictCheck ? { status: 0, stdout: "" } : this.status(["-C", repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", base, sha]);
     if (mt.status === 1) {
       const files = mt.stdout.split("\n").slice(1).filter(Boolean).slice(0, 20);
       return { status: "conflict", message: `conflicts with the base in ${files.join(", ") || "one or more files"}` };
@@ -767,6 +797,103 @@ export class WorkspaceManager {
     // Pin the head so the object survives garbage collection.
     this.git(repo, ["update-ref", `refs/orchestration/${branch.slice("orchestration/".length)}`, sha]);
     return { status: "ready", sha, baseSha: mergeBase, branch, changed };
+  }
+
+  /** Does `sha` contain `ancestor`? Local and read-only. */
+  isAncestor(o: { repoPath: string; ancestor: string; sha: string }): boolean {
+    if (!/^[0-9a-f]{7,64}$/.test(o.ancestor) || !/^[0-9a-f]{7,64}$/.test(o.sha)) return false;
+    return this.status(["-C", this.repoDir(o.repoPath), "merge-base", "--is-ancestor", o.ancestor, o.sha]).status === 0;
+  }
+
+  /**
+   * Bring a pull-request head up to date with the base: a two-parent merge commit made by
+   * Orchestration, the old head first, so pushing it is a plain fast-forward. Local and synchronous;
+   * no worktree is touched and nothing is pushed. A base that does not merge cleanly is reported with
+   * its files and changes nothing. Repeating it for the same head and base returns the same commit.
+   */
+  baseUpdate(o: { repoPath: string; projectId: string; taskId: string; n: number; base: string; headSha: string; baseSha: string }): { status: "updated"; sha: string } | { status: "conflict"; files: string[] } {
+    const check = this.check(o.repoPath);
+    if (!check.ok) throw new Error(check.reason);
+    const repo = this.repoDir(o.repoPath);
+    const hex = /^[0-9a-f]{40,64}$/;
+    if (!hex.test(o.headSha) || !hex.test(o.baseSha)) throw new Error("a base update needs two full commit ids");
+    const branch = prBranch(o.projectId, o.taskId, o.n);
+    if (!PR_BRANCH_REF.test(`refs/heads/${branch}`)) throw new Error(`${branch} is not a valid pull-request branch name`);
+    const pin = `refs/orchestration/${branch.slice("orchestration/".length)}`;
+    for (const c of [o.headSha, o.baseSha]) {
+      if (this.status(["-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", `${c}^{commit}`]).status !== 0) throw new Error(`commit ${c.slice(0, 12)} is no longer in the repository`);
+    }
+    if (this.status(["-C", repo, "merge-base", "--is-ancestor", o.baseSha, o.headSha]).status === 0) return { status: "updated", sha: o.headSha };
+    // An earlier, interrupted attempt may already have made this exact merge: use it, do not make another.
+    const pinned = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", `${pin}^{commit}`]);
+    if (pinned.status === 0) {
+      const sha = pinned.stdout.trim();
+      const parents = this.git(repo, ["rev-list", "--parents", "-n", "1", sha]).split(" ").slice(1);
+      const author = this.git(repo, ["log", "-1", "--format=%an%x00%ae", sha]);
+      if (parents.length === 2 && parents[0] === o.headSha && parents[1] === o.baseSha && author === ORCHESTRATION_AUTHOR) return { status: "updated", sha };
+    }
+    const mt = this.status(["-C", repo, "merge-tree", "--write-tree", "--name-only", "--no-messages", o.headSha, o.baseSha]);
+    if (mt.status === 1) return { status: "conflict", files: mt.stdout.split("\n").slice(1).filter(Boolean).slice(0, 20) };
+    const tree = mt.stdout.split("\n")[0].trim();
+    if (mt.status !== 0 || !hex.test(tree)) throw new Error("could not merge the base into the pull request head");
+    const sha = this.run(["-C", repo, "-c", "user.name=Orchestration", "-c", "user.email=orchestration@localhost", "commit-tree", tree, "-p", o.headSha, "-p", o.baseSha, "-m", `Merge ${o.base} into ${branch}`]);
+    if (!hex.test(sha)) throw new Error("could not record the merge of the base");
+    this.git(repo, ["update-ref", pin, sha]);
+    return { status: "updated", sha };
+  }
+
+  /**
+   * The changed lines a reviewer is handed: a stat and a patch from the base the change contains to
+   * the change, cut at MAX_REVIEW_DIFF_BYTES with the list of all changed files. `from` is a commit on
+   * the base branch (the fork point is worked out from it); without it, `baseRef` (default HEAD) is
+   * used. Read-only. Undefined when a commit is missing.
+   */
+  reviewDiff(o: { repoPath: string; to: string; from?: string; baseRef?: string }): { from: string; to: string; text: string; truncated: boolean } | undefined {
+    if (!this.check(o.repoPath).ok) return undefined;
+    const repo = this.repoDir(o.repoPath);
+    const rev = (r: string) => {
+      const x = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", `${r}^{commit}`]);
+      return x.status === 0 ? x.stdout.trim() : undefined;
+    };
+    const to = rev(o.to);
+    const against = rev(o.from ?? o.baseRef ?? "HEAD");
+    if (!to || !against) return undefined;
+    const mb = this.status(["-C", repo, "merge-base", against, to]);
+    const from = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : against;
+    const base = [...this.safeFlags(), "-C", repo, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M"];
+    const names = spawnSync(this.gitBin, [...base, "--name-only", from, to], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: 8 * 1024 * 1024, timeout: this.changeDiffTimeoutMs });
+    if (names.error || names.status !== 0) return undefined;
+    const files = names.stdout.split("\n").filter(Boolean);
+    const r = spawnSync(this.gitBin, [...base, "--stat", "--patch", from, to], { env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_REVIEW_DIFF_BYTES + 4096, timeout: this.changeDiffTimeoutMs });
+    const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
+    const over = code === "ENOBUFS" || code === "ETIMEDOUT";
+    if (!over && (r.error || r.status !== 0)) return undefined;
+    const out = r.stdout ?? Buffer.alloc(0);
+    if (!over && out.length <= MAX_REVIEW_DIFF_BYTES) return { from, to, text: out.toString("utf8"), truncated: false };
+    const cut = out.subarray(0, MAX_REVIEW_DIFF_BYTES);
+    const nl = cut.lastIndexOf(10);
+    const shown = cut.subarray(0, nl > 0 ? nl + 1 : cut.length).toString("utf8");
+    // Every file whose patch started is counted as shown, except the last, which was cut.
+    const started = (shown.match(/^diff --git /gm) ?? []).length;
+    const missing = Math.max(1, files.length - Math.max(0, started - 1));
+    const list = files.slice(0, 200).map((f) => `- ${f}`).join("\n");
+    return { from, to, truncated: true, text: `${shown}\n[truncated; ${missing} of ${files.length} files not shown in full. Read them in the workspace. All changed files:]\n${list}${files.length > 200 ? `\n- and ${files.length - 200} more` : ""}\n` };
+  }
+
+  /**
+   * Orchestration's own commits on a local branch that the fetched base does not have (local delivery
+   * put them there). Read-only; the app never pushes them. Undefined when the branch or the fetched
+   * base is not there.
+   */
+  unpushedOrchestration(o: { repoPath: string; projectId: string; branch: string }): number | undefined {
+    if (!/^[A-Za-z0-9._][A-Za-z0-9._/-]{0,99}$/.test(o.branch)) return undefined;
+    const repo = this.repoDir(o.repoPath);
+    const base = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", `${this.baseRef(o.projectId)}^{commit}`]);
+    const local = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", `refs/heads/${o.branch}^{commit}`]);
+    if (base.status !== 0 || local.status !== 0) return undefined;
+    const log = this.status(["-C", repo, "log", "--format=%an%x00%ae", "--end-of-options", `${base.stdout.trim()}..${local.stdout.trim()}`]);
+    if (log.status !== 0) return undefined;
+    return log.stdout.split("\n").filter((l) => l === ORCHESTRATION_AUTHOR).length;
   }
 
   /** Remove one run's worktree (and private temp dir). Its branch, if any, is kept. */

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { buildSeed } from "../domain/seed";
+import { reviewedChange } from "../domain/testing/reviewed";
 import type { State } from "../domain/types";
 import { detectEvents } from "./notifications";
 
@@ -87,6 +88,8 @@ describe("notifications: pull requests", () => {
     let s = D.setDeliveryMode(buildSeed(T0, { inFlightRuns: false }), { mode: "pr" }, at(0));
     s.attempts = [];
     s = D.reportBaseFetched(D.reportPreflight(s, { ok: true, repo: "o/r", requiredChecks: ["check"], autoMergeBlockers: [], posture: [] }, at(1)), SHA_A, at(2));
+    // Its own pipeline reviewed exactly this change, clean, on the other provider.
+    s = reviewedChange(s, "EX-006", HEAD, at(2));
     task(s, "EX-006").integration = { status: "pending" };
     s = D.reportPrHead(s, "EX-006", { n: 1, sha: HEAD, baseSha: SHA_A, changed: { files: 1, additions: 1, deletions: 0, paths: ["a"], protectedHits: [], workflowHits: [] } }, at(3));
     const op = D.nextPrOp(s, T0 + 10_000)!;
@@ -132,5 +135,18 @@ describe("notifications: pull requests", () => {
     expect(prEvents(s0, down)).toEqual([expect.objectContaining({ key: `github:auth:${at(30)}`, title: "GitHub delivery stopped: sign-in needed" })]);
     const still = D.reportPreflight(down, { ok: false, problem: { code: "auth", message: "sign in" }, requiredChecks: [], autoMergeBlockers: [], posture: [] }, at(400));
     expect(prEvents(down, still)).toEqual([]);
+  });
+
+  it("automatic merging paused fires once, keyed on when the pause began", () => {
+    const merged = see(open(), 140, { state: "MERGED", mergeCommit: "d".repeat(40), mergedBy: "octocat" });
+    const paused = structuredClone(merged);
+    paused.project.github!.autoMergePaused = { since: at(200), reason: "the check on o/r main is failing after PR #7", sticky: false, taskId: "EX-006" };
+    const keys = (a: State, b: State) => detectEvents(a, b).filter((e) => e.key.startsWith("auto-merge-paused")).map((e) => e.key);
+    expect(keys(merged, paused)).toEqual([`auto-merge-paused:${at(200)}`]);
+    expect(keys(paused, M.markVisited(paused, at(201)))).toEqual([]);
+    const sticky = structuredClone(paused);
+    sticky.project.github!.autoMergePaused = { since: at(400), reason: "again", sticky: true };
+    expect(keys(paused, sticky)).toEqual([`auto-merge-paused:${at(400)}`]);
+    expect(detectEvents(merged, paused).find((e) => e.key.startsWith("auto-merge-paused"))).toMatchObject({ title: "Automatic merging is paused", taskId: "EX-006" });
   });
 });

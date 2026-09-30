@@ -321,7 +321,8 @@ function InvolvementCard() {
             <li>A failed step is retried once automatically before it waits for you.</li>
             {prMode ? (
               <li>
-                Verified work is opened as a GitHub pull request and held for you to merge. Autopilot does not merge anything and does not change the <a href="#delivery">delivery mode</a>.
+                Verified work is opened as a GitHub pull request and {state.project.prDelivery.merge === "auto" ? "merged automatically after an independent review and passing required checks, as you chose in Delivery" : "held for you to merge"}. Autopilot itself never
+                turns on publishing or automatic merging and does not change the <a href="#delivery">delivery mode</a>.
               </li>
             ) : (
               <li>
@@ -488,7 +489,7 @@ function AutonomyCard() {
           </label>
           <div className="field">
             <span style={{ fontWeight: 400 }}>
-              Delivery: <strong>{deliveryMode === "local" ? `local branch ${a.autoDeliver.branch}` : deliveryMode === "pr" ? "GitHub pull requests, held for you" : "off"}</strong>. <a href="#delivery">Change it in Delivery</a>.
+              Delivery: <strong>{deliveryMode === "local" ? `local branch ${a.autoDeliver.branch}` : deliveryMode === "pr" ? (state.project.prDelivery.merge === "auto" ? "GitHub pull requests, merged automatically after review and checks" : "GitHub pull requests, held for you") : "off"}</strong>. <a href="#delivery">Change it in Delivery</a>.
             </span>
           </div>
           <button type="submit" disabled={!changed}>

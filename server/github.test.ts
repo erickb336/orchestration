@@ -77,6 +77,7 @@ const PREFLIGHT: Rule[] = [
   { match: "api user", stdout: "octocat\n" },
   { match: "rules/branches/main", stdout: JSON.stringify([{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "check" }] } }, { type: "pull_request", parameters: { required_approving_review_count: 0, require_extra_approval_for_unattributed_changes: true } }]) },
   { match: "protection/required_status_checks", stderr: "gh: Not Found (HTTP 404)\n", code: 1 },
+  { match: "protection/required_pull_request_reviews", stderr: "gh: Not Found (HTTP 404)\n", code: 1 },
   { match: "rulesets/24227602", stdout: JSON.stringify({ name: "Protect main", enforcement: "active", current_user_can_bypass: "always" }) },
   { match: "rulesets", stdout: "24227602\n" },
   { match: "api repos/octo/app", stdout: JSON.stringify({ push: true, admin: true, archived: false, mergeCommit: true, autoMerge: false, deleteOnMerge: true, private: false }) },
@@ -186,13 +187,14 @@ describe("preflight (read-only)", () => {
       expect(["--version", "api"]).toContain(c.argv[0]);
       expect(c.stdin).toBe("");
     }
-    expect(calls().map((c) => c.argv[1]).filter(Boolean)).toEqual(["user", "repos/octo/app", "repos/octo/app/rules/branches/main", "repos/octo/app/branches/main/protection/required_status_checks", "repos/octo/app/rulesets", "repos/octo/app/rulesets/24227602"]);
+    expect(calls().map((c) => c.argv[1]).filter(Boolean)).toEqual(["user", "repos/octo/app", "repos/octo/app/rules/branches/main", "repos/octo/app/branches/main/protection/required_status_checks", "repos/octo/app/branches/main/protection/required_pull_request_reviews", "repos/octo/app/rulesets", "repos/octo/app/rulesets/24227602"]);
   });
 
   it("no required check, a merge queue and required approvals are reported as reasons automatic merging is unavailable", async () => {
     rules([
       { match: "rules/branches/main", stdout: JSON.stringify([{ type: "merge_queue", parameters: {} }, { type: "pull_request", parameters: { required_approving_review_count: 2 } }]) },
       { match: "protection/required_status_checks", stderr: "gh: Not Found (HTTP 404)\n", code: 1 },
+  { match: "protection/required_pull_request_reviews", stderr: "gh: Not Found (HTTP 404)\n", code: 1 },
       { match: "rulesets", stdout: "" },
       { match: "api repos/octo/app", stdout: JSON.stringify({ push: true, archived: false, mergeCommit: false, autoMerge: true, deleteOnMerge: false, private: true }) },
       ...PREFLIGHT.slice(0, 2),
@@ -202,6 +204,30 @@ describe("preflight (read-only)", () => {
     expect(r.requiredChecks).toEqual([]);
     expect(r.autoMergeBlockers).toEqual(["no required check", "a merge queue is required", "merge commits are not allowed", "2 approving review(s) required"]);
     expect(r.posture.find((x) => x.id === "required-checks")).toMatchObject({ status: "fail" });
+    // M1: kept as facts, so the gate can refuse a merge for the user's path too (gh would enqueue it).
+    expect(r).toMatchObject({ mergeQueue: true, mergeCommitsAllowed: false });
+    expect(r.posture.find((x) => x.id === "merge-queue")!.detail).toMatch(/would enqueue the pull request or switch on GitHub's own auto-merge/);
+    rules(PREFLIGHT);
+    const plain = await host().preflight({ remoteUrl: "https://github.com/octo/app", base: "main" });
+    expect(plain.mergeQueue).toBeUndefined();
+    expect(plain.mergeCommitsAllowed).toBeUndefined();
+  });
+
+  it("L6: a ruleset that cannot be read does not hide the others, and approvals required by classic protection count", async () => {
+    rules([
+      { match: "protection/required_pull_request_reviews", stdout: "2\n" },
+      { match: "rulesets/111", stderr: "gh: Not Found (HTTP 404)\n", code: 1 },
+      { match: "rulesets/24227602", stdout: JSON.stringify({ name: "Protect main", enforcement: "active", current_user_can_bypass: "always" }) },
+      { match: "rulesets", stdout: "111\n24227602\n" },
+      ...PREFLIGHT,
+    ]);
+    const r = await host().preflight({ remoteUrl: "https://github.com/octo/app.git", base: "main" });
+    expect(r.ok).toBe(true);
+    // The first ruleset answered 404; the second was still read.
+    expect(calls().map((c) => c.argv[1]).filter((a) => a?.includes("rulesets/"))).toEqual(["repos/octo/app/rulesets/111", "repos/octo/app/rulesets/24227602"]);
+    expect(r.posture.find((x) => x.id === "bypass")).toMatchObject({ status: "warn" });
+    expect(r.autoMergeBlockers).toEqual(["2 approving review(s) required"]);
+    expect(r.posture.find((x) => x.id === "approvals")).toMatchObject({ status: "warn" });
   });
 
   it("stops with an actionable problem: gh missing or too old, not signed in, not GitHub, no push permission", async () => {
@@ -353,6 +379,65 @@ describe("parsing", () => {
     // A comment is "posted" only with its address.
     rules([{ match: "-X POST", stdout: "{}" }]);
     await expect(host().comment({ repo: REPO, number: 5, body: "x" })).rejects.toThrow(/did not return the comment's address/);
+  });
+});
+
+describe("step 2 review findings in the adapter", () => {
+  it("L1: when a check name reports more than once, anything that is not a success wins over a success", () => {
+    const run = (name: string, conclusion: string | null, isRequired = false) => ({ __typename: "CheckRun", name, status: conclusion ? "COMPLETED" : "IN_PROGRESS", conclusion, isRequired });
+    const one = (nodes: unknown[]) => parseChecks({ contexts: { nodes: nodes as never } }).find((c) => c.name === "check")!;
+    expect(one([run("check", "FAILURE", true), run("check", "SUCCESS")])).toMatchObject({ conclusion: "FAILURE", required: true });
+    expect(one([run("check", "SUCCESS", true), run("check", "FAILURE")])).toMatchObject({ conclusion: "FAILURE", required: true });
+    expect(one([run("check", "SUCCESS"), run("check", null)])).toMatchObject({ conclusion: null });
+    expect(one([run("check", null), run("check", "SUCCESS")])).toMatchObject({ conclusion: null });
+    expect(one([run("check", "SKIPPED"), run("check", "SUCCESS"), run("check", "SUCCESS")])).toMatchObject({ conclusion: "SKIPPED" });
+    expect(one([run("check", "SUCCESS"), run("check", "SUCCESS")])).toMatchObject({ conclusion: "SUCCESS" });
+    // A status context and a check run of the same name are the same check.
+    expect(one([{ __typename: "StatusContext", context: "check", state: "FAILURE" }, run("check", "SUCCESS")])).toMatchObject({ conclusion: "FAILURE" });
+  });
+
+  it("L3: only the endpoint and the query are scanned, so a note that names a mutation can be posted, and a mutation in a query still cannot", async () => {
+    const note = "Please do not use mergePullRequest or enablePullRequestAutoMerge here; see /pulls/5/merge and deleteRef.";
+    expect(() => assertAllowedGh(["api", "-X", "POST", "repos/octo/app/issues/5/comments", "--input", "-"], JSON.stringify({ body: note }))).not.toThrow();
+    rules([{ match: "-X POST", stdout: JSON.stringify({ html_url: "https://github.com/octo/app/pull/5#issuecomment-9" }) }]);
+    expect(await host().comment({ repo: REPO, number: 5, body: note })).toEqual({ url: "https://github.com/octo/app/pull/5#issuecomment-9" });
+    expect(calls().at(-1)!.stdin).toContain("mergePullRequest");
+    // The endpoint is still scanned, and so is what GitHub would execute.
+    expect(() => assertAllowedGh(["api", "-X", "POST", "repos/octo/app/pulls/5/merge", "--input", "-"], "{}")).toThrow(/merge endpoint/);
+    expect(() => assertAllowedGh(["api", "graphql", "--input", "-"], JSON.stringify({ query: "mutation{mergePullRequest(input:{pullRequestId:\"x\"}){clientMutationId}}" }))).toThrow(/refusing/);
+    expect(() => assertAllowedGh(["api", "graphql", "--input", "-"], "mutation{enablePullRequestAutoMerge(input:{}){clientMutationId}}")).toThrow(/refusing/);
+    // Data next to a clean query is data.
+    expect(() => assertAllowedGh(["api", "graphql", "--input", "-"], JSON.stringify({ query: "query{viewer{login}}", variables: { text: "mergePullRequest" } }))).not.toThrow();
+  });
+
+  it("L5: gh's hints about --auto and --admin are never shown as the problem", () => {
+    const stderr = "X Pull request octo/app#5 is not mergeable: the base branch policy prohibits the merge.\nTo have the pull request merged after all the requirements have been met, add the `--auto` flag.\nTo use administrator privileges to immediately merge the pull request, add the `--admin` flag.\n";
+    const msg = shortError(stderr);
+    expect(msg).toBe("X Pull request octo/app#5 is not mergeable: the base branch policy prohibits the merge.");
+    expect(classifyGhError(1, stderr)).toMatchObject({ code: "rejected", message: msg });
+    expect(shortError("add the `--admin` flag.\n")).toBe("GitHub refused the request.");
+    expect(shortError("")).toBe("");
+  });
+
+  it("H2: the fake gh honours the repository argument, and every per-pull-request call names its repository", async () => {
+    setEnv("FAKE_GH_REPO", "octo/app");
+    rules([
+      { match: "pr list", stdout: "[]" },
+      { match: "api graphql", stdout: JSON.stringify({ data: { repository: {}, rateLimit: { remaining: 4999 } } }) },
+    ]);
+    const other = { owner: "octo", name: "other" };
+    await expect(host().merge({ repo: other, number: 5, headSha: SHA, subject: "s", body: "b" })).rejects.toMatchObject({ code: "not-found" });
+    await expect(host().close({ repo: other, number: 5, comment: "c" })).rejects.toMatchObject({ code: "not-found" });
+    await expect(host().comment({ repo: other, number: 5, body: "x" })).rejects.toMatchObject({ code: "not-found" });
+    await expect(host().findComment({ repo: other, number: 5, marker: "m" })).rejects.toMatchObject({ code: "not-found" });
+    await expect(host().findPr({ repo: other, head: "h", marker: "m" })).rejects.toMatchObject({ code: "not-found" });
+    await expect(host().observe({ repo: other, prs: [5], commits: [] })).rejects.toMatchObject({ code: "not-found" });
+    // The same calls for the repository the fake serves go through.
+    await host().merge({ repo: REPO, number: 5, headSha: SHA, subject: "s", body: "b" });
+    await host().close({ repo: REPO, number: 5, comment: "c" });
+    expect(await host().findPr({ repo: REPO, head: "h", marker: "m" })).toBeUndefined();
+    expect((await host().observe({ repo: REPO, prs: [5], commits: [] })).prs).toEqual([]);
+    setEnv("FAKE_GH_REPO", undefined);
   });
 });
 

@@ -212,6 +212,14 @@ const revert: StepDef[] = [
   },
 ];
 
+/**
+ * One independent review of a pull request's change before it merges. The service creates the task
+ * itself, points the reviewer's workspace at the exact commit, and hands it the changed lines.
+ */
+const deliveryReview: StepDef[] = [
+  { id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
+];
+
 export const BUILT_IN_TEMPLATES: WorkflowTemplate[] = [
   { id: "goal", name: "Goal", description: "Large goal: break it into parallel child tasks, evaluate, and iterate until the goal is met.", builtIn: true, rev: 1, steps: goal },
   { id: "feature", name: "Feature", description: "User-facing change: design, implement, independent code and UX review, repair if needed, verify.", builtIn: true, rev: 1, steps: feature },
@@ -220,13 +228,22 @@ export const BUILT_IN_TEMPLATES: WorkflowTemplate[] = [
   { id: "investigation", name: "Investigation", description: "Gather evidence, review it, and propose a follow-up implementation spec.", builtIn: true, rev: 1, steps: investigation },
   { id: "design", name: "Design", description: "Design only: design, UX review, revise if needed, hand off an implementation brief.", builtIn: true, rev: 1, steps: design },
   { id: "revert", name: "Revert", description: "Undo a landed change: complete the prepared revert, review it, verify. Used by Send back as revert.", builtIn: true, rev: 1, steps: revert },
+  {
+    id: "delivery-review",
+    name: "Delivery review",
+    description: "One independent review of a pull request's change before it merges, by another provider than the writer. Used by pull-request delivery.",
+    builtIn: true,
+    rev: 1,
+    steps: deliveryReview,
+  },
 ];
 
 /**
  * Built-in templates the service uses itself and that are never offered for a new task: a task made
- * from "revert" by hand would have nothing prepared in its workspace.
+ * from "revert" by hand would have nothing prepared in its workspace, and one made from
+ * "delivery-review" would have no pull request to review.
  */
-export const INTERNAL_TEMPLATE_IDS = ["revert"];
+export const INTERNAL_TEMPLATE_IDS = ["revert", "delivery-review"];
 
 /** The built-in templates a project starts with and a person or the lead can pick. */
 export const PROJECT_TEMPLATES: WorkflowTemplate[] = BUILT_IN_TEMPLATES.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id));
