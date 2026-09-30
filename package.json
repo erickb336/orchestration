@@ -2,15 +2,20 @@
   "name": "orchestrator",
   "private": true,
   "version": "0.1.0",
+  "bin": {
+    "orchestrator": "scripts/orchestrator.mjs"
+  },
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "server": "node --import tsx server/main.ts",
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
-    "start": "npm run build && node scripts/start.mjs",
+    "start": "node scripts/orchestrator.mjs start",
     "typecheck": "tsc -b --noEmit && tsc -p tsconfig.server.json",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "setup": "node scripts/orchestrator.mjs setup",
+    "status": "node scripts/orchestrator.mjs status"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.285",
