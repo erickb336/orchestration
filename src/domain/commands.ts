@@ -10,12 +10,14 @@ import {
   ControlError,
   PROVIDERS,
   ROLES,
+  STEERING_MODES,
   type ModelSelection,
   type PrDeliveryConfig,
   type ProviderId,
   type RoleId,
   type SpecContent,
   type State,
+  type SteeringMode,
   type StepDef,
   type WorkflowTemplate,
 } from "./types";
@@ -169,8 +171,34 @@ export const COMMANDS = {
   setProviderLimit: same((s, now, a) => M.setProviderLimit(s, provider(a.provider), num(a, "limit"), now)),
 
   // the lead
-  postMessage: same((s, now, a) => M.postMessage(s, str(a, "text"), now)),
+  /** A message stops a planning run in progress so it is answered next; `taskId` names the task page it was sent from. */
+  postMessage: same((s, now, a) => M.postMessage(s, str(a, "text"), now, a.taskId === undefined ? undefined : str(a, "taskId"))),
+  /** "Answer together now": stop the reply run in progress so the next run answers every pending message. */
+  stopLeadReply: same((s, now) => M.stopLeadReply(s, now)),
   setLeadSelection: same((s, now, a) => M.setLeadSelection(s, selection(a.selection), now)),
+
+  // steering by conversation (ORC-009); every one is compare-and-set and reports what it left alone
+  undoSteering: (s, now, a) => {
+    const r = M.undoSteering(s, str(a, "changeSetId"), a.changeId === undefined ? undefined : str(a, "changeId"), now);
+    return { state: r.state, result: r.result };
+  },
+  applySteering: (s, now, a) => {
+    const r = M.applySteering(s, str(a, "changeSetId"), a.changeId === undefined ? undefined : str(a, "changeId"), now);
+    return { state: r.state, result: r.result };
+  },
+  dismissSteering: (s, now, a) => {
+    const r = M.dismissSteering(s, str(a, "changeSetId"), a.changeId === undefined ? undefined : str(a, "changeId"), now);
+    return { state: r.state, result: r.result };
+  },
+  /** Run now: lift the task's own deferral and keep it running whatever the focus. */
+  undeferTask: same((s, now, a) => M.undeferTask(s, str(a, "taskId"), now)),
+  setPriorityPin: same((s, now, a) => M.setPriorityPin(s, str(a, "taskId"), bool(a, "pinned"), now)),
+  setRunPin: same((s, now, a) => M.setRunPin(s, str(a, "taskId"), bool(a, "pinned"), now)),
+  setSteeringMode: same((s, now, a) => {
+    const mode = str(a, "mode");
+    if (!STEERING_MODES.includes(mode as SteeringMode)) throw new InvalidCommandError("mode must be apply, apply-own, or suggest");
+    return M.setSteeringMode(s, mode as SteeringMode, now);
+  }),
   setAutonomy: same((s, now, a) => {
     const hours = a.operatingHours === null || a.operatingHours === undefined ? null : obj(a.operatingHours, "operatingHours");
     return M.setAutonomy(
@@ -290,6 +318,7 @@ export const COMMANDS = {
         holdBeforeStart: bool(a, "holdBeforeStart"),
         steps: structuredClone(tpl.steps),
         templateName: tpl.name,
+        priorityPinned: a.priorityPinned === undefined ? false : bool(a, "priorityPinned"),
       },
       now,
     );

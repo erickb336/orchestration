@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { StoreContext, useServiceContext, useServiceStore, useStore } from "./store";
@@ -8,7 +8,8 @@ import { Overview } from "./Overview";
 import { Activity } from "./Activity";
 import { Review } from "./Review";
 import { Settings } from "./Settings";
-import { relTime } from "./common";
+import { PREF_LEAD_SEEN, relTime, usePref } from "./common";
+import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { useBrowserNotifications } from "./notifications";
 
 type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" } | { page: "task"; id: string };
@@ -80,6 +81,31 @@ function Shell() {
   const tab = route.page === "task" ? "tasks" : route.page;
   useBrowserNotifications();
 
+  // ORC-009: the Lead panel. It stays open across routes; on the Overview the inline conversation is used instead.
+  const [leadOpen, setLeadOpen] = useState(false);
+  const [leadCtx, setLeadCtx] = useState<LeadContext>({});
+  const leadButton = useRef<HTMLButtonElement>(null);
+  const onOverview = route.page === "overview";
+  const openLead = useCallback(
+    (ctx: LeadContext = {}) => {
+      setLeadCtx(ctx);
+      if (location.hash.replace(/^#\/?/, "").split("/")[0] === "overview") {
+        const inline = document.getElementById("lead-inline");
+        inline?.scrollIntoView({ block: "start" });
+        inline?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
+        return;
+      }
+      setLeadOpen(true);
+    },
+    [],
+  );
+  const closeLead = useCallback(() => {
+    setLeadOpen(false);
+    leadButton.current?.focus();
+  }, []);
+  const clearContext = useCallback(() => setLeadCtx({}), []);
+  const leadApi = useMemo(() => ({ open: leadOpen, context: leadCtx, openLead, closeLead, clearContext }), [leadOpen, leadCtx, openLead, closeLead, clearContext]);
+
   useEffect(() => {
     if (!notice || notice.kind === "stale") return;
     const id = window.setTimeout(() => setNotice(null), 6000);
@@ -87,7 +113,7 @@ function Shell() {
   }, [notice, setNotice]);
 
   return (
-    <>
+    <LeadDrawerContext.Provider value={leadApi}>
       <SimBanner />
       <ConnectionBanner />
       <header className="top">
@@ -103,9 +129,12 @@ function Shell() {
             </a>
           ))}
         </nav>
-        <ProjectControl />
+        <div className="right">
+          <LeadButton buttonRef={leadButton} open={leadOpen && !onOverview} onClick={() => (leadOpen && !onOverview ? closeLead() : openLead())} />
+          <ProjectControl />
+        </div>
       </header>
-      <main>
+      <main className={leadOpen && !onOverview ? "with-lead" : undefined}>
         {route.page === "overview" && <Overview />}
         {route.page === "tasks" && <Board />}
         {route.page === "task" && <TaskDetail key={route.id} id={route.id} />}
@@ -113,6 +142,7 @@ function Shell() {
         {route.page === "activity" && <Activity />}
         {route.page === "settings" && <Settings />}
       </main>
+      {leadOpen && !onOverview && <LeadDrawer onClose={closeLead} />}
       {notice && (
         <div className="toast" role={notice.kind === "info" ? "status" : "alert"}>
           <span>{notice.message}</span>
@@ -121,7 +151,35 @@ function Shell() {
           </button>
         </div>
       )}
-    </>
+    </LeadDrawerContext.Provider>
+  );
+}
+
+/** The Lead button: a status dot (working, stopping planning, waiting, blocked) and a badge for unread replies plus open suggestions. */
+function LeadButton({ buttonRef, open, onClick }: { buttonRef: React.RefObject<HTMLButtonElement | null>; open: boolean; onClick: () => void }) {
+  const { state, service } = useStore();
+  const [seenAt] = usePref(PREF_LEAD_SEEN);
+  const now = useNow();
+  const run = M.activeLeadRun(state);
+  const pending = M.pendingMessages(state);
+  const status = pending.length ? M.messageStatus(state, pending[pending.length - 1], { blocked: service.leadBlocked, nowMs: now }) : undefined;
+  const unread = state.conversation.filter((m) => m.author === "lead" && (!seenAt || m.at > seenAt)).length;
+  const suggestions = M.openSuggestions(state).length;
+  const badge = unread + suggestions;
+  const dot = status?.kind === "blocked" ? "blocked" : status?.kind === "stopping-planning" || status?.kind === "restarting" || run?.outcome === "stopping" ? "paused" : run ? "running" : pending.length ? "waiting" : undefined;
+  const title = status ? (pending.length > 1 ? `${pending.length} messages waiting: ${status.text}` : status.text) : run ? "The lead is working" : "Message the lead";
+  const parts = [unread ? `${unread} new repl${unread === 1 ? "y" : "ies"}` : "", suggestions ? `${suggestions} suggestion${suggestions === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
+  return (
+    <button ref={buttonRef} className="lead-btn" onClick={onClick} aria-expanded={open} aria-haspopup="dialog" title={parts ? `${title} · ${parts}` : title}>
+      {dot && <span className={`dot ${dot}`} aria-hidden="true" />}
+      Lead
+      {badge > 0 && (
+        <span className="badge-new" aria-label={parts}>
+          {badge}
+        </span>
+      )}
+      <span className="sr-only">{title}</span>
+    </button>
   );
 }
 
@@ -225,7 +283,7 @@ function ProjectControl() {
   const running = M.activeAttempts(state).filter((a) => a.outcome === "running").length;
   const status = state.project.hold ? (stopping ? `Pausing — ${stopping} run(s) still stopping` : "Project paused") : `${running} ${service.runtime === "real" ? "" : "simulated "}run(s) active`;
   return (
-    <div className="right">
+    <>
       <span className="muted" aria-live="polite">
         {status}
       </span>
@@ -238,6 +296,6 @@ function ProjectControl() {
           Pause project
         </button>
       )}
-    </div>
+    </>
   );
 }

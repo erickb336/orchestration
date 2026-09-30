@@ -7,6 +7,7 @@ import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import type { State } from "../domain/types";
 import { PREF_NOTIFY, readPref, writePref } from "./common";
+import { describeChange, setTitle } from "./steering";
 import { useStore } from "./store";
 
 export interface NotifyEvent {
@@ -123,6 +124,13 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
   for (const m of next.conversation) {
     if (m.author !== "lead" || seen.has(m.id)) continue;
     const proposed = m.proposedTaskIds?.length ?? 0;
+    // ORC-009: a reply that steered says what changed instead of the generic "Lead replied".
+    const set = m.changeSetId ? next.steering.find((cs) => cs.id === m.changeSetId) : undefined;
+    if (set && !set.refused && set.changes.length) {
+      const rows = set.changes.filter((c) => c.status === "applied" || c.status === "suggested").slice(0, 3);
+      out.push({ key: `steer:${set.id}`, title: setTitle(set), body: clip((rows.length ? rows : set.changes.slice(0, 3)).map(describeChange).join(" · ")) });
+      continue;
+    }
     out.push({
       key: `msg:${m.id}`,
       title: proposed ? `Lead replied and proposed ${proposed} task${proposed === 1 ? "" : "s"}` : "Lead replied",

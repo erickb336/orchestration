@@ -321,7 +321,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 10,
+    version: 11,
     seq: 1000,
     project: {
       id: "sample",
@@ -362,6 +362,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
       providerLimits: { claude: 3, codex: 3 },
       runLimits: { ...DEFAULT_RUN_LIMITS },
       autonomy: { ...DEFAULT_AUTONOMY },
+      steeringMode: "apply",
       prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
       workerEnvironment: { claude: "isolated", codex: "isolated" },
       workerConnections: { claude: [], codex: [] },
@@ -374,6 +375,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     artifacts,
     conversation: [],
     leadRuns: [],
+    steering: [],
     events: [
       { id: "ev-1", at: at(600), actor: "lead", kind: "spec", message: "Published specs for EX-001…EX-007 from vision r1", taskId: undefined },
       { id: "ev-2", at: at(2200), actor: "user", kind: "decision", taskId: "EX-006", message: "Selected option B (Per-note export); override: I mostly export single notes to share them." },
