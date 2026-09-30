@@ -1,0 +1,847 @@
+import { useState } from "react";
+import * as M from "../domain/model";
+import { diffLines, specToLines } from "../domain/diff";
+import { toDef } from "../domain/pipeline";
+import { ROLES, type Attempt, type State, type Task } from "../domain/types";
+import { useStore } from "./store";
+import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } from "./common";
+import { SpecEditor } from "./SpecEditor";
+import { PipelineEditor } from "./PipelineEditor";
+
+export function TaskDetail({ id }: { id: string }) {
+  const { state } = useStore();
+  const [editing, setEditing] = useState(false);
+  const task = state.tasks.find((t) => t.id === id);
+  if (!task) {
+    return (
+      <div className="card">
+        <p>No task {id}.</p>
+        <a href="#/tasks">Back to tasks</a>
+      </div>
+    );
+  }
+  const spec = M.currentSpec(task);
+  const c = spec.content;
+
+  return (
+    <>
+      <a href="#/tasks">← Tasks</a>
+      <div className="detail-head" style={{ marginTop: "0.5rem" }}>
+        <div className="titles">
+          <div className="row">
+            <span className="mono muted">{task.id}</span>
+            <StatePill state={state} task={task} />
+            <span className="chip">P{task.priority}</span>
+            <span className="chip">{c.area}</span>
+            <span className="chip">spec r{spec.rev}</span>
+            {task.followUpOf && (
+              <span className="chip">
+                follow-up of <a href={`#/task/${task.followUpOf}`}>{task.followUpOf}</a>
+              </span>
+            )}
+          </div>
+          <h1 style={{ marginTop: "0.35rem" }}>{c.title}</h1>
+        </div>
+        <Controls state={state} task={task} editing={editing} onEdit={() => setEditing(true)} />
+      </div>
+
+      <StatusBanners state={state} task={task} />
+
+      {editing ? (
+        <SpecEditor key={task.id} task={task} onClose={() => setEditing(false)} />
+      ) : (
+        <div className="grid-2">
+          <div>
+            <OutcomeCard task={task} />
+            <OptionsCard task={task} />
+            <DetailsCard task={task} />
+            <StepsCard state={state} task={task} />
+          </div>
+          <div>
+            <ArtifactsCard state={state} task={task} />
+            <RunsCard state={state} task={task} />
+            <TaskActivity state={state} task={task} />
+            <RevisionsCard key={task.specs.length} task={task} />
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function Controls({ state, task, editing, onEdit }: { state: State; task: Task; editing: boolean; onEdit: () => void }) {
+  const { apply } = useStore();
+  const [prio, setPrio] = useState(String(task.priority));
+  const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
+  if (!open) {
+    return (
+      <div className="controls">
+        {task.lifecycle === "done" && (
+          <button
+            onClick={() => {
+              let newId = "";
+              const ok = apply((s, now) => {
+                const r = M.createFollowUp(s, task.id, now);
+                newId = r.newId;
+                return r.state;
+              });
+              if (ok) location.hash = `#/task/${newId}`;
+            }}
+          >
+            Create follow-up
+          </button>
+        )}
+      </div>
+    );
+  }
+  const pausing = task.hold && M.activeAttempts(state, task.id).some((a) => a.outcome === "stopping");
+  return (
+    <div className="controls">
+      {task.hold ? (
+        <button className="primary" onClick={() => apply((s, now) => M.resumeTask(s, task.id, now))} disabled={pausing} title={pausing ? "Waiting for runs to acknowledge stopping" : undefined}>
+          Resume
+        </button>
+      ) : (
+        <button className="primary" onClick={() => apply((s, now) => M.pauseTask(s, task.id, now))}>
+          Pause
+        </button>
+      )}
+      {task.holdBeforeStart && task.lifecycle !== "active" && (
+        <button onClick={() => apply((s, now) => M.startHeldTask(s, task.id, now))}>Release hold before start</button>
+      )}
+      <button onClick={onEdit} disabled={editing}>
+        Edit spec
+      </button>
+      <label className="row" style={{ gap: "0.3rem" }}>
+        <span className="muted" style={{ fontSize: "0.85rem" }}>
+          Priority
+        </span>
+        <input type="number" min={1} value={prio} onChange={(e) => setPrio(e.target.value)} style={{ width: "4rem" }} />
+        <button className="small" disabled={Number(prio) === task.priority} onClick={() => apply((s, now) => M.setPriority(s, task.id, Number(prio), now))}>
+          Set
+        </button>
+      </label>
+      <button
+        className="danger"
+        onClick={() => {
+          if (confirm(`Cancel ${task.id}? Running work is stopped; the spec and partial artifacts are kept.`)) apply((s, now) => M.cancelTask(s, task.id, now));
+        }}
+      >
+        Cancel task
+      </button>
+    </div>
+  );
+}
+
+function StatusBanners({ state, task }: { state: State; task: Task }) {
+  const { apply } = useStore();
+  const active = M.activeAttempts(state, task.id);
+  const stopping = active.filter((a) => a.outcome === "stopping");
+  const current = M.currentSpec(task).rev;
+  const executingRevs = [...new Set(active.map((a) => a.snapshot.specRev))];
+  const blocked = M.blockedReason(state, task);
+  const waiting = M.waitingOn(state, task);
+  const out: React.ReactNode[] = [];
+
+  if (task.controlFailure)
+    out.push(
+      <div className="banner danger" role="alert" key="cf">
+        <strong>Control failure.</strong> {task.controlFailure.message}{" "}
+        <button className="small" onClick={() => apply((s, now) => M.retryStop(s, task.id, now))}>
+          Retry stop
+        </button>
+      </div>,
+    );
+  else if (stopping.length)
+    out.push(
+      <div className="banner" role="status" key="stop">
+        <strong>{M.stopLabel(state, task)}.</strong> The change is saved. Waiting for{" "}
+        {stopping.length} run(s) to acknowledge stopping; no new work is dispatched and nothing integrates until they do. Partial changes will be checkpointed.
+      </div>,
+    );
+  if (executingRevs.length && executingRevs.some((r) => r !== current))
+    out.push(
+      <div className="banner" key="rev">
+        Runs are still on spec r{executingRevs.join(", r")}; current is r{current}. Their results will not integrate.
+      </div>,
+    );
+  else if (executingRevs.length && !stopping.length)
+    out.push(
+      <div className="banner neutral" key="exec">
+        Executing spec r{current} (simulated).
+      </div>,
+    );
+  if (blocked)
+    out.push(
+      <div className="banner danger" key="blk">
+        <strong>Blocked.</strong> {blocked}
+      </div>,
+    );
+  else if (waiting && task.lifecycle !== "done")
+    out.push(
+      <div className="banner neutral" key="wait">
+        Waiting on prerequisite <a href={`#/task/${waiting}`}>{waiting}</a>. Unfinished results from prerequisites are never used.
+      </div>,
+    );
+  if (task.hold && !stopping.length)
+    out.push(
+      <div className="banner neutral" key="hold">
+        Paused by you. Edits keep it paused; it runs again only after you resume it.
+      </div>,
+    );
+  if (task.holdBeforeStart && task.lifecycle !== "active")
+    out.push(
+      <div className="banner neutral" key="hbs">
+        Held before start: this task will not be dispatched until you release it.
+      </div>,
+    );
+  if (task.lifecycle === "done")
+    out.push(
+      <div className="banner neutral" key="done">
+        Delivered on spec r{current}. The delivered spec is read-only; create a follow-up to change it.
+      </div>,
+    );
+  return <>{out}</>;
+}
+
+function OutcomeCard({ task }: { task: Task }) {
+  const c = M.currentSpec(task).content;
+  const sel = c.options.find((o) => o.id === c.selectedOptionId);
+  const rec = c.options.find((o) => o.id === c.recommendedOptionId);
+  const overridden = c.selectedOptionId !== c.recommendedOptionId;
+  return (
+    <section className="card" aria-labelledby="outcome-h">
+      <h2 id="outcome-h">Outcome</h2>
+      <p>{c.outcome}</p>
+      <p className="muted">{c.benefit}</p>
+      {sel && (
+        <div className="approach">
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <strong>
+              Chosen approach {sel.id}: {sel.name}
+            </strong>
+            <span className="chip">decided by {c.decidedBy}</span>
+          </div>
+          <p style={{ margin: "0.3rem 0" }}>{sel.approach}</p>
+          {overridden ? (
+            <p className="muted" style={{ margin: 0 }}>
+              Lead recommended {rec?.id}: {rec?.name}. Your override reason: “{c.overrideReason}”
+            </p>
+          ) : (
+            <p className="muted" style={{ margin: 0 }}>
+              Lead's recommendation. {c.rationale}
+            </p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function OptionsCard({ task }: { task: Task }) {
+  const { apply } = useStore();
+  const spec = M.currentSpec(task);
+  const c = spec.content;
+  const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
+  const [choosing, setChoosing] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  return (
+    <section className="card" aria-labelledby="opt-h">
+      <h2 id="opt-h">Options and tradeoffs</h2>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Option</th>
+              <th>Benefit</th>
+              <th>Effort</th>
+              <th>Costs and risks</th>
+              <th>Reversibility</th>
+              <th>
+                <span className="sr-only">Decision</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {c.options.map((o) => (
+              <tr key={o.id} className={o.id === c.selectedOptionId ? "selected" : undefined}>
+                <td>
+                  <strong>
+                    {o.id}: {o.name}
+                  </strong>
+                  <div className="muted">{o.approach}</div>
+                </td>
+                <td>{o.benefit}</td>
+                <td>{o.effort}</td>
+                <td>{o.risks}</td>
+                <td>{o.reversibility}</td>
+                <td>
+                  <div className="stack">
+                    {o.id === c.recommendedOptionId && <span className="chip">Recommended</span>}
+                    {o.id === c.selectedOptionId ? (
+                      <span className="chip strong">Selected</span>
+                    ) : (
+                      open && (
+                        <button className="small" onClick={() => setChoosing(o.id)}>
+                          Choose
+                        </button>
+                      )
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {choosing && (
+        <form
+          className="stack"
+          style={{ marginTop: "0.75rem" }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            const ok =
+              choosing === c.recommendedOptionId
+                ? apply((s, now) => {
+                    const content = structuredClone(c);
+                    content.selectedOptionId = choosing;
+                    return M.editSpec(s, task.id, spec.rev, content, `User restored recommended option ${choosing}`, "user", now);
+                  })
+                : apply((s, now) => M.overrideSelection(s, task.id, spec.rev, choosing, reason, now));
+            if (ok) {
+              setChoosing(null);
+              setReason("");
+            }
+          }}
+        >
+          {choosing !== c.recommendedOptionId && (
+            <label className="field">
+              <span>Why choose {choosing} over the lead's recommendation? (kept in the decision record)</span>
+              <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus required />
+            </label>
+          )}
+          {task.lifecycle === "active" && <p className="muted">Saving creates a new revision and stops runs on the current revision first.</p>}
+          <div className="row">
+            <button type="submit" className="primary">
+              Select option {choosing} (new revision r{spec.rev + 1})
+            </button>
+            <button type="button" onClick={() => setChoosing(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+      <dl className="kv" style={{ marginTop: "0.8rem" }}>
+        <dt>Rationale</dt>
+        <dd>{c.rationale || "—"}</dd>
+        <dt>Uncertainty</dt>
+        <dd>{c.uncertainty || "None recorded"}</dd>
+      </dl>
+    </section>
+  );
+}
+
+function DetailsCard({ task }: { task: Task }) {
+  const c = M.currentSpec(task).content;
+  const list = (xs: string[]) => (xs.length ? <ul className="plain">{xs.map((x, i) => <li key={i}>{x}</li>)}</ul> : <span className="muted">—</span>);
+  return (
+    <section className="card" aria-labelledby="det-h">
+      <h2 id="det-h">Acceptance and scope</h2>
+      <dl className="kv">
+        <dt>Acceptance</dt>
+        <dd>{list(c.acceptance)}</dd>
+        <dt>Success</dt>
+        <dd>{list(c.successCriteria)}</dd>
+        <dt>Why now</dt>
+        <dd>{c.whyNow || "—"}</dd>
+        <dt>In scope</dt>
+        <dd>{list(c.scopeIncluded)}</dd>
+        <dt>Out of scope</dt>
+        <dd>{list(c.scopeExcluded)}</dd>
+        <dt>Validation</dt>
+        <dd>{c.validationPlan || "—"}</dd>
+        <dt>Rollback</dt>
+        <dd>{c.rollback || "—"}</dd>
+        <dt>Effort</dt>
+        <dd>{c.effort}</dd>
+        <dt>Depends on</dt>
+        <dd>{task.dependsOn.length ? task.dependsOn.map((d) => <a key={d} href={`#/task/${d}`} style={{ marginRight: "0.5rem" }}>{d}</a>) : "—"}</dd>
+      </dl>
+    </section>
+  );
+}
+
+function StepsCard({ state, task }: { state: State; task: Task }) {
+  const { apply } = useStore();
+  const [editing, setEditing] = useState<number | null>(null); // pipeline rev the draft started from
+  const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
+  const usedRoles = [...new Set(task.steps.map((s) => s.role))];
+  const activeCount = M.activeAttempts(state, task.id).length;
+
+  if (editing !== null) {
+    const stale = task.pipelineRev !== editing;
+    return (
+      <section className="card" aria-labelledby="steps-h">
+        <h2 id="steps-h">
+          Edit pipeline — draft from r{editing}, saves as r{task.pipelineRev + 1}
+        </h2>
+        <PipelineEditor
+          initial={task.steps.map(toDef)}
+          reservedIds={task.pipelineHistory.flatMap((p) => p.steps.map((x) => x.id))}
+          templates={state.project.templates}
+          saveLabel={`Save pipeline r${task.pipelineRev + 1}`}
+          saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : undefined}
+          requireReason
+          warning={
+            <>
+              {!open && (
+                <div className="banner danger" role="alert">
+                  {task.id} was {task.lifecycle === "done" ? "delivered" : "cancelled"} while you were editing, so this pipeline can no longer change. Your draft stays here for reference
+                  {task.lifecycle === "done" ? "; create a follow-up task to apply it." : "."}
+                </div>
+              )}
+              {stale && open && (
+                <div className="banner danger" role="alert">
+                  The pipeline changed to r{task.pipelineRev} while you were editing. Discard this draft and start again from the current pipeline.
+                </div>
+              )}
+              {activeCount > 0 && (
+                <div className="banner">
+                  {activeCount} run(s) are active. Saving stops runs on changed or removed steps and anything downstream of a change; completed steps that changed are revalidated. Model pins are kept for steps that keep their ID.
+                </div>
+              )}
+              {task.hold && <div className="banner neutral">This task is paused. Saving keeps it paused.</div>}
+            </>
+          }
+          onSave={(defs, reason) => {
+            const ok = apply((s, now) => M.setPipeline(s, task.id, editing, defs, reason, "user", now));
+            if (ok) setEditing(null);
+            return ok;
+          }}
+          onCancel={() => setEditing(null)}
+        />
+      </section>
+    );
+  }
+
+  return (
+    <section className="card" aria-labelledby="steps-h">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 id="steps-h">Pipeline</h2>
+        <span className="row">
+          <span className="chip">pipeline r{task.pipelineRev}</span>
+          {open && (
+            <button className="small" onClick={() => setEditing(task.pipelineRev)}>
+              Edit pipeline
+            </button>
+          )}
+        </span>
+      </div>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        Each step receives the vision, the current spec, and only the upstream artifacts it reads. Models resolve step pin → task role override → project role default → project default. Completed steps show the model that
+        actually ran. Model catalog is sample data.
+      </p>
+      <div className="table-wrap">
+        <table className="steps-table">
+          <thead>
+            <tr>
+              <th>Step and context</th>
+              <th>Role</th>
+              <th>Provider and model</th>
+              <th>State</th>
+            </tr>
+          </thead>
+          <tbody>
+            {task.steps.map((st) => {
+              const r = M.resolveStep(state, task, st);
+              const lastRun = [...state.attempts].reverse().find((a) => a.taskId === task.id && a.stepId === st.id && a.outcome === "completed");
+              const done = st.state === "done";
+              const activeRun = M.activeAttempts(state, task.id).find((a) => a.stepId === st.id);
+              const shownRun = activeRun ?? (done ? lastRun : undefined);
+              const stale = shownRun ? M.staleInputs(state, task, shownRun) : [];
+              return (
+                <tr key={st.id}>
+                  <td>
+                    <strong>{st.id}</strong> {st.purpose}
+                    <div className="muted" style={{ fontSize: "0.8rem" }}>
+                      {st.dependsOn.length ? `after ${st.dependsOn.join(", ")}` : "first"} · config r{st.revision}
+                    </div>
+                    <StepIO state={state} task={task} stepId={st.id} run={shownRun} />
+                    {stale.length > 0 && (
+                      <div style={{ color: "var(--s-paused)", fontSize: "0.8rem" }}>
+                        Used outdated {stale.map((i) => `${i.step}.${i.output} v${i.version}`).join(", ")}; newer versions exist.
+                      </div>
+                    )}
+                  </td>
+                  <td>{ROLE_LABEL[st.role]}</td>
+                  <td>
+                    {done && lastRun ? (
+                      <>
+                        <span>{selectionText(lastRun.snapshot)}</span>
+                        <div className="muted" style={{ fontSize: "0.8rem" }}>
+                          ran as {lastRun.id} · {M.sourceLabel(lastRun.snapshot.source).toLowerCase()}
+                        </div>
+                        {open && (
+                          <button
+                            className="small"
+                            style={{ marginTop: "0.3rem" }}
+                            aria-label={`Rerun ${st.id}`}
+                            onClick={() => {
+                              if (confirm(`Rerun ${st.id}? Results of steps that depend on it will need revalidation, and any of them still running will be stopped.`))
+                                apply((s, now) => M.rerunStep(s, task.id, st.id, now));
+                            }}
+                          >
+                            Rerun
+                          </button>
+                        )}
+                      </>
+                    ) : st.state === "skipped" ? (
+                      <span className="muted">Not run: its condition had no open findings. Re-evaluated if an upstream step reruns.</span>
+                    ) : open ? (
+                      <>
+                        {activeRun && (
+                          <div style={{ marginBottom: "0.3rem" }}>
+                            <strong>{selectionText(activeRun.snapshot)}</strong>
+                            <div className="muted" style={{ fontSize: "0.8rem" }}>
+                              {activeRun.outcome === "stopping" ? "stopping" : "running"} as {activeRun.id}; next attempt uses:
+                            </div>
+                          </div>
+                        )}
+                        <ModelPicker
+                          state={state}
+                          label={`Model for next attempt of ${st.id}`}
+                          value={st.selection}
+                          allowInherit
+                          inheritLabel={`Inherited${r.ok && st.selection === null ? `: ${selectionText(r.selection)}` : ""}`}
+                          onChange={(v) => {
+                            const running = st.state === "running";
+                            if (running && !confirm(`${st.id} is running. Changing its model stops the current run (checkpointed) before a new attempt starts. Continue?`)) return;
+                            apply((s, now) => M.setStepSelection(s, task.id, st.id, v, now));
+                          }}
+                        />
+                        <div className="muted" style={{ fontSize: "0.8rem" }}>
+                          {st.selection ? (
+                            <>
+                              Pinned by you ·{" "}
+                              <button className="link" onClick={() => apply((s, now) => M.setStepSelection(s, task.id, st.id, null, now))}>
+                                Reset to default
+                              </button>
+                            </>
+                          ) : r.ok ? (
+                            M.sourceLabel(r.source)
+                          ) : null}
+                        </div>
+                        {r.ok && r.selection.model !== (st.selection ?? r.selection).model && <div className="muted" style={{ fontSize: "0.8rem" }}>{r.reason}</div>}
+                        {!r.ok && <div style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>{r.reason}</div>}
+                      </>
+                    ) : (
+                      <span className="muted">{r.ok ? selectionText(r.selection) : "—"}</span>
+                    )}
+                  </td>
+                  <td>
+                    <span className="chip">{st.state}</span>
+                    {st.invalidatedBy && (
+                      <div className="muted" style={{ fontSize: "0.8rem" }}>
+                        revalidate: {st.invalidatedBy} changed
+                      </div>
+                    )}
+                    {st.blockedReason && <div style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>{st.blockedReason}</div>}
+                    {st.state === "blocked" && open && (
+                      <button className="small" style={{ marginTop: "0.3rem" }} aria-label={`Retry ${st.id}`} onClick={() => apply((s, now) => M.retryStep(s, task.id, st.id, now))}>
+                        Retry
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {open && (
+        <details style={{ marginTop: "0.75rem" }}>
+          <summary>Task role overrides</summary>
+          <p className="muted" style={{ fontSize: "0.85rem" }}>
+            Apply to every unpinned step of this role in this task.
+          </p>
+          <dl className="kv">
+            {ROLES.filter((r) => usedRoles.includes(r)).map((role) => (
+              <div key={role} style={{ display: "contents" }}>
+                <dt>{ROLE_LABEL[role]}</dt>
+                <dd>
+                  <ModelPicker
+                    state={state}
+                    label={`Task override for ${ROLE_LABEL[role]}`}
+                    value={task.roleOverrides[role] ?? null}
+                    allowInherit
+                    inheritLabel="Project default"
+                    onChange={(v) => apply((s, now) => M.setTaskRoleOverride(s, task.id, role, v, now))}
+                  />
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      )}
+      {task.pipelineHistory.length > 1 && (
+        <details style={{ marginTop: "0.5rem" }}>
+          <summary>Pipeline revisions ({task.pipelineHistory.length})</summary>
+          <ul className="events">
+            {[...task.pipelineHistory].reverse().map((p) => (
+              <li key={p.rev}>
+                <span className="mono">r{p.rev}</span>
+                <span className="actor">{p.author}</span>
+                <span>
+                  {p.reason} <span className="muted">· {p.steps.length} steps · {fmtTime(p.at)}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <label className="row" style={{ marginTop: "0.75rem", fontSize: "0.9rem" }}>
+        <input
+          type="checkbox"
+          checked={task.holdBeforeStart}
+          disabled={!open || task.lifecycle === "active"}
+          onChange={(e) => apply((s, now) => M.setHoldBeforeStart(s, task.id, e.target.checked, now))}
+        />
+        Hold before start (guarantees a chance to review before the first dispatch)
+      </label>
+    </section>
+  );
+}
+
+/** A step's declared inputs/outputs and the context a run received (from its snapshot) or would receive now. */
+function StepIO({ state, task, stepId, run }: { state: State; task: Task; stepId: string; run?: Attempt }) {
+  const st = task.steps.find((x) => x.id === stepId)!;
+  const spec = run ? (task.specs.find((r) => r.rev === run.snapshot.specRev) ?? M.currentSpec(task)) : M.currentSpec(task);
+  const visionRev = run ? run.snapshot.visionRev : M.currentVision(state).rev;
+  const pipelineRev = run ? run.snapshot.pipelineRev : task.pipelineRev;
+  const received = run ? run.snapshot.inputs : M.consumedInputs(state, task, st);
+  const declared = run ? received.map((i) => ({ step: i.step, output: i.output })) : st.inputs;
+  const summary = (id: string) => state.artifacts.find((a) => a.id === id);
+  return (
+    <details style={{ fontSize: "0.8rem", marginTop: "0.2rem" }}>
+      <summary className="muted">
+        reads {st.inputs.length ? st.inputs.map((r) => `${r.step}.${r.output}`).join(", ") : "nothing upstream"} · produces {st.outputs.length ? st.outputs.map((o) => o.name).join(", ") : "nothing"}
+        {st.runIf?.length ? ` · only if ${st.runIf.map((r) => `${r.step}.${r.output}`).join(" or ")} has open findings` : ""}
+      </summary>
+      <div className="stack" style={{ padding: "0.3rem 0 0.2rem" }}>
+        <div>
+          <strong>{run ? `Context ${run.id} received` : "Context this step would receive now"}</strong>
+        </div>
+        <ul className="plain">
+          <li>
+            Instruction: “{run ? run.snapshot.purpose : st.purpose}”
+          </li>
+          <li>
+            Vision r{visionRev}, spec r{spec.rev} with selected option {spec.content.selectedOptionId} and {spec.content.acceptance.length} acceptance check(s), pipeline r{pipelineRev}
+          </li>
+          {declared.map((r) => {
+            const got = received.find((i) => i.step === r.step && i.output === r.output);
+            const art = got && summary(got.artifactId);
+            return (
+              <li key={`${r.step}.${r.output}`}>
+                <span className="mono">
+                  {r.step}.{r.output}
+                </span>{" "}
+                {art ? (
+                  <>
+                    v{art.version} — {art.summary}
+                  </>
+                ) : (
+                  <span className="muted">{task.steps.find((x) => x.id === r.step)?.state === "skipped" ? "not produced (step skipped)" : "not available yet"}</span>
+                )}
+              </li>
+            );
+          })}
+          {run && st.inputs.some((r) => !received.some((i) => i.step === r.step && i.output === r.output)) && (
+            <li className="muted">
+              Not received by this run:{" "}
+              {st.inputs
+                .filter((r) => !received.some((i) => i.step === r.step && i.output === r.output))
+                .map((r) => `${r.step}.${r.output}`)
+                .join(", ")}
+            </li>
+          )}
+        </ul>
+      </div>
+    </details>
+  );
+}
+
+function ArtifactsCard({ state, task }: { state: State; task: Task }) {
+  const arts = state.artifacts.filter((a) => a.taskId === task.id);
+  const consumers = (id: string) => state.attempts.filter((a) => a.taskId === task.id && a.snapshot.inputs.some((i) => i.artifactId === id)).map((a) => a.id);
+  return (
+    <section className="card" aria-labelledby="arts-h">
+      <h2 id="arts-h">Artifacts</h2>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        Accepted step outputs, versioned and immutable. Contents are simulated.
+      </p>
+      {!arts.length && <p className="muted">None yet.</p>}
+      <ul className="events">
+        {[...arts].reverse().map((a) => {
+          const latest = M.latestArtifact(state, task, a.stepId, a.name);
+          const used = consumers(a.id);
+          return (
+            <li key={a.id} style={{ gridTemplateColumns: "6.5rem 1fr" }}>
+              <span className="mono">
+                {a.stepId}.{a.name} v{a.version}
+              </span>
+              <span>
+                <span className="chip">{a.kind}</span> {a.summary}
+                {a.openFindings !== undefined && <span className="chip strong" style={{ marginLeft: "0.3rem" }}>{a.openFindings} open</span>}
+                <div className="muted" style={{ fontSize: "0.8rem" }}>
+                  from {a.attemptId}
+                  {used.length ? ` · read by ${used.join(", ")}` : ""}
+                  {latest && latest.version > a.version ? ` · superseded by v${latest.version}` : ""}
+                </div>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function RunsCard({ state, task }: { state: State; task: Task }) {
+  const runs = state.attempts.filter((a) => a.taskId === task.id).reverse();
+  return (
+    <section className="card" aria-labelledby="runs-h">
+      <h2 id="runs-h">Runs</h2>
+      {!runs.length && <p className="muted">No runs yet.</p>}
+      {runs.map((a) => (
+        <details key={a.id} className="stack" style={{ borderBottom: "1px solid var(--border)", padding: "0.4rem 0" }}>
+          <summary>
+            <span className="mono">{a.id}</span> · {a.stepId} · {selectionText(a.snapshot)} · <strong>{a.outcome}</strong>
+            {(a.outcome === "running" || a.outcome === "stopping") && (
+              <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`} style={{ marginTop: "0.3rem" }}>
+                <div style={{ width: `${a.progress}%` }} />
+              </div>
+            )}
+          </summary>
+          <dl className="kv" style={{ fontSize: "0.82rem" }}>
+            <dt>Snapshot</dt>
+            <dd>
+              spec r{a.snapshot.specRev} · step config r{a.snapshot.stepRev} · pipeline r{a.snapshot.pipelineRev} · vision r{a.snapshot.visionRev}
+            </dd>
+            <dt>Inputs</dt>
+            <dd>{a.snapshot.inputs.length ? a.snapshot.inputs.map((i) => `${i.step}.${i.output} v${i.version}`).join(", ") : "none"}</dd>
+            <dt>Produced</dt>
+            <dd>
+              {state.artifacts
+                .filter((x) => x.attemptId === a.id)
+                .map((x) => `${x.name} v${x.version}`)
+                .join(", ") || "—"}
+            </dd>
+            <dt>Routing</dt>
+            <dd>{a.snapshot.routingReason}</dd>
+            <dt>Workspace</dt>
+            <dd className="mono">{a.snapshot.workspace}</dd>
+            <dt>Started</dt>
+            <dd>{fmtTime(a.startedAt)}</dd>
+            {a.endedAt && (
+              <>
+                <dt>Ended</dt>
+                <dd>{fmtTime(a.endedAt)}</dd>
+              </>
+            )}
+            {a.note && (
+              <>
+                <dt>Note</dt>
+                <dd>{a.note}</dd>
+              </>
+            )}
+            <dt>Checkpoints</dt>
+            <dd>{a.artifacts.length ? <ul className="plain">{a.artifacts.map((x, i) => <li key={i}>{x}</li>)}</ul> : "—"}</dd>
+          </dl>
+        </details>
+      ))}
+    </section>
+  );
+}
+
+function TaskActivity({ state, task }: { state: State; task: Task }) {
+  const evs = state.events.filter((e) => e.taskId === task.id).reverse().slice(0, 25);
+  return (
+    <section className="card" aria-labelledby="act-h">
+      <h2 id="act-h">Activity</h2>
+      <ul className="events">
+        {evs.map((e) => (
+          <li key={e.id}>
+            <span className="muted" title={fmtTime(e.at)}>
+              {relTime(e.at)}
+            </span>
+            <span className="actor">{e.actor}</span>
+            <span>{e.message}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function RevisionsCard({ task }: { task: Task }) {
+  const revs = task.specs;
+  const [from, setFrom] = useState(Math.max(1, revs.length - 1));
+  const [to, setTo] = useState(revs.length);
+  const a = revs.find((r) => r.rev === from);
+  const b = revs.find((r) => r.rev === to);
+  const diff = a && b ? diffLines(specToLines(a.content), specToLines(b.content)) : [];
+  const changed = diff.filter((d) => d.kind !== "same");
+  return (
+    <section className="card" aria-labelledby="rev-h">
+      <h2 id="rev-h">Revision history</h2>
+      <ul className="events">
+        {[...revs].reverse().map((r) => (
+          <li key={r.rev}>
+            <span className="mono">r{r.rev}</span>
+            <span className="actor">{r.author}</span>
+            <span>
+              {r.reason} <span className="muted">· {fmtTime(r.at)}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {revs.length > 1 && (
+        <>
+          <div className="row" style={{ margin: "0.75rem 0 0.5rem" }}>
+            <label className="row" style={{ gap: "0.3rem" }}>
+              Compare
+              <select value={from} onChange={(e) => setFrom(Number(e.target.value))}>
+                {revs.map((r) => (
+                  <option key={r.rev} value={r.rev}>
+                    r{r.rev}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="row" style={{ gap: "0.3rem" }}>
+              with
+              <select value={to} onChange={(e) => setTo(Number(e.target.value))}>
+                {revs.map((r) => (
+                  <option key={r.rev} value={r.rev}>
+                    r{r.rev}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="muted">{changed.length ? `${changed.length} changed line(s)` : "No differences"}</span>
+          </div>
+          {changed.length > 0 && (
+            <div className="diff" aria-label={`Differences between r${from} and r${to}`}>
+              {diff.map((d, i) => (
+                <div key={i} className={d.kind}>
+                  {d.text}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
