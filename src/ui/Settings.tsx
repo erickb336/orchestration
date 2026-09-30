@@ -10,6 +10,7 @@ import type { CapabilityMap } from "../runtime/adapter";
 import { useStore } from "./store";
 import { ModelPicker, PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, ROLE_LABEL, autonomyArgs, fmtTime, involvementOf, relTime, usePref } from "./common";
 import { disableNotifications, enableNotifications, notificationsSupported } from "./notifications";
+import { StageControl } from "./Shaping";
 
 const CAP_LABEL: Record<keyof CapabilityMap, string> = {
   start: "Start",
@@ -37,6 +38,7 @@ export function Settings() {
         <div>
           <section className="card" aria-labelledby="proj-h">
             <h2 id="proj-h">Project</h2>
+            <StageControl />
             <label className="field">
               <span>Managed repository path</span>
               <div className="row">
@@ -737,6 +739,8 @@ function ProjectSetup() {
   const [repo, setRepo] = useState("");
   const [vision, setVision] = useState("");
   const [focus, setFocus] = useState("");
+  // ORC-012: shape the vision with the lead first (the vision may stay empty), or start building now.
+  const [stage, setStage] = useState<"shaping" | "building">("building");
   const repoOk = service.repo?.ok;
   return (
     <section className="card" aria-labelledby="setup-h">
@@ -756,7 +760,7 @@ function ProjectSetup() {
           onSubmit={async (e) => {
             e.preventDefault();
             if (!confirm(`Start a new project "${name}"? The current board and history are replaced.`)) return;
-            await send("initProject", { name, repoPath: repo, vision, focus });
+            await send("initProject", { name, repoPath: repo, vision, focus, stage });
           }}
         >
           <label className="field">
@@ -767,9 +771,32 @@ function ProjectSetup() {
             <span>Repository path (absolute)</span>
             <input type="text" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="/path/to/your/repo" required />
           </label>
+          <fieldset className="plain-fieldset field">
+            <legend className="field-legend" style={{ fontSize: "0.85rem", fontWeight: 560, marginBottom: "0.2rem" }}>
+              How to begin
+            </legend>
+            <label className="row" style={{ gap: "0.45rem", alignItems: "flex-start", marginBottom: "0.3rem" }}>
+              <input type="radio" name="new-stage" checked={stage === "shaping"} onChange={() => setStage("shaping")} style={{ marginTop: "0.3rem" }} />
+              <span>
+                <strong style={{ fontWeight: 560 }}>Shape the vision with the lead first</strong>
+                <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
+                  Talk it through; the lead drafts the vision and a first roadmap. Nothing runs until you start building. The vision below may stay empty.
+                </span>
+              </span>
+            </label>
+            <label className="row" style={{ gap: "0.45rem", alignItems: "flex-start" }}>
+              <input type="radio" name="new-stage" checked={stage === "building"} onChange={() => setStage("building")} style={{ marginTop: "0.3rem" }} />
+              <span>
+                <strong style={{ fontWeight: 560 }}>Start building now</strong>
+                <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
+                  Work runs as soon as there is a task. The vision is required.
+                </span>
+              </span>
+            </label>
+          </fieldset>
           <label className="field">
-            <span>Vision</span>
-            <textarea value={vision} onChange={(e) => setVision(e.target.value)} required />
+            <span>Vision{stage === "shaping" ? " (optional while shaping)" : ""}</span>
+            <textarea value={vision} onChange={(e) => setVision(e.target.value)} required={stage === "building"} />
           </label>
           <label className="field">
             <span>Current focus</span>

@@ -11,7 +11,7 @@ import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { buildSeed } from "../src/domain/seed";
 import { ControlError, DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
 
-export const STATE_FORMAT = 11;
+export const STATE_FORMAT = 12;
 
 /** In-place upgrades of the state document, keyed by the format they upgrade from. */
 const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
@@ -81,6 +81,14 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       if (t) (t.userSet ??= {}).priority = e.at;
     }
     doc.version = 11;
+    return doc;
+  },
+  // ORC-012: the shaping stage. Every existing project keeps working as before (building); no drafts yet.
+  11: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.stage ??= "building";
+    doc.visionDrafts ??= [];
+    doc.version = 12;
     return doc;
   },
 };

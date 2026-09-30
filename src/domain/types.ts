@@ -30,9 +30,65 @@ export interface VisionRevision {
   /**
    * ORC-009: where a revision came from when it was not typed by hand. A lead focus change names its
    * change set, run and the user's messages; an Undo names the set it undid; an applied suggestion
-   * names its set only.
+   * names its set only. ORC-012: an accepted vision draft names the draft, its run and messages.
    */
-  source?: { changeSetId?: string; leadRunId?: string; messageIds?: string[]; undoOf?: string };
+  source?: { changeSetId?: string; leadRunId?: string; messageIds?: string[]; undoOf?: string; draftId?: string };
+}
+
+// ---------- shaping the vision with the lead first (ORC-012) ----------
+
+/**
+ * "shaping": the user and the lead shape the vision; no worker step runs and no planning run starts.
+ * "building": everything runs as usual.
+ */
+export type ProjectStage = "shaping" | "building";
+export const PROJECT_STAGES: ProjectStage[] = ["shaping", "building"];
+
+/** The areas a vision needs to cover; the lead reports how clear each is and asks about the open ones. */
+export type ShapingArea = "intent" | "audience" | "problem" | "outcome" | "scope" | "constraints" | "risks" | "priorities" | "material";
+export const SHAPING_AREAS: ShapingArea[] = ["intent", "audience", "problem", "outcome", "scope", "constraints", "risks", "priorities", "material"];
+export const SHAPING_AREA_LABEL: Record<ShapingArea, string> = {
+  intent: "Intent and why now",
+  audience: "Who it is for",
+  problem: "The problem and today's workaround",
+  outcome: "Desired outcome and how success is measured",
+  scope: "Scope, in and out",
+  constraints: "Constraints: technical, time, budget, platforms",
+  risks: "Risks and unknowns",
+  priorities: "Priorities and the first milestone",
+  material: "Existing material",
+};
+export type CoverageState = "clear" | "partial" | "open";
+export const COVERAGE_STATES: CoverageState[] = ["clear", "partial", "open"];
+/** The lead's reading of how clear each area is, as of one reply. Areas it did not name are open. */
+export type Coverage = Partial<Record<ShapingArea, CoverageState>>;
+
+/** A targeted question from the lead, with why it matters and (optionally) options the user can pick from. */
+export interface LeadQuestion {
+  question: string;
+  why: string;
+  area?: ShapingArea;
+  options?: string[];
+}
+
+/** A vision the lead drafted from the conversation. A suggestion: it becomes the vision only when the user accepts it. */
+export interface VisionDraft {
+  /** `vd-${leadRunId}` */
+  id: string;
+  at: string;
+  leadRunId: string;
+  /** The user's messages the drafting run answered. */
+  messageIds: string[];
+  text: string;
+  focus: string;
+  /** The lead's reason (plain text, one line, at most 500 characters). */
+  reason: string;
+  /** The vision revision the lead saw when it drafted. */
+  basedOnVisionRev: number;
+  status: "open" | "accepted" | "dismissed" | "superseded";
+  resolvedAt?: string;
+  /** accepted: the revision the user created from it. */
+  visionRev?: number;
 }
 
 // ---------- steering by conversation (ORC-009) ----------
@@ -117,6 +173,8 @@ export interface Project {
   autonomy: Autonomy;
   /** ORC-009: apply the lead's steering, apply it to the lead's own work only, or only suggest. Default "apply". */
   steeringMode: SteeringMode;
+  /** ORC-012: shaping (talk it through with the lead; nothing runs) or building (everything runs). */
+  stage: ProjectStage;
   /** Last planning run start (for the planning interval). */
   lastPlanningAt?: string;
   /** Automatic delivery state: retried until the delivery branch contains all integrated work. */
@@ -443,6 +501,8 @@ export interface Task {
   deferral?: Deferral;
   /** ORC-009: the lead dropped (cancelled) its own unstarted proposal; what reopen restores. */
   dropped?: { changeSetId: string; lifecycle: "proposed" | "ready"; at: string };
+  /** ORC-012: proposed while shaping (the roadmap). Held until the user starts building; released then on Autopilot. */
+  fromShaping?: boolean;
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
   legacySpecUnavailable?: boolean;
@@ -478,7 +538,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 11;
+  version: 12;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -489,6 +549,8 @@ export interface State {
   leadRuns: LeadRun[];
   /** ORC-009: the last 200 steering change sets; events keep the full record. */
   steering: SteeringChangeSet[];
+  /** ORC-012: the last 50 vision drafts; accepted ones live on as vision revisions. */
+  visionDrafts: VisionDraft[];
 }
 
 /** One entry in the lead conversation. */
@@ -505,6 +567,10 @@ export interface Message {
   rejected?: string[];
   /** ORC-009, lead messages: the steering change set this reply carried. */
   changeSetId?: string;
+  /** ORC-012, lead messages: the vision draft this reply carried. */
+  visionDraftId?: string;
+  /** ORC-012, lead messages: the questions this reply asked (validated; at most 5). */
+  questions?: LeadQuestion[];
   /** ORC-009, user messages: the task page the message was sent from. */
   taskId?: string;
 }
@@ -532,6 +598,8 @@ export interface LeadRun {
   visionRev?: number;
   /** ORC-009: the change set this run's reply produced. */
   changeSetId?: string;
+  /** ORC-012: the coverage this run reported (message runs only; the latest one stands). */
+  coverage?: Coverage;
 }
 
 /** Bounds on the lead's own initiative. Off until the user turns it on. */

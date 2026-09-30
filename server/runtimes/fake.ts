@@ -55,7 +55,67 @@ export function fakeSteer(prompt: string): Record<string, unknown> | undefined {
   };
 }
 
-/** A simulated lead reply in the required JSON shape. Planning runs propose one small task; message runs may steer. */
+/** The newest message the lead must answer, from the envelope. */
+function newestMessage(prompt: string): string | undefined {
+  const section = /## Messages to answer now\n([\s\S]*?)\n\n## /.exec(prompt)?.[1] ?? "";
+  const messages = section
+    .split("\n")
+    .filter((l) => l.startsWith("- "))
+    .map((l) => l.slice(2).replace(/^\(sent from [^)]*\) /, ""));
+  return messages[messages.length - 1];
+}
+
+/** How many simulated shaping replies the conversation in the envelope already holds. */
+function exchanges(prompt: string): number {
+  const convo = /## Conversation \(most recent last\)\n([\s\S]*?)\n\n## /.exec(prompt)?.[1] ?? "";
+  return (convo.match(/\(Simulated lead\) Here is what I understand/g) ?? []).length;
+}
+
+/**
+ * ORC-012: a simulated vision draft, built only from the envelope while the project is shaping. The newest
+ * message becomes the problem statement and every other part is a marked assumption, as a real lead's
+ * living draft would be from the first exchange; it is labelled simulated throughout.
+ */
+export function fakeVision(prompt: string): Record<string, unknown> | undefined {
+  if (!/^Project stage: shaping$/m.test(prompt)) return undefined;
+  const last = newestMessage(prompt);
+  if (!last) return undefined;
+  const short = last.length > 300 ? `${last.slice(0, 299)}…` : last;
+  const n = exchanges(prompt) + 1;
+  return {
+    text: [
+      `(Simulated draft, exchange ${n}) Problem: ${short}`,
+      "Who it is for: you first (assumption: confirm or change).",
+      "Outcome: what your message asks for, delivered in small verifiable steps; success is that you use it and it holds up (assumption).",
+      "Scope: the smallest slice that shows the outcome; out of scope: anything your message did not ask for (assumption).",
+      "Constraints: none stated yet (assumption: none).",
+      "Risks: the problem is broader than one message shows (assumption).",
+      "First milestone: one thing you can try yourself within a day (assumption).",
+      "",
+      "A real lead grounds each line in your answers, the vision documents and the repository, and improves the draft every turn.",
+    ].join("\n"),
+    focus: `(Simulated) ${short.length > 120 ? `${short.slice(0, 119)}…` : short}`,
+    reason: n === 1 ? "(Simulated) A first living draft from your message; the assumptions are yours to confirm or change." : `(Simulated) Improved after ${n} exchanges; a real lead would fold your answers in.`,
+  };
+}
+
+/** ORC-012: three simulated questions with reasons and options, and a simulated coverage that improves per exchange. */
+export function fakeShaping(prompt: string): { questions: Record<string, unknown>[]; coverage: Record<string, string> } | undefined {
+  if (!/^Project stage: shaping$/m.test(prompt)) return undefined;
+  const n = exchanges(prompt) + 1;
+  const questions = [
+    { question: "(Simulated) Who is this for first: you, a small team, or anyone?", why: "(Simulated) The first users decide the first milestone. I'd suggest you first, so it is usable soon.", area: "audience", options: ["Just me (recommended)", "A small team", "Anyone"] },
+    { question: "(Simulated) How will you know it worked?", why: "(Simulated) A measure keeps the scope honest.", area: "outcome", options: ["I use it daily", "A first user does", "A number improves"] },
+    { question: "(Simulated) What must it not do in the first version?", why: "(Simulated) Non-goals keep the scope in check.", area: "scope" },
+  ];
+  const coverage: Record<string, string> =
+    n === 1
+      ? { intent: "partial", audience: "open", problem: "partial", outcome: "open", scope: "open", constraints: "open", risks: "open", priorities: "open", material: "open" }
+      : { intent: "clear", audience: "partial", problem: "clear", outcome: "partial", scope: "partial", constraints: "open", risks: "open", priorities: "partial", material: "open" };
+  return { questions, coverage };
+}
+
+/** A simulated lead reply in the required JSON shape. Planning runs propose one small task; message runs may steer or draft the vision. */
 export function fakeLeadText(attemptId: string, trigger: "planning" | "message", prompt = ""): string {
   const proposals =
     trigger === "planning"
@@ -82,13 +142,17 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message",
         ]
       : [];
   const steer = trigger === "message" ? fakeSteer(prompt) : undefined;
+  const vision = trigger === "message" ? fakeVision(prompt) : undefined;
+  const shaping = trigger === "message" ? fakeShaping(prompt) : undefined;
   const reply =
     trigger === "planning"
       ? "(Simulated lead) I reviewed the board and proposed one small task."
-      : steer
-        ? "(Simulated lead) Noted the new direction. The service lists below what changed; in live mode a real lead weighs the board first."
-        : "(Simulated lead) Noted. In live mode the lead answers here using the board and the repository.";
-  return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals, ...(steer ? { steer } : {}) }, null, 2)}\n\`\`\`\n`;
+      : vision
+        ? `(Simulated lead) Here is what I understand: ${newestMessage(prompt) ?? "your message"} (assumption: that is the whole problem). I drafted a living vision from it with marked assumptions, and I have three questions with suggested answers. Accept, edit or dismiss the draft; answer what you can. In live mode a real lead grounds all of this in your answers and the repository.`
+        : steer
+          ? "(Simulated lead) Noted the new direction. The service lists below what changed; in live mode a real lead weighs the board first."
+          : "(Simulated lead) Noted. In live mode the lead answers here using the board and the repository.";
+  return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}) }, null, 2)}\n\`\`\`\n`;
 }
 
 function jitter(id: string) {

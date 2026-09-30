@@ -2,7 +2,7 @@
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CatalogModel, ProviderId } from "../../src/domain/types";
+import type { CatalogModel, LeadQuestion, ProviderId } from "../../src/domain/types";
 import type { AdapterEvent, Assignment, Connection, ProviderHealth, RuntimeAdapter } from "../runtimes/types";
 
 export class ScriptedAdapter implements RuntimeAdapter {
@@ -83,10 +83,16 @@ export class ScriptedAdapter implements RuntimeAdapter {
     const block = opts.chosen ? { outputs, chosen: opts.chosen } : { outputs };
     this.emit({ type: "completed", attemptId: id, finalText: `All done.\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\``, usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 }, model: `${a.model}-actual` });
   }
-  /** Answer a lead run with a reply, proposals and (ORC-009) a steering block, all raw and validated by the service. `steer` is written only when given. */
-  reply(id: string, reply: string, proposals: unknown[] = [], steer?: unknown) {
+  /**
+   * Answer a lead run with a reply, proposals, (ORC-009) a steering block and (ORC-012) a vision draft plus
+   * coverage and questions, all raw and validated by the service. Each block is written only when given.
+   */
+  reply(id: string, reply: string, proposals: unknown[] = [], steer?: unknown, vision?: unknown, extra: { coverage?: unknown; questions?: unknown } = {}) {
     const block: Record<string, unknown> = { reply, proposals };
     if (steer !== undefined) block.steer = steer;
+    if (vision !== undefined) block.vision = vision;
+    if (extra.coverage !== undefined) block.coverage = extra.coverage;
+    if (extra.questions !== undefined) block.questions = extra.questions;
     this.emit({ type: "completed", attemptId: id, finalText: `${reply}\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`` });
   }
   /** A reply with no JSON block at all. */
@@ -112,6 +118,30 @@ export const st = {
   undefer: (id: string, why = "fits the focus again") => ({ id, defer: false, why }),
   drop: (id: string, why = "my proposal no longer fits") => ({ id, drop: true, why }),
 };
+
+/** A valid vision draft (tests override fields). */
+export function visionDraft(over: Record<string, unknown> = {}) {
+  return {
+    text: "Problem: every app must build and run locally with one command.\nFor: the developer.\nGoals: a working local setup; clear failures.\nNon-goals: deployment automation.\nDone when: `npm start` runs every app.",
+    focus: "Get every app running locally",
+    reason: "Drafted from what you told me about local builds.",
+    ...over,
+  };
+}
+
+/** Valid lead questions (tests override or slice). */
+export function questions(): LeadQuestion[] {
+  return [
+    { question: "Who is this for first?", why: "The first users decide the first milestone.", area: "audience", options: ["Just you", "A small team", "Anyone"] },
+    { question: "How will you know it worked?", why: "A measure keeps the scope honest.", area: "outcome" },
+    { question: "What must it not do?", why: "Non-goals keep the scope in check.", area: "scope", options: ["No sync", "No accounts"] },
+  ];
+}
+
+/** A valid coverage block (tests override fields). */
+export function coverage(over: Record<string, unknown> = {}) {
+  return { intent: "clear", audience: "partial", problem: "clear", outcome: "open", scope: "partial", constraints: "open", risks: "open", priorities: "open", material: "open", ...over };
+}
 
 /** A complete, valid lead proposal (tests override fields). */
 export function proposal(over: Record<string, unknown> = {}) {

@@ -116,6 +116,7 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
   const who = m.author === "user" ? "You" : m.author === "lead" ? (simulated ? "Lead (simulated)" : "Lead") : "System";
   const status = m.author === "user" ? M.messageStatus(state, m, { blocked, nowMs: Date.now() }) : undefined;
   const set = m.changeSetId ? state.steering.find((cs) => cs.id === m.changeSetId) : undefined;
+  const draft = m.visionDraftId ? state.visionDrafts.find((d) => d.id === m.visionDraftId) : undefined;
   const about = m.taskId ? state.tasks.find((t) => t.id === m.taskId) : undefined;
   return (
     <li className={`msg ${m.author}`} id={`msg-${m.id}`}>
@@ -144,6 +145,35 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
         </div>
       )}
       {set && <SteeringChanges set={set} />}
+      {draft && (
+        <div className="msg-extra" role="note">
+          <span className="chip strong">Vision draft {draft.id}</span>{" "}
+          <span className="muted">
+            {draft.status === "open"
+              ? "waiting for you on the Overview: accept, edit or dismiss it; the vision changes only if you accept"
+              : draft.status === "accepted"
+                ? `accepted by you as r${draft.visionRev}`
+                : draft.status === "dismissed"
+                  ? "dismissed by you; the vision is unchanged"
+                  : "replaced by a newer draft"}
+          </span>
+        </div>
+      )}
+      {!!m.questions?.length && (
+        <div className="msg-extra">
+          <span className="muted">Questions:</span>
+          <ol style={{ margin: "0.15rem 0 0", paddingLeft: "1.2rem" }}>
+            {m.questions.map((q, i) => (
+              <li key={i}>
+                {q.question}
+                {q.why && <span className="muted"> — {q.why}</span>}
+                {q.options && <span className="muted"> ({q.options.join(" · ")})</span>}
+              </li>
+            ))}
+          </ol>
+          {state.project.stage === "shaping" && M.latestQuestions(state)?.message.id === m.id && <div className="muted" style={{ fontSize: "0.82rem" }}>Answer them inline in “Shape the vision”, or reply here.</div>}
+        </div>
+      )}
       {!!m.proposedTaskIds?.length && (
         <div className="msg-extra">
           <span className="muted">Proposed:</span>

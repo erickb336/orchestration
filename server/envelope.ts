@@ -5,7 +5,7 @@
 import * as D from "../src/domain/delivery";
 import * as M from "../src/domain/model";
 import { INTERNAL_TEMPLATE_IDS } from "../src/domain/templates";
-import type { LeadRun, OutputDef, RoleId, State, SteerAction, SteeringMode, Step, Task } from "../src/domain/types";
+import { SHAPING_AREAS, SHAPING_AREA_LABEL, type LeadRun, type OutputDef, type RoleId, type State, type SteerAction, type SteeringMode, type Step, type Task } from "../src/domain/types";
 
 const ROLE_BRIEFS: Record<RoleId, string> = {
   lead: "You are the lead. Verify the work against the acceptance criteria using the inputs, and decide whether it is ready to integrate. Do not change files.",
@@ -299,6 +299,23 @@ function recentSteering(state: State): string {
   return lines.join("\n");
 }
 
+/** ORC-012: every area with the state the lead last reported (open until it reports). */
+function coverageLines(state: State): string {
+  const c = M.coverageOf(state);
+  return SHAPING_AREAS.map((a) => `- ${a}: ${SHAPING_AREA_LABEL[a]} — ${c ? c[a] : "open (not reported yet)"}`).join("\n");
+}
+
+/** ORC-012: the last 3 vision drafts and what the user did with them, so the lead does not repeat a dismissed one. */
+function draftHistory(state: State): string {
+  const drafts = state.visionDrafts.slice(-3).reverse();
+  if (!drafts.length) return "";
+  const lines = drafts.map((d) => {
+    const what = d.status === "open" ? "open: waiting for the user to accept, edit or dismiss it" : d.status === "accepted" ? `accepted by the user as r${d.visionRev}` : d.status === "dismissed" ? "dismissed by the user" : "replaced by a newer draft";
+    return `- ${d.id} (${d.at}): ${what} — focus "${clip(d.focus, 120)}"; ${clip(d.text.replace(/\n/g, " "), 200)}`;
+  });
+  return `\nYour vision drafts (newest first):\n${lines.join("\n")}`;
+}
+
 /** Everything the lead sees: vision, open work with what it may do, outcomes, conflicts, conversation, and the rules. */
 export function buildLeadEnvelope(state: State, run: LeadRun, access: "read"): string {
   const p = state.project;
@@ -307,6 +324,10 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read"): s
   // Steering is available only to runs that answer user messages, never decided by the trigger.
   const canSteer = run.messageIds.length > 0;
   const mode = p.steeringMode;
+  // ORC-012: the shaping brief and the vision contract go to message runs while shaping. A planning run
+  // never starts while shaping; if one from before finishes now, it cannot draft (the domain refuses).
+  const shaping = p.stage === "shaping";
+  const canDraft = shaping && canSteer;
   const roots = state.tasks.filter((t) => !t.parentTaskId);
   // Review finding 1: the review and fix tasks the service creates for a pull request are delivery's, not
   // steerable, and not the lead's to see on its board (`steerPermission` rejects them as well).
@@ -372,8 +393,35 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
     ]
   }`
     : "";
+  const visionContract = canDraft
+    ? `,
+  "vision": {
+    "text": "<the whole vision: intent, who it is for, the problem, the outcome and how success is measured, scope in and out, constraints, risks, the first milestone; mark every proposed default (assumption)>",
+    "focus": "<the first focus, one line>",
+    "reason": "<what in the conversation, the documents or the repository this draft rests on>"
+  },
+  "coverage": { ${SHAPING_AREAS.map((a) => `"${a}": "clear|partial|open"`).join(", ")} },
+  "questions": [
+    { "question": "<one targeted question>", "why": "<why it matters, one line>", "area": "<area key>", "options": ["<option A (recommended, because …)>", "<option B>"] }
+  ]`
+    : "";
+  const shapingBrief = shaping
+    ? `
+## Shaping the vision
+Project stage: shaping. No worker step runs and no planning run starts until the user starts building; nothing is paused. You are the user's active partner in shaping the vision: a discovery interview in which you also contribute ideas. Each turn:
+- Restate what you understand so far in a few lines ("Here is what I understand…"), point out contradictions, and label anything you assume as an assumption.
+- Ask 3–5 targeted questions about the most important open areas, each with a one-line reason why it matters. Ground them in what you already know: the conversation, the vision text, the vision documents, and the repository you can read. When the code or the documents answer a question, say what you found instead of asking. Ask about intent first (why, for whom, what outcome); keep solution ideas separate. Prefer concrete questions: offer 2–3 options or examples where that helps the user answer quickly.
+- Keep a living draft. From the first exchange that gives you enough to start, propose the whole vision in "vision" and improve it every turn: fill gaps with proposed defaults, each marked "(assumption)" for the user to confirm or change. Do not wait for full coverage; the coverage and the open questions say what is still uncertain. The draft replaces the current text, so keep what already stands and still holds. The user accepts, edits or dismisses each draft; it never applies by itself, and a newer draft replaces one still open. Do not resend a draft the user dismissed unless they ask.
+- For open areas, offer options with a recommendation ("I'd suggest A, because …; alternatives: B, C") so the user can answer by picking.
+- Suggest what the user may not have considered: edge cases, users they did not mention, risks, success measures, a smaller first milestone, and non-goals that keep scope in check. Ground each suggestion in the conversation, the documents or the repository.
+- Once intent and scope are at least partly clear, propose a first roadmap as proposals and say how each serves the vision. They are held until the user starts building; on Autopilot they start then.
+- Report "coverage" for every area below ("clear", "partial" or "open"); an area you leave out counts as open. Steering still applies to the focus and priorities. Never start work.
 
-  return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : "reply to the user"})${canSteer ? `\nSteering mode: ${mode}` : ""}
+Areas, with the coverage you last reported:
+${coverageLines(state)}${draftHistory(state)}`
+    : "";
+
+  return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : "reply to the user"})${canSteer ? `\nSteering mode: ${mode}` : ""}${shaping ? "\nProject stage: shaping" : ""}
 
 You are the lead of the project "${p.name}". You own the backlog within the vision below: you decide what is worth doing next, specify it clearly, and pick the approach. Workers (designers, coders, reviewers on Claude or Codex) carry tasks out through each task's pipeline. You do not edit files: ${access === "read" ? "your working directory is a read-only checkout of the repository, which you may read to ground your proposals" : "you have no workspace"}.
 
@@ -382,7 +430,7 @@ ${vision.text || "(not written yet)"}
 Current focus: ${vision.focus || "(none)"}${focusLine}
 Focus history (newest first):
 ${focusHistory(state)}
-
+${shapingBrief}
 ## Open work (root tasks by priority; child tasks follow their root)
 ${board}
 
@@ -416,7 +464,7 @@ ${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).j
 ${templates}
 ${steerRules}
 ## Required final output
-End your final message with exactly one fenced JSON block${canSteer ? ' (leave "steer" out when the user only asked a question)' : ""}:
+End your final message with exactly one fenced JSON block${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft' : ""}${canSteer ? ")" : ""}:
 
 \`\`\`json
 {
@@ -441,7 +489,7 @@ End your final message with exactly one fenced JSON block${canSteer ? ' (leave "
       "templateId": "<template id>",
       "priority": 3
     }
-  ]${steerContract}
+  ]${steerContract}${visionContract}
 }
 \`\`\`
 `;
@@ -492,14 +540,15 @@ ${last.length ? `The user's latest notes on landed work:\n${last.map((x) => x.li
 /**
  * Parse the lead's final message. A reply without a JSON block is still a reply (with no proposals).
  * ORC-009: the steering block is passed through as found (a missing value or null becomes undefined);
- * type checks happen in the domain, which treats it as untrusted data.
+ * type checks happen in the domain, which treats it as untrusted data. ORC-012: the vision draft too.
  */
-export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; problem?: string } {
+export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; problem?: string } {
   const obj = lastJsonObject(finalText);
   if (!obj) return { reply: clip(finalText.trim(), 4000), proposals: [], problem: "no JSON block; treated the message as a reply without proposals" };
   const reply = typeof obj.reply === "string" ? clip(obj.reply, 8000) : "";
   const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
-  return { reply, proposals, ...(obj.steer !== undefined && obj.steer !== null ? { steer: obj.steer } : {}) };
+  const given = (k: "steer" | "vision" | "coverage" | "questions") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
+  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions") };
 }
 
 /** A step that reads best-of candidates must choose one. */

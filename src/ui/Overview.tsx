@@ -7,11 +7,13 @@ import { ROLE_LABEL, fmtTime, involvementOf, relTime, selectionText } from "./co
 import { PrChip } from "./Delivery";
 import { Conversation } from "./Conversation";
 import { Onboarding } from "./Onboarding";
+import { ShapingPanel, VisionDraftCard } from "./Shaping";
 import { PROVIDERS, type Attempt, type ProviderId, type State, type VisionRevision } from "../domain/types";
 
 /** Who made a vision revision and from what, in a few words. */
 function revisionSource(v: VisionRevision): string {
   if (v.source?.undoOf) return `${v.author} · undo of the lead's change`;
+  if (v.source?.draftId) return `${v.author} · accepted the lead's draft`;
   if (v.source?.changeSetId) return v.author === "lead" ? "lead · from your message" : `${v.author} · applied the lead's suggestion`;
   return v.author;
 }
@@ -114,6 +116,9 @@ export function Overview() {
   const flagged = D.landedTasks(state).filter((t) => t.integration!.landed!.status === "unreviewed" && t.integration!.landed!.flags.length > 0);
   const ghProblem = gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0) ? gh.problem : undefined;
   const outcomes = state.tasks.filter((t) => t.lifecycle === "done").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
+  // ORC-012: while shaping, the panel replaces the Vision card; a draft the lead sent while building shows on the card.
+  const shaping = state.project.stage === "shaping";
+  const openDraft = M.openVisionDraft(state);
 
   return (
     <>
@@ -122,9 +127,13 @@ export function Overview() {
       <Onboarding />
       <div className="grid-2">
         <div>
+          {shaping ? (
+            <ShapingPanel />
+          ) : (
           <section className="card" aria-labelledby="vision-h">
             <h2 id="vision-h">Vision</h2>
             <VisionProvenance state={state} />
+            {openDraft && !editing && <VisionDraftCard state={state} draft={openDraft} />}
             {editing ? (
               <form
                 onSubmit={async (e) => {
@@ -199,6 +208,7 @@ export function Overview() {
               </>
             )}
           </section>
+          )}
 
           <section className="card" aria-labelledby="since-h">
             <div className="row" style={{ justifyContent: "space-between" }}>
@@ -395,6 +405,7 @@ function ModeSummary({ state }: { state: State }) {
       <span>
         {text}
         {paused ? " · project paused" : ""}
+        {!paused && state.project.stage === "shaping" ? ` · ${M.SHAPING_LABEL.toLowerCase()}` : ""}
       </span>
       <a href="#/settings">Change</a>
     </p>

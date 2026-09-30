@@ -32,6 +32,11 @@ import {
   type ConsumedInput,
   type EventKind,
   type ModelSelection,
+  type Coverage,
+  type CoverageState,
+  type LeadQuestion,
+  type ProjectStage,
+  type ShapingArea,
   type ProviderId,
   type RoleId,
   type SelectionSource,
@@ -40,9 +45,12 @@ import {
   type Step,
   type StepDef,
   type Task,
+  type VisionDraft,
   type WorkflowTemplate,
   ControlError,
+  COVERAGE_STATES,
   REVIEW_ROLES,
+  SHAPING_AREAS,
   autoModelDefaults,
   AUTOPILOT,
   DEFAULT_PR_DELIVERY,
@@ -413,10 +421,12 @@ export function stateLabel(s: State, t: Task): string {
     if (open === 0) return "Waiting for child pull requests to merge";
     return `Waiting for ${open} child task${open === 1 ? "" : "s"}`;
   }
-  if (t.lifecycle === "active" && active.length === 0) return "Queued for next step";
+  // ORC-012: while shaping, a step that would start next waits for Start building; nothing is paused.
+  if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (shaping)" : "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return waitingLabel(s, t);
   if (col === "ready" && t.holdBeforeStart) return "Held before start";
   if (col === "ready" && s.project.hold) return "Ready (project paused)";
+  if (col === "ready" && s.project.stage === "shaping") return "Ready (shaping)";
   if (col === "ready" && waitingOn(s, t)) return waitingLabel(s, t);
   return col[0].toUpperCase() + col.slice(1);
 }
@@ -1080,6 +1090,9 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
   const s = draft(state);
   if (s.project.hold) return s;
   const vision = currentVision(s);
+  // ORC-012: while shaping no worker step starts, on any task. Like a deferral (and unlike a hold),
+  // running work finishes and its result is accepted, settled tasks become Done, and nothing is paused.
+  const shaping = s.project.stage === "shaping";
   // A stable sort: tasks the lead did not name keep their relative (creation) order.
   const tasks = s.tasks.map((t) => ({ t, rank: dispatchRank(s, t) })).sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map((x) => x.t);
   for (const t of tasks) {
@@ -1100,7 +1113,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
     // complete (including steps settled by skipping) still becomes Done and is queued for integration.
     // It is not a hold: the running step's result is accepted by reportCompletion as usual. Below, a
     // conditional step with nothing to do still settles by skipping; only starting work is withheld.
-    const deferred = !!deferredBy(s, t);
+    const deferred = shaping || !!deferredBy(s, t);
     // Parallel steps become their copies the first time they are ready to run.
     if (!deferred) {
       for (const st of [...t.steps]) {
@@ -1133,7 +1146,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           continue;
         }
       }
-      if (deferred) continue; // ORC-009: nothing new starts on a deferred task
+      if (deferred) continue; // ORC-009: nothing new starts on a deferred task; ORC-012: nor on any task while shaping
       const r = resolveStep(s, t, st);
       if (r.ok && opts.deferred?.includes(r.selection.provider)) continue;
       if (r.ok && activeAttempts(s).filter((x) => x.snapshot.provider === r.selection.provider).length >= (s.project.providerLimits?.[r.selection.provider] ?? s.project.workerLimit)) continue;
@@ -1642,11 +1655,15 @@ export function setCatalog(state: State, provider: ProviderId, models: CatalogMo
 
 /**
  * Start a real project: empty board, the given repository and vision. Refused while any run is
- * active, so no live work is orphaned by the replacement.
+ * active, so no live work is orphaned by the replacement. ORC-012: `stage` defaults to building (the
+ * vision is then required); a project that starts by shaping may leave the vision empty.
  */
-export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string }, now: string): State {
+export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string; stage?: ProjectStage }, now: string): State {
   if (activeAttempts(state).length || activeLeadRun(state)) throw new ControlError("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
-  if (!init.name.trim() || !init.repoPath.trim() || !init.vision.trim()) throw new ControlError("Name, repository path, and vision are required.");
+  const stage: ProjectStage = init.stage ?? "building";
+  if (stage !== "shaping" && stage !== "building") throw new ControlError("Unknown project stage.");
+  if (!init.name.trim() || !init.repoPath.trim()) throw new ControlError("Name and repository path are required.");
+  if (stage === "building" && !init.vision.trim()) throw new ControlError("A vision is required to start building. Choose to shape it with the lead first, or write it now.");
   const s = draft(state);
   s.project.id = `p-${Date.parse(now).toString(36)}-${s.seq.toString(36)}`;
   s.project.sample = false;
@@ -1654,7 +1671,8 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.project.repoPath = init.repoPath.trim();
   // A new project starts from provider-neutral defaults, never another project's model choices.
   Object.assign(s.project, autoModelDefaults());
-  s.project.visions = [{ rev: 1, at: now, author: "user", text: init.vision.trim(), focus: init.focus.trim(), reason: "Project created" }];
+  s.project.visions = [{ rev: 1, at: now, author: "user", text: init.vision.trim(), focus: init.focus.trim(), reason: stage === "shaping" ? "Project created; the vision is shaped with the lead first" : "Project created" }];
+  s.project.stage = stage;
   s.project.hold = false;
   s.project.lastVisitAt = now;
   // Delivery to GitHub is a choice made per project and repository: a new project starts with it off
@@ -1669,8 +1687,9 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.leadRuns = [];
   // Review finding 6: an old project's change sets must not rewrite a new project's task with the same id.
   s.steering = [];
+  s.visionDrafts = [];
   s.project.lastPlanningAt = undefined;
-  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}`);
+  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}${stage === "shaping" ? "; shaping the vision first" : ""}`);
   return s;
 }
 
@@ -1851,6 +1870,8 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
     if (!newMessage && nowMs - Date.parse(lastEnd) < Math.min(60, 2 ** (streak - 1)) * 60_000) return null;
   }
   if (pendingMessages(s).length) return "message";
+  // ORC-012: while shaping the lead only answers messages; planning is off until the user starts building.
+  if (s.project.stage === "shaping") return null;
   const a = s.project.autonomy;
   if (!a.enabled || !inHours(a.operatingHours, localMinutes)) return null;
   // ORC-009: deferred lead work does not count toward the open cap, but it cannot pile up without limit either.
@@ -1957,6 +1978,12 @@ export interface LeadOutput {
   proposals: LeadProposal[];
   /** ORC-009: the steering block as found in the JSON (untrusted; validated here). Absent or null: none. */
   steer?: unknown;
+  /** ORC-012: the vision draft as found in the JSON (untrusted; validated here). Absent or null: none. */
+  vision?: unknown;
+  /** ORC-012: the lead's coverage of the vision's areas, as found (untrusted; validated here). */
+  coverage?: unknown;
+  /** ORC-012: the lead's questions to the user, as found (untrusted; validated here). */
+  questions?: unknown;
   /** Why the output could not be read (no JSON block): recorded on the run and shown under the reply. */
   problem?: string;
 }
@@ -2022,13 +2049,36 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     if (s.steering.length > 200) s.steering.splice(0, s.steering.length - 200);
     r.changeSetId = set.id;
   }
+  // ORC-012: a vision draft. Never applied: it is recorded as a suggestion for the user to accept, edit
+  // or dismiss. The run-outcome guard above and the draft id (one per run) make it record once.
+  let visionDraft: VisionDraft | undefined;
+  if (out.vision !== undefined && out.vision !== null && !s.visionDrafts.some((d) => d.leadRunId === r.id)) {
+    const v = validateVisionDraft(s, r, out.vision);
+    if (v.ok) visionDraft = draftFromRun(s, r, v.draft, now);
+    else rejected.push(`Vision draft: ${v.why}`);
+  }
+  // ORC-012: coverage lives on the run (the latest stands); questions live on the reply. Both come only
+  // from runs that answer the user; anything unreadable is left out with a note.
+  let questions: LeadQuestion[] = [];
+  if (out.coverage !== undefined && out.coverage !== null) {
+    const c = validateCoverage(r, out.coverage);
+    if (c.ok) r.coverage = c.coverage;
+    rejected.push(...c.notes.map((n) => `Coverage: ${n}`));
+  }
+  if (out.questions !== undefined && out.questions !== null) {
+    const q = validateQuestions(r, out.questions);
+    questions = q.questions;
+    rejected.push(...q.notes.map((n) => `Questions: ${n}`));
+  }
   const limit = Math.max(1, s.project.autonomy.maxProposalsPerCycle);
   const maxOpen = s.project.autonomy.maxOpenProposals;
   const openRoom = Math.max(0, maxOpen - openLeadProposals(s).length);
   // Review finding 15: the bound on deferred lead work applies to message runs as it does to planning.
   const deferredLead = deferredLeadRoots(s).length;
   // With autonomy off, proposals from a conversation still become tasks, but they wait for the user.
-  const hold = !s.project.autonomy.enabled || s.project.autonomy.holdLeadProposals;
+  // ORC-012: while shaping every proposal is the roadmap: held until the user starts building.
+  const shaping = s.project.stage === "shaping";
+  const hold = shaping || !s.project.autonomy.enabled || s.project.autonomy.holdLeadProposals;
   const created: string[] = [];
   const label = (p: unknown) => {
     const t = p && typeof p === "object" ? (p as { title?: unknown }).title : undefined;
@@ -2053,7 +2103,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
         rejected.push(`"${label(p)}": ${why}`);
         continue;
       }
-      created.push(proposeTask(s, p, now, hold));
+      created.push(proposeTask(s, p, now, hold, undefined, shaping));
     } catch (err) {
       rejected.push(`"${label(p)}": invalid (${err instanceof Error ? err.message : String(err)})`);
     }
@@ -2066,17 +2116,21 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     id: nextId(s, "msg"),
     at: now,
     author: "lead",
-    text: out.reply.trim() || (applied ? "I made the changes listed below." : suggested ? "I suggest the changes listed below." : created.length ? "I proposed new work; see the linked tasks." : "No reply."),
+    text:
+      out.reply.trim() ||
+      (visionDraft ? "I drafted the vision; see below." : questions.length ? "I have a few questions; see below." : applied ? "I made the changes listed below." : suggested ? "I suggest the changes listed below." : created.length ? "I proposed new work; see the linked tasks." : "No reply."),
     leadRunId: r.id,
     ...(created.length ? { proposedTaskIds: created } : {}),
     ...(rejected.length ? { rejected } : {}),
     ...(set ? { changeSetId: set.id } : {}),
+    ...(visionDraft ? { visionDraftId: visionDraft.id } : {}),
+    ...(questions.length ? { questions } : {}),
   });
-  event(s, now, "lead", "spec", `Lead run ${r.id} replied${created.length ? ` and proposed ${created.join(", ")}` : ""}${rejected.length ? `; ${rejected.length} proposal(s) rejected` : ""}`);
+  event(s, now, "lead", "spec", `Lead run ${r.id} replied${visionDraft ? " and drafted the vision" : ""}${created.length ? ` and proposed ${created.join(", ")}${shaping ? " (roadmap, held while shaping)" : ""}` : ""}${rejected.length ? `; ${rejected.length} item(s) rejected` : ""}`);
   return s;
 }
 
-function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string): string {
+function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string, fromShaping = false): string {
   let n = s.tasks.length + 1;
   const ids = new Set(s.tasks.map((x) => x.id));
   while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
@@ -2126,10 +2180,11 @@ function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixe
     createdAt: now,
     updatedAt: now,
     decisionAt: now,
+    ...(fromShaping ? { fromShaping: true } : {}),
     pipelineRev: 1,
     pipelineHistory: [{ rev: 1, at: now, author: "lead", reason: `Lead applied the ${tpl.name} template`, steps: defs.map(toDef) }],
   });
-  event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})`, id);
+  event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})${fromShaping ? "; planned while shaping, waits for Start building" : ""}`, id);
   return id;
 }
 
@@ -2793,6 +2848,301 @@ export function setLeadSelection(state: State, selection: ModelSelection, now: s
   const r = activeLeadRun(s);
   if (r) requestLeadStop(s, r, "lead changed", now);
   event(s, now, "user", "config", `Lead set to ${providerLabel(selection.provider)} · ${selection.model}${r ? `; stopping ${r.id} first` : ""}`);
+  return s;
+}
+
+// ---------- ORC-012: shaping the vision with the lead first ----------
+//
+// A project is shaping or building. While shaping, the lead answers messages and may draft the vision
+// and propose a first roadmap, but no worker step is dispatched and no planning run starts. A draft is
+// a suggestion: the vision changes only when the user accepts it. Start building needs a vision and
+// releases the roadmap on Autopilot; going back to shaping stops nothing that is running.
+
+export const MAX_VISION_TEXT = 8000;
+export const MAX_VISION_FOCUS = 300;
+const MAX_VISION_DRAFTS = 50;
+
+/** The one line shown wherever new work would otherwise be expected to start. Never "Paused". */
+export const SHAPING_LABEL = "Shaping: new work waits until you start building";
+
+/** Why Start building is refused, or undefined when it is allowed. */
+export function startBuildingBlocker(s: State): string | undefined {
+  if (s.project.stage === "building") return "Already building.";
+  if (!currentVision(s).text.trim()) return "Write or accept a vision first.";
+  return undefined;
+}
+
+/** Roadmap proposals made while shaping that have not started yet, in board order. */
+export function roadmapTasks(s: State): Task[] {
+  return s.tasks.filter((t) => t.fromShaping && (t.lifecycle === "proposed" || t.lifecycle === "ready")).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+}
+
+/** The draft the user has not yet accepted or dismissed (at most one: a newer draft supersedes it). */
+export function openVisionDraft(s: State): VisionDraft | undefined {
+  for (let i = s.visionDrafts.length - 1; i >= 0; i--) if (s.visionDrafts[i].status === "open") return s.visionDrafts[i];
+  return undefined;
+}
+
+/**
+ * Start building. Refused without a vision. On Autopilot (autonomy on and lead proposals not held) the
+ * roadmap starts; with check-in or "only when I ask" it keeps waiting for the user, as lead proposals do.
+ */
+export function startBuilding(state: State, now: string): State {
+  const why = startBuildingBlocker(state);
+  if (why) throw new ControlError(why);
+  const s = draft(state);
+  s.project.stage = "building";
+  const a = s.project.autonomy;
+  const release = a.enabled && !a.holdLeadProposals;
+  const released: string[] = [];
+  for (const t of s.tasks) {
+    if (!t.fromShaping || !t.holdBeforeStart || (t.lifecycle !== "proposed" && t.lifecycle !== "ready")) continue;
+    if (!release) continue;
+    t.holdBeforeStart = false;
+    touch(t, now);
+    released.push(t.id);
+    event(s, now, "user", "control", "Released from the roadmap: building started on Autopilot", t.id);
+  }
+  const waiting = roadmapTasks(s).filter((t) => t.holdBeforeStart).length;
+  event(s, now, "user", "config", `Building started${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task(s) wait for your release` : ""}`);
+  return s;
+}
+
+/** Back to shaping: nothing running is stopped and nothing new starts. Available at any time. */
+export function startShaping(state: State, now: string): State {
+  if (state.project.stage === "shaping") throw new ControlError("Already shaping.");
+  const s = draft(state);
+  s.project.stage = "shaping";
+  const running = activeAttempts(s).length;
+  event(s, now, "user", "config", `Shaping the vision; new work waits until you start building${running ? ` (${running} running step(s) finish normally)` : ""}`);
+  return s;
+}
+
+/** Control characters other than tab and newline, removed from every text the lead drafts. */
+const CONTROL_G = new RegExp(CONTROL_RE.source, "g");
+const cleanText = (x: string) => x.replace(CONTROL_G, "").replace(/\r\n?/g, "\n").trim();
+const cleanLine = (x: string) => oneLine(x.replace(CONTROL_G, ""));
+
+export type ValidatedVisionDraft = { ok: true; draft: { text: string; focus: string; reason: string } } | { ok: false; why: string };
+
+/**
+ * Strict validation of the lead's vision draft (untrusted data). Only runs that answer the user's
+ * messages may draft. The text keeps its newlines; the focus is one line; both are capped and cleaned.
+ * A draft identical to the current vision is refused as nothing to decide.
+ */
+export function validateVisionDraft(s: State, r: LeadRun, vision: unknown): ValidatedVisionDraft {
+  if (r.messageIds.length === 0) return { ok: false, why: "planning runs cannot draft the vision" };
+  if (!vision || typeof vision !== "object" || Array.isArray(vision)) return { ok: false, why: "the draft was not an object" };
+  const v = vision as Record<string, unknown>;
+  if (typeof v.text !== "string") return { ok: false, why: "the draft needs a text" };
+  if (v.text.length > MAX_VISION_TEXT * 2) return { ok: false, why: `the text is over ${MAX_VISION_TEXT} characters` };
+  const text = cleanText(v.text);
+  if (!text) return { ok: false, why: "the text is empty" };
+  if (text.length > MAX_VISION_TEXT) return { ok: false, why: `the text is over ${MAX_VISION_TEXT} characters` };
+  const cur = currentVision(s);
+  let focus = cur.focus;
+  if (v.focus !== undefined && v.focus !== null) {
+    if (typeof v.focus !== "string") return { ok: false, why: "the focus must be text" };
+    focus = cleanLine(v.focus);
+    if (focus.length > MAX_VISION_FOCUS) return { ok: false, why: `the focus is over ${MAX_VISION_FOCUS} characters` };
+  }
+  let reason = "Drafted from your messages";
+  if (v.reason !== undefined && v.reason !== null) {
+    if (typeof v.reason !== "string") return { ok: false, why: "the reason must be text" };
+    reason = cleanLine(v.reason).slice(0, 500) || reason;
+  }
+  if (text === cur.text.trim() && focus === oneLine(cur.focus)) return { ok: false, why: "the draft is the same as the current vision" };
+  return { ok: true, draft: { text, focus, reason } };
+}
+
+/** Record a validated draft as an open suggestion; an older open draft is superseded. Nothing is applied. */
+function draftFromRun(s: State, r: LeadRun, d: { text: string; focus: string; reason: string }, now: string): VisionDraft {
+  for (const old of s.visionDrafts) {
+    if (old.status !== "open") continue;
+    old.status = "superseded";
+    old.resolvedAt = now;
+  }
+  const draft: VisionDraft = { id: `vd-${r.id}`, at: now, leadRunId: r.id, messageIds: [...r.messageIds], text: d.text, focus: d.focus, reason: d.reason, basedOnVisionRev: currentVision(s).rev, status: "open" };
+  s.visionDrafts.push(draft);
+  if (s.visionDrafts.length > MAX_VISION_DRAFTS) s.visionDrafts.splice(0, s.visionDrafts.length - MAX_VISION_DRAFTS);
+  event(s, now, "lead", "vision", `Lead run ${r.id} drafted the vision (${draft.id}) from your message ${r.messageIds.join(", ")}: ${d.reason}. It waits for you to accept, edit or dismiss it.`);
+  return draft;
+}
+
+export const MAX_QUESTIONS = 5;
+export const MAX_QUESTION_LENGTH = 300;
+export const MAX_QUESTION_WHY = 200;
+export const MAX_QUESTION_OPTIONS = 4;
+export const MAX_OPTION_LENGTH = 120;
+
+const isArea = (v: unknown): v is ShapingArea => typeof v === "string" && (SHAPING_AREAS as string[]).includes(v);
+const isCoverageState = (v: unknown): v is CoverageState => typeof v === "string" && (COVERAGE_STATES as string[]).includes(v);
+
+/**
+ * Strict validation of the lead's coverage block: only the known areas and states are kept; everything
+ * else is ignored with a note. Only runs that answer the user may report coverage.
+ */
+export function validateCoverage(r: LeadRun, raw: unknown): { ok: true; coverage: Coverage; notes: string[] } | { ok: false; notes: string[] } {
+  if (r.messageIds.length === 0) return { ok: false, notes: ["planning runs cannot report coverage"] };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, notes: ["the coverage block was not an object"] };
+  const notes: string[] = [];
+  const coverage: Coverage = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isArea(k)) {
+      notes.push(`unknown area "${cleanLine(k).slice(0, 40)}" ignored`);
+      continue;
+    }
+    if (!isCoverageState(v)) {
+      notes.push(`${k}: "${typeof v === "string" ? cleanLine(v).slice(0, 40) : typeof v}" is not clear, partial or open; ignored`);
+      continue;
+    }
+    coverage[k] = v;
+  }
+  return { ok: true, coverage, notes };
+}
+
+
+/**
+ * Strict validation of the lead's questions: at most 5, each at most 300 characters with a reason of at
+ * most 200 and at most 4 options of at most 120, control characters removed. An entry over a cap or of the
+ * wrong shape is left out with a note; the rest stand. Only runs that answer the user may ask.
+ */
+export function validateQuestions(r: LeadRun, raw: unknown): { questions: LeadQuestion[]; notes: string[] } {
+  if (r.messageIds.length === 0) return { questions: [], notes: ["planning runs cannot ask the user"] };
+  if (!Array.isArray(raw)) return { questions: [], notes: ["the questions block was not a list"] };
+  const notes: string[] = [];
+  const questions: LeadQuestion[] = [];
+  const extra = raw.length - MAX_QUESTIONS;
+  if (extra > 0) notes.push(`${extra} more ignored: at most ${MAX_QUESTIONS} questions in one reply`);
+  raw.slice(0, MAX_QUESTIONS).forEach((entry: unknown, i: number) => {
+    const n = `#${i + 1}`;
+    const it = entry && typeof entry === "object" && !Array.isArray(entry) ? (entry as Record<string, unknown>) : undefined;
+    if (!it) return notes.push(`${n} ignored: not an object`);
+    if (typeof it.question !== "string" || !cleanLine(it.question)) return notes.push(`${n} ignored: the question must be text`);
+    const question = cleanLine(it.question);
+    if (question.length > MAX_QUESTION_LENGTH) return notes.push(`${n} ignored: the question is over ${MAX_QUESTION_LENGTH} characters`);
+    let why = "";
+    if (it.why !== undefined && it.why !== null) {
+      if (typeof it.why !== "string") return notes.push(`${n} ignored: why must be text`);
+      why = cleanLine(it.why);
+      if (why.length > MAX_QUESTION_WHY) return notes.push(`${n} ignored: why is over ${MAX_QUESTION_WHY} characters`);
+    }
+    const q: LeadQuestion = { question, why };
+    if (it.area !== undefined && it.area !== null) {
+      if (isArea(it.area)) q.area = it.area;
+      else notes.push(`${n}: unknown area ignored`);
+    }
+    if (it.options !== undefined && it.options !== null) {
+      if (!Array.isArray(it.options)) notes.push(`${n}: options ignored: not a list`);
+      else {
+        const more = it.options.length - MAX_QUESTION_OPTIONS;
+        if (more > 0) notes.push(`${n}: ${more} more option(s) ignored: at most ${MAX_QUESTION_OPTIONS}`);
+        const options: string[] = [];
+        for (const o of it.options.slice(0, MAX_QUESTION_OPTIONS)) {
+          if (typeof o !== "string" || !cleanLine(o)) {
+            notes.push(`${n}: an option was ignored: not text`);
+            continue;
+          }
+          const text = cleanLine(o);
+          if (text.length > MAX_OPTION_LENGTH) {
+            notes.push(`${n}: an option was ignored: over ${MAX_OPTION_LENGTH} characters`);
+            continue;
+          }
+          options.push(text);
+        }
+        if (options.length) q.options = options;
+      }
+    }
+    questions.push(q);
+  });
+  return { questions, notes };
+}
+
+/**
+ * The coverage as it stands: from the newest completed run that reported one, with every area it did
+ * not name counted as open. Undefined until a run has reported coverage.
+ */
+export function coverageOf(s: State): Record<ShapingArea, CoverageState> | undefined {
+  for (let i = s.leadRuns.length - 1; i >= 0; i--) {
+    const c = s.leadRuns[i].coverage;
+    if (s.leadRuns[i].outcome !== "completed" || !c) continue;
+    const out = {} as Record<ShapingArea, CoverageState>;
+    for (const a of SHAPING_AREAS) out[a] = c[a] ?? "open";
+    return out;
+  }
+  return undefined;
+}
+
+/** Areas still open by the latest coverage (empty when no coverage was reported). Informational: never a block. */
+export function openAreas(s: State): ShapingArea[] {
+  const c = coverageOf(s);
+  return c ? SHAPING_AREAS.filter((a) => c[a] === "open") : [];
+}
+
+/** The newest lead questions the user has not written back since (the panel offers inline answers to these). */
+export function latestQuestions(s: State): { message: Message; questions: LeadQuestion[] } | undefined {
+  for (let i = s.conversation.length - 1; i >= 0; i--) {
+    const m = s.conversation[i];
+    if (m.author === "user") return undefined;
+    if (m.author === "lead") return m.questions?.length ? { message: m, questions: m.questions } : undefined;
+  }
+  return undefined;
+}
+
+/** One user message from the inline answers: each answered question followed by its answer; unanswered ones are skipped. */
+export function answersMessage(questions: LeadQuestion[], answers: string[]): string {
+  const parts: string[] = [];
+  questions.forEach((q, i) => {
+    const a = (answers[i] ?? "").trim();
+    if (a) parts.push(`Q: ${q.question}\nA: ${a}`);
+  });
+  return parts.join("\n\n");
+}
+
+function getVisionDraft(s: State, draftId: string): VisionDraft {
+  const d = s.visionDrafts.find((x) => x.id === draftId);
+  if (!d) throw new ControlError(`Unknown vision draft ${draftId}`);
+  return d;
+}
+
+/**
+ * Accept a draft, as drafted or with the user's edits: a user-authored vision revision that records the
+ * draft. Compare-and-set on the vision revision, like a hand edit.
+ */
+export function acceptVisionDraft(state: State, draftId: string, expectedRev: number, edits: { text?: string; focus?: string } | undefined, now: string): State {
+  const d = getVisionDraft(state, draftId);
+  if (d.status !== "open") throw new ControlError(d.status === "accepted" ? "This draft was already accepted." : d.status === "dismissed" ? "This draft was dismissed." : "A newer draft replaced this one.");
+  const cur = currentVision(state);
+  if (cur.rev !== expectedRev) throw new StaleWriteError(expectedRev, cur.rev);
+  const edited = edits?.text !== undefined || edits?.focus !== undefined;
+  const text = edits?.text !== undefined ? cleanText(edits.text) : d.text;
+  const focus = edits?.focus !== undefined ? cleanLine(edits.focus) : d.focus;
+  if (!text) throw new ControlError("The vision cannot be empty.");
+  if (text.length > MAX_VISION_TEXT) throw new ControlError(`The vision is limited to ${MAX_VISION_TEXT} characters.`);
+  if (focus.length > MAX_VISION_FOCUS) throw new ControlError(`The focus is limited to ${MAX_VISION_FOCUS} characters.`);
+  const s = draft(state);
+  const draftRec = getVisionDraft(s, draftId);
+  const rev = pushVision(
+    s,
+    { author: "user", text, focus, reason: `${edited ? "Accepted the lead's draft with edits" : "Accepted the lead's draft"} (${d.id}): ${d.reason}`, source: { draftId: d.id, leadRunId: d.leadRunId, messageIds: [...d.messageIds] } },
+    now,
+    `Vision r${cur.rev + 1} by you: accepted the lead's draft ${d.id}${edited ? " with edits" : ""}`,
+  );
+  draftRec.status = "accepted";
+  draftRec.resolvedAt = now;
+  draftRec.visionRev = rev.rev;
+  return s;
+}
+
+/** Dismiss a draft. The vision is unchanged; the lead sees the dismissal in its next envelope. */
+export function dismissVisionDraft(state: State, draftId: string, now: string): State {
+  const d = getVisionDraft(state, draftId);
+  if (d.status !== "open") throw new ControlError(`This draft is already ${d.status}.`);
+  const s = draft(state);
+  const rec = getVisionDraft(s, draftId);
+  rec.status = "dismissed";
+  rec.resolvedAt = now;
+  event(s, now, "user", "vision", `Dismissed the lead's vision draft ${d.id}; the vision is unchanged`);
   return s;
 }
 

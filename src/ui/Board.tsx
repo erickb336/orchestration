@@ -8,6 +8,7 @@ import { PrChip } from "./Delivery";
 import { COLUMN_LABEL, ROLE_LABEL, StatePill, currentWork, hasNewDecision, latestEvent, relTime } from "./common";
 import { isSettledTask, pipelineSummary } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
+import { ShapingBanner } from "./Shaping";
 import { FocusDiff } from "./SteeringChanges";
 
 type View = "list" | "board";
@@ -240,6 +241,7 @@ export function Board() {
         )}
       </div>
       {creating && <NewTaskForm onClose={() => setCreating(false)} />}
+      <ShapingBanner />
       <FocusBanner />
       <div className="toolbar" role="search">
         <div className="segmented" role="group" aria-label="View">

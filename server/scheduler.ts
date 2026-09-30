@@ -725,8 +725,8 @@ export class Scheduler {
         return M.reportLeadFailed(s, e.attemptId, e.message, now, e.usage);
       case "completed": {
         const out = parseLeadOutput(e.finalText);
-        // ORC-009: the steering block and any parse problem go through as found; the domain validates them.
-        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, problem: out.problem }, now, { usage: e.usage, actualModel: e.model });
+        // ORC-009/ORC-012: the steering block, the vision draft and any parse problem go through as found; the domain validates them.
+        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, problem: out.problem }, now, { usage: e.usage, actualModel: e.model });
       }
     }
   }
