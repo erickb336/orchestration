@@ -1,6 +1,26 @@
-# Orchestration
+# Orchestrator
 
 A local orchestrator for teams of AI coding agents. You talk to one **lead**; it plans the work, writes a specification for every task (options, trade-offs, the approach it chose), and runs each task through an editable pipeline of **Claude** and **Codex** workers: designers, coders, and independent reviewers, running concurrently. You can let it run on autopilot or step in anywhere: pause, read and edit any artifact, and resubmit it through the rest of the pipeline.
+
+**Default: one implementation, then independent review.** Choose Claude or Codex and a model for each step. Using both providers does not require building the same change twice. Competing implementations (Best of N) are an optional experiment, off in all built-in templates.
+
+## What you get that a single chat does not
+
+A single Claude Code or Codex chat is one agent, one conversation, and one provider. It stops when the chat stops, and its only reviewer is the agent that wrote the code. Orchestrator changes that:
+
+| In a single chat | With Orchestrator |
+| --- | --- |
+| One thread of work. To know where things stand, you scroll the transcript or ask. | A board shows every feature's progress at once: what is proposed, running, in review, waiting for you, or done. You can look into any track without interrupting the others. |
+| One agent works on one thing at a time. | A team works at once: up to 16 workers across many tasks, each in its own copy of your repository. |
+| The agent that wrote the code also checks it. | An independent reviewer checks every change, from the other provider if you choose (Codex writes, Claude reviews, or the reverse). Repairs repeat until the review is clean. |
+| You prompt for every next step. | A lead plans toward your vision, writes a spec for each task, and keeps work moving on a cadence and within limits you set. |
+| Work lives in a transcript and is gone when the chat ends. | Every task keeps its spec, the decision and why, the artifacts, and what was verified. You can come back days later and see all of it. |
+| To correct course, you interrupt and re-explain. | You pause any step, edit what it produced (a design, the findings, a breakdown), and resubmit. Later steps follow your version. |
+| A big goal has to fit in one context. | A goal is broken into child tasks that run in parallel, are evaluated, and are planned again until the goal is met. |
+| You copy results into your branch yourself. | Verified work is merged in order and delivered to your branch, only when that is safe. |
+| The way of working is whatever you typed this time. | Pipelines are workflows you edit once and reuse: design → implement → review → repair → verify, or any shape you build. |
+
+In short: a chat is one pair of hands on one track. Orchestrator is a team on many tracks, with a lead, a process, a record, and one place to see how each track is going. You decide how involved to be, from approving each task to letting it run end to end.
 
 ## Why this exists
 
@@ -39,7 +59,7 @@ All screenshots show the built-in sample project on the simulated runtime (no ag
 
 ![Goal task with child tasks](docs/screenshots/goal-task.png)
 
-**Best of two, then review → repair until clean.** Codex and Claude each implement, and the review chooses one. A repair round runs, and the second review comes back clean, so the loop stops.
+**Optional comparison example: best of two.** This screenshot demonstrates an explicitly enabled experiment, not the default workflow. Codex and Claude each implement, and the review chooses one. Normally a single agent implements, followed by independent review and repair only if needed.
 
 ![Best-of pipeline with an iteration](docs/screenshots/best-of-pipeline.png)
 
@@ -59,25 +79,19 @@ All screenshots show the built-in sample project on the simulated runtime (no ag
 
 ![Settings](docs/screenshots/settings.png)
 
-## When it helps, and when it does not
+## When a plain chat is the better tool
 
-A single Claude Code or Codex session is already strong. It can plan, use sub-agents, work for a long time, and run tasks in parallel inside one provider. Orchestration is worth its overhead when you want things a single session does not give you:
+For one small, focused change, use a single chat. It is faster and cheaper, because a pipeline spends extra tokens on the spec, the review, and any repair round.
 
-- **Both providers on one goal.** Claude and Codex work on the same goal concurrently, and each checks the other's work (for example, Codex implements and Claude reviews).
-- **Durable records.** Specs, decisions, and artifacts outlast any single chat. You can come back days later and see what was decided, why, and what was verified.
-- **Control at every step.** You can pause any step (with confirmation), edit what it produced, and resubmit it through the rest of the pipeline.
-- **Explicit, repeatable workflows.** Pipelines, loops (review → repair until clean), parallel candidates (best of N), and breakdowns into child tasks are workflows you can edit and reuse.
-- **Always-on, bounded autonomy.** A lead can keep proposing and shipping work toward a vision within limits you set, and integrate it serially.
-
-It is **not** a net win for a single focused change. There, a plain chat is faster and cheaper, because the pipelines spend extra tokens on specs, reviews, and iterations. The benefits have not yet been measured against real runs. The honest way to decide is to give the same goal to a single session and to Orchestration, then compare the elapsed time, the cost, and how many problems each result has.
+Orchestrator pays off when the work is bigger than one sitting: many tasks, more than one day, or work you want to keep moving while you are away. These benefits come from how it is built. They have not yet been measured against real runs, so try it on a real goal next to a plain chat and compare the time, the cost, and the problems in each result.
 
 ## Install
 
 Requires Node.js 22.13 or newer (it uses the built-in `node:sqlite`) and git.
 
 ```bash
-git clone https://github.com/erickb336/orchestration.git
-cd orchestration
+git clone https://github.com/erickb336/orchestrator.git
+cd orchestrator
 npm install
 npm start
 ```
@@ -93,7 +107,7 @@ ORCHESTRATION_RUNTIME=real npm start
 1. **Credentials.** Set them in the environment the service starts from. Settings → Providers shows each provider's status; checking never starts a model run.
    - **Claude:** `ANTHROPIC_API_KEY`, or Bedrock/Vertex/Foundry settings. Anthropic does not allow third-party Agent SDK apps to use a Claude.ai subscription login.
    - **Codex:** your local Codex sign-in (`npx codex login`) or an API key (`printenv OPENAI_API_KEY | npx codex login --with-api-key`).
-2. **Project.** In Settings → Project, point Orchestration at a git repository with at least one commit, and write a vision.
+2. **Project.** In Settings → Project, point Orchestrator at a git repository with at least one commit, and write a vision.
 3. **Involvement.** Choose how involved you want to be (Autopilot, check in before work starts, or only when I ask), then message the lead or create a task.
 
 What real runs do on your machine:
@@ -103,6 +117,15 @@ What real runs do on your machine:
   - Every other role gets a read-only checkout.
   - Finished work is merged, one task at a time, into `orchestration/<project>/integration`.
   - With automatic delivery on, that branch is fast-forwarded into your chosen branch, but only when your working tree is clean. Your latest commits are merged into the integration branch first.
+- **GitHub pull requests** (Settings → Delivery, off by default) are a third delivery mode, never on together with local delivery:
+  - Each finished task becomes one pull request on a branch the app owns (`orchestration/<project>/pr/<task>-<n>`), opened with your own `gh` sign-in. The app never reads or stores a token, never forces a push, and publishes only commits Orchestrator made.
+  - **Hold and notify** (default): an independent agent reviews the change, the app watches the required checks, and tells you once when the pull request is ready. You merge it on GitHub or with Merge in the app, which is tied to the commit you saw.
+  - **Merge automatically** (a separate, explicit setting): the app merges one pull request at a time, and only when an independent review is clean for exactly that change, every required check passed on its exact head, GitHub reports it mergeable, it touches no protected file, and nothing is paused. It first brings the pull request up to date with the base and waits for the checks again, so what lands is what was tested.
+  - The review is the task's own review when it provably saw the final change and ran on another provider than the writer. Otherwise the app starts one dedicated review task. It never swaps in another provider by itself.
+  - In automatic mode a failed required check, open review findings or a conflict get one fix task, pushed onto the same pull request, at most two per pull request.
+  - If the check on the base branch fails after a merge the app made, automatic merging pauses; a second failure within a day keeps it paused until you resume it. Nothing is reverted automatically.
+  - Everything that lands is listed on the Review page, which never blocks anything. From there you can mark it reviewed, leave a note, or send it back as a fix or a revert.
+  - Pull requests are opened, reviewed and merged only while the service is running. There are no webhooks.
 - **Worker environment** is set per provider:
   - **Isolated** (default): workers see none of your settings, plugins, or web tools, and use only the MCP connections you tick.
   - **Use my local setup:** workers get your user-level Claude or Codex configuration, including all its MCP servers and plugins.
@@ -128,13 +151,14 @@ Environment variables:
 To get the most out of your Claude and Codex capacity:
 
 1. **Give the lead the whole goal.** Write it in the vision, or say it in the conversation. The lead breaks it into specified tasks. Raise "max proposals per run" and "max open lead proposals" in Settings → Autonomy for bigger goals.
-2. **Keep both providers busy.**
-   - Raise the worker limit.
-   - Set per-provider limits to match your plans.
+2. **Assign providers where they are useful.**
+   - Set worker and per-provider limits to match your workload and budget.
+   - Parallelize distinct tasks; avoid duplicate implementations merely to keep both providers busy.
    - Give each role the provider and model that suit it. For example, Codex for implementation, Claude for design and independent review, or the reverse. Every step can be pinned individually.
 3. **Parallelise inside tasks.**
    - Pipelines are graphs: steps with no dependency between them (for example code review and UX review) run at the same time.
-   - Any step can run as **2–5 agents at once**. **Copies** (for example three reviewers, one per provider) all contribute: review findings are added together. **Best of N** (for example a Claude and a Codex implementation) lets the next step choose one; you can change the choice yourself.
+   - Every built-in step starts with **one agent**. Keep the pipeline editor’s **Run as parallel agents → Off (one agent)** for ordinary implementation.
+   - Optionally enable **2–5 agents** for a specific step. **Copies** combine contributions such as independent review findings. **Best of N** runs competing alternatives and selects one; use it only when you explicitly want that comparison and its extra cost. Provider/model selection remains independent of agent count.
 4. **Break big goals into child tasks.** The **Goal** template plans the goal as a list of child tasks, which run concurrently with their own pipelines. When they finish, it evaluates the result and plans the next round (up to 5 rounds), then reports. You can edit the list at a review gate before any child task exists.
 5. **Let work iterate.** Built-in templates repeat review → repair until the review is clean (up to 3 rounds), and you can set loops on any step in the pipeline editor.
 6. **Use Autopilot** for continuous planning, automatic retries, and automatic delivery. Add review gates only where you want to look. Outside Autopilot, child tasks wait for you to start them, like the lead's proposals.
@@ -170,6 +194,7 @@ docs/         the project specification, research, and one versioned spec per bu
 - **Claude workers:** file tools are confined to their worktree, with no shell unless you enable it.
 - **Codex workers:** they run in Codex's sandbox. Writes are limited to their worktree and a private temp directory, and network access for commands is off. **They can still read files elsewhere on your machine.**
 - **Connections:** MCP servers and plugins you allow run with your permissions and are not sandboxed.
+- **GitHub:** only the service runs `gh` and `git push`. It never uses `--admin`, GitHub's own auto-merge, a forced push, a branch deletion or the merge API; the only merge is `gh pr merge --merge --match-head-commit <sha>`. A change to CI workflow files is not pushed until you allow it for that pull request, and a change to other protected files is never merged automatically. A worker environment set to "local", or Claude workers with a shell, can reach your GitHub sign-in: automatic merging is refused for local environments unless you allow it, and both are listed as warnings in Settings → Delivery. An agent review is not a human review; the required checks, the protected paths, the daily cap and the Review list are the independent layers.
 - **Autopilot:** the lead reads summaries that workers wrote, and on Autopilot its proposals start without review. Treat repositories and connections you do not trust accordingly. Use "check in before work starts", or review gates, when that matters.
 
 ## Status
@@ -184,8 +209,11 @@ This is a personal tool under active development. It is built in milestones (see
 | Lead conversation, autonomy, and integration queue | ORC-005 |
 | Reliability, autopilot, human editing, import/export, and CI | ORC-006 |
 | Fan-out: parallel agents per step, iteration loops, breakdowns into child tasks | ORC-007 |
+| Pull-request delivery, independent review and automatic merge, review-later list | ORC-008 |
 
 Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test runs Claude and Codex workers concurrently against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost.
+
+Pull-request delivery is covered by tests that never contact GitHub: a local bare repository stands in for the remote and a fake stands in for the GitHub API. `node scripts/pr-sandbox-check.mjs --repo <owner>/<throwaway-repo> --yes` records evidence against a real repository. It refuses to run without both arguments, never defaults to a repository, and creates branches, pull requests, a ruleset and a workflow there, so use a repository made for it. That run passed on 2026-09-30 against a sandbox repository with scripted agents standing in for Claude and Codex (25 of 25 checks; see `docs/tasks/ORC-008.md`). It has not been run with real Claude and Codex workers.
 
 ## License
 

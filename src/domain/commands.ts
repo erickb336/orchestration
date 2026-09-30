@@ -2,14 +2,16 @@
 // The service validates argument shapes, applies commands inside a transaction, and records them.
 // Clients send `{ name, args }`; they never ship functions or whole states.
 
+import * as D from "./delivery";
 import * as M from "./model";
 import { buildSeed } from "./seed";
-import { BUILT_IN_TEMPLATES } from "./templates";
+import { INTERNAL_TEMPLATE_IDS, PROJECT_TEMPLATES } from "./templates";
 import {
   ControlError,
   PROVIDERS,
   ROLES,
   type ModelSelection,
+  type PrDeliveryConfig,
   type ProviderId,
   type RoleId,
   type SpecContent,
@@ -144,7 +146,7 @@ export const COMMANDS = {
   saveTemplate: same((s, now, a) => M.saveTemplate(s, template(a.template), a.expectedRev === null ? null : num(a, "expectedRev"), now)),
   deleteTemplate: same((s, now, a) => M.deleteTemplate(s, str(a, "templateId"), now)),
   restoreBuiltInTemplates: same((s, now) =>
-    BUILT_IN_TEMPLATES.filter((b) => !s.project.templates.some((t) => t.id === b.id)).reduce((acc, b) => M.saveTemplate(acc, structuredClone(b), null, now), s),
+    PROJECT_TEMPLATES.filter((b) => !s.project.templates.some((t) => t.id === b.id)).reduce((acc, b) => M.saveTemplate(acc, structuredClone(b), null, now), s),
   ),
 
   // review and editing
@@ -201,6 +203,64 @@ export const COMMANDS = {
     return { state: r.state, result: { imported: r.imported, skipped: r.skipped } };
   },
 
+  // delivery and the review-later queue (ORC-008)
+  /** Off, local branch, or GitHub pull requests: never two at once. */
+  setDeliveryMode: same((s, now, a) => {
+    const mode = str(a, "mode");
+    if (mode !== "off" && mode !== "local" && mode !== "pr") throw new InvalidCommandError("mode must be off, local, or pr");
+    return D.setDeliveryMode(s, { mode, branch: a.branch === undefined ? undefined : str(a, "branch") }, now);
+  }),
+  resetDeliveryBaseline: same((s, now) => M.resetDeliveryBaseline(s, now)),
+  /** Pull-request settings (remote, base, limits, protected paths). Automatic merging cannot be chosen yet. */
+  setPrDelivery: same((s, now, a) => {
+    const c = obj(a.config, "config");
+    const patch: Partial<PrDeliveryConfig> = {};
+    if (c.remote !== undefined) patch.remote = str(c, "remote");
+    if (c.base !== undefined) patch.base = str(c, "base");
+    if (c.merge !== undefined) patch.merge = str(c, "merge") as PrDeliveryConfig["merge"];
+    if (c.reviewer !== undefined) patch.reviewer = str(c, "reviewer") as PrDeliveryConfig["reviewer"];
+    if (c.updateBeforeMerge !== undefined) patch.updateBeforeMerge = bool(c, "updateBeforeMerge");
+    if (c.autoRepair !== undefined) patch.autoRepair = bool(c, "autoRepair");
+    if (c.allowLocalWorkers !== undefined) patch.allowLocalWorkers = bool(c, "allowLocalWorkers");
+    if (c.protectedPaths !== undefined) patch.protectedPaths = array<unknown>(c.protectedPaths, "protectedPaths").map((x) => String(x));
+    if (c.maxOpenPrs !== undefined) patch.maxOpenPrs = num(c, "maxOpenPrs");
+    if (c.maxAutoMergesPerDay !== undefined) patch.maxAutoMergesPerDay = num(c, "maxAutoMergesPerDay");
+    return D.setPrDelivery(s, patch, now);
+  }),
+  /** Run the read-only repository check now. */
+  recheckGitHub: same((s, now) => D.recheckGitHub(s, now)),
+  holdPr: same((s, now, a) => D.holdPr(s, str(a, "taskId"), a.reason === undefined ? undefined : str(a, "reason"), now)),
+  releasePr: same((s, now, a) => D.releasePr(s, str(a, "taskId"), now)),
+  setPrPolicy: same((s, now, a) => {
+    if (a.policy !== null && a.policy !== "hold" && a.policy !== "auto") throw new InvalidCommandError("policy must be hold, auto, or null");
+    return D.setPrPolicy(s, str(a, "taskId"), a.policy, now);
+  }),
+  /** The user's Merge click, tied to the head commit they saw. */
+  requestPrMerge: same((s, now, a) => D.requestPrMerge(s, str(a, "taskId"), str(a, "headSha"), now)),
+  allowWorkflowPush: same((s, now, a) => D.allowWorkflowPush(s, str(a, "taskId"), now)),
+  closePr: same((s, now, a) => D.closePr(s, str(a, "taskId"), now)),
+  redeliver: same((s, now, a) => D.redeliver(s, array<unknown>(a.taskIds, "taskIds").map((x) => String(x)), now)),
+  /** Fix this PR: one bounded fix task whose result is pushed onto the same pull request. Returns { newId }. */
+  repairPr: (s, now, a) => {
+    const r = D.repairPr(s, str(a, "taskId"), now);
+    return { state: r.state, result: { newId: r.newId } };
+  },
+  /** Ask for a dedicated independent review of the pull request's current change now. */
+  requestPrReview: same((s, now, a) => D.requestPrReview(s, str(a, "taskId"), now)),
+  /** Automatic merging continues after a failing base branch paused it. */
+  resumeAutoMerge: same((s, now) => D.resumeAutoMerge(s, now)),
+  retryLandedComment: same((s, now, a) => D.retryLandedComment(s, str(a, "taskId"), str(a, "noteId"), now)),
+  /** The only way a landed item becomes reviewed (or unreviewed again). */
+  markLandedReviewed: same((s, now, a) => D.markLandedReviewed(s, array<unknown>(a.taskIds, "taskIds").map((x) => String(x)), bool(a, "reviewed"), now)),
+  addLandedNote: same((s, now, a) => D.addLandedNote(s, str(a, "taskId"), str(a, "text"), a.postToGitHub === undefined ? false : bool(a, "postToGitHub"), now)),
+  /** Send landed work back as a fix or a revert through the normal pipeline. Returns { newId }. */
+  sendBackLanded: (s, now, a) => {
+    const kind = str(a, "kind");
+    if (kind !== "fix" && kind !== "revert") throw new InvalidCommandError("kind must be fix or revert");
+    const r = D.sendBackLanded(s, { taskId: str(a, "taskId"), kind, note: a.note === undefined ? "" : str(a, "note"), holdBeforeStart: a.holdBeforeStart === undefined ? false : bool(a, "holdBeforeStart") }, now);
+    return { state: r.state, result: { newId: r.newId } };
+  },
+
   // real projects
   setWorkerConnections: same((s, now, a) => M.setWorkerConnections(s, provider(a.provider), array<unknown>(a.names, "names").map((x) => String(x)), now)),
   setWorkerEnvironment: same((s, now, a) => {
@@ -215,6 +275,7 @@ export const COMMANDS = {
     const templateId = str(a, "templateId");
     const tpl = s.project.templates.find((t) => t.id === templateId);
     if (!tpl) throw new InvalidCommandError(`Unknown template ${templateId}`);
+    if (INTERNAL_TEMPLATE_IDS.includes(templateId)) throw new InvalidCommandError(templateId === "revert" ? `The ${tpl.name} template is used by Send back only.` : `The ${tpl.name} template is used by the service only.`);
     const r = M.createTask(
       s,
       {

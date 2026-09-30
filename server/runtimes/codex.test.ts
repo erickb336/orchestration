@@ -2,7 +2,7 @@
 // No model calls, no network, no credentials. The only test touching the real pinned CLI runs
 // `codex --version`.
 
-import { spawnSync } from "node:child_process";
+import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -90,6 +90,23 @@ function alive(pid: number) {
 }
 
 describe("CodexAdapter runs", () => {
+  it("never passes GitHub token variables to a Codex process (ORC-008)", async () => {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const spawn: CodexAdapterOptions["spawn"] = (command, args, options) => {
+      envs.push(options.env ?? {});
+      return nodeSpawn(command, args, options);
+    };
+    const { adapter, events } = make("complete", { spawn }, { GH_TOKEN: "t1", GITHUB_TOKEN: "t2", GH_ENTERPRISE_TOKEN: "t3", GITHUB_ENTERPRISE_TOKEN: "t4" });
+    await adapter.health(); // a probe process
+    adapter.start(assignment()); // a worker process
+    await waitFor(() => terminals(events).length > 0);
+    expect(envs.length).toBeGreaterThanOrEqual(2);
+    for (const env of envs) {
+      expect(Object.keys(env).filter((k) => /^(GH|GITHUB)_/.test(k))).toEqual([]);
+      expect(env.CODEX_STUB_MODE).toBe("complete");
+    }
+  });
+
   it("starts, reports activity, and completes with the final agent message and usage", async () => {
     const { adapter, events, stubLog } = make("complete");
     adapter.start(assignment());
@@ -122,7 +139,7 @@ describe("CodexAdapter runs", () => {
     const recv = log.filter((l) => l.recv).map((l) => l.recv);
     expect(recv.map((m) => m.method)).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
     expect(recv.every((m) => !("jsonrpc" in m))).toBe(true);
-    expect(recv[0].params.clientInfo).toEqual({ name: "orchestration", title: "Orchestration", version: "0.1.0" });
+    expect(recv[0].params.clientInfo).toEqual({ name: "orchestration", title: "Orchestrator", version: "0.1.0" });
     expect(recv[2].params).toEqual({ model: "stub-model", cwd: dir, approvalPolicy: "never", sandbox: "workspace-write" });
     expect(recv[3].params).toEqual({
       threadId: "thr_stub_1",

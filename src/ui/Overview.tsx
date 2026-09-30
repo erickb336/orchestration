@@ -1,7 +1,9 @@
 import { useState } from "react";
+import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { useStore } from "./store";
 import { ROLE_LABEL, fmtTime, involvementOf, relTime, selectionText } from "./common";
+import { PrChip } from "./Delivery";
 import { Conversation } from "./Conversation";
 import { Onboarding } from "./Onboarding";
 import { PROVIDERS, type Attempt, type ProviderId, type State } from "../domain/types";
@@ -24,6 +26,13 @@ export function Overview() {
   const completed = state.events.filter((e) => e.at > since && e.kind === "integration" && e.message.includes("Done")).length;
   const blocked = state.tasks.filter((t) => M.column(state, t) === "blocked").length;
   const active = M.activeAttempts(state);
+  const unreviewed = D.unreviewedCount(state);
+  const nowMs = Date.now();
+  const gh = state.project.github;
+  // A pull request the app is already fixing does not wait for you.
+  const prNeeds = D.trackedPrTasks(state).filter((t) => (t.integration!.pr!.attention && !D.openRepair(state, t.integration!.pr!)) || D.prReady(state, t, nowMs));
+  const flagged = D.landedTasks(state).filter((t) => t.integration!.landed!.status === "unreviewed" && t.integration!.landed!.flags.length > 0);
+  const ghProblem = gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0) ? gh.problem : undefined;
   const outcomes = state.tasks.filter((t) => t.lifecycle === "done").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
 
   return (
@@ -139,14 +148,53 @@ export function Overview() {
             </p>
           </section>
 
+          {(prNeeds.length > 0 || flagged.length > 0 || ghProblem || gh?.autoMergePaused) && (
+            <section className="card" aria-labelledby="needs-h">
+              <h2 id="needs-h">Needs you</h2>
+              <ul className="plain">
+                {ghProblem && (
+                  <li>
+                    <span className="chip danger">GitHub</span> {ghProblem.message} <a href="#/settings">Settings</a>
+                  </li>
+                )}
+                {gh?.autoMergePaused && (
+                  <li>
+                    <span className="chip danger">paused</span> Automatic merging is paused: {gh.autoMergePaused.reason}. {gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}{" "}
+                    <a href="#/review">Review</a>
+                  </li>
+                )}
+                {prNeeds.map((t) => (
+                  <li key={t.id}>
+                    <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title} <PrChip state={state} task={t} />
+                    {t.integration!.pr!.attention && <div className="muted" style={{ fontSize: "0.85rem" }}>{t.integration!.pr!.attention.message}</div>}
+                  </li>
+                ))}
+                {flagged.map((t) => (
+                  <li key={t.id}>
+                    <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="chip danger">landed, flagged</span>
+                  </li>
+                ))}
+              </ul>
+              <p style={{ margin: "0.5rem 0 0" }}>
+                <a href="#/review">Open Review</a>
+              </p>
+            </section>
+          )}
+
           <section className="card" aria-labelledby="outcomes-h">
             <h2 id="outcomes-h">Latest outcomes</h2>
+            {(unreviewed > 0 || D.landedTasks(state).length > 0) && (
+              <p>
+                Landed, not reviewed: <strong>{unreviewed}</strong> · <a href="#/review">Review</a>
+              </p>
+            )}
             {outcomes.length === 0 && <p className="muted">Nothing delivered yet.</p>}
             <ul className="plain">
               {outcomes.map((t) => (
                 <li key={t.id}>
                   <a href={`#/task/${t.id}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="muted">· {relTime(t.updatedAt)}</span>{" "}
                   {t.integration?.delivered?.status === "delivered" && <span className="chip done">delivered</span>}
+                  {t.integration?.pr && <PrChip state={state} task={t} />}
                   {(t.integration?.status === "conflict" || t.integration?.delivered?.status === "conflict") && <span className="chip danger">conflict</span>}
                 </li>
               ))}
@@ -237,14 +285,16 @@ export function Overview() {
 /** One line saying how much runs without the user, with a link to change it. */
 function ModeSummary({ state }: { state: State }) {
   const a = state.project.autonomy;
-  const mode = involvementOf(a);
+  const prMode = state.project.prDelivery.enabled;
+  const mode = involvementOf(a, prMode);
   const paused = state.project.hold;
+  const pr = state.project.prDelivery;
   let pill: string;
   let text: string;
   switch (mode) {
     case "autopilot":
       pill = "Autopilot on";
-      text = `delivering verified work to ${a.autoDeliver.branch}`;
+      text = prMode ? `opening verified work as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "held for you to merge"}` : `delivering verified work to ${a.autoDeliver.branch}`;
       break;
     case "checkin":
       pill = "Check-in";
@@ -257,6 +307,11 @@ function ModeSummary({ state }: { state: State }) {
     default:
       pill = "Custom";
       text = `lead planning on${a.autoDeliver.enabled ? `, delivering to ${a.autoDeliver.branch}` : ", work stays on the integration branch"}`;
+  }
+  // Manual and check-in say nothing about delivery by themselves: name the mode when it is on.
+  if (mode === "manual" || mode === "checkin") {
+    if (prMode) text += `; finished work is opened as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "held for you"}`;
+    else if (a.autoDeliver.enabled) text += `; finished work is delivered to ${a.autoDeliver.branch}`;
   }
   return (
     <p className="mode-line" aria-live="polite">

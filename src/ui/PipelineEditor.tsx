@@ -19,6 +19,7 @@ export function PipelineEditor({
   requireReason,
   header,
   warning,
+  reviewTarget,
   onSave,
   onCancel,
 }: {
@@ -32,6 +33,8 @@ export function PipelineEditor({
   requireReason: boolean;
   header?: React.ReactNode;
   warning?: React.ReactNode;
+  /** The task is a dedicated review of a pull request: the service hands its reviewer the change. */
+  reviewTarget?: boolean;
   /** May be async; the save button stays disabled until it settles. */
   onSave: (defs: StepDef[], reason: string) => Promise<unknown> | void;
   onCancel: () => void;
@@ -39,7 +42,7 @@ export function PipelineEditor({
   const [defs, setDefs] = useState<StepDef[]>(() => structuredClone(initial));
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
-  const issues = validatePipeline(defs);
+  const issues = validatePipeline(defs, { reviewTarget });
   const errors = issues.filter((i) => i.severity === "error");
 
   const update = (i: number, patch: Partial<StepDef>) => setDefs((ds) => ds.map((d, j) => (j === i ? { ...d, ...patch } : d)));

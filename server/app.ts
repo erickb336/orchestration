@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildEmptyProject } from "../src/domain/seed";
 import type { ProviderId } from "../src/domain/types";
+import type { GitHubHost } from "./github";
 import { createHttpServer } from "./http";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
@@ -21,7 +22,7 @@ const port = Number(process.env.ORCHESTRATION_PORT ?? 5319);
 const dbPath = process.env.ORCHESTRATION_DB ?? join(homedir(), ".orchestration", "orchestration.db");
 const staticDir = process.env.ORCHESTRATION_STATIC;
 const devUi = process.env.ORCHESTRATION_DEV_UI;
-const log = (msg: string) => console.log(`[orchestration] ${msg}`);
+const log = (msg: string) => console.log(`[orchestrator] ${msg}`);
 const mode = process.env.ORCHESTRATION_RUNTIME === "real" ? "real" : "fake";
 if (process.env.ORCHESTRATION_RUNTIME && !["real", "fake"].includes(process.env.ORCHESTRATION_RUNTIME)) {
   log(`Unknown ORCHESTRATION_RUNTIME "${process.env.ORCHESTRATION_RUNTIME}"; use "fake" or "real".`);
@@ -38,16 +39,26 @@ try {
 const fakeConfig = defaultFakeConfig();
 let adapters: Record<ProviderId, RuntimeAdapter>;
 let workspaces: WorkspaceManager | undefined;
+let github: GitHubHost | undefined;
+/** True when Claude workers run with shell access: the app then cannot claim that only the service reaches GitHub. */
+let workerShell = false;
 if (mode === "real") {
   // Loaded only in real mode, so the simulated service never loads provider SDKs.
   const [{ ClaudeAdapter }, { CodexAdapter }] = await Promise.all([import("./runtimes/claude"), import("./runtimes/codex")]);
-  adapters = { claude: new ClaudeAdapter({ log }), codex: new CodexAdapter({ log }) };
+  const claude = new ClaudeAdapter({ log });
+  adapters = { claude, codex: new CodexAdapter({ log }) };
+  workerShell = claude.allowShell;
   workspaces = new WorkspaceManager(join(dirname(dbPath), "worktrees"));
+  // Pull-request delivery uses the user's own gh sign-in, from an empty directory the service owns.
+  // Nothing is contacted until the user switches the delivery mode to pull requests.
+  const { GhCliHost } = await import("./github");
+  github = new GhCliHost({ cwd: join(dirname(dbPath), "gh-neutral") });
 } else {
   const catalog = store.read().state.project.catalog;
   adapters = { claude: new FakeAdapter("claude", fakeConfig, catalog.claude), codex: new FakeAdapter("codex", fakeConfig, catalog.codex) };
 }
-const scheduler = new Scheduler(store, adapters, { log, workspaces });
+// Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell });
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
 
@@ -64,7 +75,7 @@ const server = createHttpServer({
 
 
 server.on("error", (e: NodeJS.ErrnoException) => {
-  if (e.code === "EADDRINUSE") log(`Port ${port} is already in use. Another Orchestration service may be running; stop it or set ORCHESTRATION_PORT.`);
+  if (e.code === "EADDRINUSE") log(`Port ${port} is already in use. Another Orchestrator service may be running; stop it or set ORCHESTRATION_PORT.`);
   else log(`Server error: ${e.message}`);
   void scheduler.stop(); // releases the lease if it was taken
   store.close();

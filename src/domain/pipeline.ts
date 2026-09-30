@@ -13,6 +13,7 @@ export function toDef(st: StepDef): StepDef {
   if (st.iterate) d.iterate = { ...st.iterate };
   if (st.parallel) d.parallel = { ...st.parallel, ...(st.parallel.providers ? { providers: [...st.parallel.providers] } : {}) };
   if (st.waitForChildren) d.waitForChildren = true;
+  if (st.independentOf) d.independentOf = st.independentOf;
   if (st.copyOf) d.copyOf = st.copyOf;
   if (st.iteration && st.iteration > 1) d.iteration = st.iteration;
   return d;
@@ -31,6 +32,7 @@ export function structuralKey(st: StepDef): string {
     iterate: st.iterate ?? null,
     parallel: st.parallel ?? null,
     waitForChildren: !!st.waitForChildren,
+    ...(st.independentOf ? { independentOf: st.independentOf } : {}),
   });
 }
 
@@ -72,8 +74,12 @@ export interface PipelineIssue {
   message: string;
 }
 
-/** Validate a pipeline. Errors block saving; warnings are advisory. */
-export function validatePipeline(defs: StepDef[]): PipelineIssue[] {
+/**
+ * Validate a pipeline. Errors block saving; warnings are advisory. `reviewTarget`: the task is a
+ * dedicated review of a pull request, whose reviewer is handed the change by the service, so a review
+ * step without inputs is expected there.
+ */
+export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean } = {}): PipelineIssue[] {
   const issues: PipelineIssue[] = [];
   const err = (step: string | undefined, message: string): undefined => {
     issues.push({ step, severity: "error", message });
@@ -137,7 +143,7 @@ export function validatePipeline(defs: StepDef[]): PipelineIssue[] {
         if (other) err(d.id, `${d.id}'s loop overlaps ${other.id}'s loop; loops cannot overlap or nest.`);
       }
     }
-    if (REVIEW_ROLES.includes(d.role) && d.inputs.length === 0) issues.push({ step: d.id, severity: "warning", message: `${d.id} is a review with no inputs, so it has nothing specific to review.` });
+    if (REVIEW_ROLES.includes(d.role) && d.inputs.length === 0 && !opts.reviewTarget) issues.push({ step: d.id, severity: "warning", message: `${d.id} is a review with no inputs, so it has nothing specific to review.` });
     if (d.outputs.length === 0) issues.push({ step: d.id, severity: "warning", message: `${d.id} produces no artifacts, so later steps cannot use its work.` });
   });
   return issues;

@@ -9,9 +9,9 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { buildSeed } from "../src/domain/seed";
-import { ControlError, DEFAULT_AUTONOMY, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
+import { ControlError, DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
 
-export const STATE_FORMAT = 9;
+export const STATE_FORMAT = 10;
 
 /** In-place upgrades of the state document, keyed by the format they upgrade from. */
 const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
@@ -55,6 +55,14 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     const n = Number(project.workerLimit ?? 3);
     project.providerLimits ??= { claude: n, codex: n };
     doc.version = 9;
+    return doc;
+  },
+  // ORC-008: pull-request delivery settings, off. Nothing observed and no review-later items are
+  // created: earlier deliveries are never backfilled.
+  9: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.prDelivery ??= structuredClone(DEFAULT_PR_DELIVERY);
+    doc.version = 10;
     return doc;
   },
 };
@@ -164,8 +172,8 @@ export class Store {
       }
       if (row && row.format > STATE_FORMAT) {
         throw new Error(
-          `The database at ${this.path} uses state format ${row.format}, which is newer than this version of Orchestration supports (${STATE_FORMAT}). ` +
-            "Update Orchestration, or set ORCHESTRATION_DB to use a different database.",
+          `The database at ${this.path} uses state format ${row.format}, which is newer than this version of Orchestrator supports (${STATE_FORMAT}). ` +
+            "Update Orchestrator, or set ORCHESTRATION_DB to use a different database.",
         );
       }
       if (row) {

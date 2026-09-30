@@ -185,6 +185,41 @@ const goal: StepDef[] = [
   },
 ];
 
+/**
+ * Undo a change that already landed. The service prepares the revert in the first coder's workspace
+ * before the run starts; the coder completes it, and it is reviewed and delivered like any task.
+ */
+const revert: StepDef[] = [
+  {
+    id: "S1",
+    purpose: "Complete the prepared revert: resolve any conflicts, keep later work",
+    role: "coder",
+    dependsOn: [],
+    inputs: [],
+    outputs: [
+      { name: "change", kind: "code-change" },
+      { name: "handoff", kind: "handoff" },
+    ],
+  },
+  { id: "S2", purpose: "Code review", role: "code_reviewer", dependsOn: ["S1"], inputs: [ref("S1", "change"), ref("S1", "handoff")], outputs: [{ name: "findings", kind: "review-findings" }] },
+  {
+    id: "S3",
+    purpose: "Verify the revert and integrate",
+    role: "lead",
+    dependsOn: ["S2"],
+    inputs: [ref("S1", "change"), ref("S2", "findings")],
+    outputs: [{ name: "verification", kind: "verification" }],
+  },
+];
+
+/**
+ * One independent review of a pull request's change before it merges. The service creates the task
+ * itself, points the reviewer's workspace at the exact commit, and hands it the changed lines.
+ */
+const deliveryReview: StepDef[] = [
+  { id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
+];
+
 export const BUILT_IN_TEMPLATES: WorkflowTemplate[] = [
   { id: "goal", name: "Goal", description: "Large goal: break it into parallel child tasks, evaluate, and iterate until the goal is met.", builtIn: true, rev: 1, steps: goal },
   { id: "feature", name: "Feature", description: "User-facing change: design, implement, independent code and UX review, repair if needed, verify.", builtIn: true, rev: 1, steps: feature },
@@ -192,7 +227,26 @@ export const BUILT_IN_TEMPLATES: WorkflowTemplate[] = [
   { id: "bugfix", name: "Bug fix", description: "Reproduce first, fix, review, repair if needed, verify the reproduction no longer fails.", builtIn: true, rev: 1, steps: bugfix },
   { id: "investigation", name: "Investigation", description: "Gather evidence, review it, and propose a follow-up implementation spec.", builtIn: true, rev: 1, steps: investigation },
   { id: "design", name: "Design", description: "Design only: design, UX review, revise if needed, hand off an implementation brief.", builtIn: true, rev: 1, steps: design },
+  { id: "revert", name: "Revert", description: "Undo a landed change: complete the prepared revert, review it, verify. Used by Send back as revert.", builtIn: true, rev: 1, steps: revert },
+  {
+    id: "delivery-review",
+    name: "Delivery review",
+    description: "One independent review of a pull request's change before it merges, by another provider than the writer. Used by pull-request delivery.",
+    builtIn: true,
+    rev: 1,
+    steps: deliveryReview,
+  },
 ];
+
+/**
+ * Built-in templates the service uses itself and that are never offered for a new task: a task made
+ * from "revert" by hand would have nothing prepared in its workspace, and one made from
+ * "delivery-review" would have no pull request to review.
+ */
+export const INTERNAL_TEMPLATE_IDS = ["revert", "delivery-review"];
+
+/** The built-in templates a project starts with and a person or the lead can pick. */
+export const PROJECT_TEMPLATES: WorkflowTemplate[] = BUILT_IN_TEMPLATES.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id));
 
 export function templateSteps(id: string): StepDef[] {
   const t = BUILT_IN_TEMPLATES.find((x) => x.id === id);

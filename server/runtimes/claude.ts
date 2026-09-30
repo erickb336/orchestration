@@ -25,6 +25,7 @@ import type {
 import type { CatalogModel } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 import { homedir } from "node:os";
+import { withoutGitHubTokens } from "../redact";
 import type { AdapterEvent, Assignment, Connection, ProviderHealth, RuntimeAdapter, Usage } from "./types";
 
 // ---------------------------------------------------------------------------------------------
@@ -350,7 +351,8 @@ export class ClaudeAdapter implements RuntimeAdapter {
   private readonly env: NodeJS.ProcessEnv;
   private readonly interruptGraceMs: number;
   private readonly killSettleMs: number;
-  private readonly allowShell: boolean;
+  /** Whether writers get a shell (off by default). Read by the service for the GitHub posture warning. */
+  readonly allowShell: boolean;
   private readonly claudeConfigPath: string;
   private readonly log: (msg: string) => void;
   private readonly runs = new Map<string, Run>();
@@ -589,8 +591,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       canUseTool,
       hooks: { PreToolUse: [{ hooks: [preToolUse] }] },
       // Env REPLACES the child environment (per sdk.d.ts), so pass everything through, plus our flags.
+      // GitHub tokens are removed: only the service talks to GitHub.
       env: {
-        ...this.env,
+        ...withoutGitHubTokens(this.env),
         CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: "1",
         CLAUDE_AGENT_SDK_CLIENT_APP: "orchestration/0.1.0",
       },

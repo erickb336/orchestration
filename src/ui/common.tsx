@@ -125,10 +125,11 @@ export function ModelPicker({
 
 export type Involvement = "autopilot" | "checkin" | "manual" | "custom";
 
-export function involvementOf(a: Autonomy): Involvement {
+/** `prDelivery`: pull-request delivery is on, which counts as a delivery mode like the local branch. */
+export function involvementOf(a: Autonomy, prDelivery = false): Involvement {
   if (!a.enabled) return "manual";
   if (a.holdLeadProposals) return "checkin";
-  if (a.autoDeliver.enabled) return "autopilot";
+  if (a.autoDeliver.enabled || prDelivery) return "autopilot";
   return "custom";
 }
 
@@ -185,4 +186,15 @@ export function usePref(key: string): [string | null, (v: string | null) => void
     [key],
   );
   return [value, set];
+}
+
+/** What the user confirms before automatic merging continues after the base branch failed. */
+export function resumeAutoMergeText(reason?: string): string {
+  return [
+    "Resume automatic merging?",
+    "",
+    `It was paused because ${reason ?? "the check on the base branch failed after a merge the app made"}.`,
+    "Once you resume, the app merges pull requests by itself again, under your GitHub account, including the ones already open and waiting. Nothing was reverted: if the base branch is still failing, more work lands on top of it.",
+    "The count of failures that keeps it paused starts over.",
+  ].join("\n");
 }

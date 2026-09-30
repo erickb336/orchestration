@@ -1,4 +1,4 @@
-# Orchestration team roles
+# Orchestrator team roles
 
 The lead selects these roles when delegating. These are reusable role briefs, not installed custom Codex agent configurations or permanently running processes. Include the relevant brief and task context in the worker assignment. Roles are independent of provider: Claude or Codex may fill any role, including lead. Provider/model assignments are explicit run settings in the future application, not an instruction to override the models of agents in the current editing session.
 
@@ -19,3 +19,8 @@ Every worker receives task ID, revision, absolute workspace, allowed files, fixe
 ## Mixed provider teams
 
 Run Claude and Codex concurrently through separate adapters under the same lead and scheduler. Use a single project-wide worker cap, file/worktree ownership policy, integration queue, and pause mechanism. Cross-provider review is supported but does not replace evidence-based checks. Either provider may lead; only one lead has scheduling authority at a time. Record the provider, model, session/run IDs, and assignment revision for every worker.
+
+
+## Single implementation by default
+
+Assign one coder to each bounded implementation. Another provider can review that result; repair addresses concrete findings in the same line of work. Multiple coders normally own different tasks or disjoint parts of a change. Best-of comparisons are optional experiments the user may enable, not a requirement for mixed-provider teams. Keep parallel agents off on normal implementation steps.

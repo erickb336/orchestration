@@ -45,7 +45,7 @@ mkdirSync(repo);
 const git = (...args) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
 git("init", "-q", "-b", "main");
 writeFileSync(join(repo, "greeting.js"), 'export function greet(name) {\n  return `Hello, ${name}`;\n}\n');
-writeFileSync(join(repo, "README.md"), "# Greeting\n\nA tiny module used to test Orchestration.\n");
+writeFileSync(join(repo, "README.md"), "# Greeting\n\nA tiny module used to test Orchestrator.\n");
 git("add", "-A");
 git("-c", "user.name=Orchestration test", "-c", "user.email=test@localhost", "commit", "-q", "-m", "Initial commit");
 evidence.repo = repo;

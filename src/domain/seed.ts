@@ -2,8 +2,8 @@
 // it is not imported from any real repository.
 
 import { instantiate, toDef } from "./pipeline";
-import { BUILT_IN_TEMPLATES, templateSteps } from "./templates";
-import { DEFAULT_AUTONOMY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
+import { PROJECT_TEMPLATES, templateSteps } from "./templates";
+import { DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
 
 type SampleOutput = { name: string; summary: string; openFindings?: number };
 
@@ -321,7 +321,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 9,
+    version: 10,
     seq: 1000,
     project: {
       id: "sample",
@@ -362,11 +362,12 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
       providerLimits: { claude: 3, codex: 3 },
       runLimits: { ...DEFAULT_RUN_LIMITS },
       autonomy: { ...DEFAULT_AUTONOMY },
+      prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
       workerEnvironment: { claude: "isolated", codex: "isolated" },
       workerConnections: { claude: [], codex: [] },
       hold: false,
       lastVisitAt: at(60),
-      templates: structuredClone(BUILT_IN_TEMPLATES),
+      templates: structuredClone(PROJECT_TEMPLATES),
     },
     tasks,
     attempts,

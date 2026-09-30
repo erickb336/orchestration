@@ -1,20 +1,22 @@
 import { useEffect, useState } from "react";
+import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { StoreContext, useServiceContext, useServiceStore, useStore } from "./store";
 import { Board } from "./Board";
 import { TaskDetail } from "./TaskDetail";
 import { Overview } from "./Overview";
 import { Activity } from "./Activity";
+import { Review } from "./Review";
 import { Settings } from "./Settings";
 import { relTime } from "./common";
 import { useBrowserNotifications } from "./notifications";
 
-type Route = { page: "overview" | "tasks" | "activity" | "settings" } | { page: "task"; id: string };
+type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" } | { page: "task"; id: string };
 
 function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/");
   if (parts[0] === "task" && parts[1]) return { page: "task", id: decodeURIComponent(parts[1]) };
-  if (parts[0] === "overview" || parts[0] === "activity" || parts[0] === "settings") return { page: parts[0] };
+  if (parts[0] === "overview" || parts[0] === "review" || parts[0] === "activity" || parts[0] === "settings") return { page: parts[0] };
   return { page: "tasks" };
 }
 
@@ -54,18 +56,18 @@ function Gate() {
   return (
     <main>
       <section className="card connect" aria-live="polite">
-        <h1>Orchestration</h1>
+        <h1>Orchestrator</h1>
         {loadFailed ? (
           <>
             <p>
-              The Orchestration service is not running. Start it with <code>npm run dev</code> (development) or <code>npm start</code>.
+              The Orchestrator service is not running. Start it with <code>npm run dev</code> (development) or <code>npm start</code>.
             </p>
             <button className="primary" onClick={retry}>
               Retry
             </button>
           </>
         ) : (
-          <p className="muted">Connecting to the Orchestration service…</p>
+          <p className="muted">Connecting to the Orchestrator service…</p>
         )}
       </section>
     </main>
@@ -90,13 +92,14 @@ function Shell() {
       <ConnectionBanner />
       <header className="top">
         <div className="brand">
-          Orchestration
+          Orchestrator
           <ProjectName />
         </div>
         <nav className="tabs" aria-label="Main">
-          {(["overview", "tasks", "activity", "settings"] as const).map((p) => (
+          {(["overview", "tasks", "review", "activity", "settings"] as const).map((p) => (
             <a key={p} href={`#/${p}`} aria-current={tab === p ? "page" : undefined}>
               {p[0].toUpperCase() + p.slice(1)}
+              {p === "review" && <ReviewBadge />}
             </a>
           ))}
         </nav>
@@ -106,6 +109,7 @@ function Shell() {
         {route.page === "overview" && <Overview />}
         {route.page === "tasks" && <Board />}
         {route.page === "task" && <TaskDetail key={route.id} id={route.id} />}
+        {route.page === "review" && <Review />}
         {route.page === "activity" && <Activity />}
         {route.page === "settings" && <Settings />}
       </main>
@@ -118,6 +122,20 @@ function Shell() {
         </div>
       )}
     </>
+  );
+}
+
+/** What waits in the Review list. Persistent: it does not reset when the page is visited. */
+function ReviewBadge() {
+  const { state } = useStore();
+  const needs = D.needsYou(state);
+  const unreviewed = D.unreviewedCount(state);
+  if (needs + unreviewed === 0) return null;
+  const parts = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : "", unreviewed ? `${unreviewed} landed, not reviewed` : ""].filter(Boolean).join(" · ");
+  return (
+    <span className="badge-new" style={{ marginLeft: "0.35rem" }} title={parts} aria-label={parts}>
+      {needs + unreviewed}
+    </span>
   );
 }
 
@@ -135,9 +153,11 @@ function SimBanner() {
         <strong>LIVE EXECUTION</strong>
         <span>
           Claude and Codex agents run on this machine in isolated git worktrees and may incur usage costs.{" "}
-          {state.project.autonomy.autoDeliver.enabled
-            ? `Verified work is delivered to ${state.project.autonomy.autoDeliver.branch} automatically (fast-forward only).`
-            : "Results stay on orchestration/* branches until you merge them."}
+          {state.project.prDelivery.enabled
+            ? `Verified work is pushed to orchestration/* branches on ${state.project.prDelivery.remote} and opened as GitHub pull requests under your account; ${state.project.prDelivery.merge === "auto" ? "the app merges them itself after an independent review and passing required checks" : "you merge them"}.`
+            : state.project.autonomy.autoDeliver.enabled
+              ? `Verified work is delivered to ${state.project.autonomy.autoDeliver.branch} automatically (fast-forward only).`
+              : "Results stay on orchestration/* branches until you merge them."}
         </span>
         {service.scheduler === "observer" && <span>(another service instance holds the scheduler)</span>}
       </div>
@@ -146,7 +166,10 @@ function SimBanner() {
   return (
     <div className="sim-banner" role="note">
       <strong>SIMULATED EXECUTION</strong>
-      <span>Runs come from the service's fake runtime; no agents are running. Tasks and runs are sample data.</span>
+      <span>
+        Runs come from the service's fake runtime; no agents are running. Tasks and runs are sample data.
+        {state.project.prDelivery.enabled ? " Pull requests, checks and merges are simulated: nothing is sent to GitHub." : ""}
+      </span>
       {service.scheduler === "observer" && <span>(another service instance holds the scheduler)</span>}
       <span className="spacer" />
       <button onClick={() => void setSim({ auto: !sim.auto })} aria-pressed={sim.auto} disabled={disabled}>

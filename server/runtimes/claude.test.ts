@@ -216,6 +216,17 @@ describe("ClaudeAdapter", () => {
     });
   });
 
+  it("never passes GitHub token variables to the worker, in either worker environment (ORC-008)", async () => {
+    for (const environment of ["isolated", "local"] as const) {
+      const { adapter, calls } = setup({ env: { ANTHROPIC_API_KEY: "sk-ant-test", PATH: "/usr/bin", GH_TOKEN: "t1", GITHUB_TOKEN: "t2", GH_ENTERPRISE_TOKEN: "t3", GITHUB_ENTERPRISE_TOKEN: "t4" } });
+      adapter.start(assignment({ environment }));
+      await waitFor(() => calls.length === 1);
+      expect(Object.keys(calls[0].options.env ?? {}).filter((k) => /^(GH|GITHUB)_/.test(k))).toEqual([]);
+      expect(calls[0].options.env?.ANTHROPIC_API_KEY).toBe("sk-ant-test");
+      await adapter.shutdown();
+    }
+  });
+
   it("runs to completion with usage, activity, and one terminal event", async () => {
     const { adapter, events, stream, calls } = setup();
     adapter.start(assignment());

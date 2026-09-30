@@ -1,10 +1,10 @@
-# Orchestration Project Specification
+# Orchestrator Project Specification
 
 Build a project workspace where the user talks to one lead agent, sees the work that agent proposes, and can inspect or redirect any task. The lead owns planning and execution within the project vision, delegates to designers, coders, and reviewers, and keeps work moving without requiring approval for every decision.
 
 Every task carries a durable, versioned specification. It explains the problem, options, tradeoffs, and the agent's chosen approach. The user can return later to understand decisions, pause unfinished work, revise it, and resume execution.
 
-Status: proposed implementation specification. The task board, live controls, runtime adapter, and scheduler described here are not built. The existing repository Markdown board and role briefs are the starting inputs. Working product name: Orchestration. SimpleApps is its first managed project; this is development tooling, not a new consumer app in the suite.
+Status: proposed implementation specification. The task board, live controls, runtime adapter, and scheduler described here are not built. The existing repository Markdown board and role briefs are the starting inputs. Working product name: Orchestrator. SimpleApps is its first managed project; this is development tooling, not a new consumer app in the suite.
 
 ## Product outcome
 
@@ -19,6 +19,7 @@ Success means the lead can explain why it chose a task and an approach, the user
 - Designer, coding, code-review, and UX-review roles collaborate under the lead.
 - Claude and Codex must run concurrently on the same project. Roles are provider-independent, and either provider can supply the lead. One active lead owns the project at a time.
 - Provider and model are configurable independently for every workflow step, including planning, design, implementation, review, and repair. Support mixed providers and different models within one task.
+- Default to one implementation per task, followed by independent review and repair if needed. Using Claude and Codex together means assigning providers per step or to distinct tasks. Competing implementations and best-of selection are optional, off by default, and enabled only when the user chooses a comparison experiment. Do not duplicate implementation to fill provider capacity.
 - Tasks accumulate over time and remain visible with stable identifiers.
 - Every task has an attached specification with options, tradeoffs, a recommendation, and an explicit selected approach decided by the agent unless overridden by the user.
 - Reviewing specifications is optional. Their existence is not an approval gate. Human-in-the-loop is optional throughout (user direction, 2026-09-29): the tool must be able to run end to end on autopilot at large scale, while every control (pause, review gates, artifact edits, resubmission) remains available.
@@ -144,7 +145,7 @@ The runtime adapter must support start, observe events, send steering, request i
 
 Role and provider are separate choices. The lead can use either provider and assign designers, coders, or reviewers to either. For example, a Claude lead could dispatch a Codex implementation worker while a Claude designer works on an independent task; a later Claude reviewer can inspect the Codex change. The reverse arrangement must also work. These examples are not claims that one provider is inherently better at a role.
 
-The Orchestration service owns cross-provider dispatch, dependencies, pauses, file/worktree ownership, and integration. It must not rely on Codex native subagents being able to launch Claude, or Claude native subagents being able to launch Codex. Expose bounded task-management tools to the lead, validate its requests, and route each worker to the appropriate adapter. Native child delegation should be disabled or restricted unless every child can be tracked, budgeted, and interrupted through the same control layer.
+The Orchestrator service owns cross-provider dispatch, dependencies, pauses, file/worktree ownership, and integration. It must not rely on Codex native subagents being able to launch Claude, or Claude native subagents being able to launch Codex. Expose bounded task-management tools to the lead, validate its requests, and route each worker to the appropriate adapter. Native child delegation should be disabled or restricted unless every child can be tracked, budgeted, and interrupted through the same control layer.
 
 ### Provider selection and visibility
 
@@ -236,8 +237,20 @@ Use deterministic fake-runtime tests for state races and failure recovery, plus 
 
 Recommended first build: Milestone 1. Use the task detail and specification editor as the central interaction, then add reliable runtime control behind it. Do not build a general graph editor or cloud deployment before the core review-and-steer loop is usable.
 
+## Delivery of finished work (ORC-008)
+
+Finished work leaves Orchestrator through one delivery mode at a time: off (the integration branch only), a local branch (fast-forward), or GitHub pull requests. Pull-request delivery is external publishing, so it is a separate capability: off by default, switched on explicitly, and never turned on by a preset. Automatic merging is a second explicit choice on top of it.
+
+- Desired state (the mode, holds, merge requests), intent (the operation sent) and observed state (what GitHub reports) are separate. "Merged", "closed" and "posted" are recorded only from an observation.
+- The app merges only when its own gate passes for the exact commit: an independent review of exactly that change, by another provider than its writer unless the user chose otherwise; every required check passed on the exact head; GitHub reporting it mergeable; no protected file touched; nothing paused or held. It never bypasses branch rules, never uses GitHub's own auto-merge and never forces a push.
+- The review is a review, not a second implementation: the task's own review when it provably covers the final change, otherwise one dedicated review task. A provider is never substituted silently.
+- Repair is bounded: at most two fix tasks per pull request, pushed onto the same pull request.
+- Everything that lands is listed for review later. The list is informational and never blocks dispatch, integration or merging.
+- The lead sees delivery (pull requests that need attention, the unreviewed count, the user's notes) and may propose tasks. It cannot merge, push, comment, close, send work back or mark anything reviewed.
+- Real GitHub behaviour was checked by the consented sandbox run (`scripts/pr-sandbox-check.mjs`) on 2026-09-30, with scripted agents. Evidence is in `docs/tasks/ORC-008.md`.
+
 ## Assumptions to revisit
 
-The first version is local, single-user, and supports both Claude and Codex as first-class concurrent runtimes. Orchestration is the project name. The exact scheduling cadence and execution budget are not selected. The project lives at this repository, separate from the SimpleApps consumer apps. SimpleApps is its first managed repository.
+The first version is local, single-user, and supports both Claude and Codex as first-class concurrent runtimes. Orchestrator is the project name. The exact scheduling cadence and execution budget are not selected. The project lives at this repository, separate from the SimpleApps consumer apps. SimpleApps is its first managed repository.
 
-The autonomous lead may create and execute ordinary reversible product work within the recorded vision. External publishing, purchases, destructive actions, and other actions outside existing authorization remain separate capabilities. No scheduling or external deployment is enabled by writing this spec.
+The autonomous lead may create and execute ordinary reversible product work within the recorded vision. External publishing, purchases, destructive actions, and other actions outside existing authorization remain separate capabilities. Pull-request delivery is such a capability: the user switches it on, and switches automatic merging on separately. No scheduling or external deployment is enabled by writing this spec.

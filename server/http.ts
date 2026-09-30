@@ -6,7 +6,7 @@
 import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
-import { CLIENT_HEADER, type AckMode, type CommandError, type ServiceInfo, type StatePayload } from "../src/api";
+import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CommandError, type ServiceInfo, type StatePayload } from "../src/api";
 import { exportMarkdown } from "../src/domain/model";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
@@ -85,6 +85,30 @@ export function createHttpServer(opts: HttpOptions): Server {
     res.end(json);
   };
   const fail = (res: ServerResponse, status: number, kind: CommandError["kind"], error: string) => send(res, status, { error, kind } satisfies CommandError);
+
+  /**
+   * What a landed task changed, for the Review list. Takes a task id only, never a commit: the commit
+   * comes from the task's own landed record. Read-only and capped.
+   */
+  const change = (res: ServerResponse, taskId: string) => {
+    const { state } = store.read();
+    const integration = state.tasks.find((t) => t.id === taskId)?.integration;
+    const landed = integration?.landed;
+    // An open pull request shows its head against the base it contains; a landed task shows its commit.
+    const pr = !landed && integration?.status === "integrated" && integration.pr && integration.pr.phase !== "closed" ? integration.pr : undefined;
+    if (!landed && !pr) return fail(res, 404, "invalid", "This task has no landed change and no pull request.");
+    if ((landed ?? pr)!.simulated || !opts.workspaces) return fail(res, 404, "invalid", "This change is simulated: there is no commit to show.");
+    const commit = landed ? landed.commit : pr!.headSha;
+    const url = landed ? landed.pr?.url : pr!.url;
+    let out: ReturnType<WorkspaceManager["changeDiff"]>;
+    try {
+      out = opts.workspaces.changeDiff({ repoPath: state.project.repoPath, commit, ...(pr ? { from: pr.baseSha } : {}) });
+    } catch {
+      return fail(res, 500, "internal", "The changes could not be read from the repository.");
+    }
+    if (!out) return send(res, 404, { error: `Commit ${commit.slice(0, 12)} is not in the local repository.`, kind: "invalid", ...(url ? { url } : {}) } satisfies ChangeError);
+    return send(res, 200, { taskId, commit, target: landed ? landed.target : `${pr!.repo} ${pr!.base}`, diff: out.diff, truncated: out.truncated } satisfies ChangeResponse);
+  };
 
   const readJson = (req: IncomingMessage): Promise<unknown> =>
     new Promise((resolveBody, reject) => {
@@ -183,6 +207,7 @@ export function createHttpServer(opts: HttpOptions): Server {
           res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": 'attachment; filename="orchestration-board.md"', "Cache-Control": "no-store" });
           return res.end(exportMarkdown(store.read().state));
         }
+        if (path === "/api/change") return change(res, url.searchParams.get("task") ?? "");
         return fail(res, 404, "invalid", "Not found");
       }
 
@@ -196,6 +221,9 @@ export function createHttpServer(opts: HttpOptions): Server {
       if (path === "/api/commands") {
         if (typeof body.name !== "string" || typeof body.idempotencyKey !== "string") return fail(res, 400, "invalid", "name and idempotencyKey are required");
         if (real && body.name === "resetSampleData") return fail(res, 400, "control", "Sample data is only available with the fake runtime.");
+        // A sample project never contacts GitHub.
+        if (real && body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr" && store.read().state.project.sample)
+          return fail(res, 400, "control", "This is the sample project; pull-request delivery needs a project of your own. Start a new project in Settings.");
         const r = store.command(body.name, body.args, body.idempotencyKey, new Date().toISOString());
         if (body.name === "resetSampleData") scheduler.resetRuntime();
         return send(res, 200, { version: r.version, result: r.result });
