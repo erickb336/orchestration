@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
+import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
 import { toDef } from "../domain/pipeline";
+import { INTERNAL_TEMPLATE_IDS } from "../domain/templates";
 import { ROLES, type Artifact, type Attempt, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } from "./common";
+import { DeliveryCard } from "./Delivery";
 import { SpecEditor } from "./SpecEditor";
 import { PipelineEditor } from "./PipelineEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
@@ -54,6 +57,7 @@ export function TaskDetail({ id }: { id: string }) {
       </div>
 
       <StatusBanners state={state} task={task} onEdit={editing ? undefined : () => setEditing(true)} />
+      {task.lifecycle === "done" && <DeliveryCard state={state} task={task} />}
 
       {editing ? (
         <SpecEditor key={task.id} task={task} onClose={() => setEditing(false)} />
@@ -200,7 +204,22 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
   else if (waiting && task.lifecycle !== "done")
     out.push(
       <div className="banner neutral" key="wait">
-        Waiting on prerequisite <a href={`#/task/${waiting}`}>{waiting}</a>. Unfinished results from prerequisites are never used.
+        {M.waitingDetail(state, waiting) ? (
+          <>
+            {M.waitingDetail(state, waiting)} (<a href={`#/task/${waiting}`}>{waiting}</a>). With pull-request delivery, a task starts only once its prerequisite's code is in the base it starts from.
+          </>
+        ) : (
+          <>
+            Waiting on prerequisite <a href={`#/task/${waiting}`}>{waiting}</a>. Unfinished results from prerequisites are never used.
+          </>
+        )}
+      </div>,
+    );
+  const heldWriters = task.lifecycle !== "done" && task.lifecycle !== "cancelled" ? D.writersHeld(state) : undefined;
+  if (heldWriters && task.steps.some((st) => st.state === "pending" && st.role === "coder"))
+    out.push(
+      <div className="banner neutral" role="status" key="writers">
+        Coder steps are {heldWriters}. Nothing is blocked; they start once the base has been fetched.
       </div>,
     );
   if (task.hold && !stopping.length && task.holdReason)
@@ -252,7 +271,8 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
             {integ.status === "pending" && (integ.message ? `Integration is waiting: ${integ.message}. It retries automatically.` : "Waiting for integration.")}
             {integ.status === "integrated" && (
               <>
-                Integrated into the integration branch{integ.ref ? ": " : "."}
+                {integ.pr ? "Prepared as a pull request branch" : "Integrated into the integration branch"}
+                {integ.ref ? ": " : "."}
                 {integ.ref && <span className="mono">{integ.ref}</span>}
                 {integ.at && <span className="muted"> · {relTime(integ.at)}</span>}
               </>
@@ -464,7 +484,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
         <PipelineEditor
           initial={task.steps.map(toDef)}
           reservedIds={task.pipelineHistory.flatMap((p) => p.steps.map((x) => x.id))}
-          templates={state.project.templates}
+          templates={state.project.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id))}
           saveLabel={`Save pipeline r${task.pipelineRev + 1}`}
           saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : disabled ? "The service is offline" : undefined}
           requireReason

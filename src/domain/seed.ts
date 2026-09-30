@@ -2,7 +2,7 @@
 // it is not imported from any real repository.
 
 import { instantiate, toDef } from "./pipeline";
-import { BUILT_IN_TEMPLATES, templateSteps } from "./templates";
+import { PROJECT_TEMPLATES, templateSteps } from "./templates";
 import { DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
 
 type SampleOutput = { name: string; summary: string; openFindings?: number };
@@ -367,7 +367,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
       workerConnections: { claude: [], codex: [] },
       hold: false,
       lastVisitAt: at(60),
-      templates: structuredClone(BUILT_IN_TEMPLATES),
+      templates: structuredClone(PROJECT_TEMPLATES),
     },
     tasks,
     attempts,

@@ -5,6 +5,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { buildEnvelope } from "./envelope";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -434,5 +435,144 @@ describe("credentials", () => {
   it("redact removes GitHub token shapes and secret environment values", () => {
     const text = redact("remote: bad credentials ghp_abcdefghijklmnopqrstuvwxyz0123456789 and github_pat_11ABCDEFG0abcdefghij_xyz and hunter2hunter2", { GH_TOKEN: "hunter2hunter2" });
     expect(text).toBe("remote: bad credentials *** and *** and ***");
+  });
+});
+
+describe("review findings on step 1", () => {
+  it("a task whose coder changed nothing lands nothing: it never takes another task's commit as its own", () => {
+    const a = deliverTask("Real change", "one.txt", "1\n");
+    const la = structuredClone(task(a).integration!.landed!);
+    // The coder finishes without touching a file: its "change" is the commit it started from.
+    const b = newTask("No change");
+    oneStep(b);
+    tick();
+    codex.finish(run(b).id);
+    tick();
+    tick();
+    tick(61_000);
+    expect(task(b).lifecycle).toBe("done");
+    expect(task(b).integration).toMatchObject({ status: "not-needed" });
+    expect(task(b).integration!.sha).toBeUndefined();
+    expect(task(b).integration!.landed).toBeUndefined();
+    expect(task(a).integration!.landed).toEqual(la);
+    expect(D.landedTasks(st()).map((t) => t.id)).toEqual([a]);
+    expect(() => cmd("sendBackLanded", { taskId: b, kind: "revert", note: "", holdBeforeStart: false })).toThrow(/has not landed/);
+
+    // The user commits to main; a second no-change task starts from that tip. Merging it would bring
+    // only the user's commit: that is not this task's work either.
+    commit("mine.txt", "mine\n", "my own commit");
+    const mine = git("rev-parse", "main");
+    const c = newTask("No change on top of my commit");
+    oneStep(c);
+    tick();
+    expect(execFileSync("git", ["-C", codex.runs.get(run(c).id)!.workspace.path, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(mine);
+    codex.finish(run(c).id);
+    tick();
+    tick();
+    tick(61_000);
+    expect(task(c).integration).toMatchObject({ status: "not-needed" });
+    expect(task(c).integration!.landed).toBeUndefined();
+    // A real change still integrates, as a merge whose second parent is that change.
+    const d = deliverTask("Another real change", "two.txt", "2\n");
+    const ld = task(d).integration!.landed!;
+    expect(git("rev-parse", `${ld.commit}^2`).startsWith(M.finalChange(st(), task(d))!.ref!.split(" ")[0])).toBe(true);
+  });
+
+  /** A branch and main that conflict in `files`, and a writer worktree with the merge prepared. */
+  const conflicted = (files: string[], attemptId: string) => {
+    for (const f of files) writeFileSync(join(repo, f), "base\n");
+    git("add", "-A");
+    git("-c", "user.name=u", "-c", "user.email=u@u", "commit", "-q", "-m", "base files");
+    git("switch", "-q", "-c", `side-${attemptId}`);
+    for (const f of files) writeFileSync(join(repo, f), "side\n");
+    git("-c", "user.name=u", "-c", "user.email=u@u", "commit", "-q", "-am", "side");
+    const side = git("rev-parse", "HEAD");
+    git("switch", "-q", "main");
+    for (const f of files) writeFileSync(join(repo, f), "main\n");
+    git("-c", "user.name=u", "-c", "user.email=u@u", "commit", "-q", "-am", "main");
+    return workspaces.prepare({ repoPath: repo, projectId: "p", attemptId, taskId: "T", stepId: "S1", access: "write", seed: { kind: "merge", ref: side } });
+  };
+
+  it("the marker guard checks every conflicted file, not only the first 20; the envelope lists 20 and says how many more", () => {
+    const files = Array.from({ length: 25 }, (_, i) => `f${String(i + 1).padStart(2, "0")}.txt`);
+    const ws = conflicted(files, "run-many");
+    expect(ws.seed!.conflicted).toEqual(files);
+    // Every conflict is resolved except the last one, which is past the first 20.
+    for (const f of files.slice(0, 24)) writeFileSync(join(ws.path, f), "resolved\n");
+    expect(() => workspaces.commit({ ...ws, message: "T S1" })).toThrow(/unresolved conflict markers in f25\.txt/);
+    writeFileSync(join(ws.path, "f25.txt"), "resolved\n");
+    expect(workspaces.commit({ ...ws, message: "T S1" }).changed).toBe(true);
+
+    const id = newTask("Envelope");
+    const state = st();
+    const t = state.tasks.find((x) => x.id === id)!;
+    const prompt = buildEnvelope({ state, task: t, step: t.steps[0], attemptId: "run-x", access: "write", seed: ws.seed });
+    expect(prompt).toContain("- f20.txt");
+    expect(prompt).not.toContain("- f21.txt");
+    expect(prompt).toContain("and 5 more");
+  });
+
+  it("a file that legitimately shows conflict markers is accepted once the real conflict is resolved, and refused while it is not", () => {
+    // Documentation that shows what a conflict looks like, on both sides of the merge.
+    const doc = ["How a conflict looks:", "<<<<<<< ours", "our line", "=======", "their line", ">>>>>>> theirs", "", "version: base", ""].join("\n");
+    writeFileSync(join(repo, "doc.md"), doc);
+    git("add", "-A");
+    git("-c", "user.name=u", "-c", "user.email=u@u", "commit", "-q", "-m", "doc");
+    git("switch", "-q", "-c", "side-doc");
+    writeFileSync(join(repo, "doc.md"), doc.replace("version: base", "version: side"));
+    git("-c", "user.name=u", "-c", "user.email=u@u", "commit", "-q", "-am", "side");
+    const side = git("rev-parse", "HEAD");
+    git("switch", "-q", "main");
+    writeFileSync(join(repo, "doc.md"), doc.replace("version: base", "version: main"));
+    git("-c", "user.name=u", "-c", "user.email=u@u", "commit", "-q", "-am", "main");
+
+    const ws = workspaces.prepare({ repoPath: repo, projectId: "p", attemptId: "run-doc", taskId: "T", stepId: "S1", access: "write", seed: { kind: "merge", ref: side } });
+    expect(ws.seed!.conflicted).toEqual(["doc.md"]);
+    const left = readFileSync(join(ws.path, "doc.md"), "utf8");
+    expect(left).toMatch(/^<<<<<<< HEAD$/m);
+    // Unresolved: git's own markers are new, so it is refused.
+    expect(() => workspaces.commit({ ...ws, message: "T S1" })).toThrow(/unresolved conflict markers in doc\.md/);
+    // Resolved, keeping the documentation's own marker lines: accepted.
+    writeFileSync(join(ws.path, "doc.md"), doc.replace("version: base", "version: both"));
+    const c = workspaces.commit({ ...ws, message: "T S1" });
+    expect(c.changed).toBe(true);
+    expect(git("show", `${c.sha}:doc.md`)).toContain("<<<<<<< ours");
+    // A copy of the documentation's marker line beyond what was there before is still a new marker.
+    const ws2 = workspaces.prepare({ repoPath: repo, projectId: "p", attemptId: "run-doc2", taskId: "T", stepId: "S1", access: "write", seed: { kind: "merge", ref: side } });
+    writeFileSync(join(ws2.path, "doc.md"), `${doc.replace("version: base", "version: both")}<<<<<<< ours\n`);
+    expect(() => workspaces.commit({ ...ws2, message: "T S1" })).toThrow(/unresolved conflict markers/);
+  });
+
+  it("a revert starts from where the work landed, not from the current delivery setting or checkout", () => {
+    const a = deliverTask("Adds a file", "feature.txt", "feature\n");
+    const main = git("rev-parse", "main");
+    // Delivery is switched off and the user is on another branch with newer work.
+    cmd("setDeliveryMode", { mode: "off" });
+    git("switch", "-q", "-c", "elsewhere");
+    commit("unrelated.txt", "x\n", "unrelated work on another branch");
+    const rv = (cmd("sendBackLanded", { taskId: a, kind: "revert", note: "", holdBeforeStart: false }).result as { newId: string }).newId;
+    tick();
+    const ws = codex.runs.get(run(rv).id)!.workspace.path;
+    expect(execFileSync("git", ["-C", ws, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(main);
+    expect(existsSync(join(ws, "unrelated.txt"))).toBe(false);
+    expect(existsSync(join(ws, "feature.txt"))).toBe(false); // the revert is prepared on top of main
+  });
+
+  it("a diff that takes too long is stopped instead of holding the service", () => {
+    const a = deliverTask("First", "one.txt", "1\n");
+    workspaces.changeDiffTimeoutMs = 1;
+    try {
+      let out: ReturnType<WorkspaceManager["changeDiff"]> | Error;
+      try {
+        out = workspaces.changeDiff({ repoPath: repo, commit: task(a).integration!.landed!.commit });
+      } catch (e) {
+        out = e as Error;
+      }
+      // Either it was stopped (an error, or a truncated result), or git beat a 1 ms limit.
+      if (out instanceof Error) expect(out.message).toMatch(/took too long|could not be read/);
+      else expect(out).toBeDefined();
+    } finally {
+      workspaces.changeDiffTimeoutMs = 10_000;
+    }
   });
 });

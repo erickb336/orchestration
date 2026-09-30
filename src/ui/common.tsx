@@ -125,10 +125,11 @@ export function ModelPicker({
 
 export type Involvement = "autopilot" | "checkin" | "manual" | "custom";
 
-export function involvementOf(a: Autonomy): Involvement {
+/** `prDelivery`: pull-request delivery is on, which counts as a delivery mode like the local branch. */
+export function involvementOf(a: Autonomy, prDelivery = false): Involvement {
   if (!a.enabled) return "manual";
   if (a.holdLeadProposals) return "checkin";
-  if (a.autoDeliver.enabled) return "autopilot";
+  if (a.autoDeliver.enabled || prDelivery) return "autopilot";
   return "custom";
 }
 

@@ -3,8 +3,9 @@
 // Operations are applied one at a time, which serializes races such as
 // pause-vs-completion: whichever is applied first determines the outcome.
 
-import { recordLanded } from "./delivery";
+import { recordLanded, undeliveredTasks } from "./delivery";
 import { downstreamOf, instantiate, structuralKey, toDef, validatePipeline } from "./pipeline";
+import { INTERNAL_TEMPLATE_IDS } from "./templates";
 import {
   type ActivityEvent,
   type Actor,
@@ -187,10 +188,37 @@ export function sourceLabel(src: SelectionSource) {
 export type Column = "proposed" | "ready" | "running" | "reviewing" | "paused" | "blocked" | "done" | "cancelled";
 export const BOARD_COLUMNS: Column[] = ["proposed", "ready", "running", "reviewing", "paused", "blocked", "done"];
 
+/** A finished task whose pull request was closed without merging (pull-request delivery only). */
+function closedPr(s: State, d: Task | undefined): number | "unopened" | undefined {
+  const i = d?.integration;
+  if (!s.project.prDelivery.enabled || d?.lifecycle !== "done" || i?.status !== "integrated" || i.pr?.phase !== "closed") return undefined;
+  return i.pr.number ?? "unopened";
+}
+const closedText = (id: string, n: number | "unopened") => (n === "unopened" ? `${id}'s pull request was abandoned before it was opened` : `${id}'s PR #${n} was closed without merging`);
+
+/**
+ * Is a prerequisite's work available to the tasks that depend on it? Without pull-request delivery:
+ * when it is done. With it: when its code is in the base new work starts from, which means its pull
+ * request merged and the base was fetched afterwards (or it had nothing to deliver, or it was
+ * integrated before pull-request delivery was switched on).
+ */
+export function prerequisiteReady(s: State, d: Task | undefined): boolean {
+  if (d?.lifecycle !== "done") return false;
+  if (!s.project.prDelivery.enabled) return true;
+  const i = d.integration;
+  if (!i || i.status === "not-needed") return true;
+  if (i.status !== "integrated") return false;
+  if (!i.pr) return true;
+  const fetchedAt = s.project.github?.base?.fetchedAt;
+  return !!i.landed && !!fetchedAt && fetchedAt >= i.landed.at;
+}
+
 export function blockedReason(s: State, t: Task): string | undefined {
   for (const dep of t.dependsOn) {
     const d = s.tasks.find((x) => x.id === dep);
     if (d?.lifecycle === "cancelled") return `Prerequisite ${dep} was cancelled`;
+    const closed = closedPr(s, d);
+    if (closed !== undefined) return `${closedText(dep, closed)}. Deliver ${dep} again, or remove the prerequisite.`;
   }
   const st = t.steps.find((x) => x.state === "blocked");
   if (st) return `${st.id}: ${st.blockedReason ?? "blocked"}`;
@@ -199,6 +227,10 @@ export function blockedReason(s: State, t: Task): string | undefined {
       if (!isOpen(c)) continue;
       const dep = c.dependsOn.find((d) => s.tasks.find((x) => x.id === d)?.lifecycle === "cancelled");
       if (dep) return `Child ${c.id} cannot start: its prerequisite ${dep} was cancelled. Cancel ${c.id} or remove the prerequisite.`;
+    }
+    for (const c of childTasks(s, t)) {
+      const closed = closedPr(s, c);
+      if (closed !== undefined) return `Child ${closedText(c.id, closed)}. Deliver ${c.id} again.`;
     }
   }
   return undefined;
@@ -242,6 +274,7 @@ export function stateLabel(s: State, t: Task): string {
   if (col === "paused") return t.hold ? "Paused" : "Paused (project)";
   if (t.lifecycle === "active" && active.length === 0 && waitingForChildren(s, t)) {
     const open = childTasks(s, t).filter(isOpen).length;
+    if (open === 0) return "Waiting for child pull requests to merge";
     return `Waiting for ${open} child task${open === 1 ? "" : "s"}`;
   }
   if (t.lifecycle === "active" && active.length === 0) return "Queued for next step";
@@ -264,7 +297,18 @@ export function stopLabel(s: State, t: Task): string {
 }
 
 export function waitingOn(s: State, t: Task): string | undefined {
-  return t.dependsOn.find((d) => s.tasks.find((x) => x.id === d)?.lifecycle !== "done");
+  return t.dependsOn.find((d) => !prerequisiteReady(s, s.tasks.find((x) => x.id === d)));
+}
+
+/** Why a finished prerequisite is still waited on (pull-request delivery), in plain words. */
+export function waitingDetail(s: State, depId: string): string | undefined {
+  const d = s.tasks.find((x) => x.id === depId);
+  if (d?.lifecycle !== "done" || prerequisiteReady(s, d)) return undefined;
+  const i = d.integration;
+  const pr = i?.status === "integrated" ? i.pr : undefined;
+  if (pr && i?.landed) return `${depId}'s pull request merged; waiting for the next fetch of ${pr.remote}/${pr.base}`;
+  if (pr) return pr.number ? `Waiting for ${depId}'s PR #${pr.number} to merge` : `Waiting for ${depId}'s pull request to be opened and merged`;
+  return `Waiting for ${depId}'s pull request to be prepared`;
 }
 
 // ---------- spec edits ----------
@@ -722,6 +766,11 @@ export interface DispatchOptions {
   deferred?: ProviderId[];
   /** Where an attempt's workspace will live (recorded in the immutable run snapshot). */
   workspaceFor?: (taskId: string, stepId: string, attemptId: string) => string;
+  /**
+   * Set while writers have no base to start from (pull-request delivery before the first fetch):
+   * coder steps that continue no earlier change are not dispatched. Nothing is blocked or failed.
+   */
+  holdWriters?: string;
 }
 
 export function dispatchEligible(state: State, now: string, opts: DispatchOptions = {}): State {
@@ -754,6 +803,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       if (!depsDone) continue;
       if (st.waitForChildren && !childrenSettled(s, t)) continue;
       if (awaitingChoice(s, t, st)) continue;
+      if (opts.holdWriters && st.role === "coder" && !consumedInputs(s, t, st).some((i) => s.artifacts.find((x) => x.id === i.artifactId)?.kind === "code-change")) continue;
       if ((st.iteration ?? 1) > 1 && st.dependsOn.length && st.dependsOn.every((d) => getStep(t, d).state === "skipped")) {
         // The previous iteration ended without work to repeat (for example after a re-run came back clean).
         st.state = "skipped";
@@ -1554,7 +1604,7 @@ export function validateProposal(s: State, p: LeadProposal): string | undefined 
   for (const k of ["scopeIncluded", "scopeExcluded"] as const) if (p[k] !== undefined && (!Array.isArray(p[k]) || p[k].length > 30)) return `"${k}" must be a list`;
   if (typeof p.templateId !== "string") return "templateId must be text";
   const tpl = s.project.templates.find((t) => t.id === p.templateId);
-  if (!tpl) return `unknown template "${p.templateId}"`;
+  if (!tpl || INTERNAL_TEMPLATE_IDS.includes(tpl.id)) return `unknown template "${p.templateId}"`;
   if (s.tasks.some((t) => t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === (p.title as string).trim().toLowerCase())) return "a task with this title already exists";
   return undefined;
 }
@@ -1704,6 +1754,7 @@ export function setAutonomy(state: State, a: Autonomy, now: string): State {
   // The two delivery modes are never on together.
   if (a.autoDeliver.enabled && state.project.prDelivery.enabled) throw new ControlError("Pull-request delivery is on; switch the delivery mode instead.");
   const s = draft(state);
+  const before = state.project.autonomy.autoDeliver;
   s.project.autonomy = {
     enabled: !!a.enabled,
     planningIntervalMinutes: Math.round(a.planningIntervalMinutes),
@@ -1714,6 +1765,13 @@ export function setAutonomy(state: State, a: Autonomy, now: string): State {
     autoRetry: Math.round(a.autoRetry),
     autoDeliver: { enabled: !!a.autoDeliver.enabled, branch: a.autoDeliver.branch.trim() || "main" },
   };
+  const after = s.project.autonomy.autoDeliver;
+  if (after.enabled && (!before.enabled || after.branch !== before.branch)) {
+    // The baseline and the last result describe the previous branch; work integrated while delivery
+    // was off (or while it went to another branch) is queued.
+    if (after.branch !== before.branch && s.project.delivery) s.project.delivery = { pending: s.project.delivery.pending };
+    if (undeliveredTasks(s).length) s.project.delivery = { ...(s.project.delivery ?? {}), pending: true };
+  }
   const planning = activeLeadRun(s);
   if (!a.enabled && planning?.trigger === "planning") requestLeadStop(s, planning, "autonomy turned off", now);
   event(
@@ -1758,7 +1816,8 @@ export function reportIntegrationError(state: State, taskId: string, message: st
   const t = getTask(s, taskId);
   if (t.integration?.status !== "pending") return state;
   const repeated = t.integration.message === message;
-  t.integration = { status: "pending", at: now, message };
+  // A closed pull request stays on the record so the next one takes the next number.
+  t.integration = { status: "pending", at: now, message, ...(t.integration.pr ? { pr: t.integration.pr } : {}) };
   if (!repeated) event(s, now, "system", "blocked", `Integration is waiting: ${message}. It will be retried.`, t.id);
   return s;
 }
@@ -1768,7 +1827,7 @@ export function retryIntegration(state: State, taskId: string, now: string): Sta
   const s = draft(state);
   const t = getTask(s, taskId);
   if (t.lifecycle !== "done" || t.integration?.status !== "conflict") throw new ControlError(`${taskId} has no integration conflict to retry.`);
-  t.integration = { status: "pending" };
+  t.integration = { status: "pending", ...(t.integration.pr ? { pr: t.integration.pr } : {}) };
   event(s, now, "user", "integration", "Integration will be retried", t.id);
   return s;
 }
@@ -1800,7 +1859,9 @@ export function reportIntegration(state: State, taskId: string, result: Integrat
   const s = draft(state);
   const t = getTask(s, taskId);
   if (t.lifecycle !== "done" || t.integration?.status !== "pending") return s;
-  t.integration = { ...result, at: now };
+  const closed = t.integration.pr;
+  // A conflict keeps the earlier (closed) pull request on the record, so a retry takes the next number.
+  t.integration = { ...result, at: now, ...(result.status === "conflict" && !result.pr && closed ? { pr: closed } : {}) };
   // A prepared pull-request head is not on the integration branch: local delivery has nothing to do for it.
   const pr = result.pr;
   if (result.status === "integrated" && !pr && s.project.autonomy.autoDeliver.enabled) s.project.delivery = { ...(s.project.delivery ?? {}), pending: true };
@@ -2348,8 +2409,9 @@ export function childTasks(s: State, t: Task): Task[] {
   return s.tasks.filter((x) => x.parentTaskId === t.id);
 }
 
+/** Children are settled when none is open and, with pull-request delivery, their work is in the base. */
 export function childrenSettled(s: State, t: Task): boolean {
-  return childTasks(s, t).every((c) => !isOpen(c));
+  return childTasks(s, t).every((c) => !isOpen(c) && (c.lifecycle === "cancelled" || prerequisiteReady(s, c)));
 }
 
 /** Every task created, directly or through its children, by breakdowns of `t`. */

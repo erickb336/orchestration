@@ -1,7 +1,10 @@
 import { useMemo, useState } from "react";
+import * as D from "../domain/delivery";
 import * as M from "../domain/model";
+import { INTERNAL_TEMPLATE_IDS } from "../domain/templates";
 import { PROVIDERS, ROLES, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
+import { PrChip } from "./Delivery";
 import { COLUMN_LABEL, ROLE_LABEL, StatePill, currentWork, hasNewDecision, latestEvent, relTime } from "./common";
 import { isSettledTask, pipelineSummary } from "./fanout";
 
@@ -29,7 +32,7 @@ function usePref<T extends string>(key: string, initial: T) {
 
 function NewTaskForm({ onClose }: { onClose: () => void }) {
   const { state, send, disabled } = useStore();
-  const templates = state.project.templates;
+  const templates = state.project.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id));
   const [f, setF] = useState({
     title: "",
     area: "",
@@ -352,7 +355,7 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
               {childrenDone < children.length ? ` · ${childrenDone} finished` : " · all finished"}
             </span>
           )}
-          {task.lifecycle === "done" && <IntegrationChip task={task} />}
+          {task.lifecycle === "done" && <IntegrationChip state={state} task={task} />}
         </div>
       </div>
       <div className="side">
@@ -372,14 +375,18 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
   );
 }
 
-function IntegrationChip({ task }: { task: Task }) {
-  switch (task.integration?.status) {
+function IntegrationChip({ state, task }: { state: State; task: Task }) {
+  const i = task.integration;
+  // Work delivered as a pull request: its own chip says what is wanted, in flight and observed.
+  if (i?.pr && i.status !== "conflict") return <PrChip state={state} task={task} />;
+  switch (i?.status) {
     case "integrated":
+      if (i.landed) return <span className="chip done">{i.landed.status === "unreviewed" ? "delivered · review" : "delivered"}</span>;
       return <span className="chip done">integrated</span>;
     case "conflict":
       return <span className="chip danger">integration conflict</span>;
     case "pending":
-      return <span className="chip">integrating</span>;
+      return <span className="chip">{D.deliveryMode(state) === "pr" ? "preparing pull request" : "integrating"}</span>;
     default:
       return null;
   }

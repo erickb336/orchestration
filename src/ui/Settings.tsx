@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { AUTOPILOT, PROVIDERS, ROLES, type Autonomy, type WorkflowTemplate } from "../domain/types";
-import { BUILT_IN_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
+import { BUILT_IN_TEMPLATES, PROJECT_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
+import { DeliverySettings } from "./DeliverySettings";
 import { PipelineEditor } from "./PipelineEditor";
 import { pipelineSummary } from "./fanout";
 import type { CapabilityMap } from "../runtime/adapter";
@@ -98,6 +100,7 @@ export function Settings() {
 
         <div>
           <Providers />
+          <DeliverySettings />
           <AutonomyCard />
           <NotificationsCard />
           <DataCard />
@@ -273,7 +276,8 @@ function WorkerEnvironmentControls({ provider }: { provider: (typeof PROVIDERS)[
 function InvolvementCard() {
   const { state, service, send, disabled } = useStore();
   const a = state.project.autonomy;
-  const mode = involvementOf(a);
+  const prMode = state.project.prDelivery.enabled;
+  const mode = involvementOf(a, prMode);
   const [, setChosen] = usePref(PREF_INVOLVEMENT_CHOSEN);
   const defaultBranch = a.autoDeliver.enabled ? a.autoDeliver.branch : (service.repo?.branch ?? "main");
   const [branch, setBranch] = useState(defaultBranch);
@@ -315,9 +319,15 @@ function InvolvementCard() {
             </li>
             <li>Tasks the lead proposes start right away; nothing waits for your approval.</li>
             <li>A failed step is retried once automatically before it waits for you.</li>
-            <li>
-              Verified work is delivered to <strong className="mono">{branch || "your branch"}</strong>, only as a fast-forward and only when your working tree is clean. Otherwise it waits and the task says why.
-            </li>
+            {prMode ? (
+              <li>
+                Verified work is opened as a GitHub pull request and held for you to merge. Autopilot does not merge anything and does not change the <a href="#delivery">delivery mode</a>.
+              </li>
+            ) : (
+              <li>
+                Verified work is delivered to <strong className="mono">{branch || "your branch"}</strong>, only as a fast-forward and only when your working tree is clean. Otherwise it waits and the task says why.
+              </li>
+            )}
           </ul>
           <form
             className="row"
@@ -326,11 +336,13 @@ function InvolvementCard() {
               void choose({ branch: branch.trim() }, "applyAutopilot");
             }}
           >
-            <label className="row" style={{ gap: "0.35rem" }}>
-              <span style={{ fontSize: "0.85rem" }}>Deliver to branch</span>
-              <input type="text" value={branch} onChange={(e) => setBranch(e.target.value)} required aria-label="Branch to deliver verified work to" style={{ width: "10rem" }} />
-            </label>
-            <button type="submit" className="primary" disabled={disabled || !branch.trim() || (mode === "autopilot" && branch.trim() === a.autoDeliver.branch)}>
+            {!prMode && (
+              <label className="row" style={{ gap: "0.35rem" }}>
+                <span style={{ fontSize: "0.85rem" }}>Deliver to branch</span>
+                <input type="text" value={branch} onChange={(e) => setBranch(e.target.value)} required aria-label="Branch to deliver verified work to" style={{ width: "10rem" }} />
+              </label>
+            )}
+            <button type="submit" className="primary" disabled={disabled || !branch.trim() || (mode === "autopilot" && (prMode || branch.trim() === a.autoDeliver.branch))}>
               {mode === "autopilot" ? "Update autopilot" : "Turn on autopilot"}
             </button>
           </form>
@@ -376,8 +388,6 @@ function AutonomyCard() {
   const [start, setStart] = useState(a.operatingHours?.start ?? "09:00");
   const [end, setEnd] = useState(a.operatingHours?.end ?? "18:00");
   const [retries, setRetries] = useState(String(a.autoRetry));
-  const [deliver, setDeliver] = useState(a.autoDeliver.enabled);
-  const [deliverBranch, setDeliverBranch] = useState(a.autoDeliver.branch);
   // Follow the live values when they change elsewhere (another tab, the service, the choices above).
   const hoursKey = a.operatingHours ? `${a.operatingHours.start}-${a.operatingHours.end}` : "";
   useEffect(() => {
@@ -392,9 +402,7 @@ function AutonomyCard() {
       setEnd(a.operatingHours.end);
     }
     setRetries(String(a.autoRetry));
-    setDeliver(a.autoDeliver.enabled);
-    setDeliverBranch(a.autoDeliver.branch);
-  }, [a.enabled, a.planningIntervalMinutes, a.maxProposalsPerCycle, a.maxOpenProposals, a.holdLeadProposals, hoursKey, a.autoRetry, a.autoDeliver.enabled, a.autoDeliver.branch]);
+  }, [a.enabled, a.planningIntervalMinutes, a.maxProposalsPerCycle, a.maxOpenProposals, a.holdLeadProposals, hoursKey, a.autoRetry]);
 
   const hours = limitHours ? { start, end } : null;
   const changed =
@@ -404,9 +412,8 @@ function AutonomyCard() {
     Number(maxOpen) !== a.maxOpenProposals ||
     hold !== a.holdLeadProposals ||
     (hours ? `${hours.start}-${hours.end}` : "") !== hoursKey ||
-    Number(retries) !== a.autoRetry ||
-    deliver !== a.autoDeliver.enabled ||
-    deliverBranch.trim() !== a.autoDeliver.branch;
+    Number(retries) !== a.autoRetry;
+  const deliveryMode = D.deliveryMode(state);
   const n = Number(perCycle) > 0 ? Number(perCycle) : a.maxProposalsPerCycle;
   return (
     <section className="card" aria-labelledby="autonomy-h">
@@ -431,7 +438,8 @@ function AutonomyCard() {
             holdLeadProposals: hold,
             operatingHours: hours,
             autoRetry: Number(retries),
-            autoDeliver: { enabled: deliver, branch: deliverBranch.trim() },
+            // The delivery mode has its own card; saving autonomy leaves it as it is.
+            autoDeliver: a.autoDeliver,
           };
           void send("setAutonomy", next);
         }}
@@ -479,19 +487,9 @@ function AutonomyCard() {
             </span>
           </label>
           <div className="field">
-            <label className="row" style={{ gap: "0.4rem" }}>
-              <input type="checkbox" checked={deliver} onChange={(e) => setDeliver(e.target.checked)} />
-              Deliver verified work to my branch automatically
-            </label>
-            <div className="row" style={{ gap: "0.4rem", marginTop: "0.3rem" }}>
-              <span className="muted" style={{ fontSize: "0.85rem" }}>
-                Branch
-              </span>
-              <input type="text" aria-label="Delivery branch" value={deliverBranch} disabled={!deliver} required={deliver} onChange={(e) => setDeliverBranch(e.target.value)} style={{ width: "10rem" }} />
-            </div>
-            <div className="muted" style={{ fontSize: "0.8rem", marginTop: "0.25rem" }}>
-              Only fast-forwards; a checked-out branch is updated only when its working tree is clean. When off, finished work stays on the integration branch for you to merge.
-            </div>
+            <span style={{ fontWeight: 400 }}>
+              Delivery: <strong>{deliveryMode === "local" ? `local branch ${a.autoDeliver.branch}` : deliveryMode === "pr" ? "GitHub pull requests, held for you" : "off"}</strong>. <a href="#delivery">Change it in Delivery</a>.
+            </span>
           </div>
           <button type="submit" disabled={!changed}>
             Save autonomy
@@ -540,7 +538,7 @@ function NotificationsCard() {
       </label>
       <p className="muted" style={{ fontSize: "0.85rem", margin: "0.4rem 0 0" }}>
         {supported
-          ? "While a page of this app is open, you get one notification per event: a task done, work delivered, a step that needs you or a run that failed, a control failure, an integration conflict, and lead replies. Clicking one opens the task. Nothing is sent while every page is closed."
+          ? "While a page of this app is open, you get one notification per event: a task done, work delivered, a pull request that is ready for you or needs you, a pull request merged or closed on GitHub, GitHub sign-in needed, a step that needs you or a run that failed, a control failure, an integration conflict, and lead replies. Clicking one opens the task. Notifications appear only while an Orchestration page is open, and deliveries and merges happen only while the service is running. GitHub is not expected to notify you about pull requests opened with your own account, so the Review badge keeps the count."
           : "This browser does not support notifications."}
       </p>
       {message && (
@@ -754,7 +752,7 @@ function Templates() {
   const editing = draft?.tpl ?? null;
   const setEditing = (tpl: WorkflowTemplate) => setDraft((d) => (d ? { ...d, tpl } : d));
   const templates = state.project.templates;
-  const missingBuiltIns = BUILT_IN_TEMPLATES.filter((b) => !templates.some((t) => t.id === b.id));
+  const missingBuiltIns = PROJECT_TEMPLATES.filter((b) => !templates.some((t) => t.id === b.id));
 
   if (editing) {
     return (

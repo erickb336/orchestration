@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildEmptyProject } from "../src/domain/seed";
 import type { ProviderId } from "../src/domain/types";
+import type { GitHubHost } from "./github";
 import { createHttpServer } from "./http";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
@@ -38,16 +39,22 @@ try {
 const fakeConfig = defaultFakeConfig();
 let adapters: Record<ProviderId, RuntimeAdapter>;
 let workspaces: WorkspaceManager | undefined;
+let github: GitHubHost | undefined;
 if (mode === "real") {
   // Loaded only in real mode, so the simulated service never loads provider SDKs.
   const [{ ClaudeAdapter }, { CodexAdapter }] = await Promise.all([import("./runtimes/claude"), import("./runtimes/codex")]);
   adapters = { claude: new ClaudeAdapter({ log }), codex: new CodexAdapter({ log }) };
   workspaces = new WorkspaceManager(join(dirname(dbPath), "worktrees"));
+  // Pull-request delivery uses the user's own gh sign-in, from an empty directory the service owns.
+  // Nothing is contacted until the user switches the delivery mode to pull requests.
+  const { GhCliHost } = await import("./github");
+  github = new GhCliHost({ cwd: join(dirname(dbPath), "gh-neutral") });
 } else {
   const catalog = store.read().state.project.catalog;
   adapters = { claude: new FakeAdapter("claude", fakeConfig, catalog.claude), codex: new FakeAdapter("codex", fakeConfig, catalog.codex) };
 }
-const scheduler = new Scheduler(store, adapters, { log, workspaces });
+// Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell: false });
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
 

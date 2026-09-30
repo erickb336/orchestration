@@ -5,12 +5,13 @@
 import * as D from "./delivery";
 import * as M from "./model";
 import { buildSeed } from "./seed";
-import { BUILT_IN_TEMPLATES } from "./templates";
+import { INTERNAL_TEMPLATE_IDS, PROJECT_TEMPLATES } from "./templates";
 import {
   ControlError,
   PROVIDERS,
   ROLES,
   type ModelSelection,
+  type PrDeliveryConfig,
   type ProviderId,
   type RoleId,
   type SpecContent,
@@ -145,7 +146,7 @@ export const COMMANDS = {
   saveTemplate: same((s, now, a) => M.saveTemplate(s, template(a.template), a.expectedRev === null ? null : num(a, "expectedRev"), now)),
   deleteTemplate: same((s, now, a) => M.deleteTemplate(s, str(a, "templateId"), now)),
   restoreBuiltInTemplates: same((s, now) =>
-    BUILT_IN_TEMPLATES.filter((b) => !s.project.templates.some((t) => t.id === b.id)).reduce((acc, b) => M.saveTemplate(acc, structuredClone(b), null, now), s),
+    PROJECT_TEMPLATES.filter((b) => !s.project.templates.some((t) => t.id === b.id)).reduce((acc, b) => M.saveTemplate(acc, structuredClone(b), null, now), s),
   ),
 
   // review and editing
@@ -207,11 +208,39 @@ export const COMMANDS = {
   setDeliveryMode: same((s, now, a) => {
     const mode = str(a, "mode");
     if (mode !== "off" && mode !== "local" && mode !== "pr") throw new InvalidCommandError("mode must be off, local, or pr");
-    // Nothing in this build can open or watch a pull request yet, so the mode cannot be switched on.
-    if (mode === "pr") throw new ControlError("GitHub pull-request delivery is not available in this build yet.");
     return D.setDeliveryMode(s, { mode, branch: a.branch === undefined ? undefined : str(a, "branch") }, now);
   }),
   resetDeliveryBaseline: same((s, now) => M.resetDeliveryBaseline(s, now)),
+  /** Pull-request settings (remote, base, limits, protected paths). Automatic merging cannot be chosen yet. */
+  setPrDelivery: same((s, now, a) => {
+    const c = obj(a.config, "config");
+    const patch: Partial<PrDeliveryConfig> = {};
+    if (c.remote !== undefined) patch.remote = str(c, "remote");
+    if (c.base !== undefined) patch.base = str(c, "base");
+    if (c.merge !== undefined) patch.merge = str(c, "merge") as PrDeliveryConfig["merge"];
+    if (c.reviewer !== undefined) patch.reviewer = str(c, "reviewer") as PrDeliveryConfig["reviewer"];
+    if (c.updateBeforeMerge !== undefined) patch.updateBeforeMerge = bool(c, "updateBeforeMerge");
+    if (c.autoRepair !== undefined) patch.autoRepair = bool(c, "autoRepair");
+    if (c.allowLocalWorkers !== undefined) patch.allowLocalWorkers = bool(c, "allowLocalWorkers");
+    if (c.protectedPaths !== undefined) patch.protectedPaths = array<unknown>(c.protectedPaths, "protectedPaths").map((x) => String(x));
+    if (c.maxOpenPrs !== undefined) patch.maxOpenPrs = num(c, "maxOpenPrs");
+    if (c.maxAutoMergesPerDay !== undefined) patch.maxAutoMergesPerDay = num(c, "maxAutoMergesPerDay");
+    return D.setPrDelivery(s, patch, now);
+  }),
+  /** Run the read-only repository check now. */
+  recheckGitHub: same((s, now) => D.recheckGitHub(s, now)),
+  holdPr: same((s, now, a) => D.holdPr(s, str(a, "taskId"), a.reason === undefined ? undefined : str(a, "reason"), now)),
+  releasePr: same((s, now, a) => D.releasePr(s, str(a, "taskId"), now)),
+  setPrPolicy: same((s, now, a) => {
+    if (a.policy !== null && a.policy !== "hold" && a.policy !== "auto") throw new InvalidCommandError("policy must be hold, auto, or null");
+    return D.setPrPolicy(s, str(a, "taskId"), a.policy, now);
+  }),
+  /** The user's Merge click, tied to the head commit they saw. */
+  requestPrMerge: same((s, now, a) => D.requestPrMerge(s, str(a, "taskId"), str(a, "headSha"), now)),
+  allowWorkflowPush: same((s, now, a) => D.allowWorkflowPush(s, str(a, "taskId"), now)),
+  closePr: same((s, now, a) => D.closePr(s, str(a, "taskId"), now)),
+  redeliver: same((s, now, a) => D.redeliver(s, array<unknown>(a.taskIds, "taskIds").map((x) => String(x)), now)),
+  retryLandedComment: same((s, now, a) => D.retryLandedComment(s, str(a, "taskId"), str(a, "noteId"), now)),
   /** The only way a landed item becomes reviewed (or unreviewed again). */
   markLandedReviewed: same((s, now, a) => D.markLandedReviewed(s, array<unknown>(a.taskIds, "taskIds").map((x) => String(x)), bool(a, "reviewed"), now)),
   addLandedNote: same((s, now, a) => D.addLandedNote(s, str(a, "taskId"), str(a, "text"), a.postToGitHub === undefined ? false : bool(a, "postToGitHub"), now)),
@@ -237,6 +266,7 @@ export const COMMANDS = {
     const templateId = str(a, "templateId");
     const tpl = s.project.templates.find((t) => t.id === templateId);
     if (!tpl) throw new InvalidCommandError(`Unknown template ${templateId}`);
+    if (INTERNAL_TEMPLATE_IDS.includes(templateId)) throw new InvalidCommandError(`The ${tpl.name} template is used by Send back only.`);
     const r = M.createTask(
       s,
       {

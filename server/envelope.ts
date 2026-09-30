@@ -3,6 +3,7 @@
 // travels only through this envelope and the artifacts it references.
 
 import * as M from "../src/domain/model";
+import { INTERNAL_TEMPLATE_IDS } from "../src/domain/templates";
 import type { LeadRun, OutputDef, RoleId, State, Step, Task } from "../src/domain/types";
 
 const ROLE_BRIEFS: Record<RoleId, string> = {
@@ -105,7 +106,7 @@ function seedNote(seed: EnvelopeInput["seed"]): string {
   if (!seed) return "";
   const what = seed.kind === "revert" ? `a revert of commit ${seed.commit.slice(0, 12)}` : `a merge of ${seed.commit.slice(0, 12)}`;
   const rest = seed.conflicted.length
-    ? `These files have conflicts, marked with <<<<<<< and >>>>>>> lines:\n${seed.conflicted.map((f) => `- ${f}`).join("\n")}\nResolve every conflict by editing the files and remove all conflict markers. Keep work that landed later. The result is not recorded while a marker remains.`
+    ? `These files have conflicts, marked with <<<<<<< and >>>>>>> lines:\n${seed.conflicted.slice(0, 20).map((f) => `- ${f}`).join("\n")}${seed.conflicted.length > 20 ? `\n- and ${seed.conflicted.length - 20} more (every file with a conflict marker)` : ""}\nResolve every conflict by editing the files and remove all conflict markers. Keep work that landed later. The result is not recorded while a marker remains.`
     : "It applied without conflicts. Check that the result is complete and correct, and adjust files only where needed.";
   return `## Prepared in this workspace
 The orchestration service already applied ${what} to the files here and left it uncommitted.
@@ -218,7 +219,7 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read"): s
     .map((m) => `${m.author === "user" ? "User" : m.author === "lead" ? "Lead" : "System"} (${m.at}): ${clip(m.text, 1200)}`)
     .join("\n\n");
   const pending = state.conversation.filter((m) => run.messageIds.includes(m.id));
-  const templates = p.templates.map((t) => `- ${t.id}: ${t.name} — ${t.description}`).join("\n");
+  const templates = p.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id)).map((t) => `- ${t.id}: ${t.name} — ${t.description}`).join("\n");
 
   return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : "reply to the user"})
 

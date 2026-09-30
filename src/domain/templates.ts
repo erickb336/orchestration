@@ -222,6 +222,15 @@ export const BUILT_IN_TEMPLATES: WorkflowTemplate[] = [
   { id: "revert", name: "Revert", description: "Undo a landed change: complete the prepared revert, review it, verify. Used by Send back as revert.", builtIn: true, rev: 1, steps: revert },
 ];
 
+/**
+ * Built-in templates the service uses itself and that are never offered for a new task: a task made
+ * from "revert" by hand would have nothing prepared in its workspace.
+ */
+export const INTERNAL_TEMPLATE_IDS = ["revert"];
+
+/** The built-in templates a project starts with and a person or the lead can pick. */
+export const PROJECT_TEMPLATES: WorkflowTemplate[] = BUILT_IN_TEMPLATES.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id));
+
 export function templateSteps(id: string): StepDef[] {
   const t = BUILT_IN_TEMPLATES.find((x) => x.id === id);
   if (!t) throw new Error(`Unknown template ${id}`);

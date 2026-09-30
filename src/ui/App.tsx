@@ -153,9 +153,11 @@ function SimBanner() {
         <strong>LIVE EXECUTION</strong>
         <span>
           Claude and Codex agents run on this machine in isolated git worktrees and may incur usage costs.{" "}
-          {state.project.autonomy.autoDeliver.enabled
-            ? `Verified work is delivered to ${state.project.autonomy.autoDeliver.branch} automatically (fast-forward only).`
-            : "Results stay on orchestration/* branches until you merge them."}
+          {state.project.prDelivery.enabled
+            ? `Verified work is pushed to orchestration/* branches on ${state.project.prDelivery.remote} and opened as GitHub pull requests under your account; you merge them. Not verified against GitHub yet.`
+            : state.project.autonomy.autoDeliver.enabled
+              ? `Verified work is delivered to ${state.project.autonomy.autoDeliver.branch} automatically (fast-forward only).`
+              : "Results stay on orchestration/* branches until you merge them."}
         </span>
         {service.scheduler === "observer" && <span>(another service instance holds the scheduler)</span>}
       </div>
@@ -164,7 +166,10 @@ function SimBanner() {
   return (
     <div className="sim-banner" role="note">
       <strong>SIMULATED EXECUTION</strong>
-      <span>Runs come from the service's fake runtime; no agents are running. Tasks and runs are sample data.</span>
+      <span>
+        Runs come from the service's fake runtime; no agents are running. Tasks and runs are sample data.
+        {state.project.prDelivery.enabled ? " Pull requests, checks and merges are simulated: nothing is sent to GitHub." : ""}
+      </span>
       {service.scheduler === "observer" && <span>(another service instance holds the scheduler)</span>}
       <span className="spacer" />
       <button onClick={() => void setSim({ auto: !sim.auto })} aria-pressed={sim.auto} disabled={disabled}>

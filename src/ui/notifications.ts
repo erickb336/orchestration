@@ -3,6 +3,7 @@
 // the first load, after a project reset or replacement, or while the preference is off.
 
 import { useEffect, useRef } from "react";
+import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import type { State } from "../domain/types";
 import { PREF_NOTIFY, readPref, writePref } from "./common";
@@ -30,8 +31,10 @@ function clip(text: string, n = 180) {
 
 /**
  * Events that happened between two states of the same project: task done, delivery to the user's
- * branch, a step that now waits for a person, a failed lead run, a control failure, an integration
- * conflict, and new lead replies. Pure, so it can be tested without a browser.
+ * branch, a pull request that is ready for the user or needs them, a pull request merged or closed on
+ * GitHub, a GitHub problem, a step that now waits for a person, a failed lead run, a control failure,
+ * an integration conflict, and new lead replies. Every key names a transition, never a poll or a
+ * retry. Pure, so it can be tested without a browser.
  */
 export function detectEvents(prev: State, next: State): NotifyEvent[] {
   if (prev.project.id !== next.project.id) return [];
@@ -53,8 +56,30 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
     const pd = p.integration?.delivered;
     if (d && (d.status !== pd?.status || d.message !== pd?.message)) {
       const title = d.status === "delivered" ? "Work delivered" : d.status === "conflict" ? "Delivery conflict" : "Delivery waiting";
-      out.push({ key: `deliver:${t.id}:${d.status}:${d.message}`, title, body: clip(`${name}: ${d.message}`), taskId: t.id });
+      // `at` moves only when the outcome changes, so an outcome that comes back after a different one notifies again.
+      out.push({ key: `deliver:${t.id}:${d.status}:${d.at}:${d.message}`, title, body: clip(`${name}: ${d.message}`), taskId: t.id });
     }
+
+    // Pull requests. Readiness is judged at the time of each state's own observation of GitHub.
+    const pr = D.livePr(t);
+    const ppr = D.livePr(p);
+    if (pr) {
+      const n = pr.number ? `PR #${pr.number}` : "Pull request";
+      const sim = pr.simulated ? " (simulated)" : "";
+      const at = (x: typeof pr) => Date.parse(x.observed?.at ?? next.project.github?.observedAt ?? t.updatedAt);
+      if (D.prReady(next, t, at(pr)) && !(ppr && ppr.headSha === pr.headSha && D.prReady(prev, p, at(ppr))))
+        out.push({ key: `pr-ready:${t.id}:${pr.headSha}`, title: `${n} is ready for you${sim}`, body: clip(`${name}: required checks passed. Merge it in Orchestration or on GitHub.`), taskId: t.id });
+      if (pr.attention && (pr.attention.code !== ppr?.attention?.code || pr.attention.headSha !== ppr?.attention?.headSha))
+        out.push({ key: `pr-needs-you:${t.id}:${pr.attention.code}:${pr.attention.headSha ?? ""}`, title: `${n} needs you${sim}`, body: clip(`${name}: ${pr.attention.message}`), taskId: t.id });
+      if (pr.phase === "merged" && ppr?.phase !== "merged") {
+        const by = t.integration?.landed?.by === "person" ? ` by ${t.integration.landed.mergedBy ?? "a person"}` : "";
+        out.push({ key: `pr-merged:${t.id}:${pr.n}`, title: `${n} merged${by}; review it when you like${sim}`, body: name, taskId: t.id });
+      }
+      if (pr.phase === "closed" && ppr?.phase !== "closed") out.push({ key: `pr-closed:${t.id}:${pr.n}`, title: `${n} was closed without merging${sim}`, body: name, taskId: t.id });
+    }
+    const mc = t.integration?.landed?.mainCheck;
+    if (mc?.state === "failure" && p.integration?.landed?.mainCheck?.state !== "failure")
+      out.push({ key: `main-check:${t.id}:${t.integration!.landed!.commit}`, title: `Check failed on ${t.integration!.landed!.target} after ${t.integration!.landed!.pr ? `PR #${t.integration!.landed!.pr.number}` : "a delivery"}`, body: name, taskId: t.id });
 
     if (t.integration?.status === "conflict" && p.integration?.status !== "conflict")
       out.push({ key: `conflict:${t.id}:${t.integration.at ?? t.updatedAt}`, title: "Integration conflict", body: clip(`${name}: ${t.integration.message ?? "the change could not be merged"}`), taskId: t.id });
@@ -76,6 +101,10 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
       });
     }
   }
+
+  const problem = next.project.github?.problem;
+  if (problem && (problem.code !== prev.project.github?.problem?.code || problem.since !== prev.project.github?.problem?.since))
+    out.push({ key: `github:${problem.code}:${problem.since}`, title: problem.code === "auth" ? "GitHub delivery stopped: sign-in needed" : "GitHub delivery stopped", body: clip(problem.message) });
 
   const prevRuns = new Map(prev.leadRuns.map((r) => [r.id, r.outcome]));
   for (const r of next.leadRuns) {

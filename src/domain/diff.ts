@@ -58,3 +58,28 @@ export function diffLines(a: string[], b: string[]): DiffLine[] {
   while (j < m) out.push({ kind: "add", text: b[j++] });
   return out;
 }
+
+/**
+ * A class per line of `git diff --stat --patch` output, for the changes viewer. A line's first
+ * character decides it only inside a hunk: `---` and `+++` are headers only before the first `@@` of
+ * a file, so a removed line that starts with "-- " or an added line that starts with "++" keeps its
+ * colour.
+ */
+export function diffLineClasses(lines: string[]): ("meta" | "add" | "del" | "same")[] {
+  let inHunk = false;
+  return lines.map((line) => {
+    if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      return "meta";
+    }
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      return "meta";
+    }
+    if (!inHunk) return /^(---|\+\+\+|index |new file mode|deleted file mode|old mode|new mode|similarity index|rename (from|to)|Binary files)/.test(line) ? "meta" : "same";
+    if (line.startsWith("+")) return "add";
+    if (line.startsWith("-")) return "del";
+    if (line.startsWith("\\")) return "meta";
+    return "same";
+  });
+}

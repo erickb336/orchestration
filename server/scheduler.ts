@@ -7,9 +7,12 @@
 // everything in one lease-checked transaction, so state changes stay serialized.
 
 import { randomUUID } from "node:crypto";
+import * as D from "../src/domain/delivery";
 import * as M from "../src/domain/model";
 import type { Integration, ProviderId, State, Step, Task } from "../src/domain/types";
 import { buildEnvelope, buildLeadEnvelope, parseLeadOutput, parseOutputs } from "./envelope";
+import { SimulatedGitHub, type GitHubHost } from "./github";
+import { PrDriver } from "./prdelivery";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
@@ -24,6 +27,13 @@ export interface SchedulerOptions {
   /** How long a stop may stay unacknowledged before a visible control failure. */
   ackTimeoutMs?: number;
   log?: (msg: string) => void;
+  /**
+   * The GitHub side of pull-request delivery. With the fake runtime (no workspaces) a simulated host is
+   * used and nothing is contacted. A real service without one reports that pull requests cannot be opened.
+   */
+  github?: GitHubHost;
+  /** True when Claude workers run with shell access; shown as a GitHub posture warning. */
+  workerShell?: boolean;
 }
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
@@ -57,6 +67,8 @@ export class Scheduler {
   private healthState: Partial<Record<ProviderId, ProviderHealth>> = {};
   private connectionsState: Partial<Record<ProviderId, Connection[] | null>> = {};
   private repoCheck: { path: string; ok: boolean; at: number } | undefined;
+  /** Pull-request delivery: the only code that talks to GitHub or pushes. */
+  private readonly pr: PrDriver;
   /** Why the lead cannot run right now (shown in the conversation), if anything. */
   leadBlocked: string | undefined;
 
@@ -67,6 +79,7 @@ export class Scheduler {
     this.leaseMs = opts.leaseMs ?? 15000;
     this.ackTimeoutMs = opts.ackTimeoutMs ?? (this.isFake ? 8000 : 45000);
     this.log = opts.log ?? (() => {});
+    this.pr = new PrDriver(store, opts.github ?? (this.workspaces ? undefined : new SimulatedGitHub()), this.workspaces, { log: this.log, workerShell: opts.workerShell });
     for (const [p, a] of Object.entries(adapters) as [ProviderId, RuntimeAdapter][]) {
       a.onEvent((e) => this.queue.push(e));
       // The fake runtime is always available; real providers are checked asynchronously.
@@ -99,6 +112,14 @@ export class Scheduler {
     for (const a of Object.values(this.adapters)) for (const id of a.ids()) a.kill(id);
     this.queue = [];
     this.launched.clear();
+    // A GitHub operation in flight is stopped and its result dropped: its intent stays recorded and is
+    // reconciled with GitHub by whoever holds the lease next.
+    this.pr.abortAll();
+  }
+
+  /** Resolves when the GitHub operation in flight (if any) has settled. */
+  prIdle(): Promise<void> {
+    return this.pr.idle();
   }
 
   /** Stop acting as scheduler: local processes can no longer be trusted or reported. */
@@ -217,7 +238,8 @@ export class Scheduler {
         dispatched.clear();
         const before = new Set(M.activeAttempts(s).map((a) => a.id));
         if (!canDispatch) return s;
-        const next = M.dispatchEligible(M.leadPromoteProposals(s, now), now, { unavailable, deferred, workspaceFor });
+        // With pull-request delivery, writers wait for the first fetch of the base they start from.
+        const next = M.dispatchEligible(M.leadPromoteProposals(s, now), now, { unavailable, deferred, workspaceFor, holdWriters: D.writersHeld(s) });
         for (const a of M.activeAttempts(next)) if (!before.has(a.id)) dispatched.add(a.id);
         return next;
       },
@@ -374,6 +396,7 @@ export class Scheduler {
     // 5. Integration: one finished task per cycle, frozen while the project is paused; then delivery.
     this.integrateNext(nowMs, lease);
     this.deliverIfDue(nowMs, lease);
+    this.pr.tick(nowMs, lease);
 
     // 6. Automatic retries of failed steps (opt-in, bounded per step, never for credential/config failures).
     const retries = M.autoRetryCandidates(this.store.read().state, nowMs);
@@ -389,15 +412,58 @@ export class Scheduler {
     if (!t) return;
     // Fake runs produce code-change artifacts without commits; simulate their integration.
     const change = this.workspaces ? M.finalChange(state, t) : state.artifacts.filter((x) => x.taskId === t.id && x.kind === "code-change").pop();
+    const pr = state.project.prDelivery;
     let result: Integration;
     if (!change) result = { status: "not-needed" };
-    else if (!this.workspaces) result = { status: "integrated", ref: "simulated integration (no commit)" };
+    else if (pr.enabled) {
+      // Pull-request mode: the task's final commit becomes a pull-request head. Nothing is merged
+      // locally and nothing is pushed here; the driver publishes it.
+      const n = (t.integration?.pr?.n ?? 0) + 1;
+      if (!this.workspaces) {
+        this.store.update((s) => D.reportPrHead(s, t.id, { n, sha: `sim-${t.id}-${n}`, baseSha: "sim-base", simulated: true, changed: { files: 0, additions: 0, deletions: 0, paths: [], protectedHits: [], workflowHits: [] } }, now), now, lease);
+        return;
+      }
+      if (state.project.sample || !this.repoUsable(state.project.repoPath, nowMs)) return;
+      if (!state.project.github?.base) {
+        this.store.update((s) => M.reportIntegrationError(s, t.id, `waiting for the first fetch of ${pr.remote}/${pr.base}`, now), now, lease);
+        return;
+      }
+      try {
+        const head = this.workspaces.preparePrHead({
+          repoPath: state.project.repoPath,
+          projectId: state.project.id,
+          taskId: t.id,
+          n,
+          baseRef: this.workspaces.baseRef(state.project.id),
+          sha: change.ref!.split(" ")[0],
+          protectedPaths: pr.protectedPaths,
+        });
+        if (head.status === "ready") {
+          this.store.update((s) => D.reportPrHead(s, t.id, { n, sha: head.sha, baseSha: head.baseSha, changed: head.changed }, now), now, lease);
+          return;
+        }
+        result = { status: "conflict", message: head.message };
+      } catch (err) {
+        const msg = (err instanceof Error ? err.message : String(err)).split("\n")[0].slice(0, 200);
+        this.store.update((s) => M.reportIntegrationError(s, t.id, msg, now), now, lease);
+        return;
+      }
+    } else if (!this.workspaces) result = { status: "integrated", ref: "simulated integration (no commit)" };
     else if (state.project.sample || !this.repoUsable(state.project.repoPath, nowMs)) return;
     else {
       try {
         const sha = change.ref!.split(" ")[0];
         const d = state.project.autonomy.autoDeliver;
-        result = this.workspaces.integrate({ repoPath: state.project.repoPath, projectId: state.project.id, sha, message: `Integrate ${t.id}: ${M.currentSpec(t).content.title}`, baseBranch: d.enabled ? d.branch : undefined });
+        // A change a person supplied by editing the artifact is theirs to integrate; anything else must
+        // contain a commit of the task's own.
+        result = this.workspaces.integrate({
+          repoPath: state.project.repoPath,
+          projectId: state.project.id,
+          sha,
+          message: `Integrate ${t.id}: ${M.currentSpec(t).content.title}`,
+          baseBranch: d.enabled ? d.branch : undefined,
+          requireOwn: change.author !== "user",
+        });
       } catch (err) {
         // Environmental (not a merge conflict): keep it pending and retry later with a short reason.
         const msg = (err instanceof Error ? err.message : String(err)).split("\n")[0].slice(0, 200);
@@ -406,7 +472,6 @@ export class Scheduler {
       }
     }
     this.store.update((s) => M.reportIntegration(s, t.id, result, now), now, lease);
-
   }
 
   /** Automatic delivery (opt-in): retried until the branch contains all integrated work. */
@@ -492,9 +557,15 @@ export class Scheduler {
       let workspace: PreparedWorkspace | undefined;
       if (this.workspaces) {
         const d = state.project.autonomy.autoDeliver;
-        // With delivery on, new work starts from the delivery branch, not from whatever is checked out.
+        // With delivery on, new work starts from the delivery base, not from whatever is checked out:
+        // the delivery branch (local mode), or the fetched tip of the remote base (pull requests). In
+        // pull-request mode a writer never falls back to a local branch or HEAD.
         const input = baseRefFor(state, task, step);
-        const baseRef = input ?? (d.enabled ? `refs/heads/${d.branch}` : undefined);
+        const prBase = state.project.prDelivery.enabled && (access === "write" || state.project.github?.base) ? this.workspaces.baseRef(state.project.id) : undefined;
+        // A revert starts from where the work it undoes landed, whatever the delivery mode is now.
+        const origin = task.revertOf ? state.tasks.find((x) => x.id === task.revertOf!.taskId)?.integration?.landed : undefined;
+        const revertBase = origin?.via === "local" ? `refs/heads/${origin.target}` : origin?.via === "pr" && state.project.github?.base ? this.workspaces.baseRef(state.project.id) : undefined;
+        const baseRef = input ?? revertBase ?? prBase ?? (d.enabled ? `refs/heads/${d.branch}` : undefined);
         // A revert task's first writer (the one that continues no earlier change) starts from the
         // delivery base with the revert of the landed commit already prepared in its worktree.
         const seed: WorkspaceSeed | undefined = task.revertOf && access === "write" && !input ? { kind: "revert", commit: task.revertOf.commit } : undefined;
