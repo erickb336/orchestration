@@ -56,9 +56,9 @@ describe("V2 attaching", () => {
     expect(v.docIds).toHaveLength(1);
     const d = s.project.visionDocs[0];
     expect(d).toMatchObject({ id: v.docIds![0], name: "brief.md", path: "docs/brief.md", size: 1234, text: true, addedAt: at(1) });
-    expect(v.source).toEqual({ docAdded: d.id });
-    expect(v.reason).toBe("Attached docs/brief.md (1.2 KB; readable as text)");
-    expect(s.events[s.events.length - 1].message).toBe("Vision r2: attached docs/brief.md (1 document, 1.2 KB)");
+    expect(v.source).toEqual({ docsAdded: [d.id] });
+    expect(v.reason).toBe("Attached 1 document: docs/brief.md");
+    expect(s.events[s.events.length - 1].message).toBe("Vision r2: attached 1 document (1 in total, 1.2 KB)");
     expect(s0.project.visionDocs).toEqual([]); // pure
     expect(M.currentVisionDocs(s0)).toEqual([]);
   });
@@ -92,8 +92,8 @@ describe("V2 attaching", () => {
     expect(cur).toHaveLength(1);
     expect(cur[0]).toMatchObject({ path: "docs/brief.md", hash: hash(2), size: 300 });
     expect(cur[0].id).not.toBe(old.id);
-    expect(M.currentVision(s)).toMatchObject({ rev: 3, source: { docAdded: cur[0].id, docRemoved: old.id } });
-    expect(M.currentVision(s).reason).toMatch(/^Attached a newer docs\/brief.md .*replacing the earlier one$/);
+    expect(M.currentVision(s)).toMatchObject({ rev: 3, source: { docsAdded: [cur[0].id], docsRemoved: [old.id] } });
+    expect(M.currentVision(s).reason).toBe("Attached 1 document: docs/brief.md (1 replaced an earlier copy)");
     // History: r2 still has the old copy; the registry keeps both.
     expect(M.visionDocsOf(s, s.project.visions[1]).map((d) => d.hash)).toEqual([hash(1)]);
     expect(s.project.visionDocs.map((d) => d.hash)).toEqual([hash(1), hash(2)]);

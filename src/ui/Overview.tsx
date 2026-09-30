@@ -15,6 +15,7 @@ import { PROVIDERS, type Attempt, type ProviderId, type State, type VisionRevisi
 export function revisionSource(v: VisionRevision): string {
   if (v.source?.undoOf) return `${v.author} · undo of the lead's change`;
   if (v.source?.draftId) return `${v.author} · accepted the lead's draft`;
+  if (v.source?.docsAdded) return `${v.author} · attached ${v.source.docsAdded.length} document${v.source.docsAdded.length === 1 ? "" : "s"}${v.source.docsRemoved?.length ? " (replacing earlier copies)" : ""}`;
   if (v.source?.docAdded) return `${v.author} · ${v.source.docRemoved ? "replaced a document" : "attached a document"}`;
   if (v.source?.docRemoved) return `${v.author} · removed a document`;
   if (v.source?.changeSetId) return v.author === "lead" ? "lead · from your message" : `${v.author} · applied the lead's suggestion`;
@@ -121,7 +122,6 @@ export function Overview() {
   const outcomes = state.tasks.filter((t) => t.lifecycle === "done").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
   // ORC-012: while shaping, the panel replaces the Vision card; a draft the lead sent while building shows on the card.
   const shaping = state.project.stage === "shaping";
-  const openDraft = M.openVisionDraft(state);
 
   return (
     <>
@@ -136,7 +136,7 @@ export function Overview() {
           <section className="card" aria-labelledby="vision-h">
             <h2 id="vision-h">Vision</h2>
             <VisionProvenance state={state} />
-            {openDraft && !editing && <OpenDraft />}
+            {!editing && <OpenDraft />}
             {editing ? (
               <form
                 onSubmit={async (e) => {

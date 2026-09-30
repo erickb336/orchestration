@@ -291,7 +291,7 @@ export function useServiceStore() {
           /* no body: refresh below */
         }
         if (typeof ok.version !== "number" || (current.current?.version ?? -1) < ok.version) await fetchState();
-        return { ok: true, body: { version: ok.version ?? 0, docId: ok.docId ?? "", ...(ok.replaced ? { replaced: ok.replaced } : {}) } };
+        return { ok: true, body: { version: ok.version ?? 0, docId: ok.docId ?? "", status: ok.status === "unchanged" ? "unchanged" : "staged", ...(ok.replaces ? { replaces: ok.replaces } : {}) } };
       }
       const err = await readError(res);
       if (!err) {

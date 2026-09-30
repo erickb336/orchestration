@@ -32,8 +32,10 @@ export interface VisionRevision {
    * change set, run and the user's messages; an Undo names the set it undid; an applied suggestion
    * names its set only. ORC-012: an accepted vision draft names the draft, its run and messages.
    * ORC-014: a document attached or removed names it (`docAdded` / `docRemoved`; a replacement names both).
+   * ORC-014 review 9: a batch of documents attached as one revision lists them (`docsAdded`, the copies
+   * they replaced in `docsRemoved`) and the batch the client named.
    */
-  source?: { changeSetId?: string; leadRunId?: string; messageIds?: string[]; undoOf?: string; draftId?: string; docAdded?: string; docRemoved?: string };
+  source?: { changeSetId?: string; leadRunId?: string; messageIds?: string[]; undoOf?: string; draftId?: string; docAdded?: string; docRemoved?: string; docsAdded?: string[]; docsRemoved?: string[]; batchId?: string };
   /**
    * ORC-014: the vision documents that applied at this revision (ids into `Project.visionDocs`), so
    * history stays truthful. Absent on revisions from before documents existed: none applied.
@@ -62,6 +64,12 @@ export interface VisionDoc {
   /** Readable as text (valid UTF-8 without NUL bytes, and not a known binary format): its content reaches the lead and designers. */
   text: boolean;
   addedAt: string;
+  /**
+   * ORC-014 review 9: uploaded but not attached yet: it waits for its batch's `attachVisionDocs`, which
+   * attaches every file of one Add, drop or folder as one vision revision. Absent once attached. A
+   * staged record whose batch never commits is dropped after an hour.
+   */
+  stagedAt?: string;
 }
 
 // ---------- shaping the vision with the lead first (ORC-012) ----------

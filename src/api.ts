@@ -1,6 +1,7 @@
 // HTTP contract between the local service and the UI. See docs/tasks/ORC-003.md.
 
 import type { CommandName } from "./domain/commands";
+import type { AttachResult } from "./domain/model";
 import type { ProviderId, State } from "./domain/types";
 import type { CapabilityMap } from "./runtime/adapter";
 
@@ -74,9 +75,11 @@ export interface ChangeError extends CommandError {
 }
 
 /**
- * Body of POST /api/vision-docs (ORC-014): one file per request. The service checks it, keeps a copy
- * by content hash outside any repository, and records it with the `addVisionDoc` command under the
- * given idempotency key. Rejections come back as a CommandError with a plain reason.
+ * Body of POST /api/vision-docs (ORC-014): one file per request. The service checks it, records it with
+ * the `stageVisionDoc` command under the given idempotency key, then keeps a copy by content hash outside
+ * any repository. Nothing is attached yet: the client attaches every file of one Add, drop or folder as
+ * one vision revision with the `attachVisionDocs` command (review 9). Rejections come back as a
+ * CommandError with a plain reason.
  */
 export interface VisionDocUpload {
   /** Relative path, folder structure included (a folder upload keeps its paths). */
@@ -88,7 +91,13 @@ export interface VisionDocUpload {
 
 export interface VisionDocUploadOk {
   version: number;
+  /** The staged document, to name in `attachVisionDocs`; for "unchanged", the document already attached. */
   docId: string;
-  /** The id of the document at the same path this one replaced in the current set, if any. */
-  replaced?: string;
+  /** "unchanged": the same file (path and content) is attached already; there is nothing to commit. */
+  status: "staged" | "unchanged";
+  /** The document at the same path this one will replace when its batch commits. */
+  replaces?: string;
 }
+
+/** Result of the `attachVisionDocs` command: the revision created, if any, and one row per staged document sent. */
+export type AttachVisionDocsResult = AttachResult;

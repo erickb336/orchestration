@@ -165,7 +165,7 @@ describe("migration 12 → 13 (reviews 2 and 6)", () => {
     expect(shaping.tasks.find((t) => t.id === "EX-004")).toMatchObject({ heldForShaping: true, holdBeforeStart: false });
     expect(shaping.tasks.find((t) => t.id === "EX-003")!.heldForShaping).toBeUndefined();
     expect(shaping.tasks.filter((t) => t.id !== "EX-004").every((t) => t.heldForShaping === undefined)).toBe(true);
-    expect(M.stateLabel(shaping, shaping.tasks.find((t) => t.id === "EX-004")!)).toBe("Planned; waits until you start building");
+    expect(M.stateLabel(shaping, shaping.tasks.find((t) => t.id === "EX-004")!)).toBe("Planned; waits until you start building, then starts on Autopilot");
     const checkin = reopen((d) => {
       const doc = d as unknown as Doc;
       doc.project.stage = "shaping";

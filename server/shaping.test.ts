@@ -119,7 +119,7 @@ describe("A. shaping end to end", () => {
     tick();
     tick();
     expect(M.activeAttempts(state())).toHaveLength(0); // still nothing runs, the user task included
-    expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start building");
+    expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
     expect(state().leadRuns.filter((x) => x.trigger === "planning")).toHaveLength(0);
 
     const refused = failure(() => cmd("startBuilding"));

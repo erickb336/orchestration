@@ -296,7 +296,7 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
   if (task.heldForShaping && task.lifecycle !== "active")
     out.push(
       <div className="banner neutral" key="hfs">
-        Planned while shaping: it waits until you start building{task.holdBeforeStart ? ", and then for your release" : state.project.autonomy.enabled && !state.project.autonomy.holdLeadProposals ? ", then starts on Autopilot" : ", then waits for your release (your involvement setting)"}. Changing its hold below takes it out of the roadmap hold.{" "}
+        Planned while shaping: it waits until you start building{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startBuildingPlan(state).release ? "starts on Autopilot" : "waits for your release"} (your involvement setting at the moment you start building decides). Changing its hold below takes it out of the roadmap hold.{" "}
         <a href="#/overview">Shape the vision</a>
       </div>,
     );

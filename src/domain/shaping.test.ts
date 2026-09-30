@@ -237,10 +237,11 @@ describe("S5 accept and dismiss", () => {
     expect(() => M.acceptVisionDraft(accepted, "vd-none", 2, undefined, at(5))).toThrow(ControlError);
   });
 
-  it("edit and accept keeps the user's text and focus, cleaned and capped; an empty edit is refused", () => {
+  it("edit and accept keeps the user's text and focus as typed (newlines normalized, one-line focus) and capped; an empty edit is refused", () => {
     const { state: s, draft: d } = leadReply(shaping(seed()), { vision: draft() });
-    const edited = M.acceptVisionDraft(s, d!.id, 1, { text: "My own words\u0000\r\nline two", focus: "  my\nfocus " }, at(4));
-    expect(vision(edited)).toMatchObject({ rev: 2, author: "user", text: "My own words\nline two", focus: "my focus" });
+    // ORC-014 review 3: the user's own text is never altered: joiners, marks and variation selectors stay.
+    const edited = M.acceptVisionDraft(s, d!.id, 1, { text: "My own words ‏שלום\r\nline two \u{1F468}‍\u{1F469}", focus: "  my\nfocus می‌خ " }, at(4));
+    expect(vision(edited)).toMatchObject({ rev: 2, author: "user", text: "My own words ‏שלום\nline two \u{1F468}‍\u{1F469}", focus: "my focus می‌خ" });
     expect(vision(edited).reason).toMatch(/^Accepted the lead's draft with edits/);
     expect(() => M.acceptVisionDraft(s, d!.id, 1, { text: "  " }, at(4))).toThrow(/cannot be empty/);
     expect(() => M.acceptVisionDraft(s, d!.id, 1, { text: "x".repeat(8001) }, at(4))).toThrow(/8000/);
@@ -268,7 +269,7 @@ describe("S6 the roadmap and Start building", () => {
     expect(t).toMatchObject({ heldForShaping: true, holdBeforeStart: false, fromShaping: true, lifecycle: "proposed" });
     const promoted = M.dispatchEligible(M.leadPromoteProposals(s, at(4)), at(4));
     expect(task(promoted, t.id).lifecycle).toBe("ready");
-    expect(M.stateLabel(promoted, task(promoted, t.id))).toBe("Planned; waits until you start building");
+    expect(M.stateLabel(promoted, task(promoted, t.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
     expect(running(promoted, t.id)).toHaveLength(0);
     // Even while building, a task still under the roadmap hold never dispatches: only Start building lifts it.
     const forced = { ...promoted, project: { ...promoted.project, stage: "building" as const } };

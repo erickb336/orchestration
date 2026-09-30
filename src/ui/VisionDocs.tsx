@@ -1,14 +1,17 @@
 // ORC-014: the "Vision documents" list shown under the vision (Overview) and in the shaping panel:
 // Add files, Add folder (relative paths kept), drag-and-drop, one upload request per file with its own
 // status and reason, Remove with confirmation, and each document's size and whether it is readable.
-// The service keeps copies in its own directory; nothing is written into a repository.
+// The service keeps copies in its own directory; nothing is written into a repository. Review 9: every
+// file of one Add, folder or drop is attached as one vision revision. Review 4: the queue lives in a
+// ref (`UploadQueue`), so a folder walk that finishes late still drains.
 
 import { useRef, useState } from "react";
+import type { AttachVisionDocsResult } from "../api";
 import * as M from "../domain/model";
 import type { State, VisionDoc, VisionRevision } from "../domain/types";
 import { useStore } from "./store";
+import { UploadQueue, type UploadStatus } from "./uploadQueue";
 
-type UploadStatus = "queued" | "uploading" | "added" | "replaced" | "failed" | "skipped";
 interface Upload {
   key: string;
   path: string;
@@ -23,7 +26,17 @@ interface Picked {
   fromFolder: boolean;
 }
 
-const STATUS_LABEL: Record<UploadStatus, string> = { queued: "Waiting", uploading: "Uploading…", added: "Added", replaced: "Added (replaced the earlier copy)", failed: "Not added", skipped: "Skipped" };
+const STATUS_LABEL: Record<UploadStatus, string> = {
+  queued: "Waiting",
+  uploading: "Uploading…",
+  staged: "Uploaded; attaching with the batch…",
+  added: "Added",
+  replaced: "Added (replaced the earlier copy)",
+  unchanged: "Unchanged (already attached)",
+  failed: "Not added",
+  skipped: "Skipped",
+};
+const SETTLED = new Set<UploadStatus>(["added", "replaced", "unchanged", "failed", "skipped"]);
 
 /** A dropped folder, walked with the File System entry API; a dropped file as itself. */
 async function entriesOf(items: DataTransferItemList): Promise<Picked[]> {
@@ -74,36 +87,37 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
   const docs = M.currentVisionDocs(state);
   const total = M.visionDocsBytes(docs);
   const [uploads, setUploads] = useState<Upload[]>([]);
-  const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [over, setOver] = useState(false);
   const filesRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
-  const queueRef = useRef<Picked[]>([]);
   const office = docs.filter((d) => M.isOfficeDoc(d));
   const unreadable = docs.filter((d) => !d.text);
 
   const patch = (key: string, p: Partial<Upload>) => setUploads((xs) => xs.map((u) => (u.key === key ? { ...u, ...p } : u)));
 
-  /** Upload one file after another; each has its own request, key, status and reason. */
-  const drain = async () => {
-    if (busy) return;
-    setBusy(true);
-    while (queueRef.current.length) {
-      const { file, path, key } = queueRef.current.shift()! as Picked & { key: string };
-      patch(key, { status: "uploading" });
-      const r = await uploadVisionDoc(path, file);
-      if (r.ok) patch(key, { status: r.body.replaced ? "replaced" : "added" });
-      else patch(key, { status: "failed", detail: r.error });
-    }
-    setBusy(false);
-  };
+  // The queue and its hooks live in refs: the hooks always call this render's store functions, and the
+  // queue never reads a `busy` captured by an earlier render.
+  const hooksRef = useRef({ uploadVisionDoc, send });
+  hooksRef.current = { uploadVisionDoc, send };
+  const seqRef = useRef(0);
+  const queueRef = useRef<UploadQueue | null>(null);
+  if (!queueRef.current) {
+    queueRef.current = new UploadQueue({
+      upload: (path, file) => hooksRef.current.uploadVisionDoc(path, file),
+      attach: async (docIds, batchId) => {
+        const r = await hooksRef.current.send("attachVisionDocs", { docIds, batchId });
+        return r.ok ? { ok: true, result: r.result as AttachVisionDocsResult } : { ok: false, error: "The batch could not be attached (see the notice above). Add the files again." };
+      },
+      onStatus: (key, status, detail) => patch(key, { status, ...(detail !== undefined ? { detail } : {}) }),
+    });
+  }
 
   const enqueue = (picked: Picked[]) => {
     const next: Upload[] = [];
-    let n = uploads.length;
+    const files: { key: string; path: string; file: Blob }[] = [];
     for (const p of picked) {
-      const key = `u-${Date.now()}-${n++}`;
+      const key = `u-${++seqRef.current}`;
       const path = p.path.replace(/\\/g, "/");
       if (p.fromFolder && isHidden(path)) {
         next.push({ key, path, size: p.file.size, status: "skipped", detail: "hidden file or folder" });
@@ -118,10 +132,10 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
         continue;
       }
       next.push({ key, path, size: p.file.size, status: "queued" });
-      queueRef.current.push({ ...p, path, key } as Picked & { key: string });
+      files.push({ key, path, file: p.file });
     }
     setUploads((xs) => [...xs, ...next]);
-    void drain();
+    if (files.length) queueRef.current!.enqueue(files);
   };
 
   const pickFiles = (list: FileList | null, fromFolder: boolean) => {
@@ -135,16 +149,21 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
   };
 
   const remove = async (d: VisionDoc) => {
-    if (!confirm(`Remove ${d.path} from the vision?\n\nThe lead stops seeing it. Earlier vision revisions keep it in their history.`)) return;
+    if (!confirm(`Remove ${d.path} from the vision?\n\nThe lead stops seeing it. Earlier vision revisions keep it in their history, and its copy stays on disk for them.`)) return;
     setRemoving(d.id);
     await send("removeVisionDoc", { docId: d.id });
     setRemoving(null);
   };
 
-  const done = uploads.filter((u) => u.status !== "queued" && u.status !== "uploading");
+  const done = uploads.filter((u) => SETTLED.has(u.status));
   const added = uploads.filter((u) => u.status === "added" || u.status === "replaced").length;
+  const unchanged = uploads.filter((u) => u.status === "unchanged").length;
   const failed = uploads.filter((u) => u.status === "failed").length;
+  const skipped = uploads.filter((u) => u.status === "skipped").length;
   const inFlight = uploads.length - done.length;
+  const uploading = uploads.filter((u) => u.status === "queued" || u.status === "uploading").length;
+  const progress = uploading ? `Uploading ${uploads.length - uploading + 1} of ${uploads.length}…` : `Attaching ${inFlight} file${inFlight === 1 ? "" : "s"} as one revision…`;
+  const summary = [`${added} added`, unchanged ? `${unchanged} unchanged` : "", failed ? `${failed} not added` : "", skipped ? `${skipped} skipped` : ""].filter(Boolean).join(", ");
 
   return (
     <div className="vision-docs" style={{ marginTop: compact ? "0.6rem" : "0.8rem" }}>
@@ -155,7 +174,7 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
         </span>
       </div>
       <p className="muted" style={{ fontSize: "0.85rem", margin: "0.2rem 0 0.5rem" }}>
-        Files the lead reads whenever it plans, answers or drafts the vision; designers read them too, and other roles see the list. Copies are kept by the service, outside your repository; attach a file again to update it.
+        Files the lead reads whenever it plans, answers or drafts the vision; designers read them too, and other roles see the list. Copies are kept by the service, outside your repository; attach a file again to update it. Each Add, folder or drop becomes one vision revision.
       </p>
       <div
         className={`dropzone${over ? " over" : ""}`}
@@ -244,9 +263,7 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
       {uploads.length > 0 && (
         <div style={{ marginTop: "0.5rem" }} aria-live="polite">
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <span style={{ fontSize: "0.85rem" }}>
-              {inFlight ? `Uploading ${done.length + 1} of ${uploads.length}…` : `${added} added${failed ? `, ${failed} not added` : ""}${uploads.length - added - failed ? `, ${uploads.length - added - failed} skipped` : ""}.`}
-            </span>
+            <span style={{ fontSize: "0.85rem" }}>{inFlight ? progress : `${summary}.`}</span>
             {!inFlight && (
               <button type="button" className="link" style={{ fontSize: "0.82rem" }} onClick={() => setUploads([])}>
                 Clear

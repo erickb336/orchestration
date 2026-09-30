@@ -100,6 +100,8 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 
 **Overview and the lead.** The Overview shows the vision, what changed since your last visit, and the conversation with the lead.
 
+**Vision documents.** Attach files or a whole folder to the vision on the Overview (or in the shaping panel). The lead reads their text whenever it plans, answers or drafts the vision, designers read them too, and other roles see the list of names and sizes. Each Add, folder or drop becomes one vision revision, and every revision records which documents applied. Copies are kept by content hash under `~/.orchestration/vision-docs/`, outside your repository, and verified against their hash when they are read. A removed or replaced document stays on disk while the vision history refers to it; only copies no revision names (refused or abandoned uploads, and a replaced project's directory) are deleted.
+
 ![Overview](docs/screenshots/overview.png)
 
 **How involved you want to be.** Choose Autopilot, "check in before work starts", or "only when I ask".

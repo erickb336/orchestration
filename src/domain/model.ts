@@ -426,7 +426,12 @@ export function stateLabel(s: State, t: Task): string {
   if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (shaping)" : "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return waitingLabel(s, t);
   // ORC-012 review 2: the roadmap's own hold is named as such; the user's hold before start stays its own label.
-  if (col === "ready" && t.heldForShaping) return t.holdBeforeStart ? "Planned; waits until you start building, then for your release" : "Planned; waits until you start building";
+  // ORC-014 review 11: what follows Start building is decided by the involvement setting at that moment,
+  // so the label reads it now; a dependency wait is shown under the shaping hold too.
+  if (col === "ready" && t.heldForShaping) {
+    const dep = waitingOn(s, t);
+    return `Planned; waits until you start building${dep ? ` and on ${dep}` : ""}, then ${startBuildingPlan(s).release ? "starts on Autopilot" : "waits for your release (your involvement setting)"}`;
+  }
   if (col === "ready" && t.holdBeforeStart) return "Held before start";
   if (col === "ready" && s.project.hold) return "Ready (project paused)";
   // ORC-012 review 13: a dependency wait is shown before the stage, with shaping noted.
@@ -2305,19 +2310,67 @@ export const MAX_STEER_ITEMS = 20;
 // Control characters other than newline and tab (those are whitespace, collapsed by `oneLine`).
 const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 /**
- * ORC-012 review 5: characters that show nothing but change how text reads or is matched: C1 controls,
- * zero-width characters and joiners, bidi overrides and isolates, the byte-order mark, and tag
- * characters. Stripped from every text the lead supplies and from document names; text left with
- * nothing but whitespace is empty.
+ * ORC-012 review 5 and ORC-014 review 3: characters that show nothing but change how text reads or is
+ * matched. Text the lead supplies (drafts, questions, options, coverage, steering reasons and the focus)
+ * and document text in envelopes lose: C1 controls, the zero-width space, bidi embeddings and overrides
+ * (U+202A–202E) and isolates (U+2066–2069), the word joiner, the byte-order mark, and tag characters
+ * outside a valid emoji tag sequence. Legitimate text keeps what it needs: ZWJ inside emoji sequences
+ * and between letters, ZWNJ between letters (Persian, Devanagari), LRM/RLM, variation selectors, and
+ * emoji tag sequences (U+1F3F4, tags, U+E007F: subdivision flags). Text the user typed is never altered.
  */
-const INVISIBLE_RE = /[\u0080-\u009F​-‏‪-‮⁠⁦-⁩﻿\u{E0000}-\u{E007F}]/gu;
-export const stripInvisible = (x: string) => x.replace(INVISIBLE_RE, "");
+const HOSTILE_RE = /[\u0080-\u009F\u200B\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu;
+/** A valid emoji tag sequence is kept whole; any other tag character goes. */
+const TAG_RE = /(\u{1F3F4}[\u{E0020}-\u{E007E}]+\u{E007F})|[\u{E0000}-\u{E007F}]/gu;
+const JOINER_RE = /[\u200C\u200D]/gu;
+const LETTER_RE = /[\p{L}\p{M}]/u;
+const EMOJI_BEFORE_RE = /[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\uFE0F]/u;
+const EMOJI_AFTER_RE = /\p{Extended_Pictographic}/u;
+/** Nothing visible: whitespace and the invisible characters legitimate text may keep. */
+const ONLY_INVISIBLE_RE = /^[\s\u200C-\u200F\uFE0E\uFE0F]*$/u;
+
+const codePointBefore = (x: string, i: number): string => {
+  if (i <= 0) return "";
+  const lo = x.charCodeAt(i - 1);
+  if (lo >= 0xdc00 && lo <= 0xdfff && i >= 2) return x.slice(i - 2, i);
+  return x[i - 1];
+};
+const codePointAfter = (x: string, i: number): string => {
+  const cp = x.codePointAt(i);
+  return cp === undefined ? "" : String.fromCodePoint(cp);
+};
+
+/** Remove hostile invisible characters, keeping the joiners and marks legitimate text needs. Reports how many were removed. */
+export function stripHostile(x: string): { text: string; removed: number } {
+  let removed = 0;
+  let out = x.replace(HOSTILE_RE, () => {
+    removed += 1;
+    return "";
+  });
+  out = out.replace(TAG_RE, (_m, seq: string | undefined) => {
+    if (seq) return seq;
+    removed += 1;
+    return "";
+  });
+  out = out.replace(JOINER_RE, (m, offset: number, whole: string) => {
+    const before = codePointBefore(whole, offset);
+    const after = codePointAfter(whole, offset + 1);
+    const betweenLetters = LETTER_RE.test(before) && LETTER_RE.test(after);
+    const inEmoji = m === "\u200D" && (EMOJI_BEFORE_RE.test(before) || EMOJI_AFTER_RE.test(after));
+    if (betweenLetters || inEmoji) return m;
+    removed += 1;
+    return "";
+  });
+  return { text: out, removed };
+}
+export const stripInvisible = (x: string) => stripHostile(x).text;
+/** Text with nothing visible in it counts as empty. */
+const visibleOrEmpty = (x: string) => (ONLY_INVISIBLE_RE.test(x) ? "" : x);
 /**
  * Review finding 8: every text the lead supplies (focus, reason, why) is one line of plain text. The
  * focus is printed verbatim in every later envelope, so newlines would give injected text a persistent
  * channel; control characters are rejected outright by `CONTROL_RE`, invisible ones are stripped.
  */
-const oneLine = (x: string) => stripInvisible(x).replace(/\s+/g, " ").trim();
+const oneLine = (x: string) => visibleOrEmpty(stripInvisible(x).replace(/\s+/g, " ").trim());
 
 export interface SteerItem {
   id: string;
@@ -2425,9 +2478,12 @@ function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string): Steeri
   // Newer direction wins: the run is completed now, so its own messages are covered; anything still
   // pending was posted while it worked. A vision edit meanwhile also holds the set.
   const newer = pendingMessages(s).length > 0;
-  const visionMoved = currentVision(s).rev !== r.visionRev;
+  // ORC-014 review 2: only a change to the text or focus holds the set. Documents attached or removed
+  // meanwhile are noted truthfully, and the focus still applies.
+  const visionMoved = visionContentMovedSince(s, r.visionRev);
   if (newer) set.heldBecause = "You sent another message while the lead was working; its next reply decides.";
   else if (visionMoved) set.heldBecause = "You edited the vision while the lead was working.";
+  if (!visionMoved && currentVision(s).rev !== r.visionRev) set.notes.push("Your vision documents changed while the lead was working; its reply may not reflect them.");
   const held = !!set.heldBecause;
   const mode = s.project.steeringMode;
   const from = r.messageIds.join(", ");
@@ -2546,6 +2602,19 @@ function supersedeSuggestions(s: State, set: SteeringChangeSet | undefined, now:
   }
 }
 
+/**
+ * ORC-014 review 2: attaching or removing a document creates a vision revision without touching the
+ * text or focus. Compare-and-set on the lead's focus changes, and the "you edited the vision" hold,
+ * therefore compare the text and focus, never the raw revision number: a document-only change
+ * invalidates nothing.
+ */
+export function visionContentMovedSince(s: State, rev: number | undefined): boolean {
+  const then = rev === undefined ? undefined : s.project.visions.find((v) => v.rev === rev);
+  if (!then) return true;
+  const cur = currentVision(s);
+  return cur.text !== then.text || cur.focus !== then.focus;
+}
+
 /** Review finding 7: did the user undo a lead focus change to exactly this text? Then it is only suggested again. */
 function undoneFocus(s: State, focus: string): boolean {
   return s.steering.some((cs) => cs.changes.some((c) => c.kind === "focus" && c.status === "undone" && oneLine(String(c.after ?? "")) === focus));
@@ -2582,7 +2651,7 @@ function undoRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: strin
   switch (c.kind) {
     case "focus": {
       const cur = currentVision(s);
-      if (cur.rev !== c.visionRev) return `the vision changed since (now r${cur.rev})`;
+      if (visionContentMovedSince(s, c.visionRev)) return `the vision changed since (now r${cur.rev})`;
       pushVision(s, { author: "user", text: cur.text, focus: String(c.before ?? ""), reason: `Undid the lead's focus change (${set.id})`, source: { undoOf: set.id } }, now);
       return undefined;
     }
@@ -2670,7 +2739,7 @@ function applyRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: stri
   switch (c.kind) {
     case "focus": {
       const cur = currentVision(s);
-      if (cur.rev !== c.visionRev) return `the vision changed since (now r${cur.rev})`;
+      if (visionContentMovedSince(s, c.visionRev)) return `the vision changed since (now r${cur.rev})`;
       const rev = pushVision(s, { author: "user", text: cur.text, focus: String(c.after ?? ""), reason: `Applied the lead's suggestion (${set.id}): ${c.why || set.reason}`, source: { changeSetId: set.id } }, now);
       c.visionRev = rev.rev;
       return undefined;
@@ -2920,6 +2989,18 @@ export function openVisionDraft(s: State): VisionDraft | undefined {
 }
 
 /**
+ * ORC-014 review 11: what Start building would do now. It uses the involvement setting at the moment it
+ * runs, never one recorded earlier, and lifts only the roadmap's own hold: `roadmap` are the planned
+ * tasks it releases or hands to the user's release; `userHeld` are planned tasks whose hold the user
+ * took over, which keep waiting for the user either way.
+ */
+export function startBuildingPlan(s: State): { release: boolean; roadmap: Task[]; userHeld: Task[] } {
+  const a = s.project.autonomy;
+  const open = roadmapTasks(s);
+  return { release: a.enabled && !a.holdLeadProposals, roadmap: open.filter((t) => t.heldForShaping), userHeld: open.filter((t) => !t.heldForShaping && t.holdBeforeStart) };
+}
+
+/**
  * Start building. Refused without a vision. On Autopilot (autonomy on and lead proposals not held) the
  * roadmap starts; with check-in or "only when I ask" it keeps waiting for the user, as lead proposals do.
  */
@@ -2928,8 +3009,7 @@ export function startBuilding(state: State, now: string): State {
   if (why) throw new ControlError(why);
   const s = draft(state);
   s.project.stage = "building";
-  const a = s.project.autonomy;
-  const release = a.enabled && !a.holdLeadProposals;
+  const { release } = startBuildingPlan(s);
   const released: string[] = [];
   // Review 2: only the roadmap's own hold is lifted. A task the user held before start (which took it
   // out of the roadmap hold) keeps that hold; the involvement setting decides the rest.
@@ -2963,8 +3043,11 @@ export function startShaping(state: State, now: string): State {
 
 /** Control characters other than tab and newline, and invisible characters (review 5), removed from every text the lead drafts. */
 const CONTROL_G = new RegExp(CONTROL_RE.source, "g");
-const cleanText = (x: string) => stripInvisible(x.replace(CONTROL_G, "")).replace(/\r\n?/g, "\n").trim();
+const cleanText = (x: string) => visibleOrEmpty(stripInvisible(x.replace(CONTROL_G, "")).replace(/\r\n?/g, "\n").trim());
 const cleanLine = (x: string) => oneLine(x.replace(CONTROL_G, ""));
+/** ORC-014 review 3: text the user typed is never altered beyond newline normalization and trimming; joiners and marks stay. */
+const userText = (x: string) => x.replace(/\r\n?/g, "\n").trim();
+const userLine = (x: string) => x.replace(/\s+/g, " ").trim();
 
 export type ValidatedVisionDraft = { ok: true; draft: { text: string; focus: string; reason: string } } | { ok: false; why: string };
 
@@ -3169,8 +3252,8 @@ export function acceptVisionDraft(state: State, draftId: string, expectedRev: nu
   const cur = currentVision(state);
   if (cur.rev !== expectedRev) throw new StaleWriteError(expectedRev, cur.rev);
   const edited = edits?.text !== undefined || edits?.focus !== undefined;
-  const text = edits?.text !== undefined ? cleanText(edits.text) : d.text;
-  const focus = edits?.focus !== undefined ? cleanLine(edits.focus) : d.focus;
+  const text = edits?.text !== undefined ? userText(edits.text) : d.text;
+  const focus = edits?.focus !== undefined ? userLine(edits.focus) : d.focus;
   if (!text) throw new ControlError("The vision cannot be empty.");
   if (text.length > MAX_VISION_TEXT) throw new ControlError(`The vision is limited to ${MAX_VISION_TEXT} characters.`);
   if (focus.length > MAX_VISION_FOCUS) throw new ControlError(`The focus is limited to ${MAX_VISION_FOCUS} characters.`);
@@ -3213,6 +3296,7 @@ export const MAX_VISION_DOC_BYTES = 2 * 1024 * 1024;
 export const MAX_VISION_DOCS = 200;
 export const MAX_VISION_DOCS_BYTES = 20 * 1024 * 1024;
 const MAX_VISION_DOC_PATH = 512;
+const HOSTILE_PATH_RE = /[\u0080-\u009F\u200B\u2028\u2029\u202A-\u202E\u2060\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/u;
 
 /** Bytes as people read them: "1.2 KB", "3.4 MB". */
 export function fmtBytes(n: number): string {
@@ -3228,11 +3312,14 @@ export function fmtBytes(n: number): string {
  * when joined under it, because no segment is `..` and none is absolute.
  */
 export function visionDocPath(given: string): { ok: true; path: string } | { ok: false; why: string } {
-  // Review 5: invisible characters never make it into a display name.
-  const raw = typeof given === "string" ? stripInvisible(given) : "";
+  // ORC-014 review 9: one spelling per name, so the same name in two encodings replaces rather than duplicates.
+  const raw = typeof given === "string" ? given.normalize("NFC") : "";
   if (!raw.trim()) return { ok: false, why: "The file needs a name." };
   if (raw.length > MAX_VISION_DOC_PATH) return { ok: false, why: `The path is over ${MAX_VISION_DOC_PATH} characters.` };
   if (CONTROL_RE.test(raw) || raw.includes("\n") || raw.includes("\t")) return { ok: false, why: "The path contains control characters." };
+  // Reviews 3 and 8: a name is the user's, so it is refused rather than altered when it carries characters that
+  // reorder or hide text (line and paragraph separators, bidi controls, tag characters, other invisible ones).
+  if (HOSTILE_PATH_RE.test(raw)) return { ok: false, why: "The name contains invisible or bidirectional control characters." };
   const unified = raw.replace(/\\/g, "/");
   if (unified.startsWith("/") || /^[A-Za-z]:/.test(unified)) return { ok: false, why: "Absolute paths are not allowed; attach the file with a relative path." };
   const segments = unified.split("/").filter((seg) => seg !== "" && seg !== ".");
@@ -3268,11 +3355,46 @@ export interface VisionDocInput {
   text: boolean;
 }
 
+/** ORC-014 review 9: a staged record whose batch never committed is dropped after this long. */
+export const STAGED_DOC_TTL_MS = 60 * 60 * 1000;
+
+/** Documents uploaded but not yet attached (waiting for their batch). */
+export function stagedVisionDocs(s: State): VisionDoc[] {
+  return s.project.visionDocs.filter((d) => d.stagedAt);
+}
+
+/** Drop staged records older than the TTL, except those named: their batch never committed. */
+function pruneStaged(s: State, now: string, keep: Set<string> = new Set()) {
+  const cutoff = Date.parse(now) - STAGED_DOC_TTL_MS;
+  s.project.visionDocs = s.project.visionDocs.filter((d) => !d.stagedAt || keep.has(d.id) || Date.parse(d.stagedAt) >= cutoff);
+}
+
+/** A set with more documents applied in order, each replacing the one at its path. */
+function withDocs(set: VisionDoc[], more: VisionDoc[]): VisionDoc[] {
+  const out = [...set];
+  for (const d of more) {
+    const i = out.findIndex((x) => x.path === d.path);
+    if (i >= 0) out[i] = d;
+    else out.push(d);
+  }
+  return out;
+}
+
+/** Why a document on top of `set` would break the project's caps, or undefined. A replacement at an existing path takes that document's place. */
+function capReason(set: VisionDoc[], input: { path: string; size: number }): string | undefined {
+  const others = set.filter((d) => d.path !== input.path);
+  if (others.length + 1 > MAX_VISION_DOCS) return `The vision already has ${MAX_VISION_DOCS} documents; remove one first.`;
+  const total = visionDocsBytes(others) + input.size;
+  if (total > MAX_VISION_DOCS_BYTES) return `Attaching ${input.path} (${fmtBytes(input.size)}) would bring the documents to ${fmtBytes(total)}; the limit is ${fmtBytes(MAX_VISION_DOCS_BYTES)} per project.`;
+  return undefined;
+}
+
 /**
- * Why attaching this file would be refused, or undefined when it is admitted. The endpoint asks before
- * storing a copy; `addVisionDoc` asks again inside the transaction. A file at a path already in the set
- * replaces the older one (its size then no longer counts); the same file again (same path and hash)
- * is refused as already attached.
+ * Why staging this file would be refused, or undefined when it is admitted: the path, the size, the hash,
+ * and the caps against the current set with the documents already staged for the next batch applied.
+ * The endpoint asks before anything is written; `stageVisionDoc` asks again inside the transaction, and
+ * `attachVisionDocs` decides for the batch as a whole. The same file again (same path and content) is
+ * admitted: it is reported as unchanged, never as an error.
  */
 export function visionDocAdmission(s: State, input: VisionDocInput): string | undefined {
   const p = visionDocPath(input.path);
@@ -3283,45 +3405,148 @@ export function visionDocAdmission(s: State, input: VisionDocInput): string | un
   if (!/^[a-f0-9]{64}$/.test(input.hash)) return "The content hash must be a lowercase SHA-256 hex string.";
   const current = currentVisionDocs(s);
   const same = current.find((d) => d.path === p.path);
-  if (same && same.hash === input.hash) return `${p.path} is already attached (the same content).`;
-  const others = same ? current.filter((d) => d.id !== same.id) : current;
-  if (others.length + 1 > MAX_VISION_DOCS) return `The vision already has ${MAX_VISION_DOCS} documents; remove one first.`;
-  const total = visionDocsBytes(others) + input.size;
-  if (total > MAX_VISION_DOCS_BYTES) return `Attaching ${p.path} (${fmtBytes(input.size)}) would bring the documents to ${fmtBytes(total)}; the limit is ${fmtBytes(MAX_VISION_DOCS_BYTES)} per project.`;
-  return undefined;
+  if (same && same.hash === input.hash) return undefined;
+  return capReason(withDocs(current, stagedVisionDocs(s)), { path: p.path, size: input.size });
+}
+
+export interface StagedDoc {
+  docId: string;
+  /** "unchanged": the same file is attached already (`docId` is that document); nothing to commit. */
+  status: "staged" | "unchanged";
+  /** The document at the same path this one will replace when its batch commits. */
+  replaces?: string;
 }
 
 /**
- * Attach a document whose copy the service already stored. A new file at a path already in the set
- * replaces the older one in the current set only; earlier revisions keep theirs. A user-authored
- * vision revision records the resulting set.
+ * ORC-014 review 9: record one uploaded file, without a revision. The endpoint stores the copy once this
+ * succeeds; `attachVisionDocs` then attaches the batch as one revision. Staging the same file twice
+ * before the commit reuses the record.
  */
-export function addVisionDoc(state: State, input: VisionDocInput, now: string): { state: State; docId: string; replaced?: string } {
+export function stageVisionDoc(state: State, input: VisionDocInput, now: string): { state: State; result: StagedDoc } {
   const why = visionDocAdmission(state, input);
   if (why) throw new ControlError(why);
   const path = (visionDocPath(input.path) as { ok: true; path: string }).path;
   const s = draft(state);
-  const cur = currentVision(s);
-  const replaced = currentVisionDocs(s).find((d) => d.path === path);
-  const doc: VisionDoc = { id: nextId(s, "doc"), name: path.slice(path.lastIndexOf("/") + 1), path, size: input.size, hash: input.hash, text: input.text, addedAt: now };
+  pruneStaged(s, now);
+  const current = currentVisionDocs(s);
+  const same = current.find((d) => d.path === path);
+  if (same && same.hash === input.hash) return { state: s, result: { docId: same.id, status: "unchanged" } };
+  const already = stagedVisionDocs(s).find((d) => d.path === path && d.hash === input.hash);
+  if (already) return { state: s, result: { docId: already.id, status: "staged", ...(same ? { replaces: same.id } : {}) } };
+  const doc: VisionDoc = { id: nextId(s, "doc"), name: path.slice(path.lastIndexOf("/") + 1), path, size: input.size, hash: input.hash, text: input.text, addedAt: now, stagedAt: now };
   s.project.visionDocs.push(doc);
-  const docIds = [...(cur.docIds ?? []).filter((id) => id !== replaced?.id), doc.id];
-  const total = visionDocsBytes(visionDocsOf(s, { ...cur, docIds }));
-  const readable = doc.text ? "readable as text" : "not readable as text; the lead sees its name only";
-  pushVision(
+  return { state: s, result: { docId: doc.id, status: "staged", ...(same ? { replaces: same.id } : {}) } };
+}
+
+export interface AttachedDoc {
+  /** The staged document's id as sent. */
+  docId: string;
+  path: string;
+  /** "unchanged": the same file was attached already (see `attachedAs`); "refused": `why` says what cap it broke. */
+  status: "added" | "replaced" | "unchanged" | "refused";
+  /** For "unchanged": the document already in the set. */
+  attachedAs?: string;
+  /** For "replaced": the earlier document at the same path, kept by earlier revisions. */
+  replaced?: string;
+  why?: string;
+}
+
+export interface AttachResult {
+  /** The revision created, when at least one document was added or replaced. */
+  revision?: number;
+  docs: AttachedDoc[];
+}
+
+/** Up to three names, then "and N more". */
+function nameList(paths: string[]): string {
+  const shown = paths.slice(0, 3);
+  const more = paths.length - shown.length;
+  return `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+}
+
+/**
+ * ORC-014 review 9: attach a batch of staged documents as ONE user-authored vision revision ("Attached N
+ * documents"). Files are applied in the order given; each is checked against the caps on top of the ones
+ * before it, so a batch that overflows attaches what fits and reports the rest by name. A file whose
+ * path and content are attached already is reported unchanged. The revision records the whole resulting
+ * set (one list per revision: linear in the number of documents, and every revision stays self-contained).
+ */
+export function attachVisionDocs(state: State, docIds: string[], batchId: string | undefined, now: string): { state: State; result: AttachResult } {
+  const ids = [...new Set(docIds)];
+  if (!ids.length) throw new ControlError("Nothing to attach: the batch names no documents.");
+  for (const id of ids) if (!state.project.visionDocs.some((x) => x.id === id)) throw new ControlError(`Unknown document ${id}.`);
+  const s = draft(state);
+  const cur = currentVision(s);
+  let set = visionDocsOf(s, cur);
+  const rows: AttachedDoc[] = [];
+  const added: VisionDoc[] = [];
+  const removed: string[] = [];
+  const drop = new Set<string>();
+  const all = ids.map((id) => s.project.visionDocs.find((x) => x.id === id)!);
+  const batch = all.filter((d) => d.stagedAt);
+  // Two clients uploading the same file share one staged record: the second commit finds it attached
+  // already and reports it unchanged; one attached and replaced or removed since must be uploaded again.
+  for (const d of all) {
+    if (d.stagedAt) continue;
+    if (set.some((x) => x.id === d.id)) rows.push({ docId: d.id, path: d.path, status: "unchanged", attachedAs: d.id });
+    else rows.push({ docId: d.id, path: d.path, status: "refused", why: "it was attached earlier and has since been replaced or removed; attach it again" });
+  }
+  for (const d of batch) {
+    const later = batch.find((x) => x !== d && x.path === d.path && batch.indexOf(x) > batch.indexOf(d));
+    if (later) {
+      rows.push({ docId: d.id, path: d.path, status: "refused", why: `a later file in the same batch has the same path (${later.id})` });
+      drop.add(d.id);
+      continue;
+    }
+    const same = set.find((x) => x.path === d.path);
+    if (same && same.hash === d.hash) {
+      rows.push({ docId: d.id, path: d.path, status: "unchanged", attachedAs: same.id });
+      drop.add(d.id);
+      continue;
+    }
+    const why = capReason(set, d);
+    if (why) {
+      rows.push({ docId: d.id, path: d.path, status: "refused", why });
+      drop.add(d.id);
+      continue;
+    }
+    delete d.stagedAt;
+    d.addedAt = now;
+    set = withDocs(set, [d]);
+    added.push(d);
+    if (same) {
+      removed.push(same.id);
+      rows.push({ docId: d.id, path: d.path, status: "replaced", replaced: same.id });
+    } else rows.push({ docId: d.id, path: d.path, status: "added" });
+  }
+  s.project.visionDocs = s.project.visionDocs.filter((d) => !drop.has(d.id));
+  pruneStaged(s, now, new Set(ids));
+  if (!added.length) return { state: s, result: { docs: rows } };
+  const docIdsNow = set.map((d) => d.id);
+  const n = added.length;
+  const unreadable = added.filter((d) => !d.text).length;
+  const reason = `Attached ${n} document${n === 1 ? "" : "s"}: ${nameList(added.map((d) => d.path))}${removed.length ? ` (${removed.length} replaced ${removed.length === 1 ? "an earlier copy" : "earlier copies"})` : ""}${unreadable ? ` (${unreadable} not readable as text; the lead sees ${unreadable === 1 ? "its name" : "their names"} only)` : ""}`;
+  const rev = pushVision(
     s,
-    {
-      author: "user",
-      text: cur.text,
-      focus: cur.focus,
-      reason: replaced ? `Attached a newer ${path} (${fmtBytes(doc.size)}; ${readable}), replacing the earlier one` : `Attached ${path} (${fmtBytes(doc.size)}; ${readable})`,
-      source: { docAdded: doc.id, ...(replaced ? { docRemoved: replaced.id } : {}) },
-      docIds,
-    },
+    { author: "user", text: cur.text, focus: cur.focus, reason, source: { docsAdded: added.map((d) => d.id), ...(removed.length ? { docsRemoved: removed } : {}), ...(batchId ? { batchId } : {}) }, docIds: docIdsNow },
     now,
-    `Vision r${cur.rev + 1}: ${replaced ? `replaced ${path} with a newer copy` : `attached ${path}`} (${docIds.length} document${docIds.length === 1 ? "" : "s"}, ${fmtBytes(total)})`,
+    `Vision r${cur.rev + 1}: attached ${n} document${n === 1 ? "" : "s"} (${docIdsNow.length} in total, ${fmtBytes(visionDocsBytes(set))})`,
   );
-  return { state: s, docId: doc.id, ...(replaced ? { replaced: replaced.id } : {}) };
+  return { state: s, result: { revision: rev.rev, docs: rows } };
+}
+
+/**
+ * Stage and attach one document in one step (tests and single-file callers). A file at a path already
+ * in the set replaces the older one in the current set only; the same file again is refused as
+ * already attached.
+ */
+export function addVisionDoc(state: State, input: VisionDocInput, now: string): { state: State; docId: string; replaced?: string } {
+  const staged = stageVisionDoc(state, input, now);
+  if (staged.result.status === "unchanged") throw new ControlError(`${(visionDocPath(input.path) as { ok: true; path: string }).path} is already attached (the same content).`);
+  const r = attachVisionDocs(staged.state, [staged.result.docId], undefined, now);
+  const row = r.result.docs[0];
+  if (row.status === "refused") throw new ControlError(row.why ?? "Refused.");
+  return { state: r.state, docId: row.docId, ...(row.replaced ? { replaced: row.replaced } : {}) };
 }
 
 /** Remove a document from the current set. Its record and stored copy stay: earlier revisions refer to them. */

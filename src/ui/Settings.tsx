@@ -11,6 +11,7 @@ import { useStore } from "./store";
 import { ModelPicker, PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, ROLE_LABEL, autonomyArgs, fmtTime, involvementOf, relTime, usePref } from "./common";
 import { disableNotifications, enableNotifications, notificationsSupported } from "./notifications";
 import { StageControl } from "./Shaping";
+import { initProjectConfirm, newProjectStage } from "./stageChoice";
 
 const CAP_LABEL: Record<keyof CapabilityMap, string> = {
   start: "Start",
@@ -740,8 +741,10 @@ function ProjectSetup() {
   const [vision, setVision] = useState("");
   const [focus, setFocus] = useState("");
   // ORC-012: shape the vision with the lead first (the vision may stay empty), or start building now.
-  // Review 7: the form starts from the stage the project is in, so it never resets an earlier choice.
-  const [stage, setStage] = useState<"shaping" | "building">(state.project.stage);
+  // ORC-014 review 10: until you choose, the stage follows the vision: shaping while it is empty, building once written.
+  const [stageChoice, setStageChoice] = useState<"shaping" | "building" | null>(null);
+  const stage = newProjectStage(stageChoice, vision);
+  const docCount = M.currentVisionDocs(state).length;
   const repoOk = service.repo?.ok;
   return (
     <section className="card" aria-labelledby="setup-h">
@@ -754,13 +757,13 @@ function ProjectSetup() {
       <details open={!repoOk}>
         <summary>Start a new project</summary>
         <p className="muted" style={{ fontSize: "0.85rem" }}>
-          Replaces the board with an empty project for the repository below. Refused while any run is active. The repository must be a git repository with at least one commit. Agents work in separate worktrees and never
+          Replaces the board with an empty project for the repository below; vision documents attached to the current project are removed with it. Refused while any run is active. The repository must be a git repository with at least one commit. Agents work in separate worktrees and never
           edit its working tree; your branches change only through automatic delivery, when you turn it on (fast-forward only).
         </p>
         <form
           onSubmit={async (e) => {
             e.preventDefault();
-            if (!confirm(`Start a new project "${name}"? The current board and history are replaced.`)) return;
+            if (!confirm(initProjectConfirm(name, docCount))) return;
             await send("initProject", { name, repoPath: repo, vision, focus, stage });
           }}
         >
@@ -777,7 +780,7 @@ function ProjectSetup() {
               How to begin
             </legend>
             <label className="row" style={{ gap: "0.45rem", alignItems: "flex-start", marginBottom: "0.3rem" }}>
-              <input type="radio" name="new-stage" checked={stage === "shaping"} onChange={() => setStage("shaping")} style={{ marginTop: "0.3rem" }} />
+              <input type="radio" name="new-stage" checked={stage === "shaping"} onChange={() => setStageChoice("shaping")} style={{ marginTop: "0.3rem" }} />
               <span>
                 <strong style={{ fontWeight: 560 }}>Shape the vision with the lead first</strong>
                 <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
@@ -786,7 +789,7 @@ function ProjectSetup() {
               </span>
             </label>
             <label className="row" style={{ gap: "0.45rem", alignItems: "flex-start" }}>
-              <input type="radio" name="new-stage" checked={stage === "building"} onChange={() => setStage("building")} style={{ marginTop: "0.3rem" }} />
+              <input type="radio" name="new-stage" checked={stage === "building"} onChange={() => setStageChoice("building")} style={{ marginTop: "0.3rem" }} />
               <span>
                 <strong style={{ fontWeight: 560 }}>Start building now</strong>
                 <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>

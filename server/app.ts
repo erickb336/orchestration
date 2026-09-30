@@ -60,6 +60,13 @@ if (mode === "real") {
 }
 // ORC-014: copies of the user's vision documents live next to the database, never in a repository.
 const visionDocs = new VisionDocStore(join(dirname(dbPath), "vision-docs"));
+// Review 6: copies no document record refers to (and other projects' directories) are cleaned up at start.
+try {
+  const swept = visionDocs.sweep(store.read().state);
+  if (swept.removed.length || swept.removedDirs.length) log(`Vision documents: removed ${swept.removed.length} orphan cop${swept.removed.length === 1 ? "y" : "ies"} and ${swept.removedDirs.length} old project director${swept.removedDirs.length === 1 ? "y" : "ies"}`);
+} catch (e) {
+  log(`Vision documents: cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+}
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
 const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs });
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];

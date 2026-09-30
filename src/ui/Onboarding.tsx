@@ -2,33 +2,42 @@ import * as M from "../domain/model";
 import { PROVIDERS } from "../domain/types";
 import { useStore } from "./store";
 import { PREF_INVOLVEMENT_CHOSEN, PREF_ONBOARDING_DISMISSED, PREF_STAGE_CHOSEN, usePref } from "./common";
+import { stageStepDone, startNowBlocker } from "./stageChoice";
+
+function scrollToHeading(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
 
 /**
  * ORC-012: the first choice: shape the vision with the lead first, or start building now (the usual
  * behaviour). Review 6: an empty project of your own starts by shaping, so "Start building now" is a
- * real Start building, refused with a plain reason while the vision is empty.
+ * real Start building. ORC-014 review 10: the step is done once you chose: "Shape" counts as chosen while
+ * already shaping, and "Start building now" asks for a vision first, with the way there.
  */
 function StageChoice({ onChosen }: { onChosen: () => void }) {
   const { state, send, disabled } = useStore();
   const shaping = state.project.stage === "shaping";
-  const why = shaping ? M.startBuildingBlocker(state) : undefined;
+  const why = startNowBlocker(state);
+  const visionHeading = shaping ? "shape-h" : "vision-h";
   return (
     <span className="row" style={{ gap: "0.4rem" }}>
       <button
         className="small"
-        disabled={disabled || shaping}
+        disabled={disabled}
         onClick={async () => {
+          if (shaping) return onChosen();
           const r = await send("startShaping");
           if (r.ok) onChosen();
         }}
       >
-        Shape the vision with the lead first
+        {shaping ? "Keep shaping the vision with the lead" : "Shape the vision with the lead first"}
       </button>
       <button
         className="small"
-        disabled={disabled || !!why}
+        disabled={disabled}
         title={why}
         onClick={async () => {
+          if (why) return scrollToHeading(visionHeading);
           if (shaping) {
             const r = await send("startBuilding");
             if (!r.ok) return;
@@ -38,13 +47,16 @@ function StageChoice({ onChosen }: { onChosen: () => void }) {
       >
         Start building now
       </button>
-      {why && <span className="muted" style={{ fontSize: "0.82rem" }}>{why}</span>}
+      {why && (
+        <span className="muted" style={{ fontSize: "0.82rem" }}>
+          {why}{" "}
+          <button type="button" className="link" style={{ fontSize: "0.82rem" }} onClick={() => scrollToHeading(visionHeading)}>
+            Go to vision
+          </button>
+        </span>
+      )}
     </span>
   );
-}
-
-function scrollToHeading(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 interface Step {
@@ -99,7 +111,7 @@ export function Onboarding() {
     {
       id: "stage",
       label: "Choose how to begin: shape the vision with the lead first, or start building now",
-      done: stageChosen === "1" || state.tasks.length > 0 || (shaping && vision.text.trim().length > 0),
+      done: stageStepDone(state, stageChosen),
       detail: shaping ? "Shaping: the lead answers you and drafts the vision; nothing runs until you start building." : undefined,
       action: <StageChoice onChosen={() => setStageChosen("1")} />,
     },

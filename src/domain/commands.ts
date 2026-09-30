@@ -133,10 +133,19 @@ export const COMMANDS = {
   dismissVisionDraft: same((s, now, a) => M.dismissVisionDraft(s, str(a, "draftId"), now)),
 
   // vision documents (ORC-014)
-  /** Record a document whose copy the service stored (sent by POST /api/vision-docs, never by the UI directly). Returns { docId, replaced? }. */
-  addVisionDoc: (s, now, a) => {
-    const r = M.addVisionDoc(s, { path: str(a, "path"), size: num(a, "size"), hash: str(a, "hash"), text: bool(a, "text") }, now);
-    return { state: r.state, result: { docId: r.docId, ...(r.replaced ? { replaced: r.replaced } : {}) } };
+  /** Record one uploaded file without a revision (sent by POST /api/vision-docs, never by the UI directly). Returns { docId, status, replaces? }. */
+  stageVisionDoc: (s, now, a) => {
+    const r = M.stageVisionDoc(s, { path: str(a, "path"), size: num(a, "size"), hash: str(a, "hash"), text: bool(a, "text") }, now);
+    return { state: r.state, result: r.result };
+  },
+  /** ORC-014 review 9: attach a batch of staged documents as one vision revision. Returns { revision?, docs }. */
+  attachVisionDocs: (s, now, a) => {
+    if (!Array.isArray(a.docIds) || !a.docIds.every((x) => typeof x === "string")) throw new InvalidCommandError("docIds must be a list of document ids");
+    if (a.docIds.length > M.MAX_VISION_DOCS) throw new InvalidCommandError(`docIds may name at most ${M.MAX_VISION_DOCS} documents`);
+    const batchId = a.batchId === undefined ? undefined : str(a, "batchId");
+    if (batchId !== undefined && batchId.length > 100) throw new InvalidCommandError("batchId must be at most 100 characters");
+    const r = M.attachVisionDocs(s, a.docIds as string[], batchId, now);
+    return { state: r.state, result: r.result };
   },
   /** Remove a document from the current set; earlier revisions keep it. */
   removeVisionDoc: same((s, now, a) => M.removeVisionDoc(s, str(a, "docId"), now)),

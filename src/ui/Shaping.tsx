@@ -128,14 +128,16 @@ export function ShapingBanner() {
 
 /**
  * The draft to show: the open one, or, while its editor is open, the draft the user started editing even
- * after a newer draft replaced it (review 4), so edits are never dropped silently. Keyed on the draft.
+ * after a newer draft replaced it, was accepted or dismissed elsewhere (review 4; ORC-014 review 13), so
+ * edits are never dropped silently. Keyed on the draft. Always mounted by its parent: it renders
+ * `fallback` when there is nothing to show, so an editing session survives the draft going away.
  */
-export function OpenDraft() {
+export function OpenDraft({ fallback = null }: { fallback?: React.ReactNode }) {
   const { state } = useStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const open = M.openVisionDraft(state);
   const draft = (editingId ? state.visionDrafts.find((d) => d.id === editingId) : undefined) ?? open;
-  if (!draft) return null;
+  if (!draft) return <>{fallback}</>;
   return <VisionDraftCard key={draft.id} state={state} draft={draft} onEditing={setEditingId} />;
 }
 
@@ -265,18 +267,27 @@ export function VisionDraftCard({ state, draft, onEditing }: { state: State; dra
   );
 }
 
-/** Start building, or why it cannot start yet. Open areas are named and confirmed, never a block: only an empty vision blocks. */
+/**
+ * Start building, or why it cannot start yet. Open areas are named and confirmed, never a block: only an
+ * empty vision blocks. ORC-014 review 11: the outcome named is what Start building does with the
+ * involvement setting as it is now, counting only the tasks under the roadmap's own hold.
+ */
 export function StartBuildingButton({ className = "primary" }: { className?: string }) {
   const { state, send, disabled } = useStore();
   const [busy, setBusy] = useState(false);
   const why = M.startBuildingBlocker(state);
-  const a = state.project.autonomy;
-  const roadmap = M.roadmapTasks(state).length;
-  const release = a.enabled && !a.holdLeadProposals;
+  const plan = M.startBuildingPlan(state);
+  const roadmap = plan.roadmap.length;
+  const held = plan.userHeld.length;
   const open = M.openAreas(state);
   // Review 8: no coverage reported means every area is still open, and the confirmation says so.
   const stillOpen = !M.coverageOf(state) ? "The lead has not reported which areas are clear yet, so all nine count as open." : open.length ? `Still open: ${open.map((x) => SHAPING_AREA_LABEL[x].toLowerCase()).join(", ")}.` : "";
-  const outcome = roadmap ? (release ? `On Autopilot the ${roadmap} planned task${roadmap === 1 ? " starts" : "s start"} right away.` : `The ${roadmap} planned task${roadmap === 1 ? "" : "s"} wait${roadmap === 1 ? "s" : ""} for you to release ${roadmap === 1 ? "it" : "them"} (your involvement setting).`) : "";
+  const outcome = [
+    roadmap ? (plan.release ? `With your involvement set to Autopilot now, the ${roadmap} planned task${roadmap === 1 ? " starts" : "s start"} right away.` : `With your involvement setting as it is now, the ${roadmap} planned task${roadmap === 1 ? "" : "s"} wait${roadmap === 1 ? "s" : ""} for you to release ${roadmap === 1 ? "it" : "them"}.`) : "",
+    held ? `${held} planned task${held === 1 ? "" : "s"} you held keep${held === 1 ? "s" : ""} waiting for your release.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return (
     <span className="row" style={{ gap: "0.5rem" }}>
       <button
@@ -284,7 +295,7 @@ export function StartBuildingButton({ className = "primary" }: { className?: str
         disabled={disabled || busy || !!why}
         title={why}
         onClick={async () => {
-          if (open.length && !confirm(`${stillOpen}\n\nStart building anyway? The lead keeps answering you, and you can come back to shaping at any time.`)) return;
+          if (open.length && !confirm(`${stillOpen}${outcome ? `\n\n${outcome}` : ""}\n\nStart building anyway? The lead keeps answering you, and you can come back to shaping at any time.`)) return;
           setBusy(true);
           await send("startBuilding");
           setBusy(false);
@@ -376,12 +387,20 @@ function HandEdit() {
 export function ShapingPanel() {
   const { state, service } = useStore();
   const vision = M.currentVision(state);
-  const draft = M.openVisionDraft(state);
   const roadmap = M.roadmapTasks(state);
+  const plan = M.startBuildingPlan(state);
   const running = M.activeAttempts(state).length;
   const last = state.visionDrafts.length ? state.visionDrafts[state.visionDrafts.length - 1] : undefined;
   const asked = M.latestQuestions(state);
   const simulated = service.runtime !== "real";
+  // ORC-014 review 13: the draft card stays mounted while its editor is open; this is what shows otherwise.
+  const noDraft = last ? (
+    <p className="muted" style={{ fontSize: "0.85rem" }}>
+      Latest draft {last.id}: {last.status === "accepted" ? `accepted as r${last.visionRev}` : last.status === "dismissed" ? "dismissed" : last.status} · {fmtTime(last.resolvedAt ?? last.at)}. Ask the lead for another when you are ready.
+    </p>
+  ) : (
+    <p className="muted" style={{ fontSize: "0.85rem" }}>No draft yet. The lead drafts one when the conversation gives it enough.</p>
+  );
   return (
     <section className="card" aria-labelledby="shape-h">
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -434,15 +453,7 @@ export function ShapingPanel() {
 
       <CoverageChecklist state={state} />
 
-      {draft ? (
-        <OpenDraft />
-      ) : last ? (
-        <p className="muted" style={{ fontSize: "0.85rem" }}>
-          Latest draft {last.id}: {last.status === "accepted" ? `accepted as r${last.visionRev}` : last.status === "dismissed" ? "dismissed" : last.status} · {fmtTime(last.resolvedAt ?? last.at)}. Ask the lead for another when you are ready.
-        </p>
-      ) : (
-        <p className="muted" style={{ fontSize: "0.85rem" }}>No draft yet. The lead drafts one when the conversation gives it enough.</p>
-      )}
+      <OpenDraft fallback={noDraft} />
 
       <h3>Planned tasks ({roadmap.length})</h3>
       {roadmap.length === 0 ? (
@@ -452,7 +463,7 @@ export function ShapingPanel() {
           {roadmap.map((t) => (
             <li key={t.id}>
               <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="chip">P{t.priority}</span>{" "}
-              <span className="chip">{t.heldForShaping ? (t.holdBeforeStart ? "held until building, then for your release" : "held until building") : t.holdBeforeStart ? "held before start by you" : "starts when building starts"}</span>
+              <span className="chip">{t.heldForShaping ? `held until building, then ${plan.release ? "starts on Autopilot" : "waits for your release"}` : t.holdBeforeStart ? "held by you; waits for your release" : "starts when building starts"}</span>
             </li>
           ))}
         </ul>

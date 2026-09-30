@@ -100,11 +100,29 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     project.visionDocs ??= [];
     const visions = (project.visions ?? []) as { text?: unknown }[];
     const text = String(visions[visions.length - 1]?.text ?? "");
-    if (!project.sample && !text.trim()) project.stage = "shaping";
+    const now = new Date().toISOString();
+    const events = (doc.events ??= []) as { id: string; at: string; actor: string; kind: string; taskId?: string; message: string }[];
+    if (!project.sample && !text.trim() && project.stage !== "shaping") {
+      // ORC-014 review 12: a stage change is state the user can see: it is recorded, and shaping starts now.
+      project.stage = "shaping";
+      project.shapingSince = now;
+      doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
+      events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message: "Moved from building to shaping when the state format was upgraded: the project has no vision yet. Write or accept one, then start building." });
+    }
     if (project.stage === "shaping") {
+      project.shapingSince ??= now;
       const a = (project.autonomy ?? {}) as { enabled?: boolean; holdLeadProposals?: boolean };
-      for (const t of (doc.tasks ?? []) as { fromShaping?: boolean; holdBeforeStart?: boolean; heldForShaping?: boolean; lifecycle?: string }[]) {
+      // ORC-014 review 12: a hold the user set on the task themselves stays the user's hold. The last
+      // hold event decides: "enabled" by the user means theirs; released or removed means the roadmap's.
+      const userHeld = new Set<string>();
+      for (const e of events) {
+        if (e.actor !== "user" || e.kind !== "control" || !e.taskId) continue;
+        if (e.message === "Hold before start enabled") userHeld.add(e.taskId);
+        else if (e.message === "Hold before start removed" || e.message.startsWith("Hold-before-start released")) userHeld.delete(e.taskId);
+      }
+      for (const t of (doc.tasks ?? []) as { id: string; fromShaping?: boolean; holdBeforeStart?: boolean; heldForShaping?: boolean; lifecycle?: string }[]) {
         if (!t.fromShaping || !t.holdBeforeStart || (t.lifecycle !== "proposed" && t.lifecycle !== "ready")) continue;
+        if (userHeld.has(t.id)) continue;
         t.heldForShaping = true;
         t.holdBeforeStart = !a.enabled || !!a.holdLeadProposals;
       }
@@ -214,6 +232,8 @@ export class Store {
         }
         if (format === STATE_FORMAT) {
           this.db.prepare("UPDATE state SET version = ?, format = ?, json = ?, updated_at = ? WHERE id = 1").run(row.version + 1, STATE_FORMAT, JSON.stringify(doc), new Date().toISOString());
+          // An event a migration records is mirrored like any other.
+          this.mirrorEvents((JSON.parse(row.json) as { events?: State["events"] }).events ?? [], doc as unknown as State);
           return;
         }
       }

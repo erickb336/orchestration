@@ -67,7 +67,7 @@ describe("review 2: the roadmap hold is its own flag", () => {
     expect(held.events.at(-2)!.message).toMatch(/No longer held by the roadmap/);
     const p = promote(held);
     expect(M.stateLabel(p, task(p, a.id))).toBe("Held before start");
-    expect(M.stateLabel(p, task(p, b.id))).toBe("Planned; waits until you start building");
+    expect(M.stateLabel(p, task(p, b.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
     const built = M.startBuilding(p, at(5));
     expect(task(built, a.id).holdBeforeStart).toBe(true); // never overridden
     expect(task(built, b.id)).toMatchObject({ holdBeforeStart: false });
@@ -83,7 +83,7 @@ describe("review 2: the roadmap hold is its own flag", () => {
     const [t] = M.roadmapTasks(c);
     expect(t).toMatchObject({ heldForShaping: true, holdBeforeStart: true });
     const p = promote(c);
-    expect(M.stateLabel(p, task(p, t.id))).toBe("Planned; waits until you start building, then for your release");
+    expect(M.stateLabel(p, task(p, t.id))).toBe("Planned; waits until you start building, then waits for your release (your involvement setting)");
     const started = M.startHeldTask(p, t.id, at(5));
     expect(task(started, t.id).holdBeforeStart).toBe(false);
     expect(task(started, t.id).heldForShaping).toBeUndefined();
@@ -170,11 +170,13 @@ describe("review 5: invisible characters", () => {
     expect(only.state.steering.at(-1)!.changes[0]).toMatchObject({ kind: "focus", status: "rejected", note: "focus must be 1–500 characters" });
   });
 
-  it("never reach a document's display name; a name of only invisibles is refused", () => {
-    expect(M.visionDocPath(`docs/${zw}brief${bidi}.md`)).toEqual({ ok: true, path: "docs/brief.md" });
-    expect(M.visionDocPath(`a/${zw}/b${tags}.md`)).toEqual({ ok: true, path: "a/b.md" });
-    expect(M.visionDocPath(junk)).toEqual({ ok: false, why: "The file needs a name." });
-    expect(M.visionDocPath(` ${zw} `)).toEqual({ ok: false, why: "The file needs a name." });
+  it("a document name carrying them is refused, never altered (ORC-014 review 3)", () => {
+    const refused = { ok: false, why: "The name contains invisible or bidirectional control characters." };
+    expect(M.visionDocPath(`docs/${zw}brief${bidi}.md`)).toEqual(refused);
+    expect(M.visionDocPath(`a/${zw}/b${tags}.md`)).toEqual(refused);
+    expect(M.visionDocPath(junk)).toEqual(refused);
+    expect(M.visionDocPath(` ${zw} `)).toEqual(refused);
+    expect(M.visionDocPath("docs/brief.md")).toEqual({ ok: true, path: "docs/brief.md" });
     expect(M.stripInvisible(`a${junk}b`)).toBe("ab");
     expect(M.stripInvisible("héllo — wörld")).toBe("héllo — wörld"); // visible text is untouched
   });
