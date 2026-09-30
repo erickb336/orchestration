@@ -60,11 +60,27 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
 
 ## Screenshots
 
-All screenshots show the built-in sample project on the simulated runtime (no agents running).
+All screenshots show the built-in sample project on the simulated runtime: no agents are running, and the pull requests are simulated.
 
 **Tasks board.** Every task has a spec, a pipeline, and a truthful state. Child tasks link to the goal they came from.
 
 ![Tasks board](docs/screenshots/board.png)
+
+**Steering by conversation.** You tell the lead what to focus on, from any page, while work continues. The reply lists exactly what changed (here a new focus and one deferred task), and each change has an Undo.
+
+![Steering the lead from the board](docs/screenshots/steering.png)
+
+**Pull requests that need you.** Each finished task becomes one pull request. The card shows the independent review and a checklist of what must hold before it merges. Here the pull request is held for you.
+
+![Review page: pull requests that need you](docs/screenshots/review.png)
+
+**Review after it lands.** Everything that landed is listed with its summary, agent review, and checks. You can mark it reviewed, leave a note, or send it back as a fix or a revert.
+
+![Review page: landed work](docs/screenshots/landed.png)
+
+**Delivery settings.** Choose one: off, a local branch, or GitHub pull requests. With pull requests, choose whether each one is held for you or merged automatically after an independent review and passing checks.
+
+![Delivery settings](docs/screenshots/delivery-settings.png)
 
 **A large goal broken into child tasks.** The Goal template plans the work as child tasks and waits for them. Then it evaluates the result and plans the next round.
 
