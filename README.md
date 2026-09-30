@@ -119,32 +119,48 @@ Requires Node.js 22.13 or newer (it uses the built-in `node:sqlite`) and git.
 ```bash
 git clone https://github.com/erickb336/orchestrator.git
 cd orchestrator
-npm install
+npm run setup
 npm start
 ```
 
-Open http://127.0.0.1:5319. The first start shows a **sample project** running on a **simulated runtime** (no agents, no cost), so you can explore safely.
+**`npm run setup`** asks a few questions once:
+
+- It checks Node and git, and installs dependencies if they are missing.
+- It asks whether to run **real agents** or the **demo** (a sample project on a simulated runtime: no agents, no cost).
+- **Codex:** it reports whether Codex is signed in and offers to run `codex login`. Codex uses your ChatGPT sign-in, with no separate bill.
+- **Claude:** it asks how Claude signs in:
+  - **Codex only.** Claude is not used, and Codex becomes the lead and every role's default.
+  - **An Anthropic API key.** Billed per use, separately from any subscription.
+  - **Your own Claude subscription token.** Opt-in, for personal use; see the note below.
+  - **Cloud credentials** already set in your terminal: Bedrock, Vertex, Foundry, or Claude Platform on AWS.
+- **On macOS,** it can store the key or token in your Keychain. You type it into macOS's own hidden prompt, and Orchestrator never sees it, saves it to a file, or shows it.
+- It offers an `orchestrator` command you can run from any folder (through `npm link`).
+
+The answers are saved to `~/.orchestration/launcher.json`, which never contains a key or token. Run setup again at any time to change them.
+
+**`npm start`** (or `orchestrator`) builds and starts Orchestrator with those answers. It finds the Claude credential in your terminal or your Keychain, says what it is using, and opens http://127.0.0.1:5319 in your browser. Press Ctrl-C to stop it.
+
+- **Other commands:** `npm run status` (or `orchestrator status`) shows what is saved and which credentials are found, never their values.
+- **Start options:**
+  - `--demo` or `--real` overrides the saved choice for one start.
+  - `--port <n>` changes the port.
+  - `--no-open` leaves the browser closed.
+- **Environment variables** you set yourself always override saved answers.
+- **Without setup,** `npm start` runs the demo.
+
+Next, in the app, the Overview's **Get started** list takes you through connecting a repository, writing your vision, and choosing how involved you want to be (Autopilot, check in before work starts, or only when I ask). Settings → Providers shows each provider's status, and checking never starts a model run.
+
+**About your own Claude subscription token.** Setup runs `claude setup-token` for you if Claude Code is installed. Claude workers and the lead then run on your plan's usage limits, which are shared with your own Claude Code, and several workers use those limits up quickly. **Check this is allowed for you:** Anthropic's Agent SDK documentation says, "Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK." It does not say whether a subscriber may use their own token in their own tool.
+
+Without setup, the same choices are environment variables:
+
+- `ORCHESTRATION_RUNTIME=real`
+- `ANTHROPIC_API_KEY`, or `ORCHESTRATION_CLAUDE_AUTH=subscription` together with `CLAUDE_CODE_OAUTH_TOKEN`
+- the cloud flags, such as `CLAUDE_CODE_USE_BEDROCK=1`
+
+In subscription mode no API key or cloud setting is passed to workers.
 
 ### Running real agents
-
-```bash
-ORCHESTRATION_RUNTIME=real npm start
-```
-
-1. **Credentials.** Set them in the environment the service starts from. Settings → Providers shows each provider's status; checking never starts a model run.
-   - **Claude:** `ANTHROPIC_API_KEY`, or Bedrock, Vertex or Foundry settings. The key is billed per use, separately from any Claude subscription.
-     - **Optional, personal use: your own Claude subscription.** Create a token with `claude setup-token`, then start the service with both variables set:
-
-       ```bash
-       export ORCHESTRATION_CLAUDE_AUTH=subscription
-       export CLAUDE_CODE_OAUTH_TOKEN=<the token from claude setup-token>
-       ORCHESTRATION_RUNTIME=real npm start
-       ```
-
-       Claude workers and the lead then run on your plan's usage limits, which are shared with your own Claude Code. Several workers use those limits up quickly. The token is used only when both variables are set, and in that case no API key or cloud setting is passed to workers. **Check this is allowed for you:** Anthropic's Agent SDK documentation says, "Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK." It does not say whether a subscriber may use their own token in their own tool.
-   - **Codex:** your local Codex sign-in (`npx codex login`), which runs on your ChatGPT plan's usage limits with no separate bill, or an API key (`printenv OPENAI_API_KEY | npx codex login --with-api-key`).
-2. **Project.** In Settings → Project, point Orchestrator at a git repository with at least one commit, and write a vision.
-3. **Involvement.** Choose how involved you want to be (Autopilot, check in before work starts, or only when I ask), then message the lead or create a task.
 
 What real runs do on your machine:
 
