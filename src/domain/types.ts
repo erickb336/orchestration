@@ -3,9 +3,18 @@
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
-export type RoleId = "lead" | "designer" | "coder" | "code_reviewer" | "ux_reviewer";
+export type RoleId = "lead" | "designer" | "coder" | "code_reviewer" | "ux_reviewer" | "checks";
+/** Agent roles: they have role defaults, task role overrides and a resolved provider. */
 export const ROLES: RoleId[] = ["lead", "designer", "coder", "code_reviewer", "ux_reviewer"];
+/** ORC-013: roles the service runs itself; never resolved to a provider. */
+export const SERVICE_ROLES: RoleId[] = ["checks"];
+/** What a step definition may use. */
+export const STEP_ROLES: RoleId[] = [...ROLES, ...SERVICE_ROLES];
 export const REVIEW_ROLES: RoleId[] = ["code_reviewer", "ux_reviewer"];
+
+/** ORC-013: who runs an attempt: a provider's agent, or the service itself (check runs). */
+export type Runner = ProviderId | "service";
+export const isProvider = (r: Runner | string): r is ProviderId => r === "claude" || r === "codex";
 
 export type Actor = "user" | "lead" | "runtime" | "system";
 
@@ -216,6 +225,14 @@ export interface Project {
   stage: ProjectStage;
   /** ORC-012 review 8: when the current shaping session began; coverage reported before it is not reused. */
   shapingSince?: string;
+  /** ORC-013: the project's own check commands, run by the service. Desired state; only the user's `setChecks` writes it. */
+  checks: ChecksConfig;
+  /** ORC-013: the checks sandbox as last probed. Observed; written only by the service. */
+  checksHealth?: ChecksHealth;
+  /** ORC-013: who decides `ask-user` findings: the lead (Autopilot's default) or the user. */
+  triage: { askUserBy: "lead" | "user" };
+  /** ORC-013: give every run the repository's AGENTS.md and CLAUDE.md from the trusted base as labelled project conventions. */
+  conventions: { include: boolean };
   /** Last planning run start (for the planning interval). */
   lastPlanningAt?: string;
   /** Automatic delivery state: retried until the delivery branch contains all integrated work. */
@@ -323,8 +340,215 @@ export type StepState =
   | "blocked"
   | "pipeline";
 
-export type ArtifactKind = "brief" | "design" | "plan" | "code-change" | "review-findings" | "verification" | "report" | "handoff" | "breakdown";
-export const ARTIFACT_KINDS: ArtifactKind[] = ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff"];
+export type ArtifactKind = "brief" | "design" | "plan" | "code-change" | "review-findings" | "verification" | "report" | "handoff" | "breakdown" | "check-results";
+export const ARTIFACT_KINDS: ArtifactKind[] = ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results"];
+
+// ---------- ORC-013: structured findings, coverage and service checks ----------
+
+export type Severity = "error" | "warning" | "info";
+export const SEVERITIES: Severity[] = ["error", "warning", "info"];
+/**
+ * What a finding asks for. "auto-fix": the repair loop fixes it. "ask-user": someone decides first (the
+ * remedy would widen the task, or the finding questions what was asked). "no-op": information only.
+ * A finding reported without an action is treated as "ask-user".
+ */
+export type FindingAction = "auto-fix" | "ask-user" | "no-op";
+export const FINDING_ACTIONS: FindingAction[] = ["auto-fix", "ask-user", "no-op"];
+
+/** One finding of a review (or, later, of a service check run). Validated by the service; ids are unique within the artifact. */
+export interface Finding {
+  /** "F1".."F50" */
+  id: string;
+  /** 12 hex characters: sha256(source | file | normalised title). The carry-forward identity across rounds. */
+  key: string;
+  source: "review" | "check";
+  severity: Severity;
+  action: FindingAction;
+  /** The worker omitted or misspelled the action or severity, so the service chose the default. */
+  defaulted?: true;
+  /** ≤200 characters */
+  title: string;
+  /** ≤1200 characters; for checks the output tail (untrusted text) */
+  detail: string;
+  /** Repository-relative, normalised, ≤300 characters */
+  file?: string;
+  /** 1..10^7 */
+  line?: number;
+  /** ask-user: what a person has to decide (≤300 characters) */
+  why?: string;
+  /** source "check": the command */
+  checkId?: string;
+}
+
+/** Whether a code review accounted for every changed file of the change it was shown. */
+export interface PathCoverage {
+  /** "not-required": no changed-path set was recorded for the run (nothing under review). "unproven": too many files to show. */
+  state: "complete" | "incomplete" | "unproven" | "not-required";
+  /** Full SHAs of the diff the reviewer was shown. */
+  from?: string;
+  to?: string;
+  /** Size of the service's changed-path set. */
+  changed: number;
+  /** Valid reported paths. */
+  reviewed: number;
+  /** ≤50 each */
+  missing: string[];
+  extra: string[];
+}
+
+export interface CheckResult {
+  id: string;
+  label: string;
+  kind: "prepare" | "check";
+  status: "passed" | "failed" | "timed-out" | "not-run";
+  exitCode?: number;
+  durationMs: number;
+  /** Redacted: the first 2 KB and the last 6 KB of stdout, then stderr. */
+  excerpt: string;
+  bytes: number;
+  truncated: boolean;
+  /** "<attemptId>/<checkId>": the full redacted log (≤1 MiB) kept outside the state. */
+  log?: string;
+}
+
+export interface CheckRunRecord {
+  /** Full SHA the worktree was verified at. */
+  sha: string;
+  configRev: number;
+  sandbox: "codex" | "none";
+  simulated?: true;
+  /** The attempt whose run of the same sha and configRev this repeats. */
+  reusedFrom?: string;
+  /** Protected check inputs the change touched (≤20). */
+  touchedInputs: string[];
+  results: CheckResult[];
+  durationMs: number;
+}
+
+/**
+ * A decision someone has to take on an `ask-user` finding (or on failing final checks). Routed to the
+ * lead or the user by the project's triage setting; recorded, shown on the task, and given to later
+ * repairs and reviews.
+ */
+export interface FindingDecision {
+  /** "fd-<seq>" */
+  id: string;
+  taskId: string;
+  artifactId: string;
+  findingId: string;
+  key: string;
+  kind: "finding" | "final-checks";
+  finding: Pick<Finding, "source" | "severity" | "title" | "detail" | "file" | "line" | "why" | "checkId">;
+  routedTo: "lead" | "user";
+  /** When it was last routed to its current decider. A lead run for decisions starts only for decisions routed after the lead's last run. */
+  routedAt?: string;
+  status: "open" | "fix" | "accept" | "follow-up";
+  /** A lead "fix" on a spec the user wrote: recorded, not applied; the decision stays open for the user. */
+  suggestion?: { decision: "fix"; why: string; leadRunId: string; at: string };
+  decidedBy?: "lead" | "user" | "carried";
+  decidedAt?: string;
+  /** ≤300 characters */
+  why?: string;
+  leadRunId?: string;
+  followUpTaskId?: string;
+  /** The decision this one repeats (the same finding decided earlier on this task or its origin task). */
+  carriedFrom?: string;
+  /** Repair attempts whose envelope carried this decision; a later change applies to later repairs only. */
+  usedBy: string[];
+  createdAt: string;
+}
+
+/** One command the service runs as a check. Never a shell string: argv only. */
+export interface CheckCommand {
+  /** /^[a-z][a-z0-9-]{0,23}$/, unique */
+  id: string;
+  /** ≤60 */
+  label: string;
+  /** prepare commands run first, in order */
+  kind: "prepare" | "check";
+  /** 1–32 items, each 1–400 characters, no NUL or newline */
+  argv: string[];
+  /** 1–60; default commandTimeoutMinutes */
+  timeoutMinutes?: number;
+}
+
+export interface ChecksConfig {
+  enabled: boolean;
+  /** +1 on every change; recorded per run */
+  rev: number;
+  /** ≤8, ≤2 of them prepare */
+  commands: CheckCommand[];
+  sandbox: "codex" | "none";
+  /** prepare commands may use the network (still write-limited) */
+  prepareNetwork: boolean;
+  /** 1–60 */
+  commandTimeoutMinutes: number;
+  /** 1–120 */
+  runTimeoutMinutes: number;
+  /** 1–3 */
+  maxConcurrent: number;
+  /** ≤30 globs: files the checks depend on; a change that edits them becomes an ask-user finding */
+  protectedInputs: string[];
+  /** ≤20 variable names passed through to commands, none secret-named */
+  passEnv: string[];
+}
+
+export const DEFAULT_CHECKS: ChecksConfig = {
+  enabled: false,
+  rev: 0,
+  commands: [],
+  sandbox: "codex",
+  prepareNetwork: true,
+  commandTimeoutMinutes: 10,
+  runTimeoutMinutes: 30,
+  maxConcurrent: 1,
+  protectedInputs: [
+    ".github/**",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock*",
+    "tsconfig*.json",
+    "vitest.config.*",
+    "vite.config.*",
+    "jest.config.*",
+    "eslint.config.*",
+    ".eslintrc*",
+    "Makefile",
+    "pyproject.toml",
+    "setup.cfg",
+    "tox.ini",
+    "Cargo.toml",
+    "go.mod",
+  ],
+  passEnv: [],
+};
+
+/** Observed: whether the checks sandbox works on this machine. Written only by the service. */
+export interface ChecksHealth {
+  sandbox: "codex" | "none";
+  status: "ready" | "unavailable" | "unverified";
+  detail: string;
+  checkedAt: string;
+  recheck?: true;
+  probes?: { writeOutside: "denied" | "allowed" | "unknown"; network: "denied" | "allowed" | "unknown" };
+}
+
+/** Evidence of service checks for a pull request's change, bound to the exact commit and settings revision. */
+export interface CheckEvidence {
+  ok: boolean;
+  forSha: string;
+  reason: string;
+  configRev?: number;
+  attemptId?: string;
+  taskId?: string;
+  sandbox?: "codex" | "none";
+  acceptedByUser?: true;
+}
+
+/** Review-bot GitHub app slugs treated as opinions, not code failures (unverified defaults). */
+export const DEFAULT_REVIEW_BOTS = ["coderabbitai", "greptile-apps"];
 
 /** An artifact a step produces. Name is unique within the step. */
 export interface OutputDef {
@@ -371,6 +595,12 @@ export interface StepDef {
   copyOf?: string;
   /** Set by expansion: which loop iteration this step belongs to (first = 1). */
   iteration?: number;
+  /**
+   * ORC-013, role "checks" only. "findings": failing commands become auto-fix findings for the repair
+   * step. "block": the step blocks and opens a decision (a Final checks step). `only` limits the step
+   * to some command ids; prepare commands always run.
+   */
+  checks?: { onFail: "findings" | "block"; only?: string[] };
 }
 
 export interface WorkflowTemplate {
@@ -393,8 +623,17 @@ export interface Artifact {
   kind: ArtifactKind;
   version: number;
   summary: string;
-  /** For review-findings: number of unresolved findings. */
+  /**
+   * For review-findings: number of unresolved findings. Structured artifacts: the service-computed
+   * blocking count (error or warning findings with action auto-fix or ask-user); the worker's number is ignored.
+   */
   openFindings?: number;
+  /** ORC-013: structured findings. Absent on summary-only (legacy) artifacts, which keep `openFindings` semantics. */
+  findings?: Finding[];
+  /** ORC-013: code reviews of a change: whether the review accounted for every changed file. */
+  pathCoverage?: PathCoverage;
+  /** ORC-013: check-results artifacts. */
+  checkRun?: CheckRunRecord;
   /** A durable reference, e.g. the commit SHA and branch holding a code change. */
   ref?: string;
   createdAt: string;
@@ -425,13 +664,17 @@ export interface Step extends StepDef {
   invalidatedBy?: string;
   /** Automatic retries used since the step last succeeded. */
   autoRetries?: number;
+  /** ORC-013: clean code reviews that did not account for every changed file are run again once with the gap named. */
+  coverageRetries?: number;
+  coverageGap?: { missing: string[]; extra: string[] };
 }
 
-export type SelectionSource = "step" | "task-role" | "independence" | "project-role" | "project-default";
+export type SelectionSource = "step" | "task-role" | "independence" | "project-role" | "project-default" | "service";
 
 /** Immutable configuration captured at dispatch. Never rewritten. */
 export interface RunSnapshot {
-  provider: ProviderId;
+  /** The provider that ran it; "service" for a check run (ORC-013). */
+  provider: Runner;
   model: string;
   source: SelectionSource;
   routingReason: string;
@@ -450,6 +693,14 @@ export interface RunSnapshot {
   inputs: ConsumedInput[];
   /** A dedicated delivery review: the commit its read-only worktree was detached at. */
   reviewedSha?: string;
+  /** ORC-013: a service check run: the settings and commands it was started with. */
+  checks?: {
+    configRev: number;
+    sandbox: "codex" | "none";
+    target: { artifactId: string; ref: string };
+    commands: { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number }[];
+    reusedFrom?: string;
+  };
 }
 
 export type AttemptOutcome =
@@ -482,6 +733,13 @@ export interface Attempt {
   /** Latest meaningful milestone reported by the runtime. */
   activity?: string;
   usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
+  /**
+   * ORC-013: the changed-path set of the change a review run was shown, recorded by the service before
+   * the run could report anything. `paths` holds at most 500; `total` is the real count.
+   */
+  scope?: { from: string; to: string; paths: string[]; total: number };
+  /** ORC-013: the repository instruction files the run was given as project conventions, as evidence. */
+  conventions?: { file: string; blob: string; bytes: number; truncated: boolean }[];
 }
 
 export type Lifecycle = "proposed" | "ready" | "active" | "done" | "cancelled";
@@ -550,6 +808,10 @@ export interface Task {
    * setting) and by any hold change the user makes on the task.
    */
   heldForShaping?: boolean;
+  /** ORC-013: a dedicated check run of that task's pull-request change at exactly this commit. */
+  checkTarget?: { taskId: string; n: number; sha: string };
+  /** ORC-013: repair rounds added after failing final checks (at most 2). */
+  checkRounds?: number;
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
   legacySpecUnavailable?: boolean;
@@ -585,7 +847,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 13;
+  version: 14;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -598,6 +860,8 @@ export interface State {
   steering: SteeringChangeSet[];
   /** ORC-012: the last 50 vision drafts; accepted ones live on as vision revisions. */
   visionDrafts: VisionDraft[];
+  /** ORC-013: decisions on findings (at most 2000; decided ones of settled tasks are pruned first, open ones never). */
+  decisions: FindingDecision[];
 }
 
 /** One entry in the lead conversation. */
@@ -622,7 +886,8 @@ export interface Message {
   taskId?: string;
 }
 
-export type LeadTrigger = "message" | "planning";
+/** ORC-013: "decisions": a run started because findings routed to the lead wait for its decision. */
+export type LeadTrigger = "message" | "planning" | "decisions";
 
 /** A run of the lead agent. Separate from task attempts: at most one is active at a time. */
 export interface LeadRun {
@@ -734,6 +999,12 @@ export interface PrDeliveryConfig {
   maxOpenPrs: number;
   /** 0–100 */
   maxAutoMergesPerDay: number;
+  /** ORC-013: re-runs of a GitHub Actions job GitHub cancelled, per check name per head (0–3). */
+  rerunBudget: number;
+  /** ORC-013: GitHub app slugs whose failing checks are a bot's opinion, never fixed automatically (≤10). */
+  reviewBotApps: string[];
+  /** ORC-013: the user declares the repository has no CI; their own Merge then works with zero checks. */
+  noCi: boolean;
 }
 
 export const DEFAULT_PR_DELIVERY: PrDeliveryConfig = {
@@ -748,6 +1019,9 @@ export const DEFAULT_PR_DELIVERY: PrDeliveryConfig = {
   allowLocalWorkers: false,
   maxOpenPrs: 5,
   maxAutoMergesPerDay: 20,
+  rerunBudget: 1,
+  reviewBotApps: [...DEFAULT_REVIEW_BOTS],
+  noCi: false,
 };
 
 export interface PostureItem {
@@ -804,6 +1078,14 @@ export interface CheckObs {
   status: string;
   conclusion: string | null;
   url?: string;
+  /** ORC-013: a check run or a status context. */
+  kind?: "run" | "status";
+  /** ORC-013: the check suite's app slug, or the status creator's login. */
+  app?: string;
+  /** ORC-013: the check run's database id (a GitHub Actions job id when app is "github-actions"). */
+  jobId?: number;
+  runId?: number;
+  startedAt?: string;
 }
 
 export type PrAttentionCode =
@@ -831,7 +1113,13 @@ export type PrAttentionCode =
   | "auto-unavailable"
   | "limit"
   | "repo-changed"
-  | "publish-failed";
+  | "publish-failed"
+  // ORC-013
+  | "findings-decision"
+  | "bot-check"
+  | "ci-infra"
+  | "checks-skipped"
+  | "service-checks";
 
 /** Per task: Integration.pr. Desired state, intent and observed state are separate fields. */
 /**
@@ -913,7 +1201,12 @@ export interface PrDelivery {
   /** The service could not merge this base tip into this head cleanly (a local check; nothing was pushed). */
   baseConflict?: { baseSha: string; headSha: string; files: string[] };
   attention?: { code: PrAttentionCode; message: string; headSha?: string; since: string };
-  counters: { mergeAttempts: number; baseUpdates: number; repairs: number; reviews: number; failures: number };
+  /** ORC-013: `reruns` and `checks` default to 0 on records from before they existed. */
+  counters: { mergeAttempts: number; baseUpdates: number; repairs: number; reviews: number; failures: number; reruns?: number; checks?: number };
+  /** ORC-013: service-check evidence for `changeSha` under the current check settings. */
+  checks?: CheckEvidence;
+  /** ORC-013: re-runs of GitHub-cancelled jobs requested for the current head. */
+  ciReruns?: { headSha: string; used: { check: string; jobId: number; at: string; opId: string }[] };
   /** Backoff after a failed operation. */
   nextAt?: string;
   /** When headSha was first observed on GitHub (check timeouts). */
@@ -933,9 +1226,11 @@ export interface ReviewEvidence {
   model?: string;
   artifactIds: string[];
   clearedByUser?: boolean;
+  /** ORC-013: findings someone decided to accept as they are (ids like "F2 title"); the review is clean apart from them. */
+  accepted?: string[];
 }
 
-export type LandedFlag = "main-check-failed" | "merged-without-clean-gate" | "findings-cleared-by-user" | "protected-paths";
+export type LandedFlag = "main-check-failed" | "merged-without-clean-gate" | "findings-cleared-by-user" | "protected-paths" | "checks-accepted-failing" | "checks-not-run" | "findings-accepted";
 
 export interface LandedNote {
   id: string;

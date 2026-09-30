@@ -1,6 +1,6 @@
 // Pure pipeline helpers: validation, instantiation, and structural comparison.
 
-import { REVIEW_ROLES, type InputRef, type Step, type StepDef } from "./types";
+import { REVIEW_ROLES, STEP_ROLES, type InputRef, type Step, type StepDef } from "./types";
 
 export function instantiate(defs: StepDef[]): Step[] {
   return structuredClone(defs).map((d) => ({ ...d, selection: null, revision: 1, state: "pending" as const }));
@@ -16,6 +16,7 @@ export function toDef(st: StepDef): StepDef {
   if (st.independentOf) d.independentOf = st.independentOf;
   if (st.copyOf) d.copyOf = st.copyOf;
   if (st.iteration && st.iteration > 1) d.iteration = st.iteration;
+  if (st.checks) d.checks = { onFail: st.checks.onFail, ...(st.checks.only?.length ? { only: [...st.checks.only] } : {}) };
   return d;
 }
 
@@ -33,6 +34,7 @@ export function structuralKey(st: StepDef): string {
     parallel: st.parallel ?? null,
     waitForChildren: !!st.waitForChildren,
     ...(st.independentOf ? { independentOf: st.independentOf } : {}),
+    ...(st.checks ? { checks: { onFail: st.checks.onFail, only: [...(st.checks.only ?? [])].sort() } } : {}),
   });
 }
 
@@ -74,12 +76,17 @@ export interface PipelineIssue {
   message: string;
 }
 
+/** Kinds a step may be conditioned on: findings artifacts, whose open count decides whether it runs. */
+const CONDITION_KINDS = new Set(["review-findings", "check-results"]);
+const MAX_CHECK_ONLY = 8;
+
 /**
  * Validate a pipeline. Errors block saving; warnings are advisory. `reviewTarget`: the task is a
  * dedicated review of a pull request, whose reviewer is handed the change by the service, so a review
- * step without inputs is expected there.
+ * step without inputs is expected there. `checkTarget` (ORC-013): the task is a dedicated check run of
+ * a pull request's change, so a checks step without a code-change input is expected there.
  */
-export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean } = {}): PipelineIssue[] {
+export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean; checkTarget?: boolean } = {}): PipelineIssue[] {
   const issues: PipelineIssue[] = [];
   const err = (step: string | undefined, message: string): undefined => {
     issues.push({ step, severity: "error", message });
@@ -87,11 +94,19 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
   };
   if (defs.length === 0) err(undefined, "A pipeline needs at least one step.");
   const seen = new Set<string>();
+  // ORC-013: the steps inside a loop body, so a blocking checks step is never repeated.
+  const inLoop = new Set<string>();
+  defs.forEach((d, i) => {
+    if (!d.iterate) return;
+    const fromIdx = defs.findIndex((x) => x.id === d.iterate!.from);
+    if (fromIdx >= 0 && fromIdx <= i) for (const b of defs.slice(fromIdx, i + 1)) inLoop.add(b.id);
+  });
   defs.forEach((d, i) => {
     if (!/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(d.id)) err(d.id || undefined, `Step ${i + 1} ID "${d.id}" must start with a letter and use only letters, digits, or hyphens.`);
     else if (seen.has(d.id)) err(d.id, `Duplicate step ID ${d.id}.`);
     seen.add(d.id);
     if (!d.purpose.trim()) err(d.id, `${d.id} needs a purpose.`);
+    if (!STEP_ROLES.includes(d.role)) err(d.id, `${d.id} has an unknown role "${String(d.role)}".`);
     const earlier = new Set(defs.slice(0, i).map((x) => x.id));
     for (const dep of d.dependsOn) {
       if (dep === d.id) err(d.id, `${d.id} cannot depend on itself.`);
@@ -102,6 +117,7 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
       if (!/^[a-z][a-z0-9-]*$/.test(o.name)) err(d.id, `${d.id} output "${o.name}" must be lowercase letters, digits, or hyphens.`);
       if (names.has(o.name)) err(d.id, `${d.id} has two outputs named ${o.name}.`);
       names.add(o.name);
+      if (o.kind === "check-results" && d.role !== "checks") err(d.id, `${d.id} produces check results, which only a Checks step (run by the service) can produce.`);
     }
     const up = upstreamOf(defs.slice(0, i + 1), d.id);
     const checkRef = (r: InputRef, what: string) => {
@@ -114,7 +130,7 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
     for (const r of d.inputs) checkRef(r, "reads");
     for (const r of d.runIf ?? []) {
       const out = checkRef(r, "is conditioned on");
-      if (out && out.kind !== "review-findings") err(d.id, `${d.id} can only be conditioned on review findings; ${r.step}.${r.output} is ${out.kind}.`);
+      if (out && !CONDITION_KINDS.has(out.kind)) err(d.id, `${d.id} can only be conditioned on review findings or check results; ${r.step}.${r.output} is ${out.kind}.`);
     }
     if (d.iterate) {
       const fromIdx = defs.findIndex((x) => x.id === d.iterate!.from);
@@ -143,9 +159,23 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
         if (other) err(d.id, `${d.id}'s loop overlaps ${other.id}'s loop; loops cannot overlap or nest.`);
       }
     }
+    // ORC-013: a Checks step is run by the service on a code change; it produces check results and nothing else.
+    if (d.role === "checks") {
+      if (d.outputs.length !== 1 || d.outputs[0].kind !== "check-results") err(d.id, `${d.id} is a Checks step, so it produces exactly one output of kind check-results.`);
+      const readsChange = d.inputs.some((r) => defs.find((x) => x.id === r.step)?.outputs.find((o) => o.name === r.output)?.kind === "code-change");
+      if (!readsChange && !opts.checkTarget) err(d.id, `${d.id} is a Checks step, so it must read a code change to check.`);
+      if (d.parallel || d.independentOf || d.iterate) err(d.id, `${d.id} is a Checks step, which cannot run in parallel, require independence, or end a loop.`);
+      if (d.checks && d.checks.onFail !== "findings" && d.checks.onFail !== "block") err(d.id, `${d.id}: when checks fail, choose "findings" (for the repair step) or "block" (stop and ask for a decision).`);
+      if ((d.checks?.only?.length ?? 0) > MAX_CHECK_ONLY) err(d.id, `${d.id} can name at most ${MAX_CHECK_ONLY} commands.`);
+      if (d.checks?.onFail === "block" && inLoop.has(d.id)) err(d.id, `${d.id} stops the task when checks fail, so it cannot be inside a loop; use "findings" there.`);
+    }
     if (REVIEW_ROLES.includes(d.role) && d.inputs.length === 0 && !opts.reviewTarget) issues.push({ step: d.id, severity: "warning", message: `${d.id} is a review with no inputs, so it has nothing specific to review.` });
     if (d.outputs.length === 0) issues.push({ step: d.id, severity: "warning", message: `${d.id} produces no artifacts, so later steps cannot use its work.` });
   });
+  // ORC-013: a pipeline that changes code with no Checks step runs no service checks on the change.
+  if (defs.some((d) => d.outputs.some((o) => o.kind === "code-change")) && !defs.some((d) => d.role === "checks")) {
+    issues.push({ severity: "warning", message: "No service checks run on this change: add a Checks step (run by the service) to run the project's checks on it." });
+  }
   return issues;
 }
 

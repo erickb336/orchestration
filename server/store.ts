@@ -8,10 +8,225 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InvalidCommandError, runCommand } from "../src/domain/commands";
+import { toDef } from "../src/domain/pipeline";
 import { buildSeed } from "../src/domain/seed";
-import { ControlError, DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
+import { templateSteps } from "../src/domain/templates";
+import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type State, type StepDef } from "../src/domain/types";
 
-export const STATE_FORMAT = 13;
+export const STATE_FORMAT = 14;
+
+/**
+ * ORC-013: the code-changing built-in templates exactly as format 13 shipped them. The 13 → 14 upgrade
+ * replaces a project's copy with the new built-in only when it still matches one of these; an edited
+ * template is left alone (it shows "Modified", and Restore offers the new steps).
+ */
+export const V13_TEMPLATE_STEPS: Record<string, StepDef[]> = {
+  feature: [
+    { id: "S1", purpose: "Plan and design the change", role: "designer", dependsOn: [], inputs: [], outputs: [{ name: "design", kind: "design" }] },
+    {
+      id: "S2",
+      purpose: "Implement",
+      role: "coder",
+      dependsOn: ["S1"],
+      inputs: [{ step: "S1", output: "design" }],
+      outputs: [
+        { name: "change", kind: "code-change" },
+        { name: "handoff", kind: "handoff" },
+      ],
+    },
+    {
+      id: "S3",
+      purpose: "Code review",
+      role: "code_reviewer",
+      dependsOn: ["S2"],
+      inputs: [
+        { step: "S1", output: "design" },
+        { step: "S2", output: "change" },
+        { step: "S2", output: "handoff" },
+      ],
+      outputs: [{ name: "findings", kind: "review-findings" }],
+    },
+    {
+      id: "S4",
+      purpose: "UX review",
+      role: "ux_reviewer",
+      dependsOn: ["S2"],
+      inputs: [
+        { step: "S1", output: "design" },
+        { step: "S2", output: "change" },
+      ],
+      outputs: [{ name: "findings", kind: "review-findings" }],
+    },
+    {
+      id: "S5",
+      purpose: "Repair review findings",
+      role: "coder",
+      dependsOn: ["S3", "S4"],
+      inputs: [
+        { step: "S2", output: "change" },
+        { step: "S3", output: "findings" },
+        { step: "S4", output: "findings" },
+      ],
+      outputs: [{ name: "change", kind: "code-change" }],
+      runIf: [
+        { step: "S3", output: "findings" },
+        { step: "S4", output: "findings" },
+      ],
+      iterate: { from: "S3", max: 3 },
+    },
+    {
+      id: "S6",
+      purpose: "Verify and integrate",
+      role: "lead",
+      dependsOn: ["S5"],
+      inputs: [
+        { step: "S2", output: "change" },
+        { step: "S5", output: "change" },
+        { step: "S3", output: "findings" },
+        { step: "S4", output: "findings" },
+      ],
+      outputs: [{ name: "verification", kind: "verification" }],
+    },
+  ],
+  change: [
+    {
+      id: "S1",
+      purpose: "Implement",
+      role: "coder",
+      dependsOn: [],
+      inputs: [],
+      outputs: [
+        { name: "change", kind: "code-change" },
+        { name: "handoff", kind: "handoff" },
+      ],
+    },
+    {
+      id: "S2",
+      purpose: "Code review",
+      role: "code_reviewer",
+      dependsOn: ["S1"],
+      inputs: [
+        { step: "S1", output: "change" },
+        { step: "S1", output: "handoff" },
+      ],
+      outputs: [{ name: "findings", kind: "review-findings" }],
+    },
+    {
+      id: "S3",
+      purpose: "Repair review findings",
+      role: "coder",
+      dependsOn: ["S2"],
+      inputs: [
+        { step: "S1", output: "change" },
+        { step: "S2", output: "findings" },
+      ],
+      outputs: [{ name: "change", kind: "code-change" }],
+      runIf: [{ step: "S2", output: "findings" }],
+      iterate: { from: "S2", max: 3 },
+    },
+    {
+      id: "S4",
+      purpose: "Verify and integrate",
+      role: "lead",
+      dependsOn: ["S3"],
+      inputs: [
+        { step: "S1", output: "change" },
+        { step: "S3", output: "change" },
+        { step: "S2", output: "findings" },
+      ],
+      outputs: [{ name: "verification", kind: "verification" }],
+    },
+  ],
+  bugfix: [
+    { id: "S1", purpose: "Reproduce and diagnose", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "reproduction", kind: "report" }] },
+    {
+      id: "S2",
+      purpose: "Fix",
+      role: "coder",
+      dependsOn: ["S1"],
+      inputs: [{ step: "S1", output: "reproduction" }],
+      outputs: [
+        { name: "change", kind: "code-change" },
+        { name: "handoff", kind: "handoff" },
+      ],
+    },
+    {
+      id: "S3",
+      purpose: "Code review",
+      role: "code_reviewer",
+      dependsOn: ["S2"],
+      inputs: [
+        { step: "S1", output: "reproduction" },
+        { step: "S2", output: "change" },
+        { step: "S2", output: "handoff" },
+      ],
+      outputs: [{ name: "findings", kind: "review-findings" }],
+    },
+    {
+      id: "S4",
+      purpose: "Repair review findings",
+      role: "coder",
+      dependsOn: ["S3"],
+      inputs: [
+        { step: "S2", output: "change" },
+        { step: "S3", output: "findings" },
+      ],
+      outputs: [{ name: "change", kind: "code-change" }],
+      runIf: [{ step: "S3", output: "findings" }],
+      iterate: { from: "S3", max: 3 },
+    },
+    {
+      id: "S5",
+      purpose: "Verify the reproduction no longer fails, then integrate",
+      role: "lead",
+      dependsOn: ["S4"],
+      inputs: [
+        { step: "S1", output: "reproduction" },
+        { step: "S2", output: "change" },
+        { step: "S4", output: "change" },
+      ],
+      outputs: [{ name: "verification", kind: "verification" }],
+    },
+  ],
+  revert: [
+    {
+      id: "S1",
+      purpose: "Complete the prepared revert: resolve any conflicts, keep later work",
+      role: "coder",
+      dependsOn: [],
+      inputs: [],
+      outputs: [
+        { name: "change", kind: "code-change" },
+        { name: "handoff", kind: "handoff" },
+      ],
+    },
+    {
+      id: "S2",
+      purpose: "Code review",
+      role: "code_reviewer",
+      dependsOn: ["S1"],
+      inputs: [
+        { step: "S1", output: "change" },
+        { step: "S1", output: "handoff" },
+      ],
+      outputs: [{ name: "findings", kind: "review-findings" }],
+    },
+    {
+      id: "S3",
+      purpose: "Verify the revert and integrate",
+      role: "lead",
+      dependsOn: ["S2"],
+      inputs: [
+        { step: "S1", output: "change" },
+        { step: "S2", output: "findings" },
+      ],
+      outputs: [{ name: "verification", kind: "verification" }],
+    },
+  ],
+};
+
+/** Step lists compared in their normalised form, so key order and absent optionals do not count as edits. */
+const sameSteps = (a: StepDef[], b: StepDef[]) => JSON.stringify(a.map(toDef)) === JSON.stringify(b.map(toDef));
 
 /** In-place upgrades of the state document, keyed by the format they upgrade from. */
 const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
@@ -128,6 +343,46 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       }
     }
     doc.version = 13;
+    return doc;
+  },
+  // ORC-013: quality gates. Defaults are added: checks off, findings routed to the lead on projects that
+  // plan on their own (so Autopilot keeps running) and to the user otherwise, conventions on, the
+  // pull-request triage settings. Nothing is backfilled: no artifact gains findings or coverage, no
+  // decision is created, and running tasks keep their steps. Built-in templates the user never
+  // edited gain the Checks steps; edited ones are left alone, with an event.
+  13: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    const autonomy = (project.autonomy ?? {}) as { enabled?: boolean };
+    project.checks ??= structuredClone(DEFAULT_CHECKS);
+    project.triage ??= { askUserBy: autonomy.enabled ? "lead" : "user" };
+    project.conventions ??= { include: true };
+    const prDelivery = (project.prDelivery ??= structuredClone(DEFAULT_PR_DELIVERY)) as Record<string, unknown>;
+    prDelivery.rerunBudget ??= 1;
+    prDelivery.reviewBotApps ??= [...DEFAULT_REVIEW_BOTS];
+    prDelivery.noCi ??= false;
+    for (const t of (doc.tasks ?? []) as { integration?: { pr?: { counters?: Record<string, number> } } }[]) {
+      const c = t.integration?.pr?.counters;
+      if (!c) continue;
+      c.reruns ??= 0;
+      c.checks ??= 0;
+    }
+    doc.decisions ??= [];
+    const now = new Date().toISOString();
+    const events = (doc.events ??= []) as { id: string; at: string; actor: string; kind: string; taskId?: string; message: string }[];
+    const note = (message: string) => {
+      doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
+      events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message });
+    };
+    for (const t of (project.templates ?? []) as { id: string; builtIn?: boolean; rev: number; steps: StepDef[]; description?: string }[]) {
+      const legacy = V13_TEMPLATE_STEPS[t.id];
+      if (!t.builtIn || !legacy) continue;
+      if (sameSteps(t.steps, legacy)) {
+        t.steps = templateSteps(t.id);
+        t.rev += 1;
+        note(`Template ${t.id} gained the Checks steps (run by the service; skipped while checks are off) when the state format was upgraded`);
+      } else note(`Template ${t.id} was edited, so it did not gain the Checks steps; Restore in Settings offers the new built-in`);
+    }
+    doc.version = 14;
     return doc;
   },
 };

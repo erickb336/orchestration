@@ -232,6 +232,15 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
 .chip.strong { color: var(--text); }
 .chip.danger { color: var(--s-blocked); }
 .chip.done { color: var(--s-done); }
+/* ORC-013: findings */
+.chip.severity-error { color: var(--s-blocked); border: 1px solid currentColor; }
+.chip.severity-warning { color: var(--s-paused); }
+.chip.severity-info { color: var(--muted); }
+.chip.action-ask-user { color: var(--s-reviewing); }
+.chip.action-auto-fix { color: var(--text); }
+.findings .finding + .finding { border-top: 1px solid var(--border); }
+.decision.open { border-left: 2px solid var(--s-reviewing); padding-left: 0.5rem; }
+.decision-controls { margin-top: 0.25rem; }
 .badge-new {
   font-size: 0.72rem;
   font-weight: 650;

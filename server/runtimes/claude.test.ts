@@ -704,6 +704,18 @@ describe("worker environment and connections", () => {
     expect(deny?.behavior).toBe("deny");
   });
 
+  it("never loads project or local settings in either environment (ORC-013: the worktree's instruction files and hooks are agent-written)", async () => {
+    for (const environment of ["isolated", "local"] as const) {
+      const { adapter, calls } = setup({ claudeConfigPath: configWith({}) });
+      adapter.start(assignment({ environment }));
+      await waitFor(() => calls.length === 1);
+      const sources = calls[0].options.settingSources ?? [];
+      expect(sources, environment).not.toContain("project");
+      expect(sources, environment).not.toContain("local");
+      expect(sources, environment).toEqual(environment === "local" ? ["user"] : []);
+    }
+  });
+
   it("local runs load the user's Claude Code setup and may use any connection, but files stay contained", async () => {
     const { adapter, calls } = setup({ claudeConfigPath: configWith({}) });
     adapter.start(assignment({ environment: "local" }));

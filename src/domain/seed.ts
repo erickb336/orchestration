@@ -3,7 +3,7 @@
 
 import { instantiate, toDef } from "./pipeline";
 import { PROJECT_TEMPLATES, templateSteps } from "./templates";
-import { DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
+import { DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
 
 type SampleOutput = { name: string; summary: string; openFindings?: number };
 
@@ -69,6 +69,11 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     };
     tasks.push(t);
     return t;
+  };
+  // ORC-013: checks are off in the sample project, so its Checks steps (run by the service) are
+  // skipped, as the service skips them, wherever the sample story has already run past them.
+  const skipChecks = (t: Task, ...ids: string[]) => {
+    for (const st of t.steps) if (ids.includes(st.id)) st.state = "skipped";
   };
 
   const latest = (t: Task, step: string, output: string) =>
@@ -194,6 +199,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     { name: "change", summary: "Backup write errors surface a persistent banner with Retry (sample diff, +42 −6)" },
     { name: "handoff", summary: "Fault injection test added; retry path not yet tested offline (sample)" },
   ]);
+  skipChecks(ex2, "C1");
   if (inFlightRuns) run(ex2, "S2", "claude", "claude-sample-large", 12, "running", 60);
 
   task(
@@ -316,12 +322,14 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     { name: "change", summary: "Per-note Markdown export with front matter (sample diff, +88)" },
     { name: "handoff", summary: "Attachments are linked, not embedded (sample)" },
   ]);
+  skipChecks(ex6, "C1");
   run(ex6, "S2", "claude", "claude-sample-large", 1900, "completed", 100, [{ name: "findings", summary: "1 finding: exported dates lose their timezone (sample)", openFindings: 1 }]);
   run(ex6, "S3", "codex", "codex-sample-fast", 1700, "completed", 100, [{ name: "change", summary: "Dates exported in ISO 8601 with offset (sample diff, +3 −1)" }]);
+  skipChecks(ex6, "C2");
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 13,
+    version: 14,
     seq: 1000,
     project: {
       id: "sample",
@@ -366,6 +374,10 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
       steeringMode: "apply",
       stage: "building",
       prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
+      // ORC-013: checks stay off until the user turns them on; findings that need a decision go to the user.
+      checks: structuredClone(DEFAULT_CHECKS),
+      triage: { askUserBy: "user" },
+      conventions: { include: true },
       workerEnvironment: { claude: "isolated", codex: "isolated" },
       workerConnections: { claude: [], codex: [] },
       hold: false,
@@ -379,6 +391,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     leadRuns: [],
     steering: [],
     visionDrafts: [],
+    decisions: [],
     events: [
       { id: "ev-1", at: at(600), actor: "lead", kind: "spec", message: "Published specs for EX-001…EX-007 from vision r1", taskId: undefined },
       { id: "ev-2", at: at(2200), actor: "user", kind: "decision", taskId: "EX-006", message: "Selected option B (Per-note export); override: I mostly export single notes to share them." },

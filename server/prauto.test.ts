@@ -494,10 +494,10 @@ describe("what the reviewer is handed", () => {
     const small = workspaces.reviewDiff({ repoPath: repo, to: git("rev-parse", "HEAD"), from: git("rev-parse", "HEAD~1") })!;
     expect(small).toMatchObject({ truncated: false, from: git("rev-parse", "HEAD~1") });
     const id = newTask("Envelope");
-    const prompt = buildEnvelope({ state: st(), task: task(id), step: task(id).steps[1], attemptId: "run-x", access: "read", changeUnderReview: small });
+    const prompt = buildEnvelope({ state: st(), task: task(id), step: task(id).steps.find((x) => x.id === "S2")!, attemptId: "run-x", access: "read", changeUnderReview: small });
     // The diff holds a ``` line: the fence around it is longer, so the diff cannot close it.
     expect(prompt).toContain("````diff\n");
-    expect(prompt).toMatch(/\+not a fence end\n\+```\n````\nCount in openFindings only issues/);
+    expect(prompt).toMatch(/\+not a fence end\n\+```\n````\nReport as findings only issues/);
     expect(workspaces.reviewDiff({ repoPath: repo, to: "0".repeat(40) })).toBeUndefined();
   });
 });

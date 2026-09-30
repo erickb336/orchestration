@@ -21,7 +21,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { join, resolve } from "node:path";
 import * as D from "../../src/domain/delivery";
 import * as M from "../../src/domain/model";
-import type { PrDelivery, ProviderId, State, Task } from "../../src/domain/types";
+import { isProvider, type PrDelivery, type ProviderId, type State, type Task } from "../../src/domain/types";
 import { GhCliHost, GhError, type GitHubHost, type RepoRef } from "../github";
 import { redact } from "../redact";
 import type { RuntimeAdapter } from "../runtimes/types";
@@ -388,7 +388,7 @@ function newScheduler(): Scheduler {
 function driveAgents() {
   if (opts.realAgents) return;
   for (const a of M.activeAttempts(st())) {
-    if (a.outcome !== "running") continue;
+    if (a.outcome !== "running" || !isProvider(a.snapshot.provider)) continue;
     const ad = adapters[a.snapshot.provider] as ScriptedAdapter;
     if (!ad.runs.has(a.id)) continue;
     const t = task(a.taskId);

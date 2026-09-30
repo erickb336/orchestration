@@ -24,7 +24,8 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
 describe("templates", () => {
   it("every built-in template is valid and names no product or model", () => {
     for (const tpl of BUILT_IN_TEMPLATES) {
-      expect(errors(tpl.steps), tpl.id).toEqual([]);
+      // ORC-013: the delivery-checks template is valid only on a task with a checkTarget, like delivery-review on a reviewTarget.
+      expect(validatePipeline(tpl.steps, { checkTarget: tpl.id === "delivery-checks" }).filter((i) => i.severity === "error"), tpl.id).toEqual([]);
       expect(JSON.stringify(tpl)).not.toMatch(/sample|notes|claude|codex/i);
     }
   });
@@ -159,8 +160,8 @@ describe("template management", () => {
 describe("review regressions (ORC-002)", () => {
   it("a task is not integrated while a removed step's run is still stopping", () => {
     let s = finish(seed(), "EX-001", 1); // S2 implement done
-    s = M.dispatchEligible(s, at(2)); // S3 and S4 reviews run
-    const defs = task(s, "EX-001").steps.filter((x) => ["S1", "S2", "S3"].includes(x.id)).map((x) => ({ ...x }));
+    s = M.dispatchEligible(s, at(2)); // S3 and S4 reviews run (C1, the Checks step, skipped: checks are off)
+    const defs = task(s, "EX-001").steps.filter((x) => ["S1", "S2", "C1", "S3"].includes(x.id)).map((x) => ({ ...x }));
     s = M.setPipeline(s, "EX-001", 1, defs, "Drop UX review, repair, verify", "user", at(3));
     const s3 = running(s, "EX-001").find((a) => a.stepId === "S3")!;
     s = M.reportCompletion(s, s3.id, [], at(4), [{ name: "findings", summary: "ok", openFindings: 0 }]);
@@ -174,7 +175,7 @@ describe("review regressions (ORC-002)", () => {
   it("run-if ignores findings from a step that was later skipped or is re-running", () => {
     const defs: StepDef[] = [
       ...templateSteps("change")
-        .slice(0, 3)
+        .filter((d) => ["S1", "C1", "S2", "S3"].includes(d.id))
         .map((d) => ({ ...d, iterate: undefined })),
       { id: "S5", purpose: "Re-review", role: "code_reviewer", dependsOn: ["S3"], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], runIf: [{ step: "S2", output: "findings" }] },
       { id: "S6", purpose: "Second repair", role: "coder", dependsOn: ["S5"], inputs: [{ step: "S5", output: "findings" }], outputs: [{ name: "change", kind: "code-change" }], runIf: [{ step: "S5", output: "findings" }] },
@@ -243,9 +244,10 @@ describe("review regressions (ORC-002)", () => {
   it("template saves reject stale revisions and edits to deleted templates", () => {
     let s = seed();
     const tpl = structuredClone(s.project.templates.find((t) => t.id === "change")!);
-    s = M.saveTemplate(s, { ...tpl, name: "Change A" }, 1, at(0));
-    expect(() => M.saveTemplate(s, { ...tpl, name: "Change B" }, 1, at(1))).toThrow(/Stale/);
+    const rev = tpl.rev; // the built-in's current revision (ORC-013 bumped it)
+    s = M.saveTemplate(s, { ...tpl, name: "Change A" }, rev, at(0));
+    expect(() => M.saveTemplate(s, { ...tpl, name: "Change B" }, rev, at(1))).toThrow(/Stale/);
     s = M.deleteTemplate(s, "change", at(2));
-    expect(() => M.saveTemplate(s, { ...tpl, name: "Change C" }, 2, at(3))).toThrow(/deleted/);
+    expect(() => M.saveTemplate(s, { ...tpl, name: "Change C" }, rev + 1, at(3))).toThrow(/deleted/);
   });
 });

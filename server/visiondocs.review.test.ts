@@ -331,8 +331,10 @@ describe("12: migration 12 → 13 keeps state visible", () => {
     });
     expect(s.project.stage).toBe("shaping");
     expect(s.project.shapingSince).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    const ev = s.events[s.events.length - 1];
-    expect(ev).toMatchObject({ id: `ev-${s.seq}`, actor: "system", kind: "config", at: s.project.shapingSince });
+    // ORC-013: the 13 → 14 upgrade records its own template events after this one, so it is found by its text.
+    const ev = s.events.find((e) => e.message.startsWith("Moved from building to shaping when the state format was upgraded"))!;
+    expect(ev).toMatchObject({ actor: "system", kind: "config", at: s.project.shapingSince });
+    expect(ev.id).toMatch(/^ev-\d+$/);
     expect(ev.message).toMatch(/^Moved from building to shaping when the state format was upgraded: the project has no vision yet/);
     const raw = new DatabaseSync(path);
     expect(raw.prepare("SELECT COUNT(*) AS n FROM events WHERE id = ?").get(ev.id)).toEqual({ n: 1 });

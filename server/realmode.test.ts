@@ -13,6 +13,7 @@ import { buildEnvelope, parseOutputs } from "./envelope";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
 import type { AdapterEvent, Assignment, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
+import { changedFilesIn } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
 
 /** A controllable adapter: tests decide when runs finish, fail, or acknowledge stops. */
@@ -57,14 +58,14 @@ class ScriptedAdapter implements RuntimeAdapter {
     if (e.type === "completed" || e.type === "failed" || e.type === "stopped") this.runs.delete(e.attemptId);
     for (const l of this.listeners) l(e);
   }
-  /** Finish a run, optionally writing a file in its worktree first, reporting every declared output. */
+  /** Finish a run, optionally writing a file in its worktree first, reporting every declared output (a review lists the changed files it was shown, ORC-013). */
   finish(id: string, opts: { write?: [string, string]; findings?: number; omit?: string } = {}) {
     const a = this.runs.get(id)!;
     if (opts.write) writeFileSync(join(a.workspace.path, opts.write[0]), opts.write[1]);
     const outputs: Record<string, unknown> = {};
     for (const o of a.outputs) {
       if (o.name === opts.omit) continue;
-      outputs[o.name] = o.kind === "review-findings" ? { summary: `${o.name} by ${this.provider}`, openFindings: opts.findings ?? 0 } : { summary: `${o.name} by ${this.provider}` };
+      outputs[o.name] = o.kind === "review-findings" ? { summary: `${o.name} by ${this.provider}`, openFindings: opts.findings ?? 0, reviewedPaths: changedFilesIn(a.prompt) } : { summary: `${o.name} by ${this.provider}` };
     }
     this.emit({ type: "completed", attemptId: id, finalText: `All done.\n\`\`\`json\n${JSON.stringify({ outputs })}\n\`\`\``, usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 }, model: `${a.model}-actual` });
   }

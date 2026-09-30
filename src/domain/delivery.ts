@@ -4,12 +4,15 @@
 // The queue is informational. Nothing here is read to decide dispatch, integration or merging, and a
 // landed item's `status` changes only through markLandedReviewed and sendBackLanded.
 
+import { coverageCounts } from "./coverage";
+import * as F from "./findings";
 import * as M from "./model";
 import { instantiate, toDef, validatePipeline } from "./pipeline";
 import { templateSteps } from "./templates";
 import {
   ControlError,
   REVIEW_ROLES,
+  isProvider,
   type CheckObs,
   type GitHubStatus,
   type Landed,
@@ -179,14 +182,16 @@ export function landedReviews(s: State, t: Task): LandedReview[] {
       const a = M.acceptedOutput(s, t, st.id, o.name);
       if (!a) continue;
       const run = s.attempts.find((x) => x.id === a.attemptId);
+      const provider = run?.snapshot.provider;
       out.push({
         stepId: st.id,
         purpose: st.purpose,
         role: st.role,
         artifactId: a.id,
-        openFindings: a.openFindings ?? 0,
+        // ORC-013: structured findings count what is still unresolved; accepted findings are not open.
+        openFindings: F.unresolved(s, a),
         summary: a.summary,
-        provider: run?.snapshot.provider,
+        ...(provider && isProvider(provider) ? { provider } : {}),
         model: run ? (run.actualModel ?? run.snapshot.model) : undefined,
         editedByUser: a.author === "user",
       });
@@ -639,9 +644,26 @@ interface Covering {
 
 const modelOf = (run: Attempt) => run.actualModel ?? run.snapshot.model;
 const findingsText = (n: number) => `${n} open finding${n === 1 ? "" : "s"}`;
+const sameSha = (a: string, b: string) => a === b || (a.length >= 12 && b.length >= 12 && (a.startsWith(b) || b.startsWith(a)));
 
-/** The finished review steps of a task whose accepted findings satisfy `covers`. */
-function reviewsOf(s: State, c: Task, covers: (run: Attempt) => boolean): Covering[] {
+/**
+ * ORC-013 §5.4: may a review artifact count as evidence for the change `sha`? Findings someone still
+ * has to fix or decide are evidence whatever the coverage (they keep the gate blocked and drive the
+ * repair). A clean review counts only when a person wrote it, or when its coverage is complete for
+ * exactly this change, or when the service recorded no changed-path set for the run at all (nothing
+ * under review). A record from before coverage existed, an incomplete or an unproven one never
+ * counts as clean.
+ */
+function countsFor(s: State, art: Artifact, sha: string): boolean {
+  if (art.author === "user") return true;
+  if (F.unresolved(s, art) > 0) return true;
+  const c = art.pathCoverage;
+  if (!c || !coverageCounts(c)) return false;
+  return c.state === "not-required" || (!!c.to && sameSha(c.to, sha));
+}
+
+/** The finished review steps of a task whose accepted findings satisfy `covers` and count for `pr`'s change. */
+function reviewsOf(s: State, c: Task, pr: PrDelivery, covers: (run: Attempt) => boolean): Covering[] {
   const out: Covering[] = [];
   for (const st of c.steps) {
     if (st.state !== "done" || !REVIEW_ROLES.includes(st.role)) continue;
@@ -650,20 +672,20 @@ function reviewsOf(s: State, c: Task, covers: (run: Attempt) => boolean): Coveri
       const art = M.acceptedOutput(s, c, st.id, o.name);
       // For findings a person edited, the run is the one whose output they edited.
       const run = lastCompletedRun(s, c.id, st.id);
-      if (art && run && covers(run)) out.push({ art, run, role: st.role });
+      if (art && run && covers(run) && countsFor(s, art, pr.changeSha)) out.push({ art, run, role: st.role });
     }
   }
   return out;
 }
 
-/** Evidence from a set of reviews that saw the change: open findings, then independence. */
+/** Evidence from a set of reviews that saw the change: unresolved findings, then independence. */
 function judge(s: State, pr: PrDelivery, covering: Covering[], source: "pipeline" | "dedicated", taskId: string): ReviewView {
   const h = sha12(pr.changeSha);
   const base = { source, forSha: pr.changeSha, taskId, artifactIds: covering.map((x) => x.art.id) };
-  const open = covering.reduce((n, x) => n + (x.art.openFindings ?? 0), 0);
+  const open = covering.reduce((n, x) => n + F.unresolved(s, x.art), 0);
   if (open > 0) return { state: "findings", evidence: { ok: false, ...base, reason: `The review of ${h} reported ${findingsText(open)}.` } };
   const code = covering.filter((x) => x.role === "code_reviewer");
-  const by = code.find((x) => independent(s, pr, x.run.snapshot.provider));
+  const by = code.find((x) => independent(s, pr, isProvider(x.run.snapshot.provider) ? x.run.snapshot.provider : undefined));
   if (!by) {
     const who = code[0].run.snapshot.provider;
     const authors = M.prAuthors(pr);
@@ -674,20 +696,24 @@ function judge(s: State, pr: PrDelivery, covering: Covering[], source: "pipeline
         : "the provider that wrote the change";
     return {
       state: "not-independent",
-      evidence: { ok: false, ...base, attemptId: code[0].run.id, provider: who, model: modelOf(code[0].run), reason: `The review of ${h} was done by ${M.providerLabel(who)}, ${why}, so it does not count as independent.` },
+      evidence: { ok: false, ...base, attemptId: code[0].run.id, ...(isProvider(who) ? { provider: who } : {}), model: modelOf(code[0].run), reason: `The review of ${h} was done by ${M.providerLabel(who)}, ${why}, so it does not count as independent.` },
     };
   }
   const cleared = covering.some((x) => x.art.author === "user");
+  // ORC-013: findings someone decided to accept as they are do not block, and the evidence names them.
+  const accepted = covering.flatMap((x) => F.acceptedFindings(s, x.art));
+  const provider = by.run.snapshot.provider;
   return {
     state: "ok",
     evidence: {
       ok: true,
       ...base,
       attemptId: by.run.id,
-      provider: by.run.snapshot.provider,
+      ...(isProvider(provider) ? { provider } : {}),
       model: modelOf(by.run),
-      reason: `Clean review of ${h} by ${M.providerLabel(by.run.snapshot.provider)}${cleared ? " (findings cleared by you)" : ""}.`,
+      reason: `Clean review of ${h} by ${M.providerLabel(provider)}${cleared ? " (findings cleared by you)" : ""}${accepted.length ? `; ${accepted.length} finding${accepted.length === 1 ? "" : "s"} accepted as is (${accepted.slice(0, 5).join("; ")})` : ""}.`,
       ...(cleared ? { clearedByUser: true } : {}),
+      ...(accepted.length ? { accepted } : {}),
     },
   };
 }
@@ -711,8 +737,12 @@ function pipelineReview(s: State, pr: PrDelivery): ReviewView {
     const ref = fc.ref?.split(" ")[0] ?? "";
     if (ref.length < 7 || !pr.changeSha.startsWith(ref)) return missing;
   }
-  const covering = reviewsOf(s, c, (run) => run.snapshot.inputs.some((i) => i.artifactId === fc.id));
-  if (!covering.some((x) => x.role === "code_reviewer")) return missing;
+  const covering = reviewsOf(s, c, pr, (run) => run.snapshot.inputs.some((i) => i.artifactId === fc.id));
+  if (!covering.some((x) => x.role === "code_reviewer")) {
+    // ORC-013: a review that saw the change but did not list the files it covered is not clean evidence.
+    const saw = c.steps.some((st) => st.state === "done" && st.role === "code_reviewer" && lastCompletedRun(s, c.id, st.id)?.snapshot.inputs.some((i) => i.artifactId === fc.id));
+    return saw ? { state: "missing", evidence: noReview(pr, `The review of ${h} did not list the files it covered, so it does not count.`) } : missing;
+  }
   return judge(s, pr, covering, "pipeline", c.id);
 }
 
@@ -761,10 +791,12 @@ function finishedReview(s: State, pr: PrDelivery, rv: Task): ReviewView {
     const how = M.activeAttempts(s, rv.id).length ? "running" : rv.hold || rv.holdBeforeStart ? "paused" : s.project.stage === "shaping" ? "held: it waits until you start building (shaping)" : "queued";
     return { state: "pending", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is ${how}.`) };
   }
-  // A dedicated review counts only when its run read a worktree detached at exactly this commit.
-  const all = reviewsOf(s, rv, () => true);
+  // A dedicated review counts only when its run read a worktree detached at exactly this commit, and
+  // (ORC-013) only when it listed the files it covered.
+  const all = reviewsOf(s, rv, pr, () => true);
   if (!all.some((x) => x.role === "code_reviewer") || all.some((x) => x.run.snapshot.reviewedSha !== pr.changeSha)) {
-    return { state: "missing", reviewTaskId: rv.id, evidence: noReview(pr, `The review ${rv.id} did not read ${h}, so it does not count.`) };
+    const ran = rv.steps.some((st) => st.state === "done" && st.role === "code_reviewer" && lastCompletedRun(s, rv.id, st.id)?.snapshot.reviewedSha === pr.changeSha);
+    return { state: "missing", reviewTaskId: rv.id, evidence: noReview(pr, ran ? `The review ${rv.id} of ${h} did not list the files it covered, so it does not count.` : `The review ${rv.id} did not read ${h}, so it does not count.`) };
   }
   const v = judge(s, pr, all, "dedicated", rv.id);
   if (v.state === "not-independent") {
@@ -933,10 +965,48 @@ export function repairCause(s: State, t: Task): RepairCause | undefined {
   }
   const v = reviewView(s, t);
   if (v.state === "findings") {
-    const arts = s.artifacts.filter((a) => v.evidence.artifactIds.includes(a.id) && (a.openFindings ?? 0) > 0);
-    return { kind: "findings", summaries: arts.map((a) => clip(a.summary, 1200)) };
+    // ORC-013: only what a repair may fix is listed (auto-fix findings and those decided "fix"), each
+    // with its decision. When only undecided ask-user findings remain, no fix task can be started.
+    const arts = s.artifacts.filter((a) => v.evidence.artifactIds.includes(a.id) && F.unresolved(s, a) > 0);
+    const summaries: string[] = [];
+    for (const a of arts) {
+      if (!a.findings) {
+        if ((a.openFindings ?? 0) > 0) summaries.push(clip(a.summary, 1200));
+        continue;
+      }
+      for (const f of a.findings) {
+        if (!F.isBlocking(f)) continue;
+        const d = F.decisionFor(s, a, f);
+        if (f.action !== "auto-fix" && d?.status !== "fix") continue;
+        summaries.push(clip(`${f.id} [${f.severity}]${f.file ? ` ${f.file}${f.line ? `:${f.line}` : ""}` : ""} — ${f.title}${f.detail ? `: ${f.detail}` : ""}${d ? ` (${F.decisionLabel(d)})` : ""}`, 1200));
+      }
+    }
+    return summaries.length ? { kind: "findings", summaries } : undefined;
   }
   return undefined;
+}
+
+/** ORC-013: the review's open findings are all ask-user findings nobody has decided yet. */
+function onlyUndecided(s: State, t: Task): { count: number; to: "lead" | "user" | "both" } | undefined {
+  const v = reviewView(s, t);
+  if (v.state !== "findings") return undefined;
+  const arts = s.artifacts.filter((a) => v.evidence.artifactIds.includes(a.id));
+  let undecided = 0;
+  let lead = 0;
+  let user = 0;
+  for (const a of arts) {
+    if (F.fixable(s, a) > 0) return undefined;
+    if (!a.findings) return undefined;
+    undecided += F.undecided(s, a);
+    for (const f of a.findings) {
+      if (!F.isBlocking(f) || f.action !== "ask-user") continue;
+      const d = F.decisionFor(s, a, f);
+      if (d && d.status !== "open") continue;
+      if (!d || d.routedTo === "lead") lead++;
+      else user++;
+    }
+  }
+  return undecided ? { count: undecided, to: lead && user ? "both" : lead ? "lead" : "user" } : undefined;
 }
 
 /** Create the fix task and link it. Returns the new state (a fresh object) and the task's id. */
@@ -1341,6 +1411,12 @@ function refreshAttention(s: State, t: Task, now: string) {
     // Judged at the time GitHub was last read: a timeout is never declared for a period nobody looked.
     const blocking = prGate(s, t, Date.parse(pr.observed?.at ?? now), { byUser: userGate(pr) }).items.find((i) => i.state === "blocked" && i.code && (pr.phase === "open" || i.id === "review"));
     if (blocking) next = { code: blocking.code!, message: blocking.detail };
+    // ORC-013: open findings that all wait for a decision are a decision, not a fix.
+    const undecided = blocking?.code === "review-findings" ? onlyUndecided(s, t) : undefined;
+    if (undecided) {
+      const who = undecided.to === "both" ? "you and the lead" : undecided.to === "lead" ? "the lead" : "you";
+      next = { code: "findings-decision", message: `${undecided.count} finding${undecided.count === 1 ? "" : "s"} of the review of ${sha12(pr.changeSha)} need${undecided.count === 1 ? "s" : ""} a decision (${who}). Nothing is fixed until it is taken.` };
+    }
   }
   if (next && pr.policy === "auto" && REPAIRABLE.includes(next.code)) {
     const fixing = openRepair(s, pr);
@@ -1440,7 +1516,7 @@ export function reportPrHead(state: State, taskId: string, f: PrHeadFacts, now: 
     review: { ok: false, source: "none", reason: "Not evaluated yet.", forSha: f.sha, artifactIds: [] },
     reviewTaskIds: [],
     repairTaskIds: [],
-    counters: { mergeAttempts: 0, baseUpdates: 0, repairs: 0, reviews: 0, failures: 0 },
+    counters: { mergeAttempts: 0, baseUpdates: 0, repairs: 0, reviews: 0, failures: 0, reruns: 0, checks: 0 },
   };
   const s = structuredClone(M.reportIntegration(state, taskId, { status: "integrated", sha: f.sha, ref: `${sha12(f.sha)} on ${branch}`, pr }, now));
   const built = getTask(s, taskId);
@@ -1793,6 +1869,8 @@ export function reportObservations(state: State, obs: Observations, now: string,
       const flags: LandedFlag[] = [
         ...(clean ? [] : (["merged-without-clean-gate"] as const)),
         ...(pr.review.ok && pr.review.clearedByUser ? (["findings-cleared-by-user"] as const) : []),
+        // ORC-013: the review was clean apart from findings someone accepted as they are.
+        ...(pr.review.ok && pr.review.accepted?.length ? (["findings-accepted"] as const) : []),
         ...(pr.changed.protectedHits.length ? (["protected-paths"] as const) : []),
       ];
       pr.phase = "merged";

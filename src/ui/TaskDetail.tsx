@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import * as D from "../domain/delivery";
+import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
 import { toDef } from "../domain/pipeline";
@@ -8,6 +9,7 @@ import { ROLES, type Artifact, type Attempt, type State, type Task } from "../do
 import { newIdOf, useStore } from "./store";
 import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } from "./common";
 import { DeliveryCard } from "./Delivery";
+import { CoverageChip, DecisionQueue, FindingsList } from "./Findings";
 import { SpecEditor } from "./SpecEditor";
 import { PipelineEditor } from "./PipelineEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
@@ -259,6 +261,23 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
           <>
             Waiting on prerequisite <a href={`#/task/${waiting}`}>{waiting}</a>. Unfinished results from prerequisites are never used.
           </>
+        )}
+      </div>,
+    );
+  // ORC-013: findings that wait for a decision. A step that would read them is neither started nor skipped.
+  const awaiting = task.lifecycle === "active" ? F.awaitingDecision(state, task) : undefined;
+  const myDecisions = F.openDecisions(state, "user").filter((d) => d.taskId === task.id);
+  const leadDecisions = F.openDecisions(state, "lead").filter((d) => d.taskId === task.id);
+  if (awaiting || myDecisions.length || leadDecisions.length)
+    out.push(
+      <div className="banner review" role="status" key="decisions">
+        <strong>{awaiting ? `${F.awaitingLabel(awaiting)}.` : "Findings need a decision."}</strong>{" "}
+        {myDecisions.length ? "Decide each finding below; the repair fixes only what is decided “Fix” or marked auto-fix." : ""}
+        {leadDecisions.length ? ` The lead is deciding ${leadDecisions.length} finding${leadDecisions.length === 1 ? "" : "s"}; you can take any of them over from the artifact below.` : ""}
+        {myDecisions.length > 0 && (
+          <div style={{ marginTop: "0.4rem" }}>
+            <DecisionQueue state={state} taskId={task.id} showLead={false} />
+          </div>
         )}
       </div>,
     );
@@ -578,6 +597,8 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
           reservedIds={task.pipelineHistory.flatMap((p) => p.steps.map((x) => x.id))}
           templates={state.project.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id))}
           reviewTarget={!!task.reviewTarget}
+          checkTarget={!!task.checkTarget}
+          checksEnabled={!!state.project.checks?.enabled}
           saveLabel={`Save pipeline r${task.pipelineRev + 1}`}
           saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : disabled ? "The service is offline" : undefined}
           requireReason
@@ -688,7 +709,21 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                   </td>
                   <td>{ROLE_LABEL[st.role]}</td>
                   <td>
-                    {done && lastRun ? (
+                    {st.role === "checks" ? (
+                      // ORC-013: a Checks step is run by the service; it has no provider or model to choose.
+                      <>
+                        <span>Run by the service{state.project.checks?.enabled ? ` · ${state.project.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}` : ""}</span>
+                        <div className="muted" style={{ fontSize: "0.8rem" }}>
+                          {state.project.checks?.enabled ? (
+                            `${st.checks?.onFail === "block" ? "Stops the task and asks for a decision when checks fail" : "Failing checks become findings for the repair step"}.`
+                          ) : (
+                            <>
+                              {st.state === "skipped" ? "Skipped: checks are off" : "Will be skipped: checks are off"} (<a href="#/settings">Settings</a>).
+                            </>
+                          )}
+                        </div>
+                      </>
+                    ) : done && lastRun ? (
                       <>
                         <span>{selectionText(lastRun.snapshot)}</span>
                         <div className="muted" style={{ fontSize: "0.8rem" }}>
@@ -710,7 +745,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                         )}
                       </>
                     ) : st.state === "skipped" ? (
-                      <span className="muted">Not run: its condition had no open findings. Re-evaluated if an upstream step reruns.</span>
+                      <span className="muted">Not run: its condition had nothing to fix. Re-evaluated if an upstream step reruns.</span>
                     ) : open ? (
                       <>
                         {activeRun && (
@@ -841,7 +876,7 @@ function StepIO({ state, task, stepId, run }: { state: State; task: Task; stepId
     <details style={{ fontSize: "0.8rem", marginTop: "0.2rem" }}>
       <summary className="muted">
         reads {st.inputs.length ? st.inputs.map((r) => `${r.step}.${r.output}`).join(", ") : "nothing upstream"} · produces {st.outputs.length ? st.outputs.map((o) => o.name).join(", ") : "nothing"}
-        {st.runIf?.length ? ` · only if ${st.runIf.map((r) => `${r.step}.${r.output}`).join(" or ")} has open findings` : ""}
+        {st.runIf?.length ? ` · only if ${st.runIf.map((r) => `${r.step}.${r.output}`).join(" or ")} has findings to fix` : ""}
       </summary>
       <div className="stack" style={{ padding: "0.3rem 0 0.2rem" }}>
         <div>
@@ -934,7 +969,18 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                     {a.ref}
                   </div>
                 )}
-                {a.openFindings !== undefined && <span className="chip strong" style={{ marginLeft: "0.3rem" }}>{a.openFindings} open</span>}
+                {a.openFindings !== undefined && (
+                  <span className="chip strong" style={{ marginLeft: "0.3rem" }} title={a.findings ? "Unresolved: auto-fix findings, and ask-user findings not yet accepted or followed up" : undefined}>
+                    {a.findings ? F.unresolved(state, a) : a.openFindings} open
+                  </span>
+                )}
+                {a.pathCoverage && (
+                  <>
+                    {" "}
+                    <CoverageChip coverage={a.pathCoverage} />
+                  </>
+                )}
+                {a.findings && <FindingsList state={state} artifact={a} controls={latest?.id === a.id} />}
                 {edited && a.editReason && <div style={{ fontSize: "0.82rem" }}>Why you changed it: “{a.editReason}”</div>}
                 <div className="muted" style={{ fontSize: "0.8rem" }}>
                   {edited ? `edited ${relTime(a.createdAt)}` : `from ${a.attemptId}`}
@@ -969,7 +1015,9 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
   if (!found) return null;
   const base = found;
   const latest = M.latestArtifact(state, task, base.stepId, base.name) ?? base;
-  const isFindings = base.kind === "review-findings";
+  // ORC-013: structured findings are decided one by one; only the summary of such an artifact can be edited.
+  const isFindings = base.kind === "review-findings" && !base.findings;
+  const isStructured = base.kind === "review-findings" && !!base.findings;
   const isCode = base.kind === "code-change";
   const findingsOk = !isFindings || (/^\d+$/.test(findings.trim()) && Number(findings) >= 0);
   const isBreakdown = base.kind === "breakdown";
@@ -1020,6 +1068,11 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
             Steps that run only when there are open findings use this number. Set 0 to let them skip.
           </span>
         </label>
+      )}
+      {isStructured && (
+        <p className="muted" style={{ fontSize: "0.8rem", margin: 0 }}>
+          The findings are listed one by one and carry over unchanged: decide each finding on the artifact instead of editing a count.
+        </p>
       )}
       {isCode && (
         <label className="field" style={{ margin: 0 }}>

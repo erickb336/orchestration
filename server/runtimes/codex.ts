@@ -42,7 +42,14 @@ export function runTmpDir(a: Assignment): string {
   return dir;
 }
 
-export const APP_SERVER_ARGS = ["app-server", "-c", "agents.enabled=false", "--disable", "multi_agent"];
+/**
+ * Every app-server the service starts: native sub-agents off, and (ORC-013) the repository's own
+ * instruction files never loaded by Codex itself (`project_doc_max_bytes=0`; the pinned 0.159.2
+ * binary ships the key with a default of 32768). The worktree copy of AGENTS.md is agent-written;
+ * the service passes the trusted base's copy in the envelope as labelled project conventions instead.
+ */
+export const PROJECT_DOC_ARGS = ["-c", "project_doc_max_bytes=0"];
+export const APP_SERVER_ARGS = ["app-server", "-c", "agents.enabled=false", "--disable", "multi_agent", ...PROJECT_DOC_ARGS];
 
 /**
  * Worker isolation, parity with the Claude adapter (no settings, no MCP, no sub-agents, no web):

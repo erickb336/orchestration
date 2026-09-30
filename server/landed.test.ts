@@ -104,8 +104,8 @@ describe("state format 10", () => {
     const upgraded = new Store(path);
     const s = upgraded.read().state;
     // ORC-009 raised the format to 11, ORC-012 to 12 and ORC-014 to 13; a format-9 document upgrades through each.
-    expect(STATE_FORMAT).toBe(13);
-    expect(s.version).toBe(13);
+    expect(STATE_FORMAT).toBe(14);
+    expect(s.version).toBe(14);
     expect(s.project.visionDocs).toEqual([]);
     expect(upgraded.read().version).toBe(v0 + 1);
     expect(s.project.prDelivery).toEqual(DEFAULT_PR_DELIVERY);
@@ -118,7 +118,7 @@ describe("state format 10", () => {
     expect(D.deliveryMode(upgraded.read().state)).toBe("local");
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(13);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(14);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_9_%'").get()).toBeDefined();
     check.close();
   });

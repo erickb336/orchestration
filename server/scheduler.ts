@@ -8,9 +8,10 @@
 
 import { randomUUID } from "node:crypto";
 import * as D from "../src/domain/delivery";
+import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
-import type { Integration, ProviderId, State, Step, Task } from "../src/domain/types";
-import { buildEnvelope, buildLeadEnvelope, parseLeadOutput, parseOutputs } from "./envelope";
+import { REVIEW_ROLES, isProvider, type Integration, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
+import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
 import { SimulatedGitHub, type GitHubHost } from "./github";
 import { PrDriver } from "./prdelivery";
 import { FakeAdapter } from "./runtimes/fake";
@@ -41,16 +42,33 @@ export interface SchedulerOptions {
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
 const WRITER_ROLES = new Set(["coder"]);
+/** ORC-013: the repository instruction files read from the trusted base as project conventions. */
+const CONVENTION_FILES = ["AGENTS.md", "CLAUDE.md"];
 
 interface Launched {
   /** When the adapter was first seen without a live process for this run (no terminal event yet). */
   goneSince?: number;
-  provider: ProviderId;
+  provider: Runner;
   access: "write" | "read";
   workspace?: PreparedWorkspace;
   stepId: string;
   taskId: string;
 }
+
+/**
+ * ORC-013 §10.3: what the service recorded about a run before it started (the changed-path set a
+ * reviewer was shown, the conventions it was given, the decisions its envelope carried). Queued
+ * before the run starts, so it is applied in the same drain as, or an earlier one than, any event
+ * from the run. A lost lease drops it with the run.
+ */
+interface ContextEvent {
+  type: "context";
+  attemptId: string;
+  scope?: NonNullable<M.RunContext["scope"]>;
+  conventions?: NonNullable<M.RunContext["conventions"]>;
+  decisions?: string[];
+}
+type QueueEvent = AdapterEvent | ContextEvent;
 
 export class Scheduler {
   readonly holder = randomUUID();
@@ -66,8 +84,10 @@ export class Scheduler {
   readonly adapters: Record<ProviderId, RuntimeAdapter>;
   private readonly workspaces?: WorkspaceManager;
   private readonly visionDocs?: VisionDocStore;
-  private queue: AdapterEvent[] = [];
+  private queue: QueueEvent[] = [];
   private launched = new Map<string, Launched>();
+  /** ORC-013: conventions read this cycle, by trusted ref, so the files are read once per cycle. */
+  private conventionsCache: { ref: string; at: number; files: ConventionsFile[] } | undefined;
   private healthState: Partial<Record<ProviderId, ProviderHealth>> = {};
   private connectionsState: Partial<Record<ProviderId, Connection[] | null>> = {};
   private repoCheck: { path: string; ok: boolean; at: number } | undefined;
@@ -196,7 +216,7 @@ export class Scheduler {
       (s) => {
         let next = s;
         for (const a of M.activeAttempts(s)) {
-          if (!this.adapterFor(a.snapshot.provider).has(a.id)) {
+          if (!this.runnerFor(a.snapshot.provider)?.has(a.id)) {
             next = M.reportRunLost(next, a.id, "No runtime process found after the service restarted or the scheduler changed", now);
           }
         }
@@ -211,6 +231,14 @@ export class Scheduler {
 
   private adapterFor(p: ProviderId): RuntimeAdapter {
     return this.adapters[p];
+  }
+
+  /**
+   * ORC-013: who runs an attempt: a provider's adapter, or (from step 2) the service's check runner.
+   * Undefined for a service run while no runner exists, so such a run is reconciled as lost.
+   */
+  private runnerFor(p: Runner): RuntimeAdapter | undefined {
+    return isProvider(p) ? this.adapters[p] : undefined;
   }
 
   /** One scheduling cycle. */
@@ -269,7 +297,11 @@ export class Scheduler {
     const failedToStart: { id: string; reason: string }[] = [];
     const timeouts: string[] = [];
     for (const a of active.values()) {
-      const adapter = this.adapterFor(a.snapshot.provider);
+      const adapter = this.runnerFor(a.snapshot.provider);
+      if (!adapter) {
+        lost.push({ id: a.id, reason: "No runner exists for this run in this version" });
+        continue;
+      }
       const launched = this.launched.get(a.id);
       if (launched && !adapter.has(a.id) && !this.queue.some((e) => e.attemptId === a.id)) {
         // The process is gone but no terminal event was applied: never leave it "running" forever.
@@ -398,6 +430,7 @@ export class Scheduler {
       if (info?.taskId === "LEAD" && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
       this.launched.delete(e.attemptId);
     }
+    this.conventionsCache = undefined;
 
     // 5. Integration: one finished task per cycle, frozen while the project is paused; then delivery.
     this.integrateNext(nowMs, lease);
@@ -532,6 +565,30 @@ export class Scheduler {
     return catalog.some((m) => m.id === sel.model) ? { provider: sel.provider, model: sel.model } : undefined;
   }
 
+  /**
+   * ORC-013 §8.2: the repository's AGENTS.md and CLAUDE.md at the trusted base (never a worktree),
+   * capped and labelled for an envelope. Read at most once per cycle; nothing when the setting is
+   * off, in the fake runtime, or when the repository cannot be read.
+   */
+  private conventionsFor(state: State, nowMs: number): ConventionsFile[] {
+    if (!this.workspaces || !state.project.conventions?.include || state.project.sample || !state.project.repoPath) return [];
+    const ref = M.trustedBaseRef(state);
+    const cached = this.conventionsCache;
+    if (cached && cached.ref === ref && nowMs - cached.at < 10_000) return cached.files;
+    const files: { file: string; blob: string; text: string }[] = [];
+    for (const file of CONVENTION_FILES) {
+      try {
+        const r = this.workspaces.readFileAt({ repoPath: state.project.repoPath, ref, path: file });
+        if (r) files.push({ file, blob: r.blob, text: r.text });
+      } catch {
+        /* not readable: left out, never invented */
+      }
+    }
+    const capped = capConventions(files);
+    this.conventionsCache = { ref, at: nowMs, files: capped };
+    return capped;
+  }
+
   /** Start a lead run: a read-only checkout (real mode) and the lead envelope. */
   private launchLead(state: State, runId: string): string | undefined {
     const run = state.leadRuns.find((r) => r.id === runId)!;
@@ -542,6 +599,7 @@ export class Scheduler {
       if (this.workspaces) {
         workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "LEAD", stepId: "plan", access: "read" });
       }
+      const conventions = this.conventionsFor(state, Date.now());
       this.launched.set(runId, { provider: run.provider, access: "read", workspace, stepId: "LEAD", taskId: "LEAD" });
       adapter.start({
         attemptId: runId,
@@ -553,7 +611,7 @@ export class Scheduler {
         workspace: { path: workspace?.path ?? "", access: "read" },
         environment: state.project.workerEnvironment[run.provider],
         connections: state.project.workerConnections[run.provider],
-        prompt: buildLeadEnvelope(state, run, "read", this.visionDocs?.reader(state.project.id)),
+        prompt: buildLeadEnvelope(state, run, "read", this.visionDocs?.reader(state.project.id), conventions),
         outputs: [],
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
@@ -577,12 +635,15 @@ export class Scheduler {
     const a = state.attempts.find((x) => x.id === attemptId)!;
     const task = state.tasks.find((t) => t.id === a.taskId)!;
     const step = task.steps.find((x) => x.id === a.stepId)!;
-    const adapter = this.adapterFor(a.snapshot.provider);
+    const adapter = this.runnerFor(a.snapshot.provider);
+    // ORC-013: a service run (a Checks step) needs the check runner, which step 2 adds.
+    if (!adapter) return "This version has no runner for service check runs";
     const access: "write" | "read" = WRITER_ROLES.has(step.role) ? "write" : "read";
     const limits = state.project.runLimits;
     try {
       let workspace: PreparedWorkspace | undefined;
       let changeUnderReview: { from: string; to: string; text: string } | undefined;
+      let scope: NonNullable<M.RunContext["scope"]> | undefined;
       if (this.workspaces) {
         const d = state.project.autonomy.autoDeliver;
         // With delivery on, new work starts from the delivery base, not from whatever is checked out:
@@ -622,7 +683,11 @@ export class Scheduler {
               to: review ? review.headSha : input!,
               ...(review ? { from: review.baseSha } : { baseRef: prMode && fetched ? fetched : d.enabled ? `refs/heads/${d.branch}` : undefined }),
             });
-            if (diff) changeUnderReview = { from: diff.from, to: diff.to, text: diff.text };
+            if (diff) {
+              changeUnderReview = { from: diff.from, to: diff.to, text: diff.text };
+              // ORC-013 §5.1: the changed-path set a reviewer must account for, recorded before the run can report anything.
+              if (REVIEW_ROLES.includes(step.role)) scope = { from: diff.from, to: diff.to, paths: diff.paths, total: diff.total };
+            }
             // A dedicated review without the change in front of it would prove nothing.
             else if (review) throw new Error("the change under review could not be read from the repository");
           }
@@ -631,18 +696,34 @@ export class Scheduler {
           throw e;
         }
       }
+      const conventions = this.conventionsFor(state, Date.now());
+      const decisions = F.decisionsForStep(state, task, step).map((d) => d.id);
       this.launched.set(attemptId, { provider: a.snapshot.provider, access, workspace, stepId: step.id, taskId: task.id });
+      // ORC-013 §10.3: queued before the run starts, so it is applied no later than any event from the run.
+      this.queue.push({ type: "context", attemptId, ...(scope ? { scope } : {}), ...(conventions.length ? { conventions: conventions.map((c) => ({ file: c.file, blob: c.blob, bytes: c.bytes, truncated: c.truncated })) } : {}), ...(decisions.length ? { decisions } : {}) });
       adapter.start({
         attemptId,
         taskId: task.id,
         stepId: step.id,
         role: step.role,
-        provider: a.snapshot.provider,
+        provider: isProvider(a.snapshot.provider) ? a.snapshot.provider : "claude",
         model: a.snapshot.model,
         workspace: { path: workspace?.path ?? a.snapshot.workspace, access },
         environment: a.snapshot.environment ?? "isolated",
         connections: a.snapshot.connections ?? [],
-        prompt: buildEnvelope({ state, task, step, attemptId, access, seed: workspace?.seed, changeUnderReview, docs: this.visionDocs?.reader(state.project.id) }),
+        prompt: buildEnvelope({
+          state,
+          task,
+          step,
+          attemptId,
+          access,
+          seed: workspace?.seed,
+          changeUnderReview,
+          ...(scope && step.role === "code_reviewer" ? { changedPaths: { paths: scope.paths, total: scope.total } } : {}),
+          ...(step.coverageGap ? { coverageGap: step.coverageGap } : {}),
+          ...(conventions.length ? { conventions } : {}),
+          docs: this.visionDocs?.reader(state.project.id),
+        }),
         outputs: step.outputs,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
@@ -660,6 +741,8 @@ export class Scheduler {
     const step = task?.steps.find((x) => x.id === a!.stepId);
     if (!a || !step) return { outputs: [], problems: [] };
     const parsed = parseOutputs(e.finalText, step.outputs);
+    // ORC-013: what the parser corrected is recorded on the run, without refusing the result.
+    parsed.problems.push(...parsed.notes);
     const info = this.launched.get(e.attemptId);
     const outputs: M.OutputReport[] = parsed.outputs.map((o) => ({ ...o }));
     if (this.workspaces && info?.workspace) {
@@ -687,7 +770,9 @@ export class Scheduler {
     return { outputs, problems: parsed.problems, chosen: parsed.chosen };
   }
 
-  private applyEvent(s: State, e: AdapterEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[]; chosen?: string }>, now: string): State {
+  private applyEvent(s: State, e: QueueEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[]; chosen?: string }>, now: string): State {
+    // ORC-013: the service's own record of what a run was given; applied only while the run is active.
+    if (e.type === "context") return M.reportRunContext(s, e.attemptId, { scope: e.scope, conventions: e.conventions, decisions: e.decisions });
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
       case "started":
@@ -731,8 +816,8 @@ export class Scheduler {
         return M.reportLeadFailed(s, e.attemptId, e.message, now, e.usage);
       case "completed": {
         const out = parseLeadOutput(e.finalText);
-        // ORC-009/ORC-012: the steering block, the vision draft and any parse problem go through as found; the domain validates them.
-        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, problem: out.problem }, now, { usage: e.usage, actualModel: e.model });
+        // ORC-009/ORC-012/ORC-013: the steering block, the vision draft, the decisions and any parse problem go through as found; the domain validates them.
+        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, problem: out.problem }, now, { usage: e.usage, actualModel: e.model });
       }
     }
   }

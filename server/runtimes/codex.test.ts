@@ -302,6 +302,32 @@ describe("CodexAdapter runs", () => {
   });
 });
 
+describe("repository instruction files (ORC-013)", () => {
+  it("every app-server the service starts (worker, isolated or local; lead; probe) carries -c project_doc_max_bytes=0", async () => {
+    const argvs: string[][] = [];
+    const spawn: CodexAdapterOptions["spawn"] = (command, args, options) => {
+      argvs.push(args);
+      return nodeSpawn(command, args, options);
+    };
+    const { adapter, events } = make("complete", { spawn });
+    await adapter.health(); // a probe process
+    adapter.start(assignment("w-local", { environment: "local" }));
+    await waitFor(() => terminals(events).length === 1);
+    adapter.start(assignment("w-isolated", { environment: "isolated" }));
+    await waitFor(() => terminals(events).length === 2);
+    adapter.start(assignment("lead", { role: "lead", taskId: "LEAD", stepId: "LEAD", workspace: { path: dir, access: "read" } }));
+    await waitFor(() => terminals(events).length === 3);
+    const servers = argvs.filter((argv) => argv.includes("app-server"));
+    expect(servers.length).toBeGreaterThanOrEqual(4); // the probe, two workers, the lead
+    for (const argv of servers) {
+      const i = argv.indexOf("project_doc_max_bytes=0");
+      expect(i, argv.join(" ")).toBeGreaterThan(argv.indexOf("app-server"));
+      expect(argv[i - 1]).toBe("-c");
+    }
+    expect(APP_SERVER_ARGS).toContain("project_doc_max_bytes=0");
+  });
+});
+
 describe("CodexAdapter health and models", () => {
   it("is ready when signed in, and includes the CLI version without the account email", async () => {
     const { adapter } = make("complete");

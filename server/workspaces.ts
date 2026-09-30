@@ -10,6 +10,7 @@ import { execFile, execFileSync, spawnSync, type ChildProcess } from "node:child
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { MAX_SCOPE_PATHS } from "../src/domain/coverage";
 import { PR_BRANCH_REF, matchGlob, prBaseRef, prBranch } from "../src/domain/delivery";
 import type { PrDelivery } from "../src/domain/types";
 import { redact } from "./redact";
@@ -851,7 +852,7 @@ export class WorkspaceManager {
    * the base branch (the fork point is worked out from it); without it, `baseRef` (default HEAD) is
    * used. Read-only. Undefined when a commit is missing.
    */
-  reviewDiff(o: { repoPath: string; to: string; from?: string; baseRef?: string }): { from: string; to: string; text: string; truncated: boolean } | undefined {
+  reviewDiff(o: { repoPath: string; to: string; from?: string; baseRef?: string }): { from: string; to: string; text: string; truncated: boolean; paths: string[]; total: number } | undefined {
     if (!this.check(o.repoPath).ok) return undefined;
     const repo = this.repoDir(o.repoPath);
     const rev = (r: string) => {
@@ -867,12 +868,14 @@ export class WorkspaceManager {
     const names = spawnSync(this.gitBin, [...base, "--name-only", from, to], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: 8 * 1024 * 1024, timeout: this.changeDiffTimeoutMs });
     if (names.error || names.status !== 0) return undefined;
     const files = names.stdout.split("\n").filter(Boolean);
+    // ORC-013: the changed-path set the review must account for (the first 500 are recorded; the total always is).
+    const coverage = { paths: files.slice(0, MAX_SCOPE_PATHS), total: files.length };
     const r = spawnSync(this.gitBin, [...base, "--stat", "--patch", from, to], { env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_REVIEW_DIFF_BYTES + 4096, timeout: this.changeDiffTimeoutMs });
     const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
     const over = code === "ENOBUFS" || code === "ETIMEDOUT";
     if (!over && (r.error || r.status !== 0)) return undefined;
     const out = r.stdout ?? Buffer.alloc(0);
-    if (!over && out.length <= MAX_REVIEW_DIFF_BYTES) return { from, to, text: out.toString("utf8"), truncated: false };
+    if (!over && out.length <= MAX_REVIEW_DIFF_BYTES) return { from, to, text: out.toString("utf8"), truncated: false, ...coverage };
     const cut = out.subarray(0, MAX_REVIEW_DIFF_BYTES);
     const nl = cut.lastIndexOf(10);
     const shown = cut.subarray(0, nl > 0 ? nl + 1 : cut.length).toString("utf8");
@@ -880,7 +883,52 @@ export class WorkspaceManager {
     const started = (shown.match(/^diff --git /gm) ?? []).length;
     const missing = Math.max(1, files.length - Math.max(0, started - 1));
     const list = files.slice(0, 200).map((f) => `- ${f}`).join("\n");
-    return { from, to, truncated: true, text: `${shown}\n[truncated; ${missing} of ${files.length} files not shown in full. Read them in the workspace. All changed files:]\n${list}${files.length > 200 ? `\n- and ${files.length - 200} more` : ""}\n` };
+    return { from, to, truncated: true, text: `${shown}\n[truncated; ${missing} of ${files.length} files not shown in full. Read them in the workspace. All changed files:]\n${list}${files.length > 200 ? `\n- and ${files.length - 200} more` : ""}\n`, ...coverage };
+  }
+
+  /**
+   * ORC-013: a file's content at a ref (`git show <ref>:<path>`), read-only and capped, with the blob's
+   * SHA. Used for the repository's instruction files at the trusted base, never from a worktree.
+   * Undefined when the ref or the file is not there, or the path is not a plain repository-relative one.
+   */
+  readFileAt(o: { repoPath: string; ref: string; path: string; maxBytes?: number }): { text: string; blob: string; bytes: number; truncated: boolean } | undefined {
+    if (!/^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,199}$/.test(o.path) || o.path.split("/").includes("..")) return undefined;
+    if (!/^[A-Za-z0-9._/-]{1,200}$/.test(o.ref) || o.ref.startsWith("-")) return undefined;
+    if (!this.check(o.repoPath).ok) return undefined;
+    const repo = this.repoDir(o.repoPath);
+    const blob = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", `${o.ref}:${o.path}`]);
+    if (blob.status !== 0 || !blob.stdout.trim()) return undefined;
+    const max = o.maxBytes ?? 256 * 1024;
+    const r = spawnSync(this.gitBin, [...this.safeFlags(), "-C", repo, "cat-file", "blob", blob.stdout.trim()], { env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: max + 4096, timeout: this.changeDiffTimeoutMs });
+    const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
+    const over = code === "ENOBUFS";
+    if (!over && (r.error || r.status !== 0)) return undefined;
+    const out = r.stdout ?? Buffer.alloc(0);
+    const truncated = over || out.length > max;
+    const shown = truncated ? out.subarray(0, max) : out;
+    return { text: shown.toString("utf8"), blob: blob.stdout.trim(), bytes: out.length, truncated };
+  }
+
+  /**
+   * ORC-013: the paths a commit changed against the trusted base (from their merge base), read-only.
+   * Undefined when a commit is missing; at most 500 paths, with the total.
+   */
+  changedPaths(o: { repoPath: string; to: string; baseRef: string }): { paths: string[]; total: number } | undefined {
+    if (!this.check(o.repoPath).ok) return undefined;
+    const repo = this.repoDir(o.repoPath);
+    const rev = (r: string) => {
+      const x = this.status(["-C", repo, "rev-parse", "--verify", "--quiet", "--end-of-options", `${r}^{commit}`]);
+      return x.status === 0 ? x.stdout.trim() : undefined;
+    };
+    const to = rev(o.to);
+    const against = rev(o.baseRef);
+    if (!to || !against) return undefined;
+    const mb = this.status(["-C", repo, "merge-base", against, to]);
+    const from = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : against;
+    const names = this.status(["-C", repo, "diff", "--no-ext-diff", "--no-textconv", "--name-only", from, to]);
+    if (names.status !== 0) return undefined;
+    const files = names.stdout.split("\n").filter(Boolean);
+    return { paths: files.slice(0, MAX_SCOPE_PATHS), total: files.length };
   }
 
   /**

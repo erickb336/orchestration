@@ -2,8 +2,13 @@
 // The service never reads, stores, prints or sets a token; these helpers keep one that a child process
 // echoes (or that sits in the environment) out of state, events and error messages.
 
-const SECRET_NAME = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i;
+import { SECRET_NAME } from "../src/domain/secrets";
+
+export { SECRET_NAME };
 const SECRET_SHAPE = /\b(sk-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9._-]+|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})/g;
+/** ORC-013: a PEM private-key block, whatever its algorithm label, and a bearer token of 20 or more token characters. */
+const PEM_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
+const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/g;
 
 /** Remove secret-looking env values and token shapes from text shown to users or logs. */
 export function redact(text: string, env: NodeJS.ProcessEnv = process.env): string {
@@ -11,7 +16,7 @@ export function redact(text: string, env: NodeJS.ProcessEnv = process.env): stri
   for (const [k, v] of Object.entries(env)) {
     if (v && v.length >= 8 && SECRET_NAME.test(k)) out = out.split(v).join("***");
   }
-  return out.replace(SECRET_SHAPE, "***");
+  return out.replace(PEM_BLOCK, "***").replace(BEARER, "Bearer ***").replace(SECRET_SHAPE, "***");
 }
 
 /** GitHub token variables a worker process must never receive, in every worker environment. */

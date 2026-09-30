@@ -44,9 +44,9 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
 }
 
 describe("data model", () => {
-  it("a new project is format 13 with pull-request delivery off and nothing observed", () => {
+  it("a new project is format 14 with pull-request delivery off and nothing observed", () => {
     for (const s of [seed(), buildEmptyProject(T0)]) {
-      expect(s.version).toBe(13);
+      expect(s.version).toBe(14);
       expect(s.project.prDelivery).toEqual(DEFAULT_PR_DELIVERY);
       expect(s.project.prDelivery).toMatchObject({ enabled: false, merge: "hold" });
       expect(s.project.github).toBeUndefined();
@@ -64,7 +64,8 @@ describe("data model", () => {
 
   it("the revert template is built in and valid", () => {
     expect(BUILT_IN_TEMPLATES.some((t) => t.id === "revert")).toBe(true);
-    expect(templateSteps("revert").map((s) => s.role)).toEqual(["coder", "code_reviewer", "lead"]);
+    // ORC-013: a Final checks step (run by the service) sits between the review and the verification.
+    expect(templateSteps("revert").map((s) => s.role)).toEqual(["coder", "code_reviewer", "checks", "lead"]);
   });
 });
 
@@ -310,7 +311,7 @@ describe("landed: send back", () => {
     const rv = task(s, r.newId);
     expect(rv.revertOf).toEqual({ taskId: "EX-006", commit: SHA_A });
     expect(rv.holdBeforeStart).toBe(true);
-    expect(rv.steps.map((x) => x.role)).toEqual(["coder", "code_reviewer", "lead"]);
+    expect(rv.steps.map((x) => x.role)).toEqual(["coder", "code_reviewer", "checks", "lead"]);
     expect(rv.steps[0].purpose).toContain(`revert of ${SHA_A.slice(0, 12)}`);
     expect(M.currentSpec(rv).content.title).toMatch(/^Revert: /);
     expect(task(s, "EX-006").integration!.landed!.followUps).toEqual([{ taskId: r.newId, kind: "revert" }]);
@@ -370,10 +371,11 @@ describe("createFollowUp", () => {
     const { state, id } = expandedDoneTask();
     const r = M.createFollowUp(state, id, at(20));
     const f = task(r.state, r.newId);
-    expect(f.steps.map((x) => x.id)).toEqual(["S1", "S2", "S3", "S4"]);
-    expect(f.steps.find((x) => x.id === "S3")!.iterate).toEqual({ from: "S2", max: 3 }); // the loop is whole again
+    // ORC-013: the Change template carries the Checks steps C1 (in the loop) and C2 (final).
+    expect(f.steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "S3", "C2", "S4"]);
+    expect(f.steps.find((x) => x.id === "S3")!.iterate).toEqual({ from: "C1", max: 3 }); // the loop is whole again
     expect(f.steps.every((x) => x.state === "pending" && x.iteration === undefined && !x.copyOf)).toBe(true);
-    expect(f.pipelineHistory[0].steps.map((x) => x.id)).toEqual(["S1", "S2", "S3", "S4"]);
+    expect(f.pipelineHistory[0].steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "S3", "C2", "S4"]);
   });
 
   it("keeps the models the user pinned on the copied steps", () => {

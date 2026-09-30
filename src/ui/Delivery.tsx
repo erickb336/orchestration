@@ -18,6 +18,9 @@ const FLAG_LABEL: Record<LandedFlag, string> = {
   "merged-without-clean-gate": "merged without a clean gate",
   "findings-cleared-by-user": "findings cleared by you",
   "protected-paths": "touches protected files",
+  "checks-accepted-failing": "failing checks accepted by you",
+  "checks-not-run": "no service checks ran",
+  "findings-accepted": "findings accepted as is",
 };
 
 const STATUS_LABEL: Record<Landed["status"], string> = { unreviewed: "Not reviewed", reviewed: "Reviewed", "sent-back": "Sent back" };

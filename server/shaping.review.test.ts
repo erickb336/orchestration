@@ -142,7 +142,7 @@ describe("migration 12 → 13 (reviews 2 and 6)", () => {
       doc.project.visions[doc.project.visions.length - 1].text = "  ";
     });
     expect(empty.project.stage).toBe("shaping");
-    expect(empty.version).toBe(13);
+    expect(empty.version).toBe(14);
     const sample = reopen((d) => {
       (d as unknown as Doc).project.visions[0].text = "";
     });
