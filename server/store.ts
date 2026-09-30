@@ -11,7 +11,7 @@ import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { buildSeed } from "../src/domain/seed";
 import { ControlError, DEFAULT_AUTONOMY, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
 
-export const STATE_FORMAT = 7;
+export const STATE_FORMAT = 9;
 
 /** In-place upgrades of the state document, keyed by the format they upgrade from. */
 const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
@@ -41,6 +41,20 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.conversation ??= [];
     doc.leadRuns ??= [];
     doc.version = 7;
+    return doc;
+  },
+  7: (doc) => {
+    const a = (doc.project as Record<string, unknown>).autonomy as Record<string, unknown>;
+    a.autoRetry ??= 0;
+    a.autoDeliver ??= { enabled: false, branch: "main" };
+    doc.version = 8;
+    return doc;
+  },
+  8: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    const n = Number(project.workerLimit ?? 3);
+    project.providerLimits ??= { claude: n, codex: n };
+    doc.version = 9;
     return doc;
   },
 };

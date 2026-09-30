@@ -18,6 +18,8 @@ export interface ServiceInfo {
   sim: { auto: boolean; ackMode: AckMode };
   dbPath: string;
   providers: Record<ProviderId, ProviderInfo>;
+  /** Why the lead cannot run right now, if anything (shown in the conversation). */
+  leadBlocked?: string;
   /** Real mode: whether the configured repository can host worktrees, and why not. */
   repo?: { ok: boolean; reason?: string; branch?: string };
 }

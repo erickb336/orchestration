@@ -34,6 +34,7 @@ export function TaskDetail({ id }: { id: string }) {
             <span className="chip">P{task.priority}</span>
             <span className="chip">{c.area}</span>
             <span className="chip">spec r{spec.rev}</span>
+            {task.legacySpecUnavailable && <span className="chip">legacy spec unavailable</span>}
             <span className="chip">{task.specs[0]?.author === "lead" ? "Proposed by the lead" : "Created by you"}</span>
             {task.followUpOf && (
               <span className="chip">
@@ -46,7 +47,7 @@ export function TaskDetail({ id }: { id: string }) {
         <Controls state={state} task={task} editing={editing} onEdit={() => setEditing(true)} />
       </div>
 
-      <StatusBanners state={state} task={task} />
+      <StatusBanners state={state} task={task} onEdit={editing ? undefined : () => setEditing(true)} />
 
       {editing ? (
         <SpecEditor key={task.id} task={task} onClose={() => setEditing(false)} />
@@ -134,7 +135,7 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
   );
 }
 
-function StatusBanners({ state, task }: { state: State; task: Task }) {
+function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEdit?: () => void }) {
   const { send, disabled, service } = useStore();
   const active = M.activeAttempts(state, task.id);
   const stopping = active.filter((a) => a.outcome === "stopping");
@@ -144,6 +145,17 @@ function StatusBanners({ state, task }: { state: State; task: Task }) {
   const waiting = M.waitingOn(state, task);
   const out: React.ReactNode[] = [];
 
+  if (task.legacySpecUnavailable && task.lifecycle !== "done" && task.lifecycle !== "cancelled")
+    out.push(
+      <div className="banner" role="status" key="legacy">
+        <strong>Imported without a spec.</strong> Write a spec (Edit spec) before this task can run; until then it is never dispatched.{" "}
+        {onEdit && (
+          <button className="small" onClick={onEdit}>
+            Edit spec
+          </button>
+        )}
+      </div>,
+    );
   if (task.controlFailure)
     out.push(
       <div className="banner danger" role="alert" key="cf">
@@ -184,7 +196,18 @@ function StatusBanners({ state, task }: { state: State; task: Task }) {
         Waiting on prerequisite <a href={`#/task/${waiting}`}>{waiting}</a>. Unfinished results from prerequisites are never used.
       </div>,
     );
-  if (task.hold && !stopping.length)
+  if (task.hold && !stopping.length && task.holdReason)
+    out.push(
+      <div className="banner review" role="status" key="hold">
+        <strong>Paused for review:</strong> {task.holdReason}. Read or edit the artifacts below, then Resume.{" "}
+        {task.lifecycle !== "done" && task.lifecycle !== "cancelled" && (
+          <button className="small primary" disabled={disabled} onClick={() => void send("resumeTask", { taskId: task.id })}>
+            Resume
+          </button>
+        )}
+      </div>,
+    );
+  else if (task.hold && !stopping.length)
     out.push(
       <div className="banner neutral" key="hold">
         Paused by you. Edits keep it paused; it runs again only after you resume it.
@@ -202,7 +225,10 @@ function StatusBanners({ state, task }: { state: State; task: Task }) {
       out.push(
         <div className="banner danger" role="alert" key="integ">
           <strong>Integration conflict:</strong> {integ.message ?? integ.ref ?? "the change could not be merged"}. The lead sees this in its next planning run; resolve it by merging the branch yourself or by a
-          follow-up task.
+          follow-up task, then retry.{" "}
+          <button className="small" disabled={disabled} onClick={() => void send("retryIntegration", { taskId: task.id })}>
+            Retry integration
+          </button>
         </div>,
       );
     out.push(
@@ -210,7 +236,7 @@ function StatusBanners({ state, task }: { state: State; task: Task }) {
         Delivered on spec r{current}. The delivered spec is read-only; create a follow-up to change it.
         {integ && integ.status !== "conflict" && (
           <div style={{ marginTop: "0.3rem" }}>
-            {integ.status === "pending" && "Waiting for integration."}
+            {integ.status === "pending" && (integ.message ? `Integration is waiting: ${integ.message}. It retries automatically.` : "Waiting for integration.")}
             {integ.status === "integrated" && (
               <>
                 Integrated into the integration branch{integ.ref ? ": " : "."}
@@ -218,11 +244,23 @@ function StatusBanners({ state, task }: { state: State; task: Task }) {
                 {integ.at && <span className="muted"> · {relTime(integ.at)}</span>}
               </>
             )}
-            {integ.status === "not-needed" && "Nothing to integrate (no code change)."}
+            {integ.status === "not-needed" && (task.legacySpecUnavailable ? "Imported as done; its original spec and changes are not recorded here." : "Nothing to integrate (no code change).")}
+          </div>
+        )}
+        {integ?.delivered && integ.delivered.status !== "conflict" && (
+          <div style={{ marginTop: "0.3rem" }}>
+            {integ.delivered.status === "delivered" ? "Delivered to your branch: " : "Not delivered yet: "}
+            {integ.delivered.message} <span className="muted">· {relTime(integ.delivered.at)}</span>
           </div>
         )}
       </div>,
     );
+    if (integ?.delivered?.status === "conflict")
+      out.push(
+        <div className="banner danger" role="alert" key="deliver">
+          <strong>Delivery conflict:</strong> {integ.delivered.message} The work stays on the integration branch; a follow-up task or a manual merge resolves it.
+        </div>,
+      );
   }
   return <>{out}</>;
 }
@@ -455,6 +493,12 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h2 id="steps-h">Pipeline</h2>
         <span className="row">
+          {open && (
+            <label className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }} title="Pause the task after every step so you can read or edit its artifacts">
+              <input type="checkbox" checked={!!task.reviewEveryStep} disabled={disabled} onChange={(e) => void send("setReviewEveryStep", { taskId: task.id, value: e.target.checked })} />
+              Review every step
+            </label>
+          )}
           <span className="chip">pipeline r{task.pipelineRev}</span>
           {open && (
             <button className="small" onClick={() => setEditing(task.pipelineRev)}>
@@ -489,6 +533,14 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                 <tr key={st.id}>
                   <td>
                     <strong>{st.id}</strong> {st.purpose}
+                    {st.gate && (
+                      <>
+                        {" "}
+                        <span className="chip" title="The task pauses after this step so you can review or edit its artifacts">
+                          gate
+                        </span>
+                      </>
+                    )}
                     <div className="muted" style={{ fontSize: "0.8rem" }}>
                       {st.dependsOn.length ? `after ${st.dependsOn.join(", ")}` : "first"} · config r{st.revision}
                     </div>
@@ -570,7 +622,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                     <span className="chip">{st.state}</span>
                     {st.invalidatedBy && (
                       <div className="muted" style={{ fontSize: "0.8rem" }}>
-                        revalidate: {st.invalidatedBy} changed
+                        {st.invalidatedBy.startsWith("edited ") ? `re-runs: you ${st.invalidatedBy}` : `revalidate: ${st.invalidatedBy} changed`}
                       </div>
                     )}
                     {st.blockedReason && <div style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>{st.blockedReason}</div>}
@@ -677,7 +729,14 @@ function StepIO({ state, task, stepId, run }: { state: State; task: Task; stepId
                 </span>{" "}
                 {art ? (
                   <>
-                    v{art.version} — {art.summary}
+                    v{art.version}
+                    {art.author === "user" && (
+                      <>
+                        {" "}
+                        <span className="chip edited">edited by you</span>
+                      </>
+                    )}{" "}
+                    — {art.summary}
                   </>
                 ) : (
                   <span className="muted">{task.steps.find((x) => x.id === r.step)?.state === "skipped" ? "not produced (step skipped)" : "not available yet"}</span>
@@ -701,14 +760,16 @@ function StepIO({ state, task, stepId, run }: { state: State; task: Task; stepId
 }
 
 function ArtifactsCard({ state, task }: { state: State; task: Task }) {
-  const { service } = useStore();
+  const { service, disabled } = useStore();
+  const [editingId, setEditingId] = useState<string | null>(null);
   const arts = state.artifacts.filter((a) => a.taskId === task.id);
+  const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
   const consumers = (id: string) => state.attempts.filter((a) => a.taskId === task.id && a.snapshot.inputs.some((i) => i.artifactId === id)).map((a) => a.id);
   return (
     <section className="card" aria-labelledby="arts-h">
       <h2 id="arts-h">Artifacts</h2>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        Accepted step outputs, versioned and immutable.{" "}
+        Step outputs, versioned. Each version is kept as it was; editing one saves a new version that later steps use.{" "}
         {service.runtime === "real" ? "Code changes are commits on orchestration/* branches; nothing is merged for you." : "Contents are simulated."}
       </p>
       {!arts.length && <p className="muted">None yet.</p>}
@@ -716,30 +777,115 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
         {[...arts].reverse().map((a) => {
           const latest = M.latestArtifact(state, task, a.stepId, a.name);
           const used = consumers(a.id);
+          const edited = a.author === "user";
           return (
             <li key={a.id} style={{ gridTemplateColumns: "6.5rem 1fr" }}>
               <span className="mono">
                 {a.stepId}.{a.name} v{a.version}
               </span>
               <span>
-                <span className="chip">{a.kind}</span> <span style={{ whiteSpace: "pre-wrap" }}>{a.summary}</span>
+                <span className="chip">{a.kind}</span> {edited && <span className="chip edited">edited by you</span>} <span style={{ whiteSpace: "pre-wrap" }}>{a.summary}</span>
                 {a.ref && (
                   <div className="mono" style={{ fontSize: "0.78rem" }}>
                     {a.ref}
                   </div>
                 )}
                 {a.openFindings !== undefined && <span className="chip strong" style={{ marginLeft: "0.3rem" }}>{a.openFindings} open</span>}
+                {edited && a.editReason && <div style={{ fontSize: "0.82rem" }}>Why you changed it: “{a.editReason}”</div>}
                 <div className="muted" style={{ fontSize: "0.8rem" }}>
-                  from {a.attemptId}
-                  {used.length ? ` · read by ${used.join(", ")}` : ""}
+                  {edited ? `edited ${relTime(a.createdAt)}` : `from ${a.attemptId}`}
+                  {used.length ? ` · read by ${used.join(", ")}` : " · not read by any run yet"}
                   {latest && latest.version > a.version ? ` · superseded by v${latest.version}` : ""}
                 </div>
+                {open && editingId !== a.id && (
+                  <button className="small" style={{ marginTop: "0.3rem" }} aria-label={`Edit ${a.stepId}.${a.name} v${a.version}`} disabled={disabled} onClick={() => setEditingId(a.id)}>
+                    Edit
+                  </button>
+                )}
+                {open && editingId === a.id && <ArtifactEditor state={state} task={task} artifactId={a.id} onClose={() => setEditingId(null)} />}
               </span>
             </li>
           );
         })}
       </ul>
     </section>
+  );
+}
+
+/** Edit or replace one artifact; saving creates the next version and re-submits every step downstream. */
+function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; task: Task; artifactId: string; onClose: () => void }) {
+  const { send, disabled } = useStore();
+  const found = state.artifacts.find((x) => x.id === artifactId);
+  const [summary, setSummary] = useState(found?.summary ?? "");
+  const [findings, setFindings] = useState(String(found?.openFindings ?? 0));
+  const [ref, setRef] = useState("");
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  if (!found) return null;
+  const base = found;
+  const latest = M.latestArtifact(state, task, base.stepId, base.name) ?? base;
+  const isFindings = base.kind === "review-findings";
+  const isCode = base.kind === "code-change";
+  const findingsOk = !isFindings || (/^\d+$/.test(findings.trim()) && Number(findings) >= 0);
+  const canSave = !disabled && !saving && summary.trim() !== "" && reason.trim() !== "" && findingsOk;
+  const readers = task.steps.filter((d) => d.inputs.some((r) => r.step === base.stepId && r.output === base.name)).map((d) => d.id);
+  const idp = `edit-${artifactId}`;
+  return (
+    <form
+      className="artifact-editor stack"
+      aria-label={`Edit ${base.stepId}.${base.name}`}
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!canSave) return;
+        setSaving(true);
+        const args: Record<string, unknown> = { artifactId, summary, reason };
+        if (isFindings) args.openFindings = Number(findings);
+        if (isCode && ref.trim()) args.ref = ref.trim();
+        const r = await send("editArtifact", args);
+        setSaving(false);
+        if (r.ok) onClose();
+      }}
+    >
+      <p className="muted" style={{ fontSize: "0.82rem", margin: 0 }}>
+        Saving creates v{latest.version + 1}; every later step that used this output re-runs on your version.
+        {readers.length ? ` Read directly by ${readers.join(", ")}.` : ""}
+        {latest.version > base.version ? ` You are starting from v${base.version}; the newest is v${latest.version}.` : ""}
+      </p>
+      <label className="field" htmlFor={`${idp}-summary`} style={{ margin: 0 }}>
+        <span>{base.kind === "code-change" ? "Description of the change" : "Content"}</span>
+        <textarea id={`${idp}-summary`} value={summary} onChange={(e) => setSummary(e.target.value)} required />
+      </label>
+      {isFindings && (
+        <label className="field" style={{ margin: 0 }}>
+          <span>Open findings</span>
+          <input type="number" min={0} step={1} value={findings} onChange={(e) => setFindings(e.target.value)} style={{ width: "6rem" }} required />
+          <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
+            Steps that run only when there are open findings use this number. Set 0 to let them skip.
+          </span>
+        </label>
+      )}
+      {isCode && (
+        <label className="field" style={{ margin: 0 }}>
+          <span>Use this commit or branch instead (optional)</span>
+          <input type="text" className="mono" value={ref} placeholder={base.ref ?? "commit SHA or branch"} onChange={(e) => setRef(e.target.value)} />
+          <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
+            Point it at your own commit to replace the worker's change. Leave empty to keep {base.ref ? <span className="mono">{base.ref}</span> : "the current reference"}.
+          </span>
+        </label>
+      )}
+      <label className="field" style={{ margin: 0 }}>
+        <span>Why (required; the next steps see this)</span>
+        <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} required />
+      </label>
+      <div className="row">
+        <button type="submit" className="primary small" disabled={!canSave}>
+          {saving ? "Saving…" : `Save as v${latest.version + 1}`}
+        </button>
+        <button type="button" className="small" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -770,7 +916,13 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
               spec r{a.snapshot.specRev} · step config r{a.snapshot.stepRev} · pipeline r{a.snapshot.pipelineRev} · vision r{a.snapshot.visionRev}
             </dd>
             <dt>Inputs</dt>
-            <dd>{a.snapshot.inputs.length ? a.snapshot.inputs.map((i) => `${i.step}.${i.output} v${i.version}`).join(", ") : "none"}</dd>
+            <dd>
+              {a.snapshot.inputs.length
+                ? a.snapshot.inputs
+                    .map((i) => `${i.step}.${i.output} v${i.version}${state.artifacts.find((x) => x.id === i.artifactId)?.author === "user" ? " (your edit)" : ""}`)
+                    .join(", ")
+                : "none"}
+            </dd>
             <dt>Produced</dt>
             <dd>
               {state.artifacts

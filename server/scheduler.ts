@@ -57,6 +57,8 @@ export class Scheduler {
   private healthState: Partial<Record<ProviderId, ProviderHealth>> = {};
   private connectionsState: Partial<Record<ProviderId, Connection[] | null>> = {};
   private repoCheck: { path: string; ok: boolean; at: number } | undefined;
+  /** Why the lead cannot run right now (shown in the conversation), if anything. */
+  leadBlocked: string | undefined;
 
   constructor(store: Store, adapters: Record<ProviderId, RuntimeAdapter>, opts: SchedulerOptions = {}) {
     this.store = store;
@@ -281,10 +283,25 @@ export class Scheduler {
         else adapter.interrupt(leadRun.id);
         if (leadRun.stopRequestedAt && nowMs - Date.parse(leadRun.stopRequestedAt) >= this.ackTimeoutMs) leadIssues.push({ id: leadRun.id, kind: "timeout" });
       }
-    } else if (canDispatch) {
+    } else if (!canDispatch) {
+      this.leadBlocked = M.pendingMessages(state).length
+        ? state.project.sample
+          ? "This is the sample project; start a new project in Settings for a live lead."
+          : "No usable repository is configured (Settings → Project)."
+        : undefined;
+    } else {
       const local = new Date(nowMs);
       const trigger = M.leadDue(state, nowMs, local.getHours() * 60 + local.getMinutes());
       const lead = trigger ? this.resolveLead(state) : undefined;
+      this.leadBlocked = !trigger
+        ? undefined
+        : !lead
+          ? `The lead (${M.providerLabel(state.project.leadSelection.provider)} · ${state.project.leadSelection.model}) is not enabled or not in the model catalog. Choose another lead in Settings.`
+          : unavailable[lead.provider]
+            ? `${M.providerLabel(lead.provider)} is not available: ${unavailable[lead.provider]}`
+            : deferred.includes(lead.provider)
+              ? "Checking the lead's provider…"
+              : undefined;
       if (trigger && lead && !unavailable[lead.provider] && !deferred.includes(lead.provider)) {
         let runId = "";
         this.store.update(
@@ -346,10 +363,21 @@ export class Scheduler {
       if (!(err instanceof LeaseLostError)) this.queue.unshift(...events);
       throw err;
     }
-    for (const e of events) if (e.type === "completed" || e.type === "failed" || e.type === "stopped") this.launched.delete(e.attemptId);
+    for (const e of events) {
+      if (e.type !== "completed" && e.type !== "failed" && e.type !== "stopped") continue;
+      const info = this.launched.get(e.attemptId);
+      // Lead checkouts are only for reading the repository during the run: remove them afterwards.
+      if (info?.taskId === "LEAD" && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
+      this.launched.delete(e.attemptId);
+    }
 
-    // 5. Integration: one finished task per cycle, frozen while the project is paused.
+    // 5. Integration: one finished task per cycle, frozen while the project is paused; then delivery.
     this.integrateNext(nowMs, lease);
+    this.deliverIfDue(nowMs, lease);
+
+    // 6. Automatic retries of failed steps (opt-in, bounded per step, never for credential/config failures).
+    const retries = M.autoRetryCandidates(this.store.read().state, nowMs);
+    if (retries.length) this.store.update((s) => retries.reduce((acc, r) => M.autoRetryStep(acc, r.taskId, r.stepId, now), s), now, lease);
   }
 
   /** Merge the oldest done task's final change into the integration branch (serial, one per cycle). */
@@ -357,7 +385,7 @@ export class Scheduler {
     const now = new Date(nowMs).toISOString();
     const { state } = this.store.read();
     if (state.project.hold) return;
-    const t = M.nextIntegration(state);
+    const t = M.nextIntegration(state, nowMs);
     if (!t) return;
     // Fake runs produce code-change artifacts without commits; simulate their integration.
     const change = this.workspaces ? M.finalChange(state, t) : state.artifacts.filter((x) => x.taskId === t.id && x.kind === "code-change").pop();
@@ -368,12 +396,39 @@ export class Scheduler {
     else {
       try {
         const sha = change.ref!.split(" ")[0];
-        result = this.workspaces.integrate({ repoPath: state.project.repoPath, projectId: state.project.id, sha, message: `Integrate ${t.id}: ${M.currentSpec(t).content.title}` });
+        const d = state.project.autonomy.autoDeliver;
+        result = this.workspaces.integrate({ repoPath: state.project.repoPath, projectId: state.project.id, sha, message: `Integrate ${t.id}: ${M.currentSpec(t).content.title}`, baseBranch: d.enabled ? d.branch : undefined });
       } catch (err) {
-        result = { status: "conflict", message: `integration failed: ${err instanceof Error ? err.message : String(err)}` };
+        // Environmental (not a merge conflict): keep it pending and retry later with a short reason.
+        const msg = (err instanceof Error ? err.message : String(err)).split("\n")[0].slice(0, 200);
+        this.store.update((s) => M.reportIntegrationError(s, t.id, msg, now), now, lease);
+        return;
       }
     }
     this.store.update((s) => M.reportIntegration(s, t.id, result, now), now, lease);
+
+  }
+
+  /** Automatic delivery (opt-in): retried until the branch contains all integrated work. */
+  private deliverIfDue(nowMs: number, lease: { name: string; holder: string; nowMs: number }) {
+    const { state } = this.store.read();
+    if (!this.workspaces || state.project.sample || !M.deliveryDue(state, nowMs)) return;
+    const now = new Date(nowMs).toISOString();
+    let result: { status: "delivered" | "skipped" | "conflict" | "blocked"; message: string; sha?: string };
+    try {
+      result = this.workspaces.deliver({ repoPath: state.project.repoPath, projectId: state.project.id, branch: state.project.autonomy.autoDeliver.branch, lastDelivered: state.project.delivery?.lastSha });
+    } catch (err) {
+      result = { status: "skipped", message: `Delivery failed: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    this.store.update((s) => M.reportDeliveryResult(s, result, now), now, lease);
+  }
+
+  /** Remove workspaces of runs that are no longer active (real mode). */
+  prune(): number {
+    if (!this.workspaces) return 0;
+    const { state } = this.store.read();
+    const keep = new Set([...M.activeAttempts(state).map((a) => a.id), ...(M.activeLeadRun(state) ? [M.activeLeadRun(state)!.id] : [])]);
+    return this.workspaces.prune({ repoPath: state.project.repoPath, projectId: state.project.id, keep });
   }
 
   /** The lead's concrete provider/model ("auto" resolves to the first catalog model). */
@@ -436,7 +491,10 @@ export class Scheduler {
     try {
       let workspace: PreparedWorkspace | undefined;
       if (this.workspaces) {
-        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access, baseRef: baseRefFor(state, task, step) });
+        const d = state.project.autonomy.autoDeliver;
+        // With delivery on, new work starts from the delivery branch, not from whatever is checked out.
+        const baseRef = baseRefFor(state, task, step) ?? (d.enabled ? `refs/heads/${d.branch}` : undefined);
+        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access, baseRef });
       }
       this.launched.set(attemptId, { provider: a.snapshot.provider, access, workspace, stepId: step.id, taskId: task.id });
       adapter.start({

@@ -33,6 +33,7 @@ import {
   ControlError,
   REVIEW_ROLES,
   autoModelDefaults,
+  AUTOPILOT,
   StaleWriteError,
 } from "./types";
 
@@ -281,6 +282,9 @@ export function editSpec(
 
   const rev = prev.rev + 1;
   t.specs.push({ rev, at: now, author: actor, reason, content: next });
+  if (t.legacySpecUnavailable && t.lifecycle !== "done") {
+    t.legacySpecUnavailable = false; // a written spec now exists; the task may run
+  }
   touch(t, now);
   if (selectionChanged) {
     t.decisionAt = now;
@@ -361,6 +365,7 @@ export function resumeTask(state: State, taskId: string, now: string): State {
   assertOpen(t, "Resuming");
   if (!t.hold) throw new ControlError(`${t.id} has no hold to clear.`);
   t.hold = false;
+  t.holdReason = undefined;
   for (const st of t.steps) if (st.state === "paused") st.state = "pending";
   touch(t, now);
   const note = s.project.hold ? " Project is still paused, so nothing will dispatch until it resumes." : " It is not running until dispatched.";
@@ -503,7 +508,7 @@ export function setProviderEnabled(state: State, provider: ProviderId, enabled: 
 
 export function setWorkerLimit(state: State, limit: number, now: string): State {
   const s = draft(state);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 8) throw new ControlError("Worker limit must be between 1 and 8.");
+  if (!Number.isInteger(limit) || limit < 1 || limit > 16) throw new ControlError("Worker limit must be between 1 and 16.");
   s.project.workerLimit = limit;
   event(s, now, "user", "config", `Worker limit set to ${limit}`);
   return s;
@@ -597,7 +602,7 @@ export function leadPromoteProposals(state: State, now: string): State {
   const s = draft(state);
   if (s.project.hold) return s;
   for (const t of s.tasks) {
-    if (t.lifecycle !== "proposed" || t.hold) continue;
+    if (t.lifecycle !== "proposed" || t.hold || t.legacySpecUnavailable) continue;
     if (blockedReason(s, t) || waitingOn(s, t)) continue;
     const unresolved = t.steps.map((st) => resolveStep(s, t, st)).find((r) => !r.ok);
     if (unresolved) continue;
@@ -625,7 +630,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
   for (const t of tasks) {
     if (activeAttempts(s).length >= s.project.workerLimit) break;
     if (t.lifecycle !== "ready" && t.lifecycle !== "active") continue;
-    if (t.hold || t.holdBeforeStart || t.controlFailure) continue;
+    if (t.hold || t.holdBeforeStart || t.controlFailure || t.legacySpecUnavailable) continue;
     if (waitingOn(s, t) || blockedReason(s, t)) continue;
     // Reconcile before redispatch: nothing new while any run on this task is still stopping.
     if (activeAttempts(s, t.id).some((a) => a.outcome === "stopping")) continue;
@@ -653,6 +658,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       }
       const r = resolveStep(s, t, st);
       if (r.ok && opts.deferred?.includes(r.selection.provider)) continue;
+      if (r.ok && activeAttempts(s).filter((x) => x.snapshot.provider === r.selection.provider).length >= (s.project.providerLimits?.[r.selection.provider] ?? s.project.workerLimit)) continue;
       const down = r.ok ? opts.unavailable?.[r.selection.provider] : undefined;
       if (!r.ok || down) {
         // Never substitute another provider: block with the reason and let the user act.
@@ -865,6 +871,7 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
     a.outcome = "completed";
     st.state = "done";
     st.invalidatedBy = undefined;
+    st.autoRetries = 0;
     const produced: string[] = [];
     for (const def of st.outputs) {
       const rep = outputs.find((o) => o.name === def.name)!;
@@ -886,6 +893,13 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
       produced.push(`${def.name} v${version}`);
     }
     event(s, now, "runtime", "runtime", `${st.id} completed by ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model}${produced.length ? `; produced ${produced.join(", ")}` : ""}`, t.id);
+    // Optional review gate: stop here so a person can read or edit this step's output before the pipeline continues.
+    const more = t.steps.some((x) => !isSettled(x));
+    if ((st.gate || t.reviewEveryStep) && more && !t.hold) {
+      t.hold = true;
+      t.holdReason = `Review ${st.id} (${st.purpose}) before the pipeline continues`;
+      event(s, now, "lead", "control", `Paused for review after ${st.id}; edit its artifacts if needed, then resume`, t.id);
+    }
   }
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
@@ -930,7 +944,13 @@ export function acceptedOutput(s: State, t: Task, stepId: string, output: string
   if (!st || st.state !== "done") return undefined;
   let run: Attempt | undefined;
   for (const a of s.attempts) if (a.taskId === t.id && a.stepId === stepId && a.outcome === "completed") run = a;
-  return run && s.artifacts.find((x) => x.attemptId === run.id && x.name === output);
+  const fromRun = run && s.artifacts.find((x) => x.attemptId === run.id && x.name === output);
+  // A person's later edit of this output supersedes the run's version.
+  let edited: Artifact | undefined;
+  for (const x of s.artifacts) {
+    if (x.taskId === t.id && x.stepId === stepId && x.name === output && x.author === "user" && (!fromRun || x.version > fromRun.version) && (!edited || x.version > edited.version)) edited = x;
+  }
+  return edited ?? fromRun;
 }
 
 /** The upstream artifacts a step receives. Inputs from skipped or unfinished steps are absent. */
@@ -993,6 +1013,7 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
     if (!prev) return { ...instantiate([def])[0], state: t.hold ? "paused" : "pending" };
     const st: Step = { ...prev, ...def };
     if (!def.runIf) delete st.runIf;
+    if (!def.gate) delete st.gate;
     if (!affected.has(d.id)) return st;
     st.revision = prev.revision + 1;
     if (stopped.has(d.id)) st.state = "stopping";
@@ -1229,13 +1250,30 @@ function inHours(hours: Autonomy["operatingHours"], localMinutes: number): boole
  */
 export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrigger | null {
   if (s.project.hold || activeLeadRun(s)) return null;
+  // Back off after failed or lost lead runs (rate limits, credentials, time limits): 1, 2, 4… minutes,
+  // and after three in a row wait for a new message from the user instead of retrying on its own.
+  let streak = 0;
+  for (let i = s.leadRuns.length - 1; i >= 0 && (s.leadRuns[i].outcome === "failed" || s.leadRuns[i].outcome === "lost"); i--) streak++;
+  if (streak) {
+    const lastEnd = s.leadRuns[s.leadRuns.length - 1].endedAt ?? s.leadRuns[s.leadRuns.length - 1].startedAt;
+    const newMessage = s.conversation.some((m) => m.author === "user" && m.at > lastEnd);
+    if (streak >= 3 && !newMessage) return null;
+    if (!newMessage && nowMs - Date.parse(lastEnd) < Math.min(60, 2 ** (streak - 1)) * 60_000) return null;
+  }
   if (pendingMessages(s).length) return "message";
   const a = s.project.autonomy;
   if (!a.enabled || !inHours(a.operatingHours, localMinutes)) return null;
   if (openLeadProposals(s).length >= a.maxOpenProposals) return null;
   const last = s.project.lastPlanningAt ? Date.parse(s.project.lastPlanningAt) : 0;
-  const completedSince = s.tasks.some((t) => t.lifecycle === "done" && t.updatedAt > (s.project.lastPlanningAt ?? ""));
-  if (nowMs - last >= a.planningIntervalMinutes * 60_000 || (completedSince && nowMs - last >= 60_000)) return "planning";
+  // Completions, integration conflicts, and blocked work since the last plan wake the lead sooner.
+  const completedSince = s.tasks.some(
+    (t) => t.updatedAt > (s.project.lastPlanningAt ?? "") && (t.lifecycle === "done" || t.integration?.status === "conflict" || t.steps.some((st) => st.state === "blocked")),
+  );
+  // Never more than 48 planning runs in 24 hours, whatever else wakes the lead.
+  const dayAgo = new Date(nowMs - 24 * 60 * 60_000).toISOString();
+  if (s.leadRuns.filter((r) => r.trigger === "planning" && r.startedAt > dayAgo).length >= 48) return null;
+  const wakeGap = Math.max(5, a.planningIntervalMinutes / 4) * 60_000;
+  if (nowMs - last >= a.planningIntervalMinutes * 60_000 || (completedSince && nowMs - last >= wakeGap)) return "planning";
   return null;
 }
 
@@ -1327,16 +1365,23 @@ export interface LeadOutput {
 
 /** Check a proposal against the spec requirements. Returns a reason when it cannot become a task. */
 export function validateProposal(s: State, p: LeadProposal): string | undefined {
-  if (!p.title?.trim() || !p.outcome?.trim()) return "a title and an outcome are required";
+  // Lead output is untrusted data: check types before anything else.
+  const isStr = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
+  if (!p || typeof p !== "object") return "not an object";
+  if (!isStr(p.title, 200) || !isStr(p.outcome, 4000)) return "a title (≤200 chars) and an outcome (≤4000 chars) are required";
+  for (const k of ["area", "whyNow", "benefit", "uncertainty"] as const) if (p[k] !== undefined && (typeof p[k] !== "string" || p[k].length > 4000)) return `"${k}" must be text (≤4000 chars)`;
   if (!Array.isArray(p.options) || p.options.length < 2 || p.options.length > 4) return "it needs two to four options (include deferring when only one approach is sensible)";
-  const ids = new Set(p.options.map((o) => o.id));
-  if (ids.size !== p.options.length || p.options.some((o) => !o.id || !o.name?.trim() || !o.approach?.trim())) return "every option needs a unique id, a name, and an approach";
-  if (!ids.has(p.recommendedOptionId)) return "the recommended option is not among the options";
-  if (!p.rationale?.trim()) return "the decision needs a rationale";
-  if (!Array.isArray(p.acceptance) || !p.acceptance.some((x) => String(x).trim())) return "it needs at least one acceptance check";
+  if (p.options.some((o) => !o || typeof o !== "object" || !["string", "number"].includes(typeof o.id) || !isStr(o.name, 200) || !isStr(o.approach, 4000))) return "every option needs an id, a name, and an approach";
+  const ids = new Set(p.options.map((o) => String(o.id)));
+  if (ids.size !== p.options.length) return "option ids must be unique";
+  if (!ids.has(String(p.recommendedOptionId))) return "the recommended option is not among the options";
+  if (!isStr(p.rationale, 4000)) return "the decision needs a rationale";
+  if (!Array.isArray(p.acceptance) || !p.acceptance.some((x) => typeof x === "string" && x.trim()) || p.acceptance.length > 30) return "it needs one to thirty acceptance checks";
+  for (const k of ["scopeIncluded", "scopeExcluded"] as const) if (p[k] !== undefined && (!Array.isArray(p[k]) || p[k].length > 30)) return `"${k}" must be a list`;
+  if (typeof p.templateId !== "string") return "templateId must be text";
   const tpl = s.project.templates.find((t) => t.id === p.templateId);
   if (!tpl) return `unknown template "${p.templateId}"`;
-  if (s.tasks.some((t) => t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === p.title.trim().toLowerCase())) return "a task with this title already exists";
+  if (s.tasks.some((t) => t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === (p.title as string).trim().toLowerCase())) return "a task with this title already exists";
   return undefined;
 }
 
@@ -1349,27 +1394,42 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     // Finished after a stop request: keep the reply for the record, but create nothing.
     r.outcome = "stopped";
     r.endedAt = now;
-    r.note = "Finished after a stop request; its proposals were not applied.";
+    r.note = `Finished after a stop request; its proposals were not applied. Reply: ${String(out.reply).slice(0, 2000)}`;
     return s;
   }
   r.outcome = "completed";
   r.endedAt = now;
   if (run.usage) r.usage = run.usage;
   if (run.actualModel) r.actualModel = run.actualModel;
-  const limit = r.trigger === "planning" ? s.project.autonomy.maxProposalsPerCycle : Math.max(1, s.project.autonomy.maxProposalsPerCycle);
+  const limit = Math.max(1, s.project.autonomy.maxProposalsPerCycle);
+  const openRoom = Math.max(0, s.project.autonomy.maxOpenProposals - openLeadProposals(s).length);
+  // With autonomy off, proposals from a conversation still become tasks, but they wait for the user.
+  const hold = !s.project.autonomy.enabled || s.project.autonomy.holdLeadProposals;
   const created: string[] = [];
   const rejected: string[] = [];
+  const label = (p: unknown) => {
+    const t = p && typeof p === "object" ? (p as { title?: unknown }).title : undefined;
+    return typeof t === "string" ? t.slice(0, 80) : "(untitled)";
+  };
   for (const [i, p] of out.proposals.entries()) {
     if (i >= limit) {
-      rejected.push(`"${p.title}": more than ${limit} proposals in one run`);
+      rejected.push(`"${label(p)}": more than ${limit} proposals in one run`);
       continue;
     }
-    const why = validateProposal(s, p);
-    if (why) {
-      rejected.push(`"${p.title ?? "(untitled)"}": ${why}`);
+    if (created.length >= openRoom) {
+      rejected.push(`"${label(p)}": the limit of ${s.project.autonomy.maxOpenProposals} open lead proposals is reached`);
       continue;
     }
-    created.push(proposeTask(s, p, now));
+    try {
+      const why = validateProposal(s, p);
+      if (why) {
+        rejected.push(`"${label(p)}": ${why}`);
+        continue;
+      }
+      created.push(proposeTask(s, p, now, hold));
+    } catch (err) {
+      rejected.push(`"${label(p)}": invalid (${err instanceof Error ? err.message : String(err)})`);
+    }
   }
   s.conversation.push({
     id: nextId(s, "msg"),
@@ -1384,7 +1444,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   return s;
 }
 
-function proposeTask(s: State, p: LeadProposal, now: string): string {
+function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean): string {
   let n = s.tasks.length + 1;
   const ids = new Set(s.tasks.map((x) => x.id));
   while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
@@ -1401,7 +1461,7 @@ function proposeTask(s: State, p: LeadProposal, now: string): string {
     scopeIncluded: list(p.scopeIncluded),
     scopeExcluded: list(p.scopeExcluded),
     options: p.options.map((o) => ({
-      id: String(o.id),
+      id: String(o.id).slice(0, 10),
       name: String(o.name),
       approach: String(o.approach),
       benefit: String(o.benefit ?? ""),
@@ -1409,15 +1469,15 @@ function proposeTask(s: State, p: LeadProposal, now: string): string {
       risks: String(o.risks ?? ""),
       reversibility: String(o.reversibility ?? ""),
     })),
-    recommendedOptionId: p.recommendedOptionId,
-    selectedOptionId: p.recommendedOptionId,
+    recommendedOptionId: String(p.recommendedOptionId).slice(0, 10),
+    selectedOptionId: String(p.recommendedOptionId).slice(0, 10),
     decidedBy: "lead",
     rationale: p.rationale.trim(),
     uncertainty: (p.uncertainty ?? "").trim(),
     overrideReason: "",
     acceptance: list(p.acceptance),
     validationPlan: "",
-    rollback: "Discard the orchestration branch; nothing is merged into your branches.",
+    rollback: "Discard the orchestration branch; delivery to your branch happens only if you turned it on.",
     effort: "small",
   };
   const defs = structuredClone(tpl.steps);
@@ -1426,7 +1486,7 @@ function proposeTask(s: State, p: LeadProposal, now: string): string {
     priority: Number.isFinite(p.priority) ? Math.min(99, Math.max(1, Math.round(p.priority))) : 5,
     lifecycle: "proposed",
     hold: false,
-    holdBeforeStart: s.project.autonomy.holdLeadProposals,
+    holdBeforeStart: hold,
     specs: [{ rev: 1, at: now, author: "lead", reason: "Proposed by the lead", content }],
     steps: instantiate(defs),
     roleOverrides: {},
@@ -1464,6 +1524,9 @@ export function setAutonomy(state: State, a: Autonomy, now: string): State {
     throw new ControlError("Autonomy limits out of range: interval 5–1440 minutes, 1–10 proposals per cycle, 1–50 open proposals.");
   }
   if (a.operatingHours && (!hhmm.test(a.operatingHours.start) || !hhmm.test(a.operatingHours.end))) throw new ControlError('Operating hours must be "HH:MM".');
+  if (a.operatingHours && a.operatingHours.start === a.operatingHours.end) throw new ControlError("Operating hours need different start and end times (leave them off for any time).");
+  if (!ok(a.autoRetry, 0, 5)) throw new ControlError("Automatic retries must be between 0 and 5.");
+  if (a.autoDeliver.enabled && !/^[A-Za-z0-9._/-]{1,100}$/.test(a.autoDeliver.branch)) throw new ControlError("Choose a valid branch name for delivery.");
   const s = draft(state);
   s.project.autonomy = {
     enabled: !!a.enabled,
@@ -1472,7 +1535,11 @@ export function setAutonomy(state: State, a: Autonomy, now: string): State {
     maxOpenProposals: Math.round(a.maxOpenProposals),
     holdLeadProposals: !!a.holdLeadProposals,
     operatingHours: a.operatingHours ? { ...a.operatingHours } : null,
+    autoRetry: Math.round(a.autoRetry),
+    autoDeliver: { enabled: !!a.autoDeliver.enabled, branch: a.autoDeliver.branch.trim() || "main" },
   };
+  const planning = activeLeadRun(s);
+  if (!a.enabled && planning?.trigger === "planning") requestLeadStop(s, planning, "autonomy turned off", now);
   event(
     s,
     now,
@@ -1485,6 +1552,12 @@ export function setAutonomy(state: State, a: Autonomy, now: string): State {
 
 /** Change who leads. An active lead run is stopped first; the next run uses the new selection. */
 export function setLeadSelection(state: State, selection: ModelSelection, now: string): State {
+  const cur = state.project.leadSelection;
+  if (cur.provider === selection.provider && cur.model === selection.model && state.project.roleDefaults.lead?.model === selection.model) return state;
+  if (!state.project.enabledProviders.includes(selection.provider)) throw new ControlError(`${providerLabel(selection.provider)} is not enabled.`);
+  if (selection.model !== "auto" && !state.project.catalog[selection.provider].some((m) => m.id === selection.model)) {
+    throw new ControlError(`Model ${selection.model} is not in the ${providerLabel(selection.provider)} catalog.`);
+  }
   const s = draft(state);
   s.project.leadSelection = { ...selection };
   s.project.roleDefaults.lead = { ...selection };
@@ -1497,8 +1570,31 @@ export function setLeadSelection(state: State, selection: ModelSelection, now: s
 // ---------- integration ----------
 
 /** The next done task waiting for integration, oldest first. */
-export function nextIntegration(s: State): Task | undefined {
-  return s.tasks.filter((t) => t.lifecycle === "done" && t.integration?.status === "pending").sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
+export function nextIntegration(s: State, nowMs = Date.now()): Task | undefined {
+  // A pending task that hit an environment error waits a minute before the next attempt.
+  const ready = (t: Task) => !t.integration?.at || nowMs - Date.parse(t.integration.at) >= 60_000;
+  return s.tasks.filter((t) => t.lifecycle === "done" && t.integration?.status === "pending" && ready(t)).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
+}
+
+/** Integration could not run for an environmental reason: keep it pending and retry later. */
+export function reportIntegrationError(state: State, taskId: string, message: string, now: string): State {
+  const s = draft(state);
+  const t = getTask(s, taskId);
+  if (t.integration?.status !== "pending") return state;
+  const repeated = t.integration.message === message;
+  t.integration = { status: "pending", at: now, message };
+  if (!repeated) event(s, now, "system", "blocked", `Integration is waiting: ${message}. It will be retried.`, t.id);
+  return s;
+}
+
+/** Try a conflicted integration again (for example after resolving the conflict on the user's branch). */
+export function retryIntegration(state: State, taskId: string, now: string): State {
+  const s = draft(state);
+  const t = getTask(s, taskId);
+  if (t.lifecycle !== "done" || t.integration?.status !== "conflict") throw new ControlError(`${taskId} has no integration conflict to retry.`);
+  t.integration = { status: "pending" };
+  event(s, now, "user", "integration", "Integration will be retried", t.id);
+  return s;
 }
 
 /** The task's final accepted code change (latest by time), if it produced one. */
@@ -1511,6 +1607,7 @@ export function reportIntegration(state: State, taskId: string, result: Integrat
   const t = getTask(s, taskId);
   if (t.lifecycle !== "done" || t.integration?.status !== "pending") return s;
   t.integration = { ...result, at: now };
+  if (result.status === "integrated" && s.project.autonomy.autoDeliver.enabled) s.project.delivery = { ...(s.project.delivery ?? {}), pending: true };
   const msg =
     result.status === "integrated"
       ? `Integrated into the integration branch (${result.ref})`
@@ -1518,5 +1615,303 @@ export function reportIntegration(state: State, taskId: string, result: Integrat
         ? `Integration conflict: ${result.message}`
         : "Nothing to integrate (no code change)";
   event(s, now, "lead", result.status === "conflict" ? "blocked" : "integration", msg, t.id);
+  return s;
+}
+
+// ---------- automatic retries ----------
+
+/** Failures a retry cannot fix: missing credentials, configuration, or unusable workspaces. */
+const NOT_RETRYABLE = /API key|not signed in|not enabled|not in the .* catalog|not available|isolation|git metadata|not a git repository|time limit|usage limit|rate limit|quota|budget/i;
+
+/** Steps blocked by a failed run that may be retried automatically now (bounded per step). */
+export function autoRetryCandidates(s: State, nowMs = Date.now()): { taskId: string; stepId: string }[] {
+  const max = s.project.autonomy.autoRetry;
+  if (!max || s.project.hold) return [];
+  const out: { taskId: string; stepId: string }[] = [];
+  for (const t of s.tasks) {
+    if (t.lifecycle === "done" || t.lifecycle === "cancelled" || t.hold) continue;
+    for (const st of t.steps) {
+      if (st.state !== "blocked" || !st.blockedReason?.startsWith("Last run failed")) continue;
+      if ((st.autoRetries ?? 0) >= max || NOT_RETRYABLE.test(st.blockedReason)) continue;
+      // Back off: 1, 2, 4 … minutes after the failed run ended.
+      const last = s.attempts.filter((a) => a.taskId === t.id && a.stepId === st.id && a.endedAt).pop();
+      if (last?.endedAt && nowMs - Date.parse(last.endedAt) < 2 ** (st.autoRetries ?? 0) * 60_000) continue;
+      out.push({ taskId: t.id, stepId: st.id });
+    }
+  }
+  return out;
+}
+
+export function autoRetryStep(state: State, taskId: string, stepId: string, now: string): State {
+  const s = draft(state);
+  const t = getTask(s, taskId);
+  const st = getStep(t, stepId);
+  if (st.state !== "blocked") return state;
+  st.autoRetries = (st.autoRetries ?? 0) + 1;
+  st.state = "pending";
+  const reason = st.blockedReason;
+  st.blockedReason = undefined;
+  touch(t, now);
+  event(s, now, "lead", "control", `Automatic retry ${st.autoRetries}/${s.project.autonomy.autoRetry} of ${stepId} after: ${reason}`, t.id);
+  return s;
+}
+
+/** Is a delivery attempt due now? Failed attempts wait: 1 minute when skipped, 5 when conflicting. */
+export function deliveryDue(s: State, nowMs: number): boolean {
+  const d = s.project.delivery;
+  if (!s.project.autonomy.autoDeliver.enabled || !d?.pending || s.project.hold) return false;
+  if (!d.lastAttemptAt) return true;
+  const wait = d.status === "conflict" ? 5 * 60_000 : 60_000;
+  return nowMs - Date.parse(d.lastAttemptAt) >= wait;
+}
+
+/**
+ * Record a delivery attempt. Delivered: every integrated task not yet delivered is marked delivered.
+ * Blocked (the branch was reset or rewritten, or foreign commits would be added): automatic delivery
+ * is switched off and the user decides.
+ */
+export function reportDeliveryResult(state: State, result: { status: "delivered" | "skipped" | "conflict" | "blocked"; message: string; sha?: string }, now: string): State {
+  const s = draft(state);
+  const prev = s.project.delivery ?? { pending: true };
+  const changed = prev.status !== result.status || prev.message !== result.message;
+  s.project.delivery = {
+    ...prev,
+    pending: result.status !== "delivered" && result.status !== "blocked",
+    lastAttemptAt: now,
+    status: result.status,
+    message: result.message,
+    ...(result.status === "delivered" && result.sha ? { lastSha: result.sha } : {}),
+  };
+  if (result.status === "blocked") s.project.autonomy.autoDeliver = { ...s.project.autonomy.autoDeliver, enabled: false };
+  for (const t of s.tasks) {
+    if (t.integration?.status !== "integrated" || t.integration.delivered?.status === "delivered") continue;
+    t.integration.delivered = { status: result.status, at: now, message: result.message };
+  }
+  if (changed) event(s, now, "lead", result.status === "delivered" ? "integration" : "blocked", `Delivery to ${s.project.autonomy.autoDeliver.branch}: ${result.message}`);
+  return s;
+}
+
+/** The autopilot preset: planning on, no holds, one automatic retry, automatic delivery to the given branch. */
+export function applyAutopilot(state: State, branch: string, now: string): State {
+  const a = state.project.autonomy;
+  return setAutonomy(
+    state,
+    {
+      enabled: true,
+      planningIntervalMinutes: AUTOPILOT.planningIntervalMinutes,
+      maxProposalsPerCycle: AUTOPILOT.maxProposalsPerCycle,
+      maxOpenProposals: AUTOPILOT.maxOpenProposals,
+      holdLeadProposals: false,
+      operatingHours: a.operatingHours,
+      autoRetry: AUTOPILOT.autoRetry,
+      autoDeliver: { enabled: true, branch },
+    },
+    now,
+  );
+}
+
+// ---------- Markdown import / export ----------
+
+/** Board as Markdown, for repository visibility. The service's database remains the source of truth. */
+export function exportMarkdown(s: State): string {
+  const rows = [...s.tasks]
+    .sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))
+    .map((t) => {
+      const c = currentSpec(t).content;
+      const sel = c.options.find((o) => o.id === c.selectedOptionId);
+      const cell = (x: string) => x.replace(/\|/g, "\\|").replace(/\n/g, " ");
+      return `| ${t.id} | ${cell(c.title)} | ${stateLabel(s, t)} | P${t.priority} | ${cell(sel ? `${sel.id}: ${sel.name}` : "—")} | ${t.integration?.status ?? "—"} | ${t.specs[0].author} |`;
+    });
+  const v = currentVision(s);
+  return `# ${s.project.name}
+
+Generated by Orchestration on ${new Date().toISOString()}. Exported for visibility; edit tasks in Orchestration.
+
+## Vision (r${v.rev})
+
+${v.text}
+
+Current focus: ${v.focus}
+
+## Tasks
+
+| ID | Title | State | Priority | Selected approach | Integration | Author |
+| --- | --- | --- | --- | --- | --- | --- |
+${rows.join("\n")}
+`;
+}
+
+/**
+ * Import a Markdown task table once, preserving IDs. Recognises a header row containing "ID" and a
+ * title-like column ("Title", "Task", "Outcome"), and optionally "State"/"Status". Rows whose state
+ * reads done become done tasks with "legacy spec unavailable"; all others become held proposals that
+ * cannot run until a spec is written. Existing IDs are skipped.
+ */
+export function importMarkdown(state: State, markdown: string, now: string): { state: State; imported: string[]; skipped: string[] } {
+  const lines = markdown.split(/\r?\n/).filter((l) => l.trim().startsWith("|"));
+  const split = (l: string) => l.trim().replace(/^\|/, "").replace(/\|$/, "").split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+  const s = draft(state);
+  const imported: string[] = [];
+  const skipped: string[] = [];
+  let header: string[] | null = null;
+  for (const line of lines) {
+    const cells = split(line);
+    if (cells.every((c) => /^:?-{3,}:?$/.test(c))) continue;
+    const lower = cells.map((c) => c.toLowerCase());
+    if (lower.includes("id") && lower.some((c) => ["title", "task", "outcome", "proposed outcome"].includes(c))) {
+      header = lower;
+      continue;
+    }
+    if (!header) continue;
+    const col = (...names: string[]) => header!.findIndex((h) => names.includes(h));
+    const linkText = (c: string | undefined) => (c ?? "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    const id = linkText(cells[col("id")]).replace(/[^A-Za-z0-9._-]/g, "");
+    const title = linkText(cells[col("title", "task", "outcome", "proposed outcome")]);
+    const prioCell = Number.parseInt(linkText(cells[col("priority")]), 10);
+    const stateCell = (cells[col("state", "status")] ?? "").toLowerCase();
+    if (!id || !title) continue;
+    // IDs become part of git branch names and must not collide with the lead's reserved id.
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*$/.test(id) || id.endsWith(".lock") || id.toUpperCase() === "LEAD" || id.length > 40) {
+      skipped.push(`${id} (invalid id)`);
+      continue;
+    }
+    if (s.tasks.some((t) => t.id === id)) {
+      skipped.push(id);
+      continue;
+    }
+    const done = /\b(done|complete|completed|shipped)\b/.test(stateCell);
+    const content: SpecContent = {
+      title: title.slice(0, 200),
+      area: "Imported",
+      whyNow: "",
+      outcome: title,
+      benefit: "",
+      successCriteria: [],
+      scopeIncluded: [],
+      scopeExcluded: [],
+      options: [{ id: "A", name: "Legacy", approach: "Imported from a Markdown board; no specification was recorded.", benefit: "", effort: "", risks: "", reversibility: "" }],
+      recommendedOptionId: "A",
+      selectedOptionId: "A",
+      decidedBy: "user",
+      rationale: "Legacy spec unavailable.",
+      uncertainty: "",
+      overrideReason: "",
+      acceptance: [],
+      validationPlan: "",
+      rollback: "",
+      effort: "small",
+    };
+    const defs = structuredClone(s.project.templates.find((t) => t.id === "change")?.steps ?? []);
+    s.tasks.push({
+      id,
+      priority: Number.isFinite(prioCell) && prioCell > 0 ? Math.min(99, prioCell) : 5,
+      lifecycle: done ? "done" : "proposed",
+      hold: false,
+      holdBeforeStart: !done,
+      specs: [{ rev: 1, at: now, author: "user", reason: "Imported from Markdown", content }],
+      steps: instantiate(defs).map((st) => (done ? { ...st, state: "done" as const } : st)),
+      roleOverrides: {},
+      dependsOn: [],
+      createdAt: now,
+      updatedAt: now,
+      decisionAt: now,
+      pipelineRev: 1,
+      pipelineHistory: [{ rev: 1, at: now, author: "user", reason: "Imported", steps: defs.map(toDef) }],
+      legacySpecUnavailable: true,
+      ...(done ? { integration: { status: "not-needed" as const } } : {}),
+    });
+    imported.push(id);
+  }
+  if (!imported.length && !skipped.length) throw new ControlError("No task table found. Expected a Markdown table with an ID column and a Title (or Task/Outcome) column.");
+  event(s, now, "user", "spec", `Imported ${imported.length} task(s) from Markdown${skipped.length ? `; skipped existing ${skipped.join(", ")}` : ""}. Open imported tasks need a spec before they run.`);
+  return { state: s, imported, skipped };
+}
+
+// ---------- human review and editing of artifacts ----------
+
+export function setReviewEveryStep(state: State, taskId: string, value: boolean, now: string): State {
+  const s = draft(state);
+  const t = getTask(s, taskId);
+  assertOpen(t, "Changing review mode");
+  t.reviewEveryStep = value;
+  touch(t, now);
+  event(s, now, "user", "control", value ? "Step-by-step review on: the task pauses after every step" : "Step-by-step review off", t.id);
+  return s;
+}
+
+export function setProviderLimit(state: State, provider: ProviderId, limit: number, now: string): State {
+  if (!Number.isInteger(limit) || limit < 0 || limit > 16) throw new ControlError("Provider limit must be between 0 and 16.");
+  const s = draft(state);
+  s.project.providerLimits[provider] = limit;
+  event(s, now, "user", "config", `${providerLabel(provider)} concurrent runs limited to ${limit}`);
+  return s;
+}
+
+/**
+ * A person edits (or replaces) a step's output. The edit becomes a new version that later steps
+ * receive; every step downstream that already used an earlier version is revalidated (stopped if
+ * running, requeued if done), which re-submits the work through the rest of the pipeline.
+ */
+export function editArtifact(
+  state: State,
+  artifactId: string,
+  change: { summary: string; openFindings?: number; ref?: string; reason: string },
+  now: string,
+): State {
+  const s = draft(state);
+  const base = s.artifacts.find((a) => a.id === artifactId);
+  if (!base) throw new ControlError(`Unknown artifact ${artifactId}`);
+  const t = getTask(s, base.taskId);
+  assertOpen(t, "Editing an artifact");
+  const st = getStep(t, base.stepId);
+  if (!change.reason.trim()) throw new ControlError("Say why you changed it; the reason goes to the next steps.");
+  if (!change.summary.trim()) throw new ControlError("The artifact cannot be empty.");
+  if (base.kind === "review-findings" && (!Number.isInteger(change.openFindings) || change.openFindings! < 0)) throw new ControlError("Review findings need a number of open findings.");
+  if (change.ref?.trim() && !/^[0-9a-f]{7,40}$/i.test(change.ref.trim())) throw new ControlError("Use a commit hash (7–40 hex characters) for your own change.");
+  const version = Math.max(...s.artifacts.filter((a) => a.taskId === t.id && a.stepId === st.id && a.name === base.name).map((a) => a.version)) + 1;
+  const art: Artifact = {
+    id: nextId(s, "art"),
+    taskId: t.id,
+    stepId: st.id,
+    attemptId: "edit",
+    name: base.name,
+    kind: base.kind,
+    version,
+    summary: change.summary.slice(0, 20000),
+    createdAt: now,
+    author: "user",
+    editReason: change.reason.trim(),
+    ...(base.kind === "review-findings" ? { openFindings: change.openFindings } : {}),
+    ...(change.ref?.trim() ? { ref: change.ref.trim() } : base.ref ? { ref: base.ref } : {}),
+  };
+  s.artifacts.push(art);
+  // Re-submit: everything downstream of this step that consumed it (directly or transitively).
+  const downstream = new Set<string>();
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const d of t.steps) {
+      if (downstream.has(d.id)) continue;
+      if (d.dependsOn.includes(st.id) || d.dependsOn.some((x) => downstream.has(x))) {
+        downstream.add(d.id);
+        grew = true;
+      }
+    }
+  }
+  for (const d of t.steps) {
+    if (!downstream.has(d.id)) continue;
+    if (isSettled(d)) {
+      d.state = t.hold ? "paused" : "pending";
+      d.invalidatedBy = `edited ${st.id}.${base.name}`;
+    }
+  }
+  for (const a of activeAttempts(s, t.id)) {
+    if (!downstream.has(a.stepId)) continue;
+    const d = findStep(t, a.stepId);
+    if (d) d.revision += 1;
+    requestStop(s, a, "revision", now);
+  }
+  touch(t, now);
+  event(s, now, "user", "spec", `Edited ${st.id}.${base.name} (v${version}): ${art.editReason}${downstream.size ? `; re-submitting ${[...downstream].join(", ")}` : ""}`, t.id);
   return s;
 }

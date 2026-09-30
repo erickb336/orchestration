@@ -3,7 +3,7 @@
 // temporary git repository; no real providers.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -119,6 +119,8 @@ describe("lead conversation", () => {
     expect(st().conversation.some((m) => m.author === "system" && /API key/.test(m.text))).toBe(true);
     expect(M.pendingMessages(st())).toHaveLength(1);
     tick();
+    expect(leadRun()).toBeUndefined(); // backs off before retrying a failed lead
+    tick(61_000);
     const r2 = leadRun()!;
     claude.emit({ type: "completed", attemptId: r2.id, finalText: "Just a plain answer." });
     tick();
@@ -278,7 +280,7 @@ describe("lead controls", () => {
     now += 1000;
     s2.tick(now);
     expect(st().leadRuns.find((x) => x.id === r.id)!.outcome).toBe("lost");
-    now += 1000;
+    now += 61_000; // backoff after a lost lead run
     s2.tick(now);
     expect(M.activeLeadRun(st())!.messageIds).toHaveLength(1);
     await s2.stop();
@@ -296,5 +298,109 @@ describe("lead envelope and parser", () => {
     expect(text).toContain('"recommendedOptionId"');
     expect(parseLeadOutput("plain").proposals).toEqual([]);
     expect(parseLeadOutput('x\n```json\n{"reply":"r","proposals":[{"title":"t"},3]}\n```').proposals).toHaveLength(1);
+  });
+});
+
+describe("review regressions (ORC-005)", () => {
+  it("H1: repeated lead failures back off and then wait for a new message instead of looping", () => {
+    cmd("postMessage", { text: "hello" });
+    let starts = 0;
+    for (let i = 0; i < 30; i++) {
+      tick(30_000);
+      const r = leadRun();
+      if (r) {
+        starts++;
+        claude.emit({ type: "failed", attemptId: r.id, message: "rate limited" });
+      }
+    }
+    expect(starts).toBe(3); // 1st immediately, then after 1 min and 2 min; then it stops trying
+    cmd("postMessage", { text: "try again" });
+    tick();
+    expect(leadRun()).toBeDefined();
+  });
+
+  it("H2: a malformed proposal is rejected on its own; the reply and valid proposals survive", () => {
+    cmd("postMessage", { text: "plan" });
+    tick();
+    const r = leadRun()!;
+    claude.reply(r.id, "Mixed batch.", [{ ...proposal(), title: 42 }, { ...proposal({ title: "Null option" }), options: [null, null] }, proposal({ title: "Good one" })]);
+    tick();
+    const msg = st().conversation.find((m) => m.author === "lead")!;
+    expect(msg.text).toBe("Mixed batch.");
+    expect(msg.proposedTaskIds).toHaveLength(1);
+    expect(msg.rejected).toHaveLength(2);
+    expect(leadRun()).toBeUndefined();
+  });
+
+  it("M1: completions wake planning no sooner than the minimum gap, and never more than 48 times a day", () => {
+    autonomy({ planningIntervalMinutes: 1440, maxProposalsPerCycle: 1, maxOpenProposals: 50 });
+    tick();
+    const first = leadRun()!;
+    claude.reply(first.id, "one", [proposal({ title: "P0" })]);
+    tick();
+    const id = st().tasks[0].id;
+    cmd("cancelTask", { taskId: id });
+    tick(2 * 60_000);
+    expect(st().leadRuns).toHaveLength(1); // a quick change does not re-plan within the gap
+  });
+
+  it("M2: with autonomy off, proposals from a conversation wait for the user", () => {
+    cmd("postMessage", { text: "plan please" });
+    tick();
+    claude.reply(leadRun()!.id, "ok", [proposal()]);
+    tick();
+    tick();
+    const t = st().tasks[0];
+    expect(t.holdBeforeStart).toBe(true);
+    expect(M.activeAttempts(st(), t.id)).toHaveLength(0);
+  });
+
+  it("M4: an invalid lead selection is refused; a lead that cannot run explains why", () => {
+    expect(() => cmd("setLeadSelection", { selection: { provider: "claude", model: "no-such-model" } })).toThrow(/not in the Claude catalog/);
+    claude.healthStatus = "not-configured";
+    return scheduler.refreshHealth().then(() => {
+      cmd("postMessage", { text: "anyone?" });
+      tick();
+      expect(scheduler.leadBlocked).toMatch(/Claude is not available/);
+    });
+  });
+
+  it("H3: a missing integration workspace is recovered, not recorded as a conflict", () => {
+    const id = (cmd("createTask", { title: "I", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
+    cmd("setPipeline", { taskId: id, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+    tick();
+    codex.finish(M.activeAttempts(st(), id)[0].id, { write: ["i.txt", "i\n"] });
+    tick();
+    tick();
+    expect(task(id).integration?.status).toBe("integrated");
+    // Remove the integration worktree directory behind the service's back; the next task still integrates.
+    const wsRoot = join(dir, "worktrees");
+    const found: string[] = [];
+    const walk = (d: string) => {
+      for (const n of readdirSync(d, { withFileTypes: true })) {
+        if (n.isDirectory() && n.name === "integration") found.push(join(d, n.name));
+        else if (n.isDirectory() && !n.name.startsWith(".")) walk(join(d, n.name));
+      }
+    };
+    walk(wsRoot);
+    rmSync(found[0], { recursive: true, force: true });
+    const id2 = (cmd("createTask", { title: "J", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
+    cmd("setPipeline", { taskId: id2, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+    tick();
+    codex.finish(M.activeAttempts(st(), id2)[0].id, { write: ["j.txt", "j\n"] });
+    tick();
+    tick();
+    expect(task(id2).integration?.status).toBe("integrated");
+  });
+
+  it("M5: a lead run's read-only checkout is removed when the run ends", () => {
+    cmd("postMessage", { text: "hi" });
+    tick();
+    const r = leadRun()!;
+    const path = claude.runs.get(r.id)!.workspace.path;
+    expect(existsSync(path)).toBe(true);
+    claude.reply(r.id, "bye");
+    tick();
+    expect(existsSync(path)).toBe(false);
   });
 });

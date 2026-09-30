@@ -216,6 +216,28 @@ export function PipelineEditor({
               </div>
             )}
 
+            <label className="row" style={{ gap: "0.35rem", marginBottom: "0.6rem", fontSize: "0.9rem" }}>
+              <input
+                type="checkbox"
+                checked={!!d.gate}
+                onChange={(ev) =>
+                  setDefs((ds) =>
+                    ds.map((x, j) => {
+                      if (j !== i) return x;
+                      const next = { ...x };
+                      if (ev.target.checked) next.gate = true;
+                      else delete next.gate;
+                      return next;
+                    }),
+                  )
+                }
+              />
+              Pause for review after this step
+              <span className="muted" style={{ fontSize: "0.8rem" }}>
+                (you can read or edit its artifacts before the next step starts)
+              </span>
+            </label>
+
             {stepIssues.length > 0 && (
               <ul className="plain" style={{ fontSize: "0.85rem" }}>
                 {stepIssues.map((x, k) => (

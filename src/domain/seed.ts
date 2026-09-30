@@ -321,7 +321,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 7,
+    version: 9,
     seq: 1000,
     project: {
       id: "sample",
@@ -359,6 +359,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
       },
       leadSelection: { provider: "claude", model: "claude-sample-large" },
       workerLimit: 3,
+      providerLimits: { claude: 3, codex: 3 },
       runLimits: { ...DEFAULT_RUN_LIMITS },
       autonomy: { ...DEFAULT_AUTONOMY },
       workerEnvironment: { claude: "isolated", codex: "isolated" },

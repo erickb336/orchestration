@@ -45,11 +45,22 @@ export interface Project {
   roleDefaults: Partial<Record<RoleId, ModelSelection>>;
   leadSelection: ModelSelection;
   workerLimit: number;
+  /** Concurrent runs per provider (each also bounded by workerLimit). */
+  providerLimits: Record<ProviderId, number>;
   /** Bounds applied to every real run attempt. */
   runLimits: RunLimits;
   autonomy: Autonomy;
   /** Last planning run start (for the planning interval). */
   lastPlanningAt?: string;
+  /** Automatic delivery state: retried until the delivery branch contains all integrated work. */
+  delivery?: {
+    pending: boolean;
+    /** Commit last delivered; the branch must still contain it (detects resets and rewrites). */
+    lastSha?: string;
+    lastAttemptAt?: string;
+    status?: "delivered" | "skipped" | "conflict" | "blocked";
+    message?: string;
+  };
   workerEnvironment: Record<ProviderId, WorkerEnvironment>;
   /** MCP servers (by name, from the user's own provider config) isolated workers may use. */
   workerConnections: Record<ProviderId, string[]>;
@@ -167,6 +178,8 @@ export interface StepDef {
   outputs: OutputDef[];
   /** Run only if any referenced review-findings artifact has open findings; otherwise skip. */
   runIf?: InputRef[];
+  /** Pause the task after this step completes, so a person can review or edit its artifacts. */
+  gate?: boolean;
 }
 
 export interface WorkflowTemplate {
@@ -194,6 +207,10 @@ export interface Artifact {
   /** A durable reference, e.g. the commit SHA and branch holding a code change. */
   ref?: string;
   createdAt: string;
+  /** "user" when a person edited or replaced this output (attemptId is then "edit"). */
+  author?: "user";
+  /** Why the person changed it. */
+  editReason?: string;
 }
 
 /** A consumed input, recorded in the run snapshot. */
@@ -213,6 +230,8 @@ export interface Step extends StepDef {
   blockedReason?: string;
   /** Set when an upstream rerun invalidated this step's earlier result. */
   invalidatedBy?: string;
+  /** Automatic retries used since the step last succeeded. */
+  autoRetries?: number;
 }
 
 export type SelectionSource = "step" | "task-role" | "project-role" | "project-default";
@@ -296,6 +315,10 @@ export interface Task {
   controlFailure?: ControlFailure;
   /** Set when the task is done: whether its work reached the integration branch. */
   integration?: Integration;
+  /** Pause after every step for review (optional step-by-step mode). */
+  reviewEveryStep?: boolean;
+  /** Why the task is held, when a review gate (not a person) paused it. */
+  holdReason?: string;
   followUpOf?: string;
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
@@ -332,7 +355,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 7;
+  version: 9;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -390,6 +413,14 @@ export interface Autonomy {
   holdLeadProposals: boolean;
   /** Local-time window "HH:MM"–"HH:MM" for autonomous planning; null = any time. */
   operatingHours: { start: string; end: string } | null;
+  /** Automatic retries of a failed step before it waits for a person (0 = always wait). */
+  autoRetry: number;
+  /**
+   * Deliver integrated work to a branch of the user's repository automatically. The service merges
+   * that branch into the integration branch first, so delivery is a fast-forward; it only updates a
+   * checked-out branch when the working tree is clean.
+   */
+  autoDeliver: { enabled: boolean; branch: string };
 }
 
 export const DEFAULT_AUTONOMY: Autonomy = {
@@ -399,6 +430,19 @@ export const DEFAULT_AUTONOMY: Autonomy = {
   maxOpenProposals: 5,
   holdLeadProposals: false,
   operatingHours: null,
+  autoRetry: 0,
+  autoDeliver: { enabled: false, branch: "main" },
+};
+
+/** Everything runs without waiting for a person; every control still works when you want to step in. */
+export const AUTOPILOT: Omit<Autonomy, "operatingHours" | "autoDeliver"> & { autoDeliverEnabled: true } = {
+  enabled: true,
+  planningIntervalMinutes: 30,
+  maxProposalsPerCycle: 5,
+  maxOpenProposals: 15,
+  holdLeadProposals: false,
+  autoRetry: 1,
+  autoDeliverEnabled: true,
 };
 
 /** Merging a finished task's work into the project's integration branch. */
@@ -408,6 +452,8 @@ export interface Integration {
   /** Merge commit on the integration branch, or the conflict description. */
   ref?: string;
   message?: string;
+  /** Automatic delivery to the user's branch, when enabled. */
+  delivered?: { status: "delivered" | "skipped" | "conflict" | "blocked"; at: string; message: string };
 }
 
 export class StaleWriteError extends Error {

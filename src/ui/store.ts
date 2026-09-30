@@ -228,6 +228,38 @@ export function useServiceStore() {
     [fetchState, goOffline],
   );
 
+  /**
+   * POST a JSON body to a service endpoint other than /api/commands (for example maintenance actions)
+   * and return its JSON answer. Failures show a notice and return { ok: false }; they are never retried.
+   */
+  const postJson = useCallback(
+    async (path: string, body: object = {}): Promise<{ ok: true; body: unknown } | { ok: false }> => {
+      let res: Response;
+      try {
+        res = await fetch(path, { method: "POST", headers: POST_HEADERS, body: JSON.stringify(body) });
+      } catch {
+        goOffline();
+        setNotice({ kind: "error", message: UNREACHABLE });
+        return { ok: false };
+      }
+      if (!res.ok) {
+        const err = await readError(res);
+        if (!err) goOffline();
+        setNotice({ kind: "error", message: err ? err.error : UNREACHABLE });
+        return { ok: false };
+      }
+      let answer: unknown = null;
+      try {
+        answer = await res.json();
+      } catch {
+        /* no body */
+      }
+      await fetchState();
+      return { ok: true, body: answer };
+    },
+    [fetchState, goOffline],
+  );
+
   const setSim = useCallback((patch: { auto?: boolean; ackMode?: AckMode }) => postSim("/api/sim", patch), [postSim]);
   /** Re-check provider credentials and binaries now (never starts a model run). */
   const refreshHealth = useCallback(() => postSim("/api/health/refresh", {}), [postSim]);
@@ -253,6 +285,7 @@ export function useServiceStore() {
     refreshHealth,
     step,
     reset,
+    postJson,
     notice,
     setNotice,
   };

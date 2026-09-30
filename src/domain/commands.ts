@@ -147,6 +147,23 @@ export const COMMANDS = {
     BUILT_IN_TEMPLATES.filter((b) => !s.project.templates.some((t) => t.id === b.id)).reduce((acc, b) => M.saveTemplate(acc, structuredClone(b), null, now), s),
   ),
 
+  // review and editing
+  setReviewEveryStep: same((s, now, a) => M.setReviewEveryStep(s, str(a, "taskId"), bool(a, "value"), now)),
+  editArtifact: same((s, now, a) =>
+    M.editArtifact(
+      s,
+      str(a, "artifactId"),
+      {
+        summary: str(a, "summary"),
+        reason: str(a, "reason"),
+        openFindings: a.openFindings === undefined ? undefined : num(a, "openFindings"),
+        ref: a.ref === undefined ? undefined : str(a, "ref"),
+      },
+      now,
+    ),
+  ),
+  setProviderLimit: same((s, now, a) => M.setProviderLimit(s, provider(a.provider), num(a, "limit"), now)),
+
   // the lead
   postMessage: same((s, now, a) => M.postMessage(s, str(a, "text"), now)),
   setLeadSelection: same((s, now, a) => M.setLeadSelection(s, selection(a.selection), now)),
@@ -161,10 +178,26 @@ export const COMMANDS = {
         maxOpenProposals: num(a, "maxOpenProposals"),
         holdLeadProposals: bool(a, "holdLeadProposals"),
         operatingHours: hours ? { start: str(hours, "start"), end: str(hours, "end") } : null,
+        autoRetry: a.autoRetry === undefined ? s.project.autonomy.autoRetry : num(a, "autoRetry"),
+        autoDeliver:
+          a.autoDeliver === undefined
+            ? s.project.autonomy.autoDeliver
+            : (() => {
+                const d = obj(a.autoDeliver, "autoDeliver");
+                return { enabled: bool(d, "enabled"), branch: str(d, "branch") };
+              })(),
       },
       now,
     );
   }),
+  /** Everything runs without waiting for a person: planning, no holds, retries, automatic delivery. */
+  retryIntegration: same((s, now, a) => M.retryIntegration(s, str(a, "taskId"), now)),
+  applyAutopilot: same((s, now, a) => M.applyAutopilot(s, str(a, "branch"), now)),
+  /** Import a Markdown task table once (IDs preserved; open tasks need a spec before they run). */
+  importMarkdown: (s, now, a) => {
+    const r = M.importMarkdown(s, str(a, "markdown"), now);
+    return { state: r.state, result: { imported: r.imported, skipped: r.skipped } };
+  },
 
   // real projects
   setWorkerConnections: same((s, now, a) => M.setWorkerConnections(s, provider(a.provider), array<unknown>(a.names, "names").map((x) => String(x)), now)),

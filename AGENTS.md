@@ -16,7 +16,7 @@ Inspect existing work before editing and preserve other tasks' changes. Stop aff
 
 Build in the milestones specified in docs/PROJECT_SPEC.md. Start with the board and spec editor; label simulated execution explicitly. Real pause/resume requires runtime acknowledgment, persistent controls, and stale-result protection. Keep desired state distinct from observed worker state.
 
-This project lives at /Users/erickb336/workspace/Orchestration. SimpleApps is a managed target, not this project's implementation directory. Do not modify managed app code as a side effect of building this tool.
+This project lives at this repository. SimpleApps is a managed target, not this project's implementation directory. Do not modify managed app code as a side effect of building this tool.
 
 Verify behavior appropriate to each change, especially state races, persistence, and interruption. Do not claim background operation, native device behavior, or runtime capabilities without evidence. Configure unattended scheduling only with established operating limits and cadence. No scheduler is installed by these instructions.
 

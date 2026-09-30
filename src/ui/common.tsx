@@ -1,5 +1,6 @@
+import { useCallback, useEffect, useState } from "react";
 import * as M from "../domain/model";
-import { PROVIDERS, type ModelSelection, type ProviderId, type RoleId, type State, type Task } from "../domain/types";
+import { PROVIDERS, type Autonomy, type ModelSelection, type ProviderId, type RoleId, type State, type Task } from "../domain/types";
 
 export const ROLE_LABEL: Record<RoleId, string> = {
   lead: "Lead",
@@ -118,4 +119,70 @@ export function ModelPicker({
       )}
     </select>
   );
+}
+
+// ---- how involved the user is (derived from autonomy settings) ----
+
+export type Involvement = "autopilot" | "checkin" | "manual" | "custom";
+
+export function involvementOf(a: Autonomy): Involvement {
+  if (!a.enabled) return "manual";
+  if (a.holdLeadProposals) return "checkin";
+  if (a.autoDeliver.enabled) return "autopilot";
+  return "custom";
+}
+
+/** Full setAutonomy arguments from the current settings plus a change. */
+export function autonomyArgs(a: Autonomy, patch: Partial<Autonomy>): Autonomy {
+  return { ...a, ...patch };
+}
+
+// ---- per-browser view preferences (storage may be unavailable; never required) ----
+
+export const PREF_ONBOARDING_DISMISSED = "orchestration.onboarding.dismissed";
+export const PREF_INVOLVEMENT_CHOSEN = "orchestration.involvement.chosen";
+export const PREF_NOTIFY = "orchestration.notify";
+
+/** Fallback when browser storage is blocked: the preference lasts for this page only. */
+const memoryPrefs = new Map<string, string | null>();
+
+export function readPref(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return memoryPrefs.get(key) ?? null;
+  }
+}
+
+export function writePref(key: string, value: string | null) {
+  memoryPrefs.set(key, value);
+  try {
+    if (value === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    /* storage blocked: memoryPrefs keeps it for this page */
+  }
+  window.dispatchEvent(new CustomEvent("orchestration-pref", { detail: key }));
+}
+
+/** A per-browser preference that re-renders when it changes in this tab or another. */
+export function usePref(key: string): [string | null, (v: string | null) => void] {
+  const [value, setValue] = useState(() => readPref(key));
+  useEffect(() => {
+    const sync = () => setValue(readPref(key));
+    window.addEventListener("orchestration-pref", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("orchestration-pref", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, [key]);
+  const set = useCallback(
+    (v: string | null) => {
+      setValue(v);
+      writePref(key, v);
+    },
+    [key],
+  );
+  return [value, set];
 }

@@ -38,7 +38,8 @@ export function buildEnvelope({ state, task, step, attemptId, access }: Envelope
           if (!art) return `- ${i.step}.${i.output} v${i.version}: (missing)`;
           const ref = art.ref ? ` [ref: ${art.ref}]` : "";
           const findings = art.openFindings !== undefined ? ` (${art.openFindings} open findings)` : "";
-          return `- ${i.step}.${i.output} v${art.version} (${art.kind})${findings}${ref}:\n  ${art.summary.replace(/\n/g, "\n  ")}`;
+          const edited = art.author === "user" ? ` [edited by the user: ${art.editReason ?? "no reason given"}; follow this version]` : "";
+          return `- ${i.step}.${i.output} v${art.version} (${art.kind})${findings}${ref}${edited}:\n  ${art.summary.replace(/\n/g, "\n  ")}`;
         })
         .join("\n")
     : "- No upstream artifacts. Work from the specification.";

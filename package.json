@@ -30,5 +30,12 @@
   },
   "engines": {
     "node": ">=22.13"
+  },
+  "description": "A local orchestrator for Claude and Codex agent teams: one lead, versioned task specs, editable pipelines, and optional human-in-the-loop.",
+  "license": "MIT",
+  "author": "Erick Benitez-Ramos",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/erickb336/orchestration.git"
   }
 }

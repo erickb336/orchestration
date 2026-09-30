@@ -1,87 +1,135 @@
 # Orchestration
 
-A workspace for directing an autonomous lead and its designers, coding agents, and reviewers across Claude and Codex at the same time. Either provider can lead, and roles can be assigned to either provider. Every task has a visible specification with options, tradeoffs, and an agent-selected approach. The user can inspect decisions, pause work, edit its scope, and resume it.
+A local orchestrator for teams of AI coding agents. You talk to one **lead**; it plans the work, writes a specification for every task (options, trade-offs, the approach it chose), and runs each task through an editable pipeline of **Claude** and **Codex** workers: designers, coders, and independent reviewers, running concurrently. You can let it run on autopilot or step in anywhere: pause, read and edit any artifact, and resubmit it through the rest of the pipeline.
 
-Start with the [project specification](docs/PROJECT_SPEC.md), [task specification template](docs/task-spec-template.md), and [team roles](docs/TEAM.md).
+## Why this exists
 
-SimpleApps is the first managed project. This repository is separate development tooling; it is not a consumer app in that suite.
+I wanted my own agent orchestration tool, one I can quickly edit and extend with features and fixes whenever I need them, instead of adapting my work to someone else's product. The goal is to keep improving it and tailoring it to myself and my own workflows. It is deliberately small, local, and readable, so that changing it is cheap. If you use it, treat it the same way: fork it and make it yours.
 
-## Build status
+## What it does
 
-| Milestone | State |
-| --- | --- |
-| 1: Interface prototype ([ORC-001](docs/tasks/ORC-001.md)) | Done |
-| Editable pipelines, artifacts, templates ([ORC-002](docs/tasks/ORC-002.md)) | Done |
-| 2: Durable task service ([ORC-003](docs/tasks/ORC-003.md)) | Done |
-| 3: Claude and Codex runtime adapters ([ORC-004](docs/tasks/ORC-004.md)) | Built and reviewed; real-run verification needs your API key |
-| 4: Autonomous team loop | Not started |
-| 5: Reliability and usability | Not started |
+- **One lead, any provider.** Either Claude or Codex can lead. The lead answers in a conversation, proposes fully specified tasks from your vision on a cadence you control, and wakes when work finishes, conflicts, or gets blocked.
+- **Specs before work.** Every task has a versioned spec: the problem, the options with trade-offs, the lead's recommendation, and the selected approach. You can override the approach; the original recommendation and your reason are kept.
+- **Editable pipelines.** Each task runs a pipeline of steps (design → implement → review → repair if needed → verify, or any shape you build). Every step declares the artifacts it produces and the upstream artifacts it reads, and each step can use a different provider and model.
+- **Artifacts you can see and edit.** Designs, code changes (real git commits), review findings, reports, and verification are versioned. Edit any of them and every later step that used it is re-run on your version.
+- **Optional human-in-the-loop.** There are three levels:
+  - **Autopilot:** runs end to end.
+  - **Check in before work starts.**
+  - **Only when I ask.**
 
-The service stores state in SQLite. By default it drives a **fake runtime**, and the UI labels all execution as simulated. With `ORCHESTRATION_RUNTIME=real` it runs real Claude (Agent SDK) and Codex (app-server) workers in isolated git worktrees.
+  Independently of these, you can add review gates to single steps, or turn on step-by-step review for a task. Pause always works, and "Paused" is shown only after the runtime confirms the stop.
+- **Scale.**
+  - Claude and Codex run concurrently: up to 16 workers, with separate limits per provider.
+  - Failed steps can be retried automatically.
+  - Verified work is merged serially into an integration branch and, if you want, fast-forwarded into your branch.
+- **Truthful and durable.**
+  - Every change is a transaction in a local SQLite database.
+  - A restart reconciles instead of guessing.
+  - Runs are never shown as succeeding when they did not.
 
-The adapters are covered by tests against scripted runtimes. A run against the real providers has not been recorded yet: see "Real-run test" below. Until then, treat real mode as unverified.
+## Install
 
-## Run it
-
-Requires Node.js 22.13 or newer (it uses the built-in `node:sqlite`).
+Requires Node.js 22.13 or newer (it uses the built-in `node:sqlite`) and git.
 
 ```bash
+git clone https://github.com/erickb336/orchestration.git
+cd orchestration
 npm install
 npm start
 ```
 
-`npm start` builds the UI and serves the UI and API at http://127.0.0.1:5319. For development, `npm run dev` runs the service (restarting on change) and the Vite UI at http://127.0.0.1:5317.
+Open http://127.0.0.1:5319. The first start shows a **sample project** running on a **simulated runtime** (no agents, no cost), so you can explore safely.
 
-Environment variables:
-
-- `ORCHESTRATION_DB`: database path. Default: `~/.orchestration/orchestration.db`. Delete the file to start over with the sample project.
-- `ORCHESTRATION_PORT`: service port. Default: 5319.
-
-The service binds to loopback only. It rejects requests with foreign `Host` headers, cross-origin browser requests, and state-changing requests without its client header.
-
-Checks: `npm run typecheck`, `npm test`, `npm run build`.
-
-## Running real agents
+### Running real agents
 
 ```bash
 ORCHESTRATION_RUNTIME=real npm start
 ```
 
-In real mode:
+1. **Credentials.** Set them in the environment the service starts from. Settings → Providers shows each provider's status; checking never starts a model run.
+   - **Claude:** `ANTHROPIC_API_KEY`, or Bedrock/Vertex/Foundry settings. Anthropic does not allow third-party Agent SDK apps to use a Claude.ai subscription login.
+   - **Codex:** your local Codex sign-in (`npx codex login`) or an API key (`printenv OPENAI_API_KEY | npx codex login --with-api-key`).
+2. **Project.** In Settings → Project, point Orchestration at a git repository with at least one commit, and write a vision.
+3. **Involvement.** Choose how involved you want to be (Autopilot, check in before work starts, or only when I ask), then message the lead or create a task.
 
-- **Providers:** workers need credentials, set in the service's environment. Settings shows each provider's status, and checking never starts a model run.
-  - **Claude:** set `ANTHROPIC_API_KEY`, or Bedrock/Vertex/Foundry settings. A Claude.ai subscription login cannot be used: Anthropic does not permit third-party Agent SDK apps to use it.
-  - **Codex:** uses your local Codex sign-in (`npx codex login`, a ChatGPT plan) or `OPENAI_API_KEY`/`CODEX_API_KEY`. Whether the Codex plan terms cover third-party local orchestrators is not stated explicitly; use an API key if in doubt.
-- **Project:** a new real-mode database starts empty. In Settings, point it at a git repository with at least one commit, then create tasks from the Tasks page.
-- **Workspaces:** each run gets its own git worktree under `~/.orchestration/worktrees`, never inside your repository's working tree.
-  - Coders write on an `orchestration/<task>/<step>/<run>` branch, and the service commits their changes.
+What real runs do on your machine:
+
+- Every run gets its own git worktree under `~/.orchestration/worktrees`, outside your repository's working tree.
+  - Coders commit on `orchestration/<project>/<task>/<step>/<run>` branches (the service makes the commits).
   - Every other role gets a read-only checkout.
-  - Nothing is merged into your branches.
-- **Worker environment** is set per provider in Settings:
-  - **Isolated** (default): workers see none of your settings, plugins, or web tools, and use only the MCP connections you tick (for example Cloudflare, Vercel, or AWS servers from your own Claude or Codex config).
-  - **Use my local setup:** workers use your Claude or Codex configuration as-is, including all its MCP servers and plugins.
-  - In both environments:
-    - native sub-agents stay off;
-    - Claude workers' file tools are restricted to their worktree, with no shell;
-    - Codex workers run in Codex's workspace-write sandbox with command network access off.
-  - MCP connections run outside that sandbox, so their tools still work.
-- **Limits:** Settings → Run limits caps turns, wall-clock time, and Claude spend per run. Runs cost provider usage.
+  - Finished work is merged, one task at a time, into `orchestration/<project>/integration`.
+  - With automatic delivery on, that branch is fast-forwarded into your chosen branch, but only when your working tree is clean. Your latest commits are merged into the integration branch first.
+- **Worker environment** is set per provider:
+  - **Isolated** (default): workers see none of your settings, plugins, or web tools, and use only the MCP connections you tick.
+  - **Use my local setup:** workers get your user-level Claude or Codex configuration, including all its MCP servers and plugins.
+- **Limits:** Settings → Run limits caps turns, time, and Claude spend per run. Codex runs are bounded by time.
 
-### Real-run test
+### Development
 
-`node scripts/real-run-test.mjs` checks Milestone 3 end to end. It creates a throwaway repository and database, then:
+```bash
+npm run dev        # service (restarts on change) + Vite UI at http://127.0.0.1:5317
+npm run typecheck
+npm test
+npm run build
+```
 
-1. Runs a Codex coder and a Claude coder concurrently.
-2. Pauses and resumes each.
-3. Pauses and resumes the project.
-4. Lets both finish.
+Environment variables:
 
-It writes an evidence file to `evidence/`, and its limits are low (12 turns, 5 minutes, $0.50 per Claude run). To run the same scenario at no cost, use `node scripts/real-run-test.mjs --fake`.
+- `ORCHESTRATION_RUNTIME` (`fake` or `real`)
+- `ORCHESTRATION_DB` (default `~/.orchestration/orchestration.db`)
+- `ORCHESTRATION_PORT` (default 5319)
 
-## Layout
+## Getting large goals done
 
-- `src/domain/`: pure task/spec/step/run state transitions, the command registry, templates, and their tests. No UI, storage, or runtime dependencies.
-- `src/runtime/`: the runtime adapter contract and simulated outputs.
-- `src/ui/`: the React interface, a client of the service.
-- `server/`: the SQLite store (state document, command log with idempotency keys, events, leases), the scheduler with its lease and restart reconciliation, the fake runtime, and the HTTP API.
-- `docs/tasks/`: versioned task specs with decisions and completion evidence.
+To get the most out of your Claude and Codex capacity:
+
+1. **Give the lead the whole goal.** Write it in the vision, or say it in the conversation. The lead breaks it into specified tasks. Raise "max proposals per run" and "max open lead proposals" in Settings → Autonomy for bigger goals.
+2. **Keep both providers busy.**
+   - Raise the worker limit.
+   - Set per-provider limits to match your plans.
+   - Give each role the provider and model that suit it. For example, Codex for implementation, Claude for design and independent review, or the reverse. Every step can be pinned individually.
+3. **Parallelise inside tasks.** Pipelines are graphs: steps with no dependency between them (for example code review and UX review) run at the same time.
+4. **Use Autopilot** for continuous planning, automatic retries, and automatic delivery. Add review gates only where you want to look.
+5. **Steer through artifacts, not code.** When something is off, pause, edit the design, findings, or brief, and resubmit. The next steps follow your version.
+
+## How it is built
+
+```
+src/domain/   pure state transitions, commands, templates, and their tests (no I/O)
+src/runtime/  the runtime adapter contract
+src/ui/       React UI (a client of the service)
+server/       SQLite store, scheduler (lease, reconciliation, lead, integration),
+              Claude and Codex adapters, git worktrees, HTTP API (loopback only)
+docs/         the project specification, research, and one versioned spec per built feature
+```
+
+- **Commands.** Every change is a named command applied to the pure domain inside a transaction, recorded with an idempotency key.
+- **Scheduling.** One scheduler holds a lease. It dispatches steps, supervises runs through adapters (start, interrupt with confirmation, kill), applies their reports, and runs the lead and the integration queue.
+- **Extending it.** Adding a provider means implementing `server/runtimes/types.ts`. Adding a workflow means adding a template, either in Settings or in `src/domain/templates.ts`.
+
+## Safety notes
+
+- **Network:** the service binds to 127.0.0.1. It rejects foreign `Host` headers, cross-origin requests, and state changes without its client header.
+- **Git:** all of the service's git commands run with hooks and fsmonitor disabled. A worktree whose git metadata was tampered with is not recorded.
+- **Claude workers:** file tools are confined to their worktree, with no shell unless you enable it.
+- **Codex workers:** they run in Codex's sandbox. Writes are limited to their worktree and a private temp directory, and network access for commands is off. **They can still read files elsewhere on your machine.**
+- **Connections:** MCP servers and plugins you allow run with your permissions and are not sandboxed.
+- **Autopilot:** the lead reads summaries that workers wrote, and on Autopilot its proposals start without review. Treat repositories and connections you do not trust accordingly. Use "check in before work starts", or review gates, when that matters.
+
+## Status
+
+This is a personal tool under active development. It is built in milestones (see `docs/tasks/`), each with an independent review:
+
+| Milestone | Spec |
+| --- | --- |
+| Interface prototype, pipelines, and artifacts | ORC-001, ORC-002 |
+| Durable local service | ORC-003 |
+| Claude and Codex adapters | ORC-004 |
+| Lead conversation, autonomy, and integration queue | ORC-005 |
+| Reliability, autopilot, human editing, import/export, and CI | ORC-006 |
+
+Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test runs Claude and Codex workers concurrently against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost.
+
+## License
+
+MIT

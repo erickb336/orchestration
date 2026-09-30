@@ -62,7 +62,7 @@ export function Conversation() {
         </ol>
       )}
 
-      <LeadStatus state={state} />
+      <LeadStatus state={state} blocked={service.leadBlocked} />
       <Composer
         disabled={disabled}
         onSend={async (text) => {
@@ -116,7 +116,7 @@ function MessageItem({ state, message: m, simulated }: { state: State; message: 
   );
 }
 
-function LeadStatus({ state }: { state: State }) {
+function LeadStatus({ state, blocked }: { state: State; blocked?: string }) {
   const run = M.activeLeadRun(state);
   const pending = M.pendingMessages(state).length;
   const last = state.leadRuns.length ? state.leadRuns[state.leadRuns.length - 1] : undefined;
@@ -124,20 +124,31 @@ function LeadStatus({ state }: { state: State }) {
   let live = false;
   if (run) {
     live = true;
-    text = run.outcome === "stopping" ? `Stopping the lead run (${runLabel(run)})…` : `Lead is working (${runLabel(run)})…${run.activity ? ` ${run.activity}` : ""}`;
+    text =
+      run.outcome === "stopping"
+        ? `Stopping the lead run (${runLabel(run)})…${run.note?.startsWith("Control failure") ? ` ${run.note}` : ""}`
+        : `Lead is working (${runLabel(run)})…${run.activity ? ` ${run.activity}` : ""}`;
   } else if (last && (last.outcome === "failed" || last.outcome === "lost")) {
     text = `The last lead run ${last.outcome === "lost" ? "was lost" : "failed"}${last.note ? `: ${last.note}` : "."}${pending ? ` ${pending} message${pending === 1 ? "" : "s"} still waiting.` : ""}`;
   } else if (pending) {
     const n = `${pending} message${pending === 1 ? "" : "s"}`;
     text = state.project.hold ? `Project paused — the lead answers ${n} after you resume.` : `Waiting to answer ${n}.`;
   }
+  const controlFailure = run?.outcome === "stopping" && run.note?.startsWith("Control failure");
+  // A blocked lead matters only when nothing is running; an active run already says what the lead is doing.
+  const showBlocked = !!blocked && !run;
   return (
     <div className="convo-status" role="status">
       {text && (
         <>
           {live && <span className={`dot ${run?.outcome === "stopping" ? "paused" : "running"}`} aria-hidden="true" />}
-          <span>{text}</span>
+          <span style={controlFailure ? { color: "var(--s-blocked)" } : undefined}>{text}</span>
         </>
+      )}
+      {showBlocked && (
+        <span style={{ color: "var(--s-blocked)" }}>
+          {text ? " " : ""}The lead can't run: {blocked} <a href="#/settings">Settings</a>
+        </span>
       )}
     </div>
   );

@@ -119,7 +119,7 @@ export class FakeAdapter implements RuntimeAdapter {
   start(a: Assignment) {
     if (a.role === "lead" && a.stepId === "LEAD") {
       if (this.procs.has(a.attemptId)) return;
-      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: a.prompt.includes("(planning)") ? "planning" : "message" });
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : "message" });
       this.emit({ type: "started", attemptId: a.attemptId });
       return;
     }

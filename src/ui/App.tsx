@@ -7,6 +7,7 @@ import { Overview } from "./Overview";
 import { Activity } from "./Activity";
 import { Settings } from "./Settings";
 import { relTime } from "./common";
+import { useBrowserNotifications } from "./notifications";
 
 type Route = { page: "overview" | "tasks" | "activity" | "settings" } | { page: "task"; id: string };
 
@@ -75,6 +76,7 @@ function Shell() {
   const route = useRoute();
   const { notice, setNotice } = useStore();
   const tab = route.page === "task" ? "tasks" : route.page;
+  useBrowserNotifications();
 
   useEffect(() => {
     if (!notice || notice.kind === "stale") return;
@@ -125,13 +127,18 @@ function ProjectName() {
 }
 
 function SimBanner() {
-  const { service, setSim, step, reset, disabled } = useStore();
+  const { state, service, setSim, step, reset, disabled } = useStore();
   const { sim } = service;
   if (service.runtime === "real") {
     return (
       <div className="sim-banner live" role="note">
         <strong>LIVE EXECUTION</strong>
-        <span>Claude and Codex agents run on this machine in isolated git worktrees and may incur usage costs. Results stay on orchestration/* branches until you merge them.</span>
+        <span>
+          Claude and Codex agents run on this machine in isolated git worktrees and may incur usage costs.{" "}
+          {state.project.autonomy.autoDeliver.enabled
+            ? `Verified work is delivered to ${state.project.autonomy.autoDeliver.branch} automatically (fast-forward only).`
+            : "Results stay on orchestration/* branches until you merge them."}
+        </span>
         {service.scheduler === "observer" && <span>(another service instance holds the scheduler)</span>}
       </div>
     );
@@ -190,7 +197,8 @@ function ConnectionBanner() {
 
 function ProjectControl() {
   const { state, send, disabled, service } = useStore();
-  const stopping = M.activeAttempts(state).filter((a) => a.outcome === "stopping").length;
+  // A stopping lead run counts too: the pause is not confirmed until the lead acknowledges as well.
+  const stopping = M.activeAttempts(state).filter((a) => a.outcome === "stopping").length + (M.activeLeadRun(state)?.outcome === "stopping" ? 1 : 0);
   const running = M.activeAttempts(state).filter((a) => a.outcome === "running").length;
   const status = state.project.hold ? (stopping ? `Pausing — ${stopping} run(s) still stopping` : "Project paused") : `${running} ${service.runtime === "real" ? "" : "simulated "}run(s) active`;
   return (

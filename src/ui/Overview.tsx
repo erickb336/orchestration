@@ -1,8 +1,10 @@
 import { useState } from "react";
 import * as M from "../domain/model";
 import { useStore } from "./store";
-import { ROLE_LABEL, fmtTime, relTime, selectionText } from "./common";
+import { ROLE_LABEL, fmtTime, involvementOf, relTime, selectionText } from "./common";
 import { Conversation } from "./Conversation";
+import { Onboarding } from "./Onboarding";
+import { PROVIDERS, type Attempt, type ProviderId, type State } from "../domain/types";
 
 export function Overview() {
   const { state, send, disabled, status, service } = useStore();
@@ -27,6 +29,8 @@ export function Overview() {
   return (
     <>
       <h1>Overview</h1>
+      <ModeSummary state={state} />
+      <Onboarding />
       <div className="grid-2">
         <div>
           <section className="card" aria-labelledby="vision-h">
@@ -141,7 +145,9 @@ export function Overview() {
             <ul className="plain">
               {outcomes.map((t) => (
                 <li key={t.id}>
-                  <a href={`#/task/${t.id}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="muted">· {relTime(t.updatedAt)}</span>
+                  <a href={`#/task/${t.id}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="muted">· {relTime(t.updatedAt)}</span>{" "}
+                  {t.integration?.delivered?.status === "delivered" && <span className="chip done">delivered</span>}
+                  {(t.integration?.status === "conflict" || t.integration?.delivered?.status === "conflict") && <span className="chip danger">conflict</span>}
                 </li>
               ))}
             </ul>
@@ -190,6 +196,8 @@ export function Overview() {
             </table>
           </section>
 
+          <UsageCard state={state} />
+
           <section className="card" aria-labelledby="svc-h">
             <h2 id="svc-h">Service</h2>
             <dl className="kv">
@@ -222,6 +230,203 @@ export function Overview() {
           </section>
         </div>
       </div>
+    </>
+  );
+}
+
+/** One line saying how much runs without the user, with a link to change it. */
+function ModeSummary({ state }: { state: State }) {
+  const a = state.project.autonomy;
+  const mode = involvementOf(a);
+  const paused = state.project.hold;
+  let pill: string;
+  let text: string;
+  switch (mode) {
+    case "autopilot":
+      pill = "Autopilot on";
+      text = `delivering verified work to ${a.autoDeliver.branch}`;
+      break;
+    case "checkin":
+      pill = "Check-in";
+      text = "the lead plans on its own; each task it proposes waits for you to release it";
+      break;
+    case "manual":
+      pill = "Manual";
+      text = "the lead works when you message it or add tasks";
+      break;
+    default:
+      pill = "Custom";
+      text = `lead planning on${a.autoDeliver.enabled ? `, delivering to ${a.autoDeliver.branch}` : ", work stays on the integration branch"}`;
+  }
+  return (
+    <p className="mode-line" aria-live="polite">
+      <span className={mode === "manual" ? "chip strong" : "pill running"}>{pill}</span>
+      <span>
+        {text}
+        {paused ? " · project paused" : ""}
+      </span>
+      <a href="#/settings">Change</a>
+    </p>
+  );
+}
+
+type Usage = NonNullable<Attempt["usage"]>;
+interface Tally {
+  runs: number;
+  reported: number;
+  input: number;
+  output: number;
+  cost: number;
+  costRuns: number;
+}
+const emptyTally = (): Tally => ({ runs: 0, reported: 0, input: 0, output: 0, cost: 0, costRuns: 0 });
+
+function add(t: Tally, u: Usage | undefined) {
+  t.runs += 1;
+  if (!u) return;
+  if (u.inputTokens !== undefined || u.outputTokens !== undefined) t.reported += 1;
+  t.input += u.inputTokens ?? 0;
+  t.output += u.outputTokens ?? 0;
+  if (u.costUsd !== undefined) {
+    t.cost += u.costUsd;
+    t.costRuns += 1;
+  }
+}
+
+const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : n.toLocaleString());
+const fmtCost = (t: Tally) => (t.costRuns ? `$${t.cost.toFixed(2)}` : "—");
+
+/** Token use and provider-reported cost per provider and model, plus how busy each provider is now. */
+function UsageCard({ state }: { state: State }) {
+  const [range, setRange] = useState<"today" | "all">("today");
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const inRange = (iso: string) => range === "all" || Date.parse(iso) >= startOfToday.getTime();
+
+  // Workers and lead runs, each with the model the provider reported when known.
+  const rows: { provider: ProviderId; model: string; at: string; usage?: Usage; lead: boolean }[] = [
+    ...state.attempts.map((a) => ({ provider: a.snapshot.provider, model: a.actualModel ?? a.snapshot.model, at: a.endedAt ?? a.startedAt, usage: a.usage, lead: false })),
+    ...state.leadRuns.map((r) => ({ provider: r.provider, model: r.actualModel ?? r.model, at: r.endedAt ?? r.startedAt, usage: r.usage, lead: true })),
+  ].filter((r) => inRange(r.at));
+
+  const byProvider = new Map<ProviderId, Tally>();
+  const byModel = new Map<string, { provider: ProviderId; model: string; t: Tally }>();
+  const total = emptyTally();
+  for (const r of rows) {
+    if (!byProvider.has(r.provider)) byProvider.set(r.provider, emptyTally());
+    add(byProvider.get(r.provider)!, r.usage);
+    const key = `${r.provider}\u0000${r.model}`;
+    if (!byModel.has(key)) byModel.set(key, { provider: r.provider, model: r.model, t: emptyTally() });
+    add(byModel.get(key)!.t, r.usage);
+    add(total, r.usage);
+  }
+  const models = [...byModel.values()].sort((a, b) => b.t.input + b.t.output - (a.t.input + a.t.output));
+
+  const active = M.activeAttempts(state);
+  const lead = M.activeLeadRun(state);
+  const p = state.project;
+
+  return (
+    <section className="card" aria-labelledby="usage-h">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 id="usage-h">Usage</h2>
+        <span className="row" role="group" aria-label="Usage period" style={{ gap: "0.25rem" }}>
+          {(["today", "all"] as const).map((r) => (
+            <button key={r} className="small" aria-pressed={range === r} onClick={() => setRange(r)} style={range === r ? { fontWeight: 650 } : undefined}>
+              {r === "today" ? "Today" : "All time"}
+            </button>
+          ))}
+        </span>
+      </div>
+
+      <h3 style={{ fontSize: "0.9rem", margin: "0.3rem 0" }}>Running now</h3>
+      <table className="usage-table" style={{ fontSize: "0.88rem" }}>
+        <tbody>
+          {PROVIDERS.map((pr) => {
+            const n = active.filter((a) => a.snapshot.provider === pr).length;
+            const limit = p.providerLimits?.[pr] ?? p.workerLimit;
+            const enabled = p.enabledProviders.includes(pr);
+            return (
+              <tr key={pr}>
+                <td>{M.providerLabel(pr)}</td>
+                <td className="num">
+                  {n} of {Math.min(limit, p.workerLimit)} worker slots
+                </td>
+                <td className="muted">{!enabled ? "not enabled" : limit === 0 ? "limit 0: no runs" : lead?.provider === pr ? "+ lead run" : ""}</td>
+              </tr>
+            );
+          })}
+          <tr>
+            <td>All workers</td>
+            <td className="num">
+              {active.length} of {p.workerLimit}
+            </td>
+            <td />
+          </tr>
+        </tbody>
+      </table>
+      <p className="muted" style={{ fontSize: "0.8rem", margin: "0.3rem 0 0.8rem" }}>
+        Each provider is limited by its own setting and by the total worker limit. <a href="#/settings">Change limits</a>
+      </p>
+
+      <h3 style={{ fontSize: "0.9rem", margin: "0.3rem 0" }}>{range === "today" ? "Today" : "All time"}</h3>
+      {rows.length === 0 ? (
+        <p className="muted">No runs {range === "today" ? "today" : "yet"}.</p>
+      ) : (
+        <div className="table-wrap">
+          <table className="usage-table" style={{ fontSize: "0.88rem" }}>
+            <thead>
+              <tr>
+                <th>Provider / model</th>
+                <th className="num">Runs</th>
+                <th className="num">Input</th>
+                <th className="num">Output</th>
+                <th className="num">Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {PROVIDERS.filter((pr) => byProvider.has(pr)).map((pr) => {
+                const t = byProvider.get(pr)!;
+                return (
+                  <UsageRows key={pr} label={<strong>{M.providerLabel(pr)}</strong>} t={t}>
+                    {models
+                      .filter((m) => m.provider === pr)
+                      .map((m) => (
+                        <UsageRow key={m.model} label={<span className="mono" style={{ paddingLeft: "0.8rem" }}>{m.model}</span>} t={m.t} />
+                      ))}
+                  </UsageRows>
+                );
+              })}
+              <UsageRow label={<strong>Total</strong>} t={total} />
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="muted" style={{ fontSize: "0.8rem", marginBottom: 0 }}>
+        Includes worker and lead runs. Cost is the provider's estimate; Codex reports tokens only.
+        {total.runs > total.reported ? ` ${total.runs - total.reported} run(s) reported no token counts.` : ""}
+      </p>
+    </section>
+  );
+}
+
+function UsageRow({ label, t }: { label: React.ReactNode; t: Tally }) {
+  return (
+    <tr>
+      <td>{label}</td>
+      <td className="num">{t.runs}</td>
+      <td className="num">{t.reported ? fmtTokens(t.input) : "—"}</td>
+      <td className="num">{t.reported ? fmtTokens(t.output) : "—"}</td>
+      <td className="num">{fmtCost(t)}</td>
+    </tr>
+  );
+}
+
+function UsageRows({ label, t, children }: { label: React.ReactNode; t: Tally; children: React.ReactNode }) {
+  return (
+    <>
+      <UsageRow label={label} t={t} />
+      {children}
     </>
   );
 }

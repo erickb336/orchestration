@@ -7,6 +7,7 @@ import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
 import { CLIENT_HEADER, type AckMode, type CommandError, type ServiceInfo, type StatePayload } from "../src/api";
+import { exportMarkdown } from "../src/domain/model";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
 import type { WorkspaceManager } from "./workspaces";
@@ -64,6 +65,7 @@ export function createHttpServer(opts: HttpOptions): Server {
       sim: { auto: scheduler.auto, ackMode: fakeConfig?.ackMode ?? "normal" },
       dbPath: store.path,
       providers,
+      leadBlocked: scheduler.leadBlocked,
     };
     if (real && opts.workspaces) {
       const project = store.read().state.project;
@@ -177,6 +179,10 @@ export function createHttpServer(opts: HttpOptions): Server {
         if (path === "/api/health") return send(res, 200, { ok: true, service: info() });
         if (path === "/api/state") return send(res, 200, payload());
         if (path === "/api/stream") return stream(req, res);
+        if (path === "/api/export.md") {
+          res.writeHead(200, { "Content-Type": "text/markdown; charset=utf-8", "Content-Disposition": 'attachment; filename="orchestration-board.md"', "Cache-Control": "no-store" });
+          return res.end(exportMarkdown(store.read().state));
+        }
         return fail(res, 404, "invalid", "Not found");
       }
 
@@ -195,6 +201,10 @@ export function createHttpServer(opts: HttpOptions): Server {
         return send(res, 200, { version: r.version, result: r.result });
       }
       if (path.startsWith("/api/sim") && (real || !fakeConfig)) return fail(res, 400, "control", "Simulation controls are only available with the fake runtime.");
+      if (path === "/api/maintenance/prune") {
+        if (!real) return fail(res, 400, "control", "Workspace cleanup applies to real runs only.");
+        return send(res, 200, { removed: scheduler.prune() });
+      }
       if (path === "/api/health/refresh") {
         await scheduler.refreshHealth();
         return send(res, 200, { ok: true, service: info() });

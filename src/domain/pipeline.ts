@@ -9,6 +9,7 @@ export function instantiate(defs: StepDef[]): Step[] {
 export function toDef(st: StepDef): StepDef {
   const d: StepDef = { id: st.id, purpose: st.purpose, role: st.role, dependsOn: [...st.dependsOn], inputs: structuredClone(st.inputs), outputs: structuredClone(st.outputs) };
   if (st.runIf?.length) d.runIf = structuredClone(st.runIf);
+  if (st.gate) d.gate = true;
   return d;
 }
 

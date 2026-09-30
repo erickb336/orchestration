@@ -396,3 +396,41 @@ ul.plain { margin: 0; padding-left: 1.1rem; }
 .dot.paused { color: var(--s-paused); }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
 .composer textarea { min-height: 3.5rem; margin-bottom: 0.4rem; }
+
+/* ---------- involvement, onboarding, data ---------- */
+.mode-line { display: flex; flex-wrap: wrap; gap: 0.35rem 0.6rem; align-items: center; margin: -0.2rem 0 1rem; font-size: 0.92rem; }
+.choices { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 0.75rem; }
+@media (max-width: 900px) { .choices { grid-template-columns: minmax(0, 1fr); } }
+.choice { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem 0.9rem; display: flex; flex-direction: column; gap: 0.55rem; align-items: flex-start; }
+.choice > .row:first-child { width: 100%; }
+.choice.primary-choice { border-color: var(--border-strong); }
+.choice.current { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.choice-list { font-size: 0.88rem; }
+.choice-list li + li { margin-top: 0.2rem; }
+.choice-text { font-size: 0.88rem; margin: 0; flex: 1; }
+.checklist { list-style: none; margin: 0.6rem 0 0; padding: 0; }
+.checklist li { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr) auto; gap: 0.6rem; align-items: start; padding: 0.45rem 0; border-top: 1px solid var(--border); font-size: 0.92rem; }
+.checklist .check { width: 1.1rem; height: 1.1rem; border: 1px solid var(--border-strong); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 0.72rem; margin-top: 0.15rem; }
+.checklist li.done .check { color: var(--s-done); border-color: currentColor; }
+.checklist li.done .label { color: var(--muted); }
+.checklist .detail { font-size: 0.82rem; margin-top: 0.15rem; overflow-wrap: anywhere; }
+.checklist .action { font-size: 0.88rem; }
+@media (max-width: 600px) { .checklist li { grid-template-columns: 1.4rem minmax(0, 1fr); } .checklist .action { grid-column: 2; } }
+a.button-link {
+  display: inline-block;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0.35rem 0.8rem;
+}
+a.button-link:hover { background: var(--surface-2); }
+
+/* ---------- review gates, artifact editing, usage ---------- */
+.banner.review { border-color: var(--s-reviewing); border-left-width: 4px; background: var(--surface); }
+.chip.edited { color: var(--s-reviewing); }
+.artifact-editor { border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0.6rem 0.7rem; margin-top: 0.4rem; }
+.artifact-editor textarea { min-height: 8rem; font-family: inherit; }
+.usage-table td, .usage-table th { font-variant-numeric: tabular-nums; }
+.usage-table td.num, .usage-table th.num { text-align: right; }

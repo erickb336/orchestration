@@ -21,7 +21,7 @@ Success means the lead can explain why it chose a task and an approach, the user
 - Provider and model are configurable independently for every workflow step, including planning, design, implementation, review, and repair. Support mixed providers and different models within one task.
 - Tasks accumulate over time and remain visible with stable identifiers.
 - Every task has an attached specification with options, tradeoffs, a recommendation, and an explicit selected approach decided by the agent unless overridden by the user.
-- Reviewing specifications is optional. Their existence is not an approval gate.
+- Reviewing specifications is optional. Their existence is not an approval gate. Human-in-the-loop is optional throughout (user direction, 2026-09-29): the tool must be able to run end to end on autopilot at large scale, while every control (pause, review gates, artifact edits, resubmission) remains available.
 - Users can pause, edit, resume, reprioritize, or cancel unfinished tasks and pause the project as a whole.
 - Completed tasks retain their specifications, decision history, changes, and verification evidence.
 - The lead's work should be autonomous within the project mandate and bounded by configured execution limits.
@@ -238,6 +238,6 @@ Recommended first build: Milestone 1. Use the task detail and specification edit
 
 ## Assumptions to revisit
 
-The first version is local, single-user, and supports both Claude and Codex as first-class concurrent runtimes. Orchestration is the project name. The exact scheduling cadence and execution budget are not selected. The project lives at /Users/erickb336/workspace/Orchestration, separate from the SimpleApps consumer apps. SimpleApps is its first managed repository.
+The first version is local, single-user, and supports both Claude and Codex as first-class concurrent runtimes. Orchestration is the project name. The exact scheduling cadence and execution budget are not selected. The project lives at this repository, separate from the SimpleApps consumer apps. SimpleApps is its first managed repository.
 
 The autonomous lead may create and execute ordinary reversible product work within the recorded vision. External publishing, purchases, destructive actions, and other actions outside existing authorization remain separate capabilities. No scheduling or external deployment is enabled by writing this spec.
