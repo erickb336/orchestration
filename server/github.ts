@@ -10,7 +10,8 @@
 //   - every call runs from an empty neutral directory with an explicit repository, takes bodies on
 //     stdin, and has its error output redacted and cut before it is kept.
 //
-// Not verified against GitHub: this adapter has been exercised only against a fake `gh` in tests.
+// Checked against GitHub with gh 2.101.0 by scripts/pr-sandbox-check.mjs (2026-09-30, see
+// docs/tasks/ORC-008.md); tests use a fake `gh`.
 
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync } from "node:fs";

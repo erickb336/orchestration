@@ -92,7 +92,6 @@ export function PrChip({ state, task }: { state: State; task: Task }) {
   return <span className={TONE_CLASS[label.tone]}>{label.text}</span>;
 }
 
-const NOT_VERIFIED = "Pull-request delivery is not verified against GitHub yet: it has run only against a simulated GitHub in tests.";
 
 function observedLine(pr: PrDelivery): string {
   const o = pr.observed;
@@ -154,7 +153,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
     <div className="stack">
       <div className="row">
         {label && <span className={TONE_CLASS[label.tone]}>{label.text}</span>}
-        {pr.simulated ? <span className="chip">simulated: nothing was sent to GitHub</span> : <span className="chip" title={NOT_VERIFIED}>not verified against GitHub</span>}
+        {pr.simulated && <span className="chip">simulated: nothing was sent to GitHub</span>}
       </div>
       {pr.attention && (
         <div className="banner danger" role="alert" style={{ margin: 0 }}>
@@ -306,7 +305,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
             onClick={() => {
               if (
                 confirm(
-                  `Let PR ${pr.number ? `#${pr.number}` : "for this task"} merge by itself? It merges only when an independent review is clean for exactly this change, every required check passed on its head, GitHub reports it mergeable, and it touches no protected file. The app never bypasses branch rules. Not verified against GitHub yet.`,
+                  `Let PR ${pr.number ? `#${pr.number}` : "for this task"} merge by itself? It merges only when an independent review is clean for exactly this change, every required check passed on its head, GitHub reports it mergeable, and it touches no protected file. The app never bypasses branch rules.`,
                 )
               )
                 void send("setPrPolicy", { taskId: task.id, policy: "auto" });

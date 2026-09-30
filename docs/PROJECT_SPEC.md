@@ -247,7 +247,7 @@ Finished work leaves Orchestrator through one delivery mode at a time: off (the 
 - Repair is bounded: at most two fix tasks per pull request, pushed onto the same pull request.
 - Everything that lands is listed for review later. The list is informational and never blocks dispatch, integration or merging.
 - The lead sees delivery (pull requests that need attention, the unreviewed count, the user's notes) and may propose tasks. It cannot merge, push, comment, close, send work back or mark anything reviewed.
-- Real GitHub behaviour is unverified until the consented sandbox run (`scripts/pr-sandbox-check.mjs`) has passed; the interface says so until then.
+- Real GitHub behaviour was checked by the consented sandbox run (`scripts/pr-sandbox-check.mjs`) on 2026-09-30, with scripted agents. Evidence is in `docs/tasks/ORC-008.md`.
 
 ## Assumptions to revisit
 

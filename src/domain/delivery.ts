@@ -1593,10 +1593,10 @@ const isProjectError = (e: OpError) => e.code === "auth" || e.code === "rate-lim
 function localPosture(s: State, ctx: ReportContext): PostureItem[] {
   const out: PostureItem[] = [
     {
-      id: "not-verified",
-      status: "unverified",
-      label: "Pull-request delivery is not verified against GitHub",
-      detail: "It has run only against a simulated GitHub in tests. Watch the first pull requests, and hold any you are unsure about.",
+      id: "sandbox-verified",
+      status: "ok",
+      label: "Pull-request delivery was checked on a real GitHub sandbox",
+      detail: "Checked on 2026-09-30 with gh 2.101.0 and scripted agents (docs/tasks/ORC-008.md). Your repository's rules may differ: watch the first pull requests, and hold any you are unsure about.",
     },
   ];
   const local = s.project.enabledProviders.filter((p) => s.project.workerEnvironment[p] === "local");

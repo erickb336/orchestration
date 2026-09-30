@@ -154,7 +154,7 @@ function SimBanner() {
         <span>
           Claude and Codex agents run on this machine in isolated git worktrees and may incur usage costs.{" "}
           {state.project.prDelivery.enabled
-            ? `Verified work is pushed to orchestration/* branches on ${state.project.prDelivery.remote} and opened as GitHub pull requests under your account; ${state.project.prDelivery.merge === "auto" ? "the app merges them itself after an independent review and passing required checks" : "you merge them"}. Not verified against GitHub yet.`
+            ? `Verified work is pushed to orchestration/* branches on ${state.project.prDelivery.remote} and opened as GitHub pull requests under your account; ${state.project.prDelivery.merge === "auto" ? "the app merges them itself after an independent review and passing required checks" : "you merge them"}.`
             : state.project.autonomy.autoDeliver.enabled
               ? `Verified work is delivered to ${state.project.autonomy.autoDeliver.branch} automatically (fast-forward only).`
               : "Results stay on orchestration/* branches until you merge them."}

@@ -171,7 +171,7 @@ describe("hold and notify (scenario 1)", () => {
     expect(git("rev-parse", workspaces.baseRef(st().project.id))).toBe(remote("rev-parse", "main"));
     expect(existsSync(join(repo, ".git", "FETCH_HEAD"))).toBe(false);
     expect(branches()).toEqual([]);
-    expect(st().project.github!.posture.some((p) => p.id === "not-verified" && p.status === "unverified")).toBe(true);
+    expect(st().project.github!.posture.some((p) => p.id === "sandbox-verified" && p.status === "ok")).toBe(true);
   });
 
   it("one pull request whose head is exactly the final commit; one ready notice; a merge bound to that head; the item lands unreviewed", async () => {

@@ -117,7 +117,7 @@ What real runs do on your machine:
   - Every other role gets a read-only checkout.
   - Finished work is merged, one task at a time, into `orchestration/<project>/integration`.
   - With automatic delivery on, that branch is fast-forwarded into your chosen branch, but only when your working tree is clean. Your latest commits are merged into the integration branch first.
-- **GitHub pull requests** (Settings → Delivery, off by default, **not verified against GitHub yet**) are a third delivery mode, never on together with local delivery:
+- **GitHub pull requests** (Settings → Delivery, off by default) are a third delivery mode, never on together with local delivery:
   - Each finished task becomes one pull request on a branch the app owns (`orchestration/<project>/pr/<task>-<n>`), opened with your own `gh` sign-in. The app never reads or stores a token, never forces a push, and publishes only commits Orchestrator made.
   - **Hold and notify** (default): an independent agent reviews the change, the app watches the required checks, and tells you once when the pull request is ready. You merge it on GitHub or with Merge in the app, which is tied to the commit you saw.
   - **Merge automatically** (a separate, explicit setting): the app merges one pull request at a time, and only when an independent review is clean for exactly that change, every required check passed on its exact head, GitHub reports it mergeable, it touches no protected file, and nothing is paused. It first brings the pull request up to date with the base and waits for the checks again, so what lands is what was tested.
@@ -209,11 +209,11 @@ This is a personal tool under active development. It is built in milestones (see
 | Lead conversation, autonomy, and integration queue | ORC-005 |
 | Reliability, autopilot, human editing, import/export, and CI | ORC-006 |
 | Fan-out: parallel agents per step, iteration loops, breakdowns into child tasks | ORC-007 |
-| Pull-request delivery, independent review and automatic merge, review-later list | ORC-008 (not verified against GitHub yet) |
+| Pull-request delivery, independent review and automatic merge, review-later list | ORC-008 |
 
 Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test runs Claude and Codex workers concurrently against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost.
 
-Pull-request delivery is covered by tests that never contact GitHub: a local bare repository stands in for the remote and a fake stands in for the GitHub API. `node scripts/pr-sandbox-check.mjs --repo <owner>/<throwaway-repo> --yes` records evidence against a real repository. It refuses to run without both arguments, never defaults to a repository, and creates branches, pull requests, a ruleset and a workflow there, so use a repository made for it. Until that run has passed, the feature stays labelled "not verified against GitHub".
+Pull-request delivery is covered by tests that never contact GitHub: a local bare repository stands in for the remote and a fake stands in for the GitHub API. `node scripts/pr-sandbox-check.mjs --repo <owner>/<throwaway-repo> --yes` records evidence against a real repository. It refuses to run without both arguments, never defaults to a repository, and creates branches, pull requests, a ruleset and a workflow there, so use a repository made for it. That run passed on 2026-09-30 against a sandbox repository with scripted agents standing in for Claude and Codex (25 of 25 checks; see `docs/tasks/ORC-008.md`). It has not been run with real Claude and Codex workers.
 
 ## License
 

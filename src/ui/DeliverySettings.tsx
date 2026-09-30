@@ -80,7 +80,7 @@ export function DeliverySettings() {
     ...(posture("unattributed") ? ["The ruleset may demand an approval from a second account for commits authored by Orchestrator. If it does, pull requests wait with \"approval required\"; the app never bypasses it. Unverified."] : []),
     ...(posture("worker-shell") ? ["Claude workers have shell access, so the app cannot claim that only the service reaches GitHub."] : []),
     ...(!update ? ["Without \"bring up to date before merging\", a pull request can merge on a base its checks never ran on."] : []),
-    ...(!gh?.simulated && real ? ["Not verified against GitHub yet: it has run only against a simulated GitHub in tests. Watch the first merges."] : []),
+    ...(!gh?.simulated && real ? ["Checked on a GitHub sandbox with scripted agents, not yet with real Claude and Codex workers. Watch the first merges."] : []),
   ];
   const undelivered = D.redeliverable(state).filter((t) => !t.integration?.pr);
   const open = D.trackedPrTasks(state).length;
@@ -135,7 +135,7 @@ export function DeliverySettings() {
           {pick === "pr" && mode !== "pr" && (
             <p className="muted" style={{ fontSize: "0.82rem", margin: "0 0 0.5rem 1.4rem" }}>
               {real
-                ? "Switching this on only reads from GitHub, using your own gh sign-in. After that, each finished task is pushed to its own branch and opened as a pull request under your account. Nothing merges by itself unless you also choose automatic merging, which is a separate setting. Not verified against GitHub yet."
+                ? "Switching this on only reads from GitHub, using your own gh sign-in. After that, each finished task is pushed to its own branch and opened as a pull request under your account. Nothing merges by itself unless you also choose automatic merging, which is a separate setting."
                 : "With the simulated runtime nothing is sent to GitHub: pull requests, checks and merges are simulated and labelled so."}
             </p>
           )}
@@ -337,7 +337,7 @@ export function DeliverySettings() {
           </div>
           <p className="muted" style={{ fontSize: "0.82rem", margin: "0.3rem 0 0" }}>
             Read-only. The app uses your own gh and git sign-in and never reads, stores or prints a token.
-            {!gh?.simulated && real ? " Pull-request delivery is not verified against GitHub yet." : ""}
+            {!gh?.simulated && real ? " Your repository's rules may differ from the sandbox this was checked on: watch the first pull requests." : ""}
           </p>
           {gh?.problem && (
             <div className="banner danger" role="alert" style={{ margin: "0.5rem 0 0" }}>

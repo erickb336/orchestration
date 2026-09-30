@@ -76,7 +76,7 @@ export function Review() {
         <p className="muted" style={{ fontSize: "0.85rem" }}>
           {gh?.simulated
             ? "Pull requests here are simulated: nothing is sent to GitHub."
-            : "Pull-request delivery is not verified against GitHub yet. The app opens and watches pull requests only while this service is running."}
+            : "The app opens and watches pull requests only while this service is running."}
           {gh?.observedAt ? ` GitHub was last read ${relTime(gh.observedAt)}.` : ""}
         </p>
       )}
