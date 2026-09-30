@@ -131,6 +131,8 @@ function settleStoppedStep(s: State, t: Task, st: Step | undefined) {
 function finishTask(t: Task) {
   t.lifecycle = "done";
   t.integration = { status: "pending" };
+  // Review finding 4: a finished task's deferral is spent; its children must not inherit it.
+  t.deferral = undefined;
 }
 
 function touch(t: Task, now: string) {
@@ -300,7 +302,9 @@ export const BOARD_COLUMNS: Column[] = ["proposed", "ready", "running", "reviewi
 export function deferredBy(s: State, t: Task): { task: Task; deferral: Deferral } | undefined {
   let cur: Task | undefined = t;
   for (let i = 0; cur && i <= 10; i++) {
-    if (cur.deferral) return { task: cur, deferral: cur.deferral };
+    // Review finding 4: a done or cancelled ancestor's deferral no longer applies, so a deferred root
+    // that finishes does not strand its open children (finishTask clears the deferral as well).
+    if (cur.deferral && isOpen(cur)) return { task: cur, deferral: cur.deferral };
     if (!cur.parentTaskId) return undefined;
     cur = s.tasks.find((x) => x.id === cur!.parentTaskId);
   }
@@ -732,7 +736,7 @@ export function setPriorityPin(state: State, taskId: string, pinned: boolean, no
   return s;
 }
 
-/** "Keep running whatever the focus": the lead may not defer this task. */
+/** "Keep running whatever the focus": the lead may not defer this task. Pinning a deferred task lifts its deferral (review finding 11). */
 export function setRunPin(state: State, taskId: string, pinned: boolean, now: string): State {
   const s = draft(state);
   const t = getTask(s, taskId);
@@ -741,6 +745,7 @@ export function setRunPin(state: State, taskId: string, pinned: boolean, now: st
   else if (t.userSet) delete t.userSet.run;
   touch(t, now);
   event(s, now, "user", "control", pinned ? "Keeps running whatever the focus; the lead may not defer it" : "The lead may defer this task again", t.id);
+  if (pinned && t.deferral) clearDeferral(s, t, "user", now, "keeps running whatever the focus");
   return s;
 }
 
@@ -819,12 +824,14 @@ function userTouched(t: Task): boolean {
 const userHold = (t: Task) => t.hold && !t.holdReason && !t.pausedWith;
 
 /**
- * The dependency guard: an open task outside `t`'s tree, itself not deferred, that depends on a member
- * of the tree. A drop would leave it Blocked; a deferral would leave it waiting silently.
+ * The dependency guard: an open task outside `t`'s tree that depends on a member of the tree. A drop
+ * would leave it Blocked whenever it runs again, so for a drop every open dependent counts (review
+ * finding 2); a deferral only leaves a not-deferred dependent waiting silently, so a dependent that is
+ * already deferred does not keep a deferral back.
  */
-function openDependent(s: State, t: Task): Task | undefined {
+function openDependent(s: State, t: Task, action: "defer" | "drop"): Task | undefined {
   const tree = new Set([t.id, ...descendants(s, t).map((d) => d.id)]);
-  return s.tasks.find((x) => isOpen(x) && !tree.has(x.id) && !deferredBy(s, x) && x.dependsOn.some((d) => tree.has(d)));
+  return s.tasks.find((x) => isOpen(x) && !tree.has(x.id) && (action === "drop" || !deferredBy(s, x)) && x.dependsOn.some((d) => tree.has(d)));
 }
 
 export function pauseProject(state: State, now: string): State {
@@ -1660,6 +1667,8 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.events = [];
   s.conversation = [];
   s.leadRuns = [];
+  // Review finding 6: an old project's change sets must not rewrite a new project's task with the same id.
+  s.steering = [];
   s.project.lastPlanningAt = undefined;
   event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}`);
   return s;
@@ -1991,7 +2000,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     // Finished after a stop request: keep the reply for the record, but create nothing.
     r.outcome = "stopped";
     r.endedAt = now;
-    r.note = `Finished after a stop request; its proposals were not applied. Reply: ${String(out.reply).slice(0, 2000)}`;
+    r.note = `Finished after a stop request; its proposals and steering were not applied. Reply: ${String(out.reply).slice(0, 2000)}`;
     return s;
   }
   r.outcome = "completed";
@@ -2014,7 +2023,10 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     r.changeSetId = set.id;
   }
   const limit = Math.max(1, s.project.autonomy.maxProposalsPerCycle);
-  const openRoom = Math.max(0, s.project.autonomy.maxOpenProposals - openLeadProposals(s).length);
+  const maxOpen = s.project.autonomy.maxOpenProposals;
+  const openRoom = Math.max(0, maxOpen - openLeadProposals(s).length);
+  // Review finding 15: the bound on deferred lead work applies to message runs as it does to planning.
+  const deferredLead = deferredLeadRoots(s).length;
   // With autonomy off, proposals from a conversation still become tasks, but they wait for the user.
   const hold = !s.project.autonomy.enabled || s.project.autonomy.holdLeadProposals;
   const created: string[] = [];
@@ -2025,6 +2037,10 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   for (const [i, p] of out.proposals.entries()) {
     if (i >= limit) {
       rejected.push(`"${label(p)}": more than ${limit} proposals in one run`);
+      continue;
+    }
+    if (deferredLead >= maxOpen) {
+      rejected.push(`"${label(p)}": ${deferredLead} deferred lead proposals reached the limit of ${maxOpen}; drop those that no longer fit first`);
       continue;
     }
     if (created.length >= openRoom) {
@@ -2156,6 +2172,9 @@ export function steerPermission(s: State, t: Task | undefined, action: SteerActi
   // 1. Not steerable.
   if (!t) return { v: "reject", why: "unknown task" };
   if (t.lifecycle === "done" || t.lifecycle === "cancelled") return { v: "reject", why: `${t.id} is ${t.lifecycle}` };
+  // Review finding 1: the review and fix tasks the service creates for a pull request belong to delivery
+  // (ORC-008), which steering never touches: no priority, deferral or drop, whatever the mode.
+  if (t.reviewTarget || t.deliverInto) return { v: "reject", why: "delivery task: not steerable" };
   if (t.parentTaskId) return { v: "reject", why: `child of ${t.parentTaskId}: steer ${rootOf(s, t).id}` };
   // 2. Nothing would change.
   if (action === "priority" && value === t.priority) return { v: "noop" };
@@ -2166,7 +2185,7 @@ export function steerPermission(s: State, t: Task | undefined, action: SteerActi
   if (action === "defer" && t.hold) return { v: "skip", why: userHold(t) ? "paused by you" : "paused for review" };
   if (action === "defer" && t.controlFailure) return { v: "skip", why: "needs your attention (control failure)" };
   if (action === "defer" || action === "drop") {
-    const dep = openDependent(s, t);
+    const dep = openDependent(s, t, action);
     if (dep) return { v: "skip", why: `kept: ${dep.id} depends on it` };
   }
   // 4. A user choice or the mode turns it into a suggestion.
@@ -2200,8 +2219,14 @@ export function steerPermission(s: State, t: Task | undefined, action: SteerActi
 
 const STEER_ID_RE = /^[A-Za-z0-9._-]{1,40}$/;
 export const MAX_STEER_ITEMS = 20;
-// Control characters other than newline and tab.
+// Control characters other than newline and tab (those are whitespace, collapsed by `oneLine`).
 const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+/**
+ * Review finding 8: every text the lead supplies (focus, reason, why) is one line of plain text. The
+ * focus is printed verbatim in every later envelope, so newlines would give injected text a persistent
+ * channel; control characters are rejected outright by `CONTROL_RE`.
+ */
+const oneLine = (x: string) => x.replace(/\s+/g, " ").trim();
 
 export interface SteerItem {
   id: string;
@@ -2242,31 +2267,35 @@ export function validateSteer(s: State, r: LeadRun, steer: unknown): ValidatedSt
   const b = steer as Record<string, unknown>;
   if (b.focus !== undefined && b.focus !== null) {
     if (typeof b.focus !== "string") out.focus = { ok: false, why: "focus must be text" };
+    else if (CONTROL_RE.test(b.focus)) out.focus = { ok: false, why: "focus contains control characters" };
     else {
-      const f = b.focus.trim();
+      const f = oneLine(b.focus);
       if (f.length < 1 || f.length > 500) out.focus = { ok: false, why: "focus must be 1–500 characters" };
-      else if (CONTROL_RE.test(f)) out.focus = { ok: false, why: "focus contains control characters" };
-      else if (f !== currentVision(s).focus.trim()) out.focus = { ok: true, value: f };
+      else if (f !== oneLine(currentVision(s).focus)) out.focus = { ok: true, value: f };
     }
   }
-  if (typeof b.reason === "string" && b.reason.trim() && b.reason.trim().length <= 500) out.reason = b.reason.trim();
-  else if (b.reason !== undefined && b.reason !== null) out.notes.push("reason ignored: not text of at most 500 characters");
+  if (typeof b.reason === "string" && !CONTROL_RE.test(b.reason) && oneLine(b.reason) && oneLine(b.reason).length <= 500) out.reason = oneLine(b.reason);
+  else if (b.reason !== undefined && b.reason !== null) out.notes.push("reason ignored: not plain text of at most 500 characters");
   if (b.tasks !== undefined && b.tasks !== null) {
     if (!Array.isArray(b.tasks)) out.notes.push("tasks ignored: not a list");
     else {
+      // Review finding 5: entries past the cap are counted in one note, never one persisted row each.
+      const extra = b.tasks.length - MAX_STEER_ITEMS;
+      if (extra > 0) out.notes.push(`${extra} more entr${extra === 1 ? "y" : "ies"} ignored: at most ${MAX_STEER_ITEMS} changes in one reply`);
       const seen = new Set<string>();
-      b.tasks.forEach((raw: unknown, i: number) => {
+      b.tasks.slice(0, MAX_STEER_ITEMS).forEach((raw: unknown) => {
         const it = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
         const id = typeof it?.id === "string" && STEER_ID_RE.test(it.id) ? it.id : undefined;
-        const why = typeof it?.why === "string" ? it.why.slice(0, 300) : "";
+        // The copy kept on a rejected row is plain text too: control characters stripped, one line, capped.
+        const why = typeof it?.why === "string" ? oneLine(it.why.replace(new RegExp(CONTROL_RE.source, "g"), "")).slice(0, 300) : "";
         const fail = (reason: string) => out.items.push({ ok: false, kind: guessKind(it), ...(id ? { taskId: id } : {}), why, reason });
         try {
-          if (i >= MAX_STEER_ITEMS) return fail(`more than ${MAX_STEER_ITEMS} changes in one reply`);
           if (!it) return fail("not an object");
           if (!id) return fail("id must be 1–40 letters, digits, dots, dashes or underscores");
           const keys = ["priority", "defer", "drop"].filter((k) => it[k] !== undefined);
           if (keys.length !== 1) return fail("give exactly one of priority, defer, drop");
           if (it.why !== undefined && it.why !== null && (typeof it.why !== "string" || it.why.length > 300)) return fail("why must be text of at most 300 characters");
+          if (typeof it.why === "string" && CONTROL_RE.test(it.why)) return fail("why contains control characters");
           let action: SteerAction;
           let value: number | undefined;
           if (keys[0] === "priority") {
@@ -2323,6 +2352,9 @@ function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string): Steeri
   if (v.focus) {
     if (!v.focus.ok) row({ kind: "focus", before: cur.focus, after: null, why: v.reason, status: "rejected", note: v.focus.why });
     else if (visionMoved) row({ kind: "focus", before: cur.focus, after: v.focus.value, why: v.reason, status: "rejected", note: `you edited the vision (now r${cur.rev}); your edit stands` });
+    // Review finding 7: an undone change cannot be redone. Task rows are guarded by the pins Undo sets;
+    // a focus has no pin, so a focus the user undid can only be suggested again.
+    else if (undoneFocus(s, v.focus.value)) row({ kind: "focus", before: cur.focus, after: v.focus.value, why: v.reason, status: "suggested", note: "you undid this focus", visionRev: r.visionRev });
     else if (held || mode === "suggest") row({ kind: "focus", before: cur.focus, after: v.focus.value, why: v.reason, status: "suggested", note: held ? "held: newer direction" : "only suggest (Settings)", visionRev: r.visionRev });
     else {
       const rev = pushVision(s, { author: "lead", text: cur.text, focus: v.focus.value, reason: v.reason, source: { changeSetId: setId, leadRunId: r.id, messageIds: [...r.messageIds] } }, now, `Focus r${cur.rev + 1} by lead from your message ${from} (${setId}): ${v.reason}`);
@@ -2374,7 +2406,9 @@ function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string): Steeri
       else dropInto(s, task, setId, item.why, now, change.id);
       change.status = "applied";
       change.appliedBy = "lead";
+      // Review finding 12: a row applied on the retry pass drops its "kept: …" note from the first pass.
       if (verdict.note) change.note = verdict.note;
+      else delete change.note;
     }
     return true;
   };
@@ -2399,19 +2433,39 @@ function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string): Steeri
   return set;
 }
 
-/** Older suggestions are superseded by a held set's successor, or by a later row for the same target. */
+/**
+ * Older suggestions are superseded by a held set's successor, or by a later row for the same target.
+ * Review finding 10: only a reply that decided something supersedes. A reply without a steering block,
+ * or whose block was refused, leaves the held suggestions for the next one; and only rows the service
+ * accepted (applied or suggested) count as a decision on their target.
+ */
 function supersedeSuggestions(s: State, set: SteeringChangeSet | undefined, now: string) {
+  if (!set || set.refused) return;
+  const accepted = set.changes.filter((x) => x.status === "applied" || x.status === "suggested");
   for (const cs of s.steering) {
-    if (set && cs.id === set.id) continue;
+    if (cs.id === set.id) continue;
     for (const c of cs.changes) {
       if (c.status !== "suggested") continue;
-      const sameTarget = !!set && !set.refused && set.changes.some((x) => (x.kind === "focus" ? c.kind === "focus" : x.taskId !== undefined && x.taskId === c.taskId));
+      const sameTarget = accepted.some((x) => (x.kind === "focus" ? c.kind === "focus" : x.taskId !== undefined && x.taskId === c.taskId));
       if (cs.heldBecause || sameTarget) {
         c.status = "superseded";
         c.resolvedAt = now;
       }
     }
   }
+}
+
+/** Review finding 7: did the user undo a lead focus change to exactly this text? Then it is only suggested again. */
+function undoneFocus(s: State, focus: string): boolean {
+  return s.steering.some((cs) => cs.changes.some((c) => c.kind === "focus" && c.status === "undone" && oneLine(String(c.after ?? "")) === focus));
+}
+
+/** Replace the "left as is on <op>: …" segment of a row's note (review finding 12: failed undos must not pile up). */
+function leftNote(note: string | undefined, op: "undo" | "apply", why: string): string {
+  const prefix = `left as is on ${op}:`;
+  const parts = (note ?? "").split("; ").filter((p) => p && !p.startsWith(prefix));
+  parts.push(`${prefix} ${why}`);
+  return parts.join("; ");
 }
 
 function getChangeSet(s: State, changeSetId: string): SteeringChangeSet {
@@ -2463,13 +2517,16 @@ function undoRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: strin
       if (t.deferral) return "it was deferred again since";
       const before = c.before as Deferral | null;
       if (!before || typeof before !== "object") return "the earlier deferral is not on record";
-      t.deferral = structuredClone(before);
+      // Review finding 7: restored as the user's deferral, so the lead can only suggest lifting it again.
+      t.deferral = { ...structuredClone(before), by: "user", at: now };
       touch(t, now);
-      event(s, now, "user", "control", `Deferral restored (undo of ${c.id})`, t.id);
+      event(s, now, "user", "control", `Deferral restored by you (undo of ${c.id}); the lead may only suggest lifting it`, t.id);
       return undefined;
     }
     case "drop":
       if (!t) return "task not found";
+      // A drop the user applied went through the ordinary cancel, which has no undo.
+      if (c.appliedBy === "user") return "you cancelled it; a cancel cannot be undone";
       return reopenDropped(s, t, set.id, now);
     default:
       return "not applied";
@@ -2482,6 +2539,7 @@ export function undoSteering(state: State, changeSetId: string, changeId: string
   const set = getChangeSet(s, changeSetId);
   const rows = changeId ? [getChange(set, changeId)] : [...set.changes].reverse();
   const result: UndoResult = { undone: [], left: [] };
+  let noted = false; // a row's note changed: a new reason, not a repeat of the last failed undo
   for (const c of rows) {
     if (c.status === "undone") {
       result.left.push({ id: c.id, why: "already undone" });
@@ -2493,7 +2551,9 @@ export function undoSteering(state: State, changeSetId: string, changeId: string
     }
     const why = undoRow(s, set, c, now);
     if (why) {
-      c.note = `${c.note ? `${c.note}; ` : ""}left as is on undo: ${why}`;
+      const note = leftNote(c.note, "undo", why);
+      if (note !== c.note) noted = true;
+      c.note = note;
       result.left.push({ id: c.id, why });
     } else {
       c.status = "undone";
@@ -2501,7 +2561,8 @@ export function undoSteering(state: State, changeSetId: string, changeId: string
       result.undone.push(c.id);
     }
   }
-  if (result.undone.length || result.left.some((l) => l.why !== "already undone" && l.why !== "not applied")) {
+  // Review finding 12: a repeated failed undo neither grows the note nor logs another event.
+  if (result.undone.length || noted) {
     event(s, now, "user", "control", `Undid ${result.undone.length} of the lead's change(s) (${set.id})${result.left.length ? `; ${result.left.length} left as is` : ""}`);
   }
   return { state: s, result };
@@ -2572,7 +2633,7 @@ export function applySteering(state: State, changeSetId: string, changeId: strin
     }
     const why = applyRow(s, set, c, now);
     if (why) {
-      c.note = `${c.note ? `${c.note}; ` : ""}left as is on apply: ${why}`;
+      c.note = leftNote(c.note, "apply", why);
       result.left.push({ id: c.id, why });
     } else {
       c.status = "applied";
@@ -2648,15 +2709,17 @@ export function messageStatus(s: State, m: Message, opts: { blocked?: string; no
   if (m.author !== "user") return { kind: "answered", text: "" };
   if (s.leadRuns.some((r) => r.outcome === "completed" && r.messageIds.includes(m.id))) return { kind: "answered", text: "Answered" };
   const active = activeLeadRun(s);
-  if (active?.outcome === "running" && active.messageIds.includes(m.id)) return { kind: "working", text: "The lead is working on this…" };
   const failure = active?.note?.startsWith("Control failure") ? ` ${active.note}` : "";
-  if (active?.outcome === "stopping" && active.messageIds.includes(m.id)) return { kind: "restarting", text: `Stopping the current reply; the next run answers this together with your newer message.${failure}` };
+  // Review finding 9: a lead run stopping under a project pause is stopping because of the pause, not to
+  // answer anything. The pause is checked first, and the stop texts below name no reason for the stop.
+  if (s.project.hold) return { kind: "project-paused", text: `Project paused; ${active?.outcome === "stopping" ? "the lead run is stopping and " : ""}the lead answers after you resume.${failure}` };
+  if (active?.outcome === "running" && active.messageIds.includes(m.id)) return { kind: "working", text: "The lead is working on this…" };
+  if (active?.outcome === "stopping" && active.messageIds.includes(m.id)) return { kind: "restarting", text: `The current reply is stopping; the next lead run answers this together with your newer message.${failure}` };
   if (active?.outcome === "stopping") {
-    if (active.messageIds.length === 0) return { kind: "stopping-planning", text: `Stopping planning to answer you.${failure}` };
-    return { kind: "restarting", text: `The current reply is stopping; the next run answers this too.${failure}` };
+    if (active.messageIds.length === 0) return { kind: "stopping-planning", text: `The planning run is stopping; the next lead run answers you.${failure}` };
+    return { kind: "restarting", text: `The current reply is stopping; the next lead run answers this too.${failure}` };
   }
   if (active?.outcome === "running") return { kind: "queued-behind-reply", text: "Queued behind the current reply." };
-  if (s.project.hold) return { kind: "project-paused", text: "Project paused; the lead answers after you resume." };
   if (opts.blocked) return { kind: "blocked", text: `The lead can't run: ${opts.blocked}` };
   let streak = 0;
   for (let i = s.leadRuns.length - 1; i >= 0 && (s.leadRuns[i].outcome === "failed" || s.leadRuns[i].outcome === "lost"); i--) streak++;

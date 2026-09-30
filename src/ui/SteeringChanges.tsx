@@ -23,6 +23,16 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
   const notChanged = set.changes.filter((c) => c.status === "skipped" || c.status === "rejected");
   const resolved = set.changes.filter((c) => c.status === "undone" || c.status === "dismissed" || c.status === "superseded");
   const off = disabled || busy !== null;
+  // Review finding 13: "Ask again" only while the held rows are still open, and never during a lead run
+  // (the run in progress already answers the newest message).
+  const leadBusy = !!M.activeLeadRun(state);
+  // Review finding 3: a drop the user applies is an ordinary cancel with no undo, so it is never Undo-able here.
+  const undoable = (c: SteeringChange) => !(c.kind === "drop" && c.appliedBy === "user");
+  const applyAll = () => {
+    const drops = suggested.filter((c) => c.kind === "drop");
+    if (drops.length && !confirmDrops(state, drops)) return;
+    void run("apply-all", { name: "applySteering", args: { changeSetId: set.id } });
+  };
 
   if (set.refused) {
     return (
@@ -38,9 +48,16 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
       {set.heldBecause && (
         <div className="banner" style={{ margin: "0.3rem 0", fontSize: "0.85rem" }} role="status">
           Held: {set.heldBecause}{" "}
-          <button className="small" disabled={off} onClick={() => void run("ask", { name: "postMessage", args: { text: "Please re-apply your last steering." } })}>
-            Ask again
-          </button>
+          {suggested.length > 0 && (
+            <button
+              className="small"
+              disabled={off || leadBusy}
+              title={leadBusy ? "The lead is working; its reply decides these" : undefined}
+              onClick={() => void run("ask", { name: "postMessage", args: { text: "Please re-apply your last steering." } })}
+            >
+              Ask again
+            </button>
+          )}
         </div>
       )}
       {(notChanged.length > 0 || (suggested.length > 0 && !set.heldBecause)) && (
@@ -54,25 +71,27 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
         </div>
       ))}
       {changed.length > 0 && (
-        <Section title="Changed" action={changed.length > 1 ? <button className="small" disabled={off} onClick={() => void run("undo-all", { name: "undoSteering", args: { changeSetId: set.id } })}>Undo all</button> : undefined}>
+        <Section title="Changed" action={changed.filter(undoable).length > 1 ? <button className="small" disabled={off} onClick={() => void run("undo-all", { name: "undoSteering", args: { changeSetId: set.id } })}>Undo all</button> : undefined}>
           {changed.map((c) => (
             <Row key={c.id} state={state} c={c}>
-              <button className="small" disabled={off} onClick={() => void run(c.id, { name: "undoSteering", args: { changeSetId: set.id, changeId: c.id } })}>
-                Undo
-              </button>
+              {undoable(c) && (
+                <button className="small" disabled={off} onClick={() => void run(c.id, { name: "undoSteering", args: { changeSetId: set.id, changeId: c.id } })}>
+                  Undo
+                </button>
+              )}
             </Row>
           ))}
         </Section>
       )}
       {suggested.length > 0 && (
-        <Section title="Suggested" action={suggested.length > 1 ? <button className="small" disabled={off} onClick={() => void run("apply-all", { name: "applySteering", args: { changeSetId: set.id } })}>Apply all</button> : undefined}>
+        <Section title="Suggested" action={suggested.length > 1 ? <button className="small" disabled={off} onClick={applyAll}>Apply all</button> : undefined}>
           {suggested.map((c) => (
             <Row key={c.id} state={state} c={c}>
               <button
                 className="small"
                 disabled={off}
                 onClick={() => {
-                  if (c.kind === "drop" && !confirmDrop(state, c)) return;
+                  if (c.kind === "drop" && !confirmDrops(state, [c])) return;
                   void run(c.id, { name: "applySteering", args: { changeSetId: set.id, changeId: c.id } });
                 }}
               >
@@ -117,15 +136,21 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   );
 }
 
-/** A drop the user applies is an ordinary cancel: say what it stops and blocks first. */
-function confirmDrop(state: State, c: SteeringChange): boolean {
-  const t = state.tasks.find((x) => x.id === c.taskId);
-  if (!t) return false;
-  const running = M.activeAttempts(state, t.id).length;
-  const dependents = state.tasks.filter((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled" && x.dependsOn.includes(t.id)).map((x) => x.id);
-  return confirm(
-    [`Cancel ${t.id}?`, running ? `${running} run(s) are stopped (shown as Cancelling until confirmed).` : "", dependents.length ? `${dependents.join(", ")} would be blocked.` : "", "The spec and partial artifacts are kept."].filter(Boolean).join("\n"),
-  );
+/**
+ * A drop the user applies is an ordinary cancel, with no undo: say what each one stops and blocks first.
+ * Review finding 3: "Apply all" confirms its drops the same way, in one dialog.
+ */
+function confirmDrops(state: State, rows: SteeringChange[]): boolean {
+  const lines: string[] = [];
+  for (const c of rows) {
+    const t = state.tasks.find((x) => x.id === c.taskId);
+    if (!t) continue;
+    const running = M.activeAttempts(state, t.id).length;
+    const dependents = state.tasks.filter((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled" && x.dependsOn.includes(t.id)).map((x) => x.id);
+    lines.push([`Cancel ${t.id}?`, running ? `${running} run(s) are stopped (shown as Cancelling until confirmed).` : "", dependents.length ? `${dependents.join(", ")} would be blocked.` : ""].filter(Boolean).join(" "));
+  }
+  if (!lines.length) return false;
+  return confirm([...lines, "A cancel cannot be undone. The spec and partial artifacts are kept."].join("\n"));
 }
 
 function Row({ state, c, struck, children }: { state: State; c: SteeringChange; struck?: boolean; children?: React.ReactNode }) {
@@ -157,7 +182,7 @@ function Row({ state, c, struck, children }: { state: State; c: SteeringChange; 
           {c.kind === "priority" && `P${String(c.before ?? "?")} → P${String(c.after ?? "?")} (next free slot; running work continues)`}
           {c.kind === "defer" && "Deferred (after its current step)"}
           {c.kind === "undefer" && "Runs again (deferral lifted)"}
-          {c.kind === "drop" && "Dropped (had not started)"}
+          {c.kind === "drop" && (c.appliedBy === "user" ? "Cancelled" : "Dropped (had not started)")}
           {c.kind === "invalid" && "an entry the service could not read"}
         </span>
         {t && <span className="chip">{M.stateLabel(state, t)}</span>}

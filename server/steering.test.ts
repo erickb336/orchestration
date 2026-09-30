@@ -219,7 +219,7 @@ describe("C/D. a message preempts planning", () => {
     const plannedAt = state().project.lastPlanningAt;
     cmd("postMessage", { text: FOCUS_MSG });
     expect(leadRun()!.outcome).toBe("stopping");
-    expect(status()).toMatchObject({ kind: "stopping-planning", text: "Stopping planning to answer you." });
+    expect(status()).toMatchObject({ kind: "stopping-planning", text: "The planning run is stopping; the next lead run answers you." });
     tick();
     expect(claude.interrupts).toContain(planning.id);
     claude.reply(planning.id, "Late plan.", [proposal()]);
@@ -541,7 +541,8 @@ describe("L/M/O/Q. drops, undo idempotency, untrusted output, duplicate events",
     cmd("pauseProject");
     claude.reply(r2.id, "late", [], steer({ tasks: [st.defer(id)] }));
     tick();
-    expect(state().leadRuns.find((x) => x.id === r2.id)).toMatchObject({ outcome: "stopped", note: expect.stringContaining("not applied") });
+    // Review finding 16: the note must say the steering, not only the proposals, was not applied.
+    expect(state().leadRuns.find((x) => x.id === r2.id)).toMatchObject({ outcome: "stopped", note: expect.stringMatching(/^Finished after a stop request; its proposals and steering were not applied\./) });
     expect(state().steering).toHaveLength(1);
     expect(task(id).deferral).toBeUndefined();
   });
@@ -645,7 +646,9 @@ describe("T/U. the envelope and provider neutrality", () => {
     const r2 = ask("and now?", { taskId: c });
     claude.reply(r2.id, "ok", [], steer({ focus: undefined, tasks: [st.priority(b, 1)] }));
     tick();
-    cmd("dismissSteering", { changeSetId: lastSet().id });
+    const set2 = lastSet();
+    expect(set2.changes).toEqual([expect.objectContaining({ kind: "priority", taskId: b, status: "suggested" })]);
+    cmd("dismissSteering", { changeSetId: set2.id });
     cmd("postMessage", { text: "hold on", taskId: a });
     const s = M.startLeadRun(state(), { provider: "claude", model: "m", trigger: "message" }, iso()).state;
     const text = buildLeadEnvelope(s, M.activeLeadRun(s)!, "read");
@@ -669,7 +672,9 @@ describe("T/U. the envelope and provider neutrality", () => {
     expect(text).toMatch(/r2 by lead \(the user's message msg-/);
     expect(text).toMatch(/r3 by user \(undo of cs-/);
     expect(text).toMatch(new RegExp(`${set.changes[2].id}.*deferred — undone by the user`));
-    expect(text).toMatch(/dismissed/);
+    // Review finding 16: the rules text always contains the word "dismissed"; assert the dismissed row itself.
+    expect(text).toMatch(new RegExp(`- ${set2.changes[0].id.replace(/\\./g, "\\.")} \\(.*\\): ${b} P2 → P1 — dismissed`));
+    expect(text.split("\n").filter((l) => l.includes(" — dismissed"))).toHaveLength(1);
     expect(text).toContain(`(sent from ${a} "Open A"`);
     expect(text).toContain('"steer": {');
     expect(text).toContain("## Steering rules");
@@ -695,5 +700,50 @@ describe("T/U. the envelope and provider neutrality", () => {
       { kind: "defer", taskId: other, before: null, after: { by: "lead", at: expect.any(String), reason: "no longer fits the focus", changeSetId: set.id }, status: "applied", note: undefined },
       { kind: "drop", taskId: "nope", before: null, after: "cancelled", status: "rejected", note: "unknown task" },
     ]);
+  });
+});
+
+describe("R1. independent review findings (service)", () => {
+  it("1: the open-work board leaves out the service's review and fix tasks, and steering them is rejected", () => {
+    const a = createTask("Open A", 1);
+    const rv = createTask("Review of A's pull request", 1);
+    const fx = createTask("Fix for A's pull request", 1);
+    edit((s) => {
+      s.tasks.find((t) => t.id === rv)!.reviewTarget = { taskId: a, n: 1, headSha: "a".repeat(40), baseSha: "b".repeat(40) };
+      s.tasks.find((t) => t.id === fx)!.deliverInto = { taskId: a, n: 1, mergeBase: false };
+    });
+    tick();
+    const r = ask(FOCUS_MSG);
+    const prompt = claude.runs.get(r.id)!.prompt;
+    const open = prompt.slice(prompt.indexOf("## Open work"), prompt.indexOf("## Recently finished"));
+    expect(open).toContain(`- ${a} [`);
+    expect(open).not.toContain(`- ${rv} [`);
+    expect(open).not.toContain(`- ${fx} [`);
+    claude.reply(r.id, "ok", [], steer({ focus: undefined, tasks: [st.defer(rv), st.priority(fx, 9), st.defer(a)] }));
+    tick();
+    expect(lastSet().changes.map((c) => [c.taskId, c.status, c.note])).toEqual([
+      [rv, "rejected", "delivery task: not steerable"],
+      [fx, "rejected", "delivery task: not steerable"],
+      [a, "applied", undefined],
+    ]);
+    expect(task(rv).deferral).toBeUndefined();
+    expect(task(fx).priority).toBe(1);
+  });
+});
+
+describe("R1. independent review findings (low, service)", () => {
+  it("15: a message run cannot propose past the bound on deferred lead work either", () => {
+    autonomy({ maxOpenProposals: 1, maxProposalsPerCycle: 2 });
+    tick();
+    const p = leadRun()!;
+    claude.reply(p.id, "one", [proposal({ title: "One" })]);
+    tick();
+    const [one] = state().conversation.filter((m) => m.author === "lead").pop()!.proposedTaskIds!;
+    const r = ask(FOCUS_MSG);
+    claude.reply(r.id, "ok", [proposal({ title: "Two" })], steer({ tasks: [st.defer(one)] }));
+    tick();
+    expect(M.deferredLeadRoots(state())).toHaveLength(1);
+    expect(state().conversation.filter((m) => m.author === "lead").pop()!.rejected).toEqual([expect.stringMatching(/^"Two": 1 deferred lead proposals reached the limit of 1; drop those that no longer fit first$/)]);
+    expect(state().tasks.some((t) => M.currentSpec(t).content.title === "Two")).toBe(false);
   });
 });

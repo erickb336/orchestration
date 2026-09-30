@@ -158,10 +158,21 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
               set by the lead (was P{provenance.was}) ·{" "}
               <button className="link" disabled={disabled} onClick={() => void send("undoSteering", { changeSetId: provenance.changeSetId, changeId: provenance.changeId })}>
                 Undo
+              </button>{" "}
+              ·{" "}
+              <button className="link" disabled={disabled} title="The lead may not reorder it again" onClick={() => void send("setPriorityPin", { taskId: task.id, pinned: true })}>
+                Keep P{task.priority}
               </button>
             </>
           )}
-          {provenance.kind === "auto" && "Auto: the lead may reorder it when you steer"}
+          {provenance.kind === "auto" && (
+            <>
+              Auto: the lead may reorder it when you steer ·{" "}
+              <button className="link" disabled={disabled} title="The lead may not reorder it" onClick={() => void send("setPriorityPin", { taskId: task.id, pinned: true })}>
+                Pin P{task.priority}
+              </button>
+            </>
+          )}
           {provenance.kind === "child" && `Runs at ${provenance.rootId}'s priority (P${provenance.priority}); Set pins its own`}
         </span>
       </span>

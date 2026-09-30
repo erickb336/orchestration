@@ -359,3 +359,27 @@ describe("finding 8: ensureReview is what the service calls", () => {
     expect(reviewTasks(D.ensureReview(M.resumeProject(paused, at(6)), ID, at(7)))).toHaveLength(1);
   });
 });
+
+describe("ORC-009 review finding 1: the review and fix tasks of a pull request are not steerable", () => {
+  it("a message run in PR auto mode that defers the review or reprioritizes the fix is rejected; a deferred review is reported as such", () => {
+    const s0 = redWithFix();
+    const rv = `${ID}-RV1`;
+    for (const id of [rv, FIX]) for (const action of ["priority", "defer", "undefer", "drop"] as const) expect(M.steerPermission(s0, task(s0, id), action, "apply", 1)).toEqual({ v: "reject", why: "delivery task: not steerable" });
+    let s = M.postMessage(s0, "defer the review, it can wait", at(60));
+    const r = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "message" }, at(61));
+    s = M.completeLeadRun(r.state, r.runId, { reply: "ok", proposals: [], steer: { tasks: [{ id: rv, defer: true }, { id: FIX, priority: 1 }] } }, at(62));
+    expect(s.steering[0].changes.map((c) => [c.taskId, c.status, c.note])).toEqual([
+      [rv, "rejected", "delivery task: not steerable"],
+      [FIX, "rejected", "delivery task: not steerable"],
+    ]);
+    expect(task(s, rv).deferral).toBeUndefined();
+    expect(task(s, FIX).priority).toBe(task(s0, FIX).priority);
+    expect(D.reviewView(s, task(s, ID))).toMatchObject({ state: "pending", reviewTaskId: rv });
+    // A deferral reached by any other path is reported as what it is, never as "queued".
+    const deferred = structuredClone(s);
+    task(deferred, rv).deferral = { by: "user", at: at(63), reason: "test" };
+    const v = D.reviewView(deferred, task(deferred, ID));
+    expect(v).toMatchObject({ state: "blocked", reviewTaskId: rv });
+    expect(v.evidence.reason).toMatch(new RegExp(`The independent review ${rv} of [0-9a-f]{12} is deferred, so it does not run`));
+  });
+});

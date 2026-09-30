@@ -308,7 +308,9 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read"): s
   const canSteer = run.messageIds.length > 0;
   const mode = p.steeringMode;
   const roots = state.tasks.filter((t) => !t.parentTaskId);
-  const openRoots = roots.filter((t) => t.lifecycle !== "done" && t.lifecycle !== "cancelled").sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+  // Review finding 1: the review and fix tasks the service creates for a pull request are delivery's, not
+  // steerable, and not the lead's to see on its board (`steerPermission` rejects them as well).
+  const openRoots = roots.filter((t) => t.lifecycle !== "done" && t.lifecycle !== "cancelled" && !t.reviewTarget && !t.deliverInto).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
   const board = openRoots.length
     ? [...openRoots.slice(0, MAX_OPEN_ROWS).map((t) => openWorkLine(state, t, mode)), ...(openRoots.length > MAX_OPEN_ROWS ? [`${openRoots.length - MAX_OPEN_ROWS} more open tasks not shown (lowest priority)`] : [])].join("\n")
     : "- No open work.";

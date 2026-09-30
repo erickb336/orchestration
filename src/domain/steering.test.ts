@@ -159,7 +159,7 @@ describe("D2 validateSteer is strict", () => {
     expect(v({ focus: "x".repeat(501) }).focus).toEqual({ ok: false, why: "focus must be 1–500 characters" });
     expect(v({ focus: 7 }).focus).toEqual({ ok: false, why: "focus must be text" });
     expect(v({ focus: "a\u0007b" }).focus).toEqual({ ok: false, why: "focus contains control characters" });
-    expect(v({ focus: "ok\n\ttabs are fine" }).focus).toEqual({ ok: true, value: "ok\n\ttabs are fine" });
+    expect(v({ focus: "ok\n\ttabs and newlines\n  collapse" }).focus).toEqual({ ok: true, value: "ok tabs and newlines collapse" });
     expect(v({ focus: M.currentVision(s).focus }).focus).toBeUndefined();
   });
 
@@ -167,10 +167,11 @@ describe("D2 validateSteer is strict", () => {
     const many = Array.from({ length: 21 }, (_, i) => ({ id: `T-${i}`, defer: true }));
     const r = v({ tasks: many, reason: 42 });
     expect(r.items.filter((i) => i.ok)).toHaveLength(20);
-    expect(r.items[20]).toMatchObject({ ok: false, reason: "more than 20 changes in one reply" });
+    expect(r.items).toHaveLength(20); // review finding 5: the rest is one note, not one row each
+    expect(r.notes).toContain("1 more entry ignored: at most 20 changes in one reply");
     expect(reasons({ tasks: [{ id: "EX-003", defer: true }, { id: "EX-003", priority: 1 }] })).toEqual(["ok", "one change per task per reply"]);
     expect(r.reason).toBe("From your message");
-    expect(r.notes).toContain("reason ignored: not text of at most 500 characters");
+    expect(r.notes).toContain("reason ignored: not plain text of at most 500 characters");
     expect(v({ tasks: "EX-003" }).notes).toContain("tasks ignored: not a list");
   });
 });
@@ -473,7 +474,7 @@ describe("D9 messageStatus", () => {
     const pr = M.startLeadRun(p, { provider: "claude", model: "m", trigger: "planning" }, at(1));
     p = M.postMessage(pr.state, "focus on X", at(2));
     expect(p.leadRuns[0].outcome).toBe("stopping");
-    expect(status(p)).toMatchObject({ kind: "stopping-planning", text: "Stopping planning to answer you." });
+    expect(status(p)).toMatchObject({ kind: "stopping-planning", text: "The planning run is stopping; the next lead run answers you." });
     p = M.reportLeadStopTimeout(p, pr.runId, at(30));
     expect(status(p).text).toMatch(/Control failure/);
     expect(() => M.stopLeadReply(p, at(31))).toThrow(ControlError);
@@ -543,5 +544,171 @@ describe("D11 pins from commands", () => {
     expect(M.priorityProvenance(s, task(s, "EX-003"))).toEqual({ kind: "auto" });
     const led = steerRun(s, { tasks: [{ id: "EX-003", priority: 1 }] });
     expect(M.priorityProvenance(led.state, task(led.state, "EX-003"))).toEqual({ kind: "lead", was: 2, changeSetId: led.set.id, changeId: led.set.changes[0].id });
+  });
+});
+
+// Regressions for the independent review of ORC-009 (findings 2–8; finding 1 is in delivery.review3.test.ts
+// and server/steering.test.ts, and finding 3's confirmation dialog is UI-only).
+describe("R1. independent review findings", () => {
+  it("2: a drop counts every open dependent, deferred or not, so it never leaves a task Blocked", () => {
+    const base = userTask(seed(), "Mine", 5);
+    const s = structuredClone(base.state);
+    task(s, base.id).dependsOn = ["EX-003"];
+    for (const tasks of [
+      [{ id: "EX-003", drop: true }, { id: base.id, defer: true }],
+      [{ id: base.id, defer: true }, { id: "EX-003", drop: true }],
+    ]) {
+      const r = steerRun(s, { tasks });
+      const byTask = (id: string) => r.set.changes.find((c) => c.taskId === id)!;
+      expect(byTask("EX-003")).toMatchObject({ kind: "drop", status: "skipped", note: `kept: ${base.id} depends on it` });
+      expect(byTask(base.id)).toMatchObject({ kind: "defer", status: "applied" });
+      expect(task(r.state, "EX-003").lifecycle).not.toBe("cancelled");
+      expect(M.blockedReason(r.state, task(r.state, base.id))).toBeUndefined();
+      expect(M.stateLabel(r.state, task(r.state, base.id))).not.toMatch(/Blocked/);
+    }
+    // Deferring the prerequisite once its dependent is deferred is still fine: nothing waits silently.
+    const both = steerRun(s, { tasks: [{ id: base.id, defer: true }, { id: "EX-003", defer: true }] });
+    expect(both.set.changes.map((c) => c.status)).toEqual(["applied", "applied"]);
+  });
+
+  it("3: a drop the user applied is an ordinary cancel; Undo says so instead of failing on reopen", () => {
+    const r = steerRun(M.setSteeringMode(seed(), "suggest", at(0)), { tasks: [{ id: "EX-003", drop: true }] });
+    expect(r.set.changes[0]).toMatchObject({ kind: "drop", status: "suggested" });
+    const applied = M.applySteering(r.state, r.set.id, undefined, at(5));
+    expect(applied.result.applied).toEqual([r.set.changes[0].id]);
+    expect(task(applied.state, "EX-003")).toMatchObject({ lifecycle: "cancelled", cancelledBy: "user" });
+    expect(task(applied.state, "EX-003").dropped).toBeUndefined();
+    expect(applied.state.steering[0].changes[0]).toMatchObject({ status: "applied", appliedBy: "user" });
+    const undo = M.undoSteering(applied.state, r.set.id, undefined, at(6));
+    expect(undo.result).toEqual({ undone: [], left: [{ id: r.set.changes[0].id, why: "you cancelled it; a cancel cannot be undone" }] });
+    expect(task(undo.state, "EX-003").lifecycle).toBe("cancelled");
+  });
+
+  it("4: a deferred root that finishes no longer defers its children, and finishing clears the deferral", () => {
+    let s = structuredClone(seed());
+    task(s, "EX-004").parentTaskId = "EX-003";
+    s = deferred(s, "EX-003");
+    expect(M.deferredBy(s, task(s, "EX-004"))?.task.id).toBe("EX-003");
+    for (const lifecycle of ["done", "cancelled"] as const) {
+      const fin = structuredClone(s);
+      task(fin, "EX-003").lifecycle = lifecycle;
+      expect(M.deferredBy(fin, task(fin, "EX-004"))).toBeUndefined();
+      expect(M.stateLabel(fin, task(fin, "EX-004"))).not.toMatch(/Deferred/);
+    }
+    let { state: u, id } = userTask(seed(), "Last step", 1);
+    u = M.dispatchEligible(promote(u), at(1));
+    const [a] = running(u, id);
+    u = deferred(u, id);
+    u = complete(u, a.id, at(2));
+    expect(task(u, id)).toMatchObject({ lifecycle: "done", deferral: undefined });
+  });
+
+  it("5: entries past the cap of 20 are one note, never one persisted row each", () => {
+    const many = Array.from({ length: 5000 }, (_, i) => ({ id: `T-${i}`, defer: true }));
+    const v = M.validateSteer(seed(), messageRun, { tasks: many });
+    expect(v.items).toHaveLength(20);
+    expect(v.notes).toEqual(["4980 more entries ignored: at most 20 changes in one reply"]);
+    const r = steerRun(seed(), { tasks: many });
+    expect(r.set.changes).toHaveLength(20);
+    expect(r.set.notes).toEqual(["4980 more entries ignored: at most 20 changes in one reply"]);
+  });
+
+  it("6: a new project starts with no change sets, so old ones cannot rewrite its tasks", () => {
+    const r = steerRun(buildSeed(T0, { inFlightRuns: false }), { focus: "Local first", tasks: [{ id: "EX-003", priority: 1 }] });
+    expect(r.state.steering).toHaveLength(1);
+    const fresh = M.initProject(r.state, { name: "New", repoPath: "/tmp/new", vision: "v", focus: "f" }, at(10));
+    expect(fresh.steering).toEqual([]);
+    expect(() => M.undoSteering(fresh, r.set.id, undefined, at(11))).toThrow(ControlError);
+  });
+
+  it("7: an undone focus change or undefer cannot be redone by the lead; it is only suggested", () => {
+    const first = steerRun(seed(), { focus: "Local first", tasks: [] });
+    expect(first.set.changes[0]).toMatchObject({ kind: "focus", status: "applied" });
+    const undone = M.undoSteering(first.state, first.set.id, undefined, at(10)).state;
+    expect(M.currentVision(undone)).toMatchObject({ rev: 3, author: "user" });
+    const again = steerRun(undone, { focus: "Local first", tasks: [] }, { message: "again" });
+    expect(again.set.changes).toEqual([expect.objectContaining({ kind: "focus", status: "suggested", note: "you undid this focus", after: "Local first" })]);
+    expect(M.currentVision(again.state).rev).toBe(3);
+    const other = steerRun(again.state, { focus: "Something else", tasks: [] }, { message: "other" });
+    expect(other.set.changes[0]).toMatchObject({ kind: "focus", status: "applied" });
+    expect(M.currentVision(other.state)).toMatchObject({ rev: 4, focus: "Something else" });
+    // Undefer: Undo restores the deferral as the user's, so lifting it again is only suggested.
+    const d = structuredClone(seed());
+    task(d, "EX-003").deferral = { by: "lead", at: at(0), reason: "old focus", changeSetId: "cs-old" };
+    const lifted = steerRun(d, { tasks: [{ id: "EX-003", defer: false }] });
+    expect(lifted.set.changes[0]).toMatchObject({ kind: "undefer", status: "applied" });
+    expect(task(lifted.state, "EX-003").deferral).toBeUndefined();
+    const back = M.undoSteering(lifted.state, lifted.set.id, undefined, at(10)).state;
+    expect(task(back, "EX-003").deferral).toMatchObject({ by: "user", reason: "old focus", changeSetId: "cs-old" });
+    const redo = steerRun(back, { tasks: [{ id: "EX-003", defer: false }] }, { message: "again" });
+    expect(redo.set.changes).toEqual([expect.objectContaining({ kind: "undefer", status: "suggested", note: "you deferred it" })]);
+    expect(task(redo.state, "EX-003").deferral).toBeDefined();
+  });
+
+  it("8: focus, reason and why are one line of plain text: control characters are rejected, whitespace collapses", () => {
+    const v = M.validateSteer(seed(), messageRun, {
+      focus: "Local\n\nfirst,\tthen   deploy",
+      reason: "because\u0007",
+      tasks: [
+        { id: "EX-003", defer: true, why: "w\u0000x" },
+        { id: "EX-004", defer: true, why: "multi\nline  why" },
+      ],
+    });
+    expect(v.focus).toEqual({ ok: true, value: "Local first, then deploy" });
+    expect(v.reason).toBe("From your message");
+    expect(v.notes).toContain("reason ignored: not plain text of at most 500 characters");
+    expect(v.items).toEqual([
+      { ok: false, kind: "defer", taskId: "EX-003", why: "wx", reason: "why contains control characters" },
+      { ok: true, item: { id: "EX-004", action: "defer", why: "multi line why" } },
+    ]);
+    expect(M.validateSteer(seed(), messageRun, { reason: "one\nline\treason" }).reason).toBe("one line reason");
+    expect(M.validateSteer(seed(), messageRun, { focus: "ok\u001b[31m" }).focus).toEqual({ ok: false, why: "focus contains control characters" });
+    // Applied: the recorded focus, reason and deferral carry the single-line text.
+    const r = steerRun(seed(), { focus: "Local\nfirst", reason: "you\nsaid", tasks: [{ id: "EX-003", defer: true, why: "not\nnow" }] });
+    expect(M.currentVision(r.state).focus).toBe("Local first");
+    expect(r.set.reason).toBe("you said");
+    expect(task(r.state, "EX-003").deferral?.reason).toBe("not now");
+  });
+});
+
+describe("R1. independent review findings (low)", () => {
+  it("10: a refused set or a reply without a block decides nothing; only accepted rows supersede a target", () => {
+    const held = steerRun(seed(), { tasks: [{ id: "EX-003", priority: 1 }] }, { during: (s) => M.postMessage(s, "newer", at(2)) });
+    expect(held.set.heldBecause).toBeDefined();
+    expect(held.set.changes[0].status).toBe("suggested");
+    const refused = steerRun(held.state, 7, { message: "again" });
+    expect(refused.set.refused).toBe("the steering block was not an object");
+    expect(refused.state.steering[0].changes[0].status).toBe("suggested");
+    const noBlock = steerRun(refused.state, undefined, { message: "and again" });
+    expect(noBlock.state.steering[0].changes[0].status).toBe("suggested");
+    const decided = steerRun(noBlock.state, { tasks: [] }, { message: "decide" });
+    expect(decided.state.steering[0].changes[0].status).toBe("superseded");
+    const sug = steerRun(M.setSteeringMode(seed(), "suggest", at(0)), { tasks: [{ id: "EX-003", priority: 1 }] });
+    const rejectedOnly = steerRun(sug.state, { tasks: [{ id: "EX-003", priority: 0 }] }, { message: "bad" });
+    expect(rejectedOnly.set.changes[0].status).toBe("rejected");
+    expect(rejectedOnly.state.steering[0].changes[0].status).toBe("suggested");
+    const accepted = steerRun(rejectedOnly.state, { tasks: [{ id: "EX-003", priority: 2 }] }, { message: "ok" });
+    expect(accepted.state.steering[0].changes[0].status).toBe("superseded");
+  });
+
+  it("11: Keep running whatever the focus lifts the task's deferral", () => {
+    const pinned = M.setRunPin(deferred(seed(), "EX-003"), "EX-003", true, at(1));
+    expect(task(pinned, "EX-003").deferral).toBeUndefined();
+    expect(task(pinned, "EX-003").userSet?.run).toBe(at(1));
+  });
+
+  it("12: a row applied on the retry pass loses its kept note; a repeated failed undo neither grows the note nor logs again", () => {
+    const base = userTask(seed(), "Mine", 5);
+    const s = structuredClone(base.state);
+    task(s, base.id).dependsOn = ["EX-003"];
+    const retried = steerRun(s, { tasks: [{ id: "EX-003", defer: true }, { id: base.id, defer: true }] });
+    expect(retried.set.changes.map((c) => [c.status, c.note])).toEqual([["applied", undefined], ["applied", undefined]]);
+    const r = steerRun(seed(), { tasks: [{ id: "EX-003", priority: 1 }] });
+    const changed = M.setPriority(r.state, "EX-003", 7, at(5));
+    const once = M.undoSteering(changed, r.set.id, undefined, at(6));
+    expect(once.state.events.length).toBe(changed.events.length + 1);
+    const twice = M.undoSteering(once.state, r.set.id, undefined, at(7));
+    expect(twice.state.steering[0].changes[0].note).toBe("left as is on undo: you changed it since (now P7)");
+    expect(twice.state.events.length).toBe(once.state.events.length);
   });
 });

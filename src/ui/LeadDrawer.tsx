@@ -46,6 +46,44 @@ const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), in
 export function LeadDrawer({ onClose }: { onClose: () => void }) {
   const narrow = useNarrow();
   const ref = useRef<HTMLElement>(null);
+
+  // Review finding 14: while the dialog is modal, Esc closes it wherever focus is, the page behind it is
+  // inert (so nothing behind can be reached by Tab, click or assistive technology), and focus that still
+  // lands outside the dialog (for example on body after a re-render) is returned to it.
+  useEffect(() => {
+    if (!narrow) return;
+    const aside = ref.current;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (aside?.contains(e.target as Node)) return; // handled by the aside's own handler
+      onClose();
+    };
+    const onFocus = (e: FocusEvent) => {
+      if (!aside || aside.contains(e.target as Node)) return;
+      aside.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+    };
+    const onBlur = (e: FocusEvent) => {
+      // Focus left the document's elements entirely (relatedTarget null): it fell to body.
+      if (!aside || e.relatedTarget || !aside.contains(e.target as Node)) return;
+      window.setTimeout(() => {
+        if (document.activeElement === document.body || document.activeElement === null) aside.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+      }, 0);
+    };
+    // The page behind: the aside's siblings in the shell (banners, header, main), never the backdrop that closes it.
+    const behind = aside?.parentElement ? [...aside.parentElement.children].filter((el): el is HTMLElement => el instanceof HTMLElement && el !== aside && !el.classList.contains("lead-backdrop")) : [];
+    const inertBefore = behind.map((el) => el.inert);
+    for (const el of behind) el.inert = true;
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("focusin", onFocus);
+    aside?.addEventListener("focusout", onBlur);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("focusin", onFocus);
+      aside?.removeEventListener("focusout", onBlur);
+      behind.forEach((el, i) => (el.inert = inertBefore[i]));
+    };
+  }, [narrow, onClose]);
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") {
       e.stopPropagation();
