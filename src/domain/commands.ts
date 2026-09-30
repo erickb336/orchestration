@@ -2,6 +2,7 @@
 // The service validates argument shapes, applies commands inside a transaction, and records them.
 // Clients send `{ name, args }`; they never ship functions or whole states.
 
+import * as D from "./delivery";
 import * as M from "./model";
 import { buildSeed } from "./seed";
 import { BUILT_IN_TEMPLATES } from "./templates";
@@ -199,6 +200,27 @@ export const COMMANDS = {
   importMarkdown: (s, now, a) => {
     const r = M.importMarkdown(s, str(a, "markdown"), now);
     return { state: r.state, result: { imported: r.imported, skipped: r.skipped } };
+  },
+
+  // delivery and the review-later queue (ORC-008)
+  /** Off, local branch, or GitHub pull requests: never two at once. */
+  setDeliveryMode: same((s, now, a) => {
+    const mode = str(a, "mode");
+    if (mode !== "off" && mode !== "local" && mode !== "pr") throw new InvalidCommandError("mode must be off, local, or pr");
+    // Nothing in this build can open or watch a pull request yet, so the mode cannot be switched on.
+    if (mode === "pr") throw new ControlError("GitHub pull-request delivery is not available in this build yet.");
+    return D.setDeliveryMode(s, { mode, branch: a.branch === undefined ? undefined : str(a, "branch") }, now);
+  }),
+  resetDeliveryBaseline: same((s, now) => M.resetDeliveryBaseline(s, now)),
+  /** The only way a landed item becomes reviewed (or unreviewed again). */
+  markLandedReviewed: same((s, now, a) => D.markLandedReviewed(s, array<unknown>(a.taskIds, "taskIds").map((x) => String(x)), bool(a, "reviewed"), now)),
+  addLandedNote: same((s, now, a) => D.addLandedNote(s, str(a, "taskId"), str(a, "text"), a.postToGitHub === undefined ? false : bool(a, "postToGitHub"), now)),
+  /** Send landed work back as a fix or a revert through the normal pipeline. Returns { newId }. */
+  sendBackLanded: (s, now, a) => {
+    const kind = str(a, "kind");
+    if (kind !== "fix" && kind !== "revert") throw new InvalidCommandError("kind must be fix or revert");
+    const r = D.sendBackLanded(s, { taskId: str(a, "taskId"), kind, note: a.note === undefined ? "" : str(a, "note"), holdBeforeStart: a.holdBeforeStart === undefined ? false : bool(a, "holdBeforeStart") }, now);
+    return { state: r.state, result: { newId: r.newId } };
   },
 
   // real projects

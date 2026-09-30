@@ -3,6 +3,7 @@
 // Operations are applied one at a time, which serializes races such as
 // pause-vs-completion: whichever is applied first determines the outcome.
 
+import { recordLanded } from "./delivery";
 import { downstreamOf, instantiate, structuralKey, toDef, validatePipeline } from "./pipeline";
 import {
   type ActivityEvent,
@@ -35,6 +36,7 @@ import {
   REVIEW_ROLES,
   autoModelDefaults,
   AUTOPILOT,
+  DEFAULT_PR_DELIVERY,
   StaleWriteError,
 } from "./types";
 
@@ -171,6 +173,8 @@ export function sourceLabel(src: SelectionSource) {
       return "Pinned on this step";
     case "task-role":
       return "Task role override";
+    case "independence":
+      return "Independent of the writer";
     case "project-role":
       return "Project role default";
     case "project-default":
@@ -334,11 +338,48 @@ export function overrideSelection(state: State, taskId: string, expectedRev: num
   return editSpec(state, taskId, expectedRev, content, `User selected option ${optionId}`, "user", now);
 }
 
-export function createFollowUp(state: State, taskId: string, now: string): { state: State; newId: string } {
+export interface FollowUpOptions {
+  /** Default true: the follow-up waits for the user's release before its first dispatch. */
+  holdBeforeStart?: boolean;
+  /** The pipeline to run. Default: the origin's pipeline as it was before any expansion. */
+  steps?: StepDef[];
+  author?: Actor;
+  /** Default: the origin task (already done, so it never delays the follow-up). */
+  dependsOn?: string[];
+  /** Extra task fields, for example `revertOf` or `deliverInto`. */
+  fields?: Partial<Task>;
+}
+
+/** The origin's pipeline before any loop iteration or parallel copy was added to it. */
+function unexpandedSteps(t: Task): StepDef[] {
+  const expanded = (d: StepDef) => !!d.copyOf || d.iteration !== undefined;
+  const clean = [...t.pipelineHistory].reverse().find((r) => r.steps.length > 0 && !r.steps.some(expanded));
+  return structuredClone(clean ? clean.steps : t.steps.map(toDef));
+}
+
+export function createFollowUp(state: State, taskId: string, now: string, opts: FollowUpOptions = {}): { state: State; newId: string } {
   const s = draft(state);
   const t = getTask(s, taskId);
   if (t.lifecycle !== "done") throw new ControlError("Follow-ups are for completed tasks; edit open tasks directly.");
-  const newId = `${t.id.replace(/-F\d+$/, "")}-F${s.tasks.filter((x) => x.followUpOf === t.id).length + 1}`;
+  // <root>-F<k>: one past the highest follow-up number of this root, so a follow-up of a follow-up
+  // never reuses an id.
+  const root = t.id.replace(/-F\d+$/, "");
+  const ids = new Set(s.tasks.map((x) => x.id));
+  let k = 1;
+  for (const id of ids) {
+    const m = id.startsWith(`${root}-F`) ? /^\d+$/.exec(id.slice(root.length + 2)) : null;
+    if (m) k = Math.max(k, Number(m[0]) + 1);
+  }
+  while (ids.has(`${root}-F${k}`)) k++;
+  const newId = `${root}-F${k}`;
+  const author = opts.author ?? "user";
+  // Fresh steps: expanded -iN and -cN copies are never copied, and nothing carries run state over.
+  const defs = (opts.steps ? structuredClone(opts.steps) : unexpandedSteps(t)).map(toDef);
+  const errors = validatePipeline(defs).filter((i) => i.severity === "error");
+  if (errors.length) throw new ControlError(`The follow-up's pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
+  const steps = instantiate(defs);
+  // A copied pipeline keeps the models the user pinned on its steps.
+  if (!opts.steps) for (const st of steps) st.selection = structuredClone(findStep(t, st.id)?.selection ?? null);
   const content = structuredClone(currentSpec(t).content);
   content.title = `Follow-up: ${content.title}`;
   s.tasks.push({
@@ -346,19 +387,20 @@ export function createFollowUp(state: State, taskId: string, now: string): { sta
     priority: t.priority,
     lifecycle: "proposed",
     hold: false,
-    holdBeforeStart: true,
-    specs: [{ rev: 1, at: now, author: "user", reason: `Follow-up to delivered ${t.id} r${currentSpec(t).rev}`, content }],
-    steps: t.steps.map((st) => ({ ...structuredClone(st), state: "pending", revision: 1, invalidatedBy: undefined, blockedReason: undefined })),
+    holdBeforeStart: opts.holdBeforeStart ?? true,
+    specs: [{ rev: 1, at: now, author, reason: `Follow-up to delivered ${t.id} r${currentSpec(t).rev}`, content }],
+    steps,
     pipelineRev: 1,
-    pipelineHistory: [{ rev: 1, at: now, author: "user", reason: `Copied from ${t.id}`, steps: t.steps.map(toDef) }],
+    pipelineHistory: [{ rev: 1, at: now, author, reason: opts.steps ? `Follow-up to ${t.id}` : `Copied from ${t.id}`, steps: defs }],
     roleOverrides: structuredClone(t.roleOverrides),
-    dependsOn: [t.id],
+    dependsOn: opts.dependsOn ? [...opts.dependsOn] : [t.id],
     createdAt: now,
     updatedAt: now,
     decisionAt: now,
     followUpOf: t.id,
+    ...structuredClone(opts.fields ?? {}),
   });
-  event(s, now, "user", "spec", `Created follow-up ${newId} from delivered ${t.id}`, newId);
+  event(s, now, author, "spec", `Created follow-up ${newId} from delivered ${t.id}`, newId);
   return { state: s, newId };
 }
 
@@ -1251,6 +1293,10 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.project.visions = [{ rev: 1, at: now, author: "user", text: init.vision.trim(), focus: init.focus.trim(), reason: "Project created" }];
   s.project.hold = false;
   s.project.lastVisitAt = now;
+  // Delivery to GitHub is a choice made per project and repository: a new project starts with it off
+  // and with nothing observed about the previous repository.
+  s.project.prDelivery = structuredClone(DEFAULT_PR_DELIVERY);
+  delete s.project.github;
   s.tasks = [];
   s.attempts = [];
   s.artifacts = [];
@@ -1655,6 +1701,8 @@ export function setAutonomy(state: State, a: Autonomy, now: string): State {
   if (a.operatingHours && a.operatingHours.start === a.operatingHours.end) throw new ControlError("Operating hours need different start and end times (leave them off for any time).");
   if (!ok(a.autoRetry, 0, 5)) throw new ControlError("Automatic retries must be between 0 and 5.");
   if (a.autoDeliver.enabled && !/^[A-Za-z0-9._/-]{1,100}$/.test(a.autoDeliver.branch)) throw new ControlError("Choose a valid branch name for delivery.");
+  // The two delivery modes are never on together.
+  if (a.autoDeliver.enabled && state.project.prDelivery.enabled) throw new ControlError("Pull-request delivery is on; switch the delivery mode instead.");
   const s = draft(state);
   s.project.autonomy = {
     enabled: !!a.enabled,
@@ -1753,10 +1801,14 @@ export function reportIntegration(state: State, taskId: string, result: Integrat
   const t = getTask(s, taskId);
   if (t.lifecycle !== "done" || t.integration?.status !== "pending") return s;
   t.integration = { ...result, at: now };
-  if (result.status === "integrated" && s.project.autonomy.autoDeliver.enabled) s.project.delivery = { ...(s.project.delivery ?? {}), pending: true };
+  // A prepared pull-request head is not on the integration branch: local delivery has nothing to do for it.
+  const pr = result.pr;
+  if (result.status === "integrated" && !pr && s.project.autonomy.autoDeliver.enabled) s.project.delivery = { ...(s.project.delivery ?? {}), pending: true };
   const msg =
     result.status === "integrated"
-      ? `Integrated into the integration branch (${result.ref})`
+      ? pr
+        ? `Prepared pull request branch ${pr.branch} (${pr.headSha.slice(0, 12)})`
+        : `Integrated into the integration branch (${result.ref})`
       : result.status === "conflict"
         ? `Integration conflict: ${result.message}`
         : "Nothing to integrate (no code change)";
@@ -1812,14 +1864,16 @@ export function deliveryDue(s: State, nowMs: number): boolean {
 }
 
 /**
- * Record a delivery attempt. Delivered: every integrated task not yet delivered is marked delivered.
- * Blocked (the branch was reset or rewritten, or foreign commits would be added): automatic delivery
- * is switched off and the user decides.
+ * Record a delivery attempt. Delivered: every integrated task not yet delivered is marked delivered
+ * and gets its review-later item. Blocked (the branch was reset or rewritten, or foreign commits would
+ * be added): automatic delivery is switched off and the user decides. Tasks delivered as pull requests
+ * are never touched. A retry with the same outcome leaves the tasks as they were, so it is not a new event.
  */
 export function reportDeliveryResult(state: State, result: { status: "delivered" | "skipped" | "conflict" | "blocked"; message: string; sha?: string }, now: string): State {
   const s = draft(state);
   const prev = s.project.delivery ?? { pending: true };
   const changed = prev.status !== result.status || prev.message !== result.message;
+  const branch = s.project.autonomy.autoDeliver.branch;
   s.project.delivery = {
     ...prev,
     pending: result.status !== "delivered" && result.status !== "blocked",
@@ -1830,14 +1884,34 @@ export function reportDeliveryResult(state: State, result: { status: "delivered"
   };
   if (result.status === "blocked") s.project.autonomy.autoDeliver = { ...s.project.autonomy.autoDeliver, enabled: false };
   for (const t of s.tasks) {
-    if (t.integration?.status !== "integrated" || t.integration.delivered?.status === "delivered") continue;
-    t.integration.delivered = { status: result.status, at: now, message: result.message };
+    const i = t.integration;
+    if (i?.status !== "integrated" || i.pr || i.delivered?.status === "delivered") continue;
+    if (i.delivered?.status !== result.status || i.delivered.message !== result.message) i.delivered = { status: result.status, at: now, message: result.message };
+    // Work integrated before its merge commit was recorded cannot be shown later, so it is not listed.
+    if (result.status === "delivered" && i.sha) recordLanded(s, t, { via: "local", target: branch, commit: i.sha, by: "app" }, now);
   }
-  if (changed) event(s, now, "lead", result.status === "delivered" ? "integration" : "blocked", `Delivery to ${s.project.autonomy.autoDeliver.branch}: ${result.message}`);
+  if (changed) event(s, now, "lead", result.status === "delivered" ? "integration" : "blocked", `Delivery to ${branch}: ${result.message}`);
   return s;
 }
 
-/** The autopilot preset: planning on, no holds, one automatic retry, automatic delivery to the given branch. */
+/**
+ * Local delivery stopped because the branch no longer contains what was delivered before. Forget that
+ * baseline: the next delivery starts from the branch as it is now. Turning delivery back on is a
+ * separate choice.
+ */
+export function resetDeliveryBaseline(state: State, now: string): State {
+  if (state.project.prDelivery.enabled) throw new ControlError("Pull-request delivery is on; the baseline belongs to local branch delivery.");
+  const s = draft(state);
+  s.project.delivery = { pending: true };
+  event(s, now, "user", "config", `Delivery baseline reset: the next delivery to ${s.project.autonomy.autoDeliver.branch} starts from the branch as it is now`);
+  return s;
+}
+
+/**
+ * The autopilot preset: planning on, no holds, one automatic retry, automatic delivery to the given
+ * branch. It never turns on publishing or automatic merging: while pull-request delivery is on, the
+ * delivery mode and its settings are left exactly as they are.
+ */
 export function applyAutopilot(state: State, branch: string, now: string): State {
   const a = state.project.autonomy;
   return setAutonomy(
@@ -1850,7 +1924,7 @@ export function applyAutopilot(state: State, branch: string, now: string): State
       holdLeadProposals: false,
       operatingHours: a.operatingHours,
       autoRetry: AUTOPILOT.autoRetry,
-      autoDeliver: { enabled: true, branch },
+      autoDeliver: state.project.prDelivery.enabled ? { ...a.autoDeliver, enabled: false } : { enabled: true, branch },
     },
     now,
   );

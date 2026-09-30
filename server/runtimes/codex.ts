@@ -22,6 +22,7 @@ import type { ThreadItem } from "./codex-protocol/v2/ThreadItem";
 import type { ThreadStartParams } from "./codex-protocol/v2/ThreadStartParams";
 import type { TurnError } from "./codex-protocol/v2/TurnError";
 import type { TurnStartParams } from "./codex-protocol/v2/TurnStartParams";
+import { redact, withoutGitHubTokens } from "../redact";
 import { JsonRpcConnection, RpcClosedError, RpcError } from "./codexRpc";
 import type { AdapterEvent, Assignment, Connection, ProviderHealth, RuntimeAdapter, Usage } from "./types";
 
@@ -151,17 +152,8 @@ function truncate(s: string, max = NOTE_MAX) {
   return one.length > max ? one.slice(0, max - 1) + "…" : one;
 }
 
-const SECRET_NAME = /KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH/i;
-const SECRET_SHAPE = /\b(sk-[A-Za-z0-9_-]{8,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9._-]+)/g;
-
-/** Remove secret-looking env values and token shapes from text shown to users or logs. */
-export function redact(text: string, env: NodeJS.ProcessEnv): string {
-  let out = text;
-  for (const [k, v] of Object.entries(env)) {
-    if (v && v.length >= 8 && SECRET_NAME.test(k)) out = out.split(v).join("***");
-  }
-  return out.replace(SECRET_SHAPE, "***");
-}
+// Redaction is shared with the service's other child processes (see ../redact.ts).
+export { redact };
 
 function looksLikeAuthProblem(text: string) {
   return /unauthori[sz]ed|\b401\b|not logged in|not signed in|login required|authentication|invalid api key|api key/i.test(text);
@@ -690,7 +682,8 @@ export class CodexAdapter implements RuntimeAdapter {
 
   private spawnProcess(args: string[], probe = false, extraEnv: NodeJS.ProcessEnv = {}): ChildProcess {
     const child = this.spawnFn(this.command, [...this.prefixArgs, ...args], {
-      env: { ...this.env, ...extraEnv },
+      // Codex processes never receive GitHub tokens: only the service talks to GitHub.
+      env: { ...withoutGitHubTokens(this.env), ...extraEnv },
       stdio: ["pipe", "pipe", "pipe"],
       // Own process group, so a kill reaches the native binary behind the npm wrapper.
       detached: process.platform !== "win32",

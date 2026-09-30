@@ -48,10 +48,12 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
     if (t.lifecycle === "done" && p.lifecycle !== "done")
       out.push({ key: `done:${t.id}:${t.updatedAt}`, title: "Task done", body: name, taskId: t.id });
 
+    // Keyed on what changed, never on when it was tried: a retry with the same outcome is not an event.
     const d = t.integration?.delivered;
-    if (d && d.at !== p.integration?.delivered?.at) {
+    const pd = p.integration?.delivered;
+    if (d && (d.status !== pd?.status || d.message !== pd?.message)) {
       const title = d.status === "delivered" ? "Work delivered" : d.status === "conflict" ? "Delivery conflict" : "Delivery waiting";
-      out.push({ key: `deliver:${t.id}:${d.at}`, title, body: clip(`${name}: ${d.message}`), taskId: t.id });
+      out.push({ key: `deliver:${t.id}:${d.status}:${d.message}`, title, body: clip(`${name}: ${d.message}`), taskId: t.id });
     }
 
     if (t.integration?.status === "conflict" && p.integration?.status !== "conflict")

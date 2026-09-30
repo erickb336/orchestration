@@ -6,7 +6,7 @@
 // After a writer finishes, the service (not the agent) commits the worktree; the commit becomes the
 // step's code-change artifact. Only the opt-in delivery (see deliver) ever updates a user branch.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { basename, isAbsolute, join, resolve, sep } from "node:path";
@@ -28,7 +28,26 @@ export interface PreparedWorkspace {
   gitDir: string;
   /** Exact contents of the worktree's `.git` file at creation (it must not change). */
   gitFile: string;
+  /** Present when the service prepared a merge or revert in the worktree before the run started. */
+  seed?: PreparedSeed;
 }
+
+/**
+ * Work the service prepares in a writer's worktree before the run starts, left uncommitted:
+ * a merge of `ref`, or a revert of `commit`. Conflicts are expected; the coder resolves them.
+ */
+export type WorkspaceSeed = { kind: "merge"; ref: string } | { kind: "revert"; commit: string };
+
+export interface PreparedSeed {
+  kind: WorkspaceSeed["kind"];
+  /** The full commit that was merged or reverted. */
+  commit: string;
+  /** Files left with conflicts (at most 20). They must not contain conflict markers when recorded. */
+  conflicted: string[];
+}
+
+/** Largest diff returned to the changes viewer. */
+export const MAX_CHANGE_DIFF_BYTES = 512 * 1024;
 
 export interface CommitResult {
   sha: string;
@@ -59,16 +78,19 @@ export class WorkspaceManager {
     this.gitBin = gitBin;
   }
 
+  private safeFlags(): string[] {
+    const noHooks = join(this.root, ".no-hooks");
+    mkdirSync(noHooks, { recursive: true });
+    return ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "commit.gpgSign=false"];
+  }
+
   /**
    * Run git for the service. Hooks and fsmonitor are disabled for every call: worktree contents are
    * agent-controlled, and the service must never execute code an agent wrote or configured.
    */
   private run(args: string[]): string {
-    const noHooks = join(this.root, ".no-hooks");
-    mkdirSync(noHooks, { recursive: true });
-    const safe = ["-c", `core.hooksPath=${noHooks}`, "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "commit.gpgSign=false"];
     try {
-      return execFileSync(this.gitBin, [...safe, ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"] }).trim();
+      return execFileSync(this.gitBin, [...this.safeFlags(), ...args], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"] }).trim();
     } catch (e) {
       // Report git's own reason (stderr), not the command line with local paths.
       const stderr = (e as { stderr?: Buffer | string }).stderr;
@@ -138,8 +160,11 @@ export class WorkspaceManager {
     return `orchestration/${projectId.replace(/[^A-Za-z0-9._-]/g, "_")}/${taskId}/${stepId}/${attemptId}`;
   }
 
-  /** Create the worktree. `baseRef` is a commit to start from (an input change), else HEAD. */
-  prepare(opts: { repoPath: string; projectId?: string; attemptId: string; taskId: string; stepId: string; access: "write" | "read"; baseRef?: string }): PreparedWorkspace {
+  /**
+   * Create the worktree. `baseRef` is a commit to start from (an input change), else HEAD. A writer's
+   * worktree may be seeded with a prepared merge or revert (see WorkspaceSeed).
+   */
+  prepare(opts: { repoPath: string; projectId?: string; attemptId: string; taskId: string; stepId: string; access: "write" | "read"; baseRef?: string; seed?: WorkspaceSeed }): PreparedWorkspace {
     const check = this.check(opts.repoPath);
     if (!check.ok) throw new Error(check.reason);
     const repo = resolve(opts.repoPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
@@ -156,13 +181,69 @@ export class WorkspaceManager {
     }
     const gitDir = this.git(path, ["rev-parse", "--absolute-git-dir"]);
     const gitFile = readFileSync(join(path, ".git"), "utf8");
-    return { path, base, branch, gitDir, gitFile };
+    const ws: PreparedWorkspace = { path, base, branch, gitDir, gitFile };
+    if (opts.seed && opts.access === "write") {
+      try {
+        ws.seed = this.applySeed(repo, ws, opts.seed);
+      } catch (e) {
+        // Never hand a half-prepared worktree to a run; its branch holds no work yet.
+        this.remove(opts.repoPath, path);
+        throw e;
+      }
+    }
+    return ws;
+  }
+
+  /** Prepare a merge or a revert in a fresh writer worktree, as Orchestration, without committing. */
+  private applySeed(repo: string, ws: PreparedWorkspace, seed: WorkspaceSeed): PreparedSeed {
+    const target = seed.kind === "merge" ? seed.ref : seed.commit;
+    let commit: string;
+    try {
+      commit = this.git(repo, ["rev-parse", "--verify", "--end-of-options", `${target}^{commit}`]);
+    } catch {
+      throw new Error(`commit ${target.slice(0, 12)} is no longer in the repository`);
+    }
+    const ident = ["-c", "user.name=Orchestration", "-c", "user.email=orchestration@localhost"];
+    let args: string[];
+    if (seed.kind === "merge") args = [...ident, "merge", "--no-ff", "--no-commit", commit];
+    else {
+      // Reverting something the base does not contain would produce an unrelated change.
+      try {
+        this.git(repo, ["merge-base", "--is-ancestor", commit, ws.base]);
+      } catch {
+        throw new Error(`cannot prepare the revert: the starting point (${ws.base.slice(0, 12)}) does not contain ${commit.slice(0, 12)}`);
+      }
+      // A merge commit is reverted against its first parent (the branch it was merged into).
+      const parents = this.git(repo, ["rev-list", "--parents", "-n", "1", commit]).split(" ").length - 1;
+      args = [...ident, "revert", "--no-commit", ...(parents > 1 ? ["-m", "1"] : []), commit];
+    }
+    let failure: string | undefined;
+    try {
+      this.wt(ws, args);
+    } catch (e) {
+      failure = e instanceof Error ? e.message : String(e);
+    }
+    const conflicted = this.wt(ws, ["diff", "--name-only", "--diff-filter=U"]).split("\n").filter(Boolean);
+    // A non-zero exit that leaves conflicts is expected; anything else means nothing was prepared.
+    if (failure && conflicted.length === 0) throw new Error(`could not prepare the ${seed.kind}: ${failure}`);
+    return { kind: seed.kind, commit, conflicted: conflicted.slice(0, 20) };
   }
 
   /** Commit everything a writer changed. Hooks are skipped: they are not part of the agent's work. */
   commit(ws: PreparedWorkspace & { message: string }): CommitResult {
     const { base } = ws;
     this.wt(ws, ["add", "-A"]);
+    if (ws.seed?.conflicted.length) {
+      // Marker guard: a prepared merge or revert is recorded only once its conflicts are resolved.
+      let marked: string[] = [];
+      try {
+        marked = this.wt(ws, ["grep", "--cached", "-l", "-E", "^(<<<<<<<|>>>>>>>) ", "--", ...ws.seed.conflicted]).split("\n").filter(Boolean);
+      } catch (e) {
+        if (e instanceof Error && e.message.includes("git metadata")) throw e;
+        /* non-zero exit: no markers left */
+      }
+      if (marked.length) throw new Error(`unresolved conflict markers in ${marked.join(", ")}`);
+    }
     let changed = true;
     try {
       this.wt(ws, ["diff", "--cached", "--quiet"]);
@@ -171,8 +252,10 @@ export class WorkspaceManager {
       if (e instanceof Error && e.message.includes("git metadata")) throw e;
       /* non-zero exit: there are staged changes */
     }
-    if (changed) {
+    // A prepared merge is concluded (two parents) even when it changed no file.
+    if (changed || (ws.seed?.kind === "merge" && existsSync(join(ws.gitDir, "MERGE_HEAD")))) {
       this.wt(ws, ["-c", "user.name=Orchestration", "-c", "user.email=orchestration@localhost", "commit", "--no-verify", "-q", "-m", ws.message]);
+      changed = true;
     }
     const sha = this.wt(ws, ["rev-parse", "HEAD"]);
     let branch: string | undefined;
@@ -195,7 +278,7 @@ export class WorkspaceManager {
    * worktree. The integration branch starts from the repository's HEAD the first time; the user's own
    * branches are never touched. A conflict aborts the merge and reports the conflicted files.
    */
-  integrate(opts: { repoPath: string; projectId: string; sha: string; message: string; baseBranch?: string }): { status: "integrated"; ref: string } | { status: "conflict"; message: string } {
+  integrate(opts: { repoPath: string; projectId: string; sha: string; message: string; baseBranch?: string }): { status: "integrated"; ref: string; sha: string } | { status: "conflict"; message: string } {
     const check = this.check(opts.repoPath);
     if (!check.ok) throw new Error(check.reason);
     const repo = resolve(opts.repoPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
@@ -255,7 +338,35 @@ export class WorkspaceManager {
       return { status: "conflict", message: files.length ? `conflicts in ${files.join(", ")}` : `merging ${opts.sha.slice(0, 12)} failed` };
     }
     const head = this.wt(ws, ["rev-parse", "HEAD"]);
-    return { status: "integrated", ref: `${head.slice(0, 12)} on ${branch}` };
+    return { status: "integrated", ref: `${head.slice(0, 12)} on ${branch}`, sha: head };
+  }
+
+  /**
+   * What one commit changed relative to its first parent, for the changes viewer: a stat and a patch,
+   * cut at MAX_CHANGE_DIFF_BYTES. Read-only. Undefined when the commit (or its parent) is not in the
+   * repository.
+   */
+  changeDiff(opts: { repoPath: string; commit: string }): { diff: string; truncated: boolean } | undefined {
+    if (!/^[0-9a-f]{40,64}$/.test(opts.commit)) return undefined;
+    if (!this.check(opts.repoPath).ok) return undefined;
+    const repo = resolve(opts.repoPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
+    try {
+      this.git(repo, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${opts.commit}^{commit}`]);
+      this.git(repo, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${opts.commit}^1^{commit}`]);
+    } catch {
+      return undefined;
+    }
+    const args = [...this.safeFlags(), "-C", repo, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--stat", "--patch", `${opts.commit}^1`, opts.commit];
+    // Output past the cap is dropped by the buffer limit (ENOBUFS); what arrived is returned as truncated.
+    const r = spawnSync(this.gitBin, args, { env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_CHANGE_DIFF_BYTES + 4096 });
+    const over = (r.error as NodeJS.ErrnoException | undefined)?.code === "ENOBUFS";
+    if (!over && (r.error || r.status !== 0)) throw new Error("the changes could not be read");
+    const out = r.stdout ?? Buffer.alloc(0);
+    if (!over && out.length <= MAX_CHANGE_DIFF_BYTES) return { diff: out.toString("utf8"), truncated: false };
+    // Cut at a line boundary inside the cap.
+    const cut = out.subarray(0, MAX_CHANGE_DIFF_BYTES);
+    const nl = cut.lastIndexOf(10);
+    return { diff: cut.subarray(0, nl > 0 ? nl + 1 : cut.length).toString("utf8"), truncated: true };
   }
 
   /**

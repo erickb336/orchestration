@@ -13,6 +13,7 @@ export function toDef(st: StepDef): StepDef {
   if (st.iterate) d.iterate = { ...st.iterate };
   if (st.parallel) d.parallel = { ...st.parallel, ...(st.parallel.providers ? { providers: [...st.parallel.providers] } : {}) };
   if (st.waitForChildren) d.waitForChildren = true;
+  if (st.independentOf) d.independentOf = st.independentOf;
   if (st.copyOf) d.copyOf = st.copyOf;
   if (st.iteration && st.iteration > 1) d.iteration = st.iteration;
   return d;

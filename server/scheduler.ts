@@ -13,7 +13,7 @@ import { buildEnvelope, buildLeadEnvelope, parseLeadOutput, parseOutputs } from 
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
-import type { PreparedWorkspace, WorkspaceManager } from "./workspaces";
+import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
 
 export const SCHEDULER_LEASE = "scheduler";
 
@@ -493,8 +493,12 @@ export class Scheduler {
       if (this.workspaces) {
         const d = state.project.autonomy.autoDeliver;
         // With delivery on, new work starts from the delivery branch, not from whatever is checked out.
-        const baseRef = baseRefFor(state, task, step) ?? (d.enabled ? `refs/heads/${d.branch}` : undefined);
-        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access, baseRef });
+        const input = baseRefFor(state, task, step);
+        const baseRef = input ?? (d.enabled ? `refs/heads/${d.branch}` : undefined);
+        // A revert task's first writer (the one that continues no earlier change) starts from the
+        // delivery base with the revert of the landed commit already prepared in its worktree.
+        const seed: WorkspaceSeed | undefined = task.revertOf && access === "write" && !input ? { kind: "revert", commit: task.revertOf.commit } : undefined;
+        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access, baseRef, seed });
       }
       this.launched.set(attemptId, { provider: a.snapshot.provider, access, workspace, stepId: step.id, taskId: task.id });
       adapter.start({
@@ -507,7 +511,7 @@ export class Scheduler {
         workspace: { path: workspace?.path ?? a.snapshot.workspace, access },
         environment: a.snapshot.environment ?? "isolated",
         connections: a.snapshot.connections ?? [],
-        prompt: buildEnvelope({ state, task, step, attemptId, access }),
+        prompt: buildEnvelope({ state, task, step, attemptId, access, seed: workspace?.seed }),
         outputs: step.outputs,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });

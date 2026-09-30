@@ -21,9 +21,11 @@ export interface EnvelopeInput {
   step: Step;
   attemptId: string;
   access: "write" | "read";
+  /** A merge or revert the service prepared, uncommitted, in the workspace before the run. */
+  seed?: { kind: "merge" | "revert"; commit: string; conflicted: string[] };
 }
 
-export function buildEnvelope({ state, task, step, attemptId, access }: EnvelopeInput): string {
+export function buildEnvelope({ state, task, step, attemptId, access, seed }: EnvelopeInput): string {
   const vision = M.currentVision(state);
   const spec = M.currentSpec(task);
   const c = spec.content;
@@ -79,7 +81,7 @@ ${list(c.acceptance)}
 ## Inputs from earlier steps
 ${inputText}
 
-${bestOfNote(state, task, step)}${childrenNote(state, task, step)}## Workspace rules
+${bestOfNote(state, task, step)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
 - Your working directory is an isolated git worktree created for this run. ${access === "write" ? "Edit files only inside it." : "It is read-only for you: do not create, modify, or delete any file."}
 - Do not commit, push, create branches, or change git configuration; the orchestration service records your work.
 - Do not start sub-agents or delegate; this run is tracked and bounded by the orchestration service.
@@ -95,6 +97,21 @@ ${outputSpec}
   }
 }
 \`\`\`
+`;
+}
+
+/** What the service already did in a seeded workspace, and what is left for the coder. */
+function seedNote(seed: EnvelopeInput["seed"]): string {
+  if (!seed) return "";
+  const what = seed.kind === "revert" ? `a revert of commit ${seed.commit.slice(0, 12)}` : `a merge of ${seed.commit.slice(0, 12)}`;
+  const rest = seed.conflicted.length
+    ? `These files have conflicts, marked with <<<<<<< and >>>>>>> lines:\n${seed.conflicted.map((f) => `- ${f}`).join("\n")}\nResolve every conflict by editing the files and remove all conflict markers. Keep work that landed later. The result is not recorded while a marker remains.`
+    : "It applied without conflicts. Check that the result is complete and correct, and adjust files only where needed.";
+  return `## Prepared in this workspace
+The orchestration service already applied ${what} to the files here and left it uncommitted.
+${rest}
+Do not run git: no commit, merge, revert, reset, or checkout. Edit files only.
+
 `;
 }
 

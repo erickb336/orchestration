@@ -55,3 +55,20 @@ export interface CommandError {
   error: string;
   kind: "stale" | "control" | "invalid" | "forbidden" | "internal";
 }
+
+/** Body of GET /api/change?task=<id>: what a landed task changed, relative to the commit before it. */
+export interface ChangeResponse {
+  taskId: string;
+  /** The landed commit, read from the task's record (a request never names a commit). */
+  commit: string;
+  target: string;
+  /** `git diff --stat --patch` output. */
+  diff: string;
+  /** True when the diff was cut at the size limit. */
+  truncated: boolean;
+}
+
+/** A 404 from GET /api/change. `url` is the pull request, when the commit can still be seen there. */
+export interface ChangeError extends CommandError {
+  url?: string;
+}

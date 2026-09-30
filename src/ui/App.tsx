@@ -1,20 +1,22 @@
 import { useEffect, useState } from "react";
+import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { StoreContext, useServiceContext, useServiceStore, useStore } from "./store";
 import { Board } from "./Board";
 import { TaskDetail } from "./TaskDetail";
 import { Overview } from "./Overview";
 import { Activity } from "./Activity";
+import { Review } from "./Review";
 import { Settings } from "./Settings";
 import { relTime } from "./common";
 import { useBrowserNotifications } from "./notifications";
 
-type Route = { page: "overview" | "tasks" | "activity" | "settings" } | { page: "task"; id: string };
+type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" } | { page: "task"; id: string };
 
 function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/");
   if (parts[0] === "task" && parts[1]) return { page: "task", id: decodeURIComponent(parts[1]) };
-  if (parts[0] === "overview" || parts[0] === "activity" || parts[0] === "settings") return { page: parts[0] };
+  if (parts[0] === "overview" || parts[0] === "review" || parts[0] === "activity" || parts[0] === "settings") return { page: parts[0] };
   return { page: "tasks" };
 }
 
@@ -94,9 +96,10 @@ function Shell() {
           <ProjectName />
         </div>
         <nav className="tabs" aria-label="Main">
-          {(["overview", "tasks", "activity", "settings"] as const).map((p) => (
+          {(["overview", "tasks", "review", "activity", "settings"] as const).map((p) => (
             <a key={p} href={`#/${p}`} aria-current={tab === p ? "page" : undefined}>
               {p[0].toUpperCase() + p.slice(1)}
+              {p === "review" && <ReviewBadge />}
             </a>
           ))}
         </nav>
@@ -106,6 +109,7 @@ function Shell() {
         {route.page === "overview" && <Overview />}
         {route.page === "tasks" && <Board />}
         {route.page === "task" && <TaskDetail key={route.id} id={route.id} />}
+        {route.page === "review" && <Review />}
         {route.page === "activity" && <Activity />}
         {route.page === "settings" && <Settings />}
       </main>
@@ -118,6 +122,20 @@ function Shell() {
         </div>
       )}
     </>
+  );
+}
+
+/** What waits in the Review list. Persistent: it does not reset when the page is visited. */
+function ReviewBadge() {
+  const { state } = useStore();
+  const needs = D.needsYou(state);
+  const unreviewed = D.unreviewedCount(state);
+  if (needs + unreviewed === 0) return null;
+  const parts = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : "", unreviewed ? `${unreviewed} landed, not reviewed` : ""].filter(Boolean).join(" · ");
+  return (
+    <span className="badge-new" style={{ marginLeft: "0.35rem" }} title={parts} aria-label={parts}>
+      {needs + unreviewed}
+    </span>
   );
 }
 

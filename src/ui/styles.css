@@ -438,3 +438,10 @@ a.button-link:hover { background: var(--surface-2); }
 .artifact-editor textarea { min-height: 8rem; font-family: inherit; }
 .usage-table td, .usage-table th { font-variant-numeric: tabular-nums; }
 .usage-table td.num, .usage-table th.num { text-align: right; }
+
+/* ---------- landed changes (code diff; lines already start with + or -) ---------- */
+.diff.code div { white-space: pre; }
+.diff.code .add::before, .diff.code .del::before, .diff.code .same::before { content: none; }
+.diff.code .del { text-decoration: none; }
+.diff.code .same { color: inherit; }
+.diff.code .meta { color: var(--muted); }

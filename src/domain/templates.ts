@@ -185,6 +185,33 @@ const goal: StepDef[] = [
   },
 ];
 
+/**
+ * Undo a change that already landed. The service prepares the revert in the first coder's workspace
+ * before the run starts; the coder completes it, and it is reviewed and delivered like any task.
+ */
+const revert: StepDef[] = [
+  {
+    id: "S1",
+    purpose: "Complete the prepared revert: resolve any conflicts, keep later work",
+    role: "coder",
+    dependsOn: [],
+    inputs: [],
+    outputs: [
+      { name: "change", kind: "code-change" },
+      { name: "handoff", kind: "handoff" },
+    ],
+  },
+  { id: "S2", purpose: "Code review", role: "code_reviewer", dependsOn: ["S1"], inputs: [ref("S1", "change"), ref("S1", "handoff")], outputs: [{ name: "findings", kind: "review-findings" }] },
+  {
+    id: "S3",
+    purpose: "Verify the revert and integrate",
+    role: "lead",
+    dependsOn: ["S2"],
+    inputs: [ref("S1", "change"), ref("S2", "findings")],
+    outputs: [{ name: "verification", kind: "verification" }],
+  },
+];
+
 export const BUILT_IN_TEMPLATES: WorkflowTemplate[] = [
   { id: "goal", name: "Goal", description: "Large goal: break it into parallel child tasks, evaluate, and iterate until the goal is met.", builtIn: true, rev: 1, steps: goal },
   { id: "feature", name: "Feature", description: "User-facing change: design, implement, independent code and UX review, repair if needed, verify.", builtIn: true, rev: 1, steps: feature },
@@ -192,6 +219,7 @@ export const BUILT_IN_TEMPLATES: WorkflowTemplate[] = [
   { id: "bugfix", name: "Bug fix", description: "Reproduce first, fix, review, repair if needed, verify the reproduction no longer fails.", builtIn: true, rev: 1, steps: bugfix },
   { id: "investigation", name: "Investigation", description: "Gather evidence, review it, and propose a follow-up implementation spec.", builtIn: true, rev: 1, steps: investigation },
   { id: "design", name: "Design", description: "Design only: design, UX review, revise if needed, hand off an implementation brief.", builtIn: true, rev: 1, steps: design },
+  { id: "revert", name: "Revert", description: "Undo a landed change: complete the prepared revert, review it, verify. Used by Send back as revert.", builtIn: true, rev: 1, steps: revert },
 ];
 
 export function templateSteps(id: string): StepDef[] {

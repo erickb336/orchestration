@@ -1,4 +1,5 @@
 import { useState } from "react";
+import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { useStore } from "./store";
 import { ROLE_LABEL, fmtTime, involvementOf, relTime, selectionText } from "./common";
@@ -24,6 +25,7 @@ export function Overview() {
   const completed = state.events.filter((e) => e.at > since && e.kind === "integration" && e.message.includes("Done")).length;
   const blocked = state.tasks.filter((t) => M.column(state, t) === "blocked").length;
   const active = M.activeAttempts(state);
+  const unreviewed = D.unreviewedCount(state);
   const outcomes = state.tasks.filter((t) => t.lifecycle === "done").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
 
   return (
@@ -141,6 +143,11 @@ export function Overview() {
 
           <section className="card" aria-labelledby="outcomes-h">
             <h2 id="outcomes-h">Latest outcomes</h2>
+            {(unreviewed > 0 || D.landedTasks(state).length > 0) && (
+              <p>
+                Landed, not reviewed: <strong>{unreviewed}</strong> · <a href="#/review">Review</a>
+              </p>
+            )}
             {outcomes.length === 0 && <p className="muted">Nothing delivered yet.</p>}
             <ul className="plain">
               {outcomes.map((t) => (
