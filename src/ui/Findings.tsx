@@ -3,10 +3,11 @@
 // Nothing here decides anything by itself: every change is a named command the service applies.
 
 import { useState } from "react";
+import { checkLogUrl } from "../api";
 import { coverageLabel } from "../domain/coverage";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
-import type { Artifact, Finding, FindingDecision, PathCoverage, State } from "../domain/types";
+import type { Artifact, CheckRunRecord, Finding, FindingDecision, PathCoverage, State } from "../domain/types";
 import { relTime } from "./common";
 import { useStore } from "./store";
 
@@ -30,37 +31,49 @@ function decisionState(d: FindingDecision): string {
   if (d.suggestion && d.status === "open") return `The lead suggests: fix — ${d.suggestion.why}`;
   if (d.status === "open") return `Waiting for a decision (${d.routedTo === "lead" ? "the lead" : "you"})`;
   const by = d.decidedBy === "carried" ? `same as ${d.carriedFrom ?? "an earlier round"}` : d.decidedBy === "lead" ? "by the lead" : "by you";
-  const what = d.status === "fix" ? "Fix" : d.status === "accept" ? "Accepted as is" : `Followed up as ${d.followUpTaskId ?? "a separate task"}`;
+  if (d.status === "superseded") return `No longer open${d.why ? `: ${d.why}` : ""}`;
+  const what = d.status === "fix" ? (d.kind === "final-checks" ? "Fix round added" : "Fix") : d.status === "accept" ? (d.kind === "final-checks" ? "Failing checks accepted" : "Accepted as is") : `Followed up as ${d.followUpTaskId ?? "a separate task"}`;
   return `${what} (${by}${d.decidedAt ? `, ${relTime(d.decidedAt)}` : ""})${d.why ? `: ${d.why}` : ""}`;
 }
 
 /** The decision controls for one finding. Every button is one command; a note is optional. */
 export function DecisionControls({ decision: d }: { decision: FindingDecision }) {
-  const { send, disabled } = useStore();
+  const { state, send, disabled } = useStore();
   const [note, setNote] = useState("");
   const decide = (decision: "fix" | "accept" | "follow-up" | "reopen") => void send("decideFinding", { decisionId: d.id, decision, ...(note.trim() ? { note: note.trim() } : {}) });
   const open = d.status === "open";
+  // Review 1 (10): nothing on a cancelled or finished task can be decided any more.
+  const lifecycle = state.tasks.find((t) => t.id === d.taskId)?.lifecycle;
+  const off = disabled || lifecycle === "cancelled" || lifecycle === "done";
+  if (d.status === "superseded") return <span className="muted">No longer open{d.why ? `: ${d.why}` : ""}.</span>;
+  // ORC-013 §6.7: failing final checks take a repair round (at most two), or the user's acceptance; never a follow-up.
+  const final = d.kind === "final-checks";
+  const rounds = state.tasks.find((t) => t.id === d.taskId)?.checkRounds ?? 0;
   return (
     <div className="decision-controls row" style={{ gap: "0.35rem", flexWrap: "wrap" }}>
       {open ? (
         <>
-          <button className="small primary" disabled={disabled} onClick={() => decide("fix")} title="The next repair fixes it">
-            Fix
+          <button className="small primary" disabled={off || (final && rounds >= 2)} onClick={() => decide("fix")} title={final ? `A coder fixes the failing checks, a reviewer reads the fix, and the checks run again (round ${Math.min(rounds + 1, 2)} of 2)` : "The next repair fixes it"}>
+            {final ? `Add a fix round (${Math.min(rounds + 1, 2)} of 2)` : "Fix"}
           </button>
-          <button className="small" disabled={disabled} onClick={() => decide("accept")} title="Leave it as it is; later repairs and reviews treat it as settled">
-            Accept as is
+          <button className="small" disabled={off} onClick={() => (final ? confirm("Accept the failing checks and let the task finish? The landed work is flagged as accepted with failing checks. Only you can do this.") && decide("accept") : decide("accept"))} title={final ? "Only you can accept failing checks; the landed item is flagged" : "Leave it as it is; later repairs and reviews treat it as settled"}>
+            {final ? "Accept failing checks" : "Accept as is"}
           </button>
-          <button className="small" disabled={disabled} onClick={() => decide("follow-up")} title="A new task of yours, held before start, seeded from the finding">
-            Follow up
-          </button>
-          <button className="small" disabled={disabled} onClick={() => void send("routeDecision", { decisionId: d.id, to: d.routedTo === "lead" ? "user" : "lead" })}>
+          {!final && (
+            <button className="small" disabled={off} onClick={() => decide("follow-up")} title="A new task of yours, held before start, seeded from the finding">
+              Follow up
+            </button>
+          )}
+          <button className="small" disabled={off} onClick={() => void send("routeDecision", { decisionId: d.id, to: d.routedTo === "lead" ? "user" : "lead" })}>
             {d.routedTo === "lead" ? "Send to me" : "Send to the lead"}
           </button>
         </>
       ) : (
-        <button className="small" disabled={disabled} onClick={() => decide("reopen")} title={d.usedBy.length ? "A repair already used this decision; the change applies to later repairs" : "Decide again"}>
-          Reopen
-        </button>
+        !final && (
+          <button className="small" disabled={off} onClick={() => decide("reopen")} title={d.usedBy.length ? "A repair already used this decision; the change applies to later repairs" : "Decide again"}>
+            Reopen
+          </button>
+        )
       )}
       <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" aria-label={`Note for ${d.id}`} maxLength={F.MAX_DECISION_WHY} style={{ width: "14rem" }} />
     </div>
@@ -120,6 +133,52 @@ function ApplySuggestion({ decision }: { decision: FindingDecision }) {
     <button className="small primary" disabled={disabled} onClick={() => void send("decideFinding", { decisionId: decision.id, decision: "fix", note: decision.suggestion?.why })}>
       Apply
     </button>
+  );
+}
+
+const STATUS_MARK: Record<CheckRunRecord["results"][number]["status"], string> = { passed: "✓", failed: "✗", "timed-out": "✗", "not-run": "–" };
+const seconds = (ms: number) => `${Math.max(1, Math.round(ms / 1000))} s`;
+
+/** ORC-013: one row per command of a check run: status, exit code, duration, the excerpt and the full log; how it ran. */
+export function CheckResults({ run, attemptId }: { run: CheckRunRecord; attemptId: string }) {
+  const { service } = useStore();
+  const how = [run.sandbox === "codex" ? "sandboxed" : "no sandbox", ...(run.simulated ? ["simulated"] : []), ...(run.reusedFrom ? [`same result as ${run.reusedFrom} (not run again)`] : [])];
+  return (
+    <div className="check-results" style={{ marginTop: "0.3rem" }}>
+      <div className="muted" style={{ fontSize: "0.8rem" }}>
+        Commit <span className="mono">{run.sha.slice(0, 12)}</span> · settings r{run.configRev} · {how.join(" · ")}
+        {run.sandbox === "none" ? <span className="chip danger" style={{ marginLeft: "0.3rem" }}>ran without a sandbox</span> : null}
+        {run.touchedInputs.length ? ` · edits protected check inputs: ${run.touchedInputs.join(", ")}` : ""}
+      </div>
+      <ul className="plain">
+        {run.results.map((r) => (
+          <li key={r.id} className={`check-row ${r.status}`}>
+            <span className="check-mark" aria-hidden="true">
+              {STATUS_MARK[r.status]}
+            </span>
+            <span>
+              <strong style={{ fontWeight: 560 }}>{r.label}</strong> <span className="chip">{r.kind}</span> {r.status === "not-run" ? "not run" : r.status === "timed-out" ? `timed out after ${seconds(r.durationMs)}` : `${r.status}${r.exitCode !== undefined ? ` (exit ${r.exitCode})` : ""}, ${seconds(r.durationMs)}`}
+              {r.log && service.runtime === "real" && !run.simulated ? (
+                <>
+                  {" · "}
+                  <a href={checkLogUrl(attemptId, r.id)} target="_blank" rel="noreferrer">
+                    Full log
+                  </a>
+                </>
+              ) : null}
+              {r.excerpt && (
+                <details>
+                  <summary className="muted" style={{ fontSize: "0.8rem" }}>
+                    Output{r.truncated ? " (excerpt)" : ""}
+                  </summary>
+                  <pre className="check-output">{r.excerpt}</pre>
+                </details>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

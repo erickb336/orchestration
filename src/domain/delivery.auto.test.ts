@@ -124,12 +124,17 @@ function changeTask(s0: State, findings: (round: number) => number, reviewer: Pr
     s = M.dispatchEligible(M.leadPromoteProposals(s, at(4 + i)), at(4 + i));
     for (const a of M.activeAttempts(s, id)) {
       const st = task(s, id).steps.find((x) => x.id === a.stepId)!;
+      // As the scheduler does for a code review: the changed-path set of the change it reads is recorded before it reports.
+      if (st.role === "code_reviewer") {
+        const change = a.snapshot.inputs.map((x) => s.artifacts.find((y) => y.id === x.artifactId)!).filter((y) => y.kind === "code-change").sort((x, y) => x.createdAt.localeCompare(y.createdAt)).pop();
+        if (change?.ref) s = M.reportRunContext(s, a.id, { scope: { from: SHA_A, to: change.ref.split(" ")[0], paths: ["a.txt"], total: 1 } });
+      }
       const outputs = st.outputs.map((o) => {
         if (o.kind === "code-change") {
           final = `${String(++commits).padStart(2, "0")}${"e".repeat(38)}`;
           return { name: o.name, summary: "change", ref: `${final.slice(0, 12)} on b` };
         }
-        return { name: o.name, summary: o.name, ...(o.kind === "review-findings" ? { openFindings: findings(round++) } : {}) };
+        return { name: o.name, summary: o.name, ...(o.kind === "review-findings" ? { openFindings: findings(round++), reviewedPaths: ["a.txt"] } : {}) };
       });
       s = M.reportCompletion(s, a.id, [], at(4 + i), outputs);
     }

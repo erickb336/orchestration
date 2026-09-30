@@ -2,6 +2,7 @@
 // The service validates argument shapes, applies commands inside a transaction, and records them.
 // Clients send `{ name, args }`; they never ship functions or whole states.
 
+import * as C from "./checks";
 import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
@@ -231,6 +232,42 @@ export const COMMANDS = {
   /** Give every run the repository's AGENTS.md and CLAUDE.md (from the trusted base) as project conventions. */
   setConventions: same((s, now, a) => F.setConventions(s, bool(a, "include"), now)),
 
+  // the project's checks, run by the service (ORC-013 §9): the only way the check commands change
+  /** The whole checks configuration (minus its revision). `acknowledgeUnsandboxed` confirms "no sandbox". */
+  setChecks: same((s, now, a) => {
+    const c = obj(a.config, "config");
+    const commands = array<unknown>(c.commands, "config.commands").map((x) => {
+      const d = obj(x, "command");
+      const argv = array<unknown>(d.argv, "command.argv").map((v) => {
+        if (typeof v !== "string") throw new InvalidCommandError("command.argv must be strings");
+        return v;
+      });
+      const kind = str(d, "kind");
+      if (kind !== "prepare" && kind !== "check") throw new InvalidCommandError("command.kind must be prepare or check");
+      return { id: str(d, "id"), label: str(d, "label"), kind: kind as "prepare" | "check", argv, ...(d.timeoutMinutes === undefined ? {} : { timeoutMinutes: num(d, "timeoutMinutes") }) };
+    });
+    const sandbox = str(c, "sandbox");
+    if (sandbox !== "codex" && sandbox !== "none") throw new InvalidCommandError("config.sandbox must be codex or none");
+    return C.setChecks(
+      s,
+      {
+        enabled: bool(c, "enabled"),
+        commands,
+        sandbox,
+        prepareNetwork: bool(c, "prepareNetwork"),
+        commandTimeoutMinutes: num(c, "commandTimeoutMinutes"),
+        runTimeoutMinutes: num(c, "runTimeoutMinutes"),
+        maxConcurrent: num(c, "maxConcurrent"),
+        protectedInputs: array<unknown>(c.protectedInputs, "config.protectedInputs").map((x) => String(x)),
+        passEnv: array<unknown>(c.passEnv, "config.passEnv").map((x) => String(x)),
+      },
+      a.acknowledgeUnsandboxed === undefined ? false : bool(a, "acknowledgeUnsandboxed"),
+      now,
+    );
+  }),
+  /** Probe the checks sandbox now. */
+  recheckChecks: same((s, now) => C.recheckChecks(s, now)),
+
   // the lead
   /** A message stops a planning run in progress so it is answered next; `taskId` names the task page it was sent from. */
   postMessage: same((s, now, a) => M.postMessage(s, str(a, "text"), now, a.taskId === undefined ? undefined : str(a, "taskId"))),
@@ -397,7 +434,7 @@ export const COMMANDS = {
 
   // prototype only: replace everything with the labeled sample project
   resetSampleData: (s, now) => {
-    const next = buildSeed(Date.parse(now), { inFlightRuns: false });
+    const next = buildSeed(Date.parse(now), { inFlightRuns: false, checks: true });
     // Never reuse generated ids: a runtime process or event row from before the reset must not
     // be confused with a new run or event that happens to receive the same id.
     next.seq = Math.max(next.seq, s.seq) + 1;

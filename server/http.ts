@@ -3,11 +3,12 @@
 // and, when a browser sends an Origin, an allowed Origin. No CORS headers are ever sent, so other
 // sites can neither read responses nor make preflighted requests.
 
-import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
-import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CommandError, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
-import { exportMarkdown } from "../src/domain/model";
+import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
+import { suggestChecks, type RepoFile } from "../src/domain/checks";
+import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
@@ -23,6 +24,8 @@ export interface HttpOptions {
   workspaces?: WorkspaceManager;
   /** ORC-014: where POST /api/vision-docs keeps copies of the user's documents. Without it uploads are refused. */
   visionDocs?: VisionDocStore;
+  /** ORC-013: the service's data directory; check logs are served from <dataDir>/check-logs. */
+  dataDir?: string;
   startedAt: string;
   /** host:port values accepted in the Host header (the service's own address plus the dev UI). */
   allowedHosts: string[];
@@ -127,6 +130,36 @@ export function createHttpServer(opts: HttpOptions): Server {
     return send(res, 200, { taskId, commit, target: landed ? landed.target : `${pr!.repo} ${pr!.base}`, diff: out.diff, truncated: out.truncated } satisfies ChangeResponse);
   };
 
+  /** ORC-013 §6.2: the check commands the repository's own files suggest, read at the trusted base. Nothing is saved. */
+  const suggest = (res: ServerResponse) => {
+    const { state } = store.read();
+    if (!real || !opts.workspaces) return send(res, 200, { commands: [], ref: "", reason: "Suggestions read the repository's files; the simulated runtime has none. The sample project's commands are simulated." } satisfies CheckSuggestions);
+    if (state.project.sample || !state.project.repoPath) return send(res, 200, { commands: [], ref: "", reason: "This is the sample project; start a project of your own to read its repository." } satisfies CheckSuggestions);
+    const ref = trustedBaseRef(state);
+    const files: RepoFile[] = [];
+    for (const path of ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb", "Cargo.toml", "go.mod", "pyproject.toml"]) {
+      try {
+        const r = opts.workspaces.readFileAt({ repoPath: state.project.repoPath, ref, path, maxBytes: 256 * 1024 });
+        if (r) files.push({ path, text: r.text });
+      } catch {
+        /* unreadable: no suggestion from it */
+      }
+    }
+    const commands = suggestChecks(files);
+    return send(res, 200, { commands, ref, ...(commands.length ? {} : { reason: `No package.json scripts, lockfile, Cargo.toml, go.mod or pyproject.toml with pytest at ${ref}.` }) } satisfies CheckSuggestions);
+  };
+
+  /** ORC-013: the full (redacted) log of one check of one run, from the service's own directory. Ids are validated; nothing else is served. */
+  const checkLog = (res: ServerResponse, run: string, check: string) => {
+    const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/;
+    if (!ID.test(run) || !ID.test(check) || !opts.dataDir) return fail(res, 404, "invalid", "No such log.");
+    const { state } = store.read();
+    const file = join(opts.dataDir, "check-logs", state.project.id.replace(/[^A-Za-z0-9._-]/g, "_"), run, `${check}.log`);
+    if (!existsSync(file)) return fail(res, 404, "invalid", "No log was kept for this check (it may have been pruned).");
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
+    return res.end(readFileSync(file));
+  };
+
   const readJson = (req: IncomingMessage): Promise<unknown> =>
     new Promise((resolveBody, reject) => {
       let size = 0;
@@ -225,6 +258,8 @@ export function createHttpServer(opts: HttpOptions): Server {
           return res.end(exportMarkdown(store.read().state));
         }
         if (path === "/api/change") return change(res, url.searchParams.get("task") ?? "");
+        if (path === "/api/checks/suggest") return suggest(res);
+        if (path === "/api/checks/log") return checkLog(res, url.searchParams.get("run") ?? "", url.searchParams.get("check") ?? "");
         return fail(res, 404, "invalid", "Not found");
       }
 
@@ -243,6 +278,9 @@ export function createHttpServer(opts: HttpOptions): Server {
         // A sample project never contacts GitHub.
         if (real && body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr" && store.read().state.project.sample)
           return fail(res, 400, "control", "This is the sample project; pull-request delivery needs a project of your own. Start a new project in Settings.");
+        // ORC-013 §13: the sample project has no repository to run checks on; nothing of it ever runs on this computer.
+        if (real && body.name === "setChecks" && ((body.args as { config?: { enabled?: unknown } } | undefined)?.config?.enabled === true) && store.read().state.project.sample)
+          return fail(res, 400, "control", "This is the sample project; checks run a repository's commands, and it has no repository. Start a project of your own in Settings.");
         // ORC-014 review 6: once a batch commits (refused files lose their records) and once a project is
         // replaced, copies no record refers to are deleted. A batch's own copies go at once; others wait
         // out the grace period in case their batch is still uploading.

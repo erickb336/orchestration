@@ -24,6 +24,7 @@ export function PipelineEditor({
   reviewTarget,
   checkTarget,
   checksEnabled,
+  checkCommands,
   onSave,
   onCancel,
 }: {
@@ -43,6 +44,8 @@ export function PipelineEditor({
   checkTarget?: boolean;
   /** ORC-013: whether the project's checks are on; off, every Checks step is skipped, labelled. */
   checksEnabled?: boolean;
+  /** ORC-013: the project's check commands, so a Checks step can be limited to some of them (`only`). */
+  checkCommands?: { id: string; label: string; kind: "prepare" | "check" }[];
   /** May be async; the save button stays disabled until it settles. */
   onSave: (defs: StepDef[], reason: string) => Promise<unknown> | void;
   onCancel: () => void;
@@ -188,6 +191,34 @@ export function PipelineEditor({
                     Run by the service on the code change it reads; no provider or model. {checksEnabled ? "Checks are on for this project." : "Checks are off for this project, so this step is skipped, labelled, until they are turned on."}
                   </span>
                 </div>
+                {!!checkCommands?.some((c) => c.kind === "check") && (
+                  <div style={{ marginTop: "0.3rem" }}>
+                    <span style={{ fontSize: "0.85rem" }}>Commands this step runs (prepare commands always run):</span>
+                    <div className="row" style={{ flexWrap: "wrap" }}>
+                      {checkCommands
+                        .filter((c) => c.kind === "check")
+                        .map((c) => {
+                          const only = d.checks?.only;
+                          const on = !only?.length || only.includes(c.id);
+                          return (
+                            <label key={c.id} className="row" style={{ gap: "0.25rem" }}>
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                onChange={(e) => {
+                                  const all = checkCommands.filter((x) => x.kind === "check").map((x) => x.id);
+                                  const current = only?.length ? only : all;
+                                  const next = e.target.checked ? [...new Set([...current, c.id])] : current.filter((x) => x !== c.id);
+                                  update(i, { checks: { onFail: d.checks?.onFail ?? "findings", ...(next.length && next.length < all.length ? { only: next } : {}) } });
+                                }}
+                              />
+                              <span className="mono">{c.id}</span>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

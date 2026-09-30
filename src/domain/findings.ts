@@ -4,6 +4,7 @@
 // finding, and the validation of the decisions a lead run reports. Summary-only (legacy) artifacts
 // keep their `openFindings` semantics everywhere.
 
+import * as C from "./checks";
 import * as M from "./model";
 import { templateSteps } from "./templates";
 import { ControlError, type Artifact, type Finding, type FindingDecision, type LeadRun, type State, type Step, type Task } from "./types";
@@ -21,20 +22,36 @@ const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…`
 /** A finding that must be fixed or decided: an error or warning that is not information only. */
 export const isBlocking = (f: Finding) => f.severity !== "info" && f.action !== "no-op";
 
-/** The decision record for one finding of one artifact (the newest, if several). */
+/** Two artifacts are versions of the same output: the same task, step and name. */
+function sameOutput(s: State, a: Pick<Artifact, "id" | "taskId" | "stepId" | "name">, artifactId: string): boolean {
+  if (a.id === artifactId) return true;
+  const b = s.artifacts.find((x) => x.id === artifactId);
+  return !!b && b.taskId === a.taskId && b.stepId === a.stepId && b.name === a.name;
+}
+
+/**
+ * The decision record for one finding of one artifact (the newest, if several). A person's edit of the
+ * summary makes a new artifact version with the same findings, and `editArtifact` moves the decisions
+ * to it (review 1, finding 1), so nothing waits on a record that exists.
+ */
 export function decisionFor(s: State, art: Pick<Artifact, "id">, f: Pick<Finding, "id">): FindingDecision | undefined {
   let best: FindingDecision | undefined;
   for (const d of s.decisions) if (d.artifactId === art.id && d.findingId === f.id) best = d;
   return best;
 }
 
-/** Work a repair may do: auto-fix blocking findings, plus ask-user ones decided "fix". Legacy: openFindings. */
+/** A finding decided "accept" or "follow-up" is settled whatever action the report gives it (review 1, finding 3). */
+const settled = (d: FindingDecision | undefined) => d?.status === "accept" || d?.status === "follow-up";
+
+/** Work a repair may do: auto-fix blocking findings not settled earlier, plus ask-user ones decided "fix". Legacy: openFindings. */
 export function fixable(s: State, art: Artifact): number {
   if (!art.findings) return art.openFindings ?? 0;
   let n = 0;
   for (const f of art.findings) {
     if (!isBlocking(f)) continue;
-    if (f.action === "auto-fix" || decisionFor(s, art, f)?.status === "fix") n++;
+    const d = decisionFor(s, art, f);
+    if (settled(d)) continue;
+    if (f.action === "auto-fix" || d?.status === "fix") n++;
   }
   return n;
 }
@@ -51,18 +68,11 @@ export function undecided(s: State, art: Artifact): number {
   return n;
 }
 
-/** Not resolved: auto-fix blocking, plus ask-user blocking not decided "accept" or "follow-up". Legacy: openFindings. */
+/** Not resolved: blocking findings not decided "accept" or "follow-up". Legacy: openFindings. */
 export function unresolved(s: State, art: Artifact): number {
   if (!art.findings) return art.openFindings ?? 0;
   let n = 0;
-  for (const f of art.findings) {
-    if (!isBlocking(f)) continue;
-    if (f.action === "auto-fix") n++;
-    else {
-      const st = decisionFor(s, art, f)?.status;
-      if (st !== "accept" && st !== "follow-up") n++;
-    }
-  }
+  for (const f of art.findings) if (isBlocking(f) && !settled(decisionFor(s, art, f))) n++;
   return n;
 }
 
@@ -70,12 +80,27 @@ export function unresolved(s: State, art: Artifact): number {
 export function acceptedFindings(s: State, art: Artifact): string[] {
   if (!art.findings) return [];
   const out: string[] = [];
-  for (const f of art.findings) {
-    if (!isBlocking(f) || f.action !== "ask-user") continue;
-    const st = decisionFor(s, art, f)?.status;
-    if (st === "accept" || st === "follow-up") out.push(`${f.id} ${clip(f.title, 80)}`);
-  }
+  for (const f of art.findings) if (isBlocking(f) && settled(decisionFor(s, art, f))) out.push(`${f.id} ${clip(f.title, 80)}`);
   return out;
+}
+
+/**
+ * The decided decision an earlier round of this task (or the origin task of a pull-request repair) took
+ * on a finding with this key, if any: what carry-forward repeats.
+ */
+export function earlierDecision(s: State, t: Task, key: string): FindingDecision | undefined {
+  const origin = t.deliverInto?.taskId;
+  let earlier: FindingDecision | undefined;
+  for (const d of s.decisions) {
+    if (d.key !== key || d.status === "open" || d.status === "superseded" || d.kind !== "finding") continue;
+    if (d.taskId === t.id || (origin !== undefined && d.taskId === origin)) earlier = d;
+  }
+  return earlier;
+}
+
+/** Blocking findings of a fresh report that an earlier decision on this task already settled (accept or follow-up). */
+export function settledByKey(s: State, t: Task, f: Finding): boolean {
+  return settled(earlierDecision(s, t, f.key));
 }
 
 /** The service-computed open count of a structured artifact: blocking findings (error or warning, auto-fix or ask-user). */
@@ -105,14 +130,11 @@ function getDecision(s: State, id: string): FindingDecision {
 export function createDecisions(s: State, t: Task, art: Artifact, now: string): FindingDecision[] {
   if (!art.findings) return [];
   const out: FindingDecision[] = [];
-  const origin = t.deliverInto?.taskId;
   for (const f of art.findings) {
-    if (!isBlocking(f) || f.action !== "ask-user" || decisionFor(s, art, f)) continue;
-    let earlier: FindingDecision | undefined;
-    for (const d of s.decisions) {
-      if (d.key !== f.key || d.status === "open" || d.kind !== "finding") continue;
-      if (d.taskId === t.id || (origin !== undefined && d.taskId === origin)) earlier = d;
-    }
+    if (!isBlocking(f) || decisionFor(s, art, f)) continue;
+    const earlier = earlierDecision(s, t, f.key);
+    // An auto-fix finding needs no record, unless an earlier round settled it: then the record says so (review 1, finding 3).
+    if (f.action !== "ask-user" && !settled(earlier)) continue;
     const d: FindingDecision = {
       id: M.nextId(s, "fd"),
       taskId: t.id,
@@ -146,17 +168,41 @@ export function createDecisions(s: State, t: Task, art: Artifact, now: string): 
   return out;
 }
 
-/** Keep the record bounded: decided decisions of settled tasks go first, oldest first; open ones are never dropped. */
+/**
+ * Keep the record bounded (§4.4): decided decisions of settled tasks go first, oldest first. A task is
+ * settled once cancelled, or done and landed (or done with no delivery to wait for). Open decisions,
+ * and decided ones a repair or the gate may still read (an unsettled task), are never dropped
+ * (review 1, finding 9): the cap yields rather than reopen a finding.
+ */
 function pruneDecisions(s: State) {
   if (s.decisions.length <= MAX_DECISIONS) return;
-  const settled = new Set(s.tasks.filter((t) => t.lifecycle === "done" || t.lifecycle === "cancelled").map((t) => t.id));
-  const droppable = (d: FindingDecision, strict: boolean) => d.status !== "open" && (!strict || settled.has(d.taskId));
-  for (const strict of [true, false]) {
-    for (let i = 0; i < s.decisions.length && s.decisions.length > MAX_DECISIONS; ) {
-      if (droppable(s.decisions[i], strict)) s.decisions.splice(i, 1);
-      else i++;
-    }
+  const delivery = s.project.prDelivery.enabled || s.project.autonomy.autoDeliver.enabled;
+  const settledTask = (t: Task) => t.lifecycle === "cancelled" || (t.lifecycle === "done" && (!!t.integration?.landed || t.integration?.status === "not-needed" || !delivery));
+  const settledIds = new Set(s.tasks.filter(settledTask).map((t) => t.id));
+  const droppable = (d: FindingDecision) => d.status !== "open" && (d.status === "superseded" || settledIds.has(d.taskId) || !s.tasks.some((t) => t.id === d.taskId));
+  for (let i = 0; i < s.decisions.length && s.decisions.length > MAX_DECISIONS; ) {
+    if (droppable(s.decisions[i])) s.decisions.splice(i, 1);
+    else i++;
   }
+}
+
+/**
+ * Close the open decisions nothing can act on any more (review 1, finding 10): those of a cancelled
+ * task, or on an artifact a later run replaced. Decided ones are kept as the record. Mutates the draft.
+ */
+export function supersedeDecisions(s: State, taskId: string, now: string, o: { artifactId?: string; reason: string }): number {
+  let n = 0;
+  for (const d of s.decisions) {
+    if (d.taskId !== taskId || d.status !== "open") continue;
+    if (o.artifactId !== undefined && d.artifactId !== o.artifactId) continue;
+    d.status = "superseded";
+    d.decidedAt = now;
+    d.why = o.reason;
+    delete d.suggestion;
+    n++;
+  }
+  if (n) M.event(s, now, "system", "decision", `${n} open decision${n === 1 ? "" : "s"} closed: ${o.reason}`, taskId);
+  return n;
 }
 
 /** The undecided findings a pending step with `runIf` would read, and who is to decide them. */
@@ -174,7 +220,8 @@ export function awaitingDecision(s: State, t: Task): { count: number; lead: numb
         const d = decisionFor(s, art, f);
         if (d && d.status !== "open") continue;
         count++;
-        if (!d || d.routedTo === "lead") lead++;
+        // A finding with no record is nobody's yet: it is shown as the user's, never as "the lead's" (review 1, finding 1).
+        if (d?.routedTo === "lead") lead++;
         else user++;
       }
     }
@@ -216,7 +263,11 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
   const d = getDecision(s, decisionId);
   const t = s.tasks.find((x) => x.id === d.taskId);
   if (!t) throw new ControlError(`Unknown task ${d.taskId}`);
-  if (d.kind === "final-checks") throw new ControlError("Decisions on failing final checks are not available in this version.");
+  // ORC-013 §6.7: failing final checks take a repair round, or the user's acceptance (only the user's).
+  if (d.kind === "final-checks") {
+    C.decideFinalChecks(s, d, decision, why, now);
+    return s;
+  }
   if (decision === "reopen") {
     if (d.status === "open" && !d.suggestion) throw new ControlError(`${d.id} is already open.`);
     d.status = "open";
@@ -292,10 +343,30 @@ export function routeDecision(state: State, decisionId: string, to: "lead" | "us
   return s;
 }
 
-/** Open decisions routed to the lead that no lead run has been shown yet (routed after the last run started). */
+/**
+ * Open decisions routed to the lead that no completed lead run has been shown yet (routed after the
+ * last completed run started). A run that failed or was lost decided nothing, so they are due again;
+ * the lead's failure backoff still applies (review 1, finding 5).
+ */
 export function decisionsDueForLead(s: State): FindingDecision[] {
-  const last = s.leadRuns.length ? s.leadRuns[s.leadRuns.length - 1].startedAt : "";
+  let last = "";
+  for (const r of s.leadRuns) if ((r.outcome === "completed" || r.outcome === "running" || r.outcome === "stopping") && r.startedAt > last) last = r.startedAt;
   return openDecisions(s, "lead").filter((d) => (d.routedAt ?? d.createdAt) > last);
+}
+
+/**
+ * The task whose specification a decision is really about: a dedicated review or a repair of a pull
+ * request acts on that pull request's task, whose spec the user may have written (review 1, finding 6).
+ */
+export function owningTask(s: State, t: Task): Task {
+  let cur = t;
+  for (let i = 0; i < 5; i++) {
+    const id = cur.reviewTarget?.taskId ?? cur.deliverInto?.taskId ?? cur.checkTarget?.taskId;
+    const next = id ? s.tasks.find((x) => x.id === id) : undefined;
+    if (!next) return cur;
+    cur = next;
+  }
+  return cur;
 }
 
 /** Who decides `ask-user` findings created from now on. Open decisions stay where they are. */
@@ -329,7 +400,6 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
   if (!Array.isArray(raw)) return ["Decisions: not a list; nothing was decided"];
   const shaping = s.project.stage === "shaping";
   const hold = !s.project.autonomy.enabled || s.project.autonomy.holdLeadProposals;
-  let proposed = 0;
   raw.forEach((entry, i) => {
     if (i >= MAX_LEAD_DECISIONS) {
       if (i === MAX_LEAD_DECISIONS) notes.push(`Decisions: more than ${MAX_LEAD_DECISIONS} in one run; the rest were ignored`);
@@ -347,8 +417,12 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
     const t = s.tasks.find((x) => x.id === d.taskId);
     if (!t) return void notes.push(`Decision ${id}: its task is gone`);
     const kind = decision as LeadDecision;
-    if (d.kind === "final-checks" && kind === "accept") return void notes.push(`Decision ${id}: refused; only the user can accept failing checks`);
-    if (d.kind === "final-checks" && kind !== "ask-user") return void notes.push(`Decision ${id}: check rounds are not available in this version; it stays open`);
+    // ORC-013 §6.7: on failing final checks the lead may add a repair round or hand over; it can never accept.
+    if (d.kind === "final-checks") {
+      const note = C.leadDecidesFinalChecks(s, d, kind, why, r.id, now);
+      if (note) notes.push(note);
+      return;
+    }
     if (kind === "ask-user") {
       d.routedTo = "user";
       d.routedAt = now;
@@ -357,7 +431,7 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
       M.event(s, now, "lead", "decision", `${d.id} sent to you by the lead: ${clip(why, 200)}`, t.id);
       return;
     }
-    if (kind === "fix" && M.currentSpec(t).author === "user") {
+    if (kind === "fix" && M.currentSpec(owningTask(s, t)).author === "user") {
       d.suggestion = { decision: "fix", why, leadRunId: r.id, at: now };
       d.routedTo = "user";
       d.routedAt = now;
@@ -365,8 +439,8 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
       return;
     }
     if (kind === "follow-up") {
-      const openRoom = Math.max(0, s.project.autonomy.maxOpenProposals - M.openLeadProposals(s).length);
-      if (proposed >= openRoom) return void notes.push(`Decision ${id}: follow-up refused; the limit of ${s.project.autonomy.maxOpenProposals} open lead proposals is reached, so it stays open`);
+      // Each proposal counts once: what this run already proposed is among the open proposals (review 1, finding 14).
+      if (M.openLeadProposals(s).length >= s.project.autonomy.maxOpenProposals) return void notes.push(`Decision ${id}: follow-up refused; the limit of ${s.project.autonomy.maxOpenProposals} open lead proposals is reached, so it stays open`);
       if (M.deferredLeadRoots(s).length >= s.project.autonomy.maxOpenProposals) return void notes.push(`Decision ${id}: follow-up refused; deferred lead proposals reached their limit, so it stays open`);
       const spec = M.currentSpec(t).content;
       const title = clip((typeof e.title === "string" && e.title.trim()) || d.finding.title, 200);
@@ -393,7 +467,6 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
       const problem = M.validateProposal(s, p, now);
       if (problem) return void notes.push(`Decision ${id}: follow-up refused (${problem}); it stays open`);
       const newId = M.proposeTask(s, p, now, hold, undefined, shaping);
-      proposed++;
       d.status = "follow-up";
       d.decidedBy = "lead";
       d.decidedAt = now;
@@ -423,10 +496,10 @@ export function leadRunDecisions(s: State, leadRunId: string): { decision: Findi
   return out;
 }
 
-/** The decisions a repair or review envelope lists for a step: those on the findings artifacts it reads. */
+/** The decisions a repair or review envelope lists for a step: those on the findings artifacts it reads, any version of them. */
 export function decisionsForStep(s: State, t: Task, st: Step): FindingDecision[] {
-  const ids = new Set(M.consumedInputs(s, t, st).map((i) => i.artifactId));
-  return s.decisions.filter((d) => ids.has(d.artifactId));
+  const read = M.consumedInputs(s, t, st).map((i) => s.artifacts.find((a) => a.id === i.artifactId)).filter((a): a is Artifact => !!a);
+  return s.decisions.filter((d) => d.taskId === t.id && read.some((a) => sameOutput(s, a, d.artifactId)));
 }
 
 /** A decision, in the words later prompts and the UI use. */
@@ -434,6 +507,7 @@ export function decisionLabel(d: FindingDecision): string {
   const by = d.decidedBy === "carried" ? "carried from an earlier round" : d.decidedBy === "lead" ? "by the lead" : "by the user";
   if (d.suggestion) return `suggested fix by the lead, waiting for the user${d.suggestion.why ? `: ${d.suggestion.why}` : ""}`;
   if (d.status === "open") return `waiting for a decision (${d.routedTo === "lead" ? "the lead" : "the user"})`;
+  if (d.status === "superseded") return `no longer open${d.why ? `: ${d.why}` : ""}`;
   if (d.status === "follow-up") return `followed up as ${d.followUpTaskId ?? "a separate task"} (${by})${d.why ? `: ${d.why}` : ""}`;
   return `decided: ${d.status}, ${by}${d.why ? `: ${d.why}` : ""}`;
 }

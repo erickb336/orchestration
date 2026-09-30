@@ -4,7 +4,8 @@
 // The queue is informational. Nothing here is read to decide dispatch, integration or merging, and a
 // landed item's `status` changes only through markLandedReviewed and sendBackLanded.
 
-import { coverageCounts } from "./coverage";
+import * as C from "./checks";
+import { MAX_PROVEN_PATHS, coverageCounts } from "./coverage";
 import * as F from "./findings";
 import * as M from "./model";
 import { instantiate, toDef, validatePipeline } from "./pipeline";
@@ -127,7 +128,10 @@ export function recordLanded(
   if (!t.integration || t.integration.landed) return false;
   // A link shown as "Open on GitHub" is only ever a github.com address.
   const pr = entry.pr && !entry.simulated && !GITHUB_URL.test(entry.pr.url) ? { number: entry.pr.number, url: "" } : entry.pr;
-  t.integration.landed = { at: now, ...entry, ...(pr ? { pr } : {}), flags: entry.flags ?? [], status: "unreviewed", notes: [], followUps: [] };
+  // ORC-013 §6.9: checks the user accepted failing, or no check evidence for the landed change while checks are on.
+  const changeSha = t.integration.pr?.changeSha ?? M.finalChange(s, t)?.ref?.split(" ")[0];
+  const flags = [...new Set([...(entry.flags ?? []), ...C.landedCheckFlags(s, t, changeSha)])];
+  t.integration.landed = { at: now, ...entry, ...(pr ? { pr } : {}), flags, status: "unreviewed", notes: [], followUps: [] };
   event(s, now, "system", "integration", `Landed on ${entry.target} (${sha12(entry.commit)})${entry.simulated ? " (simulated)" : ""}; listed for review, which never blocks anything`, t.id);
   return true;
 }
@@ -376,6 +380,8 @@ export const PR_LIMITS = {
   repairs: 2,
   /** Dedicated reviews the service starts per pull request (the user may ask for more). */
   reviews: 3,
+  /** ORC-013: dedicated check runs the service starts per pull request. */
+  checks: 3,
   /** An automatic merge needs the base fetched this recently. */
   baseFreshMs: 2 * MIN,
   /** Failed attempts to push and open a pull request before it waits for the user. */
@@ -622,7 +628,7 @@ function nobodyReason(pr: PrDelivery): string {
  * that wrote none of it (or an author is unknown), so no agent's review could be independent.
  * "limit": the service already started as many dedicated reviews as it may.
  */
-export type ReviewState = "ok" | "pending" | "missing" | "not-independent" | "findings" | "blocked" | "limit";
+export type ReviewState = "ok" | "pending" | "missing" | "not-independent" | "findings" | "blocked" | "limit" | "too-large";
 export interface ReviewView {
   state: ReviewState;
   evidence: ReviewEvidence;
@@ -816,6 +822,10 @@ export function reviewView(s: State, t: Task): ReviewView {
   const dedicated = dedicatedReview(s, t, pr);
   if (dedicated && dedicated.state !== "missing") return dedicated;
   if (own.state === "findings") return own;
+  // Review 1 (8): above the coverage limit no agent review can ever be shown complete, so none is started; the user merges.
+  if (pr.changed.files > MAX_PROVEN_PATHS) {
+    return { state: "too-large", evidence: noReview(pr, `The change ${sha12(pr.changeSha)} touches ${pr.changed.files} files, too many for a review to show it covered them all (the limit is ${MAX_PROVEN_PATHS}). No review is started; look at it and merge it yourself.`) };
+  }
   const base = dedicated ?? own;
   // Every provider wrote part of it (or an author is unknown): no review can cure that, so none is started.
   if (nobodyIndependent(s, pr)) return { ...base, state: "blocked", evidence: { ...base.evidence, ok: false, reason: nobodyReason(pr) } };
@@ -929,9 +939,84 @@ export function requestPrReview(state: State, taskId: string, now: string): Stat
   return s;
 }
 
+// ---------- ORC-013 §6.9: the service's own checks on a pull request's change ----------
+
+/** The dedicated check tasks of this pull request: for the change it holds now, or (`anySha`) any change of this delivery. */
+function checkTasksFor(s: State, t: Task, pr: PrDelivery, anySha = false): Task[] {
+  return s.tasks.filter((x) => x.checkTarget?.taskId === t.id && x.checkTarget.n === pr.n && (anySha || x.checkTarget.sha === pr.changeSha));
+}
+
+/** A project template's steps for the dedicated check run, falling back to the built-in when the edited one cannot check. */
+function checkSteps(s: State): StepDef[] {
+  const usable = (d: StepDef[]) => d.some((x) => x.role === "checks" && x.outputs.some((o) => o.kind === "check-results")) && !validatePipeline(d, { checkTarget: true }).some((i) => i.severity === "error");
+  const mine = stepsOf(s, "delivery-checks").map(toDef);
+  return usable(mine) ? mine : templateSteps("delivery-checks");
+}
+
+/** Create the dedicated check task for the change the pull request holds. Mutates the draft `s`. */
+function startChecks(s: State, t: Task, pr: PrDelivery, now: string): string {
+  const h = sha12(pr.changeSha);
+  const ids = new Set(s.tasks.map((x) => x.id));
+  let k = 1;
+  while (ids.has(`${t.id}-CK${k}`)) k++;
+  const id = `${t.id}-CK${k}`;
+  const defs = checkSteps(s);
+  const content: SpecContent = structuredClone(M.currentSpec(t).content);
+  const title = content.title;
+  content.title = `Checks for merge: ${title}`;
+  content.whyNow = `The change ${h} of ${t.id} has no service-check result under the current check settings. A pull request merges only once the project's checks passed on exactly its change.`;
+  content.benefit = "The project's own checks run on the change before it reaches the base branch.";
+  const selected = content.options.find((o) => o.id === content.selectedOptionId);
+  if (selected) selected.approach = `The service runs the project's checks on ${h} of ${t.id}. No agent is involved.`;
+  s.tasks.push({
+    id,
+    priority: t.priority,
+    lifecycle: "ready",
+    hold: false,
+    holdBeforeStart: false,
+    specs: [{ rev: 1, at: now, author: "system", reason: `Service checks on ${t.id} (${h}) before it merges into ${pr.base}`, content }],
+    steps: instantiate(defs),
+    roleOverrides: {},
+    dependsOn: [],
+    createdAt: now,
+    updatedAt: now,
+    decisionAt: now,
+    checkTarget: { taskId: t.id, n: pr.n, sha: pr.changeSha },
+    pipelineRev: 1,
+    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery checks template", steps: defs.map(toDef) }],
+  });
+  pr.counters.checks = (pr.counters.checks ?? 0) + 1;
+  event(s, now, "system", "integration", `Check run ${id} created for ${prName(pr)} at ${h}: no service-check result for this change under the current settings`, t.id);
+  return id;
+}
+
+/**
+ * Make sure one dedicated check run exists when the change needs one (§6.9): checks are on, the
+ * change has no result under the current settings, no check task for it is open, fewer than the cap
+ * were started, and nothing is paused. A failed result is a repair's job, never another run's.
+ */
+export function ensureChecks(state: State, taskId: string, now: string): State {
+  const { task, pr } = prTask(state, taskId);
+  if (pr.phase !== "built" && pr.phase !== "open") return state;
+  if (!C.checksOn(state.project.checks) || !mayStartWork(state, pr)) return state;
+  const ev = C.checkEvidence(state, pr.changeSha);
+  if (ev.ok || ev.attemptId) return state;
+  if (checkTasksFor(state, task, pr).some((x) => x.lifecycle !== "cancelled" && x.lifecycle !== "done")) return state;
+  if ((pr.counters.checks ?? 0) >= PR_LIMITS.checks) return state;
+  const s = structuredClone(state);
+  const t = getTask(s, taskId);
+  startChecks(s, t, t.integration!.pr!, now);
+  refreshAttention(s, t, now);
+  return s;
+}
+
 // ---------- repair into the open pull request (design §9.3) ----------
 
-export type RepairCause = { kind: "checks"; checks: { name: string; url?: string }[] } | { kind: "findings"; summaries: string[] } | { kind: "conflict"; files: string[] };
+export type RepairCause =
+  | { kind: "checks"; checks: { name: string; url?: string }[] }
+  | { kind: "service-checks"; sha: string; results: { id: string; label: string; exitCode?: number }[] }
+  | { kind: "findings"; summaries: string[] }
+  | { kind: "conflict"; files: string[] };
 
 /** A fix task of this pull request that is still working, or finished and not yet placed on the pull request. */
 export function openRepair(s: State, pr: PrDelivery): Task | undefined {
@@ -962,6 +1047,13 @@ export function repairCause(s: State, t: Task): RepairCause | undefined {
       .filter((c): c is CheckObs => !!c && c.conclusion !== null && c.conclusion !== "SUCCESS");
     // Names and links only: CI log text is untrusted input and never reaches an agent.
     if (failed.length) return { kind: "checks", checks: failed.map((c) => ({ name: c.name, ...(c.url && GITHUB_URL.test(c.url) ? { url: c.url } : {}) })) };
+  }
+  // ORC-013 §6.9: the service's own checks failed on the change (under the current settings).
+  if (C.checksOn(s.project.checks)) {
+    const ev = C.checkEvidence(s, pr.changeSha);
+    const art = !ev.ok && ev.attemptId ? s.artifacts.find((a) => a.attemptId === ev.attemptId && a.kind === "check-results") : undefined;
+    const results = art?.checkRun ? C.failedResults(art.checkRun).filter((r) => r.kind === "check").map((r) => ({ id: r.id, label: r.label, ...(r.exitCode !== undefined ? { exitCode: r.exitCode } : {}) })) : [];
+    if (results.length) return { kind: "service-checks", sha: pr.changeSha, results };
   }
   const v = reviewView(s, t);
   if (v.state === "findings") {
@@ -1027,18 +1119,22 @@ function startRepair(state: State, taskId: string, cause: RepairCause, now: stri
   const what =
     cause.kind === "checks"
       ? `the required check${cause.checks.length === 1 ? "" : "s"} ${cause.checks.map((c) => c.name).join(", ")} failed on ${h}`
-      : cause.kind === "findings"
-        ? `the review of ${sha12(pr0.changeSha)} reported open findings`
-        : `it conflicts with ${pr0.base}`;
+      : cause.kind === "service-checks"
+        ? `the project's check${cause.results.length === 1 ? "" : "s"} ${cause.results.map((c) => c.label).join(", ")} failed on ${sha12(cause.sha)} (run by the service)`
+        : cause.kind === "findings"
+          ? `the review of ${sha12(pr0.changeSha)} reported open findings`
+          : `it conflicts with ${pr0.base}`;
   content.title = `Fix ${prName(pr0)}: ${title}`;
   content.whyNow = `${prName(pr0)} of ${taskId} cannot merge: ${what}.`;
   content.outcome = cause.kind === "conflict" ? `The pull request of ${taskId} merges cleanly into ${pr0.base}, with both sides' work kept.` : `The pull request of ${taskId} passes its required checks and its review, with its original outcome intact.`;
   content.scopeIncluded =
     cause.kind === "checks"
       ? cause.checks.map((c) => `Make the required check "${c.name}" pass${c.url ? ` (${c.url})` : ""}. Find the cause in the code; do not weaken tests, CI or build scripts.`)
-      : cause.kind === "findings"
-        ? cause.summaries.map((x) => `Open review finding: ${x}`)
-        : [`Resolve the conflict with ${pr0.base}${cause.files.length ? ` in ${cause.files.join(", ")}` : ""}, keeping the work of both sides.`];
+      : cause.kind === "service-checks"
+        ? cause.results.map((c) => `Make the project's check "${c.label}" pass${c.exitCode !== undefined ? ` (it exited ${c.exitCode})` : ""}; its output is in the check results this task's steps read. Find the cause in the code; do not weaken tests, CI or build scripts.`)
+        : cause.kind === "findings"
+          ? cause.summaries.map((x) => `Open review finding: ${x}`)
+          : [`Resolve the conflict with ${pr0.base}${cause.files.length ? ` in ${cause.files.join(", ")}` : ""}, keeping the work of both sides.`];
   content.scopeExcluded = ["Any change beyond what is needed to fix this pull request", "Weakening tests, CI or build scripts"];
   content.successCriteria = [];
   content.acceptance = [cause.kind === "conflict" ? "No conflict markers remain and both sides' behaviour is kept" : "The reported problem is fixed", `The original outcome still holds: ${clip(M.currentSpec(origin).content.outcome, 300)}`];
@@ -1102,8 +1198,13 @@ export function advanceDelivery(state: State, now: string): State {
   for (const id of trackedPrTasks(s).map((t) => t.id)) {
     dropStaleUpdate(s, getTask(s, id), now);
     getTask(s, id).integration!.pr!.review = reviewView(s, getTask(s, id)).evidence;
+    // ORC-013 §6.9: the service-check evidence for the change it holds, under the current settings.
+    if (C.checksOn(s.project.checks)) getTask(s, id).integration!.pr!.checks = C.checkEvidence(s, getTask(s, id).integration!.pr!.changeSha);
+    else delete getTask(s, id).integration!.pr!.checks;
     // The one dedicated review the change needs (it returns the same state when none is needed or allowed).
     s = ensureReview(s, id, now);
+    // ORC-013: and the one check run it needs, when the change has no result of its own.
+    s = ensureChecks(s, id, now);
     let t = getTask(s, id);
     let pr = t.integration!.pr!;
     const cfg = s.project.prDelivery;
@@ -1175,7 +1276,7 @@ function wrongRepo(s: State, pr: PrDelivery): boolean {
 // ---------- the merge gate (design §9.5) ----------
 
 export interface GateItem {
-  id: "policy" | "not-paused" | "github" | "ours" | "head" | "checks" | "mergeable" | "no-stop" | "review" | "paths" | "auto" | "up-to-date" | "attempts";
+  id: "policy" | "not-paused" | "github" | "ours" | "head" | "checks" | "mergeable" | "no-stop" | "review" | "service-checks" | "paths" | "auto" | "up-to-date" | "attempts";
   label: string;
   ok: boolean;
   detail: string;
@@ -1317,11 +1418,24 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   const note = advisory ? " You can still merge it yourself: your Merge replaces the agent review." : "";
   if (rv.state === "ok" && recorded) add("review", REVIEW, "ok", rv.evidence.reason, undefined, advisory);
   else if (rv.state === "findings") add("review", REVIEW, "blocked", `${rv.evidence.reason}${note}`, "review-findings", advisory);
-  else if (rv.state === "blocked") add("review", REVIEW, "blocked", `${rv.evidence.reason}${note}`, "review-blocked", advisory);
+  else if (rv.state === "blocked" || rv.state === "too-large") add("review", REVIEW, "blocked", `${rv.evidence.reason}${note}`, "review-blocked", advisory);
   else if (rv.state === "limit") add("review", REVIEW, "blocked", rv.evidence.reason, "review-limit", advisory);
   else if (rv.state === "pending") add("review", REVIEW, "waiting", rv.evidence.reason, undefined, advisory);
   else if (rv.state === "ok") add("review", REVIEW, "waiting", "The review result is being recorded.", undefined, advisory);
   else add("review", REVIEW, "waiting", `${rv.evidence.reason} One dedicated review is started for it${cfg.enabled && !s.project.hold && !pr.userHold ? "" : " once nothing is paused"}.`, undefined, advisory);
+
+  // 9b. ORC-013 §6.9: the project's own checks, run by the service on exactly this change under the
+  // current settings. Shown while checks are on; for a user merge it is advisory, like the review.
+  if (C.checksOn(s.project.checks)) {
+    const ev = C.checkEvidence(s, pr.changeSha);
+    const SC = "Service checks";
+    const running = checkTasksFor(s, task, pr).find((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled");
+    if (ev.ok) add("service-checks", SC, "ok", ev.reason, undefined, advisory);
+    else if (ev.attemptId) add("service-checks", SC, "blocked", `${ev.reason}${note}`, "service-checks", advisory);
+    else if (running) add("service-checks", SC, "waiting", `${ev.reason} ${running.id} runs them.`, undefined, advisory);
+    else if ((pr.counters.checks ?? 0) >= PR_LIMITS.checks) add("service-checks", SC, "blocked", `${ev.reason} ${PR_LIMITS.checks} check runs were already started for this pull request. Merge it yourself.`, "service-checks", advisory);
+    else add("service-checks", SC, "waiting", `${ev.reason} One check run is started for it${cfg.enabled && !s.project.hold && !pr.userHold ? "" : " once nothing is paused"}.`, undefined, advisory);
+  }
 
   if (!o.byUser) {
     // 10. Paths and workers
@@ -1391,7 +1505,7 @@ function announceReady(s: State, t: Task, now: string) {
 /** Reasons a head is never pushed: they end only when the delivery is closed (and delivered again). */
 const STICKY: PrAttentionCode[] = ["remote-diverged", "foreign-commits"];
 const stuck = (pr: PrDelivery) => !!pr.attention && STICKY.includes(pr.attention.code);
-const REPAIRABLE: PrAttentionCode[] = ["checks-failed", "review-findings", "conflict"];
+const REPAIRABLE: PrAttentionCode[] = ["checks-failed", "service-checks", "review-findings", "conflict"];
 
 /** Set or clear `pr.attention` from the current facts. `since` moves only when the reason or the head changes. */
 function refreshAttention(s: State, t: Task, now: string) {
@@ -1615,8 +1729,8 @@ function promoteHead(s: State, taskId: string, now: string): State {
   }
   let out = s;
   if (p.kind === "repair") {
-    // Reviews of the change this pull request no longer holds must never count, and need not finish.
-    const stale = s.tasks.filter((x) => x.reviewTarget?.taskId === t.id && x.reviewTarget.n === pr.n && x.reviewTarget.headSha !== pr.changeSha).map((x) => x.id);
+    // Reviews and check runs of the change this pull request no longer holds must never count, and need not finish.
+    const stale = s.tasks.filter((x) => (x.reviewTarget?.taskId === t.id && x.reviewTarget.n === pr.n && x.reviewTarget.headSha !== pr.changeSha) || (x.checkTarget?.taskId === t.id && x.checkTarget.n === pr.n && x.checkTarget.sha !== pr.changeSha)).map((x) => x.id);
     out = cancelLinked(s, stale, now, `${prName(pr)} holds a newer change`);
   }
   const t2 = getTask(out, taskId);
@@ -1895,7 +2009,7 @@ export function reportObservations(state: State, obs: Observations, now: string,
         },
         now,
       );
-      cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds], reason: `${prName(pr)} merged` });
+      cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds, ...checkTasksFor(s, t, pr, true).map((x) => x.id)], reason: `${prName(pr)} merged` });
       continue;
     }
     if (o.state === "CLOSED") {
@@ -1904,7 +2018,7 @@ export function reportObservations(state: State, obs: Observations, now: string,
       if (asked) pr.closedByRequest = true;
       settle();
       event(s, now, "system", asked ? "integration" : "blocked", asked ? `${prName(pr)} closed from Orchestrator; the branch is kept` : `${prName(pr)} was closed on GitHub without merging${o.closedBy ? ` by ${o.closedBy}` : ""}`, t.id);
-      cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds], reason: `${prName(pr)} was closed` });
+      cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds, ...checkTasksFor(s, t, pr, true).map((x) => x.id)], reason: `${prName(pr)} was closed` });
       continue;
     }
     // OPEN
@@ -2620,14 +2734,14 @@ export function closePr(state: State, taskId: string, now: string): State {
     delete pr.attention;
     delete pr.op;
     event(s, now, "user", "integration", `Delivery of ${pr.branch} abandoned here. ${prName(pr)} in ${pr.repo} was not touched: the remote now points at ${s.project.github!.repo}. Close it on GitHub if it should not stay open`, task.id);
-    return cancelLinked(s, [...pr.reviewTaskIds, ...pr.repairTaskIds], now, "the delivery was abandoned");
+    return cancelLinked(s, [...pr.reviewTaskIds, ...pr.repairTaskIds, ...checkTasksFor(s, task, pr, true).map((x) => x.id)], now, "the delivery was abandoned");
   }
   if (pr.phase === "built" && !pr.op && pr.counters.failures === 0 && pr.number === undefined) {
     // Nothing was ever sent to GitHub for this head.
     pr.phase = "closed";
     delete pr.attention;
     event(s, now, "user", "integration", `Delivery of ${pr.branch} abandoned before anything was pushed`, task.id);
-    return cancelLinked(s, [...pr.reviewTaskIds, ...pr.repairTaskIds], now, "the delivery was abandoned");
+    return cancelLinked(s, [...pr.reviewTaskIds, ...pr.repairTaskIds, ...checkTasksFor(s, task, pr, true).map((x) => x.id)], now, "the delivery was abandoned");
   }
   pr.closeRequested = { at: now };
   delete pr.nextAt;

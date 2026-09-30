@@ -120,6 +120,11 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
     });
   }
 
+  // ORC-013: the checks sandbox became unavailable (keyed on that observation, never on polling); check steps wait until it is ready.
+  const ch = next.project.checksHealth;
+  if (ch?.status === "unavailable" && next.project.checks?.enabled && (prev.project.checksHealth?.status !== "unavailable" || prev.project.checksHealth.checkedAt !== ch.checkedAt) && (prev.project.checksHealth?.status !== "unavailable"))
+    out.push({ key: `checks-sandbox:${ch.status}:${ch.checkedAt}`, title: "The checks sandbox is not available", body: clip(`${ch.detail} Check steps wait until it is ready, or until you choose to run without a sandbox (Settings → Checks).`) });
+
   const paused = next.project.github?.autoMergePaused;
   if (paused && paused.since !== prev.project.github?.autoMergePaused?.since)
     out.push({ key: `auto-merge-paused:${paused.since}`, title: "Automatic merging is paused", body: clip(`${paused.reason}. ${paused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}`), ...(paused.taskId ? { taskId: paused.taskId } : {}) });

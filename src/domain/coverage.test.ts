@@ -22,7 +22,7 @@ const BASE = "b".repeat(40);
 describe("normalisation and the comparison", () => {
   it("normalises paths and refuses absolute ones and .. segments", () => {
     expect(normalizePath(" ./src//a.ts ")).toBe("src/a.ts");
-    expect(normalizePath("src\\b.ts")).toBe("src/b.ts");
+    expect(normalizePath("src\\b.ts")).toBe("src\\b.ts"); // a backslash is part of the name, never a separator (review 1, finding 2)
     expect(normalizePath("/etc/passwd")).toBeUndefined();
     expect(normalizePath("../x")).toBeUndefined();
     expect(normalizePath("a/../x")).toBeUndefined();
@@ -115,11 +115,15 @@ describe("the rule in reportCompletion", () => {
     expect(art.openFindings).toBe(1);
   });
 
-  it("a review that saw no change (no scope) is not required to list paths; a UX review never is", () => {
+  it("a code review of a real change that got no changed-path set is unproven (review 1, finding 7); a simulated change or a UX review is not required to list paths", () => {
     const { s, id, review } = reviewRunning();
     const noScope = { ...s, attempts: s.attempts.map((a) => (a.id === review.id ? { ...a, scope: undefined } : a)) };
     const done = M.reportCompletion(noScope, review.id, [], at(4), clean([]));
-    expect(M.acceptedOutput(done, task(done, id), "S2", "findings")!.pathCoverage).toMatchObject({ state: "not-required" });
+    expect(M.acceptedOutput(done, task(done, id), "S2", "findings")!.pathCoverage).toMatchObject({ state: "unproven" });
+    // The simulated runtime names its changes "sim-…": there is nothing to prove there.
+    const simulated = { ...noScope, artifacts: noScope.artifacts.map((x) => (x.kind === "code-change" ? { ...x, ref: `sim-${x.attemptId} (simulated)` } : x)) };
+    const doneSim = M.reportCompletion(simulated, review.id, [], at(4), clean([]));
+    expect(M.acceptedOutput(doneSim, task(doneSim, id), "S2", "findings")!.pathCoverage).toMatchObject({ state: "not-required" });
     const ux = { ...s, tasks: s.tasks.map((t) => (t.id === id ? { ...t, steps: t.steps.map((x) => (x.id === "S2" ? { ...x, role: "ux_reviewer" as const } : x)) } : t)) };
     const doneUx = M.reportCompletion(ux, review.id, [], at(4), clean([]));
     expect(M.acceptedOutput(doneUx, task(doneUx, id), "S2", "findings")!.pathCoverage).toMatchObject({ state: "not-required" });

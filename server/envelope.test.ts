@@ -62,12 +62,25 @@ describe("the parser (§4.2)", () => {
     expect(p.notes).toEqual(expect.arrayContaining([expect.stringMatching(/reported 0 open findings; 2 blocking findings were listed/), expect.stringMatching(/2 finding\(s\) had no valid action or severity/), expect.stringMatching(/3 reviewed path\(s\)/)]));
   });
 
-  it("caps: more than 50 items are dropped with a note; titles, details and why are capped; items without a title are dropped; the file drops on an absolute path", () => {
-    const many = Array.from({ length: 53 }, (_, i) => ({ severity: "error", action: "auto-fix", title: `t${i}` }));
-    const p = parseFindings([...many, { title: "" }, "not an object", { title: "x".repeat(300), detail: "d".repeat(1300), why: "w".repeat(400), file: "/etc/passwd", line: 0 }]);
+  it("caps (review 1, finding 4): information is cut first and never a blocking finding; an untitled blocking item keeps a placeholder; more than 50 blocking findings make the report incomplete, never clean; texts are capped; the file drops on an absolute path", () => {
+    // 48 blocking findings and 5 information-only ones: the cap cuts information, all blocking ones stay.
+    const blocking = Array.from({ length: 48 }, (_, i) => ({ severity: "error", action: "auto-fix", title: `t${i}` }));
+    const info = Array.from({ length: 5 }, (_, i) => ({ severity: "info", action: "no-op", title: `note ${i}` }));
+    const p = parseFindings([...info, ...blocking, { title: "" }, "not an object"]);
     expect(p.findings).toHaveLength(50);
-    expect(p.notes).toEqual(expect.arrayContaining([expect.stringMatching(/6 finding\(s\) beyond 50 were dropped/)]));
-    const q = parseFindings([{ title: "" }, "not an object", { title: `\u0007${"x".repeat(300)}`, detail: "d".repeat(1300), why: "w".repeat(400), file: "/etc/passwd", line: 0, action: "auto-fix", severity: "error" }]);
+    expect(p.incomplete).toBeUndefined();
+    expect(p.findings.filter((f) => F.isBlocking(f))).toHaveLength(49); // 48 titled, plus the untitled one with its placeholder
+    expect(p.findings.find((f) => f.title === "(untitled finding)")).toMatchObject({ severity: "warning", action: "ask-user", defaulted: true });
+    expect(p.findings.filter((f) => f.severity === "info")).toHaveLength(1);
+    expect(p.notes).toEqual(expect.arrayContaining([expect.stringMatching(/4 finding\(s\) beyond 50 were dropped/), expect.stringMatching(/1 finding\(s\) without a title were dropped/)]));
+    // More blocking findings than the service keeps: the report is refused, so a cut can never make it clean.
+    const many = parseFindings(Array.from({ length: 53 }, (_, i) => ({ severity: "error", action: "auto-fix", title: `t${i}` })));
+    expect(many.incomplete).toBe(true);
+    expect(many.findings).toHaveLength(50);
+    const out = parseOutputs(block({ outputs: { findings: { summary: "s", findings: Array.from({ length: 51 }, (_, i) => ({ severity: "error", action: "auto-fix", title: `t${i}` })) } } }), DECLARED);
+    expect(out.outputs).toEqual([]);
+    expect(out.problems).toEqual([expect.stringMatching(/more blocking findings than the service keeps \(50\); an incomplete report is never accepted/)]);
+    const q = parseFindings([{ title: "", severity: "info", action: "no-op" }, "not an object", { title: `\u0007${"x".repeat(300)}`, detail: "d".repeat(1300), why: "w".repeat(400), file: "/etc/passwd", line: 0, action: "auto-fix", severity: "error" }]);
     expect(q.findings).toHaveLength(1);
     expect(q.findings[0].title).toHaveLength(200);
     expect(q.findings[0].detail).toBe(""); // over 1200: emptied

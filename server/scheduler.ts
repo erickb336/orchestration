@@ -7,10 +7,13 @@
 // everything in one lease-checked transaction, so state changes stay serialized.
 
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import * as C from "../src/domain/checks";
 import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
-import { REVIEW_ROLES, isProvider, type Integration, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
+import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
+import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner } from "./checks";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
 import { SimulatedGitHub, type GitHubHost } from "./github";
 import { PrDriver } from "./prdelivery";
@@ -38,6 +41,13 @@ export interface SchedulerOptions {
   workerShell?: boolean;
   /** ORC-014: where the user's vision documents are kept; their text goes into the lead's and designers' envelopes. */
   visionDocs?: VisionDocStore;
+  /**
+   * ORC-013: the runner for the project's checks. Real mode passes the sandboxed runners; without one
+   * and without workspaces (the fake runtime) a simulated runner is used, which spawns nothing.
+   */
+  checks?: CheckRunner;
+  /** ORC-013: the service's data directory (next to the database): check caches and logs live under it. */
+  dataDir?: string;
 }
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
@@ -53,6 +63,8 @@ interface Launched {
   workspace?: PreparedWorkspace;
   stepId: string;
   taskId: string;
+  /** ORC-013: a check run: the protected inputs its change touched, computed at launch, recorded with the result. */
+  touchedInputs?: string[];
 }
 
 /**
@@ -68,7 +80,13 @@ interface ContextEvent {
   conventions?: NonNullable<M.RunContext["conventions"]>;
   decisions?: string[];
 }
-type QueueEvent = AdapterEvent | ContextEvent;
+/** ORC-013 §6.5.4: a sandbox probe's result, applied under the lease like every other observation. */
+interface HealthEvent {
+  type: "checks-health";
+  attemptId: "";
+  health: ChecksHealth;
+}
+type QueueEvent = AdapterEvent | ContextEvent | HealthEvent;
 
 export class Scheduler {
   readonly holder = randomUUID();
@@ -82,6 +100,12 @@ export class Scheduler {
   private readonly log: (msg: string) => void;
   private readonly store: Store;
   readonly adapters: Record<ProviderId, RuntimeAdapter>;
+  /** ORC-013: the check runner, if this service has one. */
+  readonly checks?: CheckRunner;
+  private readonly dataDir?: string;
+  /** A sandbox probe in flight (at most one), and how many check runs in a row failed to start. */
+  private probing = false;
+  private failedStarts = 0;
   private readonly workspaces?: WorkspaceManager;
   private readonly visionDocs?: VisionDocStore;
   private queue: QueueEvent[] = [];
@@ -101,6 +125,9 @@ export class Scheduler {
     this.adapters = adapters;
     this.workspaces = opts.workspaces;
     this.visionDocs = opts.visionDocs;
+    this.dataDir = opts.dataDir;
+    this.checks = opts.checks ?? (this.workspaces ? undefined : new SimulatedChecks());
+    this.checks?.onEvent((e) => this.queue.push(e));
     this.leaseMs = opts.leaseMs ?? 15000;
     this.ackTimeoutMs = opts.ackTimeoutMs ?? (this.isFake ? 8000 : 45000);
     this.log = opts.log ?? (() => {});
@@ -133,8 +160,13 @@ export class Scheduler {
     return { name: SCHEDULER_LEASE, holder: this.holder, nowMs };
   }
 
+  /** Every runner: the provider adapters and (ORC-013) the check runner. */
+  private allRunners(): RuntimeAdapter[] {
+    return [...Object.values(this.adapters), ...(this.checks ? [this.checks as unknown as RuntimeAdapter] : [])];
+  }
+
   private killAll() {
-    for (const a of Object.values(this.adapters)) for (const id of a.ids()) a.kill(id);
+    for (const a of this.allRunners()) for (const id of a.ids()) a.kill(id);
     this.queue = [];
     this.launched.clear();
     // A GitHub operation in flight is stopped and its result dropped: its intent stays recorded and is
@@ -234,11 +266,11 @@ export class Scheduler {
   }
 
   /**
-   * ORC-013: who runs an attempt: a provider's adapter, or (from step 2) the service's check runner.
-   * Undefined for a service run while no runner exists, so such a run is reconciled as lost.
+   * ORC-013: who runs an attempt: a provider's adapter, or the service's check runner. Undefined for a
+   * service run while this service has no runner, so such a run is reconciled as lost.
    */
   private runnerFor(p: Runner): RuntimeAdapter | undefined {
-    return isProvider(p) ? this.adapters[p] : undefined;
+    return isProvider(p) ? this.adapters[p] : (this.checks as unknown as RuntimeAdapter | undefined);
   }
 
   /** One scheduling cycle. */
@@ -285,7 +317,7 @@ export class Scheduler {
     const { state } = this.store.read();
     const active = new Map(M.activeAttempts(state).map((a) => [a.id, a]));
     const leadRun = M.activeLeadRun(state);
-    for (const adapter of Object.values(this.adapters)) {
+    for (const adapter of this.allRunners()) {
       for (const id of adapter.ids()) {
         if (!active.has(id) && id !== leadRun?.id) {
           adapter.kill(id); // its run is no longer active: it must never report into state again
@@ -318,11 +350,15 @@ export class Scheduler {
           if (err) failedToStart.push({ id: a.id, reason: err });
         } else lost.push({ id: a.id, reason: "No runtime process exists for this run" });
       } else if (a.outcome === "stopping") {
-        if (adapter instanceof FakeAdapter) adapter.interruptAt(a.id, nowMs);
+        if (adapter instanceof FakeAdapter || adapter instanceof SimulatedChecks) adapter.interruptAt(a.id, nowMs);
         else adapter.interrupt(a.id);
         if (a.stopRequestedAt && nowMs - Date.parse(a.stopRequestedAt) >= this.ackTimeoutMs) timeouts.push(a.id);
       }
     }
+    // ORC-013 §6.5.4: two check runs in a row that could not start ask for a new sandbox probe.
+    if (failedToStart.some((f) => active.get(f.id)?.snapshot.provider === "service")) this.failedStarts++;
+    else if (dispatched.size && [...dispatched].some((id) => active.get(id)?.snapshot.provider === "service")) this.failedStarts = 0;
+    this.planProbe(state, nowMs);
 
     // 2b. The lead: supervise the active lead run, or start one when a message or planning is due.
     const leadIssues: { id: string; kind: "lost" | "timeout" | "failed"; reason?: string }[] = [];
@@ -380,6 +416,7 @@ export class Scheduler {
 
     // 3. The fake runtime advances on the scheduler's clock; real adapters report on their own.
     for (const adapter of Object.values(this.adapters)) if (adapter instanceof FakeAdapter && this.auto) adapter.tick(nowMs);
+    if (this.checks instanceof SimulatedChecks && this.auto) this.checks.tick(nowMs);
 
     // 4. Drain adapter events. Work that touches git happens here, outside the transaction.
     const events = this.queue.splice(0);
@@ -427,7 +464,8 @@ export class Scheduler {
       if (e.type !== "completed" && e.type !== "failed" && e.type !== "stopped") continue;
       const info = this.launched.get(e.attemptId);
       // Lead checkouts are only for reading the repository during the run: remove them afterwards.
-      if (info?.taskId === "LEAD" && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
+      // ORC-013: a check run's throwaway copy of the change goes too, pass or fail.
+      if ((info?.taskId === "LEAD" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
       this.launched.delete(e.attemptId);
     }
     this.conventionsCache = undefined;
@@ -635,9 +673,9 @@ export class Scheduler {
     const a = state.attempts.find((x) => x.id === attemptId)!;
     const task = state.tasks.find((t) => t.id === a.taskId)!;
     const step = task.steps.find((x) => x.id === a.stepId)!;
+    if (a.snapshot.provider === "service") return this.launchChecks(state, a.id, task, step);
     const adapter = this.runnerFor(a.snapshot.provider);
-    // ORC-013: a service run (a Checks step) needs the check runner, which step 2 adds.
-    if (!adapter) return "This version has no runner for service check runs";
+    if (!adapter) return "This version has no runner for this run";
     const access: "write" | "read" = WRITER_ROLES.has(step.role) ? "write" : "read";
     const limits = state.project.runLimits;
     try {
@@ -734,17 +772,105 @@ export class Scheduler {
     }
   }
 
+  /**
+   * ORC-013 §10.2: start a check run. A throwaway worktree detached at the target commit (removed after
+   * the run, pass or fail), the protected inputs the change touched, and the command environment from
+   * the allowlist. The runner is the service's own; no envelope, no provider.
+   */
+  private launchChecks(state: State, attemptId: string, task: Task, step: Step): string | undefined {
+    const a = state.attempts.find((x) => x.id === attemptId)!;
+    const runner = this.checks;
+    if (!runner) return "This service has no runner for check runs";
+    const plan = a.snapshot.checks;
+    if (!plan) return "The run has no check plan in its snapshot";
+    const cfg = state.project.checks;
+    // The plan names the commit as the code-change artifact does (a 12-character prefix); the prepared worktree gives the full SHA.
+    let target = plan.target.ref;
+    let workspace: PreparedWorkspace | undefined;
+    let touched: string[] = [];
+    try {
+      if (this.workspaces) {
+        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access: "read", baseRef: target });
+        try {
+          if (!C.sameSha(workspace.base, target)) throw new Error(`the workspace is not at ${target.slice(0, 12)} (it is at ${workspace.base.slice(0, 12)})`);
+          target = workspace.base;
+          const changed = this.workspaces.changedPaths({ repoPath: state.project.repoPath, to: target, baseRef: M.trustedBaseRef(state) });
+          touched = changed ? C.touchedInputs(cfg, changed.paths) : [];
+        } catch (e) {
+          this.workspaces.remove(state.project.repoPath, workspace.path);
+          throw e;
+        }
+      }
+      const path = workspace?.path ?? a.snapshot.workspace;
+      const tmp = `${path}.tmp`;
+      const dataDir = this.dataDir ?? join(this.workspaces?.root ?? path, "..");
+      const cache = join(dataDir, "checks-cache", state.project.id.replace(/[^A-Za-z0-9._-]/g, "_"));
+      const logDir = join(dataDir, "check-logs", state.project.id.replace(/[^A-Za-z0-9._-]/g, "_"), attemptId);
+      const assignment: CheckAssignment = {
+        attemptId,
+        taskId: task.id,
+        stepId: step.id,
+        workspace: path,
+        target,
+        commands: plan.commands.map((c) => ({ ...c, argv: [...c.argv] })),
+        runTimeoutMs: cfg.runTimeoutMinutes * 60_000,
+        sandbox: plan.sandbox,
+        prepareNetwork: cfg.prepareNetwork,
+        env: runner.simulated ? {} : checkEnv(process.env, cfg, { tmp, cache }),
+        tmpDir: tmp,
+        cacheDir: cache,
+        logDir,
+      };
+      this.launched.set(attemptId, { provider: "service", access: "read", workspace, stepId: step.id, taskId: task.id, touchedInputs: touched });
+      runner.start(assignment);
+      return undefined;
+    } catch (e) {
+      this.launched.delete(attemptId);
+      return `Could not start the check run: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * ORC-013 §6.5.4: probe the sandbox when checks were switched on, on request, every six hours, and
+   * after two check runs in a row failed to start. At most one probe at a time; its result is queued
+   * and applied under the lease. No probe with the simulated runner beyond its own answer.
+   */
+  private planProbe(state: State, nowMs: number) {
+    const runner = this.checks;
+    if (!runner || this.probing) return;
+    if (!C.probeDue(state, nowMs) && this.failedStarts < 2) return;
+    this.probing = true;
+    this.failedStarts = 0;
+    const sandbox = state.project.checks.sandbox;
+    void runner
+      .probe(sandbox)
+      .catch((e): ChecksHealth => ({ sandbox, status: "unavailable", detail: e instanceof Error ? e.message : String(e), checkedAt: new Date().toISOString() }))
+      .then((health) => {
+        this.probing = false;
+        this.queue.push({ type: "checks-health", attemptId: "", health });
+      });
+  }
+
   /** Turn a completion into output reports: parse the output block; commit a writer's changes. */
   private collectOutputs(state: State, e: Extract<AdapterEvent, { type: "completed" }>) {
     const a = state.attempts.find((x) => x.id === e.attemptId);
     const task = a && state.tasks.find((t) => t.id === a.taskId);
     const step = task?.steps.find((x) => x.id === a!.stepId);
     if (!a || !step) return { outputs: [], problems: [] };
+    const info = this.launched.get(e.attemptId);
+    // ORC-013 §10.2: a check run's report is never parsed from text; it becomes the step's one output.
+    if (a.snapshot.provider === "service") {
+      if (!e.checks || !step.outputs[0]) return { outputs: [], problems: ["The check run ended without a report."] };
+      const record = { sha: e.checks.sha, configRev: a.snapshot.checks?.configRev ?? state.project.checks.rev, sandbox: e.checks.sandbox, ...(e.checks.simulated ? { simulated: true as const } : {}), touchedInputs: info?.touchedInputs ?? [], results: e.checks.results, durationMs: e.checks.durationMs };
+      const findings = C.findingsFromRun(record, a.snapshot.checks?.commands ?? []);
+      return { outputs: [{ name: step.outputs[0].name, summary: C.runSummary(record), checkRun: record, findings }], problems: [] };
+    }
     const parsed = parseOutputs(e.finalText, step.outputs);
     // ORC-013: what the parser corrected is recorded on the run, without refusing the result.
     parsed.problems.push(...parsed.notes);
-    const info = this.launched.get(e.attemptId);
     const outputs: M.OutputReport[] = parsed.outputs.map((o) => ({ ...o }));
+    // The fake runtime commits nothing: a simulated change is named by its run, so a check step has something to check.
+    if (!this.workspaces) for (const o of outputs) if (step.outputs.find((d) => d.name === o.name)?.kind === "code-change") o.ref = `sim-${e.attemptId} (simulated)`;
     if (this.workspaces && info?.workspace) {
       try {
         if (info.access === "write") {
@@ -773,6 +899,7 @@ export class Scheduler {
   private applyEvent(s: State, e: QueueEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[]; chosen?: string }>, now: string): State {
     // ORC-013: the service's own record of what a run was given; applied only while the run is active.
     if (e.type === "context") return M.reportRunContext(s, e.attemptId, { scope: e.scope, conventions: e.conventions, decisions: e.decisions });
+    if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now);
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
       case "started":
@@ -861,7 +988,7 @@ export class Scheduler {
     if (this.isActive) this.store.releaseLease(SCHEDULER_LEASE, this.holder);
     this.isActive = false;
     this.killAll();
-    await Promise.all(Object.values(this.adapters).map((a) => a.shutdown().catch(() => undefined)));
+    await Promise.all(this.allRunners().map((a) => a.shutdown().catch(() => undefined)));
   }
 
   /** Forget runtime processes after the project state was replaced. */

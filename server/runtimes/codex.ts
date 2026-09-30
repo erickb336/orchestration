@@ -22,6 +22,7 @@ import type { ThreadItem } from "./codex-protocol/v2/ThreadItem";
 import type { ThreadStartParams } from "./codex-protocol/v2/ThreadStartParams";
 import type { TurnError } from "./codex-protocol/v2/TurnError";
 import type { TurnStartParams } from "./codex-protocol/v2/TurnStartParams";
+import { killGroup, trackLive } from "../processes";
 import { redact, withoutGitHubTokens } from "../redact";
 import { JsonRpcConnection, RpcClosedError, RpcError } from "./codexRpc";
 import type { AdapterEvent, Assignment, Connection, ProviderHealth, RuntimeAdapter, Usage } from "./types";
@@ -102,21 +103,6 @@ const ERROR_SETTLE_MS = 5_000;
 /** After closing stdin at the end of a run, how long before the process group is force-killed. */
 const EXIT_GRACE_MS = 3_000;
 
-/** Every process group any adapter started and has not seen exit, killed if this process exits. */
-const LIVE = new Set<ChildProcess>();
-let exitHookInstalled = false;
-function trackLive(child: ChildProcess) {
-  if (!exitHookInstalled) {
-    exitHookInstalled = true;
-    process.on("exit", () => {
-      for (const c of LIVE) killGroup(c, "SIGKILL");
-    });
-  }
-  LIVE.add(child);
-  child.once("exit", () => LIVE.delete(child));
-  child.once("error", () => LIVE.delete(child));
-}
-
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
 export interface CodexAdapterOptions {
@@ -175,23 +161,6 @@ function describeTurnError(err: TurnError | null | undefined): string | undefine
   if (info === "rateLimitExceeded" || info === "serverOverloaded") return `Codex is rate limited or overloaded; retry later. (${msg})`;
   if (info === "contextWindowExceeded") return `The Codex context window was exceeded. (${msg})`;
   return `Codex turn failed: ${msg}`;
-}
-
-function killGroup(child: ChildProcess, signal: NodeJS.Signals) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  if (child.pid && process.platform !== "win32") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      /* fall through to the direct kill */
-    }
-  }
-  try {
-    child.kill(signal);
-  } catch {
-    /* already gone */
-  }
 }
 
 export class CodexAdapter implements RuntimeAdapter {

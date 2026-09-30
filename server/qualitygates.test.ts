@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
-import { templateSteps } from "../src/domain/templates";
+import { isModifiedBuiltIn, templateSteps } from "../src/domain/templates";
 import { DEFAULT_CHECKS, DEFAULT_REVIEW_BOTS, type State } from "../src/domain/types";
 import { Scheduler } from "./scheduler";
 import { STATE_FORMAT, Store, V13_TEMPLATE_STEPS } from "./store";
@@ -80,6 +80,9 @@ describe("migration 13 → 14", () => {
     const tpl = (id: string) => s.project.templates.find((t) => t.id === id)!;
     expect(tpl("change").steps).toEqual(templateSteps("change"));
     expect(tpl("change").rev).toBe(2);
+    // Review 1 (11): the description follows the steps, so the upgraded built-in does not show as edited.
+    expect(isModifiedBuiltIn(tpl("change"))).toBe(false);
+    expect(isModifiedBuiltIn(tpl("feature"))).toBe(false);
     expect(tpl("feature").steps.map((x) => x.id)).toEqual(["S1", "S2", "C1", "S3", "S4", "S5", "C2", "S6"]);
     expect(tpl("bugfix").steps.some((x) => x.role === "checks")).toBe(false);
     expect(tpl("bugfix").steps[0].purpose).toBe("Reproduce it my way");

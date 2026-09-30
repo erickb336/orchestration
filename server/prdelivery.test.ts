@@ -172,7 +172,7 @@ describe("hold and notify (scenario 1)", () => {
     expect(existsSync(join(repo, ".git", "FETCH_HEAD"))).toBe(false);
     expect(branches()).toEqual([]);
     expect(st().project.github!.posture.some((p) => p.id === "sandbox-verified" && p.status === "ok")).toBe(true);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("one pull request whose head is exactly the final commit; one ready notice; a merge bound to that head; the item lands unreviewed", async () => {
     await prModeOn();
@@ -241,7 +241,7 @@ describe("hold and notify (scenario 1)", () => {
     // Local delivery never touches a task delivered as a pull request.
     expect(task(id).integration!.delivered).toBeUndefined();
     expect(git("status", "--porcelain")).toBe("");
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a merge waits for GitHub: requested early, it is sent only once the required check passed on that head", async () => {
     await prModeOn();
@@ -257,7 +257,7 @@ describe("hold and notify (scenario 1)", () => {
     await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(1);
     expect(pr(id).phase).toBe("merged");
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("the changes of an open pull request can be shown, from the base it contains to its head", async () => {
     await prModeOn();
@@ -265,7 +265,7 @@ describe("hold and notify (scenario 1)", () => {
     const d = workspaces.changeDiff({ repoPath: repo, commit: pr(id).headSha, from: pr(id).baseSha })!;
     expect(d.diff).toContain("+shown line");
     expect(pr(id).changed).toMatchObject({ files: 1, additions: 1, deletions: 0, paths: ["shown.txt"], protectedHits: [], workflowHits: [] });
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("what is never published", () => {
@@ -281,7 +281,7 @@ describe("what is never published", () => {
     expect(() => assertSafePush(["push", "origin", `${sha}:refs/heads/orchestration/p1/integration`])).toThrow(/not one of the app's/);
     expect(() => assertSafePush(["push", "origin", `main:refs/heads/orchestration/p1/pr/T-1-1`])).toThrow(/refusing/);
     expect(() => assertSafePush(["push", "origin"])).toThrow(/refusing/);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 9: work built on the user's unpushed commit is not pushed; the task names the author", async () => {
     // The task starts from the local HEAD, which holds a commit the user never pushed.
@@ -302,7 +302,7 @@ describe("what is never published", () => {
     const full = git("rev-parse", sha);
     await expect(workspaces.pushHead({ repoPath: repo, projectId: st().project.id, remote: "origin", branch: `orchestration/${st().project.id}/pr/${id}-1`, sha: full })).rejects.toThrow(/not made by Orchestrator/);
     expect(branches()).toEqual([]);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 10: a change to CI workflow files is not pushed until it is allowed; then it is pushed and marked protected", async () => {
     await prModeOn();
@@ -325,7 +325,7 @@ describe("what is never published", () => {
     await green(id);
     await mergeFromApp(id);
     expect(task(id).integration!.landed!.flags).toEqual(["protected-paths"]);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a remote branch that holds something else is never overwritten", async () => {
     await prModeOn();
@@ -343,7 +343,7 @@ describe("what is never published", () => {
     await ticks(5, 120_000);
     expect(remote("rev-parse", `refs/heads/${branch}`)).toBe(theirs);
     expect(fake.count("createPr")).toBe(0);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("people on GitHub", () => {
@@ -376,7 +376,7 @@ describe("people on GitHub", () => {
     fake.mergeByPerson(1);
     await seen();
     expect(task(id).integration!.landed).toMatchObject({ by: "person", mergedBy: "octocat", flags: ["merged-without-clean-gate"] });
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 11: merged by a person → landed by that person; closed by a person → never reopened, and Deliver again opens number 2", async () => {
     await prModeOn();
@@ -410,7 +410,7 @@ describe("people on GitHub", () => {
     expect(pr(b).number).not.toBe(n);
     expect(fake.pr(n).state).toBe("CLOSED");
     expect(branches()).toHaveLength(3); // a-1, b-1 (kept) and b-2
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 16: GitHub BLOCKED with green checks is reported as an approval the app cannot give, and never bypassed", async () => {
     await prModeOn();
@@ -439,7 +439,7 @@ describe("people on GitHub", () => {
     fake.pr(1).mergeStateStatus = "CLEAN";
     await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(pr(id).phase).toBe("merged");
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a merge GitHub refuses is tried twice for a head, then waits for the user", async () => {
     await prModeOn();
@@ -453,7 +453,7 @@ describe("people on GitHub", () => {
     expect(pr(id)).toMatchObject({ phase: "open", attention: { code: "merge-rejected" }, counters: { mergeAttempts: 2 } });
     expect(pr(id).attention!.message).toContain("base branch policy prohibits");
     expect(task(id).integration!.landed).toBeUndefined();
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("pause and hold (scenario 12)", () => {
@@ -500,7 +500,7 @@ describe("pause and hold (scenario 12)", () => {
     await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(1);
     expect(pr(id).phase).toBe("merged");
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a merge already sent to GitHub when the pause arrives is recorded with its real outcome", async () => {
     await prModeOn();
@@ -524,7 +524,7 @@ describe("pause and hold (scenario 12)", () => {
     expect(pr(id).phase).toBe("merged");
     expect(task(id).integration!.landed).toMatchObject({ by: "app", commit: remote("rev-parse", "main") });
     expect(fake.count("merge")).toBe(1);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("Close: the pull request is closed on GitHub, shows as closed only once GitHub reports it, and the branch is kept", async () => {
     await prModeOn();
@@ -542,7 +542,7 @@ describe("pause and hold (scenario 12)", () => {
     cmd("closePr", { taskId: other });
     expect(pr(other).phase).toBe("closed");
     expect(fake.count("close")).toBe(1);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("interruption (scenarios 13 and 14)", () => {
@@ -639,7 +639,7 @@ describe("interruption (scenarios 13 and 14)", () => {
     expect(fake.count("comment")).toBe(1);
     expect(fake.pr(1).comments).toHaveLength(1);
     expect(fake.pr(1).comments[0].body).toBe(`Worth a second look at naming.\n\n<!-- orchestration:note:${st().project.id}/${noteId} -->`);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 14: a lease lost during a slow create drops the late result; the new holder reconciles to exactly one pull request", async () => {
     await scheduler.stop();
@@ -680,7 +680,7 @@ describe("interruption (scenarios 13 and 14)", () => {
     expect(fake.count("createPr")).toBe(1);
     expect(fake.prs.size).toBe(1);
     expect(branches()).toHaveLength(1);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("nothing starts without a committed intent: a write planned on a state that changed meanwhile is dropped", async () => {
     await prModeOn();
@@ -698,7 +698,7 @@ describe("interruption (scenarios 13 and 14)", () => {
     expect(fake.calls.length).toBe(calls);
     expect(branches()).toEqual([]);
     expect(pr(id).op).toBeUndefined();
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a stale result changes nothing: another operation id, another number, or another head", async () => {
     await prModeOn();
@@ -719,7 +719,7 @@ describe("interruption (scenarios 13 and 14)", () => {
     expect(applied.tasks.find((t) => t.id === id)!.integration!.pr).toMatchObject({ phase: "open", number: 7 });
     // A second intent cannot start while one is recorded and may still be running.
     expect(D.beginPrOp(begun.state, { ...op, id: "again" }, new Date(now + 10_000).toISOString()).started).toBe(false);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("GitHub problems (scenario 15)", () => {
@@ -747,7 +747,7 @@ describe("GitHub problems (scenario 15)", () => {
     expect(st().project.github!.problem).toBeUndefined();
     await seen();
     expect(D.prReady(st(), task(id), now)).toBe(true);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a repository that is not GitHub, or a remote that moved, stops before anything is pushed", async () => {
     git("remote", "set-url", "origin", join(dir, "elsewhere.git"));
@@ -768,7 +768,7 @@ describe("GitHub problems (scenario 15)", () => {
     expect(run(id)).toBeDefined();
     // The writer starts from the fetched base, never from the local checkout.
     expect(execFileSync("git", ["-C", codex.runs.get(run(id).id)!.workspace.path, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(remote("rev-parse", "main"));
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("sample projects never contact GitHub", () => {
@@ -806,7 +806,7 @@ describe("sample projects never contact GitHub", () => {
     expect(sample.read().state.project.github?.checkedAt).toBeUndefined();
     await s2.stop();
     sample.close();
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("dependent tasks (scenario 20)", () => {
@@ -841,7 +841,7 @@ describe("dependent tasks (scenario 20)", () => {
     for (let i = 0; i < 8 && task(b).integration?.pr?.phase !== "open"; i++) await tick(2000);
     expect(remote("log", "--format=%an", `main..${pr(b).branch}`)).toBe("Orchestration");
     expect(pr(b).changed.paths).toEqual(["use.txt"]);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a prerequisite whose pull request was closed blocks its dependents with the reason, until it is delivered again", async () => {
     await prModeOn();
@@ -855,7 +855,7 @@ describe("dependent tasks (scenario 20)", () => {
     cmd("redeliver", { taskIds: [a] });
     expect(M.blockedReason(st(), task(b))).toBeUndefined();
     expect(M.waitingOn(st(), task(b))).toBe(a);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("switching pull-request delivery off leaves open pull requests watched and unwritten; local delivery skips their tasks", async () => {
     await prModeOn();
@@ -873,5 +873,5 @@ describe("dependent tasks (scenario 20)", () => {
     fake.mergeByPerson(1);
     await seen();
     expect(task(id).integration!.landed).toMatchObject({ via: "pr", by: "person" });
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });

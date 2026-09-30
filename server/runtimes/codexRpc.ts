@@ -12,6 +12,8 @@ import type { RequestId } from "./codex-protocol/RequestId";
 import type { ServerNotification } from "./codex-protocol/ServerNotification";
 import type { ServerRequest } from "./codex-protocol/ServerRequest";
 import type { InitializeResponse } from "./codex-protocol/InitializeResponse";
+import type { CommandExecResponse } from "./codex-protocol/v2/CommandExecResponse";
+import type { CommandExecTerminateResponse } from "./codex-protocol/v2/CommandExecTerminateResponse";
 import type { GetAccountResponse } from "./codex-protocol/v2/GetAccountResponse";
 import type { ModelListResponse } from "./codex-protocol/v2/ModelListResponse";
 import type { ThreadStartResponse } from "./codex-protocol/v2/ThreadStartResponse";
@@ -28,6 +30,9 @@ interface ResponseMap {
   "turn/interrupt": TurnInterruptResponse;
   "account/read": GetAccountResponse;
   "model/list": ModelListResponse;
+  // ORC-013: the check runner's sandboxed commands.
+  "command/exec": CommandExecResponse;
+  "command/exec/terminate": CommandExecTerminateResponse;
 }
 export type ResultOf<M extends ClientMethod> = M extends keyof ResponseMap ? ResponseMap[M] : unknown;
 export type NotificationOf<M extends ServerNotification["method"]> = Extract<ServerNotification, { method: M }>;

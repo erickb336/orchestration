@@ -865,9 +865,10 @@ export class WorkspaceManager {
     const mb = this.status(["-C", repo, "merge-base", against, to]);
     const from = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : against;
     const base = [...this.safeFlags(), "-C", repo, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M"];
-    const names = spawnSync(this.gitBin, [...base, "--name-only", from, to], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: 8 * 1024 * 1024, timeout: this.changeDiffTimeoutMs });
+    // ORC-013 review 1 (2): NUL-separated, so a name with a quote, a newline or a non-ASCII character comes back as it is, never quoted.
+    const names = spawnSync(this.gitBin, [...base, "--name-only", "-z", from, to], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: 8 * 1024 * 1024, timeout: this.changeDiffTimeoutMs });
     if (names.error || names.status !== 0) return undefined;
-    const files = names.stdout.split("\n").filter(Boolean);
+    const files = names.stdout.split("\0").filter(Boolean);
     // ORC-013: the changed-path set the review must account for (the first 500 are recorded; the total always is).
     const coverage = { paths: files.slice(0, MAX_SCOPE_PATHS), total: files.length };
     const r = spawnSync(this.gitBin, [...base, "--stat", "--patch", from, to], { env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_REVIEW_DIFF_BYTES + 4096, timeout: this.changeDiffTimeoutMs });
@@ -925,9 +926,9 @@ export class WorkspaceManager {
     if (!to || !against) return undefined;
     const mb = this.status(["-C", repo, "merge-base", against, to]);
     const from = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : against;
-    const names = this.status(["-C", repo, "diff", "--no-ext-diff", "--no-textconv", "--name-only", from, to]);
+    const names = this.status(["-C", repo, "diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", from, to]);
     if (names.status !== 0) return undefined;
-    const files = names.stdout.split("\n").filter(Boolean);
+    const files = names.stdout.split("\0").filter(Boolean);
     return { paths: files.slice(0, MAX_SCOPE_PATHS), total: files.length };
   }
 

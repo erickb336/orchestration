@@ -368,9 +368,11 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
   const children = M.childTasks(state, task);
   const childrenDone = children.filter(isSettledTask).length;
   const prio = M.priorityProvenance(state, task);
-  // ORC-013: findings waiting for a decision, by whom.
+  // ORC-013: findings waiting for a decision, by whom; check runs in progress, and final checks that failed.
   const mine = F.openDecisions(state, "user").filter((d) => d.taskId === task.id).length;
   const leads = F.openDecisions(state, "lead").filter((d) => d.taskId === task.id).length;
+  const checking = M.activeServiceAttempts(state).some((a) => a.taskId === task.id);
+  const checksFailed = task.steps.some((st) => st.role === "checks" && st.state === "blocked" && st.blockedReason?.startsWith("Checks failed"));
   return (
     <div
       className="task-row"
@@ -445,6 +447,16 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
           {task.deliverInto && (
             <span className="chip" title={`A fix whose result is pushed onto ${task.deliverInto.taskId}'s pull request, created ${task.specs[0]?.author === "user" ? "by you" : "by the service"}`}>
               PR repair · {task.deliverInto.taskId}
+            </span>
+          )}
+          {checking && (
+            <span className="chip" title="The service is running the project's checks on this task's change">
+              Checks running
+            </span>
+          )}
+          {checksFailed && (
+            <span className="chip danger" title="The project's checks failed on the final change; a repair round or your acceptance is needed">
+              Checks failed · decide
             </span>
           )}
           {mine > 0 && (

@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { toDef } from "../src/domain/pipeline";
 import { buildSeed } from "../src/domain/seed";
-import { templateSteps } from "../src/domain/templates";
+import { BUILT_IN_TEMPLATES, templateSteps } from "../src/domain/templates";
 import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type State, type StepDef } from "../src/domain/types";
 
 export const STATE_FORMAT = 14;
@@ -378,6 +378,9 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       if (!t.builtIn || !legacy) continue;
       if (sameSteps(t.steps, legacy)) {
         t.steps = templateSteps(t.id);
+        // Review 1 (11): the description follows the steps, so the template does not show as "edited".
+        const builtIn = BUILT_IN_TEMPLATES.find((b) => b.id === t.id);
+        if (builtIn) t.description = builtIn.description;
         t.rev += 1;
         note(`Template ${t.id} gained the Checks steps (run by the service; skipped while checks are off) when the state format was upgraded`);
       } else note(`Template ${t.id} was edited, so it did not gain the Checks steps; Restore in Settings offers the new built-in`);

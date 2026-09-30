@@ -7,9 +7,11 @@ import { toDef } from "../domain/pipeline";
 import { INTERNAL_TEMPLATE_IDS } from "../domain/templates";
 import { ROLES, type Artifact, type Attempt, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
+import { checkLogUrl } from "../api";
+import * as C from "../domain/checks";
 import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } from "./common";
 import { DeliveryCard } from "./Delivery";
-import { CoverageChip, DecisionQueue, FindingsList } from "./Findings";
+import { CheckResults, CoverageChip, DecisionControls, DecisionQueue, FindingsList } from "./Findings";
 import { SpecEditor } from "./SpecEditor";
 import { PipelineEditor } from "./PipelineEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
@@ -281,6 +283,24 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
         )}
       </div>,
     );
+  // ORC-013 §6.7: a Final checks step whose run did not pass waits for a decision: a repair round, or the user's acceptance.
+  const finalChecks = task.steps.filter((st) => st.role === "checks" && st.state === "blocked" && st.blockedReason?.startsWith("Checks failed"));
+  for (const st of finalChecks) {
+    const d = state.decisions.find((x) => x.kind === "final-checks" && x.taskId === task.id && x.status === "open" && state.artifacts.find((a) => a.id === x.artifactId)?.stepId === st.id);
+    out.push(
+      <div className="banner danger" role="alert" key={`final-${st.id}`}>
+        <strong>Checks failed on the final change.</strong> {st.blockedReason}{" "}
+        {d ? (
+          <>
+            {d.routedTo === "lead" && d.status === "open" ? <span className="muted">The lead is deciding whether to add a repair round; only you can accept failing checks. </span> : null}
+            <DecisionControls decision={d} />
+          </>
+        ) : (
+          <span className="muted">The decision is recorded on the artifact below.</span>
+        )}
+      </div>,
+    );
+  }
   const heldWriters = task.lifecycle !== "done" && task.lifecycle !== "cancelled" ? D.writersHeld(state) : undefined;
   if (heldWriters && task.steps.some((st) => st.state === "pending" && st.role === "coder"))
     out.push(
@@ -599,6 +619,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
           reviewTarget={!!task.reviewTarget}
           checkTarget={!!task.checkTarget}
           checksEnabled={!!state.project.checks?.enabled}
+          checkCommands={state.project.checks?.commands}
           saveLabel={`Save pipeline r${task.pipelineRev + 1}`}
           saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : disabled ? "The service is offline" : undefined}
           requireReason
@@ -712,10 +733,14 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                     {st.role === "checks" ? (
                       // ORC-013: a Checks step is run by the service; it has no provider or model to choose.
                       <>
-                        <span>Run by the service{state.project.checks?.enabled ? ` · ${state.project.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}` : ""}</span>
+                        <span>Run by the service{C.checksOn(state.project.checks) ? ` · ${state.project.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}` : ""}</span>
                         <div className="muted" style={{ fontSize: "0.8rem" }}>
-                          {state.project.checks?.enabled ? (
-                            `${st.checks?.onFail === "block" ? "Stops the task and asks for a decision when checks fail" : "Failing checks become findings for the repair step"}.`
+                          {C.checksOn(state.project.checks) ? (
+                            <>
+                              {st.checks?.onFail === "block" ? "Stops the task and asks for a decision when checks fail" : "Failing checks become findings for the repair step"}.
+                              {st.state === "pending" && C.checksHeld(state) ? ` ${C.HELD_LABEL}.` : ""}
+                              {activeRun ? ` Running as ${activeRun.id}${activeRun.activity ? `: ${activeRun.activity}` : ""}.` : lastRun && done ? ` Ran as ${lastRun.id}.` : ""}
+                            </>
                           ) : (
                             <>
                               {st.state === "skipped" ? "Skipped: checks are off" : "Will be skipped: checks are off"} (<a href="#/settings">Settings</a>).
@@ -980,6 +1005,7 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                     <CoverageChip coverage={a.pathCoverage} />
                   </>
                 )}
+                {a.checkRun && <CheckResults run={a.checkRun} attemptId={a.attemptId} />}
                 {a.findings && <FindingsList state={state} artifact={a} controls={latest?.id === a.id} />}
                 {edited && a.editReason && <div style={{ fontSize: "0.82rem" }}>Why you changed it: “{a.editReason}”</div>}
                 <div className="muted" style={{ fontSize: "0.8rem" }}>
@@ -1112,6 +1138,7 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
 }
 
 function RunsCard({ state, task }: { state: State; task: Task }) {
+  const { service } = useStore();
   const runs = state.attempts.filter((a) => a.taskId === task.id).reverse();
   return (
     <section className="card" aria-labelledby="runs-h">
@@ -1160,6 +1187,30 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
             </dd>
             <dt>Routing</dt>
             <dd>{a.snapshot.routingReason}</dd>
+            {a.snapshot.checks && (
+              <>
+                <dt>Commands</dt>
+                <dd>
+                  {a.snapshot.checks.commands.map((c) => (
+                    <div key={c.id}>
+                      <span className="chip">{c.kind}</span> <span className="mono">{c.argv.join(" ")}</span>
+                      {state.artifacts.find((x) => x.attemptId === a.id)?.checkRun?.results.find((r) => r.id === c.id)?.log && service.runtime === "real" ? (
+                        <>
+                          {" · "}
+                          <a href={checkLogUrl(a.id, c.id)} target="_blank" rel="noreferrer">
+                            log
+                          </a>
+                        </>
+                      ) : null}
+                    </div>
+                  ))}
+                  <div className="muted">
+                    on {a.snapshot.checks.target.ref.slice(0, 12)} · settings r{a.snapshot.checks.configRev} · {a.snapshot.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}
+                    {a.snapshot.checks.reusedFrom ? ` · same as ${a.snapshot.checks.reusedFrom}` : ""}
+                  </div>
+                </dd>
+              </>
+            )}
             {a.actualModel && a.actualModel !== a.snapshot.model && (
               <>
                 <dt>Model reported</dt>

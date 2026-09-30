@@ -13,13 +13,14 @@ export const MAX_REVIEWED_PATHS = 600;
 export const MAX_LISTED = 50;
 
 /**
- * A repository-relative path as the service compares it: trimmed, without a leading "./", with "/"
- * separators and no repeated slashes. Undefined when it is absolute, has a ".." segment, is empty or
- * holds a NUL character. Compared exactly (case-sensitive).
+ * A repository-relative path as the service compares it: trimmed, without a leading "./" and with no
+ * repeated slashes. Undefined when it is absolute, has a ".." segment, is empty or holds a NUL
+ * character. Compared exactly (case-sensitive). A backslash is a character of the name, never a
+ * separator (review 1, finding 2): the service runs on macOS and Linux, where git reports "/".
  */
 export function normalizePath(raw: string): string | undefined {
   if (typeof raw !== "string" || raw.includes("\0") || raw.length > 300) return undefined;
-  let p = raw.trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+  let p = raw.trim().replace(/\/{2,}/g, "/");
   while (p.startsWith("./")) p = p.slice(2);
   if (!p || p.startsWith("/") || /^[A-Za-z]:\//.test(p)) return undefined;
   if (p.split("/").some((seg) => seg === "..")) return undefined;

@@ -4,6 +4,7 @@ import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { AUTOPILOT, PROVIDERS, ROLES, STEERING_MODES, type Autonomy, type SteeringMode, type WorkflowTemplate } from "../domain/types";
 import { BUILT_IN_TEMPLATES, PROJECT_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
+import { ChecksSettings } from "./ChecksSettings";
 import { DeliverySettings } from "./DeliverySettings";
 import { PipelineEditor } from "./PipelineEditor";
 import { pipelineSummary } from "./fanout";
@@ -104,6 +105,7 @@ export function Settings() {
 
         <div>
           <Providers />
+          <ChecksSettings />
           <DeliverySettings />
           <SteeringCard />
           <AutonomyCard />
@@ -865,6 +867,7 @@ function Templates() {
         <PipelineEditor
           initial={editing.steps}
           checksEnabled={!!state.project.checks?.enabled}
+          checkCommands={state.project.checks?.commands}
           saveLabel="Save template"
           requireReason={false}
           saveBlocked={disabled ? "The service is offline" : undefined}

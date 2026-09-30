@@ -3,6 +3,7 @@
 // Operations are applied one at a time, which serializes races such as
 // pause-vs-completion: whichever is applied first determines the outcome.
 
+import * as C from "./checks";
 import { coverageOf as pathCoverageOf, gapText, notRequired } from "./coverage";
 import { prBaseRef, recordLanded, undeliveredTasks } from "./delivery";
 import * as F from "./findings";
@@ -15,6 +16,7 @@ import {
   type Attempt,
   type CatalogModel,
   type ChangeAuthor,
+  type CheckRunRecord,
   type Deferral,
   type PrDelivery,
   type RunLimits,
@@ -125,6 +127,29 @@ export function activeAttempts(s: State, taskId?: string) {
 /** ORC-013: active runs of agents (a provider's worker). Service runs (checks) count against their own limit. */
 export function activeAgentAttempts(s: State) {
   return s.attempts.filter((a) => isActive(a) && isProvider(a.snapshot.provider));
+}
+
+/** ORC-013: active check runs (run by the service), bounded by `checks.maxConcurrent`. */
+export function activeServiceAttempts(s: State) {
+  return s.attempts.filter((a) => isActive(a) && a.snapshot.provider === "service");
+}
+
+/**
+ * ORC-013 §6.10: the check settings changed, so every active check run is stopped for revision and its
+ * step's revision bumped, so a late result is discarded and the step runs again with the new settings.
+ * Mutates the draft; returns how many runs were asked to stop.
+ */
+export function stopServiceRuns(s: State, now: string): number {
+  let n = 0;
+  for (const a of activeServiceAttempts(s)) {
+    if (a.outcome !== "running") continue;
+    const t = getTask(s, a.taskId);
+    const st = findStep(t, a.stepId);
+    if (st) st.revision += 1;
+    requestStop(s, a, "revision", now);
+    n++;
+  }
+  return n;
 }
 
 function assertOpen(t: Task, what: string) {
@@ -443,6 +468,8 @@ export function stateLabel(s: State, t: Task): string {
   // ORC-013: a repair that would read undecided findings waits for the decision; nothing is blocked.
   const awaiting = t.lifecycle === "active" && active.length === 0 ? F.awaitingDecision(s, t) : undefined;
   if (awaiting) return F.awaitingLabel(awaiting);
+  // ORC-013 §6.5.4: a Checks step that would start next waits while the sandbox is not ready; nothing runs unsandboxed by itself.
+  if (t.lifecycle === "active" && active.length === 0 && C.checksHeld(s) && t.steps.some((st) => st.state === "pending" && st.role === "checks" && st.dependsOn.every((d) => isSettled(getStep(t, d))))) return C.HELD_LABEL;
   // ORC-012: while shaping, a step that would start next waits for Start building; nothing is paused.
   if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (shaping)" : "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return waitingLabel(s, t);
@@ -736,6 +763,8 @@ function cancelInto(s: State, t: Task, now: string, by?: { actor: Actor; reason:
   const active = activeAttempts(s, t.id);
   event(s, now, by?.actor ?? "user", "control", `Cancelled${by ? ` (${by.reason})` : ""}; spec and partial artifacts retained${active.length ? `; stopping ${active.length} run(s)` : ""}`, t.id);
   for (const a of active) requestStop(s, a, "cancel", now);
+  // Review 1 (10): nothing on a cancelled task waits for a decision any more.
+  F.supersedeDecisions(s, t.id, now, { reason: `${t.id} was cancelled` });
   // Unfinished child tasks exist only for this task's goal: cancel them too.
   const children = descendants(s, t).filter(isOpen);
   for (const c of children) {
@@ -745,6 +774,7 @@ function cancelInto(s: State, t: Task, now: string, by?: { actor: Actor; reason:
     const runs = activeAttempts(s, c.id);
     event(s, now, "user", "control", `Cancelled with ${t.id}${runs.length ? `; stopping ${runs.length} run(s)` : ""}`, c.id);
     for (const a of runs) requestStop(s, a, "cancel", now);
+    F.supersedeDecisions(s, c.id, now, { reason: `${c.id} was cancelled with ${t.id}` });
   }
   const gone = new Set([t.id, ...children.map((c) => c.id)]);
   for (const d of s.tasks.filter((x) => isOpen(x) && !gone.has(x.id))) {
@@ -977,11 +1007,11 @@ export function setWorkerLimit(state: State, limit: number, now: string): State 
   return s;
 }
 
-/** Configuration changed; let the next dispatch re-resolve blocked steps. */
+/** Configuration changed; let the next dispatch re-resolve blocked steps. A Checks step resolves no provider, so it stays as it is. */
 function unblockConfigSteps(s: State) {
   for (const t of s.tasks) {
     if (t.lifecycle === "done" || t.lifecycle === "cancelled") continue;
-    for (const st of t.steps) if (st.state === "blocked") {
+    for (const st of t.steps) if (st.state === "blocked" && st.role !== "checks") {
       st.state = "pending";
       st.blockedReason = undefined;
     }
@@ -1142,6 +1172,8 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
   // ORC-012: while shaping no worker step starts, on any task. Like a deferral (and unlike a hold),
   // running work finishes and its result is accepted, settled tasks become Done, and nothing is paused.
   const shaping = s.project.stage === "shaping";
+  // ORC-013: Final checks steps that repeat an earlier run of the same commit and settings complete in this same transaction.
+  const reused: { attemptId: string; outputs: OutputReport[] }[] = [];
   // A stable sort: tasks the lead did not name keep their relative (creation) order.
   const tasks = s.tasks.map((t) => ({ t, rank: dispatchRank(s, t) })).sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map((x) => x.t);
   for (const t of tasks) {
@@ -1190,14 +1222,62 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       // while deferred or shaping, as for a condition with nothing to do).
       if (st.role === "checks") {
         const cfg = s.project.checks ?? DEFAULT_CHECKS;
-        if (!cfg.enabled || !cfg.commands.some((c) => c.kind === "check")) {
+        if (!C.checksOn(cfg)) {
           st.state = "skipped";
           st.invalidatedBy = undefined;
           touch(t, now);
           event(s, now, "lead", "dispatch", `Skipped ${st.id}: checks are off for this project (Settings → Checks)`, t.id);
           continue;
         }
-        // Checks are on: the service starts the run (ORC-013 step 2). Until that runner exists, the step waits.
+        const target = C.checkTargetOf(s, t, st);
+        if (!target) {
+          st.state = "skipped";
+          st.invalidatedBy = undefined;
+          touch(t, now);
+          event(s, now, "lead", "dispatch", `Skipped ${st.id}: nothing to check: no code change reached this step`, t.id);
+          continue;
+        }
+        if (deferred) continue; // settling by skipping is allowed while deferred or shaping; starting is not
+        // The sandbox is not ready: the step waits, labelled; nothing ever falls back to running unsandboxed (Q3).
+        if (opts.checksHeld ?? C.checksHeld(s)) continue;
+        if (activeServiceAttempts(s).length >= cfg.maxConcurrent) continue;
+        const targetSha = target.ref;
+        const reuse = st.checks?.onFail === "block" ? C.reusableRun(s, t, st, targetSha) : undefined;
+        const attemptId = nextId(s, "run");
+        const a: Attempt = {
+          id: attemptId,
+          taskId: t.id,
+          stepId: st.id,
+          snapshot: {
+            provider: "service",
+            model: "checks",
+            source: "service",
+            routingReason: reuse ? `Same commit and settings as ${reuse.attempt.stepId}'s run ${reuse.attempt.id}; not run again` : `Run by the service (${cfg.sandbox === "codex" ? "sandboxed" : "no sandbox"})`,
+            specRev: spec.rev,
+            stepRev: st.revision,
+            visionRev: vision.rev,
+            workspace: opts.workspaceFor ? opts.workspaceFor(t.id, st.id, attemptId) : `${s.project.repoPath}/.orchestration/worktrees/${t.id}-${st.id}`,
+            pipelineRev: t.pipelineRev,
+            purpose: st.purpose,
+            inputs: consumedInputs(s, t, st),
+            checks: { configRev: cfg.rev, sandbox: cfg.sandbox, target, commands: C.commandsFor(cfg, st), ...(reuse ? { reusedFrom: reuse.attempt.id } : {}) },
+          },
+          startedAt: now,
+          outcome: "running",
+          progress: 0,
+          artifacts: [],
+        };
+        s.attempts.push(a);
+        st.state = "running";
+        if (t.lifecycle === "ready") t.lifecycle = "active";
+        touch(t, now);
+        event(s, now, "lead", "dispatch", `Dispatched ${st.id} (checks) to the service as ${a.id} on ${targetSha.slice(0, 12)} with settings r${cfg.rev}${reuse ? `; same commit and settings as ${reuse.attempt.id}, not run again` : ""}`, t.id);
+        // Reuse (a Final checks step whose commit the loop already checked with these settings): it completes in this same transaction with a copy of that result.
+        if (reuse) {
+          const record: CheckRunRecord = { ...structuredClone(reuse.artifact.checkRun!), reusedFrom: reuse.attempt.id };
+          const findings = reuse.artifact.findings ? structuredClone(reuse.artifact.findings) : undefined;
+          reused.push({ attemptId, outputs: [{ name: st.outputs[0].name, summary: C.runSummary(record), checkRun: record, ...(findings ? { findings } : {}) }] });
+        }
         continue;
       }
       // ORC-013: a step conditioned on findings waits, neither dispatched nor skipped, while an
@@ -1264,7 +1344,9 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       event(s, now, "lead", "dispatch", `Dispatched ${st.id} (${st.role}) to ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model} as ${a.id} on spec r${spec.rev}`, t.id);
     }
   }
-  return s;
+  let out: State = s;
+  for (const r of reused) out = reportCompletion(out, r.attemptId, [], now, r.outputs);
+  return out;
 }
 
 export function reportProgress(state: State, attemptId: string, progress: number): State {
@@ -1446,19 +1528,30 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
     // ORC-013 §5.3: a code review that reports nothing must account for every changed file the
     // service showed it. Otherwise it is not accepted: once more with the gap named, then blocked.
     const reviewCoverage = new Map<string, ReturnType<typeof pathCoverageOf>>();
+    // Review 1 (7): a code review that read a real change but got no changed-path set is "unproven", never "not-required".
+    const readsRealChange = a.snapshot.inputs.some((i) => {
+      const art = s.artifacts.find((x) => x.id === i.artifactId);
+      return art?.kind === "code-change" && !!art.ref && !art.ref.startsWith("sim-");
+    });
     for (const def of st.outputs) {
       if (def.kind !== "review-findings") continue;
       const rep = outputs.find((o) => o.name === def.name)!;
-      const cov = st.role === "code_reviewer" ? pathCoverageOf(a.scope, rep.reviewedPaths ?? []) : notRequired();
+      const cov = st.role !== "code_reviewer" ? notRequired() : a.scope || !readsRealChange ? pathCoverageOf(a.scope, rep.reviewedPaths ?? []) : { state: "unproven" as const, changed: 0, reviewed: (rep.reviewedPaths ?? []).length, missing: [], extra: [] };
       reviewCoverage.set(def.name, cov);
-      const open = rep.findings ? F.blockingCount(rep.findings) : (rep.openFindings ?? 0);
+      // Review 1 (14): a finding an earlier round settled (accepted, followed up) does not make this report "not clean".
+      const open = rep.findings ? rep.findings.filter((f) => F.isBlocking(f) && !F.settledByKey(s, t, f)).length : (rep.openFindings ?? 0);
       if (open > 0 || cov.state !== "incomplete") continue;
+      // Review 1 (12): the gap and its retry belong to one change; a different change starts over.
+      if (st.coverageGap && st.coverageGap.to !== cov.to) {
+        delete st.coverageGap;
+        delete st.coverageRetries;
+      }
       const gap = gapText(cov);
       a.outcome = "failed";
       const files = [...cov.missing, ...cov.extra].slice(0, 10).join(", ");
       if (!st.coverageRetries) {
         st.coverageRetries = 1;
-        st.coverageGap = { missing: [...cov.missing], extra: [...cov.extra] };
+        st.coverageGap = { missing: [...cov.missing], extra: [...cov.extra], ...(cov.to ? { to: cov.to } : {}) };
         settleStoppedStep(s, t, st); // pending, or paused under a hold
         a.note = `Reported no findings but ${gap}; not accepted. It runs again with those files named.`;
         event(s, now, "runtime", "runtime", `${a.id} reported no findings but ${gap}; ${st.id} runs again with those files named`, t.id);
@@ -1499,10 +1592,20 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
         ...(def.kind === "check-results" && rep.checkRun ? { checkRun: structuredClone(rep.checkRun), ...(rep.findings ? { findings: structuredClone(rep.findings), openFindings: F.blockingCount(rep.findings) } : {}) } : {}),
         ...(def.kind === "breakdown" ? { items: structuredClone(rep.items ?? []) } : {}),
       };
+      // Review 1 (10): open decisions on the version this run replaces cannot be acted on any more; decided ones are the record (and carry forward).
+      for (const old of s.artifacts) if (old.taskId === t.id && old.stepId === st.id && old.name === def.name) F.supersedeDecisions(s, t.id, now, { artifactId: old.id, reason: `${st.id} ran again and produced ${def.name} v${version}` });
       s.artifacts.push(art);
       produced.push(`${def.name} v${version}`);
       // ORC-013 §4.4: every blocking ask-user finding becomes a decision, routed as the project is set.
       if (art.findings) F.createDecisions(s, t, art, now);
+      // ORC-013 §6.7: a Final checks step whose run did not pass blocks the task and opens a decision.
+      // The result stays on the record. The reason never starts with "Last run failed", so automatic
+      // retry leaves it alone; only a repair round (lead or user) or the user's acceptance ends it.
+      if (def.kind === "check-results" && st.checks?.onFail === "block" && art.checkRun && !C.allPassed(art.checkRun)) {
+        const d = C.openFinalChecksDecision(s, t, st, art, now);
+        st.state = "blocked";
+        st.blockedReason = `Checks failed on the final change ${art.checkRun.sha.slice(0, 12)}: ${C.failedResults(art.checkRun).map((r) => r.label).join(", ")}. A decision is needed (${d.id}).`;
+      }
     }
     event(s, now, "runtime", "runtime", `${st.id} completed by ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model}${produced.length ? `; produced ${produced.join(", ")}` : ""}`, t.id);
     // Best-of: record which candidate this step chose (default: the first completed copy).
@@ -1797,6 +1900,10 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // and with nothing observed about the previous repository.
   s.project.prDelivery = structuredClone(DEFAULT_PR_DELIVERY);
   delete s.project.github;
+  // ORC-013: checks are off until the user turns them on for this repository, and nothing has been probed for it.
+  s.project.checks = structuredClone(DEFAULT_CHECKS);
+  delete s.project.checksHealth;
+  s.decisions = [];
   s.tasks = [];
   s.attempts = [];
   s.artifacts = [];
@@ -1905,12 +2012,12 @@ export function pendingMessages(s: State): Message[] {
  */
 export function openLeadProposals(s: State): Task[] {
   // Review and fix tasks the service creates for a pull request are never the lead's proposals.
-  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && t.lifecycle !== "done" && t.lifecycle !== "cancelled" && !t.reviewTarget && !t.deliverInto && !deferredBy(s, t));
+  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && t.lifecycle !== "done" && t.lifecycle !== "cancelled" && !t.reviewTarget && !t.deliverInto && !t.checkTarget && !deferredBy(s, t));
 }
 
 /** ORC-009: lead-authored open roots with their own deferral. Planning stops when these reach the open cap too. */
 export function deferredLeadRoots(s: State): Task[] {
-  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && isOpen(t) && !t.parentTaskId && !!t.deferral && !t.reviewTarget && !t.deliverInto);
+  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && isOpen(t) && !t.parentTaskId && !!t.deferral && !t.reviewTarget && !t.deliverInto && !t.checkTarget);
 }
 
 /** Pull-request codes that wake the lead when they are new. */
@@ -2274,6 +2381,8 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     ...(set ? { changeSetId: set.id } : {}),
     ...(visionDraft ? { visionDraftId: visionDraft.id } : {}),
     ...(questions.length ? { questions } : {}),
+    // Review 1 (14): what this reply decided, as recorded now; the user's later changes do not rewrite it.
+    ...(decided.length ? { leadDecisions: decided.map(({ decision: d, what }) => ({ id: d.id, taskId: d.taskId, what, status: d.status, ...(d.why || d.suggestion?.why ? { why: d.why ?? d.suggestion?.why } : {}) })) } : {}),
   });
   event(
     s,
@@ -2423,7 +2532,7 @@ export function steerPermission(s: State, t: Task | undefined, action: SteerActi
   if (t.lifecycle === "done" || t.lifecycle === "cancelled") return { v: "reject", why: `${t.id} is ${t.lifecycle}` };
   // Review finding 1: the review and fix tasks the service creates for a pull request belong to delivery
   // (ORC-008), which steering never touches: no priority, deferral or drop, whatever the mode.
-  if (t.reviewTarget || t.deliverInto) return { v: "reject", why: "delivery task: not steerable" };
+  if (t.reviewTarget || t.deliverInto || t.checkTarget) return { v: "reject", why: "delivery task: not steerable" };
   if (t.parentTaskId) return { v: "reject", why: `child of ${t.parentTaskId}: steer ${rootOf(s, t).id}` };
   // 2. Nothing would change.
   if (action === "priority" && value === t.priority) return { v: "noop" };
@@ -4101,6 +4210,13 @@ export function editArtifact(
     ...(change.ref?.trim() ? { ref: change.ref.trim() } : base.ref ? { ref: base.ref } : {}),
   };
   s.artifacts.push(art);
+  // Review 1 (1): the findings carry over with their decisions, which now belong to the new version (the same
+  // findings under a new artifact id); any blocking ask-user finding still without a record gets one, so
+  // nothing waits on a record that does not exist.
+  if (art.findings) {
+    for (const d of s.decisions) if (d.artifactId === base.id) d.artifactId = art.id;
+    F.createDecisions(s, t, art, now);
+  }
   // Re-submit: everything downstream of this step that consumed it (directly or transitively).
   const downstream = new Set<string>();
   let grew = true;

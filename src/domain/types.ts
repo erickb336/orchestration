@@ -442,7 +442,8 @@ export interface FindingDecision {
   routedTo: "lead" | "user";
   /** When it was last routed to its current decider. A lead run for decisions starts only for decisions routed after the lead's last run. */
   routedAt?: string;
-  status: "open" | "fix" | "accept" | "follow-up";
+  /** "superseded": its task was cancelled, or a later run replaced the artifact while it was still open (review 1, finding 10). */
+  status: "open" | "fix" | "accept" | "follow-up" | "superseded";
   /** A lead "fix" on a spec the user wrote: recorded, not applied; the decision stays open for the user. */
   suggestion?: { decision: "fix"; why: string; leadRunId: string; at: string };
   decidedBy?: "lead" | "user" | "carried";
@@ -666,7 +667,8 @@ export interface Step extends StepDef {
   autoRetries?: number;
   /** ORC-013: clean code reviews that did not account for every changed file are run again once with the gap named. */
   coverageRetries?: number;
-  coverageGap?: { missing: string[]; extra: string[] };
+  /** The gap, bound to the change (`to`) it was found on; a different change starts the count over. */
+  coverageGap?: { missing: string[]; extra: string[]; to?: string };
 }
 
 export type SelectionSource = "step" | "task-role" | "independence" | "project-role" | "project-default" | "service";
@@ -882,6 +884,8 @@ export interface Message {
   visionDraftId?: string;
   /** ORC-012, lead messages: the questions this reply asked (validated; at most 5). */
   questions?: LeadQuestion[];
+  /** ORC-013, lead messages: what this reply decided, suggested or handed over, as recorded then (a later change by the user does not rewrite it). */
+  leadDecisions?: { id: string; taskId: string; what: "decided" | "suggested" | "handed-over"; status: string; why?: string }[];
   /** ORC-009, user messages: the task page the message was sent from. */
   taskId?: string;
 }
@@ -1015,7 +1019,8 @@ export const DEFAULT_PR_DELIVERY: PrDeliveryConfig = {
   reviewer: "other-provider",
   updateBeforeMerge: true,
   autoRepair: true,
-  protectedPaths: [".github/**", "package.json", "tsconfig*.json", "vitest.config.*", "vite.config.*"],
+  // ORC-013 review 1 (13): the repository's instruction files, anywhere in the tree, are protected too.
+  protectedPaths: [".github/**", "package.json", "tsconfig*.json", "vitest.config.*", "vite.config.*", "**/AGENTS.md", "**/CLAUDE.md"],
   allowLocalWorkers: false,
   maxOpenPrs: 5,
   maxAutoMergesPerDay: 20,

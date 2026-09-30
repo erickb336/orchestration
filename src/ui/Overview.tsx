@@ -1,6 +1,7 @@
 import { useState } from "react";
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
+import * as C from "../domain/checks";
 import * as M from "../domain/model";
 import { diffLines } from "../domain/diff";
 import { useStore } from "./store";
@@ -418,11 +419,19 @@ function ModeSummary({ state }: { state: State }) {
     if (prMode) text += `; finished work is opened as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "held for you"}`;
     else if (a.autoDeliver.enabled) text += `; finished work is delivered to ${a.autoDeliver.branch}`;
   }
+  // ORC-013: whether the service runs the project's checks, and whether it can right now.
+  const checks = state.project.checks;
+  const checksText = !C.checksOn(checks)
+    ? "checks off"
+    : C.checksHeld(state)
+      ? "checks waiting: sandbox unavailable"
+      : `checks on (${checks.commands.filter((c) => c.kind === "check").length} command${checks.commands.filter((c) => c.kind === "check").length === 1 ? "" : "s"}, ${checks.sandbox === "codex" ? "sandboxed" : "no sandbox"})`;
   return (
     <p className="mode-line" aria-live="polite">
       <span className={mode === "manual" ? "chip strong" : "pill running"}>{pill}</span>
       <span>
         {text}
+        {` · ${checksText}`}
         {paused ? " · project paused" : ""}
         {!paused && state.project.stage === "shaping" ? ` · ${M.SHAPING_LABEL.toLowerCase()}` : ""}
       </span>

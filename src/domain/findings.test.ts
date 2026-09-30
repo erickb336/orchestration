@@ -313,7 +313,8 @@ describe("the lead's decisions (applyLeadDecisions, Q9)", () => {
     const out = complete(fc, runId, [{ id: fc.decisions[0].id, decision: "accept", why: "good enough" }]);
     expect(out.decisions[0].status).toBe("open");
     expect(out.conversation.at(-1)!.rejected).toEqual([expect.stringMatching(/only the user can accept failing checks/)]);
-    expect(() => F.decideFinding(fc, fc.decisions[0].id, "accept", undefined, at(7))).toThrow(/not available in this version/);
+    // The user's acceptance acts on the blocked Final checks step itself (checks.test.ts); a decision that names none is refused.
+    expect(() => F.decideFinding(fc, fc.decisions[0].id, "accept", undefined, at(7))).toThrow(/does not belong to a Checks step/);
   });
 
   it("usedBy records the repair that carried a decision; a later change applies only to later repairs", () => {

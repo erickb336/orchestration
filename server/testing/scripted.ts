@@ -183,3 +183,71 @@ export function proposal(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+// ---------- ORC-013: a controllable check runner for scheduler tests ----------
+
+import type { CheckAssignment, CheckRunner } from "../checks";
+import type { CheckResult, ChecksHealth } from "../../src/domain/types";
+
+/** Tests decide when a check run completes, fails or confirms a stop, and what its results are. Nothing is spawned. */
+export class ScriptedChecks implements CheckRunner {
+  readonly simulated = false;
+  runs = new Map<string, CheckAssignment>();
+  started: CheckAssignment[] = [];
+  interrupts: string[] = [];
+  probes: ("codex" | "none")[] = [];
+  health: ChecksHealth["status"] = "ready";
+  private listeners = new Set<(e: AdapterEvent) => void>();
+  start(a: CheckAssignment) {
+    if (this.runs.has(a.attemptId)) return;
+    this.runs.set(a.attemptId, a);
+    this.started.push(a);
+    this.emit({ type: "started", attemptId: a.attemptId });
+  }
+  interrupt(id: string) {
+    if (!this.interrupts.includes(id)) this.interrupts.push(id);
+  }
+  kill(id: string) {
+    this.runs.delete(id);
+  }
+  has(id: string) {
+    return this.runs.has(id);
+  }
+  ids() {
+    return [...this.runs.keys()];
+  }
+  onEvent(l: (e: AdapterEvent) => void) {
+    this.listeners.add(l);
+    return () => {
+      this.listeners.delete(l);
+    };
+  }
+  async probe(sandbox: "codex" | "none"): Promise<ChecksHealth> {
+    this.probes.push(sandbox);
+    return { sandbox, status: this.health, detail: this.health === "ready" ? "scripted: ready" : "scripted: the sandbox is unavailable", checkedAt: new Date().toISOString(), ...(this.health !== "ready" ? { probes: { writeOutside: "allowed" as const, network: "unknown" as const } } : {}) };
+  }
+  async shutdown() {
+    this.runs.clear();
+  }
+  emit(e: AdapterEvent) {
+    if (e.type === "completed" || e.type === "failed" || e.type === "stopped") this.runs.delete(e.attemptId);
+    for (const l of this.listeners) l(e);
+  }
+  /** Complete a run: every planned command passes unless `fail` names it (exit 1) or `timeout` names it. */
+  finish(id: string, o: { fail?: string[]; timeout?: string[]; excerpt?: string } = {}) {
+    const a = this.runs.get(id)!;
+    const results: CheckResult[] = a.commands.map((c) => {
+      const failed = o.fail?.includes(c.id);
+      const timedOut = o.timeout?.includes(c.id);
+      return { id: c.id, label: c.label, kind: c.kind, status: timedOut ? "timed-out" : failed ? "failed" : "passed", ...(timedOut ? {} : { exitCode: failed ? 1 : 0 }), durationMs: 1500, excerpt: failed || timedOut ? (o.excerpt ?? `${c.label}: 1 failing`) : "", bytes: 0, truncated: false };
+    });
+    this.emit({ type: "completed", attemptId: id, finalText: "", checks: { sha: a.target, results, durationMs: 1500 * results.length, sandbox: a.sandbox } });
+  }
+  /** Confirm a stop request. */
+  stopped(id: string) {
+    this.emit({ type: "stopped", attemptId: id, how: "interrupted" });
+  }
+  fail(id: string, message: string) {
+    this.emit({ type: "failed", attemptId: id, message });
+  }
+}
