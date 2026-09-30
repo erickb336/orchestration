@@ -319,7 +319,7 @@ export function Overview() {
                           <span className="pill paused transition">Stopping</span>
                         ) : a.progress > 0 ? (
                           <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`}>
-                            <div style={{ width: `${a.progress}%` }} />
+                            <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
                           </div>
                         ) : (
                           <span className="muted" style={{ fontSize: "0.8rem" }}>

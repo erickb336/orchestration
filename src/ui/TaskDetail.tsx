@@ -1076,7 +1076,7 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
             )}
             {(a.outcome === "running" || a.outcome === "stopping") && a.progress > 0 && (
               <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`} style={{ marginTop: "0.3rem" }}>
-                <div style={{ width: `${a.progress}%` }} />
+                <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
               </div>
             )}
             {(a.outcome === "running" || a.outcome === "stopping") && a.activity && (
