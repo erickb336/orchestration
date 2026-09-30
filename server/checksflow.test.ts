@@ -6,7 +6,7 @@
 // runs, no network; nothing is spawned (the scripted runner records what it was asked).
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -47,7 +47,7 @@ let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
 const newTask = (title: string) =>
   (cmd("createTask", { title, area: "Test", outcome: `${title} outcome`, benefit: "b", whyNow: "", approach: "Just do it", acceptance: ["It works"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
-const CONFIG: Omit<ChecksConfig, "rev"> = { ...DEFAULT_CHECKS, enabled: true, commands: [{ id: "install", label: "install", kind: "prepare", argv: ["npm", "ci"] }, { id: "test", label: "test", kind: "check", argv: ["npm", "test"] }] };
+const CONFIG: Omit<ChecksConfig, "rev"> = { ...DEFAULT_CHECKS, enabled: true, commands: [{ id: "install", label: "install", kind: "prepare", argv: ["npm", "ci", "--ignore-scripts"] }, { id: "test", label: "test", kind: "check", argv: ["npm", "test"] }] };
 const checksOn = (over: Partial<Omit<ChecksConfig, "rev">> = {}) => cmd("setChecks", { config: { ...CONFIG, ...over } });
 /** Ticks until the probe's answer has been applied (the probe resolves between ticks). */
 const probed = async () => {
@@ -111,7 +111,7 @@ describe("the Change template end to end (§14)", () => {
       expect(run.snapshot.checks!.target.ref).toBe(change.ref!.split(" ")[0]);
       // What the runner was asked: a worktree detached at the commit, the commands, a sanitized environment, the run's directories.
       const a = checks.started[0];
-      expect(a).toMatchObject({ attemptId: run.id, taskId: id, stepId: "C1", target: sha, sandbox: "codex", prepareNetwork: true, commands: [{ id: "install", kind: "prepare", argv: ["npm", "ci"], timeoutMs: 600_000 }, { id: "test", kind: "check", argv: ["npm", "test"], timeoutMs: 600_000 }], runTimeoutMs: 30 * 60_000 });
+      expect(a).toMatchObject({ attemptId: run.id, taskId: id, stepId: "C1", target: sha, sandbox: "codex", prepareNetwork: true, commands: [{ id: "install", kind: "prepare", argv: ["npm", "ci", "--ignore-scripts"], timeoutMs: 600_000 }, { id: "test", kind: "check", argv: ["npm", "test"], timeoutMs: 600_000 }], runTimeoutMs: 30 * 60_000 });
       expect(existsSync(join(a.workspace, "a.txt"))).toBe(true);
       expect(git("-C", a.workspace, "rev-parse", "HEAD")).toBe(sha);
       expect(a.env.GH_TOKEN).toBeUndefined();
@@ -396,7 +396,31 @@ describe("Final checks and protected inputs (§6.7)", () => {
     claude.replyText(lead.id, 'Done.\n```json\n{"reply":"ok","proposals":[],"checks":{"enabled":true,"commands":[{"id":"x","label":"x","kind":"check","argv":["sh","-c","rm -rf /"]}]}}\n```');
     tick();
     expect(st().project.checks).toMatchObject({ enabled: false, rev: 2 });
-    expect(st().project.checks.commands.map((c) => c.argv)).toEqual([["npm", "ci"], ["npm", "test"]]);
+    expect(st().project.checks.commands.map((c) => c.argv)).toEqual([["npm", "ci", "--ignore-scripts"], ["npm", "test"]]);
     expect(F.leadRunDecisions(st(), lead.id)).toEqual([]);
+  });
+});
+
+describe("security review of step 2 (L7): leftover check worktrees", () => {
+  it("a check run's worktree and temp directory are removed after a crash even when dirty (mutation check: the throwaway prune)", async () => {
+    const { run } = await checkRunning();
+    const a = checks.started.find((x) => x.attemptId === run.id)!;
+    expect(existsSync(a.workspace)).toBe(true);
+    // Build output makes the worktree dirty: the ordinary prune would keep it, a check's is throwaway.
+    writeFileSync(join(a.workspace, "build-output.txt"), "dirty\n");
+    mkdirSync(a.tmpDir, { recursive: true });
+    writeFileSync(join(a.tmpDir, "scratch"), "x");
+    await scheduler.stop(); // the process dies without cleaning up
+    expect(existsSync(a.workspace)).toBe(true);
+    scheduler = new Scheduler(store, { claude, codex }, { workspaces, checks: new ScriptedChecks(), dataDir: dir, leaseMs: 30000, ackTimeoutMs: 10000 });
+    await scheduler.refreshHealth();
+    now += 31_000;
+    scheduler.tick(now); // reconcile: the run is lost, and its worktree goes with its temp directory
+    expect(st().attempts.find((x) => x.id === run.id)!.outcome).toBe("lost");
+    expect(existsSync(a.workspace)).toBe(false);
+    expect(existsSync(a.tmpDir)).toBe(false);
+    // The repository itself is untouched, and the worktree registration is gone.
+    expect(git("status", "--porcelain")).toBe("");
+    expect(git("worktree", "list")).not.toContain(a.workspace);
   });
 });

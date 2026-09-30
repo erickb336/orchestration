@@ -567,9 +567,11 @@ describe("prGate (items 1–8 and 13)", () => {
   });
 
   it("6: required checks must have passed on exactly this head", () => {
-    for (const c of ["FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "SKIPPED", "NEUTRAL"]) {
+    // ORC-013 §7.2: every non-success blocks; the reason names its class (a cancelled run with no job id cannot be re-run).
+    const codes: Record<string, string> = { FAILURE: "checks-failed", ERROR: "checks-failed", TIMED_OUT: "checks-failed", ACTION_REQUIRED: "checks-failed", CANCELLED: "ci-infra", SKIPPED: "checks-skipped", NEUTRAL: "checks-skipped" };
+    for (const [c, code] of Object.entries(codes)) {
       const s = opened({ checks: [check(c)] });
-      expect(item(s, "checks"), c).toMatchObject({ ok: false, state: "blocked", code: "checks-failed" });
+      expect(item(s, "checks"), c).toMatchObject({ ok: false, state: "blocked", code });
       expect(gate(requested(s)).status, c).toBe("blocked");
     }
     // Pending, then a timeout the user is told about.

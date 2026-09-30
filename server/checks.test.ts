@@ -3,12 +3,13 @@
 // a failed prepare, capped and redacted output, the log file, the stop semantics, and the environment a
 // command sees. No sandbox, no model, no network; every command is this Node running a small script.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CHECK_ENV_COPIED, DirectChecks, EXCERPT_HEAD, EXCERPT_TAIL, OUTPUT_CAP, checkEnv, excerptOf, headOf, pruneCheckLogs, type CheckAssignment, type CheckRunner } from "./checks";
+import { killGroup } from "./processes";
 import type { AdapterEvent } from "./runtimes/types";
 
 let dir: string;
@@ -217,5 +218,49 @@ describe("DirectChecks (§6.5.3, and what §6.5.2 shares)", () => {
     expect(existsSync(join(root, "p", "run-new"))).toBe(true);
     expect(existsSync(join(root, "q", "run-mid"))).toBe(true);
     expect(pruneCheckLogs(join(dir, "missing"))).toBe(0);
+  });
+});
+
+describe("security review of step 2 (M3): nothing a command started outlives the run", () => {
+  it("a command that exits but leaves a child that traps SIGTERM: the reaper ends its group before it exits, and the command's own exit code is kept (mutation check: the reaper's final SIGKILL)", async () => {
+    const pidA = join(dir, "trap-a.pid");
+    const pidB = join(dir, "trap-b.pid");
+    // The grandchild writes its pid only once its SIGTERM handler is installed, and the command waits for that before it exits.
+    // A: the leftover does not hold the output pipe (stdio ignored). B: it does (inherited), so "close" waits for it.
+    const trap = script("trap.js", 'process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(process.argv[2], String(process.pid)); setInterval(() => {}, 1000);');
+    const leaver = (pidFile: string, stdio: string) =>
+      script(
+        `leaver-${stdio}.js`,
+        `const { spawn } = require("node:child_process"); const fs = require("node:fs"); const c = spawn(process.execPath, [${JSON.stringify(trap)}, ${JSON.stringify(pidFile)}], { stdio: ${JSON.stringify(stdio)} }); c.unref(); const t0 = Date.now(); while (!fs.existsSync(${JSON.stringify(pidFile)}) && Date.now() - t0 < 5000) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20); console.log("done"); process.exit(0);`,
+      );
+    const t0 = Date.now();
+    const events = await runToEnd(new DirectChecks({ graceMs: 300 }), assignment([cmd("a", [node, leaver(pidA, "ignore")]), cmd("b", [node, leaver(pidB, "inherit")])]));
+    const [a, b] = completed(events).checks!.results;
+    expect(a).toMatchObject({ id: "a", status: "passed", exitCode: 0 });
+    expect(b).toMatchObject({ id: "b", status: "passed", exitCode: 0 });
+    expect(a.excerpt).toContain("done");
+    expect(Date.now() - t0).toBeLessThan(9000);
+    await new Promise((res) => setTimeout(res, 300));
+    for (const f of [pidA, pidB]) {
+      const pid = Number(readFileSync(f, "utf8"));
+      expect(() => process.kill(pid, 0), f).toThrow(); // gone, although it ignored SIGTERM
+    }
+    // A command ended by a signal is still recorded as such (no status file says otherwise).
+    const killed = script("selfkill.js", "process.kill(process.pid, 'SIGTERM'); setInterval(() => {}, 1000);");
+    const r = completed(await runToEnd(new DirectChecks({ graceMs: 300 }), assignment([cmd("k", [node, killed])], { attemptId: "run-k", logDir: join(dir, "logs", "run-k") }))).checks!.results[0];
+    expect(r.status).toBe("failed");
+    expect(r.exitCode).toBe(143);
+  }, 20_000);
+
+  it("killGroup signals the process group after its leader exited: a leftover in the group is still reached (mutation check)", async () => {
+    const pidFile = join(dir, "orphan.pid");
+    const leader = spawn(node, ["-e", `const c = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" }); require("node:fs").writeFileSync(process.argv[1], String(c.pid)); c.unref();`, pidFile], { detached: true, stdio: "ignore" });
+    await new Promise((r) => leader.once("exit", r));
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    expect(() => process.kill(pid, 0)).not.toThrow(); // it outlived its leader
+    killGroup(leader, "SIGTERM"); // ignored by the child
+    killGroup(leader, "SIGKILL");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(() => process.kill(pid, 0)).toThrow();
   });
 });

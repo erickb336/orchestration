@@ -4,7 +4,8 @@
 // Safety rules enforced here, before anything is spawned:
 //   - no bypass and no force: never --admin, --auto, -d, --delete-branch or --force; no call to a merge
 //     endpoint and no merge or auto-merge mutation. The only merge is
-//     `gh pr merge <n> -R <o/r> --merge --match-head-commit <sha>`;
+//     `gh pr merge <n> -R <o/r> --merge --match-head-commit <sha>`. A POST goes only to an issue's
+//     comments or to a GitHub Actions job's re-run endpoint (ORC-013);
 //   - credentials: the app uses the user's own gh sign-in. It never reads, stores, prints or sets a
 //     token, never runs `gh auth token`, and never passes --show-token;
 //   - every call runs from an empty neutral directory with an explicit repository, takes bodies on
@@ -57,6 +58,12 @@ export interface GitHubHost {
   findComment(a: { repo: RepoRef; number: number; marker: string }): Promise<{ url: string } | undefined>;
   comment(a: { repo: RepoRef; number: number; body: string }): Promise<{ url: string }>;
   close(a: { repo: RepoRef; number: number; comment: string }): Promise<void>;
+  /**
+   * ORC-013: ask GitHub Actions to run one job again (`POST repos/<o>/<r>/actions/jobs/<id>/rerun`).
+   * Only for a job seen on the app's own pull request at its current head. The caller observes
+   * afterwards; success here records nothing.
+   */
+  rerunJob(a: { repo: RepoRef; jobId: number }): Promise<void>;
   /** Simulated hosts only (no git runs there): the pull request's branch now holds this commit. */
   pushed?(a: { repo: RepoRef; number: number; headSha: string }): void;
   abortAll(): void;
@@ -104,6 +111,23 @@ function executable(args: string[], stdin: string): string {
   return stdin;
 }
 
+/** The only two shapes of endpoint the app ever POSTs to (ORC-013 narrowed this from "any non-merge path"). */
+const POST_ENDPOINTS = [/^repos\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/issues\/\d+\/comments$/, /^repos\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/actions\/jobs\/\d+\/rerun$/];
+/** gh api flags that take a value: the value is never the endpoint. */
+const API_VALUE_FLAGS = new Set(["-X", "--method", "--jq", "-q", "--input", "-f", "--raw-field", "-F", "--field", "-H", "--header", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
+
+/** The endpoint of a `gh api` invocation: its first argument that is not a flag or a flag's value. */
+function apiEndpoint(args: string[]): string | undefined {
+  for (let i = 1; i < args.length; i++) {
+    if (args[i].startsWith("-")) {
+      if (API_VALUE_FLAGS.has(args[i])) i++;
+      continue;
+    }
+    return args[i];
+  }
+  return undefined;
+}
+
 /** Throws when a gh invocation could bypass rules, force, delete a branch, merge by API, or reveal a token. */
 export function assertAllowedGh(args: string[], stdin = "") {
   for (const a of args) if (FORBIDDEN_ARGS.has(a)) throw new GhError("rejected", `refusing to run gh with ${a}`);
@@ -115,6 +139,11 @@ export function assertAllowedGh(args: string[], stdin = "") {
     if (/mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|deleteRef|updateRef/.test(text)) throw new GhError("rejected", "refusing to send a merge or ref mutation");
     const x = args.indexOf("-X") >= 0 ? args[args.indexOf("-X") + 1] : args.indexOf("--method") >= 0 ? args[args.indexOf("--method") + 1] : undefined;
     if (x && x.toUpperCase() !== "POST" && x.toUpperCase() !== "GET") throw new GhError("rejected", `refusing to call the GitHub API with ${x}`);
+    // A POST goes only to the two endpoints the app writes to: a pull request's comments, or a job re-run.
+    if (x && x.toUpperCase() === "POST") {
+      const endpoint = apiEndpoint(args) ?? "";
+      if (!POST_ENDPOINTS.some((re) => re.test(endpoint))) throw new GhError("rejected", `refusing to POST to ${endpoint || "an unknown endpoint"}: the app writes only comments and job re-runs`);
+    }
   }
   if (args[0] === "pr" && args[1] === "merge" && (!args.includes("--merge") || !args.includes("--match-head-commit"))) throw new GhError("rejected", "refusing to merge without --merge and --match-head-commit");
 }
@@ -141,7 +170,8 @@ export function classifyGhError(exitCode: number | null, stderr: string): GhErro
   return new GhError("unknown", msg);
 }
 
-interface RollupNode {
+/** One node of a commit's status check rollup, as GitHub's GraphQL API returns it. */
+export interface RollupNode {
   __typename?: string;
   name?: string;
   status?: string;
@@ -151,34 +181,93 @@ interface RollupNode {
   state?: string;
   targetUrl?: string;
   isRequired?: boolean;
+  /** CheckRun: the check run's id (a GitHub Actions job id when the app is github-actions). */
+  databaseId?: number;
+  startedAt?: string | null;
+  checkSuite?: { app?: { slug?: string } | null; workflowRun?: { databaseId?: number } | null } | null;
+  /** StatusContext: who posted it. */
+  creator?: { login?: string } | null;
 }
 
+/** A whole-second UTC time, as GitHub reports `startedAt`: the only form supersession trusts. */
+const WHOLE_SECOND = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const startedMs = (c: CheckObs): number | undefined => (c.kind === "run" && c.startedAt && WHOLE_SECOND.test(c.startedAt) ? Date.parse(c.startedAt) : undefined);
+
 /**
- * One rollup → checks, one per name. When a name reports more than once, the worst wins: anything
- * that is not a success beats a run that is still going, which beats a success. A passing run never
- * hides a failing one of the same name. No rollup at all means nothing has reported.
+ * One rollup → checks, one per name. No rollup at all means nothing has reported.
+ *
+ * When a name reports more than once (ORC-013 §7.1), the newest run wins: the group is represented by
+ * its newest dated check run when that run is a success or still going, and every other run that is
+ * not a success is completed, has a whole-second `startedAt`, and started strictly before it. A
+ * cancelled run therefore no longer stays red next to a later green re-run, and a re-run still going
+ * keeps the name pending rather than red. In every other case the worst wins, as in ORC-008: an
+ * undated or tied run keeps the name red, an older pending run keeps it pending, and a status context
+ * is never grouped or superseded (GitHub reports one state per context). A passing run never hides a
+ * failing one it cannot be shown to have replaced, and a newer run never hides a newer failure.
  */
 export function parseChecks(rollup: { contexts?: { nodes?: RollupNode[] } } | null | undefined): CheckObs[] {
-  const out = new Map<string, CheckObs>();
-  const rank = (c: CheckObs) => (c.conclusion === null ? 1 : c.conclusion === "SUCCESS" ? 0 : 2);
-  const put = (c: CheckObs) => {
-    const prev = out.get(c.name);
-    if (!prev || rank(c) >= rank(prev)) out.set(c.name, { ...c, required: c.required || !!prev?.required });
-    else if (c.required) prev.required = true;
-  };
+  const groups = new Map<string, CheckObs[]>();
   for (const n of rollup?.contexts?.nodes ?? []) {
+    let c: CheckObs;
     if (n.__typename === "StatusContext" || n.context !== undefined) {
       const done = n.state === "SUCCESS" || n.state === "FAILURE" || n.state === "ERROR";
-      put({ name: n.context ?? "", required: !!n.isRequired, status: done ? "COMPLETED" : "PENDING", conclusion: done ? n.state! : null, ...(n.targetUrl ? { url: n.targetUrl } : {}) });
-    } else put({ name: n.name ?? "", required: !!n.isRequired, status: n.status ?? "PENDING", conclusion: n.conclusion ?? null, ...(n.detailsUrl ? { url: n.detailsUrl } : {}) });
+      const login = n.creator?.login?.replace(/\[bot\]$/, "");
+      c = { name: n.context ?? "", required: !!n.isRequired, status: done ? "COMPLETED" : "PENDING", conclusion: done ? n.state! : null, ...(n.targetUrl ? { url: n.targetUrl } : {}), kind: "status", ...(login ? { app: login } : {}) };
+    } else {
+      const jobId = Number.isInteger(n.databaseId) && n.databaseId! > 0 ? n.databaseId : undefined;
+      const runId = Number.isInteger(n.checkSuite?.workflowRun?.databaseId) && n.checkSuite!.workflowRun!.databaseId! > 0 ? n.checkSuite!.workflowRun!.databaseId : undefined;
+      const app = n.checkSuite?.app?.slug;
+      c = {
+        name: n.name ?? "",
+        required: !!n.isRequired,
+        status: n.status ?? "PENDING",
+        conclusion: n.conclusion ?? null,
+        ...(n.detailsUrl ? { url: n.detailsUrl } : {}),
+        kind: "run",
+        ...(app ? { app } : {}),
+        ...(jobId !== undefined ? { jobId } : {}),
+        ...(runId !== undefined ? { runId } : {}),
+        ...(typeof n.startedAt === "string" && n.startedAt ? { startedAt: n.startedAt } : {}),
+      };
+    }
+    if (!c.name) continue;
+    groups.set(c.name, [...(groups.get(c.name) ?? []), c]);
   }
-  out.delete("");
-  return [...out.values()];
+  const rank = (c: CheckObs) => (c.conclusion === null ? 1 : c.conclusion === "SUCCESS" ? 0 : 2);
+  const out: CheckObs[] = [];
+  for (const [, runs] of groups) {
+    const required = runs.some((c) => c.required);
+    // Newest run wins: the newest dated check run, when it is a success or still going (never a
+    // failure), and every other non-success is a completed, dated check run that started strictly before it.
+    const newest = runs.filter((c) => startedMs(c) !== undefined).sort((a, b) => startedMs(b)! - startedMs(a)!)[0];
+    const superseded =
+      !!newest &&
+      (newest.conclusion === "SUCCESS" || newest.conclusion === null) &&
+      runs.every((c) => {
+        if (c === newest || c.conclusion === "SUCCESS") return true;
+        const t = startedMs(c);
+        return c.kind === "run" && c.status === "COMPLETED" && t !== undefined && t < startedMs(newest)!;
+      });
+    if (superseded) {
+      out.push({ ...newest, required });
+      continue;
+    }
+    // Worst wins. Among equals the newer run is kept (the one a re-run would target), else the later one.
+    let worst = runs[0];
+    for (const c of runs.slice(1)) {
+      const r = rank(c) - rank(worst);
+      const a = startedMs(c);
+      const b = startedMs(worst);
+      if (r > 0 || (r === 0 && (a === undefined || b === undefined || a >= b))) worst = c;
+    }
+    out.push({ ...worst, required });
+  }
+  return out;
 }
 
 const contexts = (n?: number) => {
   const req = n === undefined ? "" : ` isRequired(pullRequestNumber:${n})`;
-  return `statusCheckRollup{contexts(first:50){nodes{__typename ... on CheckRun{name status conclusion detailsUrl${req}} ... on StatusContext{context state targetUrl${req}}}}}`;
+  return `statusCheckRollup{contexts(first:50){nodes{__typename ... on CheckRun{name status conclusion detailsUrl databaseId startedAt checkSuite{app{slug} workflowRun{databaseId}}${req}} ... on StatusContext{context state targetUrl creator{login}${req}}}}}`;
 };
 
 /** The one batched read: an alias per pull request and per landed commit, plus the rate limit. */
@@ -550,6 +639,13 @@ export class GhCliHost implements GitHubHost {
   async close(a: { repo: RepoRef; number: number; comment: string }): Promise<void> {
     await this.gh(["pr", "close", String(a.number), "-R", `${a.repo.owner}/${a.repo.name}`, "--comment", a.comment]);
   }
+
+  /** The exact invocation: `gh api -X POST repos/<o>/<r>/actions/jobs/<jobId>/rerun`. The id is checked first. */
+  async rerunJob(a: { repo: RepoRef; jobId: number }): Promise<void> {
+    if (!Number.isInteger(a.jobId) || a.jobId <= 0) throw new GhError("rejected", "refusing to re-run a job without a valid job id");
+    if (!NAME.test(a.repo.owner) || !NAME.test(a.repo.name)) throw new GhError("rejected", "invalid repository name");
+    await this.gh(["api", "-X", "POST", `repos/${a.repo.owner}/${a.repo.name}/actions/jobs/${a.jobId}/rerun`]);
+  }
 }
 
 // ---------- simulated ----------
@@ -724,6 +820,18 @@ export class SimulatedGitHub implements GitHubHost {
       p.closedBy = this.login;
       p.comments.push({ url: `${p.url}#issuecomment-${p.comments.length + 1}`, body: a.comment });
     }
+  }
+
+  /** The simulated check has no job id and never cancels, so there is never a job to run again. */
+  async rerunJob(a: { repo: RepoRef; jobId: number }): Promise<void> {
+    for (const p of this.prs.values()) {
+      const c = p.checks.find((x) => x.jobId === a.jobId);
+      if (!c) continue;
+      c.status = "IN_PROGRESS";
+      c.conclusion = null;
+      return;
+    }
+    throw new GhError("not-found", `job ${a.jobId} not found`);
   }
 
   abortAll() {}

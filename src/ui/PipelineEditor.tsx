@@ -53,7 +53,8 @@ export function PipelineEditor({
   const [defs, setDefs] = useState<StepDef[]>(() => structuredClone(initial));
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
-  const issues = validatePipeline(defs, { reviewTarget, checkTarget });
+  // A Checks step may name only configured checks (M2); the editor shows that before the save refuses it.
+  const issues = validatePipeline(defs, { reviewTarget, checkTarget, ...(checkCommands ? { checkIds: checkCommands.filter((c) => c.kind === "check").map((c) => c.id) } : {}) });
   const errors = issues.filter((i) => i.severity === "error");
 
   const update = (i: number, patch: Partial<StepDef>) => setDefs((ds) => ds.map((d, j) => (j === i ? { ...d, ...patch } : d)));

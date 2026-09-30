@@ -9,6 +9,7 @@ import { runCommand } from "./commands";
 import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
+import { validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
 import { templateSteps } from "./templates";
 import { ControlError, DEFAULT_CHECKS, type CheckRunRecord, type ChecksConfig, type State } from "./types";
@@ -32,7 +33,7 @@ describe("validateChecks (§6.1)", () => {
   });
 
   it("package managers may only install (prepare) or test and run scripts (check); interpreters may not run inline code or preloads", () => {
-    ok(cfg({ commands: [cmd("i", ["npm", "ci"], "prepare"), cmd("t", ["npm", "test"]), cmd("l", ["pnpm", "run", "lint"]), cmd("b", ["yarn", "run-script", "build"])] }));
+    ok(cfg({ commands: [cmd("i", ["npm", "ci", "--ignore-scripts"], "prepare"), cmd("t", ["npm", "test"]), cmd("l", ["pnpm", "run", "lint"]), cmd("b", ["yarn", "run-script", "build"])] }));
     for (const sub of ["exec", "x", "publish", "login", "config", "token", "install"]) bad(cfg({ commands: [cmd("c", ["npm", sub])] }), /not allowed|is "npm test"/);
     for (const sub of ["test", "run", "publish"]) bad(cfg({ commands: [cmd("c", ["npm", sub], "prepare")] }), /prepare command with npm is/);
     ok(cfg({ commands: [cmd("py", ["python3", "-m", "pytest"]), cmd("n", ["node", "scripts/check.mjs"])] }));
@@ -50,8 +51,8 @@ describe("validateChecks (§6.1)", () => {
     bad(cfg({ commands: [cmd("a", ["npm", "run", "x\0y"])] }), /newline or NUL/);
     bad(cfg({ commands: [cmd("a", ["npm", "test"]), cmd("a", ["npm", "test"])] }), /Two commands have the id/);
     bad(cfg({ commands: Array.from({ length: 9 }, (_, i) => cmd(`c${i}`, ["npm", "test"])) }), /At most 8 commands/);
-    bad(cfg({ commands: [cmd("t", ["npm", "test"]), cmd("i", ["npm", "ci"], "prepare")] }), /prepare commands come before/);
-    bad(cfg({ commands: [cmd("i1", ["npm", "ci"], "prepare"), cmd("i2", ["npm", "ci"], "prepare"), cmd("i3", ["npm", "ci"], "prepare")] }), /At most 2 prepare/);
+    bad(cfg({ commands: [cmd("t", ["npm", "test"]), cmd("i", ["npm", "ci", "--ignore-scripts"], "prepare")] }), /prepare commands come before/);
+    bad(cfg({ commands: [cmd("i1", ["npm", "ci", "--ignore-scripts"], "prepare"), cmd("i2", ["npm", "ci", "--ignore-scripts"], "prepare"), cmd("i3", ["npm", "ci", "--ignore-scripts"], "prepare")] }), /At most 2 prepare/);
     bad(cfg({ commands: [{ ...cmd("a", ["npm", "test"]), timeoutMinutes: 61 }] }), /1–60 minutes/);
     bad(cfg({ commandTimeoutMinutes: 0 }), /per command is 1–60/);
     bad(cfg({ runTimeoutMinutes: 121 }), /per run is 1–120/);
@@ -137,7 +138,7 @@ describe("suggestChecks (§6.2)", () => {
   it("reads this repository's package.json and lockfile into npm ci, typecheck, test and build", () => {
     const pkg = JSON.stringify({ scripts: { dev: "x", build: "tsc", typecheck: "tsc", test: "vitest run", lint: undefined } });
     expect(C.suggestChecks([{ path: "package.json", text: pkg }, { path: "package-lock.json", text: "{}" }])).toEqual([
-      { id: "install", label: "Install dependencies", kind: "prepare", argv: ["npm", "ci"] },
+      { id: "install", label: "Install dependencies", kind: "prepare", argv: ["npm", "ci", "--ignore-scripts"] },
       { id: "typecheck", label: "typecheck", kind: "check", argv: ["npm", "run", "typecheck"] },
       { id: "test", label: "test", kind: "check", argv: ["npm", "test"] },
       { id: "build", label: "build", kind: "check", argv: ["npm", "run", "build"] },
@@ -146,7 +147,7 @@ describe("suggestChecks (§6.2)", () => {
 
   it("pnpm, cargo, go and pytest fixtures; everything suggested passes validation; nothing without evidence", () => {
     const pnpm = C.suggestChecks([{ path: "package.json", text: JSON.stringify({ scripts: { lint: "eslint .", test: "vitest" } }) }, { path: "pnpm-lock.yaml", text: "" }]);
-    expect(pnpm.map((c) => c.argv)).toEqual([["pnpm", "install", "--frozen-lockfile"], ["pnpm", "run", "lint"], ["pnpm", "test"]]);
+    expect(pnpm.map((c) => c.argv)).toEqual([["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], ["pnpm", "run", "lint"], ["pnpm", "test"]]);
     const rust = C.suggestChecks([{ path: "Cargo.toml", text: "[package]" }, { path: "go.mod", text: "module x" }, { path: "pyproject.toml", text: "[tool.pytest.ini_options]" }]);
     expect(rust.map((c) => c.argv)).toEqual([["cargo", "build"], ["cargo", "test"], ["go", "vet", "./..."], ["go", "test", "./..."], ["python3", "-m", "pytest"]]);
     for (const list of [pnpm, rust]) expect(C.validateChecks(cfg({ commands: list }), { acknowledged: true })).toBeUndefined();
@@ -469,5 +470,102 @@ describe("evidence and the merge gate (§6.9)", () => {
     // Landed without evidence while checks are on: flagged.
     expect(C.landedCheckFlags(pr, task(pr, "EX-006"), SHA)).toEqual(["checks-not-run"]);
     expect(C.landedCheckFlags(okState, task(okState, "EX-006"), SHA)).toEqual([]);
+  });
+});
+
+describe("security review of step 2 (H1, M2, L5, L6)", () => {
+  const withArt = (s: State, rec: CheckRunRecord) => ({
+    ...s,
+    artifacts: [...s.artifacts, { id: "art-x", taskId: "EX-006", stepId: "C2", attemptId: "run-x", name: "final", kind: "check-results" as const, version: 1, summary: "s", createdAt: at(1), checkRun: rec, findings: C.findingsFromRun(rec), openFindings: C.findingsFromRun(rec).length }],
+  });
+
+  it("H1: an install that may use the network must carry its package manager's no-scripts flag; offline it need not; a rebuild step is allowed and marked offline (mutation check)", () => {
+    for (const argv of [["npm", "ci"], ["npm", "install"], ["pnpm", "install", "--frozen-lockfile"], ["yarn", "install", "--immutable"], ["bun", "install"]]) {
+      bad(cfg({ prepareNetwork: true, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }), /must not run install scripts/);
+      ok(cfg({ prepareNetwork: false, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }));
+    }
+    for (const argv of [["npm", "ci", "--ignore-scripts"], ["pnpm", "install", "--ignore-scripts", "--frozen-lockfile"], ["yarn", "install", "--immutable", "--mode=skip-build"], ["yarn", "install", "--ignore-scripts"], ["bun", "install", "--frozen-lockfile", "--ignore-scripts"]]) {
+      ok(cfg({ prepareNetwork: true, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }));
+    }
+    expect(C.validateCommand(cmd("i", ["npm", "ci"], "prepare"), { networked: true })).toMatch(/add "--ignore-scripts" to it\. Scripts your project needs can run offline afterwards in a separate "npm rebuild" prepare command/);
+    // The offline way to run install scripts.
+    ok(cfg({ prepareNetwork: true, commands: [cmd("i", ["npm", "ci", "--ignore-scripts"], "prepare"), cmd("s", ["npm", "rebuild"], "prepare"), cmd("t", ["npm", "test"])] }));
+    ok(cfg({ prepareNetwork: true, commands: [cmd("s", ["pnpm", "rebuild"], "prepare"), cmd("t", ["pnpm", "test"])] }));
+    bad(cfg({ commands: [cmd("s", ["npm", "rebuild"])] }), /a check with npm is/); // rebuild is a prepare step, never a check
+    const plannedCommands = C.commandsFor(cfg({ prepareNetwork: true, commands: [cmd("i", ["npm", "ci", "--ignore-scripts"], "prepare"), cmd("s", ["npm", "rebuild"], "prepare"), cmd("t", ["npm", "test"])] }), {});
+    expect(plannedCommands.map((c) => [c.id, c.offline])).toEqual([["i", undefined], ["s", true], ["t", undefined]]);
+    expect(C.isInstall(["npm", "ci"])).toBe(true);
+    expect(C.isRebuild(["yarn", "rebuild"])).toBe(true);
+    expect(C.ignoresScripts(["yarn", "install", "--mode=skip-build"])).toBe(true);
+    // Suggestions carry the flags; a project that needs scripts adds the offline step itself.
+    const sug = C.suggestChecks([{ path: "package.json", text: JSON.stringify({ scripts: { test: "vitest" } }) }, { path: "yarn.lock", text: "" }]);
+    expect(sug[0].argv).toEqual(["yarn", "install", "--immutable", "--mode=skip-build"]);
+    expect(C.validateChecks({ ...cfg(), prepareNetwork: true, commands: sug }, { acknowledged: true })).toBeUndefined();
+  });
+
+  it("L6: interpreter flags are matched by prefix and in clusters, deno eval is refused, and scanning stops at -m, -- or the script (mutation check)", () => {
+    for (const a of ["-cprint(1)", "-e1", "-pe", "-rfoo", "-Ec", "-ic", "--eval=1", "--require=x", "--import", "--loader"]) bad(cfg({ commands: [cmd("c", ["python3", a, "x"])] }), /inline code or preload/);
+    for (const a of ["-cprint(1)", "-e1", "-pe", "-rfoo"]) bad(cfg({ commands: [cmd("c", ["node", a])] }), /inline code or preload/);
+    bad(cfg({ commands: [cmd("c", ["ruby", "-rjson", "x.rb"])] }), /inline code or preload/);
+    bad(cfg({ commands: [cmd("c", ["deno", "eval", "1"])] }), /deno eval runs inline code/);
+    // Legitimate flags: attached values, and anything after -m <module>, "--" or the script belongs to the script.
+    ok(cfg({ commands: [cmd("c", ["python3", "-Werror", "-X", "dev", "-m", "pytest", "-p", "xdist", "-c", "pytest.ini"])] }));
+    ok(cfg({ commands: [cmd("c", ["python3", "-m", "pytest", "-p", "xdist"])] }));
+    ok(cfg({ commands: [cmd("c", ["node", "scripts/check.mjs", "-e", "--require", "x"])] }));
+    ok(cfg({ commands: [cmd("c", ["node", "--", "-e"])] }));
+    ok(cfg({ commands: [cmd("c", ["ruby", "-Ilib/core", "-W2", "test.rb"])] }));
+    ok(cfg({ commands: [cmd("c", ["deno", "run", "-A", "--allow-net", "main.ts"])] }));
+    ok(cfg({ commands: [cmd("c", ["deno", "test", "-r"])] }));
+  });
+
+  it("M2: a Checks step that names checks that do not exist, or would run no check, blocks with the reason instead of counting as passing (mutation check)", () => {
+    const { s, id } = withChecks();
+    // Rename the step's `only` to an id that is not configured: the pending Final checks step blocks at dispatch.
+    const s1 = structuredClone(s);
+    const final = step(s1, id, "C2");
+    final.checks = { onFail: "block", only: ["tests"] };
+    final.dependsOn = [];
+    const out = M.dispatchEligible(s1, at(4));
+    expect(step(out, id, "C2")).toMatchObject({ state: "blocked", blockedReason: "this step names checks that do not exist: tests. Fix the pipeline, or the check settings." });
+    expect(M.activeServiceAttempts(out).map((a) => a.stepId)).toEqual(["C1"]); // only the earlier step runs
+    // Only a prepare command is named: nothing to run.
+    const s2 = structuredClone(s);
+    step(s2, id, "C2").checks = { onFail: "block", only: ["i"] };
+    step(s2, id, "C2").dependsOn = [];
+    const s2cfg = { ...s2, project: { ...s2.project, checks: { ...cfg({ commands: [cmd("i", ["npm", "ci", "--ignore-scripts"], "prepare"), cmd("test", ["npm", "test"])] }), rev: 1 } } };
+    expect(step(M.dispatchEligible(s2cfg, at(4)), id, "C2")).toMatchObject({ state: "blocked", blockedReason: expect.stringMatching(/names checks that do not exist: i\./) });
+    expect(C.missingChecks(cfg({ commands: [cmd("test", ["npm", "test"])] }), { checks: { onFail: "block", only: ["tests", "test"] } })).toEqual(["tests"]);
+    // Saving a pipeline or a template that names an unknown check is refused with the same words.
+    const defs = task(s, id).steps.map((x) => ({ id: x.id, purpose: x.purpose, role: x.role, dependsOn: [...x.dependsOn], inputs: [...x.inputs], outputs: [...x.outputs], ...(x.checks ? { checks: { ...x.checks } } : {}), ...(x.runIf ? { runIf: [...x.runIf] } : {}), ...(x.iterate ? { iterate: { ...x.iterate } } : {}) }));
+    const c2 = defs.find((d) => d.id === "C2")!;
+    c2.checks = { onFail: "block", only: ["tests"] };
+    expect(validatePipeline(defs, { checkIds: C.configuredCheckIds(s.project.checks) }).filter((i) => i.severity === "error").map((i) => i.message)).toEqual(["C2 names checks that do not exist: tests. The configured checks are test (Settings → Checks)."]);
+    expect(validatePipeline(defs).filter((i) => i.severity === "error")).toEqual([]); // without the ids nothing is known
+    expect(() => M.setPipeline(s, id, task(s, id).pipelineRev, defs, "rename", "user", at(5))).toThrow(/C2 names checks that do not exist: tests/);
+  });
+
+  it("M2: evidence means every configured check passed on the commit; a run of a subset, or one missing a check, is not evidence (mutation check)", () => {
+    const base = { ...buildSeed(T0, { inFlightRuns: false }) };
+    const two = { ...base, project: { ...base.project, checks: { ...cfg({ commands: [cmd("lint", ["npm", "run", "lint"]), cmd("test", ["npm", "test"])] }), rev: 1 } } };
+    const both = record(SHA, { results: [{ id: "lint", label: "lint", kind: "check", status: "passed", exitCode: 0, durationMs: 1, excerpt: "", bytes: 0, truncated: false }, ...record(SHA).results] });
+    expect(C.checkEvidence(withArt(two, both), SHA)).toMatchObject({ ok: true, reason: `lint, test passed on ${SHA.slice(0, 12)}.` });
+    expect(C.checkEvidence(withArt(two, record(SHA)), SHA)).toMatchObject({ ok: false, attemptId: "run-x", reason: `The run on ${SHA.slice(0, 12)} did not run every configured check (missing: lint).` });
+    const notRun = record(SHA, { results: [{ id: "lint", label: "lint", kind: "check", status: "not-run", durationMs: 0, excerpt: "", bytes: 0, truncated: false }, ...record(SHA).results] });
+    expect(C.checkEvidence(withArt(two, notRun), SHA).ok).toBe(false);
+    // The landed flag and the merge-gate item follow the evidence.
+    expect(C.landedCheckFlags(withArt(two, record(SHA)), task(two, "EX-006"), SHA)).toEqual(["checks-not-run"]);
+    expect(C.landedCheckFlags(withArt(two, both), task(two, "EX-006"), SHA)).toEqual([]);
+  });
+
+  it("L5: a probe result does not clear a 'Check again' asked for after the probe began (mutation check)", () => {
+    let s = buildSeed(T0, { inFlightRuns: false });
+    s = { ...s, project: { ...s.project, checks: cfg() } };
+    const asked = C.recheckChecks(s, at(10)); // the probe starts on this request
+    const askedAgain = C.recheckChecks(asked, at(20)); // …and a newer request arrives while it runs
+    const health = { sandbox: "codex" as const, status: "ready" as const, detail: "ok", checkedAt: at(12) };
+    expect(C.reportChecksHealth(askedAgain, health, at(25), { startedAt: at(11) }).project.checksHealth).toMatchObject({ status: "ready", recheck: true });
+    // A result for the newest request clears it.
+    expect(C.reportChecksHealth(askedAgain, health, at(25), { startedAt: at(21) }).project.checksHealth!.recheck).toBeUndefined();
+    expect(C.reportChecksHealth(asked, health, at(25), { startedAt: at(11) }).project.checksHealth!.recheck).toBeUndefined();
   });
 });

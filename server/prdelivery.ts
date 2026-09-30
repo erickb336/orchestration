@@ -13,6 +13,8 @@
 // lease are dropped by a generation counter.
 //
 // Only this driver runs gh and git push. It never forces a push and never bypasses GitHub's rules.
+// ORC-013: a re-run of a GitHub-cancelled job is a write like any other: intent (budget spent) → act
+// → observe; an interrupted one is observed, never sent again.
 
 import * as D from "../src/domain/delivery";
 import type { State } from "../src/domain/types";
@@ -310,6 +312,28 @@ export class PrDriver {
         }
         try {
           return { op, actError, ...(found ? { adopted: found } : {}), observed: await this.observe(host, { repo, prs: [number], commits: [] }) };
+        } catch (e) {
+          return { op, actError, error: opError(e) };
+        }
+      }
+      case "rerun": {
+        // ORC-013 §7.3: the intent (and its budget) is already recorded. Each job id was seen on the
+        // app's own pull request at its current head and is checked as an integer before use.
+        const t = state.tasks.find((x) => x.id === op.taskId)!;
+        const pr = t.integration!.pr!;
+        const repo = this.repoFor(state, pr.repo);
+        let actError: D.OpError | undefined;
+        try {
+          for (const j of op.jobs) {
+            if (!Number.isInteger(j.jobId) || j.jobId <= 0) throw new GhError("rejected", `refusing to re-run ${j.check}: no valid job id`);
+            await host.rerunJob({ repo, jobId: j.jobId });
+          }
+        } catch (e) {
+          actError = opError(e);
+        }
+        // The exit code records nothing: what GitHub reports afterwards does.
+        try {
+          return { op, actError, observed: await this.observe(host, { repo, prs: [pr.number!], commits: [] }) };
         } catch (e) {
           return { op, actError, error: opError(e) };
         }

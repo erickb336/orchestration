@@ -13,7 +13,7 @@ import { useStore } from "./store";
 type Draft = Omit<ChecksConfig, "rev">;
 
 const ON_TEXT =
-  "Turn checks on?\n\nChecks run commands from your repository, including code agents wrote, on this computer. They run in a sandbox with no network (except while installing dependencies, if you allow it) and no writes outside a temporary copy of the change. The sandbox cannot stop them from reading your files.\n\nTurn checks on only for repositories whose agents' work you are willing to run.";
+  "Turn checks on?\n\nChecks run the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote.\n\nThe Codex sandbox blocks writes outside a temporary copy of the change, and blocks the network except for the dependency download. It does not stop that code from reading your files. Install scripts never run while the network is on.\n\nTurn checks on only for repositories whose agents' work you are willing to run.";
 const NO_SANDBOX_TEXT =
   "Run checks without a sandbox?\n\nEvery check will run with your permissions: it can read and write anywhere you can and reach the network. Code an agent wrote will run that way. The app never chooses this by itself; every such run is labelled as unsandboxed.\n\nChoose this only if the Codex sandbox cannot work on this computer and you accept the risk.";
 
@@ -113,8 +113,9 @@ export function ChecksSettings() {
         step fixes. If the final change still fails, the task waits for a decision; only you can accept failing checks. Agents never choose or change these commands.
       </p>
       <p style={{ fontSize: "0.85rem" }}>
-        Checks run the repository's code on this computer. With the Codex sandbox, that code cannot use the network (outside dependency installs, when allowed) or write outside a throwaway copy of the change, but it can read your files.
-        Turn checks on only for repositories whose agents' work you are willing to run.
+        Checks run the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote. With the Codex sandbox, that code cannot write outside a throwaway copy of the change and
+        cannot use the network, except for the dependency download. The sandbox does not stop it from reading your files. Install scripts never run while the network is on: a download runs with scripts off, and scripts your project
+        needs run afterwards, offline, in a separate step. Turn checks on only for repositories whose agents' work you are willing to run.
       </p>
       {sampleBlocked && <div className="banner">This is the sample project: it has no repository, so its checks cannot be turned on. Start a project of your own in Settings → Project.</div>}
       {!real && <div className="banner neutral">Fake runtime: check runs are simulated. Nothing is run and nothing is spawned; the results say so.</div>}
@@ -138,7 +139,7 @@ export function ChecksSettings() {
                 <div>{health.detail}</div>
                 {health.probes && (
                   <div className="muted">
-                    Writes outside the run's directories: {health.probes.writeOutside} · network: {health.probes.network}
+                    Writes outside the run's directories: {health.probes.writeOutside} · this machine's loopback: {health.probes.loopback ?? "not probed"} · network: {health.probes.network}
                   </div>
                 )}
               </>
@@ -174,6 +175,27 @@ export function ChecksSettings() {
           <input type="checkbox" checked={next.prepareNetwork} onChange={(e) => patch({ prepareNetwork: e.target.checked })} />
           Prepare commands (dependency installs) may use the network
         </label>
+        <p className="muted" style={{ fontSize: "0.82rem", margin: "0.2rem 0 0 1.5rem" }}>
+          An install that may use the network runs with install scripts off (the "--ignore-scripts" flag is required on it, and set again by the service), so repository code never runs while the network is on. If your project needs
+          its install scripts, add the offline step below: it runs them afterwards in the throwaway copy, with no network.
+        </p>
+        {!next.commands.some((c) => c.kind === "prepare" && c.argv[1] === "rebuild") && (
+          <button
+            className="small"
+            style={{ marginLeft: "1.5rem", marginTop: "0.3rem" }}
+            disabled={next.commands.filter((c) => c.kind === "prepare").length >= MAX_PREPARE_COMMANDS || next.commands.length >= MAX_CHECK_COMMANDS}
+            onClick={() => {
+              const pm = next.commands.find((c) => c.kind === "prepare" && ["npm", "pnpm", "yarn"].includes(c.argv[0]))?.argv[0] ?? "npm";
+              let at = 0;
+              next.commands.forEach((c, i) => {
+                if (c.kind === "prepare") at = i + 1;
+              });
+              setDraft((d) => ({ ...d, commands: [...d.commands.slice(0, at), { id: "install-scripts", label: "Run install scripts (offline)", kind: "prepare", argv: [pm, "rebuild"] }, ...d.commands.slice(at)] }));
+            }}
+          >
+            Add an offline step that runs install scripts
+          </button>
+        )}
 
         <div className="row" style={{ justifyContent: "space-between", marginTop: "0.9rem" }}>
           <h3 style={{ margin: 0 }}>Commands</h3>

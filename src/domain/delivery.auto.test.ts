@@ -403,9 +403,11 @@ describe("the automatic gate: items 9 to 12 (design §9.5)", () => {
   });
 
   it("6 and 7 still bind: a required check that is failing, skipped, neutral, missing, running or for another commit; UNKNOWN; no required check", () => {
-    for (const c of ["FAILURE", "SKIPPED", "NEUTRAL", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"]) {
+    // ORC-013 §7.2: every non-success still blocks; a skipped or cancelled check needs a person, not a fix task.
+    const codes: Record<string, string> = { FAILURE: "checks-failed", SKIPPED: "checks-skipped", NEUTRAL: "checks-skipped", CANCELLED: "ci-infra", TIMED_OUT: "checks-failed", ACTION_REQUIRED: "checks-failed" };
+    for (const [c, code] of Object.entries(codes)) {
       const s = autoOpen({}, { checks: [check(c)] });
-      expect(item(s, "checks"), c).toMatchObject({ state: "blocked", code: "checks-failed" });
+      expect(item(s, "checks"), c).toMatchObject({ state: "blocked", code });
       expect(gate(s).status, c).toBe("blocked");
     }
     expect(gate(autoOpen({}, { checks: [] })).status).toBe("waiting");

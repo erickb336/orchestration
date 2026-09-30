@@ -3,13 +3,17 @@
 //   - observe() reads the real head of each pull request's branch from the bare repository;
 //   - merge() checks the head and makes a real two-parent merge commit on the bare base branch;
 //   - tests script checks, states, delays, failures, labels, and what a person does on GitHub.
+//   - ORC-013: checks are kept as raw check runs (with job ids, apps and start times) and judged by
+//     the real parseChecks, so a re-run appends a new run the way GitHub does.
 
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import type { CheckObs } from "../../src/domain/types";
-import { GhError, SimulatedGitHub, type Observations, type PreflightResult, type RepoRef, type SimPr } from "../github";
+import { GhError, SimulatedGitHub, parseChecks, type Observations, type PreflightResult, type RepoRef, type RollupNode, type SimPr } from "../github";
 
-type Method = "preflight" | "findPr" | "createPr" | "observe" | "merge" | "findComment" | "comment" | "close";
+type Method = "preflight" | "findPr" | "createPr" | "observe" | "merge" | "findComment" | "comment" | "close" | "rerunJob";
+
+const RUNS_T0 = Date.parse("2026-09-30T12:00:00Z");
 
 export class FakeGitHub extends SimulatedGitHub {
   override readonly simulated = false;
@@ -34,6 +38,10 @@ export class FakeGitHub extends SimulatedGitHub {
   private readonly prRepo = new Map<number, string>();
   /** The head each pull request's checks were reported for: a new head starts without checks, like CI does. */
   private readonly checksHead = new Map<number, string>();
+  /** The raw check runs on each pull request's current head; `p.checks` is parseChecks over them. */
+  private readonly runs = new Map<number, RollupNode[]>();
+  private jobSeq = 100;
+  private stampSeq = 0;
   /** Per-pull-request calls that named another repository than the one the pull request lives in. */
   wrongRepoCalls: { method: Method; repo: string; number: number }[] = [];
 
@@ -76,13 +84,50 @@ export class FakeGitHub extends SimulatedGitHub {
   count(method: Method): number {
     return this.calls.filter((c) => c.method === method).length;
   }
-  /** Report a check on the pull request's current head. `conclusion` null means still running. */
-  setCheck(number: number, conclusion: string | null, name = "check") {
+  /** Strictly increasing whole-second start times, so every later run started strictly after every earlier one. */
+  private stamp(): string {
+    return new Date(RUNS_T0 + ++this.stampSeq * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  }
+  private refresh(number: number) {
+    this.pr(number).checks = parseChecks({ contexts: { nodes: this.runs.get(number) ?? [] } });
+  }
+  /** The raw check runs on the pull request's current head, newest last. */
+  runsOf(number: number): RollupNode[] {
+    return [...(this.runs.get(number) ?? [])];
+  }
+  /**
+   * Report a check on the pull request's current head. `conclusion` null means still running. A run
+   * that is still going completes in place; a completed check reported again is a new run of that
+   * name (a re-run), started strictly later. `app`: the check suite's app (github-actions by default).
+   */
+  setCheck(number: number, conclusion: string | null, name = "check", o: { app?: string } = {}) {
     const p = this.pr(number);
     const head = this.headOf(p);
-    if (this.checksHead.get(number) !== head) p.checks = [];
+    if (this.checksHead.get(number) !== head) {
+      p.checks = [];
+      this.runs.set(number, []);
+    }
     this.checksHead.set(number, head);
-    p.checks = [...p.checks.filter((c) => c.name !== name), { name, required: this.requiredChecks.includes(name), status: conclusion ? "COMPLETED" : "IN_PROGRESS", conclusion, url: `https://github.com/test/repo/actions/runs/${number}` }];
+    const runs = this.runs.get(number) ?? [];
+    const last = [...runs].reverse().find((r) => r.name === name);
+    if (last && last.status !== "COMPLETED") {
+      last.status = conclusion ? "COMPLETED" : "IN_PROGRESS";
+      last.conclusion = conclusion;
+    } else {
+      runs.push({
+        __typename: "CheckRun",
+        name,
+        databaseId: ++this.jobSeq,
+        status: conclusion ? "COMPLETED" : "IN_PROGRESS",
+        conclusion,
+        startedAt: this.stamp(),
+        detailsUrl: `https://github.com/test/repo/actions/runs/${number}`,
+        isRequired: this.requiredChecks.includes(name),
+        checkSuite: { app: { slug: o.app ?? "github-actions" }, workflowRun: { databaseId: number } },
+      });
+    }
+    this.runs.set(number, runs);
+    this.refresh(number);
   }
   /** The next call of `method` fails with this error. */
   failNext(method: Method, error: GhError) {
@@ -140,7 +185,10 @@ export class FakeGitHub extends SimulatedGitHub {
   /** Checks belong to the head they ran on: after a push, none have reported yet. */
   protected override observation(p: SimPr) {
     const head = this.headOf(p);
-    if (p.checks.length && this.checksHead.get(p.number) !== undefined && this.checksHead.get(p.number) !== head) p.checks = [];
+    if (p.checks.length && this.checksHead.get(p.number) !== undefined && this.checksHead.get(p.number) !== head) {
+      p.checks = [];
+      this.runs.set(p.number, []);
+    }
     return super.observation(p);
   }
   protected override prUrl(n: number): string {
@@ -174,7 +222,15 @@ export class FakeGitHub extends SimulatedGitHub {
       if (this.preflightProblem) return { ok: false, problem: this.preflightProblem, requiredChecks: [], autoMergeBlockers: [], posture: [] };
       const repo = this.parseRemote(a.remoteUrl);
       if (!repo) return { ok: false, problem: { code: "remote", message: "The remote is not the test repository." }, requiredChecks: [], autoMergeBlockers: [], posture: [] };
-      return { ok: true, repo: `${repo.owner}/${repo.name}`, login: this.login, ghVersion: "2.101.0", requiredChecks: [...this.requiredChecks], autoMergeBlockers: [], posture: [{ id: "required-checks", status: "ok", label: `Required checks: ${this.requiredChecks.join(", ")}`, detail: "From the fake." }] };
+      return {
+        ok: true,
+        repo: `${repo.owner}/${repo.name}`,
+        login: this.login,
+        ghVersion: "2.101.0",
+        requiredChecks: [...this.requiredChecks],
+        autoMergeBlockers: this.requiredChecks.length ? [] : ["no required check"],
+        posture: [{ id: "required-checks", status: this.requiredChecks.length ? "ok" : "fail", label: this.requiredChecks.length ? `Required checks: ${this.requiredChecks.join(", ")}` : "No required check", detail: "From the fake." }],
+      };
     });
   }
   override findPr(a: { repo: RepoRef; head: string; marker: string }) {
@@ -219,6 +275,20 @@ export class FakeGitHub extends SimulatedGitHub {
     return this.call("close", a, async () => {
       this.inRepo("close", a.repo, a.number);
       return super.close(a);
+    });
+  }
+  /** A re-run appends a new, running run of the same job's name, started strictly later, as GitHub Actions does. */
+  override rerunJob(a: { repo: RepoRef; jobId: number }) {
+    return this.call("rerunJob", a, async () => {
+      for (const [number, runs] of this.runs) {
+        const job = runs.find((r) => r.databaseId === a.jobId);
+        if (!job) continue;
+        this.inRepo("rerunJob", a.repo, number);
+        runs.push({ ...job, databaseId: ++this.jobSeq, status: "IN_PROGRESS", conclusion: null, startedAt: this.stamp() });
+        this.refresh(number);
+        return;
+      }
+      throw new GhError("not-found", `job ${a.jobId} not found (HTTP 404)`);
     });
   }
 }

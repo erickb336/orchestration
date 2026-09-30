@@ -21,17 +21,22 @@ export function trackLive(child: ChildProcess) {
   child.once("error", () => LIVE.delete(child));
 }
 
-/** Signal the child's whole process group (it was spawned detached), falling back to the child alone. */
+/**
+ * Signal the child's whole process group (it was spawned detached, so its pid is the group id),
+ * falling back to the child alone. The group is signalled whether or not its leader is still alive
+ * (M3): a process the leader left behind is still in the group after the leader exited, and the group
+ * id stays valid while any member lives.
+ */
 export function killGroup(child: ChildProcess, signal: NodeJS.Signals) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
   if (child.pid && process.platform !== "win32") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {
-      /* fall through to the direct kill */
+      /* no such group (every member is gone), or the pid never led one: fall through */
     }
   }
+  if (child.exitCode !== null || child.signalCode !== null) return;
   try {
     child.kill(signal);
   } catch {

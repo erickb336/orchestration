@@ -629,7 +629,7 @@ export function createFollowUp(state: State, taskId: string, now: string, opts: 
   const author = opts.author ?? "user";
   // Fresh steps: expanded -iN and -cN copies are never copied, and nothing carries run state over.
   const defs = (opts.steps ? structuredClone(opts.steps) : unexpandedSteps(t)).map(toDef);
-  const errors = validatePipeline(defs).filter((i) => i.severity === "error");
+  const errors = validatePipeline(defs, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`The follow-up's pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
   const steps = instantiate(defs);
   // A copied pipeline keeps the models the user pinned on its steps.
@@ -1237,6 +1237,16 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           event(s, now, "lead", "dispatch", `Skipped ${st.id}: nothing to check: no code change reached this step`, t.id);
           continue;
         }
+        // M2: a step that would run no check command never counts as passing; it blocks and says why.
+        const missing = C.missingChecks(cfg, st);
+        if (missing.length || !C.commandsFor(cfg, st).some((c) => c.kind === "check")) {
+          const reason = missing.length ? `this step names checks that do not exist: ${missing.join(", ")}. Fix the pipeline, or the check settings.` : "this step runs no check command: every check it names was removed from the settings.";
+          st.state = "blocked";
+          st.blockedReason = reason;
+          touch(t, now);
+          event(s, now, "system", "blocked", `${st.id} blocked: ${reason}`, t.id);
+          continue;
+        }
         if (deferred) continue; // settling by skipping is allowed while deferred or shaping; starting is not
         // The sandbox is not ready: the step waits, labelled; nothing ever falls back to running unsandboxed (Q3).
         if (opts.checksHeld ?? C.checksHeld(s)) continue;
@@ -1723,7 +1733,7 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
     if (prev?.iteration && prev.iteration > 1) n.iteration = prev.iteration;
     return n;
   });
-  const errors = validatePipeline(defs).filter((i) => i.severity === "error");
+  const errors = validatePipeline(defs, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`Pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
   for (const d of defs) {
     const prev = old.get(d.id);
@@ -1807,7 +1817,7 @@ export function saveTemplate(state: State, template: WorkflowTemplate, expectedR
   if (expectedRev === null && existing) throw new ControlError(`A template with ID ${template.id} already exists.`);
   if (expectedRev !== null && !existing) throw new ControlError(`"${template.name}" was deleted while you were editing it.`);
   if (existing && existing.rev !== expectedRev) throw new StaleWriteError(expectedRev!, existing.rev);
-  const errors = validatePipeline(template.steps).filter((i) => i.severity === "error");
+  const errors = validatePipeline(template.steps, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`Template is invalid: ${errors.map((e) => e.message).join(" ")}`);
   const clean: WorkflowTemplate = { ...structuredClone(template), rev: (existing?.rev ?? 0) + 1, steps: template.steps.map(toDef) };
   const i = s.project.templates.findIndex((x) => x.id === template.id);
@@ -1940,7 +1950,7 @@ export interface NewTask {
  */
 export function createTask(state: State, t: NewTask, now: string): { state: State; newId: string } {
   if (!t.title.trim() || !t.outcome.trim() || !t.approach.trim()) throw new ControlError("Title, outcome, and approach are required.");
-  const errors = validatePipeline(t.steps).filter((i) => i.severity === "error");
+  const errors = validatePipeline(t.steps, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`Pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
   const s = draft(state);
   let n = s.tasks.length + 1;

@@ -391,14 +391,28 @@ export const PR_LIMITS = {
   closedWatchEveryMs: 10 * MIN,
   /** A paused automatic merge watches the failing commit this long for a check that passes on a re-run. */
   pausedWatchMs: 24 * 60 * MIN,
+  /** ORC-013 §7.3: re-runs of GitHub-cancelled jobs per pull request over its life, and per operation. */
+  reruns: 5,
+  /** After a re-run was requested, the cancelled run still shown counts as pending for this long, or this many observations. */
+  rerunWaitMs: 5 * MIN,
+  rerunObservations: 2,
 };
 
 /** How long each operation may run (the driver's timeouts, summed over its network calls). */
-export const OP_TIMEOUT_MS: Record<"publish" | "push" | "merge" | "close", number> = { publish: 240_000, push: 120_000, merge: 120_000, close: 120_000 };
+export const OP_TIMEOUT_MS: Record<"publish" | "push" | "merge" | "close" | "rerun", number> = { publish: 240_000, push: 120_000, merge: 120_000, close: 120_000, rerun: 120_000 };
 
 const BACKOFF_MIN = [1, 2, 4, 8, 15];
 const sanitizeId = (id: string) => id.replace(/[^A-Za-z0-9._-]/g, "_");
 const REPO = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/;
+/** A GitHub app slug (ORC-013 §7.5). */
+const REVIEW_BOT_SLUG = /^[a-z0-9][a-z0-9-]{0,38}$/;
+const NO_CI_ID = "no-ci";
+
+/** The posture line for the user's "no CI" declaration (ORC-013 §7.4), added or removed. */
+function withNoCiPosture(posture: PostureItem[], noCi: boolean): PostureItem[] {
+  const rest = posture.filter((x) => x.id !== NO_CI_ID);
+  return noCi ? [...rest, { id: NO_CI_ID, status: "warn", label: "You declared no CI.", detail: "Your own Merge goes through with no checks on the head. Automatic merging still needs a required check, and any check GitHub does report is honoured." }] : rest;
+}
 
 /** The private local ref that holds the fetched tip of the delivery base. Writers start from it. */
 export const prBaseRef = (projectId: string) => `refs/orchestration/${sanitizeId(projectId)}/base`;
@@ -484,9 +498,10 @@ export interface OpError {
 }
 
 /**
- * One operation of the driver. "publish", "push", "merge", "close" and "comment" write to the remote
- * or to GitHub. "update" is local: it builds the commit that brings a pull request up to date with the
- * base; the push that follows publishes it. `repo` on "observe": the one repository that is read.
+ * One operation of the driver. "publish", "push", "merge", "close", "comment" and "rerun" write to the
+ * remote or to GitHub. "update" is local: it builds the commit that brings a pull request up to date
+ * with the base; the push that follows publishes it. `repo` on "observe": the one repository that is
+ * read. "rerun" (ORC-013 §7.3) asks GitHub Actions to run cancelled jobs of the head again.
  */
 export type PrOp =
   | { id: string; kind: "preflight" }
@@ -494,9 +509,10 @@ export type PrOp =
   | { id: string; kind: "observe"; repo?: string; prs: { taskId: string; number: number }[]; commits: string[] }
   | { id: string; kind: "publish" | "push" | "merge" | "close"; taskId: string; n: number; headSha: string }
   | { id: string; kind: "update"; taskId: string; n: number; headSha: string; baseSha: string }
-  | { id: string; kind: "comment"; taskId: string; noteId: string };
+  | { id: string; kind: "comment"; taskId: string; noteId: string }
+  | { id: string; kind: "rerun"; taskId: string; n: number; headSha: string; jobs: { check: string; jobId: number }[] };
 
-export const opMutates = (op: PrOp) => op.kind === "publish" || op.kind === "push" || op.kind === "merge" || op.kind === "close" || op.kind === "comment";
+export const opMutates = (op: PrOp) => op.kind === "publish" || op.kind === "push" || op.kind === "merge" || op.kind === "close" || op.kind === "comment" || op.kind === "rerun";
 
 export interface PrOpResult {
   op: PrOp;
@@ -1034,17 +1050,27 @@ export function repairTarget(s: State, repair: Task): { task: Task; pr: PrDelive
   return task && pr && pr.n === d!.n && (pr.phase === "built" || pr.phase === "open") && !pr.foreignHead && !pr.closeRequested ? { task, pr } : undefined;
 }
 
-/** What is wrong with the current head that a fix task could cure: a conflict, a failed required check, or open findings. */
-export function repairCause(s: State, t: Task): RepairCause | undefined {
+/**
+ * What is wrong with the current head that a fix task could cure: a conflict, a failed required check,
+ * or open findings. ORC-013 §7.2: only `code` failures are a fix task's business; a cancelled run, a
+ * skipped check and a review bot's opinion are not. `byUser` (the Fix this PR button) may also take
+ * on a review bot's failing check, by name and link only.
+ */
+export function repairCause(s: State, t: Task, o: { byUser?: boolean } = {}): RepairCause | undefined {
   const pr = livePr(t);
   if (!pr || pr.pendingHead || (pr.phase !== "built" && pr.phase !== "open")) return undefined;
   const ob = pr.observed;
+  const cfg = s.project.prDelivery;
   if (pr.baseConflict?.headSha === pr.headSha && pr.baseConflict.baseSha === s.project.github?.base?.sha) return { kind: "conflict", files: pr.baseConflict.files.slice(0, 20) };
   if (ob && ob.state === "OPEN" && ob.headSha === pr.headSha && (ob.mergeable === "CONFLICTING" || ob.mergeStateStatus === "DIRTY")) return { kind: "conflict", files: [] };
   if (ob && ob.state === "OPEN" && ob.checksFor === pr.headSha) {
-    const failed = requiredCheckNames(s, pr)
+    const failed = gateCheckNames(s, pr, ob.checks)
       .map((n) => ob.checks.find((c) => c.name === n))
-      .filter((c): c is CheckObs => !!c && c.conclusion !== null && c.conclusion !== "SUCCESS");
+      .filter((c): c is CheckObs => !!c && c.conclusion !== null && c.conclusion !== "SUCCESS")
+      .filter((c) => {
+        const cls = triageCheck(cfg, c);
+        return cls === "code" || (cls === "bot" && !!o.byUser);
+      });
     // Names and links only: CI log text is untrusted input and never reaches an agent.
     if (failed.length) return { kind: "checks", checks: failed.map((c) => ({ name: c.name, ...(c.url && GITHUB_URL.test(c.url) ? { url: c.url } : {}) })) };
   }
@@ -1171,8 +1197,8 @@ export function createRepair(state: State, taskId: string, cause: RepairCause, n
 export function repairPr(state: State, taskId: string, now: string): { state: State; newId: string } {
   const { task } = openPr(state, taskId, "fix");
   if (!state.project.prDelivery.enabled) throw new ControlError("Pull-request delivery is off, so a fix could not be pushed. Switch the delivery mode back on first.");
-  const cause = repairCause(state, task);
-  if (!cause) throw new ControlError("Nothing a fix task could cure was found: no failed required check, no open review finding and no conflict on this head.");
+  const cause = repairCause(state, task, { byUser: true });
+  if (!cause) throw new ControlError("Nothing a fix task could cure was found: no required check failed on the code, no open review finding and no conflict on this head. A cancelled or skipped check is re-run on GitHub, not fixed.");
   return createRepair(state, taskId, cause, now, { byUser: true });
 }
 
@@ -1299,6 +1325,95 @@ export function requiredCheckNames(s: State, pr: PrDelivery): string[] {
   return [...new Set([...(s.project.github?.requiredChecks ?? []), ...(pr.observed?.checks.filter((c) => c.required).map((c) => c.name) ?? [])])];
 }
 
+// ---------- CI triage (ORC-013 §7) ----------
+
+/**
+ * Why a required check is not green: a review bot's opinion, a run GitHub cancelled (provider), a
+ * check that never ran, or the code. Only `code` failures start a fix task; the rest need a person,
+ * except a provider failure, which is re-run once per head first.
+ */
+export type CiClass = "bot" | "provider" | "not-run" | "code";
+
+/** Pure: classify one required check on the exact head whose conclusion is not SUCCESS. */
+export function triageCheck(cfg: PrDeliveryConfig, c: CheckObs): CiClass {
+  if (c.app && cfg.reviewBotApps.includes(c.app)) return "bot";
+  if (c.conclusion === "CANCELLED") return "provider";
+  if (c.conclusion === "SKIPPED" || c.conclusion === "NEUTRAL" || c.conclusion === "STALE") return "not-run";
+  return "code";
+}
+
+const CLASS_WORD: Record<CiClass, string> = { bot: "review bot", provider: "cancelled by GitHub", "not-run": "did not run", code: "the code" };
+
+/** "build: cancelled (cancelled by GitHub, github-actions, https://…)" — one failing check, with its class and app. */
+function checkLine(cfg: PrDeliveryConfig, c: CheckObs): string {
+  const cls = triageCheck(cfg, c);
+  const parts = [cls === "bot" ? `review bot ${c.app}` : CLASS_WORD[cls], ...(cls !== "bot" && c.app ? [c.app] : []), ...(c.url && GITHUB_URL.test(c.url) ? [c.url] : [])];
+  return `${c.name}: ${(c.conclusion ?? "running").toLowerCase().replace(/_/g, " ")} (${parts.join(", ")})`;
+}
+
+/**
+ * The checks the gate judges for a head. Normally the required ones. With the user's "no CI"
+ * declaration and no required check, every check GitHub does report is judged as required, so the
+ * declaration never waives a reported check.
+ */
+function gateCheckNames(s: State, pr: PrDelivery, checks: CheckObs[]): string[] {
+  const names = requiredCheckNames(s, pr);
+  if (names.length || !s.project.prDelivery.noCi) return names;
+  return [...new Set(checks.map((c) => c.name))];
+}
+
+/** The re-runs already spent on this head, per check name. */
+function rerunsUsed(pr: PrDelivery, name?: string): NonNullable<PrDelivery["ciReruns"]>["used"] {
+  if (!pr.ciReruns || pr.ciReruns.headSha !== pr.headSha) return [];
+  return name === undefined ? pr.ciReruns.used : pr.ciReruns.used.filter((u) => u.check === name);
+}
+
+/** The observed run of a check is still the one a re-run was requested for: the new run has not shown up yet. */
+function staleAfterRerun(c: CheckObs, u: { jobId: number; at: string }): boolean {
+  if (c.jobId !== undefined) return c.jobId === u.jobId;
+  return !!c.startedAt && Date.parse(c.startedAt) <= Date.parse(u.at);
+}
+
+/**
+ * After a re-run was requested for this check, its cancelled run still shows and the wait is not over:
+ * at most 2 observations or 5 minutes (§7.3), so a provider that accepts a re-run and never
+ * publishes it cannot stall the pull request.
+ */
+function awaitingRerun(pr: PrDelivery, c: CheckObs, nowMs: number): boolean {
+  const u = rerunsUsed(pr, c.name).at(-1);
+  if (!u || !staleAfterRerun(c, u)) return false;
+  return (u.seen ?? 0) < PR_LIMITS.rerunObservations && nowMs - Date.parse(u.at) < PR_LIMITS.rerunWaitMs;
+}
+
+/** Can this failing check be re-run: a GitHub-cancelled Actions job with an id, budget left for its name and for the pull request. */
+function rerunnable(s: State, pr: PrDelivery, c: CheckObs): boolean {
+  const cfg = s.project.prDelivery;
+  if (triageCheck(cfg, c) !== "provider" || c.app !== "github-actions" || !Number.isInteger(c.jobId) || c.jobId! <= 0) return false;
+  return rerunsUsed(pr, c.name).length < cfg.rerunBudget && (pr.counters.reruns ?? 0) < PR_LIMITS.reruns;
+}
+
+/**
+ * The jobs to re-run on this head, or nothing (§7.3): the pull request is open and seen at this head
+ * with checks for it, every required check has settled, at least one failed, every failed one is a
+ * re-runnable provider failure with budget left, and nothing conflicts. Any `code` failure suppresses
+ * re-runs: a fix is needed anyway. Pure; the planner, the intent and the gate all use it.
+ */
+export function rerunPlan(s: State, pr: PrDelivery, nowMs: number): { check: string; jobId: number }[] | undefined {
+  const ob = pr.observed;
+  if (!s.project.prDelivery.enabled || !ob || ob.state !== "OPEN" || ob.headSha !== pr.headSha || ob.checksFor !== pr.headSha) return undefined;
+  if (pr.phase !== "open" || pr.number === undefined || pr.pendingHead || pr.foreignHead) return undefined;
+  if (ob.mergeable === "CONFLICTING" || ob.mergeStateStatus === "DIRTY") return undefined;
+  if (pr.baseConflict?.headSha === pr.headSha && pr.baseConflict.baseSha === s.project.github?.base?.sha) return undefined;
+  const names = gateCheckNames(s, pr, ob.checks);
+  const checks = names.map((n) => ob.checks.find((c) => c.name === n));
+  if (!checks.length || checks.some((c) => !c || c.conclusion === null || awaitingRerun(pr, c, nowMs))) return undefined;
+  const failed = checks.filter((c): c is CheckObs => !!c && c.conclusion !== "SUCCESS");
+  if (!failed.length || failed.some((c) => !rerunnable(s, pr, c))) return undefined;
+  const jobs = failed.map((c) => ({ check: c.name, jobId: c.jobId! }));
+  if ((pr.counters.reruns ?? 0) + jobs.length > PR_LIMITS.reruns) return undefined;
+  return jobs.slice(0, PR_LIMITS.reruns);
+}
+
 /**
  * May this pull request be merged now? Evaluated for `pr.headSha`. Pure; the UI shows the same list.
  * `byUser`: the user's Merge click. It replaces the agent review and the rules that belong to
@@ -1357,30 +1472,58 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   else if (ob.headSha !== pr.headSha) add("head", "The commit you saw", "blocked", `GitHub shows ${sha12(ob.headSha)}, not ${h12}.`, "foreign-push");
   else add("head", "The commit you saw", "ok", `GitHub shows ${h12}.`);
 
-  // 6. Required checks, for exactly this head
-  const names = requiredCheckNames(s, pr);
+  // 6. Required checks, for exactly this head. ORC-013 §7: each failing check is classed (bot,
+  //    provider, not-run, code); a cancelled Actions job is re-run once before anything else; the
+  //    user's "no CI" declaration lets their own Merge through with zero checks, never an automatic one.
+  const names = gateCheckNames(s, pr, ob?.checks ?? []);
   let checksOk = false;
   if (!ob) add("checks", "Required checks", "waiting", "Not seen on GitHub yet.");
   else if (ob.checksFor !== pr.headSha) add("checks", "Required checks", "waiting", "The check results GitHub shows belong to another commit.");
-  else if (names.length === 0)
-    add("checks", "Required checks", "blocked", `GitHub lists no required check for ${pr.base}. The app merges only what a required check has passed; merge this one on GitHub, or add a required check.`, "checks-missing");
-  else {
+  else if (names.length === 0) {
+    if (cfg.noCi && o.byUser) {
+      checksOk = true;
+      add("checks", "Required checks", "ok", `No CI: you declared this repository has no CI, and GitHub reports no check on ${h12}.`);
+    } else if (cfg.noCi)
+      add("checks", "Required checks", "blocked", `You declared this repository has no CI, and GitHub reports no check on ${h12}. Automatic merging still needs a required check; merge this one yourself.`, "checks-missing");
+    else add("checks", "Required checks", "blocked", `GitHub lists no required check for ${pr.base}. The app merges only what a required check has passed; merge this one on GitHub, or add a required check.`, "checks-missing");
+  } else {
     const of = (n: string) => ob.checks.find((c) => c.name === n);
     const failed = names.filter((n) => {
       const c = of(n);
-      return !!c && c.conclusion !== null && c.conclusion !== "SUCCESS";
+      return !!c && c.conclusion !== null && c.conclusion !== "SUCCESS" && !awaitingRerun(pr, c, nowMs);
     });
-    const pending = names.filter((n) => !of(n) || of(n)!.conclusion === null);
-    if (failed.length)
-      add("checks", "Required checks", "blocked", failed.map((n) => `${n}: ${of(n)!.conclusion!.toLowerCase().replace(/_/g, " ")}${of(n)!.url ? ` (${of(n)!.url})` : ""}`).join("; "), "checks-failed");
-    else if (pending.length) {
+    const pending = names.filter((n) => !of(n) || of(n)!.conclusion === null || awaitingRerun(pr, of(n)!, nowMs));
+    if (failed.length) {
+      const checks = failed.map((n) => of(n)!);
+      const classes = checks.map((c) => triageCheck(cfg, c));
+      const lines = checks.map((c) => checkLine(cfg, c)).join("; ");
+      const first = (cls: CiClass) => checks[classes.indexOf(cls)];
+      if (classes.includes("code")) add("checks", "Required checks", "blocked", lines, "checks-failed");
+      else if (classes.includes("bot")) {
+        const c = first("bot");
+        add("checks", "Required checks", "blocked", `The review bot ${c.app} reports ${(c.conclusion ?? "").toLowerCase().replace(/_/g, " ")} on ${h12}. A bot's opinion is not fixed automatically. Read it on GitHub, then merge, or choose Fix this PR. ${lines}`, "bot-check");
+      } else if (classes.includes("not-run")) {
+        const c = first("not-run");
+        add("checks", "Required checks", "blocked", `The required check ${c.name} did not run on ${h12}, so nothing shows this head passes. Re-run it on GitHub, or merge it yourself. ${lines}`, "checks-skipped");
+      } else if (rerunPlan(s, pr, nowMs)) {
+        const used = rerunsUsed(pr).length;
+        add("checks", "Required checks", "waiting", `GitHub cancelled ${checks.map((c) => c.name).join(", ")} on ${h12}. It is re-run (${used} of ${cfg.rerunBudget} per check used on this head). ${lines}`);
+      } else {
+        const c = first("provider");
+        const spent = rerunsUsed(pr, c.name).length;
+        add("checks", "Required checks", "blocked", `GitHub cancelled ${c.name} on ${h12}${spent ? `, and its re-run is used (${spent} of ${cfg.rerunBudget})` : cfg.rerunBudget === 0 ? "; re-runs are off (Settings → Delivery)" : c.app !== "github-actions" ? `; ${c.app ?? "this check"} has no re-run` : "; it cannot be re-run"}. Re-run it on GitHub, or merge it yourself. ${lines}`, "ci-infra");
+      }
+    } else if (pending.length) {
       const reported = names.some((n) => !!of(n));
-      if (!reported && headAge > PR_LIMITS.checksMissingMs) add("checks", "Required checks", "blocked", `No required check (${names.join(", ")}) has reported for 15 minutes. It may not run for this branch.`, "checks-missing");
+      const rerunning = pending.filter((n) => of(n) && awaitingRerun(pr, of(n)!, nowMs));
+      if (rerunning.length) add("checks", "Required checks", "waiting", `Re-running ${rerunning.join(", ")} on ${h12} (GitHub had cancelled it); waiting for the new run.`);
+      else if (!reported && headAge > PR_LIMITS.checksMissingMs) add("checks", "Required checks", "blocked", `No required check (${names.join(", ")}) has reported for 15 minutes. It may not run for this branch.`, "checks-missing");
       else if (headAge > PR_LIMITS.checksPendingMs) add("checks", "Required checks", "blocked", `Still waiting for ${pending.join(", ")} after 60 minutes.`, "checks-timeout");
       else add("checks", "Required checks", "waiting", `Waiting for ${pending.join(", ")}.`);
     } else {
       checksOk = true;
-      add("checks", "Required checks", "ok", `${names.join(", ")} passed on ${h12}.`);
+      const reruns = rerunsUsed(pr);
+      add("checks", "Required checks", "ok", `${names.join(", ")} passed on ${h12}.${reruns.length ? ` ${reruns.map((u) => `${u.check} was re-run after GitHub cancelled it.`).join(" ")}` : ""}${!requiredCheckNames(s, pr).length ? " No check is required; these are the checks GitHub reported." : ""}`);
     }
   }
 
@@ -1505,7 +1648,8 @@ function announceReady(s: State, t: Task, now: string) {
 /** Reasons a head is never pushed: they end only when the delivery is closed (and delivered again). */
 const STICKY: PrAttentionCode[] = ["remote-diverged", "foreign-commits"];
 const stuck = (pr: PrDelivery) => !!pr.attention && STICKY.includes(pr.attention.code);
-const REPAIRABLE: PrAttentionCode[] = ["checks-failed", "service-checks", "review-findings", "conflict"];
+/** Reasons a fix task may be working on (bot-check only at the user's request; never automatically). */
+const REPAIRABLE: PrAttentionCode[] = ["checks-failed", "service-checks", "review-findings", "conflict", "bot-check"];
 
 /** Set or clear `pr.attention` from the current facts. `since` moves only when the reason or the head changes. */
 function refreshAttention(s: State, t: Task, now: string) {
@@ -1720,6 +1864,8 @@ function promoteHead(s: State, taskId: string, now: string): State {
   delete pr.baseConflict;
   delete pr.message;
   delete pr.nextAt;
+  // ORC-013 §7.3: the re-run budget is per head.
+  delete pr.ciReruns;
   pr.counters.mergeAttempts = 0;
   pr.counters.failures = 0;
   if (p.kind === "update") {
@@ -1834,7 +1980,7 @@ export function reportPreflight(state: State, r: PreflightReport, now: string, c
     requiredChecks: [...r.requiredChecks],
     autoMergeBlockers: [...r.autoMergeBlockers],
     // What the last fetch found on the local delivery branch stays listed until the next fetch.
-    posture: [...r.posture, ...(r.simulated ? [] : localPosture(s, ctx)), ...(prev?.posture.filter((x) => x.id === UNPUSHED_ID) ?? [])],
+    posture: withNoCiPosture([...r.posture, ...(r.simulated ? [] : localPosture(s, ctx)), ...(prev?.posture.filter((x) => x.id === UNPUSHED_ID) ?? [])], s.project.prDelivery.noCi),
   };
   if (r.mergeQueue) gh.mergeQueue = true;
   else delete gh.mergeQueue;
@@ -1977,9 +2123,11 @@ export function reportObservations(state: State, obs: Observations, now: string,
       const late = !!pr.lastMergeIntent && pr.lastMergeIntent.headSha === o.headSha && !!o.mergedBy && o.mergedBy === gh?.login;
       const byApp = (pr.op?.kind === "merge" && pr.op.headSha === o.headSha) || late;
       const auto = byApp && !!pr.lastMergeIntent?.auto && pr.lastMergeIntent.headSha === o.headSha;
-      const names = requiredCheckNames(s, pr);
+      const names = gateCheckNames(s, pr, o.checks);
       const required = o.checks.filter((c) => names.includes(c.name));
-      const clean = o.headSha === pr.headSha && !pr.foreignHead && o.checksFor === o.headSha && names.length > 0 && names.every((n) => required.find((c) => c.name === n)?.conclusion === "SUCCESS");
+      // ORC-013 §7.4: with the user's "no CI" declaration and nothing reported, the head has no checks to be judged by.
+      const declaredNoCi = s.project.prDelivery.noCi && names.length === 0 && o.checksFor === o.headSha && o.checks.length === 0;
+      const clean = o.headSha === pr.headSha && !pr.foreignHead && o.checksFor === o.headSha && (declaredNoCi || (names.length > 0 && names.every((n) => required.find((c) => c.name === n)?.conclusion === "SUCCESS")));
       const flags: LandedFlag[] = [
         ...(clean ? [] : (["merged-without-clean-gate"] as const)),
         ...(pr.review.ok && pr.review.clearedByUser ? (["findings-cleared-by-user"] as const) : []),
@@ -2004,7 +2152,8 @@ export function reportObservations(state: State, obs: Observations, now: string,
           pr: { number: o.number, url: pr.url ?? safePrUrl(pr, o.number, o.url), ...(pr.repo ? { repo: pr.repo } : {}) },
           review: structuredClone(pr.review),
           checks: required.map((c) => ({ ...c })),
-          mainCheck: { state: "pending", at: now },
+          // With "no CI" declared and nothing reported on the head, the base's check is not watched.
+          mainCheck: { state: declaredNoCi ? "unknown" : "pending", at: now },
           flags,
         },
         now,
@@ -2029,6 +2178,29 @@ export function reportObservations(state: State, obs: Observations, now: string,
       delete pr.mergeRequested;
       delete pr.pendingHead;
       cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds], reason: `someone else pushed to ${prName(pr)}` });
+    }
+    // ORC-013 §7.3: observations after a re-run request that still show the cancelled run are counted;
+    // after 2 (or 5 minutes) the check is judged as observed. The observation, not the request, decides.
+    if (o.checksFor === pr.headSha) {
+      for (const u of rerunsUsed(pr)) {
+        const c = o.checks.find((x) => x.name === u.check);
+        if (c && staleAfterRerun(c, u)) u.seen = (u.seen ?? 0) + 1;
+      }
+    }
+    if (pr.op?.kind === "rerun") {
+      const own = ctx.opId === pr.op.id;
+      const graceOver = nowMs - Date.parse(pr.op.at) >= OP_TIMEOUT_MS.rerun + PR_LIMITS.graceMs;
+      if (own || graceOver) {
+        const mine = rerunsUsed(pr).filter((u) => u.opId === pr.op!.id);
+        delete pr.op;
+        // A definite refusal means the re-run did not happen: the wait is over at once. The budget stays spent (I7).
+        const definite = !!ctx.actError && !["network", "timeout", "unknown"].includes(ctx.actError.code);
+        if (definite) for (const u of mine) u.seen = PR_LIMITS.rerunObservations;
+        if (ctx.actError) {
+          pr.message = clip(ctx.actError.message, 300);
+          event(s, now, "system", "blocked", `${prName(pr)}: the re-run of ${mine.map((u) => u.check).join(", ") || "the cancelled job"} was not accepted by GitHub (${clip(ctx.actError.message, 200)}); it is not sent again`, t.id);
+        }
+      }
     }
     if (pr.op && (pr.op.kind === "merge" || pr.op.kind === "close")) {
       const own = ctx.opId === pr.op.id;
@@ -2059,7 +2231,7 @@ export function reportObservations(state: State, obs: Observations, now: string,
   for (const r of ctx.requested ?? []) {
     const t = s.tasks.find((x) => x.id === r.taskId);
     const pr = t && livePr(t);
-    if (!t || !pr?.op || seen.has(t.id) || (pr.op.kind !== "merge" && pr.op.kind !== "close")) continue;
+    if (!t || !pr?.op || seen.has(t.id) || (pr.op.kind !== "merge" && pr.op.kind !== "close" && pr.op.kind !== "rerun")) continue;
     if (nowMs - Date.parse(pr.op.at) < OP_TIMEOUT_MS[pr.op.kind] + PR_LIMITS.graceMs) continue;
     pr.message = "GitHub did not return this pull request; the interrupted operation was dropped.";
     delete pr.op;
@@ -2227,7 +2399,9 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
     const pr = t.integration!.pr!;
     if (!here(t)) continue;
     if (!pr.op || age(pr.op.at) < OP_TIMEOUT_MS[pr.op.kind] + PR_LIMITS.graceMs) continue;
-    if ((pr.op.kind === "merge" || pr.op.kind === "close") && pr.number !== undefined) return observe();
+    // A re-run intent is observed, never sent again (Q11): its budget was spent when it was recorded.
+    if ((pr.op.kind === "merge" || pr.op.kind === "close" || pr.op.kind === "rerun") && pr.number !== undefined) return observe();
+    if (pr.op.kind === "rerun") continue;
     // publish, push, or a close that never had a number: the operation itself checks the remote first.
     const kind = pr.op.kind === "close" || pr.closeRequested ? "close" : pr.op.kind === "push" ? "push" : "publish";
     if (kind === "close" ? writable : canWrite && !pr.userHold && !pr.foreignHead && !stuck(pr)) return { id, kind, taskId: t.id, n: pr.n, headSha: pr.headSha };
@@ -2289,6 +2463,13 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
     if (pr.pendingHead?.kind === "update" && autoQueue(s)[0]?.id !== t.id) continue;
     if (pr.pendingHead && !pr.op && pushable(pr) && rested(pr)) return { id, kind: "push", taskId: t.id, n: pr.n, headSha: pr.headSha };
   }
+  // 6.2b ORC-013 §7.3: re-run the GitHub-cancelled jobs of a head, once per check, before any fix task.
+  for (const t of open) {
+    const pr = t.integration!.pr!;
+    if (pr.op || pr.userHold || pr.foreignHead || pr.closeRequested || pr.pendingHead || stuck(pr) || !rested(pr)) continue;
+    const jobs = rerunPlan(s, pr, nowMs);
+    if (jobs) return { id, kind: "rerun", taskId: t.id, n: pr.n, headSha: pr.headSha, jobs };
+  }
   // 6.3 Bring the merge candidate, and only it, up to date with the base (local; the push follows).
   if (candidate && cfg.updateBeforeMerge && gh.base) {
     const pr = candidate.integration!.pr!;
@@ -2339,6 +2520,22 @@ export function beginPrOp(state: State, op: PrOp, now: string): { state: State; 
     const note = l?.notes.find((x) => x.id === op.noteId);
     if (!l?.pr || l.simulated || note?.comment?.status !== "pending") return no;
     note.comment.attempts += 1;
+  } else if (op.kind === "rerun") {
+    const pr = livePr(t);
+    if (!pr || pr.n !== op.n || pr.headSha !== op.headSha || wrongRepo(s, pr)) return no;
+    if (pr.op && nowMs - Date.parse(pr.op.at) < OP_TIMEOUT_MS[pr.op.kind] + PR_LIMITS.graceMs) return no;
+    if (pr.nextAt && Date.parse(pr.nextAt) > nowMs) return no;
+    if (pr.userHold || pr.foreignHead || pr.closeRequested || pr.pendingHead) return no;
+    // Re-checked inside the transaction: the same jobs, on the same head, still re-runnable with budget left.
+    const plan = rerunPlan(s, pr, nowMs);
+    if (!plan || JSON.stringify(plan) !== JSON.stringify(op.jobs)) return no;
+    // The budget is spent when the intent is recorded (Q11), before anything is sent.
+    if (pr.ciReruns?.headSha !== pr.headSha) pr.ciReruns = { headSha: pr.headSha, used: [] };
+    for (const j of op.jobs) pr.ciReruns.used.push({ check: j.check, jobId: j.jobId, at: now, opId: op.id });
+    pr.counters.reruns = (pr.counters.reruns ?? 0) + op.jobs.length;
+    pr.op = { id: op.id, kind: "rerun", at: now, headSha: pr.headSha };
+    const names = op.jobs.map((j) => j.check).join(", ");
+    event(s, now, "system", "integration", `Re-running ${names} on ${prName(pr)} (${sha12(pr.headSha)}): GitHub cancelled ${op.jobs.length === 1 ? "it" : "them"}. ${pr.counters.reruns} of ${PR_LIMITS.reruns} re-runs used for this pull request; no fix task is started for a cancelled run`, t.id);
   } else if (op.kind === "publish" || op.kind === "push" || op.kind === "merge" || op.kind === "close") {
     const pr = livePr(t);
     if (!pr || pr.n !== op.n || pr.headSha !== op.headSha) return no;
@@ -2567,7 +2764,12 @@ export function setPrDelivery(state: State, patch: Partial<PrDeliveryConfig>, no
   if (next.protectedPaths.length > 20 || next.protectedPaths.some((x) => x.length > 200)) throw new ControlError("At most 20 protected paths of at most 200 characters each.");
   if (!int(next.maxOpenPrs, 1, 20)) throw new ControlError("Open pull requests: between 1 and 20.");
   if (!int(next.maxAutoMergesPerDay, 0, 100)) throw new ControlError("Automatic merges per day: between 0 and 100.");
-  for (const k of ["updateBeforeMerge", "autoRepair", "allowLocalWorkers"] as const) if (typeof next[k] !== "boolean") throw new ControlError(`${k} must be true or false.`);
+  for (const k of ["updateBeforeMerge", "autoRepair", "allowLocalWorkers", "noCi"] as const) if (typeof next[k] !== "boolean") throw new ControlError(`${k} must be true or false.`);
+  // ORC-013 §7.5
+  if (!int(next.rerunBudget, 0, 3)) throw new ControlError("Re-runs of a cancelled check: between 0 and 3 per check per head.");
+  next.reviewBotApps = [...(patch.reviewBotApps ?? cur.reviewBotApps)].map((x) => String(x).trim()).filter(Boolean);
+  if (next.reviewBotApps.length > 10) throw new ControlError("At most 10 review bots.");
+  if (next.reviewBotApps.some((x) => !REVIEW_BOT_SLUG.test(x))) throw new ControlError("A review bot is named by its GitHub app slug: lowercase letters, digits and hyphens, at most 39 characters.");
   if (JSON.stringify(next) === JSON.stringify(cur)) return state;
   const s = structuredClone(state);
   s.project.prDelivery = next;
@@ -2580,12 +2782,13 @@ export function setPrDelivery(state: State, patch: Partial<PrDeliveryConfig>, no
       delete gh.fetchFailures;
     }
   }
+  if (next.noCi !== cur.noCi && s.project.github) s.project.github.posture = withNoCiPosture(s.project.github.posture, next.noCi);
   event(
     s,
     now,
     "user",
     "config",
-    `Pull-request settings: ${next.remote}/${next.base}, ${next.merge === "auto" ? `merge automatically after an independent review (${next.reviewer === "any-agent" ? "any agent" : "another provider than the writer"}) and passing required checks, at most ${next.maxAutoMergesPerDay} a day` : "hold and notify"}, at most ${next.maxOpenPrs} open`,
+    `Pull-request settings: ${next.remote}/${next.base}, ${next.merge === "auto" ? `merge automatically after an independent review (${next.reviewer === "any-agent" ? "any agent" : "another provider than the writer"}) and passing required checks, at most ${next.maxAutoMergesPerDay} a day` : "hold and notify"}, at most ${next.maxOpenPrs} open${next.noCi !== cur.noCi ? (next.noCi ? "; you declared this repository has no CI (your own Merge works with no checks; automatic merging still needs a required check)" : "; the no-CI declaration was withdrawn") : ""}${next.rerunBudget !== cur.rerunBudget ? `; a check GitHub cancelled is re-run ${next.rerunBudget === 0 ? "never" : `${next.rerunBudget} time${next.rerunBudget === 1 ? "" : "s"} per head`}` : ""}`,
   );
   // Another rule for who may review: a dedicated review that could not start is tried again under it.
   if (next.reviewer !== cur.reviewer) {
@@ -2820,9 +3023,13 @@ export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
   if (pr.phase === "merged") return { text: i.landed?.status === "unreviewed" ? `merged · review${sim}` : `merged${sim}`, tone: "done" };
   if (pr.phase === "closed") return { text: `${name} closed${sim}`, tone: "danger" };
   if (pr.op?.kind === "merge") return { text: `${name} merging${sim}`, tone: "strong" };
+  // ORC-013 §7: a cancelled check being re-run, and a review bot's verdict, are named as such.
+  const rerunning = pr.op?.kind === "rerun" ? rerunsUsed(pr).filter((u) => u.opId === pr.op!.id) : pr.observed?.checksFor === pr.headSha ? rerunsUsed(pr).filter((u) => pr.observed!.checks.some((c) => c.name === u.check && awaitingRerun(pr, c, nowMs))) : [];
+  if (rerunning.length) return plain(`re-running ${[...new Set(rerunning.map((u) => u.check))].join(", ")}`);
   if (pr.attention) {
     const fixing = openRepair(s, pr);
     if (fixing || pr.pendingHead?.kind === "repair") return plain("being fixed");
+    if (pr.attention.code === "bot-check") return { text: `${name} bot check · needs you${sim}`, tone: "danger" };
     return { text: `${name} needs you${sim}`, tone: "danger" };
   }
   if (pr.userHold) return plain("held by you");
@@ -2864,6 +3071,10 @@ export function prIntentLine(pr: PrDelivery): string | undefined {
   if (pr.op?.kind === "merge") return `Merging ${n} (already sent to GitHub; cannot be interrupted). It shows as merged once GitHub reports it.`;
   if (pr.op?.kind === "close") return `Closing ${n} (already sent to GitHub). It shows as closed once GitHub reports it.`;
   if (pr.op?.kind === "push") return `Pushing ${pr.pendingHead ? sha12(pr.pendingHead.sha) : "a newer head"} onto ${n} as a fast-forward.`;
+  if (pr.op?.kind === "rerun") {
+    const mine = rerunsUsed(pr).filter((u) => u.opId === pr.op!.id);
+    return `Asking GitHub to run ${mine.map((u) => u.check).join(", ") || "the cancelled job"} again on ${n} (GitHub had cancelled it). What GitHub reports afterwards decides; nothing is sent twice.`;
+  }
   if (pr.op) return `Pushing ${pr.branch} and opening the pull request.`;
   if (pr.closeRequested) return `You asked to close ${n}; not sent yet.`;
   if (pr.mergeRequested) {

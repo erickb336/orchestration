@@ -85,8 +85,9 @@ const MAX_CHECK_ONLY = 8;
  * dedicated review of a pull request, whose reviewer is handed the change by the service, so a review
  * step without inputs is expected there. `checkTarget` (ORC-013): the task is a dedicated check run of
  * a pull request's change, so a checks step without a code-change input is expected there.
+ * `checkIds`: the configured check commands; a step's `only` may name nothing else (M2).
  */
-export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean; checkTarget?: boolean } = {}): PipelineIssue[] {
+export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean; checkTarget?: boolean; checkIds?: string[] } = {}): PipelineIssue[] {
   const issues: PipelineIssue[] = [];
   const err = (step: string | undefined, message: string): undefined => {
     issues.push({ step, severity: "error", message });
@@ -167,6 +168,10 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
       if (d.parallel || d.independentOf || d.iterate) err(d.id, `${d.id} is a Checks step, which cannot run in parallel, require independence, or end a loop.`);
       if (d.checks && d.checks.onFail !== "findings" && d.checks.onFail !== "block") err(d.id, `${d.id}: when checks fail, choose "findings" (for the repair step) or "block" (stop and ask for a decision).`);
       if ((d.checks?.only?.length ?? 0) > MAX_CHECK_ONLY) err(d.id, `${d.id} can name at most ${MAX_CHECK_ONLY} commands.`);
+      if (opts.checkIds && d.checks?.only?.length) {
+        const unknown = d.checks.only.filter((id) => !opts.checkIds!.includes(id));
+        if (unknown.length) err(d.id, `${d.id} names checks that do not exist: ${unknown.join(", ")}. The configured checks are ${opts.checkIds.join(", ") || "none"} (Settings → Checks).`);
+      }
       if (d.checks?.onFail === "block" && inLoop.has(d.id)) err(d.id, `${d.id} stops the task when checks fail, so it cannot be inside a loop; use "findings" there.`);
     }
     if (REVIEW_ROLES.includes(d.role) && d.inputs.length === 0 && !opts.reviewTarget) issues.push({ step: d.id, severity: "warning", message: `${d.id} is a review with no inputs, so it has nothing specific to review.` });

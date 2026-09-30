@@ -252,7 +252,7 @@ describe("hold and notify (scenario 1)", () => {
     fake.setCheck(1, "SKIPPED"); // a skipped required check is not a pass
     await ticks(3, 31_000);
     expect(fake.count("merge")).toBe(0);
-    expect(pr(id).attention?.code).toBe("checks-failed");
+    expect(pr(id).attention?.code).toBe("checks-skipped"); // ORC-013: it needs a person, not a fix task
     fake.setCheck(1, "SUCCESS");
     await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(1);
@@ -874,4 +874,122 @@ describe("dependent tasks (scenario 20)", () => {
     await seen();
     expect(task(id).integration!.landed).toMatchObject({ via: "pr", by: "person" });
   }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
+});
+
+describe("CI triage (ORC-013 step 3)", () => {
+  /** Ticks until `pred` holds, reading GitHub in between; fails with `what` otherwise. */
+  const until = async (what: string, pred: () => boolean, ms = 5000, max = 120) => {
+    for (let i = 0; i < max && !pred(); i++) await tick(ms);
+    expect(pred(), what).toBe(true);
+  };
+  const repairTasks = (id: string) => st().tasks.filter((t) => t.deliverInto?.taskId === id);
+  const reruns = () => fake.calls.filter((c) => c.method === "rerunJob").map((c) => c.args as { jobId: number });
+  /** An open, reviewed pull request that merges automatically, so a fix task would start if anything let it. */
+  const autoPr = async (title: string, file: string) => {
+    const id = await openPr(title, file, `${file}\n`);
+    cmd("setPrDelivery", { config: { merge: "auto" } });
+    expect(pr(id).policy).toBe("auto");
+    return id;
+  };
+
+  it("a cancelled required check is re-run once (intent, then `rerunJob`), the new run passes, the pull request merges, and no fix task ever starts", async () => {
+    await prModeOn();
+    const id = await autoPr("Cancelled once", "c1.txt");
+    fake.setCheck(1, "CANCELLED");
+    const before = fake.runsOf(1).length;
+    await until("the re-run was requested", () => reruns().length === 1, 5000, 60);
+    expect(reruns()[0].jobId).toBe(fake.runsOf(1)[0].databaseId);
+    expect(fake.runsOf(1)).toHaveLength(before + 1); // GitHub appended a new, running run of the same job
+    expect(pr(id).ciReruns).toMatchObject({ headSha: pr(id).headSha, used: [{ check: "check", jobId: reruns()[0].jobId }] });
+    expect(pr(id).counters.reruns).toBe(1);
+    expect(events("Re-running check on PR #1")).toHaveLength(1);
+    expect(repairTasks(id)).toHaveLength(0);
+    // While the new run is going the pull request waits; nothing is repaired and nothing is re-run again.
+    await ticks(3, 31_000);
+    expect(pr(id).attention).toBeUndefined();
+    expect(D.prGate(st(), task(id), now, { byUser: false }).items.find((i) => i.id === "checks")).toMatchObject({ state: "waiting" });
+    expect(reruns()).toHaveLength(1);
+    // The new run passes: the name is green (newest run wins over the cancelled one), and the merge follows.
+    fake.setCheck(1, "SUCCESS");
+    await until("it merged", () => pr(id).phase === "merged", 5000, 60);
+    expect(fake.count("merge")).toBe(1);
+    expect(repairTasks(id)).toHaveLength(0);
+    expect(reruns()).toHaveLength(1);
+    expect(task(id).integration!.landed!.checks).toEqual([expect.objectContaining({ name: "check", conclusion: "SUCCESS" })]);
+    expect(JSON.stringify(fake.calls)).not.toMatch(/--admin|--auto|--force/);
+  }, 30_000);
+
+  it("cancelled twice: the second cancellation needs a person (ci-infra); no second re-run and no fix task", async () => {
+    await prModeOn();
+    const id = await autoPr("Cancelled twice", "c2.txt");
+    fake.setCheck(1, "CANCELLED");
+    await until("the re-run was requested", () => reruns().length === 1, 5000, 60);
+    fake.setCheck(1, "CANCELLED"); // the new run is cancelled too
+    await until("it needs a person", () => pr(id).attention?.code === "ci-infra", 31_000, 30);
+    expect(pr(id).attention!.message).toMatch(/GitHub cancelled check on [0-9a-f]{12}, and its re-run is used \(1 of 1\)\. Re-run it on GitHub, or merge it yourself\./);
+    await ticks(6, 61_000);
+    expect(reruns()).toHaveLength(1);
+    expect(repairTasks(id)).toHaveLength(0);
+    expect(fake.count("merge")).toBe(0);
+    expect(D.needsYou(st(), now)).toBe(1);
+    // A person re-runs it on GitHub and it passes: the name is green and the merge follows.
+    fake.setCheck(1, "SUCCESS");
+    await until("it merged", () => pr(id).phase === "merged", 5000, 60);
+    expect(reruns()).toHaveLength(1);
+  }, 30_000);
+
+  it("a review bot's failing check is bot-check, and a skipped required check is checks-skipped: no fix task and no re-run for either", async () => {
+    await prModeOn();
+    const id = await autoPr("Bot and skipped", "b.txt");
+    fake.setCheck(1, "FAILURE", "check", { app: "coderabbitai" });
+    await until("the bot's verdict needs a person", () => pr(id).attention?.code === "bot-check", 31_000, 30);
+    expect(pr(id).attention!.message).toMatch(/^The review bot coderabbitai reports failure on [0-9a-f]{12}\. A bot's opinion is not fixed automatically\./);
+    await ticks(4, 61_000);
+    expect(repairTasks(id)).toHaveLength(0);
+    expect(reruns()).toHaveLength(0);
+    expect(D.repairCause(st(), task(id))).toBeUndefined();
+    expect(D.repairCause(st(), task(id), { byUser: true })).toEqual({ kind: "checks", checks: [{ name: "check", url: "https://github.com/test/repo/actions/runs/1" }] });
+    // A skipped required check (a later run of the same name that was skipped).
+    fake.setCheck(1, "SKIPPED");
+    await until("the skipped check needs a person", () => pr(id).attention?.code === "checks-skipped", 31_000, 30);
+    await ticks(4, 61_000);
+    expect(repairTasks(id)).toHaveLength(0);
+    expect(reruns()).toHaveLength(0);
+    expect(() => cmd("repairPr", { taskId: id })).toThrow(/re-run on GitHub, not fixed/);
+    expect(fake.count("merge")).toBe(0);
+  }, 30_000);
+
+  it("a restart during a re-run intent: the new service observes and never sends the re-run again", async () => {
+    await prModeOn();
+    const id = await autoPr("Restart mid re-run", "r.txt");
+    fake.setCheck(1, "CANCELLED");
+    const release = fake.hold("rerunJob", "after"); // GitHub accepts it, but the answer is slow
+    for (let i = 0; i < 120 && pr(id).op?.kind !== "rerun"; i++) {
+      now += 5000;
+      scheduler.tick(now); // do not wait: the re-run stays in flight
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(pr(id).op).toMatchObject({ kind: "rerun" });
+    expect(pr(id).ciReruns!.used).toHaveLength(1); // the budget was spent with the intent
+    for (let i = 0; i < 200 && reruns().length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(reruns()).toHaveLength(1);
+    await scheduler.stop(); // the in-flight result is dropped, like a process that died
+    scheduler = newScheduler();
+    await scheduler.refreshHealth();
+    release();
+    // Inside the timeout and grace nothing is assumed and nothing is sent; after it, an observation settles the intent.
+    await ticks(3, 10_000);
+    expect(pr(id).op).toMatchObject({ kind: "rerun" });
+    expect(reruns()).toHaveLength(1);
+    await tick(D.OP_TIMEOUT_MS.rerun + D.PR_LIMITS.graceMs);
+    await ticks(3, 5000);
+    expect(pr(id).op).toBeUndefined();
+    expect(reruns()).toHaveLength(1);
+    expect(pr(id).ciReruns!.used).toHaveLength(1);
+    // The new run (which GitHub did start) passes: merged, still with one re-run in the record.
+    fake.setCheck(1, "SUCCESS");
+    await until("it merged", () => pr(id).phase === "merged", 5000, 60);
+    expect(reruns()).toHaveLength(1);
+    expect(repairTasks(id)).toHaveLength(0);
+  }, 30_000);
 });

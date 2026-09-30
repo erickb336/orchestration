@@ -351,6 +351,10 @@ export const COMMANDS = {
     if (c.protectedPaths !== undefined) patch.protectedPaths = array<unknown>(c.protectedPaths, "protectedPaths").map((x) => String(x));
     if (c.maxOpenPrs !== undefined) patch.maxOpenPrs = num(c, "maxOpenPrs");
     if (c.maxAutoMergesPerDay !== undefined) patch.maxAutoMergesPerDay = num(c, "maxAutoMergesPerDay");
+    // ORC-013 §7.5
+    if (c.rerunBudget !== undefined) patch.rerunBudget = num(c, "rerunBudget");
+    if (c.reviewBotApps !== undefined) patch.reviewBotApps = array<unknown>(c.reviewBotApps, "reviewBotApps").map((x) => String(x));
+    if (c.noCi !== undefined) patch.noCi = bool(c, "noCi");
     return D.setPrDelivery(s, patch, now);
   }),
   /** Run the read-only repository check now. */

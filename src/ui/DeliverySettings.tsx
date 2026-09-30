@@ -34,10 +34,15 @@ export function DeliverySettings() {
   const [repair, setRepair] = useState(cfg.autoRepair);
   const [localOk, setLocalOk] = useState(cfg.allowLocalWorkers);
   const [perDay, setPerDay] = useState(String(cfg.maxAutoMergesPerDay));
+  // ORC-013 §7.5: CI triage settings.
+  const [rerunBudget, setRerunBudget] = useState(String(cfg.rerunBudget));
+  const [bots, setBots] = useState(cfg.reviewBotApps.join(", "));
+  const [noCi, setNoCi] = useState(cfg.noCi);
   // Follow the live values when they change elsewhere.
   useEffect(() => setPick(mode), [mode]);
   useEffect(() => setBranch(p.autonomy.autoDeliver.branch), [p.autonomy.autoDeliver.branch]);
   const pathsKey = cfg.protectedPaths.join("\n");
+  const botsKey = cfg.reviewBotApps.join(", ");
   useEffect(() => {
     setRemote(cfg.remote);
     setBase(cfg.base);
@@ -49,11 +54,15 @@ export function DeliverySettings() {
     setRepair(cfg.autoRepair);
     setLocalOk(cfg.allowLocalWorkers);
     setPerDay(String(cfg.maxAutoMergesPerDay));
-  }, [cfg.remote, cfg.base, cfg.maxOpenPrs, pathsKey, cfg.merge, cfg.reviewer, cfg.updateBeforeMerge, cfg.autoRepair, cfg.allowLocalWorkers, cfg.maxAutoMergesPerDay]);
+    setRerunBudget(String(cfg.rerunBudget));
+    setBots(botsKey);
+    setNoCi(cfg.noCi);
+  }, [cfg.remote, cfg.base, cfg.maxOpenPrs, pathsKey, cfg.merge, cfg.reviewer, cfg.updateBeforeMerge, cfg.autoRepair, cfg.allowLocalWorkers, cfg.maxAutoMergesPerDay, cfg.rerunBudget, botsKey, cfg.noCi]);
 
   const sampleBlocked = real && p.sample;
   const modeChanged = pick !== mode || (pick === "local" && branch.trim() !== p.autonomy.autoDeliver.branch);
   const pathList = paths.split("\n").map((x) => x.trim()).filter(Boolean);
+  const botList = bots.split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
   const optionsChanged =
     remote.trim() !== cfg.remote ||
     base.trim() !== cfg.base ||
@@ -64,7 +73,10 @@ export function DeliverySettings() {
     update !== cfg.updateBeforeMerge ||
     repair !== cfg.autoRepair ||
     localOk !== cfg.allowLocalWorkers ||
-    Number(perDay) !== cfg.maxAutoMergesPerDay;
+    Number(perDay) !== cfg.maxAutoMergesPerDay ||
+    Number(rerunBudget) !== cfg.rerunBudget ||
+    botList.join(", ") !== botsKey ||
+    noCi !== cfg.noCi;
   // What stands in the way of automatic merging, or makes it less safe, as the app sees it now.
   const local = p.enabledProviders.filter((x) => p.workerEnvironment[x] === "local");
   const posture = (id: string) => gh?.posture.find((x) => x.id === id);
@@ -231,7 +243,21 @@ export function DeliverySettings() {
                 if (!confirm(text)) return;
               }
               void send("setPrDelivery", {
-                config: { remote: remote.trim(), base: base.trim(), maxOpenPrs: Number(maxOpen), protectedPaths: pathList, merge, reviewer, updateBeforeMerge: update, autoRepair: repair, allowLocalWorkers: localOk, maxAutoMergesPerDay: Number(perDay) },
+                config: {
+                  remote: remote.trim(),
+                  base: base.trim(),
+                  maxOpenPrs: Number(maxOpen),
+                  protectedPaths: pathList,
+                  merge,
+                  reviewer,
+                  updateBeforeMerge: update,
+                  autoRepair: repair,
+                  allowLocalWorkers: localOk,
+                  maxAutoMergesPerDay: Number(perDay),
+                  rerunBudget: Number(rerunBudget),
+                  reviewBotApps: botList,
+                  noCi,
+                },
               });
             }}
           >
@@ -306,6 +332,36 @@ export function DeliverySettings() {
               </label>
               <p className="muted" style={{ fontSize: "0.82rem", margin: "-0.3rem 0 0.6rem" }}>
                 A pull request that touches these is never merged automatically: you merge it. A change to CI workflow files (.github/workflows/) is not pushed until you allow it for that pull request.
+              </p>
+
+              <h4 style={{ margin: "0.6rem 0 0.3rem" }}>Failing checks</h4>
+              <p className="muted" style={{ fontSize: "0.82rem", margin: "0 0 0.5rem" }}>
+                Each required check that is not green on a head is sorted first. Only a check that fails on the code starts a fix task. A check GitHub cancelled is re-run first. A review bot's verdict and a check that was skipped need you: they are never fixed by an agent on their own.
+              </p>
+              <label className="field">
+                <span>Re-run a check GitHub cancelled</span>
+                <select value={rerunBudget} onChange={(e) => setRerunBudget(e.target.value)} aria-describedby="rerun-note">
+                  <option value="0">0 times: never re-run</option>
+                  <option value="1">1 time per check per head</option>
+                  <option value="2">2 times per check per head</option>
+                  <option value="3">3 times per check per head</option>
+                </select>
+              </label>
+              <p id="rerun-note" className="muted" style={{ fontSize: "0.82rem", margin: "-0.3rem 0 0.6rem" }}>
+                Only GitHub Actions jobs can be re-run, at most {D.PR_LIMITS.reruns} per pull request. The re-run is sent under your GitHub account and recorded like every other write. If you cancel runs on purpose, choose 0.
+              </p>
+              <label className="field">
+                <span>Review bots (GitHub app names, separated by commas)</span>
+                <input type="text" value={bots} onChange={(e) => setBots(e.target.value)} className="mono" aria-describedby="bots-note" />
+              </label>
+              <p id="bots-note" className="muted" style={{ fontSize: "0.82rem", margin: "-0.3rem 0 0.6rem" }}>
+                A failing check from one of these apps is a bot's opinion: the pull request waits for you to read it on GitHub. The default names are the apps' published slugs and are not verified against a real installation.
+              </p>
+              <label style={{ display: "block", marginBottom: "0.35rem" }}>
+                <input type="checkbox" checked={noCi} onChange={(e) => setNoCi(e.target.checked)} /> <strong>This repository has no CI.</strong> Declare that this repository intentionally has no CI. Your own Merge then works with no checks. Automatic merging still needs a required check.
+              </label>
+              <p className="muted" style={{ fontSize: "0.82rem", margin: "0 0 0.6rem 1.4rem" }}>
+                Any check GitHub does report on a head is still honoured: a failing one blocks, a running one waits. Without this declaration, a head with no check is never treated as green.
               </p>
               <button type="submit" disabled={!optionsChanged}>
                 Save pull-request options

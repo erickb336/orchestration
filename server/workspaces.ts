@@ -960,8 +960,47 @@ export class WorkspaceManager {
     rmSync(`${path}.tmp`, { recursive: true, force: true });
   }
 
-  /** Remove worktrees (and private temp dirs) of runs that are no longer active. Branches are kept. */
-  prune(opts: { repoPath: string; projectId: string; keep: Set<string> }): number {
+  /**
+   * Remove the worktrees and temp directories of the given run ids, dirty or not: the service's check
+   * runs are throwaway by design (their dirt is build output), unlike a user's or an agent's worktree.
+   * Registrations of removed directories are forgotten. Returns how many directories went.
+   */
+  pruneThrowaway(opts: { repoPath: string; projectId: string; ids: string[] }): number {
+    if (!opts.ids.length) return 0;
+    const check = this.check(opts.repoPath);
+    if (!check.ok) return 0;
+    const repo = resolve(opts.repoPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
+    let removed = 0;
+    for (const id of opts.ids) {
+      const path = this.pathFor(opts.repoPath, id, opts.projectId);
+      if (existsSync(path)) {
+        try {
+          this.git(repo, ["worktree", "remove", "--force", path]);
+        } catch {
+          rmSync(path, { recursive: true, force: true });
+        }
+        removed++;
+      }
+      if (existsSync(`${path}.tmp`)) {
+        rmSync(`${path}.tmp`, { recursive: true, force: true });
+        removed++;
+      }
+    }
+    if (removed) {
+      try {
+        this.git(repo, ["worktree", "prune"]);
+      } catch {
+        /* best effort */
+      }
+    }
+    return removed;
+  }
+
+  /**
+   * Remove worktrees (and private temp dirs) of runs that are no longer active. Branches are kept.
+   * `throwaway`: run ids whose worktree goes even when dirty (service check runs).
+   */
+  prune(opts: { repoPath: string; projectId: string; keep: Set<string>; throwaway?: Set<string> }): number {
     const check = this.check(opts.repoPath);
     if (!check.ok) return 0;
     const repo = resolve(opts.repoPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
@@ -976,14 +1015,15 @@ export class WorkspaceManager {
         rmSync(path, { recursive: true, force: true });
         continue;
       }
-      // Never destroy work that exists only in a worktree (for example a run stopped at its time limit).
+      // Never destroy work that exists only in a worktree (for example a run stopped at its time limit),
+      // unless the worktree is a throwaway one (a check run's build output).
       let dirty = true;
       try {
         dirty = this.git(path, ["status", "--porcelain"]) !== "";
       } catch {
         dirty = false;
       }
-      if (dirty) continue;
+      if (dirty && !opts.throwaway?.has(id)) continue;
       try {
         this.git(repo, ["worktree", "remove", "--force", path]);
       } catch {

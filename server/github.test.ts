@@ -350,10 +350,10 @@ describe("parsing", () => {
     expect(o.rateRemaining).toBe(4321);
     expect(o.prs[0]).toMatchObject({ number: 12, state: "OPEN", headSha: SHA, checksFor: SHA, mergeStateStatus: "BLOCKED", reviewDecision: "REVIEW_REQUIRED", labels: ["orchestration:hold"], crossRepo: false });
     expect(o.prs[0].checks).toEqual([
-      { name: "check", required: true, status: "COMPLETED", conclusion: "SUCCESS", url: "https://github.com/octo/app/actions/runs/1" },
-      { name: "lint", required: false, status: "IN_PROGRESS", conclusion: null },
-      { name: "ci/legacy", required: false, status: "COMPLETED", conclusion: "FAILURE", url: "https://ci.example/1" },
-      { name: "ci/pending", required: true, status: "PENDING", conclusion: null },
+      { name: "check", required: true, status: "COMPLETED", conclusion: "SUCCESS", url: "https://github.com/octo/app/actions/runs/1", kind: "run" },
+      { name: "lint", required: false, status: "IN_PROGRESS", conclusion: null, kind: "run" },
+      { name: "ci/legacy", required: false, status: "COMPLETED", conclusion: "FAILURE", url: "https://ci.example/1", kind: "status" },
+      { name: "ci/pending", required: true, status: "PENDING", conclusion: null, kind: "status" },
     ]);
     expect(o.prs[1]).toMatchObject({ number: 13, state: "MERGED", mergeCommit: "b".repeat(40), mergedBy: "octocat", checks: [] });
     expect(o.commits).toEqual([{ oid: SHA, checks: [] }]); // nothing reported: pending, never a pass
@@ -497,5 +497,103 @@ describe("errors", () => {
     new GhCliHost({ ghBin: FAKE_GH, cwd: d });
     expect(readdirSync(d)).toEqual([]);
     mkdirSync(d, { recursive: true });
+  });
+});
+
+describe("ORC-013 step 3: CI triage in the adapter", () => {
+  const T = (s: string) => `2026-09-30T12:${s}Z`;
+  const run = (name: string, conclusion: string | null, o: { startedAt?: string | null; id?: number; app?: string; status?: string; isRequired?: boolean } = {}) => ({
+    __typename: "CheckRun",
+    name,
+    status: o.status ?? (conclusion ? "COMPLETED" : "IN_PROGRESS"),
+    conclusion,
+    databaseId: o.id ?? 1,
+    startedAt: o.startedAt === undefined ? null : o.startedAt,
+    checkSuite: { app: { slug: o.app ?? "github-actions" }, workflowRun: { databaseId: 77 } },
+    isRequired: o.isRequired ?? false,
+  });
+  const one = (nodes: unknown[], name = "check") => parseChecks({ contexts: { nodes: nodes as never } }).find((c) => c.name === name)!;
+
+  it("parseChecks: the newest run wins only when every other non-success is a completed, dated run that started strictly before it (mutation check: the strict 'before')", () => {
+    // Cancelled, then a later success: green, carrying the winning run's ids.
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, isRequired: true }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "SUCCESS", jobId: 2, runId: 77, required: true, startedAt: T("05:00") });
+    // A success, then a later cancel: red (the cancel is newer).
+    expect(one([run("check", "SUCCESS", { startedAt: T("00:00"), id: 1 }), run("check", "CANCELLED", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "CANCELLED", jobId: 2 });
+    // A tie at whole-second resolution, or an undated run: the worst wins (fail closed).
+    expect(one([run("check", "CANCELLED", { startedAt: T("05:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "CANCELLED" });
+    expect(one([run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 }), run("check", "CANCELLED", { startedAt: T("05:00"), id: 1 })])).toMatchObject({ conclusion: "CANCELLED" }); // whichever GitHub lists first
+    expect(one([run("check", null, { startedAt: T("05:00"), id: 2 }), run("check", "CANCELLED", { startedAt: T("05:00"), id: 1 })])).toMatchObject({ conclusion: "CANCELLED" });
+    expect(one([run("check", "CANCELLED", { startedAt: null, id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "CANCELLED" });
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: null, id: 2 })])).toMatchObject({ conclusion: "CANCELLED" });
+    // Sub-second or non-UTC timestamps are not trusted for supersession.
+    expect(one([run("check", "CANCELLED", { startedAt: "2026-09-30T12:00:00.500Z", id: 1 }), run("check", "SUCCESS", { startedAt: "2026-09-30T12:00:01.000Z", id: 2 })])).toMatchObject({ conclusion: "CANCELLED" });
+    // A pending run keeps the name pending, even next to a newer success.
+    expect(one([run("check", null, { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: null });
+    // A re-run still going, started strictly after the cancelled run, keeps the name pending (not red), carrying the new run's id.
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), run("check", null, { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: null, jobId: 2 });
+    // A newer failure is never hidden by anything, and an undated pending run does not supersede a failure.
+    expect(one([run("check", "SUCCESS", { startedAt: T("00:00"), id: 1 }), run("check", "FAILURE", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "FAILURE" });
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), run("check", null, { startedAt: null, id: 2 })])).toMatchObject({ conclusion: "CANCELLED" });
+    // A failure that is not completed (GitHub's status says so) does not count as superseded.
+    expect(one([run("check", "FAILURE", { startedAt: T("00:00"), id: 1, status: "IN_PROGRESS" }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "FAILURE" });
+    // SKIPPED and NEUTRAL are never green; a later success does supersede them like any completed run.
+    expect(one([run("check", "SKIPPED", { startedAt: T("00:00"), id: 1 })])).toMatchObject({ conclusion: "SKIPPED" });
+    expect(one([run("check", "SKIPPED", { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "SUCCESS" });
+    // Status contexts are never superseded: one state per context.
+    expect(one([{ __typename: "StatusContext", context: "check", state: "FAILURE", creator: { login: "ci-bot[bot]" } }, run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "FAILURE", kind: "status", app: "ci-bot" });
+    // Among equal failures the newer run is kept (the one a re-run would target).
+    expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), run("check", "CANCELLED", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ jobId: 2 });
+    // Ids are validated: a non-integer or non-positive databaseId is dropped, and the app slug comes through.
+    expect(one([run("check", "CANCELLED", { id: 0 })]).jobId).toBeUndefined();
+    expect(one([{ ...run("check", "CANCELLED"), databaseId: "12" }]).jobId).toBeUndefined();
+    expect(one([run("check", "FAILURE", { app: "coderabbitai", id: 9 })])).toMatchObject({ app: "coderabbitai", jobId: 9, kind: "run" });
+  });
+
+  it("the observe query asks for the fields triage needs; parseObserveResponse carries them", async () => {
+    const q = buildObserveQuery(REPO, [12], []);
+    expect(q).toContain("databaseId startedAt checkSuite{app{slug} workflowRun{databaseId}}");
+    expect(q).toContain("creator{login}");
+    const o = parseObserveResponse(
+      JSON.stringify({ data: { repository: { p12: { number: 12, state: "OPEN", headRefOid: SHA, commits: { nodes: [{ commit: { oid: SHA, statusCheckRollup: { contexts: { nodes: [run("build", "CANCELLED", { startedAt: T("00:00"), id: 4242, isRequired: true })] } } } }] } } } } }),
+      [12],
+      [],
+    );
+    expect(o.prs[0].checks).toEqual([{ name: "build", required: true, status: "COMPLETED", conclusion: "CANCELLED", kind: "run", app: "github-actions", jobId: 4242, runId: 77, startedAt: T("00:00") }]);
+  });
+
+  it("rerunJob sends exactly `api -X POST repos/o/r/actions/jobs/<id>/rerun`, checks the id first, and the guard allows nothing else to be POSTed", async () => {
+    rules([{ match: "actions/jobs/123/rerun", stdout: "" }]);
+    await host().rerunJob({ repo: REPO, jobId: 123 });
+    expect(calls().map((c) => c.argv)).toEqual([["api", "-X", "POST", "repos/octo/app/actions/jobs/123/rerun"]]);
+    expect(calls()[0].stdin).toBe("");
+    for (const bad of [0, -1, 1.5, Number.NaN, "123" as unknown as number]) {
+      await expect(host().rerunJob({ repo: REPO, jobId: bad })).rejects.toThrow(/valid job id/);
+    }
+    await expect(host().rerunJob({ repo: { owner: "o\"", name: "r" }, jobId: 1 })).rejects.toThrow(/invalid repository/);
+    expect(calls()).toHaveLength(1); // nothing else was spawned
+    // I1 narrowed: a POST goes only to a pull request's comments or a job re-run; everything else ORC-008 refused stays refused.
+    expect(() => assertAllowedGh(["api", "-X", "POST", "repos/octo/app/actions/jobs/123/rerun"])).not.toThrow();
+    expect(() => assertAllowedGh(["api", "-X", "POST", "repos/octo/app/issues/5/comments", "--input", "-"], "{}")).not.toThrow();
+    for (const args of [
+      ["api", "-X", "POST", "repos/octo/app/actions/runs/1/rerun"],
+      ["api", "-X", "POST", "repos/octo/app/actions/jobs/123/rerun/extra"],
+      ["api", "-X", "POST", "repos/octo/app/actions/workflows/ci.yml/dispatches"],
+      ["api", "-X", "POST", "repos/octo/app/pulls/5/reviews"],
+      ["api", "-X", "POST", "repos/octo/app/pulls/5/merge"],
+      ["api", "--method", "POST", "repos/octo/app/git/refs"],
+      ["api", "-X", "POST", "user/repos"],
+      ["api", "-X", "POST", "--input", "-", "repos/octo/app/dispatches"],
+      ["api", "-X", "PUT", "repos/octo/app/actions/jobs/123/rerun"],
+      ["api", "-X", "DELETE", "repos/octo/app/actions/jobs/123"],
+      ["pr", "merge", "5", "-R", "octo/app", "--merge", "--match-head-commit", SHA, "--admin"],
+      ["pr", "merge", "5", "-R", "octo/app", "--merge", "--match-head-commit", SHA, "--auto"],
+      ["pr", "merge", "5", "-R", "octo/app", "--merge", "--match-head-commit", SHA, "--force"],
+      ["pr", "merge", "5", "-R", "octo/app", "--merge", "--match-head-commit", SHA, "-d"],
+      ["auth", "token"],
+    ]) {
+      expect(() => assertAllowedGh(args), args.join(" ")).toThrow(GhError);
+    }
+    expect(() => assertAllowedGh(["api", "graphql", "--input", "-"], JSON.stringify({ query: "mutation{updateRef(input:{}){clientMutationId}}" }))).toThrow(/refusing/);
+    expect(calls()).toHaveLength(1);
   });
 });

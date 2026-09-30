@@ -85,6 +85,8 @@ interface HealthEvent {
   type: "checks-health";
   attemptId: "";
   health: ChecksHealth;
+  /** When the probe began (the scheduler's clock): a "Check again" asked for later is not cleared by this result (L5). */
+  startedAt: string;
 }
 type QueueEvent = AdapterEvent | ContextEvent | HealthEvent;
 
@@ -259,6 +261,23 @@ export class Scheduler {
       now,
       this.lease(nowMs),
     );
+    // L7: the worktrees of check runs are throwaway by design. Any left by a crash (dirty from a build
+    // or an install, which is why the ordinary prune keeps them) go now, together with their temp dirs.
+    this.pruneCheckWorkspaces();
+  }
+
+  /** Remove the worktree and temp directory of every service check run that is no longer active, even when dirty. */
+  private pruneCheckWorkspaces(): number {
+    if (!this.workspaces) return 0;
+    const { state } = this.store.read();
+    const active = new Set(M.activeAttempts(state).map((a) => a.id));
+    const stale = state.attempts.filter((a) => a.snapshot.provider === "service" && !active.has(a.id)).map((a) => a.id);
+    try {
+      return this.workspaces.pruneThrowaway({ repoPath: state.project.repoPath, projectId: state.project.id, ids: stale });
+    } catch (e) {
+      this.log(`could not remove leftover check worktrees: ${e instanceof Error ? e.message : String(e)}`);
+      return 0;
+    }
   }
 
   private adapterFor(p: ProviderId): RuntimeAdapter {
@@ -586,12 +605,13 @@ export class Scheduler {
     this.store.update((s) => M.reportDeliveryResult(s, result, now), now, lease);
   }
 
-  /** Remove workspaces of runs that are no longer active (real mode). */
+  /** Remove workspaces of runs that are no longer active (real mode). Check worktrees go even when dirty (L7). */
   prune(): number {
     if (!this.workspaces) return 0;
     const { state } = this.store.read();
     const keep = new Set([...M.activeAttempts(state).map((a) => a.id), ...(M.activeLeadRun(state) ? [M.activeLeadRun(state)!.id] : [])]);
-    return this.workspaces.prune({ repoPath: state.project.repoPath, projectId: state.project.id, keep });
+    const throwaway = new Set(state.attempts.filter((a) => a.snapshot.provider === "service" && !keep.has(a.id)).map((a) => a.id));
+    return this.workspaces.prune({ repoPath: state.project.repoPath, projectId: state.project.id, keep, throwaway });
   }
 
   /** The lead's concrete provider/model ("auto" resolves to the first catalog model). */
@@ -842,12 +862,13 @@ export class Scheduler {
     this.probing = true;
     this.failedStarts = 0;
     const sandbox = state.project.checks.sandbox;
+    const startedAt = new Date(nowMs).toISOString();
     void runner
       .probe(sandbox)
       .catch((e): ChecksHealth => ({ sandbox, status: "unavailable", detail: e instanceof Error ? e.message : String(e), checkedAt: new Date().toISOString() }))
       .then((health) => {
         this.probing = false;
-        this.queue.push({ type: "checks-health", attemptId: "", health });
+        this.queue.push({ type: "checks-health", attemptId: "", health, startedAt });
       });
   }
 
@@ -899,7 +920,7 @@ export class Scheduler {
   private applyEvent(s: State, e: QueueEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[]; chosen?: string }>, now: string): State {
     // ORC-013: the service's own record of what a run was given; applied only while the run is active.
     if (e.type === "context") return M.reportRunContext(s, e.attemptId, { scope: e.scope, conventions: e.conventions, decisions: e.decisions });
-    if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now);
+    if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now, { startedAt: e.startedAt });
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
       case "started":

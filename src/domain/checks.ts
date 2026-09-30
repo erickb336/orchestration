@@ -51,18 +51,39 @@ export const MAX_CHECK_ROUNDS = 2;
 const ID_RE = /^[a-z][a-z0-9-]{0,23}$/;
 const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]{0,63}$/;
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"]);
-const PREPARE_SUBCOMMANDS = new Set(["ci", "install", "i"]);
+/** Prepare subcommands that download dependencies: they may use the network, so they must never run install scripts. */
+const INSTALL_SUBCOMMANDS = new Set(["ci", "install", "i"]);
+/** Prepare subcommands that run the install scripts of what was already downloaded, offline, in the throwaway copy. */
+const REBUILD_SUBCOMMANDS = new Set(["rebuild"]);
+const PREPARE_SUBCOMMANDS = new Set([...INSTALL_SUBCOMMANDS, ...REBUILD_SUBCOMMANDS]);
 const CHECK_SUBCOMMANDS = new Set(["test", "t", "run", "run-script"]);
 const INTERPRETERS = new Set(["node", "deno", "python", "python3", "ruby"]);
 /** Inline-code and preload flags: a check may run a program in the repository, never code typed into the settings. */
 const INLINE_FLAGS = ["-e", "--eval", "-p", "--print", "-c", "-r", "--require", "--import", "--loader", "--experimental-loader"];
+/** Short flags whose value is attached (`-Werror`, `-Ilib`): not a cluster of single-letter flags. */
+const ATTACHED_VALUE: Record<string, RegExp> = { python: /^-[WX]/, python3: /^-[WX]/, ruby: /^-[CEFIKTW0x]/, node: /^-C/ };
+/**
+ * How each package manager is told not to run lifecycle scripts (review finding H1: repository code
+ * never runs while the network is on). Yarn Berry has no --ignore-scripts; it takes --mode=skip-build.
+ */
+export const IGNORE_SCRIPTS_FLAGS: Record<string, string[]> = { npm: ["--ignore-scripts"], pnpm: ["--ignore-scripts"], yarn: ["--ignore-scripts", "--mode=skip-build"], bun: ["--ignore-scripts"] };
 /** Names a check environment never takes from the settings (§6.6 sets or drops them itself). */
 const RESERVED_ENV = new Set(["PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD"]);
 
 const inRange = (n: unknown, lo: number, hi: number) => typeof n === "number" && Number.isInteger(n) && n >= lo && n <= hi;
 
-/** Why a command is not allowed, or undefined. Shared by the whole configuration's validation and the editor. */
-export function validateCommand(c: CheckCommand): string | undefined {
+/** A package manager's download command (`npm ci`, `pnpm install`, …). */
+export const isInstall = (argv: string[]) => PACKAGE_MANAGERS.has(argv[0]) && INSTALL_SUBCOMMANDS.has(argv[1] ?? "");
+/** A package manager's offline "run the install scripts" command (`npm rebuild`, …). */
+export const isRebuild = (argv: string[]) => PACKAGE_MANAGERS.has(argv[0]) && REBUILD_SUBCOMMANDS.has(argv[1] ?? "");
+/** Does an install command carry its package manager's "no scripts" flag? */
+export const ignoresScripts = (argv: string[]) => (IGNORE_SCRIPTS_FLAGS[argv[0]] ?? []).some((f) => argv.includes(f));
+
+/**
+ * Why a command is not allowed, or undefined. Shared by the whole configuration's validation and the
+ * editor. `networked`: prepare commands may use the network, so an install must not run scripts.
+ */
+export function validateCommand(c: CheckCommand, o: { networked?: boolean } = {}): string | undefined {
   if (typeof c.id !== "string" || !ID_RE.test(c.id)) return `A command id is lowercase letters, digits and hyphens (at most 24 characters), starting with a letter; "${String(c.id).slice(0, 30)}" is not.`;
   if (typeof c.label !== "string" || !c.label.trim() || c.label.length > MAX_LABEL) return `${c.id}: the label is 1–${MAX_LABEL} characters.`;
   if (c.kind !== "prepare" && c.kind !== "check") return `${c.id}: the kind is "prepare" or "check".`;
@@ -76,13 +97,27 @@ export function validateCommand(c: CheckCommand): string | undefined {
   if (!CHECK_PROGRAMS.includes(program)) return `${c.id}: "${program}" is not one of the programs checks may run (${CHECK_PROGRAMS.join(", ")}). Use the bare program name; shells, paths, curl, npx, git and gh are never allowed.`;
   if (PACKAGE_MANAGERS.has(program)) {
     const sub = c.argv[1] ?? "";
-    if (c.kind === "prepare" && !PREPARE_SUBCOMMANDS.has(sub)) return `${c.id}: a prepare command with ${program} is "${program} ci", "${program} install" or "${program} i".`;
+    if (c.kind === "prepare" && !PREPARE_SUBCOMMANDS.has(sub)) return `${c.id}: a prepare command with ${program} is "${program} ci", "${program} install", "${program} i" or "${program} rebuild".`;
     if (c.kind === "check" && !CHECK_SUBCOMMANDS.has(sub)) return `${c.id}: a check with ${program} is "${program} test", "${program} run <script>" or "${program} run-script <script>"; "${program} ${sub}" is not allowed.`;
+    // H1: an install that may use the network never runs the repository's install scripts (they could
+    // reach this machine's own control API). Scripts that are needed run offline in a "rebuild" step.
+    if (c.kind === "prepare" && o.networked && isInstall(c.argv) && !ignoresScripts(c.argv))
+      return `${c.id}: an install that may use the network must not run install scripts: add ${IGNORE_SCRIPTS_FLAGS[program].map((f) => `"${f}"`).join(" or ")} to it. Scripts your project needs can run offline afterwards in a separate "${program} rebuild" prepare command.`;
   }
   if (INTERPRETERS.has(program)) {
-    for (const a of c.argv.slice(1)) {
+    if (program === "deno" && c.argv[1] === "eval") return `${c.id}: deno eval runs inline code; run a script or module from the repository instead.`;
+    const attached = ATTACHED_VALUE[program];
+    for (let i = 1; i < c.argv.length; i++) {
+      const a = c.argv[i];
+      // What follows "--", "-m <module>" or the script's own name belongs to the script, not the interpreter.
+      if (a === "--" || a === "-m" || !a.startsWith("-")) break;
       const flag = a.split("=")[0];
-      if (INLINE_FLAGS.includes(flag) || (/^-[A-Za-z]+$/.test(a) && /[epcr]/.test(a.slice(1)))) return `${c.id}: ${program} may not run inline code or preload modules (${a}); run a script or module from the repository instead.`;
+      const refuse = () => `${c.id}: ${program} may not run inline code or preload modules (${a}); run a script or module from the repository instead.`;
+      if (INLINE_FLAGS.includes(flag)) return refuse();
+      if (a.startsWith("--")) continue;
+      if (attached?.test(a)) continue;
+      // A short flag, alone, in a cluster, or with its value attached (-cprint(1), -e1, -pe, -rfoo).
+      if (/[epcr]/.test(a.slice(1))) return refuse();
     }
   }
   return undefined;
@@ -96,7 +131,7 @@ export function validateChecks(cfg: ChecksConfig, opts: { acknowledged?: boolean
   let seenCheck = false;
   let prepares = 0;
   for (const c of cfg.commands) {
-    const why = validateCommand(c);
+    const why = validateCommand(c, { networked: cfg.prepareNetwork === true });
     if (why) return why;
     if (ids.has(c.id)) return `Two commands have the id "${c.id}".`;
     ids.add(c.id);
@@ -149,7 +184,8 @@ export function suggestChecks(files: RepoFile[]): CheckCommand[] {
       /* not JSON: no scripts */
     }
     const pm = file("pnpm-lock.yaml") ? "pnpm" : file("yarn.lock") ? "yarn" : file("bun.lock") || file("bun.lockb") ? "bun" : "npm";
-    const install: Record<string, string[]> = { npm: ["npm", "ci"], pnpm: ["pnpm", "install", "--frozen-lockfile"], yarn: ["yarn", "install", "--immutable"], bun: ["bun", "install", "--frozen-lockfile"] };
+    // Installs never run install scripts (H1); a project that needs them adds an offline "rebuild" step.
+    const install: Record<string, string[]> = { npm: ["npm", "ci", "--ignore-scripts"], pnpm: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"], yarn: ["yarn", "install", "--immutable", "--mode=skip-build"], bun: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"] };
     if (pm !== "npm" || file("package-lock.json")) out.push({ id: "install", label: "Install dependencies", kind: "prepare", argv: install[pm] });
     for (const name of CHECK_SCRIPTS) {
       if (typeof scripts[name] !== "string") continue;
@@ -165,14 +201,23 @@ export function suggestChecks(files: RepoFile[]): CheckCommand[] {
 
 // ---------- what a Checks step runs (§6.4) ----------
 
-export type PlannedCommand = { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number };
+export type PlannedCommand = { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number; offline?: true };
 
-/** The commands a step runs: every prepare command, and the checks its `only` names (all of them without `only`). */
+/** The commands a step runs: every prepare command, and the checks its `only` names (all of them without `only`). A rebuild step is marked offline. */
 export function commandsFor(cfg: ChecksConfig, st: Pick<StepDef, "checks">): PlannedCommand[] {
   const only = st.checks?.only?.length ? new Set(st.checks.only) : undefined;
   return cfg.commands
     .filter((c) => c.kind === "prepare" || !only || only.has(c.id))
-    .map((c) => ({ id: c.id, label: c.label, kind: c.kind, argv: [...c.argv], timeoutMs: (c.timeoutMinutes ?? cfg.commandTimeoutMinutes) * 60_000 }));
+    .map((c) => ({ id: c.id, label: c.label, kind: c.kind, argv: [...c.argv], timeoutMs: (c.timeoutMinutes ?? cfg.commandTimeoutMinutes) * 60_000, ...(c.kind === "prepare" && isRebuild(c.argv) ? { offline: true as const } : {}) }));
+}
+
+/** The ids of the configured check commands (the ones a step's `only` may name). */
+export const configuredCheckIds = (cfg: ChecksConfig | undefined) => (cfg?.commands ?? []).filter((c) => c.kind === "check").map((c) => c.id);
+
+/** Ids a step's `only` names that are not configured checks (M2: such a step runs nothing and must never count as passing). */
+export function missingChecks(cfg: ChecksConfig, st: Pick<StepDef, "checks">): string[] {
+  const ids = new Set(configuredCheckIds(cfg));
+  return (st.checks?.only ?? []).filter((id) => !ids.has(id));
 }
 
 /** Are checks on with at least one check command? Off, every Checks step skips. */
@@ -501,10 +546,13 @@ export function checkEvidence(s: State, sha: string): CheckEvidence {
   const run = best.checkRun!;
   const base = { forSha: sha, configRev: run.configRev, attemptId: best.attemptId, taskId: best.taskId, sandbox: run.sandbox };
   const failing = failedResults(run);
+  // M2: evidence means every configured check passed on this commit, not only the ones a step chose to run.
+  const missing = configuredCheckIds(cfg).filter((id) => run.results.find((r) => r.id === id)?.status !== "passed" && !failing.some((r) => r.id === id));
   const unresolved = F.unresolved(s, best);
-  if (!failing.length && unresolved === 0) return { ok: true, ...base, reason: `${run.results.filter((r) => r.kind === "check").map((r) => r.label).join(", ") || "The checks"} passed on ${h}${run.sandbox === "codex" ? "" : " (no sandbox)"}${run.simulated ? " (simulated)" : ""}.` };
+  if (!failing.length && !missing.length && unresolved === 0) return { ok: true, ...base, reason: `${run.results.filter((r) => r.kind === "check").map((r) => r.label).join(", ") || "The checks"} passed on ${h}${run.sandbox === "codex" ? "" : " (no sandbox)"}${run.simulated ? " (simulated)" : ""}.` };
   const accepted = s.decisions.find((d) => d.kind === "final-checks" && d.artifactId === best!.id && d.status === "accept");
   if (accepted) return { ok: true, ...base, acceptedByUser: true, reason: `You accepted failing checks on ${h} (${failing.map((r) => r.label).join(", ")}).` };
+  if (missing.length) return { ok: false, ...base, reason: `The run on ${h} did not run every configured check (missing: ${missing.join(", ")}).` };
   if (failing.length) return { ok: false, ...base, reason: `${failing.map((r) => r.label).join(", ")} failed on ${h}.` };
   return { ok: false, ...base, reason: `${unresolved} finding${unresolved === 1 ? "" : "s"} of the check run on ${h} need${unresolved === 1 ? "s" : ""} a decision.` };
 }
@@ -551,7 +599,7 @@ export function setChecks(state: State, input: ChecksInput, acknowledgeUnsandbox
   s.project.checks = next;
   const runsChanged = ["commands", "sandbox", "prepareNetwork", "commandTimeoutMinutes", "runTimeoutMinutes", "protectedInputs", "passEnv"].some((k) => JSON.stringify(prev[k as keyof ChecksConfig]) !== JSON.stringify(next[k as keyof ChecksConfig]));
   if ((next.enabled && !prev.enabled) || next.sandbox !== prev.sandbox) {
-    s.project.checksHealth = { sandbox: next.sandbox, status: "unverified", detail: "The sandbox has not been checked with these settings yet.", checkedAt: now, ...(s.project.checksHealth?.sandbox === next.sandbox ? s.project.checksHealth : {}), recheck: true };
+    s.project.checksHealth = { sandbox: next.sandbox, status: "unverified", detail: "The sandbox has not been checked with these settings yet.", checkedAt: now, ...(s.project.checksHealth?.sandbox === next.sandbox ? s.project.checksHealth : {}), recheck: true, requestedAt: now };
   }
   const stopped = runsChanged ? M.stopServiceRuns(s, now) : 0;
   const what = !next.enabled ? "off" : `on (settings r${next.rev}, ${next.sandbox === "codex" ? "Codex sandbox" : "NO SANDBOX, as you confirmed"}, ${next.commands.length} command${next.commands.length === 1 ? "" : "s"}${next.commands.length ? `: ${next.commands.map(argvText).join("; ")}` : ""})`;
@@ -563,18 +611,23 @@ export function setChecks(state: State, input: ChecksInput, acknowledgeUnsandbox
 export function recheckChecks(state: State, now: string): State {
   const s = structuredClone(state);
   const cfg = s.project.checks;
-  s.project.checksHealth = { sandbox: cfg.sandbox, status: "unverified", detail: "Checking…", checkedAt: now, ...(s.project.checksHealth?.sandbox === cfg.sandbox ? s.project.checksHealth : {}), recheck: true };
+  s.project.checksHealth = { sandbox: cfg.sandbox, status: "unverified", detail: "Checking…", checkedAt: now, ...(s.project.checksHealth?.sandbox === cfg.sandbox ? s.project.checksHealth : {}), recheck: true, requestedAt: now };
   M.event(s, now, "user", "config", `Checks sandbox (${cfg.sandbox === "codex" ? "Codex" : "none"}): check requested`);
   return s;
 }
 
-/** The service's probe result (observed state, written only by the service). */
-export function reportChecksHealth(state: State, health: ChecksHealth, now: string): State {
+/**
+ * The service's probe result (observed state, written only by the service). `startedAt`: when the
+ * probe began; a "Check again" asked for after that (L5) is kept, so the newer request still runs.
+ */
+export function reportChecksHealth(state: State, health: ChecksHealth, now: string, o: { startedAt?: string } = {}): State {
   const s = structuredClone(state);
   const prev = s.project.checksHealth;
-  const { recheck: _drop, ...clean } = health;
+  const { recheck: _drop, requestedAt: _drop2, ...clean } = health;
   void _drop;
-  s.project.checksHealth = { ...clean };
+  void _drop2;
+  const newerRequest = !!prev?.recheck && !!o.startedAt && (prev.requestedAt ?? prev.checkedAt) > o.startedAt;
+  s.project.checksHealth = { ...clean, ...(newerRequest ? { recheck: true as const, ...(prev!.requestedAt ? { requestedAt: prev!.requestedAt } : {}) } : {}) };
   if (!prev || prev.status !== health.status || prev.sandbox !== health.sandbox) {
     M.event(s, now, "system", "config", `Checks sandbox (${health.sandbox === "codex" ? "Codex" : "none"}): ${health.status}${health.detail ? ` — ${health.detail}` : ""}${health.status !== "ready" && health.sandbox === "codex" ? ". Check steps wait until it is ready" : ""}`);
   }

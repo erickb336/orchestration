@@ -17,6 +17,8 @@ import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:c
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createServer, type Server as NetServer } from "node:net";
+import { IGNORE_SCRIPTS_FLAGS, isInstall, isRebuild } from "../src/domain/checks";
 import type { CheckResult, ChecksConfig, ChecksHealth } from "../src/domain/types";
 import { killGroup, trackLive } from "./processes";
 import { SECRET_NAME, redact } from "./redact";
@@ -37,7 +39,33 @@ export interface PlannedCheck {
   kind: "prepare" | "check";
   argv: string[];
   timeoutMs: number;
+  /** A prepare command that runs install scripts in the copy: it never gets the network. */
+  offline?: true;
+  /** Variables set for this one command on top of the run's environment (the "no scripts" settings). */
+  env?: Record<string, string>;
 }
+
+/**
+ * H1: repository code never runs while the network is on. An install command that may use the network
+ * is run with its package manager's "no scripts" flag and environment; a rebuild command (the offline
+ * way to run install scripts) never gets the network. The result is what the runner starts.
+ */
+export const NO_SCRIPTS_ENV: Record<string, string> = {
+  // npm and pnpm read npm_config_*; Yarn Berry reads YARN_ENABLE_SCRIPTS (documented); Yarn classic reads YARN_IGNORE_SCRIPTS (best effort).
+  npm_config_ignore_scripts: "true",
+  YARN_ENABLE_SCRIPTS: "0",
+  YARN_IGNORE_SCRIPTS: "true",
+};
+export function hardenCommand(c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">): PlannedCheck {
+  if (c.kind !== "prepare") return c;
+  if (c.offline || isRebuild(c.argv)) return { ...c, offline: true };
+  if (!a.prepareNetwork) return c;
+  const flags = IGNORE_SCRIPTS_FLAGS[c.argv[0]];
+  const argv = flags && isInstall(c.argv) && !flags.some((f) => c.argv.includes(f)) ? [...c.argv, flags[0]] : c.argv;
+  return { ...c, argv, env: { ...(c.env ?? {}), ...NO_SCRIPTS_ENV } };
+}
+/** Does this command get the network: only a prepare command that is not offline, when the settings allow it. */
+export const networkFor = (c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">) => c.kind === "prepare" && a.prepareNetwork && !c.offline && !isRebuild(c.argv);
 
 export interface CheckAssignment {
   attemptId: string;
@@ -317,7 +345,14 @@ abstract class BaseChecks implements CheckRunner {
       this.finish(run, { type: "failed", attemptId: a.attemptId, message: `Checks reached their ${minutes}-minute time limit.` });
     }, a.runTimeoutMs);
     let prepareFailed = false;
-    for (const c of a.commands) {
+    try {
+      mkdirSync(a.tmpDir, { recursive: true, mode: 0o700 });
+    } catch {
+      /* the command reports it */
+    }
+    for (const planned of a.commands) {
+      // What runs is the hardened command (H1); the record keeps the id and label the settings gave it.
+      const c = hardenCommand(planned, a);
       if (run.done || run.stopRequested) break;
       if (prepareFailed) {
         run.results.push(notRun(c));
@@ -368,9 +403,50 @@ abstract class BaseChecks implements CheckRunner {
 
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
+/** The reaper's arguments: its options, then "--", then the command's argv exactly as given. */
+export function reaperArgs(argv: string[], o: { pidFile?: string; statusFile?: string } = {}): string[] {
+  return [REAPER, ...(o.pidFile ? ["--pid-file", o.pidFile] : []), ...(o.statusFile ? ["--status-file", o.statusFile] : []), "--", ...argv];
+}
+
+/**
+ * The command's own exit, as the reaper wrote it before its final group kill (M3). Undefined when
+ * there is no status file: the reaper itself was ended, so what the runner saw stands.
+ */
+export function readStatus(statusFile: string | undefined): { exitCode: number | undefined } | undefined {
+  if (!statusFile) return undefined;
+  try {
+    const s = JSON.parse(readFileSync(statusFile, "utf8")) as { code?: unknown; signal?: unknown };
+    // A command ended by a signal exits 128 plus the signal number, as a shell would report it.
+    if (typeof s.signal === "string") return { exitCode: 128 + (SIGNUM[s.signal] ?? 0) };
+    return { exitCode: typeof s.code === "number" ? s.code : undefined };
+  } catch {
+    return undefined;
+  }
+}
+const SIGNUM: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGABRT: 6, SIGKILL: 9, SIGSEGV: 11, SIGTERM: 15 };
+
+/** Where the reaper writes a command's exit: inside the run's temp directory, a writable root under the sandbox. */
+const statusFileFor = (a: Pick<CheckAssignment, "tmpDir">, c: Pick<PlannedCheck, "id">) => join(a.tmpDir, `${c.id}.status`);
+/** The status file a `command/exec` request named, if any. */
+function statusFileOf(params: CommandExecParams): string | undefined {
+  const i = params.command.indexOf("--status-file");
+  return i >= 0 ? params.command[i + 1] : undefined;
+}
+
+/**
+ * The verdict of a probe command that prints "DENIED <code>" and exits 3 when the sandbox refused it,
+ * or `success` when it got through (L5): only an explicit refusal (EPERM or EACCES) is a denial. An
+ * unreachable network, a missing directory or a timeout proves nothing and stays "unknown".
+ */
+export function probeVerdict(stdout: string, exitCode: number | undefined, success: string): "denied" | "allowed" | "unknown" {
+  if (stdout.includes(success)) return "allowed";
+  const m = /DENIED (E[A-Z]+)/.exec(stdout);
+  return exitCode === 3 && m && (m[1] === "EPERM" || m[1] === "EACCES") ? "denied" : "unknown";
+}
+
 /** Start argv through the reaper (its own process group) and capture its output up to the cap. */
-function spawnReaper(spawnFn: SpawnFn, argv: string[], o: { cwd: string; env: NodeJS.ProcessEnv; pidFile?: string }): { child: ChildProcess; done: Promise<Captured> } {
-  const child = spawnFn(process.execPath, [REAPER, ...(o.pidFile ? ["--pid-file", o.pidFile] : []), "--", ...argv], {
+function spawnReaper(spawnFn: SpawnFn, argv: string[], o: { cwd: string; env: NodeJS.ProcessEnv; pidFile?: string; statusFile?: string }): { child: ChildProcess; done: Promise<Captured> } {
+  const child = spawnFn(process.execPath, reaperArgs(argv, { pidFile: o.pidFile, statusFile: o.statusFile }), {
     cwd: o.cwd,
     env: o.env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -402,7 +478,11 @@ function spawnReaper(spawnFn: SpawnFn, argv: string[], o: { cwd: string; env: No
     const settle = (code: number | null, error?: Error) => {
       if (settled) return;
       settled = true;
-      resolveDone({ exitCode: code ?? undefined, stdout: Buffer.concat(out).toString("utf8"), stderr: `${Buffer.concat(err).toString("utf8")}${error ? `\n${error.message}` : ""}`, timedOut: false, capped, ended: false, produced });
+      // The reaper ends its own group (itself included) after the command exited: the command's real
+      // exit is in the status file. Without one, the reaper was ended from outside and nothing is assumed.
+      const status = code === null ? readStatus(o.statusFile) : undefined;
+      const exitCode = code ?? status?.exitCode;
+      resolveDone({ exitCode, stdout: Buffer.concat(out).toString("utf8"), stderr: `${Buffer.concat(err).toString("utf8")}${error ? `\n${error.message}` : ""}`, timedOut: false, capped, ended: false, produced });
     };
     child.on("error", (e) => settle(null, e));
     child.on("close", (code) => settle(code));
@@ -424,8 +504,10 @@ export class DirectChecks extends BaseChecks {
   protected async exec(run: Run, c: PlannedCheck): Promise<Captured> {
     const { a } = run;
     let started: ReturnType<typeof spawnReaper>;
+    const statusFile = statusFileFor(a, c);
     try {
-      started = spawnReaper(this.spawnFn, c.argv, { cwd: a.workspace, env: a.env });
+      rmSync(statusFile, { force: true });
+      started = spawnReaper(this.spawnFn, c.argv, { cwd: a.workspace, env: { ...a.env, ...(c.env ?? {}) }, statusFile });
     } catch (e) {
       return { exitCode: undefined, stdout: "", stderr: `could not start ${c.argv[0]}: ${e instanceof Error ? e.message : String(e)}`, timedOut: false, capped: false, ended: false };
     }
@@ -579,20 +661,25 @@ export class CodexSandboxChecks extends BaseChecks {
     this.endServer(server);
   }
 
-  /** The `command/exec` request for one command: argv through the reaper, the run's directories writable, network only for prepare when allowed. */
-  static execParams(a: Pick<CheckAssignment, "attemptId" | "workspace" | "prepareNetwork" | "env" | "tmpDir" | "cacheDir">, c: PlannedCheck, o: { pidFile?: string } = {}): CommandExecParams {
+  /**
+   * The `command/exec` request for one command: argv through the reaper, the run's directories
+   * writable, network only for a prepare command that downloads (never for a rebuild), when allowed.
+   * The command is hardened here too (H1), whatever the caller passed.
+   */
+  static execParams(a: Pick<CheckAssignment, "attemptId" | "workspace" | "prepareNetwork" | "env" | "tmpDir" | "cacheDir">, c0: PlannedCheck, o: { pidFile?: string; statusFile?: string } = {}): CommandExecParams {
+    const c = hardenCommand(c0, a);
     const policy: SandboxPolicy = {
       type: "workspaceWrite",
       writableRoots: [a.workspace, a.tmpDir, a.cacheDir],
-      networkAccess: c.kind === "prepare" && a.prepareNetwork,
+      networkAccess: networkFor(c, a),
       excludeTmpdirEnvVar: true,
       excludeSlashTmp: true,
     };
     return {
-      command: [process.execPath, REAPER, ...(o.pidFile ? ["--pid-file", o.pidFile] : []), "--", ...c.argv],
+      command: [process.execPath, ...reaperArgs(c.argv, { pidFile: o.pidFile, statusFile: o.statusFile })],
       processId: `${a.attemptId}:${c.id}`,
       cwd: a.workspace,
-      env: { ...a.env },
+      env: { ...a.env, ...(c.env ?? {}) },
       timeoutMs: c.timeoutMs,
       outputBytesCap: OUTPUT_CAP,
       sandboxPolicy: policy,
@@ -602,6 +689,9 @@ export class CodexSandboxChecks extends BaseChecks {
   /** Run one command on a server. Resolves with what was captured; a stop or the watchdog ends it. */
   private async execOn(server: Server, params: CommandExecParams, c: PlannedCheck, hold: { current?: () => void; run?: Run }): Promise<Captured> {
     const t0 = Date.now();
+    // A status file from an earlier command of the same id must never be read as this one's.
+    const statusFile = statusFileOf(params);
+    if (statusFile) rmSync(statusFile, { force: true });
     let timedOut = false;
     let ended = false;
     let killed = false;
@@ -638,8 +728,11 @@ export class CodexSandboxChecks extends BaseChecks {
     const elapsed = Date.now() - t0;
     if (elapsed >= c.timeoutMs) timedOut = true;
     if (!answer) return { exitCode: undefined, stdout: "", stderr: error ?? "no answer", timedOut, capped: false, ended };
+    // The reaper ends its own group (itself included) once the command exited; the command's real exit is in its status file.
+    const reported = typeof answer.exitCode === "number" ? answer.exitCode : undefined;
+    const status = reported === undefined || reported >= 128 ? readStatus(statusFileOf(params)) : undefined;
     return {
-      exitCode: typeof answer.exitCode === "number" ? answer.exitCode : undefined,
+      exitCode: status ? status.exitCode : reported,
       stdout: answer.stdout ?? "",
       stderr: answer.stderr ?? "",
       timedOut,
@@ -652,7 +745,7 @@ export class CodexSandboxChecks extends BaseChecks {
     const server = servers.get(run);
     if (!server) return { exitCode: undefined, stdout: "", stderr: "no app-server for this run", timedOut: false, capped: false, ended: true };
     const hold: { current?: () => void } = {};
-    const p = this.execOn(server, CodexSandboxChecks.execParams(run.a, c), c, hold);
+    const p = this.execOn(server, CodexSandboxChecks.execParams(run.a, c, { statusFile: statusFileFor(run.a, c) }), c, hold);
     run.current = () => hold.current?.();
     const cap = await p;
     run.current = undefined;
@@ -662,13 +755,15 @@ export class CodexSandboxChecks extends BaseChecks {
   }
 
   /**
-   * The probe (§6.5.4): four service-owned commands in a scratch directory, never the repository.
-   * A write inside the writable root must work; a write into $HOME must fail; a connection to
-   * 1.1.1.1:443 must fail; a grandchild the reaper started must be gone after terminate.
+   * The probe (§6.5.4): service-owned commands in a scratch directory, never the repository. A write
+   * inside the writable root must work; a write into $HOME must be refused; a connection to this
+   * machine's own loopback (where the service listens, H1) and to 1.1.1.1:443 must be refused; a
+   * grandchild the reaper started must be gone after terminate. Only an explicit refusal counts (L5).
+   * `checkedAt` is when the probe began, so a "Check again" asked for meanwhile is not lost.
    */
   async probe(sandbox: "codex" | "none"): Promise<ChecksHealth> {
-    const checkedAt = () => new Date().toISOString();
-    if (sandbox === "none") return { sandbox, status: "ready", detail: "No sandbox: checks run with your permissions on this computer, as you chose.", checkedAt: checkedAt() };
+    const checkedAt = new Date().toISOString();
+    if (sandbox === "none") return { sandbox, status: "ready", detail: "No sandbox: checks run with your permissions on this computer, as you chose.", checkedAt };
     const rand = Math.random().toString(36).slice(2, 10);
     const scratch = join(this.probeDir, `probe-${rand}`);
     const tmp = join(scratch, "tmp");
@@ -678,8 +773,10 @@ export class CodexSandboxChecks extends BaseChecks {
     const env = checkEnv(this.baseEnv, { passEnv: [] }, { tmp, cache });
     const home = this.baseEnv.HOME ?? "";
     const outside = join(home, `.orchestrator-probe-${rand}`);
-    const probes: NonNullable<ChecksHealth["probes"]> = { writeOutside: "unknown", network: "unknown" };
+    const probes: NonNullable<ChecksHealth["probes"]> = { writeOutside: "unknown", network: "unknown", loopback: "unknown" };
+    const listeners: NetServer[] = [];
     const cleanup = () => {
+      for (const l of listeners) l.close();
       rmSync(scratch, { recursive: true, force: true });
       rmSync(outside, { force: true });
     };
@@ -687,22 +784,43 @@ export class CodexSandboxChecks extends BaseChecks {
     try {
       server = await this.startServer(env, scratch);
       const base = { attemptId: `probe-${rand}`, workspace: scratch, prepareNetwork: false, env, tmpDir: tmp, cacheDir: cache };
-      const runIt = (id: string, argv: string[], pidFile?: string) => this.execOn(server!, CodexSandboxChecks.execParams(base, { id, label: id, kind: "check", argv, timeoutMs: 20_000 }, { pidFile }), { id, label: id, kind: "check", argv, timeoutMs: 20_000 }, {});
+      const runIt = (id: string, argv: string[], pidFile?: string) => this.execOn(server!, CodexSandboxChecks.execParams(base, { id, label: id, kind: "check", argv, timeoutMs: 20_000 }, { pidFile, statusFile: statusFileFor(base, { id }) }), { id, label: id, kind: "check", argv, timeoutMs: 20_000 }, {});
       const node = process.execPath;
+      const unavailable = (detail: string): ChecksHealth => ({ sandbox, status: "unavailable", detail, checkedAt, probes });
       // 1. A write inside the writable root must succeed.
       const inside = await runIt("write-inside", [node, "-e", `require("node:fs").writeFileSync(process.argv[1], "ok")`, join(scratch, "inside.txt")]);
       if (inside.exitCode !== 0 || !existsSync(join(scratch, "inside.txt"))) {
-        return { sandbox, status: "unavailable", detail: `A command could not write inside its own directory (exit ${inside.exitCode ?? "?"}): ${(inside.stderr || inside.stdout).trim().slice(0, 200) || "no output"}`, checkedAt: checkedAt(), probes };
+        return unavailable(`A command could not write inside its own directory (exit ${inside.exitCode ?? "?"}): ${(inside.stderr || inside.stdout).trim().slice(0, 200) || "no output"}`);
       }
-      // 2. A write outside (into $HOME) must fail.
+      // 2. A write outside (into $HOME) must be refused by the sandbox (EPERM or EACCES), not merely fail.
       const out = await runIt("write-outside", [node, "-e", `try { require("node:fs").writeFileSync(process.argv[1], "x"); console.log("WROTE") } catch (e) { console.log("DENIED " + e.code); process.exit(3) }`, outside]);
-      probes.writeOutside = existsSync(outside) || out.stdout.includes("WROTE") ? "allowed" : out.exitCode === 3 ? "denied" : "unknown";
-      if (probes.writeOutside !== "denied") return { sandbox, status: "unavailable", detail: `The sandbox let a command write outside its directory (${probes.writeOutside}); checks are held until it is fixed or you choose to run without a sandbox.`, checkedAt: checkedAt(), probes };
-      // 3. The network must be unreachable: an immediate error, not a timeout, proves the sandbox denied it.
+      probes.writeOutside = existsSync(outside) ? "allowed" : probeVerdict(out.stdout, out.exitCode, "WROTE");
+      if (probes.writeOutside !== "denied") return unavailable(probes.writeOutside === "allowed" ? "The sandbox let a command write outside its directory; checks are held until it is fixed or you choose to run without a sandbox." : `Could not prove the sandbox blocks writes outside the run (${out.stdout.trim().slice(0, 60) || "no answer"}). Check again.`);
+      // 3. This machine's own loopback must be refused: the service's control API listens there (H1).
+      //    The probe listens itself, on 127.0.0.1 and ::1, so the answer does not depend on the service's port.
+      const targets: { host: string; port: number }[] = [];
+      for (const host of ["127.0.0.1", "::1"]) {
+        const l = await new Promise<NetServer | undefined>((res) => {
+          const srv = createServer();
+          srv.once("error", () => res(undefined));
+          srv.listen(0, host, () => res(srv));
+        });
+        if (!l) continue; // no such loopback on this machine: nothing to reach there
+        listeners.push(l);
+        targets.push({ host, port: (l.address() as { port: number }).port });
+      }
+      for (const t of targets) {
+        const loop = await runIt(`loopback-${t.host === "::1" ? "v6" : "v4"}`, [node, "-e", `const s = require("node:net").connect(Number(process.argv[2]), process.argv[1]); s.on("connect", () => { console.log("CONNECTED"); process.exit(0) }); s.on("error", (e) => { console.log("DENIED " + e.code); process.exit(3) }); setTimeout(() => { console.log("TIMEOUT"); process.exit(4) }, 2000)`, t.host, String(t.port)]);
+        const v = probeVerdict(loop.stdout, loop.exitCode, "CONNECTED");
+        probes.loopback = probes.loopback === "allowed" || v === "allowed" ? "allowed" : probes.loopback === "unknown" && targets.indexOf(t) > 0 ? "unknown" : v;
+        if (v !== "denied") break;
+      }
+      if (probes.loopback !== "denied") return unavailable(probes.loopback === "allowed" ? "The sandbox does not block your own machine: a command reached this computer's loopback address, where this service listens. Checks are held." : "Could not prove the sandbox blocks connections to this machine's own loopback address. Check again.");
+      // 4. The network must be refused by the sandbox: an unreachable network or a timeout proves nothing.
       const net = await runIt("network", [node, "-e", `const s = require("node:net").connect(443, "1.1.1.1"); s.on("connect", () => { console.log("CONNECTED"); process.exit(0) }); s.on("error", (e) => { console.log("DENIED " + e.code); process.exit(3) }); setTimeout(() => { console.log("TIMEOUT"); process.exit(4) }, 2000)`]);
-      probes.network = net.stdout.includes("CONNECTED") ? "allowed" : net.exitCode === 3 ? "denied" : "unknown";
-      if (probes.network !== "denied") return { sandbox, status: "unavailable", detail: probes.network === "allowed" ? "The sandbox let a command open a network connection; checks are held." : "Could not prove the sandbox blocks the network (the connection attempt timed out instead of being refused). Check again with the network on.", checkedAt: checkedAt(), probes };
-      // 4. A grandchild the reaper started must be gone after terminate.
+      probes.network = probeVerdict(net.stdout, net.exitCode, "CONNECTED");
+      if (probes.network !== "denied") return unavailable(probes.network === "allowed" ? "The sandbox let a command open a network connection; checks are held." : `Could not prove the sandbox blocks the network (${net.stdout.trim().slice(0, 60) || "no answer"}: not a refusal). Check again with the network on.`);
+      // 5. A grandchild the reaper started must be gone after terminate.
       const pidFile = join(scratch, "child.pid");
       const long = { id: "grandchild", label: "grandchild", kind: "check" as const, argv: [node, "-e", "setInterval(() => {}, 1000)"], timeoutMs: 20_000 };
       const hold: { current?: () => void } = {};
@@ -720,7 +838,7 @@ export class CodexSandboxChecks extends BaseChecks {
       if (pid === undefined) {
         hold.current?.();
         await running;
-        return { sandbox, status: "unavailable", detail: "The reaper did not report its child's pid within 5 s; termination could not be verified.", checkedAt: checkedAt(), probes };
+        return { sandbox, status: "unavailable", detail: "The reaper did not report its child's pid within 5 s; termination could not be verified.", checkedAt, probes };
       }
       hold.current?.();
       await running;
@@ -739,11 +857,11 @@ export class CodexSandboxChecks extends BaseChecks {
         } catch {
           /* raced */
         }
-        return { sandbox, status: "unavailable", detail: "A process a check started survived the command's termination; the reaper could not end its group.", checkedAt: checkedAt(), probes };
+        return { sandbox, status: "unavailable", detail: "A process a check started survived the command's termination; the reaper could not end its group.", checkedAt, probes };
       }
-      return { sandbox, status: "ready", detail: "Codex sandbox verified: writes outside the run's directories and network connections are refused, and terminated commands take their children with them.", checkedAt: checkedAt(), probes };
+      return { sandbox, status: "ready", detail: "Codex sandbox verified: writes outside the run's directories, connections to this machine's own loopback and network connections are refused, and terminated commands take their children with them.", checkedAt, probes };
     } catch (e) {
-      return { sandbox, status: "unavailable", detail: redact(e instanceof Error ? e.message : String(e), this.baseEnv).slice(0, 300), checkedAt: checkedAt(), probes };
+      return { sandbox, status: "unavailable", detail: redact(e instanceof Error ? e.message : String(e), this.baseEnv).slice(0, 300), checkedAt, probes };
     } finally {
       if (server) this.endServer(server);
       cleanup();

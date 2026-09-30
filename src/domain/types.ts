@@ -533,7 +533,10 @@ export interface ChecksHealth {
   detail: string;
   checkedAt: string;
   recheck?: true;
-  probes?: { writeOutside: "denied" | "allowed" | "unknown"; network: "denied" | "allowed" | "unknown" };
+  /** When the pending recheck was asked for: a probe that began earlier does not clear it (L5). */
+  requestedAt?: string;
+  /** `loopback`: a connection to this machine's own 127.0.0.1 and ::1 (where the service listens) must be refused too. */
+  probes?: { writeOutside: "denied" | "allowed" | "unknown"; network: "denied" | "allowed" | "unknown"; loopback?: "denied" | "allowed" | "unknown" };
 }
 
 /** Evidence of service checks for a pull request's change, bound to the exact commit and settings revision. */
@@ -700,7 +703,8 @@ export interface RunSnapshot {
     configRev: number;
     sandbox: "codex" | "none";
     target: { artifactId: string; ref: string };
-    commands: { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number }[];
+    /** `offline`: a prepare command that runs install scripts in the copy and never gets the network. */
+    commands: { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number; offline?: true }[];
     reusedFrom?: string;
   };
 }
@@ -1176,7 +1180,7 @@ export interface PrDelivery {
   closedByRequest?: boolean;
   // intent
   phase: "built" | "open" | "merged" | "closed";
-  op?: { id: string; kind: "publish" | "push" | "merge" | "close"; at: string; headSha: string };
+  op?: { id: string; kind: "publish" | "push" | "merge" | "close" | "rerun"; at: string; headSha: string };
   // observed and recorded
   number?: number;
   url?: string;
@@ -1210,8 +1214,12 @@ export interface PrDelivery {
   counters: { mergeAttempts: number; baseUpdates: number; repairs: number; reviews: number; failures: number; reruns?: number; checks?: number };
   /** ORC-013: service-check evidence for `changeSha` under the current check settings. */
   checks?: CheckEvidence;
-  /** ORC-013: re-runs of GitHub-cancelled jobs requested for the current head. */
-  ciReruns?: { headSha: string; used: { check: string; jobId: number; at: string; opId: string }[] };
+  /**
+   * ORC-013: re-runs of GitHub-cancelled jobs requested for the current head. `seen`: observations
+   * since the request that still showed the cancelled run; after 2 (or 5 minutes) the check is
+   * judged as observed.
+   */
+  ciReruns?: { headSha: string; used: { check: string; jobId: number; at: string; opId: string; seen?: number }[] };
   /** Backoff after a failed operation. */
   nextAt?: string;
   /** When headSha was first observed on GitHub (check timeouts). */
