@@ -32,6 +32,11 @@ import {
   type ConsumedInput,
   type EventKind,
   type ModelSelection,
+  type Coverage,
+  type CoverageState,
+  type LeadQuestion,
+  type ProjectStage,
+  type ShapingArea,
   type ProviderId,
   type RoleId,
   type SelectionSource,
@@ -40,9 +45,13 @@ import {
   type Step,
   type StepDef,
   type Task,
+  type VisionDoc,
+  type VisionDraft,
   type WorkflowTemplate,
   ControlError,
+  COVERAGE_STATES,
   REVIEW_ROLES,
+  SHAPING_AREAS,
   autoModelDefaults,
   AUTOPILOT,
   DEFAULT_PR_DELIVERY,
@@ -413,19 +422,29 @@ export function stateLabel(s: State, t: Task): string {
     if (open === 0) return "Waiting for child pull requests to merge";
     return `Waiting for ${open} child task${open === 1 ? "" : "s"}`;
   }
-  if (t.lifecycle === "active" && active.length === 0) return "Queued for next step";
+  // ORC-012: while shaping, a step that would start next waits for Start building; nothing is paused.
+  if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (shaping)" : "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return waitingLabel(s, t);
+  // ORC-012 review 2: the roadmap's own hold is named as such; the user's hold before start stays its own label.
+  // ORC-014 review 11: what follows Start building is decided by the involvement setting at that moment,
+  // so the label reads it now; a dependency wait is shown under the shaping hold too.
+  if (col === "ready" && t.heldForShaping) {
+    const dep = waitingOn(s, t);
+    return `Planned; waits until you start building${dep ? ` and on ${dep}` : ""}, then ${startBuildingPlan(s).release ? "starts on Autopilot" : "waits for your release (your involvement setting)"}`;
+  }
   if (col === "ready" && t.holdBeforeStart) return "Held before start";
   if (col === "ready" && s.project.hold) return "Ready (project paused)";
+  // ORC-012 review 13: a dependency wait is shown before the stage, with shaping noted.
   if (col === "ready" && waitingOn(s, t)) return waitingLabel(s, t);
+  if (col === "ready" && s.project.stage === "shaping") return "Ready (shaping)";
   return col[0].toUpperCase() + col.slice(1);
 }
 
-/** "Waiting on T-x", or "Waiting on T-x (deferred)" when the prerequisite itself is deferred. */
+/** "Waiting on T-x", or "Waiting on T-x (deferred)" when the prerequisite itself is deferred; "(shaping)" while nothing would start anyway. */
 function waitingLabel(s: State, t: Task): string {
   const dep = waitingOn(s, t)!;
   const d = s.tasks.find((x) => x.id === dep);
-  return `Waiting on ${dep}${d && deferredBy(s, d) ? " (deferred)" : ""}`;
+  return `Waiting on ${dep}${d && deferredBy(s, d) ? " (deferred)" : ""}${s.project.stage === "shaping" ? " (shaping)" : ""}`;
 }
 
 /** Why runs on this task are stopping, derived from the stop requests and current desired state. */
@@ -651,13 +670,21 @@ export function resumeTask(state: State, taskId: string, now: string): State {
   return s;
 }
 
+/** ORC-012 review 2: any hold change the user makes on a roadmap task takes the task out of the shaping hold; the user's choice then stands. */
+function takeOverShapingHold(s: State, t: Task, now: string) {
+  if (!t.heldForShaping) return;
+  delete t.heldForShaping;
+  event(s, now, "user", "control", "No longer held by the roadmap: your hold setting decides when it starts", t.id);
+}
+
 export function startHeldTask(state: State, taskId: string, now: string): State {
   const s = draft(state);
   const t = getTask(s, taskId);
   assertOpen(t, "Starting");
+  takeOverShapingHold(s, t, now);
   t.holdBeforeStart = false;
   touch(t, now);
-  event(s, now, "user", "control", "Hold-before-start released; eligible for dispatch", t.id);
+  event(s, now, "user", "control", `Hold-before-start released; eligible for dispatch${s.project.stage === "shaping" ? " once you start building" : ""}`, t.id);
   return s;
 }
 
@@ -665,6 +692,7 @@ export function setHoldBeforeStart(state: State, taskId: string, value: boolean,
   const s = draft(state);
   const t = getTask(s, taskId);
   assertOpen(t, "Changing hold");
+  takeOverShapingHold(s, t, now);
   t.holdBeforeStart = value;
   touch(t, now);
   event(s, now, "user", "control", value ? "Hold before start enabled" : "Hold before start removed", t.id);
@@ -994,10 +1022,15 @@ export function rerunStep(state: State, taskId: string, stepId: string, now: str
 
 // ---------- vision ----------
 
-/** Append a vision revision. The user's edits and the lead's focus changes (ORC-009) both go through here. */
-function pushVision(s: State, v: Pick<VisionRevision, "author" | "text" | "focus" | "reason" | "source">, now: string, message?: string): VisionRevision {
+/**
+ * Append a vision revision. The user's edits and the lead's focus changes (ORC-009) both go through here.
+ * ORC-014: the document set carries forward unless the revision changes it, so every revision records
+ * exactly which documents applied.
+ */
+function pushVision(s: State, v: Pick<VisionRevision, "author" | "text" | "focus" | "reason" | "source" | "docIds">, now: string, message?: string): VisionRevision {
   const prev = currentVision(s);
-  const rev: VisionRevision = { rev: prev.rev + 1, at: now, author: v.author, text: v.text, focus: v.focus, reason: v.reason, ...(v.source ? { source: v.source } : {}) };
+  const docIds = v.docIds ?? prev.docIds;
+  const rev: VisionRevision = { rev: prev.rev + 1, at: now, author: v.author, text: v.text, focus: v.focus, reason: v.reason, ...(v.source ? { source: v.source } : {}), ...(docIds ? { docIds: [...docIds] } : {}) };
   s.project.visions.push(rev);
   event(s, now, v.author, "vision", message ?? `Vision r${rev.rev}: ${v.reason}`);
   return rev;
@@ -1007,6 +1040,8 @@ export function editVision(state: State, expectedRev: number, text: string, focu
   const s = draft(state);
   const v = currentVision(s);
   if (v.rev !== expectedRev) throw new StaleWriteError(expectedRev, v.rev);
+  // ORC-012 review 6: a project never builds without a vision. Clearing it is possible while shaping.
+  if (s.project.stage === "building" && !text.trim()) throw new ControlError("The vision cannot be empty while building. Go back to shaping to clear it.");
   pushVision(s, { author: "user", text, focus, reason }, now);
   return s;
 }
@@ -1080,12 +1115,15 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
   const s = draft(state);
   if (s.project.hold) return s;
   const vision = currentVision(s);
+  // ORC-012: while shaping no worker step starts, on any task. Like a deferral (and unlike a hold),
+  // running work finishes and its result is accepted, settled tasks become Done, and nothing is paused.
+  const shaping = s.project.stage === "shaping";
   // A stable sort: tasks the lead did not name keep their relative (creation) order.
   const tasks = s.tasks.map((t) => ({ t, rank: dispatchRank(s, t) })).sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map((x) => x.t);
   for (const t of tasks) {
     if (activeAttempts(s).length >= s.project.workerLimit) break;
     if (t.lifecycle !== "ready" && t.lifecycle !== "active") continue;
-    if (t.hold || t.holdBeforeStart || t.controlFailure || t.legacySpecUnavailable) continue;
+    if (t.hold || t.holdBeforeStart || t.heldForShaping || t.controlFailure || t.legacySpecUnavailable) continue;
     if (waitingOn(s, t) || blockedReason(s, t)) continue;
     // Reconcile before redispatch: nothing new while any run on this task is still stopping.
     if (activeAttempts(s, t.id).some((a) => a.outcome === "stopping")) continue;
@@ -1100,7 +1138,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
     // complete (including steps settled by skipping) still becomes Done and is queued for integration.
     // It is not a hold: the running step's result is accepted by reportCompletion as usual. Below, a
     // conditional step with nothing to do still settles by skipping; only starting work is withheld.
-    const deferred = !!deferredBy(s, t);
+    const deferred = shaping || !!deferredBy(s, t);
     // Parallel steps become their copies the first time they are ready to run.
     if (!deferred) {
       for (const st of [...t.steps]) {
@@ -1133,7 +1171,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           continue;
         }
       }
-      if (deferred) continue; // ORC-009: nothing new starts on a deferred task
+      if (deferred) continue; // ORC-009: nothing new starts on a deferred task; ORC-012: nor on any task while shaping
       const r = resolveStep(s, t, st);
       if (r.ok && opts.deferred?.includes(r.selection.provider)) continue;
       if (r.ok && activeAttempts(s).filter((x) => x.snapshot.provider === r.selection.provider).length >= (s.project.providerLimits?.[r.selection.provider] ?? s.project.workerLimit)) continue;
@@ -1642,11 +1680,15 @@ export function setCatalog(state: State, provider: ProviderId, models: CatalogMo
 
 /**
  * Start a real project: empty board, the given repository and vision. Refused while any run is
- * active, so no live work is orphaned by the replacement.
+ * active, so no live work is orphaned by the replacement. ORC-012: `stage` defaults to building (the
+ * vision is then required); a project that starts by shaping may leave the vision empty.
  */
-export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string }, now: string): State {
+export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string; stage?: ProjectStage }, now: string): State {
   if (activeAttempts(state).length || activeLeadRun(state)) throw new ControlError("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
-  if (!init.name.trim() || !init.repoPath.trim() || !init.vision.trim()) throw new ControlError("Name, repository path, and vision are required.");
+  const stage: ProjectStage = init.stage ?? "building";
+  if (stage !== "shaping" && stage !== "building") throw new ControlError("Unknown project stage.");
+  if (!init.name.trim() || !init.repoPath.trim()) throw new ControlError("Name and repository path are required.");
+  if (stage === "building" && !init.vision.trim()) throw new ControlError("A vision is required to start building. Choose to shape it with the lead first, or write it now.");
   const s = draft(state);
   s.project.id = `p-${Date.parse(now).toString(36)}-${s.seq.toString(36)}`;
   s.project.sample = false;
@@ -1654,7 +1696,12 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.project.repoPath = init.repoPath.trim();
   // A new project starts from provider-neutral defaults, never another project's model choices.
   Object.assign(s.project, autoModelDefaults());
-  s.project.visions = [{ rev: 1, at: now, author: "user", text: init.vision.trim(), focus: init.focus.trim(), reason: "Project created" }];
+  s.project.visions = [{ rev: 1, at: now, author: "user", text: init.vision.trim(), focus: init.focus.trim(), reason: stage === "shaping" ? "Project created; the vision is shaped with the lead first" : "Project created" }];
+  // ORC-014: documents belong to the project they were attached to; a new project starts with none.
+  s.project.visionDocs = [];
+  s.project.stage = stage;
+  if (stage === "shaping") s.project.shapingSince = now;
+  else delete s.project.shapingSince;
   s.project.hold = false;
   s.project.lastVisitAt = now;
   // Delivery to GitHub is a choice made per project and repository: a new project starts with it off
@@ -1669,8 +1716,9 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.leadRuns = [];
   // Review finding 6: an old project's change sets must not rewrite a new project's task with the same id.
   s.steering = [];
+  s.visionDrafts = [];
   s.project.lastPlanningAt = undefined;
-  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}`);
+  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}${stage === "shaping" ? "; shaping the vision first" : ""}`);
   return s;
 }
 
@@ -1851,6 +1899,8 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
     if (!newMessage && nowMs - Date.parse(lastEnd) < Math.min(60, 2 ** (streak - 1)) * 60_000) return null;
   }
   if (pendingMessages(s).length) return "message";
+  // ORC-012: while shaping the lead only answers messages; planning is off until the user starts building.
+  if (s.project.stage === "shaping") return null;
   const a = s.project.autonomy;
   if (!a.enabled || !inHours(a.operatingHours, localMinutes)) return null;
   // ORC-009: deferred lead work does not count toward the open cap, but it cannot pile up without limit either.
@@ -1957,6 +2007,12 @@ export interface LeadOutput {
   proposals: LeadProposal[];
   /** ORC-009: the steering block as found in the JSON (untrusted; validated here). Absent or null: none. */
   steer?: unknown;
+  /** ORC-012: the vision draft as found in the JSON (untrusted; validated here). Absent or null: none. */
+  vision?: unknown;
+  /** ORC-012: the lead's coverage of the vision's areas, as found (untrusted; validated here). */
+  coverage?: unknown;
+  /** ORC-012: the lead's questions to the user, as found (untrusted; validated here). */
+  questions?: unknown;
   /** Why the output could not be read (no JSON block): recorded on the run and shown under the reply. */
   problem?: string;
 }
@@ -2022,12 +2078,38 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     if (s.steering.length > 200) s.steering.splice(0, s.steering.length - 200);
     r.changeSetId = set.id;
   }
+  // ORC-012: a vision draft. Never applied: it is recorded as a suggestion for the user to accept, edit
+  // or dismiss. The run-outcome guard above and the draft id (one per run) make it record once.
+  let visionDraft: VisionDraft | undefined;
+  if (out.vision !== undefined && out.vision !== null && !s.visionDrafts.some((d) => d.leadRunId === r.id)) {
+    const v = validateVisionDraft(s, r, out.vision);
+    if (v.ok) visionDraft = draftFromRun(s, r, v.draft, now);
+    else rejected.push(`Vision draft: ${v.why}`);
+  }
+  // ORC-012: coverage lives on the run (the latest stands); questions live on the reply. Both come only
+  // from runs that answer the user; anything unreadable is left out with a note.
+  let questions: LeadQuestion[] = [];
+  if (out.coverage !== undefined && out.coverage !== null) {
+    const c = validateCoverage(r, out.coverage);
+    rejected.push(...c.notes.map((n) => `Coverage: ${n}`));
+    // ORC-012 review 8: a block with no valid entry reports nothing; the previous coverage stands.
+    if (c.ok && Object.keys(c.coverage).length === 0) rejected.push("Coverage: no valid entries; the previous coverage stands");
+    else if (c.ok) r.coverage = c.coverage;
+  }
+  if (out.questions !== undefined && out.questions !== null) {
+    const q = validateQuestions(r, out.questions);
+    questions = q.questions;
+    rejected.push(...q.notes.map((n) => `Questions: ${n}`));
+  }
   const limit = Math.max(1, s.project.autonomy.maxProposalsPerCycle);
   const maxOpen = s.project.autonomy.maxOpenProposals;
   const openRoom = Math.max(0, maxOpen - openLeadProposals(s).length);
   // Review finding 15: the bound on deferred lead work applies to message runs as it does to planning.
   const deferredLead = deferredLeadRoots(s).length;
   // With autonomy off, proposals from a conversation still become tasks, but they wait for the user.
+  // ORC-012: while shaping every proposal is the roadmap: held by its own flag until the user starts
+  // building (review 2); the hold before start follows the involvement setting as for any lead proposal.
+  const shaping = s.project.stage === "shaping";
   const hold = !s.project.autonomy.enabled || s.project.autonomy.holdLeadProposals;
   const created: string[] = [];
   const label = (p: unknown) => {
@@ -2053,7 +2135,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
         rejected.push(`"${label(p)}": ${why}`);
         continue;
       }
-      created.push(proposeTask(s, p, now, hold));
+      created.push(proposeTask(s, p, now, hold, undefined, shaping));
     } catch (err) {
       rejected.push(`"${label(p)}": invalid (${err instanceof Error ? err.message : String(err)})`);
     }
@@ -2066,17 +2148,21 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     id: nextId(s, "msg"),
     at: now,
     author: "lead",
-    text: out.reply.trim() || (applied ? "I made the changes listed below." : suggested ? "I suggest the changes listed below." : created.length ? "I proposed new work; see the linked tasks." : "No reply."),
+    text:
+      out.reply.trim() ||
+      (visionDraft ? "I drafted the vision; see below." : questions.length ? "I have a few questions; see below." : applied ? "I made the changes listed below." : suggested ? "I suggest the changes listed below." : created.length ? "I proposed new work; see the linked tasks." : "No reply."),
     leadRunId: r.id,
     ...(created.length ? { proposedTaskIds: created } : {}),
     ...(rejected.length ? { rejected } : {}),
     ...(set ? { changeSetId: set.id } : {}),
+    ...(visionDraft ? { visionDraftId: visionDraft.id } : {}),
+    ...(questions.length ? { questions } : {}),
   });
-  event(s, now, "lead", "spec", `Lead run ${r.id} replied${created.length ? ` and proposed ${created.join(", ")}` : ""}${rejected.length ? `; ${rejected.length} proposal(s) rejected` : ""}`);
+  event(s, now, "lead", "spec", `Lead run ${r.id} replied${visionDraft ? " and drafted the vision" : ""}${created.length ? ` and proposed ${created.join(", ")}${shaping ? " (roadmap, held while shaping)" : ""}` : ""}${rejected.length ? `; ${rejected.length} item(s) rejected` : ""}`);
   return s;
 }
 
-function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string): string {
+function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string, fromShaping = false): string {
   let n = s.tasks.length + 1;
   const ids = new Set(s.tasks.map((x) => x.id));
   while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
@@ -2119,6 +2205,7 @@ function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixe
     lifecycle: "proposed",
     hold: false,
     holdBeforeStart: hold,
+    ...(fromShaping ? { heldForShaping: true } : {}),
     specs: [{ rev: 1, at: now, author: "lead", reason: "Proposed by the lead", content }],
     steps: instantiate(defs),
     roleOverrides: {},
@@ -2126,10 +2213,11 @@ function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixe
     createdAt: now,
     updatedAt: now,
     decisionAt: now,
+    ...(fromShaping ? { fromShaping: true } : {}),
     pipelineRev: 1,
     pipelineHistory: [{ rev: 1, at: now, author: "lead", reason: `Lead applied the ${tpl.name} template`, steps: defs.map(toDef) }],
   });
-  event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})`, id);
+  event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})${fromShaping ? "; planned while shaping, waits for Start building" : ""}`, id);
   return id;
 }
 
@@ -2222,11 +2310,67 @@ export const MAX_STEER_ITEMS = 20;
 // Control characters other than newline and tab (those are whitespace, collapsed by `oneLine`).
 const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 /**
+ * ORC-012 review 5 and ORC-014 review 3: characters that show nothing but change how text reads or is
+ * matched. Text the lead supplies (drafts, questions, options, coverage, steering reasons and the focus)
+ * and document text in envelopes lose: C1 controls, the zero-width space, bidi embeddings and overrides
+ * (U+202A–202E) and isolates (U+2066–2069), the word joiner, the byte-order mark, and tag characters
+ * outside a valid emoji tag sequence. Legitimate text keeps what it needs: ZWJ inside emoji sequences
+ * and between letters, ZWNJ between letters (Persian, Devanagari), LRM/RLM, variation selectors, and
+ * emoji tag sequences (U+1F3F4, tags, U+E007F: subdivision flags). Text the user typed is never altered.
+ */
+const HOSTILE_RE = /[\u0080-\u009F\u200B\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/gu;
+/** A valid emoji tag sequence is kept whole; any other tag character goes. */
+const TAG_RE = /(\u{1F3F4}[\u{E0020}-\u{E007E}]+\u{E007F})|[\u{E0000}-\u{E007F}]/gu;
+const JOINER_RE = /[\u200C\u200D]/gu;
+const LETTER_RE = /[\p{L}\p{M}]/u;
+const EMOJI_BEFORE_RE = /[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\uFE0F]/u;
+const EMOJI_AFTER_RE = /\p{Extended_Pictographic}/u;
+/** Nothing visible: whitespace and the invisible characters legitimate text may keep. */
+const ONLY_INVISIBLE_RE = /^[\s\u200C-\u200F\uFE0E\uFE0F]*$/u;
+
+const codePointBefore = (x: string, i: number): string => {
+  if (i <= 0) return "";
+  const lo = x.charCodeAt(i - 1);
+  if (lo >= 0xdc00 && lo <= 0xdfff && i >= 2) return x.slice(i - 2, i);
+  return x[i - 1];
+};
+const codePointAfter = (x: string, i: number): string => {
+  const cp = x.codePointAt(i);
+  return cp === undefined ? "" : String.fromCodePoint(cp);
+};
+
+/** Remove hostile invisible characters, keeping the joiners and marks legitimate text needs. Reports how many were removed. */
+export function stripHostile(x: string): { text: string; removed: number } {
+  let removed = 0;
+  let out = x.replace(HOSTILE_RE, () => {
+    removed += 1;
+    return "";
+  });
+  out = out.replace(TAG_RE, (_m, seq: string | undefined) => {
+    if (seq) return seq;
+    removed += 1;
+    return "";
+  });
+  out = out.replace(JOINER_RE, (m, offset: number, whole: string) => {
+    const before = codePointBefore(whole, offset);
+    const after = codePointAfter(whole, offset + 1);
+    const betweenLetters = LETTER_RE.test(before) && LETTER_RE.test(after);
+    const inEmoji = m === "\u200D" && (EMOJI_BEFORE_RE.test(before) || EMOJI_AFTER_RE.test(after));
+    if (betweenLetters || inEmoji) return m;
+    removed += 1;
+    return "";
+  });
+  return { text: out, removed };
+}
+export const stripInvisible = (x: string) => stripHostile(x).text;
+/** Text with nothing visible in it counts as empty. */
+const visibleOrEmpty = (x: string) => (ONLY_INVISIBLE_RE.test(x) ? "" : x);
+/**
  * Review finding 8: every text the lead supplies (focus, reason, why) is one line of plain text. The
  * focus is printed verbatim in every later envelope, so newlines would give injected text a persistent
- * channel; control characters are rejected outright by `CONTROL_RE`.
+ * channel; control characters are rejected outright by `CONTROL_RE`, invisible ones are stripped.
  */
-const oneLine = (x: string) => x.replace(/\s+/g, " ").trim();
+const oneLine = (x: string) => visibleOrEmpty(stripInvisible(x).replace(/\s+/g, " ").trim());
 
 export interface SteerItem {
   id: string;
@@ -2334,9 +2478,12 @@ function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string): Steeri
   // Newer direction wins: the run is completed now, so its own messages are covered; anything still
   // pending was posted while it worked. A vision edit meanwhile also holds the set.
   const newer = pendingMessages(s).length > 0;
-  const visionMoved = currentVision(s).rev !== r.visionRev;
+  // ORC-014 review 2: only a change to the text or focus holds the set. Documents attached or removed
+  // meanwhile are noted truthfully, and the focus still applies.
+  const visionMoved = visionContentMovedSince(s, r.visionRev);
   if (newer) set.heldBecause = "You sent another message while the lead was working; its next reply decides.";
   else if (visionMoved) set.heldBecause = "You edited the vision while the lead was working.";
+  if (!visionMoved && currentVision(s).rev !== r.visionRev) set.notes.push("Your vision documents changed while the lead was working; its reply may not reflect them.");
   const held = !!set.heldBecause;
   const mode = s.project.steeringMode;
   const from = r.messageIds.join(", ");
@@ -2455,6 +2602,19 @@ function supersedeSuggestions(s: State, set: SteeringChangeSet | undefined, now:
   }
 }
 
+/**
+ * ORC-014 review 2: attaching or removing a document creates a vision revision without touching the
+ * text or focus. Compare-and-set on the lead's focus changes, and the "you edited the vision" hold,
+ * therefore compare the text and focus, never the raw revision number: a document-only change
+ * invalidates nothing.
+ */
+export function visionContentMovedSince(s: State, rev: number | undefined): boolean {
+  const then = rev === undefined ? undefined : s.project.visions.find((v) => v.rev === rev);
+  if (!then) return true;
+  const cur = currentVision(s);
+  return cur.text !== then.text || cur.focus !== then.focus;
+}
+
 /** Review finding 7: did the user undo a lead focus change to exactly this text? Then it is only suggested again. */
 function undoneFocus(s: State, focus: string): boolean {
   return s.steering.some((cs) => cs.changes.some((c) => c.kind === "focus" && c.status === "undone" && oneLine(String(c.after ?? "")) === focus));
@@ -2491,7 +2651,7 @@ function undoRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: strin
   switch (c.kind) {
     case "focus": {
       const cur = currentVision(s);
-      if (cur.rev !== c.visionRev) return `the vision changed since (now r${cur.rev})`;
+      if (visionContentMovedSince(s, c.visionRev)) return `the vision changed since (now r${cur.rev})`;
       pushVision(s, { author: "user", text: cur.text, focus: String(c.before ?? ""), reason: `Undid the lead's focus change (${set.id})`, source: { undoOf: set.id } }, now);
       return undefined;
     }
@@ -2579,7 +2739,7 @@ function applyRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: stri
   switch (c.kind) {
     case "focus": {
       const cur = currentVision(s);
-      if (cur.rev !== c.visionRev) return `the vision changed since (now r${cur.rev})`;
+      if (visionContentMovedSince(s, c.visionRev)) return `the vision changed since (now r${cur.rev})`;
       const rev = pushVision(s, { author: "user", text: cur.text, focus: String(c.after ?? ""), reason: `Applied the lead's suggestion (${set.id}): ${c.why || set.reason}`, source: { changeSetId: set.id } }, now);
       c.visionRev = rev.rev;
       return undefined;
@@ -2796,6 +2956,611 @@ export function setLeadSelection(state: State, selection: ModelSelection, now: s
   return s;
 }
 
+// ---------- ORC-012: shaping the vision with the lead first ----------
+//
+// A project is shaping or building. While shaping, the lead answers messages and may draft the vision
+// and propose a first roadmap, but no worker step is dispatched and no planning run starts. A draft is
+// a suggestion: the vision changes only when the user accepts it. Start building needs a vision and
+// releases the roadmap on Autopilot; going back to shaping stops nothing that is running.
+
+export const MAX_VISION_TEXT = 8000;
+export const MAX_VISION_FOCUS = 300;
+const MAX_VISION_DRAFTS = 50;
+
+/** The one line shown wherever new work would otherwise be expected to start. Never "Paused". */
+export const SHAPING_LABEL = "Shaping: new work waits until you start building";
+
+/** Why Start building is refused, or undefined when it is allowed. */
+export function startBuildingBlocker(s: State): string | undefined {
+  if (s.project.stage === "building") return "Already building.";
+  if (!currentVision(s).text.trim()) return "Write or accept a vision first.";
+  return undefined;
+}
+
+/** Roadmap proposals made while shaping that have not started yet, in board order. */
+export function roadmapTasks(s: State): Task[] {
+  return s.tasks.filter((t) => t.fromShaping && (t.lifecycle === "proposed" || t.lifecycle === "ready")).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+}
+
+/** The draft the user has not yet accepted or dismissed (at most one: a newer draft supersedes it). */
+export function openVisionDraft(s: State): VisionDraft | undefined {
+  for (let i = s.visionDrafts.length - 1; i >= 0; i--) if (s.visionDrafts[i].status === "open") return s.visionDrafts[i];
+  return undefined;
+}
+
+/**
+ * ORC-014 review 11: what Start building would do now. It uses the involvement setting at the moment it
+ * runs, never one recorded earlier, and lifts only the roadmap's own hold: `roadmap` are the planned
+ * tasks it releases or hands to the user's release; `userHeld` are planned tasks whose hold the user
+ * took over, which keep waiting for the user either way.
+ */
+export function startBuildingPlan(s: State): { release: boolean; roadmap: Task[]; userHeld: Task[] } {
+  const a = s.project.autonomy;
+  const open = roadmapTasks(s);
+  return { release: a.enabled && !a.holdLeadProposals, roadmap: open.filter((t) => t.heldForShaping), userHeld: open.filter((t) => !t.heldForShaping && t.holdBeforeStart) };
+}
+
+/**
+ * Start building. Refused without a vision. On Autopilot (autonomy on and lead proposals not held) the
+ * roadmap starts; with check-in or "only when I ask" it keeps waiting for the user, as lead proposals do.
+ */
+export function startBuilding(state: State, now: string): State {
+  const why = startBuildingBlocker(state);
+  if (why) throw new ControlError(why);
+  const s = draft(state);
+  s.project.stage = "building";
+  const { release } = startBuildingPlan(s);
+  const released: string[] = [];
+  // Review 2: only the roadmap's own hold is lifted. A task the user held before start (which took it
+  // out of the roadmap hold) keeps that hold; the involvement setting decides the rest.
+  for (const t of s.tasks) {
+    if (!t.heldForShaping) continue;
+    delete t.heldForShaping;
+    if (t.lifecycle !== "proposed" && t.lifecycle !== "ready") continue;
+    t.holdBeforeStart = !release;
+    touch(t, now);
+    if (release) {
+      released.push(t.id);
+      event(s, now, "user", "control", "Released from the roadmap: building started on Autopilot", t.id);
+    } else event(s, now, "user", "control", "Building started; this planned task waits for your release (your involvement setting)", t.id);
+  }
+  const waiting = roadmapTasks(s).filter((t) => t.holdBeforeStart).length;
+  event(s, now, "user", "config", `Building started${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task(s) wait for your release` : ""}`);
+  return s;
+}
+
+/** Back to shaping: nothing running is stopped and nothing new starts. Available at any time. */
+export function startShaping(state: State, now: string): State {
+  if (state.project.stage === "shaping") throw new ControlError("Already shaping.");
+  const s = draft(state);
+  s.project.stage = "shaping";
+  // Review 8: a new shaping session; coverage the lead reported in an earlier one is not reused.
+  s.project.shapingSince = now;
+  const running = activeAttempts(s).length;
+  event(s, now, "user", "config", `Shaping the vision; new work waits until you start building${running ? ` (${running} running step(s) finish normally)` : ""}`);
+  return s;
+}
+
+/** Control characters other than tab and newline, and invisible characters (review 5), removed from every text the lead drafts. */
+const CONTROL_G = new RegExp(CONTROL_RE.source, "g");
+const cleanText = (x: string) => visibleOrEmpty(stripInvisible(x.replace(CONTROL_G, "")).replace(/\r\n?/g, "\n").trim());
+const cleanLine = (x: string) => oneLine(x.replace(CONTROL_G, ""));
+/** ORC-014 review 3: text the user typed is never altered beyond newline normalization and trimming; joiners and marks stay. */
+const userText = (x: string) => x.replace(/\r\n?/g, "\n").trim();
+const userLine = (x: string) => x.replace(/\s+/g, " ").trim();
+
+export type ValidatedVisionDraft = { ok: true; draft: { text: string; focus: string; reason: string } } | { ok: false; why: string };
+
+/**
+ * Strict validation of the lead's vision draft (untrusted data). Only runs that answer the user's
+ * messages may draft. The text keeps its newlines; the focus is one line; both are capped and cleaned.
+ * A draft identical to the current vision is refused as nothing to decide.
+ */
+export function validateVisionDraft(s: State, r: LeadRun, vision: unknown): ValidatedVisionDraft {
+  if (r.messageIds.length === 0) return { ok: false, why: "planning runs cannot draft the vision" };
+  if (!vision || typeof vision !== "object" || Array.isArray(vision)) return { ok: false, why: "the draft was not an object" };
+  const v = vision as Record<string, unknown>;
+  if (typeof v.text !== "string") return { ok: false, why: "the draft needs a text" };
+  if (v.text.length > MAX_VISION_TEXT * 2) return { ok: false, why: `the text is over ${MAX_VISION_TEXT} characters` };
+  const text = cleanText(v.text);
+  if (!text) return { ok: false, why: "the text is empty" };
+  if (text.length > MAX_VISION_TEXT) return { ok: false, why: `the text is over ${MAX_VISION_TEXT} characters` };
+  const cur = currentVision(s);
+  let focus = cur.focus;
+  if (v.focus !== undefined && v.focus !== null) {
+    if (typeof v.focus !== "string") return { ok: false, why: "the focus must be text" };
+    focus = cleanLine(v.focus);
+    if (focus.length > MAX_VISION_FOCUS) return { ok: false, why: `the focus is over ${MAX_VISION_FOCUS} characters` };
+  }
+  let reason = "Drafted from your messages";
+  if (v.reason !== undefined && v.reason !== null) {
+    if (typeof v.reason !== "string") return { ok: false, why: "the reason must be text" };
+    reason = cleanLine(v.reason).slice(0, 500) || reason;
+  }
+  if (text === cur.text.trim() && focus === oneLine(cur.focus)) return { ok: false, why: "the draft is the same as the current vision" };
+  return { ok: true, draft: { text, focus, reason } };
+}
+
+/** Record a validated draft as an open suggestion; an older open draft is superseded. Nothing is applied. */
+function draftFromRun(s: State, r: LeadRun, d: { text: string; focus: string; reason: string }, now: string): VisionDraft {
+  for (const old of s.visionDrafts) {
+    if (old.status !== "open") continue;
+    old.status = "superseded";
+    old.resolvedAt = now;
+  }
+  // ORC-012 review 3: the revision the run saw, not the one current at completion, so a vision that moved
+  // meanwhile is shown as moved and Accept never silently replaces it.
+  const draft: VisionDraft = { id: `vd-${r.id}`, at: now, leadRunId: r.id, messageIds: [...r.messageIds], text: d.text, focus: d.focus, reason: d.reason, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, status: "open" };
+  s.visionDrafts.push(draft);
+  if (s.visionDrafts.length > MAX_VISION_DRAFTS) s.visionDrafts.splice(0, s.visionDrafts.length - MAX_VISION_DRAFTS);
+  event(s, now, "lead", "vision", `Lead run ${r.id} drafted the vision (${draft.id}) from your message ${r.messageIds.join(", ")}: ${d.reason}. It waits for you to accept, edit or dismiss it.`);
+  return draft;
+}
+
+export const MAX_QUESTIONS = 5;
+export const MAX_QUESTION_LENGTH = 300;
+export const MAX_QUESTION_WHY = 200;
+export const MAX_QUESTION_OPTIONS = 4;
+export const MAX_OPTION_LENGTH = 120;
+
+const isArea = (v: unknown): v is ShapingArea => typeof v === "string" && (SHAPING_AREAS as string[]).includes(v);
+const isCoverageState = (v: unknown): v is CoverageState => typeof v === "string" && (COVERAGE_STATES as string[]).includes(v);
+
+/**
+ * Strict validation of the lead's coverage block: only the known areas and states are kept; everything
+ * else is ignored with a note. Only runs that answer the user may report coverage.
+ */
+export function validateCoverage(r: LeadRun, raw: unknown): { ok: true; coverage: Coverage; notes: string[] } | { ok: false; notes: string[] } {
+  if (r.messageIds.length === 0) return { ok: false, notes: ["planning runs cannot report coverage"] };
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ok: false, notes: ["the coverage block was not an object"] };
+  const notes: string[] = [];
+  const coverage: Coverage = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isArea(k)) {
+      notes.push(`unknown area "${cleanLine(k).slice(0, 40)}" ignored`);
+      continue;
+    }
+    if (!isCoverageState(v)) {
+      notes.push(`${k}: "${typeof v === "string" ? cleanLine(v).slice(0, 40) : typeof v}" is not clear, partial or open; ignored`);
+      continue;
+    }
+    coverage[k] = v;
+  }
+  return { ok: true, coverage, notes };
+}
+
+
+/**
+ * Strict validation of the lead's questions: at most 5, each at most 300 characters with a reason of at
+ * most 200 and at most 4 options of at most 120, control characters removed. An entry over a cap or of the
+ * wrong shape is left out with a note; the rest stand. Only runs that answer the user may ask.
+ */
+export function validateQuestions(r: LeadRun, raw: unknown): { questions: LeadQuestion[]; notes: string[] } {
+  if (r.messageIds.length === 0) return { questions: [], notes: ["planning runs cannot ask the user"] };
+  if (!Array.isArray(raw)) return { questions: [], notes: ["the questions block was not a list"] };
+  const notes: string[] = [];
+  const questions: LeadQuestion[] = [];
+  const extra = raw.length - MAX_QUESTIONS;
+  if (extra > 0) notes.push(`${extra} more ignored: at most ${MAX_QUESTIONS} questions in one reply`);
+  raw.slice(0, MAX_QUESTIONS).forEach((entry: unknown, i: number) => {
+    const n = `#${i + 1}`;
+    const it = entry && typeof entry === "object" && !Array.isArray(entry) ? (entry as Record<string, unknown>) : undefined;
+    if (!it) return notes.push(`${n} ignored: not an object`);
+    if (typeof it.question !== "string" || !cleanLine(it.question)) return notes.push(`${n} ignored: the question must be text`);
+    const question = cleanLine(it.question);
+    if (question.length > MAX_QUESTION_LENGTH) return notes.push(`${n} ignored: the question is over ${MAX_QUESTION_LENGTH} characters`);
+    let why = "";
+    if (it.why !== undefined && it.why !== null) {
+      if (typeof it.why !== "string") return notes.push(`${n} ignored: why must be text`);
+      why = cleanLine(it.why);
+      if (why.length > MAX_QUESTION_WHY) return notes.push(`${n} ignored: why is over ${MAX_QUESTION_WHY} characters`);
+    }
+    const q: LeadQuestion = { question, why };
+    if (it.area !== undefined && it.area !== null) {
+      if (isArea(it.area)) q.area = it.area;
+      else notes.push(`${n}: unknown area ignored`);
+    }
+    if (it.options !== undefined && it.options !== null) {
+      if (!Array.isArray(it.options)) notes.push(`${n}: options ignored: not a list`);
+      else {
+        const more = it.options.length - MAX_QUESTION_OPTIONS;
+        if (more > 0) notes.push(`${n}: ${more} more option(s) ignored: at most ${MAX_QUESTION_OPTIONS}`);
+        const options: string[] = [];
+        for (const o of it.options.slice(0, MAX_QUESTION_OPTIONS)) {
+          if (typeof o !== "string" || !cleanLine(o)) {
+            notes.push(`${n}: an option was ignored: not text`);
+            continue;
+          }
+          const text = cleanLine(o);
+          if (text.length > MAX_OPTION_LENGTH) {
+            notes.push(`${n}: an option was ignored: over ${MAX_OPTION_LENGTH} characters`);
+            continue;
+          }
+          // Review 10: the same option twice is one option.
+          if (options.includes(text)) {
+            notes.push(`${n}: a repeated option was ignored`);
+            continue;
+          }
+          options.push(text);
+        }
+        if (options.length) q.options = options;
+      }
+    }
+    questions.push(q);
+  });
+  return { questions, notes };
+}
+
+/**
+ * The coverage as it stands: from the newest completed run that reported one, with every area it did
+ * not name counted as open. Undefined until a run has reported coverage.
+ */
+export function coverageOf(s: State): Record<ShapingArea, CoverageState> | undefined {
+  const since = s.project.shapingSince;
+  for (let i = s.leadRuns.length - 1; i >= 0; i--) {
+    const r = s.leadRuns[i];
+    // Review 8: coverage from an earlier shaping session (before this one began) is not reused.
+    if (since && r.startedAt < since) break;
+    const c = r.coverage;
+    if (r.outcome !== "completed" || !c) continue;
+    const out = {} as Record<ShapingArea, CoverageState>;
+    for (const a of SHAPING_AREAS) out[a] = c[a] ?? "open";
+    return out;
+  }
+  return undefined;
+}
+
+/** Areas still open by the latest coverage; every area while none was reported (review 8). Informational: never a block. */
+export function openAreas(s: State): ShapingArea[] {
+  const c = coverageOf(s);
+  return c ? SHAPING_AREAS.filter((a) => c[a] === "open") : [...SHAPING_AREAS];
+}
+
+/** The newest lead questions the user has not written back since (the panel offers inline answers to these). */
+export function latestQuestions(s: State): { message: Message; questions: LeadQuestion[] } | undefined {
+  for (let i = s.conversation.length - 1; i >= 0; i--) {
+    const m = s.conversation[i];
+    if (m.author === "user") return undefined;
+    if (m.author === "lead") return m.questions?.length ? { message: m, questions: m.questions } : undefined;
+  }
+  return undefined;
+}
+
+/** One user message from the inline answers: each answered question followed by its answer; unanswered ones are skipped. */
+export function answersMessage(questions: LeadQuestion[], answers: string[]): string {
+  const parts: string[] = [];
+  questions.forEach((q, i) => {
+    const a = (answers[i] ?? "").trim();
+    if (a) parts.push(`Q: ${q.question}\nA: ${a}`);
+  });
+  return parts.join("\n\n");
+}
+
+function getVisionDraft(s: State, draftId: string): VisionDraft {
+  const d = s.visionDrafts.find((x) => x.id === draftId);
+  if (!d) throw new ControlError(`Unknown vision draft ${draftId}`);
+  return d;
+}
+
+/**
+ * Accept a draft, as drafted or with the user's edits: a user-authored vision revision that records the
+ * draft. Compare-and-set on the vision revision, like a hand edit.
+ */
+export function acceptVisionDraft(state: State, draftId: string, expectedRev: number, edits: { text?: string; focus?: string } | undefined, now: string): State {
+  const d = getVisionDraft(state, draftId);
+  if (d.status !== "open") throw new ControlError(d.status === "accepted" ? "This draft was already accepted." : d.status === "dismissed" ? "This draft was dismissed." : "A newer draft replaced this one.");
+  const cur = currentVision(state);
+  if (cur.rev !== expectedRev) throw new StaleWriteError(expectedRev, cur.rev);
+  const edited = edits?.text !== undefined || edits?.focus !== undefined;
+  const text = edits?.text !== undefined ? userText(edits.text) : d.text;
+  const focus = edits?.focus !== undefined ? userLine(edits.focus) : d.focus;
+  if (!text) throw new ControlError("The vision cannot be empty.");
+  if (text.length > MAX_VISION_TEXT) throw new ControlError(`The vision is limited to ${MAX_VISION_TEXT} characters.`);
+  if (focus.length > MAX_VISION_FOCUS) throw new ControlError(`The focus is limited to ${MAX_VISION_FOCUS} characters.`);
+  // Review 9: accepting what already stands would record a revision that changes nothing.
+  if (text === cur.text.trim() && focus === oneLine(cur.focus)) throw new ControlError("Nothing differs from the current vision; change the text or dismiss the draft.");
+  const s = draft(state);
+  const draftRec = getVisionDraft(s, draftId);
+  const rev = pushVision(
+    s,
+    { author: "user", text, focus, reason: `${edited ? "Accepted the lead's draft with edits" : "Accepted the lead's draft"} (${d.id}): ${d.reason}`, source: { draftId: d.id, leadRunId: d.leadRunId, messageIds: [...d.messageIds] } },
+    now,
+    `Vision r${cur.rev + 1} by you: accepted the lead's draft ${d.id}${edited ? " with edits" : ""}`,
+  );
+  draftRec.status = "accepted";
+  draftRec.resolvedAt = now;
+  draftRec.visionRev = rev.rev;
+  return s;
+}
+
+/** Dismiss a draft. The vision is unchanged; the lead sees the dismissal in its next envelope. */
+export function dismissVisionDraft(state: State, draftId: string, now: string): State {
+  const d = getVisionDraft(state, draftId);
+  if (d.status !== "open") throw new ControlError(`This draft is already ${d.status}.`);
+  const s = draft(state);
+  const rec = getVisionDraft(s, draftId);
+  rec.status = "dismissed";
+  rec.resolvedAt = now;
+  event(s, now, "user", "vision", `Dismissed the lead's vision draft ${d.id}; the vision is unchanged`);
+  return s;
+}
+
+// ---------- ORC-014: vision documents ----------
+//
+// Files the user attaches to the vision. The state keeps metadata; the service keeps a copy of each
+// file by content hash outside any repository. Attaching or removing one creates a user-authored
+// vision revision that records the resulting set, so history says which documents applied when. A
+// document is never removed from the registry: an old revision may still refer to it.
+
+export const MAX_VISION_DOC_BYTES = 2 * 1024 * 1024;
+export const MAX_VISION_DOCS = 200;
+export const MAX_VISION_DOCS_BYTES = 20 * 1024 * 1024;
+const MAX_VISION_DOC_PATH = 512;
+const HOSTILE_PATH_RE = /[\u0080-\u009F\u200B\u2028\u2029\u202A-\u202E\u2060\u2066-\u2069\uFEFF\u{E0000}-\u{E007F}]/u;
+
+/** Bytes as people read them: "1.2 KB", "3.4 MB". */
+export function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(n >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(n >= 10 * 1024 ? 0 : 1)} KB`;
+  return `${n} B`;
+}
+
+/**
+ * A safe relative path for a document, or why the given one is refused. Separators are normalized to
+ * `/`, `.` segments dropped; `..` segments, absolute paths (POSIX, Windows drive or UNC), empty names,
+ * control characters and over-long paths are refused. The result never leaves the documents directory
+ * when joined under it, because no segment is `..` and none is absolute.
+ */
+export function visionDocPath(given: string): { ok: true; path: string } | { ok: false; why: string } {
+  // ORC-014 review 9: one spelling per name, so the same name in two encodings replaces rather than duplicates.
+  const raw = typeof given === "string" ? given.normalize("NFC") : "";
+  if (!raw.trim()) return { ok: false, why: "The file needs a name." };
+  if (raw.length > MAX_VISION_DOC_PATH) return { ok: false, why: `The path is over ${MAX_VISION_DOC_PATH} characters.` };
+  if (CONTROL_RE.test(raw) || raw.includes("\n") || raw.includes("\t")) return { ok: false, why: "The path contains control characters." };
+  // Reviews 3 and 8: a name is the user's, so it is refused rather than altered when it carries characters that
+  // reorder or hide text (line and paragraph separators, bidi controls, tag characters, other invisible ones).
+  if (HOSTILE_PATH_RE.test(raw)) return { ok: false, why: "The name contains invisible or bidirectional control characters." };
+  const unified = raw.replace(/\\/g, "/");
+  if (unified.startsWith("/") || /^[A-Za-z]:/.test(unified)) return { ok: false, why: "Absolute paths are not allowed; attach the file with a relative path." };
+  const segments = unified.split("/").filter((seg) => seg !== "" && seg !== ".");
+  if (!segments.length) return { ok: false, why: "The file needs a name." };
+  if (segments.some((seg) => seg === ".." || /^\.+$/.test(seg))) return { ok: false, why: 'Paths with ".." are not allowed.' };
+  if (segments.some((seg) => seg.trim() !== seg)) return { ok: false, why: "A path segment starts or ends with whitespace." };
+  return { ok: true, path: segments.join("/") };
+}
+
+/** The documents a revision recorded, in the order they were attached; ids no longer in the registry are skipped (never expected). */
+export function visionDocsOf(s: State, rev: VisionRevision): VisionDoc[] {
+  if (!rev.docIds?.length) return [];
+  const byId = new Map(s.project.visionDocs.map((d) => [d.id, d]));
+  return rev.docIds.map((id) => byId.get(id)).filter((d): d is VisionDoc => !!d);
+}
+
+/** The current document set: what the lead and designers read. */
+export function currentVisionDocs(s: State): VisionDoc[] {
+  return visionDocsOf(s, currentVision(s));
+}
+
+export const visionDocsBytes = (docs: VisionDoc[]) => docs.reduce((n, d) => n + d.size, 0);
+
+/** Files whose text is not extracted yet, so the interface says so when one is attached. */
+export function isOfficeDoc(doc: Pick<VisionDoc, "name">): boolean {
+  return /\.(pdf|docx?|pptx?|xlsx?|odt|odp|ods|rtf|pages|key|numbers)$/i.test(doc.name);
+}
+
+export interface VisionDocInput {
+  path: string;
+  size: number;
+  hash: string;
+  text: boolean;
+}
+
+/** ORC-014 review 9: a staged record whose batch never committed is dropped after this long. */
+export const STAGED_DOC_TTL_MS = 60 * 60 * 1000;
+
+/** Documents uploaded but not yet attached (waiting for their batch). */
+export function stagedVisionDocs(s: State): VisionDoc[] {
+  return s.project.visionDocs.filter((d) => d.stagedAt);
+}
+
+/** Drop staged records older than the TTL, except those named: their batch never committed. */
+function pruneStaged(s: State, now: string, keep: Set<string> = new Set()) {
+  const cutoff = Date.parse(now) - STAGED_DOC_TTL_MS;
+  s.project.visionDocs = s.project.visionDocs.filter((d) => !d.stagedAt || keep.has(d.id) || Date.parse(d.stagedAt) >= cutoff);
+}
+
+/** A set with more documents applied in order, each replacing the one at its path. */
+function withDocs(set: VisionDoc[], more: VisionDoc[]): VisionDoc[] {
+  const out = [...set];
+  for (const d of more) {
+    const i = out.findIndex((x) => x.path === d.path);
+    if (i >= 0) out[i] = d;
+    else out.push(d);
+  }
+  return out;
+}
+
+/** Why a document on top of `set` would break the project's caps, or undefined. A replacement at an existing path takes that document's place. */
+function capReason(set: VisionDoc[], input: { path: string; size: number }): string | undefined {
+  const others = set.filter((d) => d.path !== input.path);
+  if (others.length + 1 > MAX_VISION_DOCS) return `The vision already has ${MAX_VISION_DOCS} documents; remove one first.`;
+  const total = visionDocsBytes(others) + input.size;
+  if (total > MAX_VISION_DOCS_BYTES) return `Attaching ${input.path} (${fmtBytes(input.size)}) would bring the documents to ${fmtBytes(total)}; the limit is ${fmtBytes(MAX_VISION_DOCS_BYTES)} per project.`;
+  return undefined;
+}
+
+/**
+ * Why staging this file would be refused, or undefined when it is admitted: the path, the size, the hash,
+ * and the caps against the current set with the documents already staged for the next batch applied.
+ * The endpoint asks before anything is written; `stageVisionDoc` asks again inside the transaction, and
+ * `attachVisionDocs` decides for the batch as a whole. The same file again (same path and content) is
+ * admitted: it is reported as unchanged, never as an error.
+ */
+export function visionDocAdmission(s: State, input: VisionDocInput): string | undefined {
+  const p = visionDocPath(input.path);
+  if (!p.ok) return p.why;
+  if (!Number.isInteger(input.size) || input.size < 0) return "The size must be a whole number of bytes.";
+  if (input.size === 0) return "The file is empty.";
+  if (input.size > MAX_VISION_DOC_BYTES) return `The file is ${fmtBytes(input.size)}; the limit is ${fmtBytes(MAX_VISION_DOC_BYTES)} per file.`;
+  if (!/^[a-f0-9]{64}$/.test(input.hash)) return "The content hash must be a lowercase SHA-256 hex string.";
+  const current = currentVisionDocs(s);
+  const same = current.find((d) => d.path === p.path);
+  if (same && same.hash === input.hash) return undefined;
+  return capReason(withDocs(current, stagedVisionDocs(s)), { path: p.path, size: input.size });
+}
+
+export interface StagedDoc {
+  docId: string;
+  /** "unchanged": the same file is attached already (`docId` is that document); nothing to commit. */
+  status: "staged" | "unchanged";
+  /** The document at the same path this one will replace when its batch commits. */
+  replaces?: string;
+}
+
+/**
+ * ORC-014 review 9: record one uploaded file, without a revision. The endpoint stores the copy once this
+ * succeeds; `attachVisionDocs` then attaches the batch as one revision. Staging the same file twice
+ * before the commit reuses the record.
+ */
+export function stageVisionDoc(state: State, input: VisionDocInput, now: string): { state: State; result: StagedDoc } {
+  const why = visionDocAdmission(state, input);
+  if (why) throw new ControlError(why);
+  const path = (visionDocPath(input.path) as { ok: true; path: string }).path;
+  const s = draft(state);
+  pruneStaged(s, now);
+  const current = currentVisionDocs(s);
+  const same = current.find((d) => d.path === path);
+  if (same && same.hash === input.hash) return { state: s, result: { docId: same.id, status: "unchanged" } };
+  const already = stagedVisionDocs(s).find((d) => d.path === path && d.hash === input.hash);
+  if (already) return { state: s, result: { docId: already.id, status: "staged", ...(same ? { replaces: same.id } : {}) } };
+  const doc: VisionDoc = { id: nextId(s, "doc"), name: path.slice(path.lastIndexOf("/") + 1), path, size: input.size, hash: input.hash, text: input.text, addedAt: now, stagedAt: now };
+  s.project.visionDocs.push(doc);
+  return { state: s, result: { docId: doc.id, status: "staged", ...(same ? { replaces: same.id } : {}) } };
+}
+
+export interface AttachedDoc {
+  /** The staged document's id as sent. */
+  docId: string;
+  path: string;
+  /** "unchanged": the same file was attached already (see `attachedAs`); "refused": `why` says what cap it broke. */
+  status: "added" | "replaced" | "unchanged" | "refused";
+  /** For "unchanged": the document already in the set. */
+  attachedAs?: string;
+  /** For "replaced": the earlier document at the same path, kept by earlier revisions. */
+  replaced?: string;
+  why?: string;
+}
+
+export interface AttachResult {
+  /** The revision created, when at least one document was added or replaced. */
+  revision?: number;
+  docs: AttachedDoc[];
+}
+
+/** Up to three names, then "and N more". */
+function nameList(paths: string[]): string {
+  const shown = paths.slice(0, 3);
+  const more = paths.length - shown.length;
+  return `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
+}
+
+/**
+ * ORC-014 review 9: attach a batch of staged documents as ONE user-authored vision revision ("Attached N
+ * documents"). Files are applied in the order given; each is checked against the caps on top of the ones
+ * before it, so a batch that overflows attaches what fits and reports the rest by name. A file whose
+ * path and content are attached already is reported unchanged. The revision records the whole resulting
+ * set (one list per revision: linear in the number of documents, and every revision stays self-contained).
+ */
+export function attachVisionDocs(state: State, docIds: string[], batchId: string | undefined, now: string): { state: State; result: AttachResult } {
+  const ids = [...new Set(docIds)];
+  if (!ids.length) throw new ControlError("Nothing to attach: the batch names no documents.");
+  for (const id of ids) if (!state.project.visionDocs.some((x) => x.id === id)) throw new ControlError(`Unknown document ${id}.`);
+  const s = draft(state);
+  const cur = currentVision(s);
+  let set = visionDocsOf(s, cur);
+  const rows: AttachedDoc[] = [];
+  const added: VisionDoc[] = [];
+  const removed: string[] = [];
+  const drop = new Set<string>();
+  const all = ids.map((id) => s.project.visionDocs.find((x) => x.id === id)!);
+  const batch = all.filter((d) => d.stagedAt);
+  // Two clients uploading the same file share one staged record: the second commit finds it attached
+  // already and reports it unchanged; one attached and replaced or removed since must be uploaded again.
+  for (const d of all) {
+    if (d.stagedAt) continue;
+    if (set.some((x) => x.id === d.id)) rows.push({ docId: d.id, path: d.path, status: "unchanged", attachedAs: d.id });
+    else rows.push({ docId: d.id, path: d.path, status: "refused", why: "it was attached earlier and has since been replaced or removed; attach it again" });
+  }
+  for (const d of batch) {
+    const later = batch.find((x) => x !== d && x.path === d.path && batch.indexOf(x) > batch.indexOf(d));
+    if (later) {
+      rows.push({ docId: d.id, path: d.path, status: "refused", why: `a later file in the same batch has the same path (${later.id})` });
+      drop.add(d.id);
+      continue;
+    }
+    const same = set.find((x) => x.path === d.path);
+    if (same && same.hash === d.hash) {
+      rows.push({ docId: d.id, path: d.path, status: "unchanged", attachedAs: same.id });
+      drop.add(d.id);
+      continue;
+    }
+    const why = capReason(set, d);
+    if (why) {
+      rows.push({ docId: d.id, path: d.path, status: "refused", why });
+      drop.add(d.id);
+      continue;
+    }
+    delete d.stagedAt;
+    d.addedAt = now;
+    set = withDocs(set, [d]);
+    added.push(d);
+    if (same) {
+      removed.push(same.id);
+      rows.push({ docId: d.id, path: d.path, status: "replaced", replaced: same.id });
+    } else rows.push({ docId: d.id, path: d.path, status: "added" });
+  }
+  s.project.visionDocs = s.project.visionDocs.filter((d) => !drop.has(d.id));
+  pruneStaged(s, now, new Set(ids));
+  if (!added.length) return { state: s, result: { docs: rows } };
+  const docIdsNow = set.map((d) => d.id);
+  const n = added.length;
+  const unreadable = added.filter((d) => !d.text).length;
+  const reason = `Attached ${n} document${n === 1 ? "" : "s"}: ${nameList(added.map((d) => d.path))}${removed.length ? ` (${removed.length} replaced ${removed.length === 1 ? "an earlier copy" : "earlier copies"})` : ""}${unreadable ? ` (${unreadable} not readable as text; the lead sees ${unreadable === 1 ? "its name" : "their names"} only)` : ""}`;
+  const rev = pushVision(
+    s,
+    { author: "user", text: cur.text, focus: cur.focus, reason, source: { docsAdded: added.map((d) => d.id), ...(removed.length ? { docsRemoved: removed } : {}), ...(batchId ? { batchId } : {}) }, docIds: docIdsNow },
+    now,
+    `Vision r${cur.rev + 1}: attached ${n} document${n === 1 ? "" : "s"} (${docIdsNow.length} in total, ${fmtBytes(visionDocsBytes(set))})`,
+  );
+  return { state: s, result: { revision: rev.rev, docs: rows } };
+}
+
+/**
+ * Stage and attach one document in one step (tests and single-file callers). A file at a path already
+ * in the set replaces the older one in the current set only; the same file again is refused as
+ * already attached.
+ */
+export function addVisionDoc(state: State, input: VisionDocInput, now: string): { state: State; docId: string; replaced?: string } {
+  const staged = stageVisionDoc(state, input, now);
+  if (staged.result.status === "unchanged") throw new ControlError(`${(visionDocPath(input.path) as { ok: true; path: string }).path} is already attached (the same content).`);
+  const r = attachVisionDocs(staged.state, [staged.result.docId], undefined, now);
+  const row = r.result.docs[0];
+  if (row.status === "refused") throw new ControlError(row.why ?? "Refused.");
+  return { state: r.state, docId: row.docId, ...(row.replaced ? { replaced: row.replaced } : {}) };
+}
+
+/** Remove a document from the current set. Its record and stored copy stay: earlier revisions refer to them. */
+export function removeVisionDoc(state: State, docId: string, now: string): State {
+  const doc = state.project.visionDocs.find((d) => d.id === docId);
+  if (!doc) throw new ControlError(`Unknown document ${docId}.`);
+  const cur = currentVision(state);
+  if (!cur.docIds?.includes(docId)) throw new ControlError(`${doc.path} is not attached to the current vision (r${cur.rev}).`);
+  const s = draft(state);
+  const docIds = cur.docIds.filter((id) => id !== docId);
+  pushVision(s, { author: "user", text: cur.text, focus: cur.focus, reason: `Removed ${doc.path}`, source: { docRemoved: doc.id }, docIds }, now, `Vision r${cur.rev + 1}: removed ${doc.path} (${docIds.length} document${docIds.length === 1 ? "" : "s"} left; earlier revisions keep it)`);
+  return s;
+}
+
 // ---------- integration ----------
 
 /** The next done task waiting for integration, oldest first. */
@@ -2915,7 +3680,8 @@ export function autoRetryStep(state: State, taskId: string, stepId: string, now:
 /** Is a delivery attempt due now? Failed attempts wait: 1 minute when skipped, 5 when conflicting. */
 export function deliveryDue(s: State, nowMs: number): boolean {
   const d = s.project.delivery;
-  if (!s.project.autonomy.autoDeliver.enabled || !d?.pending || s.project.hold) return false;
+  // ORC-012 review 1: no delivery work starts while shaping.
+  if (!s.project.autonomy.autoDeliver.enabled || !d?.pending || s.project.hold || s.project.stage === "shaping") return false;
   if (!d.lastAttemptAt) return true;
   const wait = d.status === "conflict" ? 5 * 60_000 : 60_000;
   return nowMs - Date.parse(d.lastAttemptAt) >= wait;

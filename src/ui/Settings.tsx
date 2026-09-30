@@ -10,6 +10,8 @@ import type { CapabilityMap } from "../runtime/adapter";
 import { useStore } from "./store";
 import { ModelPicker, PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, ROLE_LABEL, autonomyArgs, fmtTime, involvementOf, relTime, usePref } from "./common";
 import { disableNotifications, enableNotifications, notificationsSupported } from "./notifications";
+import { StageControl } from "./Shaping";
+import { initProjectConfirm, newProjectStage } from "./stageChoice";
 
 const CAP_LABEL: Record<keyof CapabilityMap, string> = {
   start: "Start",
@@ -37,6 +39,7 @@ export function Settings() {
         <div>
           <section className="card" aria-labelledby="proj-h">
             <h2 id="proj-h">Project</h2>
+            <StageControl />
             <label className="field">
               <span>Managed repository path</span>
               <div className="row">
@@ -737,6 +740,11 @@ function ProjectSetup() {
   const [repo, setRepo] = useState("");
   const [vision, setVision] = useState("");
   const [focus, setFocus] = useState("");
+  // ORC-012: shape the vision with the lead first (the vision may stay empty), or start building now.
+  // ORC-014 review 10: until you choose, the stage follows the vision: shaping while it is empty, building once written.
+  const [stageChoice, setStageChoice] = useState<"shaping" | "building" | null>(null);
+  const stage = newProjectStage(stageChoice, vision);
+  const docCount = M.currentVisionDocs(state).length;
   const repoOk = service.repo?.ok;
   return (
     <section className="card" aria-labelledby="setup-h">
@@ -749,14 +757,14 @@ function ProjectSetup() {
       <details open={!repoOk}>
         <summary>Start a new project</summary>
         <p className="muted" style={{ fontSize: "0.85rem" }}>
-          Replaces the board with an empty project for the repository below. Refused while any run is active. The repository must be a git repository with at least one commit. Agents work in separate worktrees and never
+          Replaces the board with an empty project for the repository below; vision documents attached to the current project are removed with it. Refused while any run is active. The repository must be a git repository with at least one commit. Agents work in separate worktrees and never
           edit its working tree; your branches change only through automatic delivery, when you turn it on (fast-forward only).
         </p>
         <form
           onSubmit={async (e) => {
             e.preventDefault();
-            if (!confirm(`Start a new project "${name}"? The current board and history are replaced.`)) return;
-            await send("initProject", { name, repoPath: repo, vision, focus });
+            if (!confirm(initProjectConfirm(name, docCount))) return;
+            await send("initProject", { name, repoPath: repo, vision, focus, stage });
           }}
         >
           <label className="field">
@@ -767,9 +775,32 @@ function ProjectSetup() {
             <span>Repository path (absolute)</span>
             <input type="text" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="/path/to/your/repo" required />
           </label>
+          <fieldset className="plain-fieldset field">
+            <legend className="field-legend" style={{ fontSize: "0.85rem", fontWeight: 560, marginBottom: "0.2rem" }}>
+              How to begin
+            </legend>
+            <label className="row" style={{ gap: "0.45rem", alignItems: "flex-start", marginBottom: "0.3rem" }}>
+              <input type="radio" name="new-stage" checked={stage === "shaping"} onChange={() => setStageChoice("shaping")} style={{ marginTop: "0.3rem" }} />
+              <span>
+                <strong style={{ fontWeight: 560 }}>Shape the vision with the lead first</strong>
+                <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
+                  Talk it through; the lead drafts the vision and a first roadmap. Nothing runs until you start building. The vision below may stay empty.
+                </span>
+              </span>
+            </label>
+            <label className="row" style={{ gap: "0.45rem", alignItems: "flex-start" }}>
+              <input type="radio" name="new-stage" checked={stage === "building"} onChange={() => setStageChoice("building")} style={{ marginTop: "0.3rem" }} />
+              <span>
+                <strong style={{ fontWeight: 560 }}>Start building now</strong>
+                <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
+                  Work runs as soon as there is a task. The vision is required.
+                </span>
+              </span>
+            </label>
+          </fieldset>
           <label className="field">
-            <span>Vision</span>
-            <textarea value={vision} onChange={(e) => setVision(e.target.value)} required />
+            <span>Vision{stage === "shaping" ? " (optional while shaping)" : ""}</span>
+            <textarea value={vision} onChange={(e) => setVision(e.target.value)} required={stage === "building"} />
           </label>
           <label className="field">
             <span>Current focus</span>

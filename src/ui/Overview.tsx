@@ -7,11 +7,17 @@ import { ROLE_LABEL, fmtTime, involvementOf, relTime, selectionText } from "./co
 import { PrChip } from "./Delivery";
 import { Conversation } from "./Conversation";
 import { Onboarding } from "./Onboarding";
+import { OpenDraft, ShapingPanel } from "./Shaping";
+import { RevisionDocs, VisionDocsList } from "./VisionDocs";
 import { PROVIDERS, type Attempt, type ProviderId, type State, type VisionRevision } from "../domain/types";
 
 /** Who made a vision revision and from what, in a few words. */
-function revisionSource(v: VisionRevision): string {
+export function revisionSource(v: VisionRevision): string {
   if (v.source?.undoOf) return `${v.author} · undo of the lead's change`;
+  if (v.source?.draftId) return `${v.author} · accepted the lead's draft`;
+  if (v.source?.docsAdded) return `${v.author} · attached ${v.source.docsAdded.length} document${v.source.docsAdded.length === 1 ? "" : "s"}${v.source.docsRemoved?.length ? " (replacing earlier copies)" : ""}`;
+  if (v.source?.docAdded) return `${v.author} · ${v.source.docRemoved ? "replaced a document" : "attached a document"}`;
+  if (v.source?.docRemoved) return `${v.author} · removed a document`;
   if (v.source?.changeSetId) return v.author === "lead" ? "lead · from your message" : `${v.author} · applied the lead's suggestion`;
   return v.author;
 }
@@ -78,7 +84,7 @@ function VisionProvenance({ state }: { state: State }) {
               <span className="mono">r{r.rev}</span>
               <span className="actor">{revisionSource(r)}</span>
               <span>
-                {r.reason} <span className="muted">· focus: “{r.focus}” · {fmtTime(r.at)}</span>
+                {r.reason} <span className="muted">· focus: “{r.focus}” · {fmtTime(r.at)}</span> <RevisionDocs state={state} rev={r} />
               </span>
             </li>
           ))}
@@ -114,6 +120,8 @@ export function Overview() {
   const flagged = D.landedTasks(state).filter((t) => t.integration!.landed!.status === "unreviewed" && t.integration!.landed!.flags.length > 0);
   const ghProblem = gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0) ? gh.problem : undefined;
   const outcomes = state.tasks.filter((t) => t.lifecycle === "done").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
+  // ORC-012: while shaping, the panel replaces the Vision card; a draft the lead sent while building shows on the card.
+  const shaping = state.project.stage === "shaping";
 
   return (
     <>
@@ -122,9 +130,13 @@ export function Overview() {
       <Onboarding />
       <div className="grid-2">
         <div>
+          {shaping ? (
+            <ShapingPanel />
+          ) : (
           <section className="card" aria-labelledby="vision-h">
             <h2 id="vision-h">Vision</h2>
             <VisionProvenance state={state} />
+            {!editing && <OpenDraft />}
             {editing ? (
               <form
                 onSubmit={async (e) => {
@@ -198,7 +210,9 @@ export function Overview() {
                 </button>
               </>
             )}
+            <VisionDocsList />
           </section>
+          )}
 
           <section className="card" aria-labelledby="since-h">
             <div className="row" style={{ justifyContent: "space-between" }}>
@@ -395,6 +409,7 @@ function ModeSummary({ state }: { state: State }) {
       <span>
         {text}
         {paused ? " · project paused" : ""}
+        {!paused && state.project.stage === "shaping" ? ` · ${M.SHAPING_LABEL.toLowerCase()}` : ""}
       </span>
       <a href="#/settings">Change</a>
     </p>

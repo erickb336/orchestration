@@ -757,7 +757,8 @@ function finishedReview(s: State, pr: PrDelivery, rv: Task): ReviewView {
     if (deferred) {
       return { state: "blocked", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is deferred${deferred.task.id !== rv.id ? ` with ${deferred.task.id}` : ""}, so it does not run. Run it now to continue, or merge it yourself.`) };
     }
-    const how = M.activeAttempts(s, rv.id).length ? "running" : rv.hold || rv.holdBeforeStart ? "paused" : "queued";
+    // ORC-012 review 1: while shaping the review, like any other work, waits for Start building; it is not queued.
+    const how = M.activeAttempts(s, rv.id).length ? "running" : rv.hold || rv.holdBeforeStart ? "paused" : s.project.stage === "shaping" ? "held: it waits until you start building (shaping)" : "queued";
     return { state: "pending", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is ${how}.`) };
   }
   // A dedicated review counts only when its run read a worktree detached at exactly this commit.
@@ -1153,10 +1154,11 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   } else if (pr.policy === "auto") add("policy", "Merges automatically", "ok", "It merges by itself once everything below holds for this exact commit.");
   else add("policy", "You merge this pull request", "waiting", `Hold and notify: it merges when you choose Merge for ${h12}, or merge it on GitHub.`);
 
-  // 2. Not paused
+  // 2. Not paused (ORC-012 review 1: shaping is not a pause, but no delivery work starts until building)
   if (s.project.hold) add("not-paused", "Not paused", "waiting", "The project is paused: nothing is pushed, opened, merged or commented.");
   else if (pr.userHold) add("not-paused", "Not paused", "waiting", `You are holding this pull request${pr.userHold.reason ? `: ${pr.userHold.reason}` : ""}.`);
   else if (pr.closeRequested) add("not-paused", "Not paused", "waiting", "You asked to close this pull request.");
+  else if (s.project.stage === "shaping") add("not-paused", "Not paused", "waiting", "Shaping: nothing is pushed, opened, merged or brought up to date until you start building. Nothing is paused.");
   else add("not-paused", "Not paused", "ok", "No pause or hold.");
 
   // 3. GitHub reachable, the same repository, and a repository the app can merge in
@@ -2021,7 +2023,10 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
     prs: [...open, ...(withClosed ? closedWatch : [])].slice(0, PR_LIMITS.observeBatch).map((t) => ({ taskId: t.id, number: t.integration!.pr!.number! })),
     commits: mainChecks.slice(0, PR_LIMITS.observeBatch).map((t) => t.integration!.landed!.commit),
   });
-  const canWrite = !p.hold && cfg.enabled && age(gh.lastMutationAt) >= PR_LIMITS.mutationGapMs && mutationsThisHour(gh, nowMs) < PR_LIMITS.mutationsPerHour;
+  // ORC-012 review 1: while shaping no delivery work starts (no publish, push, merge or base update);
+  // reads go on, and so do the user's own explicit requests to close or to post a note.
+  const writable = !p.hold && cfg.enabled && age(gh.lastMutationAt) >= PR_LIMITS.mutationGapMs && mutationsThisHour(gh, nowMs) < PR_LIMITS.mutationsPerHour;
+  const canWrite = writable && p.stage !== "shaping";
   const rested = (pr: PrDelivery) => !pr.nextAt || Date.parse(pr.nextAt) <= nowMs;
   const pushable = (pr: PrDelivery) => !pr.userHold && !pr.foreignHead && !pr.closeRequested && !stuck(pr) && publishAllowed(pr);
 
@@ -2033,10 +2038,10 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
     if ((pr.op.kind === "merge" || pr.op.kind === "close") && pr.number !== undefined) return observe();
     // publish, push, or a close that never had a number: the operation itself checks the remote first.
     const kind = pr.op.kind === "close" || pr.closeRequested ? "close" : pr.op.kind === "push" ? "push" : "publish";
-    if (kind === "close" ? canWrite : canWrite && !pr.userHold && !pr.foreignHead && !stuck(pr)) return { id, kind, taskId: t.id, n: pr.n, headSha: pr.headSha };
+    if (kind === "close" ? writable : canWrite && !pr.userHold && !pr.foreignHead && !stuck(pr)) return { id, kind, taskId: t.id, n: pr.n, headSha: pr.headSha };
   }
 
-  // 4. The delivery base.
+  // 4. The delivery base (a read: it is fetched while shaping too, so building resumes with a fresh base).
   if (cfg.enabled && (!gh.fetchFailures || Date.parse(gh.fetchFailures.nextAt) <= nowMs)) {
     const fetched = age(gh.base?.fetchedAt);
     // A merge the app has seen moved the base: what it fetched before is stale, so it fetches at once.
@@ -2056,8 +2061,17 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
     if (age(gh.observedAt) >= interval && (open.length || mainChecks.length || withClosed)) return observe(withClosed);
   }
 
-  // 6. Writes.
-  if (!canWrite) return undefined;
+  // 6. Writes. While shaping only the user's own close and note requests (6.5, 6.6) go through.
+  if (!writable) return undefined;
+  if (!canWrite) {
+    const c = pendingComment(s, nowMs);
+    if (c) return { id, kind: "comment", taskId: c.task.id, noteId: c.noteId };
+    for (const t of tracked) {
+      const pr = t.integration!.pr!;
+      if (pr.closeRequested && !pr.op && rested(pr) && here(t)) return { id, kind: "close", taskId: t.id, n: pr.n, headSha: pr.headSha };
+    }
+    return undefined;
+  }
   // 6.1 A merge: the user's, bound to the head they saw; else the one candidate of automatic merging.
   const mergeOf = (t: Task, byUser: boolean): PrOp | undefined => {
     const pr = t.integration!.pr!;
@@ -2121,6 +2135,8 @@ export function beginPrOp(state: State, op: PrOp, now: string): { state: State; 
   const p = state.project;
   const gh = p.github;
   if (!opMutates(op) || p.hold || !p.prDelivery.enabled || !gh?.ok || gh.problem) return no;
+  // ORC-012 review 1: delivery work (publish, push, merge) never starts while shaping; the user's own close or note may.
+  if (p.stage === "shaping" && op.kind !== "close" && op.kind !== "comment") return no;
   if (gh.lastMutationAt && nowMs - Date.parse(gh.lastMutationAt) < PR_LIMITS.mutationGapMs) return no;
   if (mutationsThisHour(gh, nowMs) >= PR_LIMITS.mutationsPerHour) return no;
   const s = structuredClone(state);
@@ -2603,7 +2619,10 @@ export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
   const pr = i?.pr;
   if (!i || !pr) return undefined;
   const sim = pr.simulated ? " (simulated)" : "";
-  if (i.status !== "integrated") return { text: `preparing pull request ${pr.n + 1}`, tone: "plain" };
+  // ORC-012 review 1: while shaping, delivery says what it waits for, never "queued" or "preparing".
+  const shaping = s.project.stage === "shaping" && !s.project.hold;
+  const WAITS = "waits until you start building (shaping)";
+  if (i.status !== "integrated") return { text: shaping ? `pull request ${pr.n + 1} ${WAITS}` : `preparing pull request ${pr.n + 1}`, tone: "plain" };
   const name = pr.number ? `PR #${pr.number}` : "PR";
   const plain = (what: string): PrLabel => ({ text: `${name} ${what}${sim}`, tone: "plain" });
   if (pr.phase === "merged") return { text: i.landed?.status === "unreviewed" ? `merged · review${sim}` : `merged${sim}`, tone: "done" };
@@ -2615,14 +2634,14 @@ export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
     return { text: `${name} needs you${sim}`, tone: "danger" };
   }
   if (pr.userHold) return plain("held by you");
-  if (pr.phase === "built") return plain(!s.project.prDelivery.enabled ? "not opened: delivery is off" : s.project.hold ? "not opened: paused" : "preparing");
+  if (pr.phase === "built") return plain(!s.project.prDelivery.enabled ? "not opened: delivery is off" : s.project.hold ? "not opened: paused" : shaping ? `not opened: ${WAITS}` : "preparing");
   if (prReady(s, t, nowMs)) return { text: `${name} waiting for you${sim}`, tone: "strong" };
   const byUser = userGate(pr);
   const waits = prGate(s, t, nowMs, { byUser }).items.find((x) => !x.ok && x.id !== "policy");
   if (!waits) return pr.policy === "auto" && !byUser ? { text: `${name} merging next${sim}`, tone: "strong" } : pr.mergeRequested ? { text: `${name} merge requested${sim}`, tone: "strong" } : plain("open");
   switch (waits.id) {
     case "not-paused":
-      return plain(pr.closeRequested ? "closing" : "paused");
+      return plain(pr.closeRequested ? "closing" : shaping && !pr.userHold ? WAITS : "paused");
     case "github":
       return plain("waiting for GitHub");
     case "ours":

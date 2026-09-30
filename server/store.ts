@@ -11,7 +11,7 @@ import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { buildSeed } from "../src/domain/seed";
 import { ControlError, DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
 
-export const STATE_FORMAT = 11;
+export const STATE_FORMAT = 13;
 
 /** In-place upgrades of the state document, keyed by the format they upgrade from. */
 const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
@@ -81,6 +81,53 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       if (t) (t.userSet ??= {}).priority = e.at;
     }
     doc.version = 11;
+    return doc;
+  },
+  // ORC-012: the shaping stage. Every existing project keeps working as before (building); no drafts yet.
+  11: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.stage ??= "building";
+    doc.visionDrafts ??= [];
+    doc.version = 12;
+    return doc;
+  },
+  // ORC-014: vision documents. No project has any yet; existing revisions record none (`docIds` absent).
+  // ORC-012 review 6: a project of the user's own with an empty vision cannot be building; it shapes first.
+  // ORC-012 review 2: the roadmap's hold while shaping becomes its own flag; the user's hold before start
+  // then follows the involvement setting, as a lead proposal's would.
+  12: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.visionDocs ??= [];
+    const visions = (project.visions ?? []) as { text?: unknown }[];
+    const text = String(visions[visions.length - 1]?.text ?? "");
+    const now = new Date().toISOString();
+    const events = (doc.events ??= []) as { id: string; at: string; actor: string; kind: string; taskId?: string; message: string }[];
+    if (!project.sample && !text.trim() && project.stage !== "shaping") {
+      // ORC-014 review 12: a stage change is state the user can see: it is recorded, and shaping starts now.
+      project.stage = "shaping";
+      project.shapingSince = now;
+      doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
+      events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message: "Moved from building to shaping when the state format was upgraded: the project has no vision yet. Write or accept one, then start building." });
+    }
+    if (project.stage === "shaping") {
+      project.shapingSince ??= now;
+      const a = (project.autonomy ?? {}) as { enabled?: boolean; holdLeadProposals?: boolean };
+      // ORC-014 review 12: a hold the user set on the task themselves stays the user's hold. The last
+      // hold event decides: "enabled" by the user means theirs; released or removed means the roadmap's.
+      const userHeld = new Set<string>();
+      for (const e of events) {
+        if (e.actor !== "user" || e.kind !== "control" || !e.taskId) continue;
+        if (e.message === "Hold before start enabled") userHeld.add(e.taskId);
+        else if (e.message === "Hold before start removed" || e.message.startsWith("Hold-before-start released")) userHeld.delete(e.taskId);
+      }
+      for (const t of (doc.tasks ?? []) as { id: string; fromShaping?: boolean; holdBeforeStart?: boolean; heldForShaping?: boolean; lifecycle?: string }[]) {
+        if (!t.fromShaping || !t.holdBeforeStart || (t.lifecycle !== "proposed" && t.lifecycle !== "ready")) continue;
+        if (userHeld.has(t.id)) continue;
+        t.heldForShaping = true;
+        t.holdBeforeStart = !a.enabled || !!a.holdLeadProposals;
+      }
+    }
+    doc.version = 13;
     return doc;
   },
 };
@@ -185,6 +232,8 @@ export class Store {
         }
         if (format === STATE_FORMAT) {
           this.db.prepare("UPDATE state SET version = ?, format = ?, json = ?, updated_at = ? WHERE id = 1").run(row.version + 1, STATE_FORMAT, JSON.stringify(doc), new Date().toISOString());
+          // An event a migration records is mirrored like any other.
+          this.mirrorEvents((JSON.parse(row.json) as { events?: State["events"] }).events ?? [], doc as unknown as State);
           return;
         }
       }
@@ -240,6 +289,12 @@ export class Store {
   read(): { version: number; state: State } {
     const { version, state } = this.load();
     return { version, state };
+  }
+
+  /** The command already recorded under an idempotency key, if any (its args as sent), so a retry is not re-validated as a new request. */
+  recorded(idempotencyKey: string): { name: string; args: unknown } | undefined {
+    const row = this.db.prepare("SELECT name, args FROM commands WHERE idempotency_key = ?").get(idempotencyKey) as { name: string; args: string } | undefined;
+    return row ? { name: row.name, args: JSON.parse(row.args) as unknown } : undefined;
   }
 
   /**

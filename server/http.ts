@@ -6,12 +6,14 @@
 import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
-import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CommandError, type ServiceInfo, type StatePayload } from "../src/api";
+import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CommandError, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
 import { exportMarkdown } from "../src/domain/model";
+import type { State } from "../src/domain/types";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
+import type { VisionDocStore } from "./visiondocs";
 import type { WorkspaceManager } from "./workspaces";
-import { CommandFailure, type Store } from "./store";
+import { CommandFailure, type CommandResult, type Store } from "./store";
 
 export interface HttpOptions {
   store: Store;
@@ -19,6 +21,8 @@ export interface HttpOptions {
   /** Shared simulation settings of the fake adapters (fake mode only). */
   fakeConfig?: FakeRuntimeConfig;
   workspaces?: WorkspaceManager;
+  /** ORC-014: where POST /api/vision-docs keeps copies of the user's documents. Without it uploads are refused. */
+  visionDocs?: VisionDocStore;
   startedAt: string;
   /** host:port values accepted in the Host header (the service's own address plus the dev UI). */
   allowedHosts: string[];
@@ -45,6 +49,19 @@ export function createHttpServer(opts: HttpOptions): Server {
   const hosts = new Set(opts.allowedHosts.map((h) => h.toLowerCase()));
   const origins = new Set([...hosts].map((h) => `http://${h}`));
   const log = opts.log ?? (() => {});
+  /** The copies a batch names, so a refused file's copy can go at once (review 6). */
+  const stagedHashes = (state: State, args: unknown): string[] => {
+    const ids = (args as { docIds?: unknown } | undefined)?.docIds;
+    if (!Array.isArray(ids)) return [];
+    return state.project.visionDocs.filter((d) => ids.includes(d.id)).map((d) => d.hash);
+  };
+  const sweepDocs = (immediate: string[]) => {
+    try {
+      opts.visionDocs?.sweep(store.read().state, { immediate });
+    } catch (e) {
+      log(`Vision documents: cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   // Repository checks run git; cache them so every state push does not spawn processes.
   let repoCache: { path: string; at: number; result: ReturnType<WorkspaceManager["check"]> } | undefined;
@@ -221,12 +238,40 @@ export function createHttpServer(opts: HttpOptions): Server {
       if (path === "/api/commands") {
         if (typeof body.name !== "string" || typeof body.idempotencyKey !== "string") return fail(res, 400, "invalid", "name and idempotencyKey are required");
         if (real && body.name === "resetSampleData") return fail(res, 400, "control", "Sample data is only available with the fake runtime.");
+        // A document is recorded together with its copy: the upload endpoint does both.
+        if (body.name === "stageVisionDoc" || body.name === "addVisionDoc") return fail(res, 400, "invalid", "Attach documents through POST /api/vision-docs, which stores the file first.");
         // A sample project never contacts GitHub.
         if (real && body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr" && store.read().state.project.sample)
           return fail(res, 400, "control", "This is the sample project; pull-request delivery needs a project of your own. Start a new project in Settings.");
-        const r = store.command(body.name, body.args, body.idempotencyKey, new Date().toISOString());
+        // ORC-014 review 6: once a batch commits (refused files lose their records) and once a project is
+        // replaced, copies no record refers to are deleted. A batch's own copies go at once; others wait
+        // out the grace period in case their batch is still uploading.
+        const sweepAfter = !!opts.visionDocs && (body.name === "attachVisionDocs" || body.name === "initProject");
+        const batchHashes = sweepAfter && body.name === "attachVisionDocs" ? stagedHashes(store.read().state, body.args) : [];
+        let r: CommandResult;
+        try {
+          r = store.command(body.name, body.args, body.idempotencyKey, new Date().toISOString());
+        } finally {
+          if (sweepAfter) sweepDocs(batchHashes);
+        }
         if (body.name === "resetSampleData") scheduler.resetRuntime();
         return send(res, 200, { version: r.version, result: r.result });
+      }
+      // ORC-014: one file per request. The same host, origin and client-header checks as every other
+      // state change already ran above; the body cap (MAX_BODY) bounds the base64 upload.
+      if (path === "/api/vision-docs") {
+        if (typeof body.path !== "string" || typeof body.content !== "string" || typeof body.idempotencyKey !== "string") return fail(res, 400, "invalid", "path, content and idempotencyKey are required");
+        if (!opts.visionDocs) return fail(res, 400, "control", "This service has no place to keep documents.");
+        // Review 5: every field, the idempotency key and the project's caps are checked, and the command
+        // recorded, before any byte reaches the disk. A retry replays the recorded outcome (a different
+        // file under the same key is refused by the store). The copy is written, or found already
+        // present, only once the command succeeded; nothing is attached until `attachVisionDocs`.
+        if (!body.idempotencyKey || body.idempotencyKey.length > 200) return fail(res, 400, "invalid", "idempotencyKey is required (at most 200 characters)");
+        const upload = opts.visionDocs.inspect(body.path, body.content);
+        const r = store.command("stageVisionDoc", upload.input, body.idempotencyKey, new Date().toISOString());
+        const result = (r.result ?? {}) as { docId?: string; status?: "staged" | "unchanged"; replaces?: string };
+        opts.visionDocs.store(store.read().state.project.id, upload.input.hash, upload.buf);
+        return send(res, 200, { version: r.version, docId: result.docId ?? "", status: result.status ?? "staged", ...(result.replaces ? { replaces: result.replaces } : {}) } satisfies VisionDocUploadOk);
       }
       if (path.startsWith("/api/sim") && (real || !fakeConfig)) return fail(res, 400, "control", "Simulation controls are only available with the fake runtime.");
       if (path === "/api/maintenance/prune") {

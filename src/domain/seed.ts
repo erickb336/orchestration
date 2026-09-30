@@ -321,7 +321,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 11,
+    version: 13,
     seq: 1000,
     project: {
       id: "sample",
@@ -338,6 +338,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
           reason: "Initial vision",
         },
       ],
+      visionDocs: [],
       enabledProviders: ["claude", "codex"],
       catalog: {
         claude: [
@@ -363,6 +364,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
       runLimits: { ...DEFAULT_RUN_LIMITS },
       autonomy: { ...DEFAULT_AUTONOMY },
       steeringMode: "apply",
+      stage: "building",
       prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
       workerEnvironment: { claude: "isolated", codex: "isolated" },
       workerConnections: { claude: [], codex: [] },
@@ -376,6 +378,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     conversation: [],
     leadRuns: [],
     steering: [],
+    visionDrafts: [],
     events: [
       { id: "ev-1", at: at(600), actor: "lead", kind: "spec", message: "Published specs for EX-001…EX-007 from vision r1", taskId: undefined },
       { id: "ev-2", at: at(2200), actor: "user", kind: "decision", taskId: "EX-006", message: "Selected option B (Per-note export); override: I mostly export single notes to share them." },
@@ -411,6 +414,10 @@ export function buildEmptyProject(nowMs: number = Date.now()): State {
       // listed model, so no sample model id survives into a real project.
       ...autoModelDefaults(),
       visions: [{ rev: 1, at: now, author: "system", text: "", focus: "", reason: "Empty project; set it up in Settings" }],
+      visionDocs: [],
+      // ORC-012 review 6: a project never builds without a vision; an empty one starts by shaping.
+      stage: "shaping",
+      shapingSince: now,
       lastVisitAt: now,
     },
     tasks: [],

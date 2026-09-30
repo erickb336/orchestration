@@ -607,8 +607,9 @@ describe("R/S. restart and migration", () => {
     raw.close();
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(11);
-    expect(s.version).toBe(11);
+    // ORC-012 raised the format to 12 and ORC-014 to 13; a format-10 document upgrades through each.
+    expect(STATE_FORMAT).toBe(13);
+    expect(s.version).toBe(13);
     expect(s.steering).toEqual([]);
     expect(s.project.steeringMode).toBe("apply");
     expect(s.tasks.find((t) => t.id === "EX-002")!.userSet).toEqual({ priority: "2026-09-01T00:00:00.000Z" });

@@ -8,11 +8,13 @@ import { buildSeed } from "./seed";
 import { INTERNAL_TEMPLATE_IDS, PROJECT_TEMPLATES } from "./templates";
 import {
   ControlError,
+  PROJECT_STAGES,
   PROVIDERS,
   ROLES,
   STEERING_MODES,
   type ModelSelection,
   type PrDeliveryConfig,
+  type ProjectStage,
   type ProviderId,
   type RoleId,
   type SpecContent,
@@ -118,6 +120,35 @@ export const COMMANDS = {
   resumeProject: same((s, now) => M.resumeProject(s, now)),
   markVisited: same((s, now) => M.markVisited(s, now)),
   editVision: same((s, now, a) => M.editVision(s, num(a, "expectedRev"), str(a, "text"), str(a, "focus"), str(a, "reason"), now)),
+
+  // shaping the vision with the lead first (ORC-012)
+  /** Needs a vision; releases the roadmap on Autopilot, otherwise it keeps waiting for you. */
+  startBuilding: same((s, now) => M.startBuilding(s, now)),
+  /** Back to shaping: nothing running is stopped; nothing new starts. */
+  startShaping: same((s, now) => M.startShaping(s, now)),
+  /** Accept the lead's draft as drafted or with edits: a user-authored revision, compare-and-set on the vision. */
+  acceptVisionDraft: same((s, now, a) =>
+    M.acceptVisionDraft(s, str(a, "draftId"), num(a, "expectedRev"), { text: a.text === undefined ? undefined : str(a, "text"), focus: a.focus === undefined ? undefined : str(a, "focus") }, now),
+  ),
+  dismissVisionDraft: same((s, now, a) => M.dismissVisionDraft(s, str(a, "draftId"), now)),
+
+  // vision documents (ORC-014)
+  /** Record one uploaded file without a revision (sent by POST /api/vision-docs, never by the UI directly). Returns { docId, status, replaces? }. */
+  stageVisionDoc: (s, now, a) => {
+    const r = M.stageVisionDoc(s, { path: str(a, "path"), size: num(a, "size"), hash: str(a, "hash"), text: bool(a, "text") }, now);
+    return { state: r.state, result: r.result };
+  },
+  /** ORC-014 review 9: attach a batch of staged documents as one vision revision. Returns { revision?, docs }. */
+  attachVisionDocs: (s, now, a) => {
+    if (!Array.isArray(a.docIds) || !a.docIds.every((x) => typeof x === "string")) throw new InvalidCommandError("docIds must be a list of document ids");
+    if (a.docIds.length > M.MAX_VISION_DOCS) throw new InvalidCommandError(`docIds may name at most ${M.MAX_VISION_DOCS} documents`);
+    const batchId = a.batchId === undefined ? undefined : str(a, "batchId");
+    if (batchId !== undefined && batchId.length > 100) throw new InvalidCommandError("batchId must be at most 100 characters");
+    const r = M.attachVisionDocs(s, a.docIds as string[], batchId, now);
+    return { state: r.state, result: r.result };
+  },
+  /** Remove a document from the current set; earlier revisions keep it. */
+  removeVisionDoc: same((s, now, a) => M.removeVisionDoc(s, str(a, "docId"), now)),
 
   // specs
   editSpec: same((s, now, a) => M.editSpec(s, str(a, "taskId"), num(a, "expectedRev"), specContent(a.content), str(a, "reason"), "user", now)),
@@ -297,7 +328,16 @@ export const COMMANDS = {
     return M.setWorkerEnvironment(s, provider(a.provider), env, now);
   }),
   setRunLimits: same((s, now, a) => M.setRunLimits(s, { maxTurns: num(a, "maxTurns"), timeoutMinutes: num(a, "timeoutMinutes"), maxBudgetUsd: num(a, "maxBudgetUsd") }, now)),
-  initProject: same((s, now, a) => M.initProject(s, { name: str(a, "name"), repoPath: str(a, "repoPath"), vision: str(a, "vision"), focus: str(a, "focus") }, now)),
+  /** ORC-012: `stage` chooses shaping (the vision may be empty) or building (the default; the vision is required). */
+  initProject: same((s, now, a) => {
+    let stage: ProjectStage | undefined;
+    if (a.stage !== undefined) {
+      const v = str(a, "stage");
+      if (!PROJECT_STAGES.includes(v as ProjectStage)) throw new InvalidCommandError("stage must be shaping or building");
+      stage = v as ProjectStage;
+    }
+    return M.initProject(s, { name: str(a, "name"), repoPath: str(a, "repoPath"), vision: str(a, "vision"), focus: str(a, "focus"), ...(stage ? { stage } : {}) }, now);
+  }),
   /** Create a user-authored task from one of the project's templates. Returns { newId }. */
   createTask: (s, now, a) => {
     const templateId = str(a, "templateId");

@@ -483,6 +483,14 @@ a.button-link:hover { background: var(--surface-2); }
 .usage-table td, .usage-table th { font-variant-numeric: tabular-nums; }
 .usage-table td.num, .usage-table th.num { text-align: right; }
 
+/* ---------- vision documents (ORC-014) ---------- */
+.dropzone { border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 0.5rem 0.7rem; margin-bottom: 0.5rem; }
+.dropzone.over { background: var(--surface-2); border-style: solid; }
+ul.doc-list { list-style: none; padding: 0; margin: 0.3rem 0; }
+ul.doc-list > li { display: flex; flex-wrap: wrap; gap: 0.3rem 0.6rem; align-items: center; padding: 0.3rem 0; border-top: 1px solid var(--border); font-size: 0.88rem; }
+ul.doc-list > li > .mono { overflow-wrap: anywhere; }
+ul.doc-list.uploads > li.skipped, ul.doc-list.uploads > li.queued { color: var(--muted); }
+
 /* ---------- landed changes (code diff; lines already start with + or -) ---------- */
 .diff.code div { white-space: pre; }
 .diff.code .add::before, .diff.code .del::before, .diff.code .same::before { content: none; }

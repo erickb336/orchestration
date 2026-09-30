@@ -11,6 +11,7 @@ import { Settings } from "./Settings";
 import { PREF_LEAD_SEEN, relTime, usePref } from "./common";
 import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { useBrowserNotifications } from "./notifications";
+import { StageChip } from "./Shaping";
 
 type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" } | { page: "task"; id: string };
 
@@ -131,6 +132,7 @@ function Shell() {
         </nav>
         <div className="right">
           <LeadButton buttonRef={leadButton} open={leadOpen && !onOverview} onClick={() => (leadOpen && !onOverview ? closeLead() : openLead())} />
+          <StageChip />
           <ProjectControl />
         </div>
       </header>
@@ -281,7 +283,12 @@ function ProjectControl() {
   // A stopping lead run counts too: the pause is not confirmed until the lead acknowledges as well.
   const stopping = M.activeAttempts(state).filter((a) => a.outcome === "stopping").length + (M.activeLeadRun(state)?.outcome === "stopping" ? 1 : 0);
   const running = M.activeAttempts(state).filter((a) => a.outcome === "running").length;
-  const status = state.project.hold ? (stopping ? `Pausing — ${stopping} run(s) still stopping` : "Project paused") : `${running} ${service.runtime === "real" ? "" : "simulated "}run(s) active`;
+  // ORC-012: while shaping nothing is paused; the stage chip says what waits, and the count stays truthful.
+  const status = state.project.hold
+    ? stopping
+      ? `Pausing — ${stopping} run(s) still stopping`
+      : "Project paused"
+    : `${running} ${service.runtime === "real" ? "" : "simulated "}run(s) active${state.project.stage === "shaping" && running ? " (finishing; shaping)" : ""}`;
   return (
     <>
       <span className="muted" aria-live="polite">
