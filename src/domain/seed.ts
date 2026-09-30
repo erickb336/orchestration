@@ -3,7 +3,7 @@
 
 import { instantiate, toDef } from "./pipeline";
 import { BUILT_IN_TEMPLATES, templateSteps } from "./templates";
-import { DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
+import { DEFAULT_AUTONOMY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
 
 type SampleOutput = { name: string; summary: string; openFindings?: number };
 
@@ -321,7 +321,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 6,
+    version: 7,
     seq: 1000,
     project: {
       id: "sample",
@@ -360,6 +360,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
       leadSelection: { provider: "claude", model: "claude-sample-large" },
       workerLimit: 3,
       runLimits: { ...DEFAULT_RUN_LIMITS },
+      autonomy: { ...DEFAULT_AUTONOMY },
       workerEnvironment: { claude: "isolated", codex: "isolated" },
       workerConnections: { claude: [], codex: [] },
       hold: false,
@@ -369,6 +370,8 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     tasks,
     attempts,
     artifacts,
+    conversation: [],
+    leadRuns: [],
     events: [
       { id: "ev-1", at: at(600), actor: "lead", kind: "spec", message: "Published specs for EX-001…EX-007 from vision r1", taskId: undefined },
       { id: "ev-2", at: at(2200), actor: "user", kind: "decision", taskId: "EX-006", message: "Selected option B (Per-note export); override: I mostly export single notes to share them." },

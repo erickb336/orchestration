@@ -5,7 +5,7 @@ import { BUILT_IN_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
 import { PipelineEditor } from "./PipelineEditor";
 import type { CapabilityMap } from "../runtime/adapter";
 import { useStore } from "./store";
-import { ModelPicker, ROLE_LABEL } from "./common";
+import { ModelPicker, ROLE_LABEL, fmtTime, relTime } from "./common";
 
 const CAP_LABEL: Record<keyof CapabilityMap, string> = {
   start: "Start",
@@ -78,17 +78,23 @@ export function Settings() {
                   </dd>
                 </div>
               ))}
-              <dt>Lead ownership</dt>
-              <dd>
-                <span className="muted">The Lead default applies to lead-owned steps such as verification. Switching the scheduling lead (checkpoint and lease transfer) arrives in Milestone 4.</span>
-              </dd>
             </dl>
+            <h3 style={{ marginTop: "1rem" }}>Lead agent</h3>
+            <label className="field">
+              <span>Conversation and planning</span>
+              <ModelPicker state={state} label="Lead agent model" value={p.leadSelection} disabled={disabled} onChange={(v) => v && void send("setLeadSelection", { selection: v })} />
+            </label>
+            <p className="muted" style={{ fontSize: "0.85rem", marginBottom: 0 }}>
+              The lead answers the conversation and proposes tasks. Switching stops an active lead run first; the next run uses the new lead. Setting it also sets the Lead default above, which applies to lead-owned
+              steps such as verification.
+            </p>
           </section>
           <Templates />
         </div>
 
         <div>
           <Providers />
+          <AutonomyCard />
           <RunLimitsCard />
           {service.runtime === "real" && <ProjectSetup />}
         </div>
@@ -210,6 +216,123 @@ function WorkerEnvironmentControls({ provider }: { provider: (typeof PROVIDERS)[
         started after the change.
       </div>
     </fieldset>
+  );
+}
+
+function AutonomyCard() {
+  const { state, send, disabled } = useStore();
+  const a = state.project.autonomy;
+  const lastPlanning = state.project.lastPlanningAt;
+  const openProposals = M.openLeadProposals(state).length;
+  const [enabled, setEnabled] = useState(a.enabled);
+  const [interval, setIntervalMinutes] = useState(String(a.planningIntervalMinutes));
+  const [perCycle, setPerCycle] = useState(String(a.maxProposalsPerCycle));
+  const [maxOpen, setMaxOpen] = useState(String(a.maxOpenProposals));
+  const [hold, setHold] = useState(a.holdLeadProposals);
+  const [limitHours, setLimitHours] = useState(a.operatingHours !== null);
+  const [start, setStart] = useState(a.operatingHours?.start ?? "09:00");
+  const [end, setEnd] = useState(a.operatingHours?.end ?? "18:00");
+  // Follow the live values when they change elsewhere (another tab, the service).
+  const hoursKey = a.operatingHours ? `${a.operatingHours.start}-${a.operatingHours.end}` : "";
+  useEffect(() => {
+    setEnabled(a.enabled);
+    setIntervalMinutes(String(a.planningIntervalMinutes));
+    setPerCycle(String(a.maxProposalsPerCycle));
+    setMaxOpen(String(a.maxOpenProposals));
+    setHold(a.holdLeadProposals);
+    setLimitHours(a.operatingHours !== null);
+    if (a.operatingHours) {
+      setStart(a.operatingHours.start);
+      setEnd(a.operatingHours.end);
+    }
+  }, [a.enabled, a.planningIntervalMinutes, a.maxProposalsPerCycle, a.maxOpenProposals, a.holdLeadProposals, hoursKey]);
+
+  const hours = limitHours ? { start, end } : null;
+  const changed =
+    enabled !== a.enabled ||
+    Number(interval) !== a.planningIntervalMinutes ||
+    Number(perCycle) !== a.maxProposalsPerCycle ||
+    Number(maxOpen) !== a.maxOpenProposals ||
+    hold !== a.holdLeadProposals ||
+    (hours ? `${hours.start}-${hours.end}` : "") !== hoursKey;
+  const n = Number(perCycle) > 0 ? Number(perCycle) : a.maxProposalsPerCycle;
+  return (
+    <section className="card" aria-labelledby="autonomy-h">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 id="autonomy-h" style={{ margin: 0 }}>
+          Autonomy
+        </h2>
+        <span className={a.enabled ? "pill running" : "chip"}>{a.enabled ? "On" : "Off"}</span>
+      </div>
+      <p className="muted" style={{ fontSize: "0.85rem", marginTop: "0.4rem" }}>
+        Off by default. When on, the lead may propose up to {n} task{n === 1 ? "" : "s"} per planning run; they run through their pipelines without further prompting unless held. The lead never edits existing tasks or
+        your pinned choices.
+      </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void send("setAutonomy", {
+            enabled,
+            planningIntervalMinutes: Number(interval),
+            maxProposalsPerCycle: Number(perCycle),
+            maxOpenProposals: Number(maxOpen),
+            holdLeadProposals: hold,
+            operatingHours: hours,
+          });
+        }}
+      >
+        <fieldset className="plain-fieldset" disabled={disabled}>
+          <label className="row field" style={{ gap: "0.4rem" }}>
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            <strong>Let the lead plan and propose tasks on its own</strong>
+          </label>
+          <div className="row" style={{ alignItems: "flex-start" }}>
+            <label className="field">
+              <span>Planning interval (minutes)</span>
+              <input type="number" min={5} max={1440} value={interval} onChange={(e) => setIntervalMinutes(e.target.value)} style={{ width: "6rem" }} />
+            </label>
+            <label className="field">
+              <span>Max proposals per run</span>
+              <input type="number" min={1} max={10} value={perCycle} onChange={(e) => setPerCycle(e.target.value)} style={{ width: "6rem" }} />
+            </label>
+            <label className="field">
+              <span>Max open lead proposals</span>
+              <input type="number" min={1} max={50} value={maxOpen} onChange={(e) => setMaxOpen(e.target.value)} style={{ width: "6rem" }} />
+            </label>
+          </div>
+          <label className="row field" style={{ gap: "0.4rem" }}>
+            <input type="checkbox" checked={hold} onChange={(e) => setHold(e.target.checked)} />
+            Hold lead proposals before start (each waits for you to release it)
+          </label>
+          <div className="row" style={{ gap: "0.4rem", marginBottom: "0.8rem" }}>
+            <label className="row" style={{ gap: "0.4rem" }}>
+              <input type="checkbox" checked={limitHours} onChange={(e) => setLimitHours(e.target.checked)} />
+              Only between
+            </label>
+            <input type="time" aria-label="Operating hours start" value={start} disabled={!limitHours} onChange={(e) => setStart(e.target.value)} required={limitHours} />
+            <span className="muted">and</span>
+            <input type="time" aria-label="Operating hours end" value={end} disabled={!limitHours} onChange={(e) => setEnd(e.target.value)} required={limitHours} />
+            <span className="muted" style={{ fontSize: "0.8rem" }}>
+              (this machine's local time)
+            </span>
+          </div>
+          <button type="submit" disabled={!changed}>
+            Save autonomy
+          </button>
+        </fieldset>
+      </form>
+      <p className="muted" style={{ fontSize: "0.82rem", margin: "0.6rem 0 0" }}>
+        Open lead proposals: {openProposals} of {a.maxOpenProposals}. Planning waits while the project is paused.{" "}
+        {lastPlanning ? (
+          <>
+            Last planning run: <span title={fmtTime(lastPlanning)}>{relTime(lastPlanning)}</span>.
+          </>
+        ) : (
+          "No planning run yet."
+        )}{" "}
+        Your messages are answered whether or not autonomy is on.
+      </p>
+    </section>
   );
 }
 

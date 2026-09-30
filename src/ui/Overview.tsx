@@ -2,6 +2,7 @@ import { useState } from "react";
 import * as M from "../domain/model";
 import { useStore } from "./store";
 import { ROLE_LABEL, fmtTime, relTime, selectionText } from "./common";
+import { Conversation } from "./Conversation";
 
 export function Overview() {
   const { state, send, disabled, status, service } = useStore();
@@ -148,15 +149,7 @@ export function Overview() {
         </div>
 
         <div>
-          <section className="card" aria-labelledby="lead-h">
-            <h2 id="lead-h">Lead</h2>
-            <p>
-              {selectionText(state.project.leadSelection)} <span className="chip">{service.runtime === "real" ? "rule-based scheduling until Milestone 4" : "simulated"}</span>
-            </p>
-            <div className="banner neutral" style={{ marginBottom: 0 }}>
-              The lead conversation arrives with the runtime integrations (Milestone 3). In this prototype, direction is recorded through vision revisions and task edits.
-            </div>
-          </section>
+          <Conversation />
 
           <section className="card" aria-labelledby="team-h">
             <h2 id="team-h">Team now</h2>
@@ -219,7 +212,12 @@ export function Overview() {
               <dt>Repository</dt>
               <dd className="mono">{state.project.repoPath}</dd>
               <dt>Scheduler</dt>
-              <dd>Fake runtime only; no unattended real runs</dd>
+              <dd>
+                {state.project.autonomy.enabled
+                  ? `Autonomous planning on: every ${state.project.autonomy.planningIntervalMinutes} min${state.project.autonomy.operatingHours ? ` between ${state.project.autonomy.operatingHours.start} and ${state.project.autonomy.operatingHours.end}` : ""}, while this service runs`
+                  : "Autonomous planning off; the lead runs only when you message it"}
+                {service.runtime === "fake" ? " (simulated)" : ""}. Nothing runs while this service is stopped or the computer sleeps.
+              </dd>
             </dl>
           </section>
         </div>

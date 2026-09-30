@@ -9,9 +9,9 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { buildSeed } from "../src/domain/seed";
-import { ControlError, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
+import { ControlError, DEFAULT_AUTONOMY, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
 
-export const STATE_FORMAT = 6;
+export const STATE_FORMAT = 7;
 
 /** In-place upgrades of the state document, keyed by the format they upgrade from. */
 const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
@@ -33,6 +33,14 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     project.sample ??= project.name === "Example Notes (sample)" || project.repoPath === "~/code/example-notes";
     project.id ??= project.sample ? "sample" : `p-${Date.now().toString(36)}`;
     doc.version = 6;
+    return doc;
+  },
+  6: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.autonomy ??= { ...DEFAULT_AUTONOMY };
+    doc.conversation ??= [];
+    doc.leadRuns ??= [];
+    doc.version = 7;
     return doc;
   },
 };

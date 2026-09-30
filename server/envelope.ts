@@ -3,7 +3,7 @@
 // travels only through this envelope and the artifacts it references.
 
 import * as M from "../src/domain/model";
-import type { OutputDef, RoleId, State, Step, Task } from "../src/domain/types";
+import type { LeadRun, OutputDef, RoleId, State, Step, Task } from "../src/domain/types";
 
 const ROLE_BRIEFS: Record<RoleId, string> = {
   lead: "You are the lead. Verify the work against the acceptance criteria using the inputs, and decide whether it is ready to integrate. Do not change files.",
@@ -102,29 +102,32 @@ export interface ParsedOutputs {
 }
 
 /** Extract the output block from a worker's final message. Uses the last fenced JSON block. */
-export function parseOutputs(finalText: string, declared: OutputDef[]): ParsedOutputs {
-  const problems: string[] = [];
-  const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
-  // Candidates, most likely first: from the last ```json fence to the last closing fence (summaries
-  // may themselves contain ``` fences), then each simple fenced block from the end.
+const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** The last fenced JSON object in a message. Summaries may themselves contain ``` fences. */
+export function lastJsonObject(text: string): Record<string, unknown> | undefined {
+  // Candidates, most likely first: from the last ```json fence to the last closing fence, then each
+  // simple fenced block from the end.
   const candidates: string[] = [];
-  const open = finalText.lastIndexOf("```json");
-  const close = finalText.lastIndexOf("```");
-  if (open >= 0 && close > open + 7) candidates.push(finalText.slice(open + 7, close));
-  const blocks = [...finalText.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map((m) => m[1]);
+  const open = text.lastIndexOf("```json");
+  const close = text.lastIndexOf("```");
+  if (open >= 0 && close > open + 7) candidates.push(text.slice(open + 7, close));
+  const blocks = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map((m) => m[1]);
   candidates.push(...blocks.reverse());
-  let parsed: Record<string, unknown> | undefined;
   for (const c of candidates) {
     try {
       const v: unknown = JSON.parse(c);
-      if (isObject(v)) {
-        parsed = v;
-        break;
-      }
+      if (isObject(v)) return v;
     } catch {
       /* try the next candidate */
     }
   }
+  return undefined;
+}
+
+export function parseOutputs(finalText: string, declared: OutputDef[]): ParsedOutputs {
+  const problems: string[] = [];
+  const parsed = lastJsonObject(finalText);
   if (!parsed) {
     return { outputs: [], problems: ["The final message has no parseable JSON output block."] };
   }
@@ -150,4 +153,111 @@ export function parseOutputs(finalText: string, declared: OutputDef[]): ParsedOu
     outputs.push(out);
   }
   return { outputs, problems };
+}
+
+// ---------- the lead ----------
+
+const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+
+/** Everything the lead sees: vision, board, outcomes, conflicts, conversation, and the rules. */
+export function buildLeadEnvelope(state: State, run: LeadRun, access: "read"): string {
+  const p = state.project;
+  const vision = M.currentVision(state);
+  const maxProposals = p.autonomy.maxProposalsPerCycle;
+  const tasks = [...state.tasks].sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
+  const board = tasks.length
+    ? tasks
+        .slice(0, 60)
+        .map((t) => {
+          const c = M.currentSpec(t).content;
+          const sel = c.options.find((o) => o.id === c.selectedOptionId);
+          const integ = t.integration ? `; integration ${t.integration.status}` : "";
+          return `- ${t.id} [${M.stateLabel(state, t)}${integ}] P${t.priority} ${clip(c.title, 90)} — approach ${sel?.id}: ${clip(sel?.name ?? "", 60)} (by ${t.specs[0].author})`;
+        })
+        .join("\n")
+    : "- The board is empty.";
+  const recent = state.artifacts
+    .filter((a) => a.kind === "review-findings" || a.kind === "verification" || a.kind === "report")
+    .slice(-10)
+    .map((a) => `- ${a.taskId} ${a.stepId}.${a.name} (${a.kind}${a.openFindings !== undefined ? `, ${a.openFindings} open` : ""}): ${clip(a.summary.replace(/\n/g, " "), 240)}`)
+    .join("\n");
+  const conflicts = state.tasks.filter((t) => t.integration?.status === "conflict").map((t) => `- ${t.id}: ${t.integration!.message}`);
+  const convo = state.conversation
+    .slice(-20)
+    .map((m) => `${m.author === "user" ? "User" : m.author === "lead" ? "Lead" : "System"} (${m.at}): ${clip(m.text, 1200)}`)
+    .join("\n\n");
+  const pending = state.conversation.filter((m) => run.messageIds.includes(m.id));
+  const templates = p.templates.map((t) => `- ${t.id}: ${t.name} — ${t.description}`).join("\n");
+
+  return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : "reply to the user"})
+
+You are the lead of the project "${p.name}". You own the backlog within the vision below: you decide what is worth doing next, specify it clearly, and pick the approach. Workers (designers, coders, reviewers on Claude or Codex) carry tasks out through each task's pipeline. You do not edit files: ${access === "read" ? "your working directory is a read-only checkout of the repository, which you may read to ground your proposals" : "you have no workspace"}.
+
+## Vision (r${vision.rev})
+${vision.text || "(not written yet)"}
+Current focus: ${vision.focus || "(none)"}
+
+## Board
+${board}
+
+## Recent outcomes and findings
+${recent || "- None yet."}
+
+## Integration conflicts
+${conflicts.length ? conflicts.join("\n") : "- None."}
+
+## Conversation (most recent last)
+${convo || "(no messages yet)"}
+
+## ${pending.length ? "Messages to answer now" : "This run"}
+${pending.length ? pending.map((m) => `- ${clip(m.text, 2000)}`).join("\n") : run.trigger === "planning" ? "Planning check: propose the most useful next work, or nothing if nothing is clearly worth doing." : "No new messages."}
+
+## Rules for proposals
+- Propose at most ${maxProposals} task(s). Proposing nothing is fine when nothing is clearly worth doing; say why in your reply.
+- Do not duplicate tasks already on the board. Prefer small, independently verifiable work that serves the current focus.
+- Each proposal needs 2–4 options with trade-offs. When only one approach is sensible, include deferring as the other option and explain.
+- Choose "recommendedOptionId" yourself; it becomes the selected approach unless the user overrides it.
+- Give concrete, observable acceptance checks.
+- Pick "templateId" from:
+${templates}
+
+## Required final output
+End your final message with exactly one fenced JSON block:
+
+\`\`\`json
+{
+  "reply": "<your answer to the user, or a short planning summary>",
+  "proposals": [
+    {
+      "title": "<short imperative title>",
+      "area": "<area>",
+      "whyNow": "<evidence and why this matters now>",
+      "outcome": "<what is true when done>",
+      "benefit": "<user benefit>",
+      "scopeIncluded": ["..."],
+      "scopeExcluded": ["..."],
+      "options": [
+        { "id": "A", "name": "...", "approach": "...", "benefit": "...", "effort": "...", "risks": "...", "reversibility": "..." },
+        { "id": "B", "name": "Defer", "approach": "...", "benefit": "...", "effort": "...", "risks": "...", "reversibility": "..." }
+      ],
+      "recommendedOptionId": "A",
+      "rationale": "<why this option>",
+      "uncertainty": "<what you do not know, and what would change the decision>",
+      "acceptance": ["<observable check>"],
+      "templateId": "<template id>",
+      "priority": 3
+    }
+  ]
+}
+\`\`\`
+`;
+}
+
+/** Parse the lead's final message. A reply without a JSON block is still a reply (with no proposals). */
+export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; problem?: string } {
+  const obj = lastJsonObject(finalText);
+  if (!obj) return { reply: clip(finalText.trim(), 4000), proposals: [], problem: "no JSON block; treated the message as a reply without proposals" };
+  const reply = typeof obj.reply === "string" ? clip(obj.reply, 8000) : "";
+  const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
+  return { reply, proposals };
 }

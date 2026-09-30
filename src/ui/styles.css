@@ -125,7 +125,7 @@ button.primary:hover:not(:disabled) { filter: brightness(1.07); background: var(
 button.danger { color: var(--s-blocked); border-color: var(--danger-border); }
 button.link { border: none; background: none; padding: 0; color: var(--accent); text-decoration: underline; }
 button.small { padding: 0.15rem 0.55rem; font-size: 0.85rem; }
-select, input[type="text"], input[type="number"], textarea {
+select, input[type="text"], input[type="number"], input[type="time"], textarea {
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -225,6 +225,8 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
   white-space: nowrap;
 }
 .chip.strong { color: var(--text); }
+.chip.danger { color: var(--s-blocked); }
+.chip.done { color: var(--s-done); }
 .badge-new {
   font-size: 0.72rem;
   font-weight: 650;
@@ -342,6 +344,7 @@ ul.plain { margin: 0; padding-left: 1.1rem; }
 .diff .same { color: var(--muted); }
 .diff .same::before { content: "  "; }
 
+.plain-fieldset { border: none; margin: 0; padding: 0; min-width: 0; }
 .option-edit { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; margin-bottom: 0.6rem; }
 .option-edit .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 0.7rem; }
 .sticky-actions { position: sticky; bottom: 0; background: var(--surface); padding: 0.7rem 0; border-top: 1px solid var(--border); display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
@@ -366,3 +369,30 @@ ul.plain { margin: 0; padding-left: 1.1rem; }
 }
 .conn-banner.offline { background: var(--danger-bg); border-bottom-color: var(--danger-border); }
 .card.connect { max-width: 36rem; margin: 3rem auto; }
+
+/* ---------- lead conversation ---------- */
+.convo {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0.25rem 0.25rem 0.25rem 0;
+  max-height: 26rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.msg { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.7rem; font-size: 0.9rem; }
+.msg.user { background: var(--surface-2); border-color: var(--surface-2); margin-left: 1.5rem; }
+.msg.lead { background: var(--surface); margin-right: 1.5rem; }
+.msg.system { border-style: dashed; color: var(--muted); font-size: 0.84rem; }
+.msg-head { display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; align-items: baseline; font-size: 0.8rem; margin-bottom: 0.15rem; }
+.msg-head time { margin-left: auto; }
+.msg-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-extra { margin-top: 0.35rem; font-size: 0.85rem; }
+.convo-empty { font-size: 0.88rem; }
+.convo-status { display: flex; gap: 0.45rem; align-items: center; min-height: 1.4rem; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.4rem; }
+.dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: currentColor; flex: none; animation: pulse 1.2s ease-in-out infinite; }
+.dot.running { color: var(--s-running); }
+.dot.paused { color: var(--s-paused); }
+@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+.composer textarea { min-height: 3.5rem; margin-bottom: 0.4rem; }

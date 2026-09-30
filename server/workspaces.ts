@@ -179,6 +179,54 @@ export class WorkspaceManager {
     return { sha, branch, changed, diffstat: stat || "no changes", files };
   }
 
+  integrationBranch(projectId: string): string {
+    return `orchestration/${projectId.replace(/[^A-Za-z0-9._-]/g, "_")}/integration`;
+  }
+
+  /**
+   * Merge a finished task's commit into the project's integration branch, serially, in a service-only
+   * worktree. The integration branch starts from the repository's HEAD the first time; the user's own
+   * branches are never touched. A conflict aborts the merge and reports the conflicted files.
+   */
+  integrate(opts: { repoPath: string; projectId: string; sha: string; message: string }): { status: "integrated"; ref: string } | { status: "conflict"; message: string } {
+    const check = this.check(opts.repoPath);
+    if (!check.ok) throw new Error(check.reason);
+    const repo = resolve(opts.repoPath.replace(/^~(?=\/|$)/, process.env.HOME ?? "~"));
+    const branch = this.integrationBranch(opts.projectId);
+    const path = this.pathFor(opts.repoPath, "integration", opts.projectId);
+    if (!existsSync(path)) {
+      mkdirSync(join(path, ".."), { recursive: true });
+      let exists = true;
+      try {
+        this.git(repo, ["rev-parse", "--verify", `refs/heads/${branch}`]);
+      } catch {
+        exists = false;
+      }
+      if (exists) this.git(repo, ["worktree", "add", path, branch]);
+      else this.git(repo, ["worktree", "add", "-b", branch, path, check.head!]);
+    }
+    const ws = { path, gitDir: this.git(path, ["rev-parse", "--absolute-git-dir"]), gitFile: readFileSync(join(path, ".git"), "utf8") };
+    const ident = ["-c", "user.name=Orchestration", "-c", "user.email=orchestration@localhost"];
+    try {
+      this.wt(ws, [...ident, "merge", "--no-ff", "--no-edit", "-m", opts.message, opts.sha]);
+    } catch {
+      let files: string[] = [];
+      try {
+        files = this.wt(ws, ["diff", "--name-only", "--diff-filter=U"]).split("\n").filter(Boolean).slice(0, 20);
+      } catch {
+        /* no conflict listing available */
+      }
+      try {
+        this.wt(ws, ["merge", "--abort"]);
+      } catch {
+        this.wt(ws, ["reset", "--hard", "HEAD"]);
+      }
+      return { status: "conflict", message: files.length ? `conflicts in ${files.join(", ")}` : `merging ${opts.sha.slice(0, 12)} failed` };
+    }
+    const head = this.wt(ws, ["rev-parse", "HEAD"]);
+    return { status: "integrated", ref: `${head.slice(0, 12)} on ${branch}` };
+  }
+
   /** Files a read-only run left modified (should be none). */
   dirtyFiles(ws: PreparedWorkspace): string[] {
     try {

@@ -147,6 +147,25 @@ export const COMMANDS = {
     BUILT_IN_TEMPLATES.filter((b) => !s.project.templates.some((t) => t.id === b.id)).reduce((acc, b) => M.saveTemplate(acc, structuredClone(b), null, now), s),
   ),
 
+  // the lead
+  postMessage: same((s, now, a) => M.postMessage(s, str(a, "text"), now)),
+  setLeadSelection: same((s, now, a) => M.setLeadSelection(s, selection(a.selection), now)),
+  setAutonomy: same((s, now, a) => {
+    const hours = a.operatingHours === null || a.operatingHours === undefined ? null : obj(a.operatingHours, "operatingHours");
+    return M.setAutonomy(
+      s,
+      {
+        enabled: bool(a, "enabled"),
+        planningIntervalMinutes: num(a, "planningIntervalMinutes"),
+        maxProposalsPerCycle: num(a, "maxProposalsPerCycle"),
+        maxOpenProposals: num(a, "maxOpenProposals"),
+        holdLeadProposals: bool(a, "holdLeadProposals"),
+        operatingHours: hours ? { start: str(hours, "start"), end: str(hours, "end") } : null,
+      },
+      now,
+    );
+  }),
+
   // real projects
   setWorkerConnections: same((s, now, a) => M.setWorkerConnections(s, provider(a.provider), array<unknown>(a.names, "names").map((x) => String(x)), now)),
   setWorkerEnvironment: same((s, now, a) => {

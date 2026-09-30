@@ -34,6 +34,7 @@ export function TaskDetail({ id }: { id: string }) {
             <span className="chip">P{task.priority}</span>
             <span className="chip">{c.area}</span>
             <span className="chip">spec r{spec.rev}</span>
+            <span className="chip">{task.specs[0]?.author === "lead" ? "Proposed by the lead" : "Created by you"}</span>
             {task.followUpOf && (
               <span className="chip">
                 follow-up of <a href={`#/task/${task.followUpOf}`}>{task.followUpOf}</a>
@@ -195,12 +196,34 @@ function StatusBanners({ state, task }: { state: State; task: Task }) {
         Held before start: this task will not be dispatched until you release it.
       </div>,
     );
-  if (task.lifecycle === "done")
+  if (task.lifecycle === "done") {
+    const integ = task.integration;
+    if (integ?.status === "conflict")
+      out.push(
+        <div className="banner danger" role="alert" key="integ">
+          <strong>Integration conflict:</strong> {integ.message ?? integ.ref ?? "the change could not be merged"}. The lead sees this in its next planning run; resolve it by merging the branch yourself or by a
+          follow-up task.
+        </div>,
+      );
     out.push(
       <div className="banner neutral" key="done">
         Delivered on spec r{current}. The delivered spec is read-only; create a follow-up to change it.
+        {integ && integ.status !== "conflict" && (
+          <div style={{ marginTop: "0.3rem" }}>
+            {integ.status === "pending" && "Waiting for integration."}
+            {integ.status === "integrated" && (
+              <>
+                Integrated into the integration branch{integ.ref ? ": " : "."}
+                {integ.ref && <span className="mono">{integ.ref}</span>}
+                {integ.at && <span className="muted"> · {relTime(integ.at)}</span>}
+              </>
+            )}
+            {integ.status === "not-needed" && "Nothing to integrate (no code change)."}
+          </div>
+        )}
       </div>,
     );
+  }
   return <>{out}</>;
 }
 

@@ -8,8 +8,8 @@
 
 import { randomUUID } from "node:crypto";
 import * as M from "../src/domain/model";
-import type { ProviderId, State, Step, Task } from "../src/domain/types";
-import { buildEnvelope, parseOutputs } from "./envelope";
+import type { Integration, ProviderId, State, Step, Task } from "../src/domain/types";
+import { buildEnvelope, buildLeadEnvelope, parseLeadOutput, parseOutputs } from "./envelope";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
@@ -172,6 +172,8 @@ export class Scheduler {
             next = M.reportRunLost(next, a.id, "No runtime process found after the service restarted or the scheduler changed", now);
           }
         }
+        const lead = M.activeLeadRun(next);
+        if (lead && !this.adapterFor(lead.provider).has(lead.id)) next = M.reportLeadStopped(next, lead.id, now, true);
         return next;
       },
       now,
@@ -224,9 +226,10 @@ export class Scheduler {
     // 2. Start the runs dispatched in step 1; stop orphans; forward stop requests.
     const { state } = this.store.read();
     const active = new Map(M.activeAttempts(state).map((a) => [a.id, a]));
+    const leadRun = M.activeLeadRun(state);
     for (const adapter of Object.values(this.adapters)) {
       for (const id of adapter.ids()) {
-        if (!active.has(id)) {
+        if (!active.has(id) && id !== leadRun?.id) {
           adapter.kill(id); // its run is no longer active: it must never report into state again
           this.launched.delete(id);
         }
@@ -256,6 +259,45 @@ export class Scheduler {
         if (adapter instanceof FakeAdapter) adapter.interruptAt(a.id, nowMs);
         else adapter.interrupt(a.id);
         if (a.stopRequestedAt && nowMs - Date.parse(a.stopRequestedAt) >= this.ackTimeoutMs) timeouts.push(a.id);
+      }
+    }
+
+    // 2b. The lead: supervise the active lead run, or start one when a message or planning is due.
+    const leadIssues: { id: string; kind: "lost" | "timeout" | "failed"; reason?: string }[] = [];
+    if (leadRun) {
+      const adapter = this.adapterFor(leadRun.provider);
+      const launchedL = this.launched.get(leadRun.id);
+      if (!adapter.has(leadRun.id) && !this.queue.some((e) => e.attemptId === leadRun.id)) {
+        if (!launchedL) leadIssues.push({ id: leadRun.id, kind: "lost" });
+        else {
+          launchedL.goneSince ??= nowMs;
+          if (nowMs - launchedL.goneSince > 10_000) {
+            this.launched.delete(leadRun.id);
+            leadIssues.push({ id: leadRun.id, kind: "lost" });
+          }
+        }
+      } else if (leadRun.outcome === "stopping") {
+        if (adapter instanceof FakeAdapter) adapter.interruptAt(leadRun.id, nowMs);
+        else adapter.interrupt(leadRun.id);
+        if (leadRun.stopRequestedAt && nowMs - Date.parse(leadRun.stopRequestedAt) >= this.ackTimeoutMs) leadIssues.push({ id: leadRun.id, kind: "timeout" });
+      }
+    } else if (canDispatch) {
+      const local = new Date(nowMs);
+      const trigger = M.leadDue(state, nowMs, local.getHours() * 60 + local.getMinutes());
+      const lead = trigger ? this.resolveLead(state) : undefined;
+      if (trigger && lead && !unavailable[lead.provider] && !deferred.includes(lead.provider)) {
+        let runId = "";
+        this.store.update(
+          (s) => {
+            const r = M.startLeadRun(s, { provider: lead.provider, model: lead.model, trigger }, now);
+            runId = r.runId;
+            return r.state;
+          },
+          now,
+          lease,
+        );
+        const err = this.launchLead(this.store.read().state, runId);
+        if (err) leadIssues.push({ id: runId, kind: "failed", reason: err });
       }
     }
 
@@ -289,6 +331,11 @@ export class Scheduler {
             }
           }
           for (const id of timeouts) next = M.reportStopTimeout(next, id, now);
+          for (const l of leadIssues) {
+            if (l.kind === "lost") next = M.reportLeadStopped(next, l.id, now, true);
+            else if (l.kind === "timeout") next = M.reportLeadStopTimeout(next, l.id, now);
+            else next = M.reportLeadFailed(next, l.id, l.reason ?? "could not start", now);
+          }
           return next;
         },
         now,
@@ -300,6 +347,74 @@ export class Scheduler {
       throw err;
     }
     for (const e of events) if (e.type === "completed" || e.type === "failed" || e.type === "stopped") this.launched.delete(e.attemptId);
+
+    // 5. Integration: one finished task per cycle, frozen while the project is paused.
+    this.integrateNext(nowMs, lease);
+  }
+
+  /** Merge the oldest done task's final change into the integration branch (serial, one per cycle). */
+  private integrateNext(nowMs: number, lease: { name: string; holder: string; nowMs: number }) {
+    const now = new Date(nowMs).toISOString();
+    const { state } = this.store.read();
+    if (state.project.hold) return;
+    const t = M.nextIntegration(state);
+    if (!t) return;
+    // Fake runs produce code-change artifacts without commits; simulate their integration.
+    const change = this.workspaces ? M.finalChange(state, t) : state.artifacts.filter((x) => x.taskId === t.id && x.kind === "code-change").pop();
+    let result: Integration;
+    if (!change) result = { status: "not-needed" };
+    else if (!this.workspaces) result = { status: "integrated", ref: "simulated integration (no commit)" };
+    else if (state.project.sample || !this.repoUsable(state.project.repoPath, nowMs)) return;
+    else {
+      try {
+        const sha = change.ref!.split(" ")[0];
+        result = this.workspaces.integrate({ repoPath: state.project.repoPath, projectId: state.project.id, sha, message: `Integrate ${t.id}: ${M.currentSpec(t).content.title}` });
+      } catch (err) {
+        result = { status: "conflict", message: `integration failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+    }
+    this.store.update((s) => M.reportIntegration(s, t.id, result, now), now, lease);
+  }
+
+  /** The lead's concrete provider/model ("auto" resolves to the first catalog model). */
+  private resolveLead(state: State): { provider: ProviderId; model: string } | undefined {
+    const sel = state.project.leadSelection;
+    const catalog = state.project.catalog[sel.provider];
+    if (!state.project.enabledProviders.includes(sel.provider)) return undefined;
+    if (sel.model === "auto") return catalog[0] ? { provider: sel.provider, model: catalog[0].id } : undefined;
+    return catalog.some((m) => m.id === sel.model) ? { provider: sel.provider, model: sel.model } : undefined;
+  }
+
+  /** Start a lead run: a read-only checkout (real mode) and the lead envelope. */
+  private launchLead(state: State, runId: string): string | undefined {
+    const run = state.leadRuns.find((r) => r.id === runId)!;
+    const adapter = this.adapterFor(run.provider);
+    const limits = state.project.runLimits;
+    try {
+      let workspace: PreparedWorkspace | undefined;
+      if (this.workspaces) {
+        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "LEAD", stepId: "plan", access: "read" });
+      }
+      this.launched.set(runId, { provider: run.provider, access: "read", workspace, stepId: "LEAD", taskId: "LEAD" });
+      adapter.start({
+        attemptId: runId,
+        taskId: "LEAD",
+        stepId: "LEAD",
+        role: "lead",
+        provider: run.provider,
+        model: run.model,
+        workspace: { path: workspace?.path ?? "", access: "read" },
+        environment: state.project.workerEnvironment[run.provider],
+        connections: state.project.workerConnections[run.provider],
+        prompt: buildLeadEnvelope(state, run, "read"),
+        outputs: [],
+        limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
+      });
+      return undefined;
+    } catch (e) {
+      this.launched.delete(runId);
+      return `Could not start the lead: ${e instanceof Error ? e.message : String(e)}`;
+    }
   }
 
   private repoUsable(repoPath: string, nowMs: number): boolean {
@@ -380,6 +495,7 @@ export class Scheduler {
   }
 
   private applyEvent(s: State, e: AdapterEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[] }>, now: string): State {
+    if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
       case "started":
         return M.reportRunStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
@@ -404,6 +520,25 @@ export class Scheduler {
         let next = M.reportCompletion(s, e.attemptId, [], now, c.outputs, { usage: e.usage, actualModel: e.model });
         if (c.problems.length) next = noteProblems(next, e.attemptId, c.problems);
         return next;
+      }
+    }
+  }
+
+  private applyLeadEvent(s: State, e: AdapterEvent, now: string): State {
+    switch (e.type) {
+      case "started":
+        return M.reportLeadStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
+      case "activity":
+        return M.reportLeadActivity(s, e.attemptId, e.note);
+      case "progress":
+        return s;
+      case "stopped":
+        return M.reportLeadStopped(s, e.attemptId, now);
+      case "failed":
+        return M.reportLeadFailed(s, e.attemptId, e.message, now, e.usage);
+      case "completed": {
+        const out = parseLeadOutput(e.finalText);
+        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals }, now, { usage: e.usage, actualModel: e.model });
       }
     }
   }

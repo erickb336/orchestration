@@ -18,6 +18,41 @@ interface Proc {
   progress: number;
   outputs: OutputDef[];
   interruptAt?: number;
+  /** Lead runs answer with a reply (and, when planning, one proposal) instead of step outputs. */
+  lead?: "planning" | "message";
+}
+
+/** A simulated lead reply in the required JSON shape. Planning runs propose one small task. */
+export function fakeLeadText(attemptId: string, trigger: "planning" | "message"): string {
+  const proposals =
+    trigger === "planning"
+      ? [
+          {
+            title: `Simulated improvement ${attemptId}`,
+            area: "Simulation",
+            whyNow: "Simulated planning run: demonstrates a lead-authored task flowing through its pipeline.",
+            outcome: "A small, verifiable improvement is delivered (simulated).",
+            benefit: "Shows the autonomous loop end to end without cost.",
+            scopeIncluded: ["One small change"],
+            scopeExcluded: ["Anything else"],
+            options: [
+              { id: "A", name: "Small change", approach: "Make the smallest useful change", benefit: "Quick", effort: "Small", risks: "Low", reversibility: "High" },
+              { id: "B", name: "Defer", approach: "Do nothing now", benefit: "No cost", effort: "None", risks: "No improvement", reversibility: "N/A" },
+            ],
+            recommendedOptionId: "A",
+            rationale: "Smallest step that exercises the loop.",
+            uncertainty: "Simulated; no real evidence.",
+            acceptance: ["The simulated change completes review"],
+            templateId: "change",
+            priority: 5,
+          },
+        ]
+      : [];
+  const reply =
+    trigger === "planning"
+      ? "(Simulated lead) I reviewed the board and proposed one small task."
+      : "(Simulated lead) Noted. In live mode the lead answers here using the board and the repository.";
+  return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals }, null, 2)}\n\`\`\`\n`;
 }
 
 function jitter(id: string) {
@@ -82,6 +117,12 @@ export class FakeAdapter implements RuntimeAdapter {
   }
 
   start(a: Assignment) {
+    if (a.role === "lead" && a.stepId === "LEAD") {
+      if (this.procs.has(a.attemptId)) return;
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: a.prompt.includes("(planning)") ? "planning" : "message" });
+      this.emit({ type: "started", attemptId: a.attemptId });
+      return;
+    }
     this.startAt(a.attemptId, a.outputs, 0);
   }
 
@@ -142,7 +183,7 @@ export class FakeAdapter implements RuntimeAdapter {
       p.progress = Math.min(100, p.progress + this.config.progressPerTick + jitter(id));
       if (p.progress >= 100) {
         this.procs.delete(id);
-        this.emit({ type: "completed", attemptId: id, finalText: fakeFinalText(id, p.outputs) });
+        this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead) : fakeFinalText(id, p.outputs) });
       } else this.emit({ type: "progress", attemptId: id, percent: p.progress });
     }
   }

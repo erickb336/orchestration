@@ -330,6 +330,12 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
           )}
           <span className="chip">spec r{M.currentSpec(task).rev}</span>
           {task.legacySpecUnavailable && <span className="chip">legacy spec unavailable</span>}
+          {task.specs[0]?.author === "lead" && (
+            <span className="chip" title="Proposed by the lead">
+              lead
+            </span>
+          )}
+          {task.lifecycle === "done" && <IntegrationChip task={task} />}
         </div>
       </div>
       <div className="side">
@@ -347,4 +353,17 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
       </div>
     </div>
   );
+}
+
+function IntegrationChip({ task }: { task: Task }) {
+  switch (task.integration?.status) {
+    case "integrated":
+      return <span className="chip done">integrated</span>;
+    case "conflict":
+      return <span className="chip danger">integration conflict</span>;
+    case "pending":
+      return <span className="chip">integrating</span>;
+    default:
+      return null;
+  }
 }

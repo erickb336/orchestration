@@ -11,6 +11,12 @@ import {
   type Attempt,
   type CatalogModel,
   type RunLimits,
+  type Autonomy,
+  type Integration,
+  type LeadRun,
+  type LeadTrigger,
+  type Message,
+  type SpecOption,
   type WorkerEnvironment,
   type ConsumedInput,
   type EventKind,
@@ -107,6 +113,11 @@ function settleStoppedStep(s: State, t: Task, st: Step | undefined) {
   if (!st) return; // removed by a pipeline edit
   if (t.lifecycle === "cancelled" || t.hold || s.project.hold) st.state = "paused";
   else st.state = "pending";
+}
+
+function finishTask(t: Task) {
+  t.lifecycle = "done";
+  t.integration = { status: "pending" };
 }
 
 function touch(t: Task, now: string) {
@@ -411,6 +422,8 @@ export function pauseProject(state: State, now: string): State {
   const active = activeAttempts(s);
   event(s, now, "user", "control", `Project paused; dispatch and integration frozen${active.length ? `; interrupting ${active.length} run(s)` : ""}`);
   for (const a of active) requestStop(s, a, "project-pause", now);
+  const lead = activeLeadRun(s);
+  if (lead && lead.outcome === "running") requestLeadStop(s, lead, "project paused", now);
   return s;
 }
 
@@ -467,6 +480,8 @@ export function setTaskRoleOverride(state: State, taskId: string, role: RoleId, 
 }
 
 export function setRoleDefault(state: State, role: RoleId, selection: ModelSelection | null, now: string): State {
+  // The lead role default and the project lead are one choice: keep them from diverging.
+  if (role === "lead" && selection) return setLeadSelection(state, selection, now);
   const s = draft(state);
   if (selection) s.project.roleDefaults[role] = { ...selection };
   else delete s.project.roleDefaults[role];
@@ -616,9 +631,9 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
     if (activeAttempts(s, t.id).some((a) => a.outcome === "stopping")) continue;
     const spec = currentSpec(t);
     if (t.lifecycle === "active" && t.steps.every(isSettled) && activeAttempts(s, t.id).length === 0) {
-      t.lifecycle = "done";
+      finishTask(t);
       touch(t, now);
-      event(s, now, "lead", "integration", `Integrated spec r${spec.rev} (simulated); task Done`, t.id);
+      event(s, now, "lead", "integration", `All steps settled on spec r${spec.rev}; task Done, queued for integration`, t.id);
       continue;
     }
     for (const st of t.steps) {
@@ -876,8 +891,8 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
   touch(t, now);
 
   if (t.lifecycle === "active" && t.steps.every(isSettled) && activeAttempts(s, t.id).length === 0 && !t.hold && !s.project.hold) {
-    t.lifecycle = "done";
-    event(s, now, "lead", "integration", `Integrated spec r${currentSpec(t).rev} (simulated); task Done`, t.id);
+    finishTask(t);
+    event(s, now, "lead", "integration", `All steps settled on spec r${currentSpec(t).rev}; task Done, queued for integration`, t.id);
   }
   return s;
 }
@@ -1075,7 +1090,7 @@ export function setCatalog(state: State, provider: ProviderId, models: CatalogMo
  * active, so no live work is orphaned by the replacement.
  */
 export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string }, now: string): State {
-  if (activeAttempts(state).length) throw new ControlError("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
+  if (activeAttempts(state).length || activeLeadRun(state)) throw new ControlError("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
   if (!init.name.trim() || !init.repoPath.trim() || !init.vision.trim()) throw new ControlError("Name, repository path, and vision are required.");
   const s = draft(state);
   s.project.id = `p-${Date.parse(now).toString(36)}-${s.seq.toString(36)}`;
@@ -1091,6 +1106,9 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.attempts = [];
   s.artifacts = [];
   s.events = [];
+  s.conversation = [];
+  s.leadRuns = [];
+  s.project.lastPlanningAt = undefined;
   event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}`);
   return s;
 }
@@ -1165,4 +1183,340 @@ export function createTask(state: State, t: NewTask, now: string): { state: Stat
   });
   event(s, now, "user", "spec", `Created ${id}: ${content.title}`, id);
   return { state: s, newId: id };
+}
+
+// ---------- lead conversation and runs ----------
+
+export function activeLeadRun(s: State): LeadRun | undefined {
+  return s.leadRuns.find((r) => r.outcome === "running" || r.outcome === "stopping");
+}
+
+/** User messages not yet answered by a completed lead run (and not being answered right now). */
+export function pendingMessages(s: State): Message[] {
+  const covered = new Set(s.leadRuns.filter((r) => r.outcome === "completed" || r.outcome === "running").flatMap((r) => r.messageIds));
+  return s.conversation.filter((m) => m.author === "user" && !covered.has(m.id));
+}
+
+/** Lead-proposed tasks that are not finished yet (the autonomy cap counts these). */
+export function openLeadProposals(s: State): Task[] {
+  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && t.lifecycle !== "done" && t.lifecycle !== "cancelled");
+}
+
+export function postMessage(state: State, text: string, now: string): State {
+  const body = text.trim();
+  if (!body) throw new ControlError("Write a message first.");
+  if (body.length > 8000) throw new ControlError("Messages are limited to 8000 characters.");
+  const s = draft(state);
+  s.conversation.push({ id: nextId(s, "msg"), at: now, author: "user", text: body });
+  return s;
+}
+
+function inHours(hours: Autonomy["operatingHours"], localMinutes: number): boolean {
+  if (!hours) return true;
+  const m = (hhmm: string) => {
+    const [h, mi] = hhmm.split(":").map(Number);
+    return h * 60 + mi;
+  };
+  const a = m(hours.start);
+  const b = m(hours.end);
+  return a <= b ? localMinutes >= a && localMinutes < b : localMinutes >= a || localMinutes < b; // overnight windows
+}
+
+/**
+ * Should the lead run now, and why? Messages always wake it (unless the project is paused);
+ * planning needs autonomy on, operating hours, the interval (or a completion since the last plan),
+ * and room under the open-proposal cap.
+ */
+export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrigger | null {
+  if (s.project.hold || activeLeadRun(s)) return null;
+  if (pendingMessages(s).length) return "message";
+  const a = s.project.autonomy;
+  if (!a.enabled || !inHours(a.operatingHours, localMinutes)) return null;
+  if (openLeadProposals(s).length >= a.maxOpenProposals) return null;
+  const last = s.project.lastPlanningAt ? Date.parse(s.project.lastPlanningAt) : 0;
+  const completedSince = s.tasks.some((t) => t.lifecycle === "done" && t.updatedAt > (s.project.lastPlanningAt ?? ""));
+  if (nowMs - last >= a.planningIntervalMinutes * 60_000 || (completedSince && nowMs - last >= 60_000)) return "planning";
+  return null;
+}
+
+export function startLeadRun(state: State, init: { provider: ProviderId; model: string; trigger: LeadTrigger }, now: string): { state: State; runId: string } {
+  if (activeLeadRun(state)) throw new ControlError("A lead run is already active.");
+  const s = draft(state);
+  const id = nextId(s, "lead");
+  s.leadRuns.push({ id, trigger: init.trigger, provider: init.provider, model: init.model, startedAt: now, outcome: "running", messageIds: pendingMessages(s).map((m) => m.id) });
+  if (init.trigger === "planning") s.project.lastPlanningAt = now;
+  event(s, now, "lead", "dispatch", `Lead ${init.trigger === "planning" ? "planning" : "reply"} run ${id} started on ${providerLabel(init.provider)} · ${init.model}`);
+  return { state: s, runId: id };
+}
+
+function requestLeadStop(s: State, r: LeadRun, reason: string, now: string) {
+  if (r.outcome !== "running") return;
+  r.outcome = "stopping";
+  r.stopRequestedAt = now;
+  event(s, now, "system", "control", `Stop requested for lead run ${r.id} (${reason}); awaiting runtime acknowledgment`);
+}
+
+function getLeadRun(s: State, id: string): LeadRun | undefined {
+  return s.leadRuns.find((r) => r.id === id);
+}
+
+export function reportLeadStarted(state: State, runId: string, info: { sessionId?: string; actualModel?: string }): State {
+  const s = draft(state);
+  const r = getLeadRun(s, runId);
+  if (r && (r.outcome === "running" || r.outcome === "stopping")) Object.assign(r, info.sessionId ? { sessionId: info.sessionId } : {}, info.actualModel ? { actualModel: info.actualModel } : {});
+  return s;
+}
+
+export function reportLeadActivity(state: State, runId: string, note: string): State {
+  const s = draft(state);
+  const r = getLeadRun(s, runId);
+  if (r && (r.outcome === "running" || r.outcome === "stopping")) r.activity = note.slice(0, 200);
+  return s;
+}
+
+/** The lead run is confirmed stopped (pause, lead switch) or its process is gone. Its messages stay pending. */
+export function reportLeadStopped(state: State, runId: string, now: string, lost = false): State {
+  const s = draft(state);
+  const r = getLeadRun(s, runId);
+  if (!r || (r.outcome !== "running" && r.outcome !== "stopping")) return s;
+  r.outcome = lost ? "lost" : r.outcome === "stopping" ? "stopped" : "failed";
+  r.endedAt = now;
+  if (r.outcome === "failed") r.note = "The lead run stopped without a stop request (for example its time limit).";
+  event(s, now, "runtime", "runtime", `Lead run ${r.id} ${r.outcome}`);
+  if (r.outcome === "failed" || r.outcome === "lost") {
+    s.conversation.push({ id: nextId(s, "msg"), at: now, author: "system", text: `The lead run ended without a reply (${r.outcome}). Your messages are still pending and will be answered by the next run.` });
+  }
+  return s;
+}
+
+export function reportLeadFailed(state: State, runId: string, message: string, now: string, usage?: Attempt["usage"]): State {
+  const s = draft(state);
+  const r = getLeadRun(s, runId);
+  if (!r || (r.outcome !== "running" && r.outcome !== "stopping")) return s;
+  const wasStopping = r.outcome === "stopping";
+  r.outcome = wasStopping ? "stopped" : "failed";
+  r.endedAt = now;
+  r.note = message;
+  if (usage) r.usage = usage;
+  event(s, now, "runtime", "blocked", `Lead run ${r.id} failed: ${message}`);
+  if (!wasStopping) s.conversation.push({ id: nextId(s, "msg"), at: now, author: "system", text: `The lead could not respond: ${message}` });
+  return s;
+}
+
+export interface LeadProposal {
+  title: string;
+  area: string;
+  whyNow: string;
+  outcome: string;
+  benefit: string;
+  scopeIncluded: string[];
+  scopeExcluded: string[];
+  options: SpecOption[];
+  recommendedOptionId: string;
+  rationale: string;
+  uncertainty: string;
+  acceptance: string[];
+  templateId: string;
+  priority: number;
+}
+
+export interface LeadOutput {
+  reply: string;
+  proposals: LeadProposal[];
+}
+
+/** Check a proposal against the spec requirements. Returns a reason when it cannot become a task. */
+export function validateProposal(s: State, p: LeadProposal): string | undefined {
+  if (!p.title?.trim() || !p.outcome?.trim()) return "a title and an outcome are required";
+  if (!Array.isArray(p.options) || p.options.length < 2 || p.options.length > 4) return "it needs two to four options (include deferring when only one approach is sensible)";
+  const ids = new Set(p.options.map((o) => o.id));
+  if (ids.size !== p.options.length || p.options.some((o) => !o.id || !o.name?.trim() || !o.approach?.trim())) return "every option needs a unique id, a name, and an approach";
+  if (!ids.has(p.recommendedOptionId)) return "the recommended option is not among the options";
+  if (!p.rationale?.trim()) return "the decision needs a rationale";
+  if (!Array.isArray(p.acceptance) || !p.acceptance.some((x) => String(x).trim())) return "it needs at least one acceptance check";
+  const tpl = s.project.templates.find((t) => t.id === p.templateId);
+  if (!tpl) return `unknown template "${p.templateId}"`;
+  if (s.tasks.some((t) => t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === p.title.trim().toLowerCase())) return "a task with this title already exists";
+  return undefined;
+}
+
+/** Apply a completed lead run: its reply, and each valid proposal as a new lead-authored task. */
+export function completeLeadRun(state: State, runId: string, out: LeadOutput, now: string, run: RunReport = {}): State {
+  const s = draft(state);
+  const r = getLeadRun(s, runId);
+  if (!r || (r.outcome !== "running" && r.outcome !== "stopping")) return s;
+  if (r.outcome === "stopping") {
+    // Finished after a stop request: keep the reply for the record, but create nothing.
+    r.outcome = "stopped";
+    r.endedAt = now;
+    r.note = "Finished after a stop request; its proposals were not applied.";
+    return s;
+  }
+  r.outcome = "completed";
+  r.endedAt = now;
+  if (run.usage) r.usage = run.usage;
+  if (run.actualModel) r.actualModel = run.actualModel;
+  const limit = r.trigger === "planning" ? s.project.autonomy.maxProposalsPerCycle : Math.max(1, s.project.autonomy.maxProposalsPerCycle);
+  const created: string[] = [];
+  const rejected: string[] = [];
+  for (const [i, p] of out.proposals.entries()) {
+    if (i >= limit) {
+      rejected.push(`"${p.title}": more than ${limit} proposals in one run`);
+      continue;
+    }
+    const why = validateProposal(s, p);
+    if (why) {
+      rejected.push(`"${p.title ?? "(untitled)"}": ${why}`);
+      continue;
+    }
+    created.push(proposeTask(s, p, now));
+  }
+  s.conversation.push({
+    id: nextId(s, "msg"),
+    at: now,
+    author: "lead",
+    text: out.reply.trim() || (created.length ? "I proposed new work; see the linked tasks." : "No reply."),
+    leadRunId: r.id,
+    ...(created.length ? { proposedTaskIds: created } : {}),
+    ...(rejected.length ? { rejected } : {}),
+  });
+  event(s, now, "lead", "spec", `Lead run ${r.id} replied${created.length ? ` and proposed ${created.join(", ")}` : ""}${rejected.length ? `; ${rejected.length} proposal(s) rejected` : ""}`);
+  return s;
+}
+
+function proposeTask(s: State, p: LeadProposal, now: string): string {
+  let n = s.tasks.length + 1;
+  const ids = new Set(s.tasks.map((x) => x.id));
+  while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
+  const id = `T-${String(n).padStart(3, "0")}`;
+  const tpl = s.project.templates.find((t) => t.id === p.templateId)!;
+  const list = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => String(x).trim()).filter(Boolean) : []);
+  const content: SpecContent = {
+    title: p.title.trim().slice(0, 200),
+    area: (p.area ?? "").trim().slice(0, 60) || "General",
+    whyNow: (p.whyNow ?? "").trim(),
+    outcome: p.outcome.trim(),
+    benefit: (p.benefit ?? "").trim(),
+    successCriteria: [],
+    scopeIncluded: list(p.scopeIncluded),
+    scopeExcluded: list(p.scopeExcluded),
+    options: p.options.map((o) => ({
+      id: String(o.id),
+      name: String(o.name),
+      approach: String(o.approach),
+      benefit: String(o.benefit ?? ""),
+      effort: String(o.effort ?? ""),
+      risks: String(o.risks ?? ""),
+      reversibility: String(o.reversibility ?? ""),
+    })),
+    recommendedOptionId: p.recommendedOptionId,
+    selectedOptionId: p.recommendedOptionId,
+    decidedBy: "lead",
+    rationale: p.rationale.trim(),
+    uncertainty: (p.uncertainty ?? "").trim(),
+    overrideReason: "",
+    acceptance: list(p.acceptance),
+    validationPlan: "",
+    rollback: "Discard the orchestration branch; nothing is merged into your branches.",
+    effort: "small",
+  };
+  const defs = structuredClone(tpl.steps);
+  s.tasks.push({
+    id,
+    priority: Number.isFinite(p.priority) ? Math.min(99, Math.max(1, Math.round(p.priority))) : 5,
+    lifecycle: "proposed",
+    hold: false,
+    holdBeforeStart: s.project.autonomy.holdLeadProposals,
+    specs: [{ rev: 1, at: now, author: "lead", reason: "Proposed by the lead", content }],
+    steps: instantiate(defs),
+    roleOverrides: {},
+    dependsOn: [],
+    createdAt: now,
+    updatedAt: now,
+    decisionAt: now,
+    pipelineRev: 1,
+    pipelineHistory: [{ rev: 1, at: now, author: "lead", reason: `Lead applied the ${tpl.name} template`, steps: defs.map(toDef) }],
+  });
+  event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})`, id);
+  return id;
+}
+
+export function requestLeadRunStop(state: State, runId: string, reason: string, now: string): State {
+  const s = draft(state);
+  const r = getLeadRun(s, runId);
+  if (r) requestLeadStop(s, r, reason, now);
+  return s;
+}
+
+export function reportLeadStopTimeout(state: State, runId: string, now: string): State {
+  const s = draft(state);
+  const r = getLeadRun(s, runId);
+  if (!r || r.outcome !== "stopping" || r.note?.startsWith("Control failure")) return s;
+  r.note = "Control failure: the runtime has not acknowledged the stop request.";
+  event(s, now, "system", "control", `Control failure: lead run ${r.id} did not acknowledge stop in time`);
+  return s;
+}
+
+export function setAutonomy(state: State, a: Autonomy, now: string): State {
+  const ok = (n: number, lo: number, hi: number) => Number.isFinite(n) && n >= lo && n <= hi;
+  const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if (!ok(a.planningIntervalMinutes, 5, 24 * 60) || !ok(a.maxProposalsPerCycle, 1, 10) || !ok(a.maxOpenProposals, 1, 50)) {
+    throw new ControlError("Autonomy limits out of range: interval 5–1440 minutes, 1–10 proposals per cycle, 1–50 open proposals.");
+  }
+  if (a.operatingHours && (!hhmm.test(a.operatingHours.start) || !hhmm.test(a.operatingHours.end))) throw new ControlError('Operating hours must be "HH:MM".');
+  const s = draft(state);
+  s.project.autonomy = {
+    enabled: !!a.enabled,
+    planningIntervalMinutes: Math.round(a.planningIntervalMinutes),
+    maxProposalsPerCycle: Math.round(a.maxProposalsPerCycle),
+    maxOpenProposals: Math.round(a.maxOpenProposals),
+    holdLeadProposals: !!a.holdLeadProposals,
+    operatingHours: a.operatingHours ? { ...a.operatingHours } : null,
+  };
+  event(
+    s,
+    now,
+    "user",
+    "config",
+    `Autonomy ${a.enabled ? `on: planning every ${s.project.autonomy.planningIntervalMinutes} min, ≤${s.project.autonomy.maxProposalsPerCycle} proposals per cycle, ≤${s.project.autonomy.maxOpenProposals} open${a.operatingHours ? `, ${a.operatingHours.start}–${a.operatingHours.end}` : ""}` : "off"}`,
+  );
+  return s;
+}
+
+/** Change who leads. An active lead run is stopped first; the next run uses the new selection. */
+export function setLeadSelection(state: State, selection: ModelSelection, now: string): State {
+  const s = draft(state);
+  s.project.leadSelection = { ...selection };
+  s.project.roleDefaults.lead = { ...selection };
+  const r = activeLeadRun(s);
+  if (r) requestLeadStop(s, r, "lead changed", now);
+  event(s, now, "user", "config", `Lead set to ${providerLabel(selection.provider)} · ${selection.model}${r ? `; stopping ${r.id} first` : ""}`);
+  return s;
+}
+
+// ---------- integration ----------
+
+/** The next done task waiting for integration, oldest first. */
+export function nextIntegration(s: State): Task | undefined {
+  return s.tasks.filter((t) => t.lifecycle === "done" && t.integration?.status === "pending").sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
+}
+
+/** The task's final accepted code change (latest by time), if it produced one. */
+export function finalChange(s: State, t: Task): Artifact | undefined {
+  return s.artifacts.filter((a) => a.taskId === t.id && a.kind === "code-change" && a.ref).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).pop();
+}
+
+export function reportIntegration(state: State, taskId: string, result: Integration, now: string): State {
+  const s = draft(state);
+  const t = getTask(s, taskId);
+  if (t.lifecycle !== "done" || t.integration?.status !== "pending") return s;
+  t.integration = { ...result, at: now };
+  const msg =
+    result.status === "integrated"
+      ? `Integrated into the integration branch (${result.ref})`
+      : result.status === "conflict"
+        ? `Integration conflict: ${result.message}`
+        : "Nothing to integrate (no code change)";
+  event(s, now, "lead", result.status === "conflict" ? "blocked" : "integration", msg, t.id);
+  return s;
 }

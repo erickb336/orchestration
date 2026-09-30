@@ -47,6 +47,9 @@ export interface Project {
   workerLimit: number;
   /** Bounds applied to every real run attempt. */
   runLimits: RunLimits;
+  autonomy: Autonomy;
+  /** Last planning run start (for the planning interval). */
+  lastPlanningAt?: string;
   workerEnvironment: Record<ProviderId, WorkerEnvironment>;
   /** MCP servers (by name, from the user's own provider config) isolated workers may use. */
   workerConnections: Record<ProviderId, string[]>;
@@ -291,6 +294,8 @@ export interface Task {
   /** Last spec decision (selection) change; drives the "new decision" badge. */
   decisionAt: string;
   controlFailure?: ControlFailure;
+  /** Set when the task is done: whether its work reached the integration branch. */
+  integration?: Integration;
   followUpOf?: string;
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
@@ -327,13 +332,82 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 6;
+  version: 7;
   seq: number;
   project: Project;
   tasks: Task[];
   attempts: Attempt[];
   artifacts: Artifact[];
   events: ActivityEvent[];
+  conversation: Message[];
+  leadRuns: LeadRun[];
+}
+
+/** One entry in the lead conversation. */
+export interface Message {
+  id: string;
+  at: string;
+  author: "user" | "lead" | "system";
+  text: string;
+  /** For lead messages: the run that wrote it. */
+  leadRunId?: string;
+  /** Tasks the lead proposed in this message. */
+  proposedTaskIds?: string[];
+  /** Proposals the service rejected, with reasons. */
+  rejected?: string[];
+}
+
+export type LeadTrigger = "message" | "planning";
+
+/** A run of the lead agent. Separate from task attempts: at most one is active at a time. */
+export interface LeadRun {
+  id: string;
+  trigger: LeadTrigger;
+  provider: ProviderId;
+  model: string;
+  startedAt: string;
+  endedAt?: string;
+  outcome: "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";
+  /** User messages this run answers. */
+  messageIds: string[];
+  stopRequestedAt?: string;
+  activity?: string;
+  sessionId?: string;
+  actualModel?: string;
+  usage?: Attempt["usage"];
+  note?: string;
+}
+
+/** Bounds on the lead's own initiative. Off until the user turns it on. */
+export interface Autonomy {
+  enabled: boolean;
+  /** Minimum time between planning runs (task completions may wake the lead sooner). */
+  planningIntervalMinutes: number;
+  maxProposalsPerCycle: number;
+  /** No planning while this many lead-proposed tasks are still unfinished. */
+  maxOpenProposals: number;
+  /** Lead proposals wait for the user's release before their first dispatch. */
+  holdLeadProposals: boolean;
+  /** Local-time window "HH:MM"–"HH:MM" for autonomous planning; null = any time. */
+  operatingHours: { start: string; end: string } | null;
+}
+
+export const DEFAULT_AUTONOMY: Autonomy = {
+  enabled: false,
+  planningIntervalMinutes: 60,
+  maxProposalsPerCycle: 3,
+  maxOpenProposals: 5,
+  holdLeadProposals: false,
+  operatingHours: null,
+};
+
+/** Merging a finished task's work into the project's integration branch. */
+export interface Integration {
+  status: "pending" | "integrated" | "conflict" | "not-needed";
+  at?: string;
+  /** Merge commit on the integration branch, or the conflict description. */
+  ref?: string;
+  message?: string;
 }
 
 export class StaleWriteError extends Error {
