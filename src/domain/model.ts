@@ -18,6 +18,7 @@ import {
   type Message,
   type SpecOption,
   type WorkerEnvironment,
+  type InputRef,
   type ConsumedInput,
   type EventKind,
   type ModelSelection,
@@ -189,7 +190,20 @@ export function blockedReason(s: State, t: Task): string | undefined {
   }
   const st = t.steps.find((x) => x.state === "blocked");
   if (st) return `${st.id}: ${st.blockedReason ?? "blocked"}`;
+  if (waitingForChildren(s, t)) {
+    for (const c of childTasks(s, t)) {
+      if (!isOpen(c)) continue;
+      const dep = c.dependsOn.find((d) => s.tasks.find((x) => x.id === d)?.lifecycle === "cancelled");
+      if (dep) return `Child ${c.id} cannot start: its prerequisite ${dep} was cancelled. Cancel ${c.id} or remove the prerequisite.`;
+    }
+  }
   return undefined;
+}
+
+/** A pending step that is ready except that it waits for this task's child tasks to finish. */
+export function waitingForChildren(s: State, t: Task): Step | undefined {
+  if (childrenSettled(s, t)) return undefined;
+  return t.steps.find((x) => x.state === "pending" && x.waitForChildren && x.dependsOn.every((d) => isSettled(getStep(t, d))));
 }
 
 export function column(s: State, t: Task): Column {
@@ -222,6 +236,10 @@ export function stateLabel(s: State, t: Task): string {
   if (col === "done") return "Done";
   if (col === "blocked") return "Blocked";
   if (col === "paused") return t.hold ? "Paused" : "Paused (project)";
+  if (t.lifecycle === "active" && active.length === 0 && waitingForChildren(s, t)) {
+    const open = childTasks(s, t).filter(isOpen).length;
+    return `Waiting for ${open} child task${open === 1 ? "" : "s"}`;
+  }
   if (t.lifecycle === "active" && active.length === 0) return "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return `Waiting on ${waitingOn(s, t)}`;
   if (col === "ready" && t.holdBeforeStart) return "Held before start";
@@ -346,16 +364,26 @@ export function createFollowUp(state: State, taskId: string, now: string): { sta
 
 // ---------- task controls ----------
 
+function holdTask(s: State, t: Task, now: string, with_?: string) {
+  t.hold = true; // persist the hold before interrupting anything
+  if (with_) t.pausedWith = with_;
+  touch(t, now);
+  const active = activeAttempts(s, t.id);
+  const why = with_ ? ` with ${with_}` : "";
+  event(s, now, "user", "control", active.length ? `Pause requested${why}; hold saved, interrupting ${active.length} run(s)` : `Paused${why}; hold saved and excluded from dispatch`, t.id);
+  for (const a of active) requestStop(s, a, "pause", now);
+}
+
+const isOpen = (t: Task) => t.lifecycle !== "done" && t.lifecycle !== "cancelled";
+
+/** Pausing a task also pauses its unfinished child tasks (and theirs); resuming it resumes them. */
 export function pauseTask(state: State, taskId: string, now: string): State {
   const s = draft(state);
   const t = getTask(s, taskId);
   assertOpen(t, "Pausing");
   if (t.hold) return s;
-  t.hold = true; // persist the hold before interrupting anything
-  touch(t, now);
-  const active = activeAttempts(s, t.id);
-  event(s, now, "user", "control", active.length ? `Pause requested; hold saved, interrupting ${active.length} run(s)` : "Paused; hold saved and excluded from dispatch", t.id);
-  for (const a of active) requestStop(s, a, "pause", now);
+  holdTask(s, t, now);
+  for (const d of descendants(s, t)) if (isOpen(d) && !d.hold) holdTask(s, d, now, t.id);
   return s;
 }
 
@@ -366,10 +394,31 @@ export function resumeTask(state: State, taskId: string, now: string): State {
   if (!t.hold) throw new ControlError(`${t.id} has no hold to clear.`);
   t.hold = false;
   t.holdReason = undefined;
+  t.pausedWith = undefined;
   for (const st of t.steps) if (st.state === "paused") st.state = "pending";
+  // Breakdowns reviewed at a gate (or edited while paused): create their children now, from the latest version.
+  const pending = t.pendingBreakdowns ?? [];
+  t.pendingBreakdowns = undefined;
+  for (const pb of pending) applyBreakdown(s, t, pb.stepId, pb.output, now);
   touch(t, now);
   const note = s.project.hold ? " Project is still paused, so nothing will dispatch until it resumes." : " It is not running until dispatched.";
   event(s, now, "user", "control", `Hold cleared; requeued.${note}`, t.id);
+  // Child tasks paused together with this one (or with one of its ancestors) resume with it.
+  const above = new Set([t.id]);
+  for (let cur = t, i = 0; cur.parentTaskId && i < 10; i++) {
+    above.add(cur.parentTaskId);
+    const p = s.tasks.find((x) => x.id === cur.parentTaskId);
+    if (!p) break;
+    cur = p;
+  }
+  for (const d of descendants(s, t)) {
+    if (!d.pausedWith || !above.has(d.pausedWith) || !isOpen(d)) continue;
+    d.hold = false;
+    d.pausedWith = undefined;
+    for (const st of d.steps) if (st.state === "paused") st.state = "pending";
+    touch(d, now);
+    event(s, now, "user", "control", `Resumed with ${t.id}`, d.id);
+  }
   return s;
 }
 
@@ -402,8 +451,19 @@ export function cancelTask(state: State, taskId: string, now: string): State {
   const active = activeAttempts(s, t.id);
   event(s, now, "user", "control", `Cancelled; spec and partial artifacts retained${active.length ? `; stopping ${active.length} run(s)` : ""}`, t.id);
   for (const a of active) requestStop(s, a, "cancel", now);
-  for (const d of s.tasks.filter((x) => x.dependsOn.includes(t.id) && x.lifecycle !== "done" && x.lifecycle !== "cancelled")) {
-    event(s, now, "system", "blocked", `Blocked: prerequisite ${t.id} was cancelled`, d.id);
+  // Unfinished child tasks exist only for this task's goal: cancel them too.
+  const children = descendants(s, t).filter(isOpen);
+  for (const c of children) {
+    c.lifecycle = "cancelled";
+    touch(c, now);
+    const runs = activeAttempts(s, c.id);
+    event(s, now, "user", "control", `Cancelled with ${t.id}${runs.length ? `; stopping ${runs.length} run(s)` : ""}`, c.id);
+    for (const a of runs) requestStop(s, a, "cancel", now);
+  }
+  const gone = new Set([t.id, ...children.map((c) => c.id)]);
+  for (const d of s.tasks.filter((x) => isOpen(x) && !gone.has(x.id))) {
+    const dep = d.dependsOn.find((x) => gone.has(x));
+    if (dep) event(s, now, "system", "blocked", `Blocked: prerequisite ${dep} was cancelled`, d.id);
   }
   return s;
 }
@@ -641,11 +701,25 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       event(s, now, "lead", "integration", `All steps settled on spec r${spec.rev}; task Done, queued for integration`, t.id);
       continue;
     }
-    for (const st of t.steps) {
+    // Parallel steps become their copies the first time they are ready to run.
+    for (const st of [...t.steps]) {
+      if (st.parallel && !st.copyOf && st.state === "pending" && st.dependsOn.every((d) => isSettled(getStep(t, d)))) expandParallel(s, t, st, now);
+    }
+    for (const st of [...t.steps]) {
       if (activeAttempts(s).length >= s.project.workerLimit) break;
       if (st.state !== "pending") continue;
       const depsDone = st.dependsOn.every((d) => isSettled(getStep(t, d)));
       if (!depsDone) continue;
+      if (st.waitForChildren && !childrenSettled(s, t)) continue;
+      if (awaitingChoice(s, t, st)) continue;
+      if ((st.iteration ?? 1) > 1 && st.dependsOn.length && st.dependsOn.every((d) => getStep(t, d).state === "skipped")) {
+        // The previous iteration ended without work to repeat (for example after a re-run came back clean).
+        st.state = "skipped";
+        st.invalidatedBy = undefined;
+        touch(t, now);
+        event(s, now, "lead", "dispatch", `Skipped ${st.id}: the previous iteration ended clean`, t.id);
+        continue;
+      }
       if (st.runIf?.length) {
         const open = st.runIf.reduce((n, r) => n + (acceptedOutput(s, t, r.step, r.output)?.openFindings ?? 0), 0);
         if (open === 0) {
@@ -822,6 +896,8 @@ export interface OutputReport {
   name: string;
   summary: string;
   openFindings?: number;
+  /** Breakdown outputs: the work items that become child tasks. */
+  items?: unknown[];
   /** Durable reference, e.g. "<sha> on orchestration/run-12". */
   ref?: string;
 }
@@ -829,6 +905,8 @@ export interface OutputReport {
 export interface RunReport {
   usage?: Attempt["usage"];
   actualModel?: string;
+  /** For a step that compared best-of candidates: the step id of the chosen copy. */
+  chosen?: string;
 }
 
 export function reportCompletion(state: State, attemptId: string, artifacts: string[], now: string, outputs: OutputReport[] = [], run: RunReport = {}): State {
@@ -888,11 +966,23 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
         createdAt: now,
         ...(rep.ref ? { ref: rep.ref } : {}),
         ...(def.kind === "review-findings" ? { openFindings: rep.openFindings ?? 0 } : {}),
+        ...(def.kind === "breakdown" ? { items: structuredClone(rep.items ?? []) } : {}),
       };
       s.artifacts.push(art);
       produced.push(`${def.name} v${version}`);
     }
     event(s, now, "runtime", "runtime", `${st.id} completed by ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model}${produced.length ? `; produced ${produced.join(", ")}` : ""}`, t.id);
+    // Best-of: record which candidate this step chose (default: the first completed copy).
+    recordBestOfChoice(s, t, st, run.chosen, now);
+    // Breakdown outputs become child tasks; loops append their next iteration.
+    const breakdowns = st.outputs.filter((d) => d.kind === "breakdown");
+    const gated = (st.gate || t.reviewEveryStep) && t.steps.some((x) => !isSettled(x));
+    if (breakdowns.length && gated) {
+      // Children are created when the person resumes, from the (possibly edited) latest version.
+      t.pendingBreakdowns = breakdowns.map((d) => ({ stepId: st.id, output: d.name }));
+    } else if (breakdowns.length) {
+      for (const def of breakdowns) applyBreakdown(s, t, st.id, def.name, now);
+    } else if (st.iterate) expandIteration(s, t, st, now);
     // Optional review gate: stop here so a person can read or edit this step's output before the pipeline continues.
     const more = t.steps.some((x) => !isSettled(x));
     if ((st.gate || t.reviewEveryStep) && more && !t.hold) {
@@ -957,6 +1047,10 @@ export function acceptedOutput(s: State, t: Task, stepId: string, output: string
 export function consumedInputs(s: State, t: Task, st: StepDef): ConsumedInput[] {
   const out: ConsumedInput[] = [];
   for (const r of st.inputs) {
+    // After a best-of choice, only the chosen candidate goes further.
+    const member = findStep(t, r.step);
+    const group = member?.copyOf;
+    if (group && t.bestOf?.[group] && t.bestOf[group] !== r.step && st.id !== chooserOf(t, group)) continue;
     const art = acceptedOutput(s, t, r.step, r.output);
     if (art) out.push({ step: r.step, output: r.output, artifactId: art.id, version: art.version });
   }
@@ -981,19 +1075,53 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
   assertOpen(t, "Editing the pipeline");
   if (t.pipelineRev !== expectedRev) throw new StaleWriteError(expectedRev, t.pipelineRev);
   if (!reason.trim()) throw new ControlError("A pipeline revision needs a reason.");
+  const old = new Map(t.steps.map((st) => [st.id, st]));
+  // `copyOf` and `iteration` are set by the service when it expands steps: they carry over from the
+  // existing step, and a client can neither add nor drop them.
+  defs = defs.map((d) => {
+    const prev = old.get(d.id);
+    const n: StepDef = { ...d };
+    delete n.copyOf;
+    delete n.iteration;
+    if (prev?.copyOf) n.copyOf = prev.copyOf;
+    if (prev?.iteration && prev.iteration > 1) n.iteration = prev.iteration;
+    return n;
+  });
   const errors = validatePipeline(defs).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`Pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
+  for (const d of defs) {
+    const prev = old.get(d.id);
+    if (prev?.copyOf === prev?.id && prev?.parallel && JSON.stringify(prev.parallel) !== JSON.stringify(d.parallel ?? null)) {
+      throw new ControlError(`${d.id} already runs as ${prev.parallel.count} parallel agents, so its parallel setting cannot change. Add a new step instead.`);
+    }
+  }
 
   const retired = new Set(t.pipelineHistory.flatMap((p) => p.steps.map((x) => x.id)).filter((id) => !t.steps.some((st) => st.id === id)));
   const reused = defs.filter((d) => retired.has(d.id)).map((d) => d.id);
   if (reused.length) throw new ControlError(`Step ID ${reused.join(", ")} belonged to a removed step; new steps need new IDs so their history stays separate.`);
 
   const rev = t.pipelineRev + 1;
-  const old = new Map(t.steps.map((st) => [st.id, st]));
   const changed = new Set<string>();
   for (const d of defs) {
     const prev = old.get(d.id);
     if (!prev || structuralKey(prev) !== structuralKey(d)) changed.add(d.id);
+  }
+  // Parallel copies are separate steps but do the leader's work: a changed leader changes and re-runs
+  // them too (unless the person edited that copy in the same revision).
+  defs = defs.map((d) => {
+    const leader = d.copyOf && d.copyOf !== d.id && changed.has(d.copyOf) ? defs.find((x) => x.id === d.copyOf) : undefined;
+    if (!leader) return d;
+    changed.add(d.id);
+    const prev = old.get(d.id);
+    if (prev && structuralKey(prev) !== structuralKey(d)) return d;
+    const suffix = / \(copy \d+ of \d+\)$/.exec(d.purpose)?.[0] ?? "";
+    const synced: StepDef = { ...toDef(leader), id: d.id, purpose: `${leader.purpose}${suffix}`, copyOf: d.copyOf };
+    delete synced.parallel;
+    return synced;
+  });
+  const syncErrors = validatePipeline(defs).filter((i) => i.severity === "error");
+  if (syncErrors.length) {
+    throw new ControlError(`Parallel copies follow their step's changes, and here that makes the pipeline invalid: ${syncErrors.map((e) => e.message).join(" ")} Update the steps that read the copies too.`);
   }
   const removed = t.steps.filter((st) => !defs.some((d) => d.id === st.id)).map((st) => st.id);
   const affected = new Set([...changed, ...downstreamOf(defs, changed)]);
@@ -1012,8 +1140,8 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
     const def = toDef(d);
     if (!prev) return { ...instantiate([def])[0], state: t.hold ? "paused" : "pending" };
     const st: Step = { ...prev, ...def };
-    if (!def.runIf) delete st.runIf;
-    if (!def.gate) delete st.gate;
+    // The new definition is the whole truth: optional settings it leaves out are removed.
+    for (const k of ["runIf", "gate", "iterate", "parallel", "waitForChildren", "copyOf", "iteration"] as const) if (def[k] === undefined) delete st[k];
     if (!affected.has(d.id)) return st;
     st.revision = prev.revision + 1;
     if (stopped.has(d.id)) st.state = "stopping";
@@ -1218,7 +1346,7 @@ export function pendingMessages(s: State): Message[] {
   return s.conversation.filter((m) => m.author === "user" && !covered.has(m.id));
 }
 
-/** Lead-proposed tasks that are not finished yet (the autonomy cap counts these). */
+/** Lead-proposed tasks (including child tasks from breakdowns) that are not finished yet: the autonomy cap counts these. */
 export function openLeadProposals(s: State): Task[] {
   return s.tasks.filter((t) => t.specs[0]?.author === "lead" && t.lifecycle !== "done" && t.lifecycle !== "cancelled");
 }
@@ -1444,11 +1572,11 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   return s;
 }
 
-function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean): string {
+function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string): string {
   let n = s.tasks.length + 1;
   const ids = new Set(s.tasks.map((x) => x.id));
   while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
-  const id = `T-${String(n).padStart(3, "0")}`;
+  const id = fixedId ?? `T-${String(n).padStart(3, "0")}`;
   const tpl = s.project.templates.find((t) => t.id === p.templateId)!;
   const list = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => String(x).trim()).filter(Boolean) : []);
   const content: SpecContent = {
@@ -1597,9 +1725,27 @@ export function retryIntegration(state: State, taskId: string, now: string): Sta
   return s;
 }
 
-/** The task's final accepted code change (latest by time), if it produced one. */
+/**
+ * The task's final code change: the latest accepted change of a step that is done now. Skipped or
+ * re-run steps contribute nothing, even if they produced a change earlier.
+ */
 export function finalChange(s: State, t: Task): Artifact | undefined {
-  return s.artifacts.filter((a) => a.taskId === t.id && a.kind === "code-change" && a.ref).sort((a, b) => a.createdAt.localeCompare(b.createdAt)).pop();
+  const unchosen = (stepId: string) => {
+    const g = findStep(t, stepId)?.copyOf;
+    if (!g) return false;
+    // Without a recorded choice, only the first candidate counts (never "whichever finished last").
+    return t.bestOf?.[g] ? t.bestOf[g] !== stepId : findStep(t, g)?.parallel?.mode === "best-of" && stepId !== g;
+  };
+  const changes: Artifact[] = [];
+  for (const st of t.steps) {
+    if (st.state !== "done" || unchosen(st.id)) continue;
+    for (const o of st.outputs) {
+      if (o.kind !== "code-change") continue;
+      const a = acceptedOutput(s, t, st.id, o.name);
+      if (a?.ref) changes.push(a);
+    }
+  }
+  return changes.sort((a, b) => a.createdAt.localeCompare(b.createdAt)).pop();
 }
 
 export function reportIntegration(state: State, taskId: string, result: Integration, now: string): State {
@@ -1855,7 +2001,7 @@ export function setProviderLimit(state: State, provider: ProviderId, limit: numb
 export function editArtifact(
   state: State,
   artifactId: string,
-  change: { summary: string; openFindings?: number; ref?: string; reason: string },
+  change: { summary: string; openFindings?: number; ref?: string; items?: unknown[]; reason: string },
   now: string,
 ): State {
   const s = draft(state);
@@ -1868,6 +2014,7 @@ export function editArtifact(
   if (!change.summary.trim()) throw new ControlError("The artifact cannot be empty.");
   if (base.kind === "review-findings" && (!Number.isInteger(change.openFindings) || change.openFindings! < 0)) throw new ControlError("Review findings need a number of open findings.");
   if (change.ref?.trim() && !/^[0-9a-f]{7,40}$/i.test(change.ref.trim())) throw new ControlError("Use a commit hash (7–40 hex characters) for your own change.");
+  if (change.items !== undefined && (base.kind !== "breakdown" || !Array.isArray(change.items) || change.items.length > 50)) throw new ControlError("Items can be edited only on breakdowns (at most 50).");
   const version = Math.max(...s.artifacts.filter((a) => a.taskId === t.id && a.stepId === st.id && a.name === base.name).map((a) => a.version)) + 1;
   const art: Artifact = {
     id: nextId(s, "art"),
@@ -1882,6 +2029,7 @@ export function editArtifact(
     author: "user",
     editReason: change.reason.trim(),
     ...(base.kind === "review-findings" ? { openFindings: change.openFindings } : {}),
+    ...(base.kind === "breakdown" ? { items: structuredClone(change.items ?? base.items ?? []) } : {}),
     ...(change.ref?.trim() ? { ref: change.ref.trim() } : base.ref ? { ref: base.ref } : {}),
   };
   s.artifacts.push(art);
@@ -1913,5 +2061,424 @@ export function editArtifact(
   }
   touch(t, now);
   event(s, now, "user", "spec", `Edited ${st.id}.${base.name} (v${version}): ${art.editReason}${downstream.size ? `; re-submitting ${[...downstream].join(", ")}` : ""}`, t.id);
+  if (base.kind === "breakdown" && st.state === "done") {
+    // Child tasks follow the edited breakdown: now, or when the task resumes if it is paused.
+    const pb = { stepId: st.id, output: base.name };
+    const already = (t.pendingBreakdowns ?? []).some((x) => x.stepId === pb.stepId && x.output === pb.output);
+    if (t.hold) {
+      if (!already) t.pendingBreakdowns = [...(t.pendingBreakdowns ?? []), pb];
+    } else if (!already) applyBreakdown(s, t, st.id, base.name, now);
+  }
+  return s;
+}
+
+// ---------- fan-out: parallel copies, iteration, breakdowns into child tasks ----------
+
+const baseId = (id: string) => id.replace(/-(c\d+|i\d+)$/, "");
+const uniqueRefs = (refs: InputRef[]) => refs.filter((r, i) => refs.findIndex((x) => x.step === r.step && x.output === r.output) === i);
+
+function steplist(t: Task): StepDef[] {
+  return t.steps.map(toDef);
+}
+
+function recordRevision(s: State, t: Task, reason: string, now: string) {
+  t.pipelineRev += 1;
+  t.pipelineHistory.push({ rev: t.pipelineRev, at: now, author: "lead", reason, steps: steplist(t) });
+  event(s, now, "lead", "pipeline", `Pipeline r${t.pipelineRev}: ${reason}`, t.id);
+}
+
+/** Replace a parallel step by its copies: siblings with the same inputs; readers of it read all copies. */
+function expandParallel(s: State, t: Task, st: Step, now: string) {
+  const p = st.parallel!;
+  const ids = [st.id, ...Array.from({ length: p.count - 1 }, (_, i) => `${st.id}-c${i + 2}`)];
+  if (ids.some((id, i) => i > 0 && t.steps.some((x) => x.id === id))) return; // already expanded
+  const at = t.steps.indexOf(st);
+  const assign = (i: number): ModelSelection | null => {
+    const pv = p.providers?.length ? p.providers[i % p.providers.length] : undefined;
+    if (!pv || st.selection?.provider === pv) return st.selection;
+    return { provider: pv, model: "auto" };
+  };
+  st.copyOf = st.id;
+  if (p.providers?.length && !st.selection) st.selection = assign(0);
+  const copies: Step[] = ids.slice(1).map((id, i) => ({
+    ...structuredClone(st),
+    id,
+    purpose: `${st.purpose} (copy ${i + 2} of ${p.count})`,
+    selection: assign(i + 1),
+    revision: 1,
+    state: t.hold ? "paused" : "pending",
+    parallel: undefined,
+    copyOf: st.id,
+  }));
+  for (const c of copies) delete c.parallel;
+  t.steps.splice(at + 1, 0, ...copies);
+  // Everything that depended on or read the original now depends on / reads every copy.
+  for (const d of t.steps) {
+    if (ids.includes(d.id)) continue;
+    if (d.dependsOn.includes(st.id)) d.dependsOn = [...new Set([...d.dependsOn, ...ids.slice(1)])];
+    const addCopies = (refs: InputRef[] | undefined) =>
+      refs?.flatMap((r) => (r.step === st.id ? [r, ...ids.slice(1).map((id) => ({ step: id, output: r.output }))] : [r]));
+    d.inputs = addCopies(d.inputs)!;
+    if (d.runIf) d.runIf = addCopies(d.runIf);
+  }
+  recordRevision(s, t, `${st.id} runs as ${p.count} parallel ${p.mode === "best-of" ? "candidates (best of)" : "copies"}`, now);
+}
+
+/** The first later step that reads a best-of group: it makes the choice. */
+function chooserOf(t: Task, group: string): string | undefined {
+  const members = new Set(t.steps.filter((x) => x.copyOf === group).map((x) => x.id));
+  return t.steps.find((x) => !members.has(x.id) && x.inputs.some((r) => members.has(r.step)))?.id;
+}
+
+/**
+ * A best-of choice changed: every step that received the old choice (each reader of the group other
+ * than the comparing step, and everything after those readers or after the comparison) is
+ * revalidated, and runs among them are stopped.
+ */
+function revalidateChoice(s: State, t: Task, group: string, pick: string, now: string): string[] {
+  const chooser = chooserOf(t, group);
+  const members = new Set(t.steps.filter((x) => x.copyOf === group).map((x) => x.id));
+  const after = new Set(t.steps.filter((d) => d.id !== chooser && !members.has(d.id) && d.inputs.some((r) => members.has(r.step))).map((d) => d.id));
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const d of t.steps) {
+      if (after.has(d.id) || d.id === chooser || members.has(d.id)) continue;
+      if ((chooser && d.dependsOn.includes(chooser)) || d.dependsOn.some((x) => after.has(x))) {
+        after.add(d.id);
+        grew = true;
+      }
+    }
+  }
+  const redo: string[] = [];
+  for (const d of t.steps) {
+    if (!after.has(d.id) || !isSettled(d)) continue;
+    d.state = t.hold ? "paused" : "pending";
+    d.invalidatedBy = `choice changed to ${pick}`;
+    redo.push(d.id);
+  }
+  for (const a of activeAttempts(s, t.id)) {
+    if (!after.has(a.stepId)) continue;
+    const d = findStep(t, a.stepId);
+    if (d) d.revision += 1;
+    requestStop(s, a, "revision", now);
+    redo.push(a.stepId);
+  }
+  return redo;
+}
+
+/** A person's choice stands until that candidate produces a new run result (their own edits do not count). */
+function userChoiceStands(s: State, t: Task, group: string): boolean {
+  const at = t.bestOfByUser?.[group];
+  const pick = t.bestOf?.[group];
+  if (!at || !pick || findStep(t, pick)?.state !== "done") return false;
+  return !s.artifacts.some((a) => a.taskId === t.id && a.stepId === pick && a.author !== "user" && a.createdAt > at);
+}
+
+/**
+ * Record the comparing step's choice. Every completion of the comparing step decides again (a re-run
+ * may choose differently), except where a person's choice still stands.
+ */
+function recordBestOfChoice(s: State, t: Task, st: Step, chosen: string | undefined, now: string) {
+  for (const g of new Set(t.steps.filter((x) => x.copyOf).map((x) => x.copyOf!))) {
+    const leader = findStep(t, g);
+    if (leader?.parallel?.mode !== "best-of" || chooserOf(t, g) !== st.id) continue;
+    const members = t.steps.filter((x) => x.copyOf === g && x.state === "done").map((x) => x.id);
+    if (userChoiceStands(s, t, g)) {
+      if (chosen && chosen !== t.bestOf![g]) event(s, now, "lead", "decision", `${st.id} preferred ${chosen}; keeping your choice of ${t.bestOf![g]}`, t.id);
+      continue;
+    }
+    if (t.bestOfByUser?.[g]) {
+      const { [g]: _, ...rest } = t.bestOfByUser;
+      t.bestOfByUser = rest;
+    }
+    const pick = chosen && members.includes(chosen) ? chosen : members[0];
+    if (!pick) continue;
+    const previous = t.bestOf?.[g];
+    t.bestOf = { ...(t.bestOf ?? {}), [g]: pick };
+    const why = chosen && chosen !== pick ? ` (reported "${chosen}", not a candidate)` : chosen ? "" : " (no choice reported; took the first)";
+    const redo = previous && previous !== pick ? revalidateChoice(s, t, g, pick, now) : [];
+    event(s, now, "lead", "decision", `${st.id} chose ${pick} among ${members.join(", ")}${why}${previous && previous !== pick ? `; was ${previous}` : ""}${redo.length ? `; re-running ${redo.join(", ")}` : ""}`, t.id);
+  }
+}
+
+/**
+ * Append the next iteration of a loop body (the steps from `iterate.from` to `st`). New steps depend
+ * on the previous iteration; inputs that came from outside the body are re-pointed to the previous
+ * iteration's newest output of the same kind (for example the repaired change instead of the first
+ * one). Steps after the loop also wait for, and read, the new iteration.
+ */
+function expandIteration(s: State, t: Task, st: Step, now: string) {
+  const it = st.iterate!;
+  const n = (st.iteration ?? 1) + 1;
+  if (n > it.max) return;
+  const from = t.steps.findIndex((x) => x.id === it.from);
+  const to = t.steps.indexOf(st);
+  if (from < 0 || from > to) return;
+  const body = t.steps.slice(from, to + 1);
+  const idMap = new Map(body.map((b) => [b.id, `${baseId(b.id)}-i${n}`]));
+  if ([...idMap.values()].some((id) => t.steps.some((x) => x.id === id))) return;
+  // Newest producer in the finished iteration for each artifact kind.
+  const producerOfKind = new Map<string, InputRef>();
+  for (const b of body) for (const o of b.outputs) producerOfKind.set(o.kind, { step: b.id, output: o.name });
+  const kindOf = (r: InputRef) => findStep(t, r.step)?.outputs.find((o) => o.name === r.output)?.kind;
+  const remap = (r: InputRef): InputRef => {
+    if (idMap.has(r.step)) return { step: idMap.get(r.step)!, output: r.output };
+    const k = kindOf(r);
+    return (k && producerOfKind.get(k)) || r;
+  };
+  const copies: Step[] = body.map((b, i) => {
+    const c: Step = {
+      ...structuredClone(b),
+      id: idMap.get(b.id)!,
+      purpose: `${b.purpose.replace(/ \(iteration \d+\)$/, "")} (iteration ${n})`,
+      revision: 1,
+      state: t.hold ? "paused" : "pending",
+      iteration: n,
+      // Inside the body keep the structure; anything that depended on work before the loop now
+      // depends on the previous iteration's end, so it reads the newest outputs.
+      dependsOn: i === 0 ? [st.id] : [...new Set(b.dependsOn.map((d) => idMap.get(d) ?? st.id))],
+      inputs: uniqueRefs(b.inputs.map(remap)),
+      runIf: b.runIf && uniqueRefs(b.runIf.map(remap)),
+      invalidatedBy: undefined,
+      blockedReason: undefined,
+      autoRetries: 0,
+    };
+    if (!c.runIf) delete c.runIf;
+    delete c.parallel; // copies of copies are already explicit steps
+    if (b === st) c.iterate = { from: idMap.get(it.from)!, max: it.max };
+    else delete c.iterate;
+    return c;
+  });
+  const before = structuredClone(t.steps);
+  delete st.iterate; // the loop continues from the new last step
+  t.steps.splice(to + 1, 0, ...copies);
+  const last = copies[copies.length - 1].id;
+  for (const d of t.steps) {
+    if (idMap.has(d.id) || copies.some((c) => c.id === d.id)) continue;
+    if (d.dependsOn.includes(st.id)) d.dependsOn = [...new Set([...d.dependsOn, last])];
+    const extra = d.inputs.filter((r) => idMap.has(r.step)).map((r) => ({ step: idMap.get(r.step)!, output: r.output }));
+    if (extra.length) d.inputs = [...d.inputs, ...extra];
+  }
+  const issues = validatePipeline(steplist(t)).filter((i) => i.severity === "error");
+  if (issues.length) {
+    // Never leave an invalid pipeline behind: restore it exactly and record why.
+    t.steps = before;
+    event(s, now, "system", "blocked", `Could not add iteration ${n}: ${issues[0].message}`, t.id);
+    return;
+  }
+  recordRevision(s, t, `Iteration ${n} of ${body.map((b) => b.id).join(" → ")}`, now);
+}
+
+export function childTasks(s: State, t: Task): Task[] {
+  return s.tasks.filter((x) => x.parentTaskId === t.id);
+}
+
+export function childrenSettled(s: State, t: Task): boolean {
+  return childTasks(s, t).every((c) => !isOpen(c));
+}
+
+/** Every task created, directly or through its children, by breakdowns of `t`. */
+export function descendants(s: State, t: Task): Task[] {
+  const out: Task[] = [];
+  const seen = new Set([t.id]);
+  const stack = [t.id];
+  while (stack.length) {
+    const id = stack.pop()!;
+    for (const c of s.tasks) {
+      if (c.parentTaskId !== id || seen.has(c.id)) continue;
+      seen.add(c.id);
+      out.push(c);
+      stack.push(c.id);
+    }
+  }
+  return out;
+}
+
+function depth(s: State, t: Task): number {
+  let d = 0;
+  let cur: Task | undefined = t;
+  while (cur?.parentTaskId && d < 10) {
+    d++;
+    cur = s.tasks.find((x) => x.id === cur!.parentTaskId);
+  }
+  return d;
+}
+
+function rootOf(s: State, t: Task): Task {
+  let cur = t;
+  for (let i = 0; cur.parentTaskId && i < 10; i++) {
+    const p = s.tasks.find((x) => x.id === cur.parentTaskId);
+    if (!p) break;
+    cur = p;
+  }
+  return cur;
+}
+
+/** At most this many child tasks (all levels, not counting cancelled ones) come from one task you created. */
+export const MAX_CHILD_TASKS = 100;
+export const MAX_ITEMS_PER_BREAKDOWN = 20;
+
+/** Readers of a best-of group other than the comparing step wait until a candidate is chosen. */
+function awaitingChoice(s: State, t: Task, st: Step): boolean {
+  for (const r of st.inputs) {
+    const g = findStep(t, r.step)?.copyOf;
+    if (!g || findStep(t, g)?.parallel?.mode !== "best-of") continue;
+    const chooser = chooserOf(t, g);
+    if (st.copyOf === g || chooser === st.id) continue;
+    // Wait for a choice, and while the comparing step re-runs, for its new one (a person's choice stands).
+    if (!t.bestOf?.[g]) return true;
+    if (!userChoiceStands(s, t, g) && findStep(t, chooser ?? "")?.state !== "done") return true;
+  }
+  return false;
+}
+
+/** Create (or reconcile) the child tasks of a breakdown output, then continue its loop if it has one. */
+function applyBreakdown(s: State, t: Task, stepId: string, output: string, now: string) {
+  const st = findStep(t, stepId);
+  const art = st && acceptedOutput(s, t, stepId, output);
+  if (!st || !art) return;
+  const linked = createChildren(s, t, st, art.items ?? [], now, art.id);
+  if (st.iterate && linked > 0) expandIteration(s, t, st, now);
+}
+
+const hasBreakdown = (steps: StepDef[]) => steps.some((x) => x.outputs.some((o) => o.kind === "breakdown"));
+
+/**
+ * Turn breakdown items into child tasks of `t`. Items use the lead-proposal shape; `approach` alone is
+ * enough (the options become "as planned" vs deferring). Items may depend on earlier items by index
+ * (0-based) or title. Children follow the same autonomy holds as lead proposals.
+ *
+ * A newer version of the same step's breakdown (a re-run or an edit) reconciles instead of adding a
+ * second batch: children whose title is still listed are kept, unstarted ones that are no longer
+ * listed are cancelled, and started ones are kept and reported. Returns how many children the
+ * breakdown now has.
+ */
+function createChildren(s: State, t: Task, st: Step, items: unknown[], now: string, artifactId: string): number {
+  if (depth(s, t) >= 2) {
+    event(s, now, "system", "blocked", `${st.id}: breakdowns are limited to two levels; no child tasks were created`, t.id);
+    return 0;
+  }
+  const a = s.project.autonomy;
+  const holdBeforeStart = !a.enabled || a.holdLeadProposals;
+  const root = rootOf(s, t);
+  const earlier = childTasks(s, t).filter((c) => c.parentStepId === st.id && c.parentArtifactId !== artifactId && c.lifecycle !== "cancelled");
+  const started = (c: Task) => c.lifecycle === "active" || c.lifecycle === "done" || s.attempts.some((x) => x.taskId === c.id);
+  const titleOf = (c: Task) => currentSpec(c).content.title.trim().toLowerCase();
+  const linked: { id: string; title: string; kept?: boolean }[] = [];
+  const rejected: string[] = [];
+  const resolveDeps = (raw: unknown) =>
+    (Array.isArray(raw) ? raw : [])
+      .map((d) => (typeof d === "number" ? linked[d]?.id : linked.find((c) => c.title.toLowerCase() === String(d).toLowerCase())?.id))
+      .filter((x): x is string => !!x);
+  for (const [i, raw] of items.slice(0, MAX_ITEMS_PER_BREAKDOWN).entries()) {
+    try {
+      const it = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+      const title = typeof it.title === "string" ? it.title.trim() : "";
+      const same = title && earlier.find((c) => titleOf(c) === title.toLowerCase() && !linked.some((l) => l.id === c.id));
+      if (same) {
+        same.parentArtifactId = artifactId;
+        if (!started(same)) same.dependsOn = resolveDeps(it.dependsOn);
+        linked.push({ id: same.id, title: currentSpec(same).content.title, kept: true });
+        continue;
+      }
+      const approach = typeof it.approach === "string" ? it.approach : "";
+      const p = {
+        ...it,
+        options: Array.isArray(it.options)
+          ? it.options
+          : [
+              { id: "A", name: "As planned", approach, benefit: "", effort: "", risks: "", reversibility: "" },
+              { id: "B", name: "Defer", approach: "Do not do this now", benefit: "", effort: "", risks: "", reversibility: "" },
+            ],
+        recommendedOptionId: typeof it.recommendedOptionId === "string" ? it.recommendedOptionId : "A",
+        rationale: typeof it.rationale === "string" && it.rationale.trim() ? it.rationale : `Part of ${t.id}'s breakdown (${st.id}).`,
+        templateId: typeof it.templateId === "string" ? it.templateId : "change",
+        priority: typeof it.priority === "number" ? it.priority : t.priority,
+      } as unknown as LeadProposal;
+      const why = validateProposal(s, p);
+      if (why) {
+        rejected.push(`#${i + 1}: ${why}`);
+        continue;
+      }
+      const tpl = s.project.templates.find((x) => x.id === p.templateId)!;
+      if (hasBreakdown(tpl.steps)) {
+        rejected.push(`#${i + 1}: child tasks cannot break down further (template "${tpl.name}"); use a template without breakdown steps`);
+        continue;
+      }
+      if (descendants(s, root).filter((x) => x.lifecycle !== "cancelled").length >= MAX_CHILD_TASKS) {
+        rejected.push(`#${i + 1}: ${root.id} already has ${MAX_CHILD_TASKS} child tasks, the limit per task`);
+        continue;
+      }
+      let k = childTasks(s, t).length + 1;
+      while (s.tasks.some((x) => x.id === `${t.id}.${k}`)) k++;
+      const id = proposeTask(s, p, now, holdBeforeStart, `${t.id}.${k}`);
+      const child = getTask(s, id);
+      child.parentTaskId = t.id;
+      child.parentStepId = st.id;
+      child.parentArtifactId = artifactId;
+      if (t.hold) {
+        child.hold = true;
+        child.pausedWith = t.pausedWith ?? t.id;
+      }
+      child.dependsOn = resolveDeps(it.dependsOn);
+      linked.push({ id, title: String(p.title) });
+    } catch (err) {
+      rejected.push(`#${i + 1}: invalid (${err instanceof Error ? err.message : String(err)})`);
+    }
+  }
+  if (items.length > MAX_ITEMS_PER_BREAKDOWN) rejected.push(`${items.length - MAX_ITEMS_PER_BREAKDOWN} item(s) beyond the limit of ${MAX_ITEMS_PER_BREAKDOWN} per breakdown`);
+  // Children of an earlier version that the new version no longer lists.
+  const dropped = earlier.filter((c) => !linked.some((l) => l.id === c.id));
+  const cancelled: string[] = [];
+  const keptStarted: string[] = [];
+  for (const c of dropped) {
+    if (started(c)) {
+      keptStarted.push(c.id);
+      continue;
+    }
+    c.lifecycle = "cancelled";
+    touch(c, now);
+    cancelled.push(c.id);
+    event(s, now, "lead", "control", `Cancelled: no longer in ${t.id}'s breakdown (${st.id})`, c.id);
+  }
+  const fresh = linked.filter((l) => !l.kept).map((l) => l.id);
+  const kept = linked.filter((l) => l.kept).map((l) => l.id);
+  const parts = [
+    `${st.id} broke the work into ${linked.length} child task(s)${fresh.length ? `; new: ${fresh.join(", ")}` : ""}`,
+    kept.length && `kept ${kept.join(", ")}`,
+    cancelled.length && `cancelled ${cancelled.join(", ")} (no longer listed)`,
+    keptStarted.length && `${keptStarted.join(", ")} already started and no longer listed; cancel them if they are not needed`,
+    holdBeforeStart && fresh.length && "new ones wait for you to start them (autonomy settings)",
+    rejected.length && `rejected ${rejected.join("; ")}`,
+  ].filter(Boolean);
+  event(s, now, "lead", "spec", parts.join("; "), t.id);
+  return linked.length;
+}
+
+/**
+ * A person picks (or changes) the best-of candidate. If the comparing step already used an earlier
+ * choice, everything after it is revalidated so later steps work from the new choice.
+ */
+export function chooseCandidate(state: State, taskId: string, group: string, stepId: string, now: string): State {
+  const s = draft(state);
+  const t = getTask(s, taskId);
+  assertOpen(t, "Choosing a candidate");
+  const leader = findStep(t, group);
+  if (leader?.parallel?.mode !== "best-of") throw new ControlError(`${group} is not a best-of step.`);
+  const member = findStep(t, stepId);
+  if (member?.copyOf !== group) throw new ControlError(`${stepId} is not a candidate of ${group}.`);
+  if (member.state !== "done") throw new ControlError(`${stepId} has not finished; choose a finished candidate.`);
+  const previous = t.bestOf?.[group];
+  t.bestOfByUser = { ...(t.bestOfByUser ?? {}), [group]: now };
+  if (previous === stepId) {
+    touch(t, now);
+    event(s, now, "user", "decision", `Confirmed ${stepId} for ${group}`, t.id);
+    return s;
+  }
+  t.bestOf = { ...(t.bestOf ?? {}), [group]: stepId };
+  if (previous) revalidateChoice(s, t, group, stepId, now);
+  touch(t, now);
+  event(s, now, "user", "decision", `Chose ${stepId} for ${group}${previous ? ` (was ${previous})` : ""}`, t.id);
   return s;
 }

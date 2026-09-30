@@ -158,10 +158,12 @@ export const COMMANDS = {
         reason: str(a, "reason"),
         openFindings: a.openFindings === undefined ? undefined : num(a, "openFindings"),
         ref: a.ref === undefined ? undefined : str(a, "ref"),
+        items: a.items === undefined ? undefined : array<unknown>(a.items, "items"),
       },
       now,
     ),
   ),
+  chooseCandidate: same((s, now, a) => M.chooseCandidate(s, str(a, "taskId"), str(a, "group"), str(a, "stepId"), now)),
   setProviderLimit: same((s, now, a) => M.setProviderLimit(s, provider(a.provider), num(a, "limit"), now)),
 
   // the lead

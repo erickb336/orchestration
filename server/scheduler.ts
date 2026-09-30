@@ -323,7 +323,7 @@ export class Scheduler {
 
     // 4. Drain adapter events. Work that touches git happens here, outside the transaction.
     const events = this.queue.splice(0);
-    const completions = new Map<string, { outputs: M.OutputReport[]; problems: string[] }>();
+    const completions = new Map<string, { outputs: M.OutputReport[]; problems: string[]; chosen?: string }>();
     for (const e of events) {
       if (e.type !== "completed") continue;
       try {
@@ -549,10 +549,10 @@ export class Scheduler {
         return { outputs: outputs.filter((o) => !codeOutputs.has(o.name)), problems: parsed.problems };
       }
     }
-    return { outputs, problems: parsed.problems };
+    return { outputs, problems: parsed.problems, chosen: parsed.chosen };
   }
 
-  private applyEvent(s: State, e: AdapterEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[] }>, now: string): State {
+  private applyEvent(s: State, e: AdapterEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[]; chosen?: string }>, now: string): State {
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
       case "started":
@@ -575,7 +575,7 @@ export class Scheduler {
         return M.reportRunFailed(s, e.attemptId, e.message, now, { usage: e.usage });
       case "completed": {
         const c = completions.get(e.attemptId) ?? { outputs: [], problems: [] };
-        let next = M.reportCompletion(s, e.attemptId, [], now, c.outputs, { usage: e.usage, actualModel: e.model });
+        let next = M.reportCompletion(s, e.attemptId, [], now, c.outputs, { usage: e.usage, actualModel: e.model, chosen: c.chosen });
         if (c.problems.length) next = noteProblems(next, e.attemptId, c.problems);
         return next;
       }

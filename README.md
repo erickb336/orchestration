@@ -27,6 +27,50 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
   - A restart reconciles instead of guessing.
   - Runs are never shown as succeeding when they did not.
 
+## Screenshots
+
+All screenshots show the built-in sample project on the simulated runtime (no agents running).
+
+**Tasks board.** Every task has a spec, a pipeline, and a truthful state. Child tasks link to the goal they came from.
+
+![Tasks board](docs/screenshots/board.png)
+
+**A large goal broken into child tasks.** The Goal template plans the work as child tasks and waits for them. Then it evaluates the result and plans the next round.
+
+![Goal task with child tasks](docs/screenshots/goal-task.png)
+
+**Best of two, then review → repair until clean.** Codex and Claude each implement, and the review chooses one. A repair round runs, and the second review comes back clean, so the loop stops.
+
+![Best-of pipeline with an iteration](docs/screenshots/best-of-pipeline.png)
+
+**Versioned artifacts.** Every step's output is kept, and you can edit any of them. Candidates that were not chosen stay visible.
+
+![Artifacts](docs/screenshots/artifacts.png)
+
+**Pipeline editor.** Each step sets its inputs, its outputs, parallel agents (copies or best of N, across providers), repeats, and whether it waits for child tasks.
+
+![Pipeline editor](docs/screenshots/pipeline-editor.png)
+
+**Overview and the lead.** The Overview shows the vision, what changed since your last visit, and the conversation with the lead.
+
+![Overview](docs/screenshots/overview.png)
+
+**How involved you want to be.** Choose Autopilot, "check in before work starts", or "only when I ask".
+
+![Settings](docs/screenshots/settings.png)
+
+## When it helps, and when it does not
+
+A single Claude Code or Codex session is already strong. It can plan, use sub-agents, work for a long time, and run tasks in parallel inside one provider. Orchestration is worth its overhead when you want things a single session does not give you:
+
+- **Both providers on one goal.** Claude and Codex work on the same goal concurrently, and each checks the other's work (for example, Codex implements and Claude reviews).
+- **Durable records.** Specs, decisions, and artifacts outlast any single chat. You can come back days later and see what was decided, why, and what was verified.
+- **Control at every step.** You can pause any step (with confirmation), edit what it produced, and resubmit it through the rest of the pipeline.
+- **Explicit, repeatable workflows.** Pipelines, loops (review → repair until clean), parallel candidates (best of N), and breakdowns into child tasks are workflows you can edit and reuse.
+- **Always-on, bounded autonomy.** A lead can keep proposing and shipping work toward a vision within limits you set, and integrate it serially.
+
+It is **not** a net win for a single focused change. There, a plain chat is faster and cheaper, because the pipelines spend extra tokens on specs, reviews, and iterations. The benefits have not yet been measured against real runs. The honest way to decide is to give the same goal to a single session and to Orchestration, then compare the elapsed time, the cost, and how many problems each result has.
+
 ## Install
 
 Requires Node.js 22.13 or newer (it uses the built-in `node:sqlite`) and git.
@@ -88,9 +132,21 @@ To get the most out of your Claude and Codex capacity:
    - Raise the worker limit.
    - Set per-provider limits to match your plans.
    - Give each role the provider and model that suit it. For example, Codex for implementation, Claude for design and independent review, or the reverse. Every step can be pinned individually.
-3. **Parallelise inside tasks.** Pipelines are graphs: steps with no dependency between them (for example code review and UX review) run at the same time.
-4. **Use Autopilot** for continuous planning, automatic retries, and automatic delivery. Add review gates only where you want to look.
-5. **Steer through artifacts, not code.** When something is off, pause, edit the design, findings, or brief, and resubmit. The next steps follow your version.
+3. **Parallelise inside tasks.**
+   - Pipelines are graphs: steps with no dependency between them (for example code review and UX review) run at the same time.
+   - Any step can run as **2–5 agents at once**. **Copies** (for example three reviewers, one per provider) all contribute: review findings are added together. **Best of N** (for example a Claude and a Codex implementation) lets the next step choose one; you can change the choice yourself.
+4. **Break big goals into child tasks.** The **Goal** template plans the goal as a list of child tasks, which run concurrently with their own pipelines. When they finish, it evaluates the result and plans the next round (up to 5 rounds), then reports. You can edit the list at a review gate before any child task exists.
+5. **Let work iterate.** Built-in templates repeat review → repair until the review is clean (up to 3 rounds), and you can set loops on any step in the pipeline editor.
+6. **Use Autopilot** for continuous planning, automatic retries, and automatic delivery. Add review gates only where you want to look. Outside Autopilot, child tasks wait for you to start them, like the lead's proposals.
+7. **Steer through artifacts, not code.** When something is off, pause, edit the design, findings, breakdown, or brief, and resubmit. The next steps follow your version.
+
+Limits that keep fan-out bounded:
+
+- **Breakdowns:** 20 child tasks per breakdown, and 100 per task you created, counting all levels.
+- **Child tasks:** they cannot use a template that breaks down again.
+- **Parallel steps:** they cannot sit inside a loop, and a code change cannot run as copies (use best of N).
+- **Pausing or cancelling:** it applies to a task's child tasks too, and resuming a task resumes the child tasks that were paused with it.
+- **The lead's open-proposal cap:** child tasks count toward it, so a large goal paces the lead's other proposals.
 
 ## How it is built
 
@@ -127,6 +183,7 @@ This is a personal tool under active development. It is built in milestones (see
 | Claude and Codex adapters | ORC-004 |
 | Lead conversation, autonomy, and integration queue | ORC-005 |
 | Reliability, autopilot, human editing, import/export, and CI | ORC-006 |
+| Fan-out: parallel agents per step, iteration loops, breakdowns into child tasks | ORC-007 |
 
 Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test runs Claude and Codex workers concurrently against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost.
 

@@ -67,15 +67,21 @@ export class ScriptedAdapter implements RuntimeAdapter {
     for (const l of this.listeners) l(e);
   }
   /** Finish a worker run, optionally writing a file first, reporting every declared output. */
-  finish(id: string, opts: { write?: [string, string]; findings?: number; omit?: string } = {}) {
+  finish(id: string, opts: { write?: [string, string]; findings?: number; omit?: string; items?: unknown[]; chosen?: string } = {}) {
     const a = this.runs.get(id)!;
     if (opts.write) writeFileSync(join(a.workspace.path, opts.write[0]), opts.write[1]);
     const outputs: Record<string, unknown> = {};
     for (const o of a.outputs) {
       if (o.name === opts.omit) continue;
-      outputs[o.name] = o.kind === "review-findings" ? { summary: `${o.name} by ${this.provider}`, openFindings: opts.findings ?? 0 } : { summary: `${o.name} by ${this.provider}` };
+      outputs[o.name] =
+        o.kind === "review-findings"
+          ? { summary: `${o.name} by ${this.provider}`, openFindings: opts.findings ?? 0 }
+          : o.kind === "breakdown"
+            ? { summary: `${o.name} by ${this.provider}`, items: opts.items ?? [] }
+            : { summary: `${o.name} by ${this.provider}` };
     }
-    this.emit({ type: "completed", attemptId: id, finalText: `All done.\n\`\`\`json\n${JSON.stringify({ outputs })}\n\`\`\``, usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 }, model: `${a.model}-actual` });
+    const block = opts.chosen ? { outputs, chosen: opts.chosen } : { outputs };
+    this.emit({ type: "completed", attemptId: id, finalText: `All done.\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\``, usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 }, model: `${a.model}-actual` });
   }
   /** Answer a lead run with a reply and proposals (raw objects, validated by the service). */
   reply(id: string, reply: string, proposals: unknown[] = []) {

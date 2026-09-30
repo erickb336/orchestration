@@ -17,6 +17,7 @@ export interface FakeRuntimeConfig {
 interface Proc {
   progress: number;
   outputs: OutputDef[];
+  stepId?: string;
   interruptAt?: number;
   /** Lead runs answer with a reply (and, when planning, one proposal) instead of step outputs. */
   lead?: "planning" | "message";
@@ -62,13 +63,23 @@ function jitter(id: string) {
 }
 
 /** The final message a well-behaved worker would send: a JSON output block for every declared output. */
-export function fakeFinalText(attemptId: string, outputs: OutputDef[]): string {
+export function fakeFinalText(attemptId: string, outputs: OutputDef[], stepId = ""): string {
   const block: Record<string, { summary: string; openFindings?: number }> = {};
   for (const o of outputs) {
     if (o.kind === "review-findings") {
       const found = jitter(attemptId) % 2;
       block[o.name] = { summary: found ? "1 open finding (simulated)" : "No blocking findings (simulated)", openFindings: found };
     } else if (o.kind === "code-change") block[o.name] = { summary: "Simulated change; no files were touched" };
+    else if (o.kind === "breakdown") {
+      // First pass proposes two small items; later iterations report the goal as met.
+      const items = /-i\d+$/.test(stepId)
+        ? []
+        : [
+            { title: `Simulated part A (${attemptId})`, outcome: "Part A done (simulated)", approach: "Small change", acceptance: ["Part A verified"], templateId: "change", priority: 3 },
+            { title: `Simulated part B (${attemptId})`, outcome: "Part B done (simulated)", approach: "Small change", acceptance: ["Part B verified"], templateId: "change", priority: 3, dependsOn: [0] },
+          ];
+      block[o.name] = { summary: items.length ? "Split into two parts (simulated)" : "Goal met (simulated)", items } as never;
+    }
     else block[o.name] = { summary: `${o.kind} (simulated)` };
   }
   return `Done (simulated).\n\n\`\`\`json\n${JSON.stringify({ outputs: block }, null, 2)}\n\`\`\`\n`;
@@ -124,6 +135,8 @@ export class FakeAdapter implements RuntimeAdapter {
       return;
     }
     this.startAt(a.attemptId, a.outputs, 0);
+    const p = this.procs.get(a.attemptId);
+    if (p) p.stepId = a.stepId;
   }
 
   /** Start with a given progress (tests and restart scenarios). */
@@ -183,7 +196,7 @@ export class FakeAdapter implements RuntimeAdapter {
       p.progress = Math.min(100, p.progress + this.config.progressPerTick + jitter(id));
       if (p.progress >= 100) {
         this.procs.delete(id);
-        this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead) : fakeFinalText(id, p.outputs) });
+        this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead) : fakeFinalText(id, p.outputs, p.stepId) });
       } else this.emit({ type: "progress", attemptId: id, percent: p.progress });
     }
   }

@@ -3,6 +3,7 @@ import * as M from "../domain/model";
 import { PROVIDERS, ROLES, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { COLUMN_LABEL, ROLE_LABEL, StatePill, currentWork, hasNewDecision, latestEvent, relTime } from "./common";
+import { isSettledTask, pipelineSummary } from "./fanout";
 
 type View = "list" | "board";
 type Sort = "priority" | "activity";
@@ -109,7 +110,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
       </div>
       {tpl && (
         <p className="mono muted" style={{ fontSize: "0.78rem" }}>
-          {tpl.steps.map((st) => `${st.id} ${st.purpose}${st.runIf?.length ? " (if findings)" : ""}`).join(" → ")}
+          {pipelineSummary(tpl.steps)}
         </p>
       )}
       <label className="row" style={{ fontSize: "0.9rem", marginBottom: "0.8rem" }}>
@@ -298,6 +299,8 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
   const work = currentWork(state, task);
   const ev = latestEvent(state, task.id);
   const open = () => (location.hash = `#/task/${encodeURIComponent(task.id)}`);
+  const children = M.childTasks(state, task);
+  const childrenDone = children.filter(isSettledTask).length;
   return (
     <div
       className="task-row"
@@ -333,6 +336,20 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
           {task.specs[0]?.author === "lead" && (
             <span className="chip" title="Proposed by the lead">
               lead
+            </span>
+          )}
+          {task.parentTaskId && (
+            <span className="chip">
+              part of{" "}
+              <a href={`#/task/${encodeURIComponent(task.parentTaskId)}`} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                {task.parentTaskId}
+              </a>
+            </span>
+          )}
+          {children.length > 0 && (
+            <span className="chip" title={`${childrenDone} of ${children.length} child tasks finished`}>
+              {children.length} child task{children.length === 1 ? "" : "s"}
+              {childrenDone < children.length ? ` · ${childrenDone} finished` : " · all finished"}
             </span>
           )}
           {task.lifecycle === "done" && <IntegrationChip task={task} />}
