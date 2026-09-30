@@ -194,7 +194,8 @@ export type AttemptOutcome =
   | "stopped" // acknowledged stop; partial work checkpointed
   | "completed" // result accepted
   | "discarded" // result arrived for a superseded revision; not integrated
-  | "failed";
+  | "failed"
+  | "lost"; // the run's process no longer exists (for example after a service restart)
 
 export interface Attempt {
   id: string;
@@ -282,12 +283,13 @@ export interface State {
 }
 
 export class StaleWriteError extends Error {
-  constructor(
-    public expected: number,
-    public actual: number,
-  ) {
+  expected: number;
+  actual: number;
+  constructor(expected: number, actual: number) {
     super(`Stale write: edited revision ${expected}, current is ${actual}. Reload and reconcile.`);
     this.name = "StaleWriteError";
+    this.expected = expected;
+    this.actual = actual;
   }
 }
 

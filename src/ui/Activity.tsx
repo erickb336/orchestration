@@ -35,7 +35,7 @@ export function Activity() {
             ))}
           </select>
         </label>
-        <span className="muted">Append-only. Events marked runtime come from the simulated runtime.</span>
+        <span className="muted">Append-only. Events marked runtime come from the service's fake (simulated) runtime.</span>
       </div>
       <section className="card">
         <ul className="events">

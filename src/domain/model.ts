@@ -686,6 +686,28 @@ export function acknowledgeStop(state: State, attemptId: string, now: string): S
   return s;
 }
 
+/**
+ * Reconciliation found no live process for an active run (for example after the service restarted).
+ * A run that was stopping is treated as stopped; a running one is marked lost. Neither is completed,
+ * and the step is requeued (or stays paused under a hold) so the next dispatch starts a fresh attempt.
+ */
+export function reportRunLost(state: State, attemptId: string, reason: string, now: string): State {
+  const s = draft(state);
+  const a = s.attempts.find((x) => x.id === attemptId);
+  if (!a || !isActive(a)) return s;
+  const t = getTask(s, a.taskId);
+  const wasStopping = a.outcome === "stopping";
+  a.outcome = wasStopping ? "stopped" : "lost";
+  a.endedAt = now;
+  a.note = `${reason}; no result was produced or integrated`;
+  a.artifacts.push(`checkpoint: partial work at ${a.progress}% left in ${a.snapshot.workspace} (simulated)`);
+  settleStoppedStep(s, t, findStep(t, a.stepId));
+  if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
+  touch(t, now);
+  event(s, now, "system", "runtime", `${a.id} ${wasStopping ? "confirmed stopped" : "lost"} during reconciliation: ${reason}`, t.id);
+  return s;
+}
+
 export function reportStopTimeout(state: State, attemptId: string, now: string): State {
   const s = draft(state);
   const a = s.attempts.find((x) => x.id === attemptId);

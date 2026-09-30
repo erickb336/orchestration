@@ -18,7 +18,7 @@ const CAP_LABEL: Record<keyof CapabilityMap, string> = {
 };
 
 export function Settings() {
-  const { state, apply } = useStore();
+  const { state, send, disabled } = useStore();
   const p = state.project;
   const [repo, setRepo] = useState(p.repoPath);
   const [limit, setLimit] = useState(String(p.workerLimit));
@@ -33,7 +33,7 @@ export function Settings() {
               <span>Managed repository path</span>
               <div className="row">
                 <input type="text" value={repo} onChange={(e) => setRepo(e.target.value)} style={{ flex: 1 }} />
-                <button disabled={repo === p.repoPath} onClick={() => apply((s, now) => M.setRepoPath(s, repo, now))}>
+                <button disabled={disabled || repo === p.repoPath} onClick={() => void send("setRepoPath", { repoPath: repo })}>
                   Save
                 </button>
               </div>
@@ -42,7 +42,7 @@ export function Settings() {
               <span>Total worker limit</span>
               <div className="row">
                 <input type="number" min={1} max={8} value={limit} onChange={(e) => setLimit(e.target.value)} style={{ width: "5rem" }} />
-                <button disabled={Number(limit) === p.workerLimit} onClick={() => apply((s, now) => M.setWorkerLimit(s, Number(limit), now))}>
+                <button disabled={disabled || Number(limit) === p.workerLimit} onClick={() => void send("setWorkerLimit", { limit: Number(limit) })}>
                   Save
                 </button>
               </div>
@@ -57,7 +57,7 @@ export function Settings() {
             <dl className="kv">
               <dt>Project default</dt>
               <dd>
-                <ModelPicker state={state} label="Project default model" value={p.defaultSelection} onChange={(v) => v && apply((s, now) => M.setProjectDefault(s, v, now))} />
+                <ModelPicker state={state} label="Project default model" value={p.defaultSelection} disabled={disabled} onChange={(v) => v && void send("setProjectDefault", { selection: v })} />
               </dd>
               {ROLES.map((role) => (
                 <div key={role} style={{ display: "contents" }}>
@@ -69,7 +69,8 @@ export function Settings() {
                       value={p.roleDefaults[role] ?? null}
                       allowInherit
                       inheritLabel="Use project default"
-                      onChange={(v) => apply((s, now) => M.setRoleDefault(s, role, v, now))}
+                      disabled={disabled}
+                      onChange={(v) => void send("setRoleDefault", { role, selection: v })}
                     />
                   </dd>
                 </div>
@@ -95,7 +96,7 @@ export function Settings() {
               return (
                 <div key={prov} style={{ marginBottom: "1rem" }}>
                   <label className="row">
-                    <input type="checkbox" checked={enabled} onChange={(e) => apply((s, now) => M.setProviderEnabled(s, prov, e.target.checked, now))} />
+                    <input type="checkbox" checked={enabled} disabled={disabled} onChange={(e) => void send("setProviderEnabled", { provider: prov, enabled: e.target.checked })} />
                     <strong>{M.providerLabel(prov)}</strong>
                     <span className="chip">not connected</span>
                   </label>
@@ -129,7 +130,7 @@ export function Settings() {
 }
 
 function Templates() {
-  const { state, apply } = useStore();
+  const { state, send, disabled } = useStore();
   // baseRev: the template revision the draft started from; null for a new template.
   const [draft, setDraft] = useState<{ tpl: WorkflowTemplate; baseRev: number | null } | null>(null);
   const editing = draft?.tpl ?? null;
@@ -145,6 +146,7 @@ function Templates() {
           initial={editing.steps}
           saveLabel="Save template"
           requireReason={false}
+          saveBlocked={disabled ? "The service is offline" : undefined}
           header={
             <>
               <label className="field">
@@ -160,10 +162,10 @@ function Templates() {
               </p>
             </>
           }
-          onSave={(steps) => {
-            const ok = apply((s, now) => M.saveTemplate(s, { ...editing, steps }, draft!.baseRev, now));
-            if (ok) setDraft(null);
-            return ok;
+          onSave={async (steps) => {
+            // A 409 (someone else saved this template first) keeps the draft open; the notice explains it.
+            const r = await send("saveTemplate", { template: { ...editing, steps }, expectedRev: draft!.baseRev });
+            if (r.ok) setDraft(null);
           }}
           onCancel={() => setDraft(null)}
         />
@@ -220,9 +222,10 @@ function Templates() {
               {isModifiedBuiltIn(t) && (
                 <button
                   className="small"
+                  disabled={disabled}
                   onClick={() => {
                     const b = BUILT_IN_TEMPLATES.find((x) => x.id === t.id)!;
-                    if (confirm(`Reset "${t.name}" to the built-in version?`)) apply((s, now) => M.saveTemplate(s, structuredClone(b), t.rev, now));
+                    if (confirm(`Reset "${t.name}" to the built-in version?`)) void send("saveTemplate", { template: structuredClone(b), expectedRev: t.rev });
                   }}
                 >
                   Reset
@@ -230,8 +233,9 @@ function Templates() {
               )}
               <button
                 className="small danger"
+                disabled={disabled}
                 onClick={() => {
-                  if (confirm(`Delete the "${t.name}" template? Task pipelines already created from it are unchanged.`)) apply((s, now) => M.deleteTemplate(s, t.id, now));
+                  if (confirm(`Delete the "${t.name}" template? Task pipelines already created from it are unchanged.`)) void send("deleteTemplate", { templateId: t.id });
                 }}
               >
                 Delete
@@ -241,7 +245,7 @@ function Templates() {
         ))}
       </ul>
       {missingBuiltIns.length > 0 && (
-        <button className="small" style={{ marginTop: "0.5rem" }} onClick={() => apply((s, now) => missingBuiltIns.reduce((acc, b) => M.saveTemplate(acc, structuredClone(b), null, now), s))}>
+        <button className="small" style={{ marginTop: "0.5rem" }} disabled={disabled} onClick={() => void send("restoreBuiltInTemplates")}>
           Restore {missingBuiltIns.length} deleted built-in template(s)
         </button>
       )}

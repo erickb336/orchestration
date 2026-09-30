@@ -8,25 +8,41 @@ SimpleApps is the first managed project. This repository is separate development
 
 ## Build status
 
-Milestone 1 (interface prototype) is in progress; see [ORC-001](docs/tasks/ORC-001.md). The prototype has a task board, task detail with spec editor and revision diffs, per-step provider/model controls, decision history, and pause/resume/cancel/project-pause controls, all running against a **clearly labeled simulated runtime**. No agents run, nothing touches a repository, and state lives in the browser's local storage.
+| Milestone | State |
+| --- | --- |
+| 1: Interface prototype ([ORC-001](docs/tasks/ORC-001.md)) | Done |
+| Editable pipelines, artifacts, templates ([ORC-002](docs/tasks/ORC-002.md)) | Done |
+| 2: Durable task service ([ORC-003](docs/tasks/ORC-003.md)) | Done |
+| 3: Claude and Codex runtime adapters | Not started |
+| 4: Autonomous team loop | Not started |
+| 5: Reliability and usability | Not started |
 
-The durable local service (Milestone 2) and real Claude and Codex adapters (Milestone 3) are not built. Concurrent execution and cross-provider pause/review are required for the first usable runtime release and are not yet implemented.
+The service stores state in SQLite and drives a **fake runtime**. No agent runs yet, and the UI labels all execution as simulated. Claude and Codex adapters, concurrent mixed-provider execution, and cross-provider pause/review are required for the first usable runtime release and are not implemented.
 
-## Run the prototype
+## Run it
 
-Requires Node.js 20 or newer.
+Requires Node.js 22.13 or newer (it uses the built-in `node:sqlite`).
 
 ```bash
 npm install
-npm run dev
+npm start
 ```
 
-Open http://127.0.0.1:5317. The dev server binds to loopback only.
+`npm start` builds the UI and serves the UI and API at http://127.0.0.1:5319. For development, `npm run dev` runs the service (restarting on change) and the Vite UI at http://127.0.0.1:5317.
+
+Environment variables:
+
+- `ORCHESTRATION_DB`: database path. Default: `~/.orchestration/orchestration.db`. Delete the file to start over with the sample project.
+- `ORCHESTRATION_PORT`: service port. Default: 5319.
+
+The service binds to loopback only. It rejects requests with foreign `Host` headers, cross-origin browser requests, and state-changing requests without its client header.
 
 Checks: `npm run typecheck`, `npm test`, `npm run build`.
 
 ## Layout
 
-- `src/domain/` — pure task/spec/step/run state transitions and their tests. No UI or runtime dependencies, so the Milestone 2 service can reuse them.
-- `src/runtime/` — runtime adapter contract and the simulated runtime.
-- `src/ui/` — React interface.
+- `src/domain/`: pure task/spec/step/run state transitions, the command registry, templates, and their tests. No UI, storage, or runtime dependencies.
+- `src/runtime/`: the runtime adapter contract and simulated outputs.
+- `src/ui/`: the React interface, a client of the service.
+- `server/`: the SQLite store (state document, command log with idempotency keys, events, leases), the scheduler with its lease and restart reconciliation, the fake runtime, and the HTTP API.
+- `docs/tasks/`: versioned task specs with decisions and completion evidence.

@@ -4,9 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "typecheck": "tsc -b --noEmit",
+    "dev": "node scripts/dev.mjs",
+    "server": "node --import tsx server/main.ts",
+    "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
+    "start": "npm run build && node scripts/start.mjs",
+    "typecheck": "tsc -b --noEmit && tsc -p tsconfig.server.json",
     "test": "vitest run",
     "preview": "vite preview"
   },
@@ -15,11 +17,16 @@
     "react-dom": "^19.3.0"
   },
   "devDependencies": {
+    "@types/node": "^26.6.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
     "vitest": "^5.0.2"
+  },
+  "engines": {
+    "node": ">=22.13"
   }
 }

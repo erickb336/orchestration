@@ -27,7 +27,7 @@ function usePref<T extends string>(key: string, initial: T) {
 }
 
 export function Board() {
-  const { state, apply } = useStore();
+  const { state, send, disabled } = useStore();
   const [view, setView] = usePref<View>("orchestration.view", "list");
   const [sort, setSort] = usePref<Sort>("orchestration.sort", "priority");
   const [area, setArea] = useState("");
@@ -62,7 +62,7 @@ export function Board() {
         {newCount > 0 && (
           <span className="row">
             <span className="muted">{newCount} decision(s) since your last visit.</span>
-            <button className="small" onClick={() => apply(M.markVisited)} title="Only updates what counts as new; does not approve or pause anything">
+            <button className="small" disabled={disabled} onClick={() => void send("markVisited")} title="Only updates what counts as new; does not approve or pause anything">
               Mark all seen
             </button>
           </span>

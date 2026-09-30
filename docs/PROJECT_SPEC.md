@@ -30,7 +30,7 @@ Success means the lead can explain why it chose a task and an approach, the user
 
 Start as a single-user local web application with a local service and durable database. Use one managed repository and one lead, with up to three concurrent workers initially. Keep the runtime behind an adapter so the interface does not depend on one agent provider.
 
-Use SimpleApps' restrained visual direction: warm neutrals, light/dark appearance, readable typography, familiar controls, and minimal navigation. The product is for understanding and controlling work, not visualizing an animated agent organization.
+Use a restrained visual direction: a neutral black-and-white palette (user direction, 2026-09-29; replaces the earlier warm neutrals), light/dark appearance, readable typography, familiar controls, and minimal navigation. Color is reserved for status meaning. The product is for understanding and controlling work, not visualizing an animated agent organization.
 
 Included in the first usable release: lead conversation, board/list, specification viewer/editor, decision history, role/run visibility, actual pause/resume controls, project-wide pause, activity history, local persistence, and working Claude and Codex runtime integrations supporting concurrent mixed-provider teams.
 

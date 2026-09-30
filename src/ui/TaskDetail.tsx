@@ -3,7 +3,7 @@ import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
 import { toDef } from "../domain/pipeline";
 import { ROLES, type Attempt, type State, type Task } from "../domain/types";
-import { useStore } from "./store";
+import { newIdOf, useStore } from "./store";
 import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } from "./common";
 import { SpecEditor } from "./SpecEditor";
 import { PipelineEditor } from "./PipelineEditor";
@@ -70,7 +70,7 @@ export function TaskDetail({ id }: { id: string }) {
 }
 
 function Controls({ state, task, editing, onEdit }: { state: State; task: Task; editing: boolean; onEdit: () => void }) {
-  const { apply } = useStore();
+  const { send, disabled } = useStore();
   const [prio, setPrio] = useState(String(task.priority));
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
   if (!open) {
@@ -78,14 +78,10 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
       <div className="controls">
         {task.lifecycle === "done" && (
           <button
-            onClick={() => {
-              let newId = "";
-              const ok = apply((s, now) => {
-                const r = M.createFollowUp(s, task.id, now);
-                newId = r.newId;
-                return r.state;
-              });
-              if (ok) location.hash = `#/task/${newId}`;
+            disabled={disabled}
+            onClick={async () => {
+              const newId = newIdOf(await send("createFollowUp", { taskId: task.id }));
+              if (newId) location.hash = `#/task/${encodeURIComponent(newId)}`;
             }}
           >
             Create follow-up
@@ -98,16 +94,18 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
   return (
     <div className="controls">
       {task.hold ? (
-        <button className="primary" onClick={() => apply((s, now) => M.resumeTask(s, task.id, now))} disabled={pausing} title={pausing ? "Waiting for runs to acknowledge stopping" : undefined}>
+        <button className="primary" onClick={() => void send("resumeTask", { taskId: task.id })} disabled={disabled || pausing} title={pausing ? "Waiting for runs to acknowledge stopping" : undefined}>
           Resume
         </button>
       ) : (
-        <button className="primary" onClick={() => apply((s, now) => M.pauseTask(s, task.id, now))}>
+        <button className="primary" disabled={disabled} onClick={() => void send("pauseTask", { taskId: task.id })}>
           Pause
         </button>
       )}
       {task.holdBeforeStart && task.lifecycle !== "active" && (
-        <button onClick={() => apply((s, now) => M.startHeldTask(s, task.id, now))}>Release hold before start</button>
+        <button disabled={disabled} onClick={() => void send("startHeldTask", { taskId: task.id })}>
+          Release hold before start
+        </button>
       )}
       <button onClick={onEdit} disabled={editing}>
         Edit spec
@@ -117,14 +115,15 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
           Priority
         </span>
         <input type="number" min={1} value={prio} onChange={(e) => setPrio(e.target.value)} style={{ width: "4rem" }} />
-        <button className="small" disabled={Number(prio) === task.priority} onClick={() => apply((s, now) => M.setPriority(s, task.id, Number(prio), now))}>
+        <button className="small" disabled={disabled || Number(prio) === task.priority} onClick={() => void send("setPriority", { taskId: task.id, priority: Number(prio) })}>
           Set
         </button>
       </label>
       <button
         className="danger"
+        disabled={disabled}
         onClick={() => {
-          if (confirm(`Cancel ${task.id}? Running work is stopped; the spec and partial artifacts are kept.`)) apply((s, now) => M.cancelTask(s, task.id, now));
+          if (confirm(`Cancel ${task.id}? Running work is stopped; the spec and partial artifacts are kept.`)) void send("cancelTask", { taskId: task.id });
         }}
       >
         Cancel task
@@ -134,7 +133,7 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
 }
 
 function StatusBanners({ state, task }: { state: State; task: Task }) {
-  const { apply } = useStore();
+  const { send, disabled } = useStore();
   const active = M.activeAttempts(state, task.id);
   const stopping = active.filter((a) => a.outcome === "stopping");
   const current = M.currentSpec(task).rev;
@@ -147,7 +146,7 @@ function StatusBanners({ state, task }: { state: State; task: Task }) {
     out.push(
       <div className="banner danger" role="alert" key="cf">
         <strong>Control failure.</strong> {task.controlFailure.message}{" "}
-        <button className="small" onClick={() => apply((s, now) => M.retryStop(s, task.id, now))}>
+        <button className="small" disabled={disabled} onClick={() => void send("retryStop", { taskId: task.id })}>
           Retry stop
         </button>
       </div>,
@@ -239,12 +238,13 @@ function OutcomeCard({ task }: { task: Task }) {
 }
 
 function OptionsCard({ task }: { task: Task }) {
-  const { apply } = useStore();
+  const { send, disabled } = useStore();
   const spec = M.currentSpec(task);
   const c = spec.content;
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
   const [choosing, setChoosing] = useState<string | null>(null);
   const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
   return (
     <section className="card" aria-labelledby="opt-h">
       <h2 id="opt-h">Options and tradeoffs</h2>
@@ -298,17 +298,16 @@ function OptionsCard({ task }: { task: Task }) {
         <form
           className="stack"
           style={{ marginTop: "0.75rem" }}
-          onSubmit={(e) => {
+          onSubmit={async (e) => {
             e.preventDefault();
-            const ok =
+            if (saving) return;
+            setSaving(true);
+            const r =
               choosing === c.recommendedOptionId
-                ? apply((s, now) => {
-                    const content = structuredClone(c);
-                    content.selectedOptionId = choosing;
-                    return M.editSpec(s, task.id, spec.rev, content, `User restored recommended option ${choosing}`, "user", now);
-                  })
-                : apply((s, now) => M.overrideSelection(s, task.id, spec.rev, choosing, reason, now));
-            if (ok) {
+                ? await send("editSpec", { taskId: task.id, expectedRev: spec.rev, content: { ...structuredClone(c), selectedOptionId: choosing }, reason: `User restored recommended option ${choosing}` })
+                : await send("overrideSelection", { taskId: task.id, expectedRev: spec.rev, optionId: choosing, reason });
+            setSaving(false);
+            if (r.ok) {
               setChoosing(null);
               setReason("");
             }
@@ -322,7 +321,7 @@ function OptionsCard({ task }: { task: Task }) {
           )}
           {task.lifecycle === "active" && <p className="muted">Saving creates a new revision and stops runs on the current revision first.</p>}
           <div className="row">
-            <button type="submit" className="primary">
+            <button type="submit" className="primary" disabled={disabled || saving}>
               Select option {choosing} (new revision r{spec.rev + 1})
             </button>
             <button type="button" onClick={() => setChoosing(null)}>
@@ -372,14 +371,16 @@ function DetailsCard({ task }: { task: Task }) {
 }
 
 function StepsCard({ state, task }: { state: State; task: Task }) {
-  const { apply } = useStore();
+  const { send, disabled } = useStore();
   const [editing, setEditing] = useState<number | null>(null); // pipeline rev the draft started from
+  const [saving, setSaving] = useState(false);
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
   const usedRoles = [...new Set(task.steps.map((s) => s.role))];
   const activeCount = M.activeAttempts(state, task.id).length;
 
   if (editing !== null) {
-    const stale = task.pipelineRev !== editing;
+    // While our own save is in flight the stream may deliver the revision it created; that is not a conflict.
+    const stale = !saving && task.pipelineRev !== editing;
     return (
       <section className="card" aria-labelledby="steps-h">
         <h2 id="steps-h">
@@ -390,7 +391,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
           reservedIds={task.pipelineHistory.flatMap((p) => p.steps.map((x) => x.id))}
           templates={state.project.templates}
           saveLabel={`Save pipeline r${task.pipelineRev + 1}`}
-          saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : undefined}
+          saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : disabled ? "The service is offline" : undefined}
           requireReason
           warning={
             <>
@@ -413,10 +414,11 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
               {task.hold && <div className="banner neutral">This task is paused. Saving keeps it paused.</div>}
             </>
           }
-          onSave={(defs, reason) => {
-            const ok = apply((s, now) => M.setPipeline(s, task.id, editing, defs, reason, "user", now));
-            if (ok) setEditing(null);
-            return ok;
+          onSave={async (defs, reason) => {
+            setSaving(true);
+            const r = await send("setPipeline", { taskId: task.id, expectedRev: editing, steps: defs, reason });
+            setSaving(false);
+            if (r.ok) setEditing(null);
           }}
           onCancel={() => setEditing(null)}
         />
@@ -486,9 +488,10 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                             className="small"
                             style={{ marginTop: "0.3rem" }}
                             aria-label={`Rerun ${st.id}`}
+                            disabled={disabled}
                             onClick={() => {
                               if (confirm(`Rerun ${st.id}? Results of steps that depend on it will need revalidation, and any of them still running will be stopped.`))
-                                apply((s, now) => M.rerunStep(s, task.id, st.id, now));
+                                void send("rerunStep", { taskId: task.id, stepId: st.id });
                             }}
                           >
                             Rerun
@@ -513,17 +516,18 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                           value={st.selection}
                           allowInherit
                           inheritLabel={`Inherited${r.ok && st.selection === null ? `: ${selectionText(r.selection)}` : ""}`}
+                          disabled={disabled}
                           onChange={(v) => {
                             const running = st.state === "running";
                             if (running && !confirm(`${st.id} is running. Changing its model stops the current run (checkpointed) before a new attempt starts. Continue?`)) return;
-                            apply((s, now) => M.setStepSelection(s, task.id, st.id, v, now));
+                            void send("setStepSelection", { taskId: task.id, stepId: st.id, selection: v });
                           }}
                         />
                         <div className="muted" style={{ fontSize: "0.8rem" }}>
                           {st.selection ? (
                             <>
                               Pinned by you ·{" "}
-                              <button className="link" onClick={() => apply((s, now) => M.setStepSelection(s, task.id, st.id, null, now))}>
+                              <button className="link" disabled={disabled} onClick={() => void send("setStepSelection", { taskId: task.id, stepId: st.id, selection: null })}>
                                 Reset to default
                               </button>
                             </>
@@ -547,7 +551,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                     )}
                     {st.blockedReason && <div style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>{st.blockedReason}</div>}
                     {st.state === "blocked" && open && (
-                      <button className="small" style={{ marginTop: "0.3rem" }} aria-label={`Retry ${st.id}`} onClick={() => apply((s, now) => M.retryStep(s, task.id, st.id, now))}>
+                      <button className="small" style={{ marginTop: "0.3rem" }} aria-label={`Retry ${st.id}`} disabled={disabled} onClick={() => void send("retryStep", { taskId: task.id, stepId: st.id })}>
                         Retry
                       </button>
                     )}
@@ -575,7 +579,8 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                     value={task.roleOverrides[role] ?? null}
                     allowInherit
                     inheritLabel="Project default"
-                    onChange={(v) => apply((s, now) => M.setTaskRoleOverride(s, task.id, role, v, now))}
+                    disabled={disabled}
+                    onChange={(v) => void send("setTaskRoleOverride", { taskId: task.id, role, selection: v })}
                   />
                 </dd>
               </div>
@@ -603,8 +608,8 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
         <input
           type="checkbox"
           checked={task.holdBeforeStart}
-          disabled={!open || task.lifecycle === "active"}
-          onChange={(e) => apply((s, now) => M.setHoldBeforeStart(s, task.id, e.target.checked, now))}
+          disabled={disabled || !open || task.lifecycle === "active"}
+          onChange={(e) => void send("setHoldBeforeStart", { taskId: task.id, value: e.target.checked })}
         />
         Hold before start (guarantees a chance to review before the first dispatch)
       </label>

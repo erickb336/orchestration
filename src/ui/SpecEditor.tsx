@@ -2,20 +2,22 @@ import { useState } from "react";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
 import type { SpecContent, SpecOption, Task } from "../domain/types";
-import { useStore } from "./store";
+import { newIdOf, useStore } from "./store";
 
 const lines = (xs: string[]) => xs.join("\n");
 const unlines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
 
 /** Draft editor. Saving creates a new immutable revision against the revision the draft started from. */
 export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void }) {
-  const { state, apply } = useStore();
+  const { state, send, disabled } = useStore();
   const start = M.currentSpec(task);
   const [baseRev, setBaseRev] = useState(start.rev);
   const [draft, setDraft] = useState<SpecContent>(() => structuredClone(start.content));
   const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
   const current = M.currentSpec(task);
-  const stale = current.rev !== baseRev;
+  // While our own save is in flight the stream may deliver the revision it created; that is not a conflict.
+  const stale = !saving && current.rev !== baseRev;
   const base = task.specs.find((r) => r.rev === baseRev);
   const upstream = stale && base ? diffLines(specToLines(base.content), specToLines(current.content)).filter((d) => d.kind !== "same") : [];
   const activeRuns = M.activeAttempts(state, task.id).length;
@@ -44,20 +46,26 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
     scopeExcluded: unlines(lines(draft.scopeExcluded)),
     acceptance: unlines(lines(draft.acceptance)),
   });
-  const save = () => {
-    if (apply((s, now) => M.editSpec(s, task.id, baseRev, content(), reason, "user", now))) onClose();
+  // On failure (409 stale, 400 control error, offline) the draft stays open and a notice explains why.
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    const r = await send("editSpec", { taskId: task.id, expectedRev: baseRev, content: content(), reason });
+    setSaving(false);
+    if (r.ok) onClose();
   };
-  const saveAsFollowUp = () => {
-    let newId = "";
-    const ok = apply((s, now) => {
-      const r = M.createFollowUp(s, task.id, now);
-      newId = r.newId;
-      return M.editSpec(r.state, newId, 1, { ...content(), title: `Follow-up: ${draft.title}` }, reason || "Draft started before delivery", "user", now);
+  const saveAsFollowUp = async () => {
+    if (saving) return;
+    setSaving(true);
+    const r = await send("createFollowUpWithSpec", {
+      taskId: task.id,
+      content: { ...content(), title: `Follow-up: ${draft.title}` },
+      reason: reason || "Draft started before delivery",
     });
-    if (ok) {
-      onClose();
-      location.hash = `#/task/${newId}`;
-    }
+    setSaving(false);
+    const newId = newIdOf(r);
+    if (r.ok) onClose();
+    if (newId) location.hash = `#/task/${encodeURIComponent(newId)}`;
   };
 
   return (
@@ -65,7 +73,7 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
       className="card"
       onSubmit={(e) => {
         e.preventDefault();
-        save();
+        void save();
       }}
       aria-labelledby="edit-h"
     >
@@ -111,7 +119,7 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
             ? "This task was delivered while you were editing. The delivered spec stays read-only. "
             : "This task was cancelled while you were editing. "}
           {task.lifecycle === "done" && (
-            <button type="button" className="small" onClick={saveAsFollowUp}>
+            <button type="button" className="small" disabled={disabled || saving} onClick={() => void saveAsFollowUp()}>
               Save draft as a follow-up task
             </button>
           )}
@@ -219,7 +227,7 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
           <span>Reason for this revision (required)</span>
           <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} required />
         </label>
-        <button type="submit" className="primary" disabled={stale || closed}>
+        <button type="submit" className="primary" disabled={disabled || saving || stale || closed}>
           Save as r{current.rev + 1}
         </button>
         <button type="button" onClick={onClose}>

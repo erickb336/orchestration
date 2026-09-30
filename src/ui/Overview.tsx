@@ -4,9 +4,13 @@ import { useStore } from "./store";
 import { ROLE_LABEL, fmtTime, relTime, selectionText } from "./common";
 
 export function Overview() {
-  const { state, apply } = useStore();
+  const { state, send, disabled, status, service } = useStore();
   const vision = M.currentVision(state);
   const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // The vision revision the draft started from; saving against it lets the service reject a stale draft.
+  const [baseRev, setBaseRev] = useState(vision.rev);
+  const staleDraft = editing && !saving && vision.rev !== baseRev;
   const [text, setText] = useState(vision.text);
   const [focus, setFocus] = useState(vision.focus);
   const [reason, setReason] = useState("");
@@ -33,14 +37,38 @@ export function Overview() {
             </div>
             {editing ? (
               <form
-                onSubmit={(e) => {
+                onSubmit={async (e) => {
                   e.preventDefault();
-                  if (apply((s, now) => M.editVision(s, vision.rev, text, focus, reason, now))) {
+                  if (saving) return;
+                  setSaving(true);
+                  // A 409 keeps the form open with the draft; the notice explains the conflict.
+                  const r = await send("editVision", { expectedRev: baseRev, text, focus, reason });
+                  setSaving(false);
+                  if (r.ok) {
                     setEditing(false);
                     setReason("");
                   }
                 }}
               >
+                {staleDraft && (
+                  <div className="banner danger" role="alert">
+                    The vision changed to r{vision.rev} ({vision.author}: {vision.reason}) while you were editing. Your draft is kept.{" "}
+                    <button type="button" className="small" onClick={() => setBaseRev(vision.rev)}>
+                      Save over r{vision.rev} anyway
+                    </button>{" "}
+                    <button
+                      type="button"
+                      className="small"
+                      onClick={() => {
+                        setText(vision.text);
+                        setFocus(vision.focus);
+                        setBaseRev(vision.rev);
+                      }}
+                    >
+                      Discard draft and load r{vision.rev}
+                    </button>
+                  </div>
+                )}
                 <label className="field">
                   <span>Vision</span>
                   <textarea value={text} onChange={(e) => setText(e.target.value)} />
@@ -54,7 +82,7 @@ export function Overview() {
                   <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} required />
                 </label>
                 <div className="row">
-                  <button type="submit" className="primary">
+                  <button type="submit" className="primary" disabled={disabled || saving || staleDraft}>
                     Save as r{vision.rev + 1}
                   </button>
                   <button type="button" onClick={() => setEditing(false)}>
@@ -72,6 +100,7 @@ export function Overview() {
                   onClick={() => {
                     setText(vision.text);
                     setFocus(vision.focus);
+                    setBaseRev(vision.rev);
                     setEditing(true);
                   }}
                 >
@@ -167,14 +196,20 @@ export function Overview() {
           <section className="card" aria-labelledby="svc-h">
             <h2 id="svc-h">Service</h2>
             <dl className="kv">
-              <dt>Service</dt>
-              <dd>Not built yet — this browser tab runs the simulation (Milestone 2 adds a local service)</dd>
-              <dt>Persistence</dt>
-              <dd>This browser's local storage only</dd>
+              <dt>Status</dt>
+              <dd>{status === "online" ? "Online" : status === "connecting" ? "Connecting…" : "Offline — showing the last known state"}</dd>
+              <dt>Started</dt>
+              <dd>{fmtTime(service.startedAt)}</dd>
+              <dt>Scheduler role</dt>
+              <dd>{service.scheduler === "active" ? "Active — this instance holds the scheduler lease" : "Observer — another service instance holds the scheduler lease"}</dd>
+              <dt>Runtime</dt>
+              <dd>Fake runtime (simulated; real adapters arrive in Milestone 3)</dd>
+              <dt>Database</dt>
+              <dd className="mono">{service.dbPath}</dd>
               <dt>Repository</dt>
               <dd className="mono">{state.project.repoPath}</dd>
               <dt>Scheduler</dt>
-              <dd>None installed; no unattended runs</dd>
+              <dd>Fake runtime only; no unattended real runs</dd>
             </dl>
           </section>
         </div>

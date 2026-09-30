@@ -80,6 +80,7 @@ export function ModelPicker({
   allowInherit,
   inheritLabel,
   label,
+  disabled,
 }: {
   state: State;
   value: ModelSelection | null;
@@ -87,11 +88,13 @@ export function ModelPicker({
   allowInherit?: boolean;
   inheritLabel?: string;
   label: string;
+  disabled?: boolean;
 }) {
   const enc = (v: ModelSelection | null) => (v ? `${v.provider}::${v.model}` : INHERIT);
   return (
     <select
       aria-label={label}
+      disabled={disabled}
       value={enc(value)}
       onChange={(e) => {
         if (e.target.value === INHERIT) return onChange(null);

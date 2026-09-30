@@ -46,7 +46,7 @@ export function simulateTick(state: State, nowMs: number, cfg: SimConfig): State
 }
 
 /** Simulated outputs for every artifact the step declares. Reviews find one issue about half the time. */
-function simulatedOutputs(s: State, taskId: string, stepId: string, attemptId: string): M.OutputReport[] {
+export function simulatedOutputs(s: State, taskId: string, stepId: string, attemptId: string): M.OutputReport[] {
   const t = s.tasks.find((x) => x.id === taskId)!;
   const st = t.steps.find((x) => x.id === stepId);
   if (!st) return [];

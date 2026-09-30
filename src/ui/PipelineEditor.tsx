@@ -31,11 +31,13 @@ export function PipelineEditor({
   requireReason: boolean;
   header?: React.ReactNode;
   warning?: React.ReactNode;
-  onSave: (defs: StepDef[], reason: string) => boolean;
+  /** May be async; the save button stays disabled until it settles. */
+  onSave: (defs: StepDef[], reason: string) => Promise<unknown> | void;
   onCancel: () => void;
 }) {
   const [defs, setDefs] = useState<StepDef[]>(() => structuredClone(initial));
   const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
   const issues = validatePipeline(defs);
   const errors = issues.filter((i) => i.severity === "error");
 
@@ -69,10 +71,15 @@ export function PipelineEditor({
   return (
     <form
       className="stack"
-      onSubmit={(e) => {
+      onSubmit={async (e) => {
         e.preventDefault();
-        if (errors.length || saveBlocked) return;
-        onSave(defs, reason);
+        if (errors.length || saveBlocked || saving) return;
+        setSaving(true);
+        try {
+          await onSave(defs, reason);
+        } finally {
+          setSaving(false);
+        }
       }}
     >
       {header}
@@ -251,7 +258,7 @@ export function PipelineEditor({
             <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} required />
           </label>
         )}
-        <button type="submit" className="primary" disabled={errors.length > 0 || !!saveBlocked} title={saveBlocked}>
+        <button type="submit" className="primary" disabled={errors.length > 0 || !!saveBlocked || saving} title={saveBlocked}>
           {saveLabel}
         </button>
         <button type="button" onClick={onCancel}>

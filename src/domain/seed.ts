@@ -33,7 +33,16 @@ function spec(partial: Partial<SpecContent> & Pick<SpecContent, "title" | "area"
   };
 }
 
-export function buildSeed(nowMs: number = Date.now()): State {
+export interface SeedOptions {
+  /**
+   * Include runs that appear to be executing. Pure domain tests use them; the service does not,
+   * because no runtime process would exist for them. The service's scheduler dispatches those
+   * steps itself instead.
+   */
+  inFlightRuns?: boolean;
+}
+
+export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: SeedOptions = {}): State {
   const at = (m: number) => minutesAgo(nowMs, m);
   const tasks: Task[] = [];
   const attempts: Attempt[] = [];
@@ -157,7 +166,7 @@ export function buildSeed(nowMs: number = Date.now()): State {
   run(ex1, "S1", "claude", "claude-sample-large", 180, "completed", 100, [
     { name: "design", summary: "Two empty states (no items; no search matches), each with one message and one primary action (sample)" },
   ]);
-  run(ex1, "S2", "codex", "codex-sample-large", 30, "running", 45);
+  if (inFlightRuns) run(ex1, "S2", "codex", "codex-sample-large", 30, "running", 45);
 
   // EX-002: under review by the other provider.
   const ex2 = task(
@@ -185,7 +194,7 @@ export function buildSeed(nowMs: number = Date.now()): State {
     { name: "change", summary: "Backup write errors surface a persistent banner with Retry (sample diff, +42 −6)" },
     { name: "handoff", summary: "Fault injection test added; retry path not yet tested offline (sample)" },
   ]);
-  run(ex2, "S2", "claude", "claude-sample-large", 12, "running", 60);
+  if (inFlightRuns) run(ex2, "S2", "claude", "claude-sample-large", 12, "running", 60);
 
   task(
     "EX-003",
@@ -360,8 +369,12 @@ export function buildSeed(nowMs: number = Date.now()): State {
       { id: "ev-2", at: at(2200), actor: "user", kind: "decision", taskId: "EX-006", message: "Selected option B (Per-note export); override: I mostly export single notes to share them." },
       { id: "ev-3", at: at(1500), actor: "lead", kind: "integration", taskId: "EX-006", message: "Integrated spec r2 (simulated); task Done" },
       { id: "ev-4", at: at(90), actor: "user", kind: "control", taskId: "EX-005", message: "Paused; hold saved and excluded from dispatch" },
-      { id: "ev-5", at: at(30), actor: "lead", kind: "dispatch", taskId: "EX-001", message: "Dispatched S2 (coder) to Codex · codex-sample-large as run-2 on spec r1" },
-      { id: "ev-6", at: at(12), actor: "lead", kind: "dispatch", taskId: "EX-002", message: "Dispatched S2 (code_reviewer) to Claude · claude-sample-large as run-4 on spec r1" },
+      ...(inFlightRuns
+        ? [
+            { id: "ev-5", at: at(30), actor: "lead" as const, kind: "dispatch" as const, taskId: "EX-001", message: "Dispatched S2 (coder) to Codex · codex-sample-large as run-2 on spec r1" },
+            { id: "ev-6", at: at(12), actor: "lead" as const, kind: "dispatch" as const, taskId: "EX-002", message: "Dispatched S2 (code_reviewer) to Claude · claude-sample-large as run-4 on spec r1" },
+          ]
+        : []),
       { id: "ev-7", at: at(8), actor: "lead", kind: "spec", taskId: "EX-003", message: "Spec r1: proposed investigation" },
     ],
   };
