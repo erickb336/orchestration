@@ -132,8 +132,17 @@ ORCHESTRATION_RUNTIME=real npm start
 ```
 
 1. **Credentials.** Set them in the environment the service starts from. Settings → Providers shows each provider's status; checking never starts a model run.
-   - **Claude:** `ANTHROPIC_API_KEY`, or Bedrock/Vertex/Foundry settings. Anthropic does not allow third-party Agent SDK apps to use a Claude.ai subscription login.
-   - **Codex:** your local Codex sign-in (`npx codex login`) or an API key (`printenv OPENAI_API_KEY | npx codex login --with-api-key`).
+   - **Claude:** `ANTHROPIC_API_KEY`, or Bedrock, Vertex or Foundry settings. The key is billed per use, separately from any Claude subscription.
+     - **Optional, personal use: your own Claude subscription.** Create a token with `claude setup-token`, then start the service with both variables set:
+
+       ```bash
+       export ORCHESTRATION_CLAUDE_AUTH=subscription
+       export CLAUDE_CODE_OAUTH_TOKEN=<the token from claude setup-token>
+       ORCHESTRATION_RUNTIME=real npm start
+       ```
+
+       Claude workers and the lead then run on your plan's usage limits, which are shared with your own Claude Code. Several workers use those limits up quickly. The token is used only when both variables are set, and in that case no API key or cloud setting is passed to workers. **Check this is allowed for you:** Anthropic's Agent SDK documentation says, "Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK." It does not say whether a subscriber may use their own token in their own tool.
+   - **Codex:** your local Codex sign-in (`npx codex login`), which runs on your ChatGPT plan's usage limits with no separate bill, or an API key (`printenv OPENAI_API_KEY | npx codex login --with-api-key`).
 2. **Project.** In Settings → Project, point Orchestrator at a git repository with at least one commit, and write a vision.
 3. **Involvement.** Choose how involved you want to be (Autopilot, check in before work starts, or only when I ask), then message the lead or create a task.
 
