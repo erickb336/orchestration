@@ -30,6 +30,10 @@ export interface VisionRevision {
 }
 
 export interface Project {
+  /** Stable id; namespaces branches and worktrees so a new project never collides with an old one. */
+  id: string;
+  /** The built-in sample project: never dispatched to real agents. */
+  sample: boolean;
   name: string;
   /** Managed repository path; user-configured. */
   repoPath: string;
@@ -41,11 +45,48 @@ export interface Project {
   roleDefaults: Partial<Record<RoleId, ModelSelection>>;
   leadSelection: ModelSelection;
   workerLimit: number;
+  /** Bounds applied to every real run attempt. */
+  runLimits: RunLimits;
+  workerEnvironment: Record<ProviderId, WorkerEnvironment>;
+  /** MCP servers (by name, from the user's own provider config) isolated workers may use. */
+  workerConnections: Record<ProviderId, string[]>;
   /** Desired state: project-wide pause. */
   hold: boolean;
   lastVisitAt: string;
   templates: WorkflowTemplate[];
 }
+
+/**
+ * What a worker process sees of the user's own tool setup.
+ * "isolated": no user settings, MCP servers, plugins, or web tools (default).
+ * "local": the user's Claude/Codex configuration, including MCP servers and plugins.
+ * In both, file edits stay in the worktree and native sub-agents stay disabled.
+ */
+export type WorkerEnvironment = "isolated" | "local";
+
+export interface RunLimits {
+  maxTurns: number;
+  timeoutMinutes: number;
+  /** Claude only; Codex does not expose a spend cap. */
+  maxBudgetUsd: number;
+}
+
+/** Provider-neutral model defaults for a new project: "auto" resolves against the live catalog. */
+export function autoModelDefaults(): Pick<Project, "defaultSelection" | "leadSelection" | "roleDefaults"> {
+  return {
+    defaultSelection: { provider: "claude", model: "auto" },
+    leadSelection: { provider: "claude", model: "auto" },
+    roleDefaults: {
+      lead: { provider: "claude", model: "auto" },
+      designer: { provider: "claude", model: "auto" },
+      coder: { provider: "codex", model: "auto" },
+      code_reviewer: { provider: "claude", model: "auto" },
+      ux_reviewer: { provider: "claude", model: "auto" },
+    },
+  };
+}
+
+export const DEFAULT_RUN_LIMITS: RunLimits = { maxTurns: 40, timeoutMinutes: 20, maxBudgetUsd: 2 };
 
 export interface SpecOption {
   id: string;
@@ -147,6 +188,8 @@ export interface Artifact {
   summary: string;
   /** For review-findings: number of unresolved findings. */
   openFindings?: number;
+  /** A durable reference, e.g. the commit SHA and branch holding a code change. */
+  ref?: string;
   createdAt: string;
 }
 
@@ -182,6 +225,10 @@ export interface RunSnapshot {
   visionRev: number;
   workspace: string;
   pipelineRev: number;
+  /** The worker environment the run was started with (absent on runs from before the setting existed). */
+  environment?: WorkerEnvironment;
+  /** Connections (MCP servers) an isolated run was allowed to use. */
+  connections?: string[];
   /** The instruction the worker received for this step. */
   purpose: string;
   /** Exactly the upstream artifact versions this run received as context. */
@@ -211,6 +258,13 @@ export interface Attempt {
   stopReason?: "pause" | "revision" | "cancel" | "model-change" | "project-pause";
   artifacts: string[];
   note?: string;
+  /** Provider session/thread id, for evidence and diagnostics. */
+  sessionId?: string;
+  /** The model the provider reported actually running (may differ from an alias in the snapshot). */
+  actualModel?: string;
+  /** Latest meaningful milestone reported by the runtime. */
+  activity?: string;
+  usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
 }
 
 export type Lifecycle = "proposed" | "ready" | "active" | "done" | "cancelled";
@@ -273,7 +327,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 3;
+  version: 6;
   seq: number;
   project: Project;
   tasks: Task[];

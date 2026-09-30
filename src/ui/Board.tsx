@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import * as M from "../domain/model";
 import { PROVIDERS, ROLES, type State, type Task } from "../domain/types";
-import { useStore } from "./store";
+import { newIdOf, useStore } from "./store";
 import { COLUMN_LABEL, ROLE_LABEL, StatePill, currentWork, hasNewDecision, latestEvent, relTime } from "./common";
 
 type View = "list" | "board";
@@ -26,6 +26,108 @@ function usePref<T extends string>(key: string, initial: T) {
   return [v, set] as const;
 }
 
+function NewTaskForm({ onClose }: { onClose: () => void }) {
+  const { state, send, disabled } = useStore();
+  const templates = state.project.templates;
+  const [f, setF] = useState({
+    title: "",
+    area: "",
+    outcome: "",
+    benefit: "",
+    whyNow: "",
+    approach: "",
+    acceptance: "",
+    priority: "3",
+    templateId: templates.find((t) => t.id === "change")?.id ?? templates[0]?.id ?? "",
+    holdBeforeStart: true,
+  });
+  const set = (k: keyof typeof f, v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
+  const tpl = templates.find((t) => t.id === f.templateId);
+  const text = (k: "title" | "area" | "outcome" | "benefit" | "whyNow" | "approach", label: string, required = false, multi = false) => (
+    <label className="field">
+      <span>
+        {label}
+        {required ? "" : " (optional)"}
+      </span>
+      {multi ? <textarea value={f[k]} onChange={(e) => set(k, e.target.value)} required={required} /> : <input type="text" value={f[k]} onChange={(e) => set(k, e.target.value)} required={required} />}
+    </label>
+  );
+  return (
+    <form
+      className="card"
+      aria-labelledby="new-task-h"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        const r = await send("createTask", {
+          title: f.title,
+          area: f.area,
+          outcome: f.outcome,
+          benefit: f.benefit,
+          whyNow: f.whyNow,
+          approach: f.approach,
+          acceptance: f.acceptance.split("\n"),
+          priority: Number(f.priority) || 3,
+          holdBeforeStart: f.holdBeforeStart,
+          templateId: f.templateId,
+        });
+        const id = newIdOf(r);
+        if (id) {
+          onClose();
+          location.hash = `#/task/${encodeURIComponent(id)}`;
+        }
+      }}
+    >
+      <h2 id="new-task-h">New task</h2>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        You write the outcome and approach; the pipeline comes from a template and can be edited afterwards. Hold before start is on by default so you can review the spec and pipeline before anything runs.
+      </p>
+      {text("title", "Title", true)}
+      {text("outcome", "Outcome (what should be true when done)", true, true)}
+      {text("approach", "Approach", true, true)}
+      <label className="field">
+        <span>Acceptance checks (one per line)</span>
+        <textarea value={f.acceptance} onChange={(e) => set("acceptance", e.target.value)} />
+      </label>
+      {text("benefit", "User benefit")}
+      {text("area", "Area")}
+      {text("whyNow", "Why now")}
+      <div className="row">
+        <label className="field">
+          <span>Pipeline template</span>
+          <select value={f.templateId} onChange={(e) => set("templateId", e.target.value)}>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Priority</span>
+          <input type="number" min={1} value={f.priority} onChange={(e) => set("priority", e.target.value)} style={{ width: "5rem" }} />
+        </label>
+      </div>
+      {tpl && (
+        <p className="mono muted" style={{ fontSize: "0.78rem" }}>
+          {tpl.steps.map((st) => `${st.id} ${st.purpose}${st.runIf?.length ? " (if findings)" : ""}`).join(" → ")}
+        </p>
+      )}
+      <label className="row" style={{ fontSize: "0.9rem", marginBottom: "0.8rem" }}>
+        <input type="checkbox" checked={f.holdBeforeStart} onChange={(e) => set("holdBeforeStart", e.target.checked)} />
+        Hold before start
+      </label>
+      <div className="row">
+        <button type="submit" className="primary" disabled={disabled || !templates.length}>
+          Create task
+        </button>
+        <button type="button" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export function Board() {
   const { state, send, disabled } = useStore();
   const [view, setView] = usePref<View>("orchestration.view", "list");
@@ -36,6 +138,7 @@ export function Board() {
   const [provider, setProvider] = useState("");
   const [changed, setChanged] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const areas = useMemo(() => [...new Set(state.tasks.map((t) => M.currentSpec(t).content.area))].sort(), [state.tasks]);
 
@@ -58,7 +161,12 @@ export function Board() {
   return (
     <>
       <div className="row" style={{ justifyContent: "space-between", marginBottom: "0.75rem" }}>
-        <h1>Tasks</h1>
+        <span className="row">
+          <h1 style={{ margin: 0 }}>Tasks</h1>
+          <button className="small" disabled={disabled} onClick={() => setCreating(true)}>
+            New task
+          </button>
+        </span>
         {newCount > 0 && (
           <span className="row">
             <span className="muted">{newCount} decision(s) since your last visit.</span>
@@ -68,6 +176,7 @@ export function Board() {
           </span>
         )}
       </div>
+      {creating && <NewTaskForm onClose={() => setCreating(false)} />}
       <div className="toolbar" role="search">
         <div className="segmented" role="group" aria-label="View">
           <button aria-pressed={view === "list"} onClick={() => setView("list")}>

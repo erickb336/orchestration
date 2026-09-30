@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CLIENT_HEADER } from "../src/api";
 import * as M from "../src/domain/model";
 import type { State } from "../src/domain/types";
-import { FakeRuntime } from "./fakeRuntime";
+import { FakeAdapter, defaultFakeConfig, type FakeRuntimeConfig } from "./runtimes/fake";
 import { createHttpServer } from "./http";
 import { Scheduler } from "./scheduler";
 import { CommandFailure, STATE_FORMAT, Store } from "./store";
@@ -15,6 +15,19 @@ import { DatabaseSync } from "node:sqlite";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const j = (r: Response) => r.json() as Promise<any>;
+/** Fake adapters for both providers sharing one simulation config, plus aggregate views for assertions. */
+function fakes(cfg: Partial<FakeRuntimeConfig> = {}) {
+  const config = { ...defaultFakeConfig(), ...cfg };
+  const claude = new FakeAdapter("claude", config);
+  const codex = new FakeAdapter("codex", config);
+  const runtime = {
+    size: () => claude.size() + codex.size(),
+    ids: () => [...claude.ids(), ...codex.ids()],
+    status: (id: string) => (claude.has(id) ? claude.status(id) : codex.status(id)),
+  };
+  return { adapters: { claude, codex }, runtime, config };
+}
+
 const T0 = Date.parse("2026-09-29T12:00:00Z");
 const iso = (ms: number) => new Date(ms).toISOString();
 
@@ -121,9 +134,9 @@ describe("store", () => {
 });
 
 describe("scheduler with fake runtime", () => {
-  const make = (store: Store, cfg: Partial<ConstructorParameters<typeof FakeRuntime>[0]> = {}) => {
-    const runtime = new FakeRuntime({ ackDelayMs: 2000, ...cfg });
-    return { runtime, scheduler: new Scheduler(store, runtime, { leaseMs: 5000, ackTimeoutMs: 6000 }) };
+  const make = (store: Store, cfg: Partial<FakeRuntimeConfig> = {}) => {
+    const f = fakes({ ackDelayMs: 2000, ...cfg });
+    return { runtime: f.runtime, scheduler: new Scheduler(store, f.adapters, { leaseMs: 5000, ackTimeoutMs: 6000 }) };
   };
 
   it("only the lease holder dispatches; a second instance observes", () => {
@@ -235,14 +248,14 @@ describe("http", () => {
 
   beforeEach(async () => {
     const store = open();
-    const runtime = new FakeRuntime();
-    const scheduler = new Scheduler(store, runtime);
-    const server = createHttpServer({ store, scheduler, runtime, startedAt: iso(T0), allowedHosts: [] });
+    const { adapters, config: fakeConfig } = fakes();
+    const scheduler = new Scheduler(store, adapters);
+    const server = createHttpServer({ store, scheduler, fakeConfig, startedAt: iso(T0), allowedHosts: [] });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const port = (server.address() as AddressInfo).port;
     // Re-create with the real port in the allowlist.
     server.close();
-    const allowed = createHttpServer({ store, scheduler, runtime, startedAt: iso(T0), allowedHosts: [`127.0.0.1:${port}`] });
+    const allowed = createHttpServer({ store, scheduler, fakeConfig, startedAt: iso(T0), allowedHosts: [`127.0.0.1:${port}`] });
     await new Promise<void>((r) => allowed.listen(port, "127.0.0.1", r));
     base = `http://127.0.0.1:${port}`;
     close = () => {
@@ -305,8 +318,8 @@ describe("http", () => {
 
 describe("review regressions (ORC-003)", () => {
   const make = (store: Store) => {
-    const runtime = new FakeRuntime({ ackDelayMs: 2000 });
-    return { runtime, scheduler: new Scheduler(store, runtime, { leaseMs: 5000, ackTimeoutMs: 6000 }) };
+    const f = fakes({ ackDelayMs: 2000 });
+    return { runtime: f.runtime, scheduler: new Scheduler(store, f.adapters, { leaseMs: 5000, ackTimeoutMs: 6000 }) };
   };
 
   it("H1: a reset from another instance never lets old processes report into new runs", () => {
@@ -381,13 +394,13 @@ describe("http review regressions (ORC-003)", () => {
     writeFileSync(join(staticDir, "secret.js"), "x");
     chmodSync(join(staticDir, "secret.js"), 0o000);
     const store = open();
-    const runtime = new FakeRuntime();
-    const scheduler = new Scheduler(store, runtime);
-    const probe = createHttpServer({ store, scheduler, runtime, startedAt: iso(T0), allowedHosts: [], staticDir });
+    const { adapters, config: fakeConfig } = fakes();
+    const scheduler = new Scheduler(store, adapters);
+    const probe = createHttpServer({ store, scheduler, fakeConfig, startedAt: iso(T0), allowedHosts: [], staticDir });
     await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
     const port = (probe.address() as AddressInfo).port;
     probe.close();
-    const server = createHttpServer({ store, scheduler, runtime, startedAt: iso(T0), allowedHosts: [`127.0.0.1:${port}`], staticDir });
+    const server = createHttpServer({ store, scheduler, fakeConfig, startedAt: iso(T0), allowedHosts: [`127.0.0.1:${port}`], staticDir });
     await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
     const base = `http://127.0.0.1:${port}`;
     try {

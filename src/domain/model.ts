@@ -9,6 +9,9 @@ import {
   type Actor,
   type Artifact,
   type Attempt,
+  type CatalogModel,
+  type RunLimits,
+  type WorkerEnvironment,
   type ConsumedInput,
   type EventKind,
   type ModelSelection,
@@ -23,6 +26,7 @@ import {
   type WorkflowTemplate,
   ControlError,
   REVIEW_ROLES,
+  autoModelDefaults,
   StaleWriteError,
 } from "./types";
 
@@ -135,7 +139,7 @@ export function resolveStep(s: State, t: Task, st: Step): Resolution {
       ok: true,
       selection: { provider: selection.provider, model: catalog[0].id },
       source,
-      reason: `Auto: lead chose ${catalog[0].id}, first model on the enabled ${providerLabel(selection.provider)} allowlist`,
+      reason: `Auto: ${catalog[0].id}, the first model in the ${providerLabel(selection.provider)} catalog`,
     };
   }
   if (!catalog.some((m) => m.id === selection.model)) {
@@ -589,7 +593,16 @@ export function leadPromoteProposals(state: State, now: string): State {
   return s;
 }
 
-export function dispatchEligible(state: State, now: string): State {
+export interface DispatchOptions {
+  /** Providers that cannot run work right now, with an actionable reason (observed health). */
+  unavailable?: Partial<Record<ProviderId, string>>;
+  /** Providers whose status is not known yet: their steps wait without being blocked. */
+  deferred?: ProviderId[];
+  /** Where an attempt's workspace will live (recorded in the immutable run snapshot). */
+  workspaceFor?: (taskId: string, stepId: string, attemptId: string) => string;
+}
+
+export function dispatchEligible(state: State, now: string, opts: DispatchOptions = {}): State {
   const s = draft(state);
   if (s.project.hold) return s;
   const vision = currentVision(s);
@@ -624,14 +637,19 @@ export function dispatchEligible(state: State, now: string): State {
         }
       }
       const r = resolveStep(s, t, st);
-      if (!r.ok) {
+      if (r.ok && opts.deferred?.includes(r.selection.provider)) continue;
+      const down = r.ok ? opts.unavailable?.[r.selection.provider] : undefined;
+      if (!r.ok || down) {
+        // Never substitute another provider: block with the reason and let the user act.
+        const reason = r.ok ? `${providerLabel(r.selection.provider)} is not available: ${down}` : r.reason;
         st.state = "blocked";
-        st.blockedReason = r.reason;
-        event(s, now, "system", "blocked", `${st.id} blocked: ${r.reason}`, t.id);
+        st.blockedReason = reason;
+        event(s, now, "system", "blocked", `${st.id} blocked: ${reason}`, t.id);
         continue;
       }
+      const attemptId = nextId(s, "run");
       const a: Attempt = {
-        id: nextId(s, "run"),
+        id: attemptId,
         taskId: t.id,
         stepId: st.id,
         snapshot: {
@@ -642,8 +660,10 @@ export function dispatchEligible(state: State, now: string): State {
           specRev: spec.rev,
           stepRev: st.revision,
           visionRev: vision.rev,
-          workspace: `${s.project.repoPath}/.orchestration/worktrees/${t.id}-${st.id}`,
+          workspace: opts.workspaceFor ? opts.workspaceFor(t.id, st.id, attemptId) : `${s.project.repoPath}/.orchestration/worktrees/${t.id}-${st.id}`,
           pipelineRev: t.pipelineRev,
+          environment: s.project.workerEnvironment[r.selection.provider],
+          connections: [...s.project.workerConnections[r.selection.provider]],
           purpose: st.purpose,
           inputs: consumedInputs(s, t, st),
         },
@@ -678,7 +698,7 @@ export function acknowledgeStop(state: State, attemptId: string, now: string): S
   const st = findStep(t, a.stepId);
   a.outcome = "stopped";
   a.endedAt = now;
-  a.artifacts.push(`checkpoint: partial changes at ${a.progress}% (simulated)`);
+  a.artifacts.push(`checkpoint: partial work left in ${a.snapshot.workspace}`);
   settleStoppedStep(s, t, st);
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
@@ -700,11 +720,59 @@ export function reportRunLost(state: State, attemptId: string, reason: string, n
   a.outcome = wasStopping ? "stopped" : "lost";
   a.endedAt = now;
   a.note = `${reason}; no result was produced or integrated`;
-  a.artifacts.push(`checkpoint: partial work at ${a.progress}% left in ${a.snapshot.workspace} (simulated)`);
+  a.artifacts.push(`checkpoint: partial work left in ${a.snapshot.workspace}`);
   settleStoppedStep(s, t, findStep(t, a.stepId));
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
   event(s, now, "system", "runtime", `${a.id} ${wasStopping ? "confirmed stopped" : "lost"} during reconciliation: ${reason}`, t.id);
+  return s;
+}
+
+/** The runtime accepted the run. */
+export function reportRunStarted(state: State, attemptId: string, info: { sessionId?: string; actualModel?: string }): State {
+  const s = draft(state);
+  const a = s.attempts.find((x) => x.id === attemptId);
+  if (!a || !isActive(a)) return s;
+  if (info.sessionId) a.sessionId = info.sessionId;
+  if (info.actualModel) a.actualModel = info.actualModel;
+  return s;
+}
+
+/** A meaningful milestone from the runtime. Updates the run's activity; not written to the event log. */
+export function reportActivity(state: State, attemptId: string, note: string): State {
+  const s = draft(state);
+  const a = s.attempts.find((x) => x.id === attemptId);
+  if (a && isActive(a)) a.activity = note.slice(0, 200);
+  return s;
+}
+
+/**
+ * The run ended without a usable result (provider error, authentication, limits, crash). Nothing is
+ * integrated. The step is blocked with the reason so a person decides whether to retry, change the
+ * model, or edit the work; the scheduler never retries or switches providers on its own.
+ */
+export function reportRunFailed(state: State, attemptId: string, message: string, now: string, run: RunReport = {}): State {
+  const s = draft(state);
+  const a = s.attempts.find((x) => x.id === attemptId);
+  if (!a || !isActive(a)) return s;
+  const t = getTask(s, a.taskId);
+  const st = findStep(t, a.stepId);
+  const wasStopping = a.outcome === "stopping";
+  a.outcome = "failed";
+  a.endedAt = now;
+  a.note = message;
+  if (run.usage) a.usage = run.usage;
+  if (run.actualModel) a.actualModel = run.actualModel;
+  if (st) {
+    if (wasStopping) settleStoppedStep(s, t, st);
+    else {
+      st.state = "blocked";
+      st.blockedReason = `Last run failed: ${message}`;
+    }
+  }
+  if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
+  touch(t, now);
+  event(s, now, "runtime", wasStopping ? "runtime" : "blocked", `${a.id} failed: ${message}`, t.id);
   return s;
 }
 
@@ -733,9 +801,16 @@ export interface OutputReport {
   name: string;
   summary: string;
   openFindings?: number;
+  /** Durable reference, e.g. "<sha> on orchestration/run-12". */
+  ref?: string;
 }
 
-export function reportCompletion(state: State, attemptId: string, artifacts: string[], now: string, outputs: OutputReport[] = []): State {
+export interface RunReport {
+  usage?: Attempt["usage"];
+  actualModel?: string;
+}
+
+export function reportCompletion(state: State, attemptId: string, artifacts: string[], now: string, outputs: OutputReport[] = [], run: RunReport = {}): State {
   const s = draft(state);
   const a = s.attempts.find((x) => x.id === attemptId);
   if (!a || !isActive(a)) return s;
@@ -744,6 +819,8 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
   a.endedAt = now;
   a.progress = 100;
   a.artifacts.push(...artifacts);
+  if (run.usage) a.usage = run.usage;
+  if (run.actualModel) a.actualModel = run.actualModel;
 
   const stale = !st || a.snapshot.specRev !== currentSpec(t).rev || a.snapshot.stepRev !== st.revision;
   if (stale) {
@@ -787,6 +864,7 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
         version,
         summary: rep.summary,
         createdAt: now,
+        ...(rep.ref ? { ref: rep.ref } : {}),
         ...(def.kind === "review-findings" ? { openFindings: rep.openFindings ?? 0 } : {}),
       };
       s.artifacts.push(art);
@@ -946,4 +1024,145 @@ export function deleteTemplate(state: State, templateId: string, now: string): S
   s.project.templates = s.project.templates.filter((x) => x.id !== templateId);
   event(s, now, "user", "config", `Template "${t.name}" deleted; existing task pipelines are unchanged`);
   return s;
+}
+
+// ---------- real projects ----------
+
+export function setRunLimits(state: State, limits: RunLimits, now: string): State {
+  const s = draft(state);
+  const ok = (n: number, lo: number, hi: number) => Number.isFinite(n) && n >= lo && n <= hi;
+  if (!ok(limits.maxTurns, 1, 500) || !ok(limits.timeoutMinutes, 1, 240) || !ok(limits.maxBudgetUsd, 0.01, 1000)) {
+    throw new ControlError("Run limits out of range: turns 1–500, time 1–240 minutes, budget $0.01–$1000.");
+  }
+  s.project.runLimits = { maxTurns: Math.round(limits.maxTurns), timeoutMinutes: limits.timeoutMinutes, maxBudgetUsd: limits.maxBudgetUsd };
+  event(s, now, "user", "config", `Run limits: ${s.project.runLimits.maxTurns} turns, ${limits.timeoutMinutes} min, $${limits.maxBudgetUsd} (Claude)`);
+  return s;
+}
+
+export function setWorkerEnvironment(state: State, provider: ProviderId, environment: WorkerEnvironment, now: string): State {
+  const s = draft(state);
+  s.project.workerEnvironment[provider] = environment;
+  event(
+    s,
+    now,
+    "user",
+    "config",
+    `${providerLabel(provider)} workers: ${environment === "local" ? "use the local setup (settings, MCP servers, plugins)" : "isolated from the local setup"}; applies to runs started from now on`,
+  );
+  return s;
+}
+
+export function setWorkerConnections(state: State, provider: ProviderId, names: string[], now: string): State {
+  const clean = [...new Set(names.map((n) => n.trim()).filter(Boolean))].sort();
+  if (clean.some((n) => n.length > 100)) throw new ControlError("Connection names are too long.");
+  const s = draft(state);
+  s.project.workerConnections[provider] = clean;
+  event(s, now, "user", "config", `${providerLabel(provider)} isolated workers may use: ${clean.length ? clean.join(", ") : "no connections"}; applies to runs started from now on`);
+  return s;
+}
+
+/** Replace the provider's model catalog with the list the connected runtime reported. */
+export function setCatalog(state: State, provider: ProviderId, models: CatalogModel[], now: string): State {
+  const s = draft(state);
+  if (JSON.stringify(s.project.catalog[provider]) === JSON.stringify(models)) return state;
+  s.project.catalog[provider] = models;
+  event(s, now, "system", "config", `${providerLabel(provider)} model catalog updated from the runtime (${models.length} models)`);
+  return s;
+}
+
+/**
+ * Start a real project: empty board, the given repository and vision. Refused while any run is
+ * active, so no live work is orphaned by the replacement.
+ */
+export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string }, now: string): State {
+  if (activeAttempts(state).length) throw new ControlError("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
+  if (!init.name.trim() || !init.repoPath.trim() || !init.vision.trim()) throw new ControlError("Name, repository path, and vision are required.");
+  const s = draft(state);
+  s.project.id = `p-${Date.parse(now).toString(36)}-${s.seq.toString(36)}`;
+  s.project.sample = false;
+  s.project.name = init.name.trim();
+  s.project.repoPath = init.repoPath.trim();
+  // A new project starts from provider-neutral defaults, never another project's model choices.
+  Object.assign(s.project, autoModelDefaults());
+  s.project.visions = [{ rev: 1, at: now, author: "user", text: init.vision.trim(), focus: init.focus.trim(), reason: "Project created" }];
+  s.project.hold = false;
+  s.project.lastVisitAt = now;
+  s.tasks = [];
+  s.attempts = [];
+  s.artifacts = [];
+  s.events = [];
+  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}`);
+  return s;
+}
+
+export interface NewTask {
+  title: string;
+  area: string;
+  outcome: string;
+  benefit: string;
+  whyNow: string;
+  acceptance: string[];
+  approach: string;
+  priority: number;
+  holdBeforeStart: boolean;
+  steps: StepDef[];
+  templateName: string;
+}
+
+/**
+ * A user-authored task. Its spec records one approach decided by the user and says so; the lead
+ * has not proposed alternatives (the spec allows a single option when that is stated).
+ */
+export function createTask(state: State, t: NewTask, now: string): { state: State; newId: string } {
+  if (!t.title.trim() || !t.outcome.trim() || !t.approach.trim()) throw new ControlError("Title, outcome, and approach are required.");
+  const errors = validatePipeline(t.steps).filter((i) => i.severity === "error");
+  if (errors.length) throw new ControlError(`Pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
+  const s = draft(state);
+  let n = s.tasks.length + 1;
+  const ids = new Set(s.tasks.map((x) => x.id));
+  while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
+  const id = `T-${String(n).padStart(3, "0")}`;
+  const content: SpecContent = {
+    title: t.title.trim(),
+    area: t.area.trim() || "General",
+    whyNow: t.whyNow.trim(),
+    outcome: t.outcome.trim(),
+    benefit: t.benefit.trim(),
+    successCriteria: [],
+    scopeIncluded: [],
+    scopeExcluded: [],
+    options: [
+      { id: "A", name: "As described", approach: t.approach.trim(), benefit: t.benefit.trim(), effort: "Unknown", risks: "Not assessed; user-authored", reversibility: "Changes stay on an orchestration branch until merged" },
+      { id: "B", name: "Defer", approach: "Do not do this now", benefit: "No cost", effort: "None", risks: "The outcome is not delivered", reversibility: "N/A" },
+    ],
+    recommendedOptionId: "A",
+    selectedOptionId: "A",
+    decidedBy: "user",
+    rationale: "User-authored task; the lead has not proposed alternatives.",
+    uncertainty: "",
+    overrideReason: "",
+    acceptance: t.acceptance.map((x) => x.trim()).filter(Boolean),
+    validationPlan: "",
+    rollback: "Discard the orchestration branch.",
+    effort: "small",
+  };
+  const defs = structuredClone(t.steps);
+  s.tasks.push({
+    id,
+    priority: Math.max(1, Math.round(t.priority) || 1),
+    lifecycle: "proposed",
+    hold: false,
+    holdBeforeStart: t.holdBeforeStart,
+    specs: [{ rev: 1, at: now, author: "user", reason: "Task created by user", content }],
+    steps: instantiate(defs),
+    roleOverrides: {},
+    dependsOn: [],
+    createdAt: now,
+    updatedAt: now,
+    decisionAt: now,
+    pipelineRev: 1,
+    pipelineHistory: [{ rev: 1, at: now, author: "user", reason: `Created from the ${t.templateName} template`, steps: defs.map(toDef) }],
+  });
+  event(s, now, "user", "spec", `Created ${id}: ${content.title}`, id);
+  return { state: s, newId: id };
 }

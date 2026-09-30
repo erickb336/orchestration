@@ -229,6 +229,8 @@ export function useServiceStore() {
   );
 
   const setSim = useCallback((patch: { auto?: boolean; ackMode?: AckMode }) => postSim("/api/sim", patch), [postSim]);
+  /** Re-check provider credentials and binaries now (never starts a model run). */
+  const refreshHealth = useCallback(() => postSim("/api/health/refresh", {}), [postSim]);
   const step = useCallback(() => postSim("/api/sim/step", {}), [postSim]);
   const reset = useCallback(async () => {
     const ok = await postSim("/api/sim/reset", {});
@@ -248,6 +250,7 @@ export function useServiceStore() {
     retry,
     send,
     setSim,
+    refreshHealth,
     step,
     reset,
     notice,

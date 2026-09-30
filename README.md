@@ -13,11 +13,13 @@ SimpleApps is the first managed project. This repository is separate development
 | 1: Interface prototype ([ORC-001](docs/tasks/ORC-001.md)) | Done |
 | Editable pipelines, artifacts, templates ([ORC-002](docs/tasks/ORC-002.md)) | Done |
 | 2: Durable task service ([ORC-003](docs/tasks/ORC-003.md)) | Done |
-| 3: Claude and Codex runtime adapters | Not started |
+| 3: Claude and Codex runtime adapters ([ORC-004](docs/tasks/ORC-004.md)) | Built and reviewed; real-run verification needs your API key |
 | 4: Autonomous team loop | Not started |
 | 5: Reliability and usability | Not started |
 
-The service stores state in SQLite and drives a **fake runtime**. No agent runs yet, and the UI labels all execution as simulated. Claude and Codex adapters, concurrent mixed-provider execution, and cross-provider pause/review are required for the first usable runtime release and are not implemented.
+The service stores state in SQLite. By default it drives a **fake runtime**, and the UI labels all execution as simulated. With `ORCHESTRATION_RUNTIME=real` it runs real Claude (Agent SDK) and Codex (app-server) workers in isolated git worktrees.
+
+The adapters are covered by tests against scripted runtimes. A run against the real providers has not been recorded yet: see "Real-run test" below. Until then, treat real mode as unverified.
 
 ## Run it
 
@@ -38,6 +40,43 @@ Environment variables:
 The service binds to loopback only. It rejects requests with foreign `Host` headers, cross-origin browser requests, and state-changing requests without its client header.
 
 Checks: `npm run typecheck`, `npm test`, `npm run build`.
+
+## Running real agents
+
+```bash
+ORCHESTRATION_RUNTIME=real npm start
+```
+
+In real mode:
+
+- **Providers:** workers need credentials, set in the service's environment. Settings shows each provider's status, and checking never starts a model run.
+  - **Claude:** set `ANTHROPIC_API_KEY`, or Bedrock/Vertex/Foundry settings. A Claude.ai subscription login cannot be used: Anthropic does not permit third-party Agent SDK apps to use it.
+  - **Codex:** uses your local Codex sign-in (`npx codex login`, a ChatGPT plan) or `OPENAI_API_KEY`/`CODEX_API_KEY`. Whether the Codex plan terms cover third-party local orchestrators is not stated explicitly; use an API key if in doubt.
+- **Project:** a new real-mode database starts empty. In Settings, point it at a git repository with at least one commit, then create tasks from the Tasks page.
+- **Workspaces:** each run gets its own git worktree under `~/.orchestration/worktrees`, never inside your repository's working tree.
+  - Coders write on an `orchestration/<task>/<step>/<run>` branch, and the service commits their changes.
+  - Every other role gets a read-only checkout.
+  - Nothing is merged into your branches.
+- **Worker environment** is set per provider in Settings:
+  - **Isolated** (default): workers see none of your settings, plugins, or web tools, and use only the MCP connections you tick (for example Cloudflare, Vercel, or AWS servers from your own Claude or Codex config).
+  - **Use my local setup:** workers use your Claude or Codex configuration as-is, including all its MCP servers and plugins.
+  - In both environments:
+    - native sub-agents stay off;
+    - Claude workers' file tools are restricted to their worktree, with no shell;
+    - Codex workers run in Codex's workspace-write sandbox with command network access off.
+  - MCP connections run outside that sandbox, so their tools still work.
+- **Limits:** Settings → Run limits caps turns, wall-clock time, and Claude spend per run. Runs cost provider usage.
+
+### Real-run test
+
+`node scripts/real-run-test.mjs` checks Milestone 3 end to end. It creates a throwaway repository and database, then:
+
+1. Runs a Codex coder and a Claude coder concurrently.
+2. Pauses and resumes each.
+3. Pauses and resumes the project.
+4. Lets both finish.
+
+It writes an evidence file to `evidence/`, and its limits are low (12 turns, 5 minutes, $0.50 per Claude run). To run the same scenario at no cost, use `node scripts/real-run-test.mjs --fake`.
 
 ## Layout
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
 import { toDef } from "../domain/pipeline";
@@ -72,6 +72,7 @@ export function TaskDetail({ id }: { id: string }) {
 function Controls({ state, task, editing, onEdit }: { state: State; task: Task; editing: boolean; onEdit: () => void }) {
   const { send, disabled } = useStore();
   const [prio, setPrio] = useState(String(task.priority));
+  useEffect(() => setPrio(String(task.priority)), [task.priority]);
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
   if (!open) {
     return (
@@ -133,7 +134,7 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
 }
 
 function StatusBanners({ state, task }: { state: State; task: Task }) {
-  const { send, disabled } = useStore();
+  const { send, disabled, service } = useStore();
   const active = M.activeAttempts(state, task.id);
   const stopping = active.filter((a) => a.outcome === "stopping");
   const current = M.currentSpec(task).rev;
@@ -167,7 +168,7 @@ function StatusBanners({ state, task }: { state: State; task: Task }) {
   else if (executingRevs.length && !stopping.length)
     out.push(
       <div className="banner neutral" key="exec">
-        Executing spec r{current} (simulated).
+        Executing spec r{current}{service.runtime === "real" ? "" : " (simulated)"}.
       </div>,
     );
   if (blocked)
@@ -371,7 +372,7 @@ function DetailsCard({ task }: { task: Task }) {
 }
 
 function StepsCard({ state, task }: { state: State; task: Task }) {
-  const { send, disabled } = useStore();
+  const { send, disabled, service } = useStore();
   const [editing, setEditing] = useState<number | null>(null); // pipeline rev the draft started from
   const [saving, setSaving] = useState(false);
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
@@ -441,7 +442,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
       </div>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
         Each step receives the vision, the current spec, and only the upstream artifacts it reads. Models resolve step pin → task role override → project role default → project default. Completed steps show the model that
-        actually ran. Model catalog is sample data.
+        actually ran. {service.runtime === "real" ? "Models come from each provider's catalog." : "Model catalog is sample data."}
       </p>
       <div className="table-wrap">
         <table className="steps-table">
@@ -677,13 +678,15 @@ function StepIO({ state, task, stepId, run }: { state: State; task: Task; stepId
 }
 
 function ArtifactsCard({ state, task }: { state: State; task: Task }) {
+  const { service } = useStore();
   const arts = state.artifacts.filter((a) => a.taskId === task.id);
   const consumers = (id: string) => state.attempts.filter((a) => a.taskId === task.id && a.snapshot.inputs.some((i) => i.artifactId === id)).map((a) => a.id);
   return (
     <section className="card" aria-labelledby="arts-h">
       <h2 id="arts-h">Artifacts</h2>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        Accepted step outputs, versioned and immutable. Contents are simulated.
+        Accepted step outputs, versioned and immutable.{" "}
+        {service.runtime === "real" ? "Code changes are commits on orchestration/* branches; nothing is merged for you." : "Contents are simulated."}
       </p>
       {!arts.length && <p className="muted">None yet.</p>}
       <ul className="events">
@@ -696,7 +699,12 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                 {a.stepId}.{a.name} v{a.version}
               </span>
               <span>
-                <span className="chip">{a.kind}</span> {a.summary}
+                <span className="chip">{a.kind}</span> <span style={{ whiteSpace: "pre-wrap" }}>{a.summary}</span>
+                {a.ref && (
+                  <div className="mono" style={{ fontSize: "0.78rem" }}>
+                    {a.ref}
+                  </div>
+                )}
                 {a.openFindings !== undefined && <span className="chip strong" style={{ marginLeft: "0.3rem" }}>{a.openFindings} open</span>}
                 <div className="muted" style={{ fontSize: "0.8rem" }}>
                   from {a.attemptId}
@@ -722,9 +730,14 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
         <details key={a.id} className="stack" style={{ borderBottom: "1px solid var(--border)", padding: "0.4rem 0" }}>
           <summary>
             <span className="mono">{a.id}</span> · {a.stepId} · {selectionText(a.snapshot)} · <strong>{a.outcome}</strong>
-            {(a.outcome === "running" || a.outcome === "stopping") && (
+            {(a.outcome === "running" || a.outcome === "stopping") && a.progress > 0 && (
               <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`} style={{ marginTop: "0.3rem" }}>
                 <div style={{ width: `${a.progress}%` }} />
+              </div>
+            )}
+            {(a.outcome === "running" || a.outcome === "stopping") && a.activity && (
+              <div className="muted" style={{ fontSize: "0.8rem" }}>
+                {a.activity}
               </div>
             )}
           </summary>
@@ -744,8 +757,44 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
             </dd>
             <dt>Routing</dt>
             <dd>{a.snapshot.routingReason}</dd>
+            {a.actualModel && a.actualModel !== a.snapshot.model && (
+              <>
+                <dt>Model reported</dt>
+                <dd className="mono">{a.actualModel}</dd>
+              </>
+            )}
+            {a.sessionId && (
+              <>
+                <dt>Provider session</dt>
+                <dd className="mono">{a.sessionId}</dd>
+              </>
+            )}
+            {a.usage && (
+              <>
+                <dt>Usage</dt>
+                <dd>
+                  {[
+                    a.usage.inputTokens !== undefined && `${a.usage.inputTokens.toLocaleString()} input tokens`,
+                    a.usage.outputTokens !== undefined && `${a.usage.outputTokens.toLocaleString()} output tokens`,
+                    a.usage.costUsd !== undefined && `$${a.usage.costUsd.toFixed(4)} (provider estimate)`,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "not reported"}
+                </dd>
+              </>
+            )}
             <dt>Workspace</dt>
             <dd className="mono">{a.snapshot.workspace}</dd>
+            {a.snapshot.environment && (
+              <>
+                <dt>Environment</dt>
+                <dd>
+                  {a.snapshot.environment === "local"
+                    ? "Local setup (user settings, plugins, all MCP servers)"
+                    : `Isolated${a.snapshot.connections?.length ? `; connections: ${a.snapshot.connections.join(", ")}` : "; no connections"}`}
+                </dd>
+              </>
+            )}
             <dt>Started</dt>
             <dd>{fmtTime(a.startedAt)}</dd>
             {a.endedAt && (

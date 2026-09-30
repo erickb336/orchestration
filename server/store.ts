@@ -9,9 +9,33 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { buildSeed } from "../src/domain/seed";
-import { ControlError, StaleWriteError, type State } from "../src/domain/types";
+import { ControlError, DEFAULT_RUN_LIMITS, StaleWriteError, type State } from "../src/domain/types";
 
-export const STATE_FORMAT = 3;
+export const STATE_FORMAT = 6;
+
+/** In-place upgrades of the state document, keyed by the format they upgrade from. */
+const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
+  3: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.runLimits ??= { ...DEFAULT_RUN_LIMITS };
+    doc.version = 4;
+    return doc;
+  },
+  4: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.workerEnvironment ??= { claude: "isolated", codex: "isolated" };
+    project.workerConnections ??= { claude: [], codex: [] };
+    doc.version = 5;
+    return doc;
+  },
+  5: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.sample ??= project.name === "Example Notes (sample)" || project.repoPath === "~/code/example-notes";
+    project.id ??= project.sample ? "sample" : `p-${Date.now().toString(36)}`;
+    doc.version = 6;
+    return doc;
+  },
+};
 const SCHEMA_VERSION = 1;
 
 export type FailureKind = "stale" | "control" | "invalid" | "internal";
@@ -102,6 +126,20 @@ export class Store {
       // Read inside the transaction so two instances starting together cannot both seed.
       const row = this.db.prepare("SELECT format, version, json FROM state WHERE id = 1").get() as { format: number; version: number; json: string } | undefined;
       if (row && row.format === STATE_FORMAT) return;
+      if (row && MIGRATIONS[row.format]) {
+        // Upgrade in place, one format at a time, keeping a copy of the original.
+        this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(`backup_format_${row.format}_v${row.version}`, row.json);
+        let format = row.format;
+        let doc = JSON.parse(row.json) as Record<string, unknown>;
+        while (format < STATE_FORMAT && MIGRATIONS[format]) {
+          doc = MIGRATIONS[format](doc);
+          format += 1;
+        }
+        if (format === STATE_FORMAT) {
+          this.db.prepare("UPDATE state SET version = ?, format = ?, json = ?, updated_at = ? WHERE id = 1").run(row.version + 1, STATE_FORMAT, JSON.stringify(doc), new Date().toISOString());
+          return;
+        }
+      }
       if (row && row.format > STATE_FORMAT) {
         throw new Error(
           `The database at ${this.path} uses state format ${row.format}, which is newer than this version of Orchestration supports (${STATE_FORMAT}). ` +

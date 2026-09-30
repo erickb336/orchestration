@@ -153,6 +153,7 @@ label { display: block; }
 .sim-banner button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
 .sim-banner select option { color: #222; }
 .sim-banner .spacer { flex: 1; }
+.sim-banner.live { background: var(--s-blocked); color: #fff; }
 
 header.top {
   display: flex;

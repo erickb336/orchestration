@@ -151,7 +151,7 @@ export function Overview() {
           <section className="card" aria-labelledby="lead-h">
             <h2 id="lead-h">Lead</h2>
             <p>
-              {selectionText(state.project.leadSelection)} <span className="chip">simulated</span>
+              {selectionText(state.project.leadSelection)} <span className="chip">{service.runtime === "real" ? "rule-based scheduling until Milestone 4" : "simulated"}</span>
             </p>
             <div className="banner neutral" style={{ marginBottom: 0 }}>
               The lead conversation arrives with the runtime integrations (Milestone 3). In this prototype, direction is recorded through vision revisions and task edits.
@@ -161,7 +161,7 @@ export function Overview() {
           <section className="card" aria-labelledby="team-h">
             <h2 id="team-h">Team now</h2>
             <p className="muted" style={{ fontSize: "0.85rem" }}>
-              Worker slots: {active.length} of {state.project.workerLimit} in use. Runs are simulated.
+              Worker slots: {active.length} of {state.project.workerLimit} in use. {service.runtime === "real" ? "Runs are live Claude and Codex agents." : "Runs are simulated."}
             </p>
             {active.length === 0 && <p className="muted">No active runs.</p>}
             <table>
@@ -180,10 +180,14 @@ export function Overview() {
                       <td style={{ width: "40%" }}>
                         {a.outcome === "stopping" ? (
                           <span className="pill paused transition">Stopping</span>
-                        ) : (
+                        ) : a.progress > 0 ? (
                           <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`}>
                             <div style={{ width: `${a.progress}%` }} />
                           </div>
+                        ) : (
+                          <span className="muted" style={{ fontSize: "0.8rem" }}>
+                            {a.activity ?? "Starting…"}
+                          </span>
                         )}
                       </td>
                     </tr>
@@ -203,7 +207,13 @@ export function Overview() {
               <dt>Scheduler role</dt>
               <dd>{service.scheduler === "active" ? "Active — this instance holds the scheduler lease" : "Observer — another service instance holds the scheduler lease"}</dd>
               <dt>Runtime</dt>
-              <dd>Fake runtime (simulated; real adapters arrive in Milestone 3)</dd>
+              <dd>
+                {service.runtime === "real"
+                  ? `Real: ${Object.values(service.providers)
+                      .map((p) => p.label)
+                      .join(", ")}`
+                  : "Fake runtime (simulated). Start with ORCHESTRATION_RUNTIME=real to run Claude and Codex."}
+              </dd>
               <dt>Database</dt>
               <dd className="mono">{service.dbPath}</dd>
               <dt>Repository</dt>

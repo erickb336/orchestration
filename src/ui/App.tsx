@@ -127,6 +127,15 @@ function ProjectName() {
 function SimBanner() {
   const { service, setSim, step, reset, disabled } = useStore();
   const { sim } = service;
+  if (service.runtime === "real") {
+    return (
+      <div className="sim-banner live" role="note">
+        <strong>LIVE EXECUTION</strong>
+        <span>Claude and Codex agents run on this machine in isolated git worktrees and may incur usage costs. Results stay on orchestration/* branches until you merge them.</span>
+        {service.scheduler === "observer" && <span>(another service instance holds the scheduler)</span>}
+      </div>
+    );
+  }
   return (
     <div className="sim-banner" role="note">
       <strong>SIMULATED EXECUTION</strong>
@@ -180,10 +189,10 @@ function ConnectionBanner() {
 }
 
 function ProjectControl() {
-  const { state, send, disabled } = useStore();
+  const { state, send, disabled, service } = useStore();
   const stopping = M.activeAttempts(state).filter((a) => a.outcome === "stopping").length;
   const running = M.activeAttempts(state).filter((a) => a.outcome === "running").length;
-  const status = state.project.hold ? (stopping ? `Pausing — ${stopping} run(s) still stopping` : "Project paused") : `${running} simulated run(s) active`;
+  const status = state.project.hold ? (stopping ? `Pausing — ${stopping} run(s) still stopping` : "Project paused") : `${running} ${service.runtime === "real" ? "" : "simulated "}run(s) active`;
   return (
     <div className="right">
       <span className="muted" aria-live="polite">

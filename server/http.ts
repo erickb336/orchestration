@@ -7,14 +7,17 @@ import { createReadStream, existsSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
 import { CLIENT_HEADER, type AckMode, type CommandError, type ServiceInfo, type StatePayload } from "../src/api";
-import type { FakeRuntime } from "./fakeRuntime";
+import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
+import type { WorkspaceManager } from "./workspaces";
 import { CommandFailure, type Store } from "./store";
 
 export interface HttpOptions {
   store: Store;
   scheduler: Scheduler;
-  runtime: FakeRuntime;
+  /** Shared simulation settings of the fake adapters (fake mode only). */
+  fakeConfig?: FakeRuntimeConfig;
+  workspaces?: WorkspaceManager;
   startedAt: string;
   /** host:port values accepted in the Host header (the service's own address plus the dev UI). */
   allowedHosts: string[];
@@ -36,18 +39,42 @@ const TYPES: Record<string, string> = {
 };
 
 export function createHttpServer(opts: HttpOptions): Server {
-  const { store, scheduler, runtime } = opts;
+  const { store, scheduler, fakeConfig } = opts;
+  const real = !scheduler.isFake;
   const hosts = new Set(opts.allowedHosts.map((h) => h.toLowerCase()));
   const origins = new Set([...hosts].map((h) => `http://${h}`));
   const log = opts.log ?? (() => {});
 
-  const info = (): ServiceInfo => ({
-    startedAt: opts.startedAt,
-    scheduler: scheduler.active ? "active" : "observer",
-    runtime: "fake",
-    sim: { auto: scheduler.auto, ackMode: runtime.config.ackMode },
-    dbPath: store.path,
-  });
+  // Repository checks run git; cache them so every state push does not spawn processes.
+  let repoCache: { path: string; at: number; result: ReturnType<WorkspaceManager["check"]> } | undefined;
+  const repoCheckCached = (path: string) => {
+    if (!repoCache || repoCache.path !== path || Date.now() - repoCache.at > 5000) repoCache = { path, at: Date.now(), result: opts.workspaces!.check(path) };
+    return repoCache.result;
+  };
+
+  const info = (): ServiceInfo => {
+    const providers = {} as ServiceInfo["providers"];
+    for (const [p, a] of Object.entries(scheduler.adapters) as [keyof ServiceInfo["providers"], (typeof scheduler.adapters)[keyof typeof scheduler.adapters]][]) {
+      providers[p] = { label: a.label, capabilities: a.capabilities, health: scheduler.health[p], connections: scheduler.connections[p] };
+    }
+    const out: ServiceInfo = {
+      startedAt: opts.startedAt,
+      scheduler: scheduler.active ? "active" : "observer",
+      runtime: real ? "real" : "fake",
+      sim: { auto: scheduler.auto, ackMode: fakeConfig?.ackMode ?? "normal" },
+      dbPath: store.path,
+      providers,
+    };
+    if (real && opts.workspaces) {
+      const project = store.read().state.project;
+      if (project.sample) out.repo = { ok: false, reason: "This is the sample project; real runs are disabled for it. Start a new project below." };
+      else {
+        const c = repoCheckCached(project.repoPath);
+        out.repo = { ok: c.ok, reason: c.reason, branch: c.branch };
+      }
+    }
+    return out;
+  };
   const payload = (): StatePayload => ({ ...store.read(), service: info() });
 
   const send = (res: ServerResponse, status: number, body: unknown) => {
@@ -162,13 +189,19 @@ export function createHttpServer(opts: HttpOptions): Server {
 
       if (path === "/api/commands") {
         if (typeof body.name !== "string" || typeof body.idempotencyKey !== "string") return fail(res, 400, "invalid", "name and idempotencyKey are required");
+        if (real && body.name === "resetSampleData") return fail(res, 400, "control", "Sample data is only available with the fake runtime.");
         const r = store.command(body.name, body.args, body.idempotencyKey, new Date().toISOString());
         if (body.name === "resetSampleData") scheduler.resetRuntime();
         return send(res, 200, { version: r.version, result: r.result });
       }
+      if (path.startsWith("/api/sim") && (real || !fakeConfig)) return fail(res, 400, "control", "Simulation controls are only available with the fake runtime.");
+      if (path === "/api/health/refresh") {
+        await scheduler.refreshHealth();
+        return send(res, 200, { ok: true, service: info() });
+      }
       if (path === "/api/sim") {
         if (typeof body.auto === "boolean") scheduler.auto = body.auto;
-        if (body.ackMode === "normal" || body.ackMode === "never") runtime.config.ackMode = body.ackMode as AckMode;
+        if (body.ackMode === "normal" || body.ackMode === "never") fakeConfig!.ackMode = body.ackMode as AckMode;
         store.emit();
         return send(res, 200, { ok: true, service: info() });
       }

@@ -3,7 +3,7 @@
 
 import { instantiate, toDef } from "./pipeline";
 import { BUILT_IN_TEMPLATES, templateSteps } from "./templates";
-import type { Artifact, Attempt, ConsumedInput, SpecContent, SpecOption, State, Task } from "./types";
+import { DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
 
 type SampleOutput = { name: string; summary: string; openFindings?: number };
 
@@ -321,9 +321,11 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 3,
+    version: 6,
     seq: 1000,
     project: {
+      id: "sample",
+      sample: true,
       name: "Example Notes (sample)",
       repoPath: "~/code/example-notes",
       visions: [
@@ -357,6 +359,9 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
       },
       leadSelection: { provider: "claude", model: "claude-sample-large" },
       workerLimit: 3,
+      runLimits: { ...DEFAULT_RUN_LIMITS },
+      workerEnvironment: { claude: "isolated", codex: "isolated" },
+      workerConnections: { claude: [], codex: [] },
       hold: false,
       lastVisitAt: at(60),
       templates: structuredClone(BUILT_IN_TEMPLATES),
@@ -377,5 +382,33 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
         : []),
       { id: "ev-7", at: at(8), actor: "lead", kind: "spec", taskId: "EX-003", message: "Spec r1: proposed investigation" },
     ],
+  };
+}
+
+/**
+ * A new, empty project for real runs: no sample tasks (sample runs must never reach a real agent)
+ * and no repository until the user configures one.
+ */
+export function buildEmptyProject(nowMs: number = Date.now()): State {
+  const sample = buildSeed(nowMs, { inFlightRuns: false });
+  const now = new Date(nowMs).toISOString();
+  return {
+    ...sample,
+    project: {
+      ...sample.project,
+      id: `p-${nowMs.toString(36)}`,
+      sample: false,
+      name: "New project",
+      repoPath: "",
+      // Real catalogs replace the sample ones at startup; "auto" resolves to each provider's first
+      // listed model, so no sample model id survives into a real project.
+      ...autoModelDefaults(),
+      visions: [{ rev: 1, at: now, author: "system", text: "", focus: "", reason: "Empty project; set it up in Settings" }],
+      lastVisitAt: now,
+    },
+    tasks: [],
+    attempts: [],
+    artifacts: [],
+    events: [{ id: "ev-1", at: now, actor: "system", kind: "vision", message: "Empty project created. Configure the repository and vision in Settings." }],
   };
 }

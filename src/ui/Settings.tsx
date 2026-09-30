@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import * as M from "../domain/model";
 import { PROVIDERS, ROLES, type WorkflowTemplate } from "../domain/types";
 import { BUILT_IN_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
 import { PipelineEditor } from "./PipelineEditor";
-import { PROTOTYPE_CAPABILITIES, type CapabilityMap } from "../runtime/adapter";
+import type { CapabilityMap } from "../runtime/adapter";
 import { useStore } from "./store";
 import { ModelPicker, ROLE_LABEL } from "./common";
 
@@ -18,10 +18,13 @@ const CAP_LABEL: Record<keyof CapabilityMap, string> = {
 };
 
 export function Settings() {
-  const { state, send, disabled } = useStore();
+  const { state, service, send, disabled } = useStore();
   const p = state.project;
   const [repo, setRepo] = useState(p.repoPath);
   const [limit, setLimit] = useState(String(p.workerLimit));
+  // Follow the live value when it changes elsewhere (another tab, a new project, the service).
+  useEffect(() => setRepo(p.repoPath), [p.repoPath]);
+  useEffect(() => setLimit(String(p.workerLimit)), [p.workerLimit]);
   return (
     <>
       <h1>Settings</h1>
@@ -85,47 +88,220 @@ export function Settings() {
         </div>
 
         <div>
-          <section className="card" aria-labelledby="prov-h">
-            <h2 id="prov-h">Providers</h2>
-            <p className="muted" style={{ fontSize: "0.85rem" }}>
-              No provider is connected in this prototype. Capabilities are what the simulation models, not verified runtime behavior. Model lists are a sample catalog.
-            </p>
-            {PROVIDERS.map((prov) => {
-              const info = PROTOTYPE_CAPABILITIES[prov];
-              const enabled = p.enabledProviders.includes(prov);
-              return (
-                <div key={prov} style={{ marginBottom: "1rem" }}>
-                  <label className="row">
-                    <input type="checkbox" checked={enabled} disabled={disabled} onChange={(e) => void send("setProviderEnabled", { provider: prov, enabled: e.target.checked })} />
-                    <strong>{M.providerLabel(prov)}</strong>
-                    <span className="chip">not connected</span>
-                  </label>
-                  <div className="muted" style={{ fontSize: "0.85rem", margin: "0.2rem 0 0.4rem" }}>
-                    {info.adapter}
-                  </div>
-                  <table>
-                    <tbody>
-                      {(Object.keys(CAP_LABEL) as (keyof CapabilityMap)[]).map((k) => (
-                        <tr key={k}>
-                          <td>{CAP_LABEL[k]}</td>
-                          <td>
-                            <span className="chip">{info.capabilities[k]}</span>
-                          </td>
-                        </tr>
-                      ))}
-                      <tr>
-                        <td>Sample models</td>
-                        <td className="mono">{p.catalog[prov].map((m) => m.id).join(", ")}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              );
-            })}
-          </section>
+          <Providers />
+          <RunLimitsCard />
+          {service.runtime === "real" && <ProjectSetup />}
         </div>
       </div>
     </>
+  );
+}
+
+function Providers() {
+  const { state, service, send, disabled, refreshHealth } = useStore();
+  const p = state.project;
+  const [checking, setChecking] = useState(false);
+  const real = service.runtime === "real";
+  return (
+    <section className="card" aria-labelledby="prov-h">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 id="prov-h">Providers</h2>
+        <button
+          className="small"
+          disabled={disabled || checking}
+          onClick={async () => {
+            setChecking(true);
+            await refreshHealth();
+            setChecking(false);
+          }}
+        >
+          {checking ? "Checking…" : "Check again"}
+        </button>
+      </div>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        {real
+          ? "Status comes from the adapters on this machine. Checking never starts a model run. Claude needs an Anthropic API key (or Bedrock/Vertex credentials); Codex uses your local Codex sign-in or API key."
+          : "Fake runtime: no provider is connected and capabilities describe the simulation. Start the service with ORCHESTRATION_RUNTIME=real to run Claude and Codex."}
+      </p>
+      {PROVIDERS.map((prov) => {
+        const info = service.providers[prov];
+        const enabled = p.enabledProviders.includes(prov);
+        const h = info?.health;
+        const tone = h?.status === "ready" ? "done" : h?.status === "not-configured" ? "paused" : "blocked";
+        return (
+          <div key={prov} style={{ marginBottom: "1rem" }}>
+            <label className="row">
+              <input type="checkbox" checked={enabled} disabled={disabled} onChange={(e) => void send("setProviderEnabled", { provider: prov, enabled: e.target.checked })} />
+              <strong>{M.providerLabel(prov)}</strong>
+              {h ? <span className={`pill ${tone}`}>{h.status === "ready" ? "Ready" : h.status === "not-configured" ? "Not configured" : "Unavailable"}</span> : <span className="chip">checking…</span>}
+            </label>
+            <div className="muted" style={{ fontSize: "0.85rem", margin: "0.2rem 0 0.4rem" }}>
+              {info?.label}
+              {h && <div>{h.detail}</div>}
+            </div>
+            {real && <WorkerEnvironmentControls provider={prov} />}
+            <table>
+              <tbody>
+                {info &&
+                  (Object.keys(CAP_LABEL) as (keyof CapabilityMap)[]).map((k) => (
+                    <tr key={k}>
+                      <td>{CAP_LABEL[k]}</td>
+                      <td>
+                        <span className="chip">{info.capabilities[k]}</span>
+                      </td>
+                    </tr>
+                  ))}
+                <tr>
+                  <td>{real ? "Models" : "Sample models"}</td>
+                  <td className="mono">{p.catalog[prov].map((m) => m.id).join(", ") || "—"}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function WorkerEnvironmentControls({ provider }: { provider: (typeof PROVIDERS)[number] }) {
+  const { state, service, send, disabled } = useStore();
+  const env = state.project.workerEnvironment[provider];
+  const allowed = state.project.workerConnections[provider];
+  const found = service.providers[provider]?.connections;
+  const names = [...new Set([...(found ?? []).map((c) => c.name), ...allowed])].sort();
+  const toggle = (name: string, on: boolean) => void send("setWorkerConnections", { provider, names: on ? [...allowed, name] : allowed.filter((n) => n !== name) });
+  return (
+    <fieldset className="option-edit" style={{ margin: "0.3rem 0 0.6rem" }} disabled={disabled}>
+      <legend>Worker environment</legend>
+      <label className="row" style={{ gap: "0.35rem" }}>
+        <input type="radio" name={`env-${provider}`} checked={env === "isolated"} onChange={() => void send("setWorkerEnvironment", { provider, environment: "isolated" })} />
+        Isolated: only the connections selected below
+      </label>
+      <label className="row" style={{ gap: "0.35rem" }}>
+        <input type="radio" name={`env-${provider}`} checked={env === "local"} onChange={() => void send("setWorkerEnvironment", { provider, environment: "local" })} />
+        Use my local setup: my {M.providerLabel(provider)} settings, plugins, and all MCP servers
+      </label>
+      {env === "isolated" && (
+        <div style={{ marginTop: "0.4rem" }}>
+          <div className="muted" style={{ fontSize: "0.82rem" }}>
+            Connections from your own {M.providerLabel(provider)} configuration{provider === "claude" ? " (~/.claude.json)" : " (config.toml)"}:
+          </div>
+          {found === null && <div className="muted" style={{ fontSize: "0.82rem" }}>Could not read them; isolated runs get none.</div>}
+          {names.length === 0 && found !== null && <div className="muted" style={{ fontSize: "0.82rem" }}>None configured.</div>}
+          <div className="row">
+            {names.map((n) => {
+              const f = found?.find((c) => c.name === n);
+              return (
+                <label key={n} className="row" style={{ gap: "0.25rem" }}>
+                  <input type="checkbox" checked={allowed.includes(n)} onChange={(e) => toggle(n, e.target.checked)} />
+                  <span className="mono">{n}</span>
+                  {!f && <span className="chip">not found</span>}
+                  {f && !f.enabled && <span className="chip">off in your config</span>}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      <div className="muted" style={{ fontSize: "0.8rem", marginTop: "0.4rem" }}>
+        Either way, the worker's own file edits stay inside its worktree and native sub-agents stay off. Connections (MCP servers) and plugins are separate programs running with your permissions and are not
+        sandboxed; allow only ones you trust with automated use.{provider === "codex" ? " Codex workers can read files outside their worktree; their writes and network access are sandboxed." : ""} Applies to runs
+        started after the change.
+      </div>
+    </fieldset>
+  );
+}
+
+function RunLimitsCard() {
+  const { state, send, disabled } = useStore();
+  const l = state.project.runLimits;
+  const [turns, setTurns] = useState(String(l.maxTurns));
+  const [minutes, setMinutes] = useState(String(l.timeoutMinutes));
+  const [budget, setBudget] = useState(String(l.maxBudgetUsd));
+  useEffect(() => {
+    setTurns(String(l.maxTurns));
+    setMinutes(String(l.timeoutMinutes));
+    setBudget(String(l.maxBudgetUsd));
+  }, [l.maxTurns, l.timeoutMinutes, l.maxBudgetUsd]);
+  const changed = Number(turns) !== l.maxTurns || Number(minutes) !== l.timeoutMinutes || Number(budget) !== l.maxBudgetUsd;
+  return (
+    <section className="card" aria-labelledby="limits-h">
+      <h2 id="limits-h">Run limits</h2>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        Applied to every run attempt. A run that reaches the time limit is interrupted. Turn and spend limits are enforced only where the provider supports them (Claude); Codex runs are bounded by the time limit.
+      </p>
+      <div className="row">
+        <label className="field">
+          <span>Max turns</span>
+          <input type="number" min={1} value={turns} onChange={(e) => setTurns(e.target.value)} style={{ width: "6rem" }} />
+        </label>
+        <label className="field">
+          <span>Time limit (minutes)</span>
+          <input type="number" min={1} value={minutes} onChange={(e) => setMinutes(e.target.value)} style={{ width: "6rem" }} />
+        </label>
+        <label className="field">
+          <span>Claude budget (USD)</span>
+          <input type="number" min={0.01} step={0.5} value={budget} onChange={(e) => setBudget(e.target.value)} style={{ width: "6rem" }} />
+        </label>
+      </div>
+      <button disabled={disabled || !changed} onClick={() => void send("setRunLimits", { maxTurns: Number(turns), timeoutMinutes: Number(minutes), maxBudgetUsd: Number(budget) })}>
+        Save limits
+      </button>
+    </section>
+  );
+}
+
+function ProjectSetup() {
+  const { state, service, send, disabled } = useStore();
+  const [name, setName] = useState("");
+  const [repo, setRepo] = useState("");
+  const [vision, setVision] = useState("");
+  const [focus, setFocus] = useState("");
+  const repoOk = service.repo?.ok;
+  return (
+    <section className="card" aria-labelledby="setup-h">
+      <h2 id="setup-h">Project</h2>
+      <p style={{ fontSize: "0.9rem" }}>
+        Repository: <span className="mono">{state.project.repoPath}</span>{" "}
+        {repoOk ? <span className="pill done">Ready{service.repo?.branch ? ` (${service.repo.branch})` : ""}</span> : <span className="pill blocked">Not usable</span>}
+      </p>
+      {!repoOk && service.repo?.reason && <div className="banner danger">{service.repo.reason}</div>}
+      <details open={!repoOk}>
+        <summary>Start a new project</summary>
+        <p className="muted" style={{ fontSize: "0.85rem" }}>
+          Replaces the board with an empty project for the repository below. Refused while any run is active. The repository must be a git repository with at least one commit; agents work in separate worktrees and never
+          edit its working tree or merge into its branches.
+        </p>
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+            if (!confirm(`Start a new project "${name}"? The current board and history are replaced.`)) return;
+            await send("initProject", { name, repoPath: repo, vision, focus });
+          }}
+        >
+          <label className="field">
+            <span>Name</span>
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)} required />
+          </label>
+          <label className="field">
+            <span>Repository path (absolute)</span>
+            <input type="text" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="/path/to/your/repo" required />
+          </label>
+          <label className="field">
+            <span>Vision</span>
+            <textarea value={vision} onChange={(e) => setVision(e.target.value)} required />
+          </label>
+          <label className="field">
+            <span>Current focus</span>
+            <input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} />
+          </label>
+          <button type="submit" className="primary" disabled={disabled}>
+            Start project
+          </button>
+        </form>
+      </details>
+    </section>
   );
 }
 

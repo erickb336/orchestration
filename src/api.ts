@@ -1,7 +1,8 @@
 // HTTP contract between the local service and the UI. See docs/tasks/ORC-003.md.
 
 import type { CommandName } from "./domain/commands";
-import type { State } from "./domain/types";
+import type { ProviderId, State } from "./domain/types";
+import type { CapabilityMap } from "./runtime/adapter";
 
 export const CLIENT_HEADER = "X-Orchestration-Client";
 
@@ -11,10 +12,22 @@ export interface ServiceInfo {
   startedAt: string;
   /** "active" when this service instance holds the scheduler lease; "observer" otherwise. */
   scheduler: "active" | "observer";
-  /** Milestone 2 ships only the fake runtime; real adapters arrive in Milestone 3. */
-  runtime: "fake";
+  /** "fake": simulated runs only. "real": Claude and Codex agents run on this machine. */
+  runtime: "fake" | "real";
+  /** Simulation controls; meaningful only when runtime is "fake". */
   sim: { auto: boolean; ackMode: AckMode };
   dbPath: string;
+  providers: Record<ProviderId, ProviderInfo>;
+  /** Real mode: whether the configured repository can host worktrees, and why not. */
+  repo?: { ok: boolean; reason?: string; branch?: string };
+}
+
+export interface ProviderInfo {
+  label: string;
+  capabilities: CapabilityMap;
+  health?: { status: "ready" | "not-configured" | "unavailable"; detail: string; checkedAt: string };
+  /** MCP servers in the user's own provider configuration (names only); null if they could not be listed. */
+  connections?: { name: string; enabled: boolean }[] | null;
 }
 
 /** Body of GET /api/state and of each `state` event on GET /api/stream. */

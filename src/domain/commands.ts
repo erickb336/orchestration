@@ -147,6 +147,40 @@ export const COMMANDS = {
     BUILT_IN_TEMPLATES.filter((b) => !s.project.templates.some((t) => t.id === b.id)).reduce((acc, b) => M.saveTemplate(acc, structuredClone(b), null, now), s),
   ),
 
+  // real projects
+  setWorkerConnections: same((s, now, a) => M.setWorkerConnections(s, provider(a.provider), array<unknown>(a.names, "names").map((x) => String(x)), now)),
+  setWorkerEnvironment: same((s, now, a) => {
+    const env = str(a, "environment");
+    if (env !== "isolated" && env !== "local") throw new InvalidCommandError("environment must be isolated or local");
+    return M.setWorkerEnvironment(s, provider(a.provider), env, now);
+  }),
+  setRunLimits: same((s, now, a) => M.setRunLimits(s, { maxTurns: num(a, "maxTurns"), timeoutMinutes: num(a, "timeoutMinutes"), maxBudgetUsd: num(a, "maxBudgetUsd") }, now)),
+  initProject: same((s, now, a) => M.initProject(s, { name: str(a, "name"), repoPath: str(a, "repoPath"), vision: str(a, "vision"), focus: str(a, "focus") }, now)),
+  /** Create a user-authored task from one of the project's templates. Returns { newId }. */
+  createTask: (s, now, a) => {
+    const templateId = str(a, "templateId");
+    const tpl = s.project.templates.find((t) => t.id === templateId);
+    if (!tpl) throw new InvalidCommandError(`Unknown template ${templateId}`);
+    const r = M.createTask(
+      s,
+      {
+        title: str(a, "title"),
+        area: str(a, "area"),
+        outcome: str(a, "outcome"),
+        benefit: str(a, "benefit"),
+        whyNow: str(a, "whyNow"),
+        approach: str(a, "approach"),
+        acceptance: array<unknown>(a.acceptance, "acceptance").map((x) => String(x)),
+        priority: num(a, "priority"),
+        holdBeforeStart: bool(a, "holdBeforeStart"),
+        steps: structuredClone(tpl.steps),
+        templateName: tpl.name,
+      },
+      now,
+    );
+    return { state: r.state, result: { newId: r.newId } };
+  },
+
   // prototype only: replace everything with the labeled sample project
   resetSampleData: (s, now) => {
     const next = buildSeed(Date.parse(now), { inFlightRuns: false });

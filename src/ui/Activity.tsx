@@ -17,7 +17,7 @@ const KINDS: { kind: EventKind | ""; label: string }[] = [
 ];
 
 export function Activity() {
-  const { state } = useStore();
+  const { state, service } = useStore();
   const [kind, setKind] = useState<EventKind | "">("");
   const [limit, setLimit] = useState(60);
   const events = state.events.filter((e) => !kind || e.kind === kind).reverse();
@@ -35,7 +35,7 @@ export function Activity() {
             ))}
           </select>
         </label>
-        <span className="muted">Append-only. Events marked runtime come from the service's fake (simulated) runtime.</span>
+        <span className="muted">Append-only. {service.runtime === "real" ? "Events marked runtime come from the Claude and Codex runtimes." : "Events marked runtime come from the service's fake (simulated) runtime."}</span>
       </div>
       <section className="card">
         <ul className="events">
