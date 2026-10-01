@@ -16,6 +16,7 @@ import * as M from "../src/domain/model";
 import { DEFAULT_CHECKS, type ChecksConfig, type State } from "../src/domain/types";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter, ScriptedChecks } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
 
@@ -46,7 +47,7 @@ const runOf = (taskId: string, stepId: string) => M.activeAttempts(st(), taskId)
 let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
 const newTask = (title: string) =>
-  (cmd("createTask", { title, area: "Test", outcome: `${title} outcome`, benefit: "b", whyNow: "", approach: "Just do it", acceptance: ["It works"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
+  (cmd("createTask", { title, area: "Test", outcome: `${title} outcome`, benefit: "b", whyNow: "", approach: "Just do it", acceptance: ["It works"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
 const CONFIG: Omit<ChecksConfig, "rev"> = { ...DEFAULT_CHECKS, enabled: true, commands: [{ id: "install", label: "install", kind: "prepare", argv: ["npm", "ci", "--ignore-scripts"] }, { id: "test", label: "test", kind: "check", argv: ["npm", "test"] }] };
 const checksOn = (over: Partial<Omit<ChecksConfig, "rev">> = {}) => cmd("setChecks", { config: { ...CONFIG, ...over } });
 /** Ticks until the probe's answer has been applied (the probe resolves between ticks). */
@@ -263,7 +264,7 @@ describe("interruption (§6.10)", () => {
   it("a pipeline edit during a run discards its result; a settings change stops it for revision and it runs again with the new revision (mutation check: stale results)", async () => {
     const { id, run } = await checkRunning();
     const defs = task(id).steps.map((s) => ({ id: s.id, purpose: s.id === "C1" ? "Run the checks, edited" : s.purpose, role: s.role, dependsOn: s.dependsOn, inputs: s.inputs, outputs: s.outputs, ...(s.runIf ? { runIf: s.runIf } : {}), ...(s.iterate ? { iterate: s.iterate } : {}), ...(s.checks ? { checks: s.checks } : {}) }));
-    cmd("setPipeline", { taskId: id, expectedRev: task(id).pipelineRev, steps: defs, reason: "edit" });
+    setTestPipeline(store, id, defs, iso(), "edit");
     expect(st().attempts.find((a) => a.id === run.id)!.outcome).toBe("stopping");
     checks.finish(run.id);
     tick();
@@ -359,7 +360,7 @@ describe("Final checks and protected inputs (§6.7)", () => {
       await new Promise((r) => setTimeout(r, 5));
     }
     expect(task(id).integration?.landed?.flags).toEqual(["checks-accepted-failing"]);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a change that edits a protected check input gets a finding that needs a decision; the repair waits until it is taken", async () => {
     const { id, run } = await checkRunning("Inputs", ["package.json", '{"scripts":{"test":"echo ok"}}\n']);

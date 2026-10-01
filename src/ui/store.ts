@@ -200,7 +200,10 @@ export function useServiceStore() {
         setNotice({ kind: "error", message: UNREACHABLE });
         return { ok: false };
       }
-      setNotice({ kind: res.status === 409 || err.kind === "stale" ? "stale" : "error", message: err.error });
+      const stale = res.status === 409 || err.kind === "stale";
+      setNotice({ kind: stale ? "stale" : "error", message: err.error });
+      // A stale reply means the state moved; fetch it now rather than waiting for the stream.
+      if (stale) await fetchState();
       return { ok: false };
     },
     [fetchState, goOffline],

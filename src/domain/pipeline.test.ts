@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
 import { validatePipeline } from "./pipeline";
+import { INTERNAL_PATTERNS } from "./internalPatterns";
+import { builtInCatalog, patternSteps } from "./patterns";
 import { buildSeed } from "./seed";
-import { BUILT_IN_TEMPLATES, templateSteps } from "./templates";
 import type { State, StepDef } from "./types";
 
 const T0 = Date.parse("2026-09-29T12:00:00Z");
@@ -21,19 +22,21 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
   return M.reportCompletion(s, a.id, [], at(t), outputs);
 }
 
-describe("templates", () => {
-  it("every built-in template is valid and names no product or model", () => {
-    for (const tpl of BUILT_IN_TEMPLATES) {
-      // ORC-013: the delivery-checks template is valid only on a task with a checkTarget, like delivery-review on a reviewTarget.
-      expect(validatePipeline(tpl.steps, { checkTarget: tpl.id === "delivery-checks" }).filter((i) => i.severity === "error"), tpl.id).toEqual([]);
-      expect(JSON.stringify(tpl)).not.toMatch(/sample|notes|claude|codex/i);
+describe("built-in and internal patterns", () => {
+  it("every one is valid and names no product or model (provider ids only under parallel.providers)", () => {
+    for (const p of [...builtInCatalog().patterns, ...INTERNAL_PATTERNS]) {
+      // ORC-013: the delivery-checks pipeline is valid only on a task with a checkTarget, like delivery-review on a reviewTarget.
+      expect(validatePipeline(p.steps, { checkTarget: p.id === "delivery-checks" }).filter((i) => i.severity === "error"), p.id).toEqual([]);
+      // What workers and people read: names, descriptions and the steps, with the provider assignment of a best-of step set aside.
+      const neutral = { id: p.id, name: p.name, description: p.description, ...("whenToUse" in p ? { whenToUse: p.whenToUse, hypothesis: p.hypothesis } : {}), steps: p.steps.map((s) => ({ ...s, parallel: s.parallel ? { ...s.parallel, providers: undefined } : undefined })) };
+      expect(JSON.stringify(neutral), p.id).not.toMatch(/sample|notes|claude|codex/i);
     }
   });
 });
 
 describe("validation", () => {
   it("rejects forward dependencies, inputs from non-upstream steps, and conditions on non-findings", () => {
-    const defs = templateSteps("change");
+    const defs = patternSteps("change");
     expect(errors([{ ...defs[0], dependsOn: ["S2"] }, ...defs.slice(1)]).length).toBeGreaterThan(0);
     const badInput = structuredClone(defs);
     badInput[1].dependsOn = [];
@@ -123,7 +126,7 @@ describe("pipeline edits", () => {
 
   it("removing a running step stops it and its late result is discarded", () => {
     let s = seed();
-    const defs = templateSteps("change").filter((d) => d.id === "S1"); // drop review/repair/verify
+    const defs = patternSteps("change").filter((d) => d.id === "S1"); // drop review/repair/verify
     const [review] = running(s, "EX-002");
     s = M.setPipeline(s, "EX-002", 1, defs, "Ship without review", "user", at(0));
     expect(s.attempts.find((a) => a.id === review.id)!.outcome).toBe("stopping");
@@ -135,25 +138,12 @@ describe("pipeline edits", () => {
 
   it("editing a paused task's pipeline keeps it paused", () => {
     let s = seed();
-    const defs = templateSteps("change");
+    const defs = patternSteps("change");
     s = M.setPipeline(s, "EX-005", 1, defs, "Swap to change template", "user", at(0));
     expect(task(s, "EX-005").hold).toBe(true);
     expect(task(s, "EX-005").steps.every((x) => x.state === "paused" || x.state === "pending")).toBe(true);
     s = M.dispatchEligible(s, at(1));
     expect(running(s, "EX-005")).toHaveLength(0);
-  });
-});
-
-describe("template management", () => {
-  it("saves, updates, and deletes templates without touching task pipelines", () => {
-    let s = seed();
-    const before = JSON.stringify(task(s, "EX-001").steps);
-    s = M.saveTemplate(s, { id: "custom", name: "Quick fix", description: "", builtIn: false, rev: 0, steps: templateSteps("change").slice(0, 1) }, null, at(0));
-    expect(s.project.templates.find((t) => t.id === "custom")!.steps).toHaveLength(1);
-    s = M.deleteTemplate(s, "feature", at(1));
-    expect(s.project.templates.some((t) => t.id === "feature")).toBe(false);
-    expect(JSON.stringify(task(s, "EX-001").steps)).toBe(before);
-    expect(() => M.saveTemplate(s, { id: "bad", name: "Bad", description: "", builtIn: false, rev: 0, steps: [] }, null, at(2))).toThrow(/invalid/);
   });
 });
 
@@ -174,7 +164,7 @@ describe("review regressions (ORC-002)", () => {
 
   it("run-if ignores findings from a step that was later skipped or is re-running", () => {
     const defs: StepDef[] = [
-      ...templateSteps("change")
+      ...patternSteps("change")
         .filter((d) => ["S1", "C1", "S2", "S3"].includes(d.id))
         .map((d) => ({ ...d, iterate: undefined })),
       { id: "S5", purpose: "Re-review", role: "code_reviewer", dependsOn: ["S3"], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], runIf: [{ step: "S2", output: "findings" }] },
@@ -236,18 +226,15 @@ describe("review regressions (ORC-002)", () => {
   });
 
   it("step IDs must be safe identifiers", () => {
-    const defs = templateSteps("change");
+    const defs = patternSteps("change");
     defs[0] = { ...defs[0], id: "../../etc x" };
     expect(validatePipeline(defs).some((i) => i.severity === "error" && i.message.includes("must start with a letter"))).toBe(true);
   });
 
-  it("template saves reject stale revisions and edits to deleted templates", () => {
-    let s = seed();
-    const tpl = structuredClone(s.project.templates.find((t) => t.id === "change")!);
-    const rev = tpl.rev; // the built-in's current revision (ORC-013 bumped it)
-    s = M.saveTemplate(s, { ...tpl, name: "Change A" }, rev, at(0));
-    expect(() => M.saveTemplate(s, { ...tpl, name: "Change B" }, rev, at(1))).toThrow(/Stale/);
-    s = M.deleteTemplate(s, "change", at(2));
-    expect(() => M.saveTemplate(s, { ...tpl, name: "Change C" }, rev + 1, at(3))).toThrow(/deleted/);
+  it("the internal setPipeline records a custom pipeline as the task's pattern", () => {
+    // ORC-016: no command reaches setPipeline; what tests build with it is labelled, never mistaken for a catalog pattern.
+    const s = M.setPipeline(seed(), "EX-003", 1, patternSteps("change").slice(0, 1), "one step", "user", at(0));
+    expect(task(s, "EX-003").pattern).toEqual({ id: "custom", name: "Custom pipeline", source: "custom", chosenBy: "user" });
+    expect(task(s, "EX-003").pipelineHistory[1].pattern).toMatchObject({ source: "custom" });
   });
 });

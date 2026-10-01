@@ -115,8 +115,8 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const newTask = (title: string, templateId = "change") =>
-  (cmd("createTask", { title, area: "Test", outcome: `${title} outcome`, benefit: "b", whyNow: "", approach: "Just do it", acceptance: ["It works"], priority: 1, holdBeforeStart: false, templateId }).result as { newId: string }).newId;
+const newTask = (title: string, patternId = "change") =>
+  (cmd("createTask", { title, area: "Test", outcome: `${title} outcome`, benefit: "b", whyNow: "", approach: "Just do it", acceptance: ["It works"], priority: 1, holdBeforeStart: false, patternId }).result as { newId: string }).newId;
 
 describe("real-mode scheduling with scripted adapters", () => {
   it("runs Claude and Codex concurrently in isolated worktrees and records commit artifacts", () => {

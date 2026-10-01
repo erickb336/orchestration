@@ -10,6 +10,7 @@ import * as M from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
 
@@ -38,10 +39,10 @@ const step = (id: string, s: string) => task(id).steps.find((x) => x.id === s)!;
 const run = (id: string) => M.activeAttempts(st(), id)[0];
 let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
-const newTask = (title: string, templateId = "change") =>
-  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId }).result as { newId: string }).newId;
+const newTask = (title: string, patternId = "change") =>
+  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId }).result as { newId: string }).newId;
 const oneStep = (id: string) =>
-  cmd("setPipeline", { taskId: id, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+  setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "orch-auto-"));
@@ -69,7 +70,7 @@ describe("review gates and human edits", () => {
   it("a gated step pauses the pipeline; an edited artifact is what the next step receives", () => {
     const id = newTask("Gated");
     const defs = task(id).steps.map((x) => ({ ...x, gate: x.id === "S2" }));
-    cmd("setPipeline", { taskId: id, expectedRev: 1, steps: defs, reason: "review after code review" });
+    setTestPipeline(store, id, defs, iso(), "review after code review");
     tick();
     codex.finish(run(id).id, { write: ["a.txt", "a\n"] });
     tick();
@@ -113,11 +114,13 @@ describe("review gates and human edits", () => {
   it("a review gate can be turned off again", () => {
     const id = newTask("Toggle gate");
     const on = task(id).steps.map((x) => ({ ...x, gate: x.id === "S1" }));
-    cmd("setPipeline", { taskId: id, expectedRev: 1, steps: on, reason: "gate on" });
+    setTestPipeline(store, id, on, iso(), "gate on", 1);
     expect(step(id, "S1").gate).toBe(true);
     const off = task(id).steps.map((x) => ({ ...x, gate: false }));
-    cmd("setPipeline", { taskId: id, expectedRev: 2, steps: off, reason: "gate off" });
+    expect(() => setTestPipeline(store, id, off, iso(), "gate off", 1)).toThrow(/Stale write/); // the first save made revision 2
+    setTestPipeline(store, id, off, iso(), "gate off", 2);
     expect(step(id, "S1").gate).toBeUndefined();
+    expect(task(id).pipelineRev).toBe(3);
   });
 
   it("step-by-step mode pauses after every step", () => {

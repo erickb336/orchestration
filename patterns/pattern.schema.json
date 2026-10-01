@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Orchestrator pipeline pattern",
+  "description": "One pipeline pattern: a base pattern lists its steps; a variant extends another pattern and overrides fields of existing steps. Built-in files live in the repository's patterns/ directory; yours live in <dataDir>/patterns/ and may use comments and trailing commas.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "description", "whenToUse"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "$comment": { "type": "string" },
+    "id": { "$ref": "#/$defs/patternId", "description": "Must equal the file name without its extension." },
+    "name": { "type": "string", "minLength": 1, "maxLength": 60, "description": "Shown in pickers." },
+    "description": { "type": "string", "minLength": 1, "maxLength": 300, "description": "What the pattern does." },
+    "whenToUse": { "type": "string", "minLength": 1, "maxLength": 300, "description": "When to choose it." },
+    "order": { "type": "integer", "minimum": 0, "maximum": 10000, "description": "Sort key; default 100." },
+    "experimental": { "type": "boolean", "description": "true labels the pattern an experiment; it is then yours to choose, never the lead's." },
+    "hypothesis": { "type": "string", "minLength": 1, "maxLength": 300, "description": "What the experiment should show. Required when experimental is true." },
+    "steps": { "type": "array", "minItems": 1, "maxItems": 30, "items": { "$ref": "#/$defs/step" }, "description": "Base patterns only." },
+    "extends": { "$ref": "#/$defs/patternId", "description": "Variants only: the id of the pattern to start from." },
+    "stepOverrides": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "$ref": "#/$defs/stepId" },
+      "additionalProperties": { "$ref": "#/$defs/stepOverride" },
+      "description": "Variants only: fields to change on existing steps of the base. null removes an optional field."
+    }
+  },
+  "oneOf": [
+    { "required": ["steps"], "not": { "anyOf": [{ "required": ["extends"] }, { "required": ["stepOverrides"] }] } },
+    { "required": ["extends"], "not": { "required": ["steps"] } }
+  ],
+  "if": { "properties": { "experimental": { "const": true } }, "required": ["experimental"] },
+  "then": { "required": ["hypothesis"] },
+  "dependentRequired": { "hypothesis": ["experimental"], "stepOverrides": ["extends"] },
+  "$defs": {
+    "patternId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$" },
+    "stepId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,31}$" },
+    "role": { "enum": ["lead", "designer", "coder", "code_reviewer", "ux_reviewer", "checks"] },
+    "kind": { "enum": ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results"] },
+    "provider": { "enum": ["claude", "codex"] },
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "output"],
+      "properties": { "step": { "$ref": "#/$defs/stepId" }, "output": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" } }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": { "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }, "kind": { "$ref": "#/$defs/kind" } }
+    },
+    "purpose": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "dependsOn": { "type": "array", "maxItems": 30, "items": { "$ref": "#/$defs/stepId" } },
+    "inputs": { "type": "array", "maxItems": 60, "items": { "$ref": "#/$defs/ref" } },
+    "outputs": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/output" } },
+    "runIf": { "type": "array", "minItems": 1, "maxItems": 30, "items": { "$ref": "#/$defs/ref" } },
+    "gate": { "const": true },
+    "iterate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "max"],
+      "properties": { "from": { "$ref": "#/$defs/stepId" }, "max": { "type": "integer", "minimum": 1, "maximum": 10 } }
+    },
+    "parallel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "mode"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 2, "maximum": 5 },
+        "mode": { "enum": ["copies", "best-of"] },
+        "providers": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/provider" } }
+      }
+    },
+    "waitForChildren": { "const": true },
+    "independentOf": { "const": "writer" },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["onFail"],
+      "properties": { "onFail": { "enum": ["findings", "block"] } },
+      "description": "Checks steps only. No `only`: check commands belong to each project; patterns run every configured check."
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "purpose", "role", "dependsOn", "inputs", "outputs"],
+      "properties": {
+        "$comment": { "type": "string" },
+        "id": { "$ref": "#/$defs/stepId" },
+        "purpose": { "$ref": "#/$defs/purpose" },
+        "role": { "$ref": "#/$defs/role" },
+        "dependsOn": { "$ref": "#/$defs/dependsOn" },
+        "inputs": { "$ref": "#/$defs/inputs" },
+        "outputs": { "$ref": "#/$defs/outputs" },
+        "runIf": { "$ref": "#/$defs/runIf" },
+        "gate": { "$ref": "#/$defs/gate" },
+        "iterate": { "$ref": "#/$defs/iterate" },
+        "parallel": { "$ref": "#/$defs/parallel" },
+        "waitForChildren": { "$ref": "#/$defs/waitForChildren" },
+        "independentOf": { "$ref": "#/$defs/independentOf" },
+        "checks": { "$ref": "#/$defs/checks" }
+      }
+    },
+    "stepOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "$comment": { "type": "string" },
+        "purpose": { "$ref": "#/$defs/purpose" },
+        "role": { "$ref": "#/$defs/role" },
+        "dependsOn": { "$ref": "#/$defs/dependsOn" },
+        "inputs": { "$ref": "#/$defs/inputs" },
+        "outputs": { "$ref": "#/$defs/outputs" },
+        "runIf": { "anyOf": [{ "$ref": "#/$defs/runIf" }, { "type": "null" }] },
+        "gate": { "anyOf": [{ "$ref": "#/$defs/gate" }, { "type": "null" }] },
+        "iterate": { "anyOf": [{ "$ref": "#/$defs/iterate" }, { "type": "null" }] },
+        "parallel": { "anyOf": [{ "$ref": "#/$defs/parallel" }, { "type": "null" }] },
+        "waitForChildren": { "anyOf": [{ "$ref": "#/$defs/waitForChildren" }, { "type": "null" }] },
+        "independentOf": { "anyOf": [{ "$ref": "#/$defs/independentOf" }, { "type": "null" }] },
+        "checks": { "anyOf": [{ "$ref": "#/$defs/checks" }, { "type": "null" }] }
+      }
+    }
+  }
+}

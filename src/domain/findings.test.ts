@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import * as F from "./findings";
 import * as M from "./model";
 import { buildSeed } from "./seed";
-import { templateSteps } from "./templates";
 import { ControlError, type Artifact, type Finding, type State } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -26,7 +25,7 @@ function withTask(opts: { autopilot?: boolean; author?: "user" | "lead" } = {}):
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
   if (opts.autopilot) s = M.applyAutopilot(s, "main", at(0));
-  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, steps: templateSteps("change"), templateName: "Change" }, at(0));
+  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
   s = r.state;
   if (opts.author === "lead") task(s, r.newId).specs[0].author = "lead";
   return { s, id: r.newId };
@@ -335,7 +334,7 @@ describe("the lead's decisions (applyLeadDecisions, Q9)", () => {
 describe("applyAutopilot and the sample project", () => {
   it("Autopilot routes decisions to the lead; the sample project starts with checks off, decisions to the user and conventions on", () => {
     const s = buildSeed(T0);
-    expect(s.version).toBe(14);
+    expect(s.version).toBe(15);
     expect(s.project.checks.enabled).toBe(false);
     expect(s.project.triage).toEqual({ askUserBy: "user" });
     expect(s.project.conventions).toEqual({ include: true });

@@ -11,7 +11,6 @@ import * as F from "./findings";
 import * as M from "./model";
 import { validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
-import { templateSteps } from "./templates";
 import { ControlError, DEFAULT_CHECKS, type CheckRunRecord, type ChecksConfig, type State } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -114,7 +113,7 @@ describe("the user's settings (§9, Q1)", () => {
     let s = runCommand(s0, "setChecks", { config: input() }, at(1)).state;
     s = C.reportChecksHealth(s, { sandbox: "codex", status: "ready", detail: "ok", checkedAt: at(1) }, at(1));
     for (const t of s.tasks) t.hold = true;
-    const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, steps: templateSteps("change"), templateName: "Change" }, at(2));
+    const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(2));
     s = M.dispatchEligible(M.leadPromoteProposals(r.state, at(3)), at(3));
     const impl = running(s, r.newId)[0];
     s = M.reportCompletion(s, impl.id, [], at(4), [{ name: "change", summary: "done", ref: `${SHA} on b` }, { name: "handoff", summary: "h" }]);
@@ -166,7 +165,7 @@ function withChecks(over: Partial<ChecksConfig> = {}): { s: State; id: string } 
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
   s = { ...s, project: { ...s.project, checks: { ...cfg(over), rev: 1 }, checksHealth: { sandbox: "codex", status: "ready", detail: "ok", checkedAt: at(0) } } };
-  const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, steps: templateSteps("change"), templateName: "Change" }, at(0));
+  const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
   s = M.dispatchEligible(M.leadPromoteProposals(r.state, at(1)), at(1));
   const impl = running(s, r.newId)[0];
   s = M.reportCompletion(s, impl.id, [], at(2), [{ name: "change", summary: "done", ref: `${SHA} on b` }, { name: "handoff", summary: "h" }]);
@@ -183,7 +182,7 @@ describe("dispatch, target and reuse (§6.4)", () => {
   it("checks off: every Checks step skips with the reason; on with no check command: the same; on: C1 runs on the change's commit", () => {
     let s = buildSeed(T0, { inFlightRuns: false });
     for (const t of s.tasks) t.hold = true;
-    const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, steps: templateSteps("change"), templateName: "Change" }, at(0));
+    const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
     s = M.dispatchEligible(M.leadPromoteProposals(r.state, at(1)), at(1));
     s = M.reportCompletion(s, running(s, r.newId)[0].id, [], at(2), [{ name: "change", summary: "done", ref: `${SHA} on b` }, { name: "handoff", summary: "h" }]);
     const off = M.dispatchEligible(s, at(3));
@@ -218,7 +217,7 @@ describe("dispatch, target and reuse (§6.4)", () => {
 
   it("at most maxConcurrent check runs at once; service runs do not count against the worker limit", () => {
     let { s } = withChecks();
-    const r2 = M.createTask(s, { title: "T2", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 2, holdBeforeStart: false, steps: templateSteps("change"), templateName: "Change" }, at(4));
+    const r2 = M.createTask(s, { title: "T2", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 2, holdBeforeStart: false, patternId: "change" }, at(4));
     s = M.dispatchEligible(M.leadPromoteProposals(r2.state, at(5)), at(5));
     s = M.reportCompletion(s, running(s, r2.newId)[0].id, [], at(6), [{ name: "change", summary: "done", ref: `${SHA2} on b` }, { name: "handoff", summary: "h" }]);
     s = M.dispatchEligible(s, at(7));
@@ -481,6 +480,9 @@ describe("evidence and the merge gate (§6.9)", () => {
     expect(ck).toMatchObject({ id: "EX-006-CK1", checkTarget: { taskId: "EX-006", n: 1, sha: SHA }, lifecycle: "ready" });
     expect(ck.steps.map((x) => x.role)).toEqual(["checks"]);
     expect(ck.specs[0].author).toBe("system");
+    // ORC-016: the dedicated check pipeline is the service's own, recorded as such.
+    expect(ck.pattern).toMatchObject({ id: "delivery-checks", source: "internal", chosenBy: "service" });
+    expect(ck.patternSince).toBe(1);
     expect(D.ensureChecks(started, "EX-006", at(4)).tasks.filter((t) => t.checkTarget).length).toBe(1);
     expect(item(started)).toMatchObject({ state: "waiting", detail: expect.stringMatching(/EX-006-CK1 runs them/) });
     expect(M.openLeadProposals(started).some((t) => t.checkTarget)).toBe(false);

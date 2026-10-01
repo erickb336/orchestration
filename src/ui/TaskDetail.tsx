@@ -3,8 +3,6 @@ import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
-import { toDef } from "../domain/pipeline";
-import { INTERNAL_TEMPLATE_IDS } from "../domain/templates";
 import { ROLES, type Artifact, type Attempt, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { checkLogUrl } from "../api";
@@ -13,9 +11,10 @@ import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } f
 import { DeliveryCard } from "./Delivery";
 import { CheckResults, CoverageChip, DecisionControls, DecisionQueue, FindingsList } from "./Findings";
 import { SpecEditor } from "./SpecEditor";
-import { PipelineEditor } from "./PipelineEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
+import { PatternPicker } from "./PatternPicker";
+import { PIPELINE_CHANGED_MESSAGE, changeConsequences, earlierPatternLabel, hashTitle, patternLineParts, patternRefDetail, revisionPatternLabel, samePattern } from "./patternView";
 
 export function TaskDetail({ id }: { id: string }) {
   const { state } = useStore();
@@ -596,65 +595,137 @@ function DetailsCard({ task }: { task: Task }) {
   );
 }
 
-function StepsCard({ state, task }: { state: State; task: Task }) {
-  const { send, disabled, service } = useStore();
-  const [editing, setEditing] = useState<number | null>(null); // pipeline rev the draft started from
-  const [saving, setSaving] = useState(false);
-  const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
-  const usedRoles = [...new Set(task.steps.map((s) => s.role))];
-  const activeCount = M.activeAttempts(state, task.id).length;
+/** ORC-016: "Pattern: Change (a1b2c3d4, built-in)", or what a task from before patterns ran. The title holds the full hash and the files in the `extends` chain. */
+function PatternLine({ task }: { task: Task }) {
+  const p = task.pattern;
+  const detail = patternRefDetail(p);
+  const line = patternLineParts(p);
+  return (
+    <div className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }}>
+      <span>
+        {line.prefix}
+        <strong>{line.name}</strong>
+        {detail && (
+          <>
+            {" "}
+            <span className="muted" title={hashTitle(p)}>
+              {detail}
+            </span>
+          </>
+        )}
+      </span>
+      {p.experimental && (
+        <span className="chip" title="This pattern is marked experimental; you chose it">
+          experiment
+        </span>
+      )}
+    </div>
+  );
+}
 
-  if (editing !== null) {
-    // While our own save is in flight the stream may deliver the revision it created; that is not a conflict.
-    const stale = !saving && task.pipelineRev !== editing;
+/**
+ * ORC-016: run a task on another pattern. The button is shown while the task is open and not service-owned;
+ * it is disabled, with the reason, while the task is running or not yet confirmed Paused. The panel shows the
+ * picker, what the change does (which steps start over, which pins stay, what is closed) and an optional note.
+ * The pipeline revision is the one the panel was opened on; if it moves meanwhile, the panel asks you to
+ * review again instead of sending a stale request.
+ */
+function ChangePattern({ state, task }: { state: State; task: Task }) {
+  const { send, disabled } = useStore();
+  const [open, setOpen] = useState(false);
+  const [openedRev, setOpenedRev] = useState(task.pipelineRev);
+  const [patternId, setPatternId] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (task.reviewTarget || task.checkTarget || task.revertOf || task.deliverInto) return null;
+  const choices = state.patterns.patterns.filter((p) => !(task.parentTaskId && p.flags.breaksDown));
+  const blocker = M.patternChangeBlocker(state, task);
+  if (!open) {
     return (
-      <section className="card" aria-labelledby="steps-h">
-        <h2 id="steps-h">
-          Edit pipeline — draft from r{editing}, saves as r{task.pipelineRev + 1}
-        </h2>
-        <PipelineEditor
-          initial={task.steps.map(toDef)}
-          reservedIds={task.pipelineHistory.flatMap((p) => p.steps.map((x) => x.id))}
-          templates={state.project.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id))}
-          reviewTarget={!!task.reviewTarget}
-          checkTarget={!!task.checkTarget}
-          checksEnabled={!!state.project.checks?.enabled}
-          checkCommands={state.project.checks?.commands}
-          saveLabel={`Save pipeline r${task.pipelineRev + 1}`}
-          saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : disabled ? "The service is offline" : undefined}
-          requireReason
-          warning={
-            <>
-              {!open && (
-                <div className="banner danger" role="alert">
-                  {task.id} was {task.lifecycle === "done" ? "delivered" : "cancelled"} while you were editing, so this pipeline can no longer change. Your draft stays here for reference
-                  {task.lifecycle === "done" ? "; create a follow-up task to apply it." : "."}
-                </div>
-              )}
-              {stale && open && (
-                <div className="banner danger" role="alert">
-                  The pipeline changed to r{task.pipelineRev} while you were editing. Discard this draft and start again from the current pipeline.
-                </div>
-              )}
-              {activeCount > 0 && (
-                <div className="banner">
-                  {activeCount} run(s) are active. Saving stops runs on changed or removed steps and anything downstream of a change; completed steps that changed are revalidated. Model pins are kept for steps that keep their ID.
-                </div>
-              )}
-              {task.hold && <div className="banner neutral">This task is paused. Saving keeps it paused.</div>}
-            </>
-          }
-          onSave={async (defs, reason) => {
-            setSaving(true);
-            const r = await send("setPipeline", { taskId: task.id, expectedRev: editing, steps: defs, reason });
-            setSaving(false);
-            if (r.ok) setEditing(null);
+      <div className="row" style={{ gap: "0.4rem", fontSize: "0.85rem", marginBottom: "0.4rem" }}>
+        <button
+          className="small"
+          disabled={disabled || !!blocker || !choices.length}
+          title={blocker ?? "Run this task on another pattern; the pipeline starts over and work done so far stays on the record"}
+          onClick={() => {
+            setOpenedRev(task.pipelineRev);
+            setPatternId("");
+            setNote("");
+            setOpen(true);
           }}
-          onCancel={() => setEditing(null)}
-        />
-      </section>
+        >
+          Change pattern
+        </button>
+        {blocker && <span className="muted">{blocker}</span>}
+      </div>
     );
   }
+  const chosen = choices.find((p) => p.id === patternId);
+  const preview = chosen ? M.patternChangePreview(state, task, chosen) : undefined;
+  const same = chosen ? samePattern(task.pattern, chosen) : false;
+  const moved = task.pipelineRev !== openedRev;
+  const canUse = !!chosen && !!preview?.allowed && !same && !moved && !busy && !disabled;
+  return (
+    <div className="pattern-panel" role="group" aria-labelledby="chg-pat-h">
+      <h3 id="chg-pat-h" style={{ marginBottom: "0.3rem" }}>
+        Change pattern
+      </h3>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        The pipeline starts over from the pattern you choose. Work done so far stays on the record, labelled "earlier pattern", and is never used again. A provider or model pin stays on a step with the same id and role.
+        {task.hold ? " The task stays paused until you resume it." : ""}
+      </p>
+      {moved && (
+        <div className="banner neutral" role="status" style={{ marginBottom: "0.6rem" }}>
+          {PIPELINE_CHANGED_MESSAGE}{" "}
+          <button className="small" onClick={() => setOpenedRev(task.pipelineRev)}>
+            Review again
+          </button>
+        </div>
+      )}
+      <PatternPicker state={state} patterns={choices} value={patternId} onChange={setPatternId} label="New pattern" disabled={disabled || busy} />
+      {chosen &&
+        (same ? (
+          <p className="muted" style={{ fontSize: "0.85rem" }}>
+            This task already runs {chosen.name} at this version; nothing would change.
+          </p>
+        ) : preview && !preview.allowed ? (
+          <p style={{ color: "var(--s-blocked)", fontSize: "0.85rem" }}>{preview.why}</p>
+        ) : preview ? (
+          <ul className="plain" style={{ fontSize: "0.85rem", marginBottom: "0.6rem" }} aria-label="What this change does">
+            {changeConsequences(preview).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        ) : null)}
+      <label className="field">
+        <span>Note (optional; recorded on the pipeline revision)</span>
+        <input type="text" value={note} onChange={(e) => setNote(e.target.value)} disabled={disabled || busy} style={{ width: "100%" }} />
+      </label>
+      <div className="row">
+        <button
+          className="primary"
+          disabled={!canUse}
+          onClick={async () => {
+            setBusy(true);
+            const r = await send("changePattern", { taskId: task.id, expectedRev: openedRev, patternId, note: note.trim() });
+            setBusy(false);
+            if (r.ok) setOpen(false);
+          }}
+        >
+          Use {chosen?.name ?? "pattern"}
+        </button>
+        <button disabled={busy} onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StepsCard({ state, task }: { state: State; task: Task }) {
+  const { send, disabled, service } = useStore();
+  const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
+  const usedRoles = [...new Set(task.steps.map((s) => s.role))];
 
   return (
     <section className="card" aria-labelledby="steps-h">
@@ -668,16 +739,14 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
             </label>
           )}
           <span className="chip">pipeline r{task.pipelineRev}</span>
-          {open && (
-            <button className="small" onClick={() => setEditing(task.pipelineRev)}>
-              Edit pipeline
-            </button>
-          )}
         </span>
       </div>
+      <PatternLine task={task} />
+      {open && <ChangePattern state={state} task={task} />}
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        Each step receives the vision, the current spec, and only the upstream artifacts it reads. Models resolve step pin → task role override → project role default → project default. Completed steps show the model that
-        actually ran. {service.runtime === "real" ? "Models come from each provider's catalog." : "Model catalog is sample data."}
+        The pipeline comes from the pattern; built-in patterns change through commits, and yours live in {state.patterns.localDir || "the patterns directory"}. Each step receives the vision, the current spec, and only the
+        upstream artifacts it reads. Models resolve step pin → task role override → project role default → project default. Completed steps show the model that actually ran.{" "}
+        {service.runtime === "real" ? "Models come from each provider's catalog." : "Model catalog is sample data."}
       </p>
       <div className="table-wrap">
         <table className="steps-table">
@@ -868,7 +937,13 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                 <span className="mono">r{p.rev}</span>
                 <span className="actor">{p.author}</span>
                 <span>
-                  {p.reason} <span className="muted">· {p.steps.length} steps · {fmtTime(p.at)}</span>
+                  {p.reason}{" "}
+                  {revisionPatternLabel(p) && (
+                    <span className="chip" title={hashTitle(p.pattern!)}>
+                      {revisionPatternLabel(p)}
+                    </span>
+                  )}{" "}
+                  <span className="muted">· {p.steps.length} steps · {fmtTime(p.at)}</span>
                 </span>
               </li>
             ))}
@@ -973,6 +1048,8 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
           const latest = M.latestArtifact(state, task, a.stepId, a.name);
           const used = consumers(a.id);
           const edited = a.author === "user";
+          // ORC-016: work from before the task's pattern changed is the record; it is never edited or consumed again.
+          const earlier = M.fromEarlierPattern(state, task, a);
           return (
             <li key={a.id} style={{ gridTemplateColumns: "6.5rem 1fr" }}>
               <span className="mono">
@@ -980,6 +1057,13 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
               </span>
               <span>
                 <span className="chip">{a.kind}</span> {edited && <span className="chip edited">edited by you</span>}{" "}
+                {earlier && (
+                  <>
+                    <span className="chip" title="Made before the task's pattern changed; kept for the record, not used by the new steps and not editable">
+                      {earlierPatternLabel(task, M.artifactPipelineRev(state, a))}
+                    </span>{" "}
+                  </>
+                )}
                 {notChosen(task, a.stepId) && (
                   <>
                     <span className="chip" title="Another candidate was chosen; this one's work stays visible and on its branch">
@@ -1013,12 +1097,12 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                   {used.length ? ` · read by ${used.join(", ")}` : " · not read by any run yet"}
                   {latest && latest.version > a.version ? ` · superseded by v${latest.version}` : ""}
                 </div>
-                {open && editingId !== a.id && (
+                {open && !earlier && editingId !== a.id && (
                   <button className="small" style={{ marginTop: "0.3rem" }} aria-label={`Edit ${a.stepId}.${a.name} v${a.version}`} disabled={disabled} onClick={() => setEditingId(a.id)}>
                     Edit
                   </button>
                 )}
-                {open && editingId === a.id && <ArtifactEditor state={state} task={task} artifactId={a.id} onClose={() => setEditingId(null)} />}
+                {open && !earlier && editingId === a.id && <ArtifactEditor state={state} task={task} artifactId={a.id} onClose={() => setEditingId(null)} />}
               </span>
             </li>
           );
@@ -1115,7 +1199,7 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
           <span>Work items (each becomes a child task)</span>
           <textarea className="mono" style={{ minHeight: "10rem" }} value={items} onChange={(e) => setItems(e.target.value)} aria-invalid={parsedItems === null} />
           <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
-            A JSON list of {`{ "title", "outcome", "approach", "acceptance": [...], "templateId", "priority", "dependsOn": [index] }`}.
+            A JSON list of {`{ "title", "outcome", "approach", "acceptance": [...], "patternId", "priority", "dependsOn": [index] }`}.
             {task.pendingBreakdowns?.length ? " Child tasks are created from this list when you resume." : ""}
           </span>
           {parsedItems === null && <span style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>Not a valid JSON list.</span>}
@@ -1402,9 +1486,12 @@ function ChildLink({ state, child }: { state: State; child: Task }) {
 
 /** Tasks created by this task's breakdown steps. */
 function ChildTasksCard({ state, task }: { state: State; task: Task }) {
-  const children = M.childTasks(state, task);
+  const all = M.childTasks(state, task);
+  // ORC-016: children of a breakdown made under an earlier pattern stay listed, labelled; the new steps never wait for or reuse them.
+  const children = all.filter((c) => !M.childFromEarlierPattern(state, task, c));
+  const earlier = all.filter((c) => M.childFromEarlierPattern(state, task, c));
   const plansBreakdown = task.steps.some((st) => st.outputs.some((o) => o.kind === "breakdown"));
-  if (!children.length && !plansBreakdown) return null;
+  if (!all.length && !plansBreakdown) return null;
   const finished = children.filter(isSettledTask);
   const cancelled = children.filter((c) => c.lifecycle === "cancelled").length;
   return (
@@ -1418,7 +1505,7 @@ function ChildTasksCard({ state, task }: { state: State; task: Task }) {
         )}
       </div>
       {!children.length ? (
-        <p className="muted">None yet. When a breakdown step completes, each item it lists becomes a child task here.</p>
+        <p className="muted">None yet{earlier.length ? " under the current pattern" : ""}. When a breakdown step completes, each item it lists becomes a child task here.</p>
       ) : (
         <ul className="plain stack">
           {children.map((c) => (
@@ -1427,6 +1514,26 @@ function ChildTasksCard({ state, task }: { state: State; task: Task }) {
             </li>
           ))}
         </ul>
+      )}
+      {earlier.length > 0 && (
+        <details style={{ marginTop: "0.5rem" }}>
+          <summary>
+            From an earlier pattern ({earlier.length})
+          </summary>
+          <p className="muted" style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
+            Created by a breakdown before this task's pattern changed. They stay on the record; the current steps do not wait for them or plan from them.
+          </p>
+          <ul className="plain stack">
+            {earlier.map((c) => (
+              <li key={c.id}>
+                <ChildLink state={state} child={c} />{" "}
+                <span className="chip" title="Its breakdown was made under a pattern this task has since left">
+                  from an earlier pattern
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </section>
   );

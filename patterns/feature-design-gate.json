@@ -1,0 +1,12 @@
+{
+  "$schema": "./pattern.schema.json",
+  "id": "feature-design-gate",
+  "name": "Feature, pause after design",
+  "order": 25,
+  "description": "Feature that pauses after the design so you can read or edit it before implementation starts.",
+  "whenToUse": "You want to read or edit the design before code is written.",
+  "extends": "feature",
+  "stepOverrides": {
+    "S1": { "gate": true }
+  }
+}

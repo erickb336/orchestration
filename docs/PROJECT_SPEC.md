@@ -155,11 +155,11 @@ Display provider and model on each active run, plus connection health and usage 
 
 ### Model configuration per step
 
-Each task detail includes an editable Steps section. Every step has a stable ID, purpose, role, dependencies, provider, model, supported effort/settings, allowed tools, budget/checkpoint, and expected output. Show whether its selection is inherited or overridden and offer Reset to default. Choose models from the connected provider's available model catalog; do not hardcode a forever-current list or expose unsupported settings.
+Each task detail includes a Steps section. The steps themselves come from the task's pipeline pattern (ORC-016) and are not edited in the UI; their provider and model are. Every step has a stable ID, purpose, role, dependencies, provider, model, supported effort/settings, allowed tools, budget/checkpoint, and expected output. Show whether its selection is inherited or overridden and offer Reset to default. Choose models from the connected provider's available model catalog; do not hardcode a forever-current list or expose unsupported settings.
 
 A simple example flow can select Claude model A for design, Codex model B for implementation, Claude model C for code review, and Codex model D for repair. These are illustrative slots, not actual model IDs or performance recommendations. Steps can be sequential or parallel according to dependencies. The first UI uses an ordered step list with dependency labels; a visual graph editor is unnecessary.
 
-Project settings offer defaults by role and reusable workflow templates. The lead may propose step/model assignments and explain the choice in the task spec. Explicit user selections are pinned until the user changes them; the lead cannot override them to optimize cost or availability. If Auto is selected, the lead chooses from the enabled model allowlist and records the resolved model and reason before execution.
+Project settings offer defaults by role and a catalog of pipeline patterns defined as JSON files (ORC-016), with one as the project default. The lead may propose step/model assignments and explain the choice in the task spec. Explicit user selections are pinned until the user changes them; the lead cannot override them to optimize cost or availability. If Auto is selected, the lead chooses from the enabled model allowlist and records the resolved model and reason before execution.
 
 Resolve settings into an immutable execution snapshot for every attempt: provider, model identifier, effort and supported parameters, tools/permissions, task/spec revision, step revision, workspace, and artifact inputs. Default-setting changes affect steps not yet dispatched; never retroactively relabel earlier runs. Keep run attempts separate from the logical step so retries and model changes remain auditable.
 
@@ -186,7 +186,7 @@ Switching the lead requires a checkpoint, suspension of new dispatch, and transf
 
 ## Persistent state and consistency
 
-Store projects, vision revisions, tasks, immutable spec revisions, option decisions, workflow templates, versioned steps and their model overrides, dependencies, role definitions, immutable run configuration snapshots, worker attempts, artifacts, review findings, control requests, and append-only events. Every run references the exact task/spec/vision revisions it received. Separate desired state, observed worker state, and integration state.
+Store projects, vision revisions, tasks, immutable spec revisions, option decisions, the pipeline pattern each task ran (id and content hash) and task outcomes, versioned steps and their model overrides, dependencies, role definitions, immutable run configuration snapshots, worker attempts, artifacts, review findings, control requests, and append-only events. Every run references the exact task/spec/vision revisions it received. Separate desired state, observed worker state, and integration state.
 
 Use database transactions and expected-revision checks for edits, state transitions, and dispatch. Reject stale writes with a reload-and-reconcile path. A single scheduler holds a renewable project lease. Expired leases trigger reconciliation, not blind redispatch: inspect live processes, run IDs, branches, and artifacts before retrying. Control requests and dispatches have idempotency keys.
 
@@ -248,6 +248,16 @@ Finished work leaves Orchestrator through one delivery mode at a time: off (the 
 - Everything that lands is listed for review later. The list is informational and never blocks dispatch, integration or merging.
 - The lead sees delivery (pull requests that need attention, the unreviewed count, the user's notes) and may propose tasks. It cannot merge, push, comment, close, send work back or mark anything reviewed.
 - Real GitHub behaviour was checked by the consented sandbox run (`scripts/pr-sandbox-check.mjs`) on 2026-09-30, with scripted agents. Evidence is in `docs/tasks/ORC-008.md`.
+
+## Pipeline patterns (ORC-016)
+
+The shape of a task's pipeline comes from a pattern, never from the UI (user direction, 2026-09-30: "it seems flaky to use UI for editing the pipeline"). The pipeline editor and the template commands are gone.
+
+- A pattern is one JSON file, validated against a schema and the pipeline graph rules. Built-in patterns live in the repository and change through commits; the user's own patterns live next to the database and are read at start and on Reload. A variant extends another pattern and overrides fields of existing steps.
+- Every task runs one pattern, chosen when it is created (by the user, the lead's proposal, a breakdown item, or the project default) or changed by the user before it starts or while it is paused. A change starts the pipeline over; earlier work stays on the record and is never reused.
+- The lead, breakdown items and the project default use standard patterns only: not experimental, not pausing for the user, and with an independent review of any code change. Experiments carry a hypothesis and are the user's to choose. This keeps the "one implementation, then independent review" default; competing implementations remain an explicit experiment.
+- Provider and model stay configurable per step, per task role and per project role, exactly as before. Only the structure moved to files.
+- Every task records the pattern it ran (id, content hash, source, who chose it), and a task that finishes or is cancelled records an outcome (runs, tokens and cost where reported, repair rounds, findings, checks, coverage). Comparing patterns on that data is a later task.
 
 ## Assumptions to revisit
 

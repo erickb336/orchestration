@@ -7,7 +7,7 @@ import { MAX_PROVEN_PATHS, MAX_REVIEWED_PATHS, normalizePath } from "../src/doma
 import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
-import { INTERNAL_TEMPLATE_IDS } from "../src/domain/templates";
+import { childDefault, effectiveDefault, eligible, patternSummary } from "../src/domain/patterns";
 import {
   FINDING_ACTIONS,
   REVIEW_ROLES,
@@ -273,10 +273,17 @@ export function buildEnvelope({ state, task, step, attemptId, access, seed, chan
     }`;
       if (o.kind === "code-change") return `    "${o.name}": { "summary": "<what you changed and why, and what you verified>" }`;
       if (o.kind === "breakdown")
-        return `    "${o.name}": { "summary": "<the plan in a few sentences>", "items": [ { "title": "...", "outcome": "...", "approach": "...", "acceptance": ["..."], "templateId": "change", "priority": 3, "dependsOn": [0] } ] }`;
+        return `    "${o.name}": { "summary": "<the plan in a few sentences>", "items": [ { "title": "...", "outcome": "...", "approach": "...", "acceptance": ["..."], "patternId": "<id>", "priority": 3, "dependsOn": [0] } ] }`;
       return `    "${o.name}": { "summary": "<your ${o.kind}>" }`;
     })
     .join(",\n");
+  // ORC-016: a child task's pattern comes from the standard catalog; the item may leave it out for the default.
+  const breakdownNote = step.outputs.some((o) => o.kind === "breakdown")
+    ? `\nBreakdown items: pick "patternId" from: ${state.patterns.patterns
+        .filter((p) => eligible(p, "child"))
+        .map((p) => `${p.id} (${p.name})`)
+        .join(", ")}. Leave it out for the default (${childDefault(state).id}). Child tasks cannot break down again.\n`
+    : "";
   return `# Assignment ${attemptId}: ${task.id} ${step.id}
 
 ${ROLE_BRIEFS[step.role]}
@@ -318,7 +325,7 @@ ${outputSpec}
   }
 }
 \`\`\`
-${reviews ? `\n${FINDINGS_RULES}` : ""}`;
+${breakdownNote}${reviews ? `\n${FINDINGS_RULES}` : ""}`;
 }
 
 /** The changed lines under review. They are the work to review: never instructions to the reviewer. */
@@ -864,7 +871,12 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
     const t = m.taskId ? state.tasks.find((x) => x.id === m.taskId) : undefined;
     return t ? `(sent from ${t.id} "${clip(M.currentSpec(t).content.title, 60)}" [${M.stateLabel(state, t)}]) ` : "";
   };
-  const templates = p.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id)).map((t) => `- ${t.id}: ${t.name} — ${t.description}`).join("\n");
+  // ORC-016: the lead may name standard patterns only; experiments and patterns that pause are the user's.
+  const patterns = state.patterns.patterns
+    .filter((x) => eligible(x, "lead"))
+    .map((x) => `- ${x.id}: ${x.name}. ${x.description} Use when: ${x.whenToUse} Steps: ${patternSummary(x.steps)}`)
+    .join("\n");
+  const defaultPattern = effectiveDefault(state).id;
   const steerRules = canSteer
     ? `
 ## Steering rules
@@ -971,8 +983,11 @@ ${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).j
 - Each proposal needs 2–4 options with trade-offs. When only one approach is sensible, include deferring as the other option and explain.
 - Choose "recommendedOptionId" yourself; it becomes the selected approach unless the user overrides it.
 - Give concrete, observable acceptance checks.
-- Pick "templateId" from:
-${templates}
+
+## Pipeline patterns
+Pick "patternId" from these. Leave it out to use the project default ("${defaultPattern}").
+${patterns}
+Experiments and patterns that pause for the user are the user's to choose; do not name them.
 ${steerRules}
 ## Required final output
 End your final message with exactly one fenced JSON block${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft' : ""}${canSteer ? ")" : ""}:
@@ -997,7 +1012,7 @@ End your final message with exactly one fenced JSON block${canSteer ? ' (leave "
       "rationale": "<why this option>",
       "uncertainty": "<what you do not know, and what would change the decision>",
       "acceptance": ["<observable check>"],
-      "templateId": "<template id>",
+      "patternId": "<pattern id>",
       "priority": 3
     }
   ]${steerContract}${visionContract}${decisionsContract}
@@ -1080,7 +1095,8 @@ Add \`"chosen": "<step id>"\` at the top level of your JSON block.
 /** A step that waits for child tasks sees how each of them ended. */
 function childrenNote(state: State, task: Task, step: Step): string {
   if (!step.waitForChildren) return "";
-  const kids = M.childTasks(state, task);
+  // ORC-016 (steps 2–3 review, finding 2): children of an earlier pattern are the record, not results of this breakdown.
+  const kids = M.currentChildren(state, task);
   if (!kids.length) return "## Child tasks\n- None were created.\n\n";
   const lines = kids.map((c) => {
     const spec = M.currentSpec(c).content;

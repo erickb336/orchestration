@@ -7,8 +7,9 @@ import * as C from "./checks";
 import { coverageOf as pathCoverageOf, gapText, notRequired } from "./coverage";
 import { prBaseRef, recordLanded, undeliveredTasks } from "./delivery";
 import * as F from "./findings";
+import { isInternalPatternId } from "./internalPatterns";
+import { childDefault, customRef, effectiveDefault, eligible, eligibleIds, findPattern, patternRef, servicePattern } from "./patterns";
 import { downstreamOf, instantiate, structuralKey, toDef, validatePipeline } from "./pipeline";
-import { INTERNAL_TEMPLATE_IDS } from "./templates";
 import {
   type ActivityEvent,
   type Actor,
@@ -53,7 +54,10 @@ import {
   type Task,
   type VisionDoc,
   type VisionDraft,
-  type WorkflowTemplate,
+  type ChosenBy,
+  type Pattern,
+  type PatternCatalog,
+  type PatternRef,
   ControlError,
   COVERAGE_STATES,
   REVIEW_ROLES,
@@ -180,6 +184,32 @@ function finishTask(t: Task) {
   t.integration = { status: "pending" };
   // Review finding 4: a finished task's deferral is spent; its children must not inherit it.
   t.deferral = undefined;
+}
+
+/** ORC-016 G2: the attempt started under a pattern the task has since left (never true for tasks from before patterns, whose `patternSince` is 0). */
+function beforePattern(t: Task, a: Attempt): boolean {
+  return a.snapshot.pipelineRev < (t.patternSince ?? 0);
+}
+
+/**
+ * ORC-016 (steps 2–3 review, finding 6): the revision a step created now starts at, above any revision that
+ * id ever had on this task (a current step, or an attempt's snapshot), so no earlier run can report into it
+ * (G1). Used for pattern changes, parallel copies, loop iterations and check rounds alike.
+ */
+export function nextRevisionFor(s: State, t: Task, id: string): number {
+  let highest = 0;
+  for (const st of t.steps) if (st.id === id) highest = Math.max(highest, st.revision);
+  for (const a of s.attempts) if (a.taskId === t.id && a.stepId === id) highest = Math.max(highest, a.snapshot.stepRev);
+  return highest + 1;
+}
+
+/** ORC-016 G2: record a result from before the pattern changed as discarded. The step is not touched: no blocked state, no output. */
+function discardEarlierPattern(s: State, t: Task, a: Attempt, now: string, detail = "") {
+  a.outcome = "discarded";
+  a.note = `Result from before the pattern changed (pipeline r${a.snapshot.pipelineRev}); not integrated${detail}`;
+  if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
+  touch(t, now);
+  event(s, now, "runtime", "integration", `${a.id} finished on pipeline r${a.snapshot.pipelineRev}, before the pattern changed (r${t.patternSince}); result discarded, not integrated`, t.id);
 }
 
 function touch(t: Task, now: string) {
@@ -398,12 +428,12 @@ export function blockedReason(s: State, t: Task): string | undefined {
   const st = t.steps.find((x) => x.state === "blocked");
   if (st) return `${st.id}: ${st.blockedReason ?? "blocked"}`;
   if (waitingForChildren(s, t)) {
-    for (const c of childTasks(s, t)) {
+    for (const c of currentChildren(s, t)) {
       if (!isOpen(c)) continue;
       const dep = c.dependsOn.find((d) => s.tasks.find((x) => x.id === d)?.lifecycle === "cancelled");
       if (dep) return `Child ${c.id} cannot start: its prerequisite ${dep} was cancelled. Cancel ${c.id} or remove the prerequisite.`;
     }
-    for (const c of childTasks(s, t)) {
+    for (const c of currentChildren(s, t)) {
       const closed = closedPr(s, c);
       if (closed !== undefined) return `Child ${closedText(c.id, closed)}. Deliver ${c.id} again.`;
     }
@@ -461,7 +491,7 @@ export function stateLabel(s: State, t: Task): string {
   if ((col === "running" || col === "reviewing") && deferredBy(s, t)) return `${col === "running" ? "Running" : "Reviewing"} · deferred after this step`;
   if (col === "deferred") return deferredLabel(s, t)!;
   if (t.lifecycle === "active" && active.length === 0 && waitingForChildren(s, t)) {
-    const open = childTasks(s, t).filter(isOpen).length;
+    const open = currentChildren(s, t).filter(isOpen).length;
     if (open === 0) return "Waiting for child pull requests to merge";
     return `Waiting for ${open} child task${open === 1 ? "" : "s"}`;
   }
@@ -595,8 +625,10 @@ export function overrideSelection(state: State, taskId: string, expectedRev: num
 export interface FollowUpOptions {
   /** Default true: the follow-up waits for the user's release before its first dispatch. */
   holdBeforeStart?: boolean;
-  /** The pipeline to run. Default: the origin's pipeline as it was before any expansion. */
+  /** The pipeline to run. Default: the origin's current pattern from the catalog, else a copy of its pipeline before any expansion. */
   steps?: StepDef[];
+  /** ORC-016: the provenance of `steps` when the service supplies them. Default: a custom pipeline. */
+  pattern?: PatternRef;
   author?: Actor;
   /** Default: the origin task (already done, so it never delays the follow-up). */
   dependsOn?: string[];
@@ -628,12 +660,37 @@ export function createFollowUp(state: State, taskId: string, now: string, opts: 
   const newId = `${root}-F${k}`;
   const author = opts.author ?? "user";
   // Fresh steps: expanded -iN and -cN copies are never copied, and nothing carries run state over.
-  const defs = (opts.steps ? structuredClone(opts.steps) : unexpandedSteps(t)).map(toDef);
+  // ORC-016: the origin's pattern is re-applied from the current catalog when it is still there (so a
+  // follow-up takes up an updated pattern); legacy, custom and internal pipelines are copied as they were.
+  let defs: StepDef[];
+  let pattern: PatternRef;
+  let reason: string;
+  if (opts.steps) {
+    defs = structuredClone(opts.steps).map(toDef);
+    pattern = opts.pattern ? structuredClone(opts.pattern) : customRef("follow-up");
+    reason = `Follow-up to ${t.id}`;
+  } else {
+    const current = t.pattern.source === "built-in" || t.pattern.source === "local" ? findPattern(state, t.pattern.id) : undefined;
+    if (current) {
+      defs = structuredClone(current.steps).map(toDef);
+      pattern = patternRef(current, "follow-up");
+      reason = `Created from the ${current.name} pattern (follow-up to ${t.id})`;
+    } else {
+      defs = unexpandedSteps(t).map(toDef);
+      pattern = { ...structuredClone(t.pattern), chosenBy: "follow-up" };
+      reason = `Copied from ${t.id}`;
+    }
+  }
   const errors = validatePipeline(defs, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`The follow-up's pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
   const steps = instantiate(defs);
-  // A copied pipeline keeps the models the user pinned on its steps.
-  if (!opts.steps) for (const st of steps) st.selection = structuredClone(findStep(t, st.id)?.selection ?? null);
+  // A copied or re-applied pipeline keeps the models the user pinned on steps with the same id and role.
+  if (!opts.steps) {
+    for (const st of steps) {
+      const prev = findStep(t, st.id);
+      st.selection = prev && prev.role === st.role ? structuredClone(prev.selection) : null;
+    }
+  }
   const content = structuredClone(currentSpec(t).content);
   content.title = `Follow-up: ${content.title}`;
   s.tasks.push({
@@ -645,7 +702,9 @@ export function createFollowUp(state: State, taskId: string, now: string, opts: 
     specs: [{ rev: 1, at: now, author, reason: `Follow-up to delivered ${t.id} r${currentSpec(t).rev}`, content }],
     steps,
     pipelineRev: 1,
-    pipelineHistory: [{ rev: 1, at: now, author, reason: opts.steps ? `Follow-up to ${t.id}` : `Copied from ${t.id}`, steps: defs }],
+    pipelineHistory: [{ rev: 1, at: now, author, reason, steps: defs, pattern }],
+    pattern,
+    patternSince: 1,
     roleOverrides: structuredClone(t.roleOverrides),
     dependsOn: opts.dependsOn ? [...opts.dependsOn] : [t.id],
     createdAt: now,
@@ -879,6 +938,8 @@ function reopenDropped(s: State, t: Task, changeSetId: string, now: string): str
   t.lifecycle = t.dropped.lifecycle;
   t.dropped = undefined;
   t.cancelledBy = undefined;
+  // ORC-016 (steps 2–3 review, finding 7): an open task has no outcome; one is recorded again when it settles.
+  delete t.outcome;
   (t.userSet ??= {}).run = now;
   touch(t, now);
   event(s, now, "user", "control", `Reopened: the lead's drop (${changeSetId}) was undone`, t.id);
@@ -1268,6 +1329,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
             visionRev: vision.rev,
             workspace: opts.workspaceFor ? opts.workspaceFor(t.id, st.id, attemptId) : `${s.project.repoPath}/.orchestration/worktrees/${t.id}-${st.id}`,
             pipelineRev: t.pipelineRev,
+            role: st.role,
             purpose: st.purpose,
             inputs: consumedInputs(s, t, st),
             checks: { configRev: cfg.rev, sandbox: cfg.sandbox, target, commands: C.commandsFor(cfg, st), ...(reuse ? { reusedFrom: reuse.attempt.id } : {}) },
@@ -1335,6 +1397,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           visionRev: vision.rev,
           workspace: opts.workspaceFor ? opts.workspaceFor(t.id, st.id, attemptId) : `${s.project.repoPath}/.orchestration/worktrees/${t.id}-${st.id}`,
           pipelineRev: t.pipelineRev,
+          role: st.role,
           environment: s.project.workerEnvironment[r.selection.provider],
           connections: [...s.project.workerConnections[r.selection.provider]],
           purpose: st.purpose,
@@ -1376,10 +1439,13 @@ export function acknowledgeStop(state: State, attemptId: string, now: string): S
   a.outcome = "stopped";
   a.endedAt = now;
   a.artifacts.push(`checkpoint: partial work left in ${a.snapshot.workspace}`);
-  settleStoppedStep(s, t, st);
+  // ORC-016 G2 (steps 2–3 review, finding 6): a run from before the pattern changed settles alone; its step belongs to the new pattern.
+  const earlier = beforePattern(t, a);
+  if (earlier) a.note = `Stopped on pipeline r${a.snapshot.pipelineRev}, before the pattern changed (r${t.patternSince}); its step was not touched`;
+  else settleStoppedStep(s, t, st);
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
-  event(s, now, "runtime", "runtime", `${a.id} acknowledged stop; partial work checkpointed`, t.id);
+  event(s, now, "runtime", "runtime", `${a.id} acknowledged stop; partial work checkpointed${earlier ? ` (it ran on pipeline r${a.snapshot.pipelineRev}, before the pattern changed; its step is untouched)` : ""}`, t.id);
   return s;
 }
 
@@ -1398,10 +1464,13 @@ export function reportRunLost(state: State, attemptId: string, reason: string, n
   a.endedAt = now;
   a.note = `${reason}; no result was produced or integrated`;
   a.artifacts.push(`checkpoint: partial work left in ${a.snapshot.workspace}`);
-  settleStoppedStep(s, t, findStep(t, a.stepId));
+  // ORC-016 G2 (steps 2–3 review, finding 6): a run from before the pattern changed settles alone; its step belongs to the new pattern.
+  const earlier = beforePattern(t, a);
+  if (earlier) a.note += `; it ran on pipeline r${a.snapshot.pipelineRev}, before the pattern changed (r${t.patternSince}), so its step was not touched`;
+  else settleStoppedStep(s, t, findStep(t, a.stepId));
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
-  event(s, now, "system", "runtime", `${a.id} ${wasStopping ? "confirmed stopped" : "lost"} during reconciliation: ${reason}`, t.id);
+  event(s, now, "system", "runtime", `${a.id} ${wasStopping ? "confirmed stopped" : "lost"} during reconciliation: ${reason}${earlier ? " (from before the pattern changed; its step is untouched)" : ""}`, t.id);
   return s;
 }
 
@@ -1435,11 +1504,16 @@ export function reportRunFailed(state: State, attemptId: string, message: string
   const t = getTask(s, a.taskId);
   const st = findStep(t, a.stepId);
   const wasStopping = a.outcome === "stopping";
-  a.outcome = "failed";
   a.endedAt = now;
-  a.note = message;
   if (run.usage) a.usage = run.usage;
   if (run.actualModel) a.actualModel = run.actualModel;
+  if (beforePattern(t, a)) {
+    // G2 (ORC-016 §7.3): the step belongs to the new pattern; a failure from the earlier one says nothing about it.
+    discardEarlierPattern(s, t, a, now, `; it failed: ${message}`);
+    return s;
+  }
+  a.outcome = "failed";
+  a.note = message;
   if (st) {
     if (wasStopping) settleStoppedStep(s, t, st);
     else {
@@ -1510,6 +1584,12 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
   if (run.usage) a.usage = run.usage;
   if (run.actualModel) a.actualModel = run.actualModel;
 
+  // G2 (ORC-016 §7.3): a run started before the task's pattern changed reports nothing to the new steps,
+  // whatever its step id now means. Checked before G1, so the note names the cause.
+  if (beforePattern(t, a)) {
+    discardEarlierPattern(s, t, a, now);
+    return s;
+  }
   const stale = !st || a.snapshot.specRev !== currentSpec(t).rev || a.snapshot.stepRev !== st.revision;
   if (stale) {
     a.outcome = "discarded";
@@ -1597,6 +1677,7 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
         version,
         summary: rep.summary,
         createdAt: now,
+        pipelineRev: t.pipelineRev,
         ...(rep.ref ? { ref: rep.ref } : {}),
         ...(def.kind === "review-findings" ? { openFindings: findings ? F.blockingCount(findings) : (rep.openFindings ?? 0), ...(findings ? { findings } : {}), pathCoverage: reviewCoverage.get(def.name) ?? notRequired() } : {}),
         ...(def.kind === "check-results" && rep.checkRun ? { checkRun: structuredClone(rep.checkRun), ...(rep.findings ? { findings: structuredClone(rep.findings), openFindings: F.blockingCount(rep.findings) } : {}) } : {}),
@@ -1708,12 +1789,33 @@ export function staleInputs(s: State, t: Task, a: Attempt): ConsumedInput[] {
   return a.snapshot.inputs.filter((i) => (latestArtifact(s, t, i.step, i.output)?.version ?? 0) > i.version);
 }
 
+/**
+ * ORC-016: the pipeline revision an artifact was made under. Stamped on new artifacts; an older one takes
+ * it from its attempt's snapshot, and an older edit from the version it edited. Unknown counts as 0.
+ */
+export function artifactPipelineRev(s: State, art: Artifact): number {
+  if (art.pipelineRev !== undefined) return art.pipelineRev;
+  const run = s.attempts.find((a) => a.id === art.attemptId);
+  if (run) return run.snapshot.pipelineRev;
+  let prev: Artifact | undefined;
+  for (const x of s.artifacts) if (x.taskId === art.taskId && x.stepId === art.stepId && x.name === art.name && x.version < art.version && (!prev || x.version > prev.version)) prev = x;
+  return prev ? artifactPipelineRev(s, prev) : 0;
+}
+
+/** ORC-016: the artifact was made under a pattern the task has since left. Labelled in the UI; never edited or consumed again. */
+export function fromEarlierPattern(s: State, t: Task, art: Artifact): boolean {
+  return artifactPipelineRev(s, art) < t.patternSince;
+}
+
 // ---------- pipeline editing ----------
 
 /**
  * Replace a task's pipeline with a new revision. Unchanged steps keep their state and runs.
  * Changed or removed steps stop any active run; changed steps and everything downstream of a
  * change are revalidated. Explicit model pins survive for steps that keep their ID.
+ *
+ * Internal (ORC-016): no command reaches this. Tests use it to build pipelines that patterns do not
+ * offer; the task's pattern then becomes "Custom pipeline".
  */
 export function setPipeline(state: State, taskId: string, expectedRev: number, defs: StepDef[], reason: string, actor: Actor, now: string): State {
   const s = draft(state);
@@ -1799,7 +1901,9 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
     return st;
   });
   t.pipelineRev = rev;
-  t.pipelineHistory.push({ rev, at: now, author: actor, reason, steps: defs.map(toDef) });
+  const custom = customRef(actor === "lead" ? "lead" : actor === "user" ? "user" : "service");
+  t.pipelineHistory.push({ rev, at: now, author: actor, reason, steps: defs.map(toDef), pattern: custom });
+  t.pattern = custom;
   touch(t, now);
   const parts = [changed.size && `changed ${[...changed].join(", ")}`, removed.length && `removed ${removed.join(", ")}`].filter(Boolean);
   event(s, now, actor, "pipeline", `Pipeline r${rev}: ${reason}${parts.length ? ` (${parts.join("; ")})` : ""}`, t.id);
@@ -1807,32 +1911,189 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
   return s;
 }
 
-// ---------- workflow templates ----------
+// ---------- pipeline patterns (ORC-016) ----------
 
-/** Save a template. `expectedRev` is the revision the edit started from, or null for a new template. */
-export function saveTemplate(state: State, template: WorkflowTemplate, expectedRev: number | null, now: string): State {
+/** The pattern a task may be created from by its id: a catalog pattern, never an internal one. */
+export function creationPattern(s: State, patternId: string): Pattern {
+  if (isInternalPatternId(patternId)) {
+    throw new ControlError(patternId === "revert" ? "The Revert pattern is used by Send back only." : `The ${patternId === "delivery-review" ? "Delivery review" : "Delivery checks"} pattern is used by the service only.`);
+  }
+  const p = findPattern(s, patternId) ?? (patternId === "change" || patternId === "bugfix" ? servicePattern(s, patternId) : undefined);
+  if (!p) throw new ControlError(`Unknown pattern ${patternId}`);
+  return p;
+}
+
+// ---------- changing a task's pattern (ORC-016 §7) ----------
+
+/** Who asks for a pattern change. The lead has no verb for it yet; when it gets one, it may choose standard patterns only. */
+export type PatternChanger = "user" | "lead";
+
+const serviceOwned = (t: Task) => !!(t.reviewTarget || t.checkTarget || t.revertOf || t.deliverInto);
+
+/**
+ * Why a task's pattern cannot change right now, or undefined. Preconditions 1, 2, 5 and 6 of §7.1: open,
+ * not service-owned, no open child task, and either never run or confirmed Paused (held, with no attempt
+ * still running or stopping). With `p`, also precondition 4's pattern checks.
+ */
+export function patternChangeBlocker(s: State, t: Task, p?: Pattern, by: PatternChanger = "user"): string | undefined {
+  if (t.lifecycle === "done") return "Done tasks keep the pipeline they ran. Create a follow-up and choose its pattern there.";
+  if (t.lifecycle === "cancelled") return `${t.id} is cancelled.`;
+  if (serviceOwned(t)) return "This task's pipeline is set by pull-request delivery.";
+  if (p) {
+    if (t.parentTaskId && p.flags.breaksDown) return `${p.name} breaks down into child tasks, which a child task cannot do.`;
+    if (by === "lead" && !eligible(p, t.parentTaskId ? "child" : "lead")) return `pattern "${p.id}" is not available to the lead; choose one of: ${eligibleIds(s, t.parentTaskId ? "child" : "lead").join(", ")}`;
+  }
+  if (descendants(s, t).some(isOpen)) return "It has child tasks; cancel them or let them finish first.";
+  if (s.attempts.some((a) => a.taskId === t.id)) {
+    const active = activeAttempts(s, t.id);
+    if (!t.hold) return "Pause the task first; patterns change only before a task starts or while it is paused.";
+    if (active.length) return "Wait until it shows Paused.";
+  }
+  return undefined;
+}
+
+interface PinPlan {
+  kept: string[];
+  dropped: { step: string; why: "role changed" | "no such step" }[];
+  /** The pin each new step takes: the old step's, when a step with the same id has the same role. */
+  selectionFor: (id: string) => ModelSelection | null;
+}
+
+function pinPlan(t: Task, steps: StepDef[]): PinPlan {
+  const kept: string[] = [];
+  const dropped: PinPlan["dropped"] = [];
+  const keep = new Map<string, ModelSelection>();
+  for (const old of t.steps) {
+    if (!old.selection) continue;
+    const next = steps.find((d) => d.id === old.id);
+    if (!next) dropped.push({ step: old.id, why: "no such step" });
+    else if (next.role !== old.role) dropped.push({ step: old.id, why: "role changed" });
+    else {
+      kept.push(old.id);
+      keep.set(old.id, old.selection);
+    }
+  }
+  return { kept, dropped, selectionFor: (id) => (keep.has(id) ? { ...keep.get(id)! } : null) };
+}
+
+/** What changing `t` to pattern `p` would do (pure; shared by the UI and the pipeline event). */
+export function patternChangePreview(s: State, t: Task, p: Pattern, by: PatternChanger = "user"): { allowed: boolean; why?: string; redo: string[]; pinsKept: string[]; pinsDropped: PinPlan["dropped"]; artifactsKept: number; decisionsClosed: number } {
+  const why = patternChangeBlocker(s, t, p, by);
+  const pins = pinPlan(t, p.steps);
+  return {
+    allowed: !why,
+    ...(why ? { why } : {}),
+    redo: t.steps.filter(isSettled).map((st) => st.id),
+    pinsKept: pins.kept,
+    pinsDropped: pins.dropped,
+    artifactsKept: s.artifacts.filter((a) => a.taskId === t.id).length,
+    decisionsClosed: s.decisions.filter((d) => d.taskId === t.id && d.status === "open").length,
+  };
+}
+
+/**
+ * Replace a task's pipeline with another catalog pattern, before it has run or once it shows Paused. The
+ * pipeline starts over: every step is new, with a revision above any the id ever had, so no earlier run
+ * can report into it (G1), and `patternSince` moves to this revision (G2, G3). Artifacts and attempts
+ * stay as the record; open decisions are closed; pins carry over on steps with the same id and role.
+ * `by`: the user (the command) or, later, the lead, who may choose standard patterns only.
+ */
+export function changePattern(state: State, taskId: string, expectedRev: number, patternId: string, note: string, now: string, by: PatternChanger = "user"): State {
+  const t0 = getTask(state, taskId);
+  const early = patternChangeBlocker(state, t0);
+  if (early) throw new ControlError(early);
+  if (t0.pipelineRev !== expectedRev) throw new StaleWriteError(expectedRev, t0.pipelineRev);
+  const p = creationPattern(state, patternId);
+  const why = patternChangeBlocker(state, t0, p, by);
+  if (why) throw new ControlError(why);
+  const errors = validatePipeline(p.steps, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
+  if (errors.length) throw new ControlError(`Pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
+  if (t0.pattern.id === p.id && t0.pattern.hash === p.hash && t0.pattern.source === p.source) return state;
+
   const s = draft(state);
-  if (!template.name.trim()) throw new ControlError("A template needs a name.");
-  const existing = s.project.templates.find((x) => x.id === template.id);
-  if (expectedRev === null && existing) throw new ControlError(`A template with ID ${template.id} already exists.`);
-  if (expectedRev !== null && !existing) throw new ControlError(`"${template.name}" was deleted while you were editing it.`);
-  if (existing && existing.rev !== expectedRev) throw new StaleWriteError(expectedRev!, existing.rev);
-  const errors = validatePipeline(template.steps, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
-  if (errors.length) throw new ControlError(`Template is invalid: ${errors.map((e) => e.message).join(" ")}`);
-  const clean: WorkflowTemplate = { ...structuredClone(template), rev: (existing?.rev ?? 0) + 1, steps: template.steps.map(toDef) };
-  const i = s.project.templates.findIndex((x) => x.id === template.id);
-  if (i >= 0) s.project.templates[i] = clean;
-  else s.project.templates.push(clean);
-  event(s, now, "user", "config", `Template "${template.name}" ${i >= 0 ? "updated" : "created"}; existing task pipelines are unchanged`);
+  const t = getTask(s, taskId);
+  const preview = patternChangePreview(s, t, p, by);
+  const rev = t.pipelineRev + 1;
+  const defs = structuredClone(p.steps).map(toDef);
+  const pins = pinPlan(t, defs);
+  // Every revision an id ever had on this task: its current step's, and every attempt's snapshot (G1).
+  const highest = new Map<string, number>();
+  for (const st of t.steps) highest.set(st.id, Math.max(highest.get(st.id) ?? 0, st.revision));
+  for (const a of s.attempts) if (a.taskId === t.id) highest.set(a.stepId, Math.max(highest.get(a.stepId) ?? 0, a.snapshot.stepRev));
+  t.steps = instantiate(defs).map((st) => ({ ...st, revision: 1 + (highest.get(st.id) ?? 0), state: t.hold ? ("paused" as const) : ("pending" as const), selection: pins.selectionFor(st.id) }));
+  const before = t.pattern;
+  const ref = patternRef(p, by);
+  t.pipelineRev = rev;
+  t.patternSince = rev;
+  t.pattern = ref;
+  t.pipelineHistory.push({ rev, at: now, author: by, reason: `Pattern changed from ${before.name} to ${p.name}${note.trim() ? `: ${note.trim()}` : ""}`, steps: defs, pattern: ref });
+  // These belong to the old steps. The hold itself stays.
+  delete t.bestOf;
+  delete t.bestOfByUser;
+  delete t.pendingBreakdowns;
+  delete t.checkRounds;
+  delete t.holdReason;
+  F.supersedeDecisions(s, t.id, now, { reason: "the task's pattern changed" });
+  touch(t, now);
+  const parts = [
+    preview.redo.length ? `${preview.redo.length} completed step${preview.redo.length === 1 ? "" : "s"} start${preview.redo.length === 1 ? "s" : ""} over` : "nothing had run",
+    ...(preview.pinsKept.length ? [`pins kept: ${preview.pinsKept.join(", ")}`] : []),
+    ...(preview.pinsDropped.length ? [`dropped: ${preview.pinsDropped.map((d) => `${d.step} (${d.why})`).join(", ")}`] : []),
+  ];
+  event(s, now, by, "pipeline", `Pipeline r${rev}: pattern ${before.name} → ${p.name}; ${parts.join("; ")}`, t.id);
   return s;
 }
 
-export function deleteTemplate(state: State, templateId: string, now: string): State {
+/**
+ * The project default pattern, used by the lead's proposals and breakdown items when they name none.
+ * It must be standard: experiments, patterns that pause for you and unreviewed ones are yours to choose per task.
+ */
+export function setDefaultPattern(state: State, patternId: string, now: string): State {
+  if (isInternalPatternId(patternId)) throw new ControlError(`"${patternId}" is a pipeline the service owns; it cannot be the default.`);
+  const p = findPattern(state, patternId);
+  if (!p) throw new ControlError(`Unknown pattern ${patternId}.`);
+  if (!eligible(p, "default")) throw new ControlError(`"${p.name}" cannot be the default: the default is also used by the lead and by breakdowns, so it must be a standard pattern.`);
   const s = draft(state);
-  const t = s.project.templates.find((x) => x.id === templateId);
-  if (!t) throw new ControlError(`Unknown template ${templateId}`);
-  s.project.templates = s.project.templates.filter((x) => x.id !== templateId);
-  event(s, now, "user", "config", `Template "${t.name}" deleted; existing task pipelines are unchanged`);
+  if (s.project.defaultPatternId === patternId) return s;
+  s.project.defaultPatternId = patternId;
+  event(s, now, "user", "config", `Default pattern: ${p.name} (${p.id})`);
+  return s;
+}
+
+const catalogKey = (c: PatternCatalog) =>
+  JSON.stringify({ p: c.patterns.map((p) => [p.id, p.source, p.hash]), e: c.errors.map((e) => [e.file, e.message, e.line ?? null, e.column ?? null, e.effect]) });
+
+/**
+ * Replace the catalog with what the server loaded from files. Never a command: only the server calls it,
+ * through `store.update`. It changes no task (tasks own copies of their steps), and it records an event only
+ * when the set of patterns (id, source, hash) or the errors changed.
+ */
+export function setPatternCatalog(state: State, catalog: PatternCatalog, now: string): State {
+  const s = draft(state);
+  const changed = catalogKey(s.patterns) !== catalogKey(catalog);
+  s.patterns = structuredClone(catalog);
+  if (changed) {
+    const yours = catalog.patterns.filter((p) => p.source === "local").length;
+    const bad = new Set(catalog.errors.map((e) => e.file)).size;
+    event(s, now, "system", "config", `Patterns loaded: ${catalog.patterns.length}${yours ? ` (${yours} yours)` : ""}${bad ? `; ${bad} file${bad === 1 ? " has" : "s have"} errors` : ""}`);
+  }
+  return s;
+}
+
+/** Record the outcome of writing a retired template as a pattern file (server, at start). Never a command. */
+export function recordTemplateExport(state: State, templateId: string, result: { exportedTo: string; exportedId: string; stripped: string[] } | { exportError: string }, now: string): State {
+  const s = draft(state);
+  const t = s.retiredTemplates.find((x) => x.id === templateId && !x.exportedTo && !x.exportError);
+  if (!t) return s;
+  if ("exportError" in result) {
+    t.exportError = result.exportError;
+    event(s, now, "system", "config", `Template "${t.name}" from before patterns could not be saved as a pattern file: ${result.exportError}`);
+  } else {
+    t.exportedTo = result.exportedTo;
+    t.exportedId = result.exportedId;
+    if (result.stripped.length) t.stripped = [...result.stripped];
+    event(s, now, "system", "config", `Template "${t.name}" from before patterns saved as ${result.exportedTo}${result.stripped.length ? ` (left out: ${result.stripped.join("; ")})` : ""}; choose Reload in Settings → Patterns to use it`);
+  }
   return s;
 }
 
@@ -1913,6 +2174,8 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // ORC-013: checks are off until the user turns them on for this repository, and nothing has been probed for it.
   s.project.checks = structuredClone(DEFAULT_CHECKS);
   delete s.project.checksHealth;
+  // ORC-016: the catalog is machine-level and stays; the default pattern is a project choice.
+  s.project.defaultPatternId = "change";
   s.decisions = [];
   s.tasks = [];
   s.attempts = [];
@@ -1938,8 +2201,10 @@ export interface NewTask {
   approach: string;
   priority: number;
   holdBeforeStart: boolean;
-  steps: StepDef[];
-  templateName: string;
+  /** ORC-016: the catalog pattern the pipeline comes from. Any pattern but an internal one; nothing else supplies steps. */
+  patternId: string;
+  /** Default "user". The service passes "service" for the follow-ups it creates. */
+  chosenBy?: ChosenBy;
   /** ORC-009: the user chose the priority (not the form's default): the lead may not reorder it. */
   priorityPinned?: boolean;
 }
@@ -1950,7 +2215,8 @@ export interface NewTask {
  */
 export function createTask(state: State, t: NewTask, now: string): { state: State; newId: string } {
   if (!t.title.trim() || !t.outcome.trim() || !t.approach.trim()) throw new ControlError("Title, outcome, and approach are required.");
-  const errors = validatePipeline(t.steps, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
+  const pattern = creationPattern(state, t.patternId);
+  const errors = validatePipeline(pattern.steps, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`Pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
   const s = draft(state);
   let n = s.tasks.length + 1;
@@ -1981,7 +2247,8 @@ export function createTask(state: State, t: NewTask, now: string): { state: Stat
     rollback: "Discard the orchestration branch.",
     effort: "small",
   };
-  const defs = structuredClone(t.steps);
+  const defs = structuredClone(pattern.steps).map(toDef);
+  const ref = patternRef(pattern, t.chosenBy ?? "user");
   s.tasks.push({
     id,
     priority: Math.max(1, Math.round(t.priority) || 1),
@@ -1996,7 +2263,9 @@ export function createTask(state: State, t: NewTask, now: string): { state: Stat
     updatedAt: now,
     decisionAt: now,
     pipelineRev: 1,
-    pipelineHistory: [{ rev: 1, at: now, author: "user", reason: `Created from the ${t.templateName} template`, steps: defs.map(toDef) }],
+    pipelineHistory: [{ rev: 1, at: now, author: "user", reason: `Created from the ${pattern.name} pattern`, steps: defs, pattern: ref }],
+    pattern: ref,
+    patternSince: 1,
     ...(t.priorityPinned ? { userSet: { priority: now } } : {}),
   });
   event(s, now, "user", "spec", `Created ${id}: ${content.title}`, id);
@@ -2214,9 +2483,15 @@ export interface LeadProposal {
   rationale: string;
   uncertainty: string;
   acceptance: string[];
-  templateId: string;
+  /** ORC-016: the pattern to run. Absent: the project default. */
+  patternId?: string;
+  /** The name from before patterns, accepted as an alias of `patternId`. */
+  templateId?: string;
   priority: number;
 }
+
+/** The pattern a proposal or breakdown item names, when it names one. */
+const namedPattern = (p: LeadProposal): unknown => (p.patternId !== undefined ? p.patternId : p.templateId);
 
 export interface LeadOutput {
   reply: string;
@@ -2238,8 +2513,11 @@ export interface LeadOutput {
 /** How long a dropped title stays off limits to planning (ORC-009). */
 const DROP_GUARD_MS = 7 * 24 * 60 * 60_000;
 
-/** Check a proposal against the spec requirements. Returns a reason when it cannot become a task. */
-export function validateProposal(s: State, p: LeadProposal, now?: string): string | undefined {
+/**
+ * Check a proposal against the spec requirements. Returns a reason when it cannot become a task.
+ * `who`: a lead proposal, or a breakdown item ("child": its pattern may not break down again).
+ */
+export function validateProposal(s: State, p: LeadProposal, now?: string, who: "lead" | "child" = "lead"): string | undefined {
   // Lead output is untrusted data: check types before anything else.
   const isStr = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
   if (!p || typeof p !== "object") return "not an object";
@@ -2253,9 +2531,13 @@ export function validateProposal(s: State, p: LeadProposal, now?: string): strin
   if (!isStr(p.rationale, 4000)) return "the decision needs a rationale";
   if (!Array.isArray(p.acceptance) || !p.acceptance.some((x) => typeof x === "string" && x.trim()) || p.acceptance.length > 30) return "it needs one to thirty acceptance checks";
   for (const k of ["scopeIncluded", "scopeExcluded"] as const) if (p[k] !== undefined && (!Array.isArray(p[k]) || p[k].length > 30)) return `"${k}" must be a list`;
-  if (typeof p.templateId !== "string") return "templateId must be text";
-  const tpl = s.project.templates.find((t) => t.id === p.templateId);
-  if (!tpl || INTERNAL_TEMPLATE_IDS.includes(tpl.id)) return `unknown template "${p.templateId}"`;
+  // ORC-016: the pattern is validated as untrusted data; the lead and breakdowns may use standard patterns only.
+  const named = namedPattern(p);
+  if (named !== undefined && typeof named !== "string") return "patternId must be text";
+  const patternId = named ?? (who === "child" ? childDefault(s) : effectiveDefault(s)).id;
+  const pattern = findPattern(s, patternId);
+  if (!pattern || !eligible(pattern, "lead")) return `pattern "${patternId}" is not available to the lead; choose one of: ${eligibleIds(s, who).join(", ")}`;
+  if (who === "child" && pattern.flags.breaksDown) return `child tasks cannot break down further (pattern "${pattern.name}"); use a pattern without breakdown steps: ${eligibleIds(s, "child").join(", ")}`;
   const title = (p.title as string).trim().toLowerCase();
   if (s.tasks.some((t) => t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === title)) return "a task with this title already exists";
   // ORC-009: work the lead dropped when the focus changed is not proposed again for a week.
@@ -2441,13 +2723,19 @@ export function reportRunContext(state: State, attemptId: string, ctx: RunContex
   return s;
 }
 
-/** Create a lead-authored task from a validated proposal on a draft state. Shared with the findings module (ORC-013 follow-ups). */
-export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string, fromShaping = false): string {
+/**
+ * Create a lead-authored task from a validated proposal on a draft state. Shared with the findings module
+ * (ORC-013 follow-ups). `who`: who named the pattern when the proposal names one; the project default
+ * (or the child default for breakdown items) applies otherwise, recorded as chosen by "default".
+ */
+export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string, fromShaping = false, who: "lead" | "breakdown" = "lead"): string {
   let n = s.tasks.length + 1;
   const ids = new Set(s.tasks.map((x) => x.id));
   while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
   const id = fixedId ?? `T-${String(n).padStart(3, "0")}`;
-  const tpl = s.project.templates.find((t) => t.id === p.templateId)!;
+  const named = namedPattern(p);
+  const pattern = typeof named === "string" ? findPattern(s, named)! : who === "breakdown" ? childDefault(s) : effectiveDefault(s);
+  const ref = patternRef(pattern, typeof named === "string" ? who : "default");
   const list = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => String(x).trim()).filter(Boolean) : []);
   const content: SpecContent = {
     title: p.title.trim().slice(0, 200),
@@ -2478,7 +2766,7 @@ export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolea
     rollback: "Discard the orchestration branch; delivery to your branch happens only if you turned it on.",
     effort: "small",
   };
-  const defs = structuredClone(tpl.steps);
+  const defs = structuredClone(pattern.steps).map(toDef);
   s.tasks.push({
     id,
     priority: Number.isFinite(p.priority) ? Math.min(99, Math.max(1, Math.round(p.priority))) : 5,
@@ -2495,7 +2783,9 @@ export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolea
     decisionAt: now,
     ...(fromShaping ? { fromShaping: true } : {}),
     pipelineRev: 1,
-    pipelineHistory: [{ rev: 1, at: now, author: "lead", reason: `Lead applied the ${tpl.name} template`, steps: defs.map(toDef) }],
+    pipelineHistory: [{ rev: 1, at: now, author: "lead", reason: `Created from the ${pattern.name} pattern`, steps: defs, pattern: ref }],
+    pattern: ref,
+    patternSince: 1,
   });
   event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})${fromShaping ? "; planned while shaping, waits for Start building" : ""}`, id);
   return id;
@@ -4129,7 +4419,10 @@ export function importMarkdown(state: State, markdown: string, now: string): { s
       rollback: "",
       effort: "small",
     };
-    const defs = structuredClone(s.project.templates.find((t) => t.id === "change")?.steps ?? []);
+    // ORC-016: imported tasks run the project default pattern.
+    const pattern = effectiveDefault(s);
+    const defs = structuredClone(pattern.steps).map(toDef);
+    const ref = patternRef(pattern, "default");
     s.tasks.push({
       id,
       priority: Number.isFinite(prioCell) && prioCell > 0 ? Math.min(99, prioCell) : 5,
@@ -4144,7 +4437,9 @@ export function importMarkdown(state: State, markdown: string, now: string): { s
       updatedAt: now,
       decisionAt: now,
       pipelineRev: 1,
-      pipelineHistory: [{ rev: 1, at: now, author: "user", reason: "Imported", steps: defs.map(toDef) }],
+      pipelineHistory: [{ rev: 1, at: now, author: "user", reason: `Imported; created from the ${pattern.name} pattern`, steps: defs, pattern: ref }],
+      pattern: ref,
+      patternSince: 1,
       legacySpecUnavailable: true,
       ...(done ? { integration: { status: "not-needed" as const } } : {}),
     });
@@ -4191,6 +4486,8 @@ export function editArtifact(
   if (!base) throw new ControlError(`Unknown artifact ${artifactId}`);
   const t = getTask(s, base.taskId);
   assertOpen(t, "Editing an artifact");
+  // G3 (ORC-016 §7.3): work done under an earlier pattern is the record, never an input to the new steps.
+  if (artifactPipelineRev(s, base) < t.patternSince) throw new ControlError("This artifact belongs to an earlier pattern of this task. It is kept for the record and cannot be edited.");
   const st = getStep(t, base.stepId);
   if (!change.reason.trim()) throw new ControlError("Say why you changed it; the reason goes to the next steps.");
   if (!change.summary.trim()) throw new ControlError("The artifact cannot be empty.");
@@ -4210,6 +4507,7 @@ export function editArtifact(
     version,
     summary: change.summary.slice(0, 20000),
     createdAt: now,
+    pipelineRev: t.pipelineRev,
     author: "user",
     editReason: change.reason.trim(),
     ...(base.kind === "review-findings" && !base.findings ? { openFindings: change.openFindings } : {}),
@@ -4299,7 +4597,7 @@ function expandParallel(s: State, t: Task, st: Step, now: string) {
     id,
     purpose: `${st.purpose} (copy ${i + 2} of ${p.count})`,
     selection: assign(i + 1),
-    revision: 1,
+    revision: nextRevisionFor(s, t, id),
     state: t.hold ? "paused" : "pending",
     parallel: undefined,
     copyOf: st.id,
@@ -4426,7 +4724,7 @@ function expandIteration(s: State, t: Task, st: Step, now: string) {
       ...structuredClone(b),
       id: idMap.get(b.id)!,
       purpose: `${b.purpose.replace(/ \(iteration \d+\)$/, "")} (iteration ${n})`,
-      revision: 1,
+      revision: nextRevisionFor(s, t, idMap.get(b.id)!),
       state: t.hold ? "paused" : "pending",
       iteration: n,
       // Inside the body keep the structure; anything that depended on work before the loop now
@@ -4468,9 +4766,24 @@ export function childTasks(s: State, t: Task): Task[] {
   return s.tasks.filter((x) => x.parentTaskId === t.id);
 }
 
-/** Children are settled when none is open and, with pull-request delivery, their work is in the base. */
+/**
+ * ORC-016 (steps 2–3 review, finding 2): the child was created by a breakdown made under a pattern the task has
+ * since left. It stays on the record, labelled, and is never relinked, waited for or reported to the new steps.
+ */
+export function childFromEarlierPattern(s: State, t: Task, c: Task): boolean {
+  if (!c.parentArtifactId) return false;
+  const art = s.artifacts.find((a) => a.id === c.parentArtifactId);
+  return !!art && fromEarlierPattern(s, t, art);
+}
+
+/** The children of the task's current pattern: what breakdowns reconcile with, what waiting steps wait for, and what the envelope reports. */
+export function currentChildren(s: State, t: Task): Task[] {
+  return childTasks(s, t).filter((c) => !childFromEarlierPattern(s, t, c));
+}
+
+/** Children are settled when none is open and, with pull-request delivery, their work is in the base. Children of an earlier pattern do not count. */
 export function childrenSettled(s: State, t: Task): boolean {
-  return childTasks(s, t).every((c) => !isOpen(c) && (c.lifecycle === "cancelled" || prerequisiteReady(s, c)));
+  return currentChildren(s, t).every((c) => !isOpen(c) && (c.lifecycle === "cancelled" || prerequisiteReady(s, c)));
 }
 
 /** Every task created, directly or through its children, by breakdowns of `t`. */
@@ -4537,8 +4850,6 @@ function applyBreakdown(s: State, t: Task, stepId: string, output: string, now: 
   if (st.iterate && linked > 0) expandIteration(s, t, st, now);
 }
 
-const hasBreakdown = (steps: StepDef[]) => steps.some((x) => x.outputs.some((o) => o.kind === "breakdown"));
-
 /**
  * Turn breakdown items into child tasks of `t`. Items use the lead-proposal shape; `approach` alone is
  * enough (the options become "as planned" vs deferring). Items may depend on earlier items by index
@@ -4557,7 +4868,8 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
   const a = s.project.autonomy;
   const holdBeforeStart = !a.enabled || a.holdLeadProposals;
   const root = rootOf(s, t);
-  const earlier = childTasks(s, t).filter((c) => c.parentStepId === st.id && c.parentArtifactId !== artifactId && c.lifecycle !== "cancelled");
+  // ORC-016 (steps 2–3 review, finding 2): only children of the current pattern are reconciled; an earlier pattern's children are the record.
+  const earlier = currentChildren(s, t).filter((c) => c.parentStepId === st.id && c.parentArtifactId !== artifactId && c.lifecycle !== "cancelled");
   const started = (c: Task) => c.lifecycle === "active" || c.lifecycle === "done" || s.attempts.some((x) => x.taskId === c.id);
   const titleOf = (c: Task) => currentSpec(c).content.title.trim().toLowerCase();
   const linked: { id: string; title: string; kept?: boolean }[] = [];
@@ -4588,17 +4900,13 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
             ],
         recommendedOptionId: typeof it.recommendedOptionId === "string" ? it.recommendedOptionId : "A",
         rationale: typeof it.rationale === "string" && it.rationale.trim() ? it.rationale : `Part of ${t.id}'s breakdown (${st.id}).`,
-        templateId: typeof it.templateId === "string" ? it.templateId : "change",
+        // ORC-016: the item's pattern (templateId is the old name); absent, the child default applies.
+        ...(it.patternId !== undefined ? { patternId: it.patternId } : it.templateId !== undefined ? { patternId: it.templateId } : {}),
         priority: typeof it.priority === "number" ? it.priority : t.priority,
       } as unknown as LeadProposal;
-      const why = validateProposal(s, p, now);
+      const why = validateProposal(s, p, now, "child");
       if (why) {
         rejected.push(`#${i + 1}: ${why}`);
-        continue;
-      }
-      const tpl = s.project.templates.find((x) => x.id === p.templateId)!;
-      if (hasBreakdown(tpl.steps)) {
-        rejected.push(`#${i + 1}: child tasks cannot break down further (template "${tpl.name}"); use a template without breakdown steps`);
         continue;
       }
       if (descendants(s, root).filter((x) => x.lifecycle !== "cancelled").length >= MAX_CHILD_TASKS) {
@@ -4607,7 +4915,7 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
       }
       let k = childTasks(s, t).length + 1;
       while (s.tasks.some((x) => x.id === `${t.id}.${k}`)) k++;
-      const id = proposeTask(s, p, now, holdBeforeStart, `${t.id}.${k}`);
+      const id = proposeTask(s, p, now, holdBeforeStart, `${t.id}.${k}`, false, "breakdown");
       const child = getTask(s, id);
       child.parentTaskId = t.id;
       child.parentStepId = st.id;

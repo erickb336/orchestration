@@ -459,7 +459,7 @@ const WAIT = {
 };
 
 function createTask(title: string): string {
-  const id = (cmd("createTask", { title, area: "Sandbox", outcome: `${title}: a small file is added`, benefit: "Evidence", whyNow: "Evidence run", approach: "Add one small file", acceptance: ["The file exists"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
+  const id = (cmd("createTask", { title, area: "Sandbox", outcome: `${title}: a small file is added`, benefit: "Evidence", whyNow: "Evidence run", approach: "Add one small file", acceptance: ["The file exists"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
   log(`task ${id}: ${title}`);
   return id;
 }

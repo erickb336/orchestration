@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
-import { AUTOPILOT, PROVIDERS, ROLES, STEERING_MODES, type Autonomy, type SteeringMode, type WorkflowTemplate } from "../domain/types";
-import { BUILT_IN_TEMPLATES, PROJECT_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
+import { AUTOPILOT, PROVIDERS, ROLES, STEERING_MODES, type Autonomy, type SteeringMode } from "../domain/types";
+import { effectiveDefault, eligible } from "../domain/patterns";
+import type { PatternsReloadResponse } from "../api";
+import { PatternPicker, PatternSteps } from "./PatternPicker";
+import { EXAMPLE_VARIANT, catalogSummary, defaultPatternNote, errorLocation, patternFlagChips, retiredTemplateJson, shortHash, sourceLabel } from "./patternView";
 import { ChecksSettings } from "./ChecksSettings";
 import { DeliverySettings } from "./DeliverySettings";
-import { PipelineEditor } from "./PipelineEditor";
-import { pipelineSummary } from "./fanout";
 import type { CapabilityMap } from "../runtime/adapter";
 import { useStore } from "./store";
 import { ModelPicker, PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, ROLE_LABEL, autonomyArgs, fmtTime, involvementOf, relTime, usePref } from "./common";
@@ -100,7 +101,7 @@ export function Settings() {
               steps such as verification.
             </p>
           </section>
-          <Templates />
+          <Patterns />
         </div>
 
         <div>
@@ -851,128 +852,190 @@ function ProjectSetup() {
   );
 }
 
-function Templates() {
-  const { state, send, disabled } = useStore();
-  // baseRev: the template revision the draft started from; null for a new template.
-  const [draft, setDraft] = useState<{ tpl: WorkflowTemplate; baseRev: number | null } | null>(null);
-  const editing = draft?.tpl ?? null;
-  const setEditing = (tpl: WorkflowTemplate) => setDraft((d) => (d ? { ...d, tpl } : d));
-  const templates = state.project.templates;
-  const missingBuiltIns = PROJECT_TEMPLATES.filter((b) => !templates.some((t) => t.id === b.id));
-
-  if (editing) {
-    return (
-      <section className="card" aria-labelledby="tpl-h">
-        <h2 id="tpl-h">{draft!.baseRev !== null ? `Edit template: ${editing.name}` : "New template"}</h2>
-        <PipelineEditor
-          initial={editing.steps}
-          checksEnabled={!!state.project.checks?.enabled}
-          checkCommands={state.project.checks?.commands}
-          saveLabel="Save template"
-          requireReason={false}
-          saveBlocked={disabled ? "The service is offline" : undefined}
-          header={
-            <>
-              <label className="field">
-                <span>Name</span>
-                <input type="text" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>When to use it</span>
-                <input type="text" value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} />
-              </label>
-              <p className="muted" style={{ fontSize: "0.85rem" }}>
-                Templates describe kinds of work, not a specific app. Saving never changes existing task pipelines.
-              </p>
-            </>
-          }
-          onSave={async (steps) => {
-            // A 409 (someone else saved this template first) keeps the draft open; the notice explains it.
-            const r = await send("saveTemplate", { template: { ...editing, steps }, expectedRev: draft!.baseRev });
-            if (r.ok) setDraft(null);
-          }}
-          onCancel={() => setDraft(null)}
-        />
-      </section>
-    );
-  }
-
+/**
+ * ORC-016: the pattern catalog, read-only. Built-in patterns change through commits; a file of yours in
+ * the patterns directory is picked up by Reload. The project default is the one setting here.
+ */
+function Patterns() {
+  const { state, send, disabled, postJson } = useStore();
+  const [reloading, setReloading] = useState(false);
+  const [last, setLast] = useState<PatternsReloadResponse | null>(null);
+  const catalog = state.patterns;
+  const stored = state.project.defaultPatternId;
+  const effective = effectiveDefault(state);
+  const standard = catalog.patterns.filter((p) => eligible(p, "default"));
+  const note = defaultPatternNote(stored, standard, effective);
+  const retired = state.retiredTemplates;
+  const localDir = catalog.localDir || "the patterns directory";
   return (
-    <section className="card" aria-labelledby="tpl-h">
+    <section className="card" aria-labelledby="pat-h">
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 id="tpl-h">Workflow templates</h2>
+        <h2 id="pat-h">Patterns</h2>
         <button
           className="small"
-          onClick={() =>
-            setDraft({
-              baseRev: null,
-              tpl: {
-              id: `custom-${Date.now().toString(36)}`,
-              name: "",
-              description: "",
-              builtIn: false,
-              rev: 0,
-              steps: [{ id: "S1", purpose: "", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }],
-              },
-            })
-          }
+          disabled={disabled || reloading}
+          title="Read the pattern files again. Tasks that already exist keep their steps."
+          onClick={async () => {
+            setReloading(true);
+            const r = await postJson("/api/patterns/reload", {});
+            setReloading(false);
+            if (r.ok) setLast(r.body as PatternsReloadResponse);
+          }}
         >
-          New template
+          {reloading ? "Reloading…" : "Reload patterns"}
         </button>
       </div>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        Starting pipelines for any project goal. A task's pipeline can be replaced from a template while editing it.
+        Every task runs one pattern from this catalog, chosen when the task is created or changed on the task page. Nothing here edits a pattern: built-in ones live in the repository's <code>patterns/</code> directory and change
+        through commits; yours live in <code>{localDir}</code> and are read at start and on Reload.
       </p>
-      {templates.length === 0 && <p className="muted">No templates.</p>}
-      <ul className="events">
-        {templates.map((t) => (
-          <li key={t.id} style={{ gridTemplateColumns: "1fr auto" }}>
-            <span>
-              <strong>{t.name}</strong> {t.builtIn && <span className="chip">{isModifiedBuiltIn(t) ? "built-in, edited" : "built-in"}</span>}
+      <p className="muted" style={{ fontSize: "0.85rem" }} role="status">
+        {catalogSummary(catalog)}
+        {catalog.loadedAt ? `, loaded ${relTime(catalog.loadedAt)}` : ""}.{last ? ` Last reload: ${last.patterns} patterns, ${last.errors} file error${last.errors === 1 ? "" : "s"}.` : ""}
+      </p>
+
+      <h3>Default pattern</h3>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        Used by the lead's proposals and by breakdowns when they name none, and preselected in New task. Only standard patterns can be the default: experiments, patterns that pause for you and patterns without an
+        independent review are yours to choose per task.
+      </p>
+      <PatternPicker state={state} patterns={standard} value={standard.some((p) => p.id === stored) ? stored : effective.id} label="Default pattern" disabled={disabled} onChange={(id) => void send("setDefaultPattern", { patternId: id })} />
+      {note && (
+        <p className="muted" style={{ fontSize: "0.85rem" }} role="status">
+          {note}
+        </p>
+      )}
+
+      {catalog.errors.length > 0 && (
+        <div className="banner danger" role="alert">
+          <strong>
+            {catalog.errors.length} pattern file error{catalog.errors.length === 1 ? "" : "s"}
+          </strong>
+          <ul className="plain" style={{ margin: "0.3rem 0 0", fontSize: "0.85rem" }}>
+            {catalog.errors.map((e, i) => (
+              <li key={i}>
+                <span className="mono">{errorLocation(e)}</span>
+                {e.id ? ` (${e.id})` : ""}: {e.message}{" "}
+                <span className="chip" title={e.effect === "built-in kept" ? "This file would replace a built-in pattern; the built-in stays in effect" : "The file is not in the catalog"}>
+                  {e.effect}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="muted" style={{ fontSize: "0.8rem", margin: "0.3rem 0 0" }}>
+            Fix the file and choose Reload. The app started anyway; a broken file never blocks it.
+          </p>
+        </div>
+      )}
+
+      <h3>Catalog ({catalog.patterns.length})</h3>
+      <ul className="pattern-list">
+        {catalog.patterns.map((p) => (
+          <li key={p.id}>
+            <div className="row" style={{ gap: "0.3rem" }}>
+              <strong>{p.name}</strong>
+              <span className="chip" title={`Loaded from ${p.file}`}>
+                {sourceLabel(p.source, p.replacesBuiltIn)}
+              </span>
+              <span className="chip" title={p.audience !== "standard" ? "Only you can choose it" : p.flags.breaksDown ? "The lead may choose it; breakdowns may not, because it breaks down itself" : "The lead and breakdowns may choose it"}>
+                {p.audience}
+              </span>
+              {patternFlagChips(p)
+                .filter((c) => !c.text.startsWith("yours"))
+                .map((c) => (
+                  <span key={c.text} className="chip" title={c.title}>
+                    {c.text}
+                  </span>
+                ))}
+            </div>
+            <div style={{ fontSize: "0.86rem", marginTop: "0.15rem" }}>{p.description}</div>
+            <div className="muted" style={{ fontSize: "0.85rem" }}>
+              <strong>Use when:</strong> {p.whenToUse}
+            </div>
+            {p.experimental && p.hypothesis && (
               <div className="muted" style={{ fontSize: "0.85rem" }}>
-                {t.description}
+                <strong>Hypothesis:</strong> {p.hypothesis}
               </div>
-              <div className="mono muted" style={{ fontSize: "0.78rem" }}>
-                {pipelineSummary(t.steps)}
+            )}
+            {p.warnings.length > 0 && (
+              <div className="muted" style={{ fontSize: "0.8rem" }}>
+                Warnings: {p.warnings.join("; ")}
               </div>
-            </span>
-            <span className="row" style={{ alignItems: "flex-start" }}>
-              <button className="small" onClick={() => setDraft({ tpl: structuredClone(t), baseRev: t.rev })}>
-                Edit
-              </button>
-              <button className="small" onClick={() => setDraft({ tpl: { ...structuredClone(t), id: `custom-${Date.now().toString(36)}`, name: `${t.name} copy`, builtIn: false, rev: 0 }, baseRev: null })}>
-                Duplicate
-              </button>
-              {isModifiedBuiltIn(t) && (
-                <button
-                  className="small"
-                  disabled={disabled}
-                  onClick={() => {
-                    const b = BUILT_IN_TEMPLATES.find((x) => x.id === t.id)!;
-                    if (confirm(`Reset "${t.name}" to the built-in version?`)) void send("saveTemplate", { template: structuredClone(b), expectedRev: t.rev });
-                  }}
-                >
-                  Reset
-                </button>
-              )}
-              <button
-                className="small danger"
-                disabled={disabled}
-                onClick={() => {
-                  if (confirm(`Delete the "${t.name}" template? Task pipelines already created from it are unchanged.`)) void send("deleteTemplate", { templateId: t.id });
-                }}
-              >
-                Delete
-              </button>
-            </span>
+            )}
+            <div className="mono muted" style={{ fontSize: "0.78rem", overflowWrap: "anywhere" }} title={`Content hash ${p.hash}`}>
+              {p.file} · {p.id} · {shortHash(p.hash)}
+              {p.chain.length > 1 ? ` · extends ${p.chain.slice(1).map((c) => c.id).join(" → ")}` : ""}
+            </div>
+            <details>
+              <summary className="muted" style={{ fontSize: "0.8rem", cursor: "pointer" }}>
+                {p.steps.length} steps
+              </summary>
+              <PatternSteps steps={p.steps} />
+            </details>
           </li>
         ))}
       </ul>
-      {missingBuiltIns.length > 0 && (
-        <button className="small" style={{ marginTop: "0.5rem" }} disabled={disabled} onClick={() => void send("restoreBuiltInTemplates")}>
-          Restore {missingBuiltIns.length} deleted built-in template(s)
-        </button>
+
+      {retired.length > 0 && (
+        <details style={{ marginTop: "0.6rem" }}>
+          <summary>Templates from before patterns ({retired.length})</summary>
+          <p className="muted" style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
+            Custom and edited templates were retired when pipelines became patterns. Each is written once as a pattern file of yours when the service starts; no file is ever overwritten.
+          </p>
+          <ul className="plain">
+            {retired.map((t) => (
+              <li key={t.id} style={{ fontSize: "0.85rem" }}>
+                <strong>{t.name}</strong> ({t.kind === "custom" ? "custom" : "edited built-in"}):{" "}
+                {t.exportedTo ? (
+                  <>
+                    saved as <code>{t.exportedTo}</code>
+                    {t.stripped?.length ? ` (left out: ${t.stripped.join("; ")})` : ""}
+                  </>
+                ) : t.exportError ? (
+                  <>
+                    <span style={{ color: "var(--s-blocked)" }}>{t.exportError}</span>
+                    <div className="muted" style={{ fontSize: "0.8rem" }}>
+                      The file it would have been, to copy into <code>{localDir}</code> yourself:
+                    </div>
+                    <pre className="pattern-json" tabIndex={0} aria-label={`Pattern file for ${t.name}`}>
+                      {retiredTemplateJson(t)}
+                    </pre>
+                  </>
+                ) : (
+                  "saved as a pattern file at the next start"
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
+
+      <details style={{ marginTop: "0.6rem" }}>
+        <summary>How patterns work</summary>
+        <ul className="plain" style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
+          <li>
+            Two folders: <code>patterns/</code> in the repository holds the built-in patterns, and <code>{localDir}</code> holds yours. Built-in patterns change through commits and pull requests. To add one of yours, drop a{" "}
+            <code>.json</code> or <code>.jsonc</code> file there and choose Reload; a file with a built-in's id replaces that built-in.
+          </li>
+          <li>Each file is checked against the schema, then the pipeline graph rules, then the pattern rules. A file with an error is listed above and skipped; when it would replace a built-in, the built-in stays.</li>
+          <li>
+            A variant can be two lines: <code>extends</code> another pattern and <code>stepOverrides</code> fields of its existing steps. This one pauses Bug fix after the reproduction:
+          </li>
+        </ul>
+        <pre className="pattern-json" tabIndex={0} aria-label="Example pattern file">
+          {EXAMPLE_VARIANT}
+        </pre>
+        <ul className="plain" style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
+          <li>
+            A pattern marked <code>experimental</code> must state its <code>hypothesis</code>. Experiments, patterns that pause for you and patterns without an independent review are yours to choose; the lead and breakdowns use
+            standard patterns only.
+          </li>
+          <li>Every task records the pattern it ran: its id, its content hash and its source. A task created before a file changed keeps its steps and its hash.</li>
+          <li>
+            The README section "Adding or changing a pipeline pattern" has the field reference and the validation rules.
+          </li>
+        </ul>
+      </details>
     </section>
   );
 }

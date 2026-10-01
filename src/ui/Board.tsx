@@ -2,13 +2,14 @@ import { useMemo, useState } from "react";
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
-import { INTERNAL_TEMPLATE_IDS } from "../domain/templates";
+import { effectiveDefault } from "../domain/patterns";
 import { PROVIDERS, ROLES, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { PrChip } from "./Delivery";
 import { COLUMN_LABEL, ROLE_LABEL, StatePill, currentWork, hasNewDecision, latestEvent, relTime } from "./common";
-import { isSettledTask, pipelineSummary } from "./fanout";
+import { isSettledTask } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
+import { PatternPicker } from "./PatternPicker";
 import { ShapingBanner } from "./Shaping";
 import { FocusDiff } from "./SteeringChanges";
 
@@ -36,7 +37,8 @@ function usePref<T extends string>(key: string, initial: T) {
 
 function NewTaskForm({ onClose }: { onClose: () => void }) {
   const { state, send, disabled } = useStore();
-  const templates = state.project.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id));
+  // ORC-016: the catalog never holds the service's own pipelines; everything in it is yours to choose.
+  const patterns = state.patterns.patterns;
   const [f, setF] = useState({
     title: "",
     area: "",
@@ -47,11 +49,10 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     acceptance: "",
     // "auto": priority 3, not pinned, so the lead may reorder it when you steer. A number is your choice and stays.
     priority: "auto",
-    templateId: templates.find((t) => t.id === "change")?.id ?? templates[0]?.id ?? "",
+    patternId: effectiveDefault(state).id,
     holdBeforeStart: true,
   });
   const set = (k: keyof typeof f, v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
-  const tpl = templates.find((t) => t.id === f.templateId);
   const text = (k: "title" | "area" | "outcome" | "benefit" | "whyNow" | "approach", label: string, required = false, multi = false) => (
     <label className="field">
       <span>
@@ -78,7 +79,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
           priority: f.priority === "auto" ? 3 : Number(f.priority) || 3,
           priorityPinned: f.priority !== "auto",
           holdBeforeStart: f.holdBeforeStart,
-          templateId: f.templateId,
+          patternId: f.patternId,
         });
         const id = newIdOf(r);
         if (id) {
@@ -89,7 +90,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     >
       <h2 id="new-task-h">New task</h2>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        You write the outcome and approach; the pipeline comes from a template and can be edited afterwards. Hold before start is on by default so you can review the spec and pipeline before anything runs.
+        You write the outcome and approach; the pipeline comes from the pattern you choose. You can pin a provider and model for each step on the task page. Hold before start is on by default so you can review the spec before anything runs.
       </p>
       {text("title", "Title", true)}
       {text("outcome", "Outcome (what should be true when done)", true, true)}
@@ -101,40 +102,24 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
       {text("benefit", "User benefit")}
       {text("area", "Area")}
       {text("whyNow", "Why now")}
-      <div className="row">
-        <label className="field">
-          <span>Pipeline template</span>
-          <select value={f.templateId} onChange={(e) => set("templateId", e.target.value)}>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Priority</span>
-          <select value={f.priority} onChange={(e) => set("priority", e.target.value)}>
-            <option value="auto">Auto (P3; the lead may reorder it)</option>
-            {Array.from({ length: 9 }, (_, i) => (
-              <option key={i + 1} value={String(i + 1)}>
-                P{i + 1} (pinned: the lead may not change it)
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {tpl && (
-        <p className="mono muted" style={{ fontSize: "0.78rem" }}>
-          {pipelineSummary(tpl.steps)}
-        </p>
-      )}
+      <PatternPicker state={state} patterns={patterns} value={f.patternId} onChange={(v) => set("patternId", v)} />
+      <label className="field">
+        <span>Priority</span>
+        <select value={f.priority} onChange={(e) => set("priority", e.target.value)}>
+          <option value="auto">Auto (P3; the lead may reorder it)</option>
+          {Array.from({ length: 9 }, (_, i) => (
+            <option key={i + 1} value={String(i + 1)}>
+              P{i + 1} (pinned: the lead may not change it)
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="row" style={{ fontSize: "0.9rem", marginBottom: "0.8rem" }}>
         <input type="checkbox" checked={f.holdBeforeStart} onChange={(e) => set("holdBeforeStart", e.target.checked)} />
         Hold before start
       </label>
       <div className="row">
-        <button type="submit" className="primary" disabled={disabled || !templates.length}>
+        <button type="submit" className="primary" disabled={disabled || !patterns.length}>
           Create task
         </button>
         <button type="button" onClick={onClose}>
@@ -365,7 +350,7 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
   const work = currentWork(state, task);
   const ev = latestEvent(state, task.id);
   const open = () => (location.hash = `#/task/${encodeURIComponent(task.id)}`);
-  const children = M.childTasks(state, task);
+  const children = M.currentChildren(state, task);
   const childrenDone = children.filter(isSettledTask).length;
   const prio = M.priorityProvenance(state, task);
   // ORC-013: findings waiting for a decision, by whom; check runs in progress, and final checks that failed.
