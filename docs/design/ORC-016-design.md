@@ -58,7 +58,7 @@ Companion to `docs/tasks/ORC-016.md` (spec r1). Branch `pipeline-patterns`, cut 
 3. **Tasks own copies.** A file change or a Reload never changes a task that already exists.
 4. **Behaviour is preserved.** The built-in patterns are a 1:1 transcription of today's built-in templates, and the service keeps creating the same shapes.
 5. **Files fail soft, code fails hard.** A broken file of yours is skipped and listed. A broken built-in fails the test suite and never ships.
-6. **Record now, compare later.** Provenance and outcomes are written from now on, and the comparison view is ORC-017.
+6. **Record now, compare later.** Provenance and outcomes are written from now on, and the comparison view is ORC-018.
 7. **Reuse the machinery.** Pipeline revisions, stale-result checks, holds, `supersedeDecisions` and `validatePipeline` all stay.
 
 ## 2. Invariants (each has a test, §17)
@@ -767,7 +767,7 @@ How each field is derived:
 
 ### 10.3 Derived later, not copied
 
-Delivery results are already stored on the task, are never backfilled, and are not pruned. A pure `deliveryOutcome(t)` (ORC-017) reads them from `t.integration`:
+Delivery results are already stored on the task, are never backfilled, and are not pruned. A pure `deliveryOutcome(t)` (ORC-018) reads them from `t.integration`:
 
 - the `status` and `at`;
 - `pr` (merged or closed, as observed);
@@ -778,9 +778,9 @@ Delivery results are already stored on the task, are never backfilled, and are n
 
 Time spent paused for a person is derivable later from control events. It is not recorded in v1.
 
-### 10.4 OpenTelemetry GenAI mapping (for ORC-017; nothing is exported now)
+### 10.4 OpenTelemetry GenAI mapping (for ORC-018; nothing is exported now)
 
-The GenAI semantic conventions are still marked "Development". The names below are re-checked against the version pinned when ORC-017 adds an exporter for Phoenix or Langfuse, both of which ingest OTLP.
+The GenAI semantic conventions are still marked "Development". The names below are re-checked against the version pinned when ORC-018 adds an exporter for Phoenix or Langfuse, both of which ingest OTLP.
 
 | Orchestrator | OpenTelemetry | Note |
 | --- | --- | --- |
@@ -797,7 +797,7 @@ The GenAI semantic conventions are still marked "Development". The names below a
 | `RunTally` rows | Metrics `gen_ai.client.token.usage` (`gen_ai.token.type` = input or output) and `gen_ai.client.operation.duration`, by provider, model and agent name | |
 | `TaskOutcome` numbers | `orc.outcome.*` attributes on the task span | Custom |
 
-A later SWE-bench run (ORC-018) needs only what exists after this task:
+A later SWE-bench run (ORC-019) needs only what exists after this task:
 
 - `createTask` with a `patternId` over HTTP;
 - the per-task `PatternRef` with its hash;
@@ -1128,8 +1128,8 @@ Dependencies: B2 needs B1's provenance (`patternSince`). B3 needs B2's `patternS
 
 ## 19. Later: seams left on purpose
 
-- **ORC-017, comparison.** Outcomes grouped by `pattern.id` and `hash`, with sample sizes, using `TaskOutcome` and `deliveryOutcome(t)`. An OTLP exporter maps §10.4 to Phoenix or Langfuse, off by default.
-- **ORC-018, SWE-bench Verified through patterns.** `createTask` with a `patternId` over HTTP, and the outcome records.
+- **ORC-018, comparison.** Outcomes grouped by `pattern.id` and `hash`, with sample sizes, using `TaskOutcome` and `deliveryOutcome(t)`. An OTLP exporter maps §10.4 to Phoenix or Langfuse, off by default.
+- **ORC-019, SWE-bench Verified through patterns.** `createTask` with a `patternId` over HTTP, and the outcome records.
 - **Automatic assignment.** `ChosenBy` gains `"rotation"` and `PatternRef.assignment = { experimentId, arm }`, plus a project setting that rotates two patterns for new tasks of one kind. It needs rules for lead-created tasks and holds.
 - **Patterns in a managed repository**, read only from the trusted base (as ORC-013 does for conventions) and added to protected paths.
 - **"Final checks only" per check command** in Settings → Checks, if `checks.only` is missed.

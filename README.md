@@ -128,9 +128,9 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 
 ![Artifacts](docs/screenshots/artifacts.png)
 
-**Choosing a pattern.** New task shows the catalog in groups (standard, pauses for you, experiments), what each pattern does and when to use it, and a read-only preview of its steps. The same picker changes a task's pattern before it starts or while it is paused, and sets the project default in Settings.
+**Choosing a pattern.** New task shows the catalog in groups (standard, pauses for you, experiments), what each pattern does and when to use it, and a read-only preview of its steps. The same picker changes a task's pattern before it starts or while it is paused, and sets the project default in Settings → Patterns. That page also lists any pattern file with an error, by file, line and column; a broken file is skipped and never stops the app.
 
-![Choosing a pattern for a new task](docs/screenshots/patterns.png)
+![Settings → Patterns: the default pattern, its steps, and a pattern file with errors](docs/screenshots/patterns.png)
 
 **Overview and the lead.** The Overview shows the vision, what changed since your last visit, and the conversation with the lead.
 
