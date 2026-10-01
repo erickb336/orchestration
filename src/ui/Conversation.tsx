@@ -60,7 +60,7 @@ export function Conversation({ variant = "inline", onClose, focusOnMount }: { va
       <p className="muted" style={{ fontSize: "0.82rem", margin: "0.3rem 0 0.6rem" }}>
         {simulated
           ? "Fake runtime: lead replies and steering are simulated, not written by a model."
-          : "When you give direction, the lead can change the focus, reorder and defer work, and drop its own unstarted proposals. Every change is listed with Undo. It never pauses or stops running work."}
+          : "When you give direction, the lead can change the focus, reorder and defer work, drop its own unstarted proposals, and send a note to a running coder or designer. Every change is listed, with Undo for all but notes. It never pauses or stops running work."}
       </p>
 
       {messages.length === 0 ? (

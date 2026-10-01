@@ -115,6 +115,8 @@ export class Scheduler {
   private readonly visionDocs?: VisionDocStore;
   private queue: QueueEvent[] = [];
   private launched = new Map<string, Launched>();
+  /** ORC-022: notes this instance handed to an adapter, so each is handed over once; cleared with the runs. */
+  private notesSent = new Set<string>();
   /** ORC-013: conventions read this cycle, by trusted ref, so the files are read once per cycle. */
   private conventionsCache: { ref: string; at: number; files: ConventionsFile[] } | undefined;
   private healthState: Partial<Record<ProviderId, ProviderHealth>> = {};
@@ -174,6 +176,7 @@ export class Scheduler {
     for (const a of this.allRunners()) for (const id of a.ids()) a.kill(id);
     this.queue = [];
     this.launched.clear();
+    this.notesSent.clear();
     // A GitHub operation in flight is stopped and its result dropped: its intent stays recorded and is
     // reconciled with GitHub by whoever holds the lease next.
     this.pr.abortAll();
@@ -251,8 +254,10 @@ export class Scheduler {
     const now = new Date(nowMs).toISOString();
     this.store.update(
       (s) => {
-        let next = s;
-        for (const a of M.activeAttempts(s)) {
+        // ORC-022: a note handed over before the restart gets no answer now; it is never shown as delivered.
+        // Before the runs, so its reason names the restart rather than the lost run.
+        let next = M.reconcileNotes(s, now);
+        for (const a of M.activeAttempts(next)) {
           if (!this.runnerFor(a.snapshot.provider)?.has(a.id)) {
             next = M.reportRunLost(next, a.id, "No runtime process found after the service restarted or the scheduler changed", now);
           }
@@ -381,6 +386,8 @@ export class Scheduler {
     if (failedToStart.some((f) => active.get(f.id)?.snapshot.provider === "service")) this.failedStarts++;
     else if (dispatched.size && [...dispatched].some((id) => active.get(id)?.snapshot.provider === "service")) this.failedStarts = 0;
     this.planProbe(state, nowMs);
+    // ORC-022: notes the user sent since the last cycle go to their live runs.
+    this.sendNotes(state);
 
     // 2b. The lead: supervise the active lead run, or start one when a message or planning is due.
     const leadIssues: { id: string; kind: "lost" | "timeout" | "failed"; reason?: string }[] = [];
@@ -491,6 +498,8 @@ export class Scheduler {
       this.launched.delete(e.attemptId);
     }
     this.conventionsCache = undefined;
+    // ORC-022: notes the lead's reply just sent (applied in the drain above) go to their live runs now.
+    this.sendNotes(this.store.read().state);
 
     // 5. Integration: one finished task per cycle, frozen while the project is paused; then delivery.
     this.integrateNext(nowMs, lease);
@@ -500,6 +509,28 @@ export class Scheduler {
     // 6. Automatic retries of failed steps (opt-in, bounded per step, never for credential/config failures).
     const retries = M.autoRetryCandidates(this.store.read().state, nowMs);
     if (retries.length) this.store.update((s) => retries.reduce((acc, r) => M.autoRetryStep(acc, r.taskId, r.stepId, now), s), now, lease);
+  }
+
+  /**
+   * ORC-022: hand every note the domain marked "sending" for a live run to that run's adapter, once. The
+   * adapter answers with exactly one "note" event (also when it has no such run); the domain records the
+   * answer, and a restart marks the unanswered ones not delivered. Notes written into a starting run's
+   * instructions (`via: "start"`) are confirmed by `launch`, not here.
+   */
+  private sendNotes(state: State) {
+    for (const n of state.notes) {
+      if (n.status !== "sending" || n.via !== "live" || !n.attemptId || this.notesSent.has(n.id)) continue;
+      this.notesSent.add(n.id);
+      const a = state.attempts.find((x) => x.id === n.attemptId);
+      const adapter = a && isProvider(a.snapshot.provider) ? this.adapters[a.snapshot.provider] : undefined;
+      if (!adapter) {
+        this.queue.push({ type: "note", attemptId: n.attemptId, noteId: n.id, outcome: "not-delivered", reason: "this run has no agent runtime" });
+        continue;
+      }
+      adapter.note(n.attemptId, { id: n.id, text: M.noteMessage(n) });
+    }
+    // Settled notes are forgotten, so the set does not grow with the record.
+    for (const id of this.notesSent) if (!state.notes.some((n) => n.id === id && n.status === "sending")) this.notesSent.delete(id);
   }
 
   /** Merge the oldest done task's final change into the integration branch (serial, one per cycle). */
@@ -788,6 +819,8 @@ export class Scheduler {
         outputs: step.outputs,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
+      // Notes written into the instructions ("via start") are confirmed when the runtime reports the run started
+      // (ORC-022 review M1): a run that fails before it starts settles them as not delivered.
       return undefined;
     } catch (e) {
       this.launched.delete(attemptId);
@@ -926,8 +959,12 @@ export class Scheduler {
     if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now, { startedAt: e.startedAt });
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
-      case "started":
-        return M.reportRunStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
+      case "started": {
+        let next = M.reportRunStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
+        const simulated = this.simulatedRun(next, e.attemptId);
+        for (const n of M.notesAtStart(next, e.attemptId)) if (n.status === "sending") next = M.reportNoteOutcome(next, { attemptId: e.attemptId, noteId: n.id, outcome: "delivered" }, now, simulated);
+        return next;
+      }
       case "progress":
         return M.reportProgress(s, e.attemptId, e.percent);
       case "activity":
@@ -950,7 +987,18 @@ export class Scheduler {
         if (c.problems.length) next = noteProblems(next, e.attemptId, c.problems);
         return next;
       }
+      case "note": {
+        // ORC-022: the runtime's answer (or the service's, for a note written into a run that started). An answer
+        // from the fake runtime is recorded as simulated. A stale answer changes nothing (the domain checks the run).
+        return M.reportNoteOutcome(s, e, now, this.simulatedRun(s, e.attemptId));
+      }
     }
+  }
+
+  /** Whether a run is the fake runtime's: its note outcomes are recorded as simulated. */
+  private simulatedRun(s: State, attemptId: string): true | undefined {
+    const a = s.attempts.find((x) => x.id === attemptId);
+    return a && isProvider(a.snapshot.provider) && this.adapters[a.snapshot.provider] instanceof FakeAdapter ? true : undefined;
   }
 
   private applyLeadEvent(s: State, e: AdapterEvent, now: string): State {
@@ -960,6 +1008,7 @@ export class Scheduler {
       case "activity":
         return M.reportLeadActivity(s, e.attemptId, e.note);
       case "progress":
+      case "note": // lead runs never receive notes
         return s;
       case "stopped":
         return M.reportLeadStopped(s, e.attemptId, now);

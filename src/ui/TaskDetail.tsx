@@ -3,11 +3,12 @@ import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
-import { ROLES, type Artifact, type Attempt, type State, type Step, type Task } from "../domain/types";
+import { MAX_NOTE_LENGTH, ROLES, type Artifact, type Attempt, type Note, type State, type Step, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { checkLogUrl } from "../api";
 import * as C from "../domain/checks";
 import { ModelPicker, Pill, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText, useNarrow, type Tone } from "./common";
+import { canSendNote, noteSourceLabel, noteStatusLabel, noteTone } from "./notes";
 import { DeliveryCard } from "./Delivery";
 import { CheckResults, CoverageChip, DecisionControls, DecisionQueue, FindingsList } from "./Findings";
 import { SpecEditor } from "./SpecEditor";
@@ -883,6 +884,124 @@ function StepStateCell({ st, task, open }: { st: Step; task: Task; open: boolean
   );
 }
 
+/**
+ * ORC-022: the secondary "Send a note" control on a running agent step (never a Checks step), and the
+ * one-paragraph form it opens. The note is guidance within the spec; the service decides which run gets it.
+ */
+function SendNote({ state, task, st }: { state: State; task: Task; st: Step }) {
+  const { send, disabled, service } = useStore();
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  // An open form with a draft stays when the run ends meanwhile, so the text is not lost; Send waits for a run.
+  const can = canSendNote(state, task, st.id);
+  if (!can && !(open && text)) return null;
+  const length = text.replace(/\s+/g, " ").trim().length;
+  const tooLong = length > MAX_NOTE_LENGTH;
+  const id = `note-${task.id}-${st.id}`;
+  if (!open)
+    return (
+      <button className="small" style={{ marginTop: "0.3rem" }} aria-label={`Send a note to ${st.id}`} disabled={disabled} title="A short instruction for the running agent; it reaches it at its next step and is kept on the record" onClick={() => setOpen(true)}>
+        Send a note
+      </button>
+    );
+  return (
+    <form
+      className="note-form stack"
+      aria-label={`Note to ${st.id}`}
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!can || !length || tooLong || busy) return;
+        setBusy(true);
+        const r = await send("sendNote", { taskId: task.id, stepId: st.id, text });
+        setBusy(false);
+        if (r.ok) {
+          setText("");
+          setOpen(false);
+        }
+      }}
+    >
+      <label className="field" htmlFor={id} style={{ margin: 0 }}>
+        <span>
+          Note to the {ROLE_LABEL[st.role].toLowerCase()} {can ? "running" : "of"} {st.id}
+        </span>
+        <textarea id={id} value={text} onChange={(e) => setText(e.target.value)} autoFocus rows={3} aria-describedby={`${id}-hint`} aria-invalid={tooLong} placeholder="For example: skip the README; I will write it." />
+      </label>
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <span id={`${id}-hint`} className="muted small">
+          {!can
+            ? `${st.id} is no longer running, so this note cannot reach it. Ask the lead to rerun ${st.id} with it, or cancel.`
+            : tooLong
+              ? `Notes are limited to ${MAX_NOTE_LENGTH} characters.`
+              : `One paragraph, ${length}/${MAX_NOTE_LENGTH}. Guidance within the spec; the agent keeps its work so far.`}
+          {can && service.runtime === "fake" ? " Simulated: the fake runtime acknowledges after a moment." : ""}
+        </span>
+        <span className="row" style={{ gap: "0.3rem" }}>
+          <button type="submit" className="small primary" disabled={disabled || busy || !can || !length || tooLong}>
+            {busy ? "Sending…" : "Send"}
+          </button>
+          <button
+            type="button"
+            className="small"
+            onClick={() => {
+              setOpen(false);
+              setText("");
+            }}
+          >
+            Cancel
+          </button>
+        </span>
+      </div>
+    </form>
+  );
+}
+
+/** ORC-022: notes, each with its status chip (Queued, Sending, Delivered, Delivered at start, Not delivered: reason), its source and its time; "simulated" in the demo. */
+function NotesList({ notes, label }: { notes: Note[]; label: string }) {
+  if (!notes.length) return null;
+  return (
+    <ul className="notes" aria-label={label}>
+      {notes.map((n) => (
+        <li key={n.id}>
+          <div className="row" style={{ gap: "0.35rem", alignItems: "baseline" }}>
+            <Pill tone={noteTone(n)} pulse={n.status === "sending"}>
+              {noteStatusLabel(n)}
+            </Pill>
+            {n.simulated && (
+              <span className="chip" title="Written by the fake runtime's lead, or acknowledged by a simulated run; no agent read it">
+                simulated
+              </span>
+            )}
+            <span className="muted">
+              {noteSourceLabel(n)} ·{" "}
+              <time dateTime={n.at} title={fmtTime(n.at)}>
+                {relTime(n.at)}
+              </time>
+            </span>
+          </div>
+          <div className="note-text">“{n.text}”</div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** ORC-022: under a step: Send a note while it runs, and the notes waiting for its next run. */
+function StepNotes({ state, task, st }: { state: State; task: Task; st: Step }) {
+  const queued = M.queuedNotes(state, task.id, st.id);
+  return (
+    <>
+      <SendNote state={state} task={task} st={st} />
+      {queued.length > 0 && (
+        <div className="small" style={{ marginTop: "0.3rem" }}>
+          <span className="muted">Waiting for its next run:</span>
+          <NotesList notes={queued} label={`Notes waiting for ${st.id}`} />
+        </div>
+      )}
+    </>
+  );
+}
+
 function StepsCard({ state, task }: { state: State; task: Task }) {
   const { send, disabled, service } = useStore();
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
@@ -930,6 +1049,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
               <div className="step-model">
                 <StepModel state={state} task={task} st={st} open={open} />
               </div>
+              <StepNotes state={state} task={task} st={st} />
               <StepContext state={state} task={task} st={st} />
             </li>
           ))}
@@ -950,6 +1070,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                 <tr key={st.id}>
                   <td>
                     <StepHead state={state} task={task} st={st} />
+                    <StepNotes state={state} task={task} st={st} />
                     <StepContext state={state} task={task} st={st} />
                   </td>
                   <td>{ROLE_LABEL[st.role]}</td>
@@ -1288,130 +1409,147 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
     <section className="card" aria-labelledby="runs-h">
       <h2 id="runs-h">Runs</h2>
       {!runs.length && <p className="muted">No runs yet.</p>}
-      {runs.map((a) => (
-        <details key={a.id} className="stack" style={{ borderBottom: "1px solid var(--border)", padding: "0.4rem 0" }}>
-          <summary>
-            <span className="mono">{a.id}</span> · {a.stepId} · {selectionText(a.snapshot)} · <strong>{a.outcome}</strong>
-            {notChosen(task, a.stepId) && a.outcome === "completed" && (
-              <>
-                {" "}
-                <span className="chip">not chosen</span>
-              </>
-            )}
-            {(a.outcome === "running" || a.outcome === "stopping") && a.progress > 0 && (
-              <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`} style={{ marginTop: "0.3rem" }}>
-                <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
+      {runs.map((a) => {
+        const notes = M.notesOfRun(state, a.id);
+        return (
+          <details key={a.id} className="stack" style={{ borderBottom: "1px solid var(--border)", padding: "0.4rem 0" }}>
+            <summary>
+              <span className="mono">{a.id}</span> · {a.stepId} · {selectionText(a.snapshot)} · <strong>{a.outcome}</strong>
+              {notChosen(task, a.stepId) && a.outcome === "completed" && (
+                <>
+                  {" "}
+                  <span className="chip">not chosen</span>
+                </>
+              )}
+              {notes.length > 0 && (
+                <>
+                  {" "}
+                  <span className="chip" title="Notes sent to this run; listed below">
+                    {notes.length} note{notes.length === 1 ? "" : "s"}
+                  </span>
+                </>
+              )}
+              {(a.outcome === "running" || a.outcome === "stopping") && a.progress > 0 && (
+                <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`} style={{ marginTop: "0.3rem" }}>
+                  <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
+                </div>
+              )}
+              {(a.outcome === "running" || a.outcome === "stopping") && a.activity && (
+                <div className="muted" style={{ fontSize: "0.8rem" }}>
+                  {a.activity}
+                </div>
+              )}
+            </summary>
+            {notes.length > 0 && (
+              <div className="small">
+                <span className="muted">Notes to this run:</span>
+                <NotesList notes={notes} label={`Notes to ${a.id}`} />
               </div>
             )}
-            {(a.outcome === "running" || a.outcome === "stopping") && a.activity && (
-              <div className="muted" style={{ fontSize: "0.8rem" }}>
-                {a.activity}
-              </div>
-            )}
-          </summary>
-          <dl className="kv" style={{ fontSize: "0.82rem" }}>
-            <dt>Snapshot</dt>
-            <dd>
-              spec r{a.snapshot.specRev} · step config r{a.snapshot.stepRev} · pipeline r{a.snapshot.pipelineRev} · vision r{a.snapshot.visionRev}
-            </dd>
-            <dt>Inputs</dt>
-            <dd>
-              {a.snapshot.inputs.length
-                ? a.snapshot.inputs
-                    .map((i) => `${i.step}.${i.output} v${i.version}${state.artifacts.find((x) => x.id === i.artifactId)?.author === "user" ? " (your edit)" : ""}`)
-                    .join(", ")
-                : "none"}
-            </dd>
-            <dt>Produced</dt>
-            <dd>
-              {state.artifacts
-                .filter((x) => x.attemptId === a.id)
-                .map((x) => `${x.name} v${x.version}`)
-                .join(", ") || "—"}
-            </dd>
-            <dt>Routing</dt>
-            <dd>{a.snapshot.routingReason}</dd>
-            {a.snapshot.checks && (
-              <>
-                <dt>Commands</dt>
-                <dd>
-                  {a.snapshot.checks.commands.map((c) => (
-                    <div key={c.id}>
-                      <span className="chip">{c.kind}</span> <span className="mono">{c.argv.join(" ")}</span>
-                      {state.artifacts.find((x) => x.attemptId === a.id)?.checkRun?.results.find((r) => r.id === c.id)?.log && service.runtime === "real" ? (
-                        <>
-                          {" · "}
-                          <a href={checkLogUrl(a.id, c.id)} target="_blank" rel="noreferrer">
-                            log
-                          </a>
-                        </>
-                      ) : null}
+            <dl className="kv" style={{ fontSize: "0.82rem" }}>
+              <dt>Snapshot</dt>
+              <dd>
+                spec r{a.snapshot.specRev} · step config r{a.snapshot.stepRev} · pipeline r{a.snapshot.pipelineRev} · vision r{a.snapshot.visionRev}
+              </dd>
+              <dt>Inputs</dt>
+              <dd>
+                {a.snapshot.inputs.length
+                  ? a.snapshot.inputs
+                      .map((i) => `${i.step}.${i.output} v${i.version}${state.artifacts.find((x) => x.id === i.artifactId)?.author === "user" ? " (your edit)" : ""}`)
+                      .join(", ")
+                  : "none"}
+              </dd>
+              <dt>Produced</dt>
+              <dd>
+                {state.artifacts
+                  .filter((x) => x.attemptId === a.id)
+                  .map((x) => `${x.name} v${x.version}`)
+                  .join(", ") || "—"}
+              </dd>
+              <dt>Routing</dt>
+              <dd>{a.snapshot.routingReason}</dd>
+              {a.snapshot.checks && (
+                <>
+                  <dt>Commands</dt>
+                  <dd>
+                    {a.snapshot.checks.commands.map((c) => (
+                      <div key={c.id}>
+                        <span className="chip">{c.kind}</span> <span className="mono">{c.argv.join(" ")}</span>
+                        {state.artifacts.find((x) => x.attemptId === a.id)?.checkRun?.results.find((r) => r.id === c.id)?.log && service.runtime === "real" ? (
+                          <>
+                            {" · "}
+                            <a href={checkLogUrl(a.id, c.id)} target="_blank" rel="noreferrer">
+                              log
+                            </a>
+                          </>
+                        ) : null}
+                      </div>
+                    ))}
+                    <div className="muted">
+                      on {a.snapshot.checks.target.ref.slice(0, 12)} · settings r{a.snapshot.checks.configRev} · {a.snapshot.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}
+                      {a.snapshot.checks.reusedFrom ? ` · same as ${a.snapshot.checks.reusedFrom}` : ""}
                     </div>
-                  ))}
-                  <div className="muted">
-                    on {a.snapshot.checks.target.ref.slice(0, 12)} · settings r{a.snapshot.checks.configRev} · {a.snapshot.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}
-                    {a.snapshot.checks.reusedFrom ? ` · same as ${a.snapshot.checks.reusedFrom}` : ""}
-                  </div>
-                </dd>
-              </>
-            )}
-            {a.actualModel && a.actualModel !== a.snapshot.model && (
-              <>
-                <dt>Model reported</dt>
-                <dd className="mono">{a.actualModel}</dd>
-              </>
-            )}
-            {a.sessionId && (
-              <>
-                <dt>Provider session</dt>
-                <dd className="mono">{a.sessionId}</dd>
-              </>
-            )}
-            {a.usage && (
-              <>
-                <dt>Usage</dt>
-                <dd>
-                  {[
-                    a.usage.inputTokens !== undefined && `${a.usage.inputTokens.toLocaleString()} input tokens`,
-                    a.usage.outputTokens !== undefined && `${a.usage.outputTokens.toLocaleString()} output tokens`,
-                    a.usage.costUsd !== undefined && `$${a.usage.costUsd.toFixed(4)} (provider estimate)`,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || "not reported"}
-                </dd>
-              </>
-            )}
-            <dt>Workspace</dt>
-            <dd className="mono">{a.snapshot.workspace}</dd>
-            {a.snapshot.environment && (
-              <>
-                <dt>Environment</dt>
-                <dd>
-                  {a.snapshot.environment === "local"
-                    ? "Local setup (user settings, plugins, all MCP servers)"
-                    : `Isolated${a.snapshot.connections?.length ? `; connections: ${a.snapshot.connections.join(", ")}` : "; no connections"}`}
-                </dd>
-              </>
-            )}
-            <dt>Started</dt>
-            <dd>{fmtTime(a.startedAt)}</dd>
-            {a.endedAt && (
-              <>
-                <dt>Ended</dt>
-                <dd>{fmtTime(a.endedAt)}</dd>
-              </>
-            )}
-            {a.note && (
-              <>
-                <dt>Note</dt>
-                <dd>{a.note}</dd>
-              </>
-            )}
-            <dt>Checkpoints</dt>
-            <dd>{a.artifacts.length ? <ul className="plain">{a.artifacts.map((x, i) => <li key={i}>{x}</li>)}</ul> : "—"}</dd>
-          </dl>
-        </details>
-      ))}
+                  </dd>
+                </>
+              )}
+              {a.actualModel && a.actualModel !== a.snapshot.model && (
+                <>
+                  <dt>Model reported</dt>
+                  <dd className="mono">{a.actualModel}</dd>
+                </>
+              )}
+              {a.sessionId && (
+                <>
+                  <dt>Provider session</dt>
+                  <dd className="mono">{a.sessionId}</dd>
+                </>
+              )}
+              {a.usage && (
+                <>
+                  <dt>Usage</dt>
+                  <dd>
+                    {[
+                      a.usage.inputTokens !== undefined && `${a.usage.inputTokens.toLocaleString()} input tokens`,
+                      a.usage.outputTokens !== undefined && `${a.usage.outputTokens.toLocaleString()} output tokens`,
+                      a.usage.costUsd !== undefined && `$${a.usage.costUsd.toFixed(4)} (provider estimate)`,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "not reported"}
+                  </dd>
+                </>
+              )}
+              <dt>Workspace</dt>
+              <dd className="mono">{a.snapshot.workspace}</dd>
+              {a.snapshot.environment && (
+                <>
+                  <dt>Environment</dt>
+                  <dd>
+                    {a.snapshot.environment === "local"
+                      ? "Local setup (user settings, plugins, all MCP servers)"
+                      : `Isolated${a.snapshot.connections?.length ? `; connections: ${a.snapshot.connections.join(", ")}` : "; no connections"}`}
+                  </dd>
+                </>
+              )}
+              <dt>Started</dt>
+              <dd>{fmtTime(a.startedAt)}</dd>
+              {a.endedAt && (
+                <>
+                  <dt>Ended</dt>
+                  <dd>{fmtTime(a.endedAt)}</dd>
+                </>
+              )}
+              {a.note && (
+                <>
+                  <dt>Note</dt>
+                  <dd>{a.note}</dd>
+                </>
+              )}
+              <dt>Checkpoints</dt>
+              <dd>{a.artifacts.length ? <ul className="plain">{a.artifacts.map((x, i) => <li key={i}>{x}</li>)}</ul> : "—"}</dd>
+            </dl>
+          </details>
+        );
+      })}
     </section>
   );
 }

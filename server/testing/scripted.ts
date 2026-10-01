@@ -36,10 +36,12 @@ export class ScriptedAdapter implements RuntimeAdapter {
   async listConnections(): Promise<Connection[] | null> {
     return this.connectionsList;
   }
+  /** false: the runtime accepts the run but does not report it started (the provider never got going). */
+  reportsStart = true;
   start(a: Assignment) {
     this.runs.set(a.attemptId, a);
     this.started.push(a);
-    this.emit({ type: "started", attemptId: a.attemptId, sessionId: `${this.provider}-session-${a.attemptId}`, model: `${a.model}-actual` });
+    if (this.reportsStart) this.emit({ type: "started", attemptId: a.attemptId, sessionId: `${this.provider}-session-${a.attemptId}`, model: `${a.model}-actual` });
   }
   interrupt(id: string) {
     if (!this.interrupts.includes(id)) this.interrupts.push(id);
@@ -59,6 +61,11 @@ export class ScriptedAdapter implements RuntimeAdapter {
       this.listeners.delete(l);
     };
   }
+  /** ORC-022: scripted runs acknowledge nothing unless a test says so. */
+  note(attemptId: string, note: { id: string; text: string }) {
+    this.notes.push({ attemptId, ...note });
+  }
+  readonly notes: { attemptId: string; id: string; text: string }[] = [];
   async shutdown() {
     this.runs.clear();
   }
@@ -226,6 +233,11 @@ export class ScriptedChecks implements CheckRunner {
     this.probes.push(sandbox);
     return { sandbox, status: this.health, detail: this.health === "ready" ? "scripted: ready" : "scripted: the sandbox is unavailable", checkedAt: new Date().toISOString(), ...(this.health !== "ready" ? { probes: { writeOutside: "allowed" as const, network: "unknown" as const } } : {}) };
   }
+  /** ORC-022: scripted runs acknowledge nothing unless a test says so. */
+  note(attemptId: string, note: { id: string; text: string }) {
+    this.notes.push({ attemptId, ...note });
+  }
+  readonly notes: { attemptId: string; id: string; text: string }[] = [];
   async shutdown() {
     this.runs.clear();
   }

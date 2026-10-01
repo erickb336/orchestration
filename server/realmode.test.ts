@@ -51,6 +51,11 @@ class ScriptedAdapter implements RuntimeAdapter {
     this.listeners.add(l);
     return () => this.listeners.delete(l);
   }
+  /** ORC-022: scripted runs acknowledge nothing unless a test says so. */
+  note(attemptId: string, note: { id: string; text: string }) {
+    this.notes.push({ attemptId, ...note });
+  }
+  readonly notes: { attemptId: string; id: string; text: string }[] = [];
   async shutdown() {
     this.runs.clear();
   }

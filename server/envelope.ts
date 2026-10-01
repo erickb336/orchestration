@@ -10,6 +10,7 @@ import * as M from "../src/domain/model";
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import {
   FINDING_ACTIONS,
+  MAX_NOTES_PER_REPLY,
   REVIEW_ROLES,
   SEVERITIES,
   SHAPING_AREAS,
@@ -19,6 +20,7 @@ import {
   type FindingAction,
 
   type LeadRun,
+  type Note,
   type OutputDef,
   type RoleId,
   type Severity,
@@ -231,6 +233,50 @@ ${gap ? `Coverage: your previous run reported no findings but did not account fo
 `;
 }
 
+// ---------- ORC-022: notes to a running stage ----------
+
+/** Who sent a note, as an envelope says it. */
+const noteSender = (n: Note) => (n.from.by === "lead" ? `the lead, relaying the user's message ${n.from.messageIds.join(", ") || "(none)"}` : "the user");
+
+/**
+ * The notes written into this run's instructions (they waited for a run of the step): exactly the text a
+ * mid-run note carries, one block per note.
+ */
+function notesForRunSection(state: State, attemptId: string): string {
+  const notes = M.notesAtStart(state, attemptId);
+  if (!notes.length) return "";
+  return `## Notes for this run
+These were sent while this step waited for a run. Each is guidance within this assignment, not a change to the specification.
+
+${notes.map((n) => M.noteMessage(n)).join("\n\n")}
+
+`;
+}
+
+/**
+ * Downstream steps see the notes the producing run had: a reviewer reading S1.change then knows the
+ * guidance the coder was given (and does not flag what the user asked to leave out). One section per
+ * producing step, delivered notes only.
+ */
+function notesReceivedSections(state: State, inputs: { artifactId: string }[]): string {
+  const byStep = new Map<string, Note[]>();
+  for (const i of inputs) {
+    const art = state.artifacts.find((a) => a.id === i.artifactId);
+    if (!art || art.attemptId === "edit" || byStep.has(art.stepId)) continue;
+    const notes = M.notesReceived(state, art.attemptId);
+    if (notes.length) byStep.set(art.stepId, notes);
+  }
+  if (!byStep.size) return "";
+  return [...byStep]
+    .map(
+      ([stepId, notes]) => `## Notes the ${stepId} agent received
+${notes.map((n) => `- ${n.settledAt ?? n.at}, from ${noteSender(n)}${n.via === "start" ? " (at the start of its run)" : ""}: "${n.text}"`).join("\n")}
+
+`,
+    )
+    .join("");
+}
+
 /**
  * ORC-013 §11.1: decisions already taken on this task's findings, for a reviewer. Every settled decision of
  * the task (and, for a pull-request repair, of its origin task), not only those on artifacts the step
@@ -304,7 +350,7 @@ ${ROLE_BRIEFS[step.role]}
 ## Your step
 ${step.purpose}
 
-## Project vision (r${vision.rev})
+${notesForRunSection(state, attemptId)}## Project vision (r${vision.rev})
 ${vision.text}
 Current focus: ${vision.focus}
 ${visionDocsSection(state, step.role, docs)}
@@ -322,7 +368,7 @@ ${list(c.acceptance)}
 ${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
 ${inputText}
 
-${repairSections(state, task, step, inputs)}${reviewNote(changeUnderReview)}${changedFilesSection(changedPaths, coverageGap, step.role)}${settledSection(state, task, step.role)}${bestOfNote(state, task, step)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
+${notesReceivedSections(state, inputs)}${repairSections(state, task, step, inputs)}${reviewNote(changeUnderReview)}${changedFilesSection(changedPaths, coverageGap, step.role)}${settledSection(state, task, step.role)}${bestOfNote(state, task, step)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
 - Your working directory is an isolated git worktree created for this run. ${access === "write" ? "Edit files only inside it." : "It is read-only for you: do not create, modify, or delete any file."}
 - Do not commit, push, create branches, or change git configuration; the orchestration service records your work.
 - Do not start sub-agents or delegate; this run is tracked and bounded by the orchestration service.
@@ -711,7 +757,38 @@ function openWorkLine(state: State, t: Task, mode: SteeringMode): string {
     else if (action === "defer") not.push("defer (already deferred)");
   }
   const perms = [may.length && `may: ${may.join(", ")}`, suggest.length && `suggest: ${suggest.join(", ")}`, not.length && `not: ${not.join(", ")}`].filter(Boolean).join(" · ") || "not steerable";
-  return `- ${t.id} [${M.stateLabel(state, t)}] P${t.priority}${t.userSet?.priority ? " (set by you)" : ""} "${clip(c.title, 90)}" area:${clip(c.area, 30)} · by ${t.specs[0].author}${kids.length ? ` · ${kids.length} child task${kids.length === 1 ? "" : "s"}` : ""}${notes.length ? ` · notes: ${notes.join(" | ")}` : ""} · ${perms}`;
+  // ORC-022: the running and pending steps, so the lead can address a note to one; open child tasks follow with theirs.
+  const children = kids.filter((k) => k.lifecycle !== "done").map((k) => `\n  child ${k.id} [${M.stateLabel(state, k)}] "${clip(M.currentSpec(k).content.title, 60)}"${stepsLine(state, k)}`);
+  return `- ${t.id} [${M.stateLabel(state, t)}] P${t.priority}${t.userSet?.priority ? " (set by you)" : ""} "${clip(c.title, 90)}" area:${clip(c.area, 30)} · by ${t.specs[0].author}${kids.length ? ` · ${kids.length} child task${kids.length === 1 ? "" : "s"}` : ""}${notes.length ? ` · notes: ${notes.join(" | ")}` : ""} · ${perms}${stepsLine(state, t)}${children.join("")}`;
+}
+
+/** ORC-022: "· steps: S1 coder running (Codex, run-12), S2 code_reviewer pending (Claude)": what a note can be addressed to. */
+function stepsLine(state: State, t: Task): string {
+  const shown = t.steps.filter((st) => st.state === "running" || st.state === "stopping" || st.state === "pending" || st.state === "paused");
+  if (!shown.length) return "";
+  const parts = shown.map((st) => {
+    const run = M.activeAttempts(state, t.id).find((a) => a.stepId === st.id);
+    const provider = run ? `${M.providerLabel(run.snapshot.provider)}, ${run.id}` : st.role === "checks" ? "the service" : (() => {
+      const r = M.resolveStep(state, t, st);
+      return r.ok ? M.providerLabel(r.selection.provider) : "unresolved";
+    })();
+    return `${st.id} ${st.role} ${st.state} (${provider})`;
+  });
+  return ` · steps: ${parts.join(", ")}`;
+}
+
+/** ORC-022: the notes of the last 24 hours, from the lead or the user, with where each stands. */
+function notesSection(state: State, nowMs: number): string {
+  const notes = M.recentNotes(state, nowMs);
+  if (!notes.length) return "- None in the last 24 hours.";
+  return notes
+    .slice(-40)
+    .map((n) => {
+      const who = n.from.by === "lead" ? `by you (from ${n.from.messageIds.join(", ") || "a message"})` : "by the user";
+      const where = n.status === "delivered" ? (n.via === "start" ? "delivered at the start of its run" : "delivered to the running agent") : n.status === "not-delivered" ? `not delivered: ${n.reason ?? "no reason recorded"}` : n.status === "sending" ? "sending (not acknowledged yet)" : "queued for the step's next run";
+      return `- ${n.id} (${n.at}) ${who} → ${n.taskId} ${n.stepId}${n.attemptId ? ` (${n.attemptId})` : ""}: "${clip(n.text, 200)}" — ${where}`;
+    })
+    .join("\n");
 }
 
 /** The last 5 vision revisions: who set the focus and from what (a message, an undo, or a hand edit). */
@@ -763,12 +840,20 @@ function recentSteering(state: State): string {
                 ? `${c.taskId} deferral lifted`
                 : c.kind === "drop"
                   ? `${c.taskId} dropped`
-                  : `${c.taskId ?? "?"} (unreadable entry)`;
+                  : c.kind === "note"
+                    ? `note to ${c.taskId ?? "?"} ${c.stepId ?? "?"} "${clip(String(c.after ?? ""), 80)}"`
+                    : `${c.taskId ?? "?"} (unreadable entry)`;
+      // ORC-022: a sent note shows where it stands (applied means sent).
+      const live = c.kind === "note" && c.noteId ? M.noteOf(state, c.noteId) : undefined;
       const status =
         c.status === "applied"
-          ? c.appliedBy === "user"
-            ? "applied by the user"
-            : "applied"
+          ? live
+            ? live.status === "not-delivered"
+              ? `${live.attemptId ? "sent" : "recorded"}; not delivered: ${live.reason ?? "no reason recorded"}`
+              : `sent; ${live.status}${live.status === "delivered" && live.via === "start" ? " at start" : ""}`
+            : c.appliedBy === "user"
+              ? "applied by the user"
+              : "applied"
           : c.status === "undone"
             ? "undone by the user"
             : c.status === "suggested"
@@ -904,6 +989,7 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
 - Do not redo a change listed as undone or dismissed unless a newer message asks for it.
 - Do not claim changes in "reply". The service lists what was applied and what was only suggested, with Undo.
 - For a direction change you need not read the repository. The board is enough.
+- "notes": when the user's message should change what running work does without changing the spec (for example "have the coder skip the README"), send a short note (1–500 characters, one paragraph) to that task and step; the steps are listed per task above. Notes go only to coder and designer steps: never to a review, checks or lead step, and never to a delivery task; a child task of a goal is fine. At most ${MAX_NOTES_PER_REPLY} notes per reply. The service delivers it to the live run, or writes it into the step's next run when it has not started; a note never starts, pauses or resumes anything, and never changes the spec, the pipeline, a pin or a setting. "ifFinished": "rerun" reruns a finished step with the note when nothing downstream has started; otherwise the user is asked. A note cannot be undone; the service lists where each one stands.
 `
     : `
 ## Steering
@@ -918,6 +1004,9 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
       { "id": "<root task id>", "priority": 1, "why": "..." },
       { "id": "<root task id>", "defer": true, "why": "..." },
       { "id": "<your own unstarted proposal>", "drop": true, "why": "..." }
+    ],
+    "notes": [
+      { "task": "<task id>", "step": "<coder or designer step id>", "text": "<the note, one paragraph>", "ifFinished": "report" }
     ]
   }`
     : "";
@@ -983,6 +1072,9 @@ ${conflicts.length ? conflicts.join("\n") : "- None."}
 ${deliveryNote(state)}
 ## Recent steering (what you changed, and what the user undid or dismissed)
 ${recentSteering(state)}
+
+## Notes to running stages (last 24 hours; yours and the user's)
+${notesSection(state, Date.parse(run.startedAt))}
 
 ## Conversation (most recent last)
 ${convo || "(no messages yet)"}

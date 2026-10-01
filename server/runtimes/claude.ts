@@ -1,8 +1,10 @@
 // Claude runtime adapter (ORC-004), built on the pinned @anthropic-ai/claude-agent-sdk.
 //
-// One `query()` per attempt, single prompt (the assignment envelope). The adapter never touches the
-// store: it turns the SDK message stream into AdapterEvents. Every option used here was checked
-// against the installed sdk.d.ts of the pinned version (see the ORC-004 W3 report).
+// One `query()` per attempt with streaming input (ORC-022): the assignment envelope is the first
+// message of an input stream that stays open while the run lasts, and notes are pushed onto it as
+// user messages. The adapter never touches the store: it turns the SDK message stream into
+// AdapterEvents. Every option used here was checked against the installed sdk.d.ts of the pinned
+// version (see the ORC-004 W3 report; the streaming and note fields against 0.3.285 for ORC-022).
 //
 // Worktree containment is enforced twice, independently:
 //   1. a PreToolUse hook, which the CLI runs before EVERY tool call regardless of permission mode, and
@@ -11,6 +13,7 @@
 // Both apply the same guard: the tool must be on the role's allowlist, and every path argument must
 // resolve (following symlinks, including through not-yet-existing parents) inside the worktree.
 
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
@@ -21,6 +24,7 @@ import type {
   Options,
   PermissionResult,
   SDKMessage,
+  SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CatalogModel } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
@@ -36,8 +40,8 @@ export interface ClaudeQueryHandle extends AsyncIterable<SDKMessage> {
   interrupt?: () => Promise<unknown>;
 }
 
-/** Signature-compatible with the SDK's `query` (narrowed to the single-prompt form we use). */
-export type ClaudeQueryFn = (params: { prompt: string; options: Options }) => ClaudeQueryHandle;
+/** Signature-compatible with the SDK's `query` (narrowed to the streaming-input form we use). */
+export type ClaudeQueryFn = (params: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => ClaudeQueryHandle;
 
 export interface ClaudeAdapterOptions {
   /** Replacement for the SDK's `query` (tests). When omitted, the SDK is imported lazily on first use. */
@@ -50,6 +54,11 @@ export interface ClaudeAdapterOptions {
   interruptGraceMs?: number;
   /** After an abort, how long to wait for the stream to settle before reporting "killed" anyway. Default 5000. */
   killSettleMs?: number;
+  /**
+   * ORC-022: after a turn ends with a note still unacknowledged, how long to wait for the next turn to
+   * acknowledge it before the note is reported not-delivered and the run completes. Default 90000.
+   */
+  noteAckGraceMs?: number;
   /** Adds Bash for write access. Off by default: shell commands cannot be path-contained. */
   allowShell?: boolean;
   /** Where the user's Claude Code MCP servers are configured. Default: ~/.claude.json. */
@@ -106,6 +115,8 @@ export const CLAUDE_MODEL_ALIASES: CatalogModel[] = [
 export const CLAUDE_CAPABILITIES: CapabilityMap = {
   start: "supported",
   streamEvents: "supported",
+  // ORC-022: notes go onto the input stream and count as delivered only on the CLI's uuid acknowledgment;
+  // wired and tested against a scripted SDK, unverified against a real model run.
   steer: "unverified",
   // Confirmed by the message stream ending after interrupt(); falls back to aborting the process.
   interrupt: "supported",
@@ -132,6 +143,8 @@ const CLOUD_PROVIDER_FLAGS: Array<[string, string]> = [
 ];
 
 const ACTIVITY_MAX = 140;
+/** How many ended attempt ids are remembered, so a late note is answered "the run had finished". */
+const ENDED_MAX = 500;
 
 // ---------------------------------------------------------------------------------------------
 // Tool policy and workspace guard (exported for tests)
@@ -322,6 +335,19 @@ function usageFromResult(msg: Rec): Usage {
   return usage;
 }
 
+/** Token totals added; the cost is the later figure (total_cost_usd is already cumulative). */
+function addUsage(a: Usage, b: Usage): Usage {
+  const sum = (x?: number, y?: number) => (x === undefined && y === undefined ? undefined : (x ?? 0) + (y ?? 0));
+  const out: Usage = {};
+  const input = sum(a.inputTokens, b.inputTokens);
+  if (input !== undefined) out.inputTokens = input;
+  const output = sum(a.outputTokens, b.outputTokens);
+  if (output !== undefined) out.outputTokens = output;
+  const cost = b.costUsd ?? a.costUsd;
+  if (cost !== undefined) out.costUsd = cost;
+  return out;
+}
+
 function describeToolUse(name: string, input: Rec, workspace: string): string {
   const rel = (p: unknown) => {
     if (typeof p !== "string") return "?";
@@ -346,6 +372,45 @@ function describeToolUse(name: string, input: Rec, workspace: string): string {
   }
 }
 
+/**
+ * ORC-022: a query's input stream. The envelope is pushed first and notes follow while the run lasts;
+ * the SDK writes each message to the CLI as it arrives and closes the CLI's stdin once the stream ends.
+ * The SDK is the only consumer, so one pending reader is enough.
+ */
+class InputStream implements AsyncIterable<SDKUserMessage> {
+  private readonly queue: SDKUserMessage[] = [];
+  private waiter?: (r: IteratorResult<SDKUserMessage>) => void;
+  closed = false;
+
+  push(msg: SDKUserMessage) {
+    if (this.closed) return;
+    const w = this.waiter;
+    if (w) {
+      this.waiter = undefined;
+      w({ value: msg, done: false });
+    } else this.queue.push(msg);
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    const w = this.waiter;
+    this.waiter = undefined;
+    w?.({ value: undefined, done: true });
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return {
+      next: () => {
+        const msg = this.queue.shift();
+        if (msg) return Promise.resolve({ value: msg, done: false });
+        if (this.closed) return Promise.resolve({ value: undefined, done: true });
+        return new Promise((resolve) => (this.waiter = resolve));
+      },
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Adapter
 
@@ -353,6 +418,18 @@ interface Run {
   a: Assignment;
   abort: AbortController;
   handle?: ClaudeQueryHandle;
+  /** ORC-022: the query's input; closed on every terminal path so the CLI exits. */
+  input: InputStream;
+  /** ORC-022: notes sent and not yet acknowledged, keyed by the uuid they were sent with. */
+  notes: Map<string, string>;
+  /** ORC-022: the result of the last turn, kept while a note is outstanding; the run completes on it if no acknowledgment comes. */
+  lastResult?: Extract<AdapterEvent, { type: "completed" }>;
+  /** The CLI's last reported session state (`system/session_state_changed`); undefined if it never reported one. */
+  sessionState?: string;
+  /** ORC-022: the timer bounding the wait for that acknowledgment. */
+  noteWait?: ReturnType<typeof setTimeout>;
+  /** ORC-022: summed per-turn `usage` of earlier turns (the fallback when a result has no modelUsage). */
+  priorTurnUsage?: Usage;
   /** A terminal event was emitted (or the run was killed); nothing else may be emitted. */
   terminal: boolean;
   /** kill(): forget silently. */
@@ -381,11 +458,14 @@ export class ClaudeAdapter implements RuntimeAdapter {
   private readonly env: NodeJS.ProcessEnv;
   private readonly interruptGraceMs: number;
   private readonly killSettleMs: number;
+  private readonly noteAckGraceMs: number;
   /** Whether writers get a shell (off by default). Read by the service for the GitHub posture warning. */
   readonly allowShell: boolean;
   private readonly claudeConfigPath: string;
   private readonly log: (msg: string) => void;
   private readonly runs = new Map<string, Run>();
+  /** Attempts that have ended (bounded), so a late note is answered "the run had finished", not "no such run". */
+  private readonly ended = new Set<string>();
   private readonly listeners = new Set<(e: AdapterEvent) => void>();
   private sdkPromise?: Promise<{ query: ClaudeQueryFn }>;
 
@@ -400,6 +480,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     this.env = opts.env ?? process.env;
     this.interruptGraceMs = opts.interruptGraceMs ?? 15000;
     this.killSettleMs = opts.killSettleMs ?? 5000;
+    this.noteAckGraceMs = opts.noteAckGraceMs ?? 90_000;
     this.allowShell = opts.allowShell ?? false;
     this.claudeConfigPath = opts.claudeConfigPath ?? path.join(this.env.CLAUDE_CONFIG_DIR ?? homedir(), ".claude.json");
     this.log = opts.log ?? (() => {});
@@ -423,7 +504,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     }
   }
 
-  private note(run: Run, note: string) {
+  private activity(run: Run, note: string) {
     if (run.terminal || run.forgotten) return;
     this.emitRaw({ type: "activity", attemptId: run.a.attemptId, note: truncate(note) });
   }
@@ -433,12 +514,41 @@ export class ClaudeAdapter implements RuntimeAdapter {
     if (run.terminal || run.forgotten) return;
     run.terminal = true;
     this.clearTimers(run);
+    // Notes still outstanding settle first: nothing acknowledged them, so nothing was delivered.
+    this.settleNotes(run, e.type === "completed" ? "the run completed before the agent read it" : e.type === "stopped" ? "the run was stopped first" : "the run failed first");
+    this.remember(run.a.attemptId);
     this.emitRaw(e);
+    run.input.close();
+  }
+
+  /** ORC-022: report every unacknowledged note of a run as not delivered. */
+  private settleNotes(run: Run, reason: string) {
+    for (const [uuid, noteId] of run.notes) {
+      run.notes.delete(uuid);
+      this.emitRaw({ type: "note", attemptId: run.a.attemptId, noteId, outcome: "not-delivered", reason });
+    }
+    this.clearNoteWait(run);
+  }
+
+  private remember(attemptId: string) {
+    this.ended.add(attemptId);
+    for (const id of this.ended) {
+      if (this.ended.size <= ENDED_MAX) break;
+      this.ended.delete(id);
+    }
   }
 
   private clearTimers(run: Run) {
     for (const t of run.timers) clearTimeout(t);
     run.timers.clear();
+    run.noteWait = undefined;
+  }
+
+  private clearNoteWait(run: Run) {
+    if (!run.noteWait) return;
+    clearTimeout(run.noteWait);
+    run.timers.delete(run.noteWait);
+    run.noteWait = undefined;
   }
 
   private timer(run: Run, ms: number, fn: () => void) {
@@ -448,6 +558,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     }, ms);
     t.unref?.();
     run.timers.add(t);
+    return t;
   }
 
   // --- health / models ----------------------------------------------------------------------
@@ -569,16 +680,25 @@ export class ClaudeAdapter implements RuntimeAdapter {
       aborting: false,
       started: false,
       timers: new Set(),
+      input: new InputStream(),
+      notes: new Map(),
       lastText: "",
       sawAuthError: false,
       stderrTail: "",
       done: Promise.resolve(),
     };
     this.runs.set(assignment.attemptId, run);
+    // The envelope opens the input stream, shaped as the SDK shapes a string prompt; notes follow it.
+    run.input.push({
+      type: "user",
+      session_id: "",
+      message: { role: "user", content: [{ type: "text", text: assignment.prompt }] },
+      parent_tool_use_id: null,
+    });
     if (assignment.limits.timeoutMs > 0) {
       this.timer(run, assignment.limits.timeoutMs, () => {
         if (run.terminal || run.forgotten || run.interruptRequested) return;
-        this.note(run, "Time limit reached");
+        this.activity(run, "Time limit reached");
         this.interrupt(assignment.attemptId);
       });
     }
@@ -601,7 +721,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
       const name = String(i.tool_name ?? "");
       const verdict = guard(name, i.tool_input);
       if (verdict.ok) return {};
-      this.note(run, `Blocked ${name}: ${verdict.reason}`);
+      this.activity(run, `Blocked ${name}: ${verdict.reason}`);
       return {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -614,7 +734,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     const canUseTool: CanUseTool = async (toolName, input): Promise<PermissionResult> => {
       const verdict = guard(toolName, input);
       if (verdict.ok) return { behavior: "allow", updatedInput: input };
-      this.note(run, `Blocked ${toolName}: ${verdict.reason}`);
+      this.activity(run, `Blocked ${toolName}: ${verdict.reason}`);
       return { behavior: "deny", message: verdict.reason };
     };
 
@@ -668,7 +788,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     if (run.interruptRequested) return this.finish(run, { type: "stopped", attemptId: id, how: "interrupted" });
 
     try {
-      run.handle = queryFn({ prompt: run.a.prompt, options: this.buildOptions(run) });
+      run.handle = queryFn({ prompt: run.input, options: this.buildOptions(run) });
       for await (const msg of run.handle) {
         if (run.forgotten) break;
         if (run.terminal) continue; // drain so the CLI can finish writing its session, but stay silent
@@ -685,6 +805,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     const id = run.a.attemptId;
     switch (m.type) {
       case "system": {
+        if (m.subtype === "session_state_changed" && typeof m.state === "string") run.sessionState = m.state;
         if (m.subtype === "init" && !run.started) {
           run.started = true;
           run.sessionId = typeof m.session_id === "string" ? m.session_id : undefined;
@@ -701,13 +822,14 @@ export class ClaudeAdapter implements RuntimeAdapter {
       }
       case "assistant": {
         if (typeof m.error === "string" && AUTH_ASSISTANT_ERRORS.has(m.error)) run.sawAuthError = true;
+        if (m.parent_tool_use_id == null) this.acknowledge(run, m);
         const message = asRec(m.message);
         if (!run.model && typeof message.model === "string") run.model = message.model;
         const content = Array.isArray(message.content) ? (message.content as unknown[]).map(asRec) : [];
         const texts: string[] = [];
         for (const block of content) {
           if (block.type === "tool_use") {
-            this.note(run, describeToolUse(String(block.name ?? "tool"), asRec(block.input), run.a.workspace.path));
+            this.activity(run, describeToolUse(String(block.name ?? "tool"), asRec(block.input), run.a.workspace.path));
           } else if (block.type === "text" && typeof block.text === "string") {
             texts.push(block.text);
           }
@@ -722,6 +844,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
         return;
       }
       case "result":
+        this.acknowledge(run, m);
         this.handleResult(run, m);
         return;
       default:
@@ -729,9 +852,34 @@ export class ClaudeAdapter implements RuntimeAdapter {
     }
   }
 
+  /**
+   * ORC-022: the CLI echoes the client uuids a turn has consumed on its reply frames (`user_message_uuid`,
+   * `user_message_uuids`): the turn's first top-level assistant message, and the result, whose list also
+   * holds the messages folded into the turn between tool rounds. A note counts as delivered only when one
+   * of those frames names its uuid; a write to the process is never enough.
+   */
+  private acknowledge(run: Run, m: Rec) {
+    if (run.notes.size === 0) return;
+    const named = Array.isArray(m.user_message_uuids) ? (m.user_message_uuids as unknown[]) : [m.user_message_uuid];
+    for (const uuid of named) {
+      if (typeof uuid !== "string") continue;
+      const noteId = run.notes.get(uuid);
+      if (noteId === undefined) continue;
+      run.notes.delete(uuid);
+      this.emitRaw({ type: "note", attemptId: run.a.attemptId, noteId, outcome: "delivered" });
+    }
+    if (run.notes.size === 0) this.clearNoteWait(run);
+  }
+
   private handleResult(run: Run, m: Rec) {
     const id = run.a.attemptId;
-    const usage = usageFromResult(m);
+    // modelUsage and total_cost_usd are cumulative across a streaming session's turns (sdk.d.ts), so the
+    // latest result holds the run's total; only the per-turn `usage` fallback is summed over earlier turns.
+    let usage = usageFromResult(m);
+    if (Object.keys(asRec(m.modelUsage)).length === 0) {
+      usage = run.priorTurnUsage ? addUsage(run.priorTurnUsage, usage) : usage;
+      run.priorTurnUsage = usage;
+    }
     const terminalReason = typeof m.terminal_reason === "string" ? m.terminal_reason : undefined;
     const abortedReason = terminalReason === "aborted_streaming" || terminalReason === "aborted_tools";
     const stopped = () =>
@@ -752,18 +900,36 @@ export class ClaudeAdapter implements RuntimeAdapter {
       }
       // After an interrupt, a success result marked as aborted means the stop took effect.
       if (run.interruptRequested && abortedReason) return stopped();
-      // Otherwise the run finished (possibly racing the interrupt): report completion.
-      return this.finish(run, {
+      // Otherwise the turn finished (possibly racing the interrupt).
+      const completed: AdapterEvent = {
         type: "completed",
         attemptId: id,
         finalText: resultText.trim() !== "" ? resultText : run.lastText,
         usage,
         model: run.model ?? firstModel(m),
-      });
+      };
+      // ORC-022: a note sent but not yet acknowledged is queued in the CLI, which starts the next turn with
+      // it. The run goes on and completes on a later result; this one is kept in case no acknowledgment
+      // ever comes (the wait is bounded, see giveUpOnNotes).
+      if (run.notes.size > 0) {
+        run.lastResult = completed;
+        this.activity(run, "The turn ended with a note outstanding; waiting for the next turn to take it up");
+        this.clearNoteWait(run);
+        run.noteWait = this.timer(run, this.noteAckGraceMs, () => this.giveUpOnNotes(run));
+        return;
+      }
+      return this.finish(run, completed);
     }
 
     // Error subtypes.
     if (run.interruptRequested) return stopped();
+    // ORC-022 review M3: a turn started by a note shares the run's turn and spend limits. When it hits one, the
+    // run had already finished its work on the earlier turn: complete on that result (with the total usage) and
+    // say so, rather than discarding finished work as a failure.
+    if (run.lastResult && (m.subtype === "error_max_turns" || m.subtype === "error_max_budget_usd")) {
+      this.activity(run, `The note's turn reached the ${m.subtype === "error_max_turns" ? "turn" : "spend"} limit; the run completes on the result it had before the note`);
+      return this.finish(run, { ...run.lastResult, usage });
+    }
     const errors = Array.isArray(m.errors) ? (m.errors as unknown[]).map(String).filter(Boolean) : [];
     let message: string;
     switch (m.subtype) {
@@ -787,6 +953,29 @@ export class ClaudeAdapter implements RuntimeAdapter {
     this.finish(run, { type: "failed", attemptId: id, message, usage });
   }
 
+  /**
+   * ORC-022: no turn acknowledged the outstanding notes within the grace period after the last turn ended.
+   * They were not delivered, and the run completes on that turn's result. The session is then ended in
+   * case it did start a turn after all, so nothing continues unreported.
+   */
+  private giveUpOnNotes(run: Run) {
+    if (run.terminal || run.forgotten || !run.lastResult) return;
+    // ORC-022 review L5: a turn is still running (the CLI says so), most likely the note's own turn before its first
+    // frame. Completing now would read a worktree it is still editing; wait again. The run's time limit still applies.
+    if (run.sessionState !== undefined && run.sessionState !== "idle") {
+      this.activity(run, "A turn is still running; waiting for it to take up the note");
+      run.noteWait = this.timer(run, this.noteAckGraceMs, () => this.giveUpOnNotes(run));
+      return;
+    }
+    this.settleNotes(run, `the Claude session did not acknowledge the note within ${Math.round(this.noteAckGraceMs / 1000)}s of the turn ending`);
+    this.finish(run, run.lastResult);
+    try {
+      run.abort.abort();
+    } catch {
+      /* ignore */
+    }
+  }
+
   /** The message stream finished (err undefined) or threw. */
   private onStreamEnd(run: Run, err: unknown) {
     if (run.forgotten || run.terminal) return;
@@ -794,6 +983,12 @@ export class ClaudeAdapter implements RuntimeAdapter {
     if (run.aborting) return this.finish(run, { type: "stopped", attemptId: id, how: "killed" });
     // The stream ending after interrupt() is the confirmation that nothing is running.
     if (run.interruptRequested) return this.finish(run, { type: "stopped", attemptId: id, how: "interrupted" });
+    // ORC-022: the session ended after a turn whose notes were never acknowledged: those notes were not
+    // delivered, and the run completes on that turn's result (its output block is the work done).
+    if (run.lastResult) {
+      this.settleNotes(run, "the Claude session ended before the agent read it");
+      return this.finish(run, run.lastResult);
+    }
     if (err === undefined) {
       return this.finish(run, { type: "failed", attemptId: id, message: "The Claude session ended without a result." });
     }
@@ -804,10 +999,37 @@ export class ClaudeAdapter implements RuntimeAdapter {
     this.finish(run, { type: "failed", attemptId: id, message: `Claude run failed: ${truncate(redact(errorText(err)), 300)}` });
   }
 
+  /**
+   * ORC-022: push a note onto the run's input stream as a user message. `priority: "next"` lets the CLI
+   * fold it into the running turn between tool rounds (or start the next turn with it), `client_composed`
+   * keeps the text as written, and the uuid is what the CLI echoes back to acknowledge it (`acknowledge`).
+   * The outcome arrives as one "note" event; until the acknowledgment the note is only sent, not delivered.
+   */
+  note(attemptId: string, note: { id: string; text: string }): void {
+    const notDelivered = (reason: string) =>
+      queueMicrotask(() => this.emitRaw({ type: "note", attemptId, noteId: note.id, outcome: "not-delivered", reason }));
+    const run = this.runs.get(attemptId);
+    if (!run || run.terminal || run.forgotten) return notDelivered(this.ended.has(attemptId) ? "the run had finished" : "no such run");
+    if (run.interruptRequested) return notDelivered("the run is stopping");
+    const uuid = randomUUID();
+    run.notes.set(uuid, note.id);
+    run.input.push({
+      type: "user",
+      message: { role: "user", content: note.text },
+      parent_tool_use_id: null,
+      uuid,
+      priority: "next",
+      client_composed: true,
+    });
+  }
+
   interrupt(attemptId: string): void {
     const run = this.runs.get(attemptId);
     if (!run || run.terminal || run.forgotten || run.interruptRequested) return;
     run.interruptRequested = true;
+    // ORC-022: a stopping run acts on nothing more, and the input closes so the CLI exits once the turn stops.
+    this.settleNotes(run, "the run was stopped first");
+    run.input.close();
     // Not started yet: drive() sees the flag after the SDK loads and confirms the stop without a run.
     if (!run.handle) return;
     const fn = run.handle.interrupt;
@@ -849,6 +1071,10 @@ export class ClaudeAdapter implements RuntimeAdapter {
     if (!run) return;
     run.forgotten = true;
     this.clearTimers(run);
+    // Forgotten silently, notes included (the service reconciles notes left "sending" when it restarts).
+    run.notes.clear();
+    run.input.close();
+    this.remember(attemptId);
     try {
       run.abort.abort();
     } catch {
