@@ -246,6 +246,48 @@ describe("effective review (step 1 review, finding 1)", () => {
     expect(byId(r, "change")).toMatchObject({ source: "built-in", audience: "standard" });
     expect(r.errors).toEqual([expect.objectContaining({ id: "change", effect: "built-in kept", message: expect.stringMatching(/the service creates fix tasks from "change", so it must be a standard pattern/) })]);
   });
+
+  it("steps 2–3 review, finding 3: the loop exemption needs max ≥ 2, the reviewer before the coder, the coder's change as the newest in the body and a runIf on the reviewer's findings; a reviewer must report review-findings", () => {
+    const review = (id: string, after: string[], inputs: { step: string; output: string }[], kind: "review-findings" | "report" = "review-findings"): StepDef => ({ id, purpose: "Code review", role: "code_reviewer", dependsOn: after, inputs, outputs: [{ name: kind === "report" ? "notes" : "findings", kind }] });
+    const repair = (id: string, after: string[], over: Partial<StepDef> = {}): StepDef => ({ id, purpose: "Repair", role: "coder", dependsOn: after, inputs: [{ step: "S1", output: "change" }, { step: "S2", output: "findings" }], outputs: [{ name: "change", kind: "code-change" }], runIf: [{ step: "S2", output: "findings" }], ...over });
+    const unreviewedOf = (name: string, steps: StepDef[]) => {
+      const r = resolve(local(name, { steps }));
+      expect(r.errors, name).toEqual([]);
+      return byId(r, name)!;
+    };
+    // Repro (a): a loop that runs once never reviews the repair; the same shape with max 2 does.
+    const once = unreviewedOf("once", [oneStep[0], review("S2", ["S1"], [{ step: "S1", output: "change" }]), repair("S3", ["S2"], { iterate: { from: "S2", max: 1 } })]);
+    expect(once.flags.unreviewed).toBe(true);
+    expect(once.warnings.some((w) => /S3's code change is not read by a code reviewer that always runs/.test(w))).toBe(true);
+    const twice = unreviewedOf("twice", [oneStep[0], review("S2", ["S1"], [{ step: "S1", output: "change" }]), repair("S3", ["S2"], { iterate: { from: "S2", max: 2 } })]);
+    expect(twice).toMatchObject({ audience: "standard", flags: expect.objectContaining({ unreviewed: false }) });
+    // Repro (b): a reviewer that reports only a report is not a review. (In a loop, the graph rules already refuse a runIf on a report.)
+    const reportOnly = unreviewedOf("report-only", [oneStep[0], review("S2", ["S1"], [{ step: "S1", output: "change" }], "report")]);
+    expect(reportOnly.flags.unreviewed).toBe(true);
+    expect(reportOnly.audience).toBe("user-only");
+    expect(reportOnly.warnings.some((w) => /S1's code change is not read by a code reviewer that always runs/.test(w))).toBe(true);
+    const reportThenFindings = unreviewedOf("report-then-findings", [oneStep[0], review("S2", ["S1"], [{ step: "S1", output: "change" }], "report"), review("S3", ["S2"], [{ step: "S1", output: "change" }])]);
+    expect(reportThenFindings.flags.unreviewed).toBe(false); // S3 is the review; S2's report does not count either way
+    // A repair that always runs (no runIf on the reviewer's findings) leaves its last change unreviewed.
+    const always = unreviewedOf("always", [oneStep[0], review("S2", ["S1"], [{ step: "S1", output: "change" }]), repair("S3", ["S2"], { runIf: undefined, iterate: { from: "S2", max: 3 } })]);
+    expect(always.flags.unreviewed).toBe(true);
+    // The repair must be the newest change in the body: a later coder in the loop takes the next iteration's review instead.
+    const notNewest = unreviewedOf("not-newest", [
+      oneStep[0],
+      review("S2", ["S1"], [{ step: "S1", output: "change" }]),
+      repair("S3", ["S2"]),
+      { id: "S4", purpose: "Polish", role: "coder", dependsOn: ["S3"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "change", kind: "code-change" }], runIf: [{ step: "S2", output: "findings" }], iterate: { from: "S2", max: 3 } },
+    ]);
+    expect(notNewest.warnings.some((w) => /S3's code change is not read/.test(w))).toBe(true);
+    expect(notNewest.warnings.some((w) => /S4's code change is not read/.test(w))).toBe(false);
+    // The reviewer must come before the coder in the body: one after it is the direct case, which needs it to read that change.
+    const after = unreviewedOf("after", [oneStep[0], { ...repair("S2", ["S1"], { inputs: [{ step: "S1", output: "change" }], runIf: undefined }) }, review("S3", ["S2"], [{ step: "S1", output: "change" }]), { id: "S4", purpose: "More", role: "coder", dependsOn: ["S3"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "change", kind: "code-change" }], runIf: [{ step: "S3", output: "findings" }], iterate: { from: "S3", max: 3 } }]);
+    expect(after.warnings.some((w) => /S2's code change is not read/.test(w))).toBe(true); // S3 reads S1, not S2
+    expect(after.warnings.some((w) => /S4's code change is not read/.test(w))).toBe(false); // the next iteration's S3 reads S4's change
+    // The built-ins keep their audience.
+    for (const p of builtInCatalog().patterns) expect([p.id, p.audience]).toEqual([p.id, p.experimental || p.flags.pausesForYou ? "user-only" : "standard"]);
+    for (const id of ["change", "change-lean", "change-cross-review", "feature", "feature-design-gate", "bugfix", "change-best-of-two"]) expect(builtIn(id).flags.unreviewed, id).toBe(false);
+  });
 });
 
 describe("flags and audience", () => {

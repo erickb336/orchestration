@@ -191,6 +191,18 @@ function beforePattern(t: Task, a: Attempt): boolean {
   return a.snapshot.pipelineRev < (t.patternSince ?? 0);
 }
 
+/**
+ * ORC-016 (steps 2–3 review, finding 6): the revision a step created now starts at, above any revision that
+ * id ever had on this task (a current step, or an attempt's snapshot), so no earlier run can report into it
+ * (G1). Used for pattern changes, parallel copies, loop iterations and check rounds alike.
+ */
+export function nextRevisionFor(s: State, t: Task, id: string): number {
+  let highest = 0;
+  for (const st of t.steps) if (st.id === id) highest = Math.max(highest, st.revision);
+  for (const a of s.attempts) if (a.taskId === t.id && a.stepId === id) highest = Math.max(highest, a.snapshot.stepRev);
+  return highest + 1;
+}
+
 /** ORC-016 G2: record a result from before the pattern changed as discarded. The step is not touched: no blocked state, no output. */
 function discardEarlierPattern(s: State, t: Task, a: Attempt, now: string, detail = "") {
   a.outcome = "discarded";
@@ -416,12 +428,12 @@ export function blockedReason(s: State, t: Task): string | undefined {
   const st = t.steps.find((x) => x.state === "blocked");
   if (st) return `${st.id}: ${st.blockedReason ?? "blocked"}`;
   if (waitingForChildren(s, t)) {
-    for (const c of childTasks(s, t)) {
+    for (const c of currentChildren(s, t)) {
       if (!isOpen(c)) continue;
       const dep = c.dependsOn.find((d) => s.tasks.find((x) => x.id === d)?.lifecycle === "cancelled");
       if (dep) return `Child ${c.id} cannot start: its prerequisite ${dep} was cancelled. Cancel ${c.id} or remove the prerequisite.`;
     }
-    for (const c of childTasks(s, t)) {
+    for (const c of currentChildren(s, t)) {
       const closed = closedPr(s, c);
       if (closed !== undefined) return `Child ${closedText(c.id, closed)}. Deliver ${c.id} again.`;
     }
@@ -479,7 +491,7 @@ export function stateLabel(s: State, t: Task): string {
   if ((col === "running" || col === "reviewing") && deferredBy(s, t)) return `${col === "running" ? "Running" : "Reviewing"} · deferred after this step`;
   if (col === "deferred") return deferredLabel(s, t)!;
   if (t.lifecycle === "active" && active.length === 0 && waitingForChildren(s, t)) {
-    const open = childTasks(s, t).filter(isOpen).length;
+    const open = currentChildren(s, t).filter(isOpen).length;
     if (open === 0) return "Waiting for child pull requests to merge";
     return `Waiting for ${open} child task${open === 1 ? "" : "s"}`;
   }
@@ -926,6 +938,8 @@ function reopenDropped(s: State, t: Task, changeSetId: string, now: string): str
   t.lifecycle = t.dropped.lifecycle;
   t.dropped = undefined;
   t.cancelledBy = undefined;
+  // ORC-016 (steps 2–3 review, finding 7): an open task has no outcome; one is recorded again when it settles.
+  delete t.outcome;
   (t.userSet ??= {}).run = now;
   touch(t, now);
   event(s, now, "user", "control", `Reopened: the lead's drop (${changeSetId}) was undone`, t.id);
@@ -1425,10 +1439,13 @@ export function acknowledgeStop(state: State, attemptId: string, now: string): S
   a.outcome = "stopped";
   a.endedAt = now;
   a.artifacts.push(`checkpoint: partial work left in ${a.snapshot.workspace}`);
-  settleStoppedStep(s, t, st);
+  // ORC-016 G2 (steps 2–3 review, finding 6): a run from before the pattern changed settles alone; its step belongs to the new pattern.
+  const earlier = beforePattern(t, a);
+  if (earlier) a.note = `Stopped on pipeline r${a.snapshot.pipelineRev}, before the pattern changed (r${t.patternSince}); its step was not touched`;
+  else settleStoppedStep(s, t, st);
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
-  event(s, now, "runtime", "runtime", `${a.id} acknowledged stop; partial work checkpointed`, t.id);
+  event(s, now, "runtime", "runtime", `${a.id} acknowledged stop; partial work checkpointed${earlier ? ` (it ran on pipeline r${a.snapshot.pipelineRev}, before the pattern changed; its step is untouched)` : ""}`, t.id);
   return s;
 }
 
@@ -1447,10 +1464,13 @@ export function reportRunLost(state: State, attemptId: string, reason: string, n
   a.endedAt = now;
   a.note = `${reason}; no result was produced or integrated`;
   a.artifacts.push(`checkpoint: partial work left in ${a.snapshot.workspace}`);
-  settleStoppedStep(s, t, findStep(t, a.stepId));
+  // ORC-016 G2 (steps 2–3 review, finding 6): a run from before the pattern changed settles alone; its step belongs to the new pattern.
+  const earlier = beforePattern(t, a);
+  if (earlier) a.note += `; it ran on pipeline r${a.snapshot.pipelineRev}, before the pattern changed (r${t.patternSince}), so its step was not touched`;
+  else settleStoppedStep(s, t, findStep(t, a.stepId));
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
-  event(s, now, "system", "runtime", `${a.id} ${wasStopping ? "confirmed stopped" : "lost"} during reconciliation: ${reason}`, t.id);
+  event(s, now, "system", "runtime", `${a.id} ${wasStopping ? "confirmed stopped" : "lost"} during reconciliation: ${reason}${earlier ? " (from before the pattern changed; its step is untouched)" : ""}`, t.id);
   return s;
 }
 
@@ -4577,7 +4597,7 @@ function expandParallel(s: State, t: Task, st: Step, now: string) {
     id,
     purpose: `${st.purpose} (copy ${i + 2} of ${p.count})`,
     selection: assign(i + 1),
-    revision: 1,
+    revision: nextRevisionFor(s, t, id),
     state: t.hold ? "paused" : "pending",
     parallel: undefined,
     copyOf: st.id,
@@ -4704,7 +4724,7 @@ function expandIteration(s: State, t: Task, st: Step, now: string) {
       ...structuredClone(b),
       id: idMap.get(b.id)!,
       purpose: `${b.purpose.replace(/ \(iteration \d+\)$/, "")} (iteration ${n})`,
-      revision: 1,
+      revision: nextRevisionFor(s, t, idMap.get(b.id)!),
       state: t.hold ? "paused" : "pending",
       iteration: n,
       // Inside the body keep the structure; anything that depended on work before the loop now
@@ -4746,9 +4766,24 @@ export function childTasks(s: State, t: Task): Task[] {
   return s.tasks.filter((x) => x.parentTaskId === t.id);
 }
 
-/** Children are settled when none is open and, with pull-request delivery, their work is in the base. */
+/**
+ * ORC-016 (steps 2–3 review, finding 2): the child was created by a breakdown made under a pattern the task has
+ * since left. It stays on the record, labelled, and is never relinked, waited for or reported to the new steps.
+ */
+export function childFromEarlierPattern(s: State, t: Task, c: Task): boolean {
+  if (!c.parentArtifactId) return false;
+  const art = s.artifacts.find((a) => a.id === c.parentArtifactId);
+  return !!art && fromEarlierPattern(s, t, art);
+}
+
+/** The children of the task's current pattern: what breakdowns reconcile with, what waiting steps wait for, and what the envelope reports. */
+export function currentChildren(s: State, t: Task): Task[] {
+  return childTasks(s, t).filter((c) => !childFromEarlierPattern(s, t, c));
+}
+
+/** Children are settled when none is open and, with pull-request delivery, their work is in the base. Children of an earlier pattern do not count. */
 export function childrenSettled(s: State, t: Task): boolean {
-  return childTasks(s, t).every((c) => !isOpen(c) && (c.lifecycle === "cancelled" || prerequisiteReady(s, c)));
+  return currentChildren(s, t).every((c) => !isOpen(c) && (c.lifecycle === "cancelled" || prerequisiteReady(s, c)));
 }
 
 /** Every task created, directly or through its children, by breakdowns of `t`. */
@@ -4833,7 +4868,8 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
   const a = s.project.autonomy;
   const holdBeforeStart = !a.enabled || a.holdLeadProposals;
   const root = rootOf(s, t);
-  const earlier = childTasks(s, t).filter((c) => c.parentStepId === st.id && c.parentArtifactId !== artifactId && c.lifecycle !== "cancelled");
+  // ORC-016 (steps 2–3 review, finding 2): only children of the current pattern are reconciled; an earlier pattern's children are the record.
+  const earlier = currentChildren(s, t).filter((c) => c.parentStepId === st.id && c.parentArtifactId !== artifactId && c.lifecycle !== "cancelled");
   const started = (c: Task) => c.lifecycle === "active" || c.lifecycle === "done" || s.attempts.some((x) => x.taskId === c.id);
   const titleOf = (c: Task) => currentSpec(c).content.title.trim().toLowerCase();
   const linked: { id: string; title: string; kept?: boolean }[] = [];

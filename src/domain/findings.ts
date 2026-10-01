@@ -89,12 +89,23 @@ export function acceptedFindings(s: State, art: Artifact): string[] {
  */
 export function earlierDecision(s: State, t: Task, key: string): FindingDecision | undefined {
   const origin = t.deliverInto?.taskId;
+  const originTask = origin !== undefined ? s.tasks.find((x) => x.id === origin) : undefined;
   let earlier: FindingDecision | undefined;
   for (const d of s.decisions) {
     if (d.key !== key || d.status === "open" || d.status === "superseded" || d.kind !== "finding") continue;
-    if (d.taskId === t.id || (origin !== undefined && d.taskId === origin)) earlier = d;
+    const owner = d.taskId === t.id ? t : originTask && d.taskId === originTask.id ? originTask : undefined;
+    if (!owner) continue;
+    // ORC-016 (steps 2–3 review, finding 1): a decision taken under a pattern the task has since left is the record, not a precedent.
+    if (fromEarlierPattern(s, owner, d)) continue;
+    earlier = d;
   }
   return earlier;
+}
+
+/** ORC-016: the decision's artifact was made under a pattern its task has since left. A decision whose artifact is gone is not. */
+export function fromEarlierPattern(s: State, t: Task, d: FindingDecision): boolean {
+  const art = s.artifacts.find((a) => a.id === d.artifactId);
+  return !!art && M.fromEarlierPattern(s, t, art);
 }
 
 /** Blocking findings of a fresh report that an earlier decision on this task already settled (accept or follow-up). */
@@ -262,6 +273,10 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
   const d = getDecision(s, decisionId);
   const t = s.tasks.find((x) => x.id === d.taskId);
   if (!t) throw new ControlError(`Unknown task ${d.taskId}`);
+  // ORC-016 (steps 2–3 review, finding 1): a decision closed by a pattern change belongs to the earlier pattern; the new pattern's review raises its own findings.
+  if (d.status === "superseded" && d.kind === "finding" && fromEarlierPattern(s, t, d)) {
+    throw new ControlError(`${d.id} belongs to an earlier pattern of ${t.id}: it was closed when the pattern changed and cannot be decided. The new pattern's review reports its own findings.`);
+  }
   // ORC-013 §6.7: failing final checks take a repair round, or the user's acceptance (only the user's).
   if (d.kind === "final-checks") {
     C.decideFinalChecks(s, d, decision, why, now);

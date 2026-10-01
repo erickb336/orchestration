@@ -107,20 +107,35 @@ const ROLE_WORD: Record<RoleId, string> = { lead: "lead", designer: "designer", 
 
 /**
  * Why a pattern has no effective independent code review, one line per offending step; empty when every
- * code change is reviewed (step 1 review, finding 1). A code change counts as reviewed when a
- * `code_reviewer` step with no `runIf` downstream of it reads that change, or when the step lies in an
- * `iterate` loop whose body holds such a reviewer: the next iteration re-points the reviewer at the newest
- * change of the finished one. The structure alone is checked, not what a worker does with it.
+ * code change is reviewed (step 1 review, finding 1). A qualifying reviewer is a `code_reviewer` step with
+ * no `runIf` that reads a code change and reports `review-findings`. A code change counts as reviewed when
+ * such a reviewer downstream of it reads that change, or when the next iteration of an `iterate` loop
+ * reviews it (steps 2–3 review, finding 3): the loop runs at least twice (`max` ≥ 2), the reviewer sits
+ * before the coder in the loop body, the coder's change is the newest in the body (so the next iteration
+ * re-points the reviewer at it), and the coder runs only on that reviewer's findings (`runIf`), so the
+ * loop ends with a clean review. The structure alone is checked, not what a worker does with it.
  */
 export function unreviewedReasons(steps: StepDef[]): string[] {
   const reasons: string[] = [];
-  const reviewers = steps.filter((s) => s.role === "code_reviewer" && !s.runIf?.length && s.inputs.some((r) => kindOf(steps, r) === "code-change"));
-  const bodies: Set<string>[] = [];
+  const reviewers = steps.filter((s) => s.role === "code_reviewer" && !s.runIf?.length && s.inputs.some((r) => kindOf(steps, r) === "code-change") && s.outputs.some((o) => o.kind === "review-findings"));
+  const loops: { body: StepDef[]; max: number }[] = [];
   steps.forEach((d, i) => {
     if (!d.iterate) return;
     const from = steps.findIndex((x) => x.id === d.iterate!.from);
-    if (from >= 0 && from <= i) bodies.push(new Set(steps.slice(from, i + 1).map((b) => b.id)));
+    if (from >= 0 && from <= i) loops.push({ body: steps.slice(from, i + 1), max: d.iterate.max });
   });
+  const reviewedByNextIteration = (x: StepDef) =>
+    loops.some(({ body, max }) => {
+      if (max < 2) return false;
+      const xi = body.findIndex((b) => b.id === x.id);
+      if (xi < 0) return false;
+      const newest = [...body].reverse().find((b) => b.outputs.some((o) => o.kind === "code-change"));
+      if (newest?.id !== x.id) return false;
+      return reviewers.some((r) => {
+        const ri = body.findIndex((b) => b.id === r.id);
+        return ri >= 0 && ri < xi && !!x.runIf?.some((ref) => ref.step === r.id && kindOf(steps, ref) === "review-findings");
+      });
+    });
   for (const x of steps) {
     if (!x.outputs.some((o) => o.kind === "code-change")) continue;
     if (NON_CODING_ROLES.includes(x.role)) {
@@ -129,7 +144,7 @@ export function unreviewedReasons(steps: StepDef[]): string[] {
     }
     const down = downstreamOf(steps, [x.id]);
     if (reviewers.some((r) => down.has(r.id) && r.inputs.some((i) => i.step === x.id && kindOf(steps, i) === "code-change"))) continue;
-    if (bodies.some((body) => body.has(x.id) && reviewers.some((r) => body.has(r.id)))) continue;
+    if (reviewedByNextIteration(x)) continue;
     const conditional = steps.some((r) => r.role === "code_reviewer" && r.runIf?.length && down.has(r.id));
     reasons.push(`${x.id}'s code change is not read by a code reviewer that always runs${conditional ? " (a review with runIf may be skipped)" : ""}`);
   }

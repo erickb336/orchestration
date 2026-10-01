@@ -10,6 +10,9 @@
 // stored except whether each provider reported itself ready.
 //
 // Limits: 12 turns, 5 minutes, $0.50 (Claude) per attempt; Claude uses the "haiku" alias.
+//
+// Pipeline (ORC-016): the test's one-step coder pattern is a pattern file of its own, written into the
+// throwaway data directory's patterns/ folder before the service starts, so no command defines a pipeline.
 
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -49,6 +52,28 @@ writeFileSync(join(repo, "README.md"), "# Greeting\n\nA tiny module used to test
 git("add", "-A");
 git("-c", "user.name=Orchestration test", "-c", "user.email=test@localhost", "commit", "-q", "-m", "Initial commit");
 evidence.repo = repo;
+
+// The service reads your patterns from <data dir>/patterns, and the data dir is the database's folder. A
+// one-step coder pipeline keeps a real run cheap. It has no review step, so it is flagged "no independent
+// review" and is yours to choose, which is what createTask does.
+const PATTERN_ID = "one-step";
+mkdirSync(join(work, "patterns"), { recursive: true });
+writeFileSync(
+  join(work, "patterns", `${PATTERN_ID}.json`),
+  `${JSON.stringify(
+    {
+      $schema: "./pattern.schema.json",
+      $comment: "Written by scripts/real-run-test.mjs for one run; the data directory is throwaway.",
+      id: PATTERN_ID,
+      name: "One coder step",
+      description: "Real-run test: one coder step that commits a change, with no review or verification.",
+      whenToUse: "Only for the real-run test.",
+      steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }],
+    },
+    null,
+    2,
+  )}\n`,
+);
 
 const service = spawn(process.execPath, ["--import", "tsx", "server/main.ts"], {
   cwd: resolve(import.meta.dirname, ".."),
@@ -111,25 +136,18 @@ async function main() {
     await until("sample runs stopped", (x) => x.state.attempts.every((a) => a.outcome !== "running" && a.outcome !== "stopping"), 60000);
   }
 
-  // Project, limits, and a one-step coder pipeline for a cheap test.
+  // Project and limits. The one-step pattern was read from the test's own file when the service started.
   await cmd("initProject", { name: "Real-run test", repoPath: repo, vision: "Keep the greeting module small and correct.", focus: "Real-run test" });
   await cmd("setRunLimits", { maxTurns: 12, timeoutMinutes: 5, maxBudgetUsd: 0.5 });
-  await cmd("saveTemplate", {
-    template: {
-      id: "one-step",
-      name: "One coder step",
-      description: "Real-run test",
-      builtIn: false,
-      rev: 0,
-      steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }],
-    },
-    expectedRev: null,
-  });
   s = await state();
+  const pattern = s.state.patterns.patterns.find((p) => p.id === PATTERN_ID);
+  const patternErrors = s.state.patterns.errors.filter((e) => e.file.endsWith(`${PATTERN_ID}.json`));
+  check("the test's pattern file loaded as a pattern of yours", !!pattern && pattern.source === "local" && pattern.steps.length === 1, pattern ? { file: pattern.file, hash: pattern.hash.slice(0, 8), warnings: pattern.warnings } : { errors: patternErrors });
+  if (!pattern) throw new Error(`The pattern file was not loaded: ${JSON.stringify(patternErrors)}`);
   const codexModel = FAKE ? s.state.project.catalog.codex[0].id : "auto";
   const claudeModel = FAKE ? s.state.project.catalog.claude[0].id : "haiku";
   const create = async (title, outcome, approach) =>
-    (await cmd("createTask", { title, area: "Test", outcome, benefit: "Exercise the runtime", whyNow: "", approach, acceptance: ["The change is small and correct"], priority: 1, holdBeforeStart: true, templateId: "one-step" }))
+    (await cmd("createTask", { title, area: "Test", outcome, benefit: "Exercise the runtime", whyNow: "", approach, acceptance: ["The change is small and correct"], priority: 1, holdBeforeStart: true, patternId: PATTERN_ID }))
       .result.newId;
   const codexTask = await create("Add shout()", "greeting.js exports shout(s) returning the input uppercased with a trailing '!'.", "Add the function next to greet(); keep the file style.");
   const claudeTask = await create("Document usage", "README.md has a short Usage section showing greet().", "Add a 'Usage' section with one code example.");
@@ -137,7 +155,13 @@ async function main() {
   await cmd("setStepSelection", { taskId: claudeTask, stepId: "S1", selection: { provider: "claude", model: claudeModel } });
   await cmd("startHeldTask", { taskId: codexTask });
   await cmd("startHeldTask", { taskId: claudeTask });
-  record("tasks created", { codexTask, claudeTask, codexModel, claudeModel });
+  s = await state();
+  check(
+    "both tasks record the pattern they run (id, hash, source)",
+    [codexTask, claudeTask].every((id) => task(s, id).pattern.id === PATTERN_ID && task(s, id).pattern.hash === pattern.hash && task(s, id).pattern.source === "local" && task(s, id).pattern.chosenBy === "user"),
+    { pattern: PATTERN_ID, hash: pattern.hash.slice(0, 8) },
+  );
+  record("tasks created", { codexTask, claudeTask, codexModel, claudeModel, pattern: PATTERN_ID });
 
   // 1. Concurrency: both providers running at the same moment.
   ({ s } = await until("both workers running concurrently", (x) => active(x, codexTask).length && active(x, claudeTask).length, 60000));

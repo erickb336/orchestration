@@ -13,6 +13,8 @@ import { CheckResults, CoverageChip, DecisionControls, DecisionQueue, FindingsLi
 import { SpecEditor } from "./SpecEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
+import { PatternPicker } from "./PatternPicker";
+import { PIPELINE_CHANGED_MESSAGE, changeConsequences, earlierPatternLabel, hashTitle, patternLineParts, patternRefDetail, revisionPatternLabel, samePattern } from "./patternView";
 
 export function TaskDetail({ id }: { id: string }) {
   const { state } = useStore();
@@ -593,57 +595,130 @@ function DetailsCard({ task }: { task: Task }) {
   );
 }
 
-/** ORC-016: "Pattern: Change" with its source, or what a task from before patterns ran. */
+/** ORC-016: "Pattern: Change (a1b2c3d4, built-in)", or what a task from before patterns ran. The title holds the full hash and the files in the `extends` chain. */
 function PatternLine({ task }: { task: Task }) {
   const p = task.pattern;
-  const source = p.source === "legacy" ? "from before patterns" : p.source === "custom" ? "custom pipeline" : p.source === "internal" ? "internal" : p.source === "local" ? "yours" : "built-in";
+  const detail = patternRefDetail(p);
+  const line = patternLineParts(p);
   return (
-    <span className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }}>
-      <span>Pattern: <strong>{p.name}</strong></span>
-      <span className="chip" title={p.chain?.map((c) => c.file).join(", ") ?? source}>
-        {source}
+    <div className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }}>
+      <span>
+        {line.prefix}
+        <strong>{line.name}</strong>
+        {detail && (
+          <>
+            {" "}
+            <span className="muted" title={hashTitle(p)}>
+              {detail}
+            </span>
+          </>
+        )}
       </span>
-      {p.hash && (
-        <span className="chip mono" title={`Content hash ${p.hash}`}>
-          {p.hash.slice(0, 8)}
+      {p.experimental && (
+        <span className="chip" title="This pattern is marked experimental; you chose it">
+          experiment
         </span>
       )}
-      {p.experimental && <span className="chip">experiment</span>}
-    </span>
+    </div>
   );
 }
 
 /**
- * ORC-016 step 2: the basic control to run a task on another pattern (the full panel with its consequences is
- * step 4). Shown while the task is open and not service-owned; disabled, with the reason, while it is running
- * or not yet confirmed Paused.
+ * ORC-016: run a task on another pattern. The button is shown while the task is open and not service-owned;
+ * it is disabled, with the reason, while the task is running or not yet confirmed Paused. The panel shows the
+ * picker, what the change does (which steps start over, which pins stay, what is closed) and an optional note.
+ * The pipeline revision is the one the panel was opened on; if it moves meanwhile, the panel asks you to
+ * review again instead of sending a stale request.
  */
 function ChangePattern({ state, task }: { state: State; task: Task }) {
   const { send, disabled } = useStore();
-  const choices = state.patterns.patterns.filter((p) => !(task.parentTaskId && p.flags.breaksDown));
-  const [patternId, setPatternId] = useState(choices.find((p) => p.id !== task.pattern.id)?.id ?? choices[0]?.id ?? "");
-  const chosen = choices.find((p) => p.id === patternId);
-  const blocker = M.patternChangeBlocker(state, task, chosen);
+  const [open, setOpen] = useState(false);
+  const [openedRev, setOpenedRev] = useState(task.pipelineRev);
+  const [patternId, setPatternId] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
   if (task.reviewTarget || task.checkTarget || task.revertOf || task.deliverInto) return null;
+  const choices = state.patterns.patterns.filter((p) => !(task.parentTaskId && p.flags.breaksDown));
+  const blocker = M.patternChangeBlocker(state, task);
+  if (!open) {
+    return (
+      <div className="row" style={{ gap: "0.4rem", fontSize: "0.85rem", marginBottom: "0.4rem" }}>
+        <button
+          className="small"
+          disabled={disabled || !!blocker || !choices.length}
+          title={blocker ?? "Run this task on another pattern; the pipeline starts over and work done so far stays on the record"}
+          onClick={() => {
+            setOpenedRev(task.pipelineRev);
+            setPatternId(choices.find((p) => p.id !== task.pattern.id)?.id ?? choices[0]?.id ?? "");
+            setNote("");
+            setOpen(true);
+          }}
+        >
+          Change pattern
+        </button>
+        {blocker && <span className="muted">{blocker}</span>}
+      </div>
+    );
+  }
+  const chosen = choices.find((p) => p.id === patternId);
+  const preview = chosen ? M.patternChangePreview(state, task, chosen) : undefined;
+  const same = chosen ? samePattern(task.pattern, chosen) : false;
+  const moved = task.pipelineRev !== openedRev;
+  const canUse = !!chosen && !!preview?.allowed && !same && !moved && !busy && !disabled;
   return (
-    <span className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }} title={blocker ?? "The pipeline starts over from the chosen pattern; work done so far stays on the record"}>
-      <label className="row" style={{ gap: "0.3rem" }}>
+    <div className="pattern-panel" role="group" aria-labelledby="chg-pat-h">
+      <h3 id="chg-pat-h" style={{ marginBottom: "0.3rem" }}>
         Change pattern
-        <select value={patternId} disabled={disabled || !!blocker} onChange={(e) => setPatternId(e.target.value)} aria-label="Pattern to change to">
-          {choices.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.source === "local" ? " (yours)" : ""}
-              {p.experimental ? " (experiment)" : ""}
-            </option>
-          ))}
-        </select>
+      </h3>
+      <p className="muted" style={{ fontSize: "0.85rem" }}>
+        The pipeline starts over from the pattern you choose. Work done so far stays on the record, labelled "earlier pattern", and is never used again. A provider or model pin stays on a step with the same id and role.
+        {task.hold ? " The task stays paused until you resume it." : ""}
+      </p>
+      {moved && (
+        <div className="banner neutral" role="status" style={{ marginBottom: "0.6rem" }}>
+          {PIPELINE_CHANGED_MESSAGE}{" "}
+          <button className="small" onClick={() => setOpenedRev(task.pipelineRev)}>
+            Review again
+          </button>
+        </div>
+      )}
+      <PatternPicker state={state} patterns={choices} value={patternId} onChange={setPatternId} label="New pattern" disabled={disabled || busy} />
+      {chosen &&
+        (same ? (
+          <p className="muted" style={{ fontSize: "0.85rem" }}>
+            This task already runs {chosen.name} at this version; nothing would change.
+          </p>
+        ) : preview && !preview.allowed ? (
+          <p style={{ color: "var(--s-blocked)", fontSize: "0.85rem" }}>{preview.why}</p>
+        ) : preview ? (
+          <ul className="plain" style={{ fontSize: "0.85rem", marginBottom: "0.6rem" }} aria-label="What this change does">
+            {changeConsequences(preview).map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        ) : null)}
+      <label className="field">
+        <span>Note (optional; recorded on the pipeline revision)</span>
+        <input type="text" value={note} onChange={(e) => setNote(e.target.value)} disabled={disabled || busy} style={{ width: "100%" }} />
       </label>
-      <button className="small" disabled={disabled || !!blocker || !chosen || (chosen.id === task.pattern.id && chosen.hash === task.pattern.hash)} onClick={() => void send("changePattern", { taskId: task.id, expectedRev: task.pipelineRev, patternId })}>
-        Use {chosen?.name ?? "pattern"}
-      </button>
-      {blocker && <span className="muted">{blocker}</span>}
-    </span>
+      <div className="row">
+        <button
+          className="primary"
+          disabled={!canUse}
+          onClick={async () => {
+            setBusy(true);
+            const r = await send("changePattern", { taskId: task.id, expectedRev: openedRev, patternId, note: note.trim() });
+            setBusy(false);
+            if (r.ok) setOpen(false);
+          }}
+        >
+          Use {chosen?.name ?? "pattern"}
+        </button>
+        <button disabled={busy} onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -862,7 +937,13 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                 <span className="mono">r{p.rev}</span>
                 <span className="actor">{p.author}</span>
                 <span>
-                  {p.reason} <span className="muted">· {p.steps.length} steps · {fmtTime(p.at)}</span>
+                  {p.reason}{" "}
+                  {revisionPatternLabel(p) && (
+                    <span className="chip" title={hashTitle(p.pattern!)}>
+                      {revisionPatternLabel(p)}
+                    </span>
+                  )}{" "}
+                  <span className="muted">· {p.steps.length} steps · {fmtTime(p.at)}</span>
                 </span>
               </li>
             ))}
@@ -978,8 +1059,8 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                 <span className="chip">{a.kind}</span> {edited && <span className="chip edited">edited by you</span>}{" "}
                 {earlier && (
                   <>
-                    <span className="chip" title="Made before the task's pattern changed; kept for the record, not used by the new steps">
-                      earlier pattern (r{M.artifactPipelineRev(state, a)})
+                    <span className="chip" title="Made before the task's pattern changed; kept for the record, not used by the new steps and not editable">
+                      {earlierPatternLabel(task, M.artifactPipelineRev(state, a))}
                     </span>{" "}
                   </>
                 )}
@@ -1405,9 +1486,12 @@ function ChildLink({ state, child }: { state: State; child: Task }) {
 
 /** Tasks created by this task's breakdown steps. */
 function ChildTasksCard({ state, task }: { state: State; task: Task }) {
-  const children = M.childTasks(state, task);
+  const all = M.childTasks(state, task);
+  // ORC-016: children of a breakdown made under an earlier pattern stay listed, labelled; the new steps never wait for or reuse them.
+  const children = all.filter((c) => !M.childFromEarlierPattern(state, task, c));
+  const earlier = all.filter((c) => M.childFromEarlierPattern(state, task, c));
   const plansBreakdown = task.steps.some((st) => st.outputs.some((o) => o.kind === "breakdown"));
-  if (!children.length && !plansBreakdown) return null;
+  if (!all.length && !plansBreakdown) return null;
   const finished = children.filter(isSettledTask);
   const cancelled = children.filter((c) => c.lifecycle === "cancelled").length;
   return (
@@ -1421,7 +1505,7 @@ function ChildTasksCard({ state, task }: { state: State; task: Task }) {
         )}
       </div>
       {!children.length ? (
-        <p className="muted">None yet. When a breakdown step completes, each item it lists becomes a child task here.</p>
+        <p className="muted">None yet{earlier.length ? " under the current pattern" : ""}. When a breakdown step completes, each item it lists becomes a child task here.</p>
       ) : (
         <ul className="plain stack">
           {children.map((c) => (
@@ -1430,6 +1514,26 @@ function ChildTasksCard({ state, task }: { state: State; task: Task }) {
             </li>
           ))}
         </ul>
+      )}
+      {earlier.length > 0 && (
+        <details style={{ marginTop: "0.5rem" }}>
+          <summary>
+            From an earlier pattern ({earlier.length})
+          </summary>
+          <p className="muted" style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
+            Created by a breakdown before this task's pattern changed. They stay on the record; the current steps do not wait for them or plan from them.
+          </p>
+          <ul className="plain stack">
+            {earlier.map((c) => (
+              <li key={c.id}>
+                <ChildLink state={state} child={c} />{" "}
+                <span className="chip" title="Its breakdown was made under a pattern this task has since left">
+                  from an earlier pattern
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </section>
   );

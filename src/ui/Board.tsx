@@ -2,13 +2,14 @@ import { useMemo, useState } from "react";
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
-import { effectiveDefault, patternSummary } from "../domain/patterns";
+import { effectiveDefault } from "../domain/patterns";
 import { PROVIDERS, ROLES, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { PrChip } from "./Delivery";
 import { COLUMN_LABEL, ROLE_LABEL, StatePill, currentWork, hasNewDecision, latestEvent, relTime } from "./common";
 import { isSettledTask } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
+import { PatternPicker } from "./PatternPicker";
 import { ShapingBanner } from "./Shaping";
 import { FocusDiff } from "./SteeringChanges";
 
@@ -52,8 +53,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     holdBeforeStart: true,
   });
   const set = (k: keyof typeof f, v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
-  const pattern = patterns.find((p) => p.id === f.patternId);
-  const text = (k: "title" | "area" | "outcome" | "benefit" | "whyNow" | "approach", label: string, required = false, multi = false) => (
+  const text =(k: "title" | "area" | "outcome" | "benefit" | "whyNow" | "approach", label: string, required = false, multi = false) => (
     <label className="field">
       <span>
         {label}
@@ -102,47 +102,18 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
       {text("benefit", "User benefit")}
       {text("area", "Area")}
       {text("whyNow", "Why now")}
-      <div className="row">
-        <label className="field">
-          <span>Pattern</span>
-          <select value={f.patternId} onChange={(e) => set("patternId", e.target.value)}>
-            {patterns.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-                {p.source === "local" ? (p.replacesBuiltIn ? " (yours, replaces built-in)" : " (yours)") : ""}
-                {p.experimental ? " (experiment)" : p.flags.pausesForYou ? " (pauses for you)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Priority</span>
-          <select value={f.priority} onChange={(e) => set("priority", e.target.value)}>
-            <option value="auto">Auto (P3; the lead may reorder it)</option>
-            {Array.from({ length: 9 }, (_, i) => (
-              <option key={i + 1} value={String(i + 1)}>
-                P{i + 1} (pinned: the lead may not change it)
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {pattern && (
-        <div aria-live="polite" style={{ marginBottom: "0.6rem" }}>
-          <p className="muted" style={{ fontSize: "0.85rem", margin: "0 0 0.25rem" }}>
-            {pattern.description} <strong>Use when:</strong> {pattern.whenToUse}
-            {pattern.hypothesis ? (
-              <>
-                {" "}
-                <strong>Hypothesis:</strong> {pattern.hypothesis}
-              </>
-            ) : null}
-          </p>
-          <p className="mono muted" style={{ fontSize: "0.78rem", margin: 0 }}>
-            {patternSummary(pattern.steps)}
-          </p>
-        </div>
-      )}
+      <PatternPicker state={state} patterns={patterns} value={f.patternId} onChange={(v) => set("patternId", v)} />
+      <label className="field">
+        <span>Priority</span>
+        <select value={f.priority} onChange={(e) => set("priority", e.target.value)}>
+          <option value="auto">Auto (P3; the lead may reorder it)</option>
+          {Array.from({ length: 9 }, (_, i) => (
+            <option key={i + 1} value={String(i + 1)}>
+              P{i + 1} (pinned: the lead may not change it)
+            </option>
+          ))}
+        </select>
+      </label>
       <label className="row" style={{ fontSize: "0.9rem", marginBottom: "0.8rem" }}>
         <input type="checkbox" checked={f.holdBeforeStart} onChange={(e) => set("holdBeforeStart", e.target.checked)} />
         Hold before start

@@ -87,19 +87,28 @@ export function computeOutcome(s: State, t: Task, now: string): TaskOutcome {
       byAction[f.action as FindingAction] = (byAction[f.action as FindingAction] ?? 0) + 1;
     }
   }
-  // What the last round left open: per review or check step, its latest iteration only (an earlier round's
-  // findings were the next round's work, not what is open at the end).
-  const latestRound = new Map<string, Task["steps"][number]>();
+  // What the last round left open: per review or check step, its latest round only (an earlier round's
+  // findings were the next round's work, not what is open at the end). A round is a loop iteration
+  // (`-iN`) or a check round after failed final checks (`-rK-checks`, `-rK-review`; steps 2–3 review,
+  // finding 5), keyed by the base id and the output kind so a check round's review counts on its own.
+  const latestRound = new Map<string, { st: Task["steps"][number]; rank: number }>();
   for (const st of t.steps) {
-    if (st.state !== "done" || !st.outputs.some((o) => o.kind === "review-findings" || o.kind === "check-results")) continue;
-    const base = st.id.replace(/-i\d+$/, "");
-    const cur = latestRound.get(base);
-    if (!cur || (st.iteration ?? 1) >= (cur.iteration ?? 1)) latestRound.set(base, st);
+    if (st.state !== "done") continue;
+    const round = /-r(\d+)-[a-z]+$/.exec(st.id);
+    const rank = (round ? Number(round[1]) : 0) * 1000 + (st.iteration ?? 1);
+    const base = st.id.replace(/(-i\d+|-r\d+-[a-z]+)+$/, "");
+    for (const kind of ["review-findings", "check-results"] as const) {
+      if (!st.outputs.some((o) => o.kind === kind)) continue;
+      const key = `${base}\u0000${kind}`;
+      const cur = latestRound.get(key);
+      if (!cur || rank >= cur.rank) latestRound.set(key, { st, rank });
+    }
   }
   let openAtEnd = 0;
-  for (const st of latestRound.values()) {
+  for (const [key, { st }] of latestRound) {
+    const kind = key.slice(key.indexOf("\u0000") + 1);
     for (const o of st.outputs) {
-      if (o.kind !== "review-findings" && o.kind !== "check-results") continue;
+      if (o.kind !== kind) continue;
       const art = acceptedOutput(s, t, st.id, o.name);
       if (art) openAtEnd += F.unresolved(s, art);
     }
@@ -144,7 +153,9 @@ export function computeOutcome(s: State, t: Task, now: string): TaskOutcome {
     result: t.lifecycle === "cancelled" ? "cancelled" : "done",
     settledAt: now,
     pattern: structuredClone(t.pattern),
-    patternChanges: Math.max(0, t.pipelineHistory.filter((r) => r.pattern).length - 1),
+    // Revisions after the first that applied a pattern. A task from before patterns, or one built by the internal
+    // setPipeline, has no pattern on its first revision, so "all but the first" would undercount (steps 2–3 review, finding 4).
+    patternChanges: t.pipelineHistory.filter((r) => r.pattern && r.rev > (t.pipelineHistory[0]?.rev ?? 0)).length,
     runsBeforePattern: attempts.filter((a) => a.snapshot.pipelineRev < t.patternSince).length,
     createdAt: t.createdAt,
     ...(firstRunAt ? { firstRunAt, wallMs: Math.max(0, ms(now) - ms(firstRunAt)) } : {}),

@@ -4,20 +4,8 @@
 import * as M from "../domain/model";
 import type { Artifact, State, Step, StepDef, Task } from "../domain/types";
 
-/** Short markers for a step in one-line pipeline summaries (templates, new-task preview). */
-export function stepMarkers(st: StepDef): string {
-  const m: string[] = [];
-  if (st.runIf?.length) m.push("if findings");
-  if (st.parallel) m.push(`parallel ×${st.parallel.count}${st.parallel.mode === "best-of" ? " best of" : ""}`);
-  if (st.iterate) m.push("repeats");
-  if (st.waitForChildren) m.push("waits for child tasks");
-  if (st.outputs.some((o) => o.kind === "breakdown")) m.push("breakdown");
-  return m.length ? ` (${m.join(", ")})` : "";
-}
-
-export function pipelineSummary(steps: StepDef[]): string {
-  return steps.map((st) => `${st.id} ${st.purpose}${stepMarkers(st)}`).join(" → ");
-}
+// ORC-016: one-line pipeline summaries and step markers moved to the domain (`patternSummary`, `stepMarkers`
+// in src/domain/patterns.ts), which the lead envelope shares with the UI.
 
 export function isSettledTask(t: Task) {
   return t.lifecycle === "done" || t.lifecycle === "cancelled";
@@ -45,8 +33,9 @@ export function childrenOfArtifact(state: State, task: Task, a: Artifact): Task[
   return M.childTasks(state, task).filter((c) => c.parentArtifactId === a.id);
 }
 
+/** Open children of the task's current pattern: what a waiting step waits for. Children of an earlier pattern are never waited for. */
 export function unsettledChildren(state: State, task: Task): Task[] {
-  return M.childTasks(state, task).filter((c) => !isSettledTask(c));
+  return M.currentChildren(state, task).filter((c) => !isSettledTask(c));
 }
 
 export type StepChip = { text: string; title?: string; strong?: boolean };

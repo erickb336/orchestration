@@ -523,7 +523,8 @@ export function addCheckRound(s: State, t: Task, st: Step, now: string, actor: "
   const at = t.steps.indexOf(st);
   st.state = "done";
   st.blockedReason = undefined;
-  const copies: Step[] = instantiate(defs).map((c) => ({ ...c, state: t.hold ? "paused" : "pending" }));
+  // ORC-016 (steps 2–3 review, finding 6): a round's step ids start above any revision they had before, so no earlier run can report into them.
+  const copies: Step[] = instantiate(defs).map((c) => ({ ...c, revision: M.nextRevisionFor(s, t, c.id), state: t.hold ? "paused" : "pending" }));
   t.steps.splice(at + 1, 0, ...copies);
   for (const d of t.steps) {
     if (!downstream.has(d.id)) continue;

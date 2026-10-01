@@ -4,7 +4,7 @@
 // pipeline that keeps running across the upgrade. Temporary directories only; nothing under the home.
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -22,7 +22,7 @@ import { ARTIFACT_KINDS, PROVIDERS, STEP_ROLES, type RetiredTemplate, type State
 import schema from "../patterns/pattern.schema.json";
 import { createHttpServer } from "./http";
 import { V14_TEMPLATES } from "./legacyTemplates";
-import { SCHEMA_FILE, SCHEMA_TEXT, exportRetiredTemplates, loadPatternCatalog, patternValidator, positionOf, retiredTemplateFile } from "./patterns";
+import { MAX_EXPORT_NAMES, SCHEMA_FILE, SCHEMA_TEXT, exportRetiredTemplates, loadPatternCatalog, patternValidator, positionOf, retiredTemplateFile } from "./patterns";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
 import { STATE_FORMAT, Store } from "./store";
@@ -499,15 +499,17 @@ describe("exporting retired templates at start (P10)", () => {
     const store = new Store(path);
     try {
       const first = exportRetiredTemplates(store, patterns);
-      expect(first.written.map((p) => basename(p)).sort()).toEqual(["feature-yours.json", "two-shots.json"]);
-      expect(first.failed.map((p) => basename(p))).toEqual(["quick-fix.json"]);
+      // Steps 2–3 review, finding 8: a file of yours under the first name is kept, and the export takes the next free name.
+      expect(first.written.map((p) => basename(p)).sort()).toEqual(["feature-yours.json", "quick-fix-yours.json", "two-shots.json"]);
+      expect(first.failed).toEqual([]);
       expect(readFileSync(join(patterns, "quick-fix.json"), "utf8")).toBe("keep me\n");
       const s = store.read().state;
       const byId = (id: string) => s.retiredTemplates.find((t) => t.id === id)!;
       expect(byId("feature")).toMatchObject({ exportedTo: join(patterns, "feature-yours.json"), exportedId: "feature-yours" });
       expect(byId("feature").stripped).toBeUndefined();
-      expect(byId("quick-fix-1")).toMatchObject({ exportError: `A file named ${join(patterns, "quick-fix.json")} already exists; yours was kept.` });
-      expect(byId("quick-fix-1").exportedTo).toBeUndefined();
+      expect(byId("quick-fix-1")).toMatchObject({ exportedTo: join(patterns, "quick-fix-yours.json"), exportedId: "quick-fix-yours" });
+      expect(byId("quick-fix-1").exportError).toBeUndefined();
+      expect(JSON.parse(readFileSync(join(patterns, "quick-fix-yours.json"), "utf8"))).toMatchObject({ id: "quick-fix-yours", name: "Quick fix" });
       expect(byId("two-shots-9")).toMatchObject({ exportedTo: join(patterns, "two-shots.json"), exportedId: "two-shots" });
       const feature = JSON.parse(readFileSync(join(patterns, "feature-yours.json"), "utf8"));
       expect(feature).toMatchObject({ $schema: "./pattern.schema.json", id: "feature-yours", name: "Feature (yours)", description: V14_TEMPLATES.feature.description, whenToUse: expect.stringMatching(/Your template from before patterns/) });
@@ -518,10 +520,11 @@ describe("exporting retired templates at start (P10)", () => {
       expect(twoShots).toMatchObject({ id: "two-shots", name: "Two shots", description: "Saved from your template.", experimental: true, hypothesis: expect.any(String) });
       expect(patternValidator()(feature)).toBe(true);
       expect(patternValidator()(twoShots)).toBe(true);
-      expect(s.events.filter((e) => /from before patterns saved as|could not be saved/.test(e.message))).toHaveLength(3);
-      // The loader lists the new files like any other.
+      expect(s.events.filter((e) => /from before patterns saved as/.test(e.message))).toHaveLength(3);
+      // The loader lists the new files like any other; the unrelated file of yours is still listed as broken.
       const c = loadPatternCatalog(patterns, iso());
       expect(c.patterns.find((p) => p.id === "feature-yours")).toMatchObject({ source: "local", audience: "standard" });
+      expect(c.patterns.find((p) => p.id === "quick-fix-yours")).toMatchObject({ source: "local" });
       expect(c.patterns.find((p) => p.id === "two-shots")).toMatchObject({ source: "local", experimental: true });
       expect(c.errors.map((e) => basename(e.file))).toEqual(["quick-fix.json"]);
       // A second start exports nothing again.
@@ -543,12 +546,41 @@ describe("exporting retired templates at start (P10)", () => {
       write("feature-yours.json", retiredTemplateFile(feature, "feature-yours", "Feature (yours)").json);
       write("two-shots.json", pretty({ id: "two-shots", name: "Mine already", description: "d", whenToUse: "w", steps: oneStep }));
       const r = exportRetiredTemplates(store, patterns);
-      expect(r.written.map((p) => basename(p)).sort()).toEqual(["feature-yours.json", "quick-fix.json"]);
-      expect(r.failed.map((p) => basename(p))).toEqual(["two-shots.json"]);
+      expect(r.written.map((p) => basename(p)).sort()).toEqual(["feature-yours.json", "quick-fix.json", "two-shots-yours.json"]);
+      expect(r.failed).toEqual([]);
       const s = store.read().state;
       expect(s.retiredTemplates.find((t) => t.id === "feature")).toMatchObject({ exportedTo: join(patterns, "feature-yours.json"), exportedId: "feature-yours" });
-      expect(s.retiredTemplates.find((t) => t.id === "two-shots-9")).toMatchObject({ exportError: `A file named ${join(patterns, "two-shots.json")} already exists; yours was kept.` });
+      expect(s.retiredTemplates.find((t) => t.id === "two-shots-9")).toMatchObject({ exportedTo: join(patterns, "two-shots-yours.json"), exportedId: "two-shots-yours" });
       expect(JSON.parse(readFileSync(join(patterns, "two-shots.json"), "utf8")).name).toBe("Mine already");
+      expect(JSON.parse(readFileSync(join(patterns, "two-shots-yours.json"), "utf8"))).toMatchObject({ id: "two-shots-yours", name: "Two shots" });
+      expect(exportRetiredTemplates(store, patterns)).toEqual({ written: [], failed: [] });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("steps 2–3 review, finding 8: an unrelated <id>-yours.json never blocks an edited built-in's export; the next free name is used, up to a bound, and nothing is overwritten", () => {
+    const path = join(dir, "old.sqlite");
+    format14(path);
+    const store = new Store(path);
+    try {
+      write("feature-yours.json", pretty({ id: "feature-yours", name: "Not the export", description: "d", whenToUse: "w", steps: oneStep }));
+      // Every name the custom template could take is occupied by files of yours.
+      write("quick-fix.json", "mine 0\n");
+      for (let n = 1; n < MAX_EXPORT_NAMES; n++) write(n === 1 ? "quick-fix-yours.json" : `quick-fix-yours-${n}.json`, `mine ${n}\n`);
+      const r = exportRetiredTemplates(store, patterns);
+      expect(r.written.map((p) => basename(p)).sort()).toEqual(["feature-yours-2.json", "two-shots.json"]);
+      expect(r.failed.map((p) => basename(p))).toEqual(["quick-fix.json"]);
+      const s = store.read().state;
+      expect(s.retiredTemplates.find((t) => t.id === "feature")).toMatchObject({ exportedTo: join(patterns, "feature-yours-2.json"), exportedId: "feature-yours-2" });
+      expect(JSON.parse(readFileSync(join(patterns, "feature-yours.json"), "utf8")).name).toBe("Not the export");
+      expect(JSON.parse(readFileSync(join(patterns, "feature-yours-2.json"), "utf8"))).toMatchObject({ id: "feature-yours-2", name: "Feature (yours)" });
+      const quick = s.retiredTemplates.find((t) => t.id === "quick-fix-1")!;
+      expect(quick.exportedTo).toBeUndefined();
+      expect(quick.exportError).toBe(`${MAX_EXPORT_NAMES} files named ${join(patterns, "quick-fix.json")} to ${join(patterns, `quick-fix-yours-${MAX_EXPORT_NAMES - 1}.json`)} already exist; yours were kept and nothing was written.`);
+      for (let n = 0; n < MAX_EXPORT_NAMES; n++) expect(readFileSync(join(patterns, n === 0 ? "quick-fix.json" : n === 1 ? "quick-fix-yours.json" : `quick-fix-yours-${n}.json`), "utf8")).toBe(`mine ${n}\n`);
+      expect(existsSync(join(patterns, `quick-fix-yours-${MAX_EXPORT_NAMES}.json`))).toBe(false);
+      // Recorded once: a second start tries nothing again.
       expect(exportRetiredTemplates(store, patterns)).toEqual({ written: [], failed: [] });
     } finally {
       store.close();

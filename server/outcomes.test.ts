@@ -239,6 +239,7 @@ describe("one outcome per settle (P11)", () => {
     const set = st().steering.at(-1)!;
     cmd("undoSteering", { changeSetId: set.id });
     expect(task(id).lifecycle).not.toBe("cancelled");
+    expect(task(id).outcome).toBeUndefined(); // steps 2–3 review, finding 7: an open task carries no outcome
     tick(5000);
     cmd("cancelTask", { taskId: id });
     const second = task(id).outcome!;

@@ -1095,7 +1095,8 @@ Add \`"chosen": "<step id>"\` at the top level of your JSON block.
 /** A step that waits for child tasks sees how each of them ended. */
 function childrenNote(state: State, task: Task, step: Step): string {
   if (!step.waitForChildren) return "";
-  const kids = M.childTasks(state, task);
+  // ORC-016 (steps 2–3 review, finding 2): children of an earlier pattern are the record, not results of this breakdown.
+  const kids = M.currentChildren(state, task);
   if (!kids.length) return "## Child tasks\n- None were created.\n\n";
   const lines = kids.map((c) => {
     const spec = M.currentSpec(c).content;

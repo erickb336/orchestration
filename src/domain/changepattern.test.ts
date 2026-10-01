@@ -5,10 +5,11 @@
 
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
+import * as F from "./findings";
 import * as M from "./model";
 import { builtInCatalog } from "./patterns";
 import { buildSeed } from "./seed";
-import { StaleWriteError, type Finding, type State } from "./types";
+import { StaleWriteError, type Finding, type State, type Task } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
 const at = (s: number) => new Date(T0 + s * 1000).toISOString();
@@ -276,5 +277,172 @@ describe("a fresh start while paused (P8)", () => {
     const old = legacy.artifacts.find((a) => a.taskId === id && a.stepId === "S1" && a.name === "change")!;
     expect(M.fromEarlierPattern(legacy, task(legacy, id), old)).toBe(false);
     expect(M.editArtifact(legacy, old.id, { summary: "edited", reason: "r" }, at(7)).artifacts.at(-1)).toMatchObject({ author: "user" });
+  });
+});
+
+describe("steps 2–3 review fixes", () => {
+  const titleOf = (c: Task) => M.currentSpec(c).content.title;
+
+  it("finding 1: a decision taken under the earlier pattern is not carried into the new pattern's review, and a decision the change closed cannot be decided", () => {
+    const { s: paused, id } = pausedAfterReview();
+    const open = paused.decisions.find((d) => d.taskId === id && d.status === "open")!;
+    // (a) Decided before the change: accepted. Under Bug fix, the review reports the same finding key again.
+    const accepted = F.decideFinding(paused, open.id, "accept", "fine as is", at(5));
+    const changed = M.changePattern(accepted, id, task(accepted, id).pipelineRev, "bugfix", "", at(6));
+    expect(changed.decisions.find((d) => d.id === open.id)!.status).toBe("accept");
+    expect(F.earlierDecision(changed, task(changed, id), open.key)).toBeUndefined();
+    let next = M.resumeTask(changed, id, at(7));
+    next = M.dispatchEligible(next, at(8));
+    expect(running(next, id)[0].stepId).toBe("S1");
+    next = finish(next, id, 9);
+    next = M.dispatchEligible(next, at(10));
+    expect(running(next, id)[0].stepId).toBe("S2");
+    next = finish(next, id, 11, { ref: "0123456789ab on orchestration/run" });
+    next = M.dispatchEligible(next, at(12)); // C1 skipped (checks off), S3 reviews
+    expect(running(next, id)[0].stepId).toBe("S3");
+    next = finish(next, id, 13, { findings: [finding({ key: open.key, action: "ask-user", why: "widens the task" })] });
+    const fresh = next.decisions.filter((d) => d.taskId === id && d.key === open.key && d.id !== open.id);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]).toMatchObject({ status: "open" }); // not "decided as before"
+    expect(fresh[0].carriedFrom).toBeUndefined();
+    expect(F.settledByKey(next, task(next, id), finding({ key: open.key }))).toBe(false);
+    expect(next.events.some((e) => e.taskId === id && /decided as before/.test(e.message))).toBe(false);
+    // (b) Left open at the change: closed as superseded, and no longer decidable; the message says why.
+    const closed = M.changePattern(paused, id, task(paused, id).pipelineRev, "bugfix", "", at(6));
+    expect(closed.decisions.find((d) => d.id === open.id)!.status).toBe("superseded");
+    const refusal = /belongs to an earlier pattern of T-\d+: it was closed when the pattern changed and cannot be decided/;
+    expect(() => F.decideFinding(closed, open.id, "accept", "late", at(7))).toThrow(refusal);
+    expect(() => F.decideFinding(closed, open.id, "reopen", undefined, at(7))).toThrow(refusal);
+    // A superseded decision of the current pattern (an artifact replaced by a newer run) is untouched by this rule.
+    const sup = structuredClone(paused);
+    const d0 = sup.decisions.find((d) => d.id === open.id)!;
+    d0.status = "superseded";
+    expect(() => F.decideFinding(sup, open.id, "reopen", undefined, at(7))).not.toThrow();
+  });
+
+  it("finding 2: child tasks of a breakdown made under the earlier pattern are the record: never relinked, never waited for, and told apart", () => {
+    let { s, id } = withTask("goal-plan-gate");
+    s = go(s, 1);
+    expect(running(s, id)[0].stepId).toBe("S1");
+    const items = (titles: string[]) => titles.map((title) => ({ title, outcome: `${title} is done`, approach: "do it", acceptance: ["ok"], patternId: "change" }));
+    s = M.reportCompletion(s, running(s, id)[0].id, [], at(2), [{ name: "plan", summary: "two parts", items: items(["Part one", "Part two"]) }]);
+    // The gate holds the task; the children are created when you resume.
+    expect(task(s, id).hold).toBe(true);
+    expect(M.childTasks(s, task(s, id))).toHaveLength(0);
+    s = M.resumeTask(s, id, at(3));
+    const first = M.childTasks(s, task(s, id));
+    expect(first.map(titleOf)).toEqual(["Part one", "Part two"]);
+    const plan1 = s.artifacts.find((a) => a.taskId === id && a.name === "plan")!;
+    expect(first.every((c) => c.parentArtifactId === plan1.id)).toBe(true);
+    // Both children finish (with delivery off, a done child is a ready prerequisite); S2 has not started.
+    s = structuredClone(s);
+    for (const c of first) task(s, c.id).lifecycle = "done";
+    expect(M.childrenSettled(s, task(s, id))).toBe(true);
+    s = M.pauseTask(s, id, at(4));
+    expect(running(s, id)).toHaveLength(0);
+    const changed = M.changePattern(s, id, task(s, id).pipelineRev, "goal", "", at(5));
+    const t = task(changed, id);
+    expect(first.every((c) => M.childFromEarlierPattern(changed, t, task(changed, c.id)))).toBe(true);
+    expect(M.currentChildren(changed, t)).toEqual([]);
+    expect(M.childrenSettled(changed, t)).toBe(true); // nothing of the current pattern to wait for
+    // Resume: the new S1 plans again. A title from before is not relinked; it is refused as an existing task. New titles become new children.
+    let next = M.resumeTask(changed, id, at(6));
+    next = M.dispatchEligible(next, at(7));
+    expect(running(next, id)[0].stepId).toBe("S1");
+    next = M.reportCompletion(next, running(next, id)[0].id, [], at(8), [{ name: "plan", summary: "again", items: items(["Part one", "Part three"]) }]);
+    const nt = task(next, id);
+    expect(M.currentChildren(next, nt).map(titleOf)).toEqual(["Part three"]);
+    expect(M.childTasks(next, nt)).toHaveLength(3);
+    for (const c of first) expect(task(next, c.id).parentArtifactId).toBe(plan1.id); // not relinked to the new plan
+    expect(next.events.some((e) => e.taskId === id && /a task with this title already exists/.test(e.message))).toBe(true);
+    // The evaluate step waits for the new child only: once it finishes, the earlier two (done long ago) do not hold anything back.
+    expect(M.childrenSettled(next, nt)).toBe(false);
+    expect(M.waitingForChildren(next, nt)?.id).toBe("S2");
+    const later = structuredClone(next);
+    task(later, M.currentChildren(later, nt)[0].id).lifecycle = "done";
+    expect(M.childrenSettled(later, task(later, id))).toBe(true);
+    // The rule that refuses a change while children are open still stands.
+    const paused2 = M.pauseTask(later, id, at(9));
+    expect(M.patternChangeBlocker(paused2, task(paused2, id))).toBeUndefined();
+    const withOpen = structuredClone(paused2);
+    task(withOpen, M.currentChildren(withOpen, task(withOpen, id))[0].id).lifecycle = "active";
+    expect(M.patternChangeBlocker(withOpen, task(withOpen, id))).toBe("It has child tasks; cancel them or let them finish first.");
+  });
+
+  it("finding 6: a stop acknowledged or a run lost from before the change settles that attempt alone and leaves the new step untouched", () => {
+    const { s: paused, id } = pausedAfterReview();
+    const changed = M.changePattern(paused, id, task(paused, id).pipelineRev, "bugfix", "", at(6));
+    const old = changed.attempts.find((a) => a.taskId === id && a.stepId === "S1")!;
+    let next = M.resumeTask(changed, id, at(7));
+    next = M.dispatchEligible(next, at(8));
+    const fresh = running(next, id)[0];
+    expect(fresh.stepId).toBe("S1");
+    // State surgery standing in for a regression elsewhere: the earlier run is active again while the new S1 runs.
+    const stopping = structuredClone(next);
+    const a = stopping.attempts.find((x) => x.id === old.id)!;
+    a.outcome = "stopping";
+    delete a.endedAt;
+    const acked = M.acknowledgeStop(stopping, old.id, at(9));
+    expect(acked.attempts.find((x) => x.id === old.id)).toMatchObject({ outcome: "stopped", endedAt: at(9), note: expect.stringMatching(/Stopped on pipeline r1, before the pattern changed \(r2\); its step was not touched/) });
+    expect(step(acked, id, "S1").state).toBe("running"); // not reset to pending under the new run
+    expect(running(acked, id).map((x) => x.id)).toEqual([fresh.id]);
+    const lostState = structuredClone(next);
+    const b = lostState.attempts.find((x) => x.id === old.id)!;
+    b.outcome = "running";
+    delete b.endedAt;
+    const lost = M.reportRunLost(lostState, old.id, "no live process", at(9));
+    expect(lost.attempts.find((x) => x.id === old.id)).toMatchObject({ outcome: "lost", note: expect.stringMatching(/no live process; no result was produced or integrated; it ran on pipeline r1, before the pattern changed \(r2\)/) });
+    expect(step(lost, id, "S1").state).toBe("running");
+    // An ordinary stop of the current run still requeues its step.
+    const normal = M.acknowledgeStop(M.pauseTask(next, id, at(9)), fresh.id, at(10));
+    expect(step(normal, id, "S1").state).toBe("paused");
+  });
+
+  it("finding 6: loop iterations and parallel copies created after a change start above any revision their ids had before", () => {
+    // Iterations: a Change task whose loop had expanded (S2-i2 ran) before the change to Change without verification.
+    let { s, id } = withTask("change");
+    s = go(s, 1);
+    s = finish(s, id, 2, { ref: "0123456789ab on orchestration/run" });
+    s = M.dispatchEligible(s, at(3)); // C1 skipped, S2
+    s = finish(s, id, 4, { findings: [finding()] }); // an auto-fix finding: S3 repairs without a decision
+    s = M.dispatchEligible(s, at(5));
+    expect(running(s, id)[0].stepId).toBe("S3");
+    s = finish(s, id, 6, { ref: "abcdef012345 on orchestration/run" });
+    expect(task(s, id).steps.map((x) => x.id)).toContain("S2-i2");
+    s = M.dispatchEligible(s, at(7));
+    expect(running(s, id)[0].stepId).toBe("S2-i2");
+    s = M.pauseTask(s, id, at(8));
+    s = M.acknowledgeStop(s, running(s, id)[0].id, at(9));
+    expect(running(s, id)).toHaveLength(0);
+    const lean = M.changePattern(s, id, task(s, id).pipelineRev, "change-lean", "", at(10));
+    expect(task(lean, id).steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "S3", "C2"]);
+    expect(M.nextRevisionFor(lean, task(lean, id), "S2-i2")).toBe(2); // the attempt on the old S2-i2 ran at revision 1
+    let n = M.resumeTask(lean, id, at(11));
+    n = M.dispatchEligible(n, at(12));
+    n = finish(n, id, 13, { ref: "0123456789ab on orchestration/run" });
+    n = M.dispatchEligible(n, at(14));
+    n = finish(n, id, 15, { findings: [finding()] });
+    n = M.dispatchEligible(n, at(16));
+    expect(running(n, id)[0].stepId).toBe("S3");
+    n = finish(n, id, 17, { ref: "abcdef012345 on orchestration/run" });
+    expect(step(n, id, "S2-i2").revision).toBe(2);
+    expect(step(n, id, "C1-i2").revision).toBe(1); // never ran (checks are off): nothing to stay above
+    expect(step(n, id, "S3-i2").revision).toBe(1);
+    // Copies: a best-of task whose candidates ran, changed away and back.
+    let { s: b, id: bid } = withTask("change-best-of-two");
+    b = go(b, 1);
+    expect(running(b, bid).map((x) => x.stepId).sort()).toEqual(["S1", "S1-c2"]);
+    b = M.pauseTask(b, bid, at(2));
+    for (const a of running(b, bid)) b = M.acknowledgeStop(b, a.id, at(3));
+    b = M.changePattern(b, bid, task(b, bid).pipelineRev, "change", "", at(4));
+    b = M.changePattern(b, bid, task(b, bid).pipelineRev, "change-best-of-two", "", at(5));
+    expect(step(b, bid, "S1").revision).toBe(3); // 1 ran, 2 under Change, 3 now
+    b = M.resumeTask(b, bid, at(6));
+    b = M.dispatchEligible(b, at(7));
+    expect(step(b, bid, "S1-c2").revision).toBe(2); // above the stopped candidate's run at revision 1; no step held the id in between
+    expect(running(b, bid).map((x) => [x.stepId, x.snapshot.stepRev]).sort()).toEqual([
+      ["S1", 3],
+      ["S1-c2", 2],
+    ]);
   });
 });

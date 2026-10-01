@@ -195,6 +195,47 @@ describe("computeOutcome", () => {
     expect(o.repair).toEqual({ rounds: 1, iterations: 2, finalCheckRounds: 0 });
   });
 
+  it("steps 2–3 review, finding 5: a failing final check that a check round then fixed is not open at the end; the round's ids start at the next free revision", () => {
+    let { s, id } = withTask("change");
+    s = go(s, 1);
+    s = finish(s, id, 2, { usage: codexUsage }); // S1
+    s = go(s, 3);
+    s = finish(s, id, 4); // C1 passes
+    s = go(s, 5);
+    s = finish(s, id, 6, { openFindings: 0, usage: claudeUsage }); // S2 clean
+    // The check settings changed since C1 ran, so C2 cannot repeat its result and runs.
+    s = { ...s, project: { ...s.project, checks: { ...s.project.checks, rev: 2 } } };
+    s = go(s, 7);
+    expect(step(s, id, "S3").state).toBe("skipped");
+    expect(running(s, id)[0].stepId).toBe("C2");
+    s = finish(s, id, 8, { check: record(SHA, "failed") });
+    expect(step(s, id, "C2").state).toBe("blocked");
+    const d = s.decisions.find((x) => x.taskId === id && x.kind === "final-checks")!;
+    s = F.decideFinding(s, d.id, "fix", "fix it", at(9));
+    expect(task(s, id).steps.map((x) => x.id)).toEqual(expect.arrayContaining(["C2-r1-fix", "C2-r1-review", "C2-r1-checks"]));
+    expect(step(s, id, "C2-r1-checks").revision).toBe(1); // never existed before: the next free revision is 1
+    s = go(s, 10);
+    expect(running(s, id)[0].stepId).toBe("C2-r1-fix");
+    s = finish(s, id, 11, { ref: SHA2, usage: codexUsage });
+    s = go(s, 12);
+    expect(running(s, id)[0].stepId).toBe("C2-r1-review");
+    s = finish(s, id, 13, { openFindings: 0, usage: claudeUsage });
+    s = go(s, 14);
+    expect(running(s, id)[0].stepId).toBe("C2-r1-checks");
+    s = finish(s, id, 15, { check: record(SHA2) });
+    // Finding 6: once an id has run, the next step created under it starts above that run's revision.
+    expect(M.nextRevisionFor(s, task(s, id), "C2-r1-checks")).toBe(2);
+    expect(M.nextRevisionFor(s, task(s, id), "C2-r2-checks")).toBe(1);
+    s = go(s, 16);
+    expect(running(s, id)[0].stepId).toBe("S4");
+    s = finish(s, id, 17, { usage: claudeUsage });
+    expect(task(s, id).lifecycle).toBe("done");
+    const o = computeOutcome(s, task(s, id), at(18));
+    expect(o.findings.openAtEnd).toBe(0); // C2's failure was the round's work, and C2-r1-checks passed
+    expect(o.checks).toEqual({ runs: 3, failedRuns: 1, finalPassed: true, acceptedFailing: false });
+    expect(o.repair).toEqual({ rounds: 0, iterations: 1, finalCheckRounds: 1 }); // the loop never repeated; one check round
+  });
+
   it("best-of groups: the candidates, and a choice a person made", () => {
     let { s, id } = withTask("change-best-of-two");
     s = go(s, 1);
@@ -239,6 +280,11 @@ describe("computeOutcome", () => {
     for (const r of lt.pipelineHistory) delete r.pattern;
     const lo = computeOutcome(legacy, lt, at(10));
     expect(lo).toMatchObject({ pattern: { source: "legacy" }, patternChanges: 0, runsBeforePattern: 0 });
+    // Steps 2–3 review, finding 4: a task from before patterns (its first revision names none) that changed pattern once has one change.
+    const legacyChanged = structuredClone(s);
+    delete task(legacyChanged, id).pipelineHistory[0].pattern;
+    expect(task(legacyChanged, id).pipelineHistory.filter((r) => r.pattern)).toHaveLength(1);
+    expect(computeOutcome(legacyChanged, task(legacyChanged, id), at(10)).patternChanges).toBe(1);
     // Older attempts without a role stamp take it from the pipeline revision they ran on.
     const unstamped = structuredClone(s);
     for (const a of unstamped.attempts) delete a.snapshot.role;

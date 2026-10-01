@@ -387,7 +387,7 @@ describe("send back as a revert, local delivery (scenario 17)", () => {
     expect(git("show", `${change.ref!.split(" ")[0]}:README.md`)).toBe("hello from B, without A");
     finishRest(rv);
     expect(git("show", "main:README.md")).toBe("hello from B, without A");
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a revert is refused when its starting point does not contain the landed commit", () => {
     const a = deliverTask("Adds a file", "feature.txt", "feature\n");

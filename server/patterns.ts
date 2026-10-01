@@ -378,6 +378,9 @@ export function retiredTemplateFile(t: RetiredTemplate, id: string, name: string
 
 export type ExportResult = { exportedTo: string; exportedId: string; stripped: string[] } | { exportError: string };
 
+/** How many file names an export tries before giving up: `<id>`, `<id>-yours`, `<id>-yours-2`, … (steps 2–3 review, finding 8). */
+export const MAX_EXPORT_NAMES = 10;
+
 /**
  * Write each retired template that has not been exported or marked failed yet as a pattern file of yours
  * in `dir`, once, never overwriting (`wx`). The outcome is recorded on the state so a second start exports
@@ -397,36 +400,48 @@ export function exportRetiredTemplates(store: Store, dir: string): { written: st
   const taken = new Set<string>([...builtInCatalog().patterns.map((p) => p.id), ...INTERNAL_PATTERNS.map((p) => p.id), ...store.read().state.retiredTemplates.map((t) => t.exportedId).filter((x): x is string => !!x)]);
   for (const t of pending) {
     const now = new Date().toISOString();
-    let result: ExportResult;
+    let result: ExportResult | undefined;
     try {
       const edited = t.kind === "edited-built-in";
       const base = edited ? t.id : (slugId(t.name) ?? slugId(t.id) ?? "template");
-      const id = freeId(base, taken, edited);
-      taken.add(id);
-      const name = (edited ? `${t.name} (yours)` : t.name).trim().slice(0, 60) || id;
-      const out = retiredTemplateFile(t, id, name);
-      const path = join(dir, `${id}.json`);
-      try {
-        writeFileSync(path, out.json, { flag: "wx" });
-        result = { exportedTo: displayPath(path), exportedId: id, stripped: out.stripped };
-        written.push(path);
-      } catch (e) {
-        const code = (e as NodeJS.ErrnoException).code;
-        // Step 1 review, finding 4: a file with exactly this content was written already (an earlier start that
-        // did not get to record it), so it counts as exported; anything else is the user's and is kept.
-        if (code === "EEXIST" && existingText(path) === out.json) {
+      const name = (edited ? `${t.name} (yours)` : t.name).trim().slice(0, 60) || base;
+      // Steps 2–3 review, finding 8: an unrelated file of yours under the first name does not block the export;
+      // the next free name is tried (`-yours`, `-yours-2`, …), up to a bound. Nothing is ever overwritten (P10).
+      const occupied: string[] = [];
+      for (let n = 0; n < MAX_EXPORT_NAMES && !result; n++) {
+        const id = freeId(base, taken, edited || n > 0);
+        taken.add(id);
+        const out = retiredTemplateFile(t, id, name);
+        const path = join(dir, `${id}.json`);
+        try {
+          writeFileSync(path, out.json, { flag: "wx" });
           result = { exportedTo: displayPath(path), exportedId: id, stripped: out.stripped };
           written.push(path);
-        } else {
-          result = { exportError: code === "EEXIST" ? `A file named ${displayPath(path)} already exists; yours was kept.` : `Could not write ${displayPath(path)}: ${e instanceof Error ? e.message : String(e)}` };
-          failed.push(path);
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code;
+          if (code !== "EEXIST") {
+            result = { exportError: `Could not write ${displayPath(path)}: ${e instanceof Error ? e.message : String(e)}` };
+            failed.push(path);
+          } else if (existingText(path) === out.json) {
+            // Step 1 review, finding 4: a file with exactly this content was written already (an earlier start that
+            // did not get to record it), so it counts as exported.
+            result = { exportedTo: displayPath(path), exportedId: id, stripped: out.stripped };
+            written.push(path);
+          } else {
+            occupied.push(displayPath(path)); // the user's file: kept, and the next name is tried
+          }
         }
+      }
+      if (!result) {
+        result = { exportError: `${occupied.length} files named ${occupied[0]} to ${occupied[occupied.length - 1]} already exist; yours were kept and nothing was written.` };
+        failed.push(join(dir, `${base}.json`));
       }
     } catch (e) {
       result = { exportError: `Could not build the pattern file: ${e instanceof Error ? e.message : String(e)}` };
       failed.push(t.id);
     }
-    store.update((s) => M.recordTemplateExport(s, t.id, result, now), now);
+    const final = result;
+    store.update((s) => M.recordTemplateExport(s, t.id, final, now), now);
   }
   return { written, failed };
 }

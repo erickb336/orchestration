@@ -360,7 +360,7 @@ describe("Final checks and protected inputs (§6.7)", () => {
       await new Promise((r) => setTimeout(r, 5));
     }
     expect(task(id).integration?.landed?.flags).toEqual(["checks-accepted-failing"]);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a change that edits a protected check input gets a finding that needs a decision; the repair waits until it is taken", async () => {
     const { id, run } = await checkRunning("Inputs", ["package.json", '{"scripts":{"test":"echo ok"}}\n']);

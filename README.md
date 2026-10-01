@@ -1,8 +1,8 @@
 # Orchestrator
 
-A local orchestrator for teams of AI coding agents. You talk to one **lead**; it plans the work, writes a specification for every task (options, trade-offs, the approach it chose), and runs each task through an editable pipeline of **Claude** and **Codex** workers: designers, coders, and independent reviewers, running concurrently. You can let it run on autopilot or step in anywhere: pause, read and edit any artifact, and resubmit it through the rest of the pipeline.
+A local orchestrator for teams of AI coding agents. You talk to one **lead**; it plans the work, writes a specification for every task (options, trade-offs, the approach it chose), and runs each task through a pipeline pattern you choose, staffed by **Claude** and **Codex** workers: designers, coders, and independent reviewers, running concurrently. You can let it run on autopilot or step in anywhere: pause, read and edit any artifact, and resubmit it through the rest of the pipeline.
 
-**Default: one implementation, then independent review.** Choose Claude or Codex and a model for each step. Using both providers does not require building the same change twice. Competing implementations (Best of N) are an optional experiment, off in all built-in templates.
+**Default: one implementation, then independent review.** Choose Claude or Codex and a model for each step. Using both providers does not require building the same change twice. Competing implementations (Best of N) are an experimental pattern only you can choose; no standard pattern uses them.
 
 ## What you get that a single chat does not
 
@@ -22,7 +22,7 @@ A single Claude Code or Codex chat is one agent, one conversation, and one provi
 | A big goal has to fit in one context. | A goal is broken into child tasks that run in parallel, are evaluated, and are planned again until the goal is met. |
 | You copy results into your branch yourself. | Verified work is merged in order and delivered to your branch or as GitHub pull requests. A pull request can wait for you, or merge by itself once an independent review is clean and your required checks pass. |
 | You read everything before it lands, or you do not look at all. | Everything that landed sits in a review-later list. Look at it when you like, mark it reviewed, or send it back as a fix or a revert. The list never blocks delivery. |
-| The way of working is whatever you typed this time. | Pipelines are workflows you edit once and reuse: design → implement → review → repair → verify, or any shape you build. |
+| The way of working is whatever you typed this time. | Pipelines come from patterns: tested workflows (design → implement → review → repair → verify, and variants), each a small JSON file versioned like code. You choose one per task. |
 
 In short: a chat is one pair of hands on one track. Orchestrator is a team on many tracks, with a lead, a process, a record, and one place to see how each track is going. You decide how involved to be, from approving each task to letting it run end to end.
 
@@ -34,14 +34,14 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
 
 - **One lead, any provider.** Either Claude or Codex can lead. The lead answers in a conversation, proposes fully specified tasks from your vision on a cadence you control, and wakes when work finishes, conflicts, or gets blocked.
 - **Specs before work.** Every task has a versioned spec: the problem, the options with trade-offs, the lead's recommendation, and the selected approach. You can override the approach; the original recommendation and your reason are kept.
-- **Editable pipelines.** Each task runs a pipeline of steps (design → implement → review → repair if needed → verify, or any shape you build). Every step declares the artifacts it produces and the upstream artifacts it reads, and each step can use a different provider and model.
+- **Pipeline patterns.** Each task runs one pattern from a catalog: Change, Feature, Bug fix, Investigation, Design, Goal, and labelled variants (one that pauses after the design, one reviewed by the other provider, two experiments). Each pattern is a JSON file: the built-in ones are in `patterns/` and change through commits; yours go in `~/.orchestration/patterns/`. Every step declares the artifacts it produces and the upstream artifacts it reads, and each step can still use its own provider and model, set on the task page. The pipeline's shape is never edited in the UI.
 - **Artifacts you can see and edit.** Designs, code changes (real git commits), review findings, reports, and verification are versioned. Edit any of them and every later step that used it is re-run on your version.
 - **Optional human-in-the-loop.** There are three levels:
   - **Autopilot:** runs end to end.
   - **Check in before work starts.**
   - **Only when I ask.**
 
-  Independently of these, you can add review gates to single steps, or turn on step-by-step review for a task. Pause always works, and "Paused" is shown only after the runtime confirms the stop.
+  Independently of these, you can choose a pattern that pauses after a step (or write a two-line variant that does), or turn on step-by-step review for a task. Pause always works, and "Paused" is shown only after the runtime confirms the stop.
 - **Shape the vision first** (optional). A new project can start in a shaping stage where nothing runs. The lead works with you as an active partner:
   - it asks a few targeted questions at a time, each with a reason and suggested answers;
   - it keeps a living draft of the vision, with its assumptions marked, and tracks which parts are clear and which are still open;
@@ -104,11 +104,11 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 
 ![Delivery settings](docs/screenshots/delivery-settings.png)
 
-**A large goal broken into child tasks.** The Goal template plans the work as child tasks and waits for them. Then it evaluates the result and plans the next round.
+**A large goal broken into child tasks.** The Goal pattern plans the work as child tasks and waits for them. Then it evaluates the result and plans the next round.
 
 ![Goal task with child tasks](docs/screenshots/goal-task.png)
 
-**Optional comparison example: best of two.** This screenshot demonstrates an explicitly enabled experiment, not the default workflow. Codex and Claude each implement, and the review chooses one. Normally a single agent implements, followed by independent review and repair only if needed.
+**Optional comparison example: best of two.** This task runs the experimental pattern "Change, best of two implementations", which only you can choose; it is not the default workflow. Codex and Claude each implement, and a reviewer compares the two and chooses one. Normally a single agent implements, followed by independent review and repair only if needed.
 
 ![Best-of pipeline with an iteration](docs/screenshots/best-of-pipeline.png)
 
@@ -128,9 +128,9 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 
 ![Artifacts](docs/screenshots/artifacts.png)
 
-**Pipeline editor.** Each step sets its inputs, its outputs, parallel agents (copies or best of N, across providers), repeats, and whether it waits for child tasks.
+**Choosing a pattern.** New task shows the catalog in groups (standard, pauses for you, experiments), what each pattern does and when to use it, and a read-only preview of its steps. The same picker changes a task's pattern before it starts or while it is paused, and sets the project default in Settings.
 
-![Pipeline editor](docs/screenshots/pipeline-editor.png)
+![Choosing a pattern for a new task](docs/screenshots/patterns.png)
 
 **Overview and the lead.** The Overview shows the vision, what changed since your last visit, and the conversation with the lead.
 
@@ -243,17 +243,16 @@ To get the most out of your Claude and Codex capacity:
    - Give each role the provider and model that suit it. For example, Codex for implementation, Claude for design and independent review, or the reverse. Every step can be pinned individually.
 3. **Parallelise inside tasks.**
    - Pipelines are graphs: steps with no dependency between them (for example code review and UX review) run at the same time.
-   - Every built-in step starts with **one agent**. Keep the pipeline editor’s **Run as parallel agents → Off (one agent)** for ordinary implementation.
-   - Optionally enable **2–5 agents** for a specific step. **Copies** combine contributions such as independent review findings. **Best of N** runs competing alternatives and selects one; use it only when you explicitly want that comparison and its extra cost. Provider/model selection remains independent of agent count.
-4. **Break big goals into child tasks.** The **Goal** template plans the goal as a list of child tasks, which run concurrently with their own pipelines. When they finish, it evaluates the result and plans the next round (up to 5 rounds), then reports. You can edit the list at a review gate before any child task exists.
-5. **Let work iterate.** Built-in templates repeat review → repair until the review is clean (up to 3 rounds), and you can set loops on any step in the pipeline editor.
-6. **Use Autopilot** for continuous planning, automatic retries, and automatic delivery. Add review gates only where you want to look. Outside Autopilot, child tasks wait for you to start them, like the lead's proposals.
+   - Every built-in pattern runs **one agent** per step. **Best of N** is the experimental pattern "Change, best of two implementations": two agents implement, one on each provider, and a reviewer chooses one. Use it only when you want that comparison and its extra cost. **Parallel copies** (2–5 agents whose contributions are all kept, such as independent review findings) are available to patterns you write. Provider and model selection stays independent of the agent count.
+4. **Break big goals into child tasks.** The **Goal** pattern plans the goal as a list of child tasks, which run concurrently with their own pipelines. When they finish, it evaluates the result and plans the next round (up to 5 rounds), then reports. The variant **Goal, review the plan first** pauses so you can edit the list before any child task exists.
+5. **Let work iterate.** Built-in patterns repeat review → repair until the review is clean (up to 3 rounds). Patterns you write can loop other steps.
+6. **Use Autopilot** for continuous planning, automatic retries, and automatic delivery. Choose a pattern that pauses only where you want to look. Outside Autopilot, child tasks wait for you to start them, like the lead's proposals.
 7. **Steer through artifacts, not code.** When something is off, pause, edit the design, findings, breakdown, or brief, and resubmit. The next steps follow your version.
 
 Limits that keep fan-out bounded:
 
 - **Breakdowns:** 20 child tasks per breakdown, and 100 per task you created, counting all levels.
-- **Child tasks:** they cannot use a template that breaks down again.
+- **Child tasks:** they cannot use a pattern that breaks down again.
 - **Parallel steps:** they cannot sit inside a loop, and a code change cannot run as copies (use best of N).
 - **Pausing or cancelling:** it applies to a task's child tasks too, and resuming a task resumes the child tasks that were paused with it.
 - **The lead's open-proposal cap:** child tasks count toward it, so a large goal paces the lead's other proposals.
@@ -261,7 +260,8 @@ Limits that keep fan-out bounded:
 ## How it is built
 
 ```
-src/domain/   pure state transitions, commands, templates, and their tests (no I/O)
+patterns/     the built-in pipeline patterns, one JSON file each, and their JSON Schema
+src/domain/   pure state transitions, commands, the pattern resolver, and their tests (no I/O)
 src/runtime/  the runtime adapter contract
 src/ui/       React UI (a client of the service)
 server/       SQLite store, scheduler (lease, reconciliation, lead, integration),
@@ -271,7 +271,56 @@ docs/         the project specification, research, and one versioned spec per bu
 
 - **Commands.** Every change is a named command applied to the pure domain inside a transaction, recorded with an idempotency key.
 - **Scheduling.** One scheduler holds a lease. It dispatches steps, supervises runs through adapters (start, interrupt with confirmation, kill), applies their reports, and runs the lead and the integration queue.
-- **Extending it.** Adding a provider means implementing `server/runtimes/types.ts`. Adding a workflow means adding a template, either in Settings or in `src/domain/templates.ts`.
+- **Extending it.** Adding a provider means implementing `server/runtimes/types.ts`. Adding a workflow means adding a pattern file; see the next section.
+
+## Adding or changing a pipeline pattern
+
+A pattern is one JSON file that says which steps a task runs, in what order, with which roles, inputs and outputs. The UI only chooses patterns; it never edits a pipeline's shape.
+
+**Where files live.**
+
+- Built-in patterns are in `patterns/` in this repository, validated against `patterns/pattern.schema.json`. They change through commits and pull requests, like any other code, and a changed built-in takes effect at the next start.
+- Your own patterns go in `~/.orchestration/patterns/` (next to the database; Settings → Patterns shows the exact folder). The app keeps a copy of the schema there, so an editor can complete and check your file. Your files may be `.json` or `.jsonc` and may contain `//` comments and trailing commas.
+- A file of yours with the same `id` as a built-in replaces it, and is marked "yours, replaces built-in". The pipelines the service owns (`revert`, `delivery-review`, `delivery-checks`) stay in code; a file with one of those ids is refused.
+
+**An example.** This two-line variant pauses the built-in Bug fix after the reproduction. Save it as `~/.orchestration/patterns/bugfix-pause-after-repro.jsonc`:
+
+```jsonc
+{
+  "$schema": "./pattern.schema.json",   // the app keeps a copy of the schema next to your files
+  "id": "bugfix-pause-after-repro",      // must match the file name
+  "name": "Bug fix, pause after the reproduction",
+  "description": "Bug fix that stops after the reproduction so you can read it before the fix starts.",
+  "whenToUse": "Bugs where a wrong reproduction would waste the fix.",
+  "extends": "bugfix",                   // start from the built-in Bug fix
+  "stepOverrides": {
+    "S1": { "gate": true },              // pause after S1, Reproduce and diagnose
+  },                                     // trailing commas are fine in your files
+}
+```
+
+`extends` names the pattern to start from, and `stepOverrides` changes fields of its existing steps; `null` removes an optional field (`gate`, `runIf`, `iterate`, `parallel`, `waitForChildren`, `independentOf`, `checks`). A variant cannot add or remove steps, and `extends` chains are at most three deep. For a new shape, write a full file with a `steps` list instead; `patterns/change.json` is the simplest one to copy.
+
+**Fields.**
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `id` | yes | `^[a-z][a-z0-9-]{1,39}$`, equal to the file name |
+| `name`, `description`, `whenToUse` | yes | Shown in the picker; at most 60, 300 and 300 characters |
+| `order` | no | Sort key in the picker, default 100 |
+| `experimental`, `hypothesis` | no | `true` labels an experiment; a hypothesis (what it should show) is then required |
+| `steps` | base patterns | 1–30 steps, each with `id`, `purpose`, `role`, `dependsOn`, `inputs`, `outputs`, and optionally `runIf`, `gate`, `iterate`, `parallel`, `waitForChildren`, `independentOf`, `checks.onFail` |
+| `extends`, `stepOverrides` | variants | The base pattern and the fields to change |
+
+**Reload.** Choose Reload in Settings → Patterns, and the app reads the files again without a restart. Tasks that already exist keep their steps: a pattern is copied into a task when it is created or chosen, so a later file change never alters running work.
+
+**Validation.** Every file is checked in three layers: the JSON Schema (types, lengths, unknown fields), the pipeline graph rules (every dependency and input names an existing step and output, no cycles, no parallel step inside a loop, a code change never runs as copies), then the pattern rules: no step id ending in `-c<n>` or `-i<n>` (the service uses those for copies and rounds), no `checks.only` (check commands belong to each project, so patterns run every configured check), best of N only with `experimental: true`, and the step that chooses among best-of candidates must be an agent, not Checks. A file with an error is listed in Settings → Patterns with its line and column and skipped; the app starts anyway, and if the file would have replaced a built-in, the built-in stays in effect.
+
+**Who may choose what.** A pattern is "standard" when it is not experimental, does not pause for you, and has an independent code review of any code change. The lead's proposals, breakdown items and the project default use standard patterns only. Everything else is yours to choose, at New task or with Change pattern on the task page. Marking a file of yours `experimental` is also how you keep it away from the lead.
+
+**Experiments.** A pattern marked `experimental` must state its `hypothesis`, which the picker shows. Every task records the pattern it ran (its id, a content hash of its resolved steps, and its source) and, when it finishes or is cancelled, an outcome record (runs, tokens and cost where reported, repair rounds, findings, checks and coverage). That is the data a later comparison of patterns is built on; nothing is compared or exported yet.
+
+**Changing a task's pattern.** Before a task starts, or while it is Paused, Change pattern on the task page replaces the pipeline. It starts over from the new pattern; work already done stays on the record, labelled "earlier pattern", and is never reused. A provider or model pin stays on a step with the same id and role.
 
 ## Safety notes
 
@@ -304,8 +353,9 @@ This is a personal tool under active development. It is built in milestones (see
 | Shape the vision with the lead first | ORC-012 |
 | Quality gates: service-run checks, finding triage, review coverage, CI triage, project conventions | ORC-013 |
 | Vision documents | ORC-014 |
+| Pipeline patterns instead of an editable pipeline; outcome records per task | ORC-016 |
 
-Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test runs Claude and Codex workers concurrently against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost. Steering by conversation (ORC-009) has been exercised only with scripted and simulated leads; no real Claude or Codex lead run has steered yet.
+Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test writes a one-step pattern file into a throwaway data directory, runs Claude and Codex workers concurrently on it against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost. Steering by conversation (ORC-009) has been exercised only with scripted and simulated leads; no real Claude or Codex lead run has steered yet.
 
 Pull-request delivery is covered by tests that never contact GitHub: a local bare repository stands in for the remote and a fake stands in for the GitHub API. `node scripts/pr-sandbox-check.mjs --repo <owner>/<throwaway-repo> --yes` records evidence against a real repository. It refuses to run without both arguments, never defaults to a repository, and creates branches, pull requests, a ruleset and a workflow there, so use a repository made for it. That run passed on 2026-09-30 against a sandbox repository with scripted agents standing in for Claude and Codex (25 of 25 checks; see `docs/tasks/ORC-008.md`). It has not been run with real Claude and Codex workers.
 
