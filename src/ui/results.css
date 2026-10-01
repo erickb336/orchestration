@@ -1,0 +1,26 @@
+/* The Results page (ORC-025 pass 4). Layout only: every part is a kit component or pass 3's delivery panel, so
+   colour and type come from the tokens. Every class is prefixed r- so nothing collides with other screens. */
+
+.r-page { gap: var(--space-4); }
+.r-page > h1 { margin: 0; }
+/* A pull request's panel sits under its title, full width. */
+.r-pr .k-row__main { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+.r-pr { padding: var(--space-3) 0; }
+.r-landed { align-items: start; padding: var(--space-3) 0; }
+.r-landed .k-row__meta .k-chip { flex: none; }
+/* What the change did, in its own words: at most two lines; the whole text is the title. */
+.r-summary {
+  margin: var(--space-1) 0 0;
+  font-size: var(--fs-small);
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.r-details { margin-top: var(--space-1); }
+.r-details > .k-disc__summary { font-size: var(--fs-small); }
+.r-details .t-panel { margin-top: var(--space-2); }
+.r-landed .t-panel { margin-top: var(--space-2); }
+.r-foot { margin: var(--space-3) 0 0; }
