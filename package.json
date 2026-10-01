@@ -12,6 +12,8 @@
     "build": "tsc -b && tsc -p tsconfig.server.json && vite build",
     "start": "node scripts/orchestrator.mjs start",
     "typecheck": "tsc -b --noEmit && tsc -p tsconfig.server.json",
+    "principles": "node --import tsx scripts/principles.mjs",
+    "pretest": "npm run principles --silent",
     "test": "vitest run",
     "preview": "vite preview",
     "setup": "node scripts/orchestrator.mjs setup",

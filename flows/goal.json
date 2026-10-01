@@ -12,7 +12,8 @@
       "role": "designer",
       "dependsOn": [],
       "inputs": [],
-      "outputs": [{ "name": "plan", "kind": "breakdown" }]
+      "outputs": [{ "name": "plan", "kind": "breakdown" }],
+      "principles": ["foundational-thinking", "sequence-verifiable-units"]
     },
     {
       "id": "S2",
@@ -22,7 +23,8 @@
       "inputs": [{ "step": "S1", "output": "plan" }],
       "outputs": [{ "name": "next", "kind": "breakdown" }],
       "waitForChildren": true,
-      "iterate": { "from": "S2", "max": 5 }
+      "iterate": { "from": "S2", "max": 5 },
+      "principles": ["prove-it-works"]
     },
     {
       "id": "S3",

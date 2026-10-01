@@ -149,8 +149,8 @@ describe("the delivery-review flow", () => {
   it("is internal, one independent code review and one security review beside it, and exempt from the no-inputs warning only for a review task", () => {
     const tpl = internalFlow("delivery-review");
     expect(tpl.steps).toEqual([
-      { id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
-      { id: "SR1", purpose: "Security review of the change for merge", role: "security_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
+      { id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer", principles: ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"] },
+      { id: "SR1", purpose: "Security review of the change for merge", role: "security_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer", principles: ["boundary-discipline"] },
     ]);
     expect(INTERNAL_FLOW_IDS).toContain("delivery-review");
     expect(builtInCatalog().some((p) => p.id === "delivery-review")).toBe(false);

@@ -11,7 +11,8 @@
       "role": "coder",
       "dependsOn": [],
       "inputs": [],
-      "outputs": [{ "name": "report", "kind": "report" }]
+      "outputs": [{ "name": "report", "kind": "report" }],
+      "principles": ["fix-root-causes", "prove-it-works"]
     },
     {
       "id": "S2",
@@ -19,7 +20,8 @@
       "role": "code_reviewer",
       "dependsOn": ["S1"],
       "inputs": [{ "step": "S1", "output": "report" }],
-      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+      "outputs": [{ "name": "findings", "kind": "review-findings" }],
+      "principles": ["prove-it-works"]
     },
     {
       "id": "S3",
@@ -30,7 +32,8 @@
         { "step": "S1", "output": "report" },
         { "step": "S2", "output": "findings" }
       ],
-      "outputs": [{ "name": "brief", "kind": "brief" }]
+      "outputs": [{ "name": "brief", "kind": "brief" }],
+      "principles": ["fix-root-causes"]
     }
   ]
 }

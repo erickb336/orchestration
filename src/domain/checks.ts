@@ -10,6 +10,7 @@
 
 import { matchGlob } from "./delivery";
 import * as F from "./findings";
+import { CODE_REVIEW_PRINCIPLES, REPAIR_PRINCIPLES, SECURITY_REVIEW_PRINCIPLES } from "./internalFlows";
 import * as M from "./model";
 import { downstreamOf, instantiate, toDef, validatePipeline } from "./pipeline";
 import { SECRET_NAME } from "./secrets";
@@ -513,11 +514,12 @@ export function addCheckRound(s: State, t: Task, st: Step, now: string, actor: "
   if (t.steps.some((x) => x.id === fixId || x.id === reviewId || x.id === securityId || x.id === checksId)) return `Round ${k} of ${st.id} already exists.`;
   const codeInputs = st.inputs.filter((r) => t.steps.find((x) => x.id === r.step)?.outputs.find((o) => o.name === r.output)?.kind === "code-change");
   const results = { step: st.id, output: out.name };
+  // ORC-024: the round's steps carry the same principles as a flow's repair and reviews; dispatch adds "attack the premise" to a fix after a round that failed the same way.
   const defs: StepDef[] = [
-    { id: fixId, purpose: `Fix the failing checks (round ${k}): ${failing}`, role: "coder", dependsOn: [st.id], inputs: [...codeInputs, results], outputs: [{ name: "change", kind: "code-change" }, { name: "handoff", kind: "handoff" }] },
-    { id: reviewId, purpose: `Code review of the fix (round ${k})`, role: "code_reviewer", dependsOn: [fixId], inputs: [{ step: fixId, output: "change" }, { step: fixId, output: "handoff" }, results], outputs: [{ name: "findings", kind: "review-findings" }] },
+    { id: fixId, purpose: `Fix the failing checks (round ${k}): ${failing}`, role: "coder", dependsOn: [st.id], inputs: [...codeInputs, results], outputs: [{ name: "change", kind: "code-change" }, { name: "handoff", kind: "handoff" }], principles: [...REPAIR_PRINCIPLES] },
+    { id: reviewId, purpose: `Code review of the fix (round ${k})`, role: "code_reviewer", dependsOn: [fixId], inputs: [{ step: fixId, output: "change" }, { step: fixId, output: "handoff" }, results], outputs: [{ name: "findings", kind: "review-findings" }], principles: [...CODE_REVIEW_PRINCIPLES] },
     // ORC-021: a security review beside every code review, the check rounds included.
-    { id: securityId, purpose: `Security review of the fix (round ${k})`, role: "security_reviewer", dependsOn: [fixId], inputs: [{ step: fixId, output: "change" }, { step: fixId, output: "handoff" }, results], outputs: [{ name: "findings", kind: "review-findings" }] },
+    { id: securityId, purpose: `Security review of the fix (round ${k})`, role: "security_reviewer", dependsOn: [fixId], inputs: [{ step: fixId, output: "change" }, { step: fixId, output: "handoff" }, results], outputs: [{ name: "findings", kind: "review-findings" }], principles: [...SECURITY_REVIEW_PRINCIPLES] },
     { id: checksId, purpose: `Final checks (round ${k})`, role: "checks", dependsOn: [reviewId, securityId], inputs: [...codeInputs, { step: fixId, output: "change" }], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "block" } },
   ];
   const before = structuredClone(t.steps);

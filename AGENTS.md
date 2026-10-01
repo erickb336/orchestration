@@ -20,6 +20,8 @@ This project lives at this repository. SimpleApps is a managed target, not this 
 
 Verify behavior appropriate to each change, especially state races, persistence, and interruption. Do not claim background operation, native device behavior, or runtime capabilities without evidence. Configure unattended scheduling only with established operating limits and cadence. No scheduler is installed by these instructions.
 
+Agents working on this repository follow the principles in `principles/` that fit their work: the same text Orchestrator gives its agents.
+
 ## Provider support
 
 Claude and Codex concurrency is a first-release requirement, not a future extension. Separate roles from providers, support either as lead, and use separate runtime adapters under one scheduler. The application owns shared state and dispatch; do not assume native subagent tools span providers. Enforce common pause/revision controls and isolated writer workspaces. Verify both adapters with real mixed-provider runs before claiming support.

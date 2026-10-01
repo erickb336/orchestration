@@ -1,5 +1,6 @@
 // Pure pipeline helpers: validation, instantiation, and structural comparison.
 
+import { isPrincipleId, orderPrinciples } from "./principles";
 import { REVIEW_ROLES, STEP_ROLES, type InputRef, type Step, type StepDef } from "./types";
 
 export function instantiate(defs: StepDef[]): Step[] {
@@ -17,6 +18,8 @@ export function toDef(st: StepDef): StepDef {
   if (st.copyOf) d.copyOf = st.copyOf;
   if (st.iteration && st.iteration > 1) d.iteration = st.iteration;
   if (st.checks) d.checks = { onFail: st.checks.onFail, ...(st.checks.only?.length ? { only: [...st.checks.only] } : {}) };
+  // ORC-024: part of what the agent receives, so part of the definition and of the flow hash; table order, no duplicates.
+  if (st.principles?.length) d.principles = orderPrinciples(st.principles);
   return d;
 }
 
@@ -35,6 +38,7 @@ export function structuralKey(st: StepDef): string {
     waitForChildren: !!st.waitForChildren,
     ...(st.independentOf ? { independentOf: st.independentOf } : {}),
     ...(st.checks ? { checks: { onFail: st.checks.onFail, only: [...(st.checks.only ?? [])].sort() } } : {}),
+    ...(st.principles?.length ? { principles: orderPrinciples(st.principles) } : {}),
   });
 }
 
@@ -108,6 +112,9 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
     seen.add(d.id);
     if (!d.purpose.trim()) err(d.id, `${d.id} needs a purpose.`);
     if (!STEP_ROLES.includes(d.role)) err(d.id, `${d.id} has an unknown role "${String(d.role)}".`);
+    // ORC-024: a principle is one of the files in principles/; a checks step is run by the service and gets none.
+    for (const p of d.principles ?? []) if (!isPrincipleId(p)) err(d.id, `${d.id} names a principle that does not exist: "${String(p)}".`);
+    if (d.role === "checks" && d.principles?.length) err(d.id, `${d.id} is a Checks step, run by the service; it takes no principles.`);
     const earlier = new Set(defs.slice(0, i).map((x) => x.id));
     for (const dep of d.dependsOn) {
       if (dep === d.id) err(d.id, `${d.id} cannot depend on itself.`);

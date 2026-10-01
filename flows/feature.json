@@ -12,7 +12,8 @@
       "role": "designer",
       "dependsOn": [],
       "inputs": [],
-      "outputs": [{ "name": "design", "kind": "design" }]
+      "outputs": [{ "name": "design", "kind": "design" }],
+      "principles": ["exhaust-the-design-space", "experience-first", "foundational-thinking"]
     },
     {
       "id": "S2",
@@ -23,7 +24,8 @@
       "outputs": [
         { "name": "change", "kind": "code-change" },
         { "name": "handoff", "kind": "handoff" }
-      ]
+      ],
+      "principles": ["laziness-protocol", "subtract-before-you-add", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "prove-it-works"]
     },
     {
       "id": "C1",
@@ -45,7 +47,8 @@
         { "step": "S2", "output": "handoff" },
         { "step": "C1", "output": "checks" }
       ],
-      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+      "outputs": [{ "name": "findings", "kind": "review-findings" }],
+      "principles": ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"]
     },
     {
       "id": "SR1",
@@ -58,7 +61,8 @@
         { "step": "S2", "output": "handoff" },
         { "step": "C1", "output": "checks" }
       ],
-      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+      "outputs": [{ "name": "findings", "kind": "review-findings" }],
+      "principles": ["boundary-discipline"]
     },
     {
       "id": "S4",
@@ -69,7 +73,8 @@
         { "step": "S1", "output": "design" },
         { "step": "S2", "output": "change" }
       ],
-      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+      "outputs": [{ "name": "findings", "kind": "review-findings" }],
+      "principles": ["experience-first"]
     },
     {
       "id": "S5",
@@ -91,7 +96,8 @@
         { "step": "S4", "output": "findings" }
       ],
       "$comment": "Checks, reviews and repair repeat until the checks pass and the reviews find nothing (at most 3 rounds).",
-      "iterate": { "from": "C1", "max": 3 }
+      "iterate": { "from": "C1", "max": 3 },
+      "principles": ["laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes"]
     },
     {
       "id": "C2",
@@ -118,7 +124,8 @@
         { "step": "S4", "output": "findings" },
         { "step": "C2", "output": "final" }
       ],
-      "outputs": [{ "name": "verification", "kind": "verification" }]
+      "outputs": [{ "name": "verification", "kind": "verification" }],
+      "principles": ["prove-it-works"]
     }
   ]
 }

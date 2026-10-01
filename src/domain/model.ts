@@ -10,11 +10,14 @@ import * as F from "./findings";
 import { isInternalFlowId } from "./internalFlows";
 import { childDefault, customRef, effectiveDefault, eligible, eligibleIds, findFlow, flowRef, serviceFlow } from "./flows";
 import { downstreamOf, instantiate, structuralKey, toDef, validatePipeline } from "./pipeline";
+import { PREMISE_ID, orderPrinciples, principle, stepPrinciples } from "./principles";
 import {
   type ActivityEvent,
   type Actor,
   type Artifact,
+  type ArtifactKind,
   type Attempt,
+  type GivenPrinciple,
   type CatalogModel,
   type ChangeAuthor,
   type CheckRunRecord,
@@ -1416,6 +1419,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
         continue;
       }
       const attemptId = nextId(s, "run");
+      const inputs = consumedInputs(s, t, st);
       const a: Attempt = {
         id: attemptId,
         taskId: t.id,
@@ -1434,7 +1438,9 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           environment: s.project.workerEnvironment[r.selection.provider],
           connections: [...s.project.workerConnections[r.selection.provider]],
           purpose: st.purpose,
-          inputs: consumedInputs(s, t, st),
+          inputs,
+          // ORC-024: what the run is given, with "attack the premise" when this repair round follows one that failed the same way.
+          principles: runPrinciples(s, t, st, inputs),
           // A dedicated delivery review reads a worktree detached at exactly this commit.
           ...(t.reviewTarget ? { reviewedSha: t.reviewTarget.headSha } : {}),
         },
@@ -1935,7 +1941,7 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
     if (!prev) return { ...instantiate([def])[0], state: t.hold ? "paused" : "pending" };
     const st: Step = { ...prev, ...def };
     // The new definition is the whole truth: optional settings it leaves out are removed.
-    for (const k of ["runIf", "gate", "iterate", "parallel", "waitForChildren", "independentOf", "copyOf", "iteration"] as const) if (def[k] === undefined) delete st[k];
+    for (const k of ["runIf", "gate", "iterate", "parallel", "waitForChildren", "independentOf", "copyOf", "iteration", "principles"] as const) if (def[k] === undefined) delete st[k];
     if (!affected.has(d.id)) return st;
     st.revision = prev.revision + 1;
     if (stopped.has(d.id)) st.state = "stopping";
@@ -5169,6 +5175,86 @@ function expandIteration(s: State, t: Task, st: Step, now: string) {
     return;
   }
   recordRevision(s, t, `Iteration ${n} of ${body.map((b) => b.id).join(" → ")}`, now);
+}
+
+// ---------- ORC-024: the principles a run is given ----------
+
+/**
+ * The repair step whose round this one repeats, or undefined when this is not a repair round after the
+ * first: a loop iteration `-i<k>` (k ≥ 2) of a conditional coder or designer step (a Change repair, a
+ * Design revision), or a check-round fix `-r<k>-fix` (k ≥ 2).
+ */
+function previousRepair(t: Task, st: Step): Step | undefined {
+  const round = /-r(\d+)-fix$/.exec(st.id);
+  if (round) {
+    const k = Number(round[1]);
+    if (k < 2 || st.role !== "coder") return undefined;
+    return t.steps.find((x) => x.role === "coder" && new RegExp(`-r${k - 1}-fix$`).test(x.id));
+  }
+  const k = st.iteration ?? 1;
+  if (k < 2 || !st.runIf?.length || (st.role !== "coder" && st.role !== "designer")) return undefined;
+  const base = baseId(st.id);
+  return findStep(t, k === 2 ? base : `${base}-i${k - 1}`);
+}
+
+/** The ids of the checks that did not pass in a check-results artifact (a legacy record without the run keeps them on its findings). */
+const failedCheckIds = (art: Artifact): string[] => (art.checkRun ? C.failedResults(art.checkRun).map((r) => r.id) : (art.findings ?? []).map((f) => f.checkId).filter((id): id is string => !!id));
+
+/** A finding's identity across rounds: the file and the normalised title (not the severity, unlike `key`). */
+const findingIdentity = (f: Finding) => `${f.file ?? ""}|${f.title.toLowerCase().replace(/\s+/g, " ").trim()}`;
+
+/** The findings a repair still has in front of it: blocking, and not settled by an accept or a follow-up. */
+function openFindings(s: State, art: Artifact): Finding[] {
+  return (art.findings ?? []).filter((f) => {
+    if (!F.isBlocking(f)) return false;
+    const d = F.decisionFor(s, art, f);
+    return d?.status !== "accept" && d?.status !== "follow-up";
+  });
+}
+
+const MAX_PREMISE_REASONS = 5;
+
+/**
+ * Why "attack the premise" is added to this run, or undefined. A repair round after the first gets it
+ * when the gate failed the same way again: a check that failed before the previous repair fails again in
+ * the round before this one (same check id), or an open finding of the previous round's review comes
+ * back (same file and normalised title). A first repair, or a later round whose failures are all new,
+ * gets nothing. The previous round's inputs are the ones its run recorded.
+ */
+export function premiseReason(s: State, t: Task, st: Step, inputs: ConsumedInput[] = consumedInputs(s, t, st)): string | undefined {
+  const prev = previousRepair(t, st);
+  if (!prev) return undefined;
+  let prevRun: Attempt | undefined;
+  for (const a of s.attempts) if (a.taskId === t.id && a.stepId === prev.id && a.outcome === "completed") prevRun = a;
+  const artifacts = (refs: ConsumedInput[], kind: ArtifactKind) => refs.map((i) => s.artifacts.find((a) => a.id === i.artifactId)).filter((a): a is Artifact => !!a && a.kind === kind);
+  const prevInputs = prevRun ? prevRun.snapshot.inputs : consumedInputs(s, t, prev);
+  const reasons: string[] = [];
+  const failedBefore = new Set(artifacts(prevInputs, "check-results").flatMap(failedCheckIds));
+  for (const id of new Set(artifacts(inputs, "check-results").flatMap(failedCheckIds))) if (failedBefore.has(id)) reasons.push(`check \`${id}\` failed again after ${prev.id}`);
+  const openBefore = new Set(artifacts(prevInputs, "review-findings").flatMap((a) => openFindings(s, a)).map(findingIdentity));
+  const seen = new Set<string>();
+  for (const a of artifacts(inputs, "review-findings")) {
+    for (const f of openFindings(s, a)) {
+      const key = findingIdentity(f);
+      if (!openBefore.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      reasons.push(`the finding "${f.title.length > 120 ? `${f.title.slice(0, 119)}…` : f.title}" came back after ${prev.id}`);
+    }
+  }
+  if (!reasons.length) return undefined;
+  return `added: ${reasons.slice(0, MAX_PREMISE_REASONS).join("; ")}${reasons.length > MAX_PREMISE_REASONS ? `; and ${reasons.length - MAX_PREMISE_REASONS} more` : ""}`;
+}
+
+/**
+ * The principles a run of `st` is given, in table order, each with the hash of its body: the step's own
+ * (from its flow file, an internal flow or a check round) and, for a repair round that follows a round
+ * which failed the same way, "attack the premise" with the reason. Written into the run's snapshot at dispatch.
+ */
+export function runPrinciples(s: State, t: Task, st: Step, inputs: ConsumedInput[] = consumedInputs(s, t, st)): GivenPrinciple[] {
+  const own = stepPrinciples(st);
+  const reason = premiseReason(s, t, st, inputs);
+  const ids = reason ? orderPrinciples([...own, PREMISE_ID]) : own;
+  return ids.map((id) => ({ id, hash: principle(id)?.hash ?? "", ...(reason && id === PREMISE_ID && !own.includes(PREMISE_ID) ? { added: reason } : {}) }));
 }
 
 export function childTasks(s: State, t: Task): Task[] {

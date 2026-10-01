@@ -682,6 +682,21 @@ export interface StepDef {
    * to some command ids; prepare commands always run.
    */
   checks?: { onFail: "findings" | "block"; only?: string[] };
+  /**
+   * ORC-024: the working principles the step's agent receives, by id (files in principles/), added to
+   * its instructions under "Principles for this step". Absent on steps copied before ORC-024 and on
+   * steps that get none (checks steps, for example).
+   */
+  principles?: string[];
+}
+
+/** ORC-024: one principle a run was given, as its snapshot records it. */
+export interface GivenPrinciple {
+  id: string;
+  /** SHA-256 of the principle's body as the run received it. */
+  hash: string;
+  /** Set when the service added the principle by itself (attack the premise): why, for example 'added: check `test` failed again after S3'. */
+  added?: string;
 }
 
 // ---------- ORC-021: flows ----------
@@ -813,6 +828,8 @@ export interface RunSnapshot {
   purpose: string;
   /** Exactly the upstream artifact versions this run received as context. */
   inputs: ConsumedInput[];
+  /** ORC-024: the principles the run was given, in table order, with any automatic one and its reason. Absent on older runs and on check runs. */
+  principles?: GivenPrinciple[];
   /** A dedicated delivery review: the commit its read-only worktree was detached at. */
   reviewedSha?: string;
   /** ORC-013: a service check run: the settings and commands it was started with. */
