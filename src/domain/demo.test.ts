@@ -1,5 +1,7 @@
 // ORC-017 §5: the demo state is valid by construction, tells the sample story, labels nothing by text
-// inside titles and summaries, and comes back from Reset sample data.
+// inside titles and summaries, and comes back from Reset sample data. ORC-021: it runs all six flows,
+// every finished code task has a security review beside each code review, and one security finding
+// (WT-004.1) was repaired in the loop.
 
 import { describe, expect, it } from "vitest";
 import * as C from "./checks";
@@ -194,7 +196,7 @@ describe("the demo state (ORC-017 §5)", () => {
 
   it("shows each capability once: the tasks and their states at the start of the demo", () => {
     const s = demo();
-    expect(s.tasks.map((t) => t.id)).toEqual(["WT-001", "WT-002", "WT-003", "WT-004", "WT-005", "WT-006", "WT-007", "WT-008", "WT-009", "WT-010", "WT-011", "WT-004.1", "WT-004.2", "WT-004.3"]);
+    expect(s.tasks.map((t) => t.id)).toEqual(["WT-001", "WT-002", "WT-003", "WT-004", "WT-005", "WT-006", "WT-007", "WT-008", "WT-009", "WT-010", "WT-011", "WT-012", "WT-013", "WT-004.1", "WT-004.2", "WT-004.3"]);
     const col = (id: string) => M.column(s, task(s, id));
 
     // WT-001: a failing check became a finding, the repair ran, the loop ran once more clean; merged, in Review.
@@ -233,10 +235,30 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(M.stateLabel(s, goal)).toBe("Waiting for 2 child tasks");
     expect(M.childTasks(s, goal).map((c) => c.id)).toEqual(["WT-004.1", "WT-004.2", "WT-004.3"]);
     expect(M.acceptedOutput(s, goal, "S1", "plan")?.items).toHaveLength(3);
-    expect(task(s, "WT-004.1")).toMatchObject({ parentTaskId: "WT-004", lifecycle: "done" });
-    expect(task(s, "WT-004.1").integration?.landed).toMatchObject({ status: "reviewed", simulated: true });
-    expect(task(s, "WT-004.1").roleOverrides).toEqual({ coder: { provider: "claude", model: "claude-sample-large" }, code_reviewer: { provider: "codex", model: "codex-sample-large" } });
-    expect(task(s, "WT-004.1").integration?.pr?.review).toMatchObject({ ok: true, provider: "codex" });
+    // WT-004.1: Codex's code review was clean; Claude's security review beside it found that a link opened any trip
+    // (ORC-021). The repair ran, the loop reviewed the repaired change again, clean; merged and reviewed.
+    const invite = task(s, "WT-004.1");
+    expect(invite).toMatchObject({ parentTaskId: "WT-004", lifecycle: "done" });
+    expect(invite.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "C1:done", "S2:done", "SR1:done", "S3:done", "C1-i2:done", "S2-i2:done", "SR1-i2:done", "S3-i2:skipped", "C2:done", "S4:done"]);
+    expect(invite.roleOverrides).toEqual({ coder: { provider: "claude", model: "claude-sample-large" }, code_reviewer: { provider: "codex", model: "codex-sample-large" } });
+    const codeReview = M.acceptedOutput(s, invite, "S2", "findings")!;
+    expect(codeReview.openFindings).toBe(0);
+    expect(s.attempts.find((a) => a.id === codeReview.attemptId)?.snapshot).toMatchObject({ provider: "codex", source: "task-role" });
+    const security = M.acceptedOutput(s, invite, "SR1", "findings")!;
+    expect(security.openFindings).toBe(1);
+    expect(security.findings).toEqual([expect.objectContaining({ source: "review", severity: "error", action: "auto-fix", title: "Invite links are not scoped to the trip", file: "src/server/links.ts", line: 48 })]);
+    expect(security.findings![0].detail).toMatch(/a valid link for one trip opened another/);
+    // The security reviewer follows the code reviewer's project default (Claude), not the task's code-reviewer override.
+    expect(s.attempts.find((a) => a.id === security.attemptId)?.snapshot).toMatchObject({ provider: "claude", source: "project-role" });
+    const repair = M.acceptedOutput(s, invite, "S3", "change")!;
+    expect(repair.summary).toMatch(/refuses a link opened on another trip/);
+    expect(M.acceptedOutput(s, invite, "SR1-i2", "findings")?.openFindings).toBe(0);
+    expect(M.acceptedOutput(s, invite, "S2-i2", "findings")?.openFindings).toBe(0);
+    // The pull request's review evidence is the clean Codex review of the repaired change.
+    expect(invite.integration?.pr?.review).toMatchObject({ ok: true, source: "pipeline", provider: "codex" });
+    expect(invite.integration?.pr?.review.forSha?.startsWith(repair.ref!.split(" ")[0])).toBe(true);
+    expect(invite.integration?.pr?.changeAuthors).toEqual(["claude"]);
+    expect(invite.integration?.landed).toMatchObject({ status: "reviewed", simulated: true, flags: [] });
     expect(col("WT-004.2")).toBe("ready");
     expect(M.resolveStep(s, task(s, "WT-004.2"), task(s, "WT-004.2").steps[0])).toMatchObject({ ok: true, selection: { provider: "claude" }, source: "task-role" });
     const guest = task(s, "WT-004.3");
@@ -292,9 +314,104 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(search.integration?.landed).toMatchObject({ status: "unreviewed", simulated: true });
     expect(search.integration?.pr?.changeAuthors).toEqual(["codex"]);
 
-    // The review-later list: unreviewed first, newest first.
+    // The review-later list: unreviewed first, newest first. The two tasks without code (WT-012, WT-013) are not in it.
     expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
     expect(D.unreviewedCount(s)).toBe(2);
+  });
+
+  it("runs all six flows, and every finished code task has a finished security review beside each code review (ORC-021)", () => {
+    const s = demo();
+    const flows = builtInCatalog()
+      .map((f) => f.id)
+      .sort();
+    expect(flows).toEqual(["bugfix", "change", "design", "feature", "goal", "investigation"]);
+    expect([...new Set(s.tasks.map((t) => t.flow.id))].sort()).toEqual(flows);
+    // A code task is one whose steps produce a code change. Each of its code reviews has a security review beside it:
+    // the same round, finished, with an accepted findings artifact, and it read the same change the code review read.
+    const codeTasks = s.tasks.filter((t) => t.lifecycle === "done" && t.steps.some((st) => st.outputs.some((o) => o.kind === "code-change")));
+    expect(codeTasks.map((t) => t.id).sort()).toEqual(["WT-001", "WT-004.1", "WT-005", "WT-008", "WT-011"]);
+    const changeInputs = (attemptId: string | undefined) =>
+      s.attempts
+        .find((a) => a.id === attemptId)!
+        .snapshot.inputs.filter((i) => i.output === "change")
+        .map((i) => i.artifactId);
+    for (const t of codeTasks) {
+      const codeReviews = t.steps.filter((st) => st.role === "code_reviewer");
+      const securityReviews = t.steps.filter((st) => st.role === "security_reviewer");
+      expect(codeReviews.length, t.id).toBeGreaterThan(0);
+      expect(securityReviews.map((st) => st.iteration ?? 1), t.id).toEqual(codeReviews.map((st) => st.iteration ?? 1));
+      for (const st of securityReviews) {
+        expect(st.state, `${t.id} ${st.id}`).toBe("done");
+        const art = M.acceptedOutput(s, t, st.id, "findings");
+        expect(art?.kind, `${t.id} ${st.id}`).toBe("review-findings");
+        const beside = codeReviews.find((c) => (c.iteration ?? 1) === (st.iteration ?? 1))!;
+        expect(changeInputs(art!.attemptId), `${t.id} ${st.id}`).toEqual(changeInputs(M.acceptedOutput(s, t, beside.id, "findings")?.attemptId));
+      }
+    }
+    // The security review is visible: exactly one found something (WT-004.1's first round), and its repair round was clean.
+    const securityRuns = new Set(s.attempts.filter((a) => a.snapshot.role === "security_reviewer").map((a) => a.id));
+    const found = s.artifacts.filter((a) => securityRuns.has(a.attemptId) && (a.findings?.length ?? 0) > 0);
+    expect(found.map((a) => `${a.taskId} ${a.stepId}`)).toEqual(["WT-004.1 SR1"]);
+    // Design and Investigation produce no code, so neither has one.
+    for (const id of ["WT-012", "WT-013"]) expect(task(s, id).steps.some((st) => st.role === "security_reviewer"), id).toBe(false);
+  });
+
+  it("tells the Investigation and the Design: evidence, review and follow-up spec; design, UX finding, revise round and brief; nothing to integrate", () => {
+    const s = demo();
+    // WT-012: the coder's evidence (Codex), the reviewer's one note that blocks nothing (Claude), the lead's follow-up spec.
+    const inv = task(s, "WT-012");
+    expect(inv).toMatchObject({ lifecycle: "done", flow: { id: "investigation", chosenBy: "lead" }, integration: { status: "not-needed" } });
+    expect(M.currentSpec(inv).content).toMatchObject({ area: "Reliability", title: "Why does the map drain the battery on long hikes?" });
+    expect(inv.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "S2:done", "S3:done"]);
+    const report = M.acceptedOutput(s, inv, "S1", "report")!;
+    expect(report.kind).toBe("report");
+    expect(report.summary).toMatch(/GPS is polled once a second for the whole hike, screen off included/);
+    expect(s.attempts.find((a) => a.id === report.attemptId)?.snapshot.provider).toBe("codex");
+    const evidence = M.acceptedOutput(s, inv, "S2", "findings")!;
+    expect(evidence.findings).toEqual([expect.objectContaining({ severity: "info", action: "no-op", title: "Figures from one phone on one hike" })]);
+    expect(evidence.openFindings).toBe(0);
+    expect(F.awaitingDecision(s, inv)).toBeUndefined();
+    const brief = M.acceptedOutput(s, inv, "S3", "brief")!;
+    expect(brief.kind).toBe("brief");
+    expect(brief.summary).toMatch(/polls the location every 30 seconds while the screen is off/);
+    expect(s.attempts.find((a) => a.id === brief.attemptId)?.snapshot).toMatchObject({ provider: "claude", role: "lead" });
+
+    // WT-013: the design, a UX review with one finding, the revise round, a clean second review, the lead's brief.
+    const design = task(s, "WT-013");
+    expect(design).toMatchObject({ lifecycle: "done", flow: { id: "design", chosenBy: "lead" }, integration: { status: "not-needed" } });
+    expect(M.currentSpec(design).content).toMatchObject({ area: "Trip sharing", title: "Design the invite screen for a trip" });
+    expect(design.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "S2:done", "S3:done", "S2-i2:done", "S3-i2:skipped", "S4:done"]);
+    expect(design.pipelineRev).toBe(2); // the revise round appended the loop's second iteration
+    expect(M.acceptedOutput(s, design, "S1", "design")?.kind).toBe("design");
+    const ux = M.acceptedOutput(s, design, "S2", "findings")!;
+    expect(ux.findings).toEqual([expect.objectContaining({ severity: "warning", action: "auto-fix", title: "The expiry is shown as a date only" })]);
+    expect(s.attempts.find((a) => a.id === ux.attemptId)?.snapshot).toMatchObject({ provider: "claude", model: "claude-sample-fast", role: "ux_reviewer" });
+    expect(M.acceptedOutput(s, design, "S3", "design")?.summary).toMatch(/Expires in 6 days/);
+    expect(M.acceptedOutput(s, design, "S2-i2", "findings")?.openFindings).toBe(0);
+    expect(M.acceptedOutput(s, design, "S4", "brief")?.summary).toMatch(/The invite-link part of trip sharing builds from this/);
+    // The design sits behind the first trip-sharing part: named in its plan, and finished before WT-004.1 started.
+    expect(M.currentSpec(task(s, "WT-004.1")).content.options[0].approach).toMatch(/designed in WT-013/);
+    const inviteStart = s.attempts
+      .filter((a) => a.taskId === "WT-004.1")
+      .map((a) => a.startedAt)
+      .sort()[0];
+    expect(design.integration!.at! < inviteStart).toBe(true);
+
+    // Both are settled history: in the past, no run, nothing to integrate, nowhere in the review-later list, in the Done column.
+    expect(s.events.some((e) => /Published specs for WT-012 and WT-013 from vision r1/.test(e.message))).toBe(true);
+    for (const t of [inv, design]) {
+      expect(Date.parse(t.createdAt), t.id).toBeLessThan(Date.parse(task(s, "WT-004.1").createdAt));
+      expect(Date.parse(t.updatedAt), t.id).toBeLessThan(T0 - 60 * 60_000);
+      expect(M.activeAttempts(s, t.id), t.id).toEqual([]);
+      expect(s.attempts.filter((a) => a.taskId === t.id).every((a) => a.outcome === "completed"), t.id).toBe(true);
+      expect(M.column(s, t), t.id).toBe("done");
+      expect(M.stateLabel(s, t), t.id).toBe("Done");
+      expect(t.integration?.pr, t.id).toBeUndefined();
+      expect(t.integration?.landed, t.id).toBeUndefined();
+      expect(s.artifacts.some((a) => a.taskId === t.id && a.kind === "code-change"), t.id).toBe(false);
+      expect(s.events.some((e) => e.taskId === t.id && /Nothing to integrate \(no code change\)/.test(e.message)), t.id).toBe(true);
+    }
+    expect(D.landedTasks(s).map((t) => t.id)).toEqual(expect.not.arrayContaining(["WT-012", "WT-013"]));
   });
 
   it("dispatches three agents at the worker limit, with WT-007's security review next in the queue and WT-003 after it; the paused, deferred and held tasks stay put", () => {
@@ -304,7 +421,8 @@ describe("the demo state (ORC-017 §5)", () => {
     const active = M.activeAgentAttempts(s).map((a) => `${a.taskId} ${a.stepId} ${a.snapshot.provider}`);
     expect(active).toEqual(["WT-002 S1 codex", "WT-004.2 S1 claude", "WT-007 S3 claude"]);
     expect(M.column(s, task(s, "WT-007"))).toBe("reviewing");
-    for (const id of ["WT-003", "WT-006", "WT-009", "WT-010", "WT-004.3"]) expect(M.activeAttempts(s, id), id).toEqual([]);
+    // The settled tasks, the two without code among them (ORC-021), never dispatch.
+    for (const id of ["WT-003", "WT-006", "WT-009", "WT-010", "WT-004.3", "WT-012", "WT-013"]) expect(M.activeAttempts(s, id), id).toEqual([]);
     // WT-004.3 was promoted (the lead moves published specs to Ready) and still waits for you.
     expect(task(s, "WT-004.3")).toMatchObject({ lifecycle: "ready", holdBeforeStart: true });
     expect(M.stateLabel(s, task(s, "WT-004.3"))).toBe("Held before start");
@@ -346,6 +464,11 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(r.conversation).toHaveLength(4);
     expect(r.flows).toEqual(s.flows);
     expect(r.seq).toBeGreaterThan(s.seq);
+    // ORC-021: the six flows and the security review's history come back with it.
+    expect([...new Set(r.tasks.map((t) => t.flow.id))].sort()).toEqual(["bugfix", "change", "design", "feature", "goal", "investigation"]);
+    expect(task(r, "WT-004.1").steps.map((x) => `${x.id}:${x.state}`)).toEqual(task(s0, "WT-004.1").steps.map((x) => `${x.id}:${x.state}`));
+    expect(M.acceptedOutput(r, task(r, "WT-004.1"), "SR1", "findings")?.openFindings).toBe(1);
+    for (const id of ["WT-012", "WT-013"]) expect(task(r, id)).toMatchObject({ lifecycle: "done", integration: { status: "not-needed" } });
     validate(r);
   });
 });
