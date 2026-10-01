@@ -54,7 +54,7 @@ describe("normalisation and the comparison", () => {
 function reviewRunning(): { s: State; id: string; review: Attempt } {
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
-  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
+  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
   s = r.state;
   const id = r.newId;
   const go = (t: number) => (s = M.dispatchEligible(M.leadPromoteProposals(s, at(t)), at(t)));
@@ -68,6 +68,8 @@ function reviewRunning(): { s: State; id: string; review: Attempt } {
   const review = running(s, id)[0];
   expect(review.stepId).toBe("S2");
   s = M.reportRunContext(s, review.id, { scope: { from: BASE, to: SHA, paths: ["a.ts", "b.ts"], total: 2 } });
+  // ORC-021: the security review beside S2 is completed clean; these tests are about the code review's coverage.
+  for (const a of running(s, id)) if (step(s, id, a.stepId).role === "security_reviewer") s = M.reportCompletion(s, a.id, [], at(3), [{ name: "findings", summary: "no security findings", findings: [] }]);
   return { s, id, review: running(s, id)[0] };
 }
 

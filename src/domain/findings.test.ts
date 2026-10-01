@@ -25,7 +25,7 @@ function withTask(opts: { autopilot?: boolean; author?: "user" | "lead" } = {}):
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
   if (opts.autopilot) s = M.applyAutopilot(s, "main", at(0));
-  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
+  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
   s = r.state;
   if (opts.author === "lead") task(s, r.newId).specs[0].author = "lead";
   return { s, id: r.newId };
@@ -39,8 +39,17 @@ function finish(s: State, id: string, t: number, findings?: Finding[], reviewedP
   const [a] = running(s, id);
   const st = step(s, id, a.stepId);
   const outputs = st.outputs.map((o) => (o.kind === "review-findings" ? { name: o.name, summary: "review", findings: findings ?? [], openFindings: 0, ...(reviewedPaths ? { reviewedPaths } : {}) } : { name: o.name, summary: `${o.name} at ${t}` }));
-  return M.reportCompletion(s, a.id, [], at(t), outputs);
+  const done = M.reportCompletion(s, a.id, [], at(t), outputs);
+  return st.role === "code_reviewer" ? securityClean(done, id, t) : done;
 }
+
+/** ORC-021: the security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
+function securityClean(s: State, id: string, t: number): State {
+  let next = M.dispatchEligible(s, at(t));
+  for (const a of running(next, id)) if (step(next, id, a.stepId).role === "security_reviewer") next = M.reportCompletion(next, a.id, [], at(t), [{ name: "findings", summary: "no security findings", findings: [], openFindings: 0 }]);
+  return next;
+}
+
 
 /** Drive the task through S1 (implement) and S2 (review) with the given findings; C1 skips because checks are off. */
 function reviewed(findings: Finding[], opts: Parameters<typeof withTask>[0] = {}): { s: State; id: string; art: Artifact } {
@@ -60,7 +69,7 @@ describe("the Checks steps while checks are off", () => {
   it("every code-changing built-in carries a Checks step in the loop and a Final checks step, both skipped with the reason", () => {
     const w = withTask();
     let s = go(w.s, 1);
-    expect(task(s, w.id).steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "S3", "C2", "S4"]);
+    expect(task(s, w.id).steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "SR1", "S3", "C2", "S4"]);
     expect(step(s, w.id, "S3").iterate).toEqual({ from: "C1", max: 3 });
     s = finish(s, w.id, 2);
     s = go(s, 3);
@@ -106,6 +115,7 @@ describe("derived counts (Q7, Q8)", () => {
     s = go(s, 3);
     const [a] = running(s, w.id);
     s = M.reportCompletion(s, a.id, [], at(4), [{ name: "findings", summary: "one thing", openFindings: 2 }]);
+    s = securityClean(s, w.id, 4);
     const art = M.acceptedOutput(s, task(s, w.id), "S2", "findings")!;
     expect(art.findings).toBeUndefined();
     expect([F.fixable(s, art), F.undecided(s, art), F.unresolved(s, art)]).toEqual([2, 0, 2]);
@@ -125,7 +135,7 @@ describe("runIf and the repair's wait (Q8)", () => {
     const d = s.decisions[0];
     const accepted = go(F.decideFinding(s, d.id, "accept", "fine as it is", at(6)), 7);
     expect(step(accepted, id, "S3").state).toBe("skipped");
-    expect(accepted.events.some((e) => e.message === "Skipped S3: nothing to fix in C1.checks, S2.findings")).toBe(true);
+    expect(accepted.events.some((e) => e.message === "Skipped S3: nothing to fix in C1.checks, S2.findings, SR1.findings")).toBe(true);
     const fixed = go(F.decideFinding(s, d.id, "fix", undefined, at(6)), 7);
     expect(running(fixed, id)[0].stepId).toBe("S3");
   });
@@ -334,7 +344,7 @@ describe("the lead's decisions (applyLeadDecisions, Q9)", () => {
 describe("applyAutopilot and the sample project", () => {
   it("Autopilot routes decisions to the lead; the sample project starts with checks off, decisions to the user and conventions on", () => {
     const s = buildSeed(T0);
-    expect(s.version).toBe(15);
+    expect(s.version).toBe(16);
     expect(s.project.checks.enabled).toBe(false);
     expect(s.project.triage).toEqual({ askUserBy: "user" });
     expect(s.project.conventions).toEqual({ include: true });

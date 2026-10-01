@@ -162,7 +162,7 @@ export function fakePlanningProposal(prompt: string): Record<string, unknown> {
     rationale: "The smallest step that moves the product (simulated planning: no real evidence).",
     uncertainty: "Simulated; no real evidence.",
     acceptance: base.acceptance,
-    patternId: "change",
+    flowId: "change",
     priority: 5,
   };
 }

@@ -96,7 +96,7 @@ describe("lead conversation", () => {
     claude.reply(r.id, "Here is the plan.", [
       proposal(),
       proposal({ title: "No options", options: [] }),
-      proposal({ title: "Bad pattern", patternId: "nope" }),
+      proposal({ title: "Bad flow", flowId: "nope" }),
       proposal({ title: "Add a greeting" }), // duplicate of the first
     ]);
     tick();
@@ -105,9 +105,9 @@ describe("lead conversation", () => {
     const t = task(msg.proposedTaskIds![0]);
     expect(t.specs[0].author).toBe("lead");
     expect(M.currentSpec(t).content).toMatchObject({ decidedBy: "lead", selectedOptionId: "A", recommendedOptionId: "A" });
-    expect(t.pipelineHistory[0].reason).toMatch(/Change pattern/);
+    expect(t.pipelineHistory[0].reason).toMatch(/Change flow/);
     expect(msg.rejected!.join(" ")).toMatch(/two to four options/);
-    expect(msg.rejected!.join(" ")).toMatch(/not available to the lead/);
+    expect(msg.rejected!.join(" ")).toMatch(/unknown flow "nope"/);
     expect(msg.rejected!.join(" ")).toMatch(/already exists/);
   });
 
@@ -176,7 +176,10 @@ describe("autonomy", () => {
     tick();
     const review = M.activeAttempts(st(), id)[0];
     expect(review.snapshot.provider).toBe("claude"); // independent reviewer on the other provider
+    const security = M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!; // ORC-021: the security review runs beside it, on the same reviewer provider
+    expect(security.snapshot.provider).toBe("claude");
     claude.finish(review.id, { findings: 0 });
+    claude.finish(security.id, { findings: 0 });
     tick();
     tick();
     const verify = M.activeAttempts(st(), id)[0]; // repair skipped; lead verifies
@@ -194,7 +197,7 @@ describe("autonomy", () => {
 
 describe("integration queue", () => {
   const finishChange = (title: string, file: string, content: string) => {
-    const id = (cmd("createTask", { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+    const id = (cmd("createTask", { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
     setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
     tick();
     const r = M.activeAttempts(st(), id)[0];
@@ -367,7 +370,7 @@ describe("review regressions (ORC-005)", () => {
   });
 
   it("H3: a missing integration workspace is recovered, not recorded as a conflict", () => {
-    const id = (cmd("createTask", { title: "I", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+    const id = (cmd("createTask", { title: "I", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
     setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
     tick();
     codex.finish(M.activeAttempts(st(), id)[0].id, { write: ["i.txt", "i\n"] });
@@ -385,7 +388,7 @@ describe("review regressions (ORC-005)", () => {
     };
     walk(wsRoot);
     rmSync(found[0], { recursive: true, force: true });
-    const id2 = (cmd("createTask", { title: "J", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+    const id2 = (cmd("createTask", { title: "J", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
     setTestPipeline(store, id2, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
     tick();
     codex.finish(M.activeAttempts(st(), id2)[0].id, { write: ["j.txt", "j\n"] });

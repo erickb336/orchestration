@@ -74,7 +74,7 @@ function array<T>(v: unknown, what: string): T[] {
 
 // Structured payloads (spec content) are shape-checked here and semantically validated by the domain
 // operation that receives them. ORC-016: no command accepts step definitions, templates or a catalog;
-// a task's steps come from the pattern it names, and the server alone writes the catalog from files.
+// a task's steps come from the flow it names, and the server alone writes the flows at start.
 function specContent(v: unknown): SpecContent {
   const c = obj(v, "content");
   for (const k of ["title", "area", "outcome", "benefit", "selectedOptionId", "recommendedOptionId", "overrideReason"]) str(c, k);
@@ -156,11 +156,11 @@ export const COMMANDS = {
   rerunStep: same((s, now, a) => M.rerunStep(s, str(a, "taskId"), str(a, "stepId"), now)),
   retryStep: same((s, now, a) => M.retryStep(s, str(a, "taskId"), str(a, "stepId"), now)),
 
-  // pipeline patterns (ORC-016): the structure of a pipeline is never sent by a client
-  /** The standard pattern used when a lead proposal or a breakdown item names none. */
-  setDefaultPattern: same((s, now, a) => M.setDefaultPattern(s, str(a, "patternId"), now)),
-  /** Run a task on another catalog pattern, before it starts or while it shows Paused: the pipeline starts over. `expectedRev` is the pipeline revision seen. */
-  changePattern: same((s, now, a) => M.changePattern(s, str(a, "taskId"), num(a, "expectedRev"), str(a, "patternId"), a.note === undefined ? "" : str(a, "note"), now)),
+  // flows (ORC-021): the structure of a pipeline is never sent by a client
+  /** The flow used when a lead proposal or a breakdown item names none. */
+  setDefaultFlow: same((s, now, a) => M.setDefaultFlow(s, str(a, "flowId"), now)),
+  /** Run a task on another flow, before it starts or while it shows Paused: the pipeline starts over. `expectedRev` is the pipeline revision seen. */
+  changeFlow: same((s, now, a) => M.changeFlow(s, str(a, "taskId"), num(a, "expectedRev"), str(a, "flowId"), a.note === undefined ? "" : str(a, "note"), now)),
 
   // review and editing
   setReviewEveryStep: same((s, now, a) => M.setReviewEveryStep(s, str(a, "taskId"), bool(a, "value"), now)),
@@ -380,7 +380,7 @@ export const COMMANDS = {
     }
     return M.initProject(s, { name: str(a, "name"), repoPath: str(a, "repoPath"), vision: str(a, "vision"), focus: str(a, "focus"), ...(stage ? { stage } : {}) }, now);
   }),
-  /** Create a user-authored task from a catalog pattern (`patternId`). Any `steps` sent are ignored. Returns { newId }. */
+  /** Create a user-authored task from one of the six flows (`flowId`). Any `steps` sent are ignored. Returns { newId }. */
   createTask: (s, now, a) => {
     const r = M.createTask(
       s,
@@ -394,7 +394,7 @@ export const COMMANDS = {
         acceptance: array<unknown>(a.acceptance, "acceptance").map((x) => String(x)),
         priority: num(a, "priority"),
         holdBeforeStart: bool(a, "holdBeforeStart"),
-        patternId: str(a, "patternId"),
+        flowId: str(a, "flowId"),
         priorityPinned: a.priorityPinned === undefined ? false : bool(a, "priorityPinned"),
       },
       now,
@@ -408,9 +408,8 @@ export const COMMANDS = {
     // Never reuse generated ids: a runtime process or event row from before the reset must not
     // be confused with a new run or event that happens to receive the same id.
     next.seq = Math.max(next.seq, s.seq) + 1;
-    // ORC-016: the catalog and the templates retired at the upgrade are machine-level, like the files they come from (step 1 review, finding 7).
-    next.patterns = structuredClone(s.patterns);
-    next.retiredTemplates = structuredClone(s.retiredTemplates);
+    // ORC-016: the flows are machine-level, like the files they come from (step 1 review, finding 7).
+    next.flows = structuredClone(s.flows);
     return { state: next };
   },
 } satisfies Record<string, Handler>;

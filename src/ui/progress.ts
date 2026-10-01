@@ -74,6 +74,7 @@ function verbOf(step: Step, stopping: boolean): string {
     case "designer":
       return "designing";
     case "code_reviewer":
+    case "security_reviewer":
     case "ux_reviewer":
       return "reviewing";
     case "checks":

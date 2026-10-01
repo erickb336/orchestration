@@ -1,0 +1,50 @@
+{
+  "$schema": "./flow.schema.json",
+  "id": "design",
+  "name": "Design",
+  "description": "Design only: design, UX review, revise if needed, hand off an implementation brief.",
+  "whenToUse": "Settle and review a design before anyone implements it.",
+  "steps": [
+    {
+      "id": "S1",
+      "purpose": "Design flow, states, and copy",
+      "role": "designer",
+      "dependsOn": [],
+      "inputs": [],
+      "outputs": [{ "name": "design", "kind": "design" }]
+    },
+    {
+      "id": "S2",
+      "purpose": "UX review",
+      "role": "ux_reviewer",
+      "dependsOn": ["S1"],
+      "inputs": [{ "step": "S1", "output": "design" }],
+      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+    },
+    {
+      "id": "S3",
+      "purpose": "Revise design",
+      "role": "designer",
+      "dependsOn": ["S2"],
+      "inputs": [
+        { "step": "S1", "output": "design" },
+        { "step": "S2", "output": "findings" }
+      ],
+      "outputs": [{ "name": "design", "kind": "design" }],
+      "runIf": [{ "step": "S2", "output": "findings" }],
+      "iterate": { "from": "S2", "max": 3 }
+    },
+    {
+      "id": "S4",
+      "purpose": "Accept design and write implementation brief",
+      "role": "lead",
+      "dependsOn": ["S3"],
+      "inputs": [
+        { "step": "S1", "output": "design" },
+        { "step": "S3", "output": "design" },
+        { "step": "S2", "output": "findings" }
+      ],
+      "outputs": [{ "name": "brief", "kind": "brief" }]
+    }
+  ]
+}

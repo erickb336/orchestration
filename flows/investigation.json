@@ -1,0 +1,36 @@
+{
+  "$schema": "./flow.schema.json",
+  "id": "investigation",
+  "name": "Investigation",
+  "description": "Gather evidence, review it, and propose a follow-up implementation spec.",
+  "whenToUse": "The cause or the right change is unknown; the result is a spec, not code.",
+  "steps": [
+    {
+      "id": "S1",
+      "purpose": "Investigate and gather evidence",
+      "role": "coder",
+      "dependsOn": [],
+      "inputs": [],
+      "outputs": [{ "name": "report", "kind": "report" }]
+    },
+    {
+      "id": "S2",
+      "purpose": "Review evidence for gaps",
+      "role": "code_reviewer",
+      "dependsOn": ["S1"],
+      "inputs": [{ "step": "S1", "output": "report" }],
+      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+    },
+    {
+      "id": "S3",
+      "purpose": "Propose follow-up spec",
+      "role": "lead",
+      "dependsOn": ["S2"],
+      "inputs": [
+        { "step": "S1", "output": "report" },
+        { "step": "S2", "output": "findings" }
+      ],
+      "outputs": [{ "name": "brief", "kind": "brief" }]
+    }
+  ]
+}

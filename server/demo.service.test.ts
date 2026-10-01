@@ -111,11 +111,12 @@ describe("the demo in the fake service (ORC-017)", () => {
     expect(M.stateLabel(s, task(s, "WT-009"))).toBe("Paused");
     expect(s.attempts.filter((a) => a.taskId === "WT-009").map((a) => a.outcome)).toEqual(["completed", "stopped"]);
     expect(M.stateLabel(s, task(s, "WT-010"))).toBe("Deferred by lead");
-    // Pause WT-002: the runtime acknowledges, the freed slot goes to WT-003's designer step on Claude.
+    // Pause WT-002: the runtime acknowledges, the freed slot goes to WT-007's security review on Claude (ORC-021), the next in line.
     store.command("pauseTask", { taskId: "WT-002" }, "k-pause", iso(now));
-    for (let i = 0; i < 6 && !M.activeAttempts(store.read().state, "WT-003").length; i++) s = await tick();
+    for (let i = 0; i < 6 && !M.activeAttempts(store.read().state, "WT-007").some((a) => a.stepId === "SR1"); i++) s = await tick();
     expect(M.stateLabel(s, task(s, "WT-002"))).toBe("Paused");
-    expect(M.activeAttempts(s, "WT-003").map((a) => `${a.stepId} ${a.snapshot.provider}`)).toEqual(["S1 claude"]);
+    expect(M.activeAttempts(s, "WT-007").map((a) => `${a.stepId} ${a.snapshot.provider}`)).toEqual(["S3 claude", "SR1 claude"]);
+    expect(M.activeAttempts(s, "WT-003")).toEqual([]);
     // The lead answers in the demo (a simulated run advances a few percent per tick): a steer from the fake
     // runtime carries the structured simulated flag, and no prefix.
     store.command("postMessage", { text: "Focus on offline maps" }, "k-msg", iso(now));

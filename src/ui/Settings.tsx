@@ -3,10 +3,9 @@ import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { AUTOPILOT, PROVIDERS, ROLES, STEERING_MODES, type Autonomy, type SteeringMode } from "../domain/types";
-import { effectiveDefault, eligible } from "../domain/patterns";
-import type { PatternsReloadResponse } from "../api";
-import { PatternPicker, PatternSteps } from "./PatternPicker";
-import { EXAMPLE_VARIANT, catalogSummary, defaultPatternNote, errorLocation, patternFlagChips, retiredTemplateJson, shortHash, sourceLabel } from "./patternView";
+import { effectiveDefault } from "../domain/flows";
+import { FlowPicker, FlowSteps } from "./FlowPicker";
+import { defaultFlowNote } from "./flowView";
 import { ChecksSettings } from "./ChecksSettings";
 import { DeliverySettings } from "./DeliverySettings";
 import type { CapabilityMap } from "../runtime/adapter";
@@ -83,7 +82,7 @@ export function Settings() {
                       label={`Default for ${ROLE_LABEL[role]}`}
                       value={p.roleDefaults[role] ?? null}
                       allowInherit
-                      inheritLabel="Use project default"
+                      inheritLabel={role === "security_reviewer" ? "Same as the code reviewer" : "Use project default"}
                       disabled={disabled}
                       onChange={(v) => void send("setRoleDefault", { role, selection: v })}
                     />
@@ -101,7 +100,7 @@ export function Settings() {
               steps such as verification.
             </p>
           </section>
-          <Patterns />
+          <Flows />
         </div>
 
         <div>
@@ -863,192 +862,61 @@ function ProjectSetup() {
 }
 
 /**
- * ORC-016: the pattern catalog, read-only. Built-in patterns change through commits; a file of yours in
- * the patterns directory is picked up by Reload. The project default is the one setting here.
+ * ORC-021: the six flows, read-only. The project default is the one setting here; each flow shows its
+ * name, its "use it for" line and its steps. A flow changes by editing its file in flows/ and running the
+ * tests, never here.
  */
-function Patterns() {
-  const { state, send, disabled, postJson } = useStore();
-  const [reloading, setReloading] = useState(false);
-  const [last, setLast] = useState<PatternsReloadResponse | null>(null);
-  const catalog = state.patterns;
-  const stored = state.project.defaultPatternId;
+function Flows() {
+  const { state, send, disabled } = useStore();
+  const flows = state.flows;
+  const stored = state.project.defaultFlowId;
   const effective = effectiveDefault(state);
-  const standard = catalog.patterns.filter((p) => eligible(p, "default"));
-  const note = defaultPatternNote(stored, standard, effective);
-  const retired = state.retiredTemplates;
-  const localDir = catalog.localDir || "the patterns directory";
+  const note = defaultFlowNote(stored, flows, effective);
   return (
-    <section className="card" aria-labelledby="pat-h">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 id="pat-h">Patterns</h2>
-        <button
-          className="small"
-          disabled={disabled || reloading}
-          title="Read the pattern files again. Tasks that already exist keep their steps."
-          onClick={async () => {
-            setReloading(true);
-            const r = await postJson("/api/patterns/reload", {});
-            setReloading(false);
-            if (r.ok) setLast(r.body as PatternsReloadResponse);
-          }}
-        >
-          {reloading ? "Reloading…" : "Reload patterns"}
-        </button>
-      </div>
+    <section className="card" aria-labelledby="flows-h">
+      <h2 id="flows-h">Flows</h2>
       <p className="muted small" style={{ marginBottom: "0.3rem" }}>
-        Every task runs one pattern from this catalog, chosen when the task is created or changed on the task page.
+        Every task runs one of these flows, chosen when the task is created or changed on the task page. The lead picks one per task; you can pick or change it.
       </p>
       <details className="how">
         <summary>How this works</summary>
         <p>
-          Nothing here edits a pattern: built-in ones live in the repository's <code>patterns/</code> directory and change through commits; yours live in <code>{localDir}</code> and are read at start and on Reload.
+          Nothing here edits a flow: the six live in the repository&apos;s <code>flows/</code> folder and change through commits. Every flow that changes code has an independent code review and a security review; the engine (steps, artifacts, loops, per-step provider and model, pause, edit, rerun) is the same for all of them.
         </p>
-        <p>Only standard patterns can be the default: experiments, patterns that pause for you and patterns without an independent review are yours to choose per task.</p>
       </details>
-      <p className="muted small" role="status">
-        {catalogSummary(catalog)}
-        {catalog.loadedAt ? `, loaded ${relTime(catalog.loadedAt)}` : ""}.{last ? ` Last reload: ${last.patterns} patterns, ${last.errors} file error${last.errors === 1 ? "" : "s"}.` : ""}
-      </p>
 
-      <h3>Default pattern</h3>
-      <p className="muted small">Used by the lead's proposals and by breakdowns when they name none, and preselected in New task.</p>
-      <PatternPicker state={state} patterns={standard} value={standard.some((p) => p.id === stored) ? stored : effective.id} label="Default pattern" disabled={disabled} onChange={(id) => void send("setDefaultPattern", { patternId: id })} />
+      <h3>Default flow</h3>
+      <p className="muted small">Used by the lead&apos;s proposals and by breakdowns when they name none, and preselected in New task.</p>
+      <FlowPicker flows={flows} value={flows.some((p) => p.id === stored) ? stored : effective.id} label="Default flow" disabled={disabled} showCard={false} onChange={(id) => void send("setDefaultFlow", { flowId: id })} />
       {note && (
         <p className="muted" style={{ fontSize: "0.85rem" }} role="status">
           {note}
         </p>
       )}
 
-      {catalog.errors.length > 0 && (
-        <div className="banner danger" role="alert">
-          <strong>
-            {catalog.errors.length} pattern file error{catalog.errors.length === 1 ? "" : "s"}
-          </strong>
-          <ul className="plain" style={{ margin: "0.3rem 0 0", fontSize: "0.85rem" }}>
-            {catalog.errors.map((e, i) => (
-              <li key={i}>
-                <span className="mono">{errorLocation(e)}</span>
-                {e.id ? ` (${e.id})` : ""}: {e.message}{" "}
-                <span className="chip" title={e.effect === "built-in kept" ? "This file would replace a built-in pattern; the built-in stays in effect" : "The file is not in the catalog"}>
-                  {e.effect}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p className="muted" style={{ fontSize: "0.8rem", margin: "0.3rem 0 0" }}>
-            Fix the file and choose Reload. The app started anyway; a broken file never blocks it.
-          </p>
-        </div>
-      )}
-
-      <h3>Catalog ({catalog.patterns.length})</h3>
-      <ul className="pattern-list">
-        {catalog.patterns.map((p) => (
+      <h3>The flows ({flows.length})</h3>
+      <ul className="flow-list">
+        {flows.map((p) => (
           <li key={p.id}>
             <div className="row" style={{ gap: "0.3rem" }}>
               <strong>{p.name}</strong>
-              <span className="chip" title={`Loaded from ${p.file}`}>
-                {sourceLabel(p.source, p.replacesBuiltIn)}
+              <span className="mono muted" style={{ fontSize: "0.78rem" }}>
+                {p.id}
               </span>
-              <span className="chip" title={p.audience !== "standard" ? "Only you can choose it" : p.flags.breaksDown ? "The lead may choose it; breakdowns may not, because it breaks down itself" : "The lead and breakdowns may choose it"}>
-                {p.audience}
-              </span>
-              {patternFlagChips(p)
-                .filter((c) => !c.text.startsWith("yours"))
-                .map((c) => (
-                  <span key={c.text} className="chip" title={c.title}>
-                    {c.text}
-                  </span>
-                ))}
             </div>
             <div style={{ fontSize: "0.86rem", marginTop: "0.15rem" }}>{p.description}</div>
             <div className="muted" style={{ fontSize: "0.85rem" }}>
-              <strong>Use when:</strong> {p.whenToUse}
-            </div>
-            {p.experimental && p.hypothesis && (
-              <div className="muted" style={{ fontSize: "0.85rem" }}>
-                <strong>Hypothesis:</strong> {p.hypothesis}
-              </div>
-            )}
-            {p.warnings.length > 0 && (
-              <div className="muted" style={{ fontSize: "0.8rem" }}>
-                Warnings: {p.warnings.join("; ")}
-              </div>
-            )}
-            <div className="mono muted" style={{ fontSize: "0.78rem", overflowWrap: "anywhere" }} title={`Content hash ${p.hash}`}>
-              {p.file} · {p.id} · {shortHash(p.hash)}
-              {p.chain.length > 1 ? ` · extends ${p.chain.slice(1).map((c) => c.id).join(" → ")}` : ""}
+              <strong>Use it for:</strong> {p.whenToUse}
             </div>
             <details>
               <summary className="muted" style={{ fontSize: "0.8rem", cursor: "pointer" }}>
                 {p.steps.length} steps
               </summary>
-              <PatternSteps steps={p.steps} />
+              <FlowSteps steps={p.steps} />
             </details>
           </li>
         ))}
       </ul>
-
-      {retired.length > 0 && (
-        <details style={{ marginTop: "0.6rem" }}>
-          <summary>Templates from before patterns ({retired.length})</summary>
-          <p className="muted" style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
-            Custom and edited templates were retired when pipelines became patterns. Each is written once as a pattern file of yours when the service starts; no file is ever overwritten.
-          </p>
-          <ul className="plain">
-            {retired.map((t) => (
-              <li key={t.id} style={{ fontSize: "0.85rem" }}>
-                <strong>{t.name}</strong> ({t.kind === "custom" ? "custom" : "edited built-in"}):{" "}
-                {t.exportedTo ? (
-                  <>
-                    saved as <code>{t.exportedTo}</code>
-                    {t.stripped?.length ? ` (left out: ${t.stripped.join("; ")})` : ""}
-                  </>
-                ) : t.exportError ? (
-                  <>
-                    <span style={{ color: "var(--s-blocked)" }}>{t.exportError}</span>
-                    <div className="muted" style={{ fontSize: "0.8rem" }}>
-                      The file it would have been, to copy into <code>{localDir}</code> yourself:
-                    </div>
-                    <pre className="pattern-json" tabIndex={0} aria-label={`Pattern file for ${t.name}`}>
-                      {retiredTemplateJson(t)}
-                    </pre>
-                  </>
-                ) : (
-                  "saved as a pattern file at the next start"
-                )}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
-
-      <details style={{ marginTop: "0.6rem" }}>
-        <summary>How patterns work</summary>
-        <ul className="plain" style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
-          <li>
-            Two folders: <code>patterns/</code> in the repository holds the built-in patterns, and <code>{localDir}</code> holds yours. Built-in patterns change through commits and pull requests. To add one of yours, drop a{" "}
-            <code>.json</code> or <code>.jsonc</code> file there and choose Reload; a file with a built-in's id replaces that built-in.
-          </li>
-          <li>Each file is checked against the schema, then the pipeline graph rules, then the pattern rules. A file with an error is listed above and skipped; when it would replace a built-in, the built-in stays.</li>
-          <li>
-            A variant can be two lines: <code>extends</code> another pattern and <code>stepOverrides</code> fields of its existing steps. This one pauses Bug fix after the reproduction:
-          </li>
-        </ul>
-        <pre className="pattern-json" tabIndex={0} aria-label="Example pattern file">
-          {EXAMPLE_VARIANT}
-        </pre>
-        <ul className="plain" style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
-          <li>
-            A pattern marked <code>experimental</code> must state its <code>hypothesis</code>. Experiments, patterns that pause for you and patterns without an independent review are yours to choose; the lead and breakdowns use
-            standard patterns only.
-          </li>
-          <li>Every task records the pattern it ran: its id, its content hash and its source. A task created before a file changed keeps its steps and its hash.</li>
-          <li>
-            The README section "Adding or changing a pipeline pattern" has the field reference and the validation rules.
-          </li>
-        </ul>
-      </details>
     </section>
   );
 }

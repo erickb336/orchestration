@@ -1,0 +1,124 @@
+{
+  "$schema": "./flow.schema.json",
+  "$comment": "ORC-021: SR1 is a security review that runs beside the code review (S3) and the UX review (S4); the repair runs when any of them has findings.",
+  "id": "feature",
+  "name": "Feature",
+  "description": "User-facing change: design, implement, checks, independent code, security and UX review, repair if needed, final checks, verify.",
+  "whenToUse": "User-facing work with new screens, flows or copy, where a design and a UX review are worth their cost.",
+  "steps": [
+    {
+      "id": "S1",
+      "purpose": "Plan and design the change",
+      "role": "designer",
+      "dependsOn": [],
+      "inputs": [],
+      "outputs": [{ "name": "design", "kind": "design" }]
+    },
+    {
+      "id": "S2",
+      "purpose": "Implement",
+      "role": "coder",
+      "dependsOn": ["S1"],
+      "inputs": [{ "step": "S1", "output": "design" }],
+      "outputs": [
+        { "name": "change", "kind": "code-change" },
+        { "name": "handoff", "kind": "handoff" }
+      ]
+    },
+    {
+      "id": "C1",
+      "purpose": "Run the project's checks",
+      "role": "checks",
+      "dependsOn": ["S2"],
+      "inputs": [{ "step": "S2", "output": "change" }],
+      "outputs": [{ "name": "checks", "kind": "check-results" }],
+      "checks": { "onFail": "findings" }
+    },
+    {
+      "id": "S3",
+      "purpose": "Code review",
+      "role": "code_reviewer",
+      "dependsOn": ["S2", "C1"],
+      "inputs": [
+        { "step": "S1", "output": "design" },
+        { "step": "S2", "output": "change" },
+        { "step": "S2", "output": "handoff" },
+        { "step": "C1", "output": "checks" }
+      ],
+      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+    },
+    {
+      "id": "SR1",
+      "purpose": "Security review",
+      "role": "security_reviewer",
+      "dependsOn": ["S2", "C1"],
+      "inputs": [
+        { "step": "S1", "output": "design" },
+        { "step": "S2", "output": "change" },
+        { "step": "S2", "output": "handoff" },
+        { "step": "C1", "output": "checks" }
+      ],
+      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+    },
+    {
+      "id": "S4",
+      "purpose": "UX review",
+      "role": "ux_reviewer",
+      "dependsOn": ["S2"],
+      "inputs": [
+        { "step": "S1", "output": "design" },
+        { "step": "S2", "output": "change" }
+      ],
+      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+    },
+    {
+      "id": "S5",
+      "purpose": "Repair review findings and failing checks",
+      "role": "coder",
+      "dependsOn": ["S3", "SR1", "S4"],
+      "inputs": [
+        { "step": "S2", "output": "change" },
+        { "step": "S3", "output": "findings" },
+        { "step": "SR1", "output": "findings" },
+        { "step": "S4", "output": "findings" },
+        { "step": "C1", "output": "checks" }
+      ],
+      "outputs": [{ "name": "change", "kind": "code-change" }],
+      "runIf": [
+        { "step": "C1", "output": "checks" },
+        { "step": "S3", "output": "findings" },
+        { "step": "SR1", "output": "findings" },
+        { "step": "S4", "output": "findings" }
+      ],
+      "$comment": "Checks, reviews and repair repeat until the checks pass and the reviews find nothing (at most 3 rounds).",
+      "iterate": { "from": "C1", "max": 3 }
+    },
+    {
+      "id": "C2",
+      "purpose": "Final checks",
+      "role": "checks",
+      "dependsOn": ["S5"],
+      "inputs": [
+        { "step": "S2", "output": "change" },
+        { "step": "S5", "output": "change" }
+      ],
+      "outputs": [{ "name": "final", "kind": "check-results" }],
+      "checks": { "onFail": "block" }
+    },
+    {
+      "id": "S6",
+      "purpose": "Verify and integrate",
+      "role": "lead",
+      "dependsOn": ["C2"],
+      "inputs": [
+        { "step": "S2", "output": "change" },
+        { "step": "S5", "output": "change" },
+        { "step": "S3", "output": "findings" },
+        { "step": "SR1", "output": "findings" },
+        { "step": "S4", "output": "findings" },
+        { "step": "C2", "output": "final" }
+      ],
+      "outputs": [{ "name": "verification", "kind": "verification" }]
+    }
+  ]
+}

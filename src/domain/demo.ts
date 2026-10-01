@@ -9,12 +9,16 @@
 // lead's replies with their steering. So the state is what the service would have written, and every
 // simulated thing is labelled by the records themselves (simulated runs, pull requests and check runs)
 // rather than by text inside titles and summaries.
+//
+// ORC-021: every one of the six flows has a task in the story (WT-012 is the Investigation, WT-013 the
+// Design), every finished code task has a security review beside each code review, and WT-004.1's security
+// review found what its code review did not, repaired in the loop's second round.
 
 import * as C from "./checks";
 import * as D from "./delivery";
 import * as M from "./model";
-import { DEMO_SCRIPT } from "./demoScript";
-import { builtInCatalog, builtInOrInternal, patternRef } from "./patterns";
+import { DEMO_SCRIPT, type ScriptFinding } from "./demoScript";
+import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
 import {
   DEFAULT_AUTONOMY,
@@ -170,6 +174,13 @@ function finding(id: string, f: Omit<Finding, "id" | "key" | "source">): Finding
   return { id, key: hash12(`review|${f.file ?? ""}|${f.title.toLowerCase().replace(/\s+/g, " ").trim()}`), source: "review", ...f };
 }
 
+/** The story's finding for a step (the fake runtime reports the same words if the step is rerun). */
+function scripted(taskId: string, stepId: string, severity: Finding["severity"], action: Finding["action"]): Finding {
+  const f: ScriptFinding | undefined = DEMO_SCRIPT[taskId]?.findings?.[stepId];
+  if (!f) throw new Error(`demo: the script has no finding for ${taskId} ${stepId}`);
+  return finding("F1", { severity, action, ...f });
+}
+
 type CodeChange = { sha: string; paths: string[]; files: number; additions: number; deletions: number };
 
 /**
@@ -216,7 +227,7 @@ class DemoBuilder {
       "Weekend Trips helps a small group of friends plan a weekend hike together: pick a trail, share the plan, pack the right things, and keep the map working with no signal. It should feel calm and dependable on a phone at a trailhead. Fewer, clearer screens beat more features.";
     const draftReason = "Drafted from the shaping conversation and the trail research note";
     return {
-      version: 15,
+      version: 16,
       seq: 1001,
       project: {
         id: DEMO_PROJECT_ID,
@@ -258,7 +269,7 @@ class DemoBuilder {
         workerConnections: { claude: [], codex: [] },
         hold: false,
         lastVisitAt: at(240),
-        defaultPatternId: "change",
+        defaultFlowId: "change",
       },
       tasks: [],
       attempts: [],
@@ -282,8 +293,7 @@ class DemoBuilder {
       visionDrafts: [{ id: draftId, at: at(4332), leadRunId, messageIds: [], text: visionText, focus: "Trip sharing first.", reason: draftReason, basedOnVisionRev: 0, status: "accepted", resolvedAt: at(4320), visionRev: 1, simulated: true }],
       decisions: [],
       // ORC-016: the built-in catalog until the server loads the files (it replaces this at start).
-      patterns: builtInCatalog(),
-      retiredTemplates: [],
+      flows: builtInCatalog(),
       events: [
         { id: "ev-1", at: at(4340), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; shaping the vision with the lead` },
         { id: "ev-2", at: at(4332), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the shaping conversation: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
@@ -329,11 +339,11 @@ class DemoBuilder {
 
   // ---------- tasks ----------
 
-  private addTask(id: string, priority: number, content: SpecContent, patternId: string, m: number, o: { author?: "lead" | "user"; chosenBy?: ChosenBy; dependsOn?: string[] } = {}): Task {
-    const pattern = builtInOrInternal(patternId);
-    const defs = structuredClone(pattern.steps).map(toDef);
+  private addTask(id: string, priority: number, content: SpecContent, flowId: string, m: number, o: { author?: "lead" | "user"; chosenBy?: ChosenBy; dependsOn?: string[] } = {}): Task {
+    const flow = builtInOrInternal(flowId);
+    const defs = structuredClone(flow.steps).map(toDef);
     const author = o.author ?? "lead";
-    const ref = patternRef(pattern, o.chosenBy ?? author);
+    const ref = flowRef(flow, o.chosenBy ?? author);
     const t: Task = {
       id,
       priority,
@@ -343,9 +353,9 @@ class DemoBuilder {
       specs: [{ rev: 1, at: this.at(m), author, reason: author === "lead" ? "Initial spec published by lead" : "Created by you", content }],
       steps: instantiate(defs),
       pipelineRev: 1,
-      pipelineHistory: [{ rev: 1, at: this.at(m), author, reason: `Created from the ${pattern.name} pattern`, steps: defs, pattern: ref }],
-      pattern: ref,
-      patternSince: 1,
+      pipelineHistory: [{ rev: 1, at: this.at(m), author, reason: `Created from the ${flow.name} flow`, steps: defs, flow: ref }],
+      flow: ref,
+      flowSince: 1,
       roleOverrides: {},
       dependsOn: o.dependsOn ?? [],
       createdAt: this.at(m),
@@ -494,10 +504,31 @@ class DemoBuilder {
     this.complete(attemptId, endM, [{ name: st.outputs[0].name, summary, findings, ...(scope ? { reviewedPaths: [...scope.paths] } : {}) }]);
   }
 
+  /**
+   * ORC-021: a code review and the security review beside it, dispatched together. The security review finishes
+   * first (`secEndM`) with its findings (clean unless given some), then the code review (`endM`) with its own.
+   */
+  private reviews(id: string, codeStep: string, secStep: string, startM: number, secEndM: number, endM: number, change: CodeChange | undefined, summary: string, secSummary: string, findings: Finding[] = [], secFindings: Finding[] = []) {
+    const st = this.step(id, codeStep);
+    const scope = change ? { from: SIM_BASE, to: change.sha, paths: [...change.paths], total: change.paths.length } : undefined;
+    const codeRun = this.dispatch(id, codeStep, startM, scope ? { scope } : {});
+    const secRun = this.dispatch(id, secStep, startM);
+    this.complete(secRun, secEndM, [{ name: "findings", summary: secSummary, findings: secFindings }]);
+    this.complete(codeRun, endM, [{ name: st.outputs[0].name, summary, findings, ...(scope ? { reviewedPaths: [...scope.paths] } : {}) }]);
+  }
+
   /** Any other single-output step (a design, a plan, a report, the lead's verification). */
   private output(id: string, stepId: string, startM: number, endM: number, summary: string, extra: Partial<M.OutputReport> = {}, run: M.RunReport = {}) {
     const attemptId = this.dispatch(id, stepId, startM);
     this.complete(attemptId, endM, [{ name: this.step(id, stepId).outputs[0].name, summary, ...extra }], run);
+  }
+
+  /** A finished task without a code change: the integration pass records that there is nothing to integrate, as the scheduler does. */
+  private nothingToIntegrate(id: string, m: number) {
+    const t = this.task(id);
+    if (t.lifecycle !== "done" || t.integration?.status !== "pending") throw new Error(`demo: ${id} is not done and waiting for integration`);
+    if (this.s.artifacts.some((a) => a.taskId === id && a.kind === "code-change")) throw new Error(`demo: ${id} has a code change to integrate`);
+    this.s = M.reportIntegration(this.s, id, { status: "not-needed" }, this.at(m));
   }
 
   // ---------- pull requests on the simulated GitHub ----------
@@ -529,7 +560,7 @@ class DemoBuilder {
           labels: [],
           checks: [{ ...SIM_CHECK }],
           checksFor: pr.headSha,
-          ...(merged ? { mergedAt: this.at(m), mergeCommit: `sim-merge-${number}`, mergedBy: SIM_LOGIN } : {}),
+          ...(merged ? { mergedAt: this.at(m), mergeCommit: `sim-m${number}`, mergedBy: SIM_LOGIN } : {}),
         },
       ],
       commits: [],
@@ -597,8 +628,11 @@ class DemoBuilder {
     this.specs();
     this.offlineMapsTileCache(); // WT-001: failed check → finding → repair → merged, in Review
     this.largerTapTargets(); // WT-008: merged, reviewed
-    this.tripSharingGoal(); // WT-004 and its children; WT-004.1 merged and reviewed
-    this.fasterTrailSearch(); // WT-011: the best-of experiment, merged, in Review
+    this.laterSpecs(); // WT-012 and WT-013: an investigation and a design, published once the first changes had landed
+    this.batteryInvestigation(); // WT-012: the evidence, a review of it, the lead's follow-up spec; nothing to integrate
+    this.inviteScreenDesign(); // WT-013: the design, a UX finding revised away, the lead's brief; nothing to integrate
+    this.tripSharingGoal(); // WT-004 and its children; WT-004.1's security finding repaired, merged and reviewed
+    this.fasterTrailSearch(); // WT-011: your own Change task, merged, in Review
     const fix = this.bugReproduced(); // WT-009: reproduced; the fix starts
     this.voiceOver(); // WT-007: UX review raised a finding that needs you; the code review runs at start
     this.pauseFix(fix); // WT-009: paused by you, acknowledged by the runtime
@@ -832,7 +866,7 @@ class DemoBuilder {
     );
     this.event(T, "lead", "spec", "Published specs for WT-001…WT-010 from vision r1");
     this.promote(["WT-001", "WT-002", "WT-003", "WT-004", "WT-005", "WT-006", "WT-007", "WT-008", "WT-009", "WT-010"], 4299);
-    // Your own experiment: two implementations compared before review.
+    // Your own task, on the default flow.
     this.addTask(
       "WT-011",
       10,
@@ -843,15 +877,15 @@ class DemoBuilder {
         outcome: "Search results appear as you type.",
         benefit: "Finding a trail is instant.",
         options: [opt("A", "Index the trails", "Build an index at startup and search it", "Fast", "Small", "Which index is a judgment call", "High"), opt("B", "Defer", "Leave search as it is", "No cost", "None", "Stays slow", "High")],
-        rationale: "Two agents try an index each; the better one goes forward.",
+        rationale: "One index built at startup is the simplest thing that meets the budget.",
         acceptance: ["Results for 5,000 trails within 50 ms"],
         validationPlan: "A timed test on the 5,000-trail fixture.",
       }),
-      "change-best-of-two",
+      "change",
       4250,
       { author: "user", chosenBy: "user" },
     );
-    this.event(4250, "user", "spec", "Created WT-011: Faster trail search (Change, best of two implementations pattern, experimental)", "WT-011");
+    this.event(4250, "user", "spec", "Created WT-011: Faster trail search (Change flow)", "WT-011");
     this.promote(["WT-011"], 4249);
   }
 
@@ -860,13 +894,13 @@ class DemoBuilder {
     const id = "WT-001";
     const first = this.change(id, "S1", 4200, 4140, { sha: fakeSha("WT-001 S1"), paths: ["src/map/tileCache.ts", "src/map/tileCache.test.ts", "src/map/MapView.tsx", "src/map/tiles.ts", "src/storage/disk.ts", "src/storage/disk.test.ts"], files: 6, additions: 214, deletions: 18 }, "Tile cache with a 200 MB cap and least-recently-used eviction (+214 −18, 6 files)", "Eviction runs when the cache passes the cap; the cap is a constant for now.");
     this.checks(id, "C1", 4139, 4137, [{ id: "test", excerpt: "FAIL  src/map/tileCache.test.ts > tile-cache evicts oldest first\nAssertionError: expected 3, got 4\n ❯ src/map/tileCache.test.ts:48:31\n\n Test Files  1 failed | 11 passed (12)\n      Tests  1 failed | 141 passed (142)" }]);
-    this.review(id, "S2", 4136, 4110, first, "1 finding: eviction runs on the main thread. The failing test is the cache's eviction order; the repair should take both.", [
+    this.reviews(id, "S2", "SR1", 4136, 4112, 4110, first, "1 finding: eviction runs on the main thread. The failing test is the cache's eviction order; the repair should take both.", "No security findings: the cache writes only under its own directory, and tile URLs are not logged.", [
       finding("F1", { severity: "warning", action: "auto-fix", title: "Tile eviction runs on the main thread", detail: "Move the eviction pass to the background queue; on a 200 MB cache it blocks the map for about 300 ms.", file: "src/map/tileCache.ts", line: 112 }),
     ]);
     const repaired = this.change(id, "S3", 4109, 4080, { sha: fakeSha("WT-001 S3"), paths: ["src/map/tileCache.ts", "src/map/tileCache.test.ts"], files: 2, additions: 31, deletions: 9 }, "Evicts the least recently used tile first and runs eviction off the main thread (+31 −9, 2 files)");
     // The loop's second round, appended by the service when S3 completed.
     this.checks(id, "C1-i2", 4079, 4077);
-    this.review(id, "S2-i2", 4076, 4060, repaired, "No findings: the eviction order is covered by the test, and eviction runs off the main thread.");
+    this.reviews(id, "S2-i2", "SR1-i2", 4076, 4062, 4060, repaired, "No findings: the eviction order is covered by the test, and eviction runs off the main thread.", "No security findings: the background eviction touches the same directory and nothing else.");
     this.skip(id, "S3-i2", 4059);
     this.checks(id, "C2", 4058, 4056);
     this.output(id, "S4", 4055, 4045, "The tile cache holds 200 MB and evicts least recently used first; checks passed on the final change.");
@@ -880,7 +914,7 @@ class DemoBuilder {
     const id = "WT-008";
     const change = this.change(id, "S1", 3800, 3740, { sha: fakeSha("WT-008 S1"), paths: ["src/trip/TripPage.tsx", "src/trip/Controls.tsx", "src/trip/TripPage.test.tsx"], files: 3, additions: 54, deletions: 21 }, "Trip page controls are at least 44 pt tall with 8 pt between them (+54 −21, 3 files)", "Checked with the largest Dynamic Type size; nothing clips.");
     this.checks(id, "C1", 3739, 3737);
-    this.review(id, "S2", 3736, 3715, change, "No findings: the targets meet the platform minimum and the layout tests cover three text sizes.");
+    this.reviews(id, "S2", "SR1", 3736, 3718, 3715, change, "No findings: the targets meet the platform minimum and the layout tests cover three text sizes.", "No security findings: layout only.");
     this.skip(id, "S3", 3714);
     this.checks(id, "C2", 3713, 3711);
     this.output(id, "S4", 3710, 3700, "Tap targets on the trip page meet the 44 pt minimum; checks passed on the final change.");
@@ -888,6 +922,81 @@ class DemoBuilder {
     this.openPr(id, 3698, 994);
     this.mergePr(id, 3600, 3599);
     this.s = D.markLandedReviewed(this.s, [id], true, this.at(3500));
+  }
+
+  /** The two specs the lead published once the first changes had landed: an investigation and a design, neither producing code. */
+  private laterSpecs() {
+    const T = 3481;
+    this.addTask(
+      "WT-012",
+      8,
+      spec({
+        title: "Why does the map drain the battery on long hikes?",
+        area: "Reliability",
+        whyNow: "Two hikers came back from Pine Saddle with a flat phone. The research note says battery matters and rules out background tracking, so the cause has to be found before anything is changed.",
+        outcome: "We know what drains the battery while the map is open on a long hike, with numbers, and have a spec for the fix.",
+        benefit: "The fix is aimed at the real cause instead of a guess.",
+        scopeIncluded: ["Record the map on a five-hour hike with the screen off and on", "Name the biggest drains with their share of the battery"],
+        scopeExcluded: ["Any fix: that is the follow-up task this investigation proposes"],
+        options: [
+          opt("A", "Measure first", "Instrument the map's location and drawing code, record a long hike, and report what used the battery", "A fix aimed at the cause", "Small", "A day before any fix starts", "High"),
+          opt("B", "Throttle the location now", "Poll the location less often without measuring", "A fix this week", "Small", "May fix the wrong thing: the drain may not be the location at all", "High"),
+        ],
+        rationale: "The cause is unknown; one measured hike is cheaper than a wrong fix.",
+        acceptance: ["The report names each drain with its share of the battery", "The follow-up spec names one change and its expected saving"],
+        validationPlan: "A reviewer checks the evidence for gaps before the spec is written.",
+      }),
+      "investigation",
+      T,
+    );
+    this.addTask(
+      "WT-013",
+      2,
+      spec({
+        title: "Design the invite screen for a trip",
+        area: "Trip sharing",
+        whyNow: "Trip sharing is next, and its first part is the invite link. The screen that makes and shares the link should be settled before anyone builds it.",
+        outcome: "A reviewed design for the invite screen: how a link is made, shared and renewed, with every state and its copy.",
+        benefit: "The first trip-sharing part is built once, from a design, instead of being redone after review.",
+        scopeIncluded: ["The flow: make a link, share it, see when it expires, make a new one", "The states: no link yet, link ready, link expired", "The copy for each state"],
+        scopeExcluded: ["The attendee list (its own part of the goal)", "Implementation"],
+        options: [
+          opt("A", "One sheet from the trip page", "A Share button on the trip page opens a sheet with the link, its expiry, Copy and Share", "One tap from the plan to the link", "Small", "A sheet hides the plan while it is open", "High"),
+          opt("B", "A separate invite page", "A full page reached from the trip menu", "Room for more settings later", "Small", "Another screen for one link; the research asks for fewer screens", "High"),
+        ],
+        rationale: "The research note asks for fewer screens; a sheet keeps the plan in view.",
+        acceptance: ["Every state has its copy", "The UX review finds nothing open"],
+        validationPlan: "A UX review of the design, with a revise round if it finds anything.",
+      }),
+      "design",
+      T,
+    );
+    this.event(T, "lead", "spec", "Published specs for WT-012 and WT-013 from vision r1");
+    this.promote(["WT-012", "WT-013"], 3480);
+  }
+
+  /** WT-012: an Investigation. The evidence (Codex), a review of it for gaps (Claude, one note that blocks nothing), the lead's follow-up spec; nothing to integrate. */
+  private batteryInvestigation() {
+    const id = "WT-012";
+    const script = DEMO_SCRIPT[id].outputs!;
+    this.output(id, "S1", 3470, 3390, script.report);
+    this.review(id, "S2", 3389, 3370, undefined, script["S2.findings"], [scripted(id, "S2", "info", "no-op")]);
+    this.output(id, "S3", 3369, 3355, script.brief);
+    this.nothingToIntegrate(id, 3354);
+  }
+
+  /** WT-013: a Design. The design (Claude), a UX review with one finding, a revise round, a clean second review, the lead's brief; nothing to integrate. */
+  private inviteScreenDesign() {
+    const id = "WT-013";
+    const script = DEMO_SCRIPT[id].outputs!;
+    this.output(id, "S1", 3340, 3290, script["S1.design"]);
+    this.review(id, "S2", 3289, 3270, undefined, script["S2.findings"], [scripted(id, "S2", "warning", "auto-fix")]);
+    this.output(id, "S3", 3269, 3240, script["S3.design"]);
+    // The loop's second round, appended by the service when S3 completed.
+    this.review(id, "S2-i2", 3239, 3225, undefined, script["S2-i2.findings"]);
+    this.skip(id, "S3-i2", 3224);
+    this.output(id, "S4", 3223, 3210, script.brief);
+    this.nothingToIntegrate(id, 3209);
   }
 
   /** WT-004: the goal's plan became three child tasks; WT-004.1 landed and is reviewed; .2 and .3 wait. */
@@ -903,79 +1012,50 @@ class DemoBuilder {
     }
     this.s = M.startHeldTask(this.s, "WT-004.1", this.at(2940));
     this.promote(["WT-004.1"], 2939);
+    // WT-004.1: Codex's code review was clean; Claude's security review beside it found that a link opened any
+    // trip, so the repair ran and the loop reviewed the repaired change again (ORC-021: the security review visible).
     const child = "WT-004.1";
-    const change = this.change(child, "S1", 2900, 2840, { sha: fakeSha("WT-004.1 S1"), paths: ["src/trip/invite.ts", "src/trip/invite.test.ts", "src/trip/TripPage.tsx", "src/server/links.ts"], files: 4, additions: 132, deletions: 4 }, "Signed invite links that expire after 7 days (+132 −4, 4 files)", "Links are signed with the trip key; expiry is checked when the link is opened.");
+    const words = DEMO_SCRIPT[child].outputs!;
+    const first = this.change(child, "S1", 2900, 2840, { sha: fakeSha("WT-004.1 S1"), paths: ["src/trip/invite.ts", "src/trip/invite.test.ts", "src/trip/TripPage.tsx", "src/server/links.ts"], files: 4, additions: 132, deletions: 4 }, words["S1.change"], words["S1.handoff"]);
     this.checks(child, "C1", 2839, 2837);
-    this.review(child, "S2", 2836, 2815, change, "No findings: the signature and the expiry are covered by tests, and the link format is documented.");
-    this.skip(child, "S3", 2814);
-    this.checks(child, "C2", 2813, 2811);
-    this.output(child, "S4", 2810, 2800, "A link opens the trip and an expired link says so; checks passed on the final change.");
-    this.prHead(child, 2799, change);
-    this.openPr(child, 2798, 997);
+    this.reviews(
+      child,
+      "S2",
+      "SR1",
+      2836,
+      2817,
+      2815,
+      first,
+      "No findings: the signature and the expiry are covered by tests, and the link format is documented.",
+      "1 finding: invite links are not scoped to the trip; a link for one trip opened another.",
+      [],
+      [scripted(child, "SR1", "error", "auto-fix")],
+    );
+    const repaired = this.change(child, "S3", 2814, 2790, { sha: fakeSha("WT-004.1 S3"), paths: ["src/server/links.ts", "src/trip/invite.test.ts"], files: 2, additions: 23, deletions: 6 }, words["S3.change"]);
+    // The loop's second round, appended by the service when S3 completed.
+    this.checks(child, "C1-i2", 2789, 2787);
+    this.reviews(child, "S2-i2", "SR1-i2", 2786, 2772, 2770, repaired, "No findings: the trip check sits beside the expiry check, and the new test covers a link used on another trip.", "No security findings: a link now opens only the trip it was issued for, and the key still never reaches the client.");
+    this.skip(child, "S3-i2", 2769);
+    this.checks(child, "C2", 2768, 2766);
+    this.output(child, "S4", 2765, 2755, words.verification);
+    this.prHead(child, 2754, repaired);
+    this.openPr(child, 2753, 997);
     this.mergePr(child, 2700, 2699);
     this.s = D.markLandedReviewed(this.s, [child], true, this.at(2600));
   }
 
-  /** WT-011: two implementations, one per provider; the comparison chose Claude's; merged at your request; in Review. */
+  /** WT-011: your own Change task; implemented by Codex, reviewed clean, merged at your request; in Review. */
   private fasterTrailSearch() {
     const id = "WT-011";
-    // The user chose Codex as the reviewer, since Claude's candidate was likely to win.
-    this.s = M.setTaskRoleOverride(this.s, id, "code_reviewer", { ...CODEX }, this.at(2501));
-    this.expandBestOf(id, "S1", 2500);
-    // Both candidates start together; Codex's finishes first.
-    const claude: CodeChange = { sha: fakeSha("WT-011 S1"), paths: ["src/search/index.ts", "src/search/search.ts", "src/search/search.test.ts"], files: 3, additions: 84, deletions: 18 };
-    const codex: CodeChange = { sha: fakeSha("WT-011 S1-c2"), paths: ["src/search/index.ts", "src/search/regionIndex.ts", "src/search/search.ts", "src/search/search.test.ts"], files: 4, additions: 121, deletions: 18 };
-    const runClaude = this.dispatch(id, "S1", 2500);
-    const runCodex = this.dispatch(id, "S1-c2", 2500);
-    this.complete(runCodex, 2440, [
-      { name: "change", summary: "Trail search with two indexes: one by name, one by region (+121 −18, 4 files)", ref: `${codex.sha.slice(0, 12)} on orchestration/${DEMO_PROJECT_ID}/${id}/S1-c2/${runCodex}` },
-      { name: "handoff", summary: "Two indexes built at startup; the region index answers map searches too." },
-    ]);
-    this.complete(runClaude, 2430, [
-      { name: "change", summary: "Trail search over one prefix index on normalised names (+84 −18, 3 files)", ref: `${claude.sha.slice(0, 12)} on orchestration/${DEMO_PROJECT_ID}/${id}/S1/${runClaude}` },
-      { name: "handoff", summary: "One index built at startup; diacritics and case are normalised once." },
-    ]);
-    this.output(id, "S2", 2429, 2410, "Both pass; S1 is simpler (one index instead of two) and 30 ms faster on the 5,000-trail fixture (simulated).", {}, { chosen: "S1" });
+    const change = this.change(id, "S1", 2500, 2430, { sha: fakeSha("WT-011 S1"), paths: ["src/search/index.ts", "src/search/search.ts", "src/search/search.test.ts"], files: 3, additions: 84, deletions: 18 }, "Trail search over one prefix index on normalised names (+84 −18, 3 files)", "One index built at startup; diacritics and case are normalised once.");
     this.checks(id, "C1", 2409, 2407);
-    this.review(id, "S3", 2406, 2385, claude, "No findings: the index is rebuilt when trails change, and the timing test guards the 50 ms budget.");
-    this.skip(id, "S4", 2384);
+    this.reviews(id, "S2", "SR1", 2406, 2388, 2385, change, "No findings: the index is rebuilt when trails change, and the timing test guards the 50 ms budget.", "No security findings: the search runs on local data and takes no input beyond the typed text.");
+    this.skip(id, "S3", 2384);
     this.checks(id, "C2", 2383, 2381);
-    this.output(id, "S5", 2380, 2370, "Search over 5,000 trails answers within 50 ms; checks passed on the final change.");
-    this.prHead(id, 2369, claude);
+    this.output(id, "S4", 2380, 2370, "Search over 5,000 trails answers within 50 ms; checks passed on the final change.");
+    this.prHead(id, 2369, change);
     this.openPr(id, 2368, 999);
     this.mergePr(id, 2300, 2299);
-  }
-
-  /** The parallel step becomes its candidates the way dispatch expands it (one per provider), recorded as a pipeline revision. */
-  private expandBestOf(id: string, stepId: string, m: number) {
-    const t = this.task(id);
-    const st = this.step(id, stepId);
-    const p = st.parallel;
-    if (!p || p.mode !== "best-of") throw new Error(`demo: ${id} ${stepId} is not a best-of step`);
-    const ids = [st.id, ...Array.from({ length: p.count - 1 }, (_, i) => `${st.id}-c${i + 2}`)];
-    const assign = (i: number): ModelSelection | null => {
-      const pv = p.providers?.length ? p.providers[i % p.providers.length] : undefined;
-      if (!pv || st.selection?.provider === pv) return st.selection;
-      return { provider: pv, model: "auto" };
-    };
-    st.copyOf = st.id;
-    if (p.providers?.length && !st.selection) st.selection = assign(0);
-    const copies: Step[] = ids.slice(1).map((cid, i) => {
-      const c: Step = { ...structuredClone(st), id: cid, purpose: `${st.purpose} (copy ${i + 2} of ${p.count})`, selection: assign(i + 1), revision: M.nextRevisionFor(this.s, t, cid), state: "pending", copyOf: st.id };
-      delete c.parallel;
-      return c;
-    });
-    t.steps.splice(t.steps.indexOf(st) + 1, 0, ...copies);
-    for (const d of t.steps) {
-      if (ids.includes(d.id)) continue;
-      if (d.dependsOn.includes(st.id)) d.dependsOn = [...new Set([...d.dependsOn, ...ids.slice(1)])];
-      const addCopies = (refs: Step["inputs"] | undefined) => refs?.flatMap((r) => (r.step === st.id ? [r, ...ids.slice(1).map((cid) => ({ step: cid, output: r.output }))] : [r]));
-      d.inputs = addCopies(d.inputs)!;
-      if (d.runIf) d.runIf = addCopies(d.runIf);
-    }
-    t.pipelineRev += 1;
-    t.pipelineHistory.push({ rev: t.pipelineRev, at: this.at(m), author: "lead", reason: `${st.id} runs as ${p.count} parallel candidates (best of)`, steps: t.steps.map(toDef) });
-    this.event(m, "lead", "pipeline", `Pipeline r${t.pipelineRev}: ${st.id} runs as ${p.count} parallel candidates (best of)`, id);
   }
 
   /** WT-007: designed and implemented; the UX review asks you about units; the code review is next (it starts when the service does). */
@@ -1022,6 +1102,7 @@ class DemoBuilder {
     const change = this.change(id, "S1", 110, 60, { sha: fakeSha("WT-005 S1"), paths: ["src/packing/rules.ts", "src/packing/rules.test.ts", "src/packing/suggest.ts", "src/packing/suggest.test.ts", "src/trip/NewTrip.tsx", "src/trip/weather.ts"], files: 6, additions: 167, deletions: 12 }, "Suggests a packing list from the trail length and the forecast for the trip day (+167 −12, 6 files)", "Rules live in packing/rules.ts; the forecast is the one already fetched for the trip.");
     this.checks(id, "C1", 59, 57);
     const review = this.dispatch(id, "S2", 56, { scope: { from: SIM_BASE, to: change.sha, paths: [...change.paths], total: change.paths.length } });
+    const security = this.dispatch(id, "SR1", 56);
     // WT-004.3: the lead added the second option and asked you to choose, because the choice changes what data is kept.
     this.revisePackingDecision();
     // The steering exchange: offline maps ahead of sharing; one task deferred, with Undo.
@@ -1033,6 +1114,7 @@ class DemoBuilder {
     });
     const set = this.s.steering[0];
     if (!set || !set.changes.some((c) => c.kind === "focus" && c.status === "applied") || !set.changes.some((c) => c.kind === "defer" && c.taskId === "WT-010" && c.status === "applied")) throw new Error("demo: the steering exchange was not applied");
+    this.complete(security, 36, [{ name: "findings", summary: "No security findings: the forecast is the one already fetched for the trip; no new network call.", findings: [] }]);
     this.complete(review, 35, [{ name: "findings", summary: "No findings: the rules are covered by tests for short, long, wet and cold trips.", findings: [], reviewedPaths: [...change.paths] }]);
     // You released the second trip-sharing part; it starts when a slot frees.
     this.s = M.startHeldTask(this.s, "WT-004.2", this.at(35));

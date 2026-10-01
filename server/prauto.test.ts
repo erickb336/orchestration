@@ -57,7 +57,7 @@ let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
 /** A task on the built-in "change" pipeline: implement, code review, repair if needed, verify. */
 const newTask = (title: string) =>
-  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
 const branches = () => remote("for-each-ref", "--format=%(refname)", "refs/heads/").split("\n").filter((r) => r.includes("orchestration/"));
 const events = (text: string) => st().events.filter((e) => e.message.includes(text));
 const adapter = (p: string) => (p === "codex" ? codex : claude);
@@ -86,6 +86,7 @@ const drive = async (ids: string[], script: Script = {}) => {
       const role = task(a.taskId).steps.find((x) => x.id === a.stepId)!.role;
       if (role === "coder") ad.finish(a.id, { write: script.write?.(a.taskId, next(`w:${a.taskId}`)) ?? [`${a.taskId}.txt`, `${a.taskId}\n`] });
       else if (role === "code_reviewer") ad.finish(a.id, { findings: script.findings?.(a.taskId, next(`r:${a.taskId}`)) ?? 0 });
+      else if (role === "security_reviewer") ad.finish(a.id, { findings: 0 }); // ORC-021: the security review beside each code review is clean here
       else ad.finish(a.id);
     }
     await tick();
@@ -254,7 +255,11 @@ describe("the independent review (scenarios 3 and 4)", () => {
     expect(assignment.prompt).toContain("+same provider line");
     // Its worktree is detached at exactly the commit under review.
     expect(execFileSync("git", ["-C", assignment.workspace.path, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(head);
+    // ORC-021: the security review beside it runs on the same provider, at the same commit; both must be clean.
+    const security = M.activeAttempts(st(), rv.id).find((a) => a.stepId === "SR1")!;
+    expect(security.snapshot).toMatchObject({ provider: "claude", source: "independence", reviewedSha: head });
     claude.finish(run.id, { findings: 0 });
+    claude.finish(security.id, { findings: 0 });
     await until("it merges", () => pr(id).phase === "merged");
     expect(task(id).integration!.landed!.review).toMatchObject({ ok: true, source: "dedicated", provider: "claude", forSha: head, taskId: rv.id });
     expect(reviewTasks(id)).toHaveLength(1);
@@ -276,7 +281,7 @@ describe("the independent review (scenarios 3 and 4)", () => {
     const rv = reviewTasks(id)[0];
     const run = M.activeAttempts(st(), rv.id)[0];
     expect(claude.runs.get(run.id)!.prompt).toContain("+round 3"); // the whole change against the base, as it stands
-    claude.finish(run.id, { findings: 0 });
+    for (const r of M.activeAttempts(st(), rv.id)) claude.finish(r.id, { findings: 0 }); // the code review and the security review beside it
     await until("it merges", () => pr(id).phase === "merged");
     expect(merges()).toHaveLength(1);
     expect(remote("show", "main:loop.txt")).toBe("round 3");
@@ -735,6 +740,7 @@ describe("service checks in pull-request mode (ORC-013 §6.9)", () => {
         const role = task(a.taskId).steps.find((x) => x.id === a.stepId)!.role;
         if (role === "coder") ad.finish(a.id, { write: script.write?.(a.taskId, next(`w:${a.taskId}`)) ?? [`${a.taskId}.txt`, `${a.taskId}\n`] });
         else if (role === "code_reviewer") ad.finish(a.id, { findings: script.findings?.(a.taskId, next(`r:${a.taskId}`)) ?? 0 });
+        else if (role === "security_reviewer") ad.finish(a.id, { findings: 0 });
         else ad.finish(a.id);
       }
       await tick();

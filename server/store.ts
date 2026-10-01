@@ -8,30 +8,32 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InvalidCommandError, runCommand } from "../src/domain/commands";
-import { INTERNAL_PATTERN_IDS, internalPattern } from "../src/domain/internalPatterns";
-import { captureOutcomes } from "../src/domain/outcomes";
-import { builtInCatalog, patternRef } from "../src/domain/patterns";
+import { internalFlow } from "../src/domain/internalFlows";
+import { builtInCatalog, flowRef } from "../src/domain/flows";
 import { toDef } from "../src/domain/pipeline";
 import { buildSeed } from "../src/domain/seed";
-import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type PatternRef, type RetiredTemplate, type State, type StepDef } from "../src/domain/types";
+import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type FlowRef, type State, type StepDef } from "../src/domain/types";
 import { V13_TEMPLATE_STEPS, V14_TEMPLATES, v14TemplateSteps } from "./legacyTemplates";
 
-export const STATE_FORMAT = 15;
+export const STATE_FORMAT = 16;
 
 export { V13_TEMPLATE_STEPS };
+
+/** The five ORC-016 catalog entries ORC-021 removed; a project default naming one becomes Change. */
+export const REMOVED_FLOW_IDS = ["change-cross-review", "feature-design-gate", "goal-plan-gate", "change-best-of-two", "change-lean"];
 
 /** Step lists compared in their normalised form, so key order and absent optionals do not count as edits. */
 const sameSteps = (a: StepDef[], b: StepDef[]) => JSON.stringify(a.map(toDef)) === JSON.stringify(b.map(toDef));
 
 /**
- * ORC-016: what a task from before patterns ran. Service-owned tasks name their internal pattern; every
+ * ORC-016: what a task from before flows ran. Service-owned tasks name their internal flow; every
  * other task is "legacy": the format-14 template its first pipeline revision names, or "custom".
  */
-export function legacyPatternRef(t: { reviewTarget?: unknown; checkTarget?: unknown; revertOf?: unknown; pipelineHistory?: { reason?: string }[] }): PatternRef {
+export function legacyFlowRef(t: { reviewTarget?: unknown; checkTarget?: unknown; revertOf?: unknown; pipelineHistory?: { reason?: string }[] }): FlowRef {
   const internal = t.reviewTarget ? "delivery-review" : t.checkTarget ? "delivery-checks" : t.revertOf ? "revert" : undefined;
   // No hash: the format-14 internal template may have been edited, and the task's purposes were rewritten by delivery (step 1 review, finding 5).
   if (internal) {
-    const { hash: _hash, ...ref } = patternRef(internalPattern(internal), "migration");
+    const { hash: _hash, ...ref } = flowRef(internalFlow(internal), "migration");
     return ref;
   }
   const reason = t.pipelineHistory?.[0]?.reason ?? "";
@@ -186,7 +188,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message });
     };
     // ORC-016: this reads the frozen format-14 templates, so the upgrade keeps working now that the live
-    // code has patterns instead of templates.
+    // code has flows instead of templates.
     for (const t of (project.templates ?? []) as { id: string; builtIn?: boolean; rev: number; steps: StepDef[]; description?: string }[]) {
       const legacy = V13_TEMPLATE_STEPS[t.id];
       if (!t.builtIn || !legacy) continue;
@@ -202,11 +204,12 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 14;
     return doc;
   },
-  // ORC-016: pipelines come from patterns. Custom templates and edited built-ins are retired into
-  // `retiredTemplates` (the server writes each once as a pattern file of yours at the next start, never
-  // overwriting); unedited built-ins are dropped, since the catalog provides them. Tasks are not touched
+  // ORC-016: pipelines come from the catalog. Custom templates and edited built-ins are retired (ORC-021
+  // dropped the export of retired templates as files: an edited or custom template is simply gone, and an
+  // event says so); unedited built-ins are dropped, since the catalog provides them. Tasks are not touched
   // (P9): no step, revision, history, pin or state changes, and a run active across the upgrade finishes
-  // normally. Each task records what it ran as a legacy or internal pattern reference.
+  // normally. Each task records what it ran as a legacy or internal reference, under the format-15 names;
+  // the 15 → 16 upgrade renames them.
   14: (doc) => {
     const project = doc.project as Record<string, unknown>;
     const now = new Date().toISOString();
@@ -215,23 +218,55 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
       events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message });
     };
-    const retired = (doc.retiredTemplates ??= []) as RetiredTemplate[];
     for (const t of (project.templates ?? []) as { id: string; name: string; description: string; steps: StepDef[] }[]) {
       const b = V14_TEMPLATES[t.id];
-      const internal = (INTERNAL_PATTERN_IDS as string[]).includes(t.id);
       const unedited = b && sameSteps(t.steps, b.steps) && t.name === b.name && t.description === b.description;
-      if (unedited) continue; // the catalog provides it; the service's own pipelines stay in code (step 1 review, finding 2)
-      retired.push({ id: t.id, name: t.name, description: t.description, steps: t.steps.map(toDef), kind: b ? "edited-built-in" : "custom", ...(internal ? { internal: true as const } : {}), retiredAt: now });
-      note(`Template "${t.name}" was retired: pipelines now come from patterns. It is saved as a pattern file of yours when the service starts${internal ? ", marked experimental: the service keeps its own copy of this pipeline" : ""}.`);
+      if (unedited) continue; // the built-in flows provide it; the service's own pipelines stay in code (step 1 review, finding 2)
+      note(`Template "${t.name}" was retired: pipelines now come from the built-in flows. Tasks that ran it keep their steps.`);
     }
     delete project.templates;
     project.defaultPatternId ??= "change";
-    doc.patterns = builtInCatalog(); // the server replaces it at start
     for (const t of (doc.tasks ?? []) as Record<string, unknown>[]) {
-      t.pattern ??= legacyPatternRef(t as Parameters<typeof legacyPatternRef>[0]);
+      t.pattern ??= legacyFlowRef(t as Parameters<typeof legacyFlowRef>[0]);
       t.patternSince ??= 0;
     }
     doc.version = 15;
+    return doc;
+  },
+  // ORC-021: "pattern" becomes "flow". Persisted fields are renamed (task.pattern → task.flow,
+  // task.patternSince → task.flowSince, pipelineHistory[].pattern → .flow, project.defaultPatternId →
+  // project.defaultFlowId, state.patterns → state.flows); task.outcome and retiredTemplates are dropped;
+  // a reference keeps only id, name, source, hash and chosenBy (the extends chain and the experiment flag
+  // are gone). Tasks that ran a removed catalog entry keep their steps and their recorded id and name;
+  // nothing about any pipeline changes. A default that named a removed entry or a personal file becomes "change".
+  15: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    const ref = (p: unknown): FlowRef | undefined => {
+      if (!p || typeof p !== "object") return undefined;
+      const { id, name, source, hash, chosenBy } = p as FlowRef;
+      return { id, name, source, ...(hash !== undefined ? { hash } : {}), chosenBy };
+    };
+    const stored = typeof project.defaultPatternId === "string" ? project.defaultPatternId : "change";
+    // ORC-021 review 2: personal flow files are gone too, so any id that is not one of the six becomes "change".
+    project.defaultFlowId = builtInCatalog().some((f) => f.id === stored) ? stored : "change";
+    delete project.defaultPatternId;
+    for (const t of (doc.tasks ?? []) as Record<string, unknown>[]) {
+      const flow = ref(t.pattern);
+      if (flow) t.flow = flow;
+      delete t.pattern;
+      t.flowSince = typeof t.patternSince === "number" ? t.patternSince : 0;
+      delete t.patternSince;
+      delete t.outcome;
+      for (const h of (t.pipelineHistory ?? []) as Record<string, unknown>[]) {
+        const applied = ref(h.pattern);
+        if (applied) h.flow = applied;
+        delete h.pattern;
+      }
+    }
+    doc.flows = builtInCatalog(); // the server replaces it at start
+    delete doc.patterns;
+    delete doc.retiredTemplates;
+    doc.version = 16;
     return doc;
   },
 };
@@ -432,8 +467,7 @@ export class Store {
         return { version: cur.version, replayed: false };
       }
       // Errors from here on are storage failures: they roll the whole transaction back.
-      // ORC-016 P11: a task that settled in this command gets its outcome record here, in the same transaction.
-      const version = this.persist(cur.version, cur.state, captureOutcomes(cur.state, outcome.state, now), now);
+      const version = this.persist(cur.version, cur.state, outcome.state, now);
       record.run(idempotencyKey, name, JSON.stringify(args ?? {}), now, version, outcome.result === undefined ? null : JSON.stringify(outcome.result), null, null);
       return { version, result: outcome.result, replayed: false };
     });
@@ -454,8 +488,7 @@ export class Store {
         if (!row || row.holder !== lease.holder || row.expires_at <= lease.nowMs) throw new LeaseLostError(lease.name);
       }
       const cur = this.load();
-      // ORC-016 P11: the other capture point; together with `command` these are the only writes.
-      const next = captureOutcomes(cur.state, fn(cur.state), now);
+      const next = fn(cur.state);
       const json = JSON.stringify(next);
       if (json === cur.json) return { version: cur.version, changed: false };
       return { version: this.persist(cur.version, cur.state, next, now), changed: true };

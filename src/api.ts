@@ -111,13 +111,6 @@ export interface CheckSuggestions {
   reason?: string;
 }
 
-/** ORC-016: body of POST /api/patterns/reload (`{}`): the server re-read the pattern files; the catalog itself arrives through the state. */
-export interface PatternsReloadResponse {
-  loadedAt: string;
-  patterns: number;
-  errors: number;
-}
-
 /** ORC-013: where the full (redacted) log of one check of one run is served from. */
 export function checkLogUrl(attemptId: string, checkId: string): string {
   return `/api/checks/log?run=${encodeURIComponent(attemptId)}&check=${encodeURIComponent(checkId)}`;

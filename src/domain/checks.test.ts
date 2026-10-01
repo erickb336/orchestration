@@ -113,7 +113,7 @@ describe("the user's settings (§9, Q1)", () => {
     let s = runCommand(s0, "setChecks", { config: input() }, at(1)).state;
     s = C.reportChecksHealth(s, { sandbox: "codex", status: "ready", detail: "ok", checkedAt: at(1) }, at(1));
     for (const t of s.tasks) t.hold = true;
-    const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(2));
+    const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(2));
     s = M.dispatchEligible(M.leadPromoteProposals(r.state, at(3)), at(3));
     const impl = running(s, r.newId)[0];
     s = M.reportCompletion(s, impl.id, [], at(4), [{ name: "change", summary: "done", ref: `${SHA} on b` }, { name: "handoff", summary: "h" }]);
@@ -165,13 +165,21 @@ function withChecks(over: Partial<ChecksConfig> = {}): { s: State; id: string } 
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
   s = { ...s, project: { ...s.project, checks: { ...cfg(over), rev: 1 }, checksHealth: { sandbox: "codex", status: "ready", detail: "ok", checkedAt: at(0) } } };
-  const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
+  const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
   s = M.dispatchEligible(M.leadPromoteProposals(r.state, at(1)), at(1));
   const impl = running(s, r.newId)[0];
   s = M.reportCompletion(s, impl.id, [], at(2), [{ name: "change", summary: "done", ref: `${SHA} on b` }, { name: "handoff", summary: "h" }]);
   s = M.dispatchEligible(s, at(3));
   return { s, id: r.newId };
 }
+
+/** ORC-021: the security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
+function securityClean(s: State, id: string, t: number): State {
+  let next = M.dispatchEligible(s, at(t));
+  for (const a of running(next, id)) if (step(next, id, a.stepId).role === "security_reviewer") next = M.reportCompletion(next, a.id, [], at(t), [{ name: "findings", summary: "no security findings", findings: [], openFindings: 0 }]);
+  return next;
+}
+
 const finishRun = (s: State, id: string, t: number, rec: CheckRunRecord) => {
   const a = running(s, id).find((x) => x.snapshot.provider === "service")!;
   const findings = C.findingsFromRun(rec, a.snapshot.checks!.commands);
@@ -182,7 +190,7 @@ describe("dispatch, target and reuse (§6.4)", () => {
   it("checks off: every Checks step skips with the reason; on with no check command: the same; on: C1 runs on the change's commit", () => {
     let s = buildSeed(T0, { inFlightRuns: false });
     for (const t of s.tasks) t.hold = true;
-    const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
+    const r = M.createTask(s, { title: "T", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
     s = M.dispatchEligible(M.leadPromoteProposals(r.state, at(1)), at(1));
     s = M.reportCompletion(s, running(s, r.newId)[0].id, [], at(2), [{ name: "change", summary: "done", ref: `${SHA} on b` }, { name: "handoff", summary: "h" }]);
     const off = M.dispatchEligible(s, at(3));
@@ -217,7 +225,7 @@ describe("dispatch, target and reuse (§6.4)", () => {
 
   it("at most maxConcurrent check runs at once; service runs do not count against the worker limit", () => {
     let { s } = withChecks();
-    const r2 = M.createTask(s, { title: "T2", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 2, holdBeforeStart: false, patternId: "change" }, at(4));
+    const r2 = M.createTask(s, { title: "T2", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 2, holdBeforeStart: false, flowId: "change" }, at(4));
     s = M.dispatchEligible(M.leadPromoteProposals(r2.state, at(5)), at(5));
     s = M.reportCompletion(s, running(s, r2.newId)[0].id, [], at(6), [{ name: "change", summary: "done", ref: `${SHA2} on b` }, { name: "handoff", summary: "h" }]);
     s = M.dispatchEligible(s, at(7));
@@ -241,6 +249,7 @@ describe("dispatch, target and reuse (§6.4)", () => {
     expect(review.stepId).toBe("S2");
     s = M.reportRunContext(s, review.id, { scope: { from: SHA2, to: SHA, paths: ["a"], total: 1 } });
     s = M.reportCompletion(s, review.id, [], at(6), [{ name: "findings", summary: "clean", findings: [], reviewedPaths: ["a"] }]);
+    s = securityClean(s, id, 6);
     s = M.dispatchEligible(s, at(7));
     expect(step(s, id, "S3").state).toBe("skipped");
     expect(step(s, id, "C2").state).toBe("done");
@@ -301,6 +310,7 @@ describe("findings from a run (§6.7)", () => {
     const review = running(s, id)[0];
     s = M.reportRunContext(s, review.id, { scope: { from: SHA2, to: SHA, paths: ["a"], total: 1 } });
     s = M.reportCompletion(s, review.id, [], at(6), [{ name: "findings", summary: "clean", findings: [], reviewedPaths: ["a"] }]);
+    s = securityClean(s, id, 6);
     s = M.dispatchEligible(s, at(7));
     const repair = running(s, id)[0];
     expect(repair.stepId).toBe("S3");
@@ -321,6 +331,7 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
     const review = running(s, id)[0];
     s = M.reportRunContext(s, review.id, { scope: { from: SHA2, to: SHA, paths: ["a"], total: 1 } });
     s = M.reportCompletion(s, review.id, [], at(6), [{ name: "findings", summary: "clean", findings: [], reviewedPaths: ["a"] }]);
+    s = securityClean(s, id, 6);
     // The repair produces the same commit (nothing changed), so the loop's next check reuses nothing and fails again; run the loop out.
     for (let i = 0; i < 12 && task(s, id).lifecycle === "active" && !task(s, id).steps.some((x) => x.state === "blocked"); i++) {
       s = M.dispatchEligible(s, at(10 + i));
@@ -328,7 +339,7 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
         const st = step(s, id, a.stepId);
         if (st.role === "coder") s = M.reportCompletion(s, a.id, [], at(10 + i), [{ name: "change", summary: "same", ref: `${SHA} on b` }]);
         else if (st.role === "checks") s = finishRun(s, id, 10 + i, failed(SHA));
-        else if (st.role === "code_reviewer") {
+        else if (st.role === "code_reviewer" || st.role === "security_reviewer") {
           s = M.reportRunContext(s, a.id, { scope: { from: SHA2, to: SHA, paths: ["a"], total: 1 } });
           s = M.reportCompletion(s, a.id, [], at(10 + i), [{ name: "findings", summary: "clean", findings: [], reviewedPaths: ["a"] }]);
         }
@@ -403,7 +414,12 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
     expect(r1.decisions.find((x) => x.id === d.id)).toMatchObject({ status: "fix", decidedBy: "lead" });
     const t1 = task(r1, id);
     expect(t1.checkRounds).toBe(1);
-    expect(t1.steps.map((x) => x.id)).toEqual(expect.arrayContaining(["C2-r1-fix", "C2-r1-review", "C2-r1-checks"]));
+    expect(t1.steps.map((x) => x.id)).toEqual(expect.arrayContaining(["C2-r1-fix", "C2-r1-review", "C2-r1-security", "C2-r1-checks"]));
+    // ORC-021: the round's security review runs beside its code review, and the round's checks wait for both.
+    const sec = t1.steps.find((x) => x.id === "C2-r1-security")!;
+    expect(sec.role).toBe("security_reviewer");
+    expect(sec.dependsOn).toEqual(["C2-r1-fix"]);
+    expect(t1.steps.find((x) => x.id === "C2-r1-checks")!.dependsOn).toEqual(["C2-r1-review", "C2-r1-security"]);
     const fix = step(r1, id, "C2-r1-fix");
     expect(fix).toMatchObject({ role: "coder", dependsOn: ["C2"], inputs: expect.arrayContaining([{ step: "C2", output: "final" }]) });
     expect(step(r1, id, "C2-r1-checks")).toMatchObject({ role: "checks", checks: { onFail: "block" }, inputs: expect.arrayContaining([{ step: "C2-r1-fix", output: "change" }]) });
@@ -416,9 +432,12 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
     expect(running(r1, id)[0].stepId).toBe("C2-r1-fix");
     r1 = M.reportCompletion(r1, running(r1, id)[0].id, [], at(53), [{ name: "change", summary: "f", ref: `${SHA2} on b` }, { name: "handoff", summary: "h" }]);
     r1 = M.dispatchEligible(r1, at(54));
-    const rv = running(r1, id)[0];
-    r1 = M.reportRunContext(r1, rv.id, { scope: { from: SHA, to: SHA2, paths: ["a"], total: 1 } });
-    r1 = M.reportCompletion(r1, rv.id, [], at(55), [{ name: "findings", summary: "clean", findings: [], reviewedPaths: ["a"] }]);
+    // The round's code review and security review run side by side (ORC-021); both finish clean.
+    expect(running(r1, id).map((a) => a.stepId).sort()).toEqual(["C2-r1-review", "C2-r1-security"]);
+    for (const rv of running(r1, id)) {
+      r1 = M.reportRunContext(r1, rv.id, { scope: { from: SHA, to: SHA2, paths: ["a"], total: 1 } });
+      r1 = M.reportCompletion(r1, rv.id, [], at(55), [{ name: "findings", summary: "clean", findings: [], reviewedPaths: ["a"] }]);
+    }
     r1 = M.dispatchEligible(r1, at(56));
     expect(running(r1, id)[0]).toMatchObject({ stepId: "C2-r1-checks", snapshot: { checks: { target: { ref: SHA2 } } } });
     r1 = finishRun(r1, id, 57, failed(SHA2));
@@ -481,8 +500,8 @@ describe("evidence and the merge gate (§6.9)", () => {
     expect(ck.steps.map((x) => x.role)).toEqual(["checks"]);
     expect(ck.specs[0].author).toBe("system");
     // ORC-016: the dedicated check pipeline is the service's own, recorded as such.
-    expect(ck.pattern).toMatchObject({ id: "delivery-checks", source: "internal", chosenBy: "service" });
-    expect(ck.patternSince).toBe(1);
+    expect(ck.flow).toMatchObject({ id: "delivery-checks", source: "internal", chosenBy: "service" });
+    expect(ck.flowSince).toBe(1);
     expect(D.ensureChecks(started, "EX-006", at(4)).tasks.filter((t) => t.checkTarget).length).toBe(1);
     expect(item(started)).toMatchObject({ state: "waiting", detail: expect.stringMatching(/EX-006-CK1 runs them/) });
     expect(M.openLeadProposals(started).some((t) => t.checkTarget)).toBe(false);

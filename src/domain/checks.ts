@@ -508,14 +508,17 @@ export function addCheckRound(s: State, t: Task, st: Step, now: string, actor: "
   const k = rounds + 1;
   const fixId = `${st.id}-r${k}-fix`;
   const reviewId = `${st.id}-r${k}-review`;
+  const securityId = `${st.id}-r${k}-security`;
   const checksId = `${st.id}-r${k}-checks`;
-  if (t.steps.some((x) => x.id === fixId || x.id === reviewId || x.id === checksId)) return `Round ${k} of ${st.id} already exists.`;
+  if (t.steps.some((x) => x.id === fixId || x.id === reviewId || x.id === securityId || x.id === checksId)) return `Round ${k} of ${st.id} already exists.`;
   const codeInputs = st.inputs.filter((r) => t.steps.find((x) => x.id === r.step)?.outputs.find((o) => o.name === r.output)?.kind === "code-change");
   const results = { step: st.id, output: out.name };
   const defs: StepDef[] = [
     { id: fixId, purpose: `Fix the failing checks (round ${k}): ${failing}`, role: "coder", dependsOn: [st.id], inputs: [...codeInputs, results], outputs: [{ name: "change", kind: "code-change" }, { name: "handoff", kind: "handoff" }] },
     { id: reviewId, purpose: `Code review of the fix (round ${k})`, role: "code_reviewer", dependsOn: [fixId], inputs: [{ step: fixId, output: "change" }, { step: fixId, output: "handoff" }, results], outputs: [{ name: "findings", kind: "review-findings" }] },
-    { id: checksId, purpose: `Final checks (round ${k})`, role: "checks", dependsOn: [reviewId], inputs: [...codeInputs, { step: fixId, output: "change" }], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "block" } },
+    // ORC-021: a security review beside every code review, the check rounds included.
+    { id: securityId, purpose: `Security review of the fix (round ${k})`, role: "security_reviewer", dependsOn: [fixId], inputs: [{ step: fixId, output: "change" }, { step: fixId, output: "handoff" }, results], outputs: [{ name: "findings", kind: "review-findings" }] },
+    { id: checksId, purpose: `Final checks (round ${k})`, role: "checks", dependsOn: [reviewId, securityId], inputs: [...codeInputs, { step: fixId, output: "change" }], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "block" } },
   ];
   const before = structuredClone(t.steps);
   // Only what comes after the blocked step is rewired (the steps that depend on it, directly or not).

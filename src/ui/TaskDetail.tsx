@@ -13,8 +13,8 @@ import { CheckResults, CoverageChip, DecisionControls, DecisionQueue, FindingsLi
 import { SpecEditor } from "./SpecEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
-import { PatternPicker } from "./PatternPicker";
-import { PIPELINE_CHANGED_MESSAGE, changeConsequences, earlierPatternLabel, hashTitle, patternLineParts, patternRefDetail, revisionPatternLabel, samePattern } from "./patternView";
+import { FlowPicker } from "./FlowPicker";
+import { PIPELINE_CHANGED_MESSAGE, changeConsequences, earlierFlowLabel, flowLineParts, revisionFlowLabel, sameFlow } from "./flowView";
 
 export function TaskDetail({ id }: { id: string }) {
   const { state } = useStore();
@@ -595,83 +595,69 @@ function DetailsCard({ task }: { task: Task }) {
   );
 }
 
-/** ORC-016: "Pattern: Change (a1b2c3d4, built-in)", or what a task from before patterns ran. The title holds the full hash and the files in the `extends` chain. */
-function PatternLine({ task }: { task: Task }) {
-  const p = task.pattern;
-  const detail = patternRefDetail(p);
-  const line = patternLineParts(p);
+/** ORC-021: "Flow: Change", or what a task from before flows ran ("From before flows: Feature", "Custom pipeline"). */
+function FlowLine({ task }: { task: Task }) {
+  const line = flowLineParts(task.flow);
   return (
     <div className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }}>
       <span>
         {line.prefix}
         <strong>{line.name}</strong>
-        {detail && (
-          <>
-            {" "}
-            <span className="muted" title={hashTitle(p)}>
-              {detail}
-            </span>
-          </>
-        )}
       </span>
-      {p.experimental && (
-        <span className="chip" title="This pattern is marked experimental; you chose it">
-          experiment
-        </span>
-      )}
     </div>
   );
 }
 
 /**
- * ORC-016: run a task on another pattern. The button is shown while the task is open and not service-owned;
+ * ORC-021: run a task on another flow. The button is shown while the task is open and not service-owned;
  * it is disabled, with the reason, while the task is running or not yet confirmed Paused. The panel shows the
  * picker, what the change does (which steps start over, which pins stay, what is closed) and an optional note.
  * The pipeline revision is the one the panel was opened on; if it moves meanwhile, the panel asks you to
  * review again instead of sending a stale request.
  */
-function ChangePattern({ state, task }: { state: State; task: Task }) {
+function ChangeFlow({ state, task }: { state: State; task: Task }) {
   const { send, disabled } = useStore();
   const [open, setOpen] = useState(false);
   const [openedRev, setOpenedRev] = useState(task.pipelineRev);
-  const [patternId, setPatternId] = useState("");
+  const [flowId, setFlowId] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   if (task.reviewTarget || task.checkTarget || task.revertOf || task.deliverInto) return null;
-  const choices = state.patterns.patterns.filter((p) => !(task.parentTaskId && p.flags.breaksDown));
-  const blocker = M.patternChangeBlocker(state, task);
+  // A child task may not take a flow that breaks down again.
+  const choices = state.flows.filter((p) => !(task.parentTaskId && p.breaksDown));
+  const blocker = M.flowChangeBlocker(state, task);
   if (!open) {
     return (
       <div className="row" style={{ gap: "0.4rem", fontSize: "0.85rem", marginBottom: "0.4rem" }}>
         <button
           className="small"
           disabled={disabled || !!blocker || !choices.length}
-          title={blocker ?? "Run this task on another pattern; the pipeline starts over and work done so far stays on the record"}
+          title={blocker ?? "Run this task on another flow; the pipeline starts over and work done so far stays on the record"}
           onClick={() => {
             setOpenedRev(task.pipelineRev);
-            setPatternId("");
+            setFlowId("");
             setNote("");
             setOpen(true);
           }}
         >
-          Change pattern
+          Change flow
         </button>
         {blocker && <span className="muted">{blocker}</span>}
       </div>
     );
   }
-  const chosen = choices.find((p) => p.id === patternId);
-  const preview = chosen ? M.patternChangePreview(state, task, chosen) : undefined;
-  const same = chosen ? samePattern(task.pattern, chosen) : false;
+  const chosen = choices.find((p) => p.id === flowId);
+  const preview = chosen ? M.flowChangePreview(state, task, chosen) : undefined;
+  const same = chosen ? sameFlow(task.flow, chosen) : false;
   const moved = task.pipelineRev !== openedRev;
   const canUse = !!chosen && !!preview?.allowed && !same && !moved && !busy && !disabled;
   return (
-    <div className="pattern-panel" role="group" aria-labelledby="chg-pat-h">
-      <h3 id="chg-pat-h" style={{ marginBottom: "0.3rem" }}>
-        Change pattern
+    <div className="flow-panel" role="group" aria-labelledby="chg-flow-h">
+      <h3 id="chg-flow-h" style={{ marginBottom: "0.3rem" }}>
+        Change flow
       </h3>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        The pipeline starts over from the pattern you choose. Work done so far stays on the record, labelled "earlier pattern", and is never used again. A provider or model pin stays on a step with the same id and role.
+        The pipeline starts over from the flow you choose. Work done so far stays on the record, labelled "earlier flow", and is never used again. A provider or model pin stays on a step with the same id and role.
         {task.hold ? " The task stays paused until you resume it." : ""}
       </p>
       {moved && (
@@ -682,7 +668,7 @@ function ChangePattern({ state, task }: { state: State; task: Task }) {
           </button>
         </div>
       )}
-      <PatternPicker state={state} patterns={choices} value={patternId} onChange={setPatternId} label="New pattern" disabled={disabled || busy} />
+      <FlowPicker flows={choices} value={flowId} onChange={setFlowId} label="New flow" disabled={disabled || busy} />
       {chosen &&
         (same ? (
           <p className="muted" style={{ fontSize: "0.85rem" }}>
@@ -707,12 +693,12 @@ function ChangePattern({ state, task }: { state: State; task: Task }) {
           disabled={!canUse}
           onClick={async () => {
             setBusy(true);
-            const r = await send("changePattern", { taskId: task.id, expectedRev: openedRev, patternId, note: note.trim() });
+            const r = await send("changeFlow", { taskId: task.id, expectedRev: openedRev, flowId, note: note.trim() });
             setBusy(false);
             if (r.ok) setOpen(false);
           }}
         >
-          Use {chosen?.name ?? "pattern"}
+          Use {chosen?.name ?? "flow"}
         </button>
         <button disabled={busy} onClick={() => setOpen(false)}>
           Cancel
@@ -918,10 +904,10 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
           <span className="chip">pipeline r{task.pipelineRev}</span>
         </span>
       </div>
-      <PatternLine task={task} />
-      {open && <ChangePattern state={state} task={task} />}
+      <FlowLine task={task} />
+      {open && <ChangeFlow state={state} task={task} />}
       <p className="muted small" style={{ marginBottom: "0.3rem" }}>
-        The pipeline comes from the pattern; built-in patterns change through commits, and yours live in {state.patterns.localDir || "the patterns directory"}.
+        The pipeline comes from the flow; the six flows live in the repository&apos;s flows/ folder and change through commits.
       </p>
       <details className="how">
         <summary>How this works</summary>
@@ -984,6 +970,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
           <summary>Task role overrides</summary>
           <p className="muted" style={{ fontSize: "0.85rem" }}>
             Apply to every unpinned step of this role in this task.
+            {usedRoles.includes("security_reviewer") ? " The security reviewer has its own row: an override of the code reviewer does not change it." : ""}
           </p>
           <dl className="kv">
             {ROLES.filter((r) => usedRoles.includes(r)).map((role) => (
@@ -995,7 +982,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                     label={`Task override for ${ROLE_LABEL[role]}`}
                     value={task.roleOverrides[role] ?? null}
                     allowInherit
-                    inheritLabel="Project default"
+                    inheritLabel={role === "security_reviewer" && !state.project.roleDefaults.security_reviewer ? "Project default (the code reviewer's)" : "Project default"}
                     disabled={disabled}
                     onChange={(v) => void send("setTaskRoleOverride", { taskId: task.id, role, selection: v })}
                   />
@@ -1015,11 +1002,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                 <span className="actor">{p.author}</span>
                 <span>
                   {p.reason}{" "}
-                  {revisionPatternLabel(p) && (
-                    <span className="chip" title={hashTitle(p.pattern!)}>
-                      {revisionPatternLabel(p)}
-                    </span>
-                  )}{" "}
+                  {revisionFlowLabel(p) && <span className="chip">{revisionFlowLabel(p)}</span>}{" "}
                   <span className="muted">· {p.steps.length} steps · {fmtTime(p.at)}</span>
                 </span>
               </li>
@@ -1125,8 +1108,8 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
           const latest = M.latestArtifact(state, task, a.stepId, a.name);
           const used = consumers(a.id);
           const edited = a.author === "user";
-          // ORC-016: work from before the task's pattern changed is the record; it is never edited or consumed again.
-          const earlier = M.fromEarlierPattern(state, task, a);
+          // ORC-016: work from before the task's flow changed is the record; it is never edited or consumed again.
+          const earlier = M.fromEarlierFlow(state, task, a);
           return (
             <li key={a.id} className="artifact-row">
               <span className="mono">
@@ -1136,8 +1119,8 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                 <span className="chip">{a.kind}</span> {edited && <span className="chip edited">edited by you</span>}{" "}
                 {earlier && (
                   <>
-                    <span className="chip" title="Made before the task's pattern changed; kept for the record, not used by the new steps and not editable">
-                      {earlierPatternLabel(task, M.artifactPipelineRev(state, a))}
+                    <span className="chip" title="Made before the task's flow changed; kept for the record, not used by the new steps and not editable">
+                      {earlierFlowLabel(task, M.artifactPipelineRev(state, a))}
                     </span>{" "}
                   </>
                 )}
@@ -1276,7 +1259,7 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
           <span>Work items (each becomes a child task)</span>
           <textarea className="mono" style={{ minHeight: "10rem" }} value={items} onChange={(e) => setItems(e.target.value)} aria-invalid={parsedItems === null} />
           <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
-            A JSON list of {`{ "title", "outcome", "approach", "acceptance": [...], "patternId", "priority", "dependsOn": [index] }`}.
+            A JSON list of {`{ "title", "outcome", "approach", "acceptance": [...], "flowId", "priority", "dependsOn": [index] }`}.
             {task.pendingBreakdowns?.length ? " Child tasks are created from this list when you resume." : ""}
           </span>
           {parsedItems === null && <span style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>Not a valid JSON list.</span>}
@@ -1564,9 +1547,9 @@ function ChildLink({ state, child }: { state: State; child: Task }) {
 /** Tasks created by this task's breakdown steps. */
 function ChildTasksCard({ state, task }: { state: State; task: Task }) {
   const all = M.childTasks(state, task);
-  // ORC-016: children of a breakdown made under an earlier pattern stay listed, labelled; the new steps never wait for or reuse them.
-  const children = all.filter((c) => !M.childFromEarlierPattern(state, task, c));
-  const earlier = all.filter((c) => M.childFromEarlierPattern(state, task, c));
+  // ORC-016: children of a breakdown made under an earlier flow stay listed, labelled; the new steps never wait for or reuse them.
+  const children = all.filter((c) => !M.childFromEarlierFlow(state, task, c));
+  const earlier = all.filter((c) => M.childFromEarlierFlow(state, task, c));
   const plansBreakdown = task.steps.some((st) => st.outputs.some((o) => o.kind === "breakdown"));
   if (!all.length && !plansBreakdown) return null;
   const finished = children.filter(isSettledTask);
@@ -1582,7 +1565,7 @@ function ChildTasksCard({ state, task }: { state: State; task: Task }) {
         )}
       </div>
       {!children.length ? (
-        <p className="muted">None yet{earlier.length ? " under the current pattern" : ""}. When a breakdown step completes, each item it lists becomes a child task here.</p>
+        <p className="muted">None yet{earlier.length ? " under the current flow" : ""}. When a breakdown step completes, each item it lists becomes a child task here.</p>
       ) : (
         <ul className="plain stack">
           {children.map((c) => (
@@ -1595,17 +1578,17 @@ function ChildTasksCard({ state, task }: { state: State; task: Task }) {
       {earlier.length > 0 && (
         <details style={{ marginTop: "0.5rem" }}>
           <summary>
-            From an earlier pattern ({earlier.length})
+            From an earlier flow ({earlier.length})
           </summary>
           <p className="muted" style={{ fontSize: "0.85rem", margin: "0.3rem 0" }}>
-            Created by a breakdown before this task's pattern changed. They stay on the record; the current steps do not wait for them or plan from them.
+            Created by a breakdown before this task's flow changed. They stay on the record; the current steps do not wait for them or plan from them.
           </p>
           <ul className="plain stack">
             {earlier.map((c) => (
               <li key={c.id}>
                 <ChildLink state={state} child={c} />{" "}
-                <span className="chip" title="Its breakdown was made under a pattern this task has since left">
-                  from an earlier pattern
+                <span className="chip" title="Its breakdown was made under a flow this task has since left">
+                  from an earlier flow
                 </span>
               </li>
             ))}

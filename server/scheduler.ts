@@ -6,7 +6,7 @@
 // Adapters run asynchronously and emit events into a queue; each cycle drains the queue and applies
 // everything in one lease-checked transaction, so state changes stay serialized.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import * as C from "../src/domain/checks";
 import * as D from "../src/domain/delivery";
@@ -89,6 +89,9 @@ interface HealthEvent {
   startedAt: string;
 }
 type QueueEvent = AdapterEvent | ContextEvent | HealthEvent;
+
+/** A simulated head commit: "sim" and 9 hex digits, short enough to show whole where commits are cut to 12 characters. */
+export const simSha = (key: string) => `sim${createHash("sha256").update(key).digest("hex").slice(0, 9)}`;
 
 export class Scheduler {
   readonly holder = randomUUID();
@@ -525,8 +528,8 @@ export class Scheduler {
       const n = (t.integration?.pr?.n ?? 0) + 1;
       if (!this.workspaces) {
         const none = { files: 0, additions: 0, deletions: 0, paths: [], protectedHits: [], workflowHits: [] };
-        if (target) this.store.update((s) => D.reportRepairHead(s, t.id, { n: target.pr.n, sha: `sim-${target.task.id}-${target.pr.n}-fix-${t.id}`, baseSha: "sim-base", simulated: true, changed: none, descends: true }, now), now, lease);
-        else this.store.update((s) => D.reportPrHead(s, t.id, { n, sha: `sim-${t.id}-${n}`, baseSha: "sim-base", simulated: true, changed: none }, now), now, lease);
+        if (target) this.store.update((s) => D.reportRepairHead(s, t.id, { n: target.pr.n, sha: simSha(`${target.task.id}-${target.pr.n}-fix-${t.id}`), baseSha: "sim-base", simulated: true, changed: none, descends: true }, now), now, lease);
+        else this.store.update((s) => D.reportPrHead(s, t.id, { n, sha: simSha(`${t.id}-${n}`), baseSha: "sim-base", simulated: true, changed: none }, now), now, lease);
         return;
       }
       if (state.project.sample || !this.repoUsable(state.project.repoPath, nowMs)) return;

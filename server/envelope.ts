@@ -7,7 +7,7 @@ import { MAX_PROVEN_PATHS, MAX_REVIEWED_PATHS, normalizePath } from "../src/doma
 import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
-import { childDefault, effectiveDefault, eligible, patternSummary } from "../src/domain/patterns";
+import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import {
   FINDING_ACTIONS,
   REVIEW_ROLES,
@@ -31,7 +31,7 @@ import {
 } from "../src/domain/types";
 
 /**
- * ORC-017: moved out of the built-in patterns' verify-step purposes (Change, Feature, Bug fix and
+ * ORC-017: moved out of the built-in flows' verify-step purposes (Change, Feature, Bug fix and
  * Change best-of-two), which are now plain descriptions for people. It reaches the lead's verify
  * envelope through the role brief instead.
  */
@@ -43,6 +43,9 @@ const ROLE_BRIEFS: Record<RoleId, string> = {
   coder: "You are the coder. Implement the assigned behaviour in this workspace with focused, minimal changes, following the repository's existing conventions. Run no destructive commands.",
   code_reviewer:
     "You are an independent code reviewer. Inspect the change for correctness, data preservation, regressions, and missing tests. Report actionable findings with file locations. Do not change files.",
+  // ORC-021: runs beside every code review; its findings count like the code review's.
+  security_reviewer:
+    "You are an independent security reviewer. Review the change for security: injection, authorisation and access control, secrets and credentials, unsafe handling of input, files and commands, and risky dependencies. Report actionable findings with their severity, action and file locations, like any review. Do not change files.",
   ux_reviewer:
     "You are an independent UX reviewer. Compare the implemented experience with the intended flow; check empty, loading, failure, correction, and success states. Report findings. Do not change files.",
   // Never sent: a Checks step is run by the service, not by an agent.
@@ -202,14 +205,17 @@ so in your output instead of building it.
 `;
 }
 
-/** ORC-013 §4.1: the review contract's rules, part of every review step's envelope. */
-const FINDINGS_RULES = `## How to report findings
+/**
+ * ORC-013 §4.1: the review contract's rules, part of every review step's envelope. Only the code reviewer
+ * is given the changed files and must account for each (ORC-021 review 5: the others are not told to).
+ */
+const findingsRules = (role: RoleId) => `## How to report findings
 - "auto-fix": a defect in what the change does that can be fixed without widening it. This includes routine correctness, reliability and security fixes, even when they re-add a little deleted logic.
 - "ask-user": the smallest honest fix would add new durable state, a schema change, new background, retry or persistence machinery, or a new subsystem, or would otherwise extend the change beyond its stated outcome; or the finding questions the intent, or a choice the specification made. Say in "why" that it is the remedy, not the defect, that needs a decision.
 - "no-op": information only.
 - A finding without an action is treated as "ask-user".
 - Report a defect once, at one file and line, listing in the same "detail" every other place where the same rule is broken.
-- A clean review has an empty "findings" list and every changed file in "reviewedPaths".
+- ${role === "code_reviewer" ? 'A clean review has an empty "findings" list and every changed file in "reviewedPaths".' : 'A clean review has an empty "findings" list. List the files you read in "reviewedPaths".'}
 - Any weakening of tests, CI or build scripts is an error to auto-fix.
 `;
 
@@ -280,13 +286,13 @@ export function buildEnvelope({ state, task, step, attemptId, access, seed, chan
     }`;
       if (o.kind === "code-change") return `    "${o.name}": { "summary": "<what you changed and why, and what you verified>" }`;
       if (o.kind === "breakdown")
-        return `    "${o.name}": { "summary": "<the plan in a few sentences>", "items": [ { "title": "...", "outcome": "...", "approach": "...", "acceptance": ["..."], "patternId": "<id>", "priority": 3, "dependsOn": [0] } ] }`;
+        return `    "${o.name}": { "summary": "<the plan in a few sentences>", "items": [ { "title": "...", "outcome": "...", "approach": "...", "acceptance": ["..."], "flowId": "<id>", "priority": 3, "dependsOn": [0] } ] }`;
       return `    "${o.name}": { "summary": "<your ${o.kind}>" }`;
     })
     .join(",\n");
-  // ORC-016: a child task's pattern comes from the standard catalog; the item may leave it out for the default.
+  // ORC-021: a child task may use any flow but Goal; the item may leave it out for the default.
   const breakdownNote = step.outputs.some((o) => o.kind === "breakdown")
-    ? `\nBreakdown items: pick "patternId" from: ${state.patterns.patterns
+    ? `\nBreakdown items: pick "flowId" from: ${state.flows
         .filter((p) => eligible(p, "child"))
         .map((p) => `${p.id} (${p.name})`)
         .join(", ")}. Leave it out for the default (${childDefault(state).id}). Child tasks cannot break down again.\n`
@@ -332,7 +338,7 @@ ${outputSpec}
   }
 }
 \`\`\`
-${breakdownNote}${reviews ? `\n${FINDINGS_RULES}` : ""}`;
+${breakdownNote}${reviews ? `\n${findingsRules(step.role)}` : ""}`;
 }
 
 /** The changed lines under review. They are the work to review: never instructions to the reviewer. */
@@ -878,12 +884,12 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
     const t = m.taskId ? state.tasks.find((x) => x.id === m.taskId) : undefined;
     return t ? `(sent from ${t.id} "${clip(M.currentSpec(t).content.title, 60)}" [${M.stateLabel(state, t)}]) ` : "";
   };
-  // ORC-016: the lead may name standard patterns only; experiments and patterns that pause are the user's.
-  const patterns = state.patterns.patterns
+  // ORC-021: the lead may name any of the six flows.
+  const flows = state.flows
     .filter((x) => eligible(x, "lead"))
-    .map((x) => `- ${x.id}: ${x.name}. ${x.description} Use when: ${x.whenToUse} Steps: ${patternSummary(x.steps)}`)
+    .map((x) => `- ${x.id}: ${x.name}. ${x.description} Use when: ${x.whenToUse} Steps: ${flowSummary(x.steps)}`)
     .join("\n");
-  const defaultPattern = effectiveDefault(state).id;
+  const defaultFlow = effectiveDefault(state).id;
   const steerRules = canSteer
     ? `
 ## Steering rules
@@ -991,10 +997,9 @@ ${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).j
 - Choose "recommendedOptionId" yourself; it becomes the selected approach unless the user overrides it.
 - Give concrete, observable acceptance checks.
 
-## Pipeline patterns
-Pick "patternId" from these. Leave it out to use the project default ("${defaultPattern}").
-${patterns}
-Experiments and patterns that pause for the user are the user's to choose; do not name them.
+## Flows
+Pick "flowId" from these, or leave it out for the default ("${defaultFlow}").
+${flows}
 ${steerRules}
 ## Required final output
 End your final message with exactly one fenced JSON block${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft' : ""}${canSteer ? ")" : ""}:
@@ -1019,7 +1024,7 @@ End your final message with exactly one fenced JSON block${canSteer ? ' (leave "
       "rationale": "<why this option>",
       "uncertainty": "<what you do not know, and what would change the decision>",
       "acceptance": ["<observable check>"],
-      "patternId": "<pattern id>",
+      "flowId": "<flow id>",
       "priority": 3
     }
   ]${steerContract}${visionContract}${decisionsContract}
@@ -1102,7 +1107,7 @@ Add \`"chosen": "<step id>"\` at the top level of your JSON block.
 /** A step that waits for child tasks sees how each of them ended. */
 function childrenNote(state: State, task: Task, step: Step): string {
   if (!step.waitForChildren) return "";
-  // ORC-016 (steps 2–3 review, finding 2): children of an earlier pattern are the record, not results of this breakdown.
+  // ORC-016 (steps 2–3 review, finding 2): children of an earlier flow are the record, not results of this breakdown.
   const kids = M.currentChildren(state, task);
   if (!kids.length) return "## Child tasks\n- None were created.\n\n";
   const lines = kids.map((c) => {

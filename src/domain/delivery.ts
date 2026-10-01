@@ -8,7 +8,7 @@ import * as C from "./checks";
 import { MAX_PROVEN_PATHS, coverageCounts } from "./coverage";
 import * as F from "./findings";
 import * as M from "./model";
-import { internalPattern, patternHash, patternRef, servicePattern } from "./patterns";
+import { internalFlow, flowHash, flowRef, serviceFlow } from "./flows";
 import { instantiate, toDef } from "./pipeline";
 import {
   ControlError,
@@ -20,7 +20,7 @@ import {
   type LandedFlag,
   type PostureItem,
   type PrAttentionCode,
-  type PatternRef,
+  type FlowRef,
   type PrDelivery,
   type PrDeliveryConfig,
   type ChangeAuthor,
@@ -283,29 +283,29 @@ export function sendBackLanded(state: State, a: { taskId: string; kind: "fix" | 
   const c12 = sha12(landed.commit);
   const title = M.currentSpec(origin).content.title;
   let steps: StepDef[];
-  let pattern: PatternRef;
+  let flow: FlowRef;
   let fields: Partial<Task> | undefined;
   if (a.kind === "revert") {
     if (landed.simulated) throw new ControlError("This item is simulated: there is no commit to revert.");
     const open = openRevertOf(state, landed);
     if (open) throw new ControlError(`${open.id} is already reverting this change.`);
-    // ORC-016: the revert pipeline is the service's own; no pattern file can replace it.
-    const revert = internalPattern("revert");
+    // ORC-016: the revert pipeline is the service's own; no flow file can replace it.
+    const revert = internalFlow("revert");
     steps = revert.steps;
     // The first writer is the one whose workspace holds the prepared revert: name the commit for it.
     const first = steps.find((x) => x.role === "coder");
     if (!first) throw new ControlError("The Revert pipeline has no coder step to complete the revert.");
     first.purpose = `${first.purpose} (revert of ${c12})`;
     // The hash is of the steps that run, purpose included (step 1 review, finding 5).
-    pattern = { ...patternRef(revert, "service"), hash: patternHash(steps) };
+    flow = { ...flowRef(revert, "service"), hash: flowHash(steps) };
     fields = { revertOf: { taskId: origin.id, commit: landed.commit } };
   } else {
-    const bugfix = servicePattern(state, "bugfix");
+    const bugfix = serviceFlow(state, "bugfix");
     steps = structuredClone(bugfix.steps);
-    pattern = patternRef(bugfix, "service");
+    flow = flowRef(bugfix, "service");
   }
 
-  const r = M.createFollowUp(state, origin.id, now, { steps, pattern, holdBeforeStart: a.holdBeforeStart, author: "user", fields });
+  const r = M.createFollowUp(state, origin.id, now, { steps, flow, holdBeforeStart: a.holdBeforeStart, author: "user", fields });
   const content: SpecContent = structuredClone(M.currentSpec(getTask(r.state, r.newId)).content);
   const selected = content.options.find((o) => o.id === content.selectedOptionId);
   if (a.kind === "revert") {
@@ -568,6 +568,13 @@ export function openPrTasks(s: State): Task[] {
   return trackedPrTasks(s).filter((t) => t.integration!.pr!.phase === "open");
 }
 
+/** Why a built pull request is not opened yet because of the open limit, or nothing. */
+function openSlotsFull(s: State): string | undefined {
+  const open = openPrTasks(s).length;
+  const max = s.project.prDelivery.maxOpenPrs;
+  return open >= max ? `${open} of ${max} pull requests are open, your limit` : undefined;
+}
+
 /** Why coder steps that start from the base are not dispatched yet, if they are held. */
 export function writersHeld(s: State): string | undefined {
   const cfg = s.project.prDelivery;
@@ -704,7 +711,11 @@ function reviewsOf(s: State, c: Task, pr: PrDelivery, covers: (run: Attempt) => 
   return out;
 }
 
-/** Evidence from a set of reviews that saw the change: unresolved findings, then independence. */
+/**
+ * Evidence from a set of reviews that saw the change: unresolved findings, then independence. Every
+ * review's findings count; independence is judged on the code review alone (ORC-021 review 6). A
+ * security review by the writer's own provider adds findings but is never the independent evidence.
+ */
 function judge(s: State, pr: PrDelivery, covering: Covering[], source: "pipeline" | "dedicated", taskId: string): ReviewView {
   const h = sha12(pr.changeSha);
   const base = { source, forSha: pr.changeSha, taskId, artifactIds: covering.map((x) => x.art.id) };
@@ -748,7 +759,7 @@ const noReview = (pr: PrDelivery, reason: string): ReviewEvidence => ({ ok: fals
 
 /**
  * The task's own review counts only when it provably covers the final change: a finished code review
- * whose run received exactly the final change as an input. A finished task alone proves nothing (when
+ * and a finished security review whose runs received exactly the final change as an input. A finished task alone proves nothing (when
  * a repair loop runs out, its last repair is never reviewed).
  */
 function pipelineReview(s: State, pr: PrDelivery): ReviewView {
@@ -769,7 +780,11 @@ function pipelineReview(s: State, pr: PrDelivery): ReviewView {
     const saw = c.steps.some((st) => st.state === "done" && st.role === "code_reviewer" && lastCompletedRun(s, c.id, st.id)?.snapshot.inputs.some((i) => i.artifactId === fc.id));
     return saw ? { state: "missing", evidence: noReview(pr, `The review of ${h} did not list the files it covered, so it does not count.`) } : missing;
   }
-  return judge(s, pr, covering, "pipeline", c.id);
+  const v = judge(s, pr, covering, "pipeline", c.id);
+  // ORC-021 review 1: a clean pass also needs a security review that saw the final change; without one the
+  // dedicated review (which has one) runs. Findings and a review that is not independent stand as they are.
+  if (v.state === "ok" && !covering.some((x) => x.role === "security_reviewer")) return { state: "missing", evidence: noReview(pr, `No security review saw the final change ${h}.`) };
+  return v;
 }
 
 /**
@@ -871,19 +886,21 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
   let k = 1;
   while (ids.has(`${t.id}-RV${k}`)) k++;
   const id = `${t.id}-RV${k}`;
-  // ORC-016: the dedicated review pipeline is the service's own; no pattern file can replace it.
-  const review = internalPattern("delivery-review");
+  // ORC-016: the dedicated review pipeline is the service's own; no flow file can replace it.
+  // ORC-021: it carries a security review beside the code review; both are independent of the writer,
+  // and the findings of either gate the merge (`judge` counts every review role).
+  const review = internalFlow("delivery-review");
   const defs = review.steps.map(toDef);
-  let named = false;
+  const named = new Set<RoleId>();
   for (const d of defs) {
-    if (d.role !== "code_reviewer") continue;
+    if (d.role !== "code_reviewer" && d.role !== "security_reviewer") continue;
     // The independence rule is not the pipeline's to drop.
     d.independentOf = "writer";
-    if (!named) d.purpose = `Review ${t.id} for merge into ${pr.base} at ${h}`;
-    named = true;
+    if (!named.has(d.role)) d.purpose = `${d.role === "security_reviewer" ? "Security review of" : "Review"} ${t.id} for merge into ${pr.base} at ${h}`;
+    named.add(d.role);
   }
   // The hash is of the steps that run, with the rewritten purpose and the independence rule (step 1 review, finding 5).
-  const pattern: PatternRef = { ...patternRef(review, "service"), hash: patternHash(defs) };
+  const flow: FlowRef = { ...flowRef(review, "service"), hash: flowHash(defs) };
   const content: SpecContent = structuredClone(M.currentSpec(t).content);
   const title = content.title;
   content.title = `Review for merge: ${title}`;
@@ -906,9 +923,9 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
     decisionAt: now,
     reviewTarget: { taskId: t.id, n: pr.n, headSha: pr.changeSha, baseSha: pr.baseSha },
     pipelineRev: 1,
-    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery review pattern", steps: defs.map(toDef), pattern }],
-    pattern,
-    patternSince: 1,
+    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery review flow", steps: defs.map(toDef), flow }],
+    flow,
+    flowSince: 1,
   });
   pr.reviewTaskIds.push(id);
   pr.counters.reviews += 1;
@@ -972,10 +989,10 @@ function startChecks(s: State, t: Task, pr: PrDelivery, now: string): string {
   let k = 1;
   while (ids.has(`${t.id}-CK${k}`)) k++;
   const id = `${t.id}-CK${k}`;
-  // ORC-016: the dedicated check pipeline is the service's own; no pattern file can replace it.
-  const checks = internalPattern("delivery-checks");
+  // ORC-016: the dedicated check pipeline is the service's own; no flow file can replace it.
+  const checks = internalFlow("delivery-checks");
   const defs = checks.steps.map(toDef);
-  const pattern = patternRef(checks, "service");
+  const flow = flowRef(checks, "service");
   const content: SpecContent = structuredClone(M.currentSpec(t).content);
   const title = content.title;
   content.title = `Checks for merge: ${title}`;
@@ -998,9 +1015,9 @@ function startChecks(s: State, t: Task, pr: PrDelivery, now: string): string {
     decisionAt: now,
     checkTarget: { taskId: t.id, n: pr.n, sha: pr.changeSha },
     pipelineRev: 1,
-    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery checks pattern", steps: defs.map(toDef), pattern }],
-    pattern,
-    patternSince: 1,
+    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery checks flow", steps: defs.map(toDef), flow }],
+    flow,
+    flowSince: 1,
   });
   pr.counters.checks = (pr.counters.checks ?? 0) + 1;
   event(s, now, "system", "integration", `Check run ${id} created for ${prName(pr)} at ${h}: no service-check result for this change under the current settings`, t.id);
@@ -1133,11 +1150,11 @@ function startRepair(state: State, taskId: string, cause: RepairCause, now: stri
   const pr0 = origin.integration!.pr!;
   const title = M.currentSpec(origin).content.title;
   const h = sha12(pr0.headSha);
-  // ORC-016: a fix runs the catalog's Change (standard by the pattern rules), chosen by the service.
-  const change = servicePattern(state, "change");
+  // ORC-016: a fix runs Change, chosen by the service.
+  const change = serviceFlow(state, "change");
   const r = M.createFollowUp(state, taskId, now, {
     steps: structuredClone(change.steps),
-    pattern: patternRef(change, "service"),
+    flow: flowRef(change, "service"),
     holdBeforeStart: false,
     author: actor,
     dependsOn: [],
@@ -1521,7 +1538,7 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
 
   // 4. It is our pull request
   if (pr.foreignHead) add("ours", "Only Orchestrator's commits", "blocked", `Someone else pushed ${sha12(pr.foreignHead.sha)} to this branch. The app will not push to it or merge it again; merge it on GitHub, or close it and deliver again.`, "foreign-push");
-  else if (!ob) add("ours", "Open on GitHub", "waiting", pr.phase === "built" ? "Not opened yet." : "Not seen on GitHub yet.");
+  else if (!ob) add("ours", "Open on GitHub", "waiting", pr.phase !== "built" ? "Not seen on GitHub yet." : openSlotsFull(s) ? `Not opened yet: ${openSlotsFull(s)}. It opens when one of them merges or closes, or when you raise the limit in Settings.` : "Not opened yet.");
   else if (ob.state !== "OPEN") add("ours", "Open on GitHub", "waiting", `GitHub reports it ${ob.state.toLowerCase()}.`);
   else if (ob.crossRepo) add("ours", "Open on GitHub", "blocked", "GitHub reports this pull request as coming from another repository; the app only acts on its own.", "foreign-push");
   else if (ob.isDraft) add("ours", "Open on GitHub", "blocked", "It was marked as a draft on GitHub. Mark it ready for review there.", "draft");
@@ -3113,7 +3130,7 @@ export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
     return { text: `${name} needs you${sim}`, tone: "danger" };
   }
   if (pr.userHold) return plain("held by you");
-  if (pr.phase === "built") return plain(!s.project.prDelivery.enabled ? "not opened: delivery is off" : s.project.hold ? "not opened: paused" : shaping ? `not opened: ${WAITS}` : "preparing");
+  if (pr.phase === "built") return plain(!s.project.prDelivery.enabled ? "not opened: delivery is off" : s.project.hold ? "not opened: paused" : shaping ? `not opened: ${WAITS}` : openSlotsFull(s) ? `not opened: ${openSlotsFull(s)}` : "preparing");
   if (prReady(s, t, nowMs)) return { text: `${name} waiting for you${sim}`, tone: "strong" };
   const byUser = userGate(pr);
   const waits = prGate(s, t, nowMs, { byUser }).items.find((x) => !x.ok && x.id !== "policy");
