@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   CLAUDE_AUTH_MESSAGE,
   ClaudeAdapter,
@@ -69,13 +69,22 @@ class FakeStream implements AsyncIterable<SDKMessage> {
 
 function fakeQuery() {
   const stream = new FakeStream();
-  const calls: Array<{ prompt: string; options: Options }> = [];
+  const calls: Array<{ prompt: AsyncIterable<SDKUserMessage>; options: Options }> = [];
+  // What the real SDK would write to the CLI: every streamed input message, and whether the input closed.
+  const inputs: SDKUserMessage[] = [];
+  const input = { closed: false };
   const query: ClaudeQueryFn = (params) => {
     calls.push(params);
+    void (async () => {
+      for await (const m of params.prompt) inputs.push(m);
+      input.closed = true;
+    })();
     return stream;
   };
-  return { stream, calls, query };
+  return { stream, calls, query, inputs, input };
 }
+
+const ENVELOPE_MESSAGE = { type: "user", session_id: "", message: { role: "user", content: [{ type: "text", text: "ENVELOPE" }] }, parent_tool_use_id: null };
 
 // --- message builders (shapes from the pinned sdk.d.ts) --------------------------------------
 
@@ -190,6 +199,7 @@ function setup(opts: ClaudeAdapterOptions = {}) {
 
 const TERMINAL = new Set(["completed", "stopped", "failed"]);
 const terminals = (events: AdapterEvent[]) => events.filter((e) => TERMINAL.has(e.type));
+const noteEvents = (events: AdapterEvent[]) => events.filter((e) => e.type === "note");
 
 async function waitFor(pred: () => boolean, ms = 2000) {
   const t0 = Date.now();
@@ -254,13 +264,16 @@ describe("ClaudeAdapter", () => {
   });
 
   it("runs to completion with usage, activity, and one terminal event", async () => {
-    const { adapter, events, stream, calls } = setup();
+    const { adapter, events, stream, calls, inputs, input } = setup();
     adapter.start(assignment());
     expect(adapter.has("att-1")).toBe(true);
     await waitFor(() => calls.length === 1);
 
     const opts = calls[0].options;
-    expect(calls[0].prompt).toBe("ENVELOPE");
+    // ORC-022: the prompt is an input stream whose first message is the envelope, shaped like the SDK's own string prompt.
+    await waitFor(() => inputs.length === 1);
+    expect(inputs[0]).toEqual(ENVELOPE_MESSAGE);
+    expect(input.closed).toBe(false);
     expect(opts.cwd).toBe(ws);
     expect(opts.model).toBe("sonnet");
     expect(opts.maxTurns).toBe(7);
@@ -303,6 +316,8 @@ describe("ClaudeAdapter", () => {
       model: "claude-sonnet-5",
     });
     expect(adapter.has("att-1")).toBe(false);
+    await waitFor(() => input.closed);
+    expect(inputs).toHaveLength(1); // nothing but the envelope was streamed
   });
 
   it("falls back to the last assistant text when the result text is empty", async () => {
@@ -603,6 +618,208 @@ describe("ClaudeAdapter", () => {
     await adapter.shutdown();
     expect(adapter.ids()).toEqual([]);
     expect(terminals(events)).toHaveLength(0);
+  });
+
+  describe("notes (ORC-022)", () => {
+    const NOTE = "Note from the lead, relaying the user (mid-run, 10:00): skip the README; the owner will write it.";
+    /** Start a run, bring it to the started state, send one note and return the message the adapter streamed. */
+    async function started(opts: ClaudeAdapterOptions = {}) {
+      const s = setup(opts);
+      s.adapter.start(assignment());
+      await waitFor(() => s.calls.length === 1);
+      s.stream.push(init());
+      await waitFor(() => s.events.some((e) => e.type === "started"));
+      return s;
+    }
+    async function sendNote(s: Awaited<ReturnType<typeof started>>, id = "note-1") {
+      s.adapter.note("att-1", { id, text: NOTE });
+      const n = s.inputs.length + 1;
+      await waitFor(() => s.inputs.length >= n);
+      return s.inputs[n - 1];
+    }
+    const ack = (uuid: string | undefined) => ({ user_message_uuid: uuid, user_message_uuids: [uuid] });
+
+    it("streams the note client-composed with priority next, and reports delivered only when an assistant message names its uuid", async () => {
+      const s = await started();
+      const sent = await sendNote(s);
+      expect(sent).toMatchObject({ type: "user", message: { role: "user", content: NOTE }, parent_tool_use_id: null, priority: "next", client_composed: true });
+      expect(sent.uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/);
+      await sleep(20);
+      expect(noteEvents(s.events)).toEqual([]); // written to the process, not delivered
+      s.stream.push(assistant([{ type: "text", text: "Unrelated, no uuid" }], "msg_0"));
+      await sleep(10);
+      expect(noteEvents(s.events)).toEqual([]);
+      s.stream.push(assistant([{ type: "text", text: "Reading the note" }], "msg_1", ack(sent.uuid)));
+      await waitFor(() => noteEvents(s.events).length === 1);
+      expect(noteEvents(s.events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "note-1", outcome: "delivered" }]);
+      s.stream.push(result("success"));
+      s.stream.end();
+      await waitFor(() => terminals(s.events).length === 1);
+      expect(terminals(s.events)[0]).toMatchObject({ type: "completed", finalText: "Done.\n```json\n{}\n```" });
+      expect(noteEvents(s.events)).toHaveLength(1); // exactly one event per note
+      await waitFor(() => s.input.closed);
+    });
+
+    it("a note folded into the running turn is acknowledged on that turn's result, before the completed event", async () => {
+      const s = await started();
+      s.stream.push(assistant([{ type: "text", text: "Working" }], "msg_1")); // the turn's first assistant frame: no client uuid (the envelope has none)
+      const sent = await sendNote(s);
+      s.stream.push(assistant([{ type: "tool_use", id: "t1", name: "Read", input: { file_path: path.join(ws, "src/x.ts") } }], "msg_2")); // typed turns stamp later frames no more
+      await sleep(10);
+      expect(noteEvents(s.events)).toEqual([]);
+      s.stream.push(result("success", { user_message_uuids: [sent.uuid] }));
+      s.stream.end();
+      await waitFor(() => terminals(s.events).length === 1);
+      const types = s.events.map((e) => e.type);
+      expect(noteEvents(s.events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "note-1", outcome: "delivered" }]);
+      expect(types.indexOf("note")).toBeLessThan(types.indexOf("completed"));
+    });
+
+    it("a turn that ends before the note was seen keeps the run going; the next turn acknowledges it and the run completes on the last result", async () => {
+      const s = await started();
+      const sent = await sendNote(s);
+      s.stream.push(result("success", { result: "First turn done.", queued_turn_count: 1 }));
+      await sleep(30);
+      expect(terminals(s.events)).toHaveLength(0);
+      expect(s.adapter.has("att-1")).toBe(true);
+      expect(s.input.closed).toBe(false);
+      expect(noteEvents(s.events)).toEqual([]);
+      expect(s.events).toContainEqual({ type: "activity", attemptId: "att-1", note: "The turn ended with a note outstanding; waiting for the next turn to take it up" });
+      s.stream.push(assistant([{ type: "text", text: "Applying the note" }], "msg_9", ack(sent.uuid)));
+      await waitFor(() => noteEvents(s.events).length === 1);
+      expect(noteEvents(s.events)[0]).toMatchObject({ noteId: "note-1", outcome: "delivered" });
+      // modelUsage and total_cost_usd are cumulative across a session's turns (sdk.d.ts): the last result holds the totals.
+      s.stream.push(
+        result("success", {
+          result: "Second turn done.\n```json\n{}\n```",
+          total_cost_usd: 0.03,
+          modelUsage: { "claude-sonnet-5": { inputTokens: 300, outputTokens: 120, cacheReadInputTokens: 40, cacheCreationInputTokens: 10, webSearchRequests: 0, costUSD: 0.03, contextWindow: 200000, maxOutputTokens: 32000 } },
+        }),
+      );
+      s.stream.end();
+      await waitFor(() => terminals(s.events).length === 1);
+      expect(terminals(s.events)[0]).toEqual({
+        type: "completed",
+        attemptId: "att-1",
+        finalText: "Second turn done.\n```json\n{}\n```",
+        usage: { inputTokens: 350, outputTokens: 120, costUsd: 0.03 },
+        model: "claude-sonnet-5",
+      });
+      await waitFor(() => s.input.closed);
+    });
+
+    it("sums the per-turn usage fallback when results carry no modelUsage", async () => {
+      const s = await started();
+      const sent = await sendNote(s);
+      s.stream.push(result("success", { modelUsage: {}, usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 5, cache_creation_input_tokens: 0 }, total_cost_usd: 0.01 }));
+      await sleep(20);
+      s.stream.push(assistant([{ type: "text", text: "Applying" }], "msg_9", ack(sent.uuid)));
+      s.stream.push(result("success", { modelUsage: {}, usage: { input_tokens: 40, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, total_cost_usd: 0.02 }));
+      s.stream.end();
+      await waitFor(() => terminals(s.events).length === 1);
+      expect(terminals(s.events)[0]).toMatchObject({ type: "completed", usage: { inputTokens: 145, outputTokens: 60, costUsd: 0.02 } });
+    });
+
+    it("the session ending without the acknowledgment → not-delivered, and the run still completes with its output", async () => {
+      const s = await started();
+      await sendNote(s);
+      s.stream.push(result("success", { result: "Only turn." }));
+      await sleep(20);
+      expect(terminals(s.events)).toHaveLength(0);
+      s.stream.end();
+      await waitFor(() => terminals(s.events).length === 1);
+      expect(noteEvents(s.events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "note-1", outcome: "not-delivered", reason: "the Claude session ended before the agent read it" }]);
+      expect(terminals(s.events)[0]).toMatchObject({ type: "completed", finalText: "Only turn.", usage: { costUsd: 0.0123 } });
+      const types = s.events.map((e) => e.type);
+      expect(types.indexOf("note")).toBeLessThan(types.indexOf("completed"));
+      await waitFor(() => s.input.closed);
+    });
+
+    it("no acknowledgment within the grace period → not-delivered, the run completes on its last result and the session is ended", async () => {
+      const s = await started({ noteAckGraceMs: 40 });
+      const sent = await sendNote(s);
+      s.stream.push(result("success", { result: "Only turn." }));
+      await waitFor(() => terminals(s.events).length === 1);
+      expect(noteEvents(s.events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "note-1", outcome: "not-delivered", reason: expect.stringMatching(/did not acknowledge the note within 0s/) }]);
+      expect(terminals(s.events)[0]).toMatchObject({ type: "completed", finalText: "Only turn." });
+      expect(s.calls[0].options.abortController!.signal.aborted).toBe(true);
+      await waitFor(() => s.input.closed);
+      // A late acknowledgment or result changes nothing.
+      s.stream.push(assistant([{ type: "text", text: "late" }], "m", ack(sent.uuid)), result("success"));
+      s.stream.end();
+      await sleep(20);
+      expect(noteEvents(s.events)).toHaveLength(1);
+      expect(terminals(s.events)).toHaveLength(1);
+    });
+
+    it("a note to a finished or unknown run is not delivered, with the reason", async () => {
+      const s = await started();
+      s.stream.push(result("success"));
+      s.stream.end();
+      await waitFor(() => terminals(s.events).length === 1);
+      s.adapter.note("att-1", { id: "late", text: NOTE });
+      s.adapter.note("never-started", { id: "nowhere", text: NOTE });
+      await waitFor(() => noteEvents(s.events).length === 2);
+      expect(noteEvents(s.events)).toEqual([
+        { type: "note", attemptId: "att-1", noteId: "late", outcome: "not-delivered", reason: "the run had finished" },
+        { type: "note", attemptId: "never-started", noteId: "nowhere", outcome: "not-delivered", reason: "no such run" },
+      ]);
+      expect(s.inputs).toHaveLength(1);
+    });
+
+    it("interrupt settles an outstanding note, refuses new ones, and closes the input", async () => {
+      const s = await started({ interruptGraceMs: 5000 });
+      await sendNote(s, "pending");
+      s.stream.onInterrupt = () => setTimeout(() => s.stream.end(), 5);
+      s.adapter.interrupt("att-1");
+      s.adapter.note("att-1", { id: "after", text: NOTE });
+      await waitFor(() => terminals(s.events).length === 1 && noteEvents(s.events).length === 2);
+      expect(noteEvents(s.events)).toEqual([
+        { type: "note", attemptId: "att-1", noteId: "pending", outcome: "not-delivered", reason: "the run was stopped first" },
+        { type: "note", attemptId: "att-1", noteId: "after", outcome: "not-delivered", reason: "the run is stopping" },
+      ]);
+      expect(terminals(s.events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "interrupted" }]);
+      await waitFor(() => s.input.closed);
+      expect(s.inputs).toHaveLength(2); // the envelope and the first note; the second was never streamed
+    });
+
+    it("a failed run settles its outstanding note before the terminal event", async () => {
+      const s = await started();
+      await sendNote(s);
+      s.stream.push(result("error_max_turns"));
+      s.stream.end();
+      await waitFor(() => terminals(s.events).length === 1);
+      expect(noteEvents(s.events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "note-1", outcome: "not-delivered", reason: "the run failed first" }]);
+      const types = s.events.map((e) => e.type);
+      expect(types.indexOf("note")).toBeLessThan(types.indexOf("failed"));
+    });
+
+    it("kill forgets outstanding notes silently", async () => {
+      const s = await started();
+      await sendNote(s);
+      s.adapter.kill("att-1");
+      await sleep(20);
+      expect(noteEvents(s.events)).toEqual([]);
+      expect(s.input.closed).toBe(true);
+    });
+
+    it("closes the input on every terminal path", async () => {
+      const paths: Array<[string, (s: Awaited<ReturnType<typeof started>>) => void]> = [
+        ["completed", (s) => (s.stream.push(result("success")), s.stream.end())],
+        ["stopped", (s) => ((s.stream.onInterrupt = () => s.stream.end()), s.adapter.interrupt("att-1"))],
+        ["failed by result", (s) => (s.stream.push(result("error_during_execution")), s.stream.end())],
+        ["failed by throw", (s) => s.stream.fail(new Error("boom"))],
+        ["killed after abort", (s) => (s.calls[0].options.abortController!.signal.addEventListener("abort", () => s.stream.fail(new Error("aborted"))), s.adapter.interrupt("att-1"))],
+      ];
+      for (const [name, end] of paths) {
+        const s = await started({ interruptGraceMs: name === "killed after abort" ? 10 : 5000 });
+        expect(s.input.closed, name).toBe(false);
+        end(s);
+        await waitFor(() => terminals(s.events).length === 1);
+        await waitFor(() => s.input.closed);
+        expect(s.adapter.has("att-1"), name).toBe(false);
+      }
+    });
   });
 
   describe("health and models", () => {

@@ -6,6 +6,8 @@
 //
 // Flow per attempt: initialize -> initialized -> thread/start -> [started] -> turn/start -> ...
 // item/completed notes -> turn/completed -> exactly one terminal event -> child terminated.
+// ORC-022: a note mid-run is a `turn/steer` on that turn (expectedTurnId pins it); the app-server's
+// answer decides delivered or not-delivered.
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
@@ -22,6 +24,8 @@ import type { ThreadItem } from "./codex-protocol/v2/ThreadItem";
 import type { ThreadStartParams } from "./codex-protocol/v2/ThreadStartParams";
 import type { TurnError } from "./codex-protocol/v2/TurnError";
 import type { TurnStartParams } from "./codex-protocol/v2/TurnStartParams";
+import type { TurnSteerParams } from "./codex-protocol/v2/TurnSteerParams";
+import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
 import { killGroup, trackLive } from "../processes";
 import { redact, withoutGitHubTokens } from "../redact";
 import { JsonRpcConnection, RpcClosedError, RpcError } from "./codexRpc";
@@ -85,7 +89,7 @@ export const LOGIN_GUIDANCE =
 const CAPABILITIES: CapabilityMap = {
   start: "supported",
   streamEvents: "supported",
-  // turn/steer exists in the pinned protocol but is not wired.
+  // ORC-022: turn/steer is wired for notes and tested against the stub app-server; unverified against a real model run.
   steer: "unverified",
   interrupt: "supported",
   // thread/resume exists; threads are persisted by Codex, but resume is not wired or tested.
@@ -102,6 +106,8 @@ const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 const ERROR_SETTLE_MS = 5_000;
 /** After closing stdin at the end of a run, how long before the process group is force-killed. */
 const EXIT_GRACE_MS = 3_000;
+/** How many ended attempt ids are remembered, so a late note is answered "the run had finished". */
+const ENDED_MAX = 500;
 
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
@@ -133,6 +139,8 @@ interface Run {
   stderrTail: string;
   done: boolean;
   timers: Set<ReturnType<typeof setTimeout>>;
+  /** ORC-022: ids of notes whose turn/steer is still unanswered. */
+  notes: Set<string>;
 }
 
 function defaultCodexPath() {
@@ -180,6 +188,8 @@ export class CodexAdapter implements RuntimeAdapter {
   private readonly log: (msg: string) => void;
   private version: string;
   private readonly runs = new Map<string, Run>();
+  /** Attempts that have ended (bounded), so a late note is answered "the run had finished", not "no such run". */
+  private readonly ended = new Set<string>();
   private readonly listeners = new Set<(e: AdapterEvent) => void>();
   /** Short-lived probe processes (health, model list) still alive. */
   private readonly probes = new Set<ChildProcess>();
@@ -243,7 +253,7 @@ export class CodexAdapter implements RuntimeAdapter {
       child = this.spawnProcess(this.appServerArgs(a), false, { TMPDIR: runTmpDir(a), TMP: runTmpDir(a), TEMP: runTmpDir(a) });
     } catch (e) {
       // Keep the contract asynchronous: register, then fail on the next tick.
-      const placeholder = { a, done: false, timers: new Set() } as unknown as Run;
+      const placeholder = { a, done: false, timers: new Set(), notes: new Set() } as unknown as Run;
       this.runs.set(a.attemptId, placeholder);
       setImmediate(() => this.finish(placeholder, { type: "failed", attemptId: a.attemptId, message: this.spawnFailure(e) }));
       return;
@@ -256,6 +266,7 @@ export class CodexAdapter implements RuntimeAdapter {
       stderrTail: "",
       done: false,
       timers: new Set(),
+      notes: new Set(),
     };
     run.rpc = new JsonRpcConnection(child.stdout!, child.stdin!, {
       onNotification: (n) => this.onNotification(run, n),
@@ -336,9 +347,59 @@ export class CodexAdapter implements RuntimeAdapter {
     }
   }
 
-  /** ORC-022 placeholder until W2 implements notes: nothing is delivered. */
+  /**
+   * ORC-022: steer the run's live turn with the note (`turn/steer`, pinned to this run's thread and turn by
+   * `expectedTurnId`, so it can never land in another turn). The app-server's answer is the outcome: a
+   * response is delivered, an error (no active turn, turn mismatch, a non-steerable review or compact turn)
+   * is not-delivered with its message. Exactly one "note" event follows, also when the run is not live.
+   */
   note(attemptId: string, note: { id: string; text: string }): void {
-    queueMicrotask(() => this.emit({ type: "note", attemptId, noteId: note.id, outcome: "not-delivered", reason: "this runtime does not take notes yet" }));
+    const settle = (outcome: "delivered" | "not-delivered", reason?: string) =>
+      this.emit({ type: "note", attemptId, noteId: note.id, outcome, ...(reason !== undefined && { reason }) });
+    const run = this.runs.get(attemptId);
+    if (!run || run.done) return void queueMicrotask(() => settle("not-delivered", this.ended.has(attemptId) ? "the run had finished" : "no such run"));
+    if (run.interruptRequested) return void queueMicrotask(() => settle("not-delivered", "the run is stopping"));
+    if (!run.threadId || !run.turnId || !run.rpc || run.rpc.isClosed) return void queueMicrotask(() => settle("not-delivered", "the run has no active turn yet"));
+    const params: TurnSteerParams = {
+      threadId: run.threadId,
+      expectedTurnId: run.turnId,
+      input: [{ type: "text", text: note.text, text_elements: [] }],
+    };
+    run.notes.add(note.id);
+    run.rpc.request("turn/steer", params).then(
+      (res) => {
+        if (!run.notes.delete(note.id)) return; // settled already (the run ended first)
+        const steered = (res as TurnSteerResponse | undefined)?.turnId;
+        if (steered !== undefined && steered !== run.turnId) return settle("not-delivered", `Codex steered turn ${steered}, not this run's turn`);
+        settle("delivered");
+      },
+      (e: unknown) => {
+        if (!run.notes.delete(note.id)) return;
+        settle("not-delivered", this.noteFailure(e));
+      },
+    );
+  }
+
+  private noteFailure(e: unknown) {
+    if (e instanceof RpcError) return `Codex refused the note: ${truncate(this.clean(e.message), 300)}`;
+    if (e instanceof RpcClosedError) return "the run had finished";
+    return truncate(`Codex app-server error: ${this.clean(e instanceof Error ? e.message : String(e))}`, 300);
+  }
+
+  /** ORC-022: report every note still awaiting the app-server's answer as not delivered. */
+  private settleNotes(run: Run, reason: string) {
+    for (const noteId of run.notes) {
+      run.notes.delete(noteId);
+      this.emit({ type: "note", attemptId: run.a.attemptId, noteId, outcome: "not-delivered", reason });
+    }
+  }
+
+  private remember(attemptId: string) {
+    this.ended.add(attemptId);
+    for (const id of this.ended) {
+      if (this.ended.size <= ENDED_MAX) break;
+      this.ended.delete(id);
+    }
   }
 
   interrupt(attemptId: string): void {
@@ -366,6 +427,9 @@ export class CodexAdapter implements RuntimeAdapter {
     run.done = true;
     this.runs.delete(attemptId);
     this.clearTimers(run);
+    // Forgotten silently, notes included (the service reconciles notes left "sending" when it restarts).
+    run.notes.clear();
+    this.remember(attemptId);
     if (run.child) {
       killGroup(run.child, "SIGKILL");
       run.rpc?.close();
@@ -388,6 +452,9 @@ export class CodexAdapter implements RuntimeAdapter {
     run.done = true;
     this.clearTimers(run);
     if (this.runs.get(run.a.attemptId) === run) this.runs.delete(run.a.attemptId);
+    // Notes the app-server has not answered settle first: the run is over, so they were not delivered.
+    this.settleNotes(run, e.type === "completed" ? "the turn completed before Codex answered" : e.type === "stopped" ? "the run was stopped first" : "the run failed first");
+    this.remember(run.a.attemptId);
     this.emit(e);
     if (!run.child) return;
     if (gentle) {

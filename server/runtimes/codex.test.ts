@@ -78,6 +78,7 @@ async function waitFor(pred: () => boolean, ms = 5000) {
 
 const TERMINAL = new Set(["completed", "stopped", "failed"]);
 const terminals = (events: AdapterEvent[]) => events.filter((e) => TERMINAL.has(e.type));
+const noteEvents = (events: AdapterEvent[]) => events.filter((e) => e.type === "note");
 const settle = (ms = 150) => new Promise((r) => setTimeout(r, ms));
 
 function alive(pid: number) {
@@ -299,6 +300,111 @@ describe("CodexAdapter runs", () => {
     adapter.kill("b");
     await settle();
     expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "a", how: "interrupted", usage: undefined }]);
+  });
+});
+
+describe("notes (ORC-022)", () => {
+  const NOTE = "Note from the lead, relaying the user (mid-run, 10:00): skip the README; the owner will write it.";
+  /** Start a run in `mode` and wait until its turn is live (the adapter knows the turn id). */
+  async function live(mode: string, env: NodeJS.ProcessEnv = {}) {
+    const s = make(mode, {}, env);
+    s.adapter.start(assignment());
+    await waitFor(() => s.events.some((e) => e.type === "started") && s.stubLog().some((l) => l.recv?.method === "turn/start"));
+    await settle(50);
+    return s;
+  }
+  const steers = (stubLog: ReturnType<typeof make>["stubLog"]) => stubLog().filter((l) => l.recv?.method === "turn/steer").map((l) => l.recv);
+
+  it("steers the live turn and reports delivered on the app-server's response", async () => {
+    const { adapter, events, stubLog } = await live("steer");
+    adapter.note("att-1", { id: "note-1", text: NOTE });
+    await waitFor(() => noteEvents(events).length === 1);
+    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "note-1", outcome: "delivered" }]);
+    await waitFor(() => terminals(events).length === 1);
+    await settle();
+    // The request carried this run's thread and turn, and the text as given.
+    expect(steers(stubLog)).toHaveLength(1);
+    expect(steers(stubLog)[0].params).toEqual({ threadId: "thr_stub_1", expectedTurnId: "turn_stub_1", input: [{ type: "text", text: NOTE, text_elements: [] }] });
+    // The stub echoed it on the same turn, and the run then completed normally.
+    expect(events).toContainEqual({ type: "activity", attemptId: "att-1", note: `Message: steered: ${NOTE}` });
+    expect(terminals(events)[0]).toMatchObject({ type: "completed" });
+    expect(noteEvents(events)).toHaveLength(1); // exactly one event per note
+  });
+
+  it("a refused turn/steer → not-delivered with Codex's message, and the run goes on", async () => {
+    const { adapter, events } = await live("steer-refused");
+    adapter.note("att-1", { id: "note-1", text: NOTE });
+    await waitFor(() => noteEvents(events).length === 1);
+    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "note-1", outcome: "not-delivered", reason: "Codex refused the note: turn/steer failed: the active turn is not steerable (review)" }]);
+    expect(adapter.has("att-1")).toBe(true);
+    expect(terminals(events)).toHaveLength(0);
+  });
+
+  it("a response naming another turn → not-delivered (a note never lands in another run's turn)", async () => {
+    const { adapter, events } = await live("steer-wrong-turn");
+    adapter.note("att-1", { id: "note-1", text: NOTE });
+    await waitFor(() => noteEvents(events).length === 1);
+    expect(noteEvents(events)[0]).toMatchObject({ outcome: "not-delivered", reason: "Codex steered turn turn_other, not this run's turn" });
+  });
+
+  it("no turn yet → not-delivered without calling the app-server", async () => {
+    const { adapter, events, stubLog } = make("slow-thread");
+    adapter.start(assignment());
+    await waitFor(() => stubLog().some((l) => l.recv?.method === "thread/start"));
+    adapter.note("att-1", { id: "early", text: NOTE });
+    await waitFor(() => noteEvents(events).length === 1);
+    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "not-delivered", reason: "the run has no active turn yet" }]);
+    expect(steers(stubLog)).toHaveLength(0);
+    expect(terminals(events)).toHaveLength(0);
+  });
+
+  it("after completion, and for an unknown attempt → not-delivered with the reason, without calling the app-server", async () => {
+    const { adapter, events, stubLog } = make("complete");
+    adapter.start(assignment());
+    await waitFor(() => terminals(events).length > 0);
+    adapter.note("att-1", { id: "late", text: NOTE });
+    adapter.note("never-started", { id: "nowhere", text: NOTE });
+    await waitFor(() => noteEvents(events).length === 2);
+    expect(noteEvents(events)).toEqual([
+      { type: "note", attemptId: "att-1", noteId: "late", outcome: "not-delivered", reason: "the run had finished" },
+      { type: "note", attemptId: "never-started", noteId: "nowhere", outcome: "not-delivered", reason: "no such run" },
+    ]);
+    await settle();
+    expect(steers(stubLog)).toHaveLength(0);
+  });
+
+  it("during an interrupt → not-delivered (the run is stopping)", async () => {
+    const { adapter, events, stubLog } = await live("interrupt-ignored");
+    adapter.interrupt("att-1");
+    adapter.note("att-1", { id: "note-1", text: NOTE });
+    await waitFor(() => noteEvents(events).length === 1);
+    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "note-1", outcome: "not-delivered", reason: "the run is stopping" }]);
+    await waitFor(() => terminals(events).length === 1);
+    expect(steers(stubLog)).toHaveLength(0);
+  });
+
+  it("a steer the app-server never answers settles as not-delivered before the run's terminal event", async () => {
+    const { adapter, events, stubLog } = await live("interrupt-honoured", { CODEX_STUB_STEER_SILENT: "1" });
+    adapter.note("att-1", { id: "note-1", text: NOTE });
+    await settle(100);
+    expect(steers(stubLog)).toHaveLength(1);
+    expect(noteEvents(events)).toEqual([]); // unanswered: neither delivered nor refused yet
+    adapter.interrupt("att-1");
+    await waitFor(() => terminals(events).length === 1);
+    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "note-1", outcome: "not-delivered", reason: "the run was stopped first" }]);
+    const types = events.map((e) => e.type);
+    expect(types.indexOf("note")).toBeLessThan(types.indexOf("stopped"));
+    await settle(400);
+    expect(noteEvents(events)).toHaveLength(1);
+  });
+
+  it("kill forgets an unanswered steer silently", async () => {
+    const { adapter, events } = await live("interrupt-honoured", { CODEX_STUB_STEER_SILENT: "1" });
+    adapter.note("att-1", { id: "note-1", text: NOTE });
+    await settle(50);
+    adapter.kill("att-1");
+    await settle(300);
+    expect(noteEvents(events)).toEqual([]);
   });
 });
 
