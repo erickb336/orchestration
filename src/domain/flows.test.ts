@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { BUILT_IN_FILES } from "./builtInFlows";
-import { INTERNAL_FLOWS, INTERNAL_FLOW_IDS } from "./internalFlows";
+import { INTERNAL_FLOWS } from "./internalFlows";
 import { builtInCatalog, childDefault, effectiveDefault, eligible, eligibleIds, flowHash, flowRef, flowSummary, resolveFlows, unreviewedReasons, type FlowFile, type RawFlow } from "./flows";
 import { validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
@@ -54,8 +54,8 @@ describe("the six flows", () => {
     expect(unreviewedReasons(INTERNAL_FLOWS.find((p) => p.id === "revert")!.steps)).toEqual([]);
     // Only Goal breaks down.
     expect(builtInCatalog().map((p) => [p.id, p.breaksDown])).toEqual(SIX.map((id) => [id, id === "goal"]));
-    // No built-in pauses, runs in parallel or needs a provider: those capabilities stay in the engine for flow files, unused here.
-    for (const p of builtInCatalog()) expect(p.steps.some((s) => s.gate || s.parallel || s.independentOf), p.id).toBe(false);
+    // No built-in needs a provider: that capability stays in the engine for flow files, unused here.
+    for (const p of builtInCatalog()) expect(p.steps.some((s) => s.independentOf), p.id).toBe(false);
   });
 
   it("ORC-021: a security review runs beside every code review, reads the same inputs, feeds the repair and the verification, and is never a replacement", () => {
@@ -113,36 +113,29 @@ describe("the resolver's rules (a broken file is a test failure, never a runtime
     expect(() => resolve(file("xx", { steps: [{ ...oneStep[0], dependsOn: ["S9"] }] }))).toThrow(/flows\/xx\.json: S1 depends on S9/);
     expect(() => resolve(file("mine", { steps: reviewed }, "other.json"))).toThrow(/named "other" but declares the id "mine"/);
     expect(() => resolve(file("change", { steps: reviewed }))).toThrow(/the id "change" appears twice/);
-    for (const id of INTERNAL_FLOW_IDS) expect(() => resolve(file(id, { steps: reviewed }))).toThrow(/the service owns/);
+    for (const id of INTERNAL_FLOWS.map((p) => p.id)) expect(() => resolve(file(id, { steps: reviewed }))).toThrow(/the service owns/);
     expect(() => resolve(file("Bad", { steps: reviewed }))).toThrow(/id must be lowercase/);
     expect(() => resolve(file("xx", { steps: reviewed, whenToUse: " " }))).toThrow(/whenToUse is required/);
     expect(() => resolve(file("xx", { steps: [] }))).toThrow(/1–30 steps/);
   });
 
-  it("step ids the service reserves and checks.only are refused; a Checks step may not choose among best-of candidates", () => {
-    for (const id of ["S1-c2", "S1-i3", "C2-r1-checks", "C2-r12-review", "C2-r1-fix", "C2-r1-security"]) expect(() => resolve(file("xx", { steps: [{ ...oneStep[0], id }] })), id).toThrow(/reserved/);
-    for (const id of ["S1-review", "C2-r1", "S1-rename"]) expect(() => resolve(file("xx", { steps: [...reviewed.map((s) => (s.id === "S1" ? { ...s, id } : { ...s, dependsOn: [id], inputs: [{ step: id, output: "change" }] }))] })), id).not.toThrow();
+  it("step ids the service reserves and checks.only are refused", () => {
+    for (const id of ["S1-i3", "C2-r1-checks", "C2-r12-review", "C2-r1-fix", "C2-r1-security"]) expect(() => resolve(file("xx", { steps: [{ ...oneStep[0], id }] })), id).toThrow(/reserved/);
+    // -c<n> was the parallel copies' suffix; nothing reserves it any more.
+    for (const id of ["S1-review", "C2-r1", "S1-rename", "S1-c2"]) expect(() => resolve(file("xx", { steps: [...reviewed.map((s) => (s.id === "S1" ? { ...s, id } : { ...s, dependsOn: [id], inputs: [{ step: id, output: "change" }] }))] })), id).not.toThrow();
     const only: StepDef[] = [...reviewed, { id: "C1", purpose: "Checks", role: "checks", dependsOn: ["S1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "checks", kind: "check-results" }], checks: { onFail: "findings", only: ["lint"] } }];
     expect(() => resolve(file("xx", { steps: only }))).toThrow(/C1\.checks\.only: check commands belong to each project; flows run every configured check/);
-    const bestOf: StepDef[] = [
-      { ...oneStep[0], parallel: { count: 2, mode: "best-of" } },
-      { id: "C1", purpose: "Checks", role: "checks", dependsOn: ["S1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "checks", kind: "check-results" }], checks: { onFail: "findings" } },
-      { id: "S2", purpose: "Review", role: "code_reviewer", dependsOn: ["C1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "findings", kind: "review-findings" }] },
-    ];
-    expect(() => resolve(file("xx", { steps: bestOf }))).toThrow(/C1 chooses among S1's candidates, so it cannot be a Checks step/);
-    // The engine capabilities a flow file may still use: a gate, parallel best-of with an agent chooser, independence.
-    const chosen: StepDef[] = [{ ...oneStep[0], parallel: { count: 2, mode: "best-of", providers: ["claude", "codex"] } }, { id: "S2", purpose: "Choose and review", role: "code_reviewer", dependsOn: ["S1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" }, { id: "S3", purpose: "Verify", role: "lead", dependsOn: ["S2"], inputs: [{ step: "S2", output: "findings" }], outputs: [{ name: "verification", kind: "verification" }], gate: true }];
-    const ok = resolve(file("two", { steps: chosen })).find((p) => p.id === "two")!;
-    expect(ok.steps[0].parallel).toEqual({ count: 2, mode: "best-of", providers: ["claude", "codex"] });
-    expect(ok.steps[2].gate).toBe(true);
-    expect(flowSummary(ok.steps)).toBe("S1 Implement (parallel ×2 best of) → S2 Choose and review (reviewed by the other provider) → S3 Verify (pauses for you)");
+    // The engine capability a flow file may still use and no built-in does: a review independent of the writer.
+    const independent: StepDef[] = [...reviewed.map((s) => (s.id === "S2" ? { ...s, independentOf: "writer" as const } : s)), { id: "S3", purpose: "Verify", role: "lead", dependsOn: ["S2"], inputs: [{ step: "S2", output: "findings" }], outputs: [{ name: "verification", kind: "verification" }] }];
+    const ok = resolve(file("two", { steps: independent })).find((p) => p.id === "two")!;
+    expect(ok.steps[1].independentOf).toBe("writer");
+    expect(flowSummary(ok.steps)).toBe("S1 Implement → S2 Code review (reviewed by the other provider) → S3 Verify");
   });
 
-  it("the files the service creates fix tasks from (change, bugfix) must change code, be reviewed, not break down and not pause", () => {
+  it("the files the service creates fix tasks from (change, bugfix) must change code, be reviewed and not break down", () => {
     const own = (id: string, steps: StepDef[]) => resolveFlows([...BUILT_IN_FILES.filter((f) => f.raw.id !== id), file(id, { steps })]);
     expect(() => own("change", oneStep)).toThrow(/the service creates fix tasks from "change", so it must have an independent code review of every code change/);
     expect(() => own("bugfix", [{ id: "S1", purpose: "Investigate", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "report", kind: "report" }] }])).toThrow(/must produce a code change/);
-    expect(() => own("change", builtIn("change").steps.map((s) => (s.id === "S1" ? { ...s, gate: true as const } : s)))).toThrow(/must not pause for a person/);
     expect(() => own("change", [...reviewed, { id: "S3", purpose: "Plan more", role: "designer", dependsOn: ["S2"], inputs: [], outputs: [{ name: "plan", kind: "breakdown" }] }])).toThrow(/must not break down into child tasks/);
     // A review that may be skipped is not a review.
     const skippable = builtIn("change").steps.map((s) => (s.id === "S2" ? { ...s, runIf: [{ step: "C1", output: "checks" }] } : s));

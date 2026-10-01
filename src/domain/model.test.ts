@@ -3,13 +3,41 @@ import * as M from "./model";
 import { buildSeed } from "./seed";
 import { ControlError, StaleWriteError, type State } from "./types";
 import { diffLines, specToLines } from "./diff";
-import { DEFAULT_SIM, simulateTick } from "../runtime/simulated";
 
 const T0 = Date.parse("2026-09-29T12:00:00Z");
 const at = (s: number) => new Date(T0 + s * 1000).toISOString();
 const seed = () => buildSeed(T0);
 const task = (s: State, id: string) => s.tasks.find((t) => t.id === id)!;
 const running = (s: State, id?: string) => M.activeAttempts(s, id);
+
+/** A stand-in runtime for these tests: how long a stop takes to be acknowledged, or "never" for an unresponsive one. */
+interface SimConfig {
+  ackDelayMs: number;
+  ackMode: "normal" | "never";
+  /** After this long without acknowledgment, a control failure is reported. */
+  ackTimeoutMs: number;
+  progressPerTick: number;
+}
+const DEFAULT_SIM: SimConfig = { ackDelayMs: 2500, ackMode: "normal", ackTimeoutMs: 8000, progressPerTick: 25 };
+
+/** One tick of the stand-in runtime: promote, dispatch, advance every running attempt (completing it with every declared output), answer stops. */
+function simulateTick(state: State, nowMs: number, cfg: SimConfig): State {
+  const now = new Date(nowMs).toISOString();
+  let s = M.leadPromoteProposals(state, now);
+  s = M.dispatchEligible(s, now);
+  for (const a of s.attempts) {
+    if (a.outcome === "running") {
+      const next = a.progress + cfg.progressPerTick;
+      const st = task(s, a.taskId).steps.find((x) => x.id === a.stepId);
+      s = next >= 100 ? M.reportCompletion(s, a.id, [], now, (st?.outputs ?? []).map((o) => ({ name: o.name, summary: "test" }))) : M.reportProgress(s, a.id, next);
+    } else if (a.outcome === "stopping" && a.stopRequestedAt) {
+      const elapsed = nowMs - Date.parse(a.stopRequestedAt);
+      if (cfg.ackMode === "normal" && elapsed >= cfg.ackDelayMs) s = M.acknowledgeStop(s, a.id, now);
+      else if (elapsed >= cfg.ackTimeoutMs) s = M.reportStopTimeout(s, a.id, now);
+    }
+  }
+  return s;
+}
 /** Report a run as finished with every output its step declares. */
 const complete = (s: State, attemptId: string, t: string) => {
   const a = s.attempts.find((x) => x.id === attemptId)!;
@@ -285,6 +313,25 @@ describe("review regressions", () => {
     s = { ...s, tasks: s.tasks.map((t) => (t.id === "EX-005" ? { ...t, steps: [{ ...st, state: "blocked" as const, blockedReason: "x" }, ...t.steps.slice(1)] } : t)) };
     s = M.setRoleDefault(s, "designer", null, at(1));
     expect(task(s, "EX-005").steps[0].state).toBe("blocked");
+  });
+});
+
+describe("service-owned tasks", () => {
+  it("a dedicated review, a check run, a fix pushed onto a pull request and a revert are the service's: not the product's work, and their flow cannot change", () => {
+    const s = seed();
+    const plain = task(s, "EX-001");
+    expect(M.serviceOwned(plain)).toBe(false);
+    const owned = [
+      { reviewTarget: { taskId: "EX-006", n: 1, headSha: "a".repeat(40), baseSha: "b".repeat(40) } },
+      { checkTarget: { taskId: "EX-006", n: 1, sha: "a".repeat(40) } },
+      { deliverInto: { taskId: "EX-006", n: 1, mergeBase: false } },
+      { revertOf: { taskId: "EX-006", commit: "a".repeat(40) } },
+    ];
+    for (const fields of owned) {
+      const t = { ...structuredClone(plain), ...fields };
+      expect(M.serviceOwned(t), Object.keys(fields)[0]).toBe(true);
+      expect(M.flowChangeBlocker(s, t), Object.keys(fields)[0]).toBe("This task's pipeline is set by pull-request delivery.");
+    }
   });
 });
 

@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
+import { setPipeline } from "./testing/pipelines";
 import { buildSeed } from "./seed";
 import { ControlError, StaleWriteError, type LeadQuestion, type LeadRun, type State } from "./types";
 
@@ -122,7 +123,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
 
   it("a task whose last step completes while shaping still becomes Done and is queued for integration", () => {
     const r0 = M.createTask(seed(), { title: "Last", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
-    const r = { ...r0, state: M.setPipeline(r0.state, r0.newId, 1, oneStep, "one step", "user", at(0)) };
+    const r = { ...r0, state: setPipeline(r0.state, r0.newId, 1, oneStep, "one step", "user", at(0)) };
     let s = M.dispatchEligible(M.leadPromoteProposals(r.state, at(0)), at(1));
     const [a] = running(s, r.newId);
     s = shaping(s);

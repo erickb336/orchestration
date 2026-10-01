@@ -14,7 +14,7 @@ export interface ScriptFinding {
 }
 
 /** A breakdown item in the lead-proposal shape the service accepts (`approach` alone is enough). */
-export interface ScriptBreakdownItem {
+interface ScriptBreakdownItem {
   title: string;
   area?: string;
   whyNow?: string;
@@ -31,7 +31,7 @@ export interface ScriptBreakdownItem {
   dependsOn?: (number | string)[];
 }
 
-export interface TaskScript {
+interface TaskScript {
   /** Output summaries by "<stepId>.<output>" (exact step) or "<output>" (any step with that output name). */
   outputs?: Record<string, string>;
   /** Review findings by step id (a first round reports one); "*" is the default for any review step. */
@@ -39,9 +39,6 @@ export interface TaskScript {
   /** Breakdown items by step id. An empty list means the goal is met. */
   breakdown?: Record<string, ScriptBreakdownItem[]>;
 }
-
-/** The project's areas (tracks). */
-export const DEMO_AREAS = ["Offline maps", "Trip sharing", "Packing lists", "Accessibility", "Reliability"] as const;
 
 export const DEMO_SCRIPT: Record<string, TaskScript> = {
   "WT-002": {

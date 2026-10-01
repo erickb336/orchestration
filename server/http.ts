@@ -16,7 +16,7 @@ import type { VisionDocStore } from "./visiondocs";
 import type { WorkspaceManager } from "./workspaces";
 import { CommandFailure, type CommandResult, type Store } from "./store";
 
-export interface HttpOptions {
+interface HttpOptions {
   store: Store;
   scheduler: Scheduler;
   /** Shared simulation settings of the fake adapters (fake mode only). */
@@ -35,7 +35,7 @@ export interface HttpOptions {
 }
 
 const MAX_BODY = 5 * 1024 * 1024;
-export const HEARTBEAT_MS = 5000;
+const HEARTBEAT_MS = 5000;
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",

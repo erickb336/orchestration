@@ -19,7 +19,6 @@
     "stepId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,31}$" },
     "role": { "enum": ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer", "checks"] },
     "kind": { "enum": ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results"] },
-    "provider": { "enum": ["claude", "codex"] },
     "principle": {
       "enum": [
         "exhaust-the-design-space",
@@ -65,22 +64,11 @@
         "inputs": { "type": "array", "maxItems": 60, "items": { "$ref": "#/$defs/ref" } },
         "outputs": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/output" } },
         "runIf": { "type": "array", "minItems": 1, "maxItems": 30, "items": { "$ref": "#/$defs/ref" } },
-        "gate": { "const": true },
         "iterate": {
           "type": "object",
           "additionalProperties": false,
           "required": ["from", "max"],
           "properties": { "from": { "$ref": "#/$defs/stepId" }, "max": { "type": "integer", "minimum": 1, "maximum": 10 } }
-        },
-        "parallel": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["count", "mode"],
-          "properties": {
-            "count": { "type": "integer", "minimum": 2, "maximum": 5 },
-            "mode": { "enum": ["copies", "best-of"] },
-            "providers": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/provider" } }
-          }
         },
         "waitForChildren": { "const": true },
         "independentOf": { "const": "writer" },

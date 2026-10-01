@@ -29,4 +29,4 @@ Claude and Codex concurrency is a first-release requirement, not a future extens
 Provider/model choice must be configurable per workflow step, with project role defaults and task/step overrides. Preserve explicit user choices, record resolved configurations per attempt, and reconcile active workers before a model change. Do not treat a role-level provider selector as satisfying per-step configuration.
 
 
-Default to one implementation per bounded task. Use providers across distinct tasks or sequential design, implementation and review steps. Do not create competing Claude/Codex implementations unless the user explicitly enables that comparison. Best-of mode remains optional; provider concurrency does not require duplicate work.
+Default to one implementation per bounded task. Use providers across distinct tasks or sequential design, implementation and review steps. Do not create competing Claude/Codex implementations; there is no best-of mode. Provider concurrency does not require duplicate work.

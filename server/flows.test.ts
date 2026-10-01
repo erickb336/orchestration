@@ -21,14 +21,14 @@ import * as M from "../src/domain/model";
 import { builtInCatalog } from "../src/domain/flows";
 import { toDef } from "../src/domain/pipeline";
 import { PRINCIPLE_IDS } from "../src/domain/principles";
-import { ARTIFACT_KINDS, PROVIDERS, STEP_ROLES, type State, type StepDef } from "../src/domain/types";
+import { ARTIFACT_KINDS, STEP_ROLES, type State, type StepDef } from "../src/domain/types";
 import schema from "../flows/flow.schema.json";
 import { VERIFY_CHECKS_NOTE } from "./envelope";
 import { createHttpServer } from "./http";
 import { V14_TEMPLATES } from "./legacyTemplates";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
-import { REMOVED_FLOW_IDS, STATE_FORMAT, Store } from "./store";
+import { STATE_FORMAT, Store } from "./store";
 import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
@@ -68,7 +68,7 @@ describe("the built-in files", () => {
     expect(builtInCatalog()).toHaveLength(files.length);
   });
 
-  it("the schema refuses what the engine never reads from a file: extends, stepOverrides, experimental, order, checks.only, copyOf", () => {
+  it("the schema refuses what the engine never reads from a file: extends, stepOverrides, experimental, order, checks.only, copyOf, gate, parallel", () => {
     const validate = validator();
     const change = structuredClone(BUILT_IN_FILES.find((f) => f.raw.id === "change")!.raw) as unknown as Record<string, unknown>;
     for (const extra of [{ extends: "change" }, { stepOverrides: { S1: { gate: true } } }, { experimental: true, hypothesis: "h" }, { order: 10 }]) expect(validate({ ...change, ...extra }), JSON.stringify(extra)).toBe(false);
@@ -76,6 +76,9 @@ describe("the built-in files", () => {
     (steps[1].checks as Record<string, unknown>).only = ["lint"];
     expect(validate({ ...change, steps })).toBe(false);
     expect(validate({ ...change, steps: [{ ...oneStep[0], copyOf: "S1" }] })).toBe(false);
+    // ORC-025: gate steps and parallel copies are gone; a file that still sets them is refused.
+    expect(validate({ ...change, steps: [{ ...oneStep[0], gate: true }] })).toBe(false);
+    expect(validate({ ...change, steps: [{ ...oneStep[0], parallel: { count: 2, mode: "best-of" } }] })).toBe(false);
     expect(validate({ ...change, steps: [{ ...oneStep[0], role: "tester" }] })).toBe(false);
     const { whenToUse: _w, ...noWhen } = change;
     expect(validate(noWhen)).toBe(false);
@@ -85,7 +88,6 @@ describe("the built-in files", () => {
     expect(schema.$defs.role.enum).toEqual(STEP_ROLES);
     expect(schema.$defs.role.enum).toContain("security_reviewer");
     expect(schema.$defs.kind.enum).toEqual(ARTIFACT_KINDS);
-    expect(schema.$defs.provider.enum).toEqual(PROVIDERS);
     // ORC-024: the principle ids too.
     expect(schema.$defs.principle.enum).toEqual([...PRINCIPLE_IDS]);
   });
@@ -258,8 +260,8 @@ describe("migration 14 → 15 → 16 (an ORC-016-era database)", () => {
     });
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(17);
-    expect(s.version).toBe(17);
+    expect(STATE_FORMAT).toBe(18);
+    expect(s.version).toBe(18);
     expect(upgraded.read().version).toBe(v0 + 1);
     expect((s.project as unknown as { templates?: unknown }).templates).toBeUndefined();
     expect((s.project as unknown as { defaultPatternId?: unknown }).defaultPatternId).toBeUndefined();
@@ -295,7 +297,7 @@ describe("migration 14 → 15 → 16 (an ORC-016-era database)", () => {
     expect(task(s, "EX-002-RV1").flow).toEqual({ id: "delivery-review", name: "Delivery review", source: "internal", chosenBy: "migration" });
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(17);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_14_%'").get()).toBeDefined();
     check.close();
   });
@@ -309,13 +311,18 @@ describe("migration 14 → 15 → 16 (an ORC-016-era database)", () => {
     const upgraded = new Store(path);
     const s = upgraded.read().state;
     expect(s.tasks[0].flow).toEqual({ id: "custom", name: "Custom pipeline", source: "legacy", chosenBy: "migration" });
-    expect(s.version).toBe(17);
+    expect(s.version).toBe(18);
     upgraded.close();
   });
 });
 
+/** A step as formats 15 to 17 could hold it: with the gate and parallel settings ORC-025 removed (dropped by migration 17 → 18). */
+type LegacyStepDef = StepDef & { gate?: true; parallel?: { count: number; mode: "copies" | "best-of"; providers?: string[] }; copyOf?: string };
+/** Steps without the fields the ORC-025 migration drops: what an older fixture's steps look like after the upgrade. */
+const modern = (steps: unknown[]) => steps.map((s) => Object.fromEntries(Object.entries(s as Record<string, unknown>).filter(([k]) => !["gate", "parallel", "copyOf"].includes(k))));
+
 /** The steps of the five removed catalog entries, as the ORC-016 files resolved them (from the frozen format-14 templates). */
-const REMOVED: Record<string, { name: string; steps: StepDef[]; experimental?: true }> = {
+const REMOVED: Record<string, { name: string; steps: LegacyStepDef[]; experimental?: true }> = {
   "change-cross-review": { name: "Change, reviewed by the other provider", steps: V14_TEMPLATES.change.steps.map((s) => (s.id === "S2" ? { ...s, independentOf: "writer" as const } : s)) },
   "feature-design-gate": { name: "Feature, pause after design", steps: V14_TEMPLATES.feature.steps.map((s) => (s.id === "S1" ? { ...s, gate: true } : s)) },
   "goal-plan-gate": { name: "Goal, review the plan first", steps: V14_TEMPLATES.goal.steps.map((s) => (s.id === "S1" ? { ...s, gate: true } : s)) },
@@ -390,7 +397,7 @@ describe("migration 15 → 16 (ORC-021)", () => {
     expect(before.tasks.filter((t) => Object.keys(REMOVED).includes((t.pattern as { id: string }).id))).toHaveLength(5);
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(s.version).toBe(17);
+    expect(s.version).toBe(18);
     expect(upgraded.read().version).toBe(v0 + 1);
     // The project.
     expect(s.project.defaultFlowId).toBe("change");
@@ -412,13 +419,13 @@ describe("migration 15 → 16 (ORC-021)", () => {
       expect(t.flow, t.id).toEqual(expected);
       expect(Object.keys(t.flow).sort(), t.id).toEqual(["chosenBy", "hash", "id", "name", "source"]);
       expect(t.flowSince, t.id).toBe(b.patternSince);
-      expect(t.steps, t.id).toEqual(b.steps);
+      expect(t.steps, t.id).toEqual(modern(b.steps as unknown[])); // migration 17 → 18 drops gate and parallel on the way
       expect(t.pipelineRev, t.id).toBe(b.pipelineRev);
       const history = b.pipelineHistory as Record<string, unknown>[];
       expect(t.pipelineHistory.length, t.id).toBe(history.length);
       for (const [i, h] of t.pipelineHistory.entries()) {
         const bh = history[i];
-        expect(h.steps, `${t.id} r${h.rev}`).toEqual(bh.steps);
+        expect(h.steps, `${t.id} r${h.rev}`).toEqual(modern(bh.steps as unknown[]));
         expect(h as unknown as Record<string, unknown>, `${t.id} r${h.rev}`).not.toHaveProperty("pattern");
         if (bh.pattern) {
           const { chain: _c2, experimental: _e2, ...applied } = bh.pattern as Record<string, unknown>;
@@ -435,7 +442,6 @@ describe("migration 15 → 16 (ORC-021)", () => {
       expect(t.steps[0].selection, id).toEqual({ provider: "codex", model: "codex-sample-fast" });
       expect(s.flows.some((f) => f.id === id), id).toBe(false);
     }
-    expect(REMOVED_FLOW_IDS.sort()).toEqual(Object.keys(REMOVED).sort());
     // The upgraded state takes the flow commands; a task on a removed entry can be moved to one of the six.
     const rm = s.tasks.find((x) => x.flow.id === "change-lean")!;
     upgraded.command("changeFlow", { taskId: rm.id, expectedRev: 1, flowId: "change" }, "c1", iso());
@@ -443,7 +449,7 @@ describe("migration 15 → 16 (ORC-021)", () => {
     expect(task(upgraded.read().state, rm.id).steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "SR1", "S3", "C2", "S4"]);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(17);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_15_%'").get()).toBeDefined();
     check.close();
   });
@@ -480,6 +486,147 @@ describe("migration 15 → 16 (ORC-021)", () => {
     expect(s.tasks[0].flow).toEqual({ id: "my-change", name: "My change", source: "local", hash: "3".repeat(64), chosenBy: "user" });
     expect(s.tasks[0].pipelineHistory[0].flow).toEqual(s.tasks[0].flow);
     expect(s.tasks[0].steps).toEqual(steps);
+    upgraded.close();
+  });
+});
+
+/** A format-17 database built from the seed, plus tasks holding every field ORC-025 removed. */
+function format17(path: string): { before: Doc; v0: number } {
+  const seeded = new Store(path);
+  const v0 = seeded.read().version;
+  seeded.close();
+  const doc = readDoc(path);
+  const step = (id: string, purpose: string, role: string, dependsOn: string[], inputs: { step: string; output: string }[], outputs: { name: string; kind: string }[], extra: Record<string, unknown> = {}) => ({
+    id,
+    purpose,
+    role,
+    dependsOn,
+    inputs,
+    outputs,
+    ...extra,
+    selection: null,
+    revision: 1,
+    state: "pending",
+  });
+  const change = { name: "change", kind: "code-change" };
+  const findings = { name: "findings", kind: "review-findings" };
+  const custom = { id: "custom", name: "Custom pipeline", source: "custom", chosenBy: "user" };
+  const legacy = (s: Record<string, unknown>) => Object.fromEntries(Object.entries(s).filter(([k]) => ["gate", "parallel", "copyOf"].includes(k)));
+  const task = (id: string, lifecycle: string, steps: Record<string, unknown>[], extra: Record<string, unknown> = {}): Record<string, unknown> => {
+    const { integration: _i, ...base } = structuredClone(doc.tasks[0]);
+    return {
+      ...base,
+      id,
+      lifecycle,
+      hold: false,
+      holdBeforeStart: false,
+      steps,
+      pipelineRev: 2,
+      pipelineHistory: [
+        { rev: 1, at: iso(), author: "user", reason: "Created", steps: steps.map((s) => toDef(s as unknown as StepDef)), flow: custom },
+        // A revision as the expansion wrote it: the step definitions carry the settings and the copies.
+        { rev: 2, at: iso(), author: "lead", reason: "Expanded", steps: steps.map((s) => ({ ...toDef(s as unknown as StepDef), ...legacy(s) })) },
+      ],
+      flow: custom,
+      flowSince: 1,
+      ...extra,
+    };
+  };
+  // An open task whose best-of candidates both finished, with the comparison's choice recorded and confirmed by a person.
+  const bestOf = task(
+    "BO-1",
+    "active",
+    [
+      { ...step("S1", "Implement", "coder", [], [], [change], { parallel: { count: 2, mode: "best-of", providers: ["claude", "codex"] }, copyOf: "S1" }), state: "done" },
+      { ...step("S1-c2", "Implement (copy 2 of 2)", "coder", [], [], [change], { copyOf: "S1" }), state: "done" },
+      step("S2", "Compare", "code_reviewer", ["S1", "S1-c2"], [{ step: "S1", output: "change" }, { step: "S1-c2", output: "change" }], [findings]),
+    ],
+    { bestOf: { S1: "S1-c2" }, bestOfByUser: { S1: iso() } },
+  );
+  // A finished task whose review ran as two copies, with a gate after the review.
+  const copies = task(
+    "CP-1",
+    "done",
+    [
+      { ...step("S1", "Implement", "coder", [], [], [change]), state: "done" },
+      { ...step("S2", "Review", "code_reviewer", ["S1"], [{ step: "S1", output: "change" }], [findings], { parallel: { count: 2, mode: "copies" }, copyOf: "S2", gate: true }), state: "done" },
+      { ...step("S2-c2", "Review (copy 2 of 2)", "code_reviewer", ["S1"], [{ step: "S1", output: "change" }], [findings], { copyOf: "S2" }), state: "done" },
+    ],
+    { integration: { status: "integrated" } },
+  );
+  // A proposal whose settings never expanded: a parallel step and a gate, as the removed "best of two" entry had them.
+  const unexpanded = task("UX-1", "proposed", [step("S1", "Implement", "coder", [], [], [change], { parallel: { count: 2, mode: "best-of" } }), step("S2", "Compare", "code_reviewer", ["S1"], [{ step: "S1", output: "change" }], [findings], { gate: true })]);
+  doc.tasks.push(bestOf, copies, unexpanded);
+  doc.version = 17;
+  writeDoc(path, 17, doc);
+  return { before: structuredClone(doc), v0 };
+}
+
+describe("migration 17 → 18 (ORC-025: parallel copies, best-of choices and gate steps are gone)", () => {
+  const legacyKeys = (o: unknown) => Object.keys(o as Record<string, unknown>).filter((k) => ["gate", "parallel", "copyOf", "bestOf", "bestOfByUser"].includes(k));
+
+  it("drops the fields from every task, step and pipeline revision, records what changed, holds the open best-of task, and leaves the rest alone", () => {
+    const path = join(dir, "v17.sqlite");
+    const { before, v0 } = format17(path);
+    const upgraded = new Store(path);
+    const s = upgraded.read().state;
+    expect(STATE_FORMAT).toBe(18);
+    expect(s.version).toBe(18);
+    expect(upgraded.read().version).toBe(v0 + 1);
+    // Nothing of the removed features is left anywhere.
+    for (const t of s.tasks) {
+      expect(legacyKeys(t), t.id).toEqual([]);
+      for (const st of t.steps) expect(legacyKeys(st), `${t.id} ${st.id}`).toEqual([]);
+      for (const h of t.pipelineHistory) for (const st of h.steps) expect(legacyKeys(st), `${t.id} r${h.rev} ${st.id}`).toEqual([]);
+    }
+    // The copies stay as ordinary steps with their ids and purposes; nothing else about a step changes.
+    const bo = task(s, "BO-1");
+    expect(bo.steps.map((x) => [x.id, x.purpose, x.state])).toEqual([
+      ["S1", "Implement", "done"],
+      ["S1-c2", "Implement (copy 2 of 2)", "done"],
+      ["S2", "Compare", "pending"],
+    ]);
+    expect(bo.pipelineHistory.map((h) => h.rev)).toEqual([1, 2]);
+    // The open best-of task is held, with the reason, and the event says what was dropped.
+    expect(bo.hold).toBe(true);
+    expect(bo.holdReason).toBe("Parallel copies were removed in this version: S1-c2 is now an ordinary step and every finished copy's output goes forward. Check the pipeline, then resume.");
+    const ev = (id: string) => s.events.filter((e) => e.taskId === id && /were removed from Orchestrator/.test(e.message)).map((e) => e.message);
+    expect(ev("BO-1")).toEqual(["Parallel copies, best-of choices and gate steps were removed from Orchestrator when the state format was upgraded: S1-c2 is now an ordinary step (every finished copy's output goes forward); the recorded choice (S1-c2 for S1) is dropped."]);
+    // The finished task with copies and a gate: an event, no hold, still done and integrated.
+    const cp = task(s, "CP-1");
+    expect(cp).toMatchObject({ lifecycle: "done", hold: false, integration: { status: "integrated" } });
+    expect(cp.holdReason).toBeUndefined();
+    expect(ev("CP-1")).toEqual(["Parallel copies, best-of choices and gate steps were removed from Orchestrator when the state format was upgraded: S2-c2 is now an ordinary step (every finished copy's output goes forward); S2 is no longer a pause for you."]);
+    // Settings that never expanded: an event, no hold.
+    const ux = task(s, "UX-1");
+    expect(ux).toMatchObject({ lifecycle: "proposed", hold: false });
+    expect(ev("UX-1")).toEqual(["Parallel copies, best-of choices and gate steps were removed from Orchestrator when the state format was upgraded: S1 no longer expands into parallel agents; S2 is no longer a pause for you."]);
+    // Every other task is exactly what it was, and no other event was added.
+    for (const b of before.tasks.filter((t) => !["BO-1", "CP-1", "UX-1"].includes(t.id as string))) expect(task(s, b.id as string), b.id as string).toEqual(b);
+    expect(s.events.length).toBe((before.events as unknown[]).length + 3);
+    expect(s.attempts).toEqual(before.attempts);
+    expect(s.artifacts).toEqual(before.artifacts);
+    // The upgraded state takes commands: the held task resumes and its pending step is an ordinary step.
+    upgraded.command("resumeTask", { taskId: "BO-1" }, "c1", iso());
+    expect(task(upgraded.read().state, "BO-1").hold).toBe(false);
+    expect(task(upgraded.read().state, "BO-1").holdReason).toBeUndefined();
+    upgraded.close();
+    const check = new DatabaseSync(path);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
+    expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_17_%'").get()).toBeDefined();
+    check.close();
+  });
+
+  it("a task already held keeps its own hold and reason", () => {
+    const path = join(dir, "v17-held.sqlite");
+    format17(path);
+    const doc = readDoc(path);
+    const bo = doc.tasks.find((t) => t.id === "BO-1")!;
+    bo.hold = true;
+    bo.holdReason = "Review S1 (Implement) before the pipeline continues";
+    writeDoc(path, 17, doc);
+    const upgraded = new Store(path);
+    expect(task(upgraded.read().state, "BO-1")).toMatchObject({ hold: true, holdReason: "Review S1 (Implement) before the pipeline continues" });
     upgraded.close();
   });
 });
@@ -529,7 +676,7 @@ describe("a running custom pipeline across the upgrade", () => {
     await scheduler2.refreshHealth();
     try {
       const upgraded = task(store2.read().state, id);
-      expect(store2.read().state.version).toBe(17);
+      expect(store2.read().state.version).toBe(18);
       expect(upgraded.steps).toEqual(stepsBefore);
       expect(upgraded.flow).toEqual({ id: "custom", name: "Custom pipeline", source: "legacy", chosenBy: "migration" });
       expect(upgraded.flowSince).toBe(0);

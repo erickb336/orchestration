@@ -10,7 +10,7 @@ export const MAX_SCOPE_PATHS = 500;
 /** How many reported paths are read. */
 export const MAX_REVIEWED_PATHS = 600;
 /** How many missing or extra paths a coverage record lists. */
-export const MAX_LISTED = 50;
+const MAX_LISTED = 50;
 
 /**
  * A repository-relative path as the service compares it: trimmed, without a leading "./" and with no

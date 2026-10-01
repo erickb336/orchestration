@@ -15,7 +15,7 @@ import { PR_BRANCH_REF, matchGlob, prBaseRef, prBranch } from "../src/domain/del
 import type { PrDelivery } from "../src/domain/types";
 import { redact } from "./redact";
 
-export interface RepoCheck {
+interface RepoCheck {
   ok: boolean;
   /** Present when ok. */
   head?: string;
@@ -42,7 +42,7 @@ export interface PreparedWorkspace {
  */
 export type WorkspaceSeed = { kind: "merge"; ref: string } | { kind: "revert"; commit: string };
 
-export interface PreparedSeed {
+interface PreparedSeed {
   kind: WorkspaceSeed["kind"];
   /** The full commit that was merged or reverted. */
   commit: string;
@@ -51,7 +51,7 @@ export interface PreparedSeed {
 }
 
 /** A task's final commit prepared as a pull-request head, or why it cannot be one. */
-export type PrHeadResult = { status: "ready"; sha: string; baseSha: string; branch: string; changed: PrDelivery["changed"] } | { status: "conflict"; message: string };
+type PrHeadResult = { status: "ready"; sha: string; baseSha: string; branch: string; changed: PrDelivery["changed"] } | { status: "conflict"; message: string };
 
 const ORCHESTRATION_AUTHOR = "Orchestration\0orchestration@localhost";
 /** A line git writes at the start or end of a conflict. */
@@ -82,12 +82,12 @@ export function assertSafePush(args: string[]) {
 }
 
 /** Largest diff handed to a reviewer in its assignment. */
-export const MAX_REVIEW_DIFF_BYTES = 60 * 1024;
+const MAX_REVIEW_DIFF_BYTES = 60 * 1024;
 
 /** Largest diff returned to the changes viewer. */
 export const MAX_CHANGE_DIFF_BYTES = 512 * 1024;
 
-export interface CommitResult {
+interface CommitResult {
   sha: string;
   branch?: string;
   changed: boolean;

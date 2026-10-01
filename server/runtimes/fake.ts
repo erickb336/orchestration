@@ -156,7 +156,7 @@ export function fakeVision(prompt: string): Record<string, unknown> | undefined 
 }
 
 /** ORC-012: three simulated questions with reasons and options, and a simulated coverage that improves per exchange. */
-export function fakeShaping(prompt: string): { questions: Record<string, unknown>[]; coverage: Record<string, string> } | undefined {
+function fakeShaping(prompt: string): { questions: Record<string, unknown>[]; coverage: Record<string, string> } | undefined {
   if (!/^Project stage: shaping$/m.test(prompt)) return undefined;
   const n = exchanges(prompt) + 1;
   const questions = [

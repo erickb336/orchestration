@@ -23,9 +23,9 @@ import { LeaseLostError, type Store } from "./store";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
 
-export const SCHEDULER_LEASE = "scheduler";
+const SCHEDULER_LEASE = "scheduler";
 
-export interface SchedulerOptions {
+interface SchedulerOptions {
   /** Required for real runtimes: creates isolated worktrees and commits writer changes. */
   workspaces?: WorkspaceManager;
   leaseMs?: number;
@@ -449,7 +449,7 @@ export class Scheduler {
 
     // 4. Drain adapter events. Work that touches git happens here, outside the transaction.
     const events = this.queue.splice(0);
-    const completions = new Map<string, { outputs: M.OutputReport[]; problems: string[]; chosen?: string }>();
+    const completions = new Map<string, { outputs: M.OutputReport[]; problems: string[] }>();
     for (const e of events) {
       if (e.type !== "completed") continue;
       try {
@@ -950,10 +950,10 @@ export class Scheduler {
         return { outputs: outputs.filter((o) => !codeOutputs.has(o.name)), problems: parsed.problems };
       }
     }
-    return { outputs, problems: parsed.problems, chosen: parsed.chosen };
+    return { outputs, problems: parsed.problems };
   }
 
-  private applyEvent(s: State, e: QueueEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[]; chosen?: string }>, now: string): State {
+  private applyEvent(s: State, e: QueueEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[] }>, now: string): State {
     // ORC-013: the service's own record of what a run was given; applied only while the run is active.
     if (e.type === "context") return M.reportRunContext(s, e.attemptId, { scope: e.scope, conventions: e.conventions, decisions: e.decisions });
     if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now, { startedAt: e.startedAt });
@@ -983,7 +983,7 @@ export class Scheduler {
         return M.reportRunFailed(s, e.attemptId, e.message, now, { usage: e.usage });
       case "completed": {
         const c = completions.get(e.attemptId) ?? { outputs: [], problems: [] };
-        let next = M.reportCompletion(s, e.attemptId, [], now, c.outputs, { usage: e.usage, actualModel: e.model, chosen: c.chosen });
+        let next = M.reportCompletion(s, e.attemptId, [], now, c.outputs, { usage: e.usage, actualModel: e.model });
         if (c.problems.length) next = noteProblems(next, e.attemptId, c.problems);
         return next;
       }

@@ -23,7 +23,7 @@ import { redact } from "./redact";
 import type { Store } from "./store";
 import { ForeignCommitsError, type WorkspaceManager } from "./workspaces";
 
-export interface PrDriverOptions {
+interface PrDriverOptions {
   log?: (msg: string) => void;
   /** Claude workers run with shell access (shown as a posture warning). */
   workerShell?: boolean;

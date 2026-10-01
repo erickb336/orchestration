@@ -12,7 +12,7 @@ import { canSendNote, noteSourceLabel, noteStatusLabel, noteTone } from "./notes
 import { DeliveryCard } from "./Delivery";
 import { CheckResults, CoverageChip, DecisionControls, DecisionQueue, FindingsList } from "./Findings";
 import { SpecEditor } from "./SpecEditor";
-import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
+import { childrenOfArtifact, isSettledTask, stepChips } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
 import { FlowPicker } from "./FlowPicker";
 import { PIPELINE_CHANGED_MESSAGE, changeConsequences, earlierFlowLabel, flowLineParts, principlesText, revisionFlowLabel, sameFlow } from "./flowView";
@@ -719,19 +719,11 @@ function stepRuns(state: State, task: Task, st: Step) {
   return { lastRun, done, activeRun, shownRun, stale: shownRun ? M.staleInputs(state, task, shownRun) : [] };
 }
 
-/** The step's id and purpose, its markers, the best-of choice, and what it follows. */
+/** The step's id and purpose, its markers, and what it follows. */
 function StepHead({ state, task, st }: { state: State; task: Task; st: Step }) {
   return (
     <>
       <strong>{st.id}</strong> {st.purpose}
-      {st.gate && (
-        <>
-          {" "}
-          <span className="chip" title="The task pauses after this step so you can review or edit its artifacts">
-            gate
-          </span>
-        </>
-      )}
       {stepChips(state, task, st).map((c) => (
         <span key={c.text}>
           {" "}
@@ -740,7 +732,6 @@ function StepHead({ state, task, st }: { state: State; task: Task; st: Step }) {
           </span>
         </span>
       ))}
-      <BestOfChoice task={task} stepId={st.id} />
       <div className="muted small">
         {st.dependsOn.length ? `after ${st.dependsOn.join(", ")}` : "first"} · config r{st.revision}
       </div>
@@ -1261,13 +1252,6 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                     </span>{" "}
                   </>
                 )}
-                {notChosen(task, a.stepId) && (
-                  <>
-                    <span className="chip" title="Another candidate was chosen; this one's work stays visible and on its branch">
-                      not chosen
-                    </span>{" "}
-                  </>
-                )}
                 <span style={{ whiteSpace: "pre-wrap" }}>{a.summary}</span>
                 {a.kind === "breakdown" && <BreakdownChildren state={state} task={task} artifact={a} />}
                 {a.ref && (
@@ -1431,12 +1415,6 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
           <details key={a.id} className="stack" style={{ borderBottom: "1px solid var(--border)", padding: "0.4rem 0" }}>
             <summary>
               <span className="mono">{a.id}</span> · {a.stepId} · {selectionText(a.snapshot)} · <strong>{a.outcome}</strong>
-              {notChosen(task, a.stepId) && a.outcome === "completed" && (
-                <>
-                  {" "}
-                  <span className="chip">not chosen</span>
-                </>
-              )}
               {notes.length > 0 && (
                 <>
                   {" "}
@@ -1655,41 +1633,6 @@ function RevisionsCard({ task }: { task: Task }) {
         </>
       )}
     </section>
-  );
-}
-
-/** On the first member of a best-of group, which candidate the comparing step chose. */
-function BestOfChoice({ task, stepId }: { task: Task; stepId: string }) {
-  const { send, disabled } = useStore();
-  const st = task.steps.find((x) => x.id === stepId);
-  const g = st && copyGroup(task, st);
-  if (!g || g.mode !== "best-of" || g.index !== 1) return null;
-  const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
-  const finished = g.members.filter((m) => m.state === "done");
-  return (
-    <div className="muted" style={{ fontSize: "0.8rem" }}>
-      Best of {g.members.length} ({g.members.map((x) => x.id).join(", ")}):{" "}
-      {g.chosen ? (
-        <strong style={{ color: "var(--text)" }}>
-          Chosen: {g.chosen}
-          {g.byUser ? " (your choice; it stands until that candidate re-runs)" : ""}
-        </strong>
-      ) : (
-        "the next step that reads them chooses one; only the chosen work goes further"
-      )}
-      {open && finished.length > 0 && (
-        <span className="row" style={{ gap: "0.3rem", marginTop: "0.25rem" }}>
-          <span>{g.chosen ? "Change to:" : "Or choose yourself:"}</span>
-          {finished
-            .filter((m) => m.id !== g.chosen)
-            .map((m) => (
-              <button key={m.id} className="small" disabled={disabled} onClick={() => void send("chooseCandidate", { taskId: task.id, group: m.copyOf, stepId: m.id })}>
-                {m.id}
-              </button>
-            ))}
-        </span>
-      )}
-    </div>
   );
 }
 

@@ -501,8 +501,8 @@ describe("E. migration", () => {
     raw.close();
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(17);
-    expect(s.version).toBe(17);
+    expect(STATE_FORMAT).toBe(18);
+    expect(s.version).toBe(18);
     expect(s.project.visionDocs).toEqual([]);
     expect(s.project.visions.every((v) => v.docIds === undefined)).toBe(true);
     expect(M.currentVisionDocs(s)).toEqual([]);
@@ -516,7 +516,7 @@ describe("E. migration", () => {
     expect(M.currentVisionDocs(upgraded.read().state)).toEqual([]);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(17);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_12_%'").get()).toBeDefined();
     check.close();
   });

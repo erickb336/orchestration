@@ -84,7 +84,7 @@ Details: [docs/real-agents.md](docs/real-agents.md).
 
 - **Local only.** The service runs on your computer and listens on 127.0.0.1 only.
 - **Isolated worktrees.** Every agent works in its own git worktree. Your branch changes only by a fast-forward of verified work, or through a pull request.
-- **Sandboxed agents.** Codex workers run in Codex's sandbox. Claude workers have no shell unless you turn one on.
+- **Sandboxed agents.** Codex workers run in Codex's sandbox. Claude workers have no shell.
 - **Sandboxed checks.** Your project's checks run in a sandbox with no network, except dependency installs, which run with every install hook off.
 - **Narrow GitHub use.** On GitHub the app only ever merges the exact commit that was verified. It never force-pushes or uses admin rights.
 

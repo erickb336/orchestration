@@ -15,7 +15,7 @@ export interface CheckRunReport {
   simulated?: true;
 }
 
-export interface AssignmentLimits {
+interface AssignmentLimits {
   /** Maximum agent turns (Claude) / tool-loop iterations where supported. */
   maxTurns: number;
   /** Wall-clock limit; the adapter interrupts, then kills, when exceeded. */

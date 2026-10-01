@@ -21,8 +21,8 @@ import type { TurnInterruptResponse } from "./codex-protocol/v2/TurnInterruptRes
 import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
 import type { TurnStartResponse } from "./codex-protocol/v2/TurnStartResponse";
 
-export type ClientMethod = ClientRequest["method"];
-export type ParamsOf<M extends ClientMethod> = Extract<ClientRequest, { method: M }>["params"];
+type ClientMethod = ClientRequest["method"];
+type ParamsOf<M extends ClientMethod> = Extract<ClientRequest, { method: M }>["params"];
 /** Response types for the methods this project calls (the generated tree has no method->response map). */
 interface ResponseMap {
   initialize: InitializeResponse;
@@ -36,8 +36,7 @@ interface ResponseMap {
   "command/exec": CommandExecResponse;
   "command/exec/terminate": CommandExecTerminateResponse;
 }
-export type ResultOf<M extends ClientMethod> = M extends keyof ResponseMap ? ResponseMap[M] : unknown;
-export type NotificationOf<M extends ServerNotification["method"]> = Extract<ServerNotification, { method: M }>;
+type ResultOf<M extends ClientMethod> = M extends keyof ResponseMap ? ResponseMap[M] : unknown;
 
 export class RpcError extends Error {
   constructor(
@@ -59,7 +58,7 @@ export class RpcClosedError extends Error {
   }
 }
 
-export class RpcTimeoutError extends Error {
+class RpcTimeoutError extends Error {
   constructor(readonly method: string, ms: number) {
     super(`Codex app-server did not answer ${method} within ${Math.round(ms / 1000)}s`);
     this.name = "RpcTimeoutError";
@@ -73,7 +72,7 @@ interface Pending {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-export interface RpcHandlers {
+interface RpcHandlers {
   onNotification?: (n: ServerNotification) => void;
   /** Must eventually call `respond` or `respondError` with the request id. */
   onServerRequest?: (r: ServerRequest) => void;
