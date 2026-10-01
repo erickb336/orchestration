@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Orchestrator flow",
+  "description": "One flow: the steps a task runs, in order, with their roles, inputs and outputs. The built-in flows live in the repository's flows/ directory and change through commits; a test checks every file against this schema and the pipeline graph rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "description", "whenToUse", "steps"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "$comment": { "type": "string" },
+    "id": { "$ref": "#/$defs/flowId", "description": "Must equal the file name without its extension." },
+    "name": { "type": "string", "minLength": 1, "maxLength": 60, "description": "Shown in the picker." },
+    "description": { "type": "string", "minLength": 1, "maxLength": 300, "description": "What the flow does." },
+    "whenToUse": { "type": "string", "minLength": 1, "maxLength": 300, "description": "When to choose it." },
+    "steps": { "type": "array", "minItems": 1, "maxItems": 30, "items": { "$ref": "#/$defs/step" } }
+  },
+  "$defs": {
+    "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$" },
+    "stepId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,31}$" },
+    "role": { "enum": ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer", "checks"] },
+    "kind": { "enum": ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results"] },
+    "provider": { "enum": ["claude", "codex"] },
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "output"],
+      "properties": { "step": { "$ref": "#/$defs/stepId" }, "output": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" } }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": { "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }, "kind": { "$ref": "#/$defs/kind" } }
+    },
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "purpose", "role", "dependsOn", "inputs", "outputs"],
+      "properties": {
+        "$comment": { "type": "string" },
+        "id": { "$ref": "#/$defs/stepId" },
+        "purpose": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "role": { "$ref": "#/$defs/role" },
+        "dependsOn": { "type": "array", "maxItems": 30, "items": { "$ref": "#/$defs/stepId" } },
+        "inputs": { "type": "array", "maxItems": 60, "items": { "$ref": "#/$defs/ref" } },
+        "outputs": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/output" } },
+        "runIf": { "type": "array", "minItems": 1, "maxItems": 30, "items": { "$ref": "#/$defs/ref" } },
+        "gate": { "const": true },
+        "iterate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from", "max"],
+          "properties": { "from": { "$ref": "#/$defs/stepId" }, "max": { "type": "integer", "minimum": 1, "maximum": 10 } }
+        },
+        "parallel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["count", "mode"],
+          "properties": {
+            "count": { "type": "integer", "minimum": 2, "maximum": 5 },
+            "mode": { "enum": ["copies", "best-of"] },
+            "providers": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/provider" } }
+          }
+        },
+        "waitForChildren": { "const": true },
+        "independentOf": { "const": "writer" },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["onFail"],
+          "properties": { "onFail": { "enum": ["findings", "block"] } },
+          "description": "Checks steps only. No `only`: check commands belong to each project; flows run every configured check."
+        }
+      }
+    }
+  }
+}

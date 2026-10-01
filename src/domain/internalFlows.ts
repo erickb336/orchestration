@@ -1,6 +1,6 @@
-// ORC-016: the pipelines the service owns. They stay in code, never in the catalog: their steps are a
-// contract with delivery code (a prepared revert, a review pinned to a commit, a check target), so no
-// pattern file may take these ids. Moved unchanged from the format-14 built-in templates.
+// The pipelines the service owns. They stay in code, never among the flows a task can be created from:
+// their steps are a contract with delivery code (a prepared revert, a review pinned to a commit, a check
+// target). ORC-021: the revert and the delivery review carry a security review beside their code review.
 
 import type { InputRef, StepDef } from "./types";
 
@@ -8,23 +8,23 @@ const ref = (step: string, output: string): InputRef => ({ step, output });
 
 const FINAL_CHECKS_PURPOSE = "Final checks";
 
-export interface InternalPattern {
-  id: InternalPatternId;
+export interface InternalFlow {
+  id: InternalFlowId;
   name: string;
   description: string;
   steps: StepDef[];
 }
 
-export type InternalPatternId = "revert" | "delivery-review" | "delivery-checks";
+export type InternalFlowId = "revert" | "delivery-review" | "delivery-checks";
 
 /**
  * Pipelines the service uses itself and that are never offered for a new task: a task made from
  * "revert" by hand would have nothing prepared in its workspace, one made from "delivery-review" would
  * have no pull request to review, and one made from "delivery-checks" would have no change to check.
  */
-export const INTERNAL_PATTERN_IDS: InternalPatternId[] = ["revert", "delivery-review", "delivery-checks"];
+export const INTERNAL_FLOW_IDS: InternalFlowId[] = ["revert", "delivery-review", "delivery-checks"];
 
-export const isInternalPatternId = (id: string): id is InternalPatternId => (INTERNAL_PATTERN_IDS as string[]).includes(id);
+export const isInternalFlowId = (id: string): id is InternalFlowId => (INTERNAL_FLOW_IDS as string[]).includes(id);
 
 /**
  * Undo a change that already landed. The service prepares the revert in the first coder's workspace
@@ -43,24 +43,27 @@ const revert: StepDef[] = [
     ],
   },
   { id: "S2", purpose: "Code review", role: "code_reviewer", dependsOn: ["S1"], inputs: [ref("S1", "change"), ref("S1", "handoff")], outputs: [{ name: "findings", kind: "review-findings" }] },
-  { id: "C1", purpose: FINAL_CHECKS_PURPOSE, role: "checks", dependsOn: ["S2"], inputs: [ref("S1", "change")], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "block" } },
+  { id: "SR1", purpose: "Security review", role: "security_reviewer", dependsOn: ["S1"], inputs: [ref("S1", "change"), ref("S1", "handoff")], outputs: [{ name: "findings", kind: "review-findings" }] },
+  { id: "C1", purpose: FINAL_CHECKS_PURPOSE, role: "checks", dependsOn: ["S2", "SR1"], inputs: [ref("S1", "change")], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "block" } },
   {
     id: "S3",
     // ORC-017: the instruction that was here reaches the lead through its role brief (server/envelope.ts VERIFY_CHECKS_NOTE).
     purpose: "Verify the revert and integrate",
     role: "lead",
     dependsOn: ["C1"],
-    inputs: [ref("S1", "change"), ref("S2", "findings"), ref("C1", "final")],
+    inputs: [ref("S1", "change"), ref("S2", "findings"), ref("SR1", "findings"), ref("C1", "final")],
     outputs: [{ name: "verification", kind: "verification" }],
   },
 ];
 
 /**
- * One independent review of a pull request's change before it merges. The service creates the task
- * itself, points the reviewer's workspace at the exact commit, and hands it the changed lines.
+ * One independent code review and one security review of a pull request's change before it merges. The
+ * service creates the task itself, points both reviewers' workspaces at the exact commit, and hands them
+ * the changed lines. The findings of either gate the merge.
  */
 const deliveryReview: StepDef[] = [
   { id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
+  { id: "SR1", purpose: "Security review of the change for merge", role: "security_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
 ];
 
 /**
@@ -71,12 +74,12 @@ const deliveryChecks: StepDef[] = [
   { id: "S1", purpose: "Run the project's checks on the change for merge", role: "checks", dependsOn: [], inputs: [], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "findings" } },
 ];
 
-export const INTERNAL_PATTERNS: InternalPattern[] = [
-  { id: "revert", name: "Revert", description: "Undo a landed change: complete the prepared revert, review it, final checks, verify. Used by Send back as revert.", steps: revert },
+export const INTERNAL_FLOWS: InternalFlow[] = [
+  { id: "revert", name: "Revert", description: "Undo a landed change: complete the prepared revert, code and security review, final checks, verify. Used by Send back as revert.", steps: revert },
   {
     id: "delivery-review",
     name: "Delivery review",
-    description: "One independent review of a pull request's change before it merges, by another provider than the writer. Used by pull-request delivery.",
+    description: "An independent code review and a security review of a pull request's change before it merges, by another provider than the writer. Used by pull-request delivery.",
     steps: deliveryReview,
   },
   {
@@ -87,9 +90,9 @@ export const INTERNAL_PATTERNS: InternalPattern[] = [
   },
 ];
 
-/** An internal pattern by id, with its steps cloned. */
-export function internalPattern(id: string): InternalPattern {
-  const p = INTERNAL_PATTERNS.find((x) => x.id === id);
-  if (!p) throw new Error(`Unknown internal pattern ${id}`);
+/** An internal flow by id, with its steps cloned. */
+export function internalFlow(id: string): InternalFlow {
+  const p = INTERNAL_FLOWS.find((x) => x.id === id);
+  if (!p) throw new Error(`Unknown internal flow ${id}`);
   return { ...p, steps: structuredClone(p.steps) };
 }

@@ -9,7 +9,7 @@ import { DEMO_DOC_TEXT, DEMO_PROJECT_NAME, DEMO_REPO_PATH, buildDemo } from "./d
 import { DEMO_AREAS } from "./demoScript";
 import * as F from "./findings";
 import * as M from "./model";
-import { builtInCatalog } from "./patterns";
+import { builtInCatalog } from "./flows";
 import { toDef, validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
 import type { State, Task } from "./types";
@@ -25,7 +25,7 @@ const task = (s: State, id: string): Task => {
 
 /** Structural checks any state the service writes must pass. */
 function validate(s: State) {
-  expect(s.version).toBe(15);
+  expect(s.version).toBe(16);
   const catalog = builtInCatalog();
   const ids = new Set<string>();
   for (const t of s.tasks) {
@@ -33,12 +33,12 @@ function validate(s: State) {
     ids.add(t.id);
     expect(validatePipeline(t.steps.map(toDef)).filter((i) => i.severity === "error"), `${t.id} pipeline`).toEqual([]);
     expect(t.pipelineHistory.length, `${t.id} history`).toBe(t.pipelineRev);
-    expect(t.patternSince).toBeLessThanOrEqual(t.pipelineRev);
-    expect(t.pattern.source).toBe("built-in");
-    const p = catalog.patterns.find((x) => x.id === t.pattern.id);
-    expect(p, `${t.id} pattern ${t.pattern.id}`).toBeDefined();
-    expect(t.pattern.hash).toBe(p!.hash);
-    expect(t.pipelineHistory[0].pattern?.id).toBe(t.pattern.id);
+    expect(t.flowSince).toBeLessThanOrEqual(t.pipelineRev);
+    expect(t.flow.source).toBe("built-in");
+    const p = catalog.find((x) => x.id === t.flow.id);
+    expect(p, `${t.id} flow ${t.flow.id}`).toBeDefined();
+    expect(t.flow.hash).toBe(p!.hash);
+    expect(t.pipelineHistory[0].flow?.id).toBe(t.flow.id);
     expect(t.specs.map((x) => x.rev)).toEqual(t.specs.map((_, i) => i + 1));
     const spec = M.currentSpec(t).content;
     expect(spec.options.some((o) => o.id === spec.selectedOptionId), `${t.id} selected option`).toBe(true);
@@ -200,7 +200,8 @@ describe("the demo state (ORC-017 §5)", () => {
     // WT-001: a failing check became a finding, the repair ran, the loop ran once more clean; merged, in Review.
     const wt1 = task(s, "WT-001");
     expect(col("WT-001")).toBe("done");
-    expect(wt1.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "C1:done", "S2:done", "S3:done", "C1-i2:done", "S2-i2:done", "S3-i2:skipped", "C2:done", "S4:done"]);
+    expect(wt1.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "C1:done", "S2:done", "SR1:done", "S3:done", "C1-i2:done", "S2-i2:done", "SR1-i2:done", "S3-i2:skipped", "C2:done", "S4:done"]);
+    expect(M.acceptedOutput(s, wt1, "SR1", "findings")?.openFindings).toBe(0); // ORC-021: the security review beside the code review
     const c1 = M.acceptedOutput(s, wt1, "C1", "checks")!;
     expect(c1.checkRun?.simulated).toBe(true);
     expect(c1.checkRun?.results.map((r) => `${r.id}:${r.status}`)).toEqual(["test:failed", "lint:passed"]);
@@ -222,13 +223,13 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(col("WT-002")).toBe("ready");
     expect(M.currentSpec(task(s, "WT-002")).content.benefit).toBe("You always know whether the map is current.");
     expect(col("WT-003")).toBe("ready");
-    expect(task(s, "WT-003").pattern.id).toBe("feature");
+    expect(task(s, "WT-003").flow.id).toBe("feature");
     expect(M.currentSpec(task(s, "WT-003")).content.options.map((o) => o.name)).toEqual(["Download by trail", "Download by map rectangle"]);
     expect(col("WT-006")).toBe("ready");
 
     // WT-004: a goal whose plan became three children; it waits on them.
     const goal = task(s, "WT-004");
-    expect(goal.pattern.id).toBe("goal");
+    expect(goal.flow.id).toBe("goal");
     expect(M.stateLabel(s, goal)).toBe("Waiting for 2 child tasks");
     expect(M.childTasks(s, goal).map((c) => c.id)).toEqual(["WT-004.1", "WT-004.2", "WT-004.3"]);
     expect(M.acceptedOutput(s, goal, "S1", "plan")?.items).toHaveLength(3);
@@ -258,8 +259,8 @@ describe("the demo state (ORC-017 §5)", () => {
 
     // WT-007: the UX review raised a finding that needs you; the code review is the next step.
     const vo = task(s, "WT-007");
-    expect(vo.pattern.id).toBe("feature");
-    expect(vo.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:pending", "S2:pending", "C1:pending", "S3:pending", "S4:pending", "S5:pending", "C2:pending", "S6:pending"].map((x) => (x.startsWith("S1:") || x.startsWith("S2:") || x.startsWith("C1:") || x.startsWith("S4:") ? x.replace("pending", "done") : x)));
+    expect(vo.flow.id).toBe("feature");
+    expect(vo.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:pending", "S2:pending", "C1:pending", "S3:pending", "SR1:pending", "S4:pending", "S5:pending", "C2:pending", "S6:pending"].map((x) => (x.startsWith("S1:") || x.startsWith("S2:") || x.startsWith("C1:") || x.startsWith("S4:") ? x.replace("pending", "done") : x)));
     const decision = s.decisions.find((d) => d.taskId === "WT-007");
     expect(s.decisions).toHaveLength(1);
     expect(decision).toMatchObject({ status: "open", routedTo: "user", finding: { title: "Read distances in miles or kilometres?" } });
@@ -271,7 +272,7 @@ describe("the demo state (ORC-017 §5)", () => {
 
     // WT-009: paused by you during S2; the runtime acknowledged.
     const bug = task(s, "WT-009");
-    expect(bug.pattern.id).toBe("bugfix");
+    expect(bug.flow.id).toBe("bugfix");
     expect(bug.hold).toBe(true);
     expect(M.stateLabel(s, bug)).toBe("Paused");
     const fix = s.attempts.filter((a) => a.taskId === "WT-009" && a.stepId === "S2");
@@ -284,21 +285,19 @@ describe("the demo state (ORC-017 §5)", () => {
     // WT-010: deferred by the lead's steering.
     expect(M.stateLabel(s, task(s, "WT-010"))).toBe("Deferred by lead");
 
-    // WT-011: the best-of experiment, chosen by you, compared and merged; in Review.
+    // WT-011: your own Change task, implemented by Codex, reviewed clean (code and security), merged; in Review.
     const search = task(s, "WT-011");
-    expect(search.pattern).toMatchObject({ id: "change-best-of-two", experimental: true, chosenBy: "user" });
-    expect(search.steps.filter((x) => x.copyOf === "S1").map((x) => `${x.id}:${x.selection?.provider}`)).toEqual(["S1:claude", "S1-c2:codex"]);
-    expect(search.bestOf).toEqual({ S1: "S1" });
-    expect(M.acceptedOutput(s, search, "S2", "comparison")?.summary).toMatch(/S1 is simpler/);
+    expect(search.flow).toMatchObject({ id: "change", chosenBy: "user" });
+    expect(search.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "C1:done", "S2:done", "SR1:done", "S3:skipped", "C2:done", "S4:done"]);
     expect(search.integration?.landed).toMatchObject({ status: "unreviewed", simulated: true });
-    expect(search.integration?.pr?.changeAuthors).toEqual(["claude"]);
+    expect(search.integration?.pr?.changeAuthors).toEqual(["codex"]);
 
     // The review-later list: unreviewed first, newest first.
     expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
     expect(D.unreviewedCount(s)).toBe(2);
   });
 
-  it("dispatches three agents at the worker limit, with WT-003 next in the queue; the paused, deferred and held tasks stay put", () => {
+  it("dispatches three agents at the worker limit, with WT-007's security review next in the queue and WT-003 after it; the paused, deferred and held tasks stay put", () => {
     const s0 = demo();
     const now = iso(T0 + 1000);
     const s = M.dispatchEligible(M.leadPromoteProposals(s0, now), now);
@@ -309,9 +308,12 @@ describe("the demo state (ORC-017 §5)", () => {
     // WT-004.3 was promoted (the lead moves published specs to Ready) and still waits for you.
     expect(task(s, "WT-004.3")).toMatchObject({ lifecycle: "ready", holdBeforeStart: true });
     expect(M.stateLabel(s, task(s, "WT-004.3"))).toBe("Held before start");
-    // One more slot goes to WT-003's designer step on Claude, and to nothing else first.
+    // One more slot goes to WT-007's security review (ORC-021: beside its code review), the next after that to WT-003's designer step on Claude.
     const wider = M.dispatchEligible({ ...s, project: { ...s.project, workerLimit: 4 } }, iso(T0 + 2000));
-    expect(M.activeAgentAttempts(wider).map((a) => `${a.taskId} ${a.stepId} ${a.snapshot.provider}`)).toEqual([...active, "WT-003 S1 claude"]);
+    expect(M.activeAgentAttempts(wider).map((a) => `${a.taskId} ${a.stepId} ${a.snapshot.provider}`)).toEqual([...active, "WT-007 SR1 claude"]);
+    // With Claude's own limit of three full, the fifth slot goes to WT-006's coder on Codex; WT-003's designer step waits for Claude.
+    const widest = M.dispatchEligible({ ...wider, project: { ...wider.project, workerLimit: 5 } }, iso(T0 + 3000));
+    expect(M.activeAgentAttempts(widest).map((a) => `${a.taskId} ${a.stepId} ${a.snapshot.provider}`)).toEqual([...active, "WT-007 SR1 claude", "WT-006 S1 codex"]);
   });
 
   it("labels nothing by text: no 'Simulated part', no '(sample)' outside the project name, no run id used as a name, no '(Simulated)' prefix", () => {
@@ -325,27 +327,24 @@ describe("the demo state (ORC-017 §5)", () => {
       expect(text, where).not.toMatch(/\(Simulated\)/);
     }
     expect(s.project.name).toContain("(sample)");
-    // "(simulated)" survives only where the design keeps it: the comparison's measurement.
-    const keep = texts.filter((t) => /\(simulated\)/i.test(t.text));
-    expect(keep.map((t) => t.where)).toEqual(s.artifacts.filter((a) => a.taskId === "WT-011" && a.name === "comparison").map((a) => `${a.id} summary`));
+    // "(simulated)" appears in no visible text: simulated things are labelled by their records instead.
+    expect(texts.filter((t) => /\(simulated\)/i.test(t.text))).toEqual([]);
     // Simulated things are labelled by their records instead.
     expect(s.attempts.filter((a) => a.snapshot.provider === "service").every((a) => s.artifacts.find((x) => x.attemptId === a.id)?.checkRun?.simulated)).toBe(true);
     expect(s.tasks.filter((t) => t.integration?.pr).every((t) => t.integration!.pr!.simulated)).toBe(true);
     expect(s.tasks.filter((t) => t.integration?.landed).every((t) => t.integration!.landed!.simulated)).toBe(true);
   });
 
-  it("Reset sample data restores the demo, keeps the catalog and the retired templates, and never reuses ids", () => {
+  it("Reset sample data restores the demo, keeps the flows, and never reuses ids", () => {
     const s0 = demo();
     let s = M.pauseTask(s0, "WT-002", iso(T0 + 1000));
     s = M.postMessage(s, "Hello", iso(T0 + 2000));
-    s = { ...s, retiredTemplates: [{ id: "old", name: "Old", description: "", steps: [], kind: "custom", retiredAt: iso(T0) }] };
     const r = runCommand(s, "resetSampleData", {}, iso(T0 + 3000)).state;
     expect(r.project.name).toBe(DEMO_PROJECT_NAME);
     expect(r.tasks.map((t) => t.id)).toEqual(s0.tasks.map((t) => t.id));
     expect(task(r, "WT-002").hold).toBe(false);
     expect(r.conversation).toHaveLength(4);
-    expect(r.patterns).toEqual(s.patterns);
-    expect(r.retiredTemplates).toEqual(s.retiredTemplates);
+    expect(r.flows).toEqual(s.flows);
     expect(r.seq).toBeGreaterThan(s.seq);
     validate(r);
   });

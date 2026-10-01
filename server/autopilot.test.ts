@@ -39,8 +39,8 @@ const step = (id: string, s: string) => task(id).steps.find((x) => x.id === s)!;
 const run = (id: string) => M.activeAttempts(st(), id)[0];
 let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
-const newTask = (title: string, patternId = "change") =>
-  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId }).result as { newId: string }).newId;
+const newTask = (title: string, flowId = "change") =>
+  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId }).result as { newId: string }).newId;
 const oneStep = (id: string) =>
   setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
 
@@ -75,6 +75,8 @@ describe("review gates and human edits", () => {
     codex.finish(run(id).id, { write: ["a.txt", "a\n"] });
     tick();
     tick();
+    claude.finish(M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!.id, { findings: 0 }); // ORC-021: the security review beside it, clean, first
+    tick();
     claude.finish(run(id).id, { findings: 0 });
     tick();
     expect(task(id).hold).toBe(true);
@@ -103,7 +105,7 @@ describe("review gates and human edits", () => {
     const change = st().artifacts.find((a) => a.taskId === id && a.stepId === "S1" && a.name === "change")!;
     cmd("editArtifact", { artifactId: change.id, summary: "Changed b.txt; please also check naming.", reason: "Clarify scope for the reviewer" });
     expect(st().attempts.find((a) => a.id === review.id)!.outcome).toBe("stopping"); // running reviewer stopped
-    claude.emit({ type: "stopped", attemptId: review.id, how: "interrupted" });
+    for (const a of st().attempts.filter((x) => x.taskId === id && x.outcome === "stopping")) claude.emit({ type: "stopped", attemptId: a.id, how: "interrupted" }); // both reviews beside each other
     tick();
     tick();
     const again = run(id);

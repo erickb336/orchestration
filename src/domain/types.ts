@@ -3,14 +3,16 @@
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
-export type RoleId = "lead" | "designer" | "coder" | "code_reviewer" | "ux_reviewer" | "checks";
+/** ORC-021: `security_reviewer` reviews a change for security beside the code review; its findings count like the code review's. */
+export type RoleId = "lead" | "designer" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks";
 /** Agent roles: they have role defaults, task role overrides and a resolved provider. */
-export const ROLES: RoleId[] = ["lead", "designer", "coder", "code_reviewer", "ux_reviewer"];
+export const ROLES: RoleId[] = ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
 /** ORC-013: roles the service runs itself; never resolved to a provider. */
 export const SERVICE_ROLES: RoleId[] = ["checks"];
 /** What a step definition may use. */
 export const STEP_ROLES: RoleId[] = [...ROLES, ...SERVICE_ROLES];
-export const REVIEW_ROLES: RoleId[] = ["code_reviewer", "ux_reviewer"];
+/** Roles whose findings gate repairs and merges. */
+export const REVIEW_ROLES: RoleId[] = ["code_reviewer", "security_reviewer", "ux_reviewer"];
 
 /** ORC-013: who runs an attempt: a provider's agent, or the service itself (check runs). */
 export type Runner = ProviderId | "service";
@@ -265,11 +267,11 @@ export interface Project {
   hold: boolean;
   lastVisitAt: string;
   /**
-   * ORC-016: the pattern used when a lead proposal or a breakdown item names none, and when nothing else
-   * chooses. It must be a standard pattern; when it leaves the catalog, `effectiveDefault` falls back to
-   * "change" without rewriting this field.
+   * ORC-021: the flow used when a lead proposal or a breakdown item names none, and when nothing else
+   * chooses. Any of the six; when it is not in the catalog, `effectiveDefault` falls back to "change"
+   * without rewriting this field.
    */
-  defaultPatternId: string;
+  defaultFlowId: string;
 }
 
 /**
@@ -287,7 +289,10 @@ export interface RunLimits {
   maxBudgetUsd: number;
 }
 
-/** Provider-neutral model defaults for a new project: "auto" resolves against the live catalog. */
+/**
+ * Provider-neutral model defaults for a new project: "auto" resolves against the live catalog. The
+ * security reviewer has no default of its own here: without one it follows the code reviewer's (ORC-021).
+ */
 export function autoModelDefaults(): Pick<Project, "defaultSelection" | "leadSelection" | "roleDefaults"> {
   return {
     defaultSelection: { provider: "claude", model: "auto" },
@@ -300,6 +305,11 @@ export function autoModelDefaults(): Pick<Project, "defaultSelection" | "leadSel
       ux_reviewer: { provider: "claude", model: "auto" },
     },
   };
+}
+
+/** The project role default that applies to a role: its own, or for the security reviewer the code reviewer's when it has none (ORC-021). */
+export function roleDefaultFor(p: Pick<Project, "roleDefaults">, role: RoleId): ModelSelection | undefined {
+  return p.roleDefaults[role] ?? (role === "security_reviewer" ? p.roleDefaults.code_reviewer : undefined);
 }
 
 export const DEFAULT_RUN_LIMITS: RunLimits = { maxTurns: 40, timeoutMinutes: 20, maxBudgetUsd: 2 };
@@ -581,7 +591,7 @@ export interface InputRef {
   output: string;
 }
 
-/** Structural definition of a step, shared by patterns and task pipelines. */
+/** Structural definition of a step, shared by flows and task pipelines. */
 export interface StepDef {
   id: string;
   purpose: string;
@@ -622,119 +632,45 @@ export interface StepDef {
   checks?: { onFail: "findings" | "block"; only?: string[] };
 }
 
-// ---------- ORC-016: pipeline patterns ----------
+// ---------- ORC-021: flows ----------
 
 /**
- * Who chose a task's pattern. "default": nothing named one, so the project default applied. "service":
+ * Who chose a task's flow. "default": nothing named one, so the project default applied. "service":
  * a pipeline the service created (fix, revert, delivery review or checks). "follow-up": copied or
- * re-applied from the origin task. "migration": recorded for tasks from before patterns existed.
- * A later automatic assignment (spec: excluded) would add "rotation".
+ * re-applied from the origin task. "migration": recorded for tasks from before flows existed.
  */
 export type ChosenBy = "user" | "lead" | "breakdown" | "default" | "service" | "follow-up" | "migration";
 
-export type PatternSource = "built-in" | "local";
+/** Every flow a task can be created from is one of the six files in the repository's flows/ folder. */
+export type FlowSource = "built-in";
 
-/** One file in a pattern's `extends` chain, nearest first. `fileHash` changes with any field of that file. */
-export interface PatternChainEntry {
-  id: string;
-  source: PatternSource;
-  file: string;
-  fileHash: string;
-}
-
-export interface PatternFlags {
-  /** An output has the kind `breakdown`: the pattern creates child tasks. */
-  breaksDown: boolean;
-  /** A step has `gate: true`: the task pauses for a person. */
-  pausesForYou: boolean;
-  /** Some step changes code and no code_reviewer step reads a code change. */
-  unreviewed: boolean;
-  /** A step runs as best-of candidates. */
-  bestOf: boolean;
-  /** The union of `parallel.providers`; the picker warns when one is disabled. */
-  needsProviders: ProviderId[];
-}
-
-/**
- * A resolved catalog pattern: its steps after `extends` and `stepOverrides`, with derived flags.
- * "standard": not experimental, no pause for a person, and an independent review of any code change; the
- * lead, breakdowns and the project default may use it. Everything else is "user-only".
- */
-export interface Pattern {
+/** One of the six flows, resolved from its file: Change, Bug fix, Feature, Design, Investigation or Goal. */
+export interface Flow {
   id: string;
   name: string;
   description: string;
+  /** The "use it for" line shown in the picker and in the lead's instructions. */
   whenToUse: string;
-  order: number;
-  experimental?: true;
-  hypothesis?: string;
-  source: PatternSource;
-  /** A file of yours with a built-in's id. */
-  replacesBuiltIn?: true;
-  /** Display path: "patterns/change.json" or "~/.orchestration/patterns/x.jsonc". */
-  file: string;
-  /** Nearest first: this file, then each base. */
-  chain: PatternChainEntry[];
-  /** SHA-256 of the canonical resolved steps: what runs. Names, descriptions and comments do not count. */
+  source: FlowSource;
+  /** SHA-256 of the canonical steps: what runs. Names, descriptions and comments do not count. Recorded on tasks, never shown. */
   hash: string;
   steps: StepDef[];
-  flags: PatternFlags;
-  audience: "standard" | "user-only";
-  /** validatePipeline warnings, and "no independent code review" when it applies. */
-  warnings: string[];
-}
-
-export interface PatternError {
-  file: string;
-  id?: string;
-  message: string;
-  line?: number;
-  column?: number;
-  /** "built-in kept": the broken file of yours would have replaced a built-in, which stays in effect. */
-  effect: "skipped" | "built-in kept";
-}
-
-/** The catalog, loaded by the server from files and written to the state through `setPatternCatalog` only. */
-export interface PatternCatalog {
-  loadedAt: string;
-  /** Display path of the directory of your patterns. */
-  localDir: string;
-  patterns: Pattern[];
-  errors: PatternError[];
+  /** An output has the kind `breakdown`: the flow creates child tasks, so a breakdown item may not use it. */
+  breaksDown: boolean;
 }
 
 /**
- * What a task ran. Recorded on each pipeline revision that applied a pattern, and as the task's current
+ * What a task ran. Recorded on each pipeline revision that applied a flow, and as the task's current
  * one. "internal": a service-owned pipeline. "legacy": made from a template before ORC-016. "custom":
  * built by the internal `setPipeline` (tests).
  */
-export interface PatternRef {
+export interface FlowRef {
   id: string;
   name: string;
-  source: PatternSource | "internal" | "legacy" | "custom";
+  source: FlowSource | "internal" | "legacy" | "custom";
   /** Absent for legacy and custom pipelines. */
   hash?: string;
-  chain?: PatternChainEntry[];
-  experimental?: true;
   chosenBy: ChosenBy;
-}
-
-/** A custom or edited template retired by migration 14 → 15, written once as a pattern file of yours at start. */
-export interface RetiredTemplate {
-  id: string;
-  name: string;
-  description: string;
-  steps: StepDef[];
-  kind: "custom" | "edited-built-in";
-  /** An edited copy of a pipeline the service owns (revert, delivery review, delivery checks): exported as an experiment, so the lead never gets it. */
-  internal?: true;
-  retiredAt: string;
-  /** Display path of the file written. */
-  exportedTo?: string;
-  exportedId?: string;
-  exportError?: string;
-  /** What the export had to leave out, e.g. "C2.checks.only (lint, test)". */
-  stripped?: string[];
 }
 
 /** An accepted output of a completed run. Immutable; a rerun produces a new version. */
@@ -768,8 +704,8 @@ export interface Artifact {
   /** Why the person changed it. */
   editReason?: string;
   /**
-   * ORC-016: the task's pipeline revision when this version was made. Below the task's `patternSince`, the
-   * artifact belongs to an earlier pattern: kept for the record, never edited or consumed again. Absent on
+   * ORC-016: the task's pipeline revision when this version was made. Below the task's `flowSince`, the
+   * artifact belongs to an earlier flow: kept for the record, never edited or consumed again. Absent on
    * older artifacts, which take it from their attempt's snapshot (an edit from the version it edited).
    */
   pipelineRev?: number;
@@ -814,7 +750,7 @@ export interface RunSnapshot {
   visionRev: number;
   workspace: string;
   pipelineRev: number;
-  /** ORC-016: the step's role at dispatch, for outcome records and a later trace export. Absent on older attempts, which take it from the pipeline revision named by `pipelineRev`. */
+  /** ORC-016: the step's role at dispatch. Absent on older attempts, which take it from the pipeline revision named by `pipelineRev`. */
   role?: RoleId;
   /** The worker environment the run was started with (absent on runs from before the setting existed). */
   environment?: WorkerEnvironment;
@@ -949,78 +885,10 @@ export interface Task {
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
   legacySpecUnavailable?: boolean;
-  /** ORC-016: the pattern the current pipeline came from. */
-  pattern: PatternRef;
-  /** ORC-016: the pipeline revision that applied the current pattern; 0 for tasks from before patterns. */
-  patternSince: number;
-  /**
-   * ORC-016: written once by the store when the task becomes done or cancelled, from data already kept;
-   * replaced only if the task is reopened and settles again. Read-only afterwards. Tasks settled before
-   * the upgrade have none.
-   */
-  outcome?: TaskOutcome;
-}
-
-// ---------- ORC-016: outcome records ----------
-
-/**
- * A snapshot of what a task cost and produced, taken when it settles. Field names follow the
- * OpenTelemetry GenAI semantic conventions where one exists (design §10.4): a `RunTally` row is one
- * `gen_ai.client.token.usage` / `gen_ai.client.operation.duration` series by provider, model and agent
- * name (`role`); the task-level numbers are `orc.*` attributes. Delivery results are not copied: they
- * stay on `Task.integration` and are derived later (ORC-017).
- */
-export interface TaskOutcome {
-  v: 1;
-  result: "done" | "cancelled";
-  settledAt: string;
-  /** The pattern in effect at settle. */
-  pattern: PatternRef;
-  /** Pipeline revisions that applied a pattern, after the first. */
-  patternChanges: number;
-  /** Attempts started under an earlier pattern (`snapshot.pipelineRev < patternSince`). */
-  runsBeforePattern: number;
-  createdAt: string;
-  firstRunAt?: string;
-  /** firstRunAt → settledAt. */
-  wallMs?: number;
-  /** The sum of agent attempt durations (service check runs excluded). */
-  agentMs: number;
-  /** One row per (role, runner, model). */
-  runs: RunTally[];
-  /** Per provider. `costUsd` is null when no run of that provider reported a cost. */
-  usage: { provider: ProviderId; inputTokens: number; outputTokens: number; costUsd: number | null; runsWithoutUsage: number }[];
-  /** `rounds`: completed runs of repair steps (coder with `runIf`), iterations included. `iterations`: the highest loop iteration reached (0 without a loop). */
-  repair: { rounds: number; iterations: number; finalCheckRounds: number };
-  /** Structured findings raised by runs; `summaryOnly` sums the open counts of artifacts without structured findings; `openAtEnd` is the blocking count of the done review and check steps' accepted outputs. */
-  findings: { raised: Record<Severity, number>; byAction: Record<FindingAction, number>; summaryOnly: number; openAtEnd: number };
-  /** Captured at settle because decisions are pruned later. */
-  decisions: { total: number; byUser: number; byLead: number; fix: number; accept: number; followUp: number; superseded: number; open: number };
-  /** `finalPassed`: the last blocking Checks step's accepted run, or null when it was skipped or did not run. */
-  checks: { runs: number; failedRuns: number; finalPassed: boolean | null; acceptedFailing: boolean };
-  /** Path coverage of the code reviews runs produced (`not-required` excluded), and how many clean reviews ran again for a coverage gap. */
-  coverage: { reviews: number; complete: number; incomplete: number; unproven: number; retries: number };
-  human: { artifactEdits: number; pinnedSteps: number; candidateChoices: number };
-  bestOf?: { groups: number; candidates: number; chosenByUser: number };
-}
-
-/** One (role, runner, model) series of attempts. `model` is the model that actually ran when the provider reported it. */
-export interface RunTally {
-  role: RoleId;
-  runner: Runner;
-  model: string;
-  /** Every attempt, including any still stopping at settle. */
-  runs: number;
-  completed: number;
-  failed: number;
-  stopped: number;
-  lost: number;
-  discarded: number;
-  ms: number;
-  inputTokens: number;
-  outputTokens: number;
-  /** null when no attempt in the row reported a cost. */
-  costUsd: number | null;
+  /** ORC-021: the flow the current pipeline came from. */
+  flow: FlowRef;
+  /** ORC-021: the pipeline revision that applied the current flow; 0 for tasks from before flows. */
+  flowSince: number;
 }
 
 export interface PipelineRevision {
@@ -1029,8 +897,8 @@ export interface PipelineRevision {
   author: Actor;
   reason: string;
   steps: StepDef[];
-  /** ORC-016: set on revisions that applied a pattern. Expansions and check rounds leave it unset. */
-  pattern?: PatternRef;
+  /** ORC-021: set on revisions that applied a flow. Expansions and check rounds leave it unset. */
+  flow?: FlowRef;
 }
 
 export type EventKind =
@@ -1055,7 +923,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 15;
+  version: 16;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -1070,10 +938,8 @@ export interface State {
   visionDrafts: VisionDraft[];
   /** ORC-013: decisions on findings (at most 2000; decided ones of settled tasks are pruned first, open ones never). */
   decisions: FindingDecision[];
-  /** ORC-016: the pattern catalog, machine-level like the files it comes from. Only the server writes it; initProject leaves it alone. */
-  patterns: PatternCatalog;
-  /** ORC-016: templates retired by migration 14 → 15, exported once as pattern files of yours. */
-  retiredTemplates: RetiredTemplate[];
+  /** ORC-021: the six built-in flows, machine-level like the files they come from. Only the server writes them (at start); initProject leaves them alone. */
+  flows: Flow[];
 }
 
 /** One entry in the lead conversation. */

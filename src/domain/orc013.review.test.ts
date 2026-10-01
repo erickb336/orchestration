@@ -8,7 +8,7 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
 import { buildSeed } from "./seed";
-import { builtInCatalog } from "./patterns";
+import { builtInCatalog } from "./flows";
 import { DEFAULT_PR_DELIVERY, type Finding, type State } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -27,7 +27,7 @@ function finding(over: Partial<Finding> = {}): Finding {
 function reviewRunning(o: { author?: "user" | "lead" } = {}): { s: State; id: string; review: string } {
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
-  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
+  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
   s = r.state;
   if (o.author === "lead") task(s, r.newId).specs[0].author = "lead";
   s = M.dispatchEligible(M.leadPromoteProposals(s, at(1)), at(1));
@@ -35,6 +35,8 @@ function reviewRunning(o: { author?: "user" | "lead" } = {}): { s: State; id: st
   s = M.dispatchEligible(s, at(3));
   const review = running(s, r.newId)[0].id;
   s = M.reportRunContext(s, review, { scope: { from: SHA2, to: SHA, paths: ["a.ts"], total: 1 } });
+  // ORC-021: the security review beside S2 is completed clean; these tests are about the code review.
+  for (const a of running(s, r.newId)) if (step(s, r.newId, a.stepId).role === "security_reviewer") s = M.reportCompletion(s, a.id, [], at(3), [{ name: "findings", summary: "no security findings", findings: [] }]);
   return { s, id: r.newId, review };
 }
 const report = (s: State, run: string, t: number, findings: Finding[], paths = ["a.ts"]) => M.reportCompletion(s, run, [], at(t), [{ name: "findings", summary: "r", findings, reviewedPaths: paths }]);
@@ -122,7 +124,7 @@ describe("finding 6: the lead-fix-on-a-user-spec rule holds in pull-request mode
     let s: State = { ...s0, project: { ...s0.project, triage: { askUserBy: "lead" as const } } };
     s = report(s, review, 4, [finding({ action: "ask-user" })]);
     // Pretend this task is a repair of a user-authored task (as pull-request delivery creates them).
-    const owner = M.createTask(s, { title: "Owner", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: true, patternId: "change" }, at(5));
+    const owner = M.createTask(s, { title: "Owner", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: true, flowId: "change" }, at(5));
     s = owner.state;
     task(s, id).specs[0].author = "system";
     task(s, id).deliverInto = { taskId: owner.newId, n: 1, mergeBase: false };
@@ -210,7 +212,7 @@ describe("findings 11, 13 and 14: small items", () => {
     expect(DEFAULT_PR_DELIVERY.protectedPaths).toEqual(expect.arrayContaining(["**/AGENTS.md", "**/CLAUDE.md"]));
     for (const p of ["AGENTS.md", "docs/AGENTS.md", "a/b/CLAUDE.md"]) expect(DEFAULT_PR_DELIVERY.protectedPaths.some((g) => D.matchGlob(g, p)), p).toBe(true);
     expect(DEFAULT_PR_DELIVERY.protectedPaths.some((g) => D.matchGlob(g, "src/agents.ts"))).toBe(false);
-    for (const b of builtInCatalog().patterns) expect(b.description.length).toBeGreaterThan(0);
+    for (const b of builtInCatalog()) expect(b.description.length).toBeGreaterThan(0);
   });
 
   it("a backslash is part of a path name (finding 2, the pure part)", () => {

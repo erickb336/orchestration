@@ -1,9 +1,8 @@
 {
-  "$schema": "./pattern.schema.json",
-  "$comment": "ORC-016: a 1:1 transcription of the built-in Goal template (state format 14). Large goals: plan a breakdown into child tasks (each runs its own pipeline in parallel), wait for them, then evaluate. The evaluation may break the remaining work down again, up to five rounds.",
+  "$schema": "./flow.schema.json",
+  "$comment": "Large goals: plan a breakdown into child tasks (each runs its own flow in parallel), wait for them, then evaluate. The evaluation may break the remaining work down again, up to five rounds.",
   "id": "goal",
   "name": "Goal",
-  "order": 60,
   "description": "Large goal: break it into parallel child tasks, evaluate, and iterate until the goal is met.",
   "whenToUse": "Work too large for one task.",
   "steps": [

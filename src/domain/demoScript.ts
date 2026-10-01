@@ -26,7 +26,7 @@ export interface ScriptBreakdownItem {
   recommendedOptionId?: string;
   rationale?: string;
   uncertainty?: string;
-  patternId?: string;
+  flowId?: string;
   priority?: number;
   dependsOn?: (number | string)[];
 }
@@ -83,7 +83,7 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
           benefit: "Inviting is one message, not an account per friend.",
           approach: "Signed invite links that expire after 7 days",
           acceptance: ["A link opens the trip", "An expired link says so"],
-          patternId: "change",
+          flowId: "change",
         },
         {
           title: "See who is coming",
@@ -93,7 +93,7 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
           benefit: "No separate group chat to count heads.",
           approach: "An attendee list with yes, maybe and no, stored with the trip",
           acceptance: ["Each invitee can answer once and change it", "The list updates for everyone"],
-          patternId: "change",
+          flowId: "change",
           dependsOn: [0],
         },
         {
@@ -111,7 +111,7 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
           recommendedOptionId: "A",
           rationale: "A guest link is one tap and keeps the attendee list meaningful.",
           uncertainty: "It changes what data is kept: a guest link stores a name and a link id for 30 days; a code stores nothing. Your call.",
-          patternId: "change",
+          flowId: "change",
           dependsOn: [0],
         },
       ],
@@ -124,7 +124,7 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
           benefit: "The plan is there when the signal is not.",
           approach: "Cache the trip page and its map tiles on first open",
           acceptance: ["A trip opened once shows offline", "Changes sync when the signal returns"],
-          patternId: "change",
+          flowId: "change",
         },
       ],
     },
@@ -277,7 +277,7 @@ export function breakdownItems(taskId: string, stepId: string, goalTitle: string
   if (scripted) return structuredClone(scripted);
   const of = goalTitle ? ` of ${goalTitle}` : "";
   return [
-    { title: `Part 1${of}`, outcome: `The first part${of} is done (simulated)`, approach: "A small change", acceptance: ["The first part is verified"], patternId: "change", priority: 3 },
-    { title: `Part 2${of}`, outcome: `The second part${of} is done (simulated)`, approach: "A small change", acceptance: ["The second part is verified"], patternId: "change", priority: 3, dependsOn: [0] },
+    { title: `Part 1${of}`, outcome: `The first part${of} is done (simulated)`, approach: "A small change", acceptance: ["The first part is verified"], flowId: "change", priority: 3 },
+    { title: `Part 2${of}`, outcome: `The second part${of} is done (simulated)`, approach: "A small change", acceptance: ["The second part is verified"], flowId: "change", priority: 3, dependsOn: [0] },
   ];
 }

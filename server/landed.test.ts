@@ -48,7 +48,7 @@ const adapterOf = (id: string) => (run(id).snapshot.provider === "claude" ? clau
 let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
 const newTask = (title: string) =>
-  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
 const oneStep = (id: string) =>
   setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
 /** A one-step task that writes one file, is integrated, and is delivered to main. */
@@ -105,8 +105,8 @@ describe("state format 10", () => {
     const upgraded = new Store(path);
     const s = upgraded.read().state;
     // ORC-009 raised the format to 11, ORC-012 to 12 and ORC-014 to 13; a format-9 document upgrades through each.
-    expect(STATE_FORMAT).toBe(15);
-    expect(s.version).toBe(15);
+    expect(STATE_FORMAT).toBe(16);
+    expect(s.version).toBe(16);
     expect(s.project.visionDocs).toEqual([]);
     expect(upgraded.read().version).toBe(v0 + 1);
     expect(s.project.prDelivery).toEqual(DEFAULT_PR_DELIVERY);
@@ -119,7 +119,7 @@ describe("state format 10", () => {
     expect(D.deliveryMode(upgraded.read().state)).toBe("local");
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(15);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(16);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_9_%'").get()).toBeDefined();
     check.close();
   });

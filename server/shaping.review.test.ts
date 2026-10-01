@@ -32,7 +32,7 @@ const tick = async (ms = 1000) => {
 };
 const oneStep: StepDef[] = [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }];
 function createOneStep(title: string) {
-  const id = (cmd("createTask", { title, area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+  const id = (cmd("createTask", { title, area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
   setTestPipeline(store, id, oneStep, iso(), "one step");
   cmd("setPriority", { taskId: id, priority: 1 });
   return id;
@@ -143,7 +143,7 @@ describe("migration 12 → 13 (reviews 2 and 6)", () => {
       doc.project.visions[doc.project.visions.length - 1].text = "  ";
     });
     expect(empty.project.stage).toBe("shaping");
-    expect(empty.version).toBe(15);
+    expect(empty.version).toBe(16);
     const sample = reopen((d) => {
       (d as unknown as Doc).project.visions[0].text = "";
     });

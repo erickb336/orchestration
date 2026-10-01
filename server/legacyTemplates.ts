@@ -1,6 +1,7 @@
 // ORC-016: frozen copies of the built-in workflow templates as earlier state formats shipped them. The
 // migrations read these, never the live catalog, so 13 → 14 → 15 keeps working after templates are gone,
-// and a test proves the built-in patterns equal the format-14 templates (P4). Nothing else reads them.
+// and a test proves the built-in flows equal the format-14 templates apart from the security review beside
+// each code review (ORC-021). Nothing else reads them.
 
 import type { InputRef, StepDef } from "../src/domain/types";
 

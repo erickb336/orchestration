@@ -43,9 +43,9 @@ describe("migration 13 → 14", () => {
     delete doc.project.conventions;
     delete doc.decisions;
     for (const k of ["rerunBudget", "reviewBotApps", "noCi"]) delete doc.project.prDelivery[k];
-    // ORC-016: the seed has patterns, not templates; a format-13 project carried the six pickable templates as that format shipped them.
-    delete doc.project.defaultPatternId;
-    delete doc.patterns;
+    // ORC-016: the seed has flows, not templates; a format-13 project carried the six pickable templates as that format shipped them.
+    delete doc.project.defaultFlowId;
+    delete doc.flows;
     delete doc.retiredTemplates;
     doc.project.templates = ["goal", "feature", "change", "bugfix", "investigation", "design"].map((id) => {
       const b = V14_TEMPLATES[id];
@@ -53,8 +53,8 @@ describe("migration 13 → 14", () => {
     });
     for (const t of doc.tasks) {
       t.steps = t.steps.filter((s: { role: string }) => s.role !== "checks");
-      delete t.pattern;
-      delete t.patternSince;
+      delete t.flow;
+      delete t.flowSince;
     }
     doc.version = 13;
     mutate(doc);
@@ -72,9 +72,9 @@ describe("migration 13 → 14", () => {
     });
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    // ORC-016 raised the format to 15; a format-13 document upgrades through 14 (templates) and 15 (patterns).
-    expect(STATE_FORMAT).toBe(15);
-    expect(s.version).toBe(15);
+    // ORC-016 raised the format to 15; a format-13 document upgrades through 14 (templates) and 15 (flows).
+    expect(STATE_FORMAT).toBe(16);
+    expect(s.version).toBe(16);
     expect(upgraded.read().version).toBe(v0 + 1);
     expect(s.project.checks).toEqual(DEFAULT_CHECKS);
     expect(s.project.triage).toEqual({ askUserBy: "user" }); // the sample project does not plan on its own
@@ -84,20 +84,18 @@ describe("migration 13 → 14", () => {
     expect(s.decisions).toEqual([]);
     expect(s.artifacts.every((a) => a.findings === undefined && a.pathCoverage === undefined)).toBe(true);
     // 13 → 14: unmodified built-ins gained the Checks steps (so they equal the format-14 built-ins and are dropped by
-    // 14 → 15, the catalog providing them); the edited bugfix was left alone, with an event, and 14 → 15 retired it.
+    // 14 → 15, the flows providing them); the edited bugfix was left alone, with an event, and 14 → 15 retired it
+    // (ORC-021: retired templates are no longer written as files; 15 → 16 drops the list).
     expect((s.project as unknown as { templates?: unknown }).templates).toBeUndefined();
-    expect(s.retiredTemplates.map((t) => t.id)).toEqual(["bugfix"]);
-    const bugfix = s.retiredTemplates[0];
-    expect(bugfix.kind).toBe("edited-built-in");
-    expect(bugfix.steps.some((x) => x.role === "checks")).toBe(false);
-    expect(bugfix.steps[0].purpose).toBe("Reproduce it my way");
-    expect(s.project.defaultPatternId).toBe("change");
-    expect(s.patterns.patterns.find((p) => p.id === "feature")!.steps.map((x) => x.id)).toEqual(["S1", "S2", "C1", "S3", "S4", "S5", "C2", "S6"]);
+    expect((s as unknown as { retiredTemplates?: unknown }).retiredTemplates).toBeUndefined();
+    expect((s as unknown as { patterns?: unknown }).patterns).toBeUndefined();
+    expect(s.project.defaultFlowId).toBe("change");
+    expect(s.flows.find((p) => p.id === "feature")!.steps.map((x) => x.id)).toEqual(["S1", "S2", "C1", "S3", "SR1", "S4", "S5", "C2", "S6"]);
     expect(s.events.some((e) => e.message.startsWith("Template bugfix was edited, so it did not gain the Checks steps"))).toBe(true);
     expect(s.events.some((e) => e.message.startsWith("Template change gained the Checks steps"))).toBe(true);
     expect(s.events.some((e) => e.message.startsWith('Template "Bug fix" was retired'))).toBe(true);
     // Every task records what it ran as a legacy reference; none was rewritten.
-    expect(s.tasks.every((t) => t.pattern.source === "legacy" && t.pattern.chosenBy === "migration" && t.patternSince === 0)).toBe(true);
+    expect(s.tasks.every((t) => t.flow.source === "legacy" && t.flow.chosenBy === "migration" && t.flowSince === 0)).toBe(true);
     // Task pipelines are not rewritten.
     expect(s.tasks.every((t) => !t.steps.some((x) => x.role === "checks"))).toBe(true);
     // The upgraded state accepts the new commands.
@@ -107,7 +105,7 @@ describe("migration 13 → 14", () => {
     expect(upgraded.read().state.project.conventions.include).toBe(false);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(15);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(16);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_13_%'").get()).toBeDefined();
     check.close();
   });
@@ -119,7 +117,7 @@ describe("migration 13 → 14", () => {
     const upgraded = new Store(path);
     expect(upgraded.read().state.project.triage).toEqual({ askUserBy: "lead" });
     upgraded.close();
-    expect(buildSeed(now).version).toBe(15);
+    expect(buildSeed(now).version).toBe(16);
   });
 });
 
@@ -141,7 +139,7 @@ describe("the scheduler: the context event, coverage re-runs and conventions", (
   let key = 0;
   const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
   const newTask = (title: string) =>
-    (cmd("createTask", { title, area: "Test", outcome: `${title} outcome`, benefit: "b", whyNow: "", approach: "Just do it", acceptance: ["It works"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+    (cmd("createTask", { title, area: "Test", outcome: `${title} outcome`, benefit: "b", whyNow: "", approach: "Just do it", acceptance: ["It works"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
 
   beforeEach(async () => {
     repo = join(dir, "repo");
@@ -241,6 +239,7 @@ describe("the scheduler: the context event, coverage re-runs and conventions", (
     expect(art.openFindings).toBe(2);
     expect(st().decisions).toHaveLength(1);
     expect(st().attempts.find((a) => a.id === review.id)!.note).toContain("had no valid action or severity");
+    claude.finish(M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!.id, { findings: 0 }); // ORC-021: the security review beside it is clean
     tick();
     tick();
     expect(M.activeAttempts(st(), id)).toHaveLength(0); // the repair waits for the decision

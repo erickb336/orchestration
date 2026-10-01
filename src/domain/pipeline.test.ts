@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
 import { validatePipeline } from "./pipeline";
-import { INTERNAL_PATTERNS } from "./internalPatterns";
-import { builtInCatalog, patternSteps } from "./patterns";
+import { INTERNAL_FLOWS } from "./internalFlows";
+import { builtInCatalog, flowSteps } from "./flows";
 import { buildSeed } from "./seed";
 import type { State, StepDef } from "./types";
 
@@ -22,13 +22,13 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
   return M.reportCompletion(s, a.id, [], at(t), outputs);
 }
 
-describe("built-in and internal patterns", () => {
+describe("built-in and internal flows", () => {
   it("every one is valid and names no product or model (provider ids only under parallel.providers)", () => {
-    for (const p of [...builtInCatalog().patterns, ...INTERNAL_PATTERNS]) {
+    for (const p of [...builtInCatalog(), ...INTERNAL_FLOWS]) {
       // ORC-013: the delivery-checks pipeline is valid only on a task with a checkTarget, like delivery-review on a reviewTarget.
       expect(validatePipeline(p.steps, { checkTarget: p.id === "delivery-checks" }).filter((i) => i.severity === "error"), p.id).toEqual([]);
       // What workers and people read: names, descriptions and the steps, with the provider assignment of a best-of step set aside.
-      const neutral = { id: p.id, name: p.name, description: p.description, ...("whenToUse" in p ? { whenToUse: p.whenToUse, hypothesis: p.hypothesis } : {}), steps: p.steps.map((s) => ({ ...s, parallel: s.parallel ? { ...s.parallel, providers: undefined } : undefined })) };
+      const neutral = { id: p.id, name: p.name, description: p.description, ...("whenToUse" in p ? { whenToUse: p.whenToUse } : {}), steps: p.steps.map((s) => ({ ...s, parallel: s.parallel ? { ...s.parallel, providers: undefined } : undefined })) };
       expect(JSON.stringify(neutral), p.id).not.toMatch(/sample|notes|claude|codex/i);
     }
   });
@@ -36,7 +36,7 @@ describe("built-in and internal patterns", () => {
 
 describe("validation", () => {
   it("rejects forward dependencies, inputs from non-upstream steps, and conditions on non-findings", () => {
-    const defs = patternSteps("change");
+    const defs = flowSteps("change");
     expect(errors([{ ...defs[0], dependsOn: ["S2"] }, ...defs.slice(1)]).length).toBeGreaterThan(0);
     const badInput = structuredClone(defs);
     badInput[1].dependsOn = [];
@@ -58,7 +58,7 @@ describe("artifacts and conditions", () => {
     const [verify] = running(s, "EX-002");
     expect(verify.stepId).toBe("S4");
     // Verify receives S1.change and S2.findings, not the skipped repair's output.
-    expect(verify.snapshot.inputs.map((i) => `${i.step}.${i.output}@v${i.version}`).sort()).toEqual(["S1.change@v1", "S2.findings@v1"]);
+    expect(verify.snapshot.inputs.map((i) => `${i.step}.${i.output}@v${i.version}`).sort()).toEqual(["S1.change@v1", "S2.findings@v1", "SR1.findings@v1"]);
     s = finish(s, "EX-002", 3);
     s = M.dispatchEligible(s, at(4));
     expect(task(s, "EX-002").lifecycle).toBe("done");
@@ -126,7 +126,7 @@ describe("pipeline edits", () => {
 
   it("removing a running step stops it and its late result is discarded", () => {
     let s = seed();
-    const defs = patternSteps("change").filter((d) => d.id === "S1"); // drop review/repair/verify
+    const defs = flowSteps("change").filter((d) => d.id === "S1"); // drop review/repair/verify
     const [review] = running(s, "EX-002");
     s = M.setPipeline(s, "EX-002", 1, defs, "Ship without review", "user", at(0));
     expect(s.attempts.find((a) => a.id === review.id)!.outcome).toBe("stopping");
@@ -138,7 +138,7 @@ describe("pipeline edits", () => {
 
   it("editing a paused task's pipeline keeps it paused", () => {
     let s = seed();
-    const defs = patternSteps("change");
+    const defs = flowSteps("change");
     s = M.setPipeline(s, "EX-005", 1, defs, "Swap to change template", "user", at(0));
     expect(task(s, "EX-005").hold).toBe(true);
     expect(task(s, "EX-005").steps.every((x) => x.state === "paused" || x.state === "pending")).toBe(true);
@@ -164,8 +164,8 @@ describe("review regressions (ORC-002)", () => {
 
   it("run-if ignores findings from a step that was later skipped or is re-running", () => {
     const defs: StepDef[] = [
-      ...patternSteps("change")
-        .filter((d) => ["S1", "C1", "S2", "S3"].includes(d.id))
+      ...flowSteps("change")
+        .filter((d) => ["S1", "C1", "S2", "SR1", "S3"].includes(d.id))
         .map((d) => ({ ...d, iterate: undefined })),
       { id: "S5", purpose: "Re-review", role: "code_reviewer", dependsOn: ["S3"], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], runIf: [{ step: "S2", output: "findings" }] },
       { id: "S6", purpose: "Second repair", role: "coder", dependsOn: ["S5"], inputs: [{ step: "S5", output: "findings" }], outputs: [{ name: "change", kind: "code-change" }], runIf: [{ step: "S5", output: "findings" }] },
@@ -180,6 +180,7 @@ describe("review regressions (ORC-002)", () => {
     };
     drive(0); // S1
     drive(1); // S2 finds 1
+    drive(0); // SR1, the security review beside it, clean
     drive(0); // S3 repair
     drive(1); // S5 re-review finds 1
     s = M.dispatchEligible(s, at(t++));
@@ -226,15 +227,15 @@ describe("review regressions (ORC-002)", () => {
   });
 
   it("step IDs must be safe identifiers", () => {
-    const defs = patternSteps("change");
+    const defs = flowSteps("change");
     defs[0] = { ...defs[0], id: "../../etc x" };
     expect(validatePipeline(defs).some((i) => i.severity === "error" && i.message.includes("must start with a letter"))).toBe(true);
   });
 
-  it("the internal setPipeline records a custom pipeline as the task's pattern", () => {
-    // ORC-016: no command reaches setPipeline; what tests build with it is labelled, never mistaken for a catalog pattern.
-    const s = M.setPipeline(seed(), "EX-003", 1, patternSteps("change").slice(0, 1), "one step", "user", at(0));
-    expect(task(s, "EX-003").pattern).toEqual({ id: "custom", name: "Custom pipeline", source: "custom", chosenBy: "user" });
-    expect(task(s, "EX-003").pipelineHistory[1].pattern).toMatchObject({ source: "custom" });
+  it("the internal setPipeline records a custom pipeline as the task's flow", () => {
+    // ORC-016: no command reaches setPipeline; what tests build with it is labelled, never mistaken for a catalog flow.
+    const s = M.setPipeline(seed(), "EX-003", 1, flowSteps("change").slice(0, 1), "one step", "user", at(0));
+    expect(task(s, "EX-003").flow).toEqual({ id: "custom", name: "Custom pipeline", source: "custom", chosenBy: "user" });
+    expect(task(s, "EX-003").pipelineHistory[1].flow).toMatchObject({ source: "custom" });
   });
 });

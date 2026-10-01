@@ -7,8 +7,8 @@ import * as D from "./delivery";
 import * as M from "./model";
 import { diffLineClasses } from "./diff";
 import { buildEmptyProject, buildSeed } from "./seed";
-import { INTERNAL_PATTERN_IDS } from "./internalPatterns";
-import { builtInCatalog, patternSteps } from "./patterns";
+import { INTERNAL_FLOW_IDS } from "./internalFlows";
+import { builtInCatalog, flowSteps } from "./flows";
 import { reviewedChange, type ReviewedOptions } from "./testing/reviewed";
 import { ControlError, DEFAULT_PR_DELIVERY, type CheckObs, type Integration, type PrDelivery, type State } from "./types";
 
@@ -41,13 +41,20 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
   const [a] = M.activeAttempts(s, taskId);
   const st = task(s, taskId).steps.find((x) => x.id === a.stepId)!;
   const outputs = st.outputs.map((o) => ({ name: o.name, summary: `${o.name} at ${t}`, openFindings: o.kind === "review-findings" ? findings : undefined }));
-  return M.reportCompletion(s, a.id, [], at(t), outputs);
+  const done = M.reportCompletion(s, a.id, [], at(t), outputs);
+  return st.role === "code_reviewer" ? securityClean(done, taskId, t) : done;
+}
+/** ORC-021: the security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
+function securityClean(s: State, id: string, t: number): State {
+  let next = M.dispatchEligible(s, at(t));
+  for (const a of M.activeAttempts(next, id)) if (task(next, id).steps.find((x) => x.id === a.stepId)!.role === "security_reviewer") next = M.reportCompletion(next, a.id, [], at(t), [{ name: "findings", summary: "no security findings", openFindings: 0 }]);
+  return next;
 }
 
 describe("data model", () => {
   it("a new project is format 14 with pull-request delivery off and nothing observed", () => {
     for (const s of [seed(), buildEmptyProject(T0)]) {
-      expect(s.version).toBe(15);
+      expect(s.version).toBe(16);
       expect(s.project.prDelivery).toEqual(DEFAULT_PR_DELIVERY);
       expect(s.project.prDelivery).toMatchObject({ enabled: false, merge: "hold" });
       expect(s.project.github).toBeUndefined();
@@ -65,10 +72,10 @@ describe("data model", () => {
 
   it("the revert pipeline is internal and valid", () => {
     // ORC-016: the service owns it; it is not in the catalog and no file may take its id.
-    expect(INTERNAL_PATTERN_IDS).toContain("revert");
-    expect(builtInCatalog().patterns.some((p) => p.id === "revert")).toBe(false);
+    expect(INTERNAL_FLOW_IDS).toContain("revert");
+    expect(builtInCatalog().some((p) => p.id === "revert")).toBe(false);
     // ORC-013: a Final checks step (run by the service) sits between the review and the verification.
-    expect(patternSteps("revert").map((s) => s.role)).toEqual(["coder", "code_reviewer", "checks", "lead"]);
+    expect(flowSteps("revert").map((s) => s.role)).toEqual(["coder", "code_reviewer", "security_reviewer", "checks", "lead"]);
   });
 });
 
@@ -286,7 +293,7 @@ describe("landed: send back", () => {
     const fix = task(s, r.newId);
     expect(fix).toMatchObject({ followUpOf: "EX-006", holdBeforeStart: false, dependsOn: ["EX-006"], lifecycle: "proposed" });
     expect(fix.revertOf).toBeUndefined();
-    expect(fix.steps.map((x) => x.id)).toEqual(patternSteps("bugfix").map((x) => x.id));
+    expect(fix.steps.map((x) => x.id)).toEqual(flowSteps("bugfix").map((x) => x.id));
     expect(fix.steps.every((x) => x.state === "pending")).toBe(true);
     const c = M.currentSpec(fix).content;
     expect(c.title).toMatch(/^Fix: /);
@@ -314,7 +321,7 @@ describe("landed: send back", () => {
     const rv = task(s, r.newId);
     expect(rv.revertOf).toEqual({ taskId: "EX-006", commit: SHA_A });
     expect(rv.holdBeforeStart).toBe(true);
-    expect(rv.steps.map((x) => x.role)).toEqual(["coder", "code_reviewer", "checks", "lead"]);
+    expect(rv.steps.map((x) => x.role)).toEqual(["coder", "code_reviewer", "security_reviewer", "checks", "lead"]);
     expect(rv.steps[0].purpose).toContain(`revert of ${SHA_A.slice(0, 12)}`);
     expect(M.currentSpec(rv).content.title).toMatch(/^Revert: /);
     expect(task(s, "EX-006").integration!.landed!.followUps).toEqual([{ taskId: r.newId, kind: "revert" }]);
@@ -333,14 +340,14 @@ describe("landed: send back", () => {
 
   it("the revert pipeline is the service's own: no task is created from it by hand, and a send-back records it as chosen by the service", () => {
     const s = landedState();
-    // ORC-016: "revert" is an internal pattern; createTask refuses it, whatever the catalog holds.
-    expect(s.patterns.patterns.some((p) => p.id === "revert")).toBe(false);
-    expect(() => runCommand(s, "createTask", { title: "t", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, patternId: "revert" }, at(5))).toThrow(/Send back only/);
+    // ORC-016: "revert" is an internal flow; createTask refuses it, whatever the catalog holds.
+    expect(s.flows.some((p) => p.id === "revert")).toBe(false);
+    expect(() => runCommand(s, "createTask", { title: "t", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, flowId: "revert" }, at(5))).toThrow(/Send back only/);
     const r = D.sendBackLanded(s, { taskId: "EX-006", kind: "revert", note: "", holdBeforeStart: false }, at(5));
     const revert = task(r.state, r.newId);
     expect(revert.steps[0].purpose).toBe(`Complete the prepared revert: resolve any conflicts, keep later work (revert of ${SHA_A.slice(0, 12)})`);
-    expect(revert.pattern).toMatchObject({ id: "revert", name: "Revert", source: "internal", chosenBy: "service" });
-    expect(revert.pipelineHistory[0].pattern).toMatchObject({ id: "revert", source: "internal" });
+    expect(revert.flow).toMatchObject({ id: "revert", name: "Revert", source: "internal", chosenBy: "service" });
+    expect(revert.pipelineHistory[0].flow).toMatchObject({ id: "revert", source: "internal" });
   });
 });
 
@@ -349,7 +356,7 @@ describe("createFollowUp", () => {
   function expandedDoneTask(): { state: State; id: string } {
     let s = seed();
     s.attempts = [];
-    const r = M.createTask(s, { title: "Loop", area: "", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
+    const r = M.createTask(s, { title: "Loop", area: "", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
     s = r.state;
     const id = r.newId;
     for (const other of s.tasks) if (other.id !== id) other.hold = true;
@@ -375,10 +382,10 @@ describe("createFollowUp", () => {
     const r = M.createFollowUp(state, id, at(20));
     const f = task(r.state, r.newId);
     // ORC-013: the Change template carries the Checks steps C1 (in the loop) and C2 (final).
-    expect(f.steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "S3", "C2", "S4"]);
+    expect(f.steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "SR1", "S3", "C2", "S4"]);
     expect(f.steps.find((x) => x.id === "S3")!.iterate).toEqual({ from: "C1", max: 3 }); // the loop is whole again
     expect(f.steps.every((x) => x.state === "pending" && x.iteration === undefined && !x.copyOf)).toBe(true);
-    expect(f.pipelineHistory[0].steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "S3", "C2", "S4"]);
+    expect(f.pipelineHistory[0].steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "SR1", "S3", "C2", "S4"]);
   });
 
   it("keeps the models the user pinned on the copied steps", () => {
@@ -407,11 +414,11 @@ describe("createFollowUp", () => {
   it("holds before start by default and honours the option", () => {
     const s = seed();
     expect(task(M.createFollowUp(s, "EX-006", at(1)).state, "EX-006-F1").holdBeforeStart).toBe(true);
-    const r = M.createFollowUp(s, "EX-006", at(1), { holdBeforeStart: false, steps: patternSteps("bugfix"), author: "system", dependsOn: [], fields: { revertOf: { taskId: "EX-006", commit: SHA_A } } });
+    const r = M.createFollowUp(s, "EX-006", at(1), { holdBeforeStart: false, steps: flowSteps("bugfix"), author: "system", dependsOn: [], fields: { revertOf: { taskId: "EX-006", commit: SHA_A } } });
     const f = task(r.state, r.newId);
     expect(f).toMatchObject({ holdBeforeStart: false, dependsOn: [], revertOf: { taskId: "EX-006", commit: SHA_A } });
     expect(f.specs[0].author).toBe("system");
-    expect(f.steps.map((x) => x.id)).toEqual(patternSteps("bugfix").map((x) => x.id));
+    expect(f.steps.map((x) => x.id)).toEqual(flowSteps("bugfix").map((x) => x.id));
   });
 });
 
@@ -940,7 +947,7 @@ describe("dependencies in pull-request mode", () => {
     let s = D.setDeliveryMode(seed(), { mode: "pr" }, at(0));
     s.attempts = [];
     for (const t of s.tasks) for (const st of t.steps) if (st.state === "running") st.state = "pending";
-    const r0 = M.createTask(s, { title: "Writes", area: "", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, patternId: "change" }, at(1));
+    const r0 = M.createTask(s, { title: "Writes", area: "", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, flowId: "change" }, at(1));
     const r = { ...r0, state: M.setPipeline(r0.state, r0.newId, 1, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], "one step", "user", at(1)) };
     const ready = M.leadPromoteProposals(r.state, at(1));
     for (const t of ready.tasks) if (t.id !== r.newId && t.lifecycle !== "done" && t.lifecycle !== "cancelled") t.hold = true;

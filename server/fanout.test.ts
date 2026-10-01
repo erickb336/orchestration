@@ -38,8 +38,8 @@ const finishRun = (runId: string, opts: Parameters<ScriptedAdapter["finish"]>[1]
 };
 let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
-const newTask = (title: string, patternId = "change", steps?: StepDef[]) => {
-  const id = (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId }).result as { newId: string }).newId;
+const newTask = (title: string, flowId = "change", steps?: StepDef[]) => {
+  const id = (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId }).result as { newId: string }).newId;
   if (steps) setTestPipeline(store, id, steps, iso(), "test pipeline");
   return id;
 };
@@ -140,7 +140,7 @@ describe("iteration", () => {
     finishRun(running(id)[0].id, { write: ["x.txt", "v1\n"] });
     tick();
     tick();
-    finishRun(running(id)[0].id, { findings: 2 }); // S2
+    for (const a of running(id)) finishRun(a.id, { findings: a.stepId === "S2" ? 2 : 0 }); // S2, and the security review beside it clean
     tick();
     tick();
     const repair1 = running(id)[0];
@@ -151,7 +151,7 @@ describe("iteration", () => {
     const review2 = running(id)[0];
     expect(review2.stepId).toBe("S2-i2");
     expect(review2.snapshot.inputs.find((i) => i.output === "change")!.step).toBe("S3"); // reviews the repaired change
-    finishRun(review2.id, { findings: 0 });
+    for (const a of running(id)) finishRun(a.id, { findings: 0 }); // S2-i2 and SR1-i2
     tick();
     tick();
     expect(task(id).steps.find((x) => x.id === "S3-i2")!.state).toBe("skipped"); // loop ends
@@ -190,8 +190,8 @@ describe("breakdowns into child tasks", () => {
     expect(claude.runs.get(plan.id)!.prompt).toContain('"items"');
     finishRun(plan.id, {
       items: [
-        { title: "Part one", outcome: "one done", approach: "small", acceptance: ["one works"], patternId: "change" },
-        { title: "Part two", outcome: "two done", approach: "small", acceptance: ["two works"], patternId: "change", dependsOn: [0] },
+        { title: "Part one", outcome: "one done", approach: "small", acceptance: ["one works"], flowId: "change" },
+        { title: "Part two", outcome: "two done", approach: "small", acceptance: ["two works"], flowId: "change", dependsOn: [0] },
         { title: "No acceptance", outcome: "x", approach: "y", acceptance: [] },
       ],
     });
@@ -217,7 +217,7 @@ describe("breakdowns into child tasks", () => {
     const evaluate = running(id)[0];
     expect(evaluate.stepId).toBe("S2");
     expect(claude.runs.get(evaluate.id)!.prompt).toContain("Child tasks (results of the breakdown)");
-    finishRun(evaluate.id, { items: [{ title: "Part three", outcome: "three", approach: "z", acceptance: ["three works"], patternId: "change" }] });
+    finishRun(evaluate.id, { items: [{ title: "Part three", outcome: "three", approach: "z", acceptance: ["three works"], flowId: "change" }] });
     tick();
     expect(task(id).steps.some((x) => x.id === "S2-i2")).toBe(true); // next round planned
     cmd("cancelTask", { taskId: `${id}.3` });
@@ -240,7 +240,7 @@ describe("breakdowns into child tasks", () => {
     ];
     const id = newTask("Gated plan", "change", steps);
     tick();
-    finishRun(running(id)[0].id, { items: [{ title: "Worker idea", outcome: "c", approach: "a", acceptance: ["ok"], patternId: "change" }] });
+    finishRun(running(id)[0].id, { items: [{ title: "Worker idea", outcome: "c", approach: "a", acceptance: ["ok"], flowId: "change" }] });
     tick();
     expect(task(id).hold).toBe(true);
     expect(M.childTasks(st(), task(id))).toHaveLength(0); // nothing created yet
@@ -250,8 +250,8 @@ describe("breakdowns into child tasks", () => {
       summary: "Two parts instead",
       reason: "Split differently",
       items: [
-        { title: "Part X", outcome: "x", approach: "x", acceptance: ["x ok"], patternId: "change" },
-        { title: "Part Y", outcome: "y", approach: "y", acceptance: ["y ok"], patternId: "change" },
+        { title: "Part X", outcome: "x", approach: "x", acceptance: ["x ok"], flowId: "change" },
+        { title: "Part Y", outcome: "y", approach: "y", acceptance: ["y ok"], flowId: "change" },
       ],
     });
     cmd("resumeTask", { taskId: id });
@@ -305,7 +305,7 @@ const complete = (taskId: string, stepId: string, opts: Parameters<ScriptedAdapt
   finishRun(r.id, opts);
   settle();
 };
-const items = (...titles: string[]): Record<string, unknown>[] => titles.map((title) => ({ title, outcome: `${title} done`, approach: "small", acceptance: [`${title} works`], patternId: "change" }));
+const items = (...titles: string[]): Record<string, unknown>[] => titles.map((title) => ({ title, outcome: `${title} done`, approach: "small", acceptance: [`${title} works`], flowId: "change" }));
 const bestOfSteps = (): StepDef[] => [
   { id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }], parallel: { count: 2, mode: "best-of" } },
   { id: "S2", purpose: "Compare", role: "code_reviewer", dependsOn: ["S1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "findings", kind: "review-findings" }] },
@@ -453,7 +453,7 @@ describe("review regressions: child tasks", () => {
       const r = running(id)[0];
       if (!r) break;
       const batch = items(...Array.from({ length: 20 }, (_, j) => `R${round} item ${j + 1}`));
-      if (round === 1) batch[0].patternId = "goal";
+      if (round === 1) batch[0].flowId = "goal";
       complete(id, r.stepId, { items: batch });
     }
     const kids = M.descendants(st(), task(id));
@@ -520,15 +520,17 @@ describe("review regressions: iteration", () => {
     settle();
     complete(id, "S1", { write: ["z.txt", "1\n"] });
     complete(id, "S2", { findings: 1 });
+    complete(id, "SR1", { findings: 0 });
     complete(id, "S3", { write: ["z.txt", "2\n"] });
     const review2 = runOf(id, "S2-i2")!;
     expect(review2).toBeDefined();
     cmd("rerunStep", { taskId: id, stepId: "S2" });
     confirmStop(review2.id);
+    confirmStop(runOf(id, "SR1-i2")!.id); // the security review beside it read the repair too, so it was stopped as well
     settle();
     complete(id, "S2", { findings: 0 });
     const state = Object.fromEntries(task(id).steps.map((x) => [x.id, x.state]));
-    expect(state).toMatchObject({ S3: "skipped", "S2-i2": "skipped", "S3-i2": "skipped" });
+    expect(state).toMatchObject({ S3: "skipped", "S2-i2": "skipped", "SR1-i2": "skipped", "S3-i2": "skipped" });
     expect(running(id)[0].stepId).toBe("S4");
   });
 });
@@ -564,10 +566,12 @@ describe("review regressions (re-verification)", () => {
     settle();
     complete(id, "S1", { write: ["f.txt", "1\n"] });
     complete(id, "S2", { findings: 1 });
+    complete(id, "SR1", { findings: 0 });
     complete(id, "S3", { write: ["f.txt", "2\n"] });
     const review2 = runOf(id, "S2-i2")!;
     cmd("rerunStep", { taskId: id, stepId: "S2" });
     confirmStop(review2.id);
+    confirmStop(runOf(id, "SR1-i2")!.id);
     settle();
     complete(id, "S2", { findings: 0 });
     complete(id, "S4");

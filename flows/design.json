@@ -1,9 +1,7 @@
 {
-  "$schema": "./pattern.schema.json",
-  "$comment": "ORC-016: a 1:1 transcription of the built-in Design template (state format 14).",
+  "$schema": "./flow.schema.json",
   "id": "design",
   "name": "Design",
-  "order": 50,
   "description": "Design only: design, UX review, revise if needed, hand off an implementation brief.",
   "whenToUse": "Settle and review a design before anyone implements it.",
   "steps": [

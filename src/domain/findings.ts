@@ -95,17 +95,17 @@ export function earlierDecision(s: State, t: Task, key: string): FindingDecision
     if (d.key !== key || d.status === "open" || d.status === "superseded" || d.kind !== "finding") continue;
     const owner = d.taskId === t.id ? t : originTask && d.taskId === originTask.id ? originTask : undefined;
     if (!owner) continue;
-    // ORC-016 (steps 2–3 review, finding 1): a decision taken under a pattern the task has since left is the record, not a precedent.
-    if (fromEarlierPattern(s, owner, d)) continue;
+    // ORC-016 (steps 2–3 review, finding 1): a decision taken under a flow the task has since left is the record, not a precedent.
+    if (fromEarlierFlow(s, owner, d)) continue;
     earlier = d;
   }
   return earlier;
 }
 
-/** ORC-016: the decision's artifact was made under a pattern its task has since left. A decision whose artifact is gone is not. */
-export function fromEarlierPattern(s: State, t: Task, d: FindingDecision): boolean {
+/** ORC-016: the decision's artifact was made under a flow its task has since left. A decision whose artifact is gone is not. */
+export function fromEarlierFlow(s: State, t: Task, d: FindingDecision): boolean {
   const art = s.artifacts.find((a) => a.id === d.artifactId);
-  return !!art && M.fromEarlierPattern(s, t, art);
+  return !!art && M.fromEarlierFlow(s, t, art);
 }
 
 /** Blocking findings of a fresh report that an earlier decision on this task already settled (accept or follow-up). */
@@ -273,9 +273,9 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
   const d = getDecision(s, decisionId);
   const t = s.tasks.find((x) => x.id === d.taskId);
   if (!t) throw new ControlError(`Unknown task ${d.taskId}`);
-  // ORC-016 (steps 2–3 review, finding 1): a decision closed by a pattern change belongs to the earlier pattern; the new pattern's review raises its own findings.
-  if (d.status === "superseded" && d.kind === "finding" && fromEarlierPattern(s, t, d)) {
-    throw new ControlError(`${d.id} belongs to an earlier pattern of ${t.id}: it was closed when the pattern changed and cannot be decided. The new pattern's review reports its own findings.`);
+  // ORC-016 (steps 2–3 review, finding 1): a decision closed by a flow change belongs to the earlier flow; the new flow's review raises its own findings.
+  if (d.status === "superseded" && d.kind === "finding" && fromEarlierFlow(s, t, d)) {
+    throw new ControlError(`${d.id} belongs to an earlier flow of ${t.id}: it was closed when the flow changed and cannot be decided. The new flow's review reports its own findings.`);
   }
   // ORC-013 §6.7: failing final checks take a repair round, or the user's acceptance (only the user's).
   if (d.kind === "final-checks") {
@@ -314,7 +314,7 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
         priority: t.priority,
         holdBeforeStart: true,
         // ORC-016: a follow-up fix runs the catalog's Change, chosen by the service.
-        patternId: "change",
+        flowId: "change",
         chosenBy: "service",
       },
       now,
@@ -475,7 +475,7 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
         rationale: clip(why, 300),
         uncertainty: "",
         acceptance: [`The finding no longer applies${where}`],
-        patternId: "change",
+        flowId: "change",
         priority: t.priority,
       };
       const problem = M.validateProposal(s, p, now);

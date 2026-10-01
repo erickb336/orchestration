@@ -230,7 +230,7 @@ describe("scheduler with fake runtime", () => {
     const store = open();
     const { scheduler } = make(store, { progressPerTick: 60 });
     store.command("initProject", { name: "P", repoPath: "/tmp/x", vision: "v", focus: "Deployment first" }, k(), iso(T0));
-    store.command("createTask", { title: "Automate deploy", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 5, holdBeforeStart: true, patternId: "change" }, k(), iso(T0));
+    store.command("createTask", { title: "Automate deploy", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 5, holdBeforeStart: true, flowId: "change" }, k(), iso(T0));
     const text = "focus more on building out the apps working locally vs automating the deployment process";
     store.command("postMessage", { text }, k(), iso(T0 + 10));
     for (let t = 1; t <= 4; t++) scheduler.tick(T0 + t * 1000);

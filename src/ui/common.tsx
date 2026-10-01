@@ -7,6 +7,7 @@ export const ROLE_LABEL: Record<RoleId, string> = {
   designer: "Designer",
   coder: "Coder",
   code_reviewer: "Code reviewer",
+  security_reviewer: "Security reviewer",
   ux_reviewer: "UX reviewer",
   checks: "Checks",
 };

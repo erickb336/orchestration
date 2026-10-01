@@ -178,7 +178,7 @@ export function proposal(over: Record<string, unknown> = {}) {
     rationale: "Smallest useful step.",
     uncertainty: "None significant.",
     acceptance: ["greet() returns a greeting"],
-    patternId: "change",
+    flowId: "change",
     priority: 2,
     ...over,
   };

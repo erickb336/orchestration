@@ -9,8 +9,8 @@ import * as D from "./delivery";
 import * as M from "./model";
 import { toDef, validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
-import { INTERNAL_PATTERN_IDS, internalPattern } from "./internalPatterns";
-import { builtInCatalog, patternHash, patternSteps } from "./patterns";
+import { INTERNAL_FLOW_IDS, internalFlow } from "./internalFlows";
+import { builtInCatalog, flowHash, flowSteps } from "./flows";
 import { reviewedChange, type ReviewedOptions } from "./testing/reviewed";
 import type { CheckObs, PrDelivery, ProviderId, State, Task } from "./types";
 
@@ -115,7 +115,7 @@ function runToDone(s0: State, id: string, second: number, findings = 0): State {
 function changeTask(s0: State, findings: (round: number) => number, reviewer: ProviderId = "claude"): { state: State; id: string; final: string } {
   let s = M.setRoleDefault(s0, "coder", { provider: "codex", model: "auto" }, at(3));
   s = M.setRoleDefault(s, "code_reviewer", { provider: reviewer, model: "auto" }, at(3));
-  const r = runCommand(s, "createTask", { title: "Loop", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, patternId: "change" }, at(3));
+  const r = runCommand(s, "createTask", { title: "Loop", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, flowId: "change" }, at(3));
   s = r.state;
   const id = (r.result as { newId: string }).newId;
   let commits = 0;
@@ -145,18 +145,21 @@ function changeTask(s0: State, findings: (round: number) => number, reviewer: Pr
 }
 const prFor = (s: State, id: string, sha: string) => D.reportPrHead(s, id, { n: 1, sha, baseSha: SHA_A, changed: CHANGED }, at(60));
 
-describe("the delivery-review pattern", () => {
-  it("is internal, one independent code review, and exempt from the no-inputs warning only for a review task", () => {
-    const tpl = internalPattern("delivery-review");
-    expect(tpl.steps).toEqual([{ id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" }]);
-    expect(INTERNAL_PATTERN_IDS).toContain("delivery-review");
-    expect(builtInCatalog().patterns.some((p) => p.id === "delivery-review")).toBe(false);
-    // ORC-016: no task is created from it by hand, and no pattern file may take its id (patterns.test.ts).
-    expect(() => runCommand(seed(), "createTask", { title: "t", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, patternId: "delivery-review" }, at(2))).toThrow(/used by the service only/);
-    expect(validatePipeline(tpl.steps).map((i) => i.severity)).toEqual(["warning"]);
+describe("the delivery-review flow", () => {
+  it("is internal, one independent code review and one security review beside it, and exempt from the no-inputs warning only for a review task", () => {
+    const tpl = internalFlow("delivery-review");
+    expect(tpl.steps).toEqual([
+      { id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
+      { id: "SR1", purpose: "Security review of the change for merge", role: "security_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
+    ]);
+    expect(INTERNAL_FLOW_IDS).toContain("delivery-review");
+    expect(builtInCatalog().some((p) => p.id === "delivery-review")).toBe(false);
+    // ORC-016: no task is created from it by hand, and no flow file may take its id (flows.test.ts).
+    expect(() => runCommand(seed(), "createTask", { title: "t", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, flowId: "delivery-review" }, at(2))).toThrow(/used by the service only/);
+    expect(validatePipeline(tpl.steps).map((i) => i.severity)).toEqual(["warning", "warning"]);
     expect(validatePipeline(tpl.steps, { reviewTarget: true })).toEqual([]);
     // The exemption is for that case only.
-    expect(validatePipeline(patternSteps("change").map((d) => (d.role === "code_reviewer" ? { ...d, inputs: [] } : d)), { reviewTarget: false }).some((i) => i.severity === "warning")).toBe(true);
+    expect(validatePipeline(flowSteps("change").map((d) => (d.role === "code_reviewer" ? { ...d, inputs: [] } : d)), { reviewTarget: false }).some((i) => i.severity === "warning")).toBe(true);
   });
 });
 
@@ -312,8 +315,8 @@ describe("the independence rung in resolveStep (design §9.2)", () => {
     // ORC-016 step 1 review, finding 5: the recorded hash is of the steps that run, with the purpose rewritten for this pull request.
     const second = reviewTasks(again)[1];
     expect(second.steps[0].purpose).toMatch(/^Review .* for merge into .* at [0-9a-f]{12}$/);
-    expect(second.pattern).toMatchObject({ id: "delivery-review", source: "internal", chosenBy: "service", hash: patternHash(second.steps.map(toDef)) });
-    expect(second.pattern.hash).not.toBe(patternHash(internalPattern("delivery-review").steps));
+    expect(second.flow).toMatchObject({ id: "delivery-review", source: "internal", chosenBy: "service", hash: flowHash(second.steps.map(toDef)) });
+    expect(second.flow.hash).not.toBe(flowHash(internalFlow("delivery-review").steps));
   });
 
   it("a review step of an ordinary pipeline marked independent follows the writer of its input", () => {
@@ -334,11 +337,12 @@ describe("ensureReview (design §9.2)", () => {
     expect(reviewTasks(s)).toHaveLength(1);
     expect(rv).toMatchObject({ id: `${ID}-RV1`, lifecycle: "ready", hold: false, holdBeforeStart: false, dependsOn: [], priority: task(s, ID).priority });
     expect(rv.specs[0]).toMatchObject({ author: "system" });
-    expect(rv.steps).toHaveLength(1);
+    expect(rv.steps).toHaveLength(2);
     expect(rv.steps[0]).toMatchObject({ role: "code_reviewer", purpose: `Review ${ID} for merge into main at ${HEAD.slice(0, 12)}`, independentOf: "writer", inputs: [] });
+    expect(rv.steps[1]).toMatchObject({ role: "security_reviewer", purpose: `Security review of ${ID} for merge into main at ${HEAD.slice(0, 12)}`, independentOf: "writer", inputs: [] });
     // ORC-016: the dedicated review pipeline is the service's own, recorded as such.
-    expect(rv.pattern).toMatchObject({ id: "delivery-review", source: "internal", chosenBy: "service" });
-    expect(rv.pipelineHistory[0].pattern).toMatchObject({ id: "delivery-review" });
+    expect(rv.flow).toMatchObject({ id: "delivery-review", source: "internal", chosenBy: "service" });
+    expect(rv.pipelineHistory[0].flow).toMatchObject({ id: "delivery-review" });
     expect(prOf(s)).toMatchObject({ reviewTaskIds: [rv.id], counters: { reviews: 1 } });
     expect(M.currentSpec(rv).content.title).toMatch(/^Review for merge: /);
     // Asking again, or advancing again, never makes a second one for the same change.
@@ -660,9 +664,9 @@ describe("repair into the open pull request (design §9.3)", () => {
     expect(repairTasks(s)).toHaveLength(1);
     expect(fix).toMatchObject({ id: `${ID}-F1`, holdBeforeStart: false, dependsOn: [], deliverInto: { taskId: ID, n: 1, mergeBase: false }, followUpOf: ID });
     expect(fix.specs[0].author).toBe("system");
-    expect(fix.steps.map((x) => x.id)).toEqual(patternSteps("change").map((x) => x.id));
+    expect(fix.steps.map((x) => x.id)).toEqual(flowSteps("change").map((x) => x.id));
     // ORC-016: a fix runs the catalog's Change, chosen by the service.
-    expect(fix.pattern).toMatchObject({ id: "change", source: "built-in", chosenBy: "service", hash: builtInCatalog().patterns.find((p) => p.id === "change")!.hash });
+    expect(fix.flow).toMatchObject({ id: "change", source: "built-in", chosenBy: "service", hash: builtInCatalog().find((p) => p.id === "change")!.hash });
     expect(M.currentSpec(fix).content.scopeIncluded).toEqual(['Make the required check "check" pass (https://github.com/o/r/actions/runs/1). Find the cause in the code; do not weaken tests, CI or build scripts.']);
     expect(prOf(s)).toMatchObject({ repairTaskIds: [fix.id], counters: { repairs: 1 }, attention: { code: "checks-failed" } });
     expect(prOf(s).attention!.message).toMatch(/EX-006-F1 is fixing it/);
