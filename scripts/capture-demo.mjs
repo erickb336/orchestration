@@ -183,6 +183,15 @@ const SCENES = {
     await open(page, api, "#/settings", { selector: "#pat-h" });
     await scrollTo(page, { selector: 'section[aria-labelledby="pat-h"]' });
   },
+  // ORC-018 §8: the Compare page with Change and its cross-reviewed variant side by side, the panel and the top of the table in view.
+  compare: async ({ page, api }) => {
+    await open(page, api, "#/compare", { selector: ".compare-table" });
+    await page.getByRole("checkbox", { name: /^Select Change \(/ }).check();
+    await page.getByRole("checkbox", { name: /^Select Change, reviewed by the other provider \(/ }).check();
+    await page.waitForSelector("section.compare-side");
+    // The head and the toolbar would push the table's first row below the fold: start the shot at the panel.
+    await scrollTo(page, { selector: "section.compare-side" }, 16);
+  },
   // Later in the demo: WT-006 finished and its pull request waits on a failed check (see the pr group below).
   "pr-checks": async ({ page, api }) => open(page, api, "#/task/WT-006", { selector: "#delivery-h", text: "Needs you" }),
   // The shaping stage, after a message to the lead.
@@ -196,7 +205,7 @@ const SCENES = {
   },
 };
 const GROUPS = {
-  start: ["overview", "board", "steering", "review", "landed", "goal-task", "best-of-pipeline", "artifacts", "findings", "settings", "checks-settings", "delivery-settings", "patterns"],
+  start: ["overview", "board", "steering", "review", "landed", "goal-task", "best-of-pipeline", "artifacts", "findings", "settings", "checks-settings", "delivery-settings", "patterns", "compare"],
   pr: ["pr-checks"],
   shaping: ["shaping", "vision-docs"],
 };

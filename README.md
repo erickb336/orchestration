@@ -63,13 +63,16 @@ It is deliberately small, local and readable, so that changing it is cheap, and 
 ### Measuring, not guessing
 
 - **Every task records which pattern it ran,** with the pattern's id, a content hash and its source.
-- **When a task finishes, it records an outcome:** runs, tokens and cost where the provider reports them, repair rounds, findings, check results and review coverage. This is recorded from now on, so that ways of working can be compared on real data ([ORC-016](docs/tasks/ORC-016.md)).
+- **When a task finishes, it records an outcome:** runs, tokens and cost where the provider reports them, repair rounds, findings, check results and review coverage, and whether the work landed and was sent back is derived from the delivery record ([ORC-016](docs/tasks/ORC-016.md), [ORC-018](docs/tasks/ORC-018.md)).
+- **The Compare page reads those records.** It groups finished tasks by the pattern they ran, and by version of that pattern, and shows each measure as a median, a spread and every task as a dot. A group with fewer than five tasks is marked "too few to compare". Two groups can be put side by side, and the rows download as CSV or JSON. It needs nothing beyond the app, and it never declares a winner ([ORC-018](docs/tasks/ORC-018.md)).
 - **"The tests pass" is a record, not a claim.** The service runs your project's own checks itself, in a sandbox, and keeps the results ([ORC-013](docs/tasks/ORC-013.md)).
 - **Usage per provider and model:** runs, tokens and cost, for today and for all time.
+- **Optional trace export,** off by default. Each finished task can be sent as one OpenTelemetry trace to any OTLP/HTTP viewer you already use. Nothing is sent until you turn it on, and prompts, outputs, code, paths and credentials never are. See [Optional: traces in an OpenTelemetry viewer](#optional-traces-in-an-opentelemetry-viewer).
 - **Not built yet:**
-  - a view that compares patterns on those outcomes;
-  - OpenTelemetry trace export to Phoenix or Langfuse;
-  - SWE-bench Verified runs through patterns.
+  - SWE-bench Verified runs through patterns;
+  - automatic pattern assignment (rotation or A/B arms).
+
+![Compare patterns: groups by pattern and version, medians, spreads and dots, two groups side by side](docs/screenshots/compare.png)
 
 ### UX decisions
 
@@ -94,7 +97,7 @@ Orchestrator was built the way it works.
 - **Specs first.** Every feature started as a versioned spec with options, trade-offs and the chosen approach ([`docs/tasks/`](docs/tasks/)). The larger ones also have a design document ([`docs/design/`](docs/design/)).
 - **Independent review.** Each implementation was reviewed by a separate agent, and every finding was fixed with a regression test.
 - **Tests that bite.** Each key guard was checked by reverting it and confirming that a test fails.
-- **The result:** over 900 automated tests, 16 feature specs so far, and a record of every decision and why it was made.
+- **The result:** over 1,000 automated tests, 17 feature specs so far, and a record of every decision and why it was made.
 
 ## What it does
 
@@ -198,6 +201,10 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 
 ![Settings → Patterns: the default pattern, its steps, and a pattern file with errors](docs/screenshots/patterns.png)
 
+**Compare patterns on their outcomes.** Finished tasks are grouped by the pattern and the version they ran. Each measure shows the median, the middle half of the spread, and one dot per task on a scale shared down the column; a group with fewer than five tasks is marked too few to compare. Two groups can be read side by side, measure by measure, and the rows download as CSV or JSON. Nothing is coloured better or worse: the page shows what was recorded and leaves the judgement to you.
+
+![Compare patterns: two groups side by side, then every group with medians, spreads and dots](docs/screenshots/compare.png)
+
 **Overview.** Progress by area: how far each part of the product is, which provider is working on it right now, and what needs you. Below it: everything waiting for you, the vision, and the conversation with the lead.
 
 ![Overview](docs/screenshots/overview.png)
@@ -282,6 +289,15 @@ What real runs do on your machine:
   - **Isolated** (default): workers see none of your settings, plugins, or web tools, and use only the MCP connections you tick.
   - **Use my local setup:** workers get your user-level Claude or Codex configuration, including all its MCP servers and plugins.
 - **Limits:** Settings → Run limits caps turns, time, and Claude spend per run. Codex runs are bounded by time.
+
+### Optional: traces in an OpenTelemetry viewer
+
+The Compare page needs nothing extra. If you already run an OpenTelemetry viewer, Orchestrator can also send each finished task to it as one trace: a task span with the outcome's numbers, a span per agent run (provider, model, tokens, and cost where reported) and a span per check run. It is off by default. Turn it on in Settings → Traces and give it an OTLP/HTTP traces endpoint; what is sent is listed beside the switch, and prompts, outputs, code, file paths and credentials never are. An endpoint on another computer needs a confirmation first. The export follows OTLP/HTTP with protobuf and has been tested against an in-process OTLP receiver, not against a running Phoenix or Langfuse.
+
+Two viewers that accept it, as examples:
+
+- **Phoenix**, running locally: `http://localhost:6006/v1/traces` ([Phoenix self-hosting docs](https://arize.com/docs/phoenix/self-hosting)).
+- **Langfuse**, running locally: `http://localhost:3000/api/public/otel/v1/traces` ([Langfuse OpenTelemetry docs](https://langfuse.com/integrations/native/opentelemetry)). Its keys travel in the standard variable, set in the shell that starts Orchestrator: `OTEL_EXPORTER_OTLP_HEADERS='Authorization=Basic%20<base64 of public-key:secret-key>'`. `%20` is the URL-encoded space the OpenTelemetry specification expects, and the app decodes it. Headers are never stored or shown.
 
 ### Development
 
@@ -386,7 +402,7 @@ A pattern is one JSON file that says which steps a task runs, in what order, wit
 
 **Who may choose what.** A pattern is "standard" when it is not experimental, does not pause for you, and has an independent code review of any code change. The lead's proposals, breakdown items and the project default use standard patterns only. Everything else is yours to choose, at New task or with Change pattern on the task page. Marking a file of yours `experimental` is also how you keep it away from the lead.
 
-**Experiments.** A pattern marked `experimental` must state its `hypothesis`, which the picker shows. Every task records the pattern it ran (its id, a content hash of its resolved steps, and its source) and, when it finishes or is cancelled, an outcome record (runs, tokens and cost where reported, repair rounds, findings, checks and coverage). That is the data a later comparison of patterns is built on; nothing is compared or exported yet.
+**Experiments.** A pattern marked `experimental` must state its `hypothesis`, which the picker shows. Every task records the pattern it ran (its id, a content hash of its resolved steps, and its source) and, when it finishes or is cancelled, an outcome record (runs, tokens and cost where reported, repair rounds, findings, checks and coverage). The Compare page groups tasks by pattern and version on those records, and the optional trace export can send them to an OTLP viewer; see [Measuring, not guessing](#measuring-not-guessing).
 
 **Changing a task's pattern.** Before a task starts, or while it is Paused, Change pattern on the task page replaces the pipeline. It starts over from the new pattern; work already done stays on the record, labelled "earlier pattern", and is never reused. A provider or model pin stays on a step with the same id and role.
 
@@ -423,6 +439,7 @@ This is a personal tool under active development. It is built in milestones (see
 | Vision documents | ORC-014 |
 | Pipeline patterns instead of an editable pipeline; outcome records per task | ORC-016 |
 | A demo worth showing: progress by area, a "Needs you" list, a first-run tour, the visual pass, and scripted README media | ORC-017 |
+| Compare patterns on their recorded outcomes; opt-in OpenTelemetry trace export | ORC-018 |
 
 Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test writes a one-step pattern file into a throwaway data directory, runs Claude and Codex workers concurrently on it against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost. Steering by conversation (ORC-009) has been exercised only with scripted and simulated leads; no real Claude or Codex lead run has steered yet.
 

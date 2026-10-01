@@ -104,8 +104,10 @@ describe("the demo in the fake service (ORC-017)", () => {
     expect(gate.items.find((i) => i.id === "service-checks")).toMatchObject({ ok: true });
     // Nothing was added for it: no dedicated review, no dedicated check run; and nothing else changed its state.
     expect(s.tasks.map((t) => t.id)).toEqual(before.tasks.map((t) => t.id));
-    // Landed work stays in the review-later list as it was.
-    expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
+    // Landed work stays in the review-later list as it was (the history's reviewed and sent-back items follow; ORC-018 §7).
+    const landed = D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`);
+    expect(landed.slice(0, 4)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
+    expect(landed.slice(4).every((x) => /^WT-1\d\d(-F1)?:(reviewed|sent-back)$/.test(x))).toBe(true);
     for (const id of ["WT-001", "WT-004.1", "WT-008", "WT-011"]) expect(task(s, id).integration!.pr!.phase, id).toBe("merged");
     // The paused task stays paused with its acknowledged stop; the deferred one stays deferred.
     expect(M.stateLabel(s, task(s, "WT-009"))).toBe("Paused");
