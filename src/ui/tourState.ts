@@ -63,5 +63,15 @@ export function createTourGate(store: () => KeyValueStore | undefined): TourGate
   };
 }
 
+/** The bare address ("", "#", "#/"): a visit that names no page. Only such a visit is sent to the Overview for the tour. */
+export function isLandingHash(hash: string): boolean {
+  return hash === "" || hash === "#" || hash === "#/";
+}
+
+/** Where a first visit to the demo should go: the Overview when the tour has not been seen and the address names no page. */
+export function firstVisitRedirect(demo: boolean, hash: string, store: () => KeyValueStore | undefined): string | undefined {
+  return demo && isLandingHash(hash) && !readTourDone(store) ? "#/overview" : undefined;
+}
+
 /** The browser's localStorage, when the page can reach it. The accessor itself may throw; callers wrap it. */
 export const browserStore = (): KeyValueStore | undefined => (typeof window !== "undefined" ? window.localStorage : undefined);

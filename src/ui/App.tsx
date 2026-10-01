@@ -288,7 +288,7 @@ function LiveIndicator() {
   const simulated = service.runtime !== "real";
   const text = n ? `${n} agent${n === 1 ? "" : "s"} working${simulated ? " (simulated)" : ""}${state.project.stage === "shaping" ? " (finishing; shaping)" : ""}` : "Idle";
   return (
-    <span className={`live${n ? " working" : ""}`} aria-live="polite" title={n ? "Runs in progress, including the service's check runs" : "No run is in progress"}>
+    <span className={`live${n ? " working" : ""}`} aria-live="polite" title={n ? "Agent runs in progress; the service's check runs are not counted" : "No agent run is in progress"}>
       {n > 0 && <span className="dot" aria-hidden="true" />}
       {text}
     </span>

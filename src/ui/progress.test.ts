@@ -45,6 +45,11 @@ describe("progressByArea", () => {
     expect(idle.map((r) => r.area)).toEqual(["Capture", "Storage", "Library", "Search", "Onboarding", "Settings", "Export"]);
     expect(agentsWorking(buildSeed(T0))).toBe(2);
     expect(agentsWorking(buildSeed(T0, { inFlightRuns: false }))).toBe(0);
+    // A check run by the service is not an agent.
+    const withCheck = buildSeed(T0);
+    const a = withCheck.attempts.find((x) => x.outcome === "running")!;
+    a.snapshot = { ...a.snapshot, provider: "service" };
+    expect(agentsWorking(withCheck)).toBe(1);
   });
 
   it("tasks with no area are grouped as Other; cancelled tasks and the service's own delivery tasks are left out", () => {

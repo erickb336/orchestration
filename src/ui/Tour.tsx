@@ -5,7 +5,7 @@
 import { driver, type Driver } from "driver.js";
 import "driver.js/dist/driver.css";
 import { useCallback, useEffect, useRef } from "react";
-import { browserStore, createTourGate } from "./tourState";
+import { browserStore, createTourGate, firstVisitRedirect } from "./tourState";
 
 /** One gate per page load. */
 const gate = createTourGate(browserStore);
@@ -52,9 +52,13 @@ export function startTour(onEnd?: () => void) {
       popover.closeButton.textContent = "Skip";
       popover.closeButton.setAttribute("aria-label", "Skip the tour");
     },
-    onDestroyed: () => {
-      active = null;
+    // Skip, Esc, a click outside and "Start exploring" all arrive here. driver.js calls onDestroyed only while it
+    // still holds a highlighted element, which a re-render of the Overview can take away, so the end is handled
+    // here: record it, close the tour (destroy() skips this hook), then hand focus back.
+    onDestroyStarted: () => {
       gate.markDone();
+      d.destroy();
+      if (active === d) active = null;
       onEnd?.();
     },
   });
@@ -67,6 +71,11 @@ export function startTour(onEnd?: () => void) {
  * blocked). It waits a moment so the Overview's anchors exist.
  */
 export function useFirstRunTour(demo: boolean, onOverview: boolean, returnFocus: () => void) {
+  // A first visit to the bare address lands on the Overview, where the tour lives; a link to any page is left alone.
+  useEffect(() => {
+    const to = firstVisitRedirect(demo, location.hash, browserStore);
+    if (to) location.replace(to);
+  }, [demo]);
   useEffect(() => {
     if (!demo || !onOverview || !gate.shouldAutoStart(demo)) return;
     const id = window.setTimeout(() => startTour(returnFocus), 400);

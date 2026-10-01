@@ -187,5 +187,6 @@ export function progressByArea(state: State, nowMs = Date.now()): AreaProgress[]
 
 /** How many agents work right now, for the header: counts every active run, service checks included. */
 export function agentsWorking(state: State): number {
-  return M.activeAttempts(state).filter((a) => a.outcome === "running").length;
+  // Agents only: the service's own check runs are not agents and have their own limit.
+  return M.activeAgentAttempts(state).filter((a) => a.outcome === "running").length;
 }
