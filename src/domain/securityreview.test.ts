@@ -4,11 +4,9 @@
 // pipeline and in the dedicated delivery review. Pure; nothing here touches git or GitHub.
 
 import { describe, expect, it } from "vitest";
-import { notRequired } from "./coverage";
 import * as D from "./delivery";
 import { builtInCatalog, internalFlow } from "./flows";
 import * as M from "./model";
-import { instantiate } from "./pipeline";
 import { buildSeed } from "./seed";
 import { reviewedChange } from "./testing/reviewed";
 import { REVIEW_ROLES, ROLES, STEP_ROLES, autoModelDefaults, roleDefaultFor, type CheckObs, type PrDelivery, type State } from "./types";
@@ -66,24 +64,7 @@ interface Secured {
  * flow does: a code review (S2) and a security review (SR1) beside it, both on Claude.
  */
 function secured(s0: State, id: string, sha: string, o: Secured = {}): State {
-  const s = reviewedChange(s0, id, sha, at(2), { writer: "codex", reviewer: "claude", findings: o.code ?? 0 });
-  const t = task(s, id);
-  t.steps.push({ ...instantiate([{ id: "SR1", purpose: "Security review", role: "security_reviewer", dependsOn: ["S1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "findings", kind: "review-findings" }] }])[0], state: "done" });
-  const change = `fx-change-${id}`;
-  s.attempts.push({
-    id: `fx-sec-${id}`,
-    taskId: id,
-    stepId: "SR1",
-    snapshot: { provider: "claude", model: "claude-model", source: "project-role", routingReason: "fixture", specRev: 1, stepRev: 1, visionRev: 1, workspace: "", pipelineRev: 1, purpose: "", inputs: [{ step: "S1", output: "change", artifactId: o.securitySaw === false ? `fx-earlier-${id}` : change, version: 1 }] },
-    startedAt: at(2),
-    endedAt: at(2),
-    outcome: "completed",
-    progress: 100,
-    artifacts: [],
-  });
-  // Path coverage is the code review's proof; a security review's coverage is "not required", as the engine records it.
-  s.artifacts.push({ id: `fx-secfindings-${id}`, taskId: id, stepId: "SR1", attemptId: `fx-sec-${id}`, name: "findings", kind: "review-findings", version: 1, summary: o.security ? "a token is written to the log" : "no security findings", openFindings: o.security ?? 0, pathCoverage: notRequired(), createdAt: at(2) });
-  return s;
+  return reviewedChange(s0, id, sha, at(2), { writer: "codex", reviewer: "claude", findings: o.code ?? 0, security: o.security ?? 0, ...(o.securitySaw === false ? { securitySaw: false } : {}) });
 }
 
 /** …done, with its head prepared as a pull request. */
@@ -177,9 +158,19 @@ describe("the delivery gate counts the security review's findings like the code 
     const clean = built(prMode());
     expect(prOf(clean).review).toMatchObject({ ok: true, source: "pipeline", provider: "claude", attemptId: `fx-review-${ID}`, artifactIds: [`fx-findings-${ID}`, `fx-secfindings-${ID}`] });
     expect(D.reviewView(clean, task(clean, ID)).state).toBe("ok");
-    // A security review that saw an earlier change says nothing about this one, either way.
+    // A security review that saw an earlier change says nothing about this one, either way (its findings are
+    // not counted), and a clean code review alone is not a pass (ORC-021 review 1): the dedicated review runs.
     const stale = built(prMode(), { security: 1, securitySaw: false });
-    expect(prOf(stale).review).toMatchObject({ ok: true, artifactIds: [`fx-findings-${ID}`] });
+    expect(prOf(stale).review).toMatchObject({ ok: false, source: "none", reason: `No security review saw the final change ${HEAD.slice(0, 12)}.` });
+    expect(D.reviewView(stale, task(stale, ID)).state).toBe("missing");
+    const [dedicated] = reviewTasks(D.advanceDelivery(stale, at(4)));
+    expect(dedicated.steps.map((st) => st.role)).toEqual(["code_reviewer", "security_reviewer"]);
+    // A pipeline from before ORC-021, with no security review at all, is the same.
+    const legacy = D.reportPrHead(reviewedChange(prMode(), ID, HEAD, at(2), { noSecurity: true }), ID, { n: 1, sha: HEAD, baseSha: SHA_A, changed: CHANGED }, at(3));
+    expect(D.reviewView(legacy, task(legacy, ID)).state).toBe("missing");
+    // Code findings still stand when the security review is missing: they go to repair, not to a new review.
+    const codeOpen = built(prMode(), { code: 1, securitySaw: false });
+    expect(D.reviewView(codeOpen, task(codeOpen, ID)).state).toBe("findings");
   });
 
   it("in automatic mode, open security findings hold item 9 of the gate and create one fix task seeded with the finding", () => {

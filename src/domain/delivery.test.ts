@@ -687,6 +687,11 @@ describe("nextPrOp and beginPrOp", () => {
     const capped = D.setPrDelivery(s, { maxOpenPrs: 1 }, at(12));
     expect(D.nextPrOp(capped, ms(13))).toBeUndefined();
     expect(D.beginPrOp(capped, second, at(13)).started).toBe(false);
+    // Dogfood ORC-021: a head held back by the cap says why, instead of "preparing".
+    const waiting = capped.tasks.find((t) => t.integration?.pr?.phase === "built")!;
+    expect(D.prLabel(capped, waiting, ms(13))!.text).toBe("PR not opened: 1 of 1 pull requests are open, your limit");
+    expect(D.prGate(capped, waiting, ms(13), { byUser: false }).items.find((i) => i.id === "ours")!.detail).toMatch(/^Not opened yet: 1 of 1 pull requests are open, your limit\. It opens when one of them merges or closes/);
+    expect(D.prLabel(s, waiting, ms(13))!.text).toBe("PR preparing");
     const spent = structuredClone(s);
     spent.project.github!.mutations = { hour: at(12).slice(0, 13), count: 200 };
     expect(D.nextPrOp(spent, ms(12))).toBeUndefined();

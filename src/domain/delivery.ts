@@ -568,6 +568,13 @@ export function openPrTasks(s: State): Task[] {
   return trackedPrTasks(s).filter((t) => t.integration!.pr!.phase === "open");
 }
 
+/** Why a built pull request is not opened yet because of the open limit, or nothing. */
+function openSlotsFull(s: State): string | undefined {
+  const open = openPrTasks(s).length;
+  const max = s.project.prDelivery.maxOpenPrs;
+  return open >= max ? `${open} of ${max} pull requests are open, your limit` : undefined;
+}
+
 /** Why coder steps that start from the base are not dispatched yet, if they are held. */
 export function writersHeld(s: State): string | undefined {
   const cfg = s.project.prDelivery;
@@ -748,7 +755,7 @@ const noReview = (pr: PrDelivery, reason: string): ReviewEvidence => ({ ok: fals
 
 /**
  * The task's own review counts only when it provably covers the final change: a finished code review
- * whose run received exactly the final change as an input. A finished task alone proves nothing (when
+ * and a finished security review whose runs received exactly the final change as an input. A finished task alone proves nothing (when
  * a repair loop runs out, its last repair is never reviewed).
  */
 function pipelineReview(s: State, pr: PrDelivery): ReviewView {
@@ -769,7 +776,11 @@ function pipelineReview(s: State, pr: PrDelivery): ReviewView {
     const saw = c.steps.some((st) => st.state === "done" && st.role === "code_reviewer" && lastCompletedRun(s, c.id, st.id)?.snapshot.inputs.some((i) => i.artifactId === fc.id));
     return saw ? { state: "missing", evidence: noReview(pr, `The review of ${h} did not list the files it covered, so it does not count.`) } : missing;
   }
-  return judge(s, pr, covering, "pipeline", c.id);
+  const v = judge(s, pr, covering, "pipeline", c.id);
+  // ORC-021 review 1: a clean pass also needs a security review that saw the final change; without one the
+  // dedicated review (which has one) runs. Findings and a review that is not independent stand as they are.
+  if (v.state === "ok" && !covering.some((x) => x.role === "security_reviewer")) return { state: "missing", evidence: noReview(pr, `No security review saw the final change ${h}.`) };
+  return v;
 }
 
 /**
@@ -1523,7 +1534,7 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
 
   // 4. It is our pull request
   if (pr.foreignHead) add("ours", "Only Orchestrator's commits", "blocked", `Someone else pushed ${sha12(pr.foreignHead.sha)} to this branch. The app will not push to it or merge it again; merge it on GitHub, or close it and deliver again.`, "foreign-push");
-  else if (!ob) add("ours", "Open on GitHub", "waiting", pr.phase === "built" ? "Not opened yet." : "Not seen on GitHub yet.");
+  else if (!ob) add("ours", "Open on GitHub", "waiting", pr.phase !== "built" ? "Not seen on GitHub yet." : openSlotsFull(s) ? `Not opened yet: ${openSlotsFull(s)}. It opens when one of them merges or closes, or when you raise the limit in Settings.` : "Not opened yet.");
   else if (ob.state !== "OPEN") add("ours", "Open on GitHub", "waiting", `GitHub reports it ${ob.state.toLowerCase()}.`);
   else if (ob.crossRepo) add("ours", "Open on GitHub", "blocked", "GitHub reports this pull request as coming from another repository; the app only acts on its own.", "foreign-push");
   else if (ob.isDraft) add("ours", "Open on GitHub", "blocked", "It was marked as a draft on GitHub. Mark it ready for review there.", "draft");
@@ -3115,7 +3126,7 @@ export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
     return { text: `${name} needs you${sim}`, tone: "danger" };
   }
   if (pr.userHold) return plain("held by you");
-  if (pr.phase === "built") return plain(!s.project.prDelivery.enabled ? "not opened: delivery is off" : s.project.hold ? "not opened: paused" : shaping ? `not opened: ${WAITS}` : "preparing");
+  if (pr.phase === "built") return plain(!s.project.prDelivery.enabled ? "not opened: delivery is off" : s.project.hold ? "not opened: paused" : shaping ? `not opened: ${WAITS}` : openSlotsFull(s) ? `not opened: ${openSlotsFull(s)}` : "preparing");
   if (prReady(s, t, nowMs)) return { text: `${name} waiting for you${sim}`, tone: "strong" };
   const byUser = userGate(pr);
   const waits = prGate(s, t, nowMs, { byUser }).items.find((x) => !x.ok && x.id !== "policy");

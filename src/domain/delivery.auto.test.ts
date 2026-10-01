@@ -166,7 +166,7 @@ describe("the delivery-review flow", () => {
 describe("reviewCoverage (design §9.1)", () => {
   it("Codex writes and Claude reviews the final change clean: the task's own review counts, with no extra run", () => {
     const s = built(prMode(), ID, HEAD, { writer: "codex", reviewer: "claude" });
-    expect(prOf(s).review).toMatchObject({ ok: true, source: "pipeline", forSha: HEAD, provider: "claude", taskId: ID, attemptId: `fx-review-${ID}`, artifactIds: [`fx-findings-${ID}`] });
+    expect(prOf(s).review).toMatchObject({ ok: true, source: "pipeline", forSha: HEAD, provider: "claude", taskId: ID, attemptId: `fx-review-${ID}`, artifactIds: [`fx-findings-${ID}`, `fx-secfindings-${ID}`] });
     expect(D.reviewCoverage(s, task(s, ID))).toEqual(prOf(s).review);
     const after = D.advanceDelivery(s, at(4));
     expect(reviewTasks(after)).toEqual([]);
@@ -214,7 +214,7 @@ describe("reviewCoverage (design §9.1)", () => {
     // The user edited the findings to zero while the task was open: a newer version, by them.
     const cleared = structuredClone(s);
     cleared.artifacts.push({ ...cleared.artifacts.find((a) => a.id === `fx-findings-${ID}`)!, id: "edited", attemptId: "edit", version: 2, openFindings: 0, author: "user", editReason: "not a real problem" });
-    expect(D.reviewCoverage(cleared, task(cleared, ID))).toMatchObject({ ok: true, clearedByUser: true, artifactIds: ["edited"] });
+    expect(D.reviewCoverage(cleared, task(cleared, ID))).toMatchObject({ ok: true, clearedByUser: true, artifactIds: ["edited", `fx-secfindings-${ID}`] });
     // It lands flagged.
     const open = opened(D.advanceDelivery(cleared, at(4)));
     const merged = see(open, 30, { state: "MERGED", mergeCommit: MERGE, mergedBy: "octocat" });

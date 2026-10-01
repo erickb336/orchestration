@@ -234,7 +234,7 @@ describe("finding 2: who the author is", () => {
       // review saw exactly that version. (Before the fix both facts made the author "user".)
       x.attempts = x.attempts.filter((a) => a.id !== `fx-write-${ID}`);
       edit(x, undefined);
-      x.attempts.find((a) => a.id === `fx-review-${ID}`)!.snapshot.inputs[0] = { step: "S1", output: "change", artifactId: "edited", version: 2 };
+      for (const id of [`fx-review-${ID}`, `fx-sec-${ID}`]) x.attempts.find((a) => a.id === id)!.snapshot.inputs[0] = { step: "S1", output: "change", artifactId: "edited", version: 2 };
     });
     expect(M.finalChange(s, task(s, ID))!.id).toBe("edited");
     expect(prOf(s)).toMatchObject({ changeAuthor: "unknown", changeAuthors: ["unknown"] });
