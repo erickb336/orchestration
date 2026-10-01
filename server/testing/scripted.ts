@@ -36,10 +36,12 @@ export class ScriptedAdapter implements RuntimeAdapter {
   async listConnections(): Promise<Connection[] | null> {
     return this.connectionsList;
   }
+  /** false: the runtime accepts the run but does not report it started (the provider never got going). */
+  reportsStart = true;
   start(a: Assignment) {
     this.runs.set(a.attemptId, a);
     this.started.push(a);
-    this.emit({ type: "started", attemptId: a.attemptId, sessionId: `${this.provider}-session-${a.attemptId}`, model: `${a.model}-actual` });
+    if (this.reportsStart) this.emit({ type: "started", attemptId: a.attemptId, sessionId: `${this.provider}-session-${a.attemptId}`, model: `${a.model}-actual` });
   }
   interrupt(id: string) {
     if (!this.interrupts.includes(id)) this.interrupts.push(id);

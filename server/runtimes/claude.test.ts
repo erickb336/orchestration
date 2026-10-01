@@ -708,6 +708,30 @@ describe("ClaudeAdapter", () => {
       await waitFor(() => s.input.closed);
     });
 
+    it("ORC-022 review M3: the note's turn hits the spend or turn limit: the run completes on the earlier result, with the total usage, and says so", async () => {
+      for (const subtype of ["error_max_budget_usd", "error_max_turns"] as const) {
+        const s = await started();
+        const sent = await sendNote(s);
+        s.stream.push(result("success", { result: "First turn done.\n```json\n{}\n```", queued_turn_count: 1 }));
+        await sleep(30);
+        s.stream.push(assistant([{ type: "text", text: "Applying the note" }], "msg_9", ack(sent.uuid)));
+        await waitFor(() => noteEvents(s.events).length === 1);
+        s.stream.push(result(subtype, { total_cost_usd: 2.01 }));
+        s.stream.end();
+        await waitFor(() => terminals(s.events).length === 1);
+        expect(terminals(s.events)[0]).toMatchObject({ type: "completed", attemptId: "att-1", finalText: "First turn done.\n```json\n{}\n```", usage: { costUsd: 2.01 } });
+        expect(s.events).toContainEqual({ type: "activity", attemptId: "att-1", note: `The note's turn reached the ${subtype === "error_max_turns" ? "turn" : "spend"} limit; the run completes on the result it had before the note` });
+      }
+    });
+
+    it("a limit hit with no earlier result is still a failure", async () => {
+      const s = await started();
+      s.stream.push(result("error_max_budget_usd", { total_cost_usd: 2.01 }));
+      s.stream.end();
+      await waitFor(() => terminals(s.events).length === 1);
+      expect(terminals(s.events)[0]).toMatchObject({ type: "failed" });
+    });
+
     it("sums the per-turn usage fallback when results carry no modelUsage", async () => {
       const s = await started();
       const sent = await sendNote(s);
@@ -750,6 +774,31 @@ describe("ClaudeAdapter", () => {
       await sleep(20);
       expect(noteEvents(s.events)).toHaveLength(1);
       expect(terminals(s.events)).toHaveLength(1);
+    });
+
+    it("ORC-022 review L5: while the CLI reports a turn running, the wait is renewed instead of completing under it; once idle, it gives up as before", async () => {
+      const s = await started({ noteAckGraceMs: 40 });
+      const sent = await sendNote(s);
+      s.stream.push(result("success", { result: "First turn." }));
+      s.stream.push({ type: "system", subtype: "session_state_changed", state: "running", uuid: "u-1", session_id: "sess-1" });
+      await sleep(150); // well past the grace period
+      expect(terminals(s.events)).toHaveLength(0);
+      expect(s.events).toContainEqual({ type: "activity", attemptId: "att-1", note: "A turn is still running; waiting for it to take up the note" });
+      // The note's turn shows up late: delivered, and the run completes on that turn's result.
+      s.stream.push(assistant([{ type: "text", text: "Applying the note" }], "msg_9", ack(sent.uuid)));
+      s.stream.push(result("success", { result: "Second turn." }));
+      s.stream.push({ type: "system", subtype: "session_state_changed", state: "idle", uuid: "u-2", session_id: "sess-1" });
+      s.stream.end();
+      await waitFor(() => terminals(s.events).length === 1);
+      expect(noteEvents(s.events)[0]).toMatchObject({ outcome: "delivered" });
+      expect(terminals(s.events)[0]).toMatchObject({ type: "completed", finalText: "Second turn." });
+      // Idle: the original give-up applies.
+      const t = await started({ noteAckGraceMs: 40 });
+      await sendNote(t);
+      t.stream.push(result("success", { result: "Only turn." }));
+      t.stream.push({ type: "system", subtype: "session_state_changed", state: "idle", uuid: "u-3", session_id: "sess-1" });
+      await waitFor(() => terminals(t.events).length === 1);
+      expect(noteEvents(t.events)[0]).toMatchObject({ outcome: "not-delivered" });
     });
 
     it("a note to a finished or unknown run is not delivered, with the reason", async () => {

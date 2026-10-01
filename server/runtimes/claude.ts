@@ -424,6 +424,8 @@ interface Run {
   notes: Map<string, string>;
   /** ORC-022: the result of the last turn, kept while a note is outstanding; the run completes on it if no acknowledgment comes. */
   lastResult?: Extract<AdapterEvent, { type: "completed" }>;
+  /** The CLI's last reported session state (`system/session_state_changed`); undefined if it never reported one. */
+  sessionState?: string;
   /** ORC-022: the timer bounding the wait for that acknowledgment. */
   noteWait?: ReturnType<typeof setTimeout>;
   /** ORC-022: summed per-turn `usage` of earlier turns (the fallback when a result has no modelUsage). */
@@ -803,6 +805,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     const id = run.a.attemptId;
     switch (m.type) {
       case "system": {
+        if (m.subtype === "session_state_changed" && typeof m.state === "string") run.sessionState = m.state;
         if (m.subtype === "init" && !run.started) {
           run.started = true;
           run.sessionId = typeof m.session_id === "string" ? m.session_id : undefined;
@@ -920,6 +923,13 @@ export class ClaudeAdapter implements RuntimeAdapter {
 
     // Error subtypes.
     if (run.interruptRequested) return stopped();
+    // ORC-022 review M3: a turn started by a note shares the run's turn and spend limits. When it hits one, the
+    // run had already finished its work on the earlier turn: complete on that result (with the total usage) and
+    // say so, rather than discarding finished work as a failure.
+    if (run.lastResult && (m.subtype === "error_max_turns" || m.subtype === "error_max_budget_usd")) {
+      this.activity(run, `The note's turn reached the ${m.subtype === "error_max_turns" ? "turn" : "spend"} limit; the run completes on the result it had before the note`);
+      return this.finish(run, { ...run.lastResult, usage });
+    }
     const errors = Array.isArray(m.errors) ? (m.errors as unknown[]).map(String).filter(Boolean) : [];
     let message: string;
     switch (m.subtype) {
@@ -950,6 +960,13 @@ export class ClaudeAdapter implements RuntimeAdapter {
    */
   private giveUpOnNotes(run: Run) {
     if (run.terminal || run.forgotten || !run.lastResult) return;
+    // ORC-022 review L5: a turn is still running (the CLI says so), most likely the note's own turn before its first
+    // frame. Completing now would read a worktree it is still editing; wait again. The run's time limit still applies.
+    if (run.sessionState !== undefined && run.sessionState !== "idle") {
+      this.activity(run, "A turn is still running; waiting for it to take up the note");
+      run.noteWait = this.timer(run, this.noteAckGraceMs, () => this.giveUpOnNotes(run));
+      return;
+    }
     this.settleNotes(run, `the Claude session did not acknowledge the note within ${Math.round(this.noteAckGraceMs / 1000)}s of the turn ending`);
     this.finish(run, run.lastResult);
     try {

@@ -18,6 +18,7 @@ import type { GetAccountResponse } from "./codex-protocol/v2/GetAccountResponse"
 import type { ModelListResponse } from "./codex-protocol/v2/ModelListResponse";
 import type { ThreadStartResponse } from "./codex-protocol/v2/ThreadStartResponse";
 import type { TurnInterruptResponse } from "./codex-protocol/v2/TurnInterruptResponse";
+import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
 import type { TurnStartResponse } from "./codex-protocol/v2/TurnStartResponse";
 
 export type ClientMethod = ClientRequest["method"];
@@ -28,6 +29,7 @@ interface ResponseMap {
   "thread/start": ThreadStartResponse;
   "turn/start": TurnStartResponse;
   "turn/interrupt": TurnInterruptResponse;
+  "turn/steer": TurnSteerResponse;
   "account/read": GetAccountResponse;
   "model/list": ModelListResponse;
   // ORC-013: the check runner's sandboxed commands.

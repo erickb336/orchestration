@@ -904,7 +904,7 @@ function recentSteering(state: State): string {
         c.status === "applied"
           ? live
             ? live.status === "not-delivered"
-              ? `sent; not delivered: ${live.reason ?? "no reason recorded"}`
+              ? `${live.attemptId ? "sent" : "recorded"}; not delivered: ${live.reason ?? "no reason recorded"}`
               : `sent; ${live.status}${live.status === "delivered" && live.via === "start" ? " at start" : ""}`
             : c.appliedBy === "user"
               ? "applied by the user"
