@@ -346,7 +346,7 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   const items: NeedsYouEntry[] = [];
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
-    items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings" });
+    items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings/project/delivery" });
   }
   if (gh?.autoMergePaused) {
     items.push({ kind: "open", key: "auto", what: "automatic merging is paused", detail: `${gh.autoMergePaused.reason}. ${gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}`, action: "Open", href: "#/results" });
