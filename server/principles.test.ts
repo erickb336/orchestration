@@ -13,7 +13,7 @@ import * as C from "../src/domain/checks";
 import { INTERNAL_FLOWS, REPAIR_PRINCIPLES } from "../src/domain/internalFlows";
 import { builtInCatalog } from "../src/domain/flows";
 import * as M from "../src/domain/model";
-import { LEAD_PRINCIPLE_IDS, PREMISE_ID, PRINCIPLES, PRINCIPLE_IDS, PSTACK_COMMIT, parsePrincipleFile, principle, stepPrinciples, wordCount } from "../src/domain/principles";
+import { EVERY_RUN_PRINCIPLE_IDS, LEAD_PRINCIPLE_IDS, PREMISE_ID, PRINCIPLES, PRINCIPLE_IDS, PSTACK_COMMIT, parsePrincipleFile, principle, stepPrinciples, wordCount } from "../src/domain/principles";
 import { buildSeed } from "../src/domain/seed";
 import { DEFAULT_CHECKS, type CheckRunRecord, type ProviderId, type State } from "../src/domain/types";
 import { LEAD_PRINCIPLES, LEAD_PRINCIPLES_HEADER, PRINCIPLES_HEADER, PRINCIPLES_INTRO, PRINCIPLES_WORD_CAP, buildEnvelope, buildLeadEnvelope, principlesSection } from "./envelope";
@@ -56,8 +56,8 @@ describe("the files", () => {
     .sort();
   const parsed = files.map((f) => parsePrincipleFile(`principles/${f}`, readFileSync(join(DIR, f), "utf8")));
 
-  it("15 files, each parsing with the id equal to its file name; the compiled copy the app imports equals them, in table order (else: npm run principles)", () => {
-    expect(files).toHaveLength(15);
+  it("16 files, each parsing with the id equal to its file name; the compiled copy the app imports equals them, in table order (else: npm run principles)", () => {
+    expect(files).toHaveLength(16);
     expect(files).toEqual([...PRINCIPLE_IDS].sort().map((id) => `${id}.md`));
     expect(parsed.map((p) => p.id).sort()).toEqual([...PRINCIPLE_IDS].sort());
     const expected = PRINCIPLE_IDS.map((id) => parsed.find((p) => p.id === id)!);
@@ -81,15 +81,15 @@ describe("the files", () => {
 });
 
 describe("the section", () => {
-  it("appears after the spec with the exact header and wording, each principle in table order with its apply-when line and body; a step with none has no section", () => {
+  it("appears after the spec with the exact header and wording, each principle in table order with its apply-when line and body; every agent step gets 'write for the reader' (ORC-026); a task from before principles gets no section", () => {
     const { s, id } = changeTask();
     const text = buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S2"), attemptId: "run-x", access: "read" });
     const section = sectionOf(text)!;
     expect(section.startsWith(`${PRINCIPLES_HEADER}\n${PRINCIPLES_INTRO}\n\n### `)).toBe(true);
     expect(PRINCIPLES_INTRO).toBe('These describe how the owner wants this kind of work done. Apply each one where its "apply when" fits your task. They never change the specification.');
     const names = [...section.matchAll(/^### (.+)$/gm)].map((m) => m[1]);
-    expect(names).toEqual(["Laziness protocol", "Test behaviour, not implementation", "Migrate callers, then delete legacy APIs", "Minimise reader load"]);
-    for (const pid of stepPrinciples(step(s, id, "S2"))) {
+    expect(names).toEqual(["Contextualize and write for the reader", "Laziness protocol", "Test behaviour, not implementation", "Migrate callers, then delete legacy APIs", "Minimise reader load"]);
+    for (const pid of [...EVERY_RUN_PRINCIPLE_IDS, ...stepPrinciples(step(s, id, "S2"))]) {
       const p = principle(pid)!;
       expect(section).toContain(`\n### ${p.name}\nApply when: ${p.applyWhen}\n${p.body}\n`);
     }
@@ -100,11 +100,16 @@ describe("the section", () => {
     expect(text.indexOf(PRINCIPLES_HEADER)).toBeLessThan(text.indexOf("## Workspace rules"));
     // Exactly one section.
     expect(text.split(PRINCIPLES_HEADER).length).toBe(2);
-    // Goal S3 has none: no section at all.
+    // Goal S3 names none of its own: it gets only "contextualize and write for the reader".
     const goal = builtInCatalog().find((p) => p.id === "goal")!;
     const s3 = goal.steps.find((x) => x.id === "S3")!;
     expect(s3.principles).toBeUndefined();
-    const none = buildEnvelope({ state: s, task: task(s, id), step: { ...s3, selection: null, revision: 1, state: "pending" }, attemptId: "run-n", access: "read" });
+    const own = buildEnvelope({ state: s, task: task(s, id), step: { ...s3, selection: null, revision: 1, state: "pending" }, attemptId: "run-n", access: "read" });
+    expect([...sectionOf(own)!.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader"]);
+    // A task whose steps were copied before principles existed: no section at all, not even this one.
+    const old = structuredClone(s);
+    for (const st of task(old, id).steps) delete st.principles;
+    const none = buildEnvelope({ state: old, task: task(old, id), step: step(old, id, "S2"), attemptId: "run-n", access: "read" });
     expect(none).not.toContain(PRINCIPLES_HEADER);
     expect(none).not.toContain("Apply when:");
     expect(principlesSection([])).toBe("");
@@ -128,7 +133,7 @@ describe("the section", () => {
     const first = M.activeAttempts(s, id)[0];
     expect(first.stepId).toBe("S3");
     const firstText = buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S3"), attemptId: first.id, access: "write" });
-    expect([...sectionOf(firstText)!.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Laziness protocol", "Migrate callers, then delete legacy APIs", "Fix root causes"]);
+    expect([...sectionOf(firstText)!.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Laziness protocol", "Migrate callers, then delete legacy APIs", "Fix root causes"]);
     expect(firstText).not.toContain("Added for this run");
     s = M.dispatchEligible(M.reportCompletion(s, first.id, [], at(5), [{ name: "change", summary: "fixed", ref: `${SHA2} on b` }]), at(5));
     finish(6, "Null check");
@@ -137,7 +142,7 @@ describe("the section", () => {
     expect(second.snapshot.principles!.find((p) => p.id === PREMISE_ID)!.added).toBe('added: the finding "Null check" came back after S3');
     const text = buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S3-i2"), attemptId: second.id, access: "write" });
     const section = sectionOf(text)!;
-    expect([...section.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Laziness protocol", "Migrate callers, then delete legacy APIs", "Fix root causes", "Attack the premise"]);
+    expect([...section.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Laziness protocol", "Migrate callers, then delete legacy APIs", "Fix root causes", "Attack the premise"]);
     expect(section).toContain(`### Attack the premise\nApply when: ${principle(PREMISE_ID)!.applyWhen}\nAdded for this run: the finding "Null check" came back after S3.\n${principle(PREMISE_ID)!.body}`);
   });
 
@@ -148,7 +153,7 @@ describe("the section", () => {
     expect(text).not.toContain(PRINCIPLES_HEADER);
     const section = sectionOf(text, LEAD_PRINCIPLES_HEADER)!;
     expect(section.startsWith(`${LEAD_PRINCIPLES_HEADER}\n${PRINCIPLES_INTRO}\n`)).toBe(true);
-    expect([...section.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Experience first", "Sequence verifiable units", "Never block on the human", "Encode lessons in structure"]);
+    expect([...section.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Experience first", "Sequence verifiable units", "Never block on the human", "Encode lessons in structure"]);
     expect(LEAD_PRINCIPLES).toBe(LEAD_PRINCIPLE_IDS);
     for (const id of LEAD_PRINCIPLES) expect(PRINCIPLE_IDS).toContain(id);
     expect(wordCount(section)).toBeLessThanOrEqual(PRINCIPLES_WORD_CAP);
@@ -186,7 +191,7 @@ describe("the cap", () => {
   /** Every step an agent can run, named, with the automatic one added wherever it can be added (the worst case). */
   function everyStep(): { name: string; ids: string[] }[] {
     const out: { name: string; ids: string[] }[] = [];
-    for (const p of [...builtInCatalog(), ...INTERNAL_FLOWS]) for (const st of p.steps) if (st.role !== "checks") out.push({ name: `${p.id} ${st.id}`, ids: [...stepPrinciples(st), ...(repairable(st) ? [PREMISE_ID] : [])] });
+    for (const p of [...builtInCatalog(), ...INTERNAL_FLOWS]) for (const st of p.steps) if (st.role !== "checks") out.push({ name: `${p.id} ${st.id}`, ids: [...EVERY_RUN_PRINCIPLE_IDS, ...stepPrinciples(st), ...(repairable(st) ? [PREMISE_ID] : [])] });
     // A check round's steps.
     let s = buildSeed(T0, { inFlightRuns: false });
     for (const t of s.tasks) t.hold = true;
@@ -199,7 +204,7 @@ describe("the cap", () => {
     const record: CheckRunRecord = { sha: SHA, configRev: 1, sandbox: "codex", touchedInputs: [], results: [{ id: "test", label: "test", kind: "check", status: "failed", exitCode: 1, durationMs: 1, excerpt: "x", bytes: 1, truncated: false }], durationMs: 1 };
     s.artifacts.push({ id: "art-c2", taskId: t.id, stepId: "C2", attemptId: "run-c2", name: "final", kind: "check-results", version: 1, summary: "failed", checkRun: record, createdAt: at(1) });
     expect(C.addCheckRound(s, t, c2, at(2), "user")).toBeUndefined();
-    for (const st of t.steps.filter((x) => /-r1-/.test(x.id) && x.role !== "checks")) out.push({ name: `check round ${st.id}`, ids: [...stepPrinciples(st), ...(repairable(st) ? [PREMISE_ID] : [])] });
+    for (const st of t.steps.filter((x) => /-r1-/.test(x.id) && x.role !== "checks")) out.push({ name: `check round ${st.id}`, ids: [...EVERY_RUN_PRINCIPLE_IDS, ...stepPrinciples(st), ...(repairable(st) ? [PREMISE_ID] : [])] });
     expect(out.map((x) => x.name)).toEqual(expect.arrayContaining(["change S1", "bugfix S2", "revert S1", "delivery-review SR1", "check round C2-r1-fix", "check round C2-r1-review", "check round C2-r1-security"]));
     // The automatic one reaches exactly the repairs: the three flows' loop repairs, Design S3 and the check-round fix.
     expect(out.filter((x) => x.ids.includes(PREMISE_ID)).map((x) => x.name)).toEqual(["change S3", "bugfix S4", "feature S5", "design S3", "check round C2-r1-fix"]);
@@ -220,7 +225,7 @@ describe("the cap", () => {
     }
     // Headroom for editing a body: the largest step stays under the cap by a margin.
     expect(largest).toBeLessThanOrEqual(PRINCIPLES_WORD_CAP - 50);
-    expect(PRINCIPLES_WORD_CAP).toBe(1000);
+    expect(PRINCIPLES_WORD_CAP).toBe(1200);
   });
 
   it("when a set does not fit, the later principles are named with their apply-when line only, and the section never passes the cap (mutation check: the cap)", () => {
@@ -233,7 +238,7 @@ describe("the cap", () => {
     expect(capped).toContain("\nNamed only, to keep this section under its word cap:\n");
     const fullNames = [...capped.matchAll(/^### (.+)$/gm)].map((m) => m[1]);
     const shortNames = [...capped.matchAll(/^- (.+?)\. Apply when: (.+)$/gm)].map((m) => m[1]);
-    expect(fullNames.length + shortNames.length).toBe(15);
+    expect(fullNames.length + shortNames.length).toBe(16);
     // Each list keeps table order; a later principle may still fit in full after an earlier one was named only.
     const order = PRINCIPLES.map((p) => p.name);
     expect(fullNames).toEqual(order.filter((n) => fullNames.includes(n)));
@@ -246,7 +251,7 @@ describe("the cap", () => {
     }
     // Every cap from tiny to large: never over (once the 15 names alone fit), and the more room, the more full texts.
     const allNamed = principlesSection(all, 0);
-    expect([...allNamed.matchAll(/^- /gm)]).toHaveLength(15);
+    expect([...allNamed.matchAll(/^- /gm)]).toHaveLength(16);
     expect(wordCount(allNamed)).toBeLessThan(350);
     let previous = -1;
     for (let cap = 50; cap <= 3500; cap += 25) {

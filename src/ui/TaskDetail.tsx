@@ -16,7 +16,6 @@ import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } fr
 import { useLeadContext } from "./LeadDrawer";
 import { FlowPicker } from "./FlowPicker";
 import { PIPELINE_CHANGED_MESSAGE, changeConsequences, earlierFlowLabel, flowLineParts, principlesText, revisionFlowLabel, sameFlow } from "./flowView";
-import { stepPrinciples } from "../domain/principles";
 
 export function TaskDetail({ id }: { id: string }) {
   const { state } = useStore();
@@ -758,7 +757,8 @@ function StepPrinciples({ state, task, st }: { state: State; task: Task; st: Ste
   // Review L5: a skipped step never ran, so no agent was given anything.
   if (st.state === "skipped") return null;
   const { shownRun } = stepRuns(state, task, st);
-  const given = shownRun?.snapshot.principles ?? (shownRun ? [] : stepPrinciples(st).map((id) => ({ id })));
+  // Before a run: what dispatch would give it now (the step's set, plus "contextualize and write for the reader" for agent steps).
+  const given = shownRun?.snapshot.principles ?? (shownRun ? [] : M.runPrinciples(state, task, st));
   if (!given.length) return null;
   return <div className="muted small">{principlesText(given)}</div>;
 }

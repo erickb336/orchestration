@@ -22,6 +22,7 @@
     "provider": { "enum": ["claude", "codex"] },
     "principle": {
       "enum": [
+        "contextualize-and-write-for-the-reader",
         "exhaust-the-design-space",
         "experience-first",
         "foundational-thinking",

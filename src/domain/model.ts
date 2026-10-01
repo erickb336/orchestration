@@ -10,7 +10,7 @@ import * as F from "./findings";
 import { isInternalFlowId } from "./internalFlows";
 import { childDefault, customRef, effectiveDefault, eligible, eligibleIds, findFlow, flowRef, serviceFlow } from "./flows";
 import { downstreamOf, instantiate, structuralKey, toDef, validatePipeline } from "./pipeline";
-import { PREMISE_ID, orderPrinciples, principle, stepPrinciples } from "./principles";
+import { EVERY_RUN_PRINCIPLE_IDS, PREMISE_ID, orderPrinciples, principle, stepPrinciples } from "./principles";
 import {
   type ActivityEvent,
   type Actor,
@@ -5294,9 +5294,12 @@ export function premiseReason(s: State, t: Task, st: Step, inputs: ConsumedInput
  */
 export function runPrinciples(s: State, t: Task, st: Step, inputs: ConsumedInput[] = consumedInputs(s, t, st)): GivenPrinciple[] {
   const own = stepPrinciples(st);
-  // Review L2: a step copied before ORC-024 carries no principles, and its runs get none, the automatic one included.
+  // ORC-026: every agent run also gets "contextualize and write for the reader", on tasks whose steps carry principles at all.
+  // A task copied before ORC-024 carries none anywhere, and its runs get none (review L2), this one included.
+  const current = t.steps.some((x) => (x.principles?.length ?? 0) > 0);
+  const base = current && st.role !== "checks" ? orderPrinciples([...own, ...EVERY_RUN_PRINCIPLE_IDS]) : own;
   const reason = own.length ? premiseReason(s, t, st, inputs) : undefined;
-  const ids = reason ? orderPrinciples([...own, PREMISE_ID]) : own;
+  const ids = reason ? orderPrinciples([...base, PREMISE_ID]) : base;
   return ids.map((id) => ({ id, hash: principle(id)?.hash ?? "", ...(reason && id === PREMISE_ID && !own.includes(PREMISE_ID) ? { added: reason } : {}) }));
 }
 
