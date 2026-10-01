@@ -67,7 +67,9 @@ if (mode === "real") {
   github = new GhCliHost({ cwd: join(dirname(dbPath), "gh-neutral") });
 } else {
   const catalog = store.read().state.project.catalog;
-  adapters = { claude: new FakeAdapter("claude", fakeConfig, catalog.claude), codex: new FakeAdapter("codex", fakeConfig, catalog.codex) };
+  // ORC-025 (L3): the simulated lead reads the board (read-only) to answer "what needs me?" and the like.
+  const board = () => store.read().state;
+  adapters = { claude: new FakeAdapter("claude", fakeConfig, catalog.claude, board), codex: new FakeAdapter("codex", fakeConfig, catalog.codex, board) };
 }
 // ORC-014: copies of the user's vision documents live next to the database, never in a repository.
 const visionDocs = new VisionDocStore(join(dirname(dbPath), "vision-docs"));

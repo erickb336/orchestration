@@ -1,13 +1,13 @@
 {
   "Board.tsx": 4,
   "ChecksSettings.tsx": 9,
-  "Conversation.tsx": 3,
+  "Conversation.tsx": 0,
   "DeliverySettings.tsx": 14,
   "Onboarding.tsx": 0,
   "Overview.tsx": 0,
   "Review.tsx": 2,
   "Settings.tsx": 35,
   "Shaping.tsx": 14,
-  "SteeringChanges.tsx": 12,
+  "SteeringChanges.tsx": 0,
   "VisionDocs.tsx": 8
 }
