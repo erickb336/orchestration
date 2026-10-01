@@ -151,42 +151,68 @@ details.how.inline > summary:hover { color: var(--text); }
 }
 .sim-banner strong { letter-spacing: 0.02em; }
 .sim-banner .sim-text { flex: 1 1 18rem; min-width: 0; }
-.sim-banner button, .sim-banner select { background: transparent; color: var(--sim-text); border-color: rgba(255, 255, 255, 0.35); padding: 0.1rem 0.55rem; font-size: var(--fs-small); }
-.sim-banner button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
-.sim-banner select option { color: #222; }
-.sim-banner .spacer { flex: 1; }
 .sim-banner.live { background: var(--st-fail); color: var(--accent-contrast); }
-.sim-menu { position: relative; margin-left: auto; }
-.sim-menu > summary { list-style: none; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.35); border-radius: var(--radius-control); padding: 0.1rem 0.6rem; font-size: var(--fs-small); font-weight: 560; display: inline-flex; align-items: center; gap: 0.35rem; }
-.sim-menu > summary::-webkit-details-marker { display: none; }
-.sim-menu > summary::after { content: ""; width: 0.4rem; height: 0.4rem; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); }
-.sim-menu[open] > summary { background: rgba(255, 255, 255, 0.12); }
-.sim-menu[open] > summary::after { transform: translateY(1px) rotate(225deg); }
-.sim-pop {
-  position: absolute;
-  right: 0;
-  top: calc(100% + 0.4rem);
-  width: min(26rem, calc(100vw - 2rem));
-  background: var(--sim-bg);
-  color: var(--sim-text);
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  border-radius: var(--radius);
-  padding: 0.75rem 0.9rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
-  z-index: 20;
-}
-.sim-pop p { margin: 0; font-size: var(--fs-small); color: color-mix(in srgb, var(--sim-text) 80%, transparent); }
-.sim-pop .row { gap: 0.4rem; }
-.sim-pop select { max-width: 100%; }
+/* The Simulation menu sits on the inverted bar: its button and its list take the bar's colours. */
+.sim-menu { margin-left: auto; }
+.sim-banner .menu > summary { background: transparent; color: var(--sim-text); border-color: color-mix(in srgb, var(--sim-text) 35%, transparent); min-height: 1.625rem; padding: 0.1rem 0.6rem; font-size: var(--fs-small); }
+.sim-banner .menu[open] > summary, .sim-banner .menu > summary:hover { background: color-mix(in srgb, var(--sim-text) 10%, transparent); }
+.sim-banner .menu__pop { background: var(--sim-bg); color: var(--sim-text); border-color: color-mix(in srgb, var(--sim-text) 25%, transparent); }
+.sim-banner .menu__pop .k-btn { color: var(--sim-text); }
+.sim-banner .menu__pop .k-btn:hover:not(:disabled):not([aria-disabled="true"]) { background: color-mix(in srgb, var(--sim-text) 10%, transparent); color: var(--sim-text); }
+.sim-banner .menu__pop .k-btn[aria-pressed="true"]::before { content: "✓"; }
+.sim-banner .menu__pop .k-btn-reason { color: color-mix(in srgb, var(--sim-text) 70%, transparent); }
 @media (max-width: 600px) {
   /* Phones: "Demo" and the Simulation control share the first line; the sentence follows at full width. */
   .sim-banner { padding: 0.4rem 1rem; }
   .sim-banner .sim-text { order: 3; flex-basis: 100%; font-size: var(--fs-small); }
-  .sim-pop { right: -0.5rem; }
 }
+
+/* ORC-025 pass 2: a small menu on a button (the Project menu, the Simulation menu). Native details/summary. */
+.menu { position: relative; }
+.menu > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.125rem;
+  padding: 0.3rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--fs-meta);
+  font-weight: 560;
+  line-height: 1.3;
+  white-space: nowrap;
+  transition: background-color var(--ease), border-color var(--ease);
+}
+.menu > summary::-webkit-details-marker { display: none; }
+.menu > summary:hover, .menu[open] > summary { background: var(--surface-2); }
+.menu > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.menu__caret { width: 0.4rem; height: 0.4rem; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); transition: transform var(--ease); }
+.menu[open] .menu__caret { transform: translateY(1px) rotate(225deg); }
+.menu__pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.4rem);
+  min-width: 15rem;
+  max-width: min(24rem, calc(100vw - 2rem));
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  display: grid;
+  gap: var(--space-1);
+  box-shadow: var(--shadow-pop);
+  z-index: 20;
+}
+.menu__pop .k-btn, .menu__pop .k-btn-wrap { width: 100%; }
+.menu__pop .k-btn { justify-content: flex-start; white-space: normal; text-align: left; }
+.menu__pop .k-btn-wrap { align-items: stretch; }
+.menu__pop .k-btn-reason { padding: 0 0.55rem; }
+.menu__note { margin: 0; padding: 0.1rem 0.55rem; font-size: var(--fs-small); color: var(--muted); }
 
 header.top {
   display: flex;
@@ -212,7 +238,14 @@ nav.tabs a {
 }
 nav.tabs a:hover { color: var(--text); }
 nav.tabs a[aria-current="page"] { color: var(--text); background: var(--surface-2); }
+.tab-badge { margin-left: 0.35rem; }
 header.top .right { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+/* The unread badge on the light primary button is inverted so it stays readable. */
+.k-btn--primary .badge-new { background: var(--accent-contrast); color: var(--accent); }
+/* The banners the shell shows under the header (connection, shaping). Nothing when the banner renders nothing. */
+.shell-banner { padding: var(--space-3) 1.25rem 0; }
+.shell-banner:empty { display: none; }
+@media (max-width: 600px) { .shell-banner { padding: var(--space-3) 1rem 0; } }
 /* §3.7: the live indicator. */
 .live { display: inline-flex; align-items: center; gap: 0.4rem; font-size: var(--fs-meta); color: var(--muted); white-space: nowrap; }
 .live .dot { animation: none; }
@@ -324,23 +357,6 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
 .banner.danger { border-color: var(--danger-border); background: var(--danger-bg); }
 .banner.neutral { border-color: var(--border); background: var(--surface-2); }
 
-.toast {
-  position: fixed;
-  bottom: 1rem;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: min(90vw, 640px);
-  background: var(--text);
-  color: var(--bg);
-  padding: 0.6rem 0.9rem;
-  border-radius: var(--radius);
-  display: flex;
-  gap: 0.75rem;
-  align-items: center;
-  z-index: 10;
-}
-.toast button { color: var(--bg); border-color: currentColor; background: transparent; }
-
 /* ---------- board ---------- */
 .toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: center; margin-bottom: 1rem; }
 .toolbar label { display: inline-flex; gap: 0.35rem; align-items: center; font-size: var(--fs-meta); color: var(--muted); }
@@ -449,25 +465,31 @@ main:has(.board) { max-width: none; }
 .area-live .agent .verb { white-space: nowrap; flex: none; }
 .area-live .agent i { font-style: italic; color: var(--text); flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .area-live .needs { color: var(--st-you); font-weight: 560; white-space: nowrap; }
-.area-empty { color: var(--muted); font-size: var(--fs-meta); margin: 0; }
 @media (max-width: 760px) {
   .area-row { grid-template-columns: minmax(0, 1fr); gap: 0.4rem; padding: 0.6rem 0.5rem; }
 }
 
-/* ---------- needs you (§3.4) ---------- */
-.needs-list { list-style: none; margin: 0; padding: 0; }
-.needs-list > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.2rem 0.75rem; align-items: center; padding: 0.5rem 0; border-top: 1px solid var(--border); }
-.needs-list > li:first-child { border-top: none; padding-top: 0.2rem; }
-.needs-list .what { font-size: var(--fs-small); color: var(--muted); }
-.needs-list .what strong { color: var(--st-you); font-weight: 560; }
-.needs-list .who { min-width: 0; }
-.needs-list .who .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
-.needs-list .act { white-space: nowrap; }
-.needs-list .pr-line { display: block; margin-top: 0.15rem; }
-.needs-empty { margin: 0.2rem 0 0; color: var(--muted); }
-@media (max-width: 600px) {
-  .needs-list > li { grid-template-columns: minmax(0, 1fr); }
-}
+/* ---------- Home (ORC-025 pass 2) ---------- */
+.no-margin { margin: 0; }
+.row.space-between { justify-content: space-between; }
+/* The reason an override asks for, under a Needs-you row. */
+.needs-form { margin-top: var(--space-2); display: grid; gap: var(--space-2); }
+.needs-form .k-field { margin: 0; }
+.needs-foot { margin: var(--space-3) 0 0; }
+/* The lead's reply: its first lines, at most three. */
+.lead-excerpt { margin: 0 0 var(--space-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.lead-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; align-items: center; }
+/* The focus: the line itself first, then where it came from, with Undo and the vision behind one disclosure. */
+.focus-line { margin: 0 0 var(--space-2); font-size: var(--fs-h3); font-weight: 600; text-wrap: balance; overflow-wrap: anywhere; }
+.focus-foot { display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; align-items: center; }
+.focus-foot .k-btn--quiet { min-height: 0; padding: 0; color: var(--text); text-decoration: underline; text-underline-offset: 0.18em; }
+.focus-foot .k-btn--quiet:hover:not(:disabled):not([aria-disabled="true"]) { background: none; }
+.focus-foot > .k-disc { font-size: inherit; }
+.focus-foot > .k-disc > .k-disc__summary { color: var(--text); text-decoration: underline; text-underline-offset: 0.18em; }
+.focus-foot > .k-disc[open] { flex-basis: 100%; }
+.vision-details { color: var(--text); font-size: var(--fs-body); margin-top: var(--space-2); }
+.vision-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.usage-model { padding-left: 0.8rem; }
 
 /* ---------- detail ---------- */
 .detail-head { display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; align-items: flex-start; margin-bottom: 1rem; }
@@ -519,9 +541,6 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 .option-edit .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 0.7rem; }
 .sticky-actions { position: sticky; bottom: 0; background: var(--surface); padding: 0.7rem 0; border-top: 1px solid var(--border); display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 
-.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; }
-.stat { background: var(--surface-2); border-radius: var(--radius-control); padding: 0.6rem 0.8rem; font-size: var(--fs-meta); color: var(--muted); }
-.stat b { font-size: var(--fs-h2); display: block; color: var(--text); font-variant-numeric: tabular-nums; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 /* ORC-021: flow picker, its read-only step list, the Change flow panel and the Settings list */
 .flow-card { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 0.6rem 0.8rem; background: var(--surface-2); margin-bottom: 0.8rem; min-width: 0; }
@@ -547,17 +566,6 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 .child-link { line-height: 1.9; }
 
 /* ---------- service connection ---------- */
-.conn-banner {
-  padding: 0.45rem 1.25rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem 0.8rem;
-  align-items: center;
-  font-size: var(--fs-meta);
-  background: var(--warn-bg);
-  border-bottom: 1px solid var(--warn-border);
-}
-.conn-banner.offline { background: var(--danger-bg); border-bottom-color: var(--danger-border); }
 .card.connect { max-width: 36rem; margin: 3rem auto; }
 
 /* ---------- lead conversation ---------- */
@@ -626,8 +634,7 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 .provenance { font-size: var(--fs-small); color: var(--muted); }
 
 /* ---------- involvement, onboarding, data ---------- */
-.mode-line { display: flex; flex-wrap: wrap; gap: 0.35rem 0.6rem; align-items: center; margin: -0.2rem 0 1rem; font-size: var(--fs-meta); }
-.try-shaping { font-size: var(--fs-meta); color: var(--muted); margin: 0 0 1rem; display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; }
+.try-shaping { font-size: var(--fs-meta); color: var(--muted); margin: 0; display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; }
 .choices { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 0.75rem; }
 @media (max-width: 900px) { .choices { grid-template-columns: minmax(0, 1fr); } }
 .choice { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem 0.9rem; display: flex; flex-direction: column; gap: 0.55rem; align-items: flex-start; }

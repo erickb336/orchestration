@@ -1,5 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import * as D from "../domain/delivery";
+// The shell (ORC-025 pass 2, N1–N7): the demo bar with its Simulation menu, the header with Home · Tasks ·
+// Results · Settings, the live indicator, "Message the lead" (the one primary action) and the Project menu
+// that pauses and resumes. The lead drawer opens from the header on every page. The kit's ConfirmProvider
+// and ToastRegion are mounted once here, so every screen can confirm in page and show one toast.
+
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as M from "../domain/model";
 import { StoreContext, useServiceContext, useServiceStore, useStore } from "./store";
 import { Board } from "./Board";
@@ -11,20 +15,24 @@ import { Settings } from "./Settings";
 import { PREF_LEAD_SEEN, relTime, usePref } from "./common";
 import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { useBrowserNotifications } from "./notifications";
-import { agentsStopping, agentsWorking, liveIndicatorText } from "./progress";
+import { agentsStopping, agentsWorking, liveIndicatorText, prsNeedingYou, unreadLeadReplies } from "./progress";
 import { parseRoute } from "./route";
-import { StageChip } from "./Shaping";
-import { TourButton, useFirstRunTour } from "./Tour";
+import { ShapingBanner } from "./Shaping";
+import { SIM_MENU_BUTTON_ID, TourButton, useFirstRunTour } from "./Tour";
 import { Gallery } from "./kit/Gallery";
+import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm } from "./kit";
+import { cx } from "./kit/cx";
 
-/** The tabs: the page each one opens, its label and its address. The Results page keeps `review` as its internal name. */
-const TABS = [
-  { page: "overview", label: "Overview", href: "#/overview" },
+/** The tabs: the page each one opens, its label and its address. Home keeps `overview` and Results keeps `review` as internal names. Activity (N1) is reached from Tasks. */
+export const TABS = [
+  { page: "overview", label: "Home", href: "#/overview" },
   { page: "tasks", label: "Tasks", href: "#/tasks", tour: "tab-tasks" },
   { page: "review", label: "Results", href: "#/results", tour: "tab-results" },
-  { page: "activity", label: "Activity", href: "#/activity" },
   { page: "settings", label: "Settings", href: "#/settings" },
 ] as const;
+
+/** The header's "Message the lead" button, where focus returns when the drawer closes. */
+const LEAD_BUTTON_ID = "lead-button";
 
 function useRoute() {
   const [route, setRoute] = useState(() => parseRoute(location.hash));
@@ -49,9 +57,11 @@ function useNow(ms = 15_000) {
 export function App() {
   const store = useServiceStore();
   return (
-    <StoreContext.Provider value={store}>
-      <Gate />
-    </StoreContext.Provider>
+    <ConfirmProvider>
+      <StoreContext.Provider value={store}>
+        <Gate />
+      </StoreContext.Provider>
+    </ConfirmProvider>
   );
 }
 
@@ -68,9 +78,9 @@ function Gate() {
             <p>
               The Orchestrator service is not running. Start it with <code>npm run dev</code> (development) or <code>npm start</code>.
             </p>
-            <button className="primary" onClick={retry}>
+            <Button variant="primary" onClick={retry}>
               Retry
-            </button>
+            </Button>
           </>
         ) : (
           <p className="muted">Connecting to the Orchestrator service…</p>
@@ -86,31 +96,19 @@ function Shell() {
   const tab = route.page === "task" ? "tasks" : route.page;
   const demo = service.runtime === "fake";
   useBrowserNotifications();
-  // ORC-017 §4: the first-run tour, demo only, once per browser. Focus lands on the Tour button when it ends.
-  const tourButton = useRef<HTMLDivElement>(null);
-  useFirstRunTour(demo, route.page === "overview", () => tourButton.current?.querySelector("button")?.focus());
+  // ORC-017 §4: the first-run tour, demo only, once per browser.
+  useFirstRunTour(demo, route.page === "overview");
 
-  // ORC-009: the Lead panel. It stays open across routes; on the Overview the inline conversation is used instead.
+  // ORC-009: the Lead drawer. It stays open across routes, Home included (ORC-025 N3).
   const [leadOpen, setLeadOpen] = useState(false);
   const [leadCtx, setLeadCtx] = useState<LeadContext>({});
-  const leadButton = useRef<HTMLButtonElement>(null);
-  const onOverview = route.page === "overview";
-  const openLead = useCallback(
-    (ctx: LeadContext = {}) => {
-      setLeadCtx(ctx);
-      if (location.hash.replace(/^#\/?/, "").split("/")[0] === "overview") {
-        const inline = document.getElementById("lead-inline");
-        inline?.scrollIntoView({ block: "start" });
-        inline?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-        return;
-      }
-      setLeadOpen(true);
-    },
-    [],
-  );
+  const openLead = useCallback((ctx: LeadContext = {}) => {
+    setLeadCtx(ctx);
+    setLeadOpen(true);
+  }, []);
   const closeLead = useCallback(() => {
     setLeadOpen(false);
-    leadButton.current?.focus();
+    document.getElementById(LEAD_BUTTON_ID)?.focus();
   }, []);
   const clearContext = useCallback(() => setLeadCtx({}), []);
   const leadApi = useMemo(() => ({ open: leadOpen, context: leadCtx, openLead, closeLead, clearContext }), [leadOpen, leadCtx, openLead, closeLead, clearContext]);
@@ -140,17 +138,17 @@ function Shell() {
         </nav>
         <div className="right">
           <LiveIndicator />
-          <LeadButton buttonRef={leadButton} open={leadOpen && !onOverview} onClick={() => (leadOpen && !onOverview ? closeLead() : openLead())} />
-          <StageChip />
-          {demo && (
-            <div ref={tourButton} style={{ display: "contents" }}>
-              <TourButton />
-            </div>
-          )}
-          <ProjectControl />
+          <LeadButton open={leadOpen} onClick={() => (leadOpen ? closeLead() : openLead())} />
+          <ProjectMenu />
         </div>
       </header>
-      <main className={leadOpen && !onOverview ? "with-lead" : undefined}>
+      {/* N4: no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel and the board its own banner. */}
+      {route.page !== "tasks" && route.page !== "overview" && (
+        <div className="shell-banner">
+          <ShapingBanner />
+        </div>
+      )}
+      <main className={leadOpen ? "with-lead" : undefined}>
         {route.page === "overview" && <Overview />}
         {route.page === "tasks" && <Board />}
         {route.page === "task" && <TaskDetail key={route.id} id={route.id} />}
@@ -159,57 +157,88 @@ function Shell() {
         {route.page === "settings" && <Settings />}
         {route.page === "kit" && <Gallery />}
       </main>
-      {leadOpen && !onOverview && <LeadDrawer onClose={closeLead} />}
-      {notice && (
-        <div className="toast" role={notice.kind === "info" ? "status" : "alert"}>
-          <span>{notice.message}</span>
-          <button className="small" onClick={() => setNotice(null)}>
-            Dismiss
-          </button>
-        </div>
-      )}
+      {leadOpen && <LeadDrawer onClose={closeLead} />}
+      <ToastRegion toast={notice ? { tone: notice.kind === "error" ? "fail" : "neutral", onDismiss: () => setNotice(null), children: notice.message } : null} />
     </LeadDrawerContext.Provider>
   );
 }
 
-/** The Lead button: a status dot (working, stopping planning, waiting, blocked) and a badge for unread replies plus open suggestions. */
-function LeadButton({ buttonRef, open, onClick }: { buttonRef: React.RefObject<HTMLButtonElement | null>; open: boolean; onClick: () => void }) {
+/**
+ * A small menu on a button: a native details/summary, so it is keyboard-operable as is. It closes on a click
+ * outside, on Escape (focus returns to the button), and when an item calls `close`.
+ */
+function Menu({ label, id, className, children }: { label: string; id?: string; className?: string; children: (close: () => void) => ReactNode }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const close = useCallback(() => {
+    if (ref.current) ref.current.open = false;
+  }, []);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onPointer = (e: PointerEvent) => {
+      if (el.open && !el.contains(e.target as Node)) el.open = false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !el.open) return;
+      el.open = false;
+      el.querySelector<HTMLElement>("summary")?.focus();
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+  return (
+    <details ref={ref} className={cx("menu", className)}>
+      <summary id={id} className="menu__btn">
+        {label}
+        <span className="menu__caret" aria-hidden="true" />
+      </summary>
+      <div className="menu__pop" role="group" aria-label={label}>
+        {children(close)}
+      </div>
+    </details>
+  );
+}
+
+/** The header's main action: it opens the lead drawer. A status dot (working, stopping, waiting, blocked) and a badge for unread replies only (N7). */
+export function LeadButton({ open, onClick }: { open: boolean; onClick: () => void }) {
   const { state, service } = useStore();
   const [seenAt] = usePref(PREF_LEAD_SEEN);
   const now = useNow();
   const run = M.activeLeadRun(state);
   const pending = M.pendingMessages(state);
   const status = pending.length ? M.messageStatus(state, pending[pending.length - 1], { blocked: service.leadBlocked, nowMs: now }) : undefined;
-  const unread = state.conversation.filter((m) => m.author === "lead" && (!seenAt || m.at > seenAt)).length;
-  const suggestions = M.openSuggestions(state).length;
-  const badge = unread + suggestions;
+  const unread = unreadLeadReplies(state, seenAt);
   const dot = status?.kind === "blocked" ? "blocked" : status?.kind === "stopping-planning" || status?.kind === "restarting" || run?.outcome === "stopping" ? "paused" : run ? "running" : pending.length ? "waiting" : undefined;
   const title = status ? (pending.length > 1 ? `${pending.length} messages waiting: ${status.text}` : status.text) : run ? "The lead is working" : "Message the lead";
-  const parts = [unread ? `${unread} new repl${unread === 1 ? "y" : "ies"}` : "", suggestions ? `${suggestions} suggestion${suggestions === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
+  const unreadText = unread ? `${unread} new repl${unread === 1 ? "y" : "ies"}` : "";
   return (
-    <button ref={buttonRef} className="lead-btn" onClick={onClick} aria-expanded={open} aria-haspopup="dialog" title={parts ? `${title} · ${parts}` : title} data-tour="lead">
+    <Button id={LEAD_BUTTON_ID} variant="primary" className="lead-btn" onClick={onClick} aria-expanded={open} aria-haspopup="dialog" title={unreadText ? `${title} · ${unreadText}` : title} data-tour="lead">
       {dot && <span className={`dot ${dot}`} aria-hidden="true" />}
-      Lead
-      {badge > 0 && (
-        <span className="badge-new" aria-label={parts}>
-          {badge}
+      Message the lead
+      {unread > 0 && (
+        <span className="badge-new" aria-label={unreadText}>
+          {unread}
         </span>
       )}
-      <span className="sr-only">{title}</span>
-    </button>
+      {/* What the dot means, for readers who cannot see it; nothing when the lead is simply available. */}
+      {(status || run) && <span className="sr-only">{title}</span>}
+    </Button>
   );
 }
 
-/** What waits under Results: pull requests that need you, and new results. Persistent: it does not reset when the page is visited. */
-function ResultsBadge() {
+/** N7: the Results badge counts the pull requests that wait for you there, and nothing else. Persistent: it does not reset when the page is visited. */
+export function ResultsBadge() {
   const { state } = useStore();
-  const needs = D.needsYou(state);
-  const unreviewed = D.unreviewedCount(state);
-  if (needs + unreviewed === 0) return null;
-  const parts = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : "", unreviewed ? `${unreviewed} new result${unreviewed === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
+  const n = prsNeedingYou(state).length;
+  if (n === 0) return null;
+  const text = `${n} pull request${n === 1 ? "" : "s"} waiting for you`;
   return (
-    <span className="badge-new" style={{ marginLeft: "0.35rem" }} title={parts} aria-label={parts}>
-      {needs + unreviewed}
+    <span className="badge-new tab-badge" title={text} aria-label={text}>
+      {n}
     </span>
   );
 }
@@ -219,8 +248,10 @@ function ProjectName() {
   return <small>{state.project.name}</small>;
 }
 
-function SimBanner() {
+/** N5: the demo bar is one line, and the Simulation menu holds the clock, the tour and the reset. */
+export function SimBanner() {
   const { state, service, setSim, step, reset, disabled } = useStore();
+  const confirm = useConfirm();
   const { sim } = service;
   if (service.runtime === "real") {
     return (
@@ -238,48 +269,38 @@ function SimBanner() {
       </div>
     );
   }
-  // ORC-017 §3.6: one line; the controls keep their labels inside the Simulation popover.
   return (
     <div className="sim-banner" role="note" data-tour="demo-bar">
       <strong>Demo</strong>
       <span className="sim-text">
-        Every run is simulated: no agents run and nothing leaves this computer.
+        Simulated: no agents run and nothing leaves this computer.
         {service.scheduler === "observer" ? " (Another service instance holds the scheduler.)" : ""}
       </span>
-      <details className="sim-menu">
-        <summary>Simulation</summary>
-        <div className="sim-pop">
-          <p>
-            Runs come from the service's fake runtime; no agents run. Tasks and runs are sample data.
-            {state.project.prDelivery.enabled ? " Pull requests, checks and merges are simulated: nothing is sent to GitHub." : ""}
-          </p>
-          <div className="row">
-            <button onClick={() => void setSim({ auto: !sim.auto })} aria-pressed={sim.auto} disabled={disabled}>
+      <Menu label="Simulation" id={SIM_MENU_BUTTON_ID} className="sim-menu">
+        {(close) => (
+          <>
+            <Button size="small" variant="quiet" aria-pressed={sim.auto} disabled={disabled} onClick={() => void setSim({ auto: !sim.auto })}>
               {sim.auto ? "Pause simulation clock" : "Run simulation clock"}
-            </button>
-            <button onClick={() => void step()} disabled={disabled || sim.auto} title={sim.auto ? "Pause the simulation clock to step manually" : undefined}>
+            </Button>
+            <Button size="small" variant="quiet" disabled={disabled || sim.auto} disabledReason={sim.auto ? "Pause the simulation clock to step manually" : undefined} onClick={() => void step()}>
               Step
-            </button>
-          </div>
-          <label>
-            <span className="sr-only">Simulated stop acknowledgment</span>
-            <select value={sim.ackMode} disabled={disabled} onChange={(e) => void setSim({ ackMode: e.target.value as "normal" | "never" })}>
-              <option value="normal">Runtime acknowledges stops</option>
-              <option value="never">Runtime ignores stops (test failure)</option>
-            </select>
-          </label>
-          <div className="row">
-            <button
+            </Button>
+            <TourButton onStart={close} />
+            <Button
+              size="small"
+              variant="quiet"
               disabled={disabled}
-              onClick={() => {
-                if (confirm("Replace all data in the service with the sample project?")) void reset();
+              onClick={async () => {
+                close();
+                const ok = await confirm({ title: "Replace all data with the sample project?", text: "Every task, run and message in this service is replaced by the demo's sample project.", primaryLabel: "Replace" });
+                if (ok) void reset();
               }}
             >
               Reset sample data
-            </button>
-          </div>
-        </div>
-      </details>
+            </Button>
+          </>
+        )}
+      </Menu>
     </div>
   );
 }
@@ -309,43 +330,85 @@ function ConnectionBanner() {
   if (status === "online") return null;
   if (status === "connecting")
     return (
-      <div className="conn-banner" role="status">
-        Connecting to the service… controls are disabled until the live connection opens.
+      <div className="shell-banner">
+        <Banner tone="info">Connecting to the service… controls are disabled until the live connection opens.</Banner>
       </div>
     );
   const since = confirmedAt ? relTime(new Date(confirmedAt).toISOString(), now) : "an earlier session";
   return (
-    <div className="conn-banner offline" role="alert">
-      <strong>Service offline</strong> — showing the last known state from {since}; controls are disabled until it reconnects.
-      <button className="small" onClick={retry}>
-        Reconnect now
-      </button>
+    <div className="shell-banner">
+      <Banner
+        tone="fail"
+        title="Service offline"
+        actions={
+          <Button size="small" onClick={retry}>
+            Reconnect now
+          </Button>
+        }
+      >
+        Showing the last known state from {since}; controls are disabled until it reconnects.
+      </Banner>
     </div>
   );
 }
 
-function ProjectControl() {
+/**
+ * N2: Pause project and Resume project live in a small Project menu. The header still says truthfully when the
+ * project is paused or pausing: "Paused" only once every run acknowledged the stop, "Pausing…" until then.
+ */
+export function ProjectMenu() {
   const { state, send, disabled } = useStore();
+  const hold = state.project.hold;
   // A stopping lead run counts too: the pause is not confirmed until the lead acknowledges as well.
   const stopping = M.activeAttempts(state).filter((a) => a.outcome === "stopping").length + (M.activeLeadRun(state)?.outcome === "stopping" ? 1 : 0);
-  // ORC-017 §3.7: the live indicator says how many agents work; this says only what the pause is doing.
-  const status = state.project.hold ? (stopping ? `Pausing… ${stopping} run${stopping === 1 ? "" : "s"} still stopping` : "Project paused") : null;
+  const status = hold ? (stopping ? `Pausing… ${stopping} run${stopping === 1 ? "" : "s"} still stopping` : "Project paused") : undefined;
   return (
     <>
-      {status && (
-        <span className="muted" aria-live="polite">
-          {status}
-        </span>
-      )}
-      {state.project.hold ? (
-        <button className="primary" disabled={disabled} onClick={() => void send("resumeProject")}>
-          Resume project
-        </button>
-      ) : (
-        <button className="primary" disabled={disabled} onClick={() => void send("pauseProject")}>
-          Pause project
-        </button>
-      )}
+      <span aria-live="polite">
+        {hold &&
+          (stopping ? (
+            <StatePill tone="work" pulse title={status}>
+              Pausing…
+            </StatePill>
+          ) : (
+            <StatePill tone="neutral" paused title={status}>
+              Paused
+            </StatePill>
+          ))}
+      </span>
+      <Menu label="Project" className="project-menu">
+        {(close) => (
+          <>
+            {status && <p className="menu__note">{status}</p>}
+            {hold ? (
+              <Button
+                size="small"
+                variant="quiet"
+                disabled={disabled}
+                onClick={() => {
+                  close();
+                  void send("resumeProject");
+                }}
+              >
+                Resume project
+              </Button>
+            ) : (
+              <Button
+                size="small"
+                variant="quiet"
+                disabled={disabled}
+                onClick={() => {
+                  close();
+                  void send("pauseProject");
+                }}
+              >
+                Pause project
+              </Button>
+            )}
+            <p className="menu__note">{hold ? "Agents start again when you resume." : "Every run and the lead are asked to stop; nothing starts until you resume. The pause shows as Paused once the runtime acknowledges."}</p>
+          </>
+        )}
+      </Menu>
     </>
   );
 }

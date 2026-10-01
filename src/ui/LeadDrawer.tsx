@@ -1,6 +1,6 @@
 // ORC-009: the Lead panel reachable from every page. On desktop a non-modal aside that stays open while
-// the user moves around the board; below 768 px a modal dialog with a focus trap. The Overview keeps
-// its inline conversation, so the shell scrolls to that instead of opening a second copy.
+// the user moves around the board; below 768 px a modal dialog with a focus trap. ORC-025 (N3): it is the
+// one place the conversation is drawn; Home shows the lead's latest reply and opens this.
 
 import { createContext, useContext, useEffect, useRef } from "react";
 import { useNarrow } from "./common";
@@ -16,7 +16,7 @@ export interface LeadContext {
 export interface LeadDrawerApi {
   open: boolean;
   context: LeadContext;
-  /** Open the panel (or, on the Overview, focus the inline conversation) with an optional context. */
+  /** Open the panel, on any page, with an optional context. */
   openLead: (ctx?: LeadContext) => void;
   closeLead: () => void;
   clearContext: () => void;
@@ -31,7 +31,7 @@ export function useLeadContext(): LeadDrawerApi {
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-/** The panel itself. Rendered by the shell when open and not on the Overview. */
+/** The panel itself. Rendered by the shell when open. */
 export function LeadDrawer({ onClose }: { onClose: () => void }) {
   const narrow = useNarrow();
   const ref = useRef<HTMLElement>(null);

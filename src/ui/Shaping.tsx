@@ -8,6 +8,8 @@ import * as M from "../domain/model";
 import { SHAPING_AREAS, SHAPING_AREA_LABEL, type LeadQuestion, type State, type VisionDraft } from "../domain/types";
 import { useStore } from "./store";
 import { fmtTime, relTime } from "./common";
+import { Banner, Button, ButtonLink } from "./kit";
+import { useLeadContext } from "./LeadDrawer";
 import { VisionDocsList } from "./VisionDocs";
 
 const COVERAGE_LABEL = { clear: "clear", partial: "partly clear", open: "open" } as const;
@@ -102,27 +104,26 @@ function QuestionsForm({ questions }: { questions: LeadQuestion[] }) {
   );
 }
 
-/** The stage in the header: "Shaping" says what waits; "Building" is the usual state. */
-export function StageChip() {
-  const { state } = useStore();
-  const shaping = state.project.stage === "shaping";
-  return (
-    <a href={shaping ? "#/overview" : "#/settings"} className={`chip${shaping ? " strong" : ""}`} style={{ textDecoration: "none" }} title={shaping ? `${M.SHAPING_LABEL}. Running work finishes.` : "Building: work runs as usual. Change the stage in Settings."}>
-      {shaping ? "Shaping" : "Building"}
-    </a>
-  );
-}
-
-/** On the board while shaping: why nothing new starts, without calling anything paused. */
+/**
+ * While shaping, on the board and in the shell (ORC-025 N4: there is no stage chip): why nothing new starts,
+ * without calling anything paused. Nothing while building.
+ */
 export function ShapingBanner() {
   const { state } = useStore();
   if (state.project.stage !== "shaping") return null;
   const running = M.activeAttempts(state).length;
   return (
-    <div className="banner neutral" role="note">
-      <strong>{M.SHAPING_LABEL}.</strong> {running ? `${running} running step${running === 1 ? "" : "s"} finish${running === 1 ? "es" : ""} normally; ` : ""}
-      Planned tasks are held. <a href="#/overview">Shape the vision</a>
-    </div>
+    <Banner
+      tone="info"
+      title={`${M.SHAPING_LABEL}.`}
+      actions={
+        <ButtonLink size="small" href="#/overview">
+          Shape the vision
+        </ButtonLink>
+      }
+    >
+      {running ? `${running} running step${running === 1 ? "" : "s"} finish${running === 1 ? "es" : ""} normally; planned` : "Planned"} tasks are held.
+    </Banner>
   );
 }
 
@@ -386,6 +387,7 @@ function HandEdit() {
 /** The Overview's shaping panel: what shaping means, the vision so far, the latest draft, the roadmap, and Start building. */
 export function ShapingPanel() {
   const { state, service } = useStore();
+  const lead = useLeadContext();
   const vision = M.currentVision(state);
   const roadmap = M.roadmapTasks(state);
   const plan = M.startBuildingPlan(state);
@@ -416,14 +418,9 @@ export function ShapingPanel() {
         {simulated ? " In the sample project the lead's questions, coverage and draft are simulated: built from your message, not written by a model." : ""}
       </p>
       <p style={{ margin: "0 0 0.8rem" }}>
-        <a href="#lead-inline" onClick={(e) => {
-          e.preventDefault();
-          const el = document.getElementById("lead-inline");
-          el?.scrollIntoView({ block: "start" });
-          el?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
-        }}>
+        <Button size="small" onClick={() => lead.openLead()}>
           Message the lead
-        </a>
+        </Button>
       </p>
 
       <h3>Vision so far (r{vision.rev})</h3>

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import * as M from "../domain/model";
 import { buildDemo } from "../domain/demo";
 import { buildSeed } from "../domain/seed";
-import { OTHER_AREA, agentsStopping, agentsWorking, areaOf, liveAgents, liveIndicatorText, liveText, needsYouOf, progressByArea } from "./progress";
+import { OTHER_AREA, agentsStopping, agentsWorking, areaOf, changeSummary, latestLeadReply, liveAgents, liveIndicatorText, liveText, needsYouOf, progressByArea, replyExcerpt, unreadLeadReplies } from "./progress";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
 const by = (rows: ReturnType<typeof progressByArea>, area: string) => rows.find((r) => r.area === area)!;
@@ -139,5 +139,44 @@ describe("progressByArea", () => {
     expect(needsYouOf(s, s.tasks.find((t) => t.id === "EX-006")!, T0)).toBeUndefined();
     expect(needsYouOf(s, s.tasks.find((t) => t.id === "EX-007")!, T0)).toBeUndefined();
     expect(liveAgents(s, failing)).toEqual([]);
+  });
+});
+
+describe("ORC-025 pass 2: the badges and the lead's latest reply", () => {
+  it("the Lead badge counts replies newer than the last one shown, and nothing else", () => {
+    const s = buildDemo(T0);
+    const replies = s.conversation.filter((m) => m.author === "lead");
+    expect(replies.length).toBeGreaterThan(1);
+    expect(unreadLeadReplies(s, null)).toBe(replies.length);
+    expect(unreadLeadReplies(s, replies[replies.length - 1].at)).toBe(0);
+    expect(unreadLeadReplies(s, replies[0].at)).toBe(replies.length - 1);
+  });
+
+  it("the latest reply is the newest lead message, with what its change set did", () => {
+    const s = buildDemo(T0);
+    const latest = latestLeadReply(s)!;
+    expect(latest.message.author).toBe("lead");
+    expect(latest.message.id).toBe([...s.conversation].reverse().find((m) => m.author === "lead")!.id);
+    expect(latest.summary).toBe("No changes");
+    // The steering reply: a focus change, a deferral and a note were applied.
+    const steeringAt = s.conversation.findIndex((m) => m.author === "lead" && m.changeSetId);
+    expect(steeringAt).toBeGreaterThanOrEqual(0);
+    const earlier = structuredClone(s);
+    earlier.conversation = earlier.conversation.slice(0, steeringAt + 1);
+    expect(latestLeadReply(earlier)).toMatchObject({ applied: 3, suggested: 0, summary: "3 changes" });
+    expect(changeSummary(1, 1)).toBe("1 change, 1 suggestion");
+    expect(changeSummary(0, 2)).toBe("2 suggestions");
+    expect(latestLeadReply(buildSeed(T0, { inFlightRuns: false }))).toBeUndefined();
+  });
+
+  it("the excerpt is the first paragraph, cut at a word with an ellipsis", () => {
+    expect(replyExcerpt("Done.\n\nMore detail follows.")).toBe("Done.");
+    expect(replyExcerpt("  one  line\nwith a break  ")).toBe("one line with a break");
+    const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+    const cut = replyExcerpt(long, 50);
+    expect(cut.endsWith("…")).toBe(true);
+    expect(cut.length).toBeLessThanOrEqual(51);
+    // Cut between words, never inside one.
+    expect(long.startsWith(cut.slice(0, -1) + " ")).toBe(true);
   });
 });
