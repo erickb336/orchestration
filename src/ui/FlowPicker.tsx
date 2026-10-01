@@ -19,14 +19,14 @@ export function FlowSteps({ steps }: { steps: StepDef[] }) {
             <span className="mono">{st.id}</span>
             <span>
               {st.purpose}
-              <span className="muted" style={{ fontSize: "0.8rem" }}>
+              <span className="muted small">
                 {" "}
                 · {ROLE_LABEL[st.role]}
                 {st.dependsOn.length ? ` · after ${st.dependsOn.join(", ")}` : ""}
                 {markers ? ` · ${markers}` : ""}
               </span>
               {principles.length > 0 && (
-                <div className="muted" style={{ fontSize: "0.8rem" }}>
+                <div className="muted small">
                   Principles: {principles.map(principleName).join(" · ")}
                 </div>
               )}
@@ -43,13 +43,13 @@ export function FlowCard({ flow, showSteps = true }: { flow: Flow; showSteps?: b
   return (
     <div className="flow-card" aria-live="polite">
       <strong>{flow.name}</strong>
-      <p style={{ fontSize: "0.88rem", margin: "0.3rem 0 0.2rem" }}>{flow.description}</p>
-      <p className="muted" style={{ fontSize: "0.85rem", margin: "0 0 0.2rem" }}>
+      <p className="meta flow-card__text">{flow.description}</p>
+      <p className="muted meta flow-card__text">
         <strong>Use it for:</strong> {flow.whenToUse}
       </p>
       {showSteps && (
         <>
-          <div className="muted" style={{ fontSize: "0.8rem", margin: "0.3rem 0 0.1rem" }}>
+          <div className="muted small flow-card__text">
             {flow.steps.length} steps, read-only. Provider and model are chosen per step on the task page.
           </div>
           <FlowSteps steps={flow.steps} />

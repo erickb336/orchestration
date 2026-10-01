@@ -14,6 +14,7 @@ import { useStore } from "./store";
 import { ModelPicker, PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, ROLE_LABEL, autonomyArgs, fmtTime, involvementOf, relTime, usePref } from "./common";
 import { disableNotifications, enableNotifications, notificationsSupported } from "./notifications";
 import { StageControl } from "./Shaping";
+import { DiagnosticsCard } from "./Diagnostics";
 import { initProjectConfirm, newProjectStage } from "./stageChoice";
 
 const CAP_LABEL: Record<keyof CapabilityMap, string> = {
@@ -115,6 +116,7 @@ export function Settings() {
           <DataCard />
           <RunLimitsCard />
           {service.runtime === "real" && <ProjectSetup />}
+          <DiagnosticsCard />
         </div>
       </div>
     </>

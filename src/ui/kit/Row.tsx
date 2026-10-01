@@ -57,10 +57,12 @@ export type NeedsYouItemProps = {
   /** The thing that waits is simulated (a demo pull request): one chip says so. */
   simulated?: boolean;
   as?: "div" | "li";
+  /** Under the meta line: a small form a decision needs first (a reason for an override). */
+  children?: ReactNode;
 };
 
 /** One thing that needs the person: the task, what is needed, and the actions that settle it, in place. */
-export function NeedsYouItem({ taskId, title, href, what, detail, actions, simulated, as = "li" }: NeedsYouItemProps) {
+export function NeedsYouItem({ taskId, title, href, what, detail, actions, simulated, as = "li", children }: NeedsYouItemProps) {
   return (
     <Row
       as={as}
@@ -75,6 +77,8 @@ export function NeedsYouItem({ taskId, title, href, what, detail, actions, simul
           {simulated && <SimulatedChip />}
         </>
       }
-    />
+    >
+      {children}
+    </Row>
   );
 }

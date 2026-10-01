@@ -5,7 +5,7 @@
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
-import type { Runner, State, Step, Task } from "../domain/types";
+import type { FindingDecision, Landed, Message, PrDelivery, Runner, SpecOption, State, SteeringChangeSet, Step, Task } from "../domain/types";
 
 /** The group for tasks whose spec names no area. */
 export const OTHER_AREA = "Other";
@@ -226,4 +226,156 @@ export function liveIndicatorText(working: number, stopping: number, shaping = f
   if (!working && !stopping) return "Idle";
   const text = working ? `${agents(working)} working${stopping ? `, ${stopping} stopping` : ""}` : `${agents(stopping)} stopping`;
   return shaping && working ? `${text} (finishing; shaping)` : text;
+}
+
+// ---------- ORC-025 pass 2: the badges (N7) ----------
+
+/**
+ * The pull requests that wait for you, as the Results page lists them under "Needs you": ready for your merge, or
+ * stopped on a problem nobody is fixing. The Results badge counts these and nothing else.
+ */
+export function prsNeedingYou(state: State, nowMs = Date.now()): Task[] {
+  return D.trackedPrTasks(state).filter((t) => {
+    const pr = t.integration!.pr!;
+    return (!!pr.attention && !D.openRepair(state, pr)) || D.prReady(state, t, nowMs);
+  });
+}
+
+/** Lead replies newer than the last one this browser showed (`seenAt`, from PREF_LEAD_SEEN). The Lead badge counts these only. */
+export function unreadLeadReplies(state: State, seenAt: string | null): number {
+  return state.conversation.filter((m) => m.author === "lead" && (!seenAt || m.at > seenAt)).length;
+}
+
+// ---------- ORC-025 pass 2: "Latest from the lead" (N3) ----------
+
+export interface LatestReply {
+  message: Message;
+  set?: SteeringChangeSet;
+  applied: number;
+  suggested: number;
+  /** "2 changes, 1 suggestion" or "No changes". */
+  summary: string;
+}
+
+/** "2 changes, 1 suggestion"; "No changes" when a reply changed nothing. */
+export function changeSummary(applied: number, suggested: number): string {
+  const parts: string[] = [];
+  if (applied) parts.push(`${applied} change${applied === 1 ? "" : "s"}`);
+  if (suggested) parts.push(`${suggested} suggestion${suggested === 1 ? "" : "s"}`);
+  return parts.length ? parts.join(", ") : "No changes";
+}
+
+/** The lead's newest reply and what it changed, or nothing when the lead has not replied yet. */
+export function latestLeadReply(state: State): LatestReply | undefined {
+  for (let i = state.conversation.length - 1; i >= 0; i--) {
+    const message = state.conversation[i];
+    if (message.author !== "lead") continue;
+    const set = message.changeSetId ? state.steering.find((cs) => cs.id === message.changeSetId) : undefined;
+    const applied = set?.changes.filter((c) => c.status === "applied").length ?? 0;
+    const suggested = set?.changes.filter((c) => c.status === "suggested").length ?? 0;
+    return { message, set, applied, suggested, summary: changeSummary(applied, suggested) };
+  }
+  return undefined;
+}
+
+/** The first lines of a reply: the first paragraph, cut at a word boundary with an ellipsis when it runs past `max` characters. */
+export function replyExcerpt(text: string, max = 240): string {
+  const first = text.trim().split(/\n\s*\n/)[0]?.replace(/\s+/g, " ").trim() ?? "";
+  if (first.length <= max) return first;
+  const cut = first.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "")}…`;
+}
+
+// ---------- ORC-025 pass 2: decisions taken in place on Home (H3) ----------
+
+/** One mark of the verdict line: "Code ✓", "Security ✓", "Checks ✓". */
+export interface VerdictMark {
+  label: "Code" | "Security" | "Checks";
+  ok: boolean;
+}
+
+/**
+ * The verdict line of a pull request, from the same merge gate the task page shows. A clean "review" item means
+ * both a code review and a security review saw the final change (delivery.ts: a clean pipeline review needs
+ * the security review too, and the dedicated review flow carries both). "Checks" covers GitHub's required checks
+ * and, when the project runs its own, the service's checks.
+ */
+export function mergeVerdict(state: State, task: Task, nowMs: number): VerdictMark[] {
+  const items = D.prGate(state, task, nowMs, { byUser: true }).items;
+  const ok = (id: D.GateItem["id"]) => items.find((i) => i.id === id)?.ok ?? false;
+  const service = items.find((i) => i.id === "service-checks");
+  return [
+    { label: "Code", ok: ok("review") },
+    { label: "Security", ok: ok("review") },
+    { label: "Checks", ok: ok("checks") && (!service || service.ok) },
+  ];
+}
+
+/** What a landed item passed, for its row: "Code ✓ Security ✓" from its review evidence, "Checks ✓" when every required check on the merged head succeeded. */
+export function landedVerdict(landed: Landed): string[] {
+  const out: string[] = [];
+  if (landed.review?.ok) out.push("Code ✓", "Security ✓");
+  const required = landed.checks?.filter((c) => c.required) ?? [];
+  if (required.length && required.every((c) => c.conclusion === "SUCCESS")) out.push("Checks ✓");
+  return out;
+}
+
+/**
+ * One thing that needs you on Home. The simple decisions are taken in place with the same commands the task page
+ * uses: "merge" (Merge / Keep for me), "choose" (exactly two options), "finding" (Fix / Accept as is / Message the
+ * lead), "start" (your go-ahead). Everything else is "open": one link to the place where it is decided.
+ */
+export type NeedsYouEntry =
+  | { kind: "merge"; key: string; task: Task; pr: PrDelivery; verdict: VerdictMark[]; simulated: boolean }
+  | { kind: "choose"; key: string; task: Task; options: SpecOption[]; recommendedId: string; specRev: number }
+  | { kind: "finding"; key: string; task: Task; decision: FindingDecision }
+  | { kind: "start"; key: string; task: Task }
+  | { kind: "open"; key: string; task?: Task; what: string; detail?: string; action: string; href: string };
+
+/** Whether Merge can be offered in place: the same conditions as the task page's Merge button, on a pull request that is ready. */
+function mergeInPlace(state: State, task: Task, pr: PrDelivery, nowMs: number): boolean {
+  return D.prReady(state, task, nowMs) && state.project.prDelivery.enabled && !mergeAsked(pr);
+}
+
+/** You already asked for the merge of this head: the service merges it; nothing is left for you to decide. */
+const mergeAsked = (pr: PrDelivery) => pr.mergeRequested?.headSha === pr.headSha;
+
+/** Everything that waits for you, in the order the Needs-you card shows it: project-wide problems first, then tasks by priority. */
+export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[] {
+  const items: NeedsYouEntry[] = [];
+  const gh = state.project.github;
+  if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
+    items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings" });
+  }
+  if (gh?.autoMergePaused) {
+    items.push({ kind: "open", key: "auto", what: "automatic merging is paused", detail: `${gh.autoMergePaused.reason}. ${gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}`, action: "Open", href: "#/results" });
+  }
+  for (const task of [...state.tasks].sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))) {
+    const n = needsYouOf(state, task, nowMs);
+    if (!n) continue;
+    const pr = task.integration?.pr;
+    const open = (): NeedsYouEntry => ({ kind: "open", key: task.id, task, what: n.what, detail: n.what === PR_PROBLEM ? pr?.attention?.message : undefined, action: n.action, href: n.href });
+    if (n.what === "merge PR" && pr && mergeAsked(pr)) continue;
+    if (n.what === "merge PR" && pr && mergeInPlace(state, task, pr, nowMs)) {
+      items.push({ kind: "merge", key: task.id, task, pr, verdict: mergeVerdict(state, task, nowMs), simulated: !!pr.simulated });
+    } else if (n.what === "choose an option") {
+      const spec = M.currentSpec(task);
+      if (spec.content.options.length === 2) items.push({ kind: "choose", key: task.id, task, options: spec.content.options, recommendedId: spec.content.recommendedOptionId, specRev: spec.rev });
+      else items.push(open());
+    } else if (n.what === "decide a finding") {
+      // One row per decision, so each is decided once; a decision on failing final checks has its own controls on the task page.
+      const mine = F.openDecisions(state, "user").filter((d) => d.taskId === task.id && d.kind === "finding");
+      if (mine.length) for (const decision of mine) items.push({ kind: "finding", key: decision.id, task, decision });
+      else items.push(open());
+    } else if (n.what === "give the go-ahead") {
+      items.push({ kind: "start", key: task.id, task });
+    } else items.push(open());
+  }
+  return items;
+}
+
+/** The two options as one line: "A, Guest link · B, One-time code". */
+export function optionsLine(options: SpecOption[]): string {
+  return options.map((o) => `${o.id}, ${o.name}`).join(" · ");
 }

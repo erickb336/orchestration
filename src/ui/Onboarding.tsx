@@ -2,6 +2,8 @@ import * as M from "../domain/model";
 import { PROVIDERS } from "../domain/types";
 import { useStore } from "./store";
 import { PREF_INVOLVEMENT_CHOSEN, PREF_ONBOARDING_DISMISSED, PREF_STAGE_CHOSEN, usePref } from "./common";
+import { Button, Chip } from "./kit";
+import { useLeadContext } from "./LeadDrawer";
 import { stageStepDone, startNowBlocker } from "./stageChoice";
 
 function scrollToHeading(id: string) {
@@ -12,17 +14,17 @@ function scrollToHeading(id: string) {
  * ORC-012: the first choice: shape the vision with the lead first, or start building now (the usual
  * behaviour). Review 6: an empty project of your own starts by shaping, so "Start building now" is a
  * real Start building. ORC-014 review 10: the step is done once you chose: "Shape" counts as chosen while
- * already shaping, and "Start building now" asks for a vision first, with the way there.
+ * already shaping, and "Start building now" asks for a vision first, with the way there. ORC-025 (H5):
+ * "Start building now" is offered only while shaping; on a project that is already building it did nothing.
  */
 function StageChoice({ onChosen }: { onChosen: () => void }) {
   const { state, send, disabled } = useStore();
   const shaping = state.project.stage === "shaping";
   const why = startNowBlocker(state);
-  const visionHeading = shaping ? "shape-h" : "vision-h";
   return (
-    <span className="row" style={{ gap: "0.4rem" }}>
-      <button
-        className="small"
+    <span className="k-actions">
+      <Button
+        size="small"
         disabled={disabled}
         onClick={async () => {
           if (shaping) return onChosen();
@@ -31,28 +33,27 @@ function StageChoice({ onChosen }: { onChosen: () => void }) {
         }}
       >
         {shaping ? "Keep shaping the vision with the lead" : "Shape the vision with the lead first"}
-      </button>
-      <button
-        className="small"
-        disabled={disabled}
-        title={why}
-        onClick={async () => {
-          if (why) return scrollToHeading(visionHeading);
-          if (shaping) {
+      </Button>
+      {shaping && (
+        <Button
+          size="small"
+          disabled={disabled}
+          title={why}
+          onClick={async () => {
+            if (why) return scrollToHeading("shape-h");
             const r = await send("startBuilding");
-            if (!r.ok) return;
-          }
-          onChosen();
-        }}
-      >
-        Start building now
-      </button>
-      {why && (
-        <span className="muted" style={{ fontSize: "0.82rem" }}>
+            if (r.ok) onChosen();
+          }}
+        >
+          Start building now
+        </Button>
+      )}
+      {shaping && why && (
+        <span className="muted small">
           {why}{" "}
-          <button type="button" className="link" style={{ fontSize: "0.82rem" }} onClick={() => scrollToHeading(visionHeading)}>
+          <Button size="small" variant="quiet" onClick={() => scrollToHeading("shape-h")}>
             Go to vision
-          </button>
+          </Button>
         </span>
       )}
     </span>
@@ -67,32 +68,42 @@ interface Step {
   action: React.ReactNode;
 }
 
-/** First-run checklist on the Overview. Shown only while something is missing, and hideable per browser. */
+/** First-run checklist on Home. Shown only while something is missing, and hideable per browser. */
 export function Onboarding() {
-  const { state, service } = useStore();
+  const { state, service, send, disabled } = useStore();
+  const lead = useLeadContext();
   const [dismissed, setDismissed] = usePref(PREF_ONBOARDING_DISMISSED);
   const [involvementChosen] = usePref(PREF_INVOLVEMENT_CHOSEN);
   const [stageChosen, setStageChosen] = usePref(PREF_STAGE_CHOSEN);
   if (dismissed === "1") return null;
 
   const hide = (
-    <button className="small" onClick={() => setDismissed("1")}>
+    <Button size="small" variant="quiet" onClick={() => setDismissed("1")}>
       Hide
-    </button>
+    </Button>
   );
   const shaping = state.project.stage === "shaping";
 
   if (service.runtime !== "real") {
-    // ORC-017 §3.5: the demo bar and the tour explain the sample project; what stays here is the way to your own repository and the shaping choice.
+    // ORC-025 (H5): one line. The demo bar says what is simulated; this says how to use your own repository, and offers the shaping stage once.
     return (
       <p className="try-shaping" aria-label="About the sample project">
         <span>
-          Your own repository: start the service with <code>ORCHESTRATION_RUNTIME=real npm start</code>. You will then be guided through connecting a repository, Claude or Codex, and your vision.
+          This is the sample project. For your own repository, start the service with <code>ORCHESTRATION_RUNTIME=real npm start</code>.
         </span>
         {!shaping && stageChosen !== "1" && (
-          <>
-            <span>Or try shaping the vision with the lead first:</span> <StageChoice onChosen={() => setStageChosen("1")} />
-          </>
+          <Button
+            size="small"
+            variant="quiet"
+            disabled={disabled}
+            title="Try the shaping stage: the lead asks questions and drafts the vision; nothing new starts until you start building again"
+            onClick={async () => {
+              const r = await send("startShaping");
+              if (r.ok) setStageChosen("1");
+            }}
+          >
+            Shape the vision with the lead first
+          </Button>
         )}
         {hide}
       </p>
@@ -114,11 +125,7 @@ export function Onboarding() {
       id: "repo",
       label: "Connect your repository",
       done: !!service.repo?.ok,
-      detail: service.repo?.ok ? (
-        <span className="mono">{state.project.repoPath}</span>
-      ) : (
-        service.repo?.reason
-      ),
+      detail: service.repo?.ok ? <span className="mono">{state.project.repoPath}</span> : service.repo?.reason,
       action: <a href="#/settings">Open Settings</a>,
     },
     {
@@ -126,13 +133,13 @@ export function Onboarding() {
       label: "Make Claude or Codex ready (either is enough)",
       done: anyProvider,
       detail: (
-        <span className="row" style={{ gap: "0.35rem" }}>
+        <span className="k-actions">
           {PROVIDERS.map((p) => {
             const h = health(p);
             return (
-              <span key={p} className={h === "ready" ? "chip done" : "chip"}>
+              <Chip key={p} tone={h === "ready" ? "done" : "neutral"}>
                 {M.providerLabel(p)}: {h === "ready" ? "ready" : h === "not-configured" ? "not configured" : h === "unavailable" ? "unavailable" : "checking…"}
-              </span>
+              </Chip>
             );
           })}
         </span>
@@ -144,9 +151,9 @@ export function Onboarding() {
       label: shaping ? "Shape the vision with the lead, then accept a draft" : "Write your vision",
       done: vision.text.trim().length > 0,
       action: (
-        <button className="link" onClick={() => scrollToHeading(shaping ? "shape-h" : "vision-h")}>
+        <Button size="small" variant="quiet" onClick={() => scrollToHeading(shaping ? "shape-h" : "vision-history")}>
           Go to vision
-        </button>
+        </Button>
       ),
     },
     {
@@ -154,10 +161,10 @@ export function Onboarding() {
       label: "Give the lead its first direction or create a task",
       done: state.tasks.length > 0 || state.conversation.length > 0,
       action: (
-        <span className="row" style={{ gap: "0.6rem" }}>
-          <button className="link" onClick={() => scrollToHeading("lead-inline")}>
+        <span className="k-actions">
+          <Button size="small" variant="quiet" onClick={() => lead.openLead()}>
             Message the lead
-          </button>
+          </Button>
           <a href="#/tasks">Tasks</a>
         </span>
       ),
@@ -185,12 +192,12 @@ export function Onboarding() {
 
   return (
     <section className="card onboarding" aria-labelledby="onboard-h">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 id="onboard-h" style={{ margin: 0 }}>
+      <div className="row space-between">
+        <h2 id="onboard-h" className="no-margin">
           Get started
         </h2>
-        <span className="row" style={{ gap: "0.5rem" }}>
-          <span className="muted" style={{ fontSize: "0.85rem" }}>
+        <span className="k-actions">
+          <span className="muted small">
             {steps.length - remaining} of {steps.length} done
           </span>
           {hide}

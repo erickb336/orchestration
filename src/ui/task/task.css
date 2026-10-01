@@ -1,0 +1,157 @@
+/* The task page (ORC-025 pass 3). Layout only: every part is a kit component, so colour and type come from
+   the tokens and kit.css. Every class is prefixed t- so nothing collides with other screens. */
+
+.t-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); min-width: 0; }
+/* What it's for beside Steps: the steps get the wider column, so name and state share a line. */
+.t-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: var(--space-4); align-items: start; }
+@media (max-width: 860px) { .t-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- header ---------- */
+.t-head { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); min-width: 0; }
+.t-head__meta { display: flex; flex-wrap: wrap; gap: 0 var(--space-2); align-items: baseline; margin: 0; font-size: var(--fs-small); color: var(--muted); }
+.t-head__meta a { color: inherit; }
+.t-head__title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-width: 0; }
+.t-head__title h1 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.t-head__actions { margin-left: auto; display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+@media (max-width: 600px) { .t-head__actions { margin-left: 0; width: 100%; } }
+
+/* ---------- More menu ---------- */
+.t-menu { position: relative; display: inline-block; }
+.t-menu__pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 17rem;
+  max-width: min(22rem, calc(100vw - 2rem));
+  padding: var(--space-1);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-pop);
+}
+.t-menu__item {
+  display: grid;
+  grid-template-columns: 1.1rem minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: center;
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-meta);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ease);
+}
+.t-menu__item:hover:not(:disabled), .t-menu__item:focus-visible { background: var(--surface-2); outline: none; }
+.t-menu__item:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+.t-menu__item:disabled { opacity: 0.5; cursor: not-allowed; }
+.t-menu__item--danger { color: var(--st-fail); }
+.t-menu__mark { text-align: center; font-weight: 650; }
+.t-menu__hint { display: block; font-size: var(--fs-small); color: var(--muted); font-weight: 450; }
+.t-menu__sep { height: 1px; margin: var(--space-1) 0; background: var(--border); }
+
+/* ---------- Needs you ---------- */
+.t-needs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; }
+.t-needs__item { padding: var(--space-3) 0; border-top: 1px solid var(--border); min-width: 0; }
+.t-needs__item:first-child { padding-top: 0; border-top: 0; }
+.t-needs__item:last-child { padding-bottom: 0; }
+.t-what { margin: 0 0 var(--space-1); font-size: var(--fs-small); font-weight: 600; color: var(--st-you); }
+.t-needs__q { margin: 0 0 var(--space-1); font-weight: 600; overflow-wrap: anywhere; }
+.t-needs__text { margin: 0 0 var(--space-2); font-size: var(--fs-meta); overflow-wrap: anywhere; white-space: pre-wrap; }
+.t-needs__text .mono { overflow-wrap: anywhere; }
+
+/* ---------- decisions (findings) ---------- */
+.t-decision { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); min-width: 0; }
+.t-decision__title { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.t-decision__meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; font-size: var(--fs-small); color: var(--muted); }
+.t-decision__state { margin: 0; font-size: var(--fs-small); color: var(--muted); }
+.t-decision__controls { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin-top: var(--space-1); }
+.t-decision__controls .k-control { max-width: 16rem; min-height: 1.625rem; padding: 0.1rem 0.5rem; font-size: var(--fs-small); }
+.t-decision + .t-decision { margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+
+/* ---------- verdict line ---------- */
+.t-verdict { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; margin: 0; min-width: 0; }
+.t-verdict__name { font-weight: 600; }
+.t-verdict__sep { color: var(--muted); }
+
+/* ---------- Details ---------- */
+.t-details .k-card__body { display: grid; grid-template-columns: minmax(0, 1fr); }
+.t-details > .k-card__body > .k-disc { border-top: 1px solid var(--border); }
+.t-details > .k-card__body > .k-disc:first-child { border-top: 0; }
+.t-details > .k-card__body > .k-disc > .k-disc__summary { width: 100%; padding: var(--space-3) 0; font-size: var(--fs-body); color: var(--text); }
+.t-details > .k-card__body > .k-disc > .k-disc__body { margin: 0 0 var(--space-4); }
+.t-details .k-disc__body > :last-child { margin-bottom: 0; }
+
+/* ---------- lists inside Details ---------- */
+.t-list { list-style: none; margin: 0; padding: 0; min-width: 0; }
+.t-list > li { padding: var(--space-2) 0; border-top: 1px solid var(--border); min-width: 0; font-size: var(--fs-meta); }
+.t-list > li:first-child { border-top: 0; padding-top: 0; }
+.t-list__head { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
+.t-list__head strong { font-weight: 600; }
+.t-list__body { margin-top: var(--space-1); overflow-wrap: anywhere; }
+.t-list__body p { margin: 0 0 var(--space-1); }
+.t-list__foot { margin-top: var(--space-1); font-size: var(--fs-small); color: var(--muted); overflow-wrap: anywhere; }
+.t-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1) var(--space-3); margin: 0; font-size: var(--fs-small); }
+.t-kv dt { color: var(--muted); }
+.t-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) { .t-kv { grid-template-columns: minmax(0, 1fr); gap: 0; } .t-kv dd { margin-bottom: var(--space-1); } }
+.t-models { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); }
+.t-models__step { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); padding-top: var(--space-2); border-top: 1px solid var(--border); font-size: var(--fs-meta); }
+.t-models__step:first-child { border-top: 0; padding-top: 0; }
+.t-models__step select { max-width: 24rem; }
+.t-models__step .k-field { margin: 0; }
+.t-events { list-style: none; margin: 0; padding: 0; }
+.t-events > li { display: grid; grid-template-columns: 5.5rem 4.5rem minmax(0, 1fr); gap: var(--space-2); padding: var(--space-1) 0; border-top: 1px solid var(--border); font-size: var(--fs-meta); }
+.t-events > li:first-child { border-top: 0; }
+.t-events > li > span { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .t-events > li { grid-template-columns: minmax(0, 1fr); gap: 0; } }
+
+/* ---------- steps ---------- */
+.t-steps .k-step__action { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); min-width: 0; }
+/* A step with nothing to do renders an empty action slot; it takes no row. */
+.t-steps .k-step__action:empty { display: none; }
+.t-note-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); max-width: 36rem; padding: var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--radius-control); }
+.t-note-form .k-field { margin: 0; }
+.t-notes { list-style: none; margin: 0; padding: 0; font-size: var(--fs-small); }
+.t-notes > li { padding: var(--space-1) 0; border-top: 1px solid var(--border); min-width: 0; }
+.t-notes > li:first-child { border-top: 0; }
+.t-notes__head { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; color: var(--muted); }
+.t-notes__text { overflow-wrap: anywhere; }
+
+/* ---------- child tasks ---------- */
+.t-children .k-row__title { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
+
+/* ---------- forms in panels ---------- */
+.t-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-strong); border-radius: var(--radius-control); min-width: 0; }
+.t-panel .k-field { margin: 0; }
+.t-panel h2, .t-panel h3 { margin: 0; }
+.t-inline { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.t-inline .k-field { margin: 0; }
+.t-choice { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+.t-choice .k-row { padding: var(--space-1) 0; }
+
+/* ---------- artifact editor ---------- */
+.t-editor { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); margin-top: var(--space-2); padding: var(--space-3); border: 1px solid var(--border-strong); border-radius: var(--radius-control); }
+.t-editor .k-field { margin: 0; }
+.t-editor textarea.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; min-height: 10rem; }
+
+/* ---------- the merge checklist (kept from before the kit; one place now) ---------- */
+.t-checklist { list-style: none; margin: 0 0 var(--space-3); padding: 0; }
+.t-checklist li { display: grid; grid-template-columns: 1.4rem minmax(0, 1fr); gap: var(--space-2); align-items: start; padding: var(--space-2) 0; border-top: 1px solid var(--border); font-size: var(--fs-meta); }
+.t-checklist li:first-child { border-top: 0; }
+.t-checklist .t-check { width: 1.1rem; height: 1.1rem; margin-top: 0.15rem; border: 1px solid var(--border-strong); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-micro); }
+.t-checklist li.ok .t-check { color: var(--st-done); border-color: currentColor; }
+.t-checklist li.blocked .t-check { color: var(--st-fail); border-color: currentColor; }
+.t-checklist li.ok .t-check-label { color: var(--muted); }
+.t-checklist .t-check-detail { font-size: var(--fs-small); color: var(--muted); overflow-wrap: anywhere; }
+
+/* ---------- the spec editor's sticky bar ---------- */
+.sticky-actions .sticky-actions__reason { flex: 1 1 20rem; margin: 0; }
