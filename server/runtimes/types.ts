@@ -72,7 +72,12 @@ export type AdapterEvent =
   /** The run is confirmed not running after an interrupt or kill. */
   | { type: "stopped"; attemptId: string; how: "interrupted" | "killed"; usage?: Usage }
   /** The run ended without a usable result (provider error, auth failure, limit reached, crash). */
-  | { type: "failed"; attemptId: string; message: string; usage?: Usage };
+  | { type: "failed"; attemptId: string; message: string; usage?: Usage }
+  /**
+   * ORC-022: the outcome of `note()` for one note. "delivered" only on the runtime's acknowledgment
+   * (Codex: `turn/steer` accepted; Claude: an assistant message names the note's uuid). Never terminal for the run.
+   */
+  | { type: "note"; attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string };
 
 /** An MCP server found in the user's own provider configuration (never includes its settings or secrets). */
 export interface Connection {
@@ -110,6 +115,11 @@ export interface RuntimeAdapter {
    * `stopped` with how: "killed".
    */
   interrupt(attemptId: string): void;
+  /**
+   * ORC-022: deliver a note to the live run of `attemptId`. Must not throw; exactly one "note" event
+   * for `note.id` follows (also when there is no such run: "not-delivered").
+   */
+  note(attemptId: string, note: { id: string; text: string }): void;
   /** Terminate immediately and forget the run WITHOUT emitting further events (orphan cleanup). */
   kill(attemptId: string): void;
 

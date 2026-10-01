@@ -309,6 +309,11 @@ export class FakeAdapter implements RuntimeAdapter {
     if (p && p.interruptAt === undefined) p.interruptAt = nowMs;
   }
 
+  /** ORC-022 placeholder until W1 implements notes: nothing is delivered. */
+  note(attemptId: string, note: { id: string; text: string }): void {
+    queueMicrotask(() => this.emit({ type: "note", attemptId, noteId: note.id, outcome: "not-delivered", reason: "this runtime does not take notes yet" }));
+  }
+
   kill(attemptId: string) {
     this.procs.delete(attemptId);
   }

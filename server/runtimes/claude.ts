@@ -423,7 +423,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     }
   }
 
-  private note(run: Run, note: string) {
+  private activity(run: Run, note: string) {
     if (run.terminal || run.forgotten) return;
     this.emitRaw({ type: "activity", attemptId: run.a.attemptId, note: truncate(note) });
   }
@@ -578,7 +578,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     if (assignment.limits.timeoutMs > 0) {
       this.timer(run, assignment.limits.timeoutMs, () => {
         if (run.terminal || run.forgotten || run.interruptRequested) return;
-        this.note(run, "Time limit reached");
+        this.activity(run, "Time limit reached");
         this.interrupt(assignment.attemptId);
       });
     }
@@ -601,7 +601,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
       const name = String(i.tool_name ?? "");
       const verdict = guard(name, i.tool_input);
       if (verdict.ok) return {};
-      this.note(run, `Blocked ${name}: ${verdict.reason}`);
+      this.activity(run, `Blocked ${name}: ${verdict.reason}`);
       return {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -614,7 +614,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     const canUseTool: CanUseTool = async (toolName, input): Promise<PermissionResult> => {
       const verdict = guard(toolName, input);
       if (verdict.ok) return { behavior: "allow", updatedInput: input };
-      this.note(run, `Blocked ${toolName}: ${verdict.reason}`);
+      this.activity(run, `Blocked ${toolName}: ${verdict.reason}`);
       return { behavior: "deny", message: verdict.reason };
     };
 
@@ -707,7 +707,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
         const texts: string[] = [];
         for (const block of content) {
           if (block.type === "tool_use") {
-            this.note(run, describeToolUse(String(block.name ?? "tool"), asRec(block.input), run.a.workspace.path));
+            this.activity(run, describeToolUse(String(block.name ?? "tool"), asRec(block.input), run.a.workspace.path));
           } else if (block.type === "text" && typeof block.text === "string") {
             texts.push(block.text);
           }
@@ -802,6 +802,11 @@ export class ClaudeAdapter implements RuntimeAdapter {
       return this.finish(run, { type: "failed", attemptId: id, message: CLAUDE_AUTH_MESSAGE });
     }
     this.finish(run, { type: "failed", attemptId: id, message: `Claude run failed: ${truncate(redact(errorText(err)), 300)}` });
+  }
+
+  /** ORC-022 placeholder until W2 implements notes: nothing is delivered. */
+  note(attemptId: string, note: { id: string; text: string }): void {
+    queueMicrotask(() => this.emitRaw({ type: "note", attemptId, noteId: note.id, outcome: "not-delivered", reason: "this runtime does not take notes yet" }));
   }
 
   interrupt(attemptId: string): void {

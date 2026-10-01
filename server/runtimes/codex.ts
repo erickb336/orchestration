@@ -336,6 +336,11 @@ export class CodexAdapter implements RuntimeAdapter {
     }
   }
 
+  /** ORC-022 placeholder until W2 implements notes: nothing is delivered. */
+  note(attemptId: string, note: { id: string; text: string }): void {
+    queueMicrotask(() => this.emit({ type: "note", attemptId, noteId: note.id, outcome: "not-delivered", reason: "this runtime does not take notes yet" }));
+  }
+
   interrupt(attemptId: string): void {
     const run = this.runs.get(attemptId);
     if (!run || run.done || run.interruptRequested) return;

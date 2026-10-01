@@ -950,6 +950,9 @@ export class Scheduler {
         if (c.problems.length) next = noteProblems(next, e.attemptId, c.problems);
         return next;
       }
+      case "note":
+        // ORC-022: W1 records the outcome on the note (M.reportNoteOutcome). Until then it is ignored.
+        return s;
     }
   }
 
@@ -960,6 +963,7 @@ export class Scheduler {
       case "activity":
         return M.reportLeadActivity(s, e.attemptId, e.note);
       case "progress":
+      case "note": // lead runs never receive notes
         return s;
       case "stopped":
         return M.reportLeadStopped(s, e.attemptId, now);
