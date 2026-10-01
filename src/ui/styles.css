@@ -545,6 +545,7 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 /* ORC-021: flow picker, its read-only step list, the Change flow panel and the Settings list */
 .flow-card { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 0.6rem 0.8rem; background: var(--surface-2); margin-bottom: 0.8rem; min-width: 0; }
 .flow-card .chip { white-space: normal; }
+.flow-card__text { margin: 0.2rem 0; }
 .flow-steps { margin: 0; padding: 0; list-style: none; max-height: 14rem; overflow: auto; border-top: 1px solid var(--border); background: var(--surface); border-radius: var(--radius-chip); }
 .flow-steps > li { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: 0.4rem; padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--border); font-size: var(--fs-meta); }
 .flow-steps > li > span:last-child { overflow-wrap: anywhere; }

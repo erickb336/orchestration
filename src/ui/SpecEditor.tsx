@@ -1,15 +1,23 @@
+// The spec editor. Saving creates a new immutable revision against the revision the draft started from; a
+// revision that lands meanwhile is shown as a conflict with what changed, never saved over silently.
+
 import { useState } from "react";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
 import type { SpecContent, SpecOption, Task } from "../domain/types";
+import { Actions, Banner, Button, Field, Input, Select, Textarea, useConfirm } from "./kit";
 import { newIdOf, useStore } from "./store";
+import { CONFIRM } from "./task/confirms";
 
 const lines = (xs: string[]) => xs.join("\n");
 const unlines = (s: string) => s.split("\n").map((x) => x.trim()).filter(Boolean);
 
-/** Draft editor. Saving creates a new immutable revision against the revision the draft started from. */
+type TextKey = "title" | "area" | "whyNow" | "outcome" | "benefit" | "rationale" | "uncertainty" | "validationPlan" | "rollback";
+type ListKey = "successCriteria" | "scopeIncluded" | "scopeExcluded" | "acceptance";
+
 export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void }) {
   const { state, send, disabled } = useStore();
+  const confirm = useConfirm();
   const start = M.currentSpec(task);
   const [baseRev, setBaseRev] = useState(start.rev);
   const [draft, setDraft] = useState<SpecContent>(() => structuredClone(start.content));
@@ -24,28 +32,29 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
   const set = <K extends keyof SpecContent>(k: K, v: SpecContent[K]) => setDraft((d) => ({ ...d, [k]: v }));
   const setOpt = (i: number, patch: Partial<SpecOption>) => setDraft((d) => ({ ...d, options: d.options.map((o, j) => (j === i ? { ...o, ...patch } : o)) }));
   const overriding = draft.selectedOptionId !== draft.recommendedOptionId;
+  const dirty = base ? JSON.stringify(content()) !== JSON.stringify(base.content) : true;
 
-  const text = (k: "title" | "area" | "whyNow" | "outcome" | "benefit" | "rationale" | "uncertainty" | "validationPlan" | "rollback", label: string, multi = false) => (
-    <label className="field">
-      <span>{label}</span>
-      {multi ? <textarea value={draft[k]} onChange={(e) => set(k, e.target.value)} /> : <input type="text" value={draft[k]} onChange={(e) => set(k, e.target.value)} />}
-    </label>
+  const text = (k: TextKey, label: string, multi = false) => (
+    <Field key={k} label={label}>
+      {multi ? <Textarea value={draft[k]} onChange={(e) => set(k, e.target.value)} /> : <Input type="text" value={draft[k]} onChange={(e) => set(k, e.target.value)} />}
+    </Field>
   );
-  const list = (k: "successCriteria" | "scopeIncluded" | "scopeExcluded" | "acceptance", label: string) => (
-    <label className="field">
-      <span>{label} (one per line)</span>
-      <textarea value={lines(draft[k])} onChange={(e) => set(k, e.target.value.split("\n"))} />
-    </label>
+  const list = (k: ListKey, label: string) => (
+    <Field key={k} label={`${label} (one per line)`}>
+      <Textarea value={lines(draft[k])} onChange={(e) => set(k, e.target.value.split("\n"))} />
+    </Field>
   );
 
   const closed = task.lifecycle === "done" || task.lifecycle === "cancelled";
-  const content = (): SpecContent => ({
-    ...draft,
-    successCriteria: unlines(lines(draft.successCriteria)),
-    scopeIncluded: unlines(lines(draft.scopeIncluded)),
-    scopeExcluded: unlines(lines(draft.scopeExcluded)),
-    acceptance: unlines(lines(draft.acceptance)),
-  });
+  function content(): SpecContent {
+    return {
+      ...draft,
+      successCriteria: unlines(lines(draft.successCriteria)),
+      scopeIncluded: unlines(lines(draft.scopeIncluded)),
+      scopeExcluded: unlines(lines(draft.scopeExcluded)),
+      acceptance: unlines(lines(draft.acceptance)),
+    };
+  }
   // On failure (409 stale, 400 control error, offline) the draft stays open and a notice explains why.
   const save = async () => {
     if (saving) return;
@@ -67,6 +76,9 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
     if (r.ok) onClose();
     if (newId) location.hash = `#/task/${encodeURIComponent(newId)}`;
   };
+  const discard = async () => {
+    if (!dirty || (await confirm(CONFIRM.discardDraft(baseRev)))) onClose();
+  };
 
   return (
     <form
@@ -77,29 +89,36 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
       }}
       aria-labelledby="edit-h"
     >
-      <h2 id="edit-h">
-        Edit spec — draft from r{baseRev}, saves as r{current.rev + 1}
-      </h2>
+      <h2 id="edit-h">Edit spec</h2>
+      <p className="meta muted">
+        Your draft starts from r{baseRev} and saves as r{current.rev + 1}.
+      </p>
       {stale && (
-        <div className="banner danger" role="alert">
-          This spec changed to r{current.rev} while you were editing. Your draft is kept. Review the current revision, then{" "}
-          <button type="button" className="small" onClick={() => setBaseRev(current.rev)}>
-            Save over r{current.rev} anyway
-          </button>{" "}
-          or{" "}
-          <button
-            type="button"
-            className="small"
-            onClick={() => {
-              setDraft(structuredClone(current.content));
-              setBaseRev(current.rev);
-            }}
-          >
-            Discard draft and load r{current.rev}
-          </button>
+        <Banner
+          tone="fail"
+          title={`This spec changed to r${current.rev} while you were editing.`}
+          actions={
+            <>
+              <Button size="small" onClick={() => setBaseRev(current.rev)}>
+                Save over r{current.rev} anyway
+              </Button>
+              <Button
+                size="small"
+                variant="quiet"
+                onClick={() => {
+                  setDraft(structuredClone(current.content));
+                  setBaseRev(current.rev);
+                }}
+              >
+                Discard draft and load r{current.rev}
+              </Button>
+            </>
+          }
+        >
+          Your draft is kept. Review the current revision first.
           {upstream.length > 0 && (
             <>
-              <p style={{ margin: "0.6rem 0 0.3rem" }}>
+              <p>
                 Changed in r{current.rev} ({current.author}: {current.reason}). Saving over it reverts these to your draft:
               </p>
               <div className="diff">
@@ -111,26 +130,30 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
               </div>
             </>
           )}
-        </div>
+        </Banner>
       )}
       {closed && (
-        <div className="banner danger" role="alert">
-          {task.lifecycle === "done"
-            ? "This task was delivered while you were editing. The delivered spec stays read-only. "
-            : "This task was cancelled while you were editing. "}
-          {task.lifecycle === "done" && (
-            <button type="button" className="small" disabled={disabled || saving} onClick={() => void saveAsFollowUp()}>
-              Save draft as a follow-up task
-            </button>
-          )}
-        </div>
+        <Banner
+          tone="fail"
+          title={task.lifecycle === "done" ? "This task finished while you were editing." : "This task was cancelled while you were editing."}
+          actions={
+            task.lifecycle === "done" && (
+              <Button size="small" disabled={disabled || saving} onClick={() => void saveAsFollowUp()}>
+                Save draft as a follow-up task
+              </Button>
+            )
+          }
+        >
+          {task.lifecycle === "done" ? "The finished spec stays read-only." : "Nothing runs on it again."}
+        </Banner>
       )}
       {task.lifecycle === "active" && activeRuns > 0 && (
-        <div className="banner">
-          This task has {activeRuns} active run{activeRuns === 1 ? "" : "s"}. Saving freezes integration and stops {activeRuns === 1 ? "it" : "them"}; {activeRuns === 1 ? "its result" : "their results"} will not integrate, and completed steps will be revalidated against the new revision.
-        </div>
+        <Banner tone="you">
+          This task has {activeRuns} active run{activeRuns === 1 ? "" : "s"}. Saving freezes integration and stops {activeRuns === 1 ? "it" : "them"}; {activeRuns === 1 ? "its result" : "their results"} will not integrate, and completed steps will be revalidated against the new
+          revision.
+        </Banner>
       )}
-      {task.hold && <div className="banner neutral">This task is paused. Saving keeps it paused.</div>}
+      {task.hold && <Banner>This task is paused. Saving keeps it paused.</Banner>}
 
       {text("title", "Title")}
       {text("area", "Area")}
@@ -149,90 +172,85 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
             {o.id === draft.recommendedOptionId ? " — lead's recommendation" : ""}
           </legend>
           <div className="grid">
-            <label className="field">
-              <span>Name</span>
-              <input type="text" value={o.name} onChange={(e) => setOpt(i, { name: e.target.value })} />
-            </label>
-            <label className="field">
-              <span>Effort</span>
-              <input type="text" value={o.effort} onChange={(e) => setOpt(i, { effort: e.target.value })} />
-            </label>
-            <label className="field">
-              <span>Reversibility</span>
-              <input type="text" value={o.reversibility} onChange={(e) => setOpt(i, { reversibility: e.target.value })} />
-            </label>
+            <Field label="Name">
+              <Input type="text" value={o.name} onChange={(e) => setOpt(i, { name: e.target.value })} />
+            </Field>
+            <Field label="Effort">
+              <Input type="text" value={o.effort} onChange={(e) => setOpt(i, { effort: e.target.value })} />
+            </Field>
+            <Field label="Reversibility">
+              <Input type="text" value={o.reversibility} onChange={(e) => setOpt(i, { reversibility: e.target.value })} />
+            </Field>
           </div>
-          <label className="field">
-            <span>Approach</span>
-            <textarea value={o.approach} onChange={(e) => setOpt(i, { approach: e.target.value })} />
-          </label>
+          <Field label="Approach">
+            <Textarea value={o.approach} onChange={(e) => setOpt(i, { approach: e.target.value })} />
+          </Field>
           <div className="grid">
-            <label className="field">
-              <span>Benefit</span>
-              <input type="text" value={o.benefit} onChange={(e) => setOpt(i, { benefit: e.target.value })} />
-            </label>
-            <label className="field">
-              <span>Costs and risks</span>
-              <input type="text" value={o.risks} onChange={(e) => setOpt(i, { risks: e.target.value })} />
-            </label>
+            <Field label="Benefit">
+              <Input type="text" value={o.benefit} onChange={(e) => setOpt(i, { benefit: e.target.value })} />
+            </Field>
+            <Field label="Costs and risks">
+              <Input type="text" value={o.risks} onChange={(e) => setOpt(i, { risks: e.target.value })} />
+            </Field>
           </div>
-          <div className="row">
-            <label className="row" style={{ gap: "0.3rem" }}>
+          <Actions>
+            <label className="choice-radio">
               <input type="radio" name="selected" checked={draft.selectedOptionId === o.id} onChange={() => set("selectedOptionId", o.id)} />
-              Selected
+              <span>Selected</span>
             </label>
             {o.id !== draft.recommendedOptionId && o.id !== draft.selectedOptionId && (
-              <button type="button" className="small danger" onClick={() => setDraft((d) => ({ ...d, options: d.options.filter((_, j) => j !== i) }))}>
+              <Button size="small" variant="danger" onClick={() => setDraft((d) => ({ ...d, options: d.options.filter((_, j) => j !== i) }))}>
                 Remove option
-              </button>
+              </Button>
             )}
-          </div>
+          </Actions>
         </fieldset>
       ))}
-      <button
-        type="button"
-        className="small"
-        onClick={() => {
-          const used = new Set(draft.options.map((o) => o.id));
-          const id = "ABCDEFGH".split("").find((x) => !used.has(x)) ?? String(draft.options.length + 1);
-          setDraft((d) => ({ ...d, options: [...d.options, { id, name: "", approach: "", benefit: "", effort: "", risks: "", reversibility: "" }] }));
-        }}
-      >
-        Add option
-      </button>
+      <Actions>
+        <Button
+          size="small"
+          onClick={() => {
+            const used = new Set(draft.options.map((o) => o.id));
+            const id = "ABCDEFGH".split("").find((x) => !used.has(x)) ?? String(draft.options.length + 1);
+            setDraft((d) => ({ ...d, options: [...d.options, { id, name: "", approach: "", benefit: "", effort: "", risks: "", reversibility: "" }] }));
+          }}
+        >
+          Add option
+        </Button>
+      </Actions>
 
       {overriding && (
-        <label className="field" style={{ marginTop: "0.8rem" }}>
-          <span>Override reason (required: you selected {draft.selectedOptionId}; the lead recommended {draft.recommendedOptionId})</span>
-          <input type="text" value={draft.overrideReason} onChange={(e) => set("overrideReason", e.target.value)} required />
-        </label>
+        <Field label={`Override reason (required: you selected ${draft.selectedOptionId}; the lead recommended ${draft.recommendedOptionId})`}>
+          <Input type="text" value={draft.overrideReason} onChange={(e) => set("overrideReason", e.target.value)} required />
+        </Field>
       )}
-      <div style={{ marginTop: "0.8rem" }} />
       {text("rationale", "Lead rationale", true)}
       {text("uncertainty", "Uncertainty and what would change the decision", true)}
       {list("acceptance", "Acceptance checks")}
       {text("validationPlan", "Validation plan", true)}
       {text("rollback", "Rollback / recovery")}
-      <label className="field">
-        <span>Effort</span>
-        <select value={draft.effort} onChange={(e) => set("effort", e.target.value as SpecContent["effort"])}>
-          <option value="small">Small</option>
-          <option value="medium">Medium</option>
-          <option value="large">Large</option>
-        </select>
-      </label>
+      <Field label="Effort" width="short">
+        <Select
+          value={draft.effort}
+          onChange={(e) => set("effort", e.target.value as SpecContent["effort"])}
+          options={[
+            { value: "small", label: "Small" },
+            { value: "medium", label: "Medium" },
+            { value: "large", label: "Large" },
+          ]}
+        />
+      </Field>
 
       <div className="sticky-actions">
-        <label className="field" style={{ flex: "1 1 20rem", margin: 0 }}>
-          <span>Reason for this revision (required)</span>
-          <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} required />
-        </label>
-        <button type="submit" className="primary" disabled={disabled || saving || stale || closed}>
+        <Field label="Reason for this revision (required)" className="sticky-actions__reason">
+          <Input type="text" value={reason} onChange={(e) => setReason(e.target.value)} required />
+        </Field>
+        <Button type="submit" variant="primary" disabled={disabled || saving || stale || closed} loading={saving}>
           Save as r{current.rev + 1}
-        </button>
-        <button type="button" onClick={onClose}>
+        </Button>
+        <Button variant="quiet" onClick={() => void discard()}>
           Discard draft
-        </button>
+        </Button>
       </div>
     </form>
   );
