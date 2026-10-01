@@ -7,6 +7,7 @@ import { newIdOf, useStore } from "./store";
 import { PrChip } from "./Delivery";
 import { COLUMN_LABEL, ProviderMark, ROLE_LABEL, StatePill, currentWork, hasNewDecision, isSimulated, latestEvent, relTime } from "./common";
 import { isSettledTask } from "./fanout";
+import { splitDone } from "./doneCollapse";
 import { useLeadContext } from "./LeadDrawer";
 import { PatternPicker } from "./PatternPicker";
 import { OTHER_AREA, areaOf, liveAgents, needsYouOf, serviceOwned } from "./progress";
@@ -211,6 +212,7 @@ export function Board() {
   const [provider, setProvider] = useState("");
   const [changed, setChanged] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showEarlier, setShowEarlier] = useState(false);
   const [creating, setCreating] = useState(false);
 
   const areas = useMemo(() => [...new Set(state.tasks.map(areaOf))].sort((a, b) => (a === OTHER_AREA ? 1 : b === OTHER_AREA ? -1 : a.localeCompare(b))), [state.tasks]);
@@ -230,6 +232,9 @@ export function Board() {
 
   const byColumn = (c: M.Column) => filtered.filter((t) => M.column(state, t) === c);
   const cancelled = byColumn("cancelled");
+  // ORC-018 §6: done tasks older than 7 days fold under "Done earlier", unless they still ask something of you.
+  const { recent: doneRecent, earlier: doneEarlier } = splitDone(state, byColumn("done"), Date.now());
+  const shown = (c: M.Column) => (c === "done" ? doneRecent : byColumn(c));
   const newCount = state.tasks.filter((t) => hasNewDecision(state, t)).length;
 
   return (
@@ -332,21 +337,35 @@ export function Board() {
       {filtered.length === 0 && <p className="muted">No tasks match these filters.</p>}
 
       {view === "list" ? (
-        M.BOARD_COLUMNS.map((c) => {
-          const items = byColumn(c);
-          if (!items.length) return null;
-          return (
-            <section className="group" key={c} aria-labelledby={`g-${c}`}>
+        <>
+          {M.BOARD_COLUMNS.map((c) => {
+            const items = shown(c);
+            if (!items.length) return null;
+            return (
+              <section className="group" key={c} aria-labelledby={`g-${c}`}>
+                <div className="group-head">
+                  <h2 id={`g-${c}`}>{COLUMN_LABEL[c]}</h2>
+                  <span className="chip">{items.length}</span>
+                </div>
+                {items.map((t) => (
+                  <TaskCard key={t.id} state={state} task={t} />
+                ))}
+              </section>
+            );
+          })}
+          {doneEarlier.length > 0 && (
+            <section className="group" aria-labelledby="g-done-earlier">
               <div className="group-head">
-                <h2 id={`g-${c}`}>{COLUMN_LABEL[c]}</h2>
-                <span className="chip">{items.length}</span>
+                <h2 id="g-done-earlier">Done earlier</h2>
+                <span className="chip">{doneEarlier.length}</span>
+                <button className="link" aria-expanded={showEarlier} aria-controls="done-earlier-list" onClick={() => setShowEarlier(!showEarlier)} title="Done more than 7 days ago; anything that still needs you stays above">
+                  {showEarlier ? "Hide" : "Show"}
+                </button>
               </div>
-              {items.map((t) => (
-                <TaskCard key={t.id} state={state} task={t} />
-              ))}
+              <div id="done-earlier-list">{showEarlier && doneEarlier.map((t) => <TaskCard key={t.id} state={state} task={t} />)}</div>
             </section>
-          );
-        })
+          )}
+        </>
       ) : (
         <>
           {M.BOARD_COLUMNS.some((c) => byColumn(c).length === 0) && (
@@ -361,9 +380,17 @@ export function Board() {
                 <h2>{COLUMN_LABEL[c]}</h2>
                 <span className="chip">{byColumn(c).length}</span>
               </div>
-              {byColumn(c).map((t) => (
+              {shown(c).map((t) => (
                 <TaskCard key={t.id} state={state} task={t} />
               ))}
+              {c === "done" && doneEarlier.length > 0 && (
+                <>
+                  <button className="small done-earlier" aria-expanded={showEarlier} aria-controls="done-earlier-col" onClick={() => setShowEarlier(!showEarlier)} title="Done more than 7 days ago; anything that still needs you stays above">
+                    {showEarlier ? "Hide done earlier" : `Done earlier (${doneEarlier.length})`}
+                  </button>
+                  <div id="done-earlier-col">{showEarlier && doneEarlier.map((t) => <TaskCard key={t.id} state={state} task={t} />)}</div>
+                </>
+              )}
             </section>
           ))}
         </div>

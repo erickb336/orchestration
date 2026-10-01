@@ -781,6 +781,104 @@ ul.doc-list.uploads > li.skipped, ul.doc-list.uploads > li.queued { color: var(-
 .driver-popover.orc-tour .driver-popover-arrow-side-left { border-left-color: var(--surface); }
 .driver-popover.orc-tour .driver-popover-arrow-side-right { border-right-color: var(--surface); }
 
+/* ---------- compare patterns (ORC-018 §4) ---------- */
+/* No colour here means better or worse: dots, ticks and bars are the text colour, and the state hues are not used. */
+.compare-head { margin-bottom: 0.75rem; }
+.compare-head h1 { margin-bottom: 0.25rem; }
+.compare-head p { margin: 0; max-width: 70ch; }
+.compare-toolbar { align-items: center; }
+.compare-toolbar input[type="date"] { background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-control); padding: 0.25rem 0.5rem; color: inherit; font: inherit; font-size: var(--fs-small); max-width: 11rem; }
+.compare-toolbar label > input[type="checkbox"] { margin: 0; }
+.compare-downloads { display: inline-flex; gap: 0.4rem; margin-left: auto; }
+/* "Measures…": a disclosure with the checkboxes, like the demo bar's Simulation menu. */
+.measures-menu { position: relative; }
+.measures-menu > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 0.35rem; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-control); padding: 0.15rem 0.55rem; font-size: var(--fs-small); font-weight: 560; transition: background-color var(--ease); }
+.measures-menu > summary::-webkit-details-marker { display: none; }
+.measures-menu > summary::after { content: ""; width: 0.4rem; height: 0.4rem; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); }
+.measures-menu > summary:hover, .measures-menu[open] > summary { background: var(--surface-2); }
+.measures-menu[open] > summary::after { transform: translateY(1px) rotate(225deg); }
+.measures-pop { position: absolute; left: 0; top: calc(100% + 0.4rem); z-index: 7; width: max-content; max-width: min(22rem, calc(100vw - 2rem)); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 2px 8px rgb(0 0 0 / 0.08), 0 12px 32px rgb(0 0 0 / 0.14); padding: 0.6rem 0.8rem; display: grid; grid-template-columns: repeat(2, max-content); gap: 0.2rem 1rem; }
+.measures-pop > label { font-size: var(--fs-meta); color: var(--text); gap: 0.4rem; }
+.measures-pop > .row { grid-column: 1 / -1; }
+.compare-empty p { max-width: 70ch; }
+/* Like the board, the groups table uses the page's full width: eight measures do not fit in 1200 px. */
+main:has(.compare-table) { max-width: none; }
+.compare-table th.measure { min-width: 7rem; }
+.compare-table td.measure, .side-table td.measure { white-space: nowrap; }
+.compare-table td.sel { width: 1.8rem; padding-right: 0; }
+.compare-table td.sel input, .compare-card-head > input { margin: 0.25rem 0 0; }
+.compare-table td.who { min-width: 14rem; }
+.compare-name { font-weight: 600; color: var(--text); }
+.compare-chips { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.2rem; }
+.compare-n { font-size: var(--fs-small); margin-top: 0.25rem; }
+.compare-n button.link { font-size: inherit; }
+.compare-table tr.selected td { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.compare-table tbody tr:hover td { background: color-mix(in srgb, var(--text) 3%, transparent); }
+.compare-table tr.selected:hover td { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.cell { display: flex; flex-direction: column; gap: 0.05rem; align-items: flex-start; }
+.cell-main { font-weight: 560; font-variant-numeric: tabular-nums; color: var(--text); }
+.cell-spread { font-size: var(--fs-micro); color: var(--muted); font-variant-numeric: tabular-nums; }
+.cell-reported { font-size: var(--fs-micro); color: var(--muted); }
+.cell-missing { color: var(--muted); }
+/* The strip: dots in the text colour at 55%, the median tick solid; a rate's bar is the same ink. */
+.strip { display: block; width: 96px; height: 14px; margin-top: 0.15rem; overflow: visible; }
+.strip .dot { fill: var(--text); opacity: 0.55; }
+.strip .tick { fill: var(--text); }
+.strip .track { fill: var(--border); }
+.strip .fill { fill: var(--text); opacity: 0.55; }
+.compare-tasks-row > td { padding: 0 0 0.75rem 2.3rem; background: var(--surface-2); }
+.compare-tasks { padding: 0.4rem 0.6rem 0; }
+.compare-task-table { font-size: var(--fs-small); }
+.compare-task-table th, .compare-task-table td { padding: 0.3rem 0.5rem; border-bottom-color: var(--border); }
+.compare-task-table tbody tr:last-child td { border-bottom: none; }
+.compare-task-table .num, .compare-task-table th.num { text-align: right; }
+.compare-task-table td:first-child a { color: var(--text); }
+.compare-task-table .chip { margin-left: 0.3rem; }
+/* Side by side: two columns told apart by position and label. */
+.compare-side { margin-bottom: 1rem; }
+.side-table th { vertical-align: top; }
+.side-table thead th { color: var(--text); font-size: var(--fs-meta); }
+.side-table thead th:first-child { color: var(--muted); font-size: var(--fs-small); }
+.side-table thead th .compare-chips { display: flex; margin-top: 0.15rem; }
+.side-table thead th .small { display: block; margin-top: 0.15rem; font-weight: 450; }
+.side-table tbody th { font-weight: 560; color: var(--text); font-size: var(--fs-meta); width: 16rem; }
+.side-note { display: block; font-size: var(--fs-micro); font-weight: 450; }
+/* Phones (≤ 700 px): groups and the side-by-side panel become cards; the page never scrolls sideways. */
+.compare-cards { list-style: none; margin: 0; padding: 0; }
+.compare-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 0.8rem 0.9rem; margin-bottom: 0.6rem; min-width: 0; transition: border-color var(--ease); }
+.compare-card.selected { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+.compare-card-head { display: flex; gap: 0.5rem; align-items: flex-start; }
+.compare-card-title { min-width: 0; flex: 1 1 auto; }
+.compare-card .compare-chips { white-space: normal; }
+.compare-card .chip { white-space: normal; }
+.compare-dl { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; margin: 0.6rem 0 0; }
+.compare-dl-row { display: grid; grid-template-columns: minmax(7rem, 1fr) auto; gap: 0.5rem; align-items: start; padding: 0.35rem 0; border-top: 1px solid var(--border); }
+.compare-dl dt { color: var(--muted); font-size: var(--fs-small); padding-top: 0.1rem; }
+.compare-dl dd { margin: 0; }
+.plain-list { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+.compare-tasks.plain-list > li { padding: 0.4rem 0; border-top: 1px solid var(--border); font-size: var(--fs-small); min-width: 0; overflow-wrap: anywhere; }
+.compare-task-title a { color: var(--text); }
+.side-stack { list-style: none; margin: 0; padding: 0; }
+.side-stack > li { padding: 0.5rem 0; border-top: 1px solid var(--border); }
+.side-stack > li:first-child { border-top: none; }
+.side-label { font-weight: 560; margin-bottom: 0.3rem; }
+.side-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
+.side-cell { min-width: 0; }
+.side-who { display: block; font-size: var(--fs-micro); color: var(--muted); margin-bottom: 0.15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 700px) {
+  .compare-downloads { margin-left: 0; }
+  .measures-pop { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- Settings → Traces (ORC-018 §5.4) ---------- */
+.traces-examples { margin: 0 0 0.8rem; }
+.traces-list { margin: 0 0 0.6rem; }
+.traces-list li + li { margin-top: 0.15rem; }
+.traces-remote > input { align-self: flex-start; margin-top: 0.3rem; }
+
+/* ---------- done earlier (ORC-018 §6) ---------- */
+.board .col .done-earlier { width: 100%; margin: 0.25rem 0 0.5rem; }
+
 /* §3.12: nothing moves under reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

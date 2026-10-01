@@ -15,6 +15,7 @@ import { ModelPicker, PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, ROLE_LABEL, autonomy
 import { disableNotifications, enableNotifications, notificationsSupported } from "./notifications";
 import { StageControl } from "./Shaping";
 import { initProjectConfirm, newProjectStage } from "./stageChoice";
+import { LANGFUSE_ENDPOINT, PHOENIX_ENDPOINT, backfillCount, endpointProblem, hostOf, needsRemoteConfirm, statusLine } from "./telemetryView";
 
 const CAP_LABEL: Record<keyof CapabilityMap, string> = {
   start: "Start",
@@ -112,6 +113,7 @@ export function Settings() {
           <AutonomyCard />
           <NotificationsCard />
           <DataCard />
+          <TracesCard />
           <RunLimitsCard />
           {service.runtime === "real" && <ProjectSetup />}
         </div>
@@ -732,6 +734,141 @@ function DataCard() {
           Available when real agents run (the sample project has no workspaces).
         </p>
       )}
+    </section>
+  );
+}
+
+/**
+ * ORC-018 §5.4: the opt-in trace export. Off by default; what can leave the computer is listed beside the
+ * switch, and a host other than loopback needs the confirmation before Save. Credentials never live here.
+ */
+function TracesCard() {
+  const { state, service, send, disabled, postJson } = useStore();
+  const cfg = state.project.telemetry;
+  const status = service.telemetry;
+  const [enabled, setEnabled] = useState(cfg?.enabled ?? false);
+  const [endpoint, setEndpoint] = useState(cfg?.endpoint ?? "");
+  const [allowRemote, setAllowRemote] = useState(cfg?.allowRemote ?? false);
+  const [busy, setBusy] = useState<"backfill" | "retry" | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  // Follow the live values when they change elsewhere (another tab, the service).
+  const key = `${cfg?.enabled ?? false}|${cfg?.endpoint ?? ""}|${cfg?.allowRemote ?? false}|${cfg?.rev ?? 0}`;
+  useEffect(() => {
+    setEnabled(cfg?.enabled ?? false);
+    setEndpoint(cfg?.endpoint ?? "");
+    setAllowRemote(cfg?.allowRemote ?? false);
+  }, [key]);
+  const host = hostOf(endpoint);
+  const remote = needsRemoteConfirm(endpoint);
+  const problem = endpointProblem(endpoint);
+  const next = { enabled, endpoint: endpoint.trim(), allowRemote: remote && allowRemote };
+  const changed = next.enabled !== (cfg?.enabled ?? false) || next.endpoint !== (cfg?.endpoint ?? "") || next.allowRemote !== (cfg?.allowRemote ?? false);
+  const canSave = changed && !problem && (!remote || allowRemote);
+  const pending = backfillCount(state.tasks, status);
+  const run = async (what: "backfill" | "retry") => {
+    setBusy(what);
+    setNote(null);
+    const r = await postJson(`/api/telemetry/${what}`, {});
+    setBusy(null);
+    if (!r.ok) return;
+    const queued = (r.body as { queued?: unknown } | null)?.queued;
+    setNote(typeof queued === "number" ? `${queued} task${queued === 1 ? "" : "s"} queued.` : what === "backfill" ? "Queued." : "Failed exports queued again.");
+  };
+  return (
+    <section className="card" id="telemetry" aria-labelledby="telemetry-h">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 id="telemetry-h" style={{ margin: 0 }}>
+          Traces
+        </h2>
+        <span className={cfg?.enabled ? "chip strong" : "chip"}>{cfg?.enabled ? "On" : "Off"}</span>
+      </div>
+      <p className="muted small" style={{ margin: "0.4rem 0 0.6rem" }}>
+        Send each finished task as an OpenTelemetry trace to a viewer you run, such as Phoenix or Langfuse. Off by default.
+      </p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!canSave) return;
+          void send("setTelemetry", { config: next, expectedRev: cfg?.rev ?? 0 });
+        }}
+      >
+        <fieldset className="plain-fieldset" disabled={disabled}>
+          <label className="row field" style={{ gap: "0.4rem" }}>
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            <strong>Send traces</strong>
+          </label>
+          <label className="field" style={{ marginBottom: "0.4rem" }}>
+            <span>Endpoint (OTLP/HTTP traces)</span>
+            <input type="text" value={endpoint} placeholder={PHOENIX_ENDPOINT} spellCheck={false} autoComplete="off" onChange={(e) => setEndpoint(e.target.value)} aria-describedby="telemetry-examples" />
+          </label>
+          <div className="row traces-examples" id="telemetry-examples">
+            <span className="muted small">Examples:</span>
+            <button type="button" className="small" onClick={() => setEndpoint(PHOENIX_ENDPOINT)}>
+              Phoenix (local)
+            </button>
+            <button type="button" className="small" onClick={() => setEndpoint(LANGFUSE_ENDPOINT)}>
+              Langfuse (local)
+            </button>
+          </div>
+          {problem && changed && (
+            <p className="small" role="status" style={{ color: "var(--st-fail)", margin: "0 0 0.6rem" }}>
+              {problem}
+            </p>
+          )}
+          {remote && (
+            <label className="row field traces-remote" style={{ gap: "0.4rem" }}>
+              <input type="checkbox" checked={allowRemote} onChange={(e) => setAllowRemote(e.target.checked)} />
+              <span>
+                Send to <strong>{host}</strong>: task titles, pattern and model names, timings, token counts and cost leave this computer.
+              </span>
+            </label>
+          )}
+          <button type="submit" disabled={!canSave} title={changed && remote && !allowRemote ? "Confirm what leaves this computer first" : undefined}>
+            Save
+          </button>
+        </fieldset>
+      </form>
+
+      <h3 style={{ marginTop: "1rem" }}>What is sent</h3>
+      <ul className="plain muted small traces-list">
+        <li>One trace per task when it finishes or is cancelled: a task span with the id, title, area, result, the pattern (id, name, version, source) and the outcome numbers.</li>
+        <li>One span per agent run: provider, model, role, start and end, token counts and cost where the provider reported them.</li>
+        <li>One span per check run: start and end, and whether it passed.</li>
+        <li>Never prompts, outputs, code, paths or credentials.</li>
+      </ul>
+      <p className="muted small">
+        Headers (for example Langfuse's key) come only from <code>OTEL_EXPORTER_OTLP_HEADERS</code> in the shell that starts Orchestrator; they are never stored here. Set in that shell now:{" "}
+        <strong>{status ? (status.headersFromEnv ? "yes" : "no") : "not reported yet"}</strong>.
+      </p>
+
+      <h3>Status</h3>
+      <p className="small num" role="status" style={{ margin: "0 0 0.3rem" }}>
+        {statusLine(status, status?.lastSentAt ? relTime(status.lastSentAt) : undefined)}
+      </p>
+      {status?.lastError && (
+        <p className="small" style={{ margin: "0 0 0.5rem" }}>
+          <span style={{ color: "var(--st-fail)", fontWeight: 560 }}>Last error:</span> {status.lastError}
+        </p>
+      )}
+      <div className="row">
+        <button
+          disabled={disabled || busy !== null || !cfg?.enabled || pending === 0}
+          title={!cfg?.enabled ? "Turn on Send traces and save first" : pending === 0 ? "Every finished task with an outcome has been sent or queued" : "Queue every finished task with an outcome that was not sent yet, once"}
+          onClick={() => void run("backfill")}
+        >
+          {busy === "backfill" ? "Queueing…" : `Send finished tasks (${pending})`}
+        </button>
+        {(status?.failed ?? 0) > 0 && (
+          <button disabled={disabled || busy !== null} onClick={() => void run("retry")} title="Queue the failed exports again">
+            {busy === "retry" ? "Queueing…" : "Retry failed"}
+          </button>
+        )}
+        {note && (
+          <span role="status" className="small">
+            {note}
+          </span>
+        )}
+      </div>
     </section>
   );
 }
