@@ -310,11 +310,13 @@ describe("D. migration and the simulated lead", () => {
     const prompt = buildLeadEnvelope(run.state, M.activeLeadRun(run.state)!, "read");
     const v = fakeVision(prompt)!;
     expect(v.text).toMatch(/^\(Simulated draft, exchange 1\) Problem: Build a notes app that syncs offline/);
-    expect(v.focus).toBe("(Simulated) Build a notes app that syncs offline");
+    // ORC-017: the focus and reason carry no "(Simulated)" prefix; the structured flag labels them.
+    expect(v.focus).toBe("Build a notes app that syncs offline");
+    expect(String(v.reason)).not.toMatch(/\(Simulated\)/);
     const text = fakeLeadText(run.runId, "message", prompt);
     const out = parseLeadOutput(text);
     expect(out.vision).toEqual(v);
-    expect(out.reply).toMatch(/^\(Simulated lead\) Here is what I understand: Build a notes app that syncs offline/);
+    expect(out.reply).toMatch(/^Here is what I understand: Build a notes app that syncs offline/);
     const done = M.completeLeadRun(run.state, run.runId, out, iso());
     expect(M.openVisionDraft(done)).toMatchObject({ leadRunId: run.runId, focus: v.focus, status: "open" });
     expect(M.currentVision(done).rev).toBe(1);
@@ -390,13 +392,14 @@ describe("F. coverage and questions (revision 2)", () => {
     const run = M.startLeadRun(shaping, { provider: "claude", model: "m", trigger: "message" }, iso());
     const prompt = buildLeadEnvelope(run.state, M.activeLeadRun(run.state)!, "read");
     const out = parseLeadOutput(fakeLeadText(run.runId, "message", prompt));
-    expect(out.reply).toMatch(/^\(Simulated lead\) Here is what I understand/);
+    expect(out.reply).toMatch(/^Here is what I understand/);
     expect(String((out.vision as { text: string }).text)).toMatch(/^\(Simulated draft, exchange 1\)/);
     expect(String((out.vision as { text: string }).text)).toContain("(assumption");
     expect(out.questions).toHaveLength(3);
+    // ORC-017: the questions sit inside a reply that carries the simulated chip, so they carry no prefix.
     for (const q of out.questions as { question: string; why: string }[]) {
-      expect(q.question).toMatch(/^\(Simulated\)/);
-      expect(q.why).toMatch(/^\(Simulated\)/);
+      expect(q.question).not.toMatch(/\(Simulated/);
+      expect(q.why).not.toMatch(/\(Simulated/);
     }
     expect((out.questions as { options?: string[] }[])[0].options).toEqual(["Just me (recommended)", "A small team", "Anyone"]);
     expect(out.coverage).toMatchObject({ intent: "partial", audience: "open" });

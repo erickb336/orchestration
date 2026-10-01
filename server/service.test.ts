@@ -226,21 +226,26 @@ describe("scheduler with fake runtime", () => {
     expect(M.activeAttempts(after, "EX-002")).toHaveLength(0);
   });
 
-  it("ORC-009: a simulated message run that reads like a change of direction steers, labelled as simulated", () => {
+  it("ORC-009: a simulated message run that reads like a change of direction steers, labelled as simulated by a structured flag (ORC-017)", () => {
     const store = open();
     const { scheduler } = make(store, { progressPerTick: 60 });
-    // The sample project cannot run a live lead; a real project with the fake runtime can.
     store.command("initProject", { name: "P", repoPath: "/tmp/x", vision: "v", focus: "Deployment first" }, k(), iso(T0));
     store.command("createTask", { title: "Automate deploy", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 5, holdBeforeStart: true, patternId: "change" }, k(), iso(T0));
-    store.command("postMessage", { text: "focus more on building out the apps working locally vs automating the deployment process" }, k(), iso(T0 + 10));
+    const text = "focus more on building out the apps working locally vs automating the deployment process";
+    store.command("postMessage", { text }, k(), iso(T0 + 10));
     for (let t = 1; t <= 4; t++) scheduler.tick(T0 + t * 1000);
     const s = store.read().state;
     const set = s.steering[0];
     expect(set).toBeDefined();
     expect(set.refused).toBeUndefined();
-    expect(M.currentVision(s).focus.startsWith("(Simulated) ")).toBe(true);
+    // ORC-017: the focus is the user's words, with no "(Simulated)" prefix; the flag on the revision and the set labels them.
+    expect(M.currentVision(s).focus).toBe(text);
+    expect(M.currentVision(s).simulated).toBe(true);
+    expect(set.simulated).toBe(true);
     expect(set.changes.find((c) => c.kind === "defer")).toMatchObject({ taskId: "T-001", status: "applied" });
-    expect(s.conversation.filter((m) => m.author === "lead").pop()!.text).toMatch(/^\(Simulated lead\)/);
+    const reply = s.conversation.filter((m) => m.author === "lead").pop()!.text;
+    expect(reply).toMatch(/^Noted the new direction/);
+    expect(reply).not.toMatch(/\(Simulated/);
   });
 
   it("drives tasks to completion with artifacts and never exceeds the worker limit", () => {

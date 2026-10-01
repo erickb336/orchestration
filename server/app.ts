@@ -8,8 +8,9 @@
 
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { DEMO_DOC_HASH, DEMO_DOC_TEXT, buildDemo } from "../src/domain/demo";
 import { setPatternCatalog } from "../src/domain/model";
-import { buildEmptyProject, buildSeed } from "../src/domain/seed";
+import { buildEmptyProject } from "../src/domain/seed";
 import type { ProviderId } from "../src/domain/types";
 import { pruneCheckLogs, type CheckRunner } from "./checks";
 import type { GitHubHost } from "./github";
@@ -35,8 +36,9 @@ if (process.env.ORCHESTRATION_RUNTIME && !["real", "fake"].includes(process.env.
 
 let store: Store;
 try {
-  // The fake service starts from the sample with checks on (simulated), so the demo shows the loop.
-  store = new Store(dbPath, mode === "real" ? () => buildEmptyProject() : () => buildSeed(Date.now(), { inFlightRuns: false, checks: true }));
+  // ORC-017: the fake service starts from the sample story, "Weekend Trips (sample)" (design §5); no run is in
+  // flight in it, so the scheduler dispatches the running steps itself. The test fixture `buildSeed` is not used here.
+  store = new Store(dbPath, mode === "real" ? () => buildEmptyProject() : () => buildDemo(Date.now()));
 } catch (e) {
   log(e instanceof Error ? e.message : String(e));
   process.exit(1);
@@ -75,6 +77,16 @@ try {
   if (swept.removed.length || swept.removedDirs.length) log(`Vision documents: removed ${swept.removed.length} orphan cop${swept.removed.length === 1 ? "y" : "ies"} and ${swept.removedDirs.length} old project director${swept.removedDirs.length === 1 ? "y" : "ies"}`);
 } catch (e) {
   log(`Vision documents: cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+}
+// ORC-017: the sample story's one vision document exists as a copy on disk, like any attached document,
+// so the lead and the page can read it. Written once (by hash); only for the sample project in fake mode.
+if (mode === "fake") {
+  try {
+    const p = store.read().state.project;
+    if (p.sample && p.visionDocs.some((d) => d.hash === DEMO_DOC_HASH)) visionDocs.store(p.id, DEMO_DOC_HASH, Buffer.from(DEMO_DOC_TEXT, "utf8"));
+  } catch (e) {
+    log(`Vision documents: could not write the sample document: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 // ORC-016: pipeline patterns. Templates retired by the 14 → 15 upgrade are written once as files of the
 // user's (never overwriting), then the catalog is read from the built-ins and <dataDir>/patterns. A broken

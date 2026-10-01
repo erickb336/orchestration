@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { BUILT_IN_FILES } from "./builtInPatterns";
 import { runCommand } from "./commands";
 import * as D from "./delivery";
+import { buildDemo } from "./demo";
 import * as M from "./model";
 import { builtInCatalog, childDefault, effectiveDefault, internalPattern, patternHash, resolveCatalog, type PatternFile } from "./patterns";
 import { toDef } from "./pipeline";
@@ -288,7 +289,9 @@ describe("the service's own paths", () => {
     expect(r.patterns).toEqual(s.patterns);
     expect(r.patterns.patterns.some((p) => p.id === "mine" && p.source === "local")).toBe(true);
     expect(r.retiredTemplates).toEqual(s.retiredTemplates);
-    expect(r.tasks.map((t) => t.id)).toEqual(seed().tasks.map((t) => t.id)); // the sample tasks are back
+    // ORC-017: the reset restores the demo story (not the test fixture); its tasks are back.
+    expect(r.tasks.map((t) => t.id)).toEqual(buildDemo(Date.parse(at(1))).tasks.map((t) => t.id));
+    expect(r.project.name).toBe("Weekend Trips (sample)");
   });
 
   it("initProject keeps the catalog and resets the default; the seed's tasks carry built-in references", () => {
