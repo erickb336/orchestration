@@ -13,6 +13,7 @@ import { eligibleIds } from "../src/domain/patterns";
 import { buildSeed } from "../src/domain/seed";
 import type { Finding, State } from "../src/domain/types";
 import { BUILT_IN_FILES } from "../src/domain/builtInPatterns";
+import { INTERNAL_PATTERNS } from "../src/domain/internalPatterns";
 import { CONVENTIONS_FILE_CAP, CONVENTIONS_TOTAL_CAP, VERIFY_CHECKS_NOTE, buildEnvelope, buildLeadEnvelope, capConventions, findingKey, parseFindings, parseLeadOutput, parseOutputs } from "./envelope";
 import { redact } from "./redact";
 import { WorkspaceManager } from "./workspaces";
@@ -314,6 +315,10 @@ describe("step purposes describe; instructions travel in the brief (ORC-017 §3.
         const p = (o as { purpose?: string }).purpose;
         if (p && addresses(p)) offenders.push(`${f.raw.id} ${id}: ${p}`);
       }
+    }
+    // The service's own pipelines (revert, delivery review and checks) follow the same rule.
+    for (const ip of INTERNAL_PATTERNS) {
+      for (const st of ip.steps) if (addresses(st.purpose)) offenders.push(`${ip.id} ${st.id}: ${st.purpose}`);
     }
     expect(offenders).toEqual([]);
     expect(longest).toBeLessThanOrEqual(80);

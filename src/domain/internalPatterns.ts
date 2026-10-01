@@ -7,7 +7,6 @@ import type { InputRef, StepDef } from "./types";
 const ref = (step: string, output: string): InputRef => ({ step, output });
 
 const FINAL_CHECKS_PURPOSE = "Final checks";
-const VERIFY_CHECKS_NOTE = "Service check results are the record of what ran; do not say tests passed unless a check result shows it.";
 
 export interface InternalPattern {
   id: InternalPatternId;
@@ -47,7 +46,8 @@ const revert: StepDef[] = [
   { id: "C1", purpose: FINAL_CHECKS_PURPOSE, role: "checks", dependsOn: ["S2"], inputs: [ref("S1", "change")], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "block" } },
   {
     id: "S3",
-    purpose: `Verify the revert and integrate. ${VERIFY_CHECKS_NOTE}`,
+    // ORC-017: the instruction that was here reaches the lead through its role brief (server/envelope.ts VERIFY_CHECKS_NOTE).
+    purpose: "Verify the revert and integrate",
     role: "lead",
     dependsOn: ["C1"],
     inputs: [ref("S1", "change"), ref("S2", "findings"), ref("C1", "final")],
