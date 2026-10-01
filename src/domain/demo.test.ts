@@ -2,19 +2,23 @@
 // inside titles and summaries, and comes back from Reset sample data.
 
 import { describe, expect, it } from "vitest";
+import { splitDone } from "../ui/doneCollapse";
 import * as C from "./checks";
 import { runCommand } from "./commands";
+import { compareRows, DEFAULT_FILTER, groupRows, type MeasureId } from "./compare";
 import * as D from "./delivery";
-import { DEMO_DOC_TEXT, DEMO_PROJECT_NAME, DEMO_REPO_PATH, buildDemo } from "./demo";
-import { DEMO_AREAS } from "./demoScript";
+import { DEMO_DOC_TEXT, DEMO_PROJECT_NAME, DEMO_REPO_PATH, buildDemo, olderBugfixSteps } from "./demo";
+import { DEMO_AREAS, HISTORY, HISTORY_FIX_IDS, HISTORY_IDS, HISTORY_SENT_BACK } from "./demoScript";
 import * as F from "./findings";
 import * as M from "./model";
-import { builtInCatalog } from "./patterns";
+import { computeOutcome } from "./outcomes";
+import { builtInCatalog, patternHash } from "./patterns";
 import { toDef, validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
 import type { State, Task } from "./types";
 
 const T0 = Date.parse("2026-10-01T12:00:00Z");
+const DAY = 86_400_000;
 const iso = (ms: number) => new Date(ms).toISOString();
 const demo = () => buildDemo(T0);
 const task = (s: State, id: string): Task => {
@@ -22,6 +26,11 @@ const task = (s: State, id: string): Task => {
   if (!t) throw new Error(`no task ${id}`);
   return t;
 };
+/** The current story's tasks, in creation order. */
+const STORY_IDS = ["WT-001", "WT-002", "WT-003", "WT-004", "WT-005", "WT-006", "WT-007", "WT-008", "WT-009", "WT-010", "WT-011", "WT-004.1", "WT-004.2", "WT-004.3"];
+/** The history in run order: each fix task follows the task its send-back came after (ORC-018 §7). */
+const HISTORY_RUN_ORDER = HISTORY.flatMap((h) => [h.id, ...HISTORY_SENT_BACK.filter((s) => s.after === h.id).map((s) => `${s.origin}-F1`)]);
+const OLDER_VERSION_ID = HISTORY.find((h) => h.olderVersion)!.id;
 
 /** Structural checks any state the service writes must pass. */
 function validate(s: State) {
@@ -37,7 +46,11 @@ function validate(s: State) {
     expect(t.pattern.source).toBe("built-in");
     const p = catalog.patterns.find((x) => x.id === t.pattern.id);
     expect(p, `${t.id} pattern ${t.pattern.id}`).toBeDefined();
-    expect(t.pattern.hash).toBe(p!.hash);
+    // One history task ran an older Bug fix: its hash is of the steps it ran, not the catalog's (ORC-018 §7).
+    if (t.id === OLDER_VERSION_ID) {
+      expect(t.pattern.hash).toBe(patternHash(t.pipelineHistory[0].steps));
+      expect(t.pattern.hash).not.toBe(p!.hash);
+    } else expect(t.pattern.hash, `${t.id} hash`).toBe(p!.hash);
     expect(t.pipelineHistory[0].pattern?.id).toBe(t.pattern.id);
     expect(t.specs.map((x) => x.rev)).toEqual(t.specs.map((_, i) => i + 1));
     const spec = M.currentSpec(t).content;
@@ -131,7 +144,7 @@ describe("the demo state (ORC-017 §5)", () => {
   it("is valid by construction and deterministic for a clock; the test fixture is untouched", () => {
     const s = demo();
     validate(s);
-    expect(JSON.stringify(buildDemo(T0))).toBe(JSON.stringify(s));
+    expect(JSON.stringify(buildDemo(T0, { cache: false }))).toBe(JSON.stringify(s));
     expect(M.activeAttempts(s)).toEqual([]); // no run in flight: the service dispatches
     const seed = buildSeed(T0);
     expect(seed.project.name).toBe("Example Notes (sample)");
@@ -194,7 +207,8 @@ describe("the demo state (ORC-017 §5)", () => {
 
   it("shows each capability once: the tasks and their states at the start of the demo", () => {
     const s = demo();
-    expect(s.tasks.map((t) => t.id)).toEqual(["WT-001", "WT-002", "WT-003", "WT-004", "WT-005", "WT-006", "WT-007", "WT-008", "WT-009", "WT-010", "WT-011", "WT-004.1", "WT-004.2", "WT-004.3"]);
+    // The history came first (it ran weeks earlier); the current story's tasks follow in creation order.
+    expect(s.tasks.map((t) => t.id)).toEqual([...HISTORY_RUN_ORDER, ...STORY_IDS]);
     const col = (id: string) => M.column(s, task(s, id));
 
     // WT-001: a failing check became a finding, the repair ran, the loop ran once more clean; merged, in Review.
@@ -293,8 +307,10 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(search.integration?.landed).toMatchObject({ status: "unreviewed", simulated: true });
     expect(search.integration?.pr?.changeAuthors).toEqual(["claude"]);
 
-    // The review-later list: unreviewed first, newest first.
-    expect(D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
+    // The review-later list: unreviewed first, newest first; the history follows, every item reviewed or sent back.
+    const landed = D.landedTasks(s).map((t) => `${t.id}:${t.integration!.landed!.status}`);
+    expect(landed.slice(0, 4)).toEqual(["WT-011:unreviewed", "WT-001:unreviewed", "WT-004.1:reviewed", "WT-008:reviewed"]);
+    expect(landed.slice(4).every((x) => /^WT-1\d\d(-F1)?:(reviewed|sent-back)$/.test(x))).toBe(true);
     expect(D.unreviewedCount(s)).toBe(2);
   });
 
@@ -348,5 +364,112 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(r.retiredTemplates).toEqual(s.retiredTemplates);
     expect(r.seq).toBeGreaterThan(s.seq);
     validate(r);
+  });
+});
+
+describe("the demo history (ORC-018 §7)", () => {
+  const s = demo();
+  const history = [...HISTORY_IDS, ...HISTORY_FIX_IDS].map((id) => task(s, id));
+  const groups = groupRows(s, compareRows(s), DEFAULT_FILTER);
+  const group = (name: string, older = false) => {
+    const g = groups.find((x) => x.name === name && (older ? !x.currentHash : !!x.currentHash));
+    if (!g) throw new Error(`no group ${name}${older ? " (older)" : ""}`);
+    return g;
+  };
+  const median = (name: string, id: MeasureId) => group(name).stats[id].median!;
+
+  it("has 24 tasks and two fixes sent back, settled 30 to 9 days ago, every outcome equal to computeOutcome on the settled state", () => {
+    expect(HISTORY_IDS).toEqual(Array.from({ length: 24 }, (_, i) => `WT-${101 + i}`));
+    expect(HISTORY_FIX_IDS).toEqual(["WT-105-F1", "WT-113-F1"]);
+    for (const t of history) {
+      expect(["done", "cancelled"], t.id).toContain(t.lifecycle);
+      const o = t.outcome;
+      expect(o, `${t.id} outcome`).toBeDefined();
+      const age = T0 - Date.parse(o!.settledAt);
+      expect(age, `${t.id} settled ${(age / DAY).toFixed(1)} days ago`).toBeGreaterThanOrEqual(9 * DAY);
+      expect(age, `${t.id} settled ${(age / DAY).toFixed(1)} days ago`).toBeLessThanOrEqual(30 * DAY);
+      expect(o, `${t.id} outcome equals computeOutcome`).toEqual(computeOutcome(s, t, o!.settledAt));
+      expect(o!.result).toBe(t.lifecycle);
+      // Usage as the adapters report it: every completed agent run has tokens; only Claude's carry a cost. (A stopped run reports none.)
+      for (const a of s.attempts.filter((a) => a.taskId === t.id && a.snapshot.provider !== "service" && a.outcome === "completed")) {
+        expect(a.usage?.inputTokens, `${a.id} tokens`).toBeGreaterThan(0);
+        expect(a.usage?.costUsd !== undefined, `${a.id} cost`).toBe(a.snapshot.provider === "claude");
+      }
+    }
+    // Nothing of the history is in flight or waiting: it is never dispatched, and it needs nobody.
+    for (const t of history) expect(M.activeAttempts(s, t.id), t.id).toEqual([]);
+    const fixes = HISTORY_FIX_IDS.map((id) => task(s, id));
+    expect(fixes.map((t) => [t.followUpOf, t.pattern.id, t.pattern.chosenBy])).toEqual([
+      ["WT-105", "bugfix", "service"],
+      ["WT-113", "bugfix", "service"],
+    ]);
+    expect(task(s, "WT-105").integration?.landed).toMatchObject({ status: "sent-back", followUps: [{ taskId: "WT-105-F1", kind: "fix" }] });
+    expect(task(s, "WT-113").integration?.landed).toMatchObject({ status: "sent-back", followUps: [{ taskId: "WT-113-F1", kind: "fix" }] });
+  });
+
+  it("groups on the Compare page as intended: Change 9 (one cancelled), cross-review 8, Bug fix 7, and the older Bug fix apart as too few", () => {
+    expect(groups.map((g) => [g.name, g.rows.length, g.tooFew, !!g.currentHash])).toEqual([
+      ["Change", 9, false, true],
+      ["Change, reviewed by the other provider", 8, false, true],
+      ["Bug fix", 7, false, true],
+      ["Bug fix", 1, true, false],
+    ]);
+    // The cancelled Change joins with "Done and cancelled"; merging versions puts the two Bug fix versions together.
+    const all = groupRows(s, compareRows(s), { ...DEFAULT_FILTER, results: ["done", "cancelled"] });
+    expect(all.find((g) => g.name === "Change" && g.currentHash)?.rows.map((r) => r.result).filter((r) => r === "cancelled")).toEqual(["cancelled"]);
+    const merged = groupRows(s, compareRows(s), { ...DEFAULT_FILTER, mergeVersions: true });
+    expect(merged.find((g) => g.name === "Bug fix")).toMatchObject({ rows: expect.any(Array), hashes: expect.any(Array) });
+    expect(merged.find((g) => g.name === "Bug fix")!.rows).toHaveLength(8);
+    expect(merged.find((g) => g.name === "Bug fix")!.hashes).toHaveLength(2);
+    expect(task(s, OLDER_VERSION_ID).pattern.hash).toBe(patternHash(olderBugfixSteps()));
+    // Every row is simulated (the project is the sample), and the two fixes were chosen by the service.
+    expect(compareRows(s).every((r) => r.simulated)).toBe(true);
+    expect(compareRows(s).filter((r) => r.pattern.chosenBy === "service").map((r) => r.taskId)).toEqual(HISTORY_FIX_IDS);
+  });
+
+  it("shows spread without a verdict: bug fixes are quick, cross-review takes a little longer with overlapping spreads, and no landed task has open findings or a cost", () => {
+    const change = group("Change").stats;
+    const cross = group("Change, reviewed by the other provider").stats;
+    const bug = group("Bug fix").stats;
+    expect(median("Bug fix", "timeToDone")).toBeLessThan(median("Change", "timeToDone"));
+    expect(cross.agentTime.median!).toBeGreaterThan(change.agentTime.median!);
+    expect(cross.agentTime.q1!).toBeLessThan(change.agentTime.q3!); // the spreads overlap
+    // A pull request is built only on a clean independent review, so every landed task ends with nothing open...
+    for (const g of [change, cross, bug]) expect(g.openAtEnd.values.every((v) => v === 0)).toBe(true);
+    // ...and every landed task had a Codex run (Codex writes, or reviews what Claude wrote), so none reports a cost: tokens are reported instead.
+    for (const g of [change, cross, bug]) {
+      expect(g.cost.n).toBe(0);
+      expect(g.inputTokens.n).toBe(g.inputTokens.of);
+    }
+    // The cancelled Change is the one with findings still open; it is out of the default view.
+    const cancelled = task(s, HISTORY.find((h) => h.cancelled)!.id);
+    expect(cancelled.lifecycle).toBe("cancelled");
+    expect(cancelled.outcome?.findings.openAtEnd).toBe(2);
+    // Delivery varies: landed at your request in the app, merged by you on GitHub, closed without merging, sent back.
+    expect(change.landed.count).toBe(8);
+    expect(change.landed.n).toBe(9);
+    expect(group("Change").rows.filter((r) => r.m.landed === 0).map((r) => r.taskId)).toEqual([HISTORY.find((h) => h.delivery === "github-close")!.id]);
+    for (const h of HISTORY.filter((x) => x.delivery === "github-merge")) expect(task(s, h.id).integration?.landed?.by, h.id).toBe("person");
+    expect((change.sentBack.count ?? 0) + (cross.sentBack.count ?? 0)).toBe(2);
+    expect(change.repairRounds.values).toContain(2);
+    expect(change.failedCheckRuns.values).toContain(1);
+  });
+
+  it("folds under Done earlier on the board, while the current story's done tasks stay in view", () => {
+    const done = s.tasks.filter((t) => M.column(s, t) === "done");
+    const { recent, earlier } = splitDone(s, done, T0);
+    expect(recent.map((t) => t.id)).toEqual(["WT-001", "WT-005", "WT-008", "WT-011", "WT-004.1"]);
+    expect(earlier.map((t) => t.id).sort()).toEqual([...HISTORY_IDS.filter((id) => task(s, id).lifecycle === "done"), ...HISTORY_FIX_IDS].sort());
+    expect(earlier).toHaveLength(25);
+  });
+
+  it("comes back whole from Reset sample data", () => {
+    const r = runCommand(s, "resetSampleData", {}, iso(T0 + 3000)).state;
+    for (const id of [...HISTORY_IDS, ...HISTORY_FIX_IDS]) {
+      const t = task(r, id);
+      expect(t.outcome, id).toBeDefined();
+      expect(t.outcome).toEqual(computeOutcome(r, t, t.outcome!.settledAt));
+    }
+    expect(groupRows(r, compareRows(r), DEFAULT_FILTER).map((g) => [g.name, g.rows.length, g.tooFew])).toEqual(groups.map((g) => [g.name, g.rows.length, g.tooFew]));
   });
 });

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildDemo } from "../src/domain/demo";
 import { MAX_DECISIONS } from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import type { FindingDecision, State } from "../src/domain/types";
@@ -171,11 +172,18 @@ describe("one outcome per settle (P11)", () => {
     upgraded.command("cancelTask", { taskId: open.id }, "m2", iso());
     expect(upgraded.read().state.tasks.find((t) => t.id === open.id)!.outcome).toMatchObject({ result: "cancelled" });
     upgraded.close();
-    // Reset sample data replaces every task: the sample's done task has no open counterpart, so no record.
+    // Reset sample data replaces every task: no task has an open counterpart, so the store records nothing. The only
+    // outcomes are the ones the sample ships (its history, computed at build; ORC-018 §7); the story's done tasks have none.
     cmd("resetSampleData");
     const sampleDone = st().tasks.filter((t) => t.lifecycle === "done");
+    const shipped = new Set(
+      buildDemo()
+        .tasks.filter((t) => t.outcome)
+        .map((t) => t.id),
+    );
     expect(sampleDone.length).toBeGreaterThan(0);
-    expect(sampleDone.every((t) => t.outcome === undefined)).toBe(true);
+    expect(sampleDone.filter((t) => !shipped.has(t.id)).length).toBeGreaterThan(0);
+    expect(sampleDone.every((t) => (t.outcome !== undefined) === shipped.has(t.id))).toBe(true);
   });
 
   it("survives decision pruning: the counts stay once the decisions themselves are gone", () => {

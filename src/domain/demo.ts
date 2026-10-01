@@ -13,8 +13,9 @@
 import * as C from "./checks";
 import * as D from "./delivery";
 import * as M from "./model";
-import { DEMO_SCRIPT } from "./demoScript";
-import { builtInCatalog, builtInOrInternal, patternRef } from "./patterns";
+import { DEMO_SCRIPT, HISTORY, HISTORY_SENT_BACK, type HistoryFix, type HistoryTask } from "./demoScript";
+import { computeOutcome } from "./outcomes";
+import { builtInCatalog, builtInOrInternal, patternHash, patternRef } from "./patterns";
 import { instantiate, toDef } from "./pipeline";
 import {
   DEFAULT_AUTONOMY,
@@ -29,10 +30,12 @@ import {
   type EventKind,
   type Finding,
   type ModelSelection,
+  type Runner,
   type SpecContent,
   type SpecOption,
   type State,
   type Step,
+  type StepDef,
   type Task,
   type VisionDoc,
 } from "./types";
@@ -40,6 +43,16 @@ import {
 export const DEMO_PROJECT_ID = "sample";
 export const DEMO_PROJECT_NAME = "Weekend Trips (sample)";
 export const DEMO_REPO_PATH = "~/code/weekend-trips";
+
+/** Minutes in a day, for the builder's minutes-ago clock. */
+const DAY = 1440;
+/**
+ * The project was created 31 days before now (ORC-018 §7): the history runs from day 30 to day 9, the
+ * current story (WT-001 onwards) takes the last three days, and the activity log stays in time order.
+ */
+const T_PROJECT = 31 * DAY;
+/** The history's pull-request numbers start here; the current story's are 991 and up. */
+const HISTORY_PR_FROM = 900;
 
 /** The sample model ids are kept (they are honest); the labels say what they are. */
 export const DEMO_CATALOG = {
@@ -172,6 +185,46 @@ function finding(id: string, f: Omit<Finding, "id" | "key" | "source">): Finding
 
 type CodeChange = { sha: string; paths: string[]; files: number; additions: number; deletions: number };
 
+/** Tokens a run reports; the cost follows from the provider (see `usageOf`). */
+type Tokens = { input: number; output: number };
+
+/**
+ * mulberry32, seeded by a task's id: every duration and token count of the history is the same on every
+ * build, so the captures are stable (ORC-018 §7: no Math.random at build time).
+ */
+function seeded(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const seedOf = (id: string) => parseInt(hash12(id).slice(0, 8), 16);
+
+/** Usage as the adapters report it: Claude reports a cost; Codex reports tokens only (design §7). */
+function usageOf(provider: Runner, t: Tokens): NonNullable<Attempt["usage"]> {
+  if (provider === "claude") return { inputTokens: t.input, outputTokens: t.output, costUsd: Math.round(t.input * 0.0003 + t.output * 0.0015) / 100 };
+  return { inputTokens: t.input, outputTokens: t.output };
+}
+
+/**
+ * The Bug fix pattern as it was before the fix step wrote a handoff for the reviewer: the same steps with
+ * S2's `handoff` output and S3's reading of it removed. Its hash differs from the catalog's, so the one
+ * history task that ran it shows the Compare page's version grouping (ORC-018 §7).
+ */
+export function olderBugfixSteps(): StepDef[] {
+  const steps = structuredClone(builtInOrInternal("bugfix").steps).map(toDef);
+  for (const st of steps) {
+    if (st.id === "S2") st.outputs = st.outputs.filter((o) => o.name !== "handoff");
+    st.inputs = st.inputs.filter((r) => !(r.step === "S2" && r.output === "handoff"));
+  }
+  return steps;
+}
+
 /**
  * Builds the demo state chronologically. Minutes-ago timestamps keep the story relative to "now"; every
  * helper asserts that the real domain function accepted what it was given, so a demo that drifts from
@@ -209,7 +262,7 @@ class DemoBuilder {
 
   private baseState(): State {
     const at = (m: number) => this.at(m);
-    const doc: VisionDoc = { id: "doc-1", name: "trail-research.md", path: "trail-research.md", size: utf8Length(DEMO_DOC_TEXT), hash: DEMO_DOC_HASH, text: true, addedAt: at(4336) };
+    const doc: VisionDoc = { id: "doc-1", name: "trail-research.md", path: "trail-research.md", size: utf8Length(DEMO_DOC_TEXT), hash: DEMO_DOC_HASH, text: true, addedAt: at(T_PROJECT + 36) };
     const leadRunId = "lead-1001";
     const draftId = `vd-${leadRunId}`;
     const visionText =
@@ -227,7 +280,7 @@ class DemoBuilder {
         visions: [
           {
             rev: 1,
-            at: at(4320),
+            at: at(T_PROJECT + 20),
             author: "user",
             text: visionText,
             focus: "Trip sharing first.",
@@ -249,7 +302,7 @@ class DemoBuilder {
         autonomy: { ...DEFAULT_AUTONOMY, autoDeliver: { ...DEFAULT_AUTONOMY.autoDeliver } },
         steeringMode: "apply",
         stage: "building",
-        shapingSince: at(4340),
+        shapingSince: at(T_PROJECT + 40),
         checks: structuredClone(DEFAULT_CHECKS),
         triage: { askUserBy: "user" },
         conventions: { include: true },
@@ -271,40 +324,40 @@ class DemoBuilder {
           trigger: "message",
           provider: "claude",
           model: CLAUDE.model,
-          startedAt: at(4334),
-          endedAt: at(4332),
+          startedAt: at(T_PROJECT + 34),
+          endedAt: at(T_PROJECT + 32),
           outcome: "completed",
           messageIds: [],
           coverage: { intent: "clear", audience: "clear", problem: "clear", outcome: "clear", scope: "clear", constraints: "clear", risks: "clear", priorities: "clear", material: "clear" },
         },
       ],
       steering: [],
-      visionDrafts: [{ id: draftId, at: at(4332), leadRunId, messageIds: [], text: visionText, focus: "Trip sharing first.", reason: draftReason, basedOnVisionRev: 0, status: "accepted", resolvedAt: at(4320), visionRev: 1, simulated: true }],
+      visionDrafts: [{ id: draftId, at: at(T_PROJECT + 32), leadRunId, messageIds: [], text: visionText, focus: "Trip sharing first.", reason: draftReason, basedOnVisionRev: 0, status: "accepted", resolvedAt: at(T_PROJECT + 20), visionRev: 1, simulated: true }],
       decisions: [],
       // ORC-016: the built-in catalog until the server loads the files (it replaces this at start).
       patterns: builtInCatalog(),
       retiredTemplates: [],
       events: [
-        { id: "ev-1", at: at(4340), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; shaping the vision with the lead` },
-        { id: "ev-2", at: at(4332), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the shaping conversation: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
-        { id: "ev-3", at: at(4320), actor: "user", kind: "vision", message: `Vision r1 by you: accepted the lead's draft ${draftId}` },
+        { id: "ev-1", at: at(T_PROJECT + 40), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; shaping the vision with the lead` },
+        { id: "ev-2", at: at(T_PROJECT + 32), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the shaping conversation: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
+        { id: "ev-3", at: at(T_PROJECT + 20), actor: "user", kind: "vision", message: `Vision r1 by you: accepted the lead's draft ${draftId}` },
       ],
     };
   }
 
   /** Delivery as pull requests held for you, the project's checks on, and the simulated GitHub checked (all through the real commands). */
   private settings() {
-    this.event(4318, "user", "config", "Building started");
-    this.s = D.setDeliveryMode(this.s, { mode: "pr" }, this.at(4317));
-    this.preflight(4317);
-    this.s = D.reportBaseFetched(this.s, SIM_BASE, this.at(4316));
+    this.event(T_PROJECT + 18, "user", "config", "Building started");
+    this.s = D.setDeliveryMode(this.s, { mode: "pr" }, this.at(T_PROJECT + 17));
+    this.preflight(T_PROJECT + 17);
+    this.s = D.reportBaseFetched(this.s, SIM_BASE, this.at(T_PROJECT + 16));
     this.s = C.setChecks(
       this.s,
       { ...structuredClone(DEFAULT_CHECKS), enabled: true, commands: CHECK_COMMANDS.map((c) => ({ ...c, argv: [...c.argv] })) },
       false,
-      this.at(4315),
+      this.at(T_PROJECT + 15),
     );
-    this.checksReady(4314);
+    this.checksReady(T_PROJECT + 14);
   }
 
   private preflight(m: number) {
@@ -329,11 +382,12 @@ class DemoBuilder {
 
   // ---------- tasks ----------
 
-  private addTask(id: string, priority: number, content: SpecContent, patternId: string, m: number, o: { author?: "lead" | "user"; chosenBy?: ChosenBy; dependsOn?: string[] } = {}): Task {
+  private addTask(id: string, priority: number, content: SpecContent, patternId: string, m: number, o: { author?: "lead" | "user"; chosenBy?: ChosenBy; dependsOn?: string[]; steps?: StepDef[] } = {}): Task {
     const pattern = builtInOrInternal(patternId);
-    const defs = structuredClone(pattern.steps).map(toDef);
+    // `o.steps`: an earlier version of the pattern, recorded with the hash of what actually ran.
+    const defs = (o.steps ?? structuredClone(pattern.steps)).map(toDef);
     const author = o.author ?? "lead";
-    const ref = patternRef(pattern, o.chosenBy ?? author);
+    const ref = { ...patternRef(pattern, o.chosenBy ?? author), ...(o.steps ? { hash: patternHash(defs) } : {}) };
     const t: Task = {
       id,
       priority,
@@ -445,9 +499,15 @@ class DemoBuilder {
     return attemptId;
   }
 
-  /** The run's result, accepted by the real `reportCompletion` (artifacts, decisions, loops and children follow from it). */
-  private complete(attemptId: string, m: number, outputs: M.OutputReport[], run: M.RunReport = {}) {
-    this.s = M.reportCompletion(this.s, attemptId, [], this.at(m), outputs, run);
+  /**
+   * The run's result, accepted by the real `reportCompletion` (artifacts, decisions, loops and children follow
+   * from it). `tokens` becomes the usage the run's provider would report (a cost from Claude only).
+   */
+  private complete(attemptId: string, m: number, outputs: M.OutputReport[], run: M.RunReport = {}, tokens?: Tokens) {
+    const before = this.s.attempts.find((x) => x.id === attemptId);
+    if (!before) throw new Error(`demo: unknown attempt ${attemptId}`);
+    const report = tokens ? { ...run, usage: usageOf(before.snapshot.provider, tokens) } : run;
+    this.s = M.reportCompletion(this.s, attemptId, [], this.at(m), outputs, report);
     const a = this.s.attempts.find((x) => x.id === attemptId)!;
     if (a.outcome !== "completed") throw new Error(`demo: ${attemptId} (${a.taskId} ${a.stepId}) was not accepted: ${a.note ?? a.outcome}`);
   }
@@ -463,12 +523,12 @@ class DemoBuilder {
   }
 
   /** A coder step: the change (named by its commit and branch, as the service records it) and, when the step has one, the handoff. */
-  private change(id: string, stepId: string, startM: number, endM: number, change: CodeChange, summary: string, handoff?: string): CodeChange {
+  private change(id: string, stepId: string, startM: number, endM: number, change: CodeChange, summary: string, handoff?: string, tokens?: Tokens): CodeChange {
     const attemptId = this.dispatch(id, stepId, startM);
     const st = this.step(id, stepId);
     const outputs: M.OutputReport[] = [{ name: "change", summary, ref: `${change.sha.slice(0, 12)} on orchestration/${DEMO_PROJECT_ID}/${id}/${stepId}/${attemptId}` }];
     if (st.outputs.some((o) => o.name === "handoff")) outputs.push({ name: "handoff", summary: handoff ?? "Nothing beyond the change itself." });
-    this.complete(attemptId, endM, outputs);
+    this.complete(attemptId, endM, outputs, {}, tokens);
     return change;
   }
 
@@ -487,17 +547,17 @@ class DemoBuilder {
   }
 
   /** A review step. A code review is handed the change's file list and accounts for every file (complete coverage); findings are structured. */
-  private review(id: string, stepId: string, startM: number, endM: number, change: CodeChange | undefined, summary: string, findings: Finding[] = []) {
+  private review(id: string, stepId: string, startM: number, endM: number, change: CodeChange | undefined, summary: string, findings: Finding[] = [], tokens?: Tokens) {
     const st = this.step(id, stepId);
     const scope = change && st.role === "code_reviewer" ? { from: SIM_BASE, to: change.sha, paths: [...change.paths], total: change.paths.length } : undefined;
     const attemptId = this.dispatch(id, stepId, startM, scope ? { scope } : {});
-    this.complete(attemptId, endM, [{ name: st.outputs[0].name, summary, findings, ...(scope ? { reviewedPaths: [...scope.paths] } : {}) }]);
+    this.complete(attemptId, endM, [{ name: st.outputs[0].name, summary, findings, ...(scope ? { reviewedPaths: [...scope.paths] } : {}) }], {}, tokens);
   }
 
   /** Any other single-output step (a design, a plan, a report, the lead's verification). */
-  private output(id: string, stepId: string, startM: number, endM: number, summary: string, extra: Partial<M.OutputReport> = {}, run: M.RunReport = {}) {
+  private output(id: string, stepId: string, startM: number, endM: number, summary: string, extra: Partial<M.OutputReport> = {}, run: M.RunReport = {}, tokens?: Tokens) {
     const attemptId = this.dispatch(id, stepId, startM);
-    this.complete(attemptId, endM, [{ name: this.step(id, stepId).outputs[0].name, summary, ...extra }], run);
+    this.complete(attemptId, endM, [{ name: this.step(id, stepId).outputs[0].name, summary, ...extra }], run, tokens);
   }
 
   // ---------- pull requests on the simulated GitHub ----------
@@ -508,7 +568,7 @@ class DemoBuilder {
     return { id: `prop-${this.s.seq + 1}`, kind, taskId: id, n: pr.n, headSha: pr.headSha } as const;
   }
 
-  private observation(id: string, m: number, state: "OPEN" | "MERGED", number: number): D.Observations {
+  private observation(id: string, m: number, state: "OPEN" | "MERGED" | "CLOSED", number: number): D.Observations {
     const pr = D.livePr(this.task(id))!;
     const merged = state === "MERGED";
     return {
@@ -530,11 +590,32 @@ class DemoBuilder {
           checks: [{ ...SIM_CHECK }],
           checksFor: pr.headSha,
           ...(merged ? { mergedAt: this.at(m), mergeCommit: `sim-merge-${number}`, mergedBy: SIM_LOGIN } : {}),
+          ...(state === "CLOSED" ? { closedBy: SIM_LOGIN } : {}),
         },
       ],
       commits: [],
       rateRemaining: 5000,
     };
+  }
+
+  /** You merged it on GitHub yourself: the next read sees it merged with no merge sent by the app, so it landed "by a person". */
+  private mergedOnGitHub(id: string, m: number) {
+    const pr = D.livePr(this.task(id))!;
+    const number = pr.number!;
+    this.s = D.reportObservations(this.s, this.observation(id, m, "MERGED", number), this.at(m), { requested: [{ taskId: id, number }], repo: SIM_REPO });
+    const t = this.task(id);
+    if (t.integration?.pr?.phase !== "merged" || t.integration.landed?.by !== "person") throw new Error(`demo: ${id} was not landed by a person`);
+    if (t.integration.landed.flags.length) throw new Error(`demo: ${id} landed with flags ${t.integration.landed.flags.join(", ")}`);
+    this.s = D.reportObservations(this.s, { at: this.at(m - 1), prs: [], commits: [{ oid: t.integration.landed.commit, checks: [{ ...SIM_CHECK }] }], rateRemaining: 5000 }, this.at(m - 1), { repo: SIM_REPO });
+  }
+
+  /** You closed it on GitHub without merging: the task stays done, its work never landed. */
+  private closedOnGitHub(id: string, m: number) {
+    const pr = D.livePr(this.task(id))!;
+    const number = pr.number!;
+    this.s = D.reportObservations(this.s, this.observation(id, m, "CLOSED", number), this.at(m), { requested: [{ taskId: id, number }], repo: SIM_REPO });
+    const t = this.task(id);
+    if (t.integration?.pr?.phase !== "closed" || t.integration.landed) throw new Error(`demo: ${id}'s pull request was not closed`);
   }
 
   /** The finished task's final commit becomes a pull-request head (what integration does in pull-request mode). */
@@ -594,6 +675,7 @@ class DemoBuilder {
 
   build() {
     this.settings();
+    this.history(); // ORC-018 §7: WT-101…WT-124 and two fixes sent back, settled 30 to 9 days ago
     this.specs();
     this.offlineMapsTileCache(); // WT-001: failed check → finding → repair → merged, in Review
     this.largerTapTargets(); // WT-008: merged, reviewed
@@ -1045,6 +1127,182 @@ class DemoBuilder {
     this.leadReplies(12, 10, "It is still running: Claude is reviewing “Make the trail map readable with VoiceOver”. One finding needs your decision: whether distances are read in miles or kilometres.");
   }
 
+  // ---------- the history (ORC-018 §7) ----------
+
+  /**
+   * The earlier tasks, one after another, each in a slot of about twenty hours: created and promoted by the
+   * lead, run through its pattern, verified, delivered as a pull request you merged (or closed), and marked
+   * reviewed. A send-back from the Review list creates its fix task, which runs in the next slot. Every
+   * outcome is `computeOutcome` on the state at settle, as the store records it.
+   */
+  private history() {
+    const first = 30 * DAY + 30;
+    const lastStart = 9 * DAY + 360;
+    const n = HISTORY.length + HISTORY_SENT_BACK.length;
+    const slot = (first - lastStart) / (n - 1);
+    let k = 0;
+    for (const h of HISTORY) {
+      this.historyTask(h, first - k * slot, 20 + k);
+      k++;
+      for (const sb of HISTORY_SENT_BACK.filter((x) => x.after === h.id)) {
+        this.historyFix(sb, first - k * slot);
+        k++;
+      }
+    }
+    if (k !== n) throw new Error("demo: a send-back names a task that is not in the history");
+  }
+
+  private historyTask(h: HistoryTask, start: number, priority: number) {
+    const id = h.id;
+    const bug = h.pattern === "bugfix";
+    const content = spec({
+      title: h.title,
+      area: h.area,
+      whyNow: h.whyNow,
+      outcome: h.outcome,
+      benefit: h.benefit,
+      options: [opt("A", h.option[0], h.option[1], h.benefit, "Small", bug ? "The fix is narrow; nothing else changes" : "Nothing beyond the change itself", "High"), opt("B", h.alternative[0], h.alternative[1], h.alternative[2], "Medium", h.alternative[3], "High")],
+      rationale: h.rationale,
+      acceptance: h.acceptance,
+      validationPlan: bug ? "Reproduce first; the verification runs the reproduction again." : "Tests for each acceptance criterion; a manual check on a phone.",
+    });
+    this.addTask(id, priority, content, h.pattern, start, h.olderVersion ? { steps: olderBugfixSteps() } : {});
+    this.event(start, "lead", "spec", `Published spec for ${id} from vision r1: ${h.title}`, id);
+    this.promote([id], start - 1);
+    // You asked Claude to write a few of the cross-reviewed changes; the pattern then has Codex review them.
+    if (h.claudeWrites) this.s = M.setTaskRoleOverride(this.s, id, "coder", { ...CLAUDE }, this.at(start - 1.5));
+    this.historyPipeline(id, h, start - 2, HISTORY_PR_FROM + HISTORY.indexOf(h));
+  }
+
+  /** You sent a landed change back as a fix from the Review list; the fix task (a Bug fix pipeline) runs at once. */
+  private historyFix(sb: (typeof HISTORY_SENT_BACK)[number], start: number) {
+    const r = D.sendBackLanded(this.s, { taskId: sb.origin, kind: "fix", note: sb.note, holdBeforeStart: false }, this.at(start));
+    this.s = r.state;
+    const id = r.newId;
+    if (id !== `${sb.origin}-F1`) throw new Error(`demo: the fix of ${sb.origin} is ${id}`);
+    if (this.task(sb.origin).integration?.landed?.status !== "sent-back") throw new Error(`demo: ${sb.origin} was not sent back`);
+    this.promote([id], start - 1);
+    this.historyPipeline(id, sb.fix, start - 2, HISTORY_PR_FROM + HISTORY.length + HISTORY_SENT_BACK.indexOf(sb));
+  }
+
+  /**
+   * One task through its pattern. The steps are found by role, so Change, its cross-reviewed variant and
+   * Bug fix (both versions) run through the same code: the implementation (a reproduction first for a bug),
+   * the checks, then review rounds (each repair appends the loop's next round, as the service does) until
+   * the review is clean, the final checks, the verification, and the delivery.
+   */
+  private historyPipeline(id: string, w: HistoryFix | HistoryTask, start: number, prNumber: number) {
+    const h = w as Partial<HistoryTask> & HistoryFix;
+    const rnd = seeded(seedOf(id));
+    const between = (lo: number, hi: number) => Math.round((lo + (hi - lo) * rnd()) * 10) / 10;
+    const bug = this.task(id).pattern.id === "bugfix";
+    // Cross-review runs a little longer: the reviewer reads work from the other provider's conventions.
+    const slow = this.task(id).pattern.id === "change-cross-review" ? 1.15 : 1;
+    const tokens = (lo: [number, number], hi: [number, number]): Tokens => ({ input: Math.round(between(lo[0], lo[1]) / 100) * 100, output: Math.round(between(hi[0], hi[1]) / 100) * 100 });
+    const codeChange = (label: string, paths: string[], size: "large" | "small"): CodeChange => {
+      const additions = Math.round(size === "large" ? between(40, 220) : between(6, 40));
+      return { sha: fakeSha(label), paths: [...paths], files: paths.length, additions, deletions: Math.round(additions * between(0.05, 0.35)) };
+    };
+    const sized = (text: string, c: CodeChange) => `${text} (+${c.additions} −${c.deletions}, ${c.files} file${c.files === 1 ? "" : "s"})`;
+
+    const t = this.task(id);
+    const impl = t.steps.filter((st) => st.role === "coder" && !st.runIf?.length);
+    const c1 = t.steps.find((st) => st.role === "checks" && st.checks?.onFail === "findings");
+    const rev = t.steps.find((st) => st.role === "code_reviewer");
+    const rep = t.steps.find((st) => st.role === "coder" && !!st.runIf?.length);
+    const c2 = t.steps.find((st) => st.role === "checks" && st.checks?.onFail === "block");
+    const ver = t.steps.find((st) => st.role === "lead");
+    if (!c1 || !rev || !rep || !c2 || !ver || !impl.length) throw new Error(`demo: ${id}'s pattern has not the steps the history expects`);
+
+    // The implementation: a reproduction first for a bug, then the change.
+    let m = start;
+    let change: CodeChange | undefined;
+    for (const st of impl) {
+      if (st.outputs[0].kind === "report") {
+        if (!h.reproduction) throw new Error(`demo: ${id} needs a reproduction`);
+        const d = between(8, 18);
+        this.output(id, st.id, m, m - d, h.reproduction, {}, {}, tokens([30_000, 70_000], [1_500, 5_000]));
+        m -= d + 1;
+      } else {
+        const d = (bug ? between(15, 35) : between(45, 90)) * slow;
+        const c = codeChange(`${id} ${st.id}`, h.files, "large");
+        change = this.change(id, st.id, m, m - d, c, sized(h.change, c), h.handoff || undefined, tokens([60_000, 180_000], [4_000, 16_000]));
+        m -= d + 1;
+      }
+    }
+    if (!change) throw new Error(`demo: ${id} made no change`);
+
+    // The project's checks; a failing test becomes an error finding the repair fixes.
+    const f = h.failingTest;
+    this.checks(id, c1.id, m, m - 2, f ? [{ id: "test", excerpt: `FAIL  ${f.file} > ${f.name}\n${f.message}\n ❯ ${f.file}:${Math.round(between(20, 90))}:${Math.round(between(5, 40))}\n\n Test Files  1 failed | 11 passed (12)\n      Tests  1 failed | 141 passed (142)` }] : []);
+    m -= 3;
+
+    // Review rounds. A round with findings is repaired, and the service appends the loop's next round.
+    let round = 0;
+    let ids = { c1: c1.id, rev: rev.id, rep: rep.id };
+    for (;;) {
+      const r = h.rounds[round];
+      const d = (bug ? between(8, 16) : between(15, 30)) * slow;
+      if (!r) {
+        const clean = round === 0 ? (slow > 1 ? "the change matches the handoff, and every changed file was read." : "the change does what the spec says, and the tests cover it.") : "the repair answers the earlier round, and every changed file was read.";
+        this.review(id, ids.rev, m, m - d, change, `No findings: ${clean}`, [], tokens([50_000, 130_000], [2_000, 8_000]));
+        m -= d + 1;
+        this.skip(id, ids.rep, m);
+        m -= 1;
+        break;
+      }
+      const findings = r.findings.map((x, i) => finding(`F${i + 1}`, { severity: "warning", action: "auto-fix", title: x.title, detail: x.detail, ...(x.file ? { file: x.file } : {}), ...(x.line ? { line: x.line } : {}) }));
+      const summary = `${findings.length} finding${findings.length === 1 ? "" : "s"}: ${findings.map((x) => x.title.replace(/\.$/, "")).join("; ")}.${round === 0 && f ? " The failing test is the checks' own finding; the repair should take both." : ""}`;
+      this.review(id, ids.rev, m, m - d, change, summary, findings, tokens([50_000, 130_000], [2_000, 8_000]));
+      m -= d + 1;
+      if (h.cancelled) {
+        // You cancelled while the repair ran; the runtime acknowledged the stop. The outcome is the store's capture at cancel.
+        const run = this.dispatch(id, ids.rep, m);
+        const cm = m - between(6, 14);
+        this.s = M.cancelTask(this.s, id, this.at(cm));
+        this.event(cm - 0.1, "user", "control", `Cancelled: ${h.cancelled}`, id);
+        this.s = M.acknowledgeStop(this.s, run, this.at(cm - 0.5));
+        const a = this.s.attempts.find((x) => x.id === run)!;
+        if (a.outcome !== "stopped" || this.task(id).lifecycle !== "cancelled") throw new Error(`demo: ${id} was not cancelled and stopped`);
+        this.task(id).outcome = computeOutcome(this.s, this.task(id), this.at(cm));
+        return;
+      }
+      const rd = (bug ? between(8, 20) : between(12, 30)) * slow;
+      const repaired = codeChange(`${id} ${ids.rep}`, r.paths ?? [h.files[0]], "small");
+      change = this.change(id, ids.rep, m, m - rd, repaired, sized(r.repair, repaired), undefined, tokens([40_000, 100_000], [2_000, 8_000]));
+      m -= rd + 1;
+      round++;
+      ids = { c1: `${c1.id}-i${round + 1}`, rev: `${rev.id}-i${round + 1}`, rep: `${rep.id}-i${round + 1}` };
+      this.checks(id, ids.c1, m, m - 2);
+      m -= 3;
+    }
+
+    // Final checks and the lead's verification; the task is done, and the store captures its outcome.
+    this.checks(id, c2.id, m, m - 2);
+    m -= 3;
+    const vd = bug ? between(4, 8) : between(6, 12);
+    this.output(id, ver.id, m, m - vd, `${h.verified}; checks passed on the final change.`, {}, {}, tokens([15_000, 40_000], [1_000, 3_000]));
+    m -= vd;
+    if (this.task(id).lifecycle !== "done") throw new Error(`demo: ${id} is ${this.task(id).lifecycle}, not done`);
+    this.task(id).outcome = computeOutcome(this.s, this.task(id), this.at(m));
+
+    // Delivery: the pull request is built and opened; you merge it later (in the app, or on GitHub), or close it.
+    m -= 1;
+    this.prHead(id, m, change);
+    this.preflight(m - 0.5); // the repository check is repeated every six hours; the gate wants a recent one
+    this.openPr(id, m - 1, prNumber);
+    m -= 1.5;
+    const wait = bug ? between(30, 180) : between(60, 480);
+    if (h.delivery === "github-close") {
+      this.closedOnGitHub(id, m - wait);
+      return;
+    }
+    if (h.delivery === "github-merge") this.mergedOnGitHub(id, m - wait);
+    else this.mergePr(id, m - wait, m - wait - 1);
+    m -= wait + 2;
+    this.s = D.markLandedReviewed(this.s, [id], true, this.at(m - between(30, 240)));
+  }
+
   private revisePackingDecision() {
     const id = "WT-004.3";
     const t = this.task(id);
@@ -1066,10 +1324,17 @@ class DemoBuilder {
   }
 }
 
+/** The last build, by clock: the state is a pure function of `nowMs`, and tests build the same clock many times. */
+let lastBuild: { nowMs: number; state: State } | undefined;
+
 /**
  * The demo state: "Weekend Trips (sample)" at the start of a demo, with no run in flight (the service's
- * scheduler dispatches the three running steps itself). Deterministic for a given clock.
+ * scheduler dispatches the three running steps itself). Deterministic for a given clock. With the history
+ * (ORC-018 §7) a build takes about a second, so the last one is kept and a copy returned; `cache: false`
+ * builds afresh (the determinism test compares the two).
  */
-export function buildDemo(nowMs: number = Date.now()): State {
-  return new DemoBuilder(nowMs).build();
+export function buildDemo(nowMs: number = Date.now(), o: { cache?: boolean } = {}): State {
+  if (o.cache === false) return new DemoBuilder(nowMs).build();
+  if (lastBuild?.nowMs !== nowMs) lastBuild = { nowMs, state: new DemoBuilder(nowMs).build() };
+  return structuredClone(lastBuild.state);
 }
