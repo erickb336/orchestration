@@ -155,7 +155,7 @@ describe("buildTaskTrace", () => {
       "orc.outcome.findings.warning": 0,
       "orc.outcome.findings.info": 0,
       "orc.outcome.failed_check_runs": 1,
-      "orc.outcome.review_complete": 1,
+      "orc.outcome.review_complete": true,
       "orc.outcome.human_touches": 0,
       "orc.delivery.status": "not-delivered",
     });

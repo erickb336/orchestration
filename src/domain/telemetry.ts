@@ -11,6 +11,9 @@ export interface TelemetryInput {
   allowRemote: boolean;
 }
 
+/** What leaves the computer when traces are sent, in one phrase (review L9: areas and provider session ids included). */
+export const SENT_SUMMARY = "task titles and areas, pattern and model names, provider session ids, timings, token counts and cost";
+
 /** The export before it was ever configured: off. */
 export const TELEMETRY_OFF: TelemetryConfig = { enabled: false, endpoint: "", allowRemote: false, rev: 0 };
 
@@ -33,8 +36,10 @@ export function telemetryEndpointProblem(endpoint: string, allowRemote: boolean)
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return "The endpoint must start with http:// or https://.";
   if (url.username || url.password) return "The endpoint must not contain credentials. Put headers in OTEL_EXPORTER_OTLP_HEADERS instead.";
+  // A query string is where keys end up (`?api_key=`); it would be stored in the state and shown in Settings (review L3).
+  if (url.search) return "The endpoint must not have a query string; keys belong in OTEL_EXPORTER_OTLP_HEADERS, never in the URL.";
   if (!url.hostname) return "The endpoint must name a host.";
-  if (!isLoopbackHost(url.hostname) && !allowRemote) return `${url.hostname} is not this computer. Confirm that task titles, pattern and model names, timings, token counts and cost may be sent there.`;
+  if (!isLoopbackHost(url.hostname) && !allowRemote) return `${url.hostname} is not this computer. Confirm that ${SENT_SUMMARY} may be sent there.`;
   return undefined;
 }
 

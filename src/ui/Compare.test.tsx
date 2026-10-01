@@ -24,7 +24,9 @@ describe("the groups table", () => {
     expect(html).toContain("0c1d2e3f · older");
     expect(count(html, ">built-in<")).toBe(4);
     expect(count(html, ">experiment<")).toBe(1);
-    expect(count(html, ">too few to compare<")).toBe(1);
+    // One group chip (the older Bug fix version, 2 tasks), plus two cells whose groups are big enough but where too few
+    // tasks reported the measure (review L7): cost on cross-review (1 of 8) and on Bug fix (3 of 5).
+    expect(count(html, ">too few to compare<")).toBe(3);
     expect(html).toContain("9 tasks");
     expect(html).toContain("2 tasks");
   });

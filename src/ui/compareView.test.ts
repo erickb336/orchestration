@@ -94,6 +94,15 @@ describe("cellText", () => {
     expect(c.spread).toBeUndefined();
   });
 
+  it("marks a cell too few when its group is large enough but few of its tasks reported the measure (review L7)", () => {
+    expect(cellText(measureDef("cost"), stat([1, 2, 3], 8)).fewHere).toBe(true);
+    expect(cellText(measureDef("cost"), stat([1, 2, 3], 8)).title).toMatch(/too few to compare/);
+    // A small group says so once, on its own chip; its cells do not repeat it.
+    expect(cellText(measureDef("cost"), stat([1, 2, 3], 3)).fewHere).toBeUndefined();
+    expect(cellText(measureDef("cost"), stat([1, 2, 3, 4, 5], 8)).fewHere).toBeUndefined();
+    expect(cellText(measureDef("landed"), stat([1, 0], 9, { count: 1 })).fewHere).toBe(true);
+  });
+
   it("shows the median, the q1–q3 spread and 'n of m reported'", () => {
     const c = cellText(measureDef("timeToDone"), stat([4 * MIN, 10 * MIN, 30 * MIN], 5, { median: 10 * MIN, q1: 7 * MIN, q3: 20 * MIN, min: 4 * MIN, max: 30 * MIN }));
     expect(c.main).toBe("10m 00s");

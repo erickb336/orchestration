@@ -34,7 +34,9 @@ export interface TelemetryStatus {
   failed: number;
   lastSentAt?: string;
   lastError?: string;
-  /** Whether OTEL_EXPORTER_OTLP_HEADERS was set when the service started. Its value is never exposed. */
+  /** Settled tasks with an outcome and no export row: what "Send finished tasks" would queue. */
+  unqueued: number;
+  /** Whether OTEL_EXPORTER_OTLP_HEADERS or OTEL_EXPORTER_OTLP_TRACES_HEADERS was set when the service started. Values are never exposed. */
   headersFromEnv: boolean;
 }
 

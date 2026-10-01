@@ -237,7 +237,11 @@ export function deliveryOutcome(t: Task): DeliveryOutcome {
   if (i.status === "pending") return { status: "not-delivered", flags: [] };
   const pr = i.pr;
   if (pr) {
+    // Review L4: a merge observed on GitHub before a landed record existed (older records) is still landed, by
+    // someone not recorded; a pull request that was never published is not delivered yet.
+    if (pr.phase === "merged" || pr.observed?.state === "MERGED") return { status: "landed", via: "pr", flags: [] };
     if (pr.phase === "closed" || pr.observed?.state === "CLOSED") return { status: "closed", flags: [] };
+    if (pr.phase === "built") return { status: "not-delivered", flags: [] };
     return { status: "pr-open", flags: [] };
   }
   return { status: "integrated", flags: [] };

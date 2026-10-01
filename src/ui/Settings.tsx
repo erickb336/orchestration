@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SENT_SUMMARY } from "../domain/telemetry";
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
@@ -15,7 +16,7 @@ import { ModelPicker, PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, ROLE_LABEL, autonomy
 import { disableNotifications, enableNotifications, notificationsSupported } from "./notifications";
 import { StageControl } from "./Shaping";
 import { initProjectConfirm, newProjectStage } from "./stageChoice";
-import { LANGFUSE_ENDPOINT, PHOENIX_ENDPOINT, backfillCount, endpointProblem, hostOf, needsRemoteConfirm, statusLine } from "./telemetryView";
+import { confirmedFor, LANGFUSE_ENDPOINT, PHOENIX_ENDPOINT, backfillCount, endpointProblem, hostOf, needsRemoteConfirm, statusLine } from "./telemetryView";
 
 const CAP_LABEL: Record<keyof CapabilityMap, string> = {
   start: "Start",
@@ -748,7 +749,9 @@ function TracesCard() {
   const status = service.telemetry;
   const [enabled, setEnabled] = useState(cfg?.enabled ?? false);
   const [endpoint, setEndpoint] = useState(cfg?.endpoint ?? "");
-  const [allowRemote, setAllowRemote] = useState(cfg?.allowRemote ?? false);
+  // The confirmation belongs to the host it was given for (review M3): another host needs it again.
+  const savedConfirmedHost = cfg?.allowRemote ? hostOf(cfg.endpoint) : undefined;
+  const [confirmedHost, setConfirmedHost] = useState<string | undefined>(savedConfirmedHost);
   const [busy, setBusy] = useState<"backfill" | "retry" | null>(null);
   const [note, setNote] = useState<string | null>(null);
   // Follow the live values when they change elsewhere (another tab, the service).
@@ -756,9 +759,10 @@ function TracesCard() {
   useEffect(() => {
     setEnabled(cfg?.enabled ?? false);
     setEndpoint(cfg?.endpoint ?? "");
-    setAllowRemote(cfg?.allowRemote ?? false);
+    setConfirmedHost(cfg?.allowRemote ? hostOf(cfg.endpoint) : undefined);
   }, [key]);
   const host = hostOf(endpoint);
+  const allowRemote = confirmedFor(confirmedHost, endpoint);
   const remote = needsRemoteConfirm(endpoint);
   const problem = endpointProblem(endpoint);
   const next = { enabled, endpoint: endpoint.trim(), allowRemote: remote && allowRemote };
@@ -817,9 +821,9 @@ function TracesCard() {
           )}
           {remote && (
             <label className="row field traces-remote" style={{ gap: "0.4rem" }}>
-              <input type="checkbox" checked={allowRemote} onChange={(e) => setAllowRemote(e.target.checked)} />
+              <input type="checkbox" checked={allowRemote} onChange={(e) => setConfirmedHost(e.target.checked ? host : undefined)} />
               <span>
-                Send to <strong>{host}</strong>: task titles, pattern and model names, timings, token counts and cost leave this computer.
+                Send to <strong>{host}</strong>: {SENT_SUMMARY} leave this computer.
               </span>
             </label>
           )}
@@ -832,12 +836,12 @@ function TracesCard() {
       <h3 style={{ marginTop: "1rem" }}>What is sent</h3>
       <ul className="plain muted small traces-list">
         <li>One trace per task when it finishes or is cancelled: a task span with the id, title, area, result, the pattern (id, name, version, source) and the outcome numbers.</li>
-        <li>One span per agent run: provider, model, role, start and end, token counts and cost where the provider reported them.</li>
+        <li>One span per agent run: provider, model, role, the provider&apos;s session id, start and end, token counts and cost where the provider reported them.</li>
         <li>One span per check run: start and end, and whether it passed.</li>
         <li>Never prompts, outputs, code, paths or credentials.</li>
       </ul>
       <p className="muted small">
-        Headers (for example Langfuse's key) come only from <code>OTEL_EXPORTER_OTLP_HEADERS</code> in the shell that starts Orchestrator; they are never stored here. Set in that shell now:{" "}
+        Headers (for example a viewer&apos;s key) come only from <code>OTEL_EXPORTER_OTLP_HEADERS</code> (or <code>OTEL_EXPORTER_OTLP_TRACES_HEADERS</code>) in the shell that starts Orchestrator; they are never stored here. Set in that shell now:{" "}
         <strong>{status ? (status.headersFromEnv ? "yes" : "no") : "not reported yet"}</strong>.
       </p>
 

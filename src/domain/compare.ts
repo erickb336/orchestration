@@ -52,9 +52,9 @@ export const MEASURES: MeasureDef[] = [
   { id: "findingsRaised", label: "Findings raised", unit: "count", help: "Structured findings raised by reviews and checks, of every severity.", defaultVisible: false },
   { id: "errorsRaised", label: "Errors raised", unit: "count", help: "Findings of severity error raised by reviews and checks.", defaultVisible: false },
   { id: "openAtEnd", label: "Open at the end", unit: "count", help: "Blocking findings still open in the accepted review and check outputs when the task finished.", defaultVisible: true },
-  { id: "firstPassChecks", label: "Checks passed first time", unit: "rate", help: "The final checks passed with no repair round. Missing when the final checks did not run.", defaultVisible: true },
+  { id: "firstPassChecks", label: "Checks passed first time", unit: "rate", help: "Every check run passed, so no failing check needed a repair, and the final checks passed. Missing when the final checks did not run.", defaultVisible: true },
   { id: "failedCheckRuns", label: "Failed check runs", unit: "count", help: "Check runs with a failing command. Missing when no check ran.", defaultVisible: false },
-  { id: "reviewComplete", label: "Reviews covering every file", unit: "rate", help: "The share of code reviews that reported covering every changed file. Missing when no review was required.", defaultVisible: false },
+  { id: "reviewComplete", label: "Reviews covered every file", unit: "rate", help: "Every code review of the task reported covering every changed file. Missing when no review was required.", defaultVisible: false },
   { id: "humanTouches", label: "Your interventions", unit: "count", help: "Artifacts you edited, decisions you made, and candidates you chose.", defaultVisible: false },
   { id: "landed", label: "Landed", unit: "rate", help: "The work reached the base branch. Missing when there was nothing to deliver.", defaultVisible: true },
   { id: "sentBack", label: "Sent back", unit: "rate", help: "Landed work you sent back as a fix or a revert. Missing when it did not land.", defaultVisible: true },
@@ -153,9 +153,11 @@ export function measuresOf(t: Task, o: TaskOutcome): Partial<Record<MeasureId, n
   set("findingsRaised", Object.values(o.findings.raised).reduce((n, v) => n + v, 0));
   set("errorsRaised", o.findings.raised.error ?? 0);
   set("openAtEnd", o.findings.openAtEnd);
-  if (o.checks.finalPassed !== null) set("firstPassChecks", o.checks.finalPassed && o.repair.rounds === 0 ? 1 : 0);
+  // Every check run passed, so no failing check needed a repair (review L5: a review-driven repair does not count against it).
+  if (o.checks.finalPassed !== null) set("firstPassChecks", o.checks.finalPassed && o.checks.failedRuns === 0 ? 1 : 0);
   if (o.checks.runs > 0) set("failedCheckRuns", o.checks.failedRuns);
-  if (o.coverage.reviews > 0) set("reviewComplete", o.coverage.complete / o.coverage.reviews);
+  // A task counts when every one of its code reviews covered every changed file (review M2: 0 or 1, like the other rates).
+  if (o.coverage.reviews > 0) set("reviewComplete", o.coverage.complete === o.coverage.reviews ? 1 : 0);
   set("humanTouches", o.human.artifactEdits + o.decisions.byUser + o.human.candidateChoices);
   const d = deliveryOutcome(t);
   if (d.status !== "not-needed") set("landed", d.status === "landed" ? 1 : 0);
@@ -287,10 +289,15 @@ export function groupRows(state: State, rows: CompareRow[], filter: CompareFilte
 
 const CSV_HEAD = ["task_id", "title", "area", "result", "settled_at", "pattern_id", "pattern_name", "pattern_hash", "pattern_source", "chosen_by", "experimental", "changed_pattern", "simulated"];
 
-/** RFC 4180: a field with a comma, a quote or a line break is quoted, with quotes doubled; a missing value is empty. */
+/**
+ * RFC 4180: a field with a comma, a quote or a line break is quoted, with quotes doubled; a missing value is
+ * empty. Text that a spreadsheet would run as a formula (it starts with =, +, -, @, a tab or a carriage
+ * return) gets a leading apostrophe (review L6): titles are written by agents. Numbers are never changed.
+ */
 export function csvField(v: string | number | boolean | undefined): string {
   if (v === undefined) return "";
-  const s = String(v);
+  let s = String(v);
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

@@ -13,7 +13,8 @@ export function settledAtOf(t: Task): string {
 
 /**
  * A done task older than 7 days collapses, unless it still asks something of you: it needs you, its pull
- * request is open (or built and about to open), or it landed and you have not reviewed it.
+ * request is open (or built and about to open), it landed and you have not reviewed it, or its integration
+ * is in conflict.
  */
 export function collapsesDone(state: State, t: Task, nowMs: number): boolean {
   if (t.lifecycle !== "done") return false;
@@ -23,6 +24,8 @@ export function collapsesDone(state: State, t: Task, nowMs: number): boolean {
   const pr = D.livePr(t);
   if (pr && (pr.phase === "open" || pr.phase === "built")) return false;
   if (t.integration?.landed?.status === "unreviewed") return false;
+  // An integration conflict is unresolved work, whatever its age (review L8).
+  if (t.integration?.status === "conflict") return false;
   return true;
 }
 

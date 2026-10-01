@@ -76,9 +76,9 @@ A boolean measure is stored as 0 or 1 and shown as a rate.
 | `findingsRaised` | sum of `findings.raised` (the per-severity detail stays in the row) | never |
 | `errorsRaised` | `findings.raised.error` | never |
 | `openAtEnd` | `findings.openAtEnd` | never |
-| `firstPassChecks` (rate) | `checks.finalPassed === true && repair.rounds === 0` | `checks.finalPassed === null` |
+| `firstPassChecks` (rate) | `checks.finalPassed === true && checks.failedRuns === 0` (r2: a review-driven repair does not count against it) | `checks.finalPassed === null` |
 | `failedCheckRuns` | `checks.failedRuns` | `checks.runs === 0` |
-| `reviewComplete` (rate) | `coverage.complete / coverage.reviews` | `coverage.reviews === 0` |
+| `reviewComplete` (rate) | `coverage.complete === coverage.reviews` (r2: 0 or 1 per task, like every rate) | `coverage.reviews === 0` |
 | `humanTouches` | `human.artifactEdits + decisions.byUser + human.candidateChoices` | never |
 | `landed` (rate) | `delivery.status === "landed"` | `delivery.status` is `not-needed` |
 | `sentBack` (rate) | `delivery.sentBack !== undefined` | not landed |

@@ -87,9 +87,9 @@ describe("setTelemetry", () => {
     expect(setTelemetry(seed(), { enabled: false, endpoint: "", allowRemote: false }, 0, at(1)).project.telemetry).toBeUndefined();
   });
 
-  it("never records a query string, where keys tend to go", () => {
-    const s = setTelemetry(seed(), { enabled: true, endpoint: "http://localhost:6006/v1/traces?api_key=SECRET", allowRemote: false }, 0, at(1));
-    expect(s.events.at(-1)!.message).not.toContain("SECRET");
+  it("refuses a query string, where keys tend to go, so none is ever stored or shown (review L3)", () => {
+    expect(() => setTelemetry(seed(), { enabled: true, endpoint: "http://localhost:6006/v1/traces?api_key=SECRET", allowRemote: false }, 0, at(1))).toThrow(/must not have a query string/);
+    expect(() => setTelemetry(seed(), { enabled: false, endpoint: "http://localhost:6006/v1/traces?x=1", allowRemote: false }, 0, at(1))).toThrow(/must not have a query string/);
   });
 
   it("is reachable as the setTelemetry command, which checks the argument shapes", () => {

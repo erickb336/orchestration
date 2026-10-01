@@ -68,7 +68,10 @@ describe("deliveryOutcome", () => {
     const pr = (phase: "built" | "open" | "merged" | "closed", observed?: "OPEN" | "CLOSED" | "MERGED") =>
       task({ integration: { status: "integrated", pr: { phase, ...(observed ? { observed: { state: observed } } : {}) } as unknown as NonNullable<Task["integration"]>["pr"] } });
     expect(deliveryOutcome(pr("open")).status).toBe("pr-open");
-    expect(deliveryOutcome(pr("built")).status).toBe("pr-open");
+    // Review L4: a pull request never published is not delivered; a merge seen before a landed record is landed.
+    expect(deliveryOutcome(pr("built")).status).toBe("not-delivered");
+    expect(deliveryOutcome(pr("merged"))).toEqual({ status: "landed", via: "pr", flags: [] });
+    expect(deliveryOutcome(pr("open", "MERGED")).status).toBe("landed");
     // Closed from the app, or observed CLOSED on GitHub, and not landed: closed.
     expect(deliveryOutcome(pr("closed")).status).toBe("closed");
     expect(deliveryOutcome(pr("open", "CLOSED")).status).toBe("closed");
@@ -118,9 +121,10 @@ describe("measuresOf", () => {
       findingsRaised: 3,
       errorsRaised: 1,
       openAtEnd: 1,
-      firstPassChecks: 1,
+      // One check run failed, so the checks did not pass first time; one of two reviews was incomplete (review M2, L5).
+      firstPassChecks: 0,
       failedCheckRuns: 1,
-      reviewComplete: 0.5,
+      reviewComplete: 0,
       humanTouches: 3,
       landed: 1,
       sentBack: 1,
@@ -159,10 +163,17 @@ describe("measuresOf", () => {
     expect(open.timeToLanded).toBeUndefined();
   });
 
-  it("checks passed first time needs a pass with no repair round", () => {
-    expect(measuresOf(task(), outcome({ repair: { rounds: 1 } })).firstPassChecks).toBe(0);
-    expect(measuresOf(task(), outcome({ checks: { finalPassed: false } })).firstPassChecks).toBe(0);
-    expect(measuresOf(task(), outcome()).firstPassChecks).toBe(1);
+  it("checks passed first time: every check run passed and the final checks passed; a review-driven repair does not count (review L5)", () => {
+    const clean = { runs: 2, failedRuns: 0, finalPassed: true, acceptedFailing: false };
+    expect(measuresOf(task(), outcome({ checks: clean })).firstPassChecks).toBe(1);
+    expect(measuresOf(task(), outcome({ checks: clean, repair: { rounds: 1 } })).firstPassChecks).toBe(1);
+    expect(measuresOf(task(), outcome({ checks: { ...clean, failedRuns: 1 } })).firstPassChecks).toBe(0);
+    expect(measuresOf(task(), outcome({ checks: { ...clean, finalPassed: false } })).firstPassChecks).toBe(0);
+  });
+
+  it("reviews covered every file: 1 only when every review of the task was complete (review M2)", () => {
+    expect(measuresOf(task(), outcome({ coverage: { reviews: 2, complete: 2, incomplete: 0, unproven: 0, retries: 0 } })).reviewComplete).toBe(1);
+    expect(measuresOf(task(), outcome({ coverage: { reviews: 2, complete: 1, incomplete: 1, unproven: 0, retries: 0 } })).reviewComplete).toBe(0);
   });
 
   it("counts agent runs only, not the service's check runs", () => {
@@ -343,6 +354,13 @@ describe("exports", () => {
     expect(csvField(undefined)).toBe("");
     expect(csvField(0)).toBe("0");
     expect(csvField(true)).toBe("true");
+    // Review L6: text a spreadsheet would run as a formula is neutralised; numbers are not touched.
+    expect(csvField("=SUM(A1:A9)")).toBe("'=SUM(A1:A9)");
+    expect(csvField("+1 more")).toBe("'+1 more");
+    expect(csvField("-flag")).toBe("'-flag");
+    expect(csvField("@cmd")).toBe("'@cmd");
+    expect(csvField('=HYPERLINK("x")')).toBe(`"'=HYPERLINK(""x"")"`);
+    expect(csvField(-3)).toBe("-3");
   });
 
   it("writes a header, one line per row, every measure, and an empty cell for a missing measure", () => {

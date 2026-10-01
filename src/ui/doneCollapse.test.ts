@@ -22,6 +22,11 @@ const landed = (status: Landed["status"]): Landed => ({ at: ago(10), via: "pr", 
 const pr = (phase: PrDelivery["phase"]): PrDelivery => ({ n: 1, phase } as unknown as PrDelivery);
 
 describe("collapsesDone", () => {
+  it("keeps a done task whose integration is in conflict, however old (review L8)", () => {
+    const t = done(30, { integration: { status: "conflict" } as Task["integration"] });
+    expect(collapsesDone(withTask(t), t, NOW)).toBe(false);
+  });
+
   it("folds a done task settled more than 7 days ago, and keeps a recent one", () => {
     expect(collapsesDone(withTask(done(8)), done(8), NOW)).toBe(true);
     expect(collapsesDone(withTask(done(2)), done(2), NOW)).toBe(false);

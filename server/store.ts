@@ -330,10 +330,13 @@ export class Store {
       CREATE TABLE IF NOT EXISTS trace_exports (
         task_id TEXT NOT NULL, settled_at TEXT NOT NULL,
         status TEXT NOT NULL,
-        tries INTEGER NOT NULL DEFAULT 0, next_at INTEGER, last_error TEXT, sent_at TEXT,
+        tries INTEGER NOT NULL DEFAULT 0, next_at INTEGER, last_error TEXT, sent_at TEXT, error_at TEXT,
         PRIMARY KEY (task_id, settled_at)
       );
     `);
+    // A trace_exports table from a build before `error_at` existed gains the column (it only orders "last error").
+    const columns = (this.db.prepare("PRAGMA table_info(trace_exports)").all() as { name: string }[]).map((c) => c.name);
+    if (!columns.includes("error_at")) this.db.exec("ALTER TABLE trace_exports ADD COLUMN error_at TEXT");
     this.db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT (key) DO NOTHING").run(String(SCHEMA_VERSION));
   }
 
@@ -518,9 +521,9 @@ export class Store {
   }
 
   /** Mark one row: `sent` (with `sentAt`), `pending` again after a failure (with `tries`, `nextAt` and the error), or `failed`. */
-  markTraceExport(taskId: string, settledAt: string, mark: { status: "sent"; sentAt: string } | { status: "pending" | "failed"; tries: number; nextAt: number | null; error: string }) {
+  markTraceExport(taskId: string, settledAt: string, mark: { status: "sent"; sentAt: string } | { status: "pending" | "failed"; tries: number; nextAt: number | null; error: string; at: string }) {
     if (mark.status === "sent") this.db.prepare("UPDATE trace_exports SET status = 'sent', sent_at = ?, next_at = NULL, last_error = NULL WHERE task_id = ? AND settled_at = ?").run(mark.sentAt, taskId, settledAt);
-    else this.db.prepare("UPDATE trace_exports SET status = ?, tries = ?, next_at = ?, last_error = ? WHERE task_id = ? AND settled_at = ?").run(mark.status, mark.tries, mark.nextAt, mark.error, taskId, settledAt);
+    else this.db.prepare("UPDATE trace_exports SET status = ?, tries = ?, next_at = ?, last_error = ?, error_at = ? WHERE task_id = ? AND settled_at = ?").run(mark.status, mark.tries, mark.nextAt, mark.error, mark.at, taskId, settledAt);
   }
 
   /** A settle that no longer matches the task's outcome (it settled again): nothing to send for it. */
@@ -533,6 +536,21 @@ export class Store {
     return Number(this.db.prepare("UPDATE trace_exports SET status = 'pending', tries = 0, next_at = NULL WHERE status = 'failed'").run().changes);
   }
 
+  /** Every (task, settle) with a row, as `taskId|settledAt`: what "Send finished tasks" would not queue again. */
+  traceExportKeys(): Set<string> {
+    return new Set((this.db.prepare("SELECT task_id AS t, settled_at AS s FROM trace_exports").all() as { t: string; s: string }[]).map((r) => `${r.t}|${r.s}`));
+  }
+
+  /** Rows due to be sent now: pending with no next try or a next try in the past. Cheap; read every pass. */
+  dueTraceExportCount(nowMs: number): number {
+    return Number((this.db.prepare("SELECT COUNT(*) AS n FROM trace_exports WHERE status = 'pending' AND (next_at IS NULL OR next_at <= ?)").get(nowMs) as { n: number }).n);
+  }
+
+  /** The state's version alone, without reading or parsing the state. */
+  version(): number {
+    return Number((this.db.prepare("SELECT version FROM state WHERE id = 1").get() as { version: number }).version);
+  }
+
   /** Counts by status, the last success, and the most recent error still recorded. */
   traceExportCounts(): { pending: number; sent: number; failed: number; lastSentAt?: string; lastError?: string } {
     const out = { pending: 0, sent: 0, failed: 0 } as { pending: number; sent: number; failed: number; lastSentAt?: string; lastError?: string };
@@ -541,7 +559,8 @@ export class Store {
     }
     const sent = this.db.prepare("SELECT MAX(sent_at) AS at FROM trace_exports WHERE status = 'sent'").get() as { at: string | null };
     if (sent.at) out.lastSentAt = sent.at;
-    const err = this.db.prepare("SELECT last_error AS e FROM trace_exports WHERE last_error IS NOT NULL ORDER BY COALESCE(next_at, 0) DESC, settled_at DESC LIMIT 1").get() as { e: string } | undefined;
+    // The most recent error, by when it happened (review L11: a failed row has no next try to sort by).
+    const err = this.db.prepare("SELECT last_error AS e FROM trace_exports WHERE last_error IS NOT NULL ORDER BY error_at DESC, settled_at DESC LIMIT 1").get() as { e: string } | undefined;
     if (err?.e) out.lastError = err.e;
     return out;
   }

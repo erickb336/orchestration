@@ -28,6 +28,16 @@ export const BATCH = 20;
 export const TIMEOUT_MS = 10_000;
 
 /**
+ * The headers the OTLP exporter would read from the environment by itself (review L2): the general
+ * OTEL_EXPORTER_OTLP_HEADERS, overridden key by key by the traces-specific OTEL_EXPORTER_OTLP_TRACES_HEADERS,
+ * as the OpenTelemetry specification orders them. Passing both explicitly keeps `headersFromEnv` and the
+ * redaction of error messages truthful.
+ */
+export function otlpHeadersFromEnv(env: Record<string, string | undefined>): Record<string, string> {
+  return { ...parseOtlpHeaders(env.OTEL_EXPORTER_OTLP_HEADERS), ...parseOtlpHeaders(env.OTEL_EXPORTER_OTLP_TRACES_HEADERS) };
+}
+
+/**
  * The standard `key=value,key2=value2` form of OTEL_EXPORTER_OTLP_HEADERS, URL-decoded (the specification
  * percent-encodes values). Pairs without a key are skipped. The result is held in memory only.
  */
@@ -113,6 +123,8 @@ export class TelemetryExporter {
   private readonly timeoutMs: number;
   private current: { url: string; exporter: OTLPTraceExporter } | undefined;
   private inFlight: Promise<void> | undefined;
+  /** The state as of `seen.version` (review L1): a pass with no new state and nothing due reads and writes nothing. */
+  private seen: { version: number; state: State } | undefined;
 
   constructor(store: Store, opts: TelemetryOptions = {}) {
     this.store = store;
@@ -127,9 +139,11 @@ export class TelemetryExporter {
     return Object.keys(this.headers).length > 0;
   }
 
-  /** ORC-018 §5.2: what the Settings section shows, read from the table. */
+  /** ORC-018 §5.2: what the Settings section shows, read from the table. `unqueued` is what "Send finished tasks" would queue (review M1). */
   status(state: State): TelemetryStatus {
-    return { enabled: !!state.project.telemetry?.enabled, ...this.store.traceExportCounts(), headersFromEnv: this.headersFromEnv };
+    const known = this.store.traceExportKeys();
+    const unqueued = settles(state).filter((k) => !known.has(`${k.taskId}|${k.settledAt}`)).length;
+    return { enabled: !!state.project.telemetry?.enabled, ...this.store.traceExportCounts(), unqueued, headersFromEnv: this.headersFromEnv };
   }
 
   /**
@@ -171,13 +185,19 @@ export class TelemetryExporter {
   }
 
   private async run(nowMs: number) {
-    const { state } = this.store.read();
+    // The state is read and the queue updated only when the state changed since the last pass (review L1);
+    // otherwise a pass costs one version read and, while the export is on, one count of due rows.
+    const version = this.store.version();
+    const changedState = this.seen?.version !== version;
+    if (changedState) this.seen = this.store.read();
+    const state = this.seen!.state;
     const cfg = state.project.telemetry;
     if (!cfg?.enabled || !cfg.endpoint) return;
-    if (cfg.enabledAt) {
+    if (changedState && cfg.enabledAt) {
       const since = cfg.enabledAt;
       this.store.queueTraceExports(settles(state).filter((k) => k.settledAt > since));
     }
+    if (!this.store.dueTraceExportCount(nowMs)) return;
     const due = this.store.dueTraceExports(nowMs, BATCH);
     if (!due.length) return;
     let changed = false;
@@ -197,8 +217,9 @@ export class TelemetryExporter {
       } catch (e) {
         const tries = row.tries + 1;
         const error = this.redact(message(e)).slice(0, 500);
-        if (tries >= MAX_TRIES) this.store.markTraceExport(row.taskId, row.settledAt, { status: "failed", tries, nextAt: null, error });
-        else this.store.markTraceExport(row.taskId, row.settledAt, { status: "pending", tries, nextAt: nowMs + BACKOFF_MINUTES[Math.min(tries, BACKOFF_MINUTES.length) - 1] * 60_000, error });
+        const at = new Date(nowMs).toISOString();
+        if (tries >= MAX_TRIES) this.store.markTraceExport(row.taskId, row.settledAt, { status: "failed", tries, nextAt: null, error, at });
+        else this.store.markTraceExport(row.taskId, row.settledAt, { status: "pending", tries, nextAt: nowMs + BACKOFF_MINUTES[Math.min(tries, BACKOFF_MINUTES.length) - 1] * 60_000, error, at });
         this.log(`Traces: ${row.taskId} could not be sent (try ${tries} of ${MAX_TRIES}${tries >= MAX_TRIES ? ", giving up until Retry failed" : ""}): ${error}`);
       }
       changed = true;

@@ -79,7 +79,7 @@ const OUTCOME_ATTRS: Record<MeasureId, { name: string; boolean?: true }> = {
   openAtEnd: { name: "orc.outcome.open_at_end" },
   firstPassChecks: { name: "orc.outcome.first_pass_checks", boolean: true },
   failedCheckRuns: { name: "orc.outcome.failed_check_runs" },
-  reviewComplete: { name: "orc.outcome.review_complete" },
+  reviewComplete: { name: "orc.outcome.review_complete", boolean: true },
   humanTouches: { name: "orc.outcome.human_touches" },
   landed: { name: "orc.outcome.landed", boolean: true },
   sentBack: { name: "orc.outcome.sent_back", boolean: true },

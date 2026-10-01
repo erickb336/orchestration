@@ -23,7 +23,7 @@ import {
   GEN_AI_PROVIDER_NAME_VALUE_OPENAI,
 } from "@opentelemetry/semantic-conventions/incubating";
 import { ATTR_ERROR_TYPE, ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLIENT_HEADER, type ServiceInfo } from "../src/api";
 import * as M from "../src/domain/model";
 import { GEN_AI, PROVIDER_NAMES, spanIdFor, traceIdFor } from "../src/domain/trace";
@@ -31,7 +31,7 @@ import { createHttpServer } from "./http";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
-import { BACKOFF_MINUTES, BATCH, MAX_TRIES, TIMEOUT_MS, TelemetryExporter, parseOtlpHeaders } from "./telemetry";
+import { BACKOFF_MINUTES, BATCH, MAX_TRIES, TIMEOUT_MS, TelemetryExporter, otlpHeadersFromEnv, parseOtlpHeaders } from "./telemetry";
 
 // ---- a minimal protobuf reader for ExportTraceServiceRequest ----
 
@@ -294,6 +294,57 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe("otlpHeadersFromEnv (review L2)", () => {
+  it("reads the general and the traces-specific variable, the traces-specific one winning key by key", () => {
+    expect(otlpHeadersFromEnv({})).toEqual({});
+    expect(otlpHeadersFromEnv({ OTEL_EXPORTER_OTLP_HEADERS: "a=1,b=2" })).toEqual({ a: "1", b: "2" });
+    expect(otlpHeadersFromEnv({ OTEL_EXPORTER_OTLP_TRACES_HEADERS: "Authorization=Basic%20x" })).toEqual({ Authorization: "Basic x" });
+    expect(otlpHeadersFromEnv({ OTEL_EXPORTER_OTLP_HEADERS: "a=1,b=2", OTEL_EXPORTER_OTLP_TRACES_HEADERS: "b=3" })).toEqual({ a: "1", b: "3" });
+  });
+});
+
+describe("review fixes", () => {
+  it("M1: the status counts settles with no row, even when rows outnumber tasks (a task that settled twice)", () => {
+    const store = open();
+    const a = settle(store, "a", T0);
+    settle(store, "b", T0);
+    // Task a has a row for its current settle and one for an older settle that was superseded; b has none.
+    store.queueTraceExports([{ taskId: a, settledAt: outcomeOf(store, a).settledAt }, { taskId: a, settledAt: iso(T0 - 60 * MIN) }]);
+    const e = exporter(store);
+    expect(e.status(store.read().state)).toMatchObject({ pending: 2, unqueued: 1 });
+  });
+
+  it("L1: a pass with no new state and nothing due neither reads the state nor writes the queue", async () => {
+    const store = open();
+    turnOn(store, T0);
+    const e = exporter(store);
+    await e.pass(T0 + MIN);
+    const read = vi.spyOn(store, "read");
+    const queue = vi.spyOn(store, "queueTraceExports");
+    await e.pass(T0 + 2 * MIN);
+    await e.pass(T0 + 3 * MIN);
+    expect(read).not.toHaveBeenCalled();
+    expect(queue).not.toHaveBeenCalled();
+    // A new settle changes the state: the next pass reads it, queues the task and sends it.
+    settle(store, "new", T0 + 4 * MIN);
+    await e.pass(T0 + 5 * MIN);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(receiver.requests).toHaveLength(1);
+  });
+
+  it("L11: the status shows the most recent error, whether its row is failed or still pending", () => {
+    const store = open();
+    const x = settle(store, "x", T0);
+    const y = settle(store, "y", T0);
+    const sx = outcomeOf(store, x).settledAt;
+    const sy = outcomeOf(store, y).settledAt;
+    store.queueTraceExports([{ taskId: x, settledAt: sx }, { taskId: y, settledAt: sy }]);
+    store.markTraceExport(y, sy, { status: "pending", tries: 1, nextAt: T0 + 30 * MIN, error: "older error", at: iso(T0 + MIN) });
+    store.markTraceExport(x, sx, { status: "failed", tries: MAX_TRIES, nextAt: null, error: "newest error", at: iso(T0 + 2 * MIN) });
+    expect(store.traceExportCounts().lastError).toBe("newest error");
+  });
+});
+
 describe("parseOtlpHeaders", () => {
   it("reads key=value pairs separated by commas, URL-decoded and trimmed", () => {
     expect(parseOtlpHeaders(undefined)).toEqual({});
@@ -312,7 +363,8 @@ describe("the trace exporter", () => {
     const e = exporter(store);
     await e.pass(T0 + MIN);
     expect(receiver.requests).toHaveLength(0);
-    expect(e.status(store.read().state)).toEqual({ enabled: false, pending: 0, sent: 0, failed: 0, headersFromEnv: false });
+    // Review M1: the settled task with no row is what "Send finished tasks" would queue.
+    expect(e.status(store.read().state)).toEqual({ enabled: false, pending: 0, sent: 0, failed: 0, unqueued: 1, headersFromEnv: false });
   });
 
   it("sends one trace per task settled after the export went on, as OTLP protobuf with the right spans", async () => {
@@ -350,7 +402,7 @@ describe("the trace exporter", () => {
     // Bookkeeping: the settle is `sent`; the task settled before the export went on has no row at all.
     expect(store.traceExport(id, o.settledAt)).toMatchObject({ status: "sent", tries: 0, sentAt: iso(T0 + 3 * MIN), lastError: null });
     expect(store.traceExport(before, outcomeOf(store, before).settledAt)).toBeUndefined();
-    expect(e.status(store.read().state)).toEqual({ enabled: true, pending: 0, sent: 1, failed: 0, lastSentAt: iso(T0 + 3 * MIN), headersFromEnv: false });
+    expect(e.status(store.read().state)).toEqual({ enabled: true, pending: 0, sent: 1, failed: 0, unqueued: 1, lastSentAt: iso(T0 + 3 * MIN), headersFromEnv: false });
     // Another pass sends nothing more.
     await e.pass(T0 + 4 * MIN);
     expect(receiver.requests).toHaveLength(1);
@@ -618,7 +670,7 @@ describe("the telemetry endpoints", () => {
   it("reports the export's status in ServiceInfo, without any header", async () => {
     settle(store, "x", T0);
     const info = (await j(await fetch(base + "/api/state"))).service as ServiceInfo;
-    expect(info.telemetry).toEqual({ enabled: false, pending: 0, sent: 0, failed: 0, headersFromEnv: false });
+    expect(info.telemetry).toEqual({ enabled: false, pending: 0, sent: 0, failed: 0, unqueued: 1, headersFromEnv: false });
     const text = JSON.stringify(await j(await fetch(base + "/api/health")));
     expect(text).toContain('"headersFromEnv":false');
   });

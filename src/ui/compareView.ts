@@ -78,6 +78,8 @@ export interface CellText {
   spread?: string;
   /** "3 of 9 reported", when not every row in the group reported the measure. */
   reported?: string;
+  /** The group is large enough but too few of its tasks reported this measure (review L7); the group's own chip covers a small group. */
+  fewHere?: boolean;
   /** For the cell's title: the numbers in words. */
   title: string;
   missing: boolean;
@@ -92,14 +94,16 @@ export function cellText(def: MeasureDef, stat: MeasureStat): CellText {
   if (def.unit === "rate") {
     const count = stat.count ?? 0;
     const pct = `${Math.round((count / stat.n) * 100)}%`;
-    return { main: `${count} of ${stat.n}`, spread: pct, reported, title: `${def.label}: ${fmtRate(count, stat.n)}${reported ? `; ${reported}` : ""}`, missing: false };
+    const fewHere = stat.tooFew && stat.of >= TOO_FEW;
+    return { main: `${count} of ${stat.n}`, spread: pct, reported, ...(fewHere ? { fewHere } : {}), title: `${def.label}: ${fmtRate(count, stat.n)}${reported ? `; ${reported}` : ""}${fewHere ? "; too few to compare" : ""}`, missing: false };
   }
   const f = (v: number) => fmtValue(def.unit, v);
   const median = stat.median ?? stat.values[0] ?? 0;
   const spread = stat.q1 !== undefined && stat.q3 !== undefined ? `${f(stat.q1)}–${f(stat.q3)}` : undefined;
   const range = stat.min !== undefined && stat.max !== undefined && stat.n > 1 ? `; from ${f(stat.min)} to ${f(stat.max)}` : "";
-  const title = `${def.label}: median ${f(median)}${spread ? `; middle half ${spread}` : ""}${range}; ${stat.n} task${stat.n === 1 ? "" : "s"}${reported ? ` (${reported})` : ""}`;
-  return { main: f(median), spread, reported, title, missing: false };
+  const fewHere = stat.tooFew && stat.of >= TOO_FEW;
+  const title = `${def.label}: median ${f(median)}${spread ? `; middle half ${spread}` : ""}${range}; ${stat.n} task${stat.n === 1 ? "" : "s"}${reported ? ` (${reported})` : ""}${fewHere ? "; too few to compare" : ""}`;
+  return { main: f(median), spread, reported, ...(fewHere ? { fewHere } : {}), title, missing: false };
 }
 
 export interface Scale {

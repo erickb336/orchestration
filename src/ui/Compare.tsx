@@ -436,6 +436,7 @@ function Cell({ def, stat, scale }: { def: MeasureDef; stat: MeasureStat; scale?
       <span className="cell-main num">{c.main}</span>
       {c.spread && <span className="cell-spread num">{c.spread}</span>}
       {c.reported && <span className="cell-reported">{c.reported}</span>}
+      {c.fewHere && <span className="cell-reported">too few to compare</span>}
       {def.unit === "rate" ? <RateBar count={stat.count ?? 0} n={stat.n} /> : scale && <DotStrip values={stat.values} median={stat.median ?? stat.values[0]} scale={scale} />}
     </div>
   );

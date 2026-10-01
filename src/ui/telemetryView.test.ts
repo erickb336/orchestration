@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { TelemetryStatus } from "../api";
 import { buildSeed } from "../domain/seed";
 import type { Task, TaskOutcome } from "../domain/types";
-import { LANGFUSE_ENDPOINT, PHOENIX_ENDPOINT, backfillCount, endpointProblem, hostOf, isLoopbackHost, needsRemoteConfirm, statusLine } from "./telemetryView";
+import { confirmedFor, LANGFUSE_ENDPOINT, PHOENIX_ENDPOINT, backfillCount, endpointProblem, hostOf, isLoopbackHost, needsRemoteConfirm, statusLine } from "./telemetryView";
 
 describe("the loopback rule (mirrors setTelemetry, design §5.1)", () => {
   it("treats localhost, 127.0.0.1, [::1] and *.localhost as this computer", () => {
@@ -44,33 +44,44 @@ describe("endpointProblem", () => {
     expect(endpointProblem("   ")).toMatch(/Enter the endpoint/);
     expect(endpointProblem("localhost:6006")).toMatch(/full URL/);
     expect(endpointProblem("ftp://localhost/v1/traces")).toMatch(/http:\/\/ or https:\/\//);
-    expect(endpointProblem("http://user:secret@host.example/v1/traces")).toMatch(/must not carry credentials/);
-    expect(endpointProblem("http://user@host.example/v1/traces")).toMatch(/must not carry credentials/);
+    expect(endpointProblem("http://user:secret@host.example/v1/traces")).toMatch(/must not contain credentials/);
+    expect(endpointProblem("http://user@host.example/v1/traces")).toMatch(/must not contain credentials/);
+    // The same rules as the command (review L3): no query string.
+    expect(endpointProblem("http://localhost:6006/v1/traces?api_key=x")).toMatch(/must not have a query string/);
   });
 });
 
 /** Only the record's presence counts here, so a partial outcome is enough. */
 const outcome = (settledAt: string): TaskOutcome => ({ v: 1, result: "done", settledAt }) as unknown as TaskOutcome;
 
+describe("confirmedFor", () => {
+  it("binds the remote confirmation to the host it was given for (review M3)", () => {
+    expect(confirmedFor("collector.example", "https://collector.example/v1/traces")).toBe(true);
+    expect(confirmedFor("collector.example", "https://other.example/v1/traces")).toBe(false);
+    expect(confirmedFor(undefined, "https://collector.example/v1/traces")).toBe(false);
+    expect(confirmedFor("collector.example", "not a url")).toBe(false);
+  });
+});
+
 describe("backfillCount", () => {
   const base = buildSeed(Date.parse("2026-09-30T12:00:00Z"));
   const settled = (t: Task, lifecycle: Task["lifecycle"], withOutcome: boolean): Task => ({ ...structuredClone(t), lifecycle, ...(withOutcome ? { outcome: outcome("2026-09-20T10:00:00Z") } : {}) });
 
-  it("counts settled tasks with an outcome that the export does not know yet, never below zero", () => {
+  it("uses the service's count of unqueued settles (review M1), and every settled task with an outcome before it reports", () => {
     const [a, b, c, d] = base.tasks;
     const tasks: Task[] = [settled(a, "done", true), settled(b, "cancelled", true), settled(c, "done", false), settled(d, "active", true)];
     expect(backfillCount(tasks, undefined)).toBe(2);
-    const status = (sent: number, pending: number, failed: number): TelemetryStatus => ({ enabled: true, sent, pending, failed, headersFromEnv: false });
-    expect(backfillCount(tasks, status(1, 0, 0))).toBe(1);
-    expect(backfillCount(tasks, status(1, 1, 0))).toBe(0);
-    expect(backfillCount(tasks, status(2, 1, 1))).toBe(0);
+    const status = (unqueued: number): TelemetryStatus => ({ enabled: true, sent: 2, pending: 0, failed: 0, unqueued, headersFromEnv: false });
+    // Rows per settle can outnumber tasks (a task that settled twice); the service's count is the truth.
+    expect(backfillCount(tasks, status(1))).toBe(1);
+    expect(backfillCount(tasks, status(0))).toBe(0);
   });
 });
 
 describe("statusLine", () => {
   it("says what was sent, what waits and what failed, and when the last one went", () => {
     expect(statusLine(undefined, undefined)).toBe("Nothing sent yet.");
-    expect(statusLine({ enabled: true, sent: 41, pending: 0, failed: 0, lastSentAt: "2026-09-30T11:58:00Z", headersFromEnv: true }, "2m ago")).toBe("Sent 41 · waiting 0 · failed 0 · last sent 2m ago");
-    expect(statusLine({ enabled: false, sent: 0, pending: 0, failed: 2, headersFromEnv: false }, undefined)).toBe("Sent 0 · waiting 0 · failed 2");
+    expect(statusLine({ enabled: true, sent: 41, pending: 0, failed: 0, unqueued: 0, lastSentAt: "2026-09-30T11:58:00Z", headersFromEnv: true }, "2m ago")).toBe("Sent 41 · waiting 0 · failed 0 · last sent 2m ago");
+    expect(statusLine({ enabled: false, sent: 0, pending: 0, failed: 2, unqueued: 0, headersFromEnv: false }, undefined)).toBe("Sent 0 · waiting 0 · failed 2");
   });
 });
