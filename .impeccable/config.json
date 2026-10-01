@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "layout-transition",
+        "value": "*",
+        "files": [
+          "src/ui/styles.css"
+        ],
+        "createdAt": "2026-10-01T05:37:01.606Z",
+        "reason": "lead decided (ORC-017 design §3.12, reviewed in ORC-017 B2 and R1): the 8px Progress-by-area bar animates segment widths on count changes; transform cannot keep adjacent flex segments contiguous"
+      }
+    ]
+  }
+}
