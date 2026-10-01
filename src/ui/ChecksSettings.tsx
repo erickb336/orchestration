@@ -1,6 +1,6 @@
-// Settings › checks (ORC-013 §12): the project's own check commands, run by the service in the Codex sandbox on a
+// Settings › checks: the project's own check commands, run by the service in the Codex sandbox on a
 // throwaway copy of each change. Off until the person turns it on; the commands are the person's settings and nothing
-// an agent writes can change them. ORC-025 pass 5 (S4) splits the card in two:
+// an agent writes can change them. They are split across two sections:
 //  - Quality › Checks: on or off, "On · 2 commands", Suggest from repository, and Edit commands (the editor, in place);
 //  - Advanced › Checks sandbox: the sandbox, its health, the network for installs, the limits, protected inputs and
 //    the environment. Running without a sandbox is a separate, explicit choice with its own warning.

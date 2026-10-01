@@ -21,7 +21,7 @@ export function ChildLink({ state, child }: { state: State; child: Task }) {
 
 export function ChildTasksCard({ state, task }: { state: State; task: Task }) {
   const all = M.childTasks(state, task);
-  // ORC-016: children of a breakdown made under an earlier flow stay listed, labelled; the new steps never wait for or reuse them.
+  // Children of a breakdown made under an earlier flow stay listed, labelled; the new steps never wait for or reuse them.
   const children = all.filter((c) => !M.childFromEarlierFlow(state, task, c));
   const earlier = all.filter((c) => M.childFromEarlierFlow(state, task, c));
   const plansBreakdown = task.steps.some((st) => st.outputs.some((o) => o.kind === "breakdown"));

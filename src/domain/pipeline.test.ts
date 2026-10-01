@@ -26,7 +26,7 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
 describe("built-in and internal flows", () => {
   it("every one is valid and names no product or model", () => {
     for (const p of [...builtInCatalog(), ...INTERNAL_FLOWS]) {
-      // ORC-013: the delivery-checks pipeline is valid only on a task with a checkTarget, like delivery-review on a reviewTarget.
+      // The delivery-checks pipeline is valid only on a task with a checkTarget, like delivery-review on a reviewTarget.
       expect(validatePipeline(p.steps, { checkTarget: p.id === "delivery-checks" }).filter((i) => i.severity === "error"), p.id).toEqual([]);
       // What workers and people read: names, descriptions and the steps.
       const neutral = { id: p.id, name: p.name, description: p.description, ...("whenToUse" in p ? { whenToUse: p.whenToUse } : {}), steps: p.steps };
@@ -148,7 +148,7 @@ describe("pipeline edits", () => {
   });
 });
 
-describe("review regressions (ORC-002)", () => {
+describe("removed steps, run-if, outputs and step ids", () => {
   it("a task is not integrated while a removed step's run is still stopping", () => {
     let s = finish(seed(), "EX-001", 1); // S2 implement done
     s = M.dispatchEligible(s, at(2)); // S3 and S4 reviews run (C1, the Checks step, skipped: checks are off)
@@ -234,7 +234,7 @@ describe("review regressions (ORC-002)", () => {
   });
 
   it("the internal setPipeline records a custom pipeline as the task's flow", () => {
-    // ORC-016: no command reaches setPipeline; what tests build with it is labelled, never mistaken for a catalog flow.
+    // No command reaches setPipeline; what tests build with it is labelled, never mistaken for a catalog flow.
     const s = setPipeline(seed(), "EX-003", 1, flowSteps("change").slice(0, 1), "one step", "user", at(0));
     expect(task(s, "EX-003").flow).toEqual({ id: "custom", name: "Custom pipeline", source: "custom", chosenBy: "user" });
     expect(task(s, "EX-003").pipelineHistory[1].flow).toMatchObject({ source: "custom" });

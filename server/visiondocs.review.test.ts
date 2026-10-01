@@ -1,7 +1,7 @@
-// ORC-014 independent review, service level: trailing-whitespace stripping in linear time (1), nothing
-// written for a refused upload (5), orphan copies swept and history kept (6), links refused and copies
-// verified (7), hostile document text cleaned and names quoted (8), one revision per batch through the
-// endpoint (9), and the 12 → 13 migration keeping state visible (12).
+// Vision documents, the harder cases at service level: trailing-whitespace stripping in linear time,
+// nothing written for a refused upload, orphan copies swept and history kept, links refused and copies
+// verified, hostile document text cleaned and names quoted, one revision per batch through the endpoint,
+// and the 12 → 13 migration keeping state visible.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
@@ -110,7 +110,7 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe("1: trailing whitespace is trimmed in linear time", () => {
+describe("trailing whitespace is trimmed in linear time", () => {
   it("a document and a review diff of 150000 newlines followed by text render in well under two seconds", () => {
     let s = buildSeed(now, { inFlightRuns: false });
     const text = "\n".repeat(150_000) + "end";
@@ -128,7 +128,7 @@ describe("1: trailing whitespace is trimmed in linear time", () => {
   });
 });
 
-describe("5: nothing is written for a request the command refuses", () => {
+describe("nothing is written for a request the command refuses", () => {
   it("an empty or over-long idempotency key, a key reused for a different file, and a file the project refuses leave no copy", async () => {
     init();
     for (const bad of ["", "k".repeat(201)]) {
@@ -156,7 +156,7 @@ describe("5: nothing is written for a request the command refuses", () => {
   }, 60_000);
 });
 
-describe("6: orphan copies are swept; history keeps its copies", () => {
+describe("orphan copies are swept; history keeps its copies", () => {
   it("a file refused within a batch loses its copy at once; stale orphans and temp files go after the grace period; a removed document's copy stays; a replaced project's directory goes", async () => {
     init();
     const first = await stageOk("a.md", "old");
@@ -196,7 +196,7 @@ describe("6: orphan copies are swept; history keeps its copies", () => {
   });
 });
 
-describe("7: links are refused and copies verified", () => {
+describe("links are refused and copies verified", () => {
   it("a link in the data directory cannot redirect a copy; a copy whose bytes changed, or that became a link, is reported and never used", async () => {
     init();
     const outside = join(dir, "elsewhere");
@@ -231,7 +231,7 @@ describe("7: links are refused and copies verified", () => {
   });
 });
 
-describe("8: hostile document text and names", () => {
+describe("hostile document text and names", () => {
   it("tag and bidi controls are removed from document text with a note; legitimate text stays; names are quoted and backticks in names lengthen the fence", () => {
     let s = buildSeed(now, { inFlightRuns: false });
     const persian = "می‌خواهم";
@@ -263,7 +263,7 @@ describe("8: hostile document text and names", () => {
   });
 });
 
-describe("9: one vision revision per batch through the endpoint", () => {
+describe("one vision revision per batch through the endpoint", () => {
   it("an Add of three files is one revision named for the batch; the same file again is unchanged; NFC names replace rather than duplicate; removal stays per document", async () => {
     init();
     const ids: string[] = [];
@@ -299,7 +299,7 @@ describe("9: one vision revision per batch through the endpoint", () => {
   });
 });
 
-describe("12: migration 12 → 13 keeps state visible", () => {
+describe("migration 12 → 13 keeps state visible", () => {
   type Doc = {
     seq: number;
     project: { sample: boolean; stage: string; shapingSince?: string; visions: { text: string }[]; autonomy: { enabled: boolean; holdLeadProposals: boolean } };
@@ -331,7 +331,7 @@ describe("12: migration 12 → 13 keeps state visible", () => {
     });
     expect(s.project.stage).toBe("shaping");
     expect(s.project.shapingSince).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    // ORC-013: the 13 → 14 upgrade records its own template events after this one, so it is found by its text.
+    // The 13 → 14 upgrade records its own template events after this one, so it is found by its text.
     const ev = s.events.find((e) => e.message.startsWith("Moved from building to shaping when the state format was upgraded"))!;
     expect(ev).toMatchObject({ actor: "system", kind: "config", at: s.project.shapingSince });
     expect(ev.id).toMatch(/^ev-\d+$/);

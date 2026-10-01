@@ -1,4 +1,4 @@
-// ORC-013 step 1: structured findings, the derived counts, decisions and their routing, carry-forward,
+// Structured findings, the derived counts, decisions and their routing, carry-forward,
 // the lead's decisions, and the Checks steps that skip while checks are off. Pure domain tests.
 
 import { describe, expect, it } from "vitest";
@@ -20,7 +20,7 @@ function finding(over: Partial<Finding> = {}): Finding {
   return { id: `F${n}`, key: `key${n}`.padEnd(12, "0"), source: "review", severity: "error", action: "auto-fix", title: `Finding ${n}`, detail: "what is wrong", ...over };
 }
 
-/** A fresh seed with every sample task held, plus one user task from the Change template (S1 → C1 → S2 → S3 → C2 → S4). */
+/** A fresh seed with every sample task held, plus one user task on the Change flow (S1 → C1 → S2 → S3 → C2 → S4). */
 function withTask(opts: { autopilot?: boolean; author?: "user" | "lead" } = {}): { s: State; id: string } {
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
@@ -43,7 +43,7 @@ function finish(s: State, id: string, t: number, findings?: Finding[], reviewedP
   return st.role === "code_reviewer" ? securityClean(done, id, t) : done;
 }
 
-/** ORC-021: the security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
+/** The security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
 function securityClean(s: State, id: string, t: number): State {
   let next = M.dispatchEligible(s, at(t));
   for (const a of running(next, id)) if (step(next, id, a.stepId).role === "security_reviewer") next = M.reportCompletion(next, a.id, [], at(t), [{ name: "findings", summary: "no security findings", findings: [], openFindings: 0 }]);
@@ -84,7 +84,7 @@ describe("the Checks steps while checks are off", () => {
   });
 });
 
-describe("derived counts (Q7, Q8)", () => {
+describe("derived counts", () => {
   it("fixable, undecided and unresolved over actions, severities and decisions; the open count is computed, never taken from the worker", () => {
     const fs = [
       finding({ severity: "error", action: "auto-fix" }), // F1 fixable, unresolved
@@ -125,7 +125,7 @@ describe("derived counts (Q7, Q8)", () => {
   });
 });
 
-describe("runIf and the repair's wait (Q8)", () => {
+describe("runIf and the repair's wait", () => {
   it("counts only fixable findings: a repair with only ask-user findings waits (neither dispatched nor skipped), runs on fix, skips on accept", () => {
     const { s: s0, id } = reviewed([finding({ action: "ask-user" })]);
     let s = go(s0, 5);
@@ -234,7 +234,7 @@ describe("decisions: routing, the user's decisions, follow-ups, reopen", () => {
   });
 });
 
-describe("the lead's decisions (applyLeadDecisions, Q9)", () => {
+describe("the lead's decisions (applyLeadDecisions)", () => {
   function leadCase(fs: Finding[], author: "user" | "lead" = "lead") {
     const { s, id, art } = reviewed(fs, { autopilot: true, author });
     const r = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(5));

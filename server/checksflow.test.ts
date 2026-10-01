@@ -1,5 +1,5 @@
-// ORC-013 step 2: the scheduler end to end with scripted adapters and a scripted check runner, on a
-// temporary repository. The Change template's loop (checks fail, the review sees it, the repair fixes
+// Service-run checks through the scheduler, end to end with scripted adapters and a scripted check runner, on a
+// temporary repository. The Change flow's loop (checks fail, the review sees it, the repair fixes
 // it, the next round passes, Final checks reuses the run), checks off, pause, cancel, a pipeline edit
 // and a settings change during a run, a restart, a lost lease, the sandbox being unavailable, failing
 // final checks and the user's acceptance, and a change that edits protected check inputs. No model
@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as C from "../src/domain/checks";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
@@ -19,6 +19,10 @@ import { Store } from "./store";
 import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter, ScriptedChecks } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
+
+// Real git, check commands and many scheduler cycles per test: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 let dir: string;
 let repo: string;
@@ -101,7 +105,7 @@ async function checkRunning(title = "Checked", file: [string, string] = ["a.txt"
   return { id, run };
 }
 
-describe("the Change template end to end (§14)", () => {
+describe("the Change flow end to end", () => {
   it("checks fail on the coder's change, the review sees the failure, the repair fixes it, the next round passes, Final checks reuses the run, the lead verifies and the task integrates", async () => {
     process.env.GH_TOKEN = "ghp_fakefakefakefakefakefakefake";
     try {
@@ -222,7 +226,7 @@ describe("the Change template end to end (§14)", () => {
   });
 });
 
-describe("interruption (§6.10)", () => {
+describe("interruption", () => {
   it("a pause during a check run stops it (terminate, then acknowledged), records no result, and runs it again from the start after resume", async () => {
     const { id, run } = await checkRunning();
     cmd("pauseTask", { taskId: id });
@@ -266,7 +270,7 @@ describe("interruption (§6.10)", () => {
 
   it("a pipeline edit during a run discards its result; a settings change stops it for revision and it runs again with the new revision (mutation check: stale results)", async () => {
     const { id, run } = await checkRunning();
-    // ORC-024: the principles travel with the edit; dropping them would change what S1's agent received and restart it.
+    // The principles travel with the edit; dropping them would change what S1's agent received and restart it.
     const defs = task(id).steps.map((s) => ({ id: s.id, purpose: s.id === "C1" ? "Run the checks, edited" : s.purpose, role: s.role, dependsOn: s.dependsOn, inputs: s.inputs, outputs: s.outputs, ...(s.runIf ? { runIf: s.runIf } : {}), ...(s.iterate ? { iterate: s.iterate } : {}), ...(s.checks ? { checks: s.checks } : {}), ...(s.principles ? { principles: s.principles } : {}) }));
     setTestPipeline(store, id, defs, iso(), "edit");
     expect(st().attempts.find((a) => a.id === run.id)!.outcome).toBe("stopping");
@@ -327,7 +331,7 @@ describe("interruption (§6.10)", () => {
   });
 });
 
-describe("Final checks and protected inputs (§6.7)", () => {
+describe("Final checks and protected inputs", () => {
   it("a change that still fails at the end blocks the task with a decision; the user accepts, the task finishes and its landed item is flagged", async () => {
     cmd("setDeliveryMode", { mode: "local", branch: "main" });
     const { id, run } = await checkRunning("Final");
@@ -365,7 +369,7 @@ describe("Final checks and protected inputs (§6.7)", () => {
       await new Promise((r) => setTimeout(r, 5));
     }
     expect(task(id).integration?.landed?.flags).toEqual(["checks-accepted-failing"]);
-  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
+  });
 
   it("a change that edits a protected check input gets a finding that needs a decision; the repair waits until it is taken", async () => {
     const { id, run } = await checkRunning("Inputs", ["package.json", '{"scripts":{"test":"echo ok"}}\n']);
@@ -409,7 +413,7 @@ describe("Final checks and protected inputs (§6.7)", () => {
   });
 });
 
-describe("security review of step 2 (L7): leftover check worktrees", () => {
+describe("leftover check worktrees", () => {
   it("a check run's worktree and temp directory are removed after a crash even when dirty (mutation check: the throwaway prune)", async () => {
     const { run } = await checkRunning();
     const a = checks.started.find((x) => x.attemptId === run.id)!;

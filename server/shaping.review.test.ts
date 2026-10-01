@@ -1,7 +1,7 @@
-// ORC-012 review findings, service level. While shaping no delivery work starts: no integration, no
-// publish, push, merge or base update; GitHub is still observed; the labels say what waits; Start
-// building resumes it (1). The format 12 → 13 migration gives the roadmap its own hold (2) and sends an
-// empty-vision project of the user's own to shaping (6).
+// Shaping the vision, the harder cases at service level. While shaping no delivery work starts: no
+// integration, no publish, push, merge or base update; GitHub is still observed; the labels say what waits;
+// Start building resumes it. The format 12 → 13 migration gives the roadmap its own hold and sends an
+// empty-vision project of the user's own to shaping.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,7 +50,7 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe("review 1: no delivery work while shaping (simulated GitHub)", () => {
+describe("no delivery work while shaping (simulated GitHub)", () => {
   it("an open pull request is not merged, a finished task is not integrated, the review row and the label say what waits, GitHub is still observed, and Start building resumes everything", async () => {
     cmd("setDeliveryMode", { mode: "pr" });
     cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "auto" } });
@@ -117,7 +117,7 @@ describe("review 1: no delivery work while shaping (simulated GitHub)", () => {
   });
 });
 
-describe("migration 12 → 13 (reviews 2 and 6)", () => {
+describe("migration 12 → 13", () => {
   function reopen(mutate: (doc: Record<string, unknown>) => void): State {
     const path = join(dir, `old-${++key}.sqlite`);
     const seeded = new Store(path);

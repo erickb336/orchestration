@@ -1,4 +1,4 @@
-// ORC-013 step 2: the Codex sandbox path's request contract, against a fake app-server
+// The Codex sandbox path's request contract, against a fake app-server
 // (server/testing/fake-codex-exec.mjs) that speaks initialize and command/exec and logs what it was
 // asked. The exact request (argv through the reaper, cwd, the sandbox policy with network only for
 // prepare when allowed, the writable roots, timeouts, the output cap, the environment), terminate on
@@ -33,7 +33,7 @@ function assignment(commands: CheckAssignment["commands"], o: Partial<CheckAssig
   mkdirSync(ws, { recursive: true });
   const tmp = join(dir, "tmp");
   const cache = join(dir, "cache");
-  // The app-server runs with the check environment itself (the allowlist, §6.6); the fake's own variables ride along after it.
+  // The app-server runs with the check environment itself (the allowlist); the fake's own variables ride along after it.
   const env = { ...checkEnv({ ...process.env, GH_TOKEN: "ghp_fakefakefakefakefakefakefake" }, { passEnv: [] }, { tmp, cache }), FAKE_CODEX_LOG: logFile, ...(o.sandbox === "none" ? {} : {}) };
   return { attemptId: "run-1", taskId: "T-1", stepId: "C1", workspace: ws, target: "a".repeat(40), commands, runTimeoutMs: 30_000, sandbox: "codex", prepareNetwork: true, env, tmpDir: tmp, cacheDir: cache, logDir: join(dir, "logs", "run-1"), ...o };
 }
@@ -53,7 +53,7 @@ function runToEnd(r: CodexSandboxChecks, a: CheckAssignment): Promise<AdapterEve
 }
 const completed = (events: AdapterEvent[]) => events.find((e): e is Extract<AdapterEvent, { type: "completed" }> => e.type === "completed")!;
 
-describe("CodexSandboxChecks (§6.5.2)", () => {
+describe("CodexSandboxChecks", () => {
   it("starts one app-server per run under a private, never signed-in CODEX_HOME with the isolation and project_doc_max_bytes=0 arguments, and sends the exact command/exec request per command", async () => {
     const r = runner();
     const a = assignment([cmd("install", [node, "-e", "1"], { kind: "prepare", timeoutMs: 1234 }), cmd("test", [node, "-e", 'console.log("hi")'])]);
@@ -77,7 +77,7 @@ describe("CodexSandboxChecks (§6.5.2)", () => {
     expect(rows[1].method).toBe("initialize");
     const execs = rows.filter((x) => x.method === "command/exec").map((x) => x.params as Record<string, unknown>);
     expect(execs).toHaveLength(2);
-    // A prepare command that is not an allowlisted download (review H1) runs offline, and the record says so.
+    // A prepare command that is not an allowlisted download runs offline, and the record says so.
     expect(execs[0]).toMatchObject({
       command: [node, REAPER, "--", node, "-e", "1"],
       processId: "run-1:install",
@@ -164,21 +164,21 @@ describe("the real sandbox on this machine (only with ORC_TEST_REAL_SANDBOX=1)",
   }, 60_000);
 });
 
-describe("security review of step 2 in the sandbox path (H1, L5)", () => {
+describe("running checks safely in the sandbox path: installs, forged results and probes", () => {
   const base = () => {
     const a = assignment([]);
     return { attemptId: a.attemptId, workspace: a.workspace, prepareNetwork: true, env: a.env, tmpDir: a.tmpDir, cacheDir: a.cacheDir };
   };
   const planned = (argv: string[], kind: "prepare" | "check" = "prepare", extra: object = {}) => ({ id: "c", label: "c", kind, argv, timeoutMs: 1000, ...extra });
 
-  it("H1: an install that may use the network is run with --ignore-scripts and the no-scripts environment; a rebuild step never gets the network; a check never does (mutation check)", async () => {
+  it("an install that may use the network is run with --ignore-scripts and the no-scripts environment; a rebuild step never gets the network; a check never does (mutation check)", async () => {
     const b = base();
     const npm = CodexSandboxChecks.execParams(b, planned(["npm", "ci"]));
     expect(npm.command.slice(-3)).toEqual(["npm", "ci", "--ignore-scripts"]);
     expect(npm.env).toMatchObject(NO_SCRIPTS_ENV);
     expect(NO_SCRIPTS_ENV.YARN_IGNORE_PATH).toBe("1");
     expect((npm.sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(true);
-    // Already flagged: not doubled; pnpm gets --ignore-pnpmfile too; Yarn Berry's own flag is recognised; contradictions are dropped (review H1, L11).
+    // Already flagged: not doubled; pnpm gets --ignore-pnpmfile too; Yarn Berry's own flag is recognised; contradictions are dropped.
     const pnpm = CodexSandboxChecks.execParams(b, planned(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts"]));
     expect(pnpm.command.filter((x) => x === "--ignore-scripts")).toHaveLength(1);
     expect(pnpm.command.slice(-5)).toEqual(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"]);
@@ -225,7 +225,7 @@ describe("security review of step 2 in the sandbox path (H1, L5)", () => {
     expect((execs[1].sandboxPolicy as { networkAccess?: boolean }).networkAccess).toBe(false);
   });
 
-  it("review M5, sandbox path: a command that forges a status file, prints '3 failing' and kills the reaper or its leader is recorded as failed (mutation check: the reaper's own exit status)", async () => {
+  it("a command that forges a status file, prints '3 failing' and kills the reaper or its leader is recorded as failed (mutation check: the reaper's own exit status)", async () => {
     const forge = (who: "leader" | "reaper") => {
       const p = join(dir, `forge-${who}.js`);
       writeFileSync(
@@ -250,7 +250,7 @@ describe("security review of step 2 in the sandbox path (H1, L5)", () => {
     }
   }, 20_000);
 
-  it("H1: the probe requires this machine's own loopback to be refused; a sandbox that lets a command reach it is unavailable (mutation check: no fallback)", async () => {
+  it("the probe requires this machine's own loopback to be refused; a sandbox that lets a command reach it is unavailable (mutation check: no fallback)", async () => {
     // The fake has no sandbox. A read-only $HOME makes the write-outside probe an honest EACCES refusal, so the probe reaches the loopback step,
     // where the fake connects: not ready, and it says why.
     const home = join(dir, "rohome");
@@ -264,7 +264,7 @@ describe("security review of step 2 in the sandbox path (H1, L5)", () => {
     expect(require("node:fs").readdirSync(join(dir, "probe"))).toEqual([]);
   }, 20_000);
 
-  it("L5: only an explicit refusal (EPERM or EACCES) is a denial; an unreachable network, a refused connection, a timeout or a killed command proves nothing", () => {
+  it("only an explicit refusal (EPERM or EACCES) is a denial; an unreachable network, a refused connection, a timeout or a killed command proves nothing", () => {
     expect(probeVerdict("DENIED EPERM\n", 3, "CONNECTED")).toBe("denied");
     expect(probeVerdict("DENIED EACCES\n", 3, "WROTE")).toBe("denied");
     expect(probeVerdict("DENIED ENETUNREACH\n", 3, "CONNECTED")).toBe("unknown");

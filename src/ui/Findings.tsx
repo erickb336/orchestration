@@ -1,7 +1,7 @@
-// ORC-013: structured review findings and the decisions on them. Read-only views over domain state
+// Structured review findings and the decisions on them. Read-only views over domain state
 // plus the explicit decision controls (Fix, Accept as is, Follow up, Reopen, Send to the lead / me).
 // Nothing here decides anything by itself: every change is a named command the service applies.
-// ORC-025 pass 3 (P2): a decision that needs you is taken at the top of the task page; the output's list
+// A decision that needs you is taken at the top of the task page; the output's list
 // shows the same finding with a link there instead of a second set of buttons.
 
 import { useState } from "react";
@@ -48,11 +48,11 @@ export function DecisionControls({ decision: d }: { decision: FindingDecision })
   const [note, setNote] = useState("");
   const decide = (decision: "fix" | "accept" | "follow-up" | "reopen") => void send("decideFinding", { decisionId: d.id, decision, ...(note.trim() ? { note: note.trim() } : {}) });
   const open = d.status === "open";
-  // Review 1 (10): nothing on a cancelled or finished task can be decided any more.
+  // Nothing on a cancelled or finished task can be decided any more.
   const lifecycle = state.tasks.find((t) => t.id === d.taskId)?.lifecycle;
   const off = disabled || lifecycle === "cancelled" || lifecycle === "done";
   if (d.status === "superseded") return <span className="muted small">No longer open{d.why ? `: ${d.why}` : ""}.</span>;
-  // ORC-013 §6.7: failing final checks take a repair round (at most two), or the user's acceptance; never a follow-up.
+  // Failing final checks take a repair round (at most two), or the user's acceptance; never a follow-up.
   const final = d.kind === "final-checks";
   const rounds = state.tasks.find((t) => t.id === d.taskId)?.checkRounds ?? 0;
   return (
@@ -173,7 +173,7 @@ function ApplySuggestion({ decision }: { decision: FindingDecision }) {
 const STATUS_MARK: Record<CheckRunRecord["results"][number]["status"], string> = { passed: "✓", failed: "✗", "timed-out": "✗", "not-run": "–" };
 const seconds = (ms: number) => `${Math.max(1, Math.round(ms / 1000))} s`;
 
-/** ORC-013: one row per command of a check run: status, exit code, duration, the excerpt and the full log; how it ran. */
+/** One row per command of a check run: status, exit code, duration, the excerpt and the full log; how it ran. */
 export function CheckResults({ run, attemptId }: { run: CheckRunRecord; attemptId: string }) {
   const { service } = useStore();
   const how = [run.sandbox === "codex" ? "sandboxed" : "no sandbox", ...(run.reusedFrom ? [`same result as ${run.reusedFrom} (not run again)`] : [])];

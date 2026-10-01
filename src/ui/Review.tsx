@@ -1,5 +1,5 @@
-// The Results page (ORC-025 R1–R3; `#/review` still opens it). First the pull requests that wait for you, each with
-// its verdict line, Merge and Keep for me, and "Why it's ready" (pass 3's PrPanel); then New results: work that
+// The Results page (`#/review` still opens it). First the pull requests that wait for you, each with
+// its verdict line, Merge and Keep for me, and "Why it's ready" (the PrPanel in Delivery.tsx); then New results: work that
 // landed and you have not marked as seen, with one Mark as seen and one Send back… per item and its details in
 // place. Pull requests still on their way, and closed ones, come last. The landed list never blocks anything, and an
 // item counts as seen only through Mark as seen, never by opening it.
@@ -181,7 +181,7 @@ export function Review() {
   );
 }
 
-/** A pull request that waits for you: the task, then pass 3's panel (verdict line, Merge, Keep for me, Why it's ready). */
+/** A pull request that waits for you: the task, then the PrPanel (verdict line, Merge, Keep for me, Why it's ready). */
 function PrRow({ state, task }: { state: State; task: Task }) {
   return (
     <Row as="li" id={task.id} title={titleOf(task)} href={taskHref(task)} className="r-pr">
@@ -191,7 +191,7 @@ function PrRow({ state, task }: { state: State; task: Task }) {
 }
 
 /**
- * One landed item (R3): when it landed and what passed, what it changed, one Mark as seen (or Mark as new) and one
+ * One landed item: when it landed and what passed, what it changed, one Mark as seen (or Mark as new) and one
  * Send back…; its details expand in place, with the agent reviews in one line.
  */
 function LandedRow({ state, task, filter, nowMs }: { state: State; task: Task; filter: ResultsFilter; nowMs: number }) {

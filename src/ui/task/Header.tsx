@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (P5): the task page's header: where it sits, its title and state, and its controls in one
+// The task page's header: where it sits, its title and state, and its controls in one
 // place: Pause or Resume, Message the lead, and a More menu with the rarer ones (Edit spec, Priority, Keep
 // running whatever the focus, Change flow, Review every step, Wait for my go-ahead, Cancel task).
 

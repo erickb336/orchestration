@@ -1,4 +1,4 @@
-// ORC-025 pass 4: the Tasks page (T1–T7) and the Activity page. The words come from pure helpers (tasksView.ts,
+// The Tasks page and the Activity page. The words come from pure helpers (tasksView.ts,
 // activityView.ts), checked over the seed and the demo; the screens are rendered through react-dom/server over a
 // fake store, as in home.test.tsx (there is no DOM test environment in this repository).
 
@@ -61,7 +61,7 @@ const render = (node: React.ReactElement, s: ServiceStore) =>
     </ConfirmProvider>,
   );
 
-describe("the groups (T1)", () => {
+describe("the groups", () => {
   it("puts Needs you first, as a group and a Status option, and each task in exactly one group", () => {
     expect(GROUPS[0]).toBe("needs-you");
     expect(GROUP_LABEL["needs-you"]).toBe("Needs you");
@@ -80,7 +80,7 @@ describe("the groups (T1)", () => {
   });
 });
 
-describe("the card's one line (T2)", () => {
+describe("the card's one line", () => {
   it("says what an agent is doing, with the provider and the step", () => {
     const s = buildSeed(T0);
     expect(cardLine(s, task(s, "EX-001"), T0)).toEqual({ text: "Implementing · Codex · step 2 of 9", tone: "work", provider: "codex" });
@@ -135,7 +135,7 @@ describe("the card's one line (T2)", () => {
   });
 });
 
-describe("a finished task (T7)", () => {
+describe("a finished task", () => {
   it("is Done with at most one result chip: Landed (simulated in the demo) or Pull request waiting for you", () => {
     const demo = buildDemo(T0);
     const wt1 = task(demo, "WT-001");
@@ -176,7 +176,7 @@ describe("the Tasks page", () => {
   const demo = buildDemo(T0);
   const markup = render(<Board />, store(demo));
 
-  it("lists Needs you first, then the columns, with no visit bookkeeping and no Role or Provider filter (T1, T3, T6)", () => {
+  it("lists Needs you first, then the columns, with no visit bookkeeping and no Role or Provider filter", () => {
     const needs = markup.indexOf(">Needs you</h2>");
     expect(needs).toBeGreaterThan(0);
     for (const h of [">Ready</h2>", ">Paused</h2>", ">Deferred</h2>", ">Done</h2>"]) expect(markup.indexOf(h)).toBeGreaterThan(needs);
@@ -185,13 +185,13 @@ describe("the Tasks page", () => {
     for (const kept of [">Area<", ">Status<", ">Sort<"]) expect(markup).toContain(kept);
   });
 
-  it("shows one plain line per card and no raw event text (T2)", () => {
+  it("shows one plain line per card and no raw event text", () => {
     expect(markup).toContain("Waiting for your decision");
     expect(markup).toContain("Waiting for you to choose an approach");
     expect(markup).not.toMatch(/run-\d{3}|Dispatched|acknowledged stop|cs-lead/);
   });
 
-  it("the board view names every column, empty ones narrow (T4)", () => {
+  it("the board view names every column, empty ones narrow", () => {
     const board = renderBoard(demo);
     expect(board).toContain("tl-board");
     for (const g of GROUPS) expect(board).toContain(`>${GROUP_LABEL[g]}</h2>`);
@@ -199,7 +199,7 @@ describe("the Tasks page", () => {
     expect(board).not.toContain("Empty:");
   });
 
-  it("a card is one link to the task, with Done and one result chip for finished work (T7)", () => {
+  it("a card is one link to the task, with Done and one result chip for finished work", () => {
     const card = render(<TaskCard state={demo} task={task(demo, "WT-001")} nowMs={T0} />, store(demo));
     expect(card).toContain('href="#/task/WT-001"');
     expect(card).toContain(">Done<");

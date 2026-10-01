@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (R2): the words of a delivery, apart from React: the one verdict line of a pull request
+// The words of a delivery, apart from React: the one verdict line of a pull request
 // ("Pull request #1000 · Code ✓ Security ✓ Checks ✓ · 6 files, +167 −12"), the landed line, the label of the
 // checklist disclosure, and the confirmations the delivery actions ask. Pure derivations over domain state.
 
@@ -158,10 +158,10 @@ export const LANDED_FLAG_LABEL: Record<Landed["flags"][number], string> = {
   "findings-accepted": "findings accepted as is",
 };
 
-/** ORC-025: a landed item is "New" until you mark it as seen; the words "review" and "reviewed" belong to the agents. */
+/** A landed item is "New" until you mark it as seen; the words "review" and "reviewed" belong to the agents. */
 export const LANDED_STATUS_LABEL: Record<Landed["status"], string> = { unreviewed: "New", reviewed: "Seen", "sent-back": "Sent back" };
 
-// ---------- the confirmations (P8) ----------
+// ---------- the confirmations ----------
 
 const sha12 = (sha: string) => sha.slice(0, 12);
 

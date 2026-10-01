@@ -1,4 +1,4 @@
-// ORC-017 §5: the words of the sample story, "Weekend Trips (sample)". The fake runtime reads its output
+// The words of the sample story, "Weekend Trips (sample)". The fake runtime reads its output
 // summaries, review findings and breakdown items from here, keyed by task id, and falls back to neutral
 // wording. Nothing here claims a real run: every run that uses these words is labelled simulated by the
 // run record, the banner and the chips, so the text itself carries no "(Simulated)" prefix.
@@ -133,7 +133,7 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
       "S3.change": "Signs the trip id into the invite link and refuses a link opened on another trip (+23 −6, 2 files)",
       verification: "A link opens only its own trip and an expired link says so; checks passed on the final change.",
     },
-    // ORC-021: the security review beside the code review found what the code review did not; the repair round fixed it.
+    // The security review beside the code review found what the code review did not; the repair round fixed it.
     findings: {
       SR1: {
         title: "Invite links are not scoped to the trip",
@@ -208,7 +208,7 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
     },
     findings: { "*": { title: "A stale forecast is shown as current", detail: "Hide the alert when the forecast is older than a day.", file: "src/trip/Weather.tsx", line: 27 } },
   },
-  // ORC-021: an Investigation. The result is a spec, not code; the review of the evidence leaves one note that blocks nothing.
+  // An Investigation. The result is a spec, not code; the review of the evidence leaves one note that blocks nothing.
   "WT-012": {
     outputs: {
       report: "GPS is polled once a second for the whole hike, screen off included, and every fix redraws the hidden map: together 61% of the drain over a 5-hour recording (GPS 38%, redraws 23%). Tile loading and the rest account for the remainder.",
@@ -217,7 +217,7 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
     },
     findings: { S2: { title: "Figures from one phone on one hike", detail: "The recording is one phone on one hike. The shares are large enough to act on; the follow-up should confirm the saving on a second phone." } },
   },
-  // ORC-021: a Design. The UX review's one finding is revised away; the lead's brief hands the design to the invite-link part of trip sharing.
+  // A Design. The UX review's one finding is revised away; the lead's brief hands the design to the invite-link part of trip sharing.
   "WT-013": {
     outputs: {
       "S1.design": "An invite sheet from a Share button on the trip page: the link, who it is for and when it expires, with Copy and Share. States: no link yet (Make a link), link ready, link expired (Make a new link). Plain copy; no account mentioned anywhere.",
@@ -300,7 +300,7 @@ export function scriptedFinding(taskId: string, stepId: string): ScriptFinding |
 }
 
 /** The neutral finding a first review round reports when the story has none. */
-export const NEUTRAL_FINDING: ScriptFinding = { title: "A small defect for the repair step to fix", detail: "In live mode a real reviewer names the file, the line and the smallest fix." };
+export const NEUTRAL_FINDING: ScriptFinding = { title: "A small defect for the repair step to fix", detail: "A stand-in finding, so the repair step has something to fix; the demo's reviewer does not read the code." };
 
 /**
  * The breakdown items a goal step proposes: the story's for this step, else two neutral parts named after

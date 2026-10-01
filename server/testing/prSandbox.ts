@@ -1,6 +1,6 @@
-// The evidence run for pull-request delivery (ORC-008 §17, "Real GitHub"). Started only by
-// scripts/pr-sandbox-check.mjs, which explains what it does and refuses to start without an explicit
-// repository and an explicit confirmation.
+// The evidence run for pull-request delivery (see "Real GitHub" in docs/design/ORC-008-design.md §17).
+// Started only by scripts/pr-sandbox-check.mjs, which explains what it does and refuses to start
+// without an explicit repository and an explicit confirmation.
 //
 // It drives the real application code (the scheduler, the pull-request driver, the gh adapter and the
 // workspace manager) against ONE repository that exists for this purpose, with scripted agents in

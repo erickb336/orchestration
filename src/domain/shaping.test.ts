@@ -1,4 +1,4 @@
-// ORC-012: shaping the vision with the lead first, domain level. The stage gates dispatch and planning
+// Shaping the vision with the lead first, domain level. The stage gates dispatch and planning
 // but never stops running work; vision drafts are strictly validated suggestions that apply only when
 // the user accepts them; the roadmap is held while shaping and released only on Autopilot; and the
 // labels never say Paused.
@@ -241,7 +241,7 @@ describe("S5 accept and dismiss", () => {
 
   it("edit and accept keeps the user's text and focus as typed (newlines normalized, one-line focus) and capped; an empty edit is refused", () => {
     const { state: s, draft: d } = leadReply(shaping(seed()), { vision: draft() });
-    // ORC-014 review 3: the user's own text is never altered: joiners, marks and variation selectors stay.
+    // The user's own text is never altered: joiners, marks and variation selectors stay.
     const edited = M.acceptVisionDraft(s, d!.id, 1, { text: "My own words ‏שלום\r\nline two \u{1F468}‍\u{1F469}", focus: "  my\nfocus می‌خ " }, at(4));
     expect(vision(edited)).toMatchObject({ rev: 2, author: "user", text: "My own words ‏שלום\nline two \u{1F468}‍\u{1F469}", focus: "my focus می‌خ" });
     expect(vision(edited).reason).toMatch(/^Accepted the lead's draft with edits/);
@@ -267,7 +267,7 @@ describe("S6 the roadmap and Start building", () => {
   it("proposals made while shaping are held and marked, even on Autopilot; while building they start as usual", () => {
     const { state: s } = leadReply(shaping(autopilot(seed())), { proposals: [proposal()] });
     const [t] = M.roadmapTasks(s);
-    // Review 2: the roadmap's hold is its own flag; the hold before start follows the involvement setting (Autopilot: none).
+    // The roadmap's hold is its own flag; the hold before start follows the involvement setting (Autopilot: none).
     expect(t).toMatchObject({ heldForShaping: true, holdBeforeStart: false, fromShaping: true, lifecycle: "proposed" });
     const promoted = M.dispatchEligible(M.leadPromoteProposals(s, at(4)), at(4));
     expect(task(promoted, t.id).lifecycle).toBe("ready");
@@ -300,7 +300,7 @@ describe("S6 the roadmap and Start building", () => {
     const onAuto = M.startBuilding(plan(shaping(autopilot(seed()))), at(5));
     for (const t of onAuto.tasks.filter((x) => x.fromShaping)) expect(t.holdBeforeStart).toBe(false);
     expect(M.roadmapTasks(onAuto).map((t) => M.currentSpec(t).content.title)).toEqual(["Roadmap A", "Roadmap B"]);
-    // Review 11: the roadmap tasks themselves are among what runs, not merely more runs than before
+    // The roadmap tasks themselves are among what runs, not merely more runs than before
     // (the sample's two active runs plus both roadmap tasks need four worker slots).
     const roadmapIds = M.roadmapTasks(onAuto).map((t) => t.id);
     const runningIds = running(M.dispatchEligible(M.leadPromoteProposals(M.setWorkerLimit(onAuto, 5, at(6)), at(6)), at(6))).map((a) => a.taskId);
@@ -330,7 +330,7 @@ describe("S6 the roadmap and Start building", () => {
   });
 });
 
-describe("S8 coverage and questions (revision 2)", () => {
+describe("S8 coverage and questions", () => {
   const q = (over: Record<string, unknown> = {}) => ({ question: "Who is this for first?", why: "The first users decide the first milestone.", area: "audience", options: ["Just you", "A small team"], ...over });
   const cov = (over: Record<string, unknown> = {}) => ({ intent: "clear", audience: "partial", problem: "clear", outcome: "open", scope: "partial", constraints: "open", risks: "open", priorities: "open", material: "open", ...over });
 

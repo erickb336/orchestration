@@ -1,4 +1,4 @@
-// ORC-021: choose a flow. A plain labelled select over the six flows, a card with the chosen flow's "use it
+// Choose a flow. A plain labelled select over the six flows, a card with the chosen flow's "use it
 // for" line, and a read-only list of its steps. Nothing here edits a pipeline: the shape of every pipeline
 // comes from a flow file.
 
@@ -7,7 +7,7 @@ import { principleName, stepPrinciples } from "../domain/principles";
 import type { Flow, StepDef } from "../domain/types";
 import { ROLE_LABEL } from "./common";
 
-/** One row per step: id, purpose, role, the step's markers (if findings, repeats, pauses for you, …) and its principles (ORC-024). */
+/** One row per step: id, purpose, role, the step's markers (if findings, repeats, pauses for you, …) and its principles. */
 export function FlowSteps({ steps }: { steps: StepDef[] }) {
   return (
     <ol className="flow-steps">
@@ -68,7 +68,7 @@ export function FlowPicker({ flows, value, onChange, label = "Flow", disabled, s
   const chosen = flows.find((p) => p.id === value);
   return (
     <div>
-      <label className="field" style={{ marginBottom: showCard ? "0.4rem" : undefined }}>
+      <label className={showCard ? "field flow-pick" : "field"}>
         <span>{label}</span>
         <select id={id} value={chosen ? value : ""} disabled={disabled || !flows.length} onChange={(e) => onChange(e.target.value)}>
           {!chosen && <option value="">{flows.length ? "Choose a flow" : "No flows loaded"}</option>}

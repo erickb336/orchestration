@@ -1,4 +1,4 @@
-// ORC-021: the pure helpers behind the flow picker, the task page's flow line, the Change flow panel and
+// The pure helpers behind the flow picker, the task page's flow line, the Change flow panel and
 // Settings → Flows. The components only render what these return.
 
 import { describe, expect, it } from "vitest";
@@ -23,7 +23,7 @@ describe("the task page", () => {
     expect(flowLineText(ref({ source: "internal", id: "revert", name: "Revert" }))).toBe("Flow: Revert");
     expect(flowLineParts(ref({ source: "legacy", id: "feature", name: "Feature", hash: undefined }))).toEqual({ prefix: "From before flows: ", name: "Feature" });
     expect(flowLineParts(ref({ source: "custom", id: "custom", name: "Custom pipeline", hash: undefined }))).toEqual({ prefix: "", name: "Custom pipeline" });
-    // ORC-021 review 3: a task that ran a personal file (removed in ORC-021) keeps that file's name.
+    // A task that ran a personal file (personal files are no longer used) keeps that file's name.
     expect(flowLineText(ref({ source: "local", id: "my-change", name: "My change" }))).toBe("From your own file (no longer used): My change");
     expect(flowLineText(ref({ source: "custom", id: "custom", name: "Custom pipeline", hash: undefined }))).toBe("Custom pipeline");
     expect(flowLineText(ref({}))).not.toContain("abcdef");
@@ -104,7 +104,7 @@ describe("the Change flow panel", () => {
 });
 
 describe("roles in the UI", () => {
-  it("every role has a label; ORC-021 adds the security reviewer", () => {
+  it("every role has a label, the security reviewer included", () => {
     for (const r of ROLES) expect(ROLE_LABEL[r], r).toBeTruthy();
     expect(ROLE_LABEL.security_reviewer).toBe("Security reviewer");
   });
@@ -118,7 +118,7 @@ describe("Settings → Flows", () => {
   });
 });
 
-describe("principles on the task page (ORC-024)", () => {
+describe("principles on the task page", () => {
   it("names a run's principles in order, marks an automatic one with its reason, and says nothing for a run that recorded none", () => {
     expect(principlesText([{ id: "laziness-protocol", hash: "x" }, { id: "fix-root-causes", hash: "y" }])).toBe("Principles: Laziness protocol · Fix root causes");
     expect(principlesText([{ id: "fix-root-causes" }, { id: "attack-the-premise", added: "added: check `test` failed again after S3" }])).toBe("Principles: Fix root causes · + Attack the premise (added: check `test` failed again after S3)");

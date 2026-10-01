@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (P5): the task's rarer controls in one menu behind "More". A button opens a list of actions
+// The task's rarer controls in one menu behind "More". A button opens a list of actions
 // and settings; arrow keys move, Enter or Space choose, Escape and a click outside close it. A checkbox item
 // shows its mark and is announced as checked.
 

@@ -1,6 +1,5 @@
-// ORC-025 r3: the structural check behind inlineStyles.test.ts. A screen must not size or colour things inline;
-// it uses the kit (src/ui/kit) and the tokens. The existing screens still do, so the test holds a baseline per
-// file and fails only when a count goes up. Passes 2–6 lower the baseline as they adopt the kit.
+// The structural check behind inlineStyles.test.ts. A screen must not size or colour things inline; it uses the
+// kit (src/ui/kit) and the tokens.
 
 export type InlineStyleHit = { line: number; text: string; why: "font size" | "colour" };
 

@@ -1,4 +1,4 @@
-// ORC-013 step 1: review coverage. A clean code review must account for every changed file the
+// Review coverage. A clean code review must account for every changed file the
 // service showed it; otherwise it runs once more with the gap named, then blocks. Only complete
 // coverage counts as clean evidence for the merge gate.
 
@@ -21,7 +21,7 @@ const BASE = "b".repeat(40);
 describe("normalisation and the comparison", () => {
   it("normalises paths and refuses absolute ones and .. segments", () => {
     expect(normalizePath(" ./src//a.ts ")).toBe("src/a.ts");
-    expect(normalizePath("src\\b.ts")).toBe("src\\b.ts"); // a backslash is part of the name, never a separator (review 1, finding 2)
+    expect(normalizePath("src\\b.ts")).toBe("src\\b.ts"); // a backslash is part of the name, never a separator
     expect(normalizePath("/etc/passwd")).toBeUndefined();
     expect(normalizePath("../x")).toBeUndefined();
     expect(normalizePath("a/../x")).toBeUndefined();
@@ -50,7 +50,7 @@ describe("normalisation and the comparison", () => {
   });
 });
 
-/** A user task from the Change template with the sample tasks held; S1 done; the review S2 running with a recorded scope. */
+/** A user task on the Change flow with the sample tasks held; S1 done; the review S2 running with a recorded scope. */
 function reviewRunning(): { s: State; id: string; review: Attempt } {
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
@@ -68,7 +68,7 @@ function reviewRunning(): { s: State; id: string; review: Attempt } {
   const review = running(s, id)[0];
   expect(review.stepId).toBe("S2");
   s = M.reportRunContext(s, review.id, { scope: { from: BASE, to: SHA, paths: ["a.ts", "b.ts"], total: 2 } });
-  // ORC-021: the security review beside S2 is completed clean; these tests are about the code review's coverage.
+  // The security review beside S2 is completed clean; these tests are about the code review's coverage.
   for (const a of running(s, id)) if (step(s, id, a.stepId).role === "security_reviewer") s = M.reportCompletion(s, a.id, [], at(3), [{ name: "findings", summary: "no security findings", findings: [] }]);
   return { s, id, review: running(s, id)[0] };
 }
@@ -116,7 +116,7 @@ describe("the rule in reportCompletion", () => {
     expect(art.openFindings).toBe(1);
   });
 
-  it("a code review of a real change that got no changed-path set is unproven (review 1, finding 7); a simulated change or a UX review is not required to list paths", () => {
+  it("a code review of a real change that got no changed-path set is unproven; a simulated change or a UX review is not required to list paths", () => {
     const { s, id, review } = reviewRunning();
     const noScope = { ...s, attempts: s.attempts.map((a) => (a.id === review.id ? { ...a, scope: undefined } : a)) };
     const done = M.reportCompletion(noScope, review.id, [], at(4), clean([]));

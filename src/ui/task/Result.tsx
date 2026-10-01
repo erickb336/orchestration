@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (P1, P7): a done task's result, once: what landed with the review verdict, Mark as seen and
+// A done task's result, once: what landed with the review verdict, Mark as seen and
 // Send back; the pull request while it is on its way (when it needs you it sits under Needs you instead);
 // or, for a task with nothing to merge, what its last step produced.
 

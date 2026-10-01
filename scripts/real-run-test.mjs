@@ -1,6 +1,7 @@
-// Milestone 3 real-run test. Runs a Codex worker and a Claude worker CONCURRENTLY against a throwaway
-// git repository, pauses and resumes each and then the whole project, lets both finish, and writes an
-// evidence file. It uses your own credentials from the environment and costs a small amount of usage.
+// Real-run test of the runtime adapters. Runs a Codex worker and a Claude worker CONCURRENTLY against a
+// throwaway git repository, pauses and resumes each and then the whole project, lets both finish, and
+// writes an evidence file. It uses your own credentials from the environment and costs a small amount
+// of usage.
 //
 //   node scripts/real-run-test.mjs           real Claude + Codex (needs credentials, see below)
 //   node scripts/real-run-test.mjs --fake    the same scenario against the fake runtime (no cost)
@@ -11,7 +12,7 @@
 //
 // Limits: 12 turns, 5 minutes, $0.50 (Claude) per attempt; Claude uses the "haiku" alias.
 //
-// Flow (ORC-021): the built-in Investigation flow, the smallest of the six that still runs a worker on each
+// Flow: the built-in Investigation flow, the smallest of the six that still runs a worker on each
 // provider at once (one task's first step pinned to Codex, the other's to Claude), then a reviewer and the
 // lead: three agent runs per task, no code change, no checks. Nothing is written into the data directory
 // before the service starts; the script says which flow it uses.
@@ -27,7 +28,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const HEADERS = { "Content-Type": "application/json", "X-Orchestration-Client": "1" };
 const t0 = Date.now();
 const evidence = { mode: FAKE ? "fake" : "real", startedAt: new Date().toISOString(), steps: [], checks: {}, ok: false };
-/** Every Milestone 3 exit condition is an explicit check; PASSED requires all of them. */
+/** Every exit criterion of the runtime-integrations milestone (docs/PROJECT_SPEC.md) is an explicit check; PASSED requires all of them. */
 const check = (name, ok, detail = null) => {
   evidence.checks[name] = { ok: !!ok, detail };
   log(`${ok ? "✓" : "✗"} ${name}${detail ? ` (${typeof detail === "string" ? detail : JSON.stringify(detail)})` : ""}`);

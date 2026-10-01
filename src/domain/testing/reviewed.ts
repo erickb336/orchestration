@@ -13,11 +13,11 @@ export interface ReviewedOptions {
   findings?: number;
   /** false: the review ran, but on an earlier change, so it never saw this one. */
   sawTheChange?: boolean;
-  /** Open findings the security review reported (ORC-021). */
+  /** Open findings the security review reported. */
   security?: number;
   /** false: the security review ran on an earlier change. Defaults to `sawTheChange`. */
   securitySaw?: boolean;
-  /** true: no security review at all, as in a pipeline from before ORC-021. */
+  /** true: no security review at all, as in a pipeline from before security reviews existed. */
   noSecurity?: boolean;
 }
 
@@ -55,7 +55,7 @@ export function reviewedChange(state: State, taskId: string, sha: string, at: st
       version: 1,
       summary: o.findings ? "a finding that must be fixed" : "no findings",
       openFindings: o.findings ?? 0,
-      // ORC-013: "reviewed exactly this change" includes accounting for every changed file of it.
+      // "Reviewed exactly this change" includes accounting for every changed file of it.
       pathCoverage: { state: "complete", from: "0".repeat(40), to: o.sawTheChange === false ? "1".repeat(40) : sha, changed: 1, reviewed: 1, missing: [], extra: [] },
       createdAt: at,
     },

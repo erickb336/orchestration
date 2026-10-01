@@ -1,0 +1,46 @@
+/* The vision: the shaping panel on Home, the lead's draft (in the shaping panel and the Focus card) and the vision
+   documents. Layout only: colour and type come from the tokens and the kit. Every class is prefixed v- so nothing
+   collides with other screens. */
+
+/* ---------- the shaping panel ---------- */
+.v-shape .k-card__body > .k-stack { gap: var(--space-5); }
+.v-shape h3 { margin: 0 0 var(--space-2); }
+.v-shape p { margin: 0; }
+.v-shape section.k-stack > h3 { margin: 0; }
+
+/* The lead's questions: each with its suggested answers and a box; a chosen suggestion reads as pressed. */
+.v-questions ol { margin: 0 0 var(--space-3); padding-left: 1.2rem; display: grid; gap: var(--space-3); }
+.v-questions li { display: grid; gap: var(--space-1); min-width: 0; }
+.v-questions .k-field { margin: 0; }
+.v-questions__options .k-btn[aria-pressed="true"] { border-color: var(--text); background: var(--surface-2); }
+
+/* What is clear so far: the onboarding checklist, a little tighter. */
+.checklist.v-coverage { margin-top: var(--space-1); }
+/* The state stays on the area's line at every width (the onboarding list moves its action under the text). */
+.checklist.v-coverage li { padding: var(--space-1) 0; grid-template-columns: 1.4rem minmax(0, 1fr) auto; }
+
+/* Start building, with what it will do or why it cannot start yet. */
+.v-start { display: grid; gap: var(--space-1); justify-items: start; }
+.v-start p { margin: 0; }
+
+/* ---------- the lead's draft ---------- */
+.v-draft { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--warn-border); border-radius: var(--radius); background: var(--surface); min-width: 0; }
+.k-card__body > .v-draft { margin-bottom: var(--space-3); }
+.v-draft p { margin: 0; }
+.v-draft__head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-1) var(--space-3); }
+.v-draft__head .k-btn--quiet { min-height: 0; padding: 0; color: var(--text); font-size: inherit; text-decoration: underline; text-underline-offset: 0.18em; }
+.v-draft__head .k-btn--quiet:hover:not(:disabled):not([aria-disabled="true"]) { background: none; }
+.v-draft .k-field { margin: 0; }
+
+/* ---------- vision documents ---------- */
+.v-docs { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); min-width: 0; }
+.v-docs p { margin: 0; }
+.v-docs__head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--space-1) var(--space-3); }
+.v-docs__head h3 { margin: 0; }
+.v-dropzone { border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: var(--space-2) var(--space-3); transition: background-color var(--ease); }
+.v-dropzone--over { background: var(--surface-2); border-style: solid; }
+.v-doc-list { list-style: none; padding: 0; margin: 0; }
+.v-doc-list > li { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); align-items: center; padding: var(--space-1) 0; border-top: 1px solid var(--border); font-size: var(--fs-meta); }
+.v-doc-list > li > .mono { overflow-wrap: anywhere; min-width: 0; }
+.v-doc-list--uploads > li.skipped, .v-doc-list--uploads > li.queued { color: var(--muted); }
+.v-uploads { display: grid; gap: var(--space-1); }

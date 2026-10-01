@@ -1,11 +1,11 @@
-// Milestone 5 and optional human-in-the-loop: review gates, human edits re-submitted through the
+// Reliability and optional human-in-the-loop: review gates, human edits re-submitted through the
 // pipeline, per-provider concurrency, automatic retries, automatic delivery, import/export, cleanup.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as M from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import { Scheduler } from "./scheduler";
@@ -13,6 +13,10 @@ import { Store } from "./store";
 import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
+
+// Real git and many scheduler cycles per test: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 let dir: string;
 let repo: string;
@@ -78,7 +82,7 @@ describe("review gates and human edits", () => {
     tick();
     tick();
     expect(run(id).stepId).toBe("S2");
-    // ORC-021: the security review beside the code review finishes first; its pause is resumed at once (a result that
+    // The security review beside the code review finishes first; its pause is resumed at once (a result that
     // arrives while the task is held is not integrated, so the reviews are not finished under one hold).
     claude.finish(M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!.id, { findings: 0 });
     tick();
@@ -235,7 +239,7 @@ describe("import, export, cleanup", () => {
   });
 });
 
-describe("delivery safety (ORC-006 review)", () => {
+describe("delivery safety", () => {
   const deliverOn = () =>
     cmd("setAutonomy", { enabled: false, planningIntervalMinutes: 60, maxProposalsPerCycle: 3, maxOpenProposals: 5, holdLeadProposals: false, operatingHours: null, autoDeliver: { enabled: true, branch: "main" } });
   const deliverTask = (title: string, file: string, text: string) => {
@@ -248,7 +252,7 @@ describe("delivery safety (ORC-006 review)", () => {
     return id;
   };
 
-  it("H1: work started while another branch is checked out never carries that branch's commits to main", () => {
+  it("work started while another branch is checked out never carries that branch's commits to main", () => {
     deliverOn();
     git("switch", "-q", "-c", "experiment");
     commit("EXP.md", "unfinished\n", "unfinished experiment");
@@ -261,7 +265,7 @@ describe("delivery safety (ORC-006 review)", () => {
     expect(() => git("show", "main:EXP.md")).toThrow(); // the experiment never reaches main
   });
 
-  it("H2: a checkout of main in another worktree is fast-forwarded in place, never desynced", () => {
+  it("a checkout of main in another worktree is fast-forwarded in place, never desynced", () => {
     deliverOn();
     git("switch", "-q", "-c", "other");
     const wt2 = join(dir, "wt-main");
@@ -273,7 +277,7 @@ describe("delivery safety (ORC-006 review)", () => {
     expect(existsSync(join(wt2, "h.txt"))).toBe(true);
   });
 
-  it("H3: delivery never overwrites an existing ignored file", () => {
+  it("delivery never overwrites an existing ignored file", () => {
     deliverOn();
     writeFileSync(join(repo, ".env"), "SECRET=user\n");
     const id = deliverTask("Adds .env", ".env", "AGENT=1\n");
@@ -283,7 +287,7 @@ describe("delivery safety (ORC-006 review)", () => {
     expect(execFileSync("cat", [join(repo, ".env")], { encoding: "utf8" })).toBe("SECRET=user\n");
   });
 
-  it("H4: after the user resets main backwards, delivery stops instead of restoring removed work", () => {
+  it("after the user resets main backwards, delivery stops instead of restoring removed work", () => {
     deliverOn();
     deliverTask("First", "one.txt", "1\n");
     tick(61_000);
@@ -296,7 +300,7 @@ describe("delivery safety (ORC-006 review)", () => {
     expect(() => git("show", "main:one.txt")).toThrow();
   });
 
-  it("M1: a delivery skipped for a dirty tree is retried once the tree is clean", () => {
+  it("a delivery skipped for a dirty tree is retried once the tree is clean", () => {
     deliverOn();
     writeFileSync(join(repo, "README.md"), "local edit\n");
     const id = deliverTask("Retry later", "r.txt", "r\n");
@@ -308,7 +312,7 @@ describe("delivery safety (ORC-006 review)", () => {
     expect(git("show", "main:r.txt")).toBe("r");
   });
 
-  it("M2: cleanup keeps worktrees that hold uncommitted work", () => {
+  it("cleanup keeps worktrees that hold uncommitted work", () => {
     const id = newTask("Partial");
     oneStep(id);
     tick();
@@ -321,7 +325,7 @@ describe("delivery safety (ORC-006 review)", () => {
     expect(existsSync(join(r.snapshot.workspace, "partial.txt"))).toBe(true);
   });
 
-  it("M4: an edited code change must name a commit hash", () => {
+  it("an edited code change must name a commit hash", () => {
     const id = newTask("Ref");
     tick();
     codex.finish(run(id).id, { write: ["q.txt", "q\n"] });
@@ -331,7 +335,7 @@ describe("delivery safety (ORC-006 review)", () => {
     expect(() => cmd("editArtifact", { artifactId: change.id, summary: "mine", reason: "flag", ref: "--help" })).toThrow(/commit hash/);
   });
 
-  it("low: imported ids must be valid branch names and cannot be LEAD", () => {
+  it("imported ids must be valid branch names and cannot be LEAD", () => {
     const md = "| ID | Title |\n| --- | --- |\n| a..b | Bad |\n| LEAD | Reserved |\n| [GOOD-1](x.md) | Linked |";
     const r = cmd("importMarkdown", { markdown: md }).result as { imported: string[]; skipped: string[] };
     expect(r.imported).toEqual(["GOOD-1"]);

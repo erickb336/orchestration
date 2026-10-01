@@ -23,9 +23,9 @@ export function trackLive(child: ChildProcess) {
 
 /**
  * Signal the child's whole process group (it was spawned detached, so its pid is the group id),
- * falling back to the child alone. Only while the leader is alive (review finding L10): once it has
- * exited, its pid, and so the group id, may already belong to an unrelated process, and nothing is
- * signalled. What a check command leaves behind is the reaper's business (server/check-reaper.mjs):
+ * falling back to the child alone. Only while the leader is alive: once it has exited, its pid, and
+ * so the group id, may already belong to an unrelated process, and nothing is signalled. What a
+ * check command leaves behind is the reaper's business (server/check-reaper.mjs):
  * it owns the command's group and ends it before it exits itself.
  */
 export function killGroup(child: ChildProcess, signal: NodeJS.Signals) {

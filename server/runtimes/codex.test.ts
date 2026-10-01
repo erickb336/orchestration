@@ -7,9 +7,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { APP_SERVER_ARGS, CodexAdapter, ISOLATION_CONFIG_ARGS, ISOLATION_FEATURE_ARGS, LOGIN_GUIDANCE, mcpDisableArgs, redact, type CodexAdapterOptions } from "./codex";
 import type { AdapterEvent, Assignment } from "./types";
+
+// Real child processes (the pinned Codex binary) in some tests: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const STUB = resolve(HERE, "codex-fixtures/stub-app-server.mjs");
@@ -303,7 +307,7 @@ describe("CodexAdapter runs", () => {
   });
 });
 
-describe("notes (ORC-022)", () => {
+describe("notes", () => {
   const NOTE = "Note from the lead, relaying the user (mid-run, 10:00): skip the README; the owner will write it.";
   /** Start a run in `mode` and wait until its turn is live (the adapter knows the turn id). */
   async function live(mode: string, env: NodeJS.ProcessEnv = {}) {
@@ -408,7 +412,7 @@ describe("notes (ORC-022)", () => {
   });
 });
 
-describe("repository instruction files (ORC-013)", () => {
+describe("repository instruction files", () => {
   it("every app-server the service starts (worker, isolated or local; lead; probe) carries -c project_doc_max_bytes=0", async () => {
     const argvs: string[][] = [];
     const spawn: CodexAdapterOptions["spawn"] = (command, args, options) => {

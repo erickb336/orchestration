@@ -1,4 +1,4 @@
-// ORC-008 §17 scenario 19: with the fake runtime the whole pull-request flow runs on the simulated
+// Pull-request scenario 19: with the fake runtime the whole pull-request flow runs on the simulated
 // GitHub. No process is ever started (no git, no gh), and every record is labelled simulated.
 
 import { mkdtempSync, rmSync } from "node:fs";

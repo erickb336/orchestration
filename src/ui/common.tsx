@@ -16,7 +16,7 @@ export const COLUMN_LABEL: Record<M.Column, string> = {
   proposed: "Proposed",
   ready: "Ready",
   running: "Running",
-  // ORC-025: an agent is reviewing. "Results" is where you look at what landed.
+  // An agent is reviewing. "Results" is where you look at what landed.
   reviewing: "In review",
   paused: "Paused",
   deferred: "Deferred",
@@ -39,16 +39,16 @@ export function fmtTime(iso: string) {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-/** "Claude · model"; a service run (ORC-013 checks) reads "Service · checks". */
+/** "Claude · model"; a service run (checks) reads "Service · checks". */
 export function selectionText(sel: { provider: Runner; model: string }) {
   return `${M.providerLabel(sel.provider)} · ${sel.model}`;
 }
 
-/** ORC-017 §1: the four state hues, and neutral for everything else. */
+/** The four state hues, and neutral for everything else. */
 export type Tone = "work" | "you" | "fail" | "done" | "neutral";
 
 /**
- * §3.1: one shape for every status. A dot in the tone's colour, pulsing only while agents work; a
+ * One shape for every status. A dot in the tone's colour, pulsing only while agents work; a
  * two-bar pause mark instead of the dot for a pause. The label is always text: colour never stands alone.
  */
 export function Pill({ tone, paused, pulse, title, children }: { tone: Tone; paused?: boolean; pulse?: boolean; title?: string; children: React.ReactNode }) {
@@ -80,7 +80,7 @@ export function taskTone(state: State, task: Task): { tone: Tone; paused: boolea
 }
 
 /**
- * §3.2: the provider mark. An authored monogram ("C" for Claude, "X" for Codex) in a 14 px rounded square,
+ * The provider mark. An authored monogram ("C" for Claude, "X" for Codex) in a 14 px rounded square,
  * drawn in the text colour. Never a brand logo. A service run has no mark.
  */
 export function ProviderMark({ provider }: { provider: Runner | undefined }) {
@@ -97,7 +97,7 @@ export function ProviderMark({ provider }: { provider: Runner | undefined }) {
   );
 }
 
-/** ORC-017: B1 records `simulated: true` on vision revisions and steering change sets written by the fake runtime's lead. */
+/** The fake runtime's lead records `simulated: true` on the vision revisions and steering change sets it writes. */
 export const isSimulated = (x: unknown): boolean => !!(x as { simulated?: boolean } | undefined)?.simulated;
 
 /** True below `query` (phones by default); follows the viewport. */
@@ -184,7 +184,7 @@ export function autonomyArgs(a: Autonomy, patch: Partial<Autonomy>): Autonomy {
 
 export const PREF_ONBOARDING_DISMISSED = "orchestration.onboarding.dismissed";
 export const PREF_INVOLVEMENT_CHOSEN = "orchestration.involvement.chosen";
-/** ORC-012: the user chose "Start building now" on the Get started list (shaping is recorded in the project itself). */
+/** The user chose "Start building now" on the Get started list (shaping is recorded in the project itself). */
 export const PREF_STAGE_CHOSEN = "orchestration.stage.chosen";
 export const PREF_NOTIFY = "orchestration.notify";
 /** The `at` of the newest lead reply this browser has shown (the Lead button counts newer ones). */

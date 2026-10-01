@@ -1,5 +1,5 @@
-// ORC-017 §4: the first-run tour, on driver.js. Demo only. It starts once on the first visit to Home,
-// is replayed from the demo bar's Simulation menu (ORC-025 N5), and records "done" per browser (see
+// The first-run tour, on driver.js. Demo only. It starts once on the first visit to Home,
+// is replayed from the demo bar's Simulation menu, and records "done" per browser (see
 // tourState.ts). Skip, Esc and Done all mark it done. Keyboard: arrows, Enter, Esc. Reduced motion turns
 // the animation off.
 

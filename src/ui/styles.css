@@ -1,7 +1,7 @@
 /* Tokens. Colour means state and nothing else. */
 :root {
-  /* ORC-025: dark is the only theme (the owner, 2026-10-01). Near-black surfaces with a cool cast, light ink,
-     and colour only where it means a state. Matches the UI audit's look. */
+  /* Dark is the only theme. Near-black surfaces with a cool cast, light ink, and colour only where it means a
+     state. */
   --bg: #121315;
   --surface: #1a1b1e;
   --surface-2: #222327;
@@ -121,12 +121,12 @@ label.row > input[type="checkbox"], label.row > input[type="radio"] { flex: none
 .field { margin-bottom: 0.8rem; }
 .field > span { display: block; font-size: var(--fs-small); font-weight: 560; margin-bottom: 0.2rem; }
 .field input[type="text"] { width: 100%; }
-/* §3.10: a radio and its text as one grid; the description sits under the label, aligned to its text. */
+/* A radio and its text as one grid; the description sits under the label, aligned to its text. */
 .choice-radio { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 0.5rem; align-items: start; margin-bottom: 0.5rem; }
 .choice-radio > input { margin: 0.3rem 0 0; }
 .choice-radio > span > strong { font-weight: 560; }
 .choice-radio .choice-desc { display: block; color: var(--muted); font-size: var(--fs-small); }
-/* §3.8: the long form of an explanation, behind one disclosure. */
+/* The long form of an explanation, behind one disclosure. */
 details.how { font-size: var(--fs-small); color: var(--muted); margin: 0 0 0.6rem; }
 details.how > summary { cursor: pointer; width: max-content; }
 details.how > summary::marker { color: var(--muted); }
@@ -136,7 +136,7 @@ details.how.inline > summary { display: inline; text-decoration: underline dotte
 details.how.inline > summary:hover { color: var(--text); }
 
 /* ---------- layout ---------- */
-/* §3.6: the demo bar. One line; the simulation controls live in a popover at its right. */
+/* The demo bar. One line; the simulation controls live in a popover at its right. */
 .sim-banner {
   position: relative;
   background: var(--sim-bg);
@@ -167,7 +167,7 @@ details.how.inline > summary:hover { color: var(--text); }
   .sim-banner .sim-text { order: 3; flex-basis: 100%; font-size: var(--fs-small); }
 }
 
-/* ORC-025 pass 2: a small menu on a button (the Project menu, the Simulation menu). Native details/summary. */
+/* A small menu on a button (the Project menu, the Simulation menu). Native details/summary. */
 .menu { position: relative; }
 .menu > summary {
   list-style: none;
@@ -246,7 +246,7 @@ header.top .right { margin-left: auto; display: flex; align-items: center; gap: 
 .shell-banner { padding: var(--space-3) 1.25rem 0; }
 .shell-banner:empty { display: none; }
 @media (max-width: 600px) { .shell-banner { padding: var(--space-3) 1rem 0; } }
-/* §3.7: the live indicator. */
+/* The live indicator. */
 .live { display: inline-flex; align-items: center; gap: 0.4rem; font-size: var(--fs-meta); color: var(--muted); white-space: nowrap; }
 .live .dot { animation: none; }
 .live.working { color: var(--text); }
@@ -272,7 +272,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
 .stack > * + * { margin-top: 0.5rem; }
 @media (max-width: 600px) { main { padding: 1rem; } .card { padding: 0.85rem 0.9rem; } }
 
-/* ---------- status (§3.1) ---------- */
+/* ---------- status ---------- */
 .pill {
   display: inline-flex;
   align-items: center;
@@ -302,32 +302,11 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
 .pill.pulse .pill-dot, .pill.transition::before { animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.25; } }
 
-.chip {
-  display: inline-block;
-  font-size: var(--fs-micro);
-  line-height: 1.5;
-  padding: 0.05rem 0.45rem;
-  border-radius: var(--radius-chip);
-  background: var(--surface-2);
-  color: var(--muted);
-  white-space: nowrap;
-  transition: background-color var(--ease), color var(--ease);
-}
-.chip.strong { color: var(--text); }
-.chip.danger { color: var(--st-fail); background: var(--st-fail-bg); }
-.chip.done { color: var(--st-done); background: var(--st-done-bg); }
-.chip.work { color: var(--st-work); background: var(--st-work-bg); }
-.chip.you { color: var(--st-you); background: var(--st-you-bg); }
-/* ORC-013: findings */
-.chip.severity-error { color: var(--st-fail); background: var(--st-fail-bg); }
-.chip.severity-warning { color: var(--st-you); background: var(--st-you-bg); }
-.chip.severity-info { color: var(--muted); }
-.chip.action-ask-user { color: var(--st-you); }
-.chip.action-auto-fix { color: var(--text); }
+/* Findings and decisions */
 .findings .finding + .finding { border-top: 1px solid var(--border); }
 .decision.open { background: var(--st-you-bg); border-radius: var(--radius-chip); padding: 0.3rem 0.5rem; }
 .decision-controls { margin-top: 0.25rem; }
-/* ORC-013: check results */
+/* Check results */
 .check-row { display: grid; grid-template-columns: 1.2rem 1fr; gap: 0.3rem; padding: 0.2rem 0; font-size: var(--fs-meta); }
 .check-row + .check-row { border-top: 1px solid var(--border); }
 .check-row .check-mark { font-weight: 650; }
@@ -345,21 +324,11 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
   font-variant-numeric: tabular-nums;
 }
 
-.banner {
-  border-radius: var(--radius);
-  padding: 0.65rem 0.9rem;
-  margin-bottom: 1rem;
-  border: 1px solid var(--warn-border);
-  background: var(--warn-bg);
-}
-.banner.danger { border-color: var(--danger-border); background: var(--danger-bg); }
-.banner.neutral { border-color: var(--border); background: var(--surface-2); }
-
-/* ---------- the task list and board: src/ui/tasks.css (ORC-025 pass 4) ---------- */
+/* ---------- the task list and board: src/ui/tasks.css ---------- */
 /* The provider mark: an authored monogram in a 14 px rounded square, in the text colour. */
 .pmark { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; flex: none; }
 
-/* ---------- progress by area (§3.3) ---------- */
+/* ---------- progress by area ---------- */
 .areas { list-style: none; margin: 0; padding: 0; }
 .area-row {
   display: grid;
@@ -399,7 +368,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
   .area-row { grid-template-columns: minmax(0, 1fr); gap: 0.4rem; padding: 0.6rem 0.5rem; }
 }
 
-/* ---------- Home (ORC-025 pass 2) ---------- */
+/* ---------- Home ---------- */
 .no-margin { margin: 0; }
 .row.space-between { justify-content: space-between; }
 /* The reason an override asks for, under a Needs-you row. */
@@ -450,7 +419,6 @@ ul.plain { margin: 0; padding-left: 1.1rem; }
 .events > li { display: grid; grid-template-columns: 5.5rem 4.5rem 1fr; gap: 0.6rem; padding: 0.4rem 0; border-bottom: 1px solid var(--border); font-size: var(--fs-meta); }
 .events > li .actor { color: var(--muted); }
 .events > li > span { min-width: 0; overflow-wrap: anywhere; }
-.events .chip { white-space: normal; }
 /* The Artifacts list: a wider first column for "S1.change v1". */
 .events > li.artifact-row { grid-template-columns: 6.5rem minmax(0, 1fr); }
 @media (max-width: 600px) { .events > li, .events > li.artifact-row { grid-template-columns: minmax(0, 1fr); gap: 0; } }
@@ -472,9 +440,10 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 .sticky-actions { position: sticky; bottom: 0; background: var(--surface); padding: 0.7rem 0; border-top: 1px solid var(--border); display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-/* ORC-021: flow picker, its read-only step list, the Change flow panel and the Settings list */
+/* The flow picker, its read-only step list, the Change flow panel and the Settings list */
+/* With the chosen flow's card under it, the select sits closer to the card. */
+.field.flow-pick { margin-bottom: var(--space-2); }
 .flow-card { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 0.6rem 0.8rem; background: var(--surface-2); margin-bottom: 0.8rem; min-width: 0; }
-.flow-card .chip { white-space: normal; }
 .flow-card__text { margin: 0.2rem 0; }
 .flow-steps { margin: 0; padding: 0; list-style: none; max-height: 14rem; overflow: auto; border-top: 1px solid var(--border); background: var(--surface); border-radius: var(--radius-chip); }
 .flow-steps > li { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr); gap: 0.4rem; padding: 0.25rem 0.5rem; border-bottom: 1px solid var(--border); font-size: var(--fs-meta); }
@@ -482,12 +451,11 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 .flow-panel { border: 1px solid var(--border-strong); border-radius: var(--radius-control); padding: 0.7rem 0.9rem; margin: 0.5rem 0 0.75rem; min-width: 0; }
 .flow-list { list-style: none; margin: 0; padding: 0; }
 .flow-list > li { padding: 0.6rem 0; border-bottom: 1px solid var(--border); font-size: var(--fs-meta); min-width: 0; }
-.flow-list .chip { white-space: normal; }
 
 .steps-table td:first-child { min-width: 14rem; }
 .steps-table td:nth-child(3) { min-width: 12rem; }
 .steps-table td:nth-child(3) select { max-width: 15rem; width: 100%; }
-/* §3.9: below 700 px the pipeline is a list, one block per step. */
+/* Below 700 px the pipeline is a list, one block per step. */
 .steps-list { list-style: none; margin: 0; padding: 0; }
 .steps-list > li { padding: 0.7rem 0; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
 .steps-list > li:first-child { border-top: none; }
@@ -499,7 +467,7 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 /* ---------- service connection ---------- */
 .card.connect { max-width: 36rem; margin: 3rem auto; }
 
-/* ---------- lead conversation (ORC-025 L1, L2: a chat; what a reply changed folds into one line under it) ---------- */
+/* ---------- the lead conversation: a chat; what a reply changed folds into one line under it ---------- */
 .lead-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: var(--space-2); }
 .lead-head { display: flex; align-items: center; gap: var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid var(--border); min-width: 0; }
 .lead-title { margin: 0; font-size: var(--fs-h3); flex: none; }
@@ -548,7 +516,7 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 .fold-body { margin: var(--space-1) 0 0 var(--space-3); padding-left: var(--space-3); border-left: 1px solid var(--border); }
 .fold-note { margin: 0 0 var(--space-1); }
 
-/* ---------- steering by conversation (ORC-009) ---------- */
+/* ---------- the lead button and steering ---------- */
 .lead-btn { display: inline-flex; align-items: center; gap: 0.4rem; }
 .lead-btn .dot { animation: none; }
 .lead-btn .dot.waiting { color: var(--muted); }
@@ -622,7 +590,7 @@ a.button-link {
 }
 a.button-link:hover { background: var(--surface-2); }
 
-/* ---------- notes to a running stage (ORC-022) ---------- */
+/* ---------- notes to a running step ---------- */
 .note-form { border: 1px solid var(--border-strong); border-radius: var(--radius-control); padding: 0.5rem 0.6rem; margin-top: 0.3rem; max-width: 36rem; }
 .note-form textarea { min-height: 3.5rem; font-family: inherit; }
 .notes { list-style: none; margin: 0.15rem 0 0; padding: 0; font-size: var(--fs-small); }
@@ -631,21 +599,11 @@ a.button-link:hover { background: var(--surface-2); }
 .notes .note-text { margin-top: 0.15rem; overflow-wrap: anywhere; }
 .notes .pill { white-space: normal; }
 
-/* ---------- review gates, artifact editing, usage ---------- */
-.banner.review { border-color: color-mix(in srgb, var(--st-you) 45%, var(--surface)); background: var(--surface); }
-.chip.edited { color: var(--text); }
+/* ---------- artifact editing, usage ---------- */
 .artifact-editor { border: 1px solid var(--border-strong); border-radius: var(--radius); padding: 0.6rem 0.7rem; margin-top: 0.4rem; }
 .artifact-editor textarea { min-height: 8rem; font-family: inherit; }
 .usage-table td, .usage-table th { font-variant-numeric: tabular-nums; }
 .usage-table td.num, .usage-table th.num { text-align: right; }
-
-/* ---------- vision documents (ORC-014) ---------- */
-.dropzone { border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 0.5rem 0.7rem; margin-bottom: 0.5rem; transition: background-color var(--ease); }
-.dropzone.over { background: var(--surface-2); border-style: solid; }
-ul.doc-list { list-style: none; padding: 0; margin: 0.3rem 0; }
-ul.doc-list > li { display: flex; flex-wrap: wrap; gap: 0.3rem 0.6rem; align-items: center; padding: 0.3rem 0; border-top: 1px solid var(--border); font-size: var(--fs-meta); }
-ul.doc-list > li > .mono { overflow-wrap: anywhere; }
-ul.doc-list.uploads > li.skipped, ul.doc-list.uploads > li.queued { color: var(--muted); }
 
 /* ---------- landed changes (code diff; lines already start with + or -) ---------- */
 .diff.code div { white-space: pre; }
@@ -654,7 +612,7 @@ ul.doc-list.uploads > li.skipped, ul.doc-list.uploads > li.queued { color: var(-
 .diff.code .same { color: inherit; }
 .diff.code .meta { color: var(--muted); }
 
-/* ---------- the first-run tour (§4), on driver.js ---------- */
+/* ---------- the first-run tour, on driver.js ---------- */
 .driver-popover.orc-tour {
   background: var(--surface);
   color: var(--text);
@@ -711,12 +669,12 @@ ul.doc-list.uploads > li.skipped, ul.doc-list.uploads > li.queued { color: var(-
 .driver-popover.orc-tour .driver-popover-arrow-side-left { border-left-color: var(--surface); }
 .driver-popover.orc-tour .driver-popover-arrow-side-right { border-right-color: var(--surface); }
 
-/* §3.12: nothing moves under reduced motion. */
+/* Nothing moves under reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-/* ---------- kit tokens (ORC-025 r3, pass 1″) ---------- */
+/* ---------- kit tokens ---------- */
 /* One spacing scale for the component kit (src/ui/kit). The type scale is --fs-* at the top of this file.
    The kit's own rules live in src/ui/kit/kit.css, loaded after this file. */
 :root {

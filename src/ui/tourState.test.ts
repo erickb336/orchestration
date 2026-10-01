@@ -1,4 +1,4 @@
-// ORC-017 §4: the tour's seen-state. Blocked storage never breaks the page and never loops the tour.
+// The tour's seen-state. Blocked storage never breaks the page and never loops the tour.
 
 import { describe, expect, it } from "vitest";
 import { TOUR_DONE, TOUR_KEY, createTourGate, demoLandingRedirect, readTourDone, writeTourDone, type KeyValueStore } from "./tourState";

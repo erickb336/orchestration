@@ -1,14 +1,15 @@
 // ORC-025 (L3): the demo's simulated lead answers questions about the board from the service's state, instead of
 // "Noted. In live mode…": what is running, what needs you, what landed, and how one task or area is going. The
-// words come from the derivations Home shows (src/ui/progress.ts, pure and free of React), so the demo lead and
+// words come from the derivations Home shows (src/domain/needsYou.ts and areaProgress.ts), so the demo lead and
 // the Needs-you card never disagree. Read-only: nothing here changes state. Only the fake runtime uses it; a real
 // lead answers from its envelope and the repository.
 
+import { areaOf, liveAgents, progressByArea, type LiveAgent } from "../../src/domain/areaProgress";
 import * as D from "../../src/domain/delivery";
 import * as F from "../../src/domain/findings";
 import * as M from "../../src/domain/model";
+import { needsYouItems, optionsLine, type NeedsYouEntry } from "../../src/domain/needsYou";
 import type { State, Task } from "../../src/domain/types";
-import { areaOf, liveAgents, needsYouItems, optionsLine, progressByArea, serviceOwned, type LiveAgent, type NeedsYouEntry } from "../../src/ui/progress";
 
 export type StatusQuestion =
   | { kind: "overview" }
@@ -29,7 +30,7 @@ const STOP = new Set(
 );
 
 /** The tasks a person thinks of as the product's work: not cancelled, not the service's own delivery tasks. */
-const productTasks = (s: State) => s.tasks.filter((t) => t.lifecycle !== "cancelled" && !serviceOwned(t));
+const productTasks = (s: State) => s.tasks.filter((t) => t.lifecycle !== "cancelled" && !M.serviceOwned(t));
 const titleOf = (t: Task) => M.currentSpec(t).content.title;
 const words = (text: string) => new Set((text.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 4 && !STOP.has(w)));
 

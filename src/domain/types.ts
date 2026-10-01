@@ -3,18 +3,18 @@
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
-/** ORC-021: `security_reviewer` reviews a change for security beside the code review; its findings count like the code review's. */
+/** `security_reviewer` reviews a change for security beside the code review; its findings count like the code review's. */
 export type RoleId = "lead" | "designer" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks";
 /** Agent roles: they have role defaults, task role overrides and a resolved provider. */
 export const ROLES: RoleId[] = ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
-/** ORC-013: roles the service runs itself; never resolved to a provider. */
+/** Roles the service runs itself; never resolved to a provider. */
 const SERVICE_ROLES: RoleId[] = ["checks"];
 /** What a step definition may use. */
 export const STEP_ROLES: RoleId[] = [...ROLES, ...SERVICE_ROLES];
 /** Roles whose findings gate repairs and merges. */
 export const REVIEW_ROLES: RoleId[] = ["code_reviewer", "security_reviewer", "ux_reviewer"];
 
-/** ORC-013: who runs an attempt: a provider's agent, or the service itself (check runs). */
+/** Who runs an attempt: a provider's agent, or the service itself (check runs). */
 export type Runner = ProviderId | "service";
 export const isProvider = (r: Runner | string): r is ProviderId => r === "claude" || r === "codex";
 
@@ -39,28 +39,28 @@ export interface VisionRevision {
   focus: string;
   reason: string;
   /**
-   * ORC-009: where a revision came from when it was not typed by hand. A lead focus change names its
+   * Where a revision came from when it was not typed by hand. A lead focus change names its
    * change set, run and the user's messages; an Undo names the set it undid; an applied suggestion
-   * names its set only. ORC-012: an accepted vision draft names the draft, its run and messages.
-   * ORC-014: a document attached or removed names it (`docAdded` / `docRemoved`; a replacement names both).
-   * ORC-014 review 9: a batch of documents attached as one revision lists them (`docsAdded`, the copies
-   * they replaced in `docsRemoved`) and the batch the client named.
+   * names its set only. An accepted vision draft names the draft, its run and messages.
+   * A document attached or removed names it (`docAdded` / `docRemoved`; a replacement names both).
+   * A batch of documents attached as one revision lists them (`docsAdded`, the copies they replaced in
+   * `docsRemoved`) and the batch the client named.
    */
   source?: { changeSetId?: string; leadRunId?: string; messageIds?: string[]; undoOf?: string; draftId?: string; docAdded?: string; docRemoved?: string; docsAdded?: string[]; docsRemoved?: string[]; batchId?: string };
   /**
-   * ORC-014: the vision documents that applied at this revision (ids into `Project.visionDocs`), so
+   * The vision documents that applied at this revision (ids into `Project.visionDocs`), so
    * history stays truthful. Absent on revisions from before documents existed: none applied.
    */
   docIds?: string[];
   /**
-   * ORC-017: the text of this revision was written by the simulated lead (the fake runtime): a lead focus
+   * The text of this revision was written by the simulated lead (the fake runtime): a lead focus
    * change from such a run, or a draft from one that the user accepted. Set by the store from the lead
    * run's runtime, never from the text itself. Absent on revisions a person or a real lead wrote.
    */
   simulated?: true;
 }
 
-// ---------- vision documents (ORC-014) ----------
+// ---------- vision documents ----------
 
 /**
  * A file the user attached to the vision. The state holds metadata only; the content is a copy stored
@@ -82,14 +82,14 @@ export interface VisionDoc {
   text: boolean;
   addedAt: string;
   /**
-   * ORC-014 review 9: uploaded but not attached yet: it waits for its batch's `attachVisionDocs`, which
+   * Uploaded but not attached yet: it waits for its batch's `attachVisionDocs`, which
    * attaches every file of one Add, drop or folder as one vision revision. Absent once attached. A
    * staged record whose batch never commits is dropped after an hour.
    */
   stagedAt?: string;
 }
 
-// ---------- shaping the vision with the lead first (ORC-012) ----------
+// ---------- shaping the vision with the lead first ----------
 
 /**
  * "shaping": the user and the lead shape the vision; no worker step runs and no planning run starts.
@@ -143,11 +143,11 @@ export interface VisionDraft {
   resolvedAt?: string;
   /** accepted: the revision the user created from it. */
   visionRev?: number;
-  /** ORC-017: drafted by the simulated lead (the fake runtime). Carried onto the revision when the draft is accepted. */
+  /** Drafted by the simulated lead (the fake runtime). Carried onto the revision when the draft is accepted. */
   simulated?: true;
 }
 
-// ---------- steering by conversation (ORC-009) ----------
+// ---------- steering by conversation ----------
 
 /** How far the lead may go when the user gives direction in the conversation. */
 export type SteeringMode = "apply" | "apply-own" | "suggest";
@@ -168,10 +168,10 @@ type SteeringValue = string | number | Deferral | null;
 export interface SteeringChange {
   /** `${setId}.${n}` */
   id: string;
-  /** "invalid": an entry the service could not read as one of the actions (always rejected). ORC-022: "note", a note to a running stage. */
+  /** "invalid": an entry the service could not read as one of the actions (always rejected). "note": a note to a running stage. */
   kind: "focus" | "priority" | "defer" | "undefer" | "drop" | "note" | "invalid";
   taskId?: string;
-  /** ORC-022, notes: the step the note is addressed to. */
+  /** Notes: the step the note is addressed to. */
   stepId?: string;
   /** focus text | priority | deferral | lifecycle | note text */
   before: SteeringValue;
@@ -186,15 +186,15 @@ export interface SteeringChange {
   visionRev?: number;
   /** undo / apply / dismiss / supersede time */
   resolvedAt?: string;
-  /** ORC-022, notes: the `Note` record once the note was sent ("applied" means sent; the row shows the note's live status). */
+  /** Notes: the `Note` record once the note was sent ("applied" means sent; the row shows the note's live status). */
   noteId?: string;
-  /** ORC-022, notes: what the lead asked for when the step had already finished ("report" when absent). */
+  /** Notes: what the lead asked for when the step had already finished ("report" when absent). */
   ifFinished?: "report" | "rerun";
-  /** ORC-022, notes: a suggested rerun of the finished step with the note (the row offers "Rerun with this note"). */
+  /** Notes: a suggested rerun of the finished step with the note (the row offers "Rerun with this note"). */
   rerun?: true;
 }
 
-// ---------- notes to a running stage (ORC-022) ----------
+// ---------- notes to a running stage ----------
 
 /**
  * Desired state apart from observed state. "queued": accepted, waiting for a run of the step. "sending":
@@ -255,7 +255,7 @@ export interface SteeringChangeSet {
   /** Set-level notes (reason ignored, tasks not a list, …). */
   notes: string[];
   changes: SteeringChange[];
-  /** ORC-017: the reply that carried this set came from the simulated lead (the fake runtime). Set by the store from the run's runtime. */
+  /** The reply that carried this set came from the simulated lead (the fake runtime). Set by the store from the run's runtime. */
   simulated?: true;
 }
 
@@ -268,7 +268,7 @@ export interface Project {
   /** Managed repository path; user-configured. */
   repoPath: string;
   visions: VisionRevision[];
-  /** ORC-014: every document ever attached to the vision (the current set is the current revision's `docIds`). */
+  /** Every document ever attached to the vision (the current set is the current revision's `docIds`). */
   visionDocs: VisionDoc[];
   enabledProviders: ProviderId[];
   /** Sample catalog per provider. A real catalog comes from the connected provider. */
@@ -282,19 +282,19 @@ export interface Project {
   /** Bounds applied to every real run attempt. */
   runLimits: RunLimits;
   autonomy: Autonomy;
-  /** ORC-009: apply the lead's steering, apply it to the lead's own work only, or only suggest. Default "apply". */
+  /** Apply the lead's steering, apply it to the lead's own work only, or only suggest. Default "apply". */
   steeringMode: SteeringMode;
-  /** ORC-012: shaping (talk it through with the lead; nothing runs) or building (everything runs). */
+  /** Shaping (talk it through with the lead; nothing runs) or building (everything runs). */
   stage: ProjectStage;
-  /** ORC-012 review 8: when the current shaping session began; coverage reported before it is not reused. */
+  /** When the current shaping session began; coverage reported before it is not reused. */
   shapingSince?: string;
-  /** ORC-013: the project's own check commands, run by the service. Desired state; only the user's `setChecks` writes it. */
+  /** The project's own check commands, run by the service. Desired state; only the user's `setChecks` writes it. */
   checks: ChecksConfig;
-  /** ORC-013: the checks sandbox as last probed. Observed; written only by the service. */
+  /** The checks sandbox as last probed. Observed; written only by the service. */
   checksHealth?: ChecksHealth;
-  /** ORC-013: who decides `ask-user` findings: the lead (Autopilot's default) or the user. */
+  /** Who decides `ask-user` findings: the lead (Autopilot's default) or the user. */
   triage: { askUserBy: "lead" | "user" };
-  /** ORC-013: give every run the repository's AGENTS.md and CLAUDE.md from the trusted base as labelled project conventions. */
+  /** Give every run the repository's AGENTS.md and CLAUDE.md from the trusted base as labelled project conventions. */
   conventions: { include: boolean };
   /** Last planning run start (for the planning interval). */
   lastPlanningAt?: string;
@@ -318,7 +318,7 @@ export interface Project {
   hold: boolean;
   lastVisitAt: string;
   /**
-   * ORC-021: the flow used when a lead proposal or a breakdown item names none, and when nothing else
+   * The flow used when a lead proposal or a breakdown item names none, and when nothing else
    * chooses. Any of the six; when it is not in the catalog, `effectiveDefault` falls back to "change"
    * without rewriting this field.
    */
@@ -342,7 +342,7 @@ export interface RunLimits {
 
 /**
  * Provider-neutral model defaults for a new project: "auto" resolves against the live catalog. The
- * security reviewer has no default of its own here: without one it follows the code reviewer's (ORC-021).
+ * security reviewer has no default of its own here: without one it follows the code reviewer's.
  */
 export function autoModelDefaults(): Pick<Project, "defaultSelection" | "leadSelection" | "roleDefaults"> {
   return {
@@ -358,7 +358,7 @@ export function autoModelDefaults(): Pick<Project, "defaultSelection" | "leadSel
   };
 }
 
-/** The project role default that applies to a role: its own, or for the security reviewer the code reviewer's when it has none (ORC-021). */
+/** The project role default that applies to a role: its own, or for the security reviewer the code reviewer's when it has none. */
 export function roleDefaultFor(p: Pick<Project, "roleDefaults">, role: RoleId): ModelSelection | undefined {
   return p.roleDefaults[role] ?? (role === "security_reviewer" ? p.roleDefaults.code_reviewer : undefined);
 }
@@ -419,7 +419,7 @@ type StepState =
 export type ArtifactKind = "brief" | "design" | "plan" | "code-change" | "review-findings" | "verification" | "report" | "handoff" | "breakdown" | "check-results";
 export const ARTIFACT_KINDS: ArtifactKind[] = ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results"];
 
-// ---------- ORC-013: structured findings, coverage and service checks ----------
+// ---------- structured findings, coverage and service checks ----------
 
 export type Severity = "error" | "warning" | "info";
 export const SEVERITIES: Severity[] = ["error", "warning", "info"];
@@ -518,7 +518,7 @@ export interface FindingDecision {
   routedTo: "lead" | "user";
   /** When it was last routed to its current decider. A lead run for decisions starts only for decisions routed after the lead's last run. */
   routedAt?: string;
-  /** "superseded": its task was cancelled, or a later run replaced the artifact while it was still open (review 1, finding 10). */
+  /** "superseded": its task was cancelled, or a later run replaced the artifact while it was still open. */
   status: "open" | "fix" | "accept" | "follow-up" | "superseded";
   /** A lead "fix" on a spec the user wrote: recorded, not applied; the decision stays open for the user. */
   suggestion?: { decision: "fix"; why: string; leadRunId: string; at: string };
@@ -609,7 +609,7 @@ export interface ChecksHealth {
   detail: string;
   checkedAt: string;
   recheck?: true;
-  /** When the pending recheck was asked for: a probe that began earlier does not clear it (L5). */
+  /** When the pending recheck was asked for: a probe that began earlier does not clear it. */
   requestedAt?: string;
   /** `loopback`: a connection to this machine's own 127.0.0.1 and ::1 (where the service listens) must be refused too. */
   probes?: { writeOutside: "denied" | "allowed" | "unknown"; network: "denied" | "allowed" | "unknown"; loopback?: "denied" | "allowed" | "unknown" };
@@ -666,20 +666,20 @@ export interface StepDef {
   /** Set by expansion: which loop iteration this step belongs to (first = 1). */
   iteration?: number;
   /**
-   * ORC-013, role "checks" only. "findings": failing commands become auto-fix findings for the repair
+   * Role "checks" only. "findings": failing commands become auto-fix findings for the repair
    * step. "block": the step blocks and opens a decision (a Final checks step). `only` limits the step
    * to some command ids; prepare commands always run.
    */
   checks?: { onFail: "findings" | "block"; only?: string[] };
   /**
-   * ORC-024: the working principles the step's agent receives, by id (files in principles/), added to
-   * its instructions under "Principles for this step". Absent on steps copied before ORC-024 and on
-   * steps that get none (checks steps, for example).
+   * The working principles the step's agent receives, by id (files in principles/), added to its
+   * instructions under "Principles for this step". Absent on steps copied before principles existed and
+   * on steps that get none (checks steps, for example).
    */
   principles?: string[];
 }
 
-/** ORC-024: one principle a run was given, as its snapshot records it. */
+/** One principle a run was given, as its snapshot records it. */
 export interface GivenPrinciple {
   id: string;
   /** SHA-256 of the principle's body as the run received it. */
@@ -688,7 +688,7 @@ export interface GivenPrinciple {
   added?: string;
 }
 
-// ---------- ORC-021: flows ----------
+// ---------- flows ----------
 
 /**
  * Who chose a task's flow. "default": nothing named one, so the project default applied. "service":
@@ -717,8 +717,9 @@ export interface Flow {
 
 /**
  * What a task ran. Recorded on each pipeline revision that applied a flow, and as the task's current
- * one. "internal": a service-owned pipeline. "legacy": made from a template before ORC-016. "local": from
- * a personal file in ~/.orchestration/patterns (ORC-016; removed in ORC-021), kept on tasks that ran one.
+ * one. "internal": a service-owned pipeline. "legacy": made from a template, before templates were
+ * retired. "local": from a personal file in ~/.orchestration/patterns, which are no longer read; kept on
+ * tasks that ran one.
  * "custom": built by the internal `setPipeline` (tests).
  */
 export interface FlowRef {
@@ -745,11 +746,11 @@ export interface Artifact {
    * blocking count (error or warning findings with action auto-fix or ask-user); the worker's number is ignored.
    */
   openFindings?: number;
-  /** ORC-013: structured findings. Absent on summary-only (legacy) artifacts, which keep `openFindings` semantics. */
+  /** Structured findings. Absent on summary-only (legacy) artifacts, which keep `openFindings` semantics. */
   findings?: Finding[];
-  /** ORC-013: code reviews of a change: whether the review accounted for every changed file. */
+  /** Code reviews of a change: whether the review accounted for every changed file. */
   pathCoverage?: PathCoverage;
-  /** ORC-013: check-results artifacts. */
+  /** Check-results artifacts. */
   checkRun?: CheckRunRecord;
   /** A durable reference, e.g. the commit SHA and branch holding a code change. */
   ref?: string;
@@ -761,7 +762,7 @@ export interface Artifact {
   /** Why the person changed it. */
   editReason?: string;
   /**
-   * ORC-016: the task's pipeline revision when this version was made. Below the task's `flowSince`, the
+   * The task's pipeline revision when this version was made. Below the task's `flowSince`, the
    * artifact belongs to an earlier flow: kept for the record, never edited or consumed again. Absent on
    * older artifacts, which take it from their attempt's snapshot (an edit from the version it edited).
    */
@@ -787,7 +788,7 @@ export interface Step extends StepDef {
   invalidatedBy?: string;
   /** Automatic retries used since the step last succeeded. */
   autoRetries?: number;
-  /** ORC-013: clean code reviews that did not account for every changed file are run again once with the gap named. */
+  /** Clean code reviews that did not account for every changed file are run again once with the gap named. */
   coverageRetries?: number;
   /** The gap, bound to the change (`to`) it was found on; a different change starts the count over. */
   coverageGap?: { missing: string[]; extra: string[]; to?: string };
@@ -797,7 +798,7 @@ export type SelectionSource = "step" | "task-role" | "independence" | "project-r
 
 /** Immutable configuration captured at dispatch. Never rewritten. */
 export interface RunSnapshot {
-  /** The provider that ran it; "service" for a check run (ORC-013). */
+  /** The provider that ran it; "service" for a check run. */
   provider: Runner;
   model: string;
   source: SelectionSource;
@@ -807,7 +808,7 @@ export interface RunSnapshot {
   visionRev: number;
   workspace: string;
   pipelineRev: number;
-  /** ORC-016: the step's role at dispatch. Absent on older attempts, which take it from the pipeline revision named by `pipelineRev`. */
+  /** The step's role at dispatch. Absent on older attempts, which take it from the pipeline revision named by `pipelineRev`. */
   role?: RoleId;
   /** The worker environment the run was started with (absent on runs from before the setting existed). */
   environment?: WorkerEnvironment;
@@ -817,11 +818,11 @@ export interface RunSnapshot {
   purpose: string;
   /** Exactly the upstream artifact versions this run received as context. */
   inputs: ConsumedInput[];
-  /** ORC-024: the principles the run was given, in table order, with any automatic one and its reason. Absent on older runs and on check runs. */
+  /** The principles the run was given, in table order, with any automatic one and its reason. Absent on older runs and on check runs. */
   principles?: GivenPrinciple[];
   /** A dedicated delivery review: the commit its read-only worktree was detached at. */
   reviewedSha?: string;
-  /** ORC-013: a service check run: the settings and commands it was started with. */
+  /** A service check run: the settings and commands it was started with. */
   checks?: {
     configRev: number;
     sandbox: "codex" | "none";
@@ -863,11 +864,11 @@ export interface Attempt {
   activity?: string;
   usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
   /**
-   * ORC-013: the changed-path set of the change a review run was shown, recorded by the service before
+   * The changed-path set of the change a review run was shown, recorded by the service before
    * the run could report anything. `paths` holds at most 500; `total` is the real count.
    */
   scope?: { from: string; to: string; paths: string[]; total: number };
-  /** ORC-013: the repository instruction files the run was given as project conventions, as evidence. */
+  /** The repository instruction files the run was given as project conventions, as evidence. */
   conventions?: { file: string; blob: string; bytes: number; truncated: boolean }[];
 }
 
@@ -919,30 +920,30 @@ export interface Task {
   revertOf?: { taskId: string; commit: string };
   /** Who cancelled the task. A dedicated review the user cancelled is not started again by the service. */
   cancelledBy?: Actor;
-  /** ORC-009: explicit user choices the lead must not override (ISO time the user made them). */
+  /** Explicit user choices the lead must not override (ISO time the user made them). */
   userSet?: { priority?: string; run?: string };
-  /** ORC-009, dispatch-only: no new step starts on this task or its descendants. Never a hold. */
+  /** Dispatch-only: no new step starts on this task or its descendants. Never a hold. */
   deferral?: Deferral;
-  /** ORC-009: the lead dropped (cancelled) its own unstarted proposal; what reopen restores. */
+  /** The lead dropped (cancelled) its own unstarted proposal; what reopen restores. */
   dropped?: { changeSetId: string; lifecycle: "proposed" | "ready"; at: string };
-  /** ORC-012: proposed while shaping (the roadmap). Held until the user starts building; released then on Autopilot. */
+  /** Proposed while shaping (the roadmap). Held until the user starts building; released then on Autopilot. */
   fromShaping?: boolean;
   /**
-   * ORC-012 review 2: the roadmap's own hold, distinct from the user's `holdBeforeStart`. Set on
+   * The roadmap's own hold, distinct from the user's `holdBeforeStart`. Set on
    * proposals made while shaping; cleared by Start building (which then applies the involvement
    * setting) and by any hold change the user makes on the task.
    */
   heldForShaping?: boolean;
-  /** ORC-013: a dedicated check run of that task's pull-request change at exactly this commit. */
+  /** A dedicated check run of that task's pull-request change at exactly this commit. */
   checkTarget?: { taskId: string; n: number; sha: string };
-  /** ORC-013: repair rounds added after failing final checks (at most 2). */
+  /** Repair rounds added after failing final checks (at most 2). */
   checkRounds?: number;
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
   legacySpecUnavailable?: boolean;
-  /** ORC-021: the flow the current pipeline came from. */
+  /** The flow the current pipeline came from. */
   flow: FlowRef;
-  /** ORC-021: the pipeline revision that applied the current flow; 0 for tasks from before flows. */
+  /** The pipeline revision that applied the current flow; 0 for tasks from before flows. */
   flowSince: number;
 }
 
@@ -952,7 +953,7 @@ export interface PipelineRevision {
   author: Actor;
   reason: string;
   steps: StepDef[];
-  /** ORC-021: set on revisions that applied a flow. Expansions and check rounds leave it unset. */
+  /** Set on revisions that applied a flow. Expansions and check rounds leave it unset. */
   flow?: FlowRef;
 }
 
@@ -987,15 +988,15 @@ export interface State {
   events: ActivityEvent[];
   conversation: Message[];
   leadRuns: LeadRun[];
-  /** ORC-009: the last 200 steering change sets; events keep the full record. */
+  /** The last 200 steering change sets; events keep the full record. */
   steering: SteeringChangeSet[];
-  /** ORC-012: the last 50 vision drafts; accepted ones live on as vision revisions. */
+  /** The last 50 vision drafts; accepted ones live on as vision revisions. */
   visionDrafts: VisionDraft[];
-  /** ORC-013: decisions on findings (at most 2000; decided ones of settled tasks are pruned first, open ones never). */
+  /** Decisions on findings (at most 2000; decided ones of settled tasks are pruned first, open ones never). */
   decisions: FindingDecision[];
-  /** ORC-021: the six built-in flows, machine-level like the files they come from. Only the server writes them (at start); initProject leaves them alone. */
+  /** The six built-in flows, machine-level like the files they come from. Only the server writes them (at start); initProject leaves them alone. */
   flows: Flow[];
-  /** ORC-022: notes sent to running stages (at most 2000; settled notes of finished tasks are pruned first). */
+  /** Notes sent to running stages (at most 2000; settled notes of finished tasks are pruned first). */
   notes: Note[];
 }
 
@@ -1011,19 +1012,19 @@ export interface Message {
   proposedTaskIds?: string[];
   /** Proposals the service rejected, with reasons. */
   rejected?: string[];
-  /** ORC-009, lead messages: the steering change set this reply carried. */
+  /** Lead messages: the steering change set this reply carried. */
   changeSetId?: string;
-  /** ORC-012, lead messages: the vision draft this reply carried. */
+  /** Lead messages: the vision draft this reply carried. */
   visionDraftId?: string;
-  /** ORC-012, lead messages: the questions this reply asked (validated; at most 5). */
+  /** Lead messages: the questions this reply asked (validated; at most 5). */
   questions?: LeadQuestion[];
-  /** ORC-013, lead messages: what this reply decided, suggested or handed over, as recorded then (a later change by the user does not rewrite it). */
+  /** Lead messages: what this reply decided, suggested or handed over, as recorded then (a later change by the user does not rewrite it). */
   leadDecisions?: { id: string; taskId: string; what: "decided" | "suggested" | "handed-over"; status: string; why?: string }[];
-  /** ORC-009, user messages: the task page the message was sent from. */
+  /** User messages: the task page the message was sent from. */
   taskId?: string;
 }
 
-/** ORC-013: "decisions": a run started because findings routed to the lead wait for its decision. */
+/** "decisions": a run started because findings routed to the lead wait for its decision. */
 export type LeadTrigger = "message" | "planning" | "decisions";
 
 /** A run of the lead agent. Separate from task attempts: at most one is active at a time. */
@@ -1043,11 +1044,11 @@ export interface LeadRun {
   actualModel?: string;
   usage?: Attempt["usage"];
   note?: string;
-  /** ORC-009: the vision revision the run started from. Absent on runs from before steering existed (they cannot steer). */
+  /** The vision revision the run started from. Absent on runs from before steering existed (they cannot steer). */
   visionRev?: number;
-  /** ORC-009: the change set this run's reply produced. */
+  /** The change set this run's reply produced. */
   changeSetId?: string;
-  /** ORC-012: the coverage this run reported (message runs only; the latest one stands). */
+  /** The coverage this run reported (message runs only; the latest one stands). */
   coverage?: Coverage;
 }
 
@@ -1112,7 +1113,7 @@ export interface Integration {
   landed?: Landed;
 }
 
-// ---------- pull-request delivery and the review-later queue (ORC-008) ----------
+// ---------- pull-request delivery and the review-later queue ----------
 
 /** Desired: Project.prDelivery. */
 export interface PrDeliveryConfig {
@@ -1136,11 +1137,11 @@ export interface PrDeliveryConfig {
   maxOpenPrs: number;
   /** 0–100 */
   maxAutoMergesPerDay: number;
-  /** ORC-013: re-runs of a GitHub Actions job GitHub cancelled, per check name per head (0–3). */
+  /** Re-runs of a GitHub Actions job GitHub cancelled, per check name per head (0–3). */
   rerunBudget: number;
-  /** ORC-013: GitHub app slugs whose failing checks are a bot's opinion, never fixed automatically (≤10). */
+  /** GitHub app slugs whose failing checks are a bot's opinion, never fixed automatically (≤10). */
   reviewBotApps: string[];
-  /** ORC-013: the user declares the repository has no CI; their own Merge then works with zero checks. */
+  /** The user declares the repository has no CI; their own Merge then works with zero checks. */
   noCi: boolean;
 }
 
@@ -1152,7 +1153,7 @@ export const DEFAULT_PR_DELIVERY: PrDeliveryConfig = {
   reviewer: "other-provider",
   updateBeforeMerge: true,
   autoRepair: true,
-  // ORC-013 review 1 (13): the repository's instruction files, anywhere in the tree, are protected too.
+  // The repository's instruction files, anywhere in the tree, are protected too.
   protectedPaths: [".github/**", "package.json", "tsconfig*.json", "vitest.config.*", "vite.config.*", "**/AGENTS.md", "**/CLAUDE.md"],
   allowLocalWorkers: false,
   maxOpenPrs: 5,
@@ -1216,19 +1217,19 @@ export interface CheckObs {
   status: string;
   conclusion: string | null;
   url?: string;
-  /** ORC-013: a check run or a status context. */
+  /** A check run or a status context. */
   kind?: "run" | "status";
-  /** ORC-013: the check suite's app slug, or the status creator's login. */
+  /** The check suite's app slug, or the status creator's login. */
   app?: string;
-  /** ORC-013: the check run's database id (a GitHub Actions job id when app is "github-actions"). */
+  /** The check run's database id (a GitHub Actions job id when app is "github-actions"). */
   jobId?: number;
   runId?: number;
-  /** ORC-013 review M3: the workflow the run belongs to (its id, or its name and the triggering event); supersession needs the same one. */
+  /** The workflow the run belongs to (its id, or its name and the triggering event); supersession needs the same one. */
   workflowId?: number;
   workflowName?: string;
   event?: string;
   startedAt?: string;
-  /** ORC-013 review M4: with `startedAt`, how long the job ran (a cancelled job that ran to GitHub's time limit failed on the code). */
+  /** With `startedAt`, how long the job ran (a cancelled job that ran to GitHub's time limit failed on the code). */
   completedAt?: string;
 }
 
@@ -1258,7 +1259,7 @@ export type PrAttentionCode =
   | "limit"
   | "repo-changed"
   | "publish-failed"
-  // ORC-013
+  // findings, CI and the service's own checks
   | "findings-decision"
   | "bot-check"
   | "ci-infra"
@@ -1345,12 +1346,12 @@ export interface PrDelivery {
   /** The service could not merge this base tip into this head cleanly (a local check; nothing was pushed). */
   baseConflict?: { baseSha: string; headSha: string; files: string[] };
   attention?: { code: PrAttentionCode; message: string; headSha?: string; since: string };
-  /** ORC-013: `reruns` and `checks` default to 0 on records from before they existed. */
+  /** `reruns` and `checks` default to 0 on records from before they existed. */
   counters: { mergeAttempts: number; baseUpdates: number; repairs: number; reviews: number; failures: number; reruns?: number; checks?: number };
-  /** ORC-013: service-check evidence for `changeSha` under the current check settings. */
+  /** Service-check evidence for `changeSha` under the current check settings. */
   checks?: CheckEvidence;
   /**
-   * ORC-013: re-runs of GitHub-cancelled jobs requested for the current head. `seen`: observations
+   * Re-runs of GitHub-cancelled jobs requested for the current head. `seen`: observations
    * since the request that still showed the cancelled run; after 2 (or 5 minutes) the check is
    * judged as observed.
    */
@@ -1374,7 +1375,7 @@ export interface ReviewEvidence {
   model?: string;
   artifactIds: string[];
   clearedByUser?: boolean;
-  /** ORC-013: findings someone decided to accept as they are (ids like "F2 title"); the review is clean apart from them. */
+  /** Findings someone decided to accept as they are (ids like "F2 title"); the review is clean apart from them. */
   accepted?: string[];
 }
 

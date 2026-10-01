@@ -1,9 +1,9 @@
-// ORC-012 review findings, domain level. The roadmap's hold is its own flag and Start building never
-// overrides the user's hold (2); a draft records the revision the run saw (3); Edit and accept is
-// compare-and-set on the draft and the revision (4); invisible characters are stripped everywhere the
-// lead writes and from document names (5); no empty vision while building (6); coverage: none reported
-// is all open, an empty block keeps the previous one, an earlier session's is not reused (8); a no-op
-// accept is refused (9); repeated options are dropped (10); a dependency wait is shown while shaping (13).
+// Shaping the vision, the harder cases at domain level. The roadmap's hold is its own flag and Start
+// building never overrides the user's hold; a draft records the revision the run saw; Edit and accept is
+// compare-and-set on the draft and the revision; invisible characters are stripped everywhere the lead
+// writes and from document names; no empty vision while building; coverage: none reported is all open, an
+// empty block keeps the previous one, an earlier session's is not reused; a no-op accept is refused;
+// repeated options are dropped; a dependency wait is shown while shaping.
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
@@ -55,7 +55,7 @@ function leadReply(s: State, out: { vision?: unknown; proposals?: M.LeadProposal
 }
 const messageRun: LeadRun = { id: "lead-x", trigger: "message", provider: "claude", model: "m", startedAt: at(0), outcome: "running", messageIds: ["msg-1"], visionRev: 1 };
 
-describe("review 2: the roadmap hold is its own flag", () => {
+describe("the roadmap hold is its own flag", () => {
   it("Start building lifts only the roadmap hold; a hold the user set stands; the involvement setting decides the rest", () => {
     const { state: s } = leadReply(shaping(autopilot(seed())), { proposals: [proposal({ title: "A" }), proposal({ title: "B" })] });
     const [a, b] = M.roadmapTasks(s);
@@ -103,7 +103,7 @@ describe("review 2: the roadmap hold is its own flag", () => {
   });
 });
 
-describe("review 3: a draft records the revision the run saw", () => {
+describe("a draft records the revision the run saw", () => {
   it("the vision moving while the lead worked shows as moved: basedOnVisionRev is the run's, not the one current at completion", () => {
     const posted = M.postMessage(shaping(seed()), "draft it", at(1));
     const r = M.startLeadRun(posted, { provider: "claude", model: "m", trigger: "message" }, at(2));
@@ -112,13 +112,13 @@ describe("review 3: a draft records the revision the run saw", () => {
     const done = M.completeLeadRun(moved, r.runId, { reply: "ok", proposals: [], vision: draft() }, at(4));
     expect(M.currentVision(done).rev).toBe(2);
     expect(M.openVisionDraft(done)).toMatchObject({ basedOnVisionRev: 1 });
-    // Accepting against what the user saw (r1) is refused; against r2 it records the draft.
+    // Accepting against what the user saw (revision 1) is refused; against revision 2 it records the draft.
     expect(() => M.acceptVisionDraft(done, M.openVisionDraft(done)!.id, 1, undefined, at(5))).toThrow(StaleWriteError);
     expect(M.currentVision(M.acceptVisionDraft(done, M.openVisionDraft(done)!.id, 2, undefined, at(5))).rev).toBe(3);
   });
 });
 
-describe("review 4: Edit and accept is compare-and-set", () => {
+describe("Edit and accept is compare-and-set", () => {
   it("a replaced, dismissed or accepted draft is refused with its reason, and so is a moved vision; the right revision accepts the edits", () => {
     const first = leadReply(shaping(seed()), { vision: draft({ focus: "One" }) });
     const second = leadReply(first.state, { vision: draft({ focus: "Two" }) }, 5);
@@ -137,7 +137,7 @@ describe("review 4: Edit and accept is compare-and-set", () => {
   });
 });
 
-describe("review 5: invisible characters", () => {
+describe("invisible characters", () => {
   const zw = "​‌‍﻿⁠";
   const bidi = "‪‮⁦⁩";
   const tags = "\u{E0001}\u{E0041}\u{E007F}";
@@ -170,7 +170,7 @@ describe("review 5: invisible characters", () => {
     expect(only.state.steering.at(-1)!.changes[0]).toMatchObject({ kind: "focus", status: "rejected", note: "focus must be 1–500 characters" });
   });
 
-  it("a document name carrying them is refused, never altered (ORC-014 review 3)", () => {
+  it("a document name carrying them is refused, never altered", () => {
     const refused = { ok: false, why: "The name contains invisible or bidirectional control characters." };
     expect(M.visionDocPath(`docs/${zw}brief${bidi}.md`)).toEqual(refused);
     expect(M.visionDocPath(`a/${zw}/b${tags}.md`)).toEqual(refused);
@@ -182,7 +182,7 @@ describe("review 5: invisible characters", () => {
   });
 });
 
-describe("review 6: no empty vision while building", () => {
+describe("no empty vision while building", () => {
   it("an empty project of your own starts by shaping; clearing the vision is refused while building and allowed while shaping", () => {
     const empty = buildEmptyProject(T0);
     expect(empty.project.stage).toBe("shaping");
@@ -200,7 +200,7 @@ describe("review 6: no empty vision while building", () => {
   });
 });
 
-describe("review 8: coverage", () => {
+describe("coverage", () => {
   it("none reported means every area is open; a block with no valid entry keeps the previous coverage; a new shaping session starts from nothing", () => {
     const s0 = shaping(seed());
     expect(M.coverageOf(s0)).toBeUndefined();
@@ -225,7 +225,7 @@ describe("review 8: coverage", () => {
   });
 });
 
-describe("review 9 and 13", () => {
+describe("a no-op accept, and a dependency wait while shaping", () => {
   it("accepting edits identical to the current vision is refused; a real change is recorded", () => {
     const { state: s, draft: d } = leadReply(shaping(seed()), { vision: draft() });
     const cur = M.currentVision(s);

@@ -1,4 +1,4 @@
-// Details › Models (P4): the provider and model of each step (a picker for the next attempt, what ran for a
+// Details › Models: the provider and model of each step (a picker for the next attempt, what ran for a
 // finished one, how the service runs a Checks step), and the task's role overrides.
 
 import * as C from "../../domain/checks";
@@ -7,6 +7,7 @@ import { ROLES, type State, type Step, type Task } from "../../domain/types";
 import { ModelPicker, ROLE_LABEL, selectionText } from "../common";
 import { principlesText } from "../flowView";
 import { Button, useConfirm } from "../kit";
+import { cardHref } from "../settings/sections";
 import { useStore } from "../store";
 import { CONFIRM } from "./confirms";
 import { isOpenTask } from "./needsYouItems";
@@ -20,7 +21,8 @@ export function ModelsSection({ state, task }: { state: State; task: Task }) {
     <div className="k-stack">
       <p className="small muted">
         Each step runs on the provider and model resolved as: pinned on the step → this task's role override → the project's role default → the project default. Finished steps show the model that ran.{" "}
-        {service.runtime === "real" ? "Models come from each provider's catalog." : "The model catalog is sample data."}
+        {service.runtime === "real" ? "Models come from each provider's catalog." : "The model catalog is sample data."} The project's defaults are in{" "}
+        <a href={cardHref("models")}>Settings › Agents</a>.
       </p>
       <div className="t-models">
         {task.steps.map((st) => (
@@ -65,7 +67,7 @@ function StepModel({ state, task, st, open }: { state: State; task: Task; st: St
   const lastRun = lastCompletedRun(state, task, st);
   const done = st.state === "done";
   const shownRun = activeRun ?? (done ? lastRun : undefined);
-  // ORC-024: the principles the step's agent gets: what its run recorded when it has one, else the step's own set.
+  // The principles the step's agent gets: what its run recorded when it has one, else the step's own set.
   const given = st.state === "skipped" ? [] : (shownRun?.snapshot.principles ?? (shownRun ? [] : M.runPrinciples(state, task, st)));
   const head = (
     <strong>
@@ -74,7 +76,7 @@ function StepModel({ state, task, st, open }: { state: State; task: Task; st: St
   );
   let body: React.ReactNode;
   if (st.role === "checks") {
-    // ORC-013: a Checks step is run by the service; it has no provider or model to choose.
+    // A Checks step is run by the service; it has no provider or model to choose.
     body = (
       <span>
         Run by the service{C.checksOn(state.project.checks) ? ` · ${state.project.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}` : ""}.{" "}
@@ -86,7 +88,7 @@ function StepModel({ state, task, st, open }: { state: State; task: Task; st: St
             </>
           ) : (
             <>
-              {st.state === "skipped" ? "Skipped: checks are off" : "Will be skipped: checks are off"} (<a href="#/settings">Settings</a>).
+              {st.state === "skipped" ? "Skipped: checks are off" : "Will be skipped: checks are off"} (<a href={cardHref("checks")}>Settings › Quality › Checks</a>).
             </>
           )}
         </span>

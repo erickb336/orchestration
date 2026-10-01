@@ -1,4 +1,4 @@
-// ORC-025 pass 6 (L1, L2): the lead conversation reads like a chat. One quiet line names the lead's model (and says
+// The lead conversation reads like a chat. One quiet line names the lead's model (and says
 // "simulated" once, in the demo); what a reply changed folds into one line under it, with Undo all; no internal ids
 // in the text; no scheduler buttons ("Answer together now", "Ask again"); a one-line composer hint. Rendered through
 // react-dom/server over a fake store, as home.test.tsx does (there is no DOM test environment here).
@@ -12,7 +12,7 @@ import * as M from "../domain/model";
 import type { FindingDecision, State, SteeringChange } from "../domain/types";
 import { Conversation } from "./Conversation";
 import { ConfirmProvider } from "./kit";
-import { foldActions, foldSummary, leadDecisionText, messageStatusText } from "./notes";
+import { foldActions, foldSummary, leadBlockedLink, leadDecisionText, messageStatusText } from "./notes";
 import { StoreContext, type ServiceStore } from "./store";
 
 const T0 = Date.parse("2026-10-01T12:00:00Z");
@@ -44,7 +44,7 @@ const render = (state: State, svc?: ServiceInfo) =>
 const text = (markup: string) => markup.replace(/<[^>]*>/g, " ").replace(/&[a-z]+;/g, " ").replace(/\s+/g, " ");
 const count = (s: string, needle: string) => s.split(needle).length - 1;
 
-describe("the lead conversation (ORC-025 L1, L2)", () => {
+describe("the lead conversation", () => {
   it("in the demo: one quiet line with the lead's model and one simulated chip, then the messages, then the composer", () => {
     const s = buildDemo(T0);
     const markup = render(s);
@@ -142,5 +142,23 @@ describe("the conversation's words", () => {
     s = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "message" }, at(2)).state;
     expect(messageStatusText(s, { kind: "queued-behind-reply", text: "Queued behind the current reply." })).toBe("The lead answers this right after its reply to your earlier message.");
     expect(messageStatusText(s, { kind: "working", text: "The lead is working on this…" })).toBe("The lead is working on this…");
+  });
+
+  it("a message the lead cannot answer links to the Settings card that unblocks it, not to Settings in general", () => {
+    const own = structuredClone(buildSeed(T0, { inFlightRuns: false }));
+    own.project.sample = false;
+    const sample = structuredClone(own);
+    sample.project.sample = true;
+    // The service's reasons (server/scheduler.ts), each to its card.
+    expect(leadBlockedLink(sample, "This is the sample project; start a new project in Settings for a live lead.").href).toBe("#/settings/project/new-project");
+    expect(leadBlockedLink(own, "No usable repository is configured (Settings → Project).").href).toBe("#/settings/project/repository");
+    expect(leadBlockedLink(own, "Claude is not available: not signed in").href).toBe("#/settings/agents/providers");
+    expect(leadBlockedLink(own, "Checking the lead's provider…").href).toBe("#/settings/agents/providers");
+    expect(leadBlockedLink(own, "The lead (Claude · m) is not enabled or not in the model catalog. Choose another lead in Settings.").href).toBe("#/settings/agents/models");
+    // In the conversation, under the waiting message.
+    const waiting = M.postMessage(own, "Plan the next step.", at(1));
+    const markup = render(waiting, { ...service("real"), leadBlocked: "No usable repository is configured (Settings → Project)." });
+    expect(markup).toContain('href="#/settings/project/repository"');
+    expect(markup).not.toContain('href="#/settings"');
   });
 });

@@ -1,4 +1,4 @@
-// ORC-025 pass 4: the Activity page's words, apart from React. The log stays the service's own record; only what is
+// The Activity page's words, apart from React. The log stays the service's own record; only what is
 // cheap to say plainly changes: who acted, the role names ("Code reviewer", not "code_reviewer"), the kinds of event,
 // and the task filter `#/activity?task=WT-001`.
 

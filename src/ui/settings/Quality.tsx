@@ -1,4 +1,4 @@
-// ORC-025 pass 5, Settings › Quality: the checks every change must pass (S4: "On · 2 commands", Suggest from
+// Settings › Quality: the checks every change must pass ("On · 2 commands", Suggest from
 // repository, Edit commands), the default flow and the six flows, and the principles agents work by. Flows and
 // principles are read-only here: they change through their files in the repository.
 

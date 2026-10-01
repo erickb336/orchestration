@@ -4,9 +4,6 @@
 import * as M from "../domain/model";
 import type { Artifact, State, Step, Task } from "../domain/types";
 
-// ORC-016: one-line pipeline summaries and step markers moved to the domain (`flowSummary`, `stepMarkers`
-// in src/domain/flows.ts), which the lead envelope shares with the UI.
-
 export function isSettledTask(t: Task) {
   return t.lifecycle === "done" || t.lifecycle === "cancelled";
 }

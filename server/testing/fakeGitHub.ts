@@ -3,7 +3,7 @@
 //   - observe() reads the real head of each pull request's branch from the bare repository;
 //   - merge() checks the head and makes a real two-parent merge commit on the bare base branch;
 //   - tests script checks, states, delays, failures, labels, and what a person does on GitHub.
-//   - ORC-013: checks are kept as raw check runs (with job ids, apps and start times) and judged by
+//   - checks are kept as raw check runs (with job ids, apps and start times) and judged by
 //     the real parseChecks, so a re-run appends a new run the way GitHub does.
 
 import { execFileSync } from "node:child_process";

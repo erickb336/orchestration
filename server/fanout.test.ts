@@ -1,11 +1,11 @@
-// ORC-007: iteration loops, and breakdown steps that create child tasks with goal-level iteration.
+// Iteration loops, and breakdown steps that create child tasks with goal-level iteration.
 // Scripted adapters and a temporary git repository.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as M from "../src/domain/model";
 import type { State, StepDef } from "../src/domain/types";
 import { Scheduler } from "./scheduler";
@@ -13,6 +13,10 @@ import { Store } from "./store";
 import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
+
+// Real git and many scheduler cycles per test: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 let dir: string;
 let repo: string;
@@ -70,7 +74,7 @@ afterEach(async () => {
 
 describe("iteration", () => {
   it("review → repair repeats until the review is clean, then verification reads the latest change", () => {
-    const id = newTask("Iterate"); // Change template: S1 implement, S2 review, S3 repair (loops to S2, max 3), S4 verify
+    const id = newTask("Iterate"); // Change flow: S1 implement, S2 review, S3 repair (loops to S2, max 3), S4 verify
     tick();
     finishRun(running(id)[0].id, { write: ["x.txt", "v1\n"] });
     tick();
@@ -199,7 +203,7 @@ describe("breakdowns into child tasks", () => {
 
 });
 
-// ---------- ORC-007 review regressions ----------
+// ---------- harder cases: pipeline rules, child tasks, iteration and re-verification ----------
 
 const confirmStop = (runId: string) => {
   const a = st().attempts.find((x) => x.id === runId)!;
@@ -223,7 +227,7 @@ const planSteps = (): StepDef[] => [
   { id: "S2", purpose: "Report", role: "lead", dependsOn: ["S1"], inputs: [], outputs: [{ name: "r", kind: "report" }], waitForChildren: true },
 ];
 
-describe("review regressions: pipeline rules", () => {
+describe("pipeline rules for loops and waits", () => {
   const base: StepDef = { id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] };
   const review = (id: string, dep: string, extra: Partial<StepDef> = {}): StepDef => ({ id, purpose: `Review ${id}`, role: "code_reviewer", dependsOn: [dep], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "findings", kind: "review-findings" }], ...extra });
   const repair = (id: string, dep: string, extra: Partial<StepDef> = {}): StepDef => ({ id, purpose: `Repair ${id}`, role: "coder", dependsOn: [dep], inputs: [{ step: dep, output: "findings" }], outputs: [{ name: "change", kind: "code-change" }], ...extra });
@@ -250,8 +254,8 @@ describe("review regressions: pipeline rules", () => {
 
 });
 
-describe("review regressions: child tasks", () => {
-  it("child tasks are capped per task, and cannot use a template that breaks down again", () => {
+describe("child tasks: caps, controls and reconciliation", () => {
+  it("child tasks are capped per task, and cannot use a flow that breaks down again (Goal)", () => {
     const loop: StepDef[] = [{ ...planSteps()[0], iterate: { from: "S1", max: 10 } }];
     const id = newTask("Endless", "change", loop);
     settle();
@@ -320,7 +324,7 @@ describe("review regressions: child tasks", () => {
   });
 });
 
-describe("review regressions: iteration", () => {
+describe("iteration after a clean re-run", () => {
   it("after a re-run comes back clean, the next iteration is skipped instead of repeating the review", () => {
     const id = newTask("Clean rerun"); // Change: S1 implement, S2 review, S3 repair (loop to S2), S4 verify
     settle();
@@ -341,7 +345,7 @@ describe("review regressions: iteration", () => {
   });
 });
 
-describe("review regressions (re-verification)", () => {
+describe("re-verification", () => {
   it("the final change comes only from steps that are done now, not from a repair that a clean re-run skipped", () => {
     const id = newTask("Final after clean rerun");
     settle();

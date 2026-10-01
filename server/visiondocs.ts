@@ -1,8 +1,8 @@
-// ORC-014: copies of the user's vision documents. Each upload is checked (path, size, emptiness, the
+// Copies of the user's vision documents. Each upload is checked (path, size, emptiness, the
 // project's caps) and, once the `stageVisionDoc` command recorded it, kept by content hash under
 // <data dir>/vision-docs/<project>/, never in a repository or worktree. The state records metadata only
 // (see M.stageVisionDoc and M.attachVisionDocs); the envelope reads the stored copies when it is built
-// and verifies each against its hash. Copies no record refers to are swept (review 6).
+// and verifies each against its hash. Copies no record refers to are swept.
 
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -22,7 +22,7 @@ const MAX_BASE64 = Math.ceil(M.MAX_VISION_DOC_BYTES / 3) * 4;
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 const HASH_RE = /^[a-f0-9]{64}$/;
 const PROJECT_RE = /^[A-Za-z0-9._-]{1,80}$/;
-/** Review 6: an orphan copy younger than this is left alone; its batch may still be committing. */
+/** An orphan copy younger than this is left alone; its batch may still be committing. */
 export const ORPHAN_GRACE_MS = 60 * 60 * 1000;
 
 const invalid = (why: string) => new CommandFailure("invalid", why);
@@ -85,7 +85,7 @@ export class VisionDocStore {
   }
 
   /**
-   * Review 7: the project's directory as the file system resolves it. Nothing is written unless that
+   * The project's directory as the file system resolves it. Nothing is written unless that
    * lies under the resolved root: a link placed in the data directory cannot redirect a copy elsewhere.
    */
   private writableDir(projectId: string): string {
@@ -112,7 +112,7 @@ export class VisionDocStore {
 
   /**
    * Keep a copy by hash: written once, through a temporary name, so a reader never sees a partial file.
-   * Called only after the command that records the document succeeded (review 5). A link where the copy
+   * Called only after the command that records the document succeeded. A link where the copy
    * should be is refused, never followed.
    */
   store(projectId: string, hash: string, buf: Buffer) {
@@ -137,7 +137,7 @@ export class VisionDocStore {
     }
   }
 
-  /** The stored copy's text, verified against the document's hash (review 7): missing or changed copies are reported, never used. */
+  /** The stored copy's text, verified against the document's hash: missing or changed copies are reported, never used. */
   read(projectId: string, doc: Pick<VisionDoc, "hash">): VisionDocRead {
     let buf: Buffer;
     try {
@@ -155,7 +155,7 @@ export class VisionDocStore {
   }
 
   /**
-   * Review 6: delete copies no document record refers to (failed or refused uploads, batches that never
+   * Delete copies no document record refers to (failed or refused uploads, batches that never
    * committed) once they are older than the grace period, or at once when named in `immediate`; delete
    * leftover temporary files; and delete the directories of projects other than the current one (a
    * project replaced by `initProject`). Copies any revision refers to are always kept: history stays

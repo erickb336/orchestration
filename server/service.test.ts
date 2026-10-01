@@ -226,7 +226,7 @@ describe("scheduler with fake runtime", () => {
     expect(M.activeAttempts(after, "EX-002")).toHaveLength(0);
   });
 
-  it("ORC-009: a simulated message run that reads like a change of direction steers, labelled as simulated by a structured flag (ORC-017)", () => {
+  it("a simulated message run that reads like a change of direction steers, labelled as simulated by a structured flag", () => {
     const store = open();
     const { scheduler } = make(store, { progressPerTick: 60 });
     store.command("initProject", { name: "P", repoPath: "/tmp/x", vision: "v", focus: "Deployment first" }, k(), iso(T0));
@@ -238,7 +238,7 @@ describe("scheduler with fake runtime", () => {
     const set = s.steering[0];
     expect(set).toBeDefined();
     expect(set.refused).toBeUndefined();
-    // ORC-017: the focus is the user's words, with no "(Simulated)" prefix; the flag on the revision and the set labels them.
+    // The focus is the user's words, with no "(Simulated)" prefix; the flag on the revision and the set labels them.
     expect(M.currentVision(s).focus).toBe(text);
     expect(M.currentVision(s).simulated).toBe(true);
     expect(set.simulated).toBe(true);
@@ -338,13 +338,13 @@ describe("http", () => {
   });
 });
 
-describe("review regressions (ORC-003)", () => {
+describe("resets, reconciliation, lease takeover and newer formats", () => {
   const make = (store: Store) => {
     const f = fakes({ ackDelayMs: 2000 });
     return { runtime: f.runtime, scheduler: new Scheduler(store, f.adapters, { leaseMs: 5000, ackTimeoutMs: 6000 }) };
   };
 
-  it("H1: a reset from another instance never lets old processes report into new runs", () => {
+  it("a reset from another instance never lets old processes report into new runs", () => {
     const storeA = open();
     const a = make(storeA);
     a.scheduler.tick(T0);
@@ -361,7 +361,7 @@ describe("review regressions (ORC-003)", () => {
     for (const x of M.activeAttempts(s)) expect(x.progress).toBeLessThanOrEqual(12);
   });
 
-  it("H2: failed reconciliation is retried, never skipped", () => {
+  it("failed reconciliation is retried, never skipped", () => {
     const store1 = open();
     const first = make(store1);
     first.scheduler.tick(T0);
@@ -386,7 +386,7 @@ describe("review regressions (ORC-003)", () => {
     for (const id of running) expect(s.attempts.find((x) => x.id === id)!.outcome).toBe("lost");
   });
 
-  it("M2: a scheduler whose lease was taken over cannot write or start runs", () => {
+  it("a scheduler whose lease was taken over cannot write or start runs", () => {
     const store = open();
     const a = make(store);
     a.scheduler.tick(T0);
@@ -399,7 +399,7 @@ describe("review regressions (ORC-003)", () => {
     expect(store.read().version).toBe(v);
   });
 
-  it("M4: refuses to open a database written by a newer format", () => {
+  it("refuses to open a database written by a newer format", () => {
     open().close();
     const raw = new DatabaseSync(dbPath);
     raw.prepare("UPDATE state SET format = ? WHERE id = 1").run(STATE_FORMAT + 1);
@@ -408,8 +408,8 @@ describe("review regressions (ORC-003)", () => {
   });
 });
 
-describe("http review regressions (ORC-003)", () => {
-  it("H3/M1/low: unreadable static files do not crash; cross-site reads and bad bodies are refused", async () => {
+describe("http: static files and refused requests", () => {
+  it("unreadable static files do not crash; cross-site reads and bad bodies are refused", async () => {
     const staticDir = join(dir, "static");
     mkdirSync(staticDir);
     writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>t</title>");

@@ -1,4 +1,4 @@
-// ORC-009: plain-text descriptions of steering changes, shared by the change list and notifications.
+// Plain-text descriptions of steering changes, shared by the change list and notifications.
 
 import type { SteeringChange, SteeringChangeSet } from "../domain/types";
 

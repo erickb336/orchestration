@@ -1,4 +1,4 @@
-// ORC-013 §6.8: the fake runtime's simulated check runner. In a task tree's first run the "test" command
+// The fake runtime's simulated check runner. In a task tree's first run the "test" command
 // fails and every later run passes, every record says it is simulated, and nothing is ever spawned:
 // child_process.spawn is replaced here and must never be called.
 
@@ -77,7 +77,7 @@ describe("SimulatedChecks in the fake runtime", () => {
   });
 });
 
-describe("SimulatedChecks: which run fails (ORC-017 review M4)", () => {
+describe("SimulatedChecks: which run fails", () => {
   it("a tree's own merge checks and reviews count as its root: only the tree's very first run fails 'test'", () => {
     const c = new SimulatedChecks();
     const status: Record<string, string> = {};

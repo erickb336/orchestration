@@ -1,11 +1,11 @@
-// The GitHub side of pull-request delivery (ORC-008): one interface, and its implementation on the
+// The GitHub side of pull-request delivery: one interface, and its implementation on the
 // user's own `gh` CLI. Only the service calls this; workers never do.
 //
 // Safety rules enforced here, before anything is spawned:
 //   - no bypass and no force: never --admin, --auto, -d, --delete-branch or --force; no call to a merge
 //     endpoint and no merge or auto-merge mutation. The only merge is
 //     `gh pr merge <n> -R <o/r> --merge --match-head-commit <sha>`. A POST goes only to an issue's
-//     comments or to a GitHub Actions job's re-run endpoint (ORC-013);
+//     comments or to a GitHub Actions job's re-run endpoint;
 //   - credentials: the app uses the user's own gh sign-in. It never reads, stores, prints or sets a
 //     token, never runs `gh auth token`, and never passes --show-token;
 //   - every call runs from an empty neutral directory with an explicit repository, takes bodies on
@@ -59,7 +59,7 @@ export interface GitHubHost {
   comment(a: { repo: RepoRef; number: number; body: string }): Promise<{ url: string }>;
   close(a: { repo: RepoRef; number: number; comment: string }): Promise<void>;
   /**
-   * ORC-013: ask GitHub Actions to run one job again (`POST repos/<o>/<r>/actions/jobs/<id>/rerun`).
+   * Ask GitHub Actions to run one job again (`POST repos/<o>/<r>/actions/jobs/<id>/rerun`).
    * Only for a job seen on the app's own pull request at its current head. The caller observes
    * afterwards; success here records nothing.
    */
@@ -95,7 +95,7 @@ const atLeast = (v: [number, number, number], major: number, minor: number) => v
 
 /** Arguments the app never passes to gh. Checked before every spawn. */
 const FORBIDDEN_ARGS = new Set(["--admin", "--auto", "-d", "--delete-branch", "--force", "--show-token", "--disable-auto", "--squash", "--rebase", "-s", "-r"]);
-/** The gh subcommands the app uses (ORC-013 review M2). Everything else (`pr review`, `run rerun`, `workflow run`, …) is refused before it is spawned. */
+/** The gh subcommands the app uses. Everything else (`pr review`, `run rerun`, `workflow run`, …) is refused before it is spawned. */
 const ALLOWED_GH = new Set(["--version", "api", "pr list", "pr create", "pr merge", "pr close"]);
 
 /**
@@ -113,7 +113,7 @@ function executable(endpoint: string | undefined, stdin: string): string {
   return stdin;
 }
 
-/** The only REST endpoints the app ever POSTs to (ORC-013 narrowed this from "any non-merge path"); graphql is the third, scanned for mutations. */
+/** The only REST endpoints the app ever POSTs to; graphql is the third, scanned for mutations. */
 const POST_ENDPOINTS = [/^repos\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/issues\/\d+\/comments$/, /^repos\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\/actions\/jobs\/\d+\/rerun$/];
 /** gh api flags that carry a request body: gh sends such a request as a POST unless told otherwise, and the guard treats it as one whatever it is told. */
 const API_BODY_FLAGS = new Set(["-f", "--raw-field", "-F", "--field", "--input"]);
@@ -255,16 +255,15 @@ const sameOrigin = (a: CheckObs, b: CheckObs) => !!a.app && a.app === b.app && w
 /**
  * One rollup → checks, one per name. No rollup at all means nothing has reported.
  *
- * When a name reports more than once (ORC-013 §7.1, tightened by review finding M3), a newer run
- * supersedes an older one only when the older one is a check run GitHub CANCELLED, both come from
- * the same app and the same workflow (the workflow's id, or its name and event) with the same job
- * name, the older one is completed with a whole-second `startedAt` strictly before the newer one's,
- * and the newer one started no later than `nowMs`. The group is then represented by the newest run
- * when it is a success or still going: a cancelled run no longer stays red next to a later green
- * re-run, and a re-run still going keeps the name pending rather than red. Every other non-success
- * (a failure, a skipped or a stale run, a cancelled run from another workflow or app, an undated,
- * tied, out-of-order or future-dated run) wins, as in ORC-008, and a status context is never grouped
- * or superseded (GitHub reports one state per context). A passing run never hides a failing one it
+ * When a name reports more than once, a newer run supersedes an older one only when the older one
+ * is a check run GitHub CANCELLED, both come from the same app and the same workflow (the workflow's
+ * id, or its name and event) with the same job name, the older one is completed with a whole-second
+ * `startedAt` strictly before the newer one's, and the newer one started no later than `nowMs`. The
+ * group is then represented by the newest run when it is a success or still going: a cancelled run
+ * no longer stays red next to a later green re-run, and a re-run still going keeps the name pending
+ * rather than red. Every other non-success (a failure, a skipped or a stale run, a cancelled run from
+ * another workflow or app, an undated, tied, out-of-order or future-dated run) wins, and a status
+ * context is never grouped or superseded (GitHub reports one state per context). A passing run never hides a failing one it
  * cannot be shown to have replaced, and a newer run never hides a newer failure.
  */
 export function parseChecks(rollup: { contexts?: { nodes?: RollupNode[] } } | null | undefined, nowMs = Date.now()): CheckObs[] {

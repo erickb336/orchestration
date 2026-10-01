@@ -654,7 +654,7 @@ export class WorkspaceManager {
     return { status: "delivered", message: `${target} fast-forwarded to ${newSha.slice(0, 12)}.`, sha: newSha };
   }
 
-  // ---------- pull-request delivery (ORC-008) ----------
+  // ---------- pull-request delivery ----------
 
   /** The private ref that holds the fetched tip of the delivery base. */
   baseRef(projectId: string): string {
@@ -865,11 +865,11 @@ export class WorkspaceManager {
     const mb = this.status(["-C", repo, "merge-base", against, to]);
     const from = mb.status === 0 && mb.stdout.trim() ? mb.stdout.trim() : against;
     const base = [...this.safeFlags(), "-C", repo, "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M"];
-    // ORC-013 review 1 (2): NUL-separated, so a name with a quote, a newline or a non-ASCII character comes back as it is, never quoted.
+    // NUL-separated, so a name with a quote, a newline or a non-ASCII character comes back as it is, never quoted.
     const names = spawnSync(this.gitBin, [...base, "--name-only", "-z", from, to], { encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: 8 * 1024 * 1024, timeout: this.changeDiffTimeoutMs });
     if (names.error || names.status !== 0) return undefined;
     const files = names.stdout.split("\0").filter(Boolean);
-    // ORC-013: the changed-path set the review must account for (the first 500 are recorded; the total always is).
+    // The changed-path set the review must account for (the first 500 are recorded; the total always is).
     const coverage = { paths: files.slice(0, MAX_SCOPE_PATHS), total: files.length };
     const r = spawnSync(this.gitBin, [...base, "--stat", "--patch", from, to], { env: gitEnv(), stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_REVIEW_DIFF_BYTES + 4096, timeout: this.changeDiffTimeoutMs });
     const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
@@ -888,7 +888,7 @@ export class WorkspaceManager {
   }
 
   /**
-   * ORC-013: a file's content at a ref (`git show <ref>:<path>`), read-only and capped, with the blob's
+   * A file's content at a ref (`git show <ref>:<path>`), read-only and capped, with the blob's
    * SHA. Used for the repository's instruction files at the trusted base, never from a worktree.
    * Undefined when the ref or the file is not there, or the path is not a plain repository-relative one.
    */
@@ -911,7 +911,7 @@ export class WorkspaceManager {
   }
 
   /**
-   * ORC-013: the paths a commit changed against the trusted base (from their merge base), read-only.
+   * The paths a commit changed against the trusted base (from their merge base), read-only.
    * Undefined when a commit is missing; at most 500 paths, with the total.
    */
   changedPaths(o: { repoPath: string; to: string; baseRef: string }): { paths: string[]; total: number } | undefined {

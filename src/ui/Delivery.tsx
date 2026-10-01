@@ -1,5 +1,5 @@
 // Delivery views shared by the Results page, the board and the task page.
-//   - The pull-request panel (ORC-025 R2): one verdict line ("Pull request #1000 · Code ✓ Security ✓ Checks ✓ ·
+//   - The pull-request panel: one verdict line ("Pull request #1000 · Code ✓ Security ✓ Checks ✓ ·
 //     6 files, +167 −12"), Merge and Keep for me, and the full merge checklist, the facts GitHub reports and the
 //     rarer actions behind "Why it's ready". Desired, in-flight and observed state stay apart in that disclosure.
 //   - The landed section: what landed with the agent reviews in one line, what changed, Mark as seen and Send
@@ -153,7 +153,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
   const linked = (ids: string[]) => ids.map((id) => state.tasks.find((x) => x.id === id)).filter((x): x is Task => !!x);
   const reviews = linked(pr.reviewTaskIds);
   const repairs = linked(pr.repairTaskIds);
-  // ORC-025: the service's own check runs on this change, named so the checklist's evidence has a visible source.
+  // The service's own check runs on this change, named so the checklist's evidence has a visible source.
   const checkTasks = state.tasks.filter((x) => x.checkTarget?.taskId === task.id && x.checkTarget.n === pr.n);
   const fixing = live ? D.openRepair(state, pr) : undefined;
   const openReview = reviews.find((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled" && x.reviewTarget?.headSha === pr.changeSha);
@@ -172,7 +172,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
         : cause?.kind === "findings"
           ? "the open review findings"
           : `the conflict with ${pr.base}`;
-  // ORC-013 §7.3: re-runs of GitHub-cancelled jobs on this head, as recorded when each was requested.
+  // Re-runs of GitHub-cancelled jobs on this head, as recorded when each was requested.
   const reruns = live && pr.ciReruns?.headSha === pr.headSha ? pr.ciReruns.used : [];
   const fixButton = canFix && (
     <Button

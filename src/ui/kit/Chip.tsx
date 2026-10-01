@@ -16,7 +16,7 @@ export function Chip({ tone = "neutral", strong, title, className, children }: {
 export const SIMULATED_TITLE = "Simulated: no agents ran and nothing left this computer.";
 
 /**
- * The one way the demo says "simulated" (rule 5): a dashed chip, once per thing that could pass for real.
+ * The one way the demo says "simulated": a dashed chip, once per thing that could pass for real.
  * `title` can say what exactly was simulated ("Simulated pull request: nothing was sent to GitHub.").
  */
 export function SimulatedChip({ title = SIMULATED_TITLE, className }: { title?: string; className?: string }) {

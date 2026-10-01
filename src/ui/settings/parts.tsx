@@ -1,5 +1,5 @@
-// ORC-025 pass 5: the pieces every Settings section is built from. A section is a heading, one sentence of help
-// (S6), its cards, and one Save bar (S5). A card is the kit's Card with one sentence of help under its title.
+// The pieces every Settings section is built from. A section is a heading, one sentence of help,
+// its cards, and one Save bar. A card is the kit's Card with one sentence of help under its title.
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 import * as M from "../../domain/model";
@@ -87,7 +87,7 @@ export function SettingsSection<T extends object>({
   );
 }
 
-/** A card with one sentence of help under its title (S6: help is visible, not behind "How this works"). */
+/** A card with one sentence of help under its title (help is visible, not behind "How this works"). */
 export function SettingsCard({ id, title, help, actions, children }: { id: CardId; title: ReactNode; help?: ReactNode; actions?: ReactNode; children?: ReactNode }) {
   return (
     <Card id={id} title={title} as="h3" actions={actions} className="s-card">

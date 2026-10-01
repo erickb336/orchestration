@@ -1,4 +1,4 @@
-// ORC-014 review 10: the Get-started list's first step and the new-project form, as pure decisions so
+// The Get-started list's first step and the new-project form, as pure decisions so
 // they can be tested without a browser. An empty project starts by shaping, so the step must be
 // completable while already shaping, and "Start building now" must ask for a vision instead of dying.
 

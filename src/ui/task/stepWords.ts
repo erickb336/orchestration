@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (P6): a step as the person reads it: its name, who works on it (only while running or done),
+// A step as the person reads it: its name, who works on it (only while running or done),
 // and its state in words. Pure derivations over domain state; nothing here decides anything.
 
 import * as C from "../../domain/checks";

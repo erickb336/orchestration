@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// ORC-013 §6.5.2: the service's own wrapper around a check command. It never takes a shell string:
+// The service's own wrapper around a check command. It never takes a shell string:
 // everything after "--" is the argv it starts, as given.
 //
 //   node check-reaper.mjs [--pid-file <path>] -- <program> [args...]
 //
 // Its job is to make sure nothing the command started outlives the run, and that the command's exit
-// status comes from nowhere the command can write (review finding M5). Two processes do it:
+// status comes from nowhere the command can write. Two processes do it:
 //   - This process, the reaper, starts a leader (`check-reaper.mjs --leader`) detached, so the leader
 //     heads a new process group of its own; the command and everything it starts live in that group.
 //     The reaper never joins it. It waits for the leader's one-line report of the command's exit, sent
 //     on a pipe only the leader holds (fd 3), then ends the group (SIGTERM, a short grace, SIGKILL)
-//     while the leader is still alive, so the group id is still the leader's own (finding L10), and
-//     exits with the command's exit code, or 128 plus the signal number. A leader that dies without
+//     while the leader is still alive, so the group id is still the leader's own, and exits with
+//     the command's exit code, or 128 plus the signal number. A leader that dies without
 //     reporting (killed by the command, say) is a failure: the reaper exits 128 plus that signal.
 //   - The leader starts the command in the group, passes its output through, reports the exit, tells
 //     the reaper when every holder of the output pipes is gone, and then waits to be killed with the

@@ -1,6 +1,6 @@
 {
   "$schema": "./flow.schema.json",
-  "$comment": "ORC-021: SR1 is a security review that runs beside the code review; the repair runs when either has findings.",
+  "$comment": "SR1 is a security review that runs beside the code review; the repair runs when either has findings.",
   "id": "bugfix",
   "name": "Bug fix",
   "description": "Reproduce first, fix, checks, code and security review in parallel, repair if needed, final checks, verify the reproduction no longer fails.",

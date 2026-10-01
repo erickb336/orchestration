@@ -1,4 +1,4 @@
-// ORC-021, the service side: every built-in flow file passes flows/flow.schema.json (validation lives in
+// Flows, the service side: every built-in flow file passes flows/flow.schema.json (validation lives in
 // tests, never at runtime), the six flows equal the format-14 templates apart from the security review,
 // the removed commands and the removed reload endpoint are gone over HTTP, migration 14 → 15 → 16 for an
 // older database (no file export any more), migration 15 → 16 for a format-15 database with every renamed
@@ -76,7 +76,7 @@ describe("the built-in files", () => {
     (steps[1].checks as Record<string, unknown>).only = ["lint"];
     expect(validate({ ...change, steps })).toBe(false);
     expect(validate({ ...change, steps: [{ ...oneStep[0], copyOf: "S1" }] })).toBe(false);
-    // ORC-025: gate steps and parallel copies are gone; a file that still sets them is refused.
+    // Gate steps and parallel copies are gone; a file that still sets them is refused.
     expect(validate({ ...change, steps: [{ ...oneStep[0], gate: true }] })).toBe(false);
     expect(validate({ ...change, steps: [{ ...oneStep[0], parallel: { count: 2, mode: "best-of" } }] })).toBe(false);
     expect(validate({ ...change, steps: [{ ...oneStep[0], role: "tester" }] })).toBe(false);
@@ -88,11 +88,11 @@ describe("the built-in files", () => {
     expect(schema.$defs.role.enum).toEqual(STEP_ROLES);
     expect(schema.$defs.role.enum).toContain("security_reviewer");
     expect(schema.$defs.kind.enum).toEqual(ARTIFACT_KINDS);
-    // ORC-024: the principle ids too.
+    // The principle ids too.
     expect(schema.$defs.principle.enum).toEqual([...PRINCIPLE_IDS]);
   });
 
-  it("ORC-024: the schema accepts a step's principles and refuses an unknown id, a repeated id and a non-list", () => {
+  it("the schema accepts a step's principles and refuses an unknown id, a repeated id and a non-list", () => {
     const validate = validator();
     const change = structuredClone(BUILT_IN_FILES.find((f) => f.raw.id === "change")!.raw) as unknown as { steps: Record<string, unknown>[] };
     const withS1 = (principles: unknown) => ({ ...change, steps: change.steps.map((st) => (st.id === "S1" ? { ...st, principles } : st)) });
@@ -105,9 +105,9 @@ describe("the built-in files", () => {
   });
 
   it("the six flows and the three internal pipelines equal the format-14 templates apart from the security review beside each code review and the principles", () => {
-    // ORC-017 §3.11: the verify purposes are plain descriptions now; the format-14 record keeps the sentence that moved to the
-    // lead's role brief, so it is stripped here. ORC-021: the security review step and every reference to it are stripped too,
-    // so that nothing else changed. ORC-024: the principles are stripped as well (principles.test.ts pins them step by step).
+    // The verify purposes are plain descriptions now; the format-14 record keeps the sentence that moved to the lead's
+    // role brief, so it is stripped here. The security review step and every reference to it are stripped too, so that
+    // nothing else changed. The principles are stripped as well (principles.test.ts pins them step by step).
     const described = (st: StepDef): StepDef => ({ ...st, purpose: st.purpose.replace(` ${VERIFY_CHECKS_NOTE}`, "").replace(/\.$/, "") });
     const withoutSecurity = (steps: StepDef[]): StepDef[] => {
       const sec = new Set(steps.filter((s) => s.role === "security_reviewer").map((s) => s.id));
@@ -245,7 +245,7 @@ function format14(path: string, mutate: (doc: Doc) => void = () => {}): { before
   return { before: structuredClone(doc), v0 };
 }
 
-describe("migration 14 → 15 → 16 (an ORC-016-era database)", () => {
+describe("migration 14 → 15 → 16 (a database that still has templates)", () => {
   it("drops the templates with an event each for the retired ones, writes no file, adds the default and the flows, keeps a backup, and leaves every task alone", () => {
     const path = join(dir, "old.sqlite");
     const { before, v0 } = format14(path, (doc) => {
@@ -316,12 +316,12 @@ describe("migration 14 → 15 → 16 (an ORC-016-era database)", () => {
   });
 });
 
-/** A step as formats 15 to 17 could hold it: with the gate and parallel settings ORC-025 removed (dropped by migration 17 → 18). */
+/** A step as formats 15 to 17 could hold it: with the gate and parallel settings that migration 17 → 18 drops. */
 type LegacyStepDef = StepDef & { gate?: true; parallel?: { count: number; mode: "copies" | "best-of"; providers?: string[] }; copyOf?: string };
-/** Steps without the fields the ORC-025 migration drops: what an older fixture's steps look like after the upgrade. */
+/** Steps without the fields migration 17 → 18 drops: what an older fixture's steps look like after the upgrade. */
 const modern = (steps: unknown[]) => steps.map((s) => Object.fromEntries(Object.entries(s as Record<string, unknown>).filter(([k]) => !["gate", "parallel", "copyOf"].includes(k))));
 
-/** The steps of the five removed catalog entries, as the ORC-016 files resolved them (from the frozen format-14 templates). */
+/** The steps of the five removed catalog entries, as the pattern files resolved them (from the frozen format-14 templates). */
 const REMOVED: Record<string, { name: string; steps: LegacyStepDef[]; experimental?: true }> = {
   "change-cross-review": { name: "Change, reviewed by the other provider", steps: V14_TEMPLATES.change.steps.map((s) => (s.id === "S2" ? { ...s, independentOf: "writer" as const } : s)) },
   "feature-design-gate": { name: "Feature, pause after design", steps: V14_TEMPLATES.feature.steps.map((s) => (s.id === "S1" ? { ...s, gate: true } : s)) },
@@ -338,7 +338,7 @@ const REMOVED: Record<string, { name: string; steps: LegacyStepDef[]; experiment
   "change-lean": { name: "Change without the lead's verification", experimental: true, steps: V14_TEMPLATES.change.steps.slice(0, -1) },
 };
 
-/** A format-15 database built from the seed, with every ORC-016 field as that format wrote it. */
+/** A format-15 database built from the seed, with every pipeline-pattern field as that format wrote it. */
 function format15(path: string): { before: Doc; v0: number } {
   const seeded = new Store(path);
   const v0 = seeded.read().version;
@@ -390,7 +390,7 @@ function format15(path: string): { before: Doc; v0: number } {
   return { before: structuredClone(doc), v0 };
 }
 
-describe("migration 15 → 16 (ORC-021)", () => {
+describe("migration 15 → 16 (patterns become flows)", () => {
   it("renames every persisted field, drops outcomes and retired templates, keeps every pipeline, and turns a default that named a removed entry into change", () => {
     const path = join(dir, "v15.sqlite");
     const { before, v0 } = format15(path);
@@ -470,7 +470,7 @@ describe("migration 15 → 16 (ORC-021)", () => {
     upgraded.close();
   });
 
-  it("a default that named a personal file becomes change; a task that ran one keeps its steps and its local reference (ORC-021 review 2, 3)", () => {
+  it("a default that named a personal file becomes change; a task that ran one keeps its steps and its local reference", () => {
     const path = join(dir, "v15-local.sqlite");
     format15(path);
     const doc = readDoc(path);
@@ -490,7 +490,7 @@ describe("migration 15 → 16 (ORC-021)", () => {
   });
 });
 
-/** A format-17 database built from the seed, plus tasks holding every field ORC-025 removed. */
+/** A format-17 database built from the seed, plus tasks holding every field migration 17 → 18 removes. */
 function format17(path: string): { before: Doc; v0: number } {
   const seeded = new Store(path);
   const v0 = seeded.read().version;
@@ -562,7 +562,7 @@ function format17(path: string): { before: Doc; v0: number } {
   return { before: structuredClone(doc), v0 };
 }
 
-describe("migration 17 → 18 (ORC-025: parallel copies, best-of choices and gate steps are gone)", () => {
+describe("migration 17 → 18 (parallel copies, best-of choices and gate steps are gone)", () => {
   const legacyKeys = (o: unknown) => Object.keys(o as Record<string, unknown>).filter((k) => ["gate", "parallel", "copyOf", "bestOf", "bestOfByUser"].includes(k));
 
   it("drops the fields from every task, step and pipeline revision, records what changed, holds the open best-of task, and leaves the rest alone", () => {

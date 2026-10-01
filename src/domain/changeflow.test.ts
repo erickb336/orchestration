@@ -1,7 +1,7 @@
-// ORC-016 step 2: changing a task's flow (design §7, invariants P7 and P8). Allowed before a task has
-// run or once it is confirmed Paused; the pipeline starts over; earlier work stays on the record and is
-// never reused; results from runs started before the change are discarded (G2); their artifacts cannot be
-// edited (G3). Pure domain tests over a seed with every sample task held.
+// Changing a task's flow. Allowed before a task has run or once it is confirmed Paused; the pipeline
+// starts over; earlier work stays on the record and is never reused; results from runs started before the
+// change are discarded; their artifacts cannot be edited. Pure domain tests over a seed with every sample
+// task held.
 
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
@@ -46,7 +46,7 @@ function finish(s: State, id: string, t: number, o: { findings?: Finding[]; ref?
   return st.role === "code_reviewer" ? securityClean(done, id, t) : done;
 }
 
-/** ORC-021: the security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
+/** The security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
 function securityClean(s: State, id: string, t: number): State {
   let next = M.dispatchEligible(s, at(t));
   for (const a of running(next, id)) if (step(next, id, a.stepId).role === "security_reviewer") next = M.reportCompletion(next, a.id, [], at(t), [{ name: "findings", summary: "no security findings", findings: [], openFindings: 0 }]);
@@ -114,7 +114,7 @@ describe("changeFlow before the task starts", () => {
   });
 });
 
-describe("refusals (P7)", () => {
+describe("refusals", () => {
   it("while a run is active, while pausing, and when blocked but not held", () => {
     let { s, id } = withTask("change");
     s = go(s, 1);
@@ -178,7 +178,7 @@ describe("refusals (P7)", () => {
   });
 });
 
-describe("a fresh start while paused (P8)", () => {
+describe("a fresh start while paused", () => {
   it("every new step is paused with a revision above every earlier one; decisions close; pending breakdowns clear; artifacts stay but are never consumed", () => {
     const { s: paused, id } = pausedAfterReview();
     const s0 = structuredClone(paused);
@@ -228,7 +228,7 @@ describe("a fresh start while paused (P8)", () => {
     expect(beforeArts.every((aid) => M.fromEarlierFlow(next, task(next, id), next.artifacts.find((a) => a.id === aid)!))).toBe(true);
   });
 
-  it("G2: a result from a run started before the change is discarded and its step untouched, on completion and on failure", () => {
+  it("a result from a run started before the change is discarded and its step untouched, on completion and on failure", () => {
     const { s: paused, id } = pausedAfterReview();
     const changed = M.changeFlow(paused, id, task(paused, id).pipelineRev, "bugfix", "", at(6));
     const old = changed.attempts.find((a) => a.taskId === id && a.stepId === "S1")!;
@@ -250,7 +250,7 @@ describe("a fresh start while paused (P8)", () => {
     expect(step(failed, id, "S1").blockedReason).toBeUndefined();
   });
 
-  it("G3: an artifact from before the change cannot be edited, with or without its own revision stamp; new work can", () => {
+  it("an artifact from before the change cannot be edited, with or without its own revision stamp; new work can", () => {
     const { s: paused, id } = pausedAfterReview();
     const changed = M.changeFlow(paused, id, task(paused, id).pipelineRev, "bugfix", "", at(6));
     const old = changed.artifacts.find((a) => a.taskId === id && a.stepId === "S1" && a.name === "change")!;
@@ -289,10 +289,10 @@ describe("a fresh start while paused (P8)", () => {
   });
 });
 
-describe("steps 2–3 review fixes", () => {
+describe("decisions, child tasks, late stops and loop ids across a change", () => {
   const titleOf = (c: Task) => M.currentSpec(c).content.title;
 
-  it("finding 1: a decision taken under the earlier flow is not carried into the new flow's review, and a decision the change closed cannot be decided", () => {
+  it("a decision taken under the earlier flow is not carried into the new flow's review, and a decision the change closed cannot be decided", () => {
     const { s: paused, id } = pausedAfterReview();
     const open = paused.decisions.find((d) => d.taskId === id && d.status === "open")!;
     // (a) Decided before the change: accepted. Under Bug fix, the review reports the same finding key again.
@@ -329,7 +329,7 @@ describe("steps 2–3 review fixes", () => {
     expect(() => F.decideFinding(sup, open.id, "reopen", undefined, at(7))).not.toThrow();
   });
 
-  it("finding 2: child tasks of a breakdown made under the earlier flow are the record: never relinked, never waited for, and told apart", () => {
+  it("child tasks of a breakdown made under the earlier flow are the record: never relinked, never waited for, and told apart", () => {
     let { s, id } = withTask("goal");
     // Step-by-step review (on a custom copy of the Goal steps) holds the task after the plan, before its children exist.
     s = setPipeline(s, id, 1, flowSteps("goal"), "custom goal", "user", at(0));
@@ -375,7 +375,7 @@ describe("steps 2–3 review fixes", () => {
     task(later, M.currentChildren(later, nt)[0].id).lifecycle = "done";
     expect(M.childrenSettled(later, task(later, id))).toBe(true);
     expect(M.waitingForChildren(later, task(later, id))).toBeUndefined();
-    // Review M1: an earlier child that is open again (a dropped one restored with Undo, say) is still never waited for.
+    // An earlier child that is open again (a dropped one restored with Undo, say) is still never waited for.
     const reopened = structuredClone(later);
     task(reopened, first[0].id).lifecycle = "active";
     expect(M.childrenSettled(reopened, task(reopened, id))).toBe(true);
@@ -388,7 +388,7 @@ describe("steps 2–3 review fixes", () => {
     expect(M.flowChangeBlocker(withOpen, task(withOpen, id))).toBe("It has child tasks; cancel them or let them finish first.");
   });
 
-  it("finding 6: a stop acknowledged or a run lost from before the change settles that attempt alone and leaves the new step untouched", () => {
+  it("a stop acknowledged or a run lost from before the change settles that attempt alone and leaves the new step untouched", () => {
     const { s: paused, id } = pausedAfterReview();
     const changed = M.changeFlow(paused, id, task(paused, id).pipelineRev, "bugfix", "", at(6));
     const old = changed.attempts.find((a) => a.taskId === id && a.stepId === "S1")!;
@@ -417,7 +417,7 @@ describe("steps 2–3 review fixes", () => {
     expect(step(normal, id, "S1").state).toBe("paused");
   });
 
-  it("finding 6: loop iterations created after a change start above any revision their ids had before", () => {
+  it("loop iterations created after a change start above any revision their ids had before", () => {
     // Iterations: a Change task whose loop had expanded (S2-i2 ran) before the change to Change without verification.
     let { s, id } = withTask("change");
     s = go(s, 1);

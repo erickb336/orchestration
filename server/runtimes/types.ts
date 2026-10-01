@@ -1,11 +1,11 @@
-// The runtime adapter contract (ORC-004 fixed interface). One adapter per provider; the scheduler
+// The runtime adapter contract. One adapter per provider; the scheduler
 // owns dispatch and state, adapters own processes. Adapters never touch the store: they emit events,
 // which the scheduler applies inside lease-checked transactions.
 
 import type { CatalogModel, CheckResult, OutputDef, ProviderId, RoleId } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 
-/** ORC-013: what a service check run (server/checks.ts) reports when it completes. */
+/** What a service check run (server/checks.ts) reports when it completes. */
 export interface CheckRunReport {
   /** The commit the workspace was at. */
   sha: string;
@@ -74,7 +74,7 @@ export type AdapterEvent =
   /** The run ended without a usable result (provider error, auth failure, limit reached, crash). */
   | { type: "failed"; attemptId: string; message: string; usage?: Usage }
   /**
-   * ORC-022: the outcome of `note()` for one note. "delivered" only on the runtime's acknowledgment
+   * The outcome of `note()` for one note. "delivered" only on the runtime's acknowledgment
    * (Codex: `turn/steer` accepted; Claude: an assistant message names the note's uuid). Never terminal for the run.
    */
   | { type: "note"; attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string };
@@ -116,7 +116,7 @@ export interface RuntimeAdapter {
    */
   interrupt(attemptId: string): void;
   /**
-   * ORC-022: deliver a note to the live run of `attemptId`. Must not throw; exactly one "note" event
+   * Deliver a note to the live run of `attemptId`. Must not throw; exactly one "note" event
    * for `note.id` follows (also when there is no such run: "not-delivered").
    */
   note(attemptId: string, note: { id: string; text: string }): void;

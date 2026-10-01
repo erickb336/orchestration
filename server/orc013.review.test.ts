@@ -1,4 +1,4 @@
-// ORC-013 step 1 review, finding 2: file names with non-ASCII characters, a quote or a backslash reach
+// File names with non-ASCII characters, a quote or a backslash reach
 // the changed-path set exactly as git names them, so a reviewer that lists them completes its coverage.
 // A real repository; no model runs.
 
@@ -28,14 +28,14 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-describe("the carry-forward key (review 1, finding 14)", () => {
+describe("the carry-forward key", () => {
   it("includes the severity: an error and a warning with one title and file are two findings", () => {
     expect(findingKey("review", "a.ts", "Same title", "error")).not.toBe(findingKey("review", "a.ts", "Same title", "warning"));
     expect(findingKey("review", "a.ts", "Same title", "error")).toBe(findingKey("review", "a.ts", "  same   TITLE ", "error"));
   });
 });
 
-describe("changed paths with special characters (review 1, finding 2)", () => {
+describe("changed paths with special characters", () => {
   it("reviewDiff and changedPaths return docs/café.md, a name with a quote and one with a backslash as they are; coverage completes when the reviewer lists them", () => {
     const base = git("rev-parse", "HEAD");
     mkdirSync(join(repo, "docs"));

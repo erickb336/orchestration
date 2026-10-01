@@ -1,6 +1,6 @@
-// ORC-025: the words of Settings that depend on numbers. The involvement card says the numbers each mode really
-// sets (S2); the count of open lead proposals is said truthfully (a count over the limit is explained, never "8 of 5");
-// the checks summary is one line (S4); and the consent texts moved from confirm() into in-page confirmations.
+// The words of Settings that depend on numbers. The involvement card says the numbers each mode really
+// sets; the count of open lead proposals is said truthfully (a count over the limit is explained, never "8 of 5");
+// the checks summary is one line; and the consent texts are in-page confirmations.
 
 import { describe, expect, it } from "vitest";
 import { AUTOPILOT } from "../domain/types";
@@ -28,7 +28,7 @@ describe("proposalsLine", () => {
   });
 });
 
-describe("involvementText (S2: each mode with the numbers it sets)", () => {
+describe("involvementText (each mode with the numbers it sets)", () => {
   it("Autopilot's own numbers are the preset the applyAutopilot command sets", () => {
     expect(AUTOPILOT_NUMBERS).toEqual({ interval: AUTOPILOT.planningIntervalMinutes, perCycle: AUTOPILOT.maxProposalsPerCycle, maxOpen: AUTOPILOT.maxOpenProposals, retries: AUTOPILOT.autoRetry });
     expect(involvementText("autopilot", { ...AUTOPILOT_NUMBERS, hours: null }, pr)).toBe(
@@ -55,7 +55,7 @@ describe("involvementText (S2: each mode with the numbers it sets)", () => {
   });
 });
 
-describe("checksSummary (S4)", () => {
+describe("checksSummary", () => {
   it("is one line: on or off, and how many commands", () => {
     expect(checksSummary(true, [{ kind: "check" }, { kind: "check" }])).toBe("On · 2 commands");
     expect(checksSummary(true, [{ kind: "prepare" }])).toBe("On · 1 command");
@@ -63,7 +63,7 @@ describe("checksSummary (S4)", () => {
   });
 });
 
-describe("the in-page confirmations that replaced confirm()", () => {
+describe("the in-page confirmations", () => {
   it("turning checks on and running without a sandbox say what they mean, with a verb on the button", () => {
     expect(CONFIRM_CHECKS_ON.title).toBe("Turn checks on?");
     expect(CONFIRM_CHECKS_ON.text).toMatch(/does not stop that code from reading your files/);

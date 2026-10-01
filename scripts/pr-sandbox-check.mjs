@@ -1,4 +1,4 @@
-// Evidence run for pull-request delivery (ORC-008) against a THROWAWAY GitHub repository.
+// Evidence run for pull-request delivery against a THROWAWAY GitHub repository.
 //
 //   node scripts/pr-sandbox-check.mjs --repo <owner>/<name>          prints what it would do; contacts nothing
 //   node scripts/pr-sandbox-check.mjs --repo <owner>/<name> --yes    does it

@@ -1,4 +1,4 @@
-// ORC-025 pass 3: what stands between the task and its next step, one banner each: a stop in progress, a
+// What stands between the task and its next step, one banner each: a stop in progress, a
 // prerequisite, a pause, a deferral, a conflict. A banner carries a button only where that button is the
 // answer (Retry stop, Run now, Retry integration); Pause, Resume and Start live in the header and under
 // Needs you. The decisions that need you are not here either (NeedsYou.tsx).
@@ -57,7 +57,7 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
       </Banner>,
     );
   else if (stopping.length) {
-    // ORC-025: "The change is saved" is true only of a step that writes code; a stopping review or design has no change to save.
+    // "The change is saved" is true only of a step that writes code; a stopping review or design has no change to save.
     const changesCode = stopping.some((a) => task.steps.find((st) => st.id === a.stepId)?.outputs.some((o) => o.kind === "code-change"));
     out.push(
       <Banner key="stop" title={`${M.stopLabel(state, task)}…`}>
@@ -130,7 +130,7 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
         )}
       </Banner>,
     );
-  // ORC-012 review 2: the roadmap's hold and the user's hold before start are different things and shown as such.
+  // The roadmap's hold and the user's hold before start are different things and shown as such.
   if (task.heldForShaping && task.lifecycle !== "active")
     out.push(
       <Banner key="hfs">
@@ -138,7 +138,7 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
         <a href="#/overview">Shape the vision</a>
       </Banner>,
     );
-  // ORC-009: a deferral is not a pause. The running step finishes and its result is kept; then nothing new starts.
+  // A deferral is not a pause. The running step finishes and its result is kept; then nothing new starts.
   const deferral = open ? M.deferredBy(state, task) : undefined;
   if (deferral) {
     const own = deferral.task.id === task.id;

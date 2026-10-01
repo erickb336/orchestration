@@ -1,4 +1,4 @@
-// ORC-022: notes to a running stage, domain level. The lead's `steer.notes` entries (validation, who may
+// Notes to a running stage, domain level. The lead's `steer.notes` entries (validation, who may
 // send to what, the steering modes and held sets, the change-set rows without Undo), the user's direct note,
 // the note's life (queued, sending, delivered via live or start, not delivered with a reason), reruns of a
 // finished step, stale-result protection, restart reconciliation, caps and pruning, and the exact text an
@@ -295,7 +295,7 @@ describe("the note's life", () => {
     expect(note(failed, n.id)).toMatchObject({ status: "not-delivered", reason: "the run ended before the runtime answered" });
   });
 
-  it("ORC-022 review L1: a queued note whose step can no longer run is settled as not delivered, also while the project is paused", () => {
+  it("a queued note whose step can no longer run is settled as not delivered, also while the project is paused", () => {
     const { state: s } = steerNotes(seed(), [entry("EX-005", "S1")]); // EX-005 is paused by you: the note is queued
     const id = lastNote(s).id;
     const cancelled = M.dispatchEligible(M.pauseProject(M.cancelTask(s, "EX-005", at(4)), at(4)), at(5));
@@ -443,7 +443,7 @@ describe("rerunning a finished step with a note", () => {
     const viaApply = M.applySteering(s2, set.id, row.id, at(10));
     expect(viaApply.result.applied).toEqual([row.id]);
     expect(step(viaApply.state, "EX-002", "S1").state).toBe("pending");
-    // ORC-022 review M2: Apply all never reruns: the row is left for its own button, and nothing downstream is stopped.
+    // Apply all never reruns: the row is left for its own button, and nothing downstream is stopped.
     const bulk = M.applySteering(s2, set.id, undefined, at(10));
     expect(bulk.result).toEqual({ applied: [], left: [{ id: row.id, why: "needs Rerun with this note" }] });
     expect(step(bulk.state, "EX-002", "S1").state).toBe("done");
@@ -466,7 +466,7 @@ describe("rerunning a finished step with a note", () => {
     expect(() => M.rerunWithNote(r, "EX-003", "S1", id, at(5))).toThrow(/the note is queued/);
   });
 
-  it("ORC-022 review L3: with the whole project paused by you, a rerun is a suggestion", () => {
+  it("with the whole project paused by you, a rerun is a suggestion", () => {
     const s = M.pauseProject(nothingDownstream(), at(3));
     const { set } = steerNotes(s, [entry("EX-003", "S1", "x", "rerun")]);
     expect(set.changes[0]).toMatchObject({ status: "suggested", rerun: true, note: "S1 had finished; the rerun needs your go-ahead: the project is paused by you" });
