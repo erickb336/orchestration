@@ -5,14 +5,15 @@ import * as C from "../domain/checks";
 import * as M from "../domain/model";
 import { diffLines } from "../domain/diff";
 import { useStore } from "./store";
-import { ROLE_LABEL, fmtTime, involvementOf, relTime, selectionText } from "./common";
+import { ProviderMark, ROLE_LABEL, fmtTime, involvementOf, isSimulated, relTime, selectionText } from "./common";
 import { PrChip } from "./Delivery";
 import { DecisionQueue } from "./Findings";
 import { Conversation } from "./Conversation";
 import { Onboarding } from "./Onboarding";
+import { liveText, needsYouOf, progressByArea, type AreaProgress } from "./progress";
 import { OpenDraft, ShapingPanel } from "./Shaping";
 import { RevisionDocs, VisionDocsList } from "./VisionDocs";
-import { PROVIDERS, isProvider, type Attempt, type ProviderId, type State, type VisionRevision } from "../domain/types";
+import { PROVIDERS, isProvider, type Attempt, type ProviderId, type State, type Task, type VisionRevision } from "../domain/types";
 
 /** Who made a vision revision and from what, in a few words. */
 export function revisionSource(v: VisionRevision): string {
@@ -42,6 +43,11 @@ function VisionProvenance({ state }: { state: State }) {
         <span className="chip">
           r{v.rev} · {revisionSource(v)} · {fmtTime(v.at)}
         </span>
+        {isSimulated(v) && (
+          <span className="chip" title="Written by the fake runtime's lead, not by a model">
+            simulated
+          </span>
+        )}
         {msg && (
           <button className="link" style={{ fontSize: "0.85rem" }} onClick={() => document.getElementById(`msg-${msg}`)?.scrollIntoView({ block: "center" })}>
             Show the message
@@ -87,7 +93,7 @@ function VisionProvenance({ state }: { state: State }) {
               <span className="mono">r{r.rev}</span>
               <span className="actor">{revisionSource(r)}</span>
               <span>
-                {r.reason} <span className="muted">· focus: “{r.focus}” · {fmtTime(r.at)}</span> <RevisionDocs state={state} rev={r} />
+                {r.reason} {isSimulated(r) && <span className="chip">simulated</span>} <span className="muted">· focus: “{r.focus}” · {fmtTime(r.at)}</span> <RevisionDocs state={state} rev={r} />
               </span>
             </li>
           ))}
@@ -116,15 +122,6 @@ export function Overview() {
   const blocked = state.tasks.filter((t) => M.column(state, t) === "blocked").length;
   const active = M.activeAttempts(state);
   const unreviewed = D.unreviewedCount(state);
-  const nowMs = Date.now();
-  const gh = state.project.github;
-  // A pull request the app is already fixing does not wait for you.
-  const prNeeds = D.trackedPrTasks(state).filter((t) => (t.integration!.pr!.attention && !D.openRepair(state, t.integration!.pr!)) || D.prReady(state, t, nowMs));
-  const flagged = D.landedTasks(state).filter((t) => t.integration!.landed!.status === "unreviewed" && t.integration!.landed!.flags.length > 0);
-  const ghProblem = gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0) ? gh.problem : undefined;
-  // ORC-013: findings routed to you wait here; the lead's own are news, not a request.
-  const myDecisions = F.openDecisions(state, "user").length;
-  const leadDecisions = F.openDecisions(state, "lead").length;
   const outcomes = state.tasks.filter((t) => t.lifecycle === "done").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
   // ORC-012: while shaping, the panel replaces the Vision card; a draft the lead sent while building shows on the card.
   const shaping = state.project.stage === "shaping";
@@ -134,8 +131,10 @@ export function Overview() {
       <h1>Overview</h1>
       <ModeSummary state={state} />
       <Onboarding />
+      <ProgressByArea state={state} />
       <div className="grid-2">
         <div>
+          <NeedsYouCard state={state} />
           {shaping ? (
             <ShapingPanel />
           ) : (
@@ -220,73 +219,6 @@ export function Overview() {
           </section>
           )}
 
-          <section className="card" aria-labelledby="since-h">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <h2 id="since-h">Since your last visit</h2>
-              <span className="muted">{relTime(since)}</span>
-            </div>
-            <div className="stat-row">
-              <div className="stat">
-                <b>{decisions}</b>decisions
-              </div>
-              <div className="stat">
-                <b>{newProposals}</b>new proposals
-              </div>
-              <div className="stat">
-                <b>{completed}</b>completed
-              </div>
-              <div className="stat">
-                <b>{blocked}</b>blocked now
-              </div>
-            </div>
-            <p className="muted" style={{ marginTop: "0.6rem", fontSize: "0.85rem" }}>
-              Viewing does not approve or pause anything.
-            </p>
-          </section>
-
-          {(prNeeds.length > 0 || flagged.length > 0 || ghProblem || gh?.autoMergePaused || myDecisions > 0 || leadDecisions > 0) && (
-            <section className="card" aria-labelledby="needs-h">
-              <h2 id="needs-h">Needs you</h2>
-              {(myDecisions > 0 || leadDecisions > 0) && (
-                <div style={{ marginBottom: "0.5rem" }}>
-                  {myDecisions > 0 && (
-                    <p style={{ margin: "0 0 0.3rem" }}>
-                      <span className="chip strong">decision</span> {myDecisions} review finding{myDecisions === 1 ? "" : "s"} wait{myDecisions === 1 ? "s" : ""} for your decision: fix it, accept it as it is, or follow it up as a separate task.
-                    </p>
-                  )}
-                  <DecisionQueue state={state} />
-                </div>
-              )}
-              <ul className="plain">
-                {ghProblem && (
-                  <li>
-                    <span className="chip danger">GitHub</span> {ghProblem.message} <a href="#/settings">Settings</a>
-                  </li>
-                )}
-                {gh?.autoMergePaused && (
-                  <li>
-                    <span className="chip danger">paused</span> Automatic merging is paused: {gh.autoMergePaused.reason}. {gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}{" "}
-                    <a href="#/review">Review</a>
-                  </li>
-                )}
-                {prNeeds.map((t) => (
-                  <li key={t.id}>
-                    <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title} <PrChip state={state} task={t} />
-                    {t.integration!.pr!.attention && <div className="muted" style={{ fontSize: "0.85rem" }}>{t.integration!.pr!.attention.message}</div>}
-                  </li>
-                ))}
-                {flagged.map((t) => (
-                  <li key={t.id}>
-                    <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="chip danger">landed, flagged</span>
-                  </li>
-                ))}
-              </ul>
-              <p style={{ margin: "0.5rem 0 0" }}>
-                <a href="#/review">Open Review</a>
-              </p>
-            </section>
-          )}
-
           <section className="card" aria-labelledby="outcomes-h">
             <h2 id="outcomes-h">Latest outcomes</h2>
             {(unreviewed > 0 || D.landedTasks(state).length > 0) && (
@@ -311,6 +243,30 @@ export function Overview() {
         <div>
           <Conversation />
 
+          <section className="card" aria-labelledby="since-h">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <h2 id="since-h">Since your last visit</h2>
+              <span className="muted">{relTime(since)}</span>
+            </div>
+            <div className="stat-row">
+              <div className="stat">
+                <b>{decisions}</b>decisions
+              </div>
+              <div className="stat">
+                <b>{newProposals}</b>new proposals
+              </div>
+              <div className="stat">
+                <b>{completed}</b>completed
+              </div>
+              <div className="stat">
+                <b>{blocked}</b>blocked now
+              </div>
+            </div>
+            <p className="muted small" style={{ marginTop: "0.6rem" }}>
+              Viewing does not approve or pause anything.
+            </p>
+          </section>
+
           <section className="card" aria-labelledby="team-h">
             <h2 id="team-h">Team now</h2>
             <p className="muted" style={{ fontSize: "0.85rem" }}>
@@ -332,7 +288,7 @@ export function Overview() {
                       </td>
                       <td style={{ width: "40%" }}>
                         {a.outcome === "stopping" ? (
-                          <span className="pill paused transition">Stopping</span>
+                          <span className="pill work transition">Stopping</span>
                         ) : a.progress > 0 ? (
                           <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`}>
                             <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
@@ -388,6 +344,136 @@ export function Overview() {
   );
 }
 
+/**
+ * ORC-017 §3.3: one row per area. Name and "done of total"; a bar with one segment per task (done, agents
+ * working, needs you, the rest); the live line. Each row is a button that opens the board filtered to the area.
+ */
+function ProgressByArea({ state }: { state: State }) {
+  const rows = progressByArea(state);
+  return (
+    <section className="card" aria-labelledby="progress-h" data-tour="progress">
+      <h2 id="progress-h">Progress by area</h2>
+      {rows.length === 0 ? (
+        <p className="area-empty">No tasks yet. Areas appear here as tasks are created.</p>
+      ) : (
+        <ul className="areas">
+          {rows.map((r) => (
+            <li key={r.area}>
+              <AreaRow row={r} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function AreaRow({ row: r }: { row: AreaProgress }) {
+  const open = () => (location.hash = `#/tasks?area=${encodeURIComponent(r.area)}`);
+  const widths = { done: r.buckets.done, work: r.buckets.work, you: r.buckets.you, rest: r.buckets.rest };
+  const shown = r.live.slice(0, 2);
+  const more = r.live.length - shown.length;
+  return (
+    <button type="button" className="area-row" onClick={open} title={`Open the board filtered to ${r.area}`}>
+      <span>
+        <span className="area-name">{r.area}</span>
+        <span className="area-count">
+          {r.done} of {r.total} done
+        </span>
+      </span>
+      <span className="area-bar" role="img" aria-label={r.label}>
+        {(["done", "work", "you", "rest"] as const).map((b) => (widths[b] > 0 ? <span key={b} className={b} style={{ width: `${(widths[b] / r.total) * 100}%` }} /> : null))}
+      </span>
+      <span className="area-live">
+        {shown.length === 0 && <span>Idle</span>}
+        {shown.map((a, i) => (
+          <span key={`${a.taskId}-${a.stepId}-${i}`} className="agent">
+            <ProviderMark provider={a.provider} />
+            <span className="verb">{liveText(a)}</span> <i title={a.title}>{a.title}</i>
+          </span>
+        ))}
+        {more > 0 && <span>+{more} more</span>}
+        {r.needsYou > 0 && (
+          <span className="needs">
+            {r.needsYou} need{r.needsYou === 1 ? "s" : ""} you
+          </span>
+        )}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * ORC-017 §3.4: everything that waits for you, one line each with one control that opens the right place.
+ * Reuses the delivery, findings and task derivations; nothing new is stored.
+ */
+function NeedsYouCard({ state }: { state: State }) {
+  const nowMs = Date.now();
+  const gh = state.project.github;
+  const ghProblem = gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0) ? gh.problem : undefined;
+  const myDecisions = F.openDecisions(state, "user").length;
+  const leadDecisions = F.openDecisions(state, "lead").length;
+  const items: { key: string; task?: Task; what: string; detail?: string; action: string; href: string }[] = [];
+  if (ghProblem) items.push({ key: "gh", what: "GitHub delivery is stopped", detail: ghProblem.message, action: "Settings", href: "#/settings" });
+  if (gh?.autoMergePaused) items.push({ key: "auto", what: "automatic merging is paused", detail: `${gh.autoMergePaused.reason}. ${gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}`, action: "Review", href: "#/review" });
+  for (const t of [...state.tasks].sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))) {
+    const n = needsYouOf(state, t, nowMs);
+    if (!n) continue;
+    const pr = t.integration?.pr;
+    items.push({ key: t.id, task: t, what: n.what, detail: n.what === "look at the pull request" ? pr?.attention?.message : undefined, action: n.action, href: n.href });
+  }
+  return (
+    <section className="card" aria-labelledby="needs-h" data-tour="needs-you">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h2 id="needs-h">Needs you</h2>
+        {items.length > 0 && <span className="chip you">{items.length}</span>}
+      </div>
+      {items.length === 0 ? (
+        <p className="needs-empty">Nothing needs you. Agents keep working within your settings.</p>
+      ) : (
+        <ul className="needs-list">
+          {items.map((it) => (
+            <li key={it.key}>
+              <span className="who">
+                <span className="what">
+                  <strong>Needs you:</strong> {it.what}
+                </span>
+                {it.task ? (
+                  <span className="t" title={M.currentSpec(it.task).content.title}>
+                    <span className="mono muted">{it.task.id}</span> {M.currentSpec(it.task).content.title} {it.task.integration?.pr && <PrChip state={state} task={it.task} />}
+                  </span>
+                ) : (
+                  <span className="t">{it.detail}</span>
+                )}
+                {it.task && it.detail && <span className="muted small">{it.detail}</span>}
+              </span>
+              <a className="button-link act" href={it.href}>
+                {it.action}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+      {leadDecisions > 0 && (
+        <p className="muted small" style={{ margin: "0.5rem 0 0" }}>
+          The lead is deciding {leadDecisions} finding{leadDecisions === 1 ? "" : "s"}. You can take any of them over from the task page.
+        </p>
+      )}
+      {myDecisions > 0 && (
+        <details style={{ marginTop: "0.5rem" }}>
+          <summary className="small">
+            Decide {myDecisions === 1 ? "the finding" : `the ${myDecisions} findings`} here
+          </summary>
+          <p className="muted small" style={{ margin: "0.3rem 0" }}>
+            Fix it, accept it as it is, or follow it up as a separate task.
+          </p>
+          <DecisionQueue state={state} showLead={false} />
+        </details>
+      )}
+    </section>
+  );
+}
+
 /** One line saying how much runs without the user, with a link to change it. */
 function ModeSummary({ state }: { state: State }) {
   const a = state.project.autonomy;
@@ -426,15 +512,18 @@ function ModeSummary({ state }: { state: State }) {
     : C.checksHeld(state)
       ? "checks waiting: sandbox unavailable"
       : `checks on (${checks.commands.filter((c) => c.kind === "check").length} command${checks.commands.filter((c) => c.kind === "check").length === 1 ? "" : "s"}, ${checks.sandbox === "codex" ? "sandboxed" : "no sandbox"})`;
+  // ORC-017 §3.5: the long involvement sentence sits behind a disclosure; what is paused or shaping stays in view.
   return (
     <p className="mode-line" aria-live="polite">
-      <span className={mode === "manual" ? "chip strong" : "pill running"}>{pill}</span>
+      <span className={mode === "manual" ? "chip strong" : "pill work"}>{pill}</span>
       <span>
-        {text}
-        {` · ${checksText}`}
+        {checksText}
         {paused ? " · project paused" : ""}
         {!paused && state.project.stage === "shaping" ? ` · ${M.SHAPING_LABEL.toLowerCase()}` : ""}
       </span>
+      <details className="how inline">
+        <summary>How this works</summary> {text}.
+      </details>
       <a href="#/settings">Change</a>
     </p>
   );

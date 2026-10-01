@@ -6,7 +6,7 @@ import { diffLines } from "../domain/diff";
 import * as M from "../domain/model";
 import type { State, SteeringChange, SteeringChangeSet } from "../domain/types";
 import { useStore } from "./store";
-import { relTime } from "./common";
+import { isSimulated, relTime } from "./common";
 
 type Act = { name: "undoSteering" | "applySteering" | "dismissSteering" | "postMessage"; args: object };
 
@@ -45,6 +45,13 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
   }
   return (
     <div className="msg-extra changes">
+      {isSimulated(set) && (
+        <div className="row" style={{ gap: "0.3rem", margin: "0.1rem 0 0.2rem" }}>
+          <span className="chip" title="Written by the fake runtime's lead, not by a model">
+            simulated
+          </span>
+        </div>
+      )}
       {set.heldBecause && (
         <div className="banner" style={{ margin: "0.3rem 0", fontSize: "0.85rem" }} role="status">
           Held: {set.heldBecause}{" "}

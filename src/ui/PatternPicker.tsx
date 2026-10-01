@@ -61,7 +61,7 @@ export function PatternCard({ state, pattern, showSteps = true }: { state: State
         {audienceText(pattern)}
       </p>
       {missing.length > 0 && (
-        <p style={{ color: "var(--s-paused)", fontSize: "0.85rem", margin: "0 0 0.2rem" }}>
+        <p className="small" style={{ color: "var(--st-you)", margin: "0 0 0.2rem" }}>
           This pattern runs parallel copies on {missing.join(" and ")}, which {missing.length === 1 ? "is" : "are"} not enabled (Settings → Providers). Those copies will block until the provider is enabled.
         </p>
       )}

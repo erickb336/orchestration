@@ -83,24 +83,19 @@ export function Onboarding() {
   const shaping = state.project.stage === "shaping";
 
   if (service.runtime !== "real") {
+    // ORC-017 §3.5: the demo bar and the tour explain the sample project; what stays here is the way to your own repository and the shaping choice.
     return (
-      <section className="card onboarding" aria-labelledby="onboard-h">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <h2 id="onboard-h" style={{ margin: 0 }}>
-            This is the sample project
-          </h2>
-          {hide}
-        </div>
-        <p style={{ margin: "0.4rem 0 0" }}>
-          Everything here is simulated sample data; no agents run and nothing touches your code. To work on your own repository, stop the service and start it with{" "}
-          <code>ORCHESTRATION_RUNTIME=real npm start</code>. You will then be guided through connecting a repository, Claude or Codex, and your vision.
-        </p>
+      <p className="try-shaping" aria-label="About the sample project">
+        <span>
+          Your own repository: start the service with <code>ORCHESTRATION_RUNTIME=real npm start</code>.
+        </span>
         {!shaping && stageChosen !== "1" && (
-          <p style={{ margin: "0.5rem 0 0" }}>
-            You can also try shaping the vision with the (simulated) lead before any work runs: <StageChoice onChosen={() => setStageChosen("1")} />
-          </p>
+          <>
+            <span>Or try shaping the vision with the (simulated) lead first:</span> <StageChoice onChosen={() => setStageChosen("1")} />
+          </>
         )}
-      </section>
+        {hide}
+      </p>
     );
   }
 

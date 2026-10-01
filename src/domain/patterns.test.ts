@@ -368,7 +368,8 @@ describe("hashes", () => {
 describe("summaries", () => {
   it("patternSummary names every step with its markers", () => {
     expect(patternSummary(builtIn("change").steps)).toBe(
-      "S1 Implement → C1 Run the project's checks (run by the service) → S2 Code review → S3 Repair review findings and failing checks (if findings, repeats) → C2 Final checks (run by the service) → S4 Verify and integrate. Service check results are the record of what ran; do not say tests passed unless a check result shows it.",
+      // ORC-017: the verify purpose is a plain description; its instruction to agents moved to the lead's role brief (server/envelope.ts).
+      "S1 Implement → C1 Run the project's checks (run by the service) → S2 Code review → S3 Repair review findings and failing checks (if findings, repeats) → C2 Final checks (run by the service) → S4 Verify and integrate",
     );
     expect(patternSummary(builtIn("goal-plan-gate").steps)).toContain("S1 Plan the goal and break it into independent tasks (breakdown, pauses for you)");
     expect(patternSummary(builtIn("change-best-of-two").steps)).toContain("S1 Implement (parallel ×2 best of)");

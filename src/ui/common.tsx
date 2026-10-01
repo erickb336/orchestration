@@ -42,12 +42,83 @@ export function selectionText(sel: { provider: Runner; model: string }) {
   return `${M.providerLabel(sel.provider)} · ${sel.model}`;
 }
 
-export function StatePill({ state, task }: { state: State; task: Task }) {
+/** ORC-017 §1: the four state hues, and neutral for everything else. */
+export type Tone = "work" | "you" | "fail" | "done" | "neutral";
+
+/**
+ * §3.1: one shape for every status. A dot in the tone's colour, pulsing only while agents work; a
+ * two-bar pause mark instead of the dot for a pause. The label is always text: colour never stands alone.
+ */
+export function Pill({ tone, paused, pulse, title, children }: { tone: Tone; paused?: boolean; pulse?: boolean; title?: string; children: React.ReactNode }) {
+  return (
+    <span className={`pill has-mark ${tone}${paused ? " paused" : ""}${pulse && tone === "work" ? " pulse" : ""}`} title={title}>
+      {paused ? (
+        <svg className="pill-pause" viewBox="0 0 8 9" aria-hidden="true" focusable="false">
+          <rect x="0.5" y="0.5" width="2.4" height="8" rx="0.6" fill="currentColor" />
+          <rect x="5.1" y="0.5" width="2.4" height="8" rx="0.6" fill="currentColor" />
+        </svg>
+      ) : (
+        <span className="pill-dot" aria-hidden="true" />
+      )}
+      {children}
+    </span>
+  );
+}
+
+/** The tone of a task's state: agents working, failed, done, or neutral (proposed, ready, paused, deferred, cancelled). */
+export function taskTone(state: State, task: Task): { tone: Tone; paused: boolean; pulse: boolean } {
   const label = M.stateLabel(state, task);
   const col = M.column(state, task);
-  const transitional = label === "Pausing" || label === "Cancelling" || label.startsWith("Stopping");
-  const cls = label === "Control failure" ? "failure" : label === "Pausing" ? "paused" : label.includes("deferred after this step") ? "deferred" : col;
-  return <span className={`pill ${cls}${transitional ? " transition" : ""}`}>{label}</span>;
+  if (label === "Control failure" || col === "blocked") return { tone: "fail", paused: false, pulse: false };
+  // Pausing, Stopping and Cancelling: the agent is still working until the runtime acknowledges, so the dot keeps pulsing.
+  if (col === "running" || col === "reviewing") return { tone: "work", paused: false, pulse: true };
+  if (col === "done") return { tone: "done", paused: false, pulse: false };
+  if (col === "paused") return { tone: "neutral", paused: true, pulse: false };
+  return { tone: "neutral", paused: false, pulse: false };
+}
+
+export function StatePill({ state, task }: { state: State; task: Task }) {
+  const label = M.stateLabel(state, task);
+  const { tone, paused, pulse } = taskTone(state, task);
+  return (
+    <Pill tone={tone} paused={paused} pulse={pulse}>
+      {label}
+    </Pill>
+  );
+}
+
+/**
+ * §3.2: the provider mark. An authored monogram ("C" for Claude, "X" for Codex) in a 14 px rounded square,
+ * drawn in the text colour. Never a brand logo. A service run has no mark.
+ */
+export function ProviderMark({ provider }: { provider: Runner | undefined }) {
+  if (provider !== "claude" && provider !== "codex") return null;
+  return (
+    <svg className="pmark" viewBox="0 0 14 14" aria-hidden="true" focusable="false">
+      <rect x="0.5" y="0.5" width="13" height="13" rx="3" fill="none" stroke="currentColor" />
+      {provider === "claude" ? (
+        <path d="M9.6 5.1A2.6 2.6 0 0 0 7.2 4C5.6 4 4.5 5.3 4.5 7s1.1 3 2.7 3a2.6 2.6 0 0 0 2.4-1.1" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      ) : (
+        <path d="M4.5 4.5l5 5M9.5 4.5l-5 5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      )}
+    </svg>
+  );
+}
+
+/** ORC-017: B1 records `simulated: true` on vision revisions and steering change sets written by the fake runtime's lead. */
+export const isSimulated = (x: unknown): boolean => !!(x as { simulated?: boolean } | undefined)?.simulated;
+
+/** True below `query` (phones by default); follows the viewport. */
+export function useNarrow(query = "(max-width: 767px)") {
+  const [narrow, setNarrow] = useState(() => (typeof window !== "undefined" && "matchMedia" in window ? window.matchMedia(query).matches : false));
+  useEffect(() => {
+    if (!("matchMedia" in window)) return;
+    const mq = window.matchMedia(query);
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [query]);
+  return narrow;
 }
 
 /** The role/provider currently working, or next up. Shows actual run models, not current defaults. */

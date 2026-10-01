@@ -1,17 +1,28 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import * as D from "../domain/delivery";
-import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { effectiveDefault } from "../domain/patterns";
 import { PROVIDERS, ROLES, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { PrChip } from "./Delivery";
-import { COLUMN_LABEL, ROLE_LABEL, StatePill, currentWork, hasNewDecision, latestEvent, relTime } from "./common";
+import { COLUMN_LABEL, ProviderMark, ROLE_LABEL, StatePill, currentWork, hasNewDecision, isSimulated, latestEvent, relTime } from "./common";
 import { isSettledTask } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
 import { PatternPicker } from "./PatternPicker";
+import { OTHER_AREA, areaOf, liveAgents, needsYouOf } from "./progress";
 import { ShapingBanner } from "./Shaping";
 import { FocusDiff } from "./SteeringChanges";
+
+/** ORC-017 §3.3: the board reads `#/tasks?area=<name>`; a row on the Overview's progress list sets it. */
+export function areaFromHash(hash: string): string {
+  const q = hash.indexOf("?");
+  if (q < 0) return "";
+  try {
+    return new URLSearchParams(hash.slice(q + 1)).get("area") ?? "";
+  } catch {
+    return "";
+  }
+}
 
 type View = "list" | "board";
 type Sort = "priority" | "activity";
@@ -144,6 +155,11 @@ function FocusBanner() {
       <span>
         <strong>Focus r{v.rev}</strong> · set by the lead from your message · {relTime(v.at)}:
       </span>
+      {(isSimulated(v) || isSimulated(change.set)) && (
+        <span className="chip" title="Set by the fake runtime's lead, not by a model">
+          simulated
+        </span>
+      )}
       <span className="quote">“{v.focus}”</span>
       <span className="row" style={{ gap: "0.3rem", marginLeft: "auto" }}>
         <button className="small" onClick={() => setShowDiff(!showDiff)} aria-expanded={showDiff}>
@@ -179,7 +195,17 @@ export function Board() {
   const lead = useLeadContext();
   const [view, setView] = usePref<View>("orchestration.view", "list");
   const [sort, setSort] = usePref<Sort>("orchestration.sort", "priority");
-  const [area, setArea] = useState("");
+  // The area filter lives in the URL (`#/tasks?area=…`), so the Overview's progress rows can open it.
+  const [area, setAreaState] = useState(() => areaFromHash(location.hash));
+  useEffect(() => {
+    const on = () => setAreaState(areaFromHash(location.hash));
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  const setArea = (a: string) => {
+    setAreaState(a);
+    history.replaceState(null, "", a ? `#/tasks?area=${encodeURIComponent(a)}` : "#/tasks");
+  };
   const [status, setStatus] = useState("");
   const [role, setRole] = useState("");
   const [provider, setProvider] = useState("");
@@ -187,12 +213,12 @@ export function Board() {
   const [showHistory, setShowHistory] = useState(false);
   const [creating, setCreating] = useState(false);
 
-  const areas = useMemo(() => [...new Set(state.tasks.map((t) => M.currentSpec(t).content.area))].sort(), [state.tasks]);
+  const areas = useMemo(() => [...new Set(state.tasks.map(areaOf))].sort((a, b) => (a === OTHER_AREA ? 1 : b === OTHER_AREA ? -1 : a.localeCompare(b))), [state.tasks]);
 
   const filtered = state.tasks
     .filter((t) => {
       const work = currentWork(state, t);
-      if (area && M.currentSpec(t).content.area !== area) return false;
+      if (area && areaOf(t) !== area) return false;
       if (status && M.column(state, t) !== status) return false;
       if (role && work?.role !== role) return false;
       if (provider && !involvesProvider(state, t, provider)) return false;
@@ -293,6 +319,14 @@ export function Board() {
         </label>
       </div>
 
+      {area && (
+        <p className="muted meta" style={{ margin: "-0.5rem 0 0.75rem" }}>
+          Showing the area <strong>{area}</strong>.{" "}
+          <button className="link" onClick={() => setArea("")}>
+            Show every area
+          </button>
+        </p>
+      )}
       {filtered.length === 0 && <p className="muted">No tasks match these filters.</p>}
 
       {view === "list" ? (
@@ -344,20 +378,24 @@ function involvesProvider(state: State, t: Task, provider: string) {
   return state.attempts.some((a) => a.taskId === t.id && a.snapshot.provider === provider);
 }
 
+/**
+ * ORC-017 §3.2: the card. Id and title; the state and what needs you; the work line with the provider mark,
+ * the step purpose, "step 3 of 6" and the step bar while an agent works; the area and the last activity.
+ * The spec revision, the approach, the role and the priority provenance live on the task page.
+ */
 function TaskCard({ state, task }: { state: State; task: Task }) {
   const c = M.currentSpec(task).content;
-  const selected = c.options.find((o) => o.id === c.selectedOptionId);
   const work = currentWork(state, task);
   const ev = latestEvent(state, task.id);
   const open = () => (location.hash = `#/task/${encodeURIComponent(task.id)}`);
   const children = M.currentChildren(state, task);
   const childrenDone = children.filter(isSettledTask).length;
-  const prio = M.priorityProvenance(state, task);
-  // ORC-013: findings waiting for a decision, by whom; check runs in progress, and final checks that failed.
-  const mine = F.openDecisions(state, "user").filter((d) => d.taskId === task.id).length;
-  const leads = F.openDecisions(state, "lead").filter((d) => d.taskId === task.id).length;
-  const checking = M.activeServiceAttempts(state).some((a) => a.taskId === task.id);
-  const checksFailed = task.steps.some((st) => st.role === "checks" && st.state === "blocked" && st.blockedReason?.startsWith("Checks failed"));
+  const needs = needsYouOf(state, task);
+  const agents = liveAgents(state, task);
+  const live = agents[0];
+  const liveStep = live ? task.steps.findIndex((st) => st.id === live.stepId) : -1;
+  // "next: …" for an idle open task says who is up next; the live line says who works now.
+  const next = !live && work && !work.live ? work : undefined;
   return (
     <div
       className="task-row"
@@ -372,104 +410,95 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
       }}
       aria-label={`${task.id} ${c.title}`}
     >
-      <div className="prio">P{task.priority}</div>
-      <div>
-        <div className="row" style={{ gap: "0.4rem" }}>
-          <span className="mono muted">{task.id}</span>
-          <span className="title">{c.title}</span>
-          {hasNewDecision(state, task) && <span className="badge-new">New decision</span>}
-        </div>
-        <div className="benefit">{c.benefit}</div>
-        <div className="meta">
-          <span className="chip">{c.area}</span>
-          {selected && (
-            <span className="chip strong" title={selected.approach}>
-              Approach {selected.id}: {selected.name}
-              {c.selectedOptionId !== c.recommendedOptionId ? " (user override)" : ""}
-            </span>
-          )}
-          <span className="chip">spec r{M.currentSpec(task).rev}</span>
-          {prio.kind === "lead" && (
-            <span className="chip" title="The lead set this priority when you gave direction; Undo is under its reply">
-              P{task.priority} · set by lead (was P{prio.was})
-            </span>
-          )}
-          {prio.kind === "user" && (
-            <span className="chip" title="You set this priority; the lead may not change it">
-              Pinned P{task.priority}
-            </span>
-          )}
-          {prio.kind === "child" && (
-            <span className="chip" title="Child tasks run at their root's priority unless you pin their own">
-              runs at {prio.rootId}'s P{prio.priority}
-            </span>
-          )}
-          {task.legacySpecUnavailable && <span className="chip">legacy spec unavailable</span>}
-          {task.specs[0]?.author === "lead" && (
-            <span className="chip" title="Proposed by the lead">
-              lead
-            </span>
-          )}
+      <div className="head">
+        <div className="idline">
+          <span className="mono">{task.id}</span>
+          <span className="prio" title="Priority">
+            P{task.priority}
+          </span>
           {task.parentTaskId && (
-            <span className="chip">
+            <span>
               part of{" "}
               <a href={`#/task/${encodeURIComponent(task.parentTaskId)}`} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                 {task.parentTaskId}
               </a>
             </span>
           )}
-          {children.length > 0 && (
-            <span className="chip" title={`${childrenDone} of ${children.length} child tasks finished`}>
-              {children.length} child task{children.length === 1 ? "" : "s"}
-              {childrenDone < children.length ? ` · ${childrenDone} finished` : " · all finished"}
+          {task.reviewTarget && <span title={`An independent review of ${task.reviewTarget.taskId}'s pull request at ${task.reviewTarget.headSha.slice(0, 12)}, created by the service`}>PR review · {task.reviewTarget.taskId}</span>}
+          {task.deliverInto && <span title={`A fix whose result is pushed onto ${task.deliverInto.taskId}'s pull request, created ${task.specs[0]?.author === "user" ? "by you" : "by the service"}`}>PR repair · {task.deliverInto.taskId}</span>}
+          {task.pattern.experimental && (
+            <span className="chip" title="This task runs an experimental pattern you chose">
+              experiment
             </span>
           )}
-          {task.reviewTarget && (
-            <span className="chip" title={`An independent review of ${task.reviewTarget.taskId}'s pull request at ${task.reviewTarget.headSha.slice(0, 12)}, created by the service`}>
-              PR review · {task.reviewTarget.taskId}
-            </span>
-          )}
-          {task.deliverInto && (
-            <span className="chip" title={`A fix whose result is pushed onto ${task.deliverInto.taskId}'s pull request, created ${task.specs[0]?.author === "user" ? "by you" : "by the service"}`}>
-              PR repair · {task.deliverInto.taskId}
-            </span>
-          )}
-          {checking && (
-            <span className="chip" title="The service is running the project's checks on this task's change">
-              Checks running
-            </span>
-          )}
-          {checksFailed && (
-            <span className="chip danger" title="The project's checks failed on the final change; a repair round or your acceptance is needed">
-              Checks failed · decide
-            </span>
-          )}
-          {mine > 0 && (
-            <span className="chip strong" title="A review finding whose fix would widen the task waits for your decision">
-              Decision needed{mine > 1 ? ` (${mine})` : ""}
-            </span>
-          )}
-          {leads > 0 && (
-            <span className="chip" title="The lead decides these findings; you can take them over from the task page">
-              Lead deciding{leads > 1 ? ` (${leads})` : ""}
-            </span>
-          )}
-          {task.lifecycle === "done" && <IntegrationChip state={state} task={task} />}
+          {task.legacySpecUnavailable && <span className="chip">legacy spec unavailable</span>}
+          {hasNewDecision(state, task) && <span className="badge-new">New decision</span>}
         </div>
+        <div className="title">{c.title}</div>
       </div>
-      <div className="side">
+      <div className="state">
         <StatePill state={state} task={task} />
-        {work && (
-          <span className="chip">
-            {ROLE_LABEL[work.role]} · {work.text}
+        {needs && (
+          <span className="needs-badge" title={`Open the task: ${needs.what}`}>
+            Needs you: {needs.what}
           </span>
         )}
+        {task.lifecycle === "done" && <IntegrationChip state={state} task={task} />}
+      </div>
+      {(live || next || children.length > 0) && (
+        <div className="work">
+          {live && (
+            <>
+              <div className="work-line">
+                <ProviderMark provider={live.provider} />
+                <span>{M.providerLabel(live.provider)}</span>
+                <span className="purpose">· {live.purpose}</span>
+                {liveStep >= 0 && (
+                  <span className="muted num">
+                    · step {liveStep + 1} of {task.steps.length}
+                  </span>
+                )}
+                {agents.length > 1 && <span className="muted">· +{agents.length - 1} more</span>}
+              </div>
+              <StepBar task={task} />
+            </>
+          )}
+          {next && (
+            <div className="work-line">
+              <span className="muted">
+                {ROLE_LABEL[next.role]} · {next.text}
+              </span>
+            </div>
+          )}
+          {children.length > 0 && (
+            <div className="work-line">
+              <span className="muted" title={`${childrenDone} of ${children.length} child tasks finished`}>
+                {children.length} child task{children.length === 1 ? "" : "s"}
+                {childrenDone < children.length ? ` · ${childrenDone} finished` : " · all finished"}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+      <div className="foot">
+        <span className="chip">{areaOf(task)}</span>
         {ev && (
-          <span className="activity">
+          <span className="activity" title={`${relTime(ev.at)} — ${ev.message}`}>
             {relTime(ev.at)} — {ev.message}
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+/** One 4 px segment per pipeline step, from the task's real step states: done, agents working, or neutral. */
+function StepBar({ task }: { task: Task }) {
+  return (
+    <div className="stepbar" aria-hidden="true">
+      {task.steps.map((st) => (
+        <span key={st.id} className={st.state === "done" ? "done" : st.state === "running" || st.state === "stopping" ? "work" : ""} title={`${st.id} ${st.purpose}: ${st.state}`} />
+      ))}
     </div>
   );
 }

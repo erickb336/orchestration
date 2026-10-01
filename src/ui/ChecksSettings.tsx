@@ -97,7 +97,7 @@ export function ChecksSettings() {
     setSuggesting(false);
   };
 
-  const tone = !cfg.enabled ? "chip" : health?.status === "ready" ? "pill done" : health?.status === "unavailable" ? "pill blocked" : "pill paused";
+  const tone = !cfg.enabled ? "chip" : health?.status === "ready" ? "pill done" : health?.status === "unavailable" ? "pill blocked" : "pill attention";
   const statusText = !cfg.enabled ? "Off" : cfg.sandbox === "none" ? "On · no sandbox" : health?.status === "ready" ? "On · sandbox ready" : health?.status === "unavailable" ? "On · sandbox unavailable: check steps wait" : "On · sandbox not checked yet";
 
   return (
@@ -108,15 +108,18 @@ export function ChecksSettings() {
         </h2>
         <span className={tone}>{statusText}</span>
       </div>
-      <p className="muted" style={{ fontSize: "0.85rem", marginTop: "0.4rem" }}>
-        The service runs these commands itself on a throwaway copy of each change: after a coder's work, before the review, and once more on the final change before the task finishes. A failing command becomes a finding the repair
-        step fixes. If the final change still fails, the task waits for a decision; only you can accept failing checks. Agents never choose or change these commands.
+      <p className="muted small" style={{ marginTop: "0.4rem", marginBottom: "0.3rem" }}>
+        The service runs these commands itself on a throwaway copy of each change: after a coder's work, before the review, and once more on the final change before the task finishes.
       </p>
-      <p style={{ fontSize: "0.85rem" }}>
-        Checks run the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote. With the Codex sandbox, that code cannot write outside a throwaway copy of the change and
-        cannot use the network; the one exception is a dependency download by npm, pnpm or yarn, which runs with every install hook off, so no repository code runs while the network is on. The sandbox does not stop that code from
-        reading your files. Turn checks on only for repositories whose agents' work you are willing to run.
-      </p>
+      <details className="how">
+        <summary>How this works</summary>
+        <p>A failing command becomes a finding the repair step fixes. If the final change still fails, the task waits for a decision; only you can accept failing checks. Agents never choose or change these commands.</p>
+        <p>
+          Checks run the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote. With the Codex sandbox, that code cannot write outside a throwaway copy of the change
+          and cannot use the network; the one exception is a dependency download by npm, pnpm or yarn, which runs with every install hook off, so no repository code runs while the network is on. The sandbox does not stop that code
+          from reading your files. Turn checks on only for repositories whose agents' work you are willing to run.
+        </p>
+      </details>
       {sampleBlocked && <div className="banner">This is the sample project: it has no repository, so its checks cannot be turned on. Start a project of your own in Settings → Project.</div>}
       {!real && <div className="banner neutral">Fake runtime: check runs are simulated. Nothing is run and nothing is spawned; the results say so.</div>}
 
@@ -131,7 +134,7 @@ export function ChecksSettings() {
           <div style={{ fontSize: "0.85rem", marginBottom: "0.4rem" }}>
             {health ? (
               <>
-                <span className={health.status === "ready" ? "pill done" : health.status === "unavailable" ? "pill blocked" : "pill paused"}>{health.status === "ready" ? "Ready" : health.status === "unavailable" ? "Unavailable" : "Not verified"}</span>{" "}
+                <span className={health.status === "ready" ? "pill done" : health.status === "unavailable" ? "pill blocked" : "pill attention"}>{health.status === "ready" ? "Ready" : health.status === "unavailable" ? "Unavailable" : "Not verified"}</span>{" "}
                 <span className="muted">
                   ({health.sandbox === "codex" ? "Codex sandbox" : "no sandbox"}, checked <span title={fmtTime(health.checkedAt)}>{relTime(health.checkedAt)}</span>
                   {health.recheck ? "; a new check is queued" : ""})
@@ -151,23 +154,22 @@ export function ChecksSettings() {
             </button>
           </div>
         )}
-        <label className="row" style={{ gap: "0.35rem", alignItems: "flex-start" }}>
-          <input type="radio" name="checks-sandbox" checked={next.sandbox === "codex"} onChange={() => chooseSandbox("codex")} style={{ marginTop: "0.3rem" }} />
+        {/* ORC-017 §3.10: the radio sits on the label's first line; the description is under the label, indented to its text. */}
+        <label className="choice-radio">
+          <input type="radio" name="checks-sandbox" checked={next.sandbox === "codex"} onChange={() => chooseSandbox("codex")} />
           <span>
-            <strong style={{ fontWeight: 560 }}>Codex sandbox (recommended)</strong>
-            <span className="muted" style={{ display: "block", fontSize: "0.82rem" }}>
-              Each command runs through the pinned Codex app-server's sandbox under a private, never signed-in home: no network, and writes only inside the copy of the change, its temp directory and a cache. The service probes the sandbox before
-              any run; while the probe fails, check steps wait. Nothing falls back to running without a sandbox by itself.
+            <strong>Codex sandbox (recommended)</strong>
+            <span className="choice-desc">
+              Each command runs through the pinned Codex app-server's sandbox under a private, never signed-in home: no network, and writes only inside the copy of the change, its temp directory and a cache. The service probes the sandbox
+              before any run; while the probe fails, check steps wait. Nothing falls back to running without a sandbox by itself.
             </span>
           </span>
         </label>
-        <label className="row" style={{ gap: "0.35rem", alignItems: "flex-start", marginTop: "0.3rem" }}>
-          <input type="radio" name="checks-sandbox" checked={next.sandbox === "none"} onChange={() => chooseSandbox("none")} style={{ marginTop: "0.3rem" }} />
+        <label className="choice-radio">
+          <input type="radio" name="checks-sandbox" checked={next.sandbox === "none"} onChange={() => chooseSandbox("none")} />
           <span>
-            <strong style={{ fontWeight: 560 }}>Run without a sandbox</strong>
-            <span className="muted" style={{ display: "block", fontSize: "0.82rem" }}>
-              Only if the sandbox cannot work on this computer. Every check then runs with your permissions.
-            </span>
+            <strong>Run without a sandbox</strong>
+            <span className="choice-desc">Only if the sandbox cannot work on this computer. Every check then runs with your permissions.</span>
           </span>
         </label>
         {next.sandbox === "none" && <div className="banner danger">No sandbox: checks run with your permissions. Code an agent wrote can read and write anywhere you can and reach the network. Every such run is labelled "no sandbox".</div>}
