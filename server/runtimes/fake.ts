@@ -27,7 +27,12 @@ interface Proc {
   lead?: "planning" | "message" | "decisions";
   /** The lead envelope, kept so a simulated message run can steer from what it was shown. */
   prompt?: string;
+  /** ORC-022: notes handed to this run, each acknowledged after `ticks` more ticks (a simulated delay). */
+  notes?: { id: string; ticks: number }[];
 }
+
+/** ORC-022: how many ticks a simulated run takes to acknowledge a note (about two seconds in the service). */
+export const NOTE_ACK_TICKS = 2;
 
 /** Words that make the simulated lead treat a message as a change of direction. */
 const DIRECTION_RE = /\bfocus\b| vs |\binstead\b|rather than/i;
@@ -37,9 +42,43 @@ const DIRECTION_RE = /\bfocus\b| vs |\binstead\b|rather than/i;
 // banner on every page. Neutral fallbacks keep "(simulated)" where nothing else would label the text.
 
 /**
+ * ORC-022: a message that asks to pass something on to a coder or designer ("tell the coder on WT-002 to skip
+ * the README"). It stays within one sentence; a dot followed by a digit (a child task id, "WT-004.2") is not a stop.
+ */
+const NOTE_RE = /\b(?:tell|ask|remind|let)\b(?:[^.?!]|\.(?=\d))*?\b(coder|designer)\b(?:[^.?!]|\.(?=\d))*?\b(?:to|that):?\s+((?:[^.?!]|\.(?=\d))+)/i;
+
+/**
+ * ORC-022: a simulated note, built only from the envelope: the newest message that asks to tell a coder or
+ * designer something becomes a note to that role's running (else pending) step of the task the message
+ * names, or of the first task on the board that has one. Nothing is sent to any other role.
+ */
+export function fakeNote(prompt: string, messages: string[]): { task: string; step: string; text: string } | undefined {
+  const message = [...messages].reverse().find((m) => NOTE_RE.test(m));
+  const m = message ? NOTE_RE.exec(message) : null;
+  if (!m) return undefined;
+  const role = m[1].toLowerCase();
+  const text = m[2].trim();
+  if (!text) return undefined;
+  const named = /\b([A-Z]{1,6}-\d{1,4}(?:\.\d+)?)\b/.exec(message!)?.[1];
+  // "- WT-002 [Running] … · steps: S1 coder running (Codex, run-12), S2 code_reviewer pending (Claude)" (child lines are indented).
+  const lines = [...prompt.matchAll(/^(?:- |  child )(\S+) \[[^\]]*\].*· steps: ([^\n]*)$/gm)].map((x) => ({ id: x[1], steps: x[2] }));
+  const pick = (line: { id: string; steps: string }) => {
+    const steps = [...line.steps.matchAll(/(\S+) (\S+) (running|pending|paused|stopping) \(/g)].map((x) => ({ id: x[1], role: x[2], state: x[3] }));
+    return steps.find((st) => st.role === role && st.state === "running") ?? steps.find((st) => st.role === role && st.state !== "stopping");
+  };
+  for (const line of lines) {
+    if (named && line.id !== named) continue;
+    const st = pick(line);
+    if (st) return { task: line.id, step: st.id, text: `${text[0].toUpperCase()}${text.slice(1)}`.slice(0, 500) };
+  }
+  return undefined;
+}
+
+/**
  * ORC-009: a simulated steering block, built only from the envelope: the newest message that reads
  * like a change of direction becomes the focus, and the lowest-priority open task whose "may:" list
- * includes defer is deferred. Nothing else is touched.
+ * includes defer is deferred. ORC-022: a message that asks to tell a coder or designer something becomes
+ * one note. Nothing else is touched.
  */
 export function fakeSteer(prompt: string): Record<string, unknown> | undefined {
   const section = /## Messages to answer now\n([\s\S]*?)\n\n## /.exec(prompt)?.[1] ?? "";
@@ -48,19 +87,21 @@ export function fakeSteer(prompt: string): Record<string, unknown> | undefined {
     .filter((l) => l.startsWith("- "))
     .map((l) => l.slice(2).replace(/^\(sent from [^)]*\) /, ""));
   const direction = [...messages].reverse().find((m) => DIRECTION_RE.test(m));
-  if (!direction) return undefined;
-  const focus = direction.length > 200 ? `${direction.slice(0, 199)}…` : direction;
-  let candidate: { id: string; priority: number } | undefined;
-  for (const m of prompt.matchAll(/^- (\S+) \[[^\]]*\] P(\d+).*· may: ([^·\n]*)/gm)) {
-    if (!m[3].split(",").some((a) => a.trim() === "defer")) continue;
-    const p = Number(m[2]);
-    if (!candidate || p > candidate.priority) candidate = { id: m[1], priority: p };
+  const note = fakeNote(prompt, messages);
+  if (!direction && !note) return undefined;
+  const out: Record<string, unknown> = { reason: "Taken from your message; a real lead would weigh the board.", tasks: [] };
+  if (direction) {
+    out.focus = direction.length > 200 ? `${direction.slice(0, 199)}…` : direction;
+    let candidate: { id: string; priority: number } | undefined;
+    for (const m of prompt.matchAll(/^- (\S+) \[[^\]]*\] P(\d+).*· may: ([^·\n]*)/gm)) {
+      if (!m[3].split(",").some((a) => a.trim() === "defer")) continue;
+      const p = Number(m[2]);
+      if (!candidate || p > candidate.priority) candidate = { id: m[1], priority: p };
+    }
+    if (candidate) out.tasks = [{ id: candidate.id, defer: true, why: "The lowest-priority work that no longer fits the focus." }];
   }
-  return {
-    focus,
-    reason: "Taken from your message; a real lead would weigh the board.",
-    tasks: candidate ? [{ id: candidate.id, defer: true, why: "The lowest-priority work that no longer fits the focus." }] : [],
-  };
+  if (note) out.notes = [note];
+  return out;
 }
 
 /** The task's title as the worker envelope states it ("## Task WT-004 (spec r1): Share a trip plan with friends"). */
@@ -182,8 +223,10 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message" 
       ? "I reviewed the board and proposed one small task."
       : vision
         ? `Here is what I understand: ${newestMessage(prompt) ?? "your message"} (assumption: that is the whole problem). I drafted a living vision from it with marked assumptions, and I have three questions with suggested answers. Accept, edit or dismiss the draft; answer what you can. In live mode a real lead grounds all of this in your answers and the repository.`
-        : steer
-          ? "Noted the new direction. The service lists below what changed; in live mode a real lead weighs the board first."
+        : steer && !steer.focus
+          ? "I passed your note on to the running agent. The service lists below where it stands; in live mode a real lead would also weigh the board."
+          : steer
+            ? `Noted the new direction. The service lists below what changed${steer.notes ? ", including the note you asked me to pass on" : ""}; in live mode a real lead weighs the board first.`
           : decisions.length && trigger === "decisions"
             ? "I went through the findings waiting for me and accepted them as they are; the service lists each decision below. In live mode a real lead weighs each one."
             : "Noted. In live mode the lead answers here using the board and the repository.";
@@ -235,7 +278,8 @@ export function fakeFinalText(attemptId: string, outputs: OutputDef[], stepId = 
 const CAPABILITIES: CapabilityMap = {
   start: "simulated",
   streamEvents: "simulated",
-  steer: "unsupported",
+  // ORC-022: notes to a running simulated agent are acknowledged after a simulated delay.
+  steer: "simulated",
   interrupt: "simulated",
   resume: "unsupported",
   usageReporting: "unsupported",
@@ -309,9 +353,24 @@ export class FakeAdapter implements RuntimeAdapter {
     if (p && p.interruptAt === undefined) p.interruptAt = nowMs;
   }
 
-  /** ORC-022 placeholder until W1 implements notes: nothing is delivered. */
+  /**
+   * ORC-022: a simulated agent takes the note and acknowledges it after a short delay (`NOTE_ACK_TICKS`). A
+   * run that is stopping or gone answers "not delivered" at once; one that ends before the delay is up
+   * answers so when it ends. Never throws; exactly one event per note.
+   */
   note(attemptId: string, note: { id: string; text: string }): void {
-    queueMicrotask(() => this.emit({ type: "note", attemptId, noteId: note.id, outcome: "not-delivered", reason: "this runtime does not take notes yet" }));
+    const p = this.procs.get(attemptId);
+    if (!p || p.interruptAt !== undefined) {
+      this.emit({ type: "note", attemptId, noteId: note.id, outcome: "not-delivered", reason: p ? "the run was stopping" : "the run had finished" });
+      return;
+    }
+    (p.notes ??= []).push({ id: note.id, ticks: NOTE_ACK_TICKS });
+  }
+
+  /** Every note the run has not acknowledged yet is answered "not delivered" with the reason (the run ended or stopped first). */
+  private dropNotes(attemptId: string, p: Proc, reason: string) {
+    for (const n of p.notes ?? []) this.emit({ type: "note", attemptId, noteId: n.id, outcome: "not-delivered", reason });
+    p.notes = [];
   }
 
   kill(attemptId: string) {
@@ -343,14 +402,24 @@ export class FakeAdapter implements RuntimeAdapter {
   tick(nowMs: number) {
     for (const [id, p] of [...this.procs]) {
       if (p.interruptAt !== undefined) {
+        // A stop request supersedes the notes: none is acknowledged once the run is stopping.
+        this.dropNotes(id, p, "the run stopped first");
         if (this.config.ackMode === "normal" && nowMs - p.interruptAt >= this.config.ackDelayMs) {
           this.procs.delete(id);
           this.emit({ type: "stopped", attemptId: id, how: "interrupted" });
         }
         continue;
       }
+      // ORC-022: notes are acknowledged before the run makes progress, so a note sent in time reaches the agent.
+      for (const n of [...(p.notes ?? [])]) {
+        n.ticks -= 1;
+        if (n.ticks > 0) continue;
+        p.notes = p.notes!.filter((x) => x.id !== n.id);
+        this.emit({ type: "note", attemptId: id, noteId: n.id, outcome: "delivered" });
+      }
       p.progress = Math.min(100, p.progress + this.config.progressPerTick + jitter(id));
       if (p.progress >= 100) {
+        this.dropNotes(id, p, "the run ended first");
         this.procs.delete(id);
         this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt) : fakeFinalText(id, p.outputs, p.stepId, p.taskId, p.title) });
       } else this.emit({ type: "progress", attemptId: id, percent: p.progress });

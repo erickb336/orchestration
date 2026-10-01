@@ -700,6 +700,15 @@ a.button-link {
 }
 a.button-link:hover { background: var(--surface-2); }
 
+/* ---------- notes to a running stage (ORC-022) ---------- */
+.note-form { border: 1px solid var(--border-strong); border-radius: var(--radius-control); padding: 0.5rem 0.6rem; margin-top: 0.3rem; max-width: 36rem; }
+.note-form textarea { min-height: 3.5rem; font-family: inherit; }
+.notes { list-style: none; margin: 0.15rem 0 0; padding: 0; font-size: var(--fs-small); }
+.notes > li { padding: 0.3rem 0; border-top: 1px solid var(--border); min-width: 0; }
+.notes > li:first-child { border-top: none; }
+.notes .note-text { margin-top: 0.15rem; overflow-wrap: anywhere; }
+.notes .pill { white-space: normal; }
+
 /* ---------- review gates, artifact editing, usage ---------- */
 .banner.review { border-color: color-mix(in srgb, var(--st-you) 45%, var(--surface)); background: var(--surface); }
 .chip.edited { color: var(--text); }

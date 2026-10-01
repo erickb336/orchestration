@@ -15,6 +15,8 @@ export function describeChange(c: SteeringChange): string {
       return `${c.taskId} runs again (deferral lifted)`;
     case "drop":
       return `${c.taskId} dropped (had not started)`;
+    case "note":
+      return `Note to ${c.taskId ?? "?"} ${c.stepId ?? "?"}: "${String(c.after ?? "")}"`;
     default:
       return `${c.taskId ?? "An entry"} could not be read`;
   }

@@ -261,6 +261,15 @@ export const COMMANDS = {
   },
   /** Run now: lift the task's own deferral and keep it running whatever the focus. */
   undeferTask: same((s, now, a) => M.undeferTask(s, str(a, "taskId"), now)),
+
+  // notes to a running stage (ORC-022)
+  /** Your direct note to a running agent step (any role but checks). Returns { noteId }. */
+  sendNote: (s, now, a) => {
+    const r = M.sendNote(s, str(a, "taskId"), str(a, "stepId"), str(a, "text"), now);
+    return { state: r.state, result: { noteId: r.noteId } };
+  },
+  /** The suggested rerun: rerun the finished step with the note in the new run's instructions (the existing rerun rules apply). */
+  rerunWithNote: same((s, now, a) => M.rerunWithNote(s, str(a, "taskId"), str(a, "stepId"), str(a, "noteId"), now)),
   setPriorityPin: same((s, now, a) => M.setPriorityPin(s, str(a, "taskId"), bool(a, "pinned"), now)),
   setRunPin: same((s, now, a) => M.setRunPin(s, str(a, "taskId"), bool(a, "pinned"), now)),
   setSteeringMode: same((s, now, a) => {
