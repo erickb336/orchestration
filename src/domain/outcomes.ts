@@ -191,3 +191,19 @@ export function captureOutcomes(prev: State, next: State, now: string): State {
   }
   return s;
 }
+
+/** ORC-018 §2 (from ORC-016 design §10.3): what happened to a task's work after it was done. Derived, never stored. */
+export interface DeliveryOutcome {
+  status: "not-delivered" | "integrated" | "pr-open" | "landed" | "closed" | "not-needed" | "conflict";
+  landedAt?: string;
+  landedBy?: "app" | "person";
+  via?: "pr" | "local";
+  /** firstRunAt → landed.at, when both exist. */
+  timeToLandedMs?: number;
+  sentBack?: "fix" | "revert";
+  flags: string[];
+}
+
+export function deliveryOutcome(_t: Task): DeliveryOutcome {
+  throw new Error("ORC-018 B1: deliveryOutcome is not implemented yet");
+}

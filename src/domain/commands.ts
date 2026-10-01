@@ -200,6 +200,10 @@ export const COMMANDS = {
     if (to !== "lead" && to !== "user") throw new InvalidCommandError("to must be lead or user");
     return F.routeDecision(s, str(a, "decisionId"), to, now);
   }),
+  /** ORC-018 §5.1: the trace export's configuration ({ config: { enabled, endpoint, allowRemote }, expectedRev }). */
+  setTelemetry: same(() => {
+    throw new InvalidCommandError("ORC-018 B1: setTelemetry is not implemented yet");
+  }),
   /** Give every run the repository's AGENTS.md and CLAUDE.md (from the trusted base) as project conventions. */
   setConventions: same((s, now, a) => F.setConventions(s, bool(a, "include"), now)),
 

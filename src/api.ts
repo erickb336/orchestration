@@ -23,6 +23,19 @@ export interface ServiceInfo {
   leadBlocked?: string;
   /** Real mode: whether the configured repository can host worktrees, and why not. */
   repo?: { ok: boolean; reason?: string; branch?: string };
+  /** ORC-018 §5.2: the trace export's bookkeeping. Absent before the first configuration. */
+  telemetry?: TelemetryStatus;
+}
+
+export interface TelemetryStatus {
+  enabled: boolean;
+  pending: number;
+  sent: number;
+  failed: number;
+  lastSentAt?: string;
+  lastError?: string;
+  /** Whether OTEL_EXPORTER_OTLP_HEADERS was set when the service started. Its value is never exposed. */
+  headersFromEnv: boolean;
 }
 
 export interface ProviderInfo {

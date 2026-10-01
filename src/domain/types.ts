@@ -243,6 +243,8 @@ export interface Project {
   triage: { askUserBy: "lead" | "user" };
   /** ORC-013: give every run the repository's AGENTS.md and CLAUDE.md from the trusted base as labelled project conventions. */
   conventions: { include: boolean };
+  /** ORC-018: OpenTelemetry trace export. Absent: off. Optional, so the state format is unchanged. */
+  telemetry?: TelemetryConfig;
   /** Last planning run start (for the planning interval). */
   lastPlanningAt?: string;
   /** Automatic delivery state: retried until the delivery branch contains all integrated work. */
@@ -1509,4 +1511,16 @@ export class ControlError extends Error {
     super(message);
     this.name = "ControlError";
   }
+}
+
+/** ORC-018 §5.1: where finished tasks are sent as OTLP traces. Credentials never live here (headers come from OTEL_EXPORTER_OTLP_HEADERS). */
+export interface TelemetryConfig {
+  enabled: boolean;
+  /** An OTLP/HTTP traces endpoint, e.g. http://localhost:6006/v1/traces. */
+  endpoint: string;
+  /** Required for a host other than loopback: you confirmed what leaves the computer. */
+  allowRemote: boolean;
+  /** When the export last went from off to on; tasks that settle after it are sent automatically. */
+  enabledAt?: string;
+  rev: number;
 }
