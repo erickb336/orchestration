@@ -7,6 +7,7 @@ import { TaskDetail } from "./TaskDetail";
 import { Overview } from "./Overview";
 import { Activity } from "./Activity";
 import { Review } from "./Review";
+import { Compare } from "./Compare";
 import { Settings } from "./Settings";
 import { PREF_LEAD_SEEN, relTime, usePref } from "./common";
 import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
@@ -15,12 +16,12 @@ import { agentsWorking } from "./progress";
 import { StageChip } from "./Shaping";
 import { TourButton, useFirstRunTour } from "./Tour";
 
-type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" } | { page: "task"; id: string };
+type Route = { page: "overview" | "tasks" | "review" | "compare" | "activity" | "settings" } | { page: "task"; id: string };
 
 function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/");
   if (parts[0] === "task" && parts[1]) return { page: "task", id: decodeURIComponent(parts[1]) };
-  if (parts[0] === "overview" || parts[0] === "review" || parts[0] === "activity" || parts[0] === "settings") return { page: parts[0] };
+  if (parts[0] === "overview" || parts[0] === "review" || parts[0] === "compare" || parts[0] === "activity" || parts[0] === "settings") return { page: parts[0] };
   return { page: "tasks" };
 }
 
@@ -129,7 +130,7 @@ function Shell() {
           <ProjectName />
         </div>
         <nav className="tabs" aria-label="Main">
-          {(["overview", "tasks", "review", "activity", "settings"] as const).map((p) => (
+          {(["overview", "tasks", "review", "compare", "activity", "settings"] as const).map((p) => (
             <a key={p} href={`#/${p}`} aria-current={tab === p ? "page" : undefined} data-tour={p === "tasks" ? "tab-tasks" : p === "review" ? "tab-review" : undefined}>
               {p[0].toUpperCase() + p.slice(1)}
               {p === "review" && <ReviewBadge />}
@@ -153,6 +154,7 @@ function Shell() {
         {route.page === "tasks" && <Board />}
         {route.page === "task" && <TaskDetail key={route.id} id={route.id} />}
         {route.page === "review" && <Review />}
+        {route.page === "compare" && <Compare />}
         {route.page === "activity" && <Activity />}
         {route.page === "settings" && <Settings />}
       </main>
