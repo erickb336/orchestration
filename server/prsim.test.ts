@@ -29,7 +29,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 import * as D from "../src/domain/delivery";
 import type { State } from "../src/domain/types";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
-import { Scheduler } from "./scheduler";
+import { Scheduler, simSha } from "./scheduler";
 import { Store } from "./store";
 import { setTestPipeline } from "./testing/pipelines";
 
@@ -71,7 +71,8 @@ describe("fake runtime (scenario 19)", () => {
     for (let i = 0; i < 200 && !(task(id).integration?.pr?.phase === "open" && D.prReady(st(), task(id), now)); i++) await tick();
     const pr = task(id).integration!.pr!;
     expect(st().project.github).toMatchObject({ ok: true, simulated: true, repo: "simulated/repository", requiredChecks: ["simulated-check"], base: { sha: "sim-base" } });
-    expect(pr).toMatchObject({ phase: "open", simulated: true, number: 1000, url: "simulated://pr/1000", policy: "hold", headSha: `sim-${id}-1` });
+    expect(pr).toMatchObject({ phase: "open", simulated: true, number: 1000, url: "simulated://pr/1000", policy: "hold", headSha: simSha(`${id}-1`) });
+    expect(simSha(`${id}-1`)).toMatch(/^sim[0-9a-f]{9}$/); // shown whole: commits are cut to 12 characters
     expect(D.prLabel(st(), task(id), now)).toEqual({ text: "PR #1000 waiting for you (simulated)", tone: "strong" });
     expect(st().events.some((e) => e.message.includes("Opened pull request #1000") && e.message.includes("(simulated)"))).toBe(true);
 
@@ -82,7 +83,7 @@ describe("fake runtime (scenario 19)", () => {
     for (let i = 0; i < 10 && task(id).integration!.pr!.phase === "open"; i++) await tick(3000);
     expect(task(id).integration!.pr!.phase).toBe("merged");
     const landed = task(id).integration!.landed!;
-    expect(landed).toMatchObject({ via: "pr", simulated: true, by: "app", commit: "sim-merge-1000", status: "unreviewed", target: "simulated/repository main", pr: { number: 1000, url: "simulated://pr/1000" } });
+    expect(landed).toMatchObject({ via: "pr", simulated: true, by: "app", commit: "sim-m1000", status: "unreviewed", target: "simulated/repository main", pr: { number: 1000, url: "simulated://pr/1000" } });
     expect(D.unreviewedCount(st())).toBeGreaterThanOrEqual(1);
     // A simulated item has no commit to revert and takes no comment on GitHub.
     expect(() => cmd("sendBackLanded", { taskId: id, kind: "revert", note: "", holdBeforeStart: false })).toThrow(/simulated/);

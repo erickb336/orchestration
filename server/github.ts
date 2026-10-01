@@ -853,7 +853,7 @@ export class SimulatedGitHub implements GitHubHost {
   }
 
   protected mergeCommitFor(p: SimPr): string {
-    return `sim-merge-${p.number}`;
+    return `sim-m${p.number}`; // short enough to show whole where commits are cut to 12 characters
   }
 
   pushed(a: { repo: RepoRef; number: number; headSha: string }): void {

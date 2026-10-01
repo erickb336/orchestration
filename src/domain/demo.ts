@@ -560,7 +560,7 @@ class DemoBuilder {
           labels: [],
           checks: [{ ...SIM_CHECK }],
           checksFor: pr.headSha,
-          ...(merged ? { mergedAt: this.at(m), mergeCommit: `sim-merge-${number}`, mergedBy: SIM_LOGIN } : {}),
+          ...(merged ? { mergedAt: this.at(m), mergeCommit: `sim-m${number}`, mergedBy: SIM_LOGIN } : {}),
         },
       ],
       commits: [],
