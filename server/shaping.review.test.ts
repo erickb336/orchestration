@@ -84,7 +84,7 @@ describe("review 1: no delivery work while shaping (simulated GitHub)", () => {
       expect(["observe", "fetch", "preflight", undefined]).toContain(op?.kind);
     }
     // Labels: the pull request, its gate and the review row say what they wait for, never "queued" or "paused".
-    expect(D.prLabel(st(), task(first), now)).toEqual({ text: "PR #1000 waits until you start building (shaping) (simulated)", tone: "plain" });
+    expect(D.prLabel(st(), task(first), now)).toEqual({ text: "PR #1000 waits until you start building (shaping)", tone: "plain", simulated: true });
     const gate = D.prGate(st(), task(first), now, { byUser: true }).items.find((x) => x.id === "not-paused")!;
     expect(gate).toMatchObject({ ok: false, state: "waiting" });
     expect(gate.detail).toMatch(/^Shaping: nothing is pushed, opened, merged or brought up to date until you start building\. Nothing is paused\.$/);

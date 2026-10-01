@@ -107,7 +107,7 @@ describe("D1 permission matrix (steerPermission)", () => {
   });
 
   it("held before start: the priority applies but the hold is never released", () => {
-    expect(verdict(seed(), "EX-004", "priority", "apply", 1)).toEqual({ v: "apply", note: "still waits for your release" });
+    expect(verdict(seed(), "EX-004", "priority", "apply", 1)).toEqual({ v: "apply", note: "still waits for your go-ahead" });
   });
 
   it("the dependency guard keeps a prerequisite: EX-007 depends on EX-002", () => {
@@ -272,7 +272,7 @@ describe("D4 presentation", () => {
     expect(M.column(run, task(run, "EX-001"))).toBe("running");
     expect(M.stateLabel(run, task(run, "EX-001"))).toBe("Running · deferred after this step");
     const review = deferred(s0, "EX-002");
-    expect(M.stateLabel(review, task(review, "EX-002"))).toBe("Reviewing · deferred after this step");
+    expect(M.stateLabel(review, task(review, "EX-002"))).toBe("In review · deferred after this step");
     const both = deferred(s0, "EX-005");
     expect(M.stateLabel(both, task(both, "EX-005"))).toBe("Paused"); // the hold wins
     expect(M.stateLabel(review, task(review, "EX-007"))).toBe("Waiting on EX-002 (deferred)");

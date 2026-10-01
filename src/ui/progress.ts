@@ -42,19 +42,22 @@ export function needsYouOf(state: State, task: Task, nowMs = Date.now()): NeedsY
   const i = task.integration;
   const pr = i?.pr;
   if (pr && i?.status === "integrated" && (pr.phase === "built" || pr.phase === "open")) {
-    if (pr.attention && !D.openRepair(state, pr)) return { what: "look at the pull request", action: "Open", href };
-    if (D.prReady(state, task, nowMs)) return { what: "merge PR", action: "Merge", href: "#/review" };
+    if (pr.attention && !D.openRepair(state, pr)) return { what: PR_PROBLEM, action: "Open", href };
+    if (D.prReady(state, task, nowMs)) return { what: "merge PR", action: "Merge", href: "#/results" };
   }
-  if (i?.landed?.status === "unreviewed" && i.landed.flags.length) return { what: "review flagged work", action: "Review", href: "#/review" };
+  if (i?.landed?.status === "unreviewed" && i.landed.flags.length) return { what: "look at flagged work", action: "Open", href: "#/results" };
   if (task.controlFailure) return { what: "retry the stop", action: "Open", href };
   if (task.steps.some((st) => st.role === "checks" && st.state === "blocked" && st.blockedReason?.startsWith("Checks failed"))) return { what: "decide on failing checks", action: "Decide", href };
   if (F.openDecisions(state, "user").some((d) => d.taskId === task.id)) return { what: "decide a finding", action: "Decide", href };
   if (open && task.hold && task.holdReason) return { what: "review the step", action: "Open", href };
   if (open && task.holdBeforeStart && task.lifecycle !== "active" && !task.heldForShaping && !task.hold && !M.deferredBy(state, task)) {
-    return { what: M.currentSpec(task).content.options.length > 1 ? "choose an option" : "release it", action: "Open", href };
+    return { what: M.currentSpec(task).content.options.length > 1 ? "choose an option" : "give the go-ahead", action: "Open", href };
   }
   return undefined;
 }
+
+/** The "what" of a pull request that stopped on a problem; the Overview shows the problem's message under it. */
+export const PR_PROBLEM = "decide on the pull request";
 
 export interface LiveAgent {
   taskId: string;
@@ -212,4 +215,17 @@ export function progressByArea(state: State, nowMs = Date.now()): AreaProgress[]
 export function agentsWorking(state: State): number {
   // Agents only: the service's own check runs are not agents and have their own limit.
   return M.activeAgentAttempts(state).filter((a) => a.outcome === "running").length;
+}
+
+/** ORC-025: agent runs that were asked to stop and have not acknowledged yet. They are still busy, so the header never says Idle over them. */
+export function agentsStopping(state: State): number {
+  return M.activeAgentAttempts(state).filter((a) => a.outcome === "stopping").length;
+}
+
+/** The header's live text: "3 agents working", "3 agents working, 1 stopping", "2 agents stopping", or "Idle" only when no agent run is active. */
+export function liveIndicatorText(working: number, stopping: number, shaping = false): string {
+  const agents = (n: number) => `${n} agent${n === 1 ? "" : "s"}`;
+  if (!working && !stopping) return "Idle";
+  const text = working ? `${agents(working)} working${stopping ? `, ${stopping} stopping` : ""}` : `${agents(stopping)} stopping`;
+  return shaping && working ? `${text} (finishing; shaping)` : text;
 }

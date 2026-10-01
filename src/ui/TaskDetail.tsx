@@ -96,7 +96,7 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
   const provenance = M.priorityProvenance(state, task);
   const askLead = (
     <button onClick={() => lead.openLead({ taskId: task.id })} title="Your message carries this task as context">
-      Ask the lead about this task
+      Message the lead about this task
     </button>
   );
   if (!open) {
@@ -130,8 +130,8 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
         </button>
       )}
       {task.holdBeforeStart && task.lifecycle !== "active" && (
-        <button disabled={disabled} onClick={() => void send("startHeldTask", { taskId: task.id })}>
-          Release hold before start
+        <button disabled={disabled} onClick={() => void send("startHeldTask", { taskId: task.id })} title="Your go-ahead: the task is dispatched as soon as an agent is free">
+          Start
         </button>
       )}
       <button onClick={onEdit} disabled={editing}>
@@ -171,7 +171,7 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
           )}
           {provenance.kind === "auto" && (
             <>
-              Auto: the lead may reorder it when you steer ·{" "}
+              Auto: the lead may reorder it when you message it ·{" "}
               <button className="link" disabled={disabled} title="The lead may not reorder it" onClick={() => void send("setPriorityPin", { taskId: task.id, pinned: true })}>
                 Pin P{task.priority}
               </button>
@@ -180,7 +180,7 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
           {provenance.kind === "child" && `Runs at ${provenance.rootId}'s priority (P${provenance.priority}); Set pins its own`}
         </span>
       </span>
-      <label className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }} title="The lead may not defer this task when you steer">
+      <label className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }} title="The lead may not defer this task when you message it">
         <input type="checkbox" checked={!!task.userSet?.run} disabled={disabled} onChange={(e) => void send("setRunPin", { taskId: task.id, pinned: e.target.checked })} />
         Keep running whatever the focus
       </label>
@@ -198,7 +198,7 @@ function Controls({ state, task, editing, onEdit }: { state: State; task: Task; 
 }
 
 function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEdit?: () => void }) {
-  const { send, disabled, service } = useStore();
+  const { send, disabled } = useStore();
   const active = M.activeAttempts(state, task.id);
   const stopping = active.filter((a) => a.outcome === "stopping");
   const current = M.currentSpec(task).rev;
@@ -227,13 +227,16 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
         </button>
       </div>,
     );
-  else if (stopping.length)
+  else if (stopping.length) {
+    // ORC-025: "The change is saved" is true only of a step that writes code; a stopping review or design has no change to save.
+    const changesCode = stopping.some((a) => task.steps.find((st) => st.id === a.stepId)?.outputs.some((o) => o.kind === "code-change"));
     out.push(
       <div className="banner" role="status" key="stop">
-        <strong>{M.stopLabel(state, task)}.</strong> The change is saved. Waiting for{" "}
-        {stopping.length} run(s) to acknowledge stopping; no new work is dispatched and nothing integrates until they do. Partial changes will be checkpointed.
+        <strong>{M.stopLabel(state, task)}…</strong> {changesCode ? "The change is saved. " : ""}Waiting for {stopping.length === 1 ? "1 run" : `${stopping.length} runs`} to acknowledge stopping; no new work is dispatched and
+        nothing integrates until {stopping.length === 1 ? "it does" : "they do"}.{changesCode ? " Partial changes will be checkpointed." : ""}
       </div>,
     );
+  }
   if (executingRevs.length && executingRevs.some((r) => r !== current))
     out.push(
       <div className="banner" key="rev">
@@ -243,7 +246,7 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
   else if (executingRevs.length && !stopping.length)
     out.push(
       <div className="banner neutral" key="exec">
-        Executing spec r{current}{service.runtime === "real" ? "" : " (simulated)"}.
+        Executing spec r{current}.
       </div>,
     );
   if (blocked)
@@ -273,7 +276,7 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
   if (awaiting || myDecisions.length || leadDecisions.length)
     out.push(
       <div className="banner review" role="status" key="decisions">
-        <strong>{awaiting ? `${F.awaitingLabel(awaiting)}.` : "Findings need a decision."}</strong>{" "}
+        <strong>{awaiting ? `${F.awaitingLabel(awaiting)}.` : myDecisions.length ? `Needs you: decide ${myDecisions.length === 1 ? "a finding" : `${myDecisions.length} findings`}.` : "The lead is deciding findings."}</strong>{" "}
         {myDecisions.length ? "Decide each finding below; the repair fixes only what is decided “Fix” or marked auto-fix." : ""}
         {leadDecisions.length ? ` The lead is deciding ${leadDecisions.length} finding${leadDecisions.length === 1 ? "" : "s"}; you can take any of them over from the artifact below.` : ""}
         {myDecisions.length > 0 && (
@@ -335,14 +338,14 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
   if (task.heldForShaping && task.lifecycle !== "active")
     out.push(
       <div className="banner neutral" key="hfs">
-        Planned while shaping: it waits until you start building{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startBuildingPlan(state).release ? "starts on Autopilot" : "waits for your release"} (your involvement setting at the moment you start building decides). Changing its hold below takes it out of the roadmap hold.{" "}
+        Planned while shaping: it waits until you start building{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startBuildingPlan(state).release ? "starts on Autopilot" : "waits for your go-ahead"} (your involvement setting at the moment you start building decides). Changing "Wait for my go-ahead" below takes it out of the roadmap's wait.{" "}
         <a href="#/overview">Shape the vision</a>
       </div>,
     );
   if (task.holdBeforeStart && task.lifecycle !== "active")
     out.push(
       <div className="banner neutral" key="hbs">
-        Held before start: this task will not be dispatched until you release it.
+        Waiting for your go-ahead: nothing starts on this task until you press Start.
       </div>,
     );
   // ORC-009: a deferral is not a pause. The running step finishes and its result is kept; then nothing new starts.
@@ -356,10 +359,10 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
       <div className="banner neutral" role="status" key="deferral">
         <strong>
           {own ? (deferral.deferral.by === "lead" ? "Deferred by the lead from your message" : "Deferred by you") : `Deferred with ${deferral.task.id}`}
-          {deferral.deferral.reason ? `: ${deferral.deferral.reason}` : ""}.
+          {deferral.deferral.reason ? `: ${deferral.deferral.reason.trim().replace(/\.+$/, "")}` : ""}.
         </strong>{" "}
         {runningNow ? "This step finishes and its result is kept, then nothing new starts." : "Nothing new starts on this task until it runs again."}
-        {task.holdBeforeStart && task.lifecycle !== "active" ? " It also still needs its hold before start released." : ""}{" "}
+        {task.holdBeforeStart && task.lifecycle !== "active" ? " It also still waits for your go-ahead." : ""}{" "}
         {own ? (
           <button className="small" disabled={disabled} onClick={() => void send("undeferTask", { taskId: task.id })} title="Lift the deferral and keep this task running whatever the focus">
             Run now
@@ -375,7 +378,7 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
           </button>
         )}{" "}
         {runningNow && !task.hold && (
-          <button className="small" disabled={disabled} onClick={() => void send("pauseTask", { taskId: task.id })} title="Interrupt the running step now; it shows Pausing until the runtime confirms">
+          <button className="small" disabled={disabled} onClick={() => void send("pauseTask", { taskId: task.id })} title="Interrupt the running step now; it shows Pausing until the agent confirms">
             Pause now
           </button>
         )}
@@ -396,13 +399,13 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
       );
     out.push(
       <div className="banner neutral" key="done">
-        Delivered on spec r{current}. The delivered spec is read-only; create a follow-up to change it.
+        Done on spec r{current}. The spec is read-only now; create a follow-up to change it.
         {integ && integ.status !== "conflict" && (
           <div style={{ marginTop: "0.3rem" }}>
             {integ.status === "pending" && (integ.message ? `Integration is waiting: ${integ.message}. It retries automatically.` : "Waiting for integration.")}
             {integ.status === "integrated" && (
               <>
-                {integ.pr ? "Prepared as a pull request branch" : "Integrated into the integration branch"}
+                {integ.pr ? "Prepared as a pull request branch" : "On the integration branch"}
                 {integ.ref ? ": " : "."}
                 {integ.ref && <span className="mono">{integ.ref}</span>}
                 {integ.at && <span className="muted"> · {relTime(integ.at)}</span>}
@@ -413,7 +416,7 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
         )}
         {integ?.delivered && integ.delivered.status !== "conflict" && (
           <div style={{ marginTop: "0.3rem" }}>
-            {integ.delivered.status === "delivered" ? "Delivered to your branch: " : "Not delivered yet: "}
+            {integ.delivered.status === "delivered" ? "Landed on your branch: " : "Not landed yet: "}
             {integ.delivered.message} <span className="muted">· {relTime(integ.delivered.at)}</span>
           </div>
         )}
@@ -740,9 +743,7 @@ function StepHead({ state, task, st }: { state: State; task: Task; st: Step }) {
         </span>
       ))}
       <BestOfChoice task={task} stepId={st.id} />
-      <div className="muted small">
-        {st.dependsOn.length ? `after ${st.dependsOn.join(", ")}` : "first"} · config r{st.revision}
-      </div>
+      <div className="muted small">{st.dependsOn.length ? `after ${st.dependsOn.join(", ")}` : "first"}</div>
       <StepPrinciples state={state} task={task} st={st} />
     </>
   );
@@ -950,7 +951,7 @@ function SendNote({ state, task, st }: { state: State; task: Task; st: Step }) {
             : tooLong
               ? `Notes are limited to ${MAX_NOTE_LENGTH} characters.`
               : `One paragraph, ${length}/${MAX_NOTE_LENGTH}. Guidance within the spec; the agent keeps its work so far.`}
-          {can && service.runtime === "fake" ? " Simulated: the fake runtime acknowledges after a moment." : ""}
+          {can && service.runtime === "fake" ? " In the demo the agent acknowledges after a moment." : ""}
         </span>
         <span className="row" style={{ gap: "0.3rem" }}>
           <button type="submit" className="small primary" disabled={disabled || busy || !can || !length || tooLong}>
@@ -972,7 +973,7 @@ function SendNote({ state, task, st }: { state: State; task: Task; st: Step }) {
   );
 }
 
-/** ORC-022: notes, each with its status chip (Queued, Sending, Delivered, Delivered at start, Not delivered: reason), its source and its time; "simulated" in the demo. */
+/** ORC-022: notes, each with its status chip (Queued, Sending, Delivered, Delivered when the run started, Not delivered: reason), its source and its time; "simulated" in the demo. */
 function NotesList({ notes, label }: { notes: Note[]; label: string }) {
   if (!notes.length) return null;
   return (
@@ -984,7 +985,7 @@ function NotesList({ notes, label }: { notes: Note[]; label: string }) {
               {noteStatusLabel(n)}
             </Pill>
             {n.simulated && (
-              <span className="chip" title="Written by the fake runtime's lead, or acknowledged by a simulated run; no agent read it">
+              <span className="chip" title="Written by the demo's lead, or acknowledged by a simulated run; no agent read it">
                 simulated
               </span>
             )}
@@ -1154,7 +1155,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
           disabled={disabled || !open || task.lifecycle === "active"}
           onChange={(e) => void send("setHoldBeforeStart", { taskId: task.id, value: e.target.checked })}
         />
-        Hold before start (guarantees a chance to review before the first dispatch)
+        Wait for my go-ahead (nothing starts until you press Start)
       </label>
     </section>
   );
@@ -1184,7 +1185,7 @@ function StepIO({ state, task, stepId, run }: { state: State; task: Task; stepId
             Instruction: “{run ? run.snapshot.purpose : st.purpose}”
           </li>
           <li>
-            Vision r{visionRev}, spec r{spec.rev} with selected option {spec.content.selectedOptionId} and {spec.content.acceptance.length} acceptance check(s), pipeline r{pipelineRev}
+            Vision r{visionRev}, spec r{spec.rev} with selected option {spec.content.selectedOptionId} and {spec.content.acceptance.length} acceptance check{spec.content.acceptance.length === 1 ? "" : "s"}, pipeline r{pipelineRev}
           </li>
           {declared.map((r) => {
             const got = received.find((i) => i.step === r.step && i.output === r.output);
@@ -1387,7 +1388,7 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
           <input type="text" className="mono" value={ref} placeholder={base.ref ?? "commit hash"} onChange={(e) => setRef(e.target.value)} aria-invalid={!refOk} />
           {!refOk && <span style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>Use a commit hash (7–40 hex characters).</span>}
           <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
-            Point it at your own commit to replace the worker's change. Leave empty to keep {base.ref ? <span className="mono">{base.ref}</span> : "the current reference"}.
+            Point it at your own commit to replace the agent's change. Leave empty to keep {base.ref ? <span className="mono">{base.ref}</span> : "the current reference"}.
           </span>
         </label>
       )}
@@ -1446,7 +1447,7 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
                 </>
               )}
               {(a.outcome === "running" || a.outcome === "stopping") && a.progress > 0 && (
-                <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`} style={{ marginTop: "0.3rem" }}>
+                <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} progress`} style={{ marginTop: "0.3rem" }}>
                   <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
                 </div>
               )}
@@ -1641,7 +1642,7 @@ function RevisionsCard({ task }: { task: Task }) {
                 ))}
               </select>
             </label>
-            <span className="muted">{changed.length ? `${changed.length} changed line(s)` : "No differences"}</span>
+            <span className="muted">{changed.length ? `${changed.length} changed line${changed.length === 1 ? "" : "s"}` : "No differences"}</span>
           </div>
           {changed.length > 0 && (
             <div className="diff" aria-label={`Differences between r${from} and r${to}`}>

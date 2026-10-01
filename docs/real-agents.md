@@ -36,11 +36,11 @@ The answers are saved to `~/.orchestration/launcher.json`, which never contains 
 - **Environment variables** you set yourself always override saved answers.
 - **Without setup,** `npm start` runs the demo.
 
-Next, in the app, the Overview's **Get started** list takes you through connecting a repository, writing your vision, and choosing how involved you want to be (Autopilot, check in before work starts, or only when I ask). Settings → Providers shows each provider's status, and checking never starts a model run.
+Next, in the app, the Overview's **Get started** list takes you through connecting a repository, writing your vision, and choosing how involved you want to be (Autopilot, Check-in or Manual). Settings → Providers shows each provider's status, and checking never starts a model run.
 
 ## Your own Claude subscription token
 
-Setup runs `claude setup-token` for you if Claude Code is installed. Claude workers and the lead then run on your plan's usage limits, which are shared with your own Claude Code, and several workers use those limits up quickly. **Check this is allowed for you:** Anthropic's Agent SDK documentation says, "Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK." It does not say whether a subscriber may use their own token in their own tool.
+Setup runs `claude setup-token` for you if Claude Code is installed. Claude agents and the lead then run on your plan's usage limits, which are shared with your own Claude Code, and several agents use those limits up quickly. **Check this is allowed for you:** Anthropic's Agent SDK documentation says, "Unless previously approved, Anthropic does not allow third party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK." It does not say whether a subscriber may use their own token in their own tool.
 
 Without setup, the same choices are environment variables:
 
@@ -48,7 +48,7 @@ Without setup, the same choices are environment variables:
 - `ANTHROPIC_API_KEY`, or `ORCHESTRATION_CLAUDE_AUTH=subscription` together with `CLAUDE_CODE_OAUTH_TOKEN`
 - the cloud flags, such as `CLAUDE_CODE_USE_BEDROCK=1`
 
-In subscription mode no API key or cloud setting is passed to workers.
+In subscription mode no API key or cloud setting is passed to agents.
 
 ## What real runs do on your machine
 
@@ -61,14 +61,14 @@ What real runs do on your machine:
   - With automatic delivery on, that branch is fast-forwarded into your chosen branch, but only when your working tree is clean. Your latest commits are merged into the integration branch first.
 - **GitHub pull requests** (Settings → Delivery, off by default) are a third delivery mode, never on together with local delivery:
   - Each finished task becomes one pull request on a branch the app owns (`orchestration/<project>/pr/<task>-<n>`), opened with your own `gh` sign-in. The app never reads or stores a token, never forces a push, and publishes only commits Orchestrator made.
-  - **Hold and notify** (default): an independent agent reviews the change, the app watches the required checks, and tells you once when the pull request is ready. You merge it on GitHub or with Merge in the app, which is tied to the commit you saw.
-  - **Merge automatically** (a separate, explicit setting): the app merges one pull request at a time, and only when an independent review is clean for exactly that change, every required check passed on its exact head, GitHub reports it mergeable, it touches no protected file, and nothing is paused. It first brings the pull request up to date with the base and waits for the checks again, so what lands is what was tested.
+  - **You merge** (default): an independent agent reviews the change, the app watches the required checks, and lists the pull request under Needs you once it is ready. You merge it on GitHub or with Merge in the app, which is tied to the commit you saw.
+  - **Merges automatically** (a separate, explicit setting): the app merges one pull request at a time, and only when an independent review is clean for exactly that change, every required check passed on its exact head, GitHub reports it mergeable, it touches no protected file, and nothing is paused. It first brings the pull request up to date with the base and waits for the checks again, so what lands is what was tested.
   - The review is the task's own review when it provably saw the final change and ran on another provider than the writer. Otherwise the app starts one dedicated review task. It never swaps in another provider by itself.
   - In automatic mode a failed required check, open review findings or a conflict get one fix task, pushed onto the same pull request, at most two per pull request.
   - If the check on the base branch fails after a merge the app made, automatic merging pauses; a second failure within a day keeps it paused until you resume it. Nothing is reverted automatically.
-  - Everything that lands is listed on the Review page, which never blocks anything. From there you can mark it reviewed, leave a note, or send it back as a fix or a revert.
+  - Everything that lands is listed under Results, which never blocks anything. From there you can mark it as seen, leave a note, or send it back as a fix or a revert.
   - Pull requests are opened, reviewed and merged only while the service is running. There are no webhooks.
-- **Worker environment** is set per provider:
-  - **Isolated** (default): workers see none of your settings, plugins, or web tools, and use only the MCP connections you tick.
-  - **Use my local setup:** workers get your user-level Claude or Codex configuration, including all its MCP servers and plugins.
+- **Agent environment** is set per provider:
+  - **Isolated** (default): agents see none of your settings, plugins, or web tools, and use only the MCP connections you tick.
+  - **Use my local setup:** agents get your user-level Claude or Codex configuration, including all its MCP servers and plugins.
 - **Limits:** Settings → Run limits caps turns, time, and Claude spend per run. Codex runs are bounded by time.

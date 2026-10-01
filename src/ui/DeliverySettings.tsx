@@ -86,13 +86,13 @@ export function DeliverySettings() {
       ? [`Only ${p.enabledProviders.map(M.providerLabel).join(", ") || "no provider"} is enabled. An independent review needs the other provider: every pull request will wait with "review cannot run" until you enable it or let any agent count.`]
       : []),
     ...(reviewer === "any-agent" ? ["With \"any agent\", the provider that wrote a change may also be the one that reviews it."] : []),
-    ...(local.length && !localOk ? [`A worker environment is set to "local" (${local.map(M.providerLabel).join(", ")}), so nothing merges automatically until it is isolated or you allow local workers below.`] : []),
-    ...(local.length && localOk ? [`Local worker environments (${local.map(M.providerLabel).join(", ")}) may expose your GitHub sign-in or a GitHub MCP server to agents, and you allow automatic merging anyway.`] : []),
+    ...(local.length && !localOk ? [`An agent environment is set to "local" (${local.map(M.providerLabel).join(", ")}), so nothing merges automatically until it is isolated or you allow local agents below.`] : []),
+    ...(local.length && localOk ? [`Local agent environments (${local.map(M.providerLabel).join(", ")}) may expose your GitHub sign-in or a GitHub MCP server to agents, and you allow automatic merging anyway.`] : []),
     ...(posture("bypass") ? ["Your GitHub account can bypass the branch rules. The app never does, so for merges the app makes, its own checks are the only barrier."] : []),
     ...(posture("unattributed") ? ["The ruleset may demand an approval from a second account for commits authored by Orchestrator. If it does, pull requests wait with \"approval required\"; the app never bypasses it. Unverified."] : []),
     ...(posture("worker-shell") ? ["Claude workers have shell access, so the app cannot claim that only the service reaches GitHub."] : []),
     ...(!update ? ["Without \"bring up to date before merging\", a pull request can merge on a base its checks never ran on."] : []),
-    ...(!gh?.simulated && real ? ["Checked on a GitHub sandbox with scripted agents, not yet with real Claude and Codex workers. Watch the first merges."] : []),
+    ...(!gh?.simulated && real ? ["Checked on a GitHub sandbox with scripted agents, not yet with real Claude and Codex agents. Watch the first merges."] : []),
   ];
   const undelivered = D.redeliverable(state).filter((t) => !t.integration?.pr);
   const open = D.trackedPrTasks(state).length;
@@ -115,7 +115,7 @@ export function DeliverySettings() {
       <details className="how">
         <summary>How this works</summary>
         <p>
-          One mode at a time. Everything that lands is listed on the <a href="#/review">Review</a> page, which never blocks anything.
+          One mode at a time. Everything that lands is listed under <a href="#/results">Results</a>, which never blocks anything.
         </p>
       </details>
 
@@ -154,7 +154,7 @@ export function DeliverySettings() {
             <p className="muted" style={{ fontSize: "0.82rem", margin: "0 0 0.5rem 1.4rem" }}>
               {real
                 ? "Switching this on only reads from GitHub, using your own gh sign-in. After that, each finished task is pushed to its own branch and opened as a pull request under your account. Nothing merges by itself unless you also choose automatic merging, which is a separate setting."
-                : "With the simulated runtime nothing is sent to GitHub: pull requests, checks and merges are simulated and labelled so."}
+                : "In the demo nothing is sent to GitHub: pull requests, checks and merges are simulated and labelled so."}
             </p>
           )}
           <button type="submit" disabled={!modeChanged || (pick === "local" && !branch.trim())}>
@@ -165,7 +165,7 @@ export function DeliverySettings() {
 
       {mode !== "pr" && d?.status && (
         <p style={{ fontSize: "0.88rem", margin: "0.7rem 0 0" }}>
-          Last local delivery: {d.status === "delivered" ? "delivered" : d.status === "blocked" ? "stopped" : d.status === "conflict" ? "conflict" : "waiting"}. <span className="muted">{d.message}</span>
+          Last local delivery: {d.status === "delivered" ? "landed" : d.status === "blocked" ? "stopped" : d.status === "conflict" ? "conflict" : "waiting"}. <span className="muted">{d.message}</span>
         </p>
       )}
       {canReset && (
@@ -188,7 +188,7 @@ export function DeliverySettings() {
 
       {mode !== "pr" && open > 0 && (
         <div className="banner neutral" role="status" style={{ margin: "0.7rem 0 0" }}>
-          {open} pull request{open === 1 ? " is" : "s are"} still open from when pull-request delivery was on. {open === 1 ? "It is" : "They are"} only watched: nothing is pushed, merged or commented. See <a href="#/review">Review</a>.
+          {open} pull request{open === 1 ? " is" : "s are"} still open from when pull-request delivery was on. {open === 1 ? "It is" : "They are"} only watched: nothing is pushed, merged or commented. See <a href="#/results">Results</a>.
         </div>
       )}
 
@@ -285,14 +285,14 @@ export function DeliverySettings() {
               <label className="field">
                 <span>When a pull request is ready</span>
                 <select value={merge} onChange={(e) => setMerge(e.target.value as PrDeliveryConfig["merge"])} aria-describedby="merge-mode-note">
-                  <option value="hold">Hold and notify me</option>
-                  <option value="auto">Merge automatically after an independent review and passing required checks</option>
+                  <option value="hold">You merge</option>
+                  <option value="auto">Merges automatically after an independent review and passing required checks</option>
                 </select>
               </label>
               <p id="merge-mode-note" className="muted" style={{ fontSize: "0.82rem", margin: "-0.3rem 0 0.6rem" }}>
                 {merge === "auto"
                   ? "The app merges a pull request by itself, one at a time, only when an independent review is clean for exactly that change, every required check passed on its head, GitHub reports it mergeable, and it touches no protected file. It never bypasses branch rules, never uses GitHub's own auto-merge and never forces. You can hold or merge any pull request yourself at any time."
-                  : "You merge each pull request, here or on GitHub. A Merge click here is tied to the commit you saw and goes through only once GitHub's required checks and rules pass. Each pull request is still reviewed by an independent agent, and you are told once when it is ready."}
+                  : "You merge each pull request, here or on GitHub. A Merge click here is tied to the commit you saw and goes through only once GitHub's required checks and rules pass. Each pull request is still reviewed by an independent agent, and it is listed under Needs you once it is ready."}
               </p>
               {merge === "auto" && autoWarnings.length > 0 && (
                 <div className="banner neutral" role="note" style={{ margin: "0 0 0.6rem" }}>
@@ -324,7 +324,7 @@ export function DeliverySettings() {
                     pull request, then it asks you)
                   </label>
                   <label style={{ display: "block", marginBottom: "0.35rem" }}>
-                    <input type="checkbox" checked={localOk} onChange={(e) => setLocalOk(e.target.checked)} /> Allow automatic merging while a worker environment is "local" (agents may then reach your GitHub sign-in)
+                    <input type="checkbox" checked={localOk} onChange={(e) => setLocalOk(e.target.checked)} /> Allow automatic merging while an agent environment is "local" (agents may then reach your GitHub sign-in)
                   </label>
                   <label className="field">
                     <span>Automatic merges per day at most (0 to 100)</span>
@@ -377,7 +377,7 @@ export function DeliverySettings() {
 
           {undelivered.length > 0 && (
             <div className="banner neutral" role="status" style={{ margin: "0.8rem 0 0" }}>
-              {undelivered.length} integrated task{undelivered.length === 1 ? " was" : "s were"} never delivered.{" "}
+              {undelivered.length} finished task{undelivered.length === 1 ? " was" : "s were"} never delivered.{" "}
               <button
                 className="small"
                 disabled={disabled}
@@ -392,7 +392,7 @@ export function DeliverySettings() {
           )}
 
           <div className="row" style={{ justifyContent: "space-between", marginTop: "1rem" }}>
-            <h3 style={{ margin: 0 }}>What the app found on GitHub{gh?.simulated ? " (simulated)" : ""}</h3>
+            <h3 style={{ margin: 0 }}>What the app found on GitHub</h3>
             <button className="small" disabled={disabled || !!gh?.recheck} onClick={() => void send("recheckGitHub")}>
               {gh?.recheck ? "Checking…" : "Check again"}
             </button>

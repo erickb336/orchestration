@@ -480,6 +480,30 @@ describe("evidence and the merge gate (§6.9)", () => {
     expect(C.checkEvidence({ ...s, project: { ...s.project, checks: { ...s.project.checks, enabled: false } } }, SHA).ok).toBe(false);
   });
 
+  it("ORC-025: evidence from the service's own check task is named, and a task whose check steps never ran says so (WT-006's checklist)", () => {
+    const s = seed();
+    const h = SHA.slice(0, 12);
+    const pr = D.reportPrHead(D.setDeliveryMode({ ...s, tasks: s.tasks.map((t) => (t.id === "EX-006" ? { ...t, lifecycle: "done" as const, integration: { status: "pending" as const } } : t)) }, { mode: "pr" }, at(0)), "EX-006", { n: 1, sha: SHA, baseSha: SHA2, changed: { files: 1, additions: 1, deletions: 0, paths: ["a"], protectedHits: [], workflowHits: [] } }, at(1));
+    const item = (st: State) => D.prGate(st, task(st, "EX-006"), T0 + 5000, { byUser: true }).items.find((i) => i.id === "service-checks")!;
+    // The result came from the dedicated check task the service started for the pull request, not from EX-006's own steps.
+    const fromCheckTask = (st: State) => ({
+      ...st,
+      artifacts: [...st.artifacts, { id: "art-ck", taskId: "EX-006-CK1", stepId: "C1", attemptId: "run-ck", name: "checks", kind: "check-results" as const, version: 1, summary: "s", createdAt: at(4), checkRun: record(SHA, { configRev: 3 }), findings: [], openFindings: 0 }],
+    });
+    const checkSteps = (st: State, state: "done" | "skipped") => ({ ...st, tasks: st.tasks.map((t) => (t.id === "EX-006" ? { ...t, steps: t.steps.map((x) => (x.role === "checks" ? { ...x, state } : x)) } : t)) });
+    expect(item(fromCheckTask(checkSteps(pr, "done")))).toMatchObject({ ok: true, detail: `test passed on ${h}. Run by the service as EX-006-CK1 on this change.` });
+    // Checks were off while the task ran, so its own check steps were skipped: the checklist must not read as if they had passed.
+    const skipped = checkSteps(pr, "skipped");
+    expect(task(skipped, "EX-006").steps.some((x) => x.role === "checks" && x.state === "skipped")).toBe(true);
+    expect(item(fromCheckTask(skipped))).toMatchObject({ ok: true, detail: `test passed on ${h}. Run by the service as EX-006-CK1 on this change; the task's own check steps did not run.` });
+    // With no run on this head at all, the item still says so rather than claiming a pass.
+    expect(item(skipped)).toMatchObject({ ok: false, detail: expect.stringMatching(/^No service checks ran on/) });
+    // The reason carries no "(simulated)" suffix: the record's flag labels a demo run.
+    expect(C.checkEvidence(fromCheckTask({ ...pr, artifacts: pr.artifacts }), SHA).reason).toBe(`test passed on ${h}.`);
+    const sim = { ...pr, artifacts: [...pr.artifacts, { id: "art-sim", taskId: "EX-006", stepId: "C2", attemptId: "run-sim", name: "final", kind: "check-results" as const, version: 1, summary: "s", createdAt: at(1), checkRun: record(SHA, { configRev: 3, simulated: true }), findings: [], openFindings: 0 }] };
+    expect(C.checkEvidence(sim, SHA).reason).toBe(`test passed on ${h}.`);
+  });
+
   it("the gate item: ok, waiting (a run is started), blocked on a failure, advisory for the user's own merge; a landed change without evidence is flagged", () => {
     const s = seed();
     const pr = D.reportPrHead(D.setDeliveryMode({ ...s, tasks: s.tasks.map((t) => (t.id === "EX-006" ? { ...t, lifecycle: "done" as const, integration: { status: "pending" as const } } : t)) }, { mode: "pr" }, at(0)), "EX-006", { n: 1, sha: SHA, baseSha: SHA2, changed: { files: 1, additions: 1, deletions: 0, paths: ["a"], protectedHits: [], workflowHits: [] } }, at(1));

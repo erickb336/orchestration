@@ -16,7 +16,8 @@ export const COLUMN_LABEL: Record<M.Column, string> = {
   proposed: "Proposed",
   ready: "Ready",
   running: "Running",
-  reviewing: "Reviewing",
+  // ORC-025: an agent is reviewing. "Results" is where you look at what landed.
+  reviewing: "In review",
   paused: "Paused",
   deferred: "Deferred",
   blocked: "Blocked",

@@ -51,7 +51,7 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
     <div className="msg-extra changes">
       {isSimulated(set) && (
         <div className="row" style={{ gap: "0.3rem", margin: "0.1rem 0 0.2rem" }}>
-          <span className="chip" title="Written by the fake runtime's lead, not by a model">
+          <span className="chip" title="Written by the demo's lead, not by a model">
             simulated
           </span>
         </div>
@@ -172,7 +172,7 @@ function confirmDrops(state: State, rows: SteeringChange[]): boolean {
     if (!t) continue;
     const running = M.activeAttempts(state, t.id).length;
     const dependents = state.tasks.filter((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled" && x.dependsOn.includes(t.id)).map((x) => x.id);
-    lines.push([`Cancel ${t.id}?`, running ? `${running} run(s) are stopped (shown as Cancelling until confirmed).` : "", dependents.length ? `${dependents.join(", ")} would be blocked.` : ""].filter(Boolean).join(" "));
+    lines.push([`Cancel ${t.id}?`, running ? `${running} run${running === 1 ? " is" : "s are"} stopped (shown as Cancelling until confirmed).` : "", dependents.length ? `${dependents.join(", ")} would be blocked.` : ""].filter(Boolean).join(" "));
   }
   if (!lines.length) return false;
   return confirm([...lines, "A cancel cannot be undone. The spec and partial artifacts are kept."].join("\n"));
@@ -211,7 +211,7 @@ function Row({ state, c, struck, children }: { state: State; c: SteeringChange; 
             </Pill>
           )}
           {note?.simulated && (
-            <span className="chip" title="Written by the fake runtime's lead, or acknowledged by a simulated run; no agent read it">
+            <span className="chip" title="Written by the demo's lead, or acknowledged by a simulated run; no agent read it">
               simulated
             </span>
           )}

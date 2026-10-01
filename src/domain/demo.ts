@@ -1067,7 +1067,7 @@ class DemoBuilder {
     this.output(id, "S1", 400, 350, DEMO_SCRIPT[id].outputs!.design);
     this.change(id, "S2", 349, 260, { sha: fakeSha("WT-007 S2"), paths: ["src/map/Pins.tsx", "src/map/MapView.tsx", "src/map/a11y.ts", "src/map/a11y.test.ts", "src/map/WaypointRotor.tsx", "src/trail/distance.ts"], files: 6, additions: 142, deletions: 11 }, DEMO_SCRIPT[id].outputs!["S2.change"], DEMO_SCRIPT[id].outputs!["S2.handoff"]);
     this.checks(id, "C1", 259, 257);
-    this.review(id, "S4", 256, 230, undefined, "1 finding needs a decision: the unit distances are read in.", [
+    this.review(id, "S4", 256, 230, undefined, "1 finding for you to decide: the unit distances are read in.", [
       finding("F1", {
         severity: "warning",
         action: "ask-user",

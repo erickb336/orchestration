@@ -121,7 +121,7 @@ export function ChecksSettings() {
         </p>
       </details>
       {sampleBlocked && <div className="banner">This is the sample project: it has no repository, so its checks cannot be turned on. Start a project of your own in Settings → Project.</div>}
-      {!real && <div className="banner neutral">Fake runtime: check runs are simulated. Nothing is run and nothing is spawned; the results say so.</div>}
+      {!real && <div className="banner neutral">In the demo, check runs are simulated: nothing is run and nothing is spawned, and the results say so.</div>}
 
       <fieldset className="plain-fieldset" disabled={disabled}>
         <label className="row field" style={{ gap: "0.4rem" }}>
@@ -339,7 +339,7 @@ export function ChecksSettings() {
           <span>Protected check inputs (one pattern per line)</span>
           <textarea value={inputs} onChange={(e) => setInputs(e.target.value)} rows={4} className="mono" style={{ fontSize: "0.82rem" }} />
           <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
-            A change that edits any of these (the files the checks depend on) gets a finding that needs a decision: a passing result may then mean less than before.
+            A change that edits any of these (the files the checks depend on) gets a finding a person decides: a passing result may then mean less than before.
           </span>
         </label>
         <label className="field">

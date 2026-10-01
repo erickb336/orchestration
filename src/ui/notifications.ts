@@ -56,7 +56,7 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
     const d = t.integration?.delivered;
     const pd = p.integration?.delivered;
     if (d && (d.status !== pd?.status || d.message !== pd?.message)) {
-      const title = d.status === "delivered" ? "Work delivered" : d.status === "conflict" ? "Delivery conflict" : "Delivery waiting";
+      const title = d.status === "delivered" ? "Work landed" : d.status === "conflict" ? "Delivery conflict" : "Delivery waiting";
       // `at` moves only when the outcome changes, so an outcome that comes back after a different one notifies again.
       out.push({ key: `deliver:${t.id}:${d.status}:${d.at}:${d.message}`, title, body: clip(`${name}: ${d.message}`), taskId: t.id });
     }
@@ -77,7 +77,7 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
       }
       if (pr.phase === "merged" && ppr?.phase !== "merged") {
         const by = t.integration?.landed?.by === "person" ? ` by ${t.integration.landed.mergedBy ?? "a person"}` : "";
-        out.push({ key: `pr-merged:${t.id}:${pr.n}`, title: `${n} merged${by}; review it when you like${sim}`, body: name, taskId: t.id });
+        out.push({ key: `pr-merged:${t.id}:${pr.n}`, title: `${n} landed${by}; look at it when you like${sim}`, body: name, taskId: t.id });
       }
       if (pr.phase === "closed" && ppr?.phase !== "closed") out.push({ key: `pr-closed:${t.id}:${pr.n}`, title: `${n} was closed without merging${sim}`, body: name, taskId: t.id });
     }
@@ -100,7 +100,7 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
       out.push({
         key: `blocked:${t.id}:${st.id}:${runs}:${st.blockedReason ?? ""}`,
         title: st.blockedReason?.startsWith("Last run failed") ? "Run failed" : "Step blocked",
-        body: clip(`${name} · ${st.id}: ${st.blockedReason ?? "waiting for you"}`),
+        body: clip(`${name} · ${st.id}: ${st.blockedReason ?? "needs you"}`),
         taskId: t.id,
       });
     }

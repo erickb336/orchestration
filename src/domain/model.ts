@@ -546,9 +546,11 @@ export function stateLabel(s: State, t: Task): string {
   if (col === "cancelled") return "Cancelled";
   if (col === "done") return "Done";
   if (col === "blocked") return "Blocked";
-  if (col === "paused") return t.hold ? "Paused" : "Paused (project)";
+  // ORC-025: one word for a pause, whether the task or the project is paused; the header says "Project paused".
+  if (col === "paused") return "Paused";
   // ORC-009: a deferred task keeps working until its current step ends; then nothing new starts.
-  if ((col === "running" || col === "reviewing") && deferredBy(s, t)) return `${col === "running" ? "Running" : "Reviewing"} · deferred after this step`;
+  if ((col === "running" || col === "reviewing") && deferredBy(s, t)) return `${col === "running" ? "Running" : "In review"} · deferred after this step`;
+  if (col === "reviewing") return "In review";
   if (col === "deferred") return deferredLabel(s, t)!;
   if (t.lifecycle === "active" && active.length === 0 && waitingForChildren(s, t)) {
     const open = currentChildren(s, t).filter(isOpen).length;
@@ -568,10 +570,10 @@ export function stateLabel(s: State, t: Task): string {
   // so the label reads it now; a dependency wait is shown under the shaping hold too.
   if (col === "ready" && t.heldForShaping) {
     const dep = waitingOn(s, t);
-    return `Planned; waits until you start building${dep ? ` and on ${dep}` : ""}, then ${startBuildingPlan(s).release ? "starts on Autopilot" : "waits for your release (your involvement setting)"}`;
+    return `Planned; waits until you start building${dep ? ` and on ${dep}` : ""}, then ${startBuildingPlan(s).release ? "starts on Autopilot" : "waits for your go-ahead (your involvement setting)"}`;
   }
-  if (col === "ready" && t.holdBeforeStart) return "Held before start";
-  if (col === "ready" && s.project.hold) return "Ready (project paused)";
+  // ORC-025: "Wait for my go-ahead" is the setting; the state names what it waits for. A project pause shows in the header, not here.
+  if (col === "ready" && t.holdBeforeStart) return "Waiting for your go-ahead";
   // ORC-012 review 13: a dependency wait is shown before the stage, with shaping noted.
   if (col === "ready" && waitingOn(s, t)) return waitingLabel(s, t);
   if (col === "ready" && s.project.stage === "shaping") return "Ready (shaping)";
@@ -593,7 +595,7 @@ export function stopLabel(s: State, t: Task): string {
   if (reasons.has("revision")) return "Stopping for revision";
   if (reasons.has("model-change")) return "Stopping for model change";
   // A pause was lifted before the runtime acknowledged it; the run must still stop before redispatch.
-  return "Stopping (resume pending)";
+  return "Resuming";
 }
 
 export function waitingOn(s: State, t: Task): string | undefined {
@@ -669,7 +671,7 @@ export function editSpec(
         st.invalidatedBy = `spec r${rev}`;
       }
     }
-    if (active.length) event(s, now, "system", "control", `Integration frozen until ${active.length} run(s) on r${prev.rev} stop; r${rev} runs after reconciliation`, t.id);
+    if (active.length) event(s, now, "system", "control", `Integration frozen until ${active.length} run${active.length === 1 ? "" : "s"} on r${prev.rev} stop${active.length === 1 ? "s" : ""}; r${rev} runs after reconciliation`, t.id);
   }
   return s;
 }
@@ -785,7 +787,7 @@ function holdTask(s: State, t: Task, now: string, with_?: string) {
   touch(t, now);
   const active = activeAttempts(s, t.id);
   const why = with_ ? ` with ${with_}` : "";
-  event(s, now, "user", "control", active.length ? `Pause requested${why}; hold saved, interrupting ${active.length} run(s)` : `Paused${why}; hold saved and excluded from dispatch`, t.id);
+  event(s, now, "user", "control", active.length ? `Pause requested${why}; hold saved, interrupting ${active.length} run${active.length === 1 ? "" : "s"}` : `Paused${why}; hold saved and excluded from dispatch`, t.id);
   for (const a of active) requestStop(s, a, "pause", now);
 }
 
@@ -851,7 +853,7 @@ export function startHeldTask(state: State, taskId: string, now: string): State 
   takeOverShapingHold(s, t, now);
   t.holdBeforeStart = false;
   touch(t, now);
-  event(s, now, "user", "control", `Hold-before-start released; eligible for dispatch${s.project.stage === "shaping" ? " once you start building" : ""}`, t.id);
+  event(s, now, "user", "control", `Started on your go-ahead; eligible for dispatch${s.project.stage === "shaping" ? " once you start building" : ""}`, t.id);
   return s;
 }
 
@@ -862,7 +864,7 @@ export function setHoldBeforeStart(state: State, taskId: string, value: boolean,
   takeOverShapingHold(s, t, now);
   t.holdBeforeStart = value;
   touch(t, now);
-  event(s, now, "user", "control", value ? "Hold before start enabled" : "Hold before start removed", t.id);
+  event(s, now, "user", "control", value ? "Waits for your go-ahead before it starts" : "No longer waits for your go-ahead", t.id);
   return s;
 }
 
@@ -880,7 +882,7 @@ function cancelInto(s: State, t: Task, now: string, by?: { actor: Actor; reason:
   t.cancelledBy = by?.actor ?? "user";
   touch(t, now);
   const active = activeAttempts(s, t.id);
-  event(s, now, by?.actor ?? "user", "control", `Cancelled${by ? ` (${by.reason})` : ""}; spec and partial artifacts retained${active.length ? `; stopping ${active.length} run(s)` : ""}`, t.id);
+  event(s, now, by?.actor ?? "user", "control", `Cancelled${by ? ` (${by.reason})` : ""}; spec and partial artifacts retained${active.length ? `; stopping ${active.length} run${active.length === 1 ? "" : "s"}` : ""}`, t.id);
   for (const a of active) requestStop(s, a, "cancel", now);
   // Review 1 (10): nothing on a cancelled task waits for a decision any more.
   F.supersedeDecisions(s, t.id, now, { reason: `${t.id} was cancelled` });
@@ -891,7 +893,7 @@ function cancelInto(s: State, t: Task, now: string, by?: { actor: Actor; reason:
     c.cancelledBy = by?.actor ?? "user";
     touch(c, now);
     const runs = activeAttempts(s, c.id);
-    event(s, now, "user", "control", `Cancelled with ${t.id}${runs.length ? `; stopping ${runs.length} run(s)` : ""}`, c.id);
+    event(s, now, "user", "control", `Cancelled with ${t.id}${runs.length ? `; stopping ${runs.length} run${runs.length === 1 ? "" : "s"}` : ""}`, c.id);
     for (const a of runs) requestStop(s, a, "cancel", now);
     F.supersedeDecisions(s, c.id, now, { reason: `${c.id} was cancelled with ${t.id}` });
   }
@@ -1037,7 +1039,7 @@ export function pauseProject(state: State, now: string): State {
   if (s.project.hold) return s;
   s.project.hold = true;
   const active = activeAttempts(s);
-  event(s, now, "user", "control", `Project paused; dispatch and integration frozen${active.length ? `; interrupting ${active.length} run(s)` : ""}`);
+  event(s, now, "user", "control", `Project paused; dispatch and integration frozen${active.length ? `; interrupting ${active.length} run${active.length === 1 ? "" : "s"}` : ""}`);
   for (const a of active) requestStop(s, a, "project-pause", now);
   const lead = activeLeadRun(s);
   if (lead && lead.outcome === "running") requestLeadStop(s, lead, "project paused", now);
@@ -1057,7 +1059,7 @@ export function resumeProject(state: State, now: string): State {
     }
     for (const st of t.steps) if (st.state === "paused") st.state = "pending";
   }
-  event(s, now, "user", "control", `Project resumed${kept ? `; ${kept} task hold(s) preserved` : ""}`);
+  event(s, now, "user", "control", `Project resumed${kept ? `; ${kept} paused task${kept === 1 ? "" : "s"} stay${kept === 1 ? "s" : ""} paused` : ""}`);
   return s;
 }
 
@@ -1991,7 +1993,7 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
   touch(t, now);
   const parts = [changed.size && `changed ${[...changed].join(", ")}`, removed.length && `removed ${removed.join(", ")}`].filter(Boolean);
   event(s, now, actor, "pipeline", `Pipeline r${rev}: ${reason}${parts.length ? ` (${parts.join("; ")})` : ""}`, t.id);
-  if (stopped.size) event(s, now, "system", "control", `Stopping ${stopped.size} run(s) affected by pipeline r${rev} before redispatch`, t.id);
+  if (stopped.size) event(s, now, "system", "control", `Stopping ${stopped.size} run${stopped.size === 1 ? "" : "s"} affected by pipeline r${rev} before redispatch`, t.id);
   return s;
 }
 
@@ -2737,7 +2739,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     now,
     "lead",
     "spec",
-    `Lead run ${r.id} replied${visionDraft ? " and drafted the vision" : ""}${decided.length ? ` and went through ${decided.length} decision${decided.length === 1 ? "" : "s"}` : ""}${created.length ? ` and proposed ${created.join(", ")}${shaping ? " (roadmap, held while shaping)" : ""}` : ""}${rejected.length ? `; ${rejected.length} item(s) rejected` : ""}`,
+    `Lead run ${r.id} replied${visionDraft ? " and drafted the vision" : ""}${decided.length ? ` and went through ${decided.length} decision${decided.length === 1 ? "" : "s"}` : ""}${created.length ? ` and proposed ${created.join(", ")}${shaping ? " (roadmap, held while shaping)" : ""}` : ""}${rejected.length ? `; ${rejected.length} item${rejected.length === 1 ? "" : "s"} rejected` : ""}`,
   );
   return s;
 }
@@ -2909,7 +2911,7 @@ export function steerPermission(s: State, t: Task | undefined, action: SteerActi
     case "priority":
       if (t.userSet?.priority) verdict = { v: "suggest", why: `you set P${t.priority}` };
       else if (mode === "apply-own" && !own) verdict = { v: "suggest", why: "your task: suggest-only (Settings)" };
-      else verdict = { v: "apply", ...(t.holdBeforeStart && t.lifecycle !== "active" ? { note: "still waits for your release" } : {}) };
+      else verdict = { v: "apply", ...(t.holdBeforeStart && t.lifecycle !== "active" ? { note: "still waits for your go-ahead" } : {}) };
       break;
     case "defer":
       if (t.userSet?.run) verdict = { v: "suggest", why: "you asked it to keep running" };
@@ -3272,11 +3274,11 @@ function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string, simulat
     count("applied", "focus") && "focus changed",
     count("applied", "priority") && `${count("applied", "priority")} reprioritized`,
     count("applied", "defer") && `${count("applied", "defer")} deferred`,
-    count("applied", "undefer") && `${count("applied", "undefer")} deferral(s) lifted`,
+    count("applied", "undefer") && `${count("applied", "undefer")} deferral${count("applied", "undefer") === 1 ? "" : "s"} lifted`,
     count("applied", "drop") && `${count("applied", "drop")} dropped`,
-    count("applied", "note") && `${count("applied", "note")} note(s) sent`,
+    count("applied", "note") && `${count("applied", "note")} note${count("applied", "note") === 1 ? "" : "s"} sent`,
   ].filter(Boolean);
-  const rest = [count("suggested") && `${count("suggested")} suggestion(s)`, count("skipped") && `${count("skipped")} kept`, count("rejected") && `${count("rejected")} rejected`].filter(Boolean);
+  const rest = [count("suggested") && `${count("suggested")} suggestion${count("suggested") === 1 ? "" : "s"}`, count("skipped") && `${count("skipped")} kept`, count("rejected") && `${count("rejected")} rejected`].filter(Boolean);
   event(s, now, "lead", "control", `Lead run ${r.id} steered from ${from}: ${parts.length ? parts.join(", ") : "nothing applied"}${rest.length ? `; ${rest.join(", ")}` : ""} (${setId})${set.heldBecause ? ` — held: ${set.heldBecause}` : ""}`);
   return set;
 }
@@ -3435,7 +3437,7 @@ export function undoSteering(state: State, changeSetId: string, changeId: string
   }
   // Review finding 12: a repeated failed undo neither grows the note nor logs another event.
   if (result.undone.length || noted) {
-    event(s, now, "user", "control", `Undid ${result.undone.length} of the lead's change(s) (${set.id})${result.left.length ? `; ${result.left.length} left as is` : ""}`);
+    event(s, now, "user", "control", `Undid ${result.undone.length} of the lead's change${result.undone.length === 1 ? "" : "s"} (${set.id})${result.left.length ? `; ${result.left.length} left as is` : ""}`);
   }
   return { state: s, result };
 }
@@ -4024,7 +4026,7 @@ export function startBuildingPlan(s: State): { release: boolean; roadmap: Task[]
 
 /**
  * Start building. Refused without a vision. On Autopilot (autonomy on and lead proposals not held) the
- * roadmap starts; with check-in or "only when I ask" it keeps waiting for the user, as lead proposals do.
+ * roadmap starts; with Check-in or Manual it keeps waiting for the user, as lead proposals do.
  */
 export function startBuilding(state: State, now: string): State {
   const why = startBuildingBlocker(state);
@@ -4044,10 +4046,10 @@ export function startBuilding(state: State, now: string): State {
     if (release) {
       released.push(t.id);
       event(s, now, "user", "control", "Released from the roadmap: building started on Autopilot", t.id);
-    } else event(s, now, "user", "control", "Building started; this planned task waits for your release (your involvement setting)", t.id);
+    } else event(s, now, "user", "control", "Building started; this planned task waits for your go-ahead (your involvement setting)", t.id);
   }
   const waiting = roadmapTasks(s).filter((t) => t.holdBeforeStart).length;
-  event(s, now, "user", "config", `Building started${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task(s) wait for your release` : ""}`);
+  event(s, now, "user", "config", `Building started${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
   return s;
 }
 
@@ -4059,7 +4061,7 @@ export function startShaping(state: State, now: string): State {
   // Review 8: a new shaping session; coverage the lead reported in an earlier one is not reused.
   s.project.shapingSince = now;
   const running = activeAttempts(s).length;
-  event(s, now, "user", "config", `Shaping the vision; new work waits until you start building${running ? ` (${running} running step(s) finish normally)` : ""}`);
+  event(s, now, "user", "config", `Shaping the vision; new work waits until you start building${running ? ` (${running} running step${running === 1 ? " finishes" : "s finish"} normally)` : ""}`);
   return s;
 }
 
@@ -4900,7 +4902,7 @@ export function importMarkdown(state: State, markdown: string, now: string): { s
     imported.push(id);
   }
   if (!imported.length && !skipped.length) throw new ControlError("No task table found. Expected a Markdown table with an ID column and a Title (or Task/Outcome) column.");
-  event(s, now, "user", "spec", `Imported ${imported.length} task(s) from Markdown${skipped.length ? `; skipped existing ${skipped.join(", ")}` : ""}. Open imported tasks need a spec before they run.`);
+  event(s, now, "user", "spec", `Imported ${imported.length} task${imported.length === 1 ? "" : "s"} from Markdown${skipped.length ? `; skipped existing ${skipped.join(", ")}` : ""}. Open imported tasks need a spec before they run.`);
   return { state: s, imported, skipped };
 }
 
@@ -5471,7 +5473,7 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
       rejected.push(`#${i + 1}: invalid (${err instanceof Error ? err.message : String(err)})`);
     }
   }
-  if (items.length > MAX_ITEMS_PER_BREAKDOWN) rejected.push(`${items.length - MAX_ITEMS_PER_BREAKDOWN} item(s) beyond the limit of ${MAX_ITEMS_PER_BREAKDOWN} per breakdown`);
+  if (items.length > MAX_ITEMS_PER_BREAKDOWN) rejected.push(`${items.length - MAX_ITEMS_PER_BREAKDOWN} item${items.length - MAX_ITEMS_PER_BREAKDOWN === 1 ? "" : "s"} beyond the limit of ${MAX_ITEMS_PER_BREAKDOWN} per breakdown`);
   // Children of an earlier version that the new version no longer lists.
   const dropped = earlier.filter((c) => !linked.some((l) => l.id === c.id));
   const cancelled: string[] = [];
@@ -5489,7 +5491,7 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
   const fresh = linked.filter((l) => !l.kept).map((l) => l.id);
   const kept = linked.filter((l) => l.kept).map((l) => l.id);
   const parts = [
-    `${st.id} broke the work into ${linked.length} child task(s)${fresh.length ? `; new: ${fresh.join(", ")}` : ""}`,
+    `${st.id} broke the work into ${linked.length} child task${linked.length === 1 ? "" : "s"}${fresh.length ? `; new: ${fresh.join(", ")}` : ""}`,
     kept.length && `kept ${kept.join(", ")}`,
     cancelled.length && `cancelled ${cancelled.join(", ")} (no longer listed)`,
     keptStarted.length && `${keptStarted.join(", ")} already started and no longer listed; cancel them if they are not needed`,

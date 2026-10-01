@@ -53,7 +53,7 @@ export function Settings() {
               </div>
             </label>
             <label className="field">
-              <span>Total worker limit</span>
+              <span>Agents at once</span>
               <div className="row">
                 <input type="number" min={1} max={16} value={limit} onChange={(e) => setLimit(e.target.value)} style={{ width: "5rem" }} />
                 <button disabled={disabled || Number(limit) === p.workerLimit} onClick={() => void send("setWorkerLimit", { limit: Number(limit) })}>
@@ -121,7 +121,7 @@ export function Settings() {
   );
 }
 
-/** Concurrent runs per provider; each is also bounded by the total worker limit. */
+/** Concurrent runs per provider; each is also bounded by Agents at once. */
 function ProviderLimits() {
   const { state, send, disabled } = useStore();
   const p = state.project;
@@ -159,7 +159,7 @@ function ProviderLimits() {
         })}
       </div>
       <span className="muted" style={{ display: "block", fontSize: "0.8rem", fontWeight: 400, marginTop: "0.25rem" }}>
-        Raise these to keep both providers busy on large goals. Each is also capped by the total worker limit ({p.workerLimit}); 0 stops new runs on that provider.
+        Raise these to keep both providers busy on large goals. Each is also capped by Agents at once ({p.workerLimit}); 0 stops new runs on that provider.
       </span>
     </div>
   );
@@ -189,7 +189,7 @@ function Providers() {
       <p className="muted" style={{ fontSize: "0.85rem" }}>
         {real
           ? "Status comes from the adapters on this machine. Checking never starts a model run. Claude needs an Anthropic API key (or Bedrock/Vertex credentials); Codex uses your local Codex sign-in or API key."
-          : "Fake runtime: no provider is connected and capabilities describe the simulation. Start the service with ORCHESTRATION_RUNTIME=real to run Claude and Codex."}
+          : "In the demo no provider is connected, and the capabilities describe the simulation. Start the service with ORCHESTRATION_RUNTIME=real to run Claude and Codex."}
       </p>
       {PROVIDERS.map((prov) => {
         const info = service.providers[prov];
@@ -241,7 +241,7 @@ function WorkerEnvironmentControls({ provider }: { provider: (typeof PROVIDERS)[
   const toggle = (name: string, on: boolean) => void send("setWorkerConnections", { provider, names: on ? [...allowed, name] : allowed.filter((n) => n !== name) });
   return (
     <fieldset className="option-edit" style={{ margin: "0.3rem 0 0.6rem" }} disabled={disabled}>
-      <legend>Worker environment</legend>
+      <legend>Agent environment</legend>
       <label className="row" style={{ gap: "0.35rem" }}>
         <input type="radio" name={`env-${provider}`} checked={env === "isolated"} onChange={() => void send("setWorkerEnvironment", { provider, environment: "isolated" })} />
         Isolated: only the connections selected below
@@ -273,8 +273,8 @@ function WorkerEnvironmentControls({ provider }: { provider: (typeof PROVIDERS)[
         </div>
       )}
       <div className="muted" style={{ fontSize: "0.8rem", marginTop: "0.4rem" }}>
-        Either way, the worker's own file edits stay inside its worktree and native sub-agents stay off. Connections (MCP servers) and plugins are separate programs running with your permissions and are not
-        sandboxed; allow only ones you trust with automated use.{provider === "codex" ? " Codex workers can read files outside their worktree; their writes and network access are sandboxed." : ""} Applies to runs
+        Either way, the agent's own file edits stay inside its worktree and native sub-agents stay off. Connections (MCP servers) and plugins are separate programs running with your permissions and are not
+        sandboxed; allow only ones you trust with automated use.{provider === "codex" ? " Codex agents can read files outside their worktree; their writes and network access are sandboxed." : ""} Applies to runs
         started after the change.
       </div>
     </fieldset>
@@ -336,7 +336,7 @@ function InvolvementCard() {
             <li>A failed step is retried once automatically before it waits for you.</li>
             {prMode ? (
               <li>
-                Verified work is opened as a GitHub pull request and {state.project.prDelivery.merge === "auto" ? "merged automatically after an independent review and passing required checks, as you chose in Delivery" : "held for you to merge"}. Autopilot itself never
+                Verified work is opened as a GitHub pull request and {state.project.prDelivery.merge === "auto" ? "merged automatically after an independent review and passing required checks, as you chose in Delivery" : "waits for you to merge"}. Autopilot itself never
                 turns on publishing or automatic merging and does not change the <a href="#delivery">delivery mode</a>.
               </li>
             ) : (
@@ -359,30 +359,30 @@ function InvolvementCard() {
               </label>
             )}
             <button type="submit" className="primary" disabled={disabled || !branch.trim() || (mode === "autopilot" && (prMode || branch.trim() === a.autoDeliver.branch))}>
-              {mode === "autopilot" ? "Update autopilot" : "Turn on autopilot"}
+              {mode === "autopilot" ? "Update Autopilot" : "Use Autopilot"}
             </button>
           </form>
         </div>
 
         <div className={`choice${mode === "checkin" ? " current" : ""}`}>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <h3 style={{ margin: 0 }}>Check in before work starts</h3>
+            <h3 style={{ margin: 0 }}>Check-in: each new task waits for your go-ahead</h3>
             {current("checkin")}
           </div>
-          <p className="muted choice-text">The lead plans on its own, but each task it proposes (and each child task a breakdown creates) waits for you to release it. Everything after that runs by itself.</p>
+          <p className="muted choice-text">The lead plans on its own, but each task it proposes (and each child task a breakdown creates) waits for your go-ahead. Everything after that runs by itself.</p>
           <button disabled={disabled || mode === "checkin"} onClick={() => void choose(autonomyArgs(a, { enabled: true, holdLeadProposals: true }))}>
-            Use check-in
+            Use Check-in
           </button>
         </div>
 
         <div className={`choice${mode === "manual" ? " current" : ""}`}>
           <div className="row" style={{ justifyContent: "space-between" }}>
-            <h3 style={{ margin: 0 }}>Only when I ask</h3>
+            <h3 style={{ margin: 0 }}>Manual: the lead works only when you ask</h3>
             {current("manual")}
           </div>
-          <p className="muted choice-text">The lead answers your messages and runs the tasks you create or release. It does not plan new work on its own, and child tasks from breakdowns wait for you to start them.</p>
+          <p className="muted choice-text">The lead answers your messages and runs the tasks you create or start. It does not plan new work on its own, and child tasks from breakdowns wait for your go-ahead.</p>
           <button disabled={disabled || mode === "manual"} onClick={() => void choose(autonomyArgs(a, { enabled: false }))}>
-            Use manual
+            Use Manual
           </button>
         </div>
       </div>
@@ -399,8 +399,8 @@ function TriageRouting() {
   return (
     <div style={{ marginTop: "0.8rem", fontSize: "0.9rem" }}>
       <label className="row" style={{ gap: "0.4rem" }}>
-        <span>Findings that need a decision go to:</span>
-        <select aria-label="Who decides findings that need a decision" value={to} disabled={disabled} onChange={(e) => void send("setTriageRouting", { askUserBy: e.target.value })}>
+        <span>Findings a person must decide go to:</span>
+        <select aria-label="Who decides findings a person must decide" value={to} disabled={disabled} onChange={(e) => void send("setTriageRouting", { askUserBy: e.target.value })}>
           <option value="lead">the lead</option>
           <option value="user">me</option>
         </select>
@@ -419,13 +419,13 @@ const STEERING_CHOICES: Record<SteeringMode, { label: string; detail: string }> 
   suggest: { label: "Only suggest", detail: "Nothing changes until you press Apply on a suggestion." },
 };
 
-/** ORC-009: how far the lead may go when the user gives direction in the conversation. Separate from Autonomy. */
+/** ORC-009: how far the lead may go when the user messages it. Separate from planning. */
 function SteeringCard() {
   const { state, send, disabled } = useStore();
   const mode = state.project.steeringMode;
   return (
     <section className="card" aria-labelledby="steer-h">
-      <h2 id="steer-h">When you steer the lead in conversation</h2>
+      <h2 id="steer-h">When you message the lead</h2>
       <p className="muted small" style={{ marginBottom: "0.3rem" }}>
         Whatever you choose: priorities and pauses you set by hand are never overridden (the lead's change becomes a suggestion), the lead never pauses, stops or resumes running work, and it never edits specs, pipelines, pins,
         delivery or settings.
@@ -495,9 +495,9 @@ function AutonomyCard() {
     <section className="card" aria-labelledby="autonomy-h">
       <div className="row" style={{ justifyContent: "space-between" }}>
         <h2 id="autonomy-h" style={{ margin: 0 }}>
-          Advanced: autonomy
+          Advanced: planning
         </h2>
-        <span className={a.enabled ? "pill running" : "chip"}>{a.enabled ? "Lead planning on" : "Lead planning off"}</span>
+        <span className={a.enabled ? "pill running" : "chip"}>{a.enabled ? "Planning on" : "Planning off"}</span>
       </div>
       <p className="muted small" style={{ marginTop: "0.4rem", marginBottom: "0.3rem" }}>
         Fine-tune the choice above.
@@ -505,8 +505,8 @@ function AutonomyCard() {
       <details className="how">
         <summary>How this works</summary>
         <p>
-          When planning is on, the lead may propose up to {n} task{n === 1 ? "" : "s"} per planning run; they run through their pipelines without further prompting unless held. The lead never edits specs or your pinned choices. When
-          you give direction in the conversation, it may change the focus, reorder and defer work, and drop its own unstarted proposals; every change is listed with Undo.
+          When planning is on, the lead may propose up to {n} task{n === 1 ? "" : "s"} per planning run; they run through their pipelines without further prompting unless they wait for your go-ahead. The lead never edits specs or
+          your pinned choices. When you message it, it may change the focus, reorder and defer work, and drop its own unstarted proposals; every change is listed with Undo.
         </p>
       </details>
       <form
@@ -547,7 +547,7 @@ function AutonomyCard() {
           </div>
           <label className="row field" style={{ gap: "0.4rem" }}>
             <input type="checkbox" checked={hold} onChange={(e) => setHold(e.target.checked)} />
-            Hold lead proposals before start (each waits for you to release it)
+            Wait for my go-ahead on each task the lead proposes
           </label>
           <div className="row" style={{ gap: "0.4rem", marginBottom: "0.8rem" }}>
             <label className="row" style={{ gap: "0.4rem" }}>
@@ -570,18 +570,16 @@ function AutonomyCard() {
           </label>
           <div className="field">
             <span style={{ fontWeight: 400 }}>
-              Delivery: <strong>{deliveryMode === "local" ? `local branch ${a.autoDeliver.branch}` : deliveryMode === "pr" ? (state.project.prDelivery.merge === "auto" ? "GitHub pull requests, merged automatically after review and checks" : "GitHub pull requests, held for you") : "off"}</strong>. <a href="#delivery">Change it in Delivery</a>.
+              Delivery: <strong>{deliveryMode === "local" ? `local branch ${a.autoDeliver.branch}` : deliveryMode === "pr" ? (state.project.prDelivery.merge === "auto" ? "GitHub pull requests, merged automatically after review and checks" : "GitHub pull requests, you merge") : "off"}</strong>. <a href="#delivery">Change it in Delivery</a>.
             </span>
           </div>
           <button type="submit" disabled={!changed}>
-            Save autonomy
+            Save planning
           </button>
         </fieldset>
       </form>
       <p className="muted" style={{ fontSize: "0.82rem", margin: "0.6rem 0 0" }}>
-        Open lead proposals: {openProposals} of {a.maxOpenProposals}
-        {deferredProposals ? `; deferred lead proposals: ${deferredProposals} of at most ${a.maxOpenProposals} (they do not count as open, but planning stops when they reach the cap)` : ""}. Planning waits while the
-        project is paused.{" "}
+        {proposalsLine(openProposals, deferredProposals, a.maxOpenProposals)} Planning waits while the project is paused.{" "}
         {lastPlanning ? (
           <>
             Last planning run: <span title={fmtTime(lastPlanning)}>{relTime(lastPlanning)}</span>.
@@ -589,10 +587,23 @@ function AutonomyCard() {
         ) : (
           "No planning run yet."
         )}{" "}
-        Your messages are answered whether or not autonomy is on.
+        Your messages are answered whether or not planning is on.
       </p>
     </section>
   );
+}
+
+/**
+ * ORC-025: the count of open lead proposals against the limit, said truthfully. The limit caps what planning
+ * adds, not what exists: proposals made by hand, by a conversation, or before the limit was lowered can
+ * exceed it, so "8 of 5" is never shown as a fraction.
+ */
+export function proposalsLine(open: number, deferred: number, max: number): string {
+  const proposals = (n: number) => `${n} proposal${n === 1 ? "" : "s"}`;
+  const openText = open > max ? `Open lead proposals: ${open}, over the limit of ${max}, so planning proposes nothing new until fewer are open.` : `Open lead proposals: ${open} of at most ${max}.`;
+  if (!deferred) return openText;
+  const deferredText = deferred >= max ? `Deferred lead proposals: ${proposals(deferred)}, at the limit of ${max}; they do not count as open, but planning stops until the lead drops some.` : `Deferred lead proposals: ${proposals(deferred)} of at most ${max}; they do not count as open.`;
+  return `${openText} ${deferredText}`;
 }
 
 /** Opt-in, per-browser notifications while a page of this app is open. */
@@ -801,7 +812,7 @@ function ProjectSetup() {
         <span>
           Give every run the repository's AGENTS.md and CLAUDE.md as project conventions
           <span className="muted" style={{ display: "block", fontSize: "0.82rem" }}>
-            Read from the trusted base (the fetched remote base, the delivery branch, or HEAD), never from a worktree agents write, and labelled so they never change a run's role. No worker loads them by itself: Claude runs without project settings, and Codex is
+            Read from the trusted base (the fetched remote base, the delivery branch, or HEAD), never from a worktree agents write, and labelled so they never change a run's role. No agent loads them by itself: Claude runs without project settings, and Codex is
             started with <span className="mono">project_doc_max_bytes=0</span> (present in the pinned binary; that it suppresses AGENTS.md is not verified yet).
           </span>
         </span>
