@@ -12,7 +12,9 @@ import * as M from "../src/domain/model";
 import { eligibleIds } from "../src/domain/patterns";
 import { buildSeed } from "../src/domain/seed";
 import type { Finding, State } from "../src/domain/types";
-import { CONVENTIONS_FILE_CAP, CONVENTIONS_TOTAL_CAP, buildEnvelope, buildLeadEnvelope, capConventions, findingKey, parseFindings, parseLeadOutput, parseOutputs } from "./envelope";
+import { BUILT_IN_FILES } from "../src/domain/builtInPatterns";
+import { INTERNAL_PATTERNS } from "../src/domain/internalPatterns";
+import { CONVENTIONS_FILE_CAP, CONVENTIONS_TOTAL_CAP, VERIFY_CHECKS_NOTE, buildEnvelope, buildLeadEnvelope, capConventions, findingKey, parseFindings, parseLeadOutput, parseOutputs } from "./envelope";
 import { redact } from "./redact";
 import { WorkspaceManager } from "./workspaces";
 
@@ -277,6 +279,49 @@ describe("redaction (§6.6)", () => {
     expect(out).not.toContain("MIIEow");
     expect(out).toContain("key:\n***\nauth: Bearer *** done; ***; ***");
     expect(redact("Bearer short")).toBe("Bearer short");
+  });
+});
+
+describe("step purposes describe; instructions travel in the brief (ORC-017 §3.11)", () => {
+  it("the verify steps of the built-in patterns read as plain descriptions, and the lead's verify envelope still carries the moved sentence", () => {
+    const { s, id } = changeTask();
+    const verify = step(s, id, "S4");
+    expect(verify.role).toBe("lead");
+    expect(verify.purpose).toBe("Verify and integrate");
+    const text = buildEnvelope({ state: s, task: task(s, id), step: verify, attemptId: "run-v", access: "read" });
+    expect(text).toContain("## Your step\nVerify and integrate\n");
+    expect(text).toContain(VERIFY_CHECKS_NOTE);
+    // The brief carries it, so it arrives whether or not a check result is among the inputs.
+    expect(text).toContain(`You are the lead. Verify the work against the acceptance criteria using the inputs, and decide whether it is ready to integrate. ${VERIFY_CHECKS_NOTE} Do not change files.`);
+    // A coder's envelope is not the place for it.
+    expect(buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S1"), attemptId: "run-c", access: "write" })).not.toContain(VERIFY_CHECKS_NOTE);
+    // Every built-in verify step that carried the sentence lost it, and only that.
+    const verifies = BUILT_IN_FILES.flatMap((f) => (f.raw.steps ?? []).filter((st) => st.role === "lead" && /verify/i.test(st.purpose)).map((st) => `${f.raw.id} ${st.id}: ${st.purpose}`));
+    expect(verifies).toEqual(["change S4: Verify and integrate", "change-best-of-two S5: Verify and integrate", "feature S6: Verify and integrate", "bugfix S5: Verify the reproduction no longer fails, then integrate"]);
+  });
+
+  it("no built-in pattern purpose addresses the agent (heuristic: no 'you', no 'do not', no 'never'; at most 80 characters)", () => {
+    // The design asks for about 60 characters; the longest built-in purpose today is 69, so the limit here is 80 and is honest about that.
+    const offenders: string[] = [];
+    let longest = 0;
+    const addresses = (p: string) => /\byou\b|\byour\b|\bdo not\b|\bdon't\b|\bnever\b|\bmust\b/i.test(p) || p.length > 80 || /[.!]\s+\S/.test(p);
+    for (const f of BUILT_IN_FILES) {
+      for (const st of f.raw.steps ?? []) {
+        longest = Math.max(longest, st.purpose.length);
+        if (addresses(st.purpose)) offenders.push(`${f.raw.id} ${st.id}: ${st.purpose}`);
+      }
+      // Variants may override a purpose too.
+      for (const [id, o] of Object.entries(f.raw.stepOverrides ?? {})) {
+        const p = (o as { purpose?: string }).purpose;
+        if (p && addresses(p)) offenders.push(`${f.raw.id} ${id}: ${p}`);
+      }
+    }
+    // The service's own pipelines (revert, delivery review and checks) follow the same rule.
+    for (const ip of INTERNAL_PATTERNS) {
+      for (const st of ip.steps) if (addresses(st.purpose)) offenders.push(`${ip.id} ${st.id}: ${st.purpose}`);
+    }
+    expect(offenders).toEqual([]);
+    expect(longest).toBeLessThanOrEqual(80);
   });
 });
 

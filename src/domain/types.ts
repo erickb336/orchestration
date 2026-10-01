@@ -50,6 +50,12 @@ export interface VisionRevision {
    * history stays truthful. Absent on revisions from before documents existed: none applied.
    */
   docIds?: string[];
+  /**
+   * ORC-017: the text of this revision was written by the simulated lead (the fake runtime): a lead focus
+   * change from such a run, or a draft from one that the user accepted. Set by the store from the lead
+   * run's runtime, never from the text itself. Absent on revisions a person or a real lead wrote.
+   */
+  simulated?: true;
 }
 
 // ---------- vision documents (ORC-014) ----------
@@ -135,6 +141,8 @@ export interface VisionDraft {
   resolvedAt?: string;
   /** accepted: the revision the user created from it. */
   visionRev?: number;
+  /** ORC-017: drafted by the simulated lead (the fake runtime). Carried onto the revision when the draft is accepted. */
+  simulated?: true;
 }
 
 // ---------- steering by conversation (ORC-009) ----------
@@ -194,6 +202,8 @@ export interface SteeringChangeSet {
   /** Set-level notes (reason ignored, tasks not a list, …). */
   notes: string[];
   changes: SteeringChange[];
+  /** ORC-017: the reply that carried this set came from the simulated lead (the fake runtime). Set by the store from the run's runtime. */
+  simulated?: true;
 }
 
 export interface Project {

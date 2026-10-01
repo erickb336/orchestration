@@ -173,9 +173,13 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
           {M.fmtBytes(total)} of {M.fmtBytes(M.MAX_VISION_DOCS_BYTES)} · up to {M.MAX_VISION_DOCS} files, {M.fmtBytes(M.MAX_VISION_DOC_BYTES)} each
         </span>
       </div>
-      <p className="muted" style={{ fontSize: "0.85rem", margin: "0.2rem 0 0.5rem" }}>
-        Files the lead reads whenever it plans, answers or drafts the vision; designers read them too, and other roles see the list. Copies are kept by the service, outside your repository; attach a file again to update it. Each Add, folder or drop becomes one vision revision.
+      <p className="muted small" style={{ margin: "0.2rem 0 0.3rem" }}>
+        Files the lead reads whenever it plans, answers or drafts the vision; designers read them too, and other roles see the list.
       </p>
+      <details className="how" style={{ marginBottom: "0.5rem" }}>
+        <summary>How this works</summary>
+        <p>Copies are kept by the service, outside your repository; attach a file again to update it. Each Add, folder or drop becomes one vision revision.</p>
+      </details>
       <div
         className={`dropzone${over ? " over" : ""}`}
         onDragOver={(e) => {

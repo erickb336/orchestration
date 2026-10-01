@@ -16,7 +16,7 @@ vi.mock("node:child_process", async (orig) => ({ ...(await orig<typeof import("n
 
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
-import { SimulatedChecks } from "./checks";
+import { SimulatedChecks, type CheckAssignment } from "./checks";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
@@ -74,5 +74,24 @@ describe("SimulatedChecks in the fake runtime", () => {
     expect(spawnSpy).not.toHaveBeenCalled();
     void scheduler.stop();
     store.close();
+  });
+});
+
+describe("SimulatedChecks: which run fails (ORC-017 review M4)", () => {
+  it("a tree's own merge checks and reviews count as its root: only the tree's very first run fails 'test'", () => {
+    const c = new SimulatedChecks();
+    const status: Record<string, string> = {};
+    c.onEvent((e) => {
+      if (e.type === "completed") status[e.attemptId] = e.checks!.results.find((r) => r.id === "test")!.status;
+    });
+    const run = (attemptId: string, taskId: string) => {
+      c.start({ attemptId, taskId, stepId: "C1", workspace: "/nowhere", target: "a".repeat(40), commands: [{ id: "test", label: "npm test", kind: "test", argv: ["npm", "test"] }], runTimeoutMs: 1000, sandbox: "none", prepareNetwork: false, env: {}, tmpDir: "/nowhere" } as unknown as CheckAssignment);
+      for (let i = 0; i < 4; i++) c.tick(Date.now());
+    };
+    run("r1", "WT-002");
+    run("r2", "WT-002-CK1");
+    run("r3", "WT-002.1-RV2");
+    run("r4", "WT-003-CK1");
+    expect(status).toEqual({ r1: "failed", r2: "passed", r3: "passed", r4: "failed" });
   });
 });

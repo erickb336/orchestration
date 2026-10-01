@@ -5,8 +5,8 @@
 import * as C from "./checks";
 import * as D from "./delivery";
 import * as F from "./findings";
+import { buildDemo } from "./demo";
 import * as M from "./model";
-import { buildSeed } from "./seed";
 import {
   ControlError,
   PROJECT_STAGES,
@@ -402,9 +402,9 @@ export const COMMANDS = {
     return { state: r.state, result: { newId: r.newId } };
   },
 
-  // prototype only: replace everything with the labeled sample project
+  // fake runtime only: replace everything with the sample project ("Weekend Trips (sample)", ORC-017 §5)
   resetSampleData: (s, now) => {
-    const next = buildSeed(Date.parse(now), { inFlightRuns: false, checks: true });
+    const next = buildDemo(Date.parse(now));
     // Never reuse generated ids: a runtime process or event row from before the reset must not
     // be confused with a new run or event that happens to receive the same id.
     next.seq = Math.max(next.seq, s.seq) + 1;

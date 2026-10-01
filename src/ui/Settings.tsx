@@ -194,7 +194,7 @@ function Providers() {
         const info = service.providers[prov];
         const enabled = p.enabledProviders.includes(prov);
         const h = info?.health;
-        const tone = h?.status === "ready" ? "done" : h?.status === "not-configured" ? "paused" : "blocked";
+        const tone = h?.status === "ready" ? "done" : h?.status === "not-configured" ? "attention" : "blocked";
         return (
           <div key={prov} style={{ marginBottom: "1rem" }}>
             <label className="row">
@@ -311,10 +311,16 @@ function InvolvementCard() {
         </h2>
         {mode === "custom" && <span className="chip strong">Custom settings (see Advanced below)</span>}
       </div>
-      <p className="muted" style={{ fontSize: "0.88rem", margin: "0.35rem 0 0.8rem" }}>
-        Stepping in is always optional: whatever you choose, you can pause the project or any task, edit a spec, or message the lead at any time.
-        {simulated ? " In the sample project every run is simulated." : ""}
+      <p className="muted meta" style={{ margin: "0.35rem 0 0.3rem" }}>
+        Stepping in is always optional.
       </p>
+      <details className="how" style={{ marginBottom: "0.8rem" }}>
+        <summary>How this works</summary>
+        <p>
+          Whatever you choose, you can pause the project or any task, edit a spec, or message the lead at any time.
+          {simulated ? " In the sample project every run is simulated." : ""}
+        </p>
+      </details>
       <div className="choices">
         <div className={`choice primary-choice${mode === "autopilot" ? " current" : ""}`}>
           <div className="row" style={{ justifyContent: "space-between" }}>
@@ -419,19 +425,21 @@ function SteeringCard() {
   return (
     <section className="card" aria-labelledby="steer-h">
       <h2 id="steer-h">When you steer the lead in conversation</h2>
-      <p className="muted" style={{ fontSize: "0.85rem" }}>
-        Whatever you choose: priorities and pauses you set by hand are never overridden (the lead's change becomes a suggestion), the lead never pauses, stops or resumes running work, and it never edits specs, pipelines,
-        pins, delivery or settings. The current choice is shown on the composer.
+      <p className="muted small" style={{ marginBottom: "0.3rem" }}>
+        Whatever you choose: priorities and pauses you set by hand are never overridden (the lead's change becomes a suggestion), the lead never pauses, stops or resumes running work, and it never edits specs, pipelines, pins,
+        delivery or settings.
       </p>
+      <details className="how">
+        <summary>How this works</summary>
+        <p>The current choice is shown on the composer.</p>
+      </details>
       <fieldset className="plain-fieldset" disabled={disabled}>
         {STEERING_MODES.map((m) => (
-          <label key={m} className="row" style={{ gap: "0.45rem", alignItems: "flex-start", marginBottom: "0.5rem" }}>
-            <input type="radio" name="steering-mode" checked={mode === m} onChange={() => void send("setSteeringMode", { mode: m })} style={{ marginTop: "0.3rem" }} />
+          <label key={m} className="choice-radio">
+            <input type="radio" name="steering-mode" checked={mode === m} onChange={() => void send("setSteeringMode", { mode: m })} />
             <span>
-              <strong style={{ fontWeight: 560 }}>{STEERING_CHOICES[m].label}</strong>
-              <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
-                {STEERING_CHOICES[m].detail}
-              </span>
+              <strong>{STEERING_CHOICES[m].label}</strong>
+              <span className="choice-desc">{STEERING_CHOICES[m].detail}</span>
             </span>
           </label>
         ))}
@@ -490,10 +498,16 @@ function AutonomyCard() {
         </h2>
         <span className={a.enabled ? "pill running" : "chip"}>{a.enabled ? "Lead planning on" : "Lead planning off"}</span>
       </div>
-      <p className="muted" style={{ fontSize: "0.85rem", marginTop: "0.4rem" }}>
-        Fine-tune the choice above. When planning is on, the lead may propose up to {n} task{n === 1 ? "" : "s"} per planning run; they run through their pipelines without further prompting unless held. The lead never
-        edits specs or your pinned choices. When you give direction in the conversation, it may change the focus, reorder and defer work, and drop its own unstarted proposals; every change is listed with Undo.
+      <p className="muted small" style={{ marginTop: "0.4rem", marginBottom: "0.3rem" }}>
+        Fine-tune the choice above.
       </p>
+      <details className="how">
+        <summary>How this works</summary>
+        <p>
+          When planning is on, the lead may propose up to {n} task{n === 1 ? "" : "s"} per planning run; they run through their pipelines without further prompting unless held. The lead never edits specs or your pinned choices. When
+          you give direction in the conversation, it may change the focus, reorder and defer work, and drop its own unstarted proposals; every change is listed with Undo.
+        </p>
+      </details>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -816,22 +830,18 @@ function ProjectSetup() {
             <legend className="field-legend" style={{ fontSize: "0.85rem", fontWeight: 560, marginBottom: "0.2rem" }}>
               How to begin
             </legend>
-            <label className="row" style={{ gap: "0.45rem", alignItems: "flex-start", marginBottom: "0.3rem" }}>
-              <input type="radio" name="new-stage" checked={stage === "shaping"} onChange={() => setStageChoice("shaping")} style={{ marginTop: "0.3rem" }} />
+            <label className="choice-radio">
+              <input type="radio" name="new-stage" checked={stage === "shaping"} onChange={() => setStageChoice("shaping")} />
               <span>
-                <strong style={{ fontWeight: 560 }}>Shape the vision with the lead first</strong>
-                <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
-                  Talk it through; the lead drafts the vision and a first roadmap. Nothing runs until you start building. The vision below may stay empty.
-                </span>
+                <strong>Shape the vision with the lead first</strong>
+                <span className="choice-desc">Talk it through; the lead drafts the vision and a first roadmap. Nothing runs until you start building. The vision below may stay empty.</span>
               </span>
             </label>
-            <label className="row" style={{ gap: "0.45rem", alignItems: "flex-start" }}>
-              <input type="radio" name="new-stage" checked={stage === "building"} onChange={() => setStageChoice("building")} style={{ marginTop: "0.3rem" }} />
+            <label className="choice-radio" style={{ marginBottom: 0 }}>
+              <input type="radio" name="new-stage" checked={stage === "building"} onChange={() => setStageChoice("building")} />
               <span>
-                <strong style={{ fontWeight: 560 }}>Start building now</strong>
-                <span className="muted" style={{ display: "block", fontSize: "0.85rem" }}>
-                  Work runs as soon as there is a task. The vision is required.
-                </span>
+                <strong>Start building now</strong>
+                <span className="choice-desc">Work runs as soon as there is a task. The vision is required.</span>
               </span>
             </label>
           </fieldset>
@@ -885,20 +895,23 @@ function Patterns() {
           {reloading ? "Reloading…" : "Reload patterns"}
         </button>
       </div>
-      <p className="muted" style={{ fontSize: "0.85rem" }}>
-        Every task runs one pattern from this catalog, chosen when the task is created or changed on the task page. Nothing here edits a pattern: built-in ones live in the repository's <code>patterns/</code> directory and change
-        through commits; yours live in <code>{localDir}</code> and are read at start and on Reload.
+      <p className="muted small" style={{ marginBottom: "0.3rem" }}>
+        Every task runs one pattern from this catalog, chosen when the task is created or changed on the task page.
       </p>
-      <p className="muted" style={{ fontSize: "0.85rem" }} role="status">
+      <details className="how">
+        <summary>How this works</summary>
+        <p>
+          Nothing here edits a pattern: built-in ones live in the repository's <code>patterns/</code> directory and change through commits; yours live in <code>{localDir}</code> and are read at start and on Reload.
+        </p>
+        <p>Only standard patterns can be the default: experiments, patterns that pause for you and patterns without an independent review are yours to choose per task.</p>
+      </details>
+      <p className="muted small" role="status">
         {catalogSummary(catalog)}
         {catalog.loadedAt ? `, loaded ${relTime(catalog.loadedAt)}` : ""}.{last ? ` Last reload: ${last.patterns} patterns, ${last.errors} file error${last.errors === 1 ? "" : "s"}.` : ""}
       </p>
 
       <h3>Default pattern</h3>
-      <p className="muted" style={{ fontSize: "0.85rem" }}>
-        Used by the lead's proposals and by breakdowns when they name none, and preselected in New task. Only standard patterns can be the default: experiments, patterns that pause for you and patterns without an
-        independent review are yours to choose per task.
-      </p>
+      <p className="muted small">Used by the lead's proposals and by breakdowns when they name none, and preselected in New task.</p>
       <PatternPicker state={state} patterns={standard} value={standard.some((p) => p.id === stored) ? stored : effective.id} label="Default pattern" disabled={disabled} onChange={(id) => void send("setDefaultPattern", { patternId: id })} />
       {note && (
         <p className="muted" style={{ fontSize: "0.85rem" }} role="status">

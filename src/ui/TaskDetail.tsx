@@ -3,11 +3,11 @@ import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
-import { ROLES, type Artifact, type Attempt, type State, type Task } from "../domain/types";
+import { ROLES, type Artifact, type Attempt, type State, type Step, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { checkLogUrl } from "../api";
 import * as C from "../domain/checks";
-import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } from "./common";
+import { ModelPicker, Pill, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText, useNarrow, type Tone } from "./common";
 import { DeliveryCard } from "./Delivery";
 import { CheckResults, CoverageChip, DecisionControls, DecisionQueue, FindingsList } from "./Findings";
 import { SpecEditor } from "./SpecEditor";
@@ -722,10 +722,187 @@ function ChangePattern({ state, task }: { state: State; task: Task }) {
   );
 }
 
+/** The runs a step row shows: the active run, or the last completed one for a done step. */
+function stepRuns(state: State, task: Task, st: Step) {
+  const lastRun = [...state.attempts].reverse().find((a) => a.taskId === task.id && a.stepId === st.id && a.outcome === "completed");
+  const done = st.state === "done";
+  const activeRun = M.activeAttempts(state, task.id).find((a) => a.stepId === st.id);
+  const shownRun = activeRun ?? (done ? lastRun : undefined);
+  return { lastRun, done, activeRun, shownRun, stale: shownRun ? M.staleInputs(state, task, shownRun) : [] };
+}
+
+/** The step's id and purpose, its markers, the best-of choice, and what it follows. */
+function StepHead({ state, task, st }: { state: State; task: Task; st: Step }) {
+  return (
+    <>
+      <strong>{st.id}</strong> {st.purpose}
+      {st.gate && (
+        <>
+          {" "}
+          <span className="chip" title="The task pauses after this step so you can review or edit its artifacts">
+            gate
+          </span>
+        </>
+      )}
+      {stepChips(state, task, st).map((c) => (
+        <span key={c.text}>
+          {" "}
+          <span className={`chip${c.strong ? " strong" : ""}`} title={c.title}>
+            {c.text}
+          </span>
+        </span>
+      ))}
+      <BestOfChoice task={task} stepId={st.id} />
+      <div className="muted small">
+        {st.dependsOn.length ? `after ${st.dependsOn.join(", ")}` : "first"} · config r{st.revision}
+      </div>
+    </>
+  );
+}
+
+/** The context disclosure, plus the note about outdated inputs. */
+function StepContext({ state, task, st }: { state: State; task: Task; st: Step }) {
+  const { shownRun, stale } = stepRuns(state, task, st);
+  return (
+    <>
+      <StepIO state={state} task={task} stepId={st.id} run={shownRun} />
+      {stale.length > 0 && (
+        <div className="small" style={{ color: "var(--st-you)" }}>
+          Used outdated {stale.map((i) => `${i.step}.${i.output} v${i.version}`).join(", ")}; newer versions exist.
+        </div>
+      )}
+    </>
+  );
+}
+
+/** The provider and model: the picker for the next attempt, what ran, or how the service runs a Checks step. */
+function StepModel({ state, task, st, open }: { state: State; task: Task; st: Step; open: boolean }) {
+  const { send, disabled } = useStore();
+  const r = M.resolveStep(state, task, st);
+  const { lastRun, done, activeRun } = stepRuns(state, task, st);
+  if (st.role === "checks") {
+    // ORC-013: a Checks step is run by the service; it has no provider or model to choose.
+    return (
+      <>
+        <span>Run by the service{C.checksOn(state.project.checks) ? ` · ${state.project.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}` : ""}</span>
+        <div className="muted small">
+          {C.checksOn(state.project.checks) ? (
+            <>
+              {st.checks?.onFail === "block" ? "Stops the task and asks for a decision when checks fail" : "Failing checks become findings for the repair step"}.
+              {st.state === "pending" && C.checksHeld(state) ? ` ${C.HELD_LABEL}.` : ""}
+              {activeRun ? ` Running as ${activeRun.id}${activeRun.activity ? `: ${activeRun.activity}` : ""}.` : lastRun && done ? ` Ran as ${lastRun.id}.` : ""}
+            </>
+          ) : (
+            <>
+              {st.state === "skipped" ? "Skipped: checks are off" : "Will be skipped: checks are off"} (<a href="#/settings">Settings</a>).
+            </>
+          )}
+        </div>
+      </>
+    );
+  }
+  if (done && lastRun)
+    return (
+      <>
+        <span>{selectionText(lastRun.snapshot)}</span>
+        <div className="muted small">
+          ran as {lastRun.id} · {M.sourceLabel(lastRun.snapshot.source).toLowerCase()}
+        </div>
+        {open && (
+          <button
+            className="small"
+            style={{ marginTop: "0.3rem" }}
+            aria-label={`Rerun ${st.id}`}
+            disabled={disabled}
+            onClick={() => {
+              if (confirm(`Rerun ${st.id}? Results of steps that depend on it will need revalidation, and any of them still running will be stopped.`)) void send("rerunStep", { taskId: task.id, stepId: st.id });
+            }}
+          >
+            Rerun
+          </button>
+        )}
+      </>
+    );
+  if (st.state === "skipped") return <span className="muted">Not run: its condition had nothing to fix. Re-evaluated if an upstream step reruns.</span>;
+  if (!open) return <span className="muted">{r.ok ? selectionText(r.selection) : "—"}</span>;
+  return (
+    <>
+      {activeRun && (
+        <div style={{ marginBottom: "0.3rem" }}>
+          <strong>{selectionText(activeRun.snapshot)}</strong>
+          <div className="muted small">
+            {activeRun.outcome === "stopping" ? "stopping" : "running"} as {activeRun.id}; next attempt uses:
+          </div>
+        </div>
+      )}
+      <ModelPicker
+        state={state}
+        label={`Model for next attempt of ${st.id}`}
+        value={st.selection}
+        allowInherit
+        inheritLabel={`Inherited${r.ok && st.selection === null ? `: ${selectionText(r.selection)}` : ""}`}
+        disabled={disabled}
+        onChange={(v) => {
+          const running = st.state === "running";
+          if (running && !confirm(`${st.id} is running. Changing its model stops the current run (checkpointed) before a new attempt starts. Continue?`)) return;
+          void send("setStepSelection", { taskId: task.id, stepId: st.id, selection: v });
+        }}
+      />
+      <div className="muted small">
+        {st.selection ? (
+          <>
+            Pinned by you ·{" "}
+            <button className="link" disabled={disabled} onClick={() => void send("setStepSelection", { taskId: task.id, stepId: st.id, selection: null })}>
+              Reset to default
+            </button>
+          </>
+        ) : r.ok ? (
+          M.sourceLabel(r.source)
+        ) : null}
+      </div>
+      {r.ok && r.selection.model !== (st.selection ?? r.selection).model && <div className="muted small">{r.reason}</div>}
+      {!r.ok && <div className="small" style={{ color: "var(--st-fail)" }}>{r.reason}</div>}
+    </>
+  );
+}
+
+/** §3.1: the step's state as the one pill shape; its tone from the state. */
+function StepStatePill({ st }: { st: Step }) {
+  const tone: Tone = st.state === "running" || st.state === "stopping" ? "work" : st.state === "done" ? "done" : st.state === "blocked" ? "fail" : "neutral";
+  return (
+    <Pill tone={tone} paused={st.state === "paused"} pulse={st.state === "running"}>
+      {st.state}
+    </Pill>
+  );
+}
+
+/** The state, why it is blocked or needs revalidation, and Retry. */
+function StepStateCell({ st, task, open }: { st: Step; task: Task; open: boolean }) {
+  const { send, disabled } = useStore();
+  return (
+    <>
+      <StepStatePill st={st} />
+      {st.invalidatedBy && <div className="muted small">{st.invalidatedBy.startsWith("edited ") ? `re-runs: you ${st.invalidatedBy}` : `revalidate: ${st.invalidatedBy} changed`}</div>}
+      {st.blockedReason && (
+        <div className="small" style={{ color: "var(--st-fail)" }}>
+          {st.blockedReason}
+        </div>
+      )}
+      {st.state === "blocked" && open && (
+        <button className="small" style={{ marginTop: "0.3rem" }} aria-label={`Retry ${st.id}`} disabled={disabled} onClick={() => void send("retryStep", { taskId: task.id, stepId: st.id })}>
+          Retry
+        </button>
+      )}
+    </>
+  );
+}
+
 function StepsCard({ state, task }: { state: State; task: Task }) {
   const { send, disabled, service } = useStore();
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
   const usedRoles = [...new Set(task.steps.map((s) => s.role))];
+  // ORC-017 §3.9: below 700 px the table becomes a list, one block per step.
+  const narrow = useNarrow("(max-width: 699px)");
 
   return (
     <section className="card" aria-labelledby="steps-h">
@@ -733,7 +910,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
         <h2 id="steps-h">Pipeline</h2>
         <span className="row">
           {open && (
-            <label className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }} title="Pause the task after every step so you can read or edit its artifacts">
+            <label className="row small" style={{ gap: "0.3rem" }} title="Pause the task after every step so you can read or edit its artifacts">
               <input type="checkbox" checked={!!task.reviewEveryStep} disabled={disabled} onChange={(e) => void send("setReviewEveryStep", { taskId: task.id, value: e.target.checked })} />
               Review every step
             </label>
@@ -743,165 +920,65 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
       </div>
       <PatternLine task={task} />
       {open && <ChangePattern state={state} task={task} />}
-      <p className="muted" style={{ fontSize: "0.85rem" }}>
-        The pipeline comes from the pattern; built-in patterns change through commits, and yours live in {state.patterns.localDir || "the patterns directory"}. Each step receives the vision, the current spec, and only the
-        upstream artifacts it reads. Models resolve step pin → task role override → project role default → project default. Completed steps show the model that actually ran.{" "}
-        {service.runtime === "real" ? "Models come from each provider's catalog." : "Model catalog is sample data."}
+      <p className="muted small" style={{ marginBottom: "0.3rem" }}>
+        The pipeline comes from the pattern; built-in patterns change through commits, and yours live in {state.patterns.localDir || "the patterns directory"}.
       </p>
-      <div className="table-wrap">
-        <table className="steps-table">
-          <thead>
-            <tr>
-              <th>Step and context</th>
-              <th>Role</th>
-              <th>Provider and model</th>
-              <th>State</th>
-            </tr>
-          </thead>
-          <tbody>
-            {task.steps.map((st) => {
-              const r = M.resolveStep(state, task, st);
-              const lastRun = [...state.attempts].reverse().find((a) => a.taskId === task.id && a.stepId === st.id && a.outcome === "completed");
-              const done = st.state === "done";
-              const activeRun = M.activeAttempts(state, task.id).find((a) => a.stepId === st.id);
-              const shownRun = activeRun ?? (done ? lastRun : undefined);
-              const stale = shownRun ? M.staleInputs(state, task, shownRun) : [];
-              return (
+      <details className="how">
+        <summary>How this works</summary>
+        <p>
+          Each step receives the vision, the current spec, and only the upstream artifacts it reads. Models resolve step pin → task role override → project role default → project default. Completed steps show the model that
+          actually ran. {service.runtime === "real" ? "Models come from each provider's catalog." : "Model catalog is sample data."}
+        </p>
+      </details>
+      {narrow ? (
+        <ol className="steps-list" aria-label="Pipeline steps">
+          {task.steps.map((st) => (
+            <li key={st.id}>
+              <div>
+                <StepHead state={state} task={task} st={st} />
+              </div>
+              <div className="step-rs">
+                <span className="muted">{ROLE_LABEL[st.role]}</span>
+                <StepStateCell st={st} task={task} open={open} />
+              </div>
+              <div className="step-model">
+                <StepModel state={state} task={task} st={st} open={open} />
+              </div>
+              <StepContext state={state} task={task} st={st} />
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="table-wrap">
+          <table className="steps-table">
+            <thead>
+              <tr>
+                <th>Step and context</th>
+                <th>Role</th>
+                <th>Provider and model</th>
+                <th>State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {task.steps.map((st) => (
                 <tr key={st.id}>
                   <td>
-                    <strong>{st.id}</strong> {st.purpose}
-                    {st.gate && (
-                      <>
-                        {" "}
-                        <span className="chip" title="The task pauses after this step so you can review or edit its artifacts">
-                          gate
-                        </span>
-                      </>
-                    )}
-                    {stepChips(state, task, st).map((c) => (
-                      <span key={c.text}>
-                        {" "}
-                        <span className={`chip${c.strong ? " strong" : ""}`} title={c.title}>
-                          {c.text}
-                        </span>
-                      </span>
-                    ))}
-                    <BestOfChoice task={task} stepId={st.id} />
-                    <div className="muted" style={{ fontSize: "0.8rem" }}>
-                      {st.dependsOn.length ? `after ${st.dependsOn.join(", ")}` : "first"} · config r{st.revision}
-                    </div>
-                    <StepIO state={state} task={task} stepId={st.id} run={shownRun} />
-                    {stale.length > 0 && (
-                      <div style={{ color: "var(--s-paused)", fontSize: "0.8rem" }}>
-                        Used outdated {stale.map((i) => `${i.step}.${i.output} v${i.version}`).join(", ")}; newer versions exist.
-                      </div>
-                    )}
+                    <StepHead state={state} task={task} st={st} />
+                    <StepContext state={state} task={task} st={st} />
                   </td>
                   <td>{ROLE_LABEL[st.role]}</td>
                   <td>
-                    {st.role === "checks" ? (
-                      // ORC-013: a Checks step is run by the service; it has no provider or model to choose.
-                      <>
-                        <span>Run by the service{C.checksOn(state.project.checks) ? ` · ${state.project.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}` : ""}</span>
-                        <div className="muted" style={{ fontSize: "0.8rem" }}>
-                          {C.checksOn(state.project.checks) ? (
-                            <>
-                              {st.checks?.onFail === "block" ? "Stops the task and asks for a decision when checks fail" : "Failing checks become findings for the repair step"}.
-                              {st.state === "pending" && C.checksHeld(state) ? ` ${C.HELD_LABEL}.` : ""}
-                              {activeRun ? ` Running as ${activeRun.id}${activeRun.activity ? `: ${activeRun.activity}` : ""}.` : lastRun && done ? ` Ran as ${lastRun.id}.` : ""}
-                            </>
-                          ) : (
-                            <>
-                              {st.state === "skipped" ? "Skipped: checks are off" : "Will be skipped: checks are off"} (<a href="#/settings">Settings</a>).
-                            </>
-                          )}
-                        </div>
-                      </>
-                    ) : done && lastRun ? (
-                      <>
-                        <span>{selectionText(lastRun.snapshot)}</span>
-                        <div className="muted" style={{ fontSize: "0.8rem" }}>
-                          ran as {lastRun.id} · {M.sourceLabel(lastRun.snapshot.source).toLowerCase()}
-                        </div>
-                        {open && (
-                          <button
-                            className="small"
-                            style={{ marginTop: "0.3rem" }}
-                            aria-label={`Rerun ${st.id}`}
-                            disabled={disabled}
-                            onClick={() => {
-                              if (confirm(`Rerun ${st.id}? Results of steps that depend on it will need revalidation, and any of them still running will be stopped.`))
-                                void send("rerunStep", { taskId: task.id, stepId: st.id });
-                            }}
-                          >
-                            Rerun
-                          </button>
-                        )}
-                      </>
-                    ) : st.state === "skipped" ? (
-                      <span className="muted">Not run: its condition had nothing to fix. Re-evaluated if an upstream step reruns.</span>
-                    ) : open ? (
-                      <>
-                        {activeRun && (
-                          <div style={{ marginBottom: "0.3rem" }}>
-                            <strong>{selectionText(activeRun.snapshot)}</strong>
-                            <div className="muted" style={{ fontSize: "0.8rem" }}>
-                              {activeRun.outcome === "stopping" ? "stopping" : "running"} as {activeRun.id}; next attempt uses:
-                            </div>
-                          </div>
-                        )}
-                        <ModelPicker
-                          state={state}
-                          label={`Model for next attempt of ${st.id}`}
-                          value={st.selection}
-                          allowInherit
-                          inheritLabel={`Inherited${r.ok && st.selection === null ? `: ${selectionText(r.selection)}` : ""}`}
-                          disabled={disabled}
-                          onChange={(v) => {
-                            const running = st.state === "running";
-                            if (running && !confirm(`${st.id} is running. Changing its model stops the current run (checkpointed) before a new attempt starts. Continue?`)) return;
-                            void send("setStepSelection", { taskId: task.id, stepId: st.id, selection: v });
-                          }}
-                        />
-                        <div className="muted" style={{ fontSize: "0.8rem" }}>
-                          {st.selection ? (
-                            <>
-                              Pinned by you ·{" "}
-                              <button className="link" disabled={disabled} onClick={() => void send("setStepSelection", { taskId: task.id, stepId: st.id, selection: null })}>
-                                Reset to default
-                              </button>
-                            </>
-                          ) : r.ok ? (
-                            M.sourceLabel(r.source)
-                          ) : null}
-                        </div>
-                        {r.ok && r.selection.model !== (st.selection ?? r.selection).model && <div className="muted" style={{ fontSize: "0.8rem" }}>{r.reason}</div>}
-                        {!r.ok && <div style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>{r.reason}</div>}
-                      </>
-                    ) : (
-                      <span className="muted">{r.ok ? selectionText(r.selection) : "—"}</span>
-                    )}
+                    <StepModel state={state} task={task} st={st} open={open} />
                   </td>
                   <td>
-                    <span className="chip">{st.state}</span>
-                    {st.invalidatedBy && (
-                      <div className="muted" style={{ fontSize: "0.8rem" }}>
-                        {st.invalidatedBy.startsWith("edited ") ? `re-runs: you ${st.invalidatedBy}` : `revalidate: ${st.invalidatedBy} changed`}
-                      </div>
-                    )}
-                    {st.blockedReason && <div style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>{st.blockedReason}</div>}
-                    {st.state === "blocked" && open && (
-                      <button className="small" style={{ marginTop: "0.3rem" }} aria-label={`Retry ${st.id}`} disabled={disabled} onClick={() => void send("retryStep", { taskId: task.id, stepId: st.id })}>
-                        Retry
-                      </button>
-                    )}
+                    <StepStateCell st={st} task={task} open={open} />
                   </td>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {open && (
         <details style={{ marginTop: "0.75rem" }}>
           <summary>Task role overrides</summary>
@@ -1051,7 +1128,7 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
           // ORC-016: work from before the task's pattern changed is the record; it is never edited or consumed again.
           const earlier = M.fromEarlierPattern(state, task, a);
           return (
-            <li key={a.id} style={{ gridTemplateColumns: "6.5rem 1fr" }}>
+            <li key={a.id} className="artifact-row">
               <span className="mono">
                 {a.stepId}.{a.name} v{a.version}
               </span>

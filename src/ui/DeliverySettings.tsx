@@ -109,9 +109,15 @@ export function DeliverySettings() {
           {mode === "local" ? `: ${p.autonomy.autoDeliver.branch}` : mode === "pr" ? `: ${cfg.remote}/${cfg.base}` : ""}
         </span>
       </div>
-      <p className="muted" style={{ fontSize: "0.85rem", marginTop: "0.4rem" }}>
-        How finished work leaves Orchestrator. One mode at a time. Everything that lands is listed on the <a href="#/review">Review</a> page, which never blocks anything.
+      <p className="muted small" style={{ marginTop: "0.4rem", marginBottom: "0.3rem" }}>
+        How finished work leaves Orchestrator.
       </p>
+      <details className="how">
+        <summary>How this works</summary>
+        <p>
+          One mode at a time. Everything that lands is listed on the <a href="#/review">Review</a> page, which never blocks anything.
+        </p>
+      </details>
 
       <form
         onSubmit={(e) => {

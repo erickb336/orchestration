@@ -1,8 +1,29 @@
 # Orchestrator
 
-A local orchestrator for teams of AI coding agents. You talk to one **lead**; it plans the work, writes a specification for every task (options, trade-offs, the approach it chose), and runs each task through a pipeline pattern you choose, staffed by **Claude** and **Codex** workers: designers, coders, and independent reviewers, running concurrently. You can let it run on autopilot or step in anywhere: pause, read and edit any artifact, and resubmit it through the rest of the pipeline.
+![Orchestrator: one lead, Claude and Codex workers, every step visible, pausable and yours to steer](docs/media/hero.png)
+
+**A playground for running a team of AI coding agents, and for finding out which ways of working actually pay off.**
+
+You talk to one **lead**. It plans the work, writes a spec for every task, and runs each task through a pipeline of designers, coders and independent reviewers, on **Claude** and **Codex**, several tasks at once. You see every track's progress at a glance. You step in only where something needs you, and you review artifacts and working results rather than every detail.
 
 **Default: one implementation, then independent review.** Choose Claude or Codex and a model for each step. Using both providers does not require building the same change twice. Competing implementations (Best of N) are an experimental pattern only you can choose; no standard pattern uses them.
+
+### Try the demo in a minute
+
+The demo needs no API keys and runs no agents, and nothing leaves your computer:
+
+```bash
+git clone https://github.com/erickb336/orchestrator.git
+cd orchestrator
+npm install
+npm start
+```
+
+It opens a sample project on a simulated runtime, with a short tour. It needs Node.js 22.13 or newer. To use your own repository with real agents, see [Install](#install).
+
+![A short tour: progress by area, steering the lead, the board, a pipeline with provider and model per step, pause and resume, review](docs/media/tour.gif)
+
+*The demo: a sample project on the simulated runtime. No agents run, and every run shown is simulated.*
 
 ## What you get that a single chat does not
 
@@ -26,9 +47,54 @@ A single Claude Code or Codex chat is one agent, one conversation, and one provi
 
 In short: a chat is one pair of hands on one track. Orchestrator is a team on many tracks, with a lead, a process, a record, and one place to see how each track is going. You decide how involved to be, from approving each task to letting it run end to end.
 
-## Why this exists
+## Why I built it
 
-I wanted my own agent orchestration tool, one I can quickly edit and extend with features and fixes whenever I need them, instead of adapting my work to someone else's product. The goal is to keep improving it and tailoring it to myself and my own workflows. It is deliberately small, local, and readable, so that changing it is cheap. If you use it, treat it the same way: fork it and make it yours.
+I use several AI agents every day, and the bottleneck is no longer writing code: it is me.
+
+- juggling chats;
+- re-explaining direction;
+- checking whether "the tests pass" is true;
+- reading every diff.
+
+Orchestrator is my playground for changing that. It is a place to develop and test different patterns for using multiple agents in my own workflows. The goal is to take myself out of the loop as much as possible: I review artifacts and working prototypes rather than details, and I spend my time on solutions that can be tested end to end.
+
+It is deliberately small, local and readable, so that changing it is cheap, and I can tailor it whenever my way of working changes. If you use it, treat it the same way: fork it and make it yours.
+
+### Measuring, not guessing
+
+- **Every task records which pattern it ran,** with the pattern's id, a content hash and its source.
+- **When a task finishes, it records an outcome:** runs, tokens and cost where the provider reports them, repair rounds, findings, check results and review coverage. This is recorded from now on, so that ways of working can be compared on real data ([ORC-016](docs/tasks/ORC-016.md)).
+- **"The tests pass" is a record, not a claim.** The service runs your project's own checks itself, in a sandbox, and keeps the results ([ORC-013](docs/tasks/ORC-013.md)).
+- **Usage per provider and model:** runs, tokens and cost, for today and for all time.
+- **Not built yet:**
+  - a view that compares patterns on those outcomes;
+  - OpenTelemetry trace export to Phoenix or Langfuse;
+  - SWE-bench Verified runs through patterns.
+
+### UX decisions
+
+- **Truthful states.**
+  - "Paused" appears only after the runtime confirms the stop; until then it says "Pausing".
+  - A late result from a run that started before you edited the spec or changed the pipeline is discarded, not integrated ([ORC-001](docs/tasks/ORC-001.md), [ORC-016](docs/tasks/ORC-016.md)).
+- **Only what needs you.** The Overview leads with progress by area and a short "Needs you" list. Everything else keeps moving ([ORC-017](docs/tasks/ORC-017.md)).
+- **Every change can be undone.** When the lead steers, it lists exactly what it changed, and each change has an Undo ([ORC-009](docs/tasks/ORC-009.md)).
+- **Think before spending.** In the shaping stage nothing runs. The lead asks targeted questions and drafts the vision with you ([ORC-012](docs/tasks/ORC-012.md)).
+- **You choose how involved to be:** Autopilot, check in before work starts, or only when you ask. Specs are published for you to read; they are never approval gates.
+- **Accessible by default.**
+  - Colour carries meaning only, and always comes with a word.
+  - Text contrast is at least 4.5:1 in light and dark.
+  - Reduced motion is respected.
+  - Phone layouts never scroll sideways ([ORC-017](docs/tasks/ORC-017.md)).
+
+### How it was made
+
+Orchestrator was built the way it works.
+
+- **Who did what.** I set the direction and made the calls. AI agents in Claude Code wrote the specs and the code: a lead that planned and integrated, and the designer, coder and reviewer agents it delegated to.
+- **Specs first.** Every feature started as a versioned spec with options, trade-offs and the chosen approach ([`docs/tasks/`](docs/tasks/)). The larger ones also have a design document ([`docs/design/`](docs/design/)).
+- **Independent review.** Each implementation was reviewed by a separate agent, and every finding was fixed with a regression test.
+- **Tests that bite.** Each key guard was checked by reverting it and confirming that a test fails.
+- **The result:** over 900 automated tests, 16 feature specs so far, and a record of every decision and why it was made.
 
 ## What it does
 
@@ -76,7 +142,7 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
 
 All screenshots show the built-in sample project on the simulated runtime: no agents are running, and the pull requests and check runs are simulated.
 
-**Tasks board.** Every task has a spec, a pipeline, and a truthful state. Child tasks link to the goal they came from.
+**Tasks board.** Every task has a spec, a pipeline, and a truthful state. A card shows which provider is on it and at which step, and what needs you. Child tasks link to the goal they came from.
 
 ![Tasks board](docs/screenshots/board.png)
 
@@ -110,13 +176,13 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 
 **Optional comparison example: best of two.** This task runs the experimental pattern "Change, best of two implementations", which only you can choose; it is not the default workflow. Codex and Claude each implement, and a reviewer compares the two and chooses one. Normally a single agent implements, followed by independent review and repair only if needed.
 
-![Best-of pipeline with an iteration](docs/screenshots/best-of-pipeline.png)
+![Best-of pipeline: two candidates, one chosen](docs/screenshots/best-of-pipeline.png)
 
 **Checks and findings.** The service runs your project's own checks on each change. A failing test becomes a finding marked "error, auto-fix", next to the review's own findings, each with its severity, its action, and the file and line. The repair step fixes them, and the checks run again.
 
 ![Checks and findings](docs/screenshots/findings.png)
 
-**Checks gate the pull request.** If a check fails on the pull request's commit, it waits for you, and the card says why.
+**Checks gate the pull request.** The service runs the project's checks on the pull request's commit before it merges. If one fails, the pull request waits for you, and the card says why.
 
 ![A pull request waiting on a failed check](docs/screenshots/pr-checks.png)
 
@@ -132,7 +198,7 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 
 ![Settings → Patterns: the default pattern, its steps, and a pattern file with errors](docs/screenshots/patterns.png)
 
-**Overview and the lead.** The Overview shows the vision, what changed since your last visit, and the conversation with the lead.
+**Overview.** Progress by area: how far each part of the product is, which provider is working on it right now, and what needs you. Below it: everything waiting for you, the vision, and the conversation with the lead.
 
 ![Overview](docs/screenshots/overview.png)
 
@@ -231,6 +297,8 @@ Environment variables:
 - `ORCHESTRATION_RUNTIME` (`fake` or `real`)
 - `ORCHESTRATION_DB` (default `~/.orchestration/orchestration.db`)
 - `ORCHESTRATION_PORT` (default 5319)
+
+**Regenerating the screenshots.** `npm run capture` retakes every README image, the hero and the animated tour from the demo. It needs Google Chrome (or `CHROME_PATH` pointing at a Chrome binary) and ffmpeg, starts the service in a throwaway data directory, and never touches `~/.orchestration`.
 
 ## Getting large goals done
 
@@ -354,6 +422,7 @@ This is a personal tool under active development. It is built in milestones (see
 | Quality gates: service-run checks, finding triage, review coverage, CI triage, project conventions | ORC-013 |
 | Vision documents | ORC-014 |
 | Pipeline patterns instead of an editable pipeline; outcome records per task | ORC-016 |
+| A demo worth showing: progress by area, a "Needs you" list, a first-run tour, the visual pass, and scripted README media | ORC-017 |
 
 Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test writes a one-step pattern file into a throwaway data directory, runs Claude and Codex workers concurrently on it against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost. Steering by conversation (ORC-009) has been exercised only with scripted and simulated leads; no real Claude or Codex lead run has steered yet.
 

@@ -20,6 +20,7 @@ import { builtInCatalog } from "../src/domain/patterns";
 import { toDef } from "../src/domain/pipeline";
 import { ARTIFACT_KINDS, PROVIDERS, STEP_ROLES, type RetiredTemplate, type State, type StepDef } from "../src/domain/types";
 import schema from "../patterns/pattern.schema.json";
+import { VERIFY_CHECKS_NOTE } from "./envelope";
 import { createHttpServer } from "./http";
 import { V14_TEMPLATES } from "./legacyTemplates";
 import { MAX_EXPORT_NAMES, SCHEMA_FILE, SCHEMA_TEXT, exportRetiredTemplates, loadPatternCatalog, patternValidator, positionOf, retiredTemplateFile } from "./patterns";
@@ -221,16 +222,19 @@ describe("the built-in files", () => {
   });
 
   it("P4: the six standard base patterns and the three internal pipelines equal the format-14 templates", () => {
+    // ORC-017 §3.11: the built-in and internal verify purposes are plain descriptions now; the format-14 record keeps the sentence that moved
+    // to the lead's role brief (server/envelope.ts), so it is stripped here before comparing. Everything else stays 1:1.
+    const described = (st: StepDef): StepDef => ({ ...st, purpose: st.purpose.replace(` ${VERIFY_CHECKS_NOTE}`, "").replace(/\.$/, "") });
     for (const id of ["change", "feature", "bugfix", "investigation", "design", "goal"]) {
       const p = builtIn(id);
       const t = V14_TEMPLATES[id];
-      expect(p.steps, id).toEqual(t.steps.map(toDef));
+      expect(p.steps, id).toEqual(t.steps.map(toDef).map(described));
       expect(p.name, id).toBe(t.name);
       expect(p.description, id).toBe(t.description);
     }
     for (const p of INTERNAL_PATTERNS) {
       const t = V14_TEMPLATES[p.id];
-      expect(p.steps, p.id).toEqual(t.steps.map(toDef));
+      expect(p.steps, p.id).toEqual(t.steps.map(toDef).map(described));
       expect(p.name, p.id).toBe(t.name);
       expect(p.description, p.id).toBe(t.description);
     }

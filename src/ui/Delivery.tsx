@@ -234,7 +234,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
         </dd>
         <dt>Changes</dt>
         <dd>
-          {pr.changed.files} file{pr.changed.files === 1 ? "" : "s"}, +{pr.changed.additions} −{pr.changed.deletions}
+          {pr.simulated && pr.changed.files === 0 ? "None: the simulated run touched no files" : `${pr.changed.files} file${pr.changed.files === 1 ? "" : "s"}, +${pr.changed.additions} −${pr.changed.deletions}`}
           {pr.changed.workflowHits.length > 0 && <div>Changes CI workflow files: {pr.changed.workflowHits.slice(0, 5).join(", ")}</div>}
           {pr.changed.protectedHits.length > 0 && <div>Touches protected files: {pr.changed.protectedHits.slice(0, 5).join(", ")}</div>}
         </dd>

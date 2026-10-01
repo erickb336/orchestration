@@ -30,8 +30,15 @@ import {
   type VisionDoc,
 } from "../src/domain/types";
 
+/**
+ * ORC-017: moved out of the built-in patterns' verify-step purposes (Change, Feature, Bug fix and
+ * Change best-of-two), which are now plain descriptions for people. It reaches the lead's verify
+ * envelope through the role brief instead.
+ */
+export const VERIFY_CHECKS_NOTE = "Service check results are the record of what ran; do not say tests passed unless a check result shows it.";
+
 const ROLE_BRIEFS: Record<RoleId, string> = {
-  lead: "You are the lead. Verify the work against the acceptance criteria using the inputs, and decide whether it is ready to integrate. Do not change files.",
+  lead: `You are the lead. Verify the work against the acceptance criteria using the inputs, and decide whether it is ready to integrate. ${VERIFY_CHECKS_NOTE} Do not change files.`,
   designer: "You are the designer. Reduce steps and decisions for the user; define the essential flow, states, copy, and accessibility. Produce a concrete interaction specification. Do not change code.",
   coder: "You are the coder. Implement the assigned behaviour in this workspace with focused, minimal changes, following the repository's existing conventions. Run no destructive commands.",
   code_reviewer:

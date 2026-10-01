@@ -4,6 +4,7 @@
 // honestly. It advances only when the scheduler calls tick(). No agent executes.
 
 import type { AckMode } from "../../src/api";
+import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, scriptedFinding, scriptedSummary } from "../../src/domain/demoScript";
 import type { CatalogModel, OutputDef, ProviderId } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 import type { AdapterEvent, Assignment, ProviderHealth, RuntimeAdapter } from "./types";
@@ -19,6 +20,8 @@ interface Proc {
   outputs: OutputDef[];
   stepId?: string;
   taskId?: string;
+  /** The task's title, read from the envelope: names the parts of a goal when the story has none. */
+  title?: string;
   interruptAt?: number;
   /** Lead runs answer with a reply (and, when planning, one proposal) instead of step outputs. */
   lead?: "planning" | "message" | "decisions";
@@ -29,10 +32,14 @@ interface Proc {
 /** Words that make the simulated lead treat a message as a change of direction. */
 const DIRECTION_RE = /\bfocus\b| vs |\binstead\b|rather than/i;
 
+// ORC-017: the fake runtime's text carries no "(Simulated)" prefix where a record already labels it: the run
+// record (runtime "simulated"), the structured `simulated` flag on a focus change or a change set, and the
+// banner on every page. Neutral fallbacks keep "(simulated)" where nothing else would label the text.
+
 /**
  * ORC-009: a simulated steering block, built only from the envelope: the newest message that reads
- * like a change of direction becomes the focus (labelled simulated), and the lowest-priority open task
- * whose "may:" list includes defer is deferred. Nothing else is touched.
+ * like a change of direction becomes the focus, and the lowest-priority open task whose "may:" list
+ * includes defer is deferred. Nothing else is touched.
  */
 export function fakeSteer(prompt: string): Record<string, unknown> | undefined {
   const section = /## Messages to answer now\n([\s\S]*?)\n\n## /.exec(prompt)?.[1] ?? "";
@@ -42,7 +49,7 @@ export function fakeSteer(prompt: string): Record<string, unknown> | undefined {
     .map((l) => l.slice(2).replace(/^\(sent from [^)]*\) /, ""));
   const direction = [...messages].reverse().find((m) => DIRECTION_RE.test(m));
   if (!direction) return undefined;
-  const focus = `(Simulated) ${direction.length > 200 ? `${direction.slice(0, 199)}…` : direction}`;
+  const focus = direction.length > 200 ? `${direction.slice(0, 199)}…` : direction;
   let candidate: { id: string; priority: number } | undefined;
   for (const m of prompt.matchAll(/^- (\S+) \[[^\]]*\] P(\d+).*· may: ([^·\n]*)/gm)) {
     if (!m[3].split(",").some((a) => a.trim() === "defer")) continue;
@@ -51,9 +58,14 @@ export function fakeSteer(prompt: string): Record<string, unknown> | undefined {
   }
   return {
     focus,
-    reason: "(Simulated) Taken from your message; a real lead would weigh the board.",
-    tasks: candidate ? [{ id: candidate.id, defer: true, why: "(Simulated) lowest-priority work that no longer fits the focus" }] : [],
+    reason: "Taken from your message; a real lead would weigh the board.",
+    tasks: candidate ? [{ id: candidate.id, defer: true, why: "The lowest-priority work that no longer fits the focus." }] : [],
   };
+}
+
+/** The task's title as the worker envelope states it ("## Task WT-004 (spec r1): Share a trip plan with friends"). */
+export function taskTitleIn(prompt: string): string | undefined {
+  return /^## Task \S+ \(spec r\d+\): (.+)$/m.exec(prompt)?.[1]?.trim() || undefined;
 }
 
 /** The newest message the lead must answer, from the envelope. */
@@ -69,13 +81,15 @@ function newestMessage(prompt: string): string | undefined {
 /** How many simulated shaping replies the conversation in the envelope already holds. */
 function exchanges(prompt: string): number {
   const convo = /## Conversation \(most recent last\)\n([\s\S]*?)\n\n## /.exec(prompt)?.[1] ?? "";
-  return (convo.match(/\(Simulated lead\) Here is what I understand/g) ?? []).length;
+  // Only the lead's own lines count; a user who quotes the phrase does not add an exchange.
+  return (convo.match(/^Lead \([^)]*\): Here is what I understand/gm) ?? []).length;
 }
 
 /**
  * ORC-012: a simulated vision draft, built only from the envelope while the project is shaping. The newest
  * message becomes the problem statement and every other part is a marked assumption, as a real lead's
- * living draft would be from the first exchange; it is labelled simulated throughout.
+ * living draft would be from the first exchange. The draft's body says it is simulated (nothing else
+ * labels a draft's text once it is the vision); the focus and reason are labelled by the structured flag.
  */
 export function fakeVision(prompt: string): Record<string, unknown> | undefined {
   if (!/^Project stage: shaping$/m.test(prompt)) return undefined;
@@ -95,8 +109,8 @@ export function fakeVision(prompt: string): Record<string, unknown> | undefined 
       "",
       "A real lead grounds each line in your answers, the vision documents and the repository, and improves the draft every turn.",
     ].join("\n"),
-    focus: `(Simulated) ${short.length > 120 ? `${short.slice(0, 119)}…` : short}`,
-    reason: n === 1 ? "(Simulated) A first living draft from your message; the assumptions are yours to confirm or change." : `(Simulated) Improved after ${n} exchanges; a real lead would fold your answers in.`,
+    focus: short.length > 120 ? `${short.slice(0, 119)}…` : short,
+    reason: n === 1 ? "A first living draft from your message; the assumptions are yours to confirm or change." : `Improved after ${n} exchanges; a real lead would fold your answers in.`,
   };
 }
 
@@ -105,9 +119,9 @@ export function fakeShaping(prompt: string): { questions: Record<string, unknown
   if (!/^Project stage: shaping$/m.test(prompt)) return undefined;
   const n = exchanges(prompt) + 1;
   const questions = [
-    { question: "(Simulated) Who is this for first: you, a small team, or anyone?", why: "(Simulated) The first users decide the first milestone. I'd suggest you first, so it is usable soon.", area: "audience", options: ["Just me (recommended)", "A small team", "Anyone"] },
-    { question: "(Simulated) How will you know it worked?", why: "(Simulated) A measure keeps the scope honest.", area: "outcome", options: ["I use it daily", "A first user does", "A number improves"] },
-    { question: "(Simulated) What must it not do in the first version?", why: "(Simulated) Non-goals keep the scope in check.", area: "scope" },
+    { question: "Who is this for first: you, a small team, or anyone?", why: "The first users decide the first milestone. I'd suggest you first, so it is usable soon.", area: "audience", options: ["Just me (recommended)", "A small team", "Anyone"] },
+    { question: "How will you know it worked?", why: "A measure keeps the scope honest.", area: "outcome", options: ["I use it daily", "A first user does", "A number improves"] },
+    { question: "What must it not do in the first version?", why: "Non-goals keep the scope in check.", area: "scope" },
   ];
   const coverage: Record<string, string> =
     n === 1
@@ -116,47 +130,63 @@ export function fakeShaping(prompt: string): { questions: Record<string, unknown
   return { questions, coverage };
 }
 
+/**
+ * The one task a simulated planning run proposes: the first idea of the story that is not on the board the
+ * envelope shows, else a plain "Small improvement" numbered after the ones already there. Never a run id.
+ */
+export function fakePlanningProposal(prompt: string): Record<string, unknown> {
+  const idea = PLANNING_IDEAS.find((i) => !prompt.toLowerCase().includes(i.title.toLowerCase()));
+  const n = (prompt.match(/"Small improvement \d+"/g) ?? []).length + 1;
+  const base = idea ?? {
+    title: `Small improvement ${n}`,
+    area: "Reliability",
+    whyNow: "A planning run proposes one small, verifiable improvement so the loop can be seen end to end.",
+    outcome: "One small improvement is delivered.",
+    benefit: "Shows the autonomous loop end to end without cost.",
+    approach: "Make the smallest useful change",
+    acceptance: ["The change completes review"],
+  };
+  return {
+    title: base.title,
+    area: base.area,
+    whyNow: base.whyNow,
+    outcome: base.outcome,
+    benefit: base.benefit,
+    scopeIncluded: ["One small change"],
+    scopeExcluded: ["Anything else"],
+    options: [
+      { id: "A", name: "As planned", approach: base.approach, benefit: "Quick", effort: "Small", risks: "Low", reversibility: "High" },
+      { id: "B", name: "Defer", approach: "Do nothing now", benefit: "No cost", effort: "None", risks: "No improvement", reversibility: "N/A" },
+    ],
+    recommendedOptionId: "A",
+    rationale: "The smallest step that moves the product (simulated planning: no real evidence).",
+    uncertainty: "Simulated; no real evidence.",
+    acceptance: base.acceptance,
+    patternId: "change",
+    priority: 5,
+  };
+}
+
 /** A simulated lead reply in the required JSON shape. Planning runs propose one small task; message runs may steer or draft the vision. */
 export function fakeLeadText(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = ""): string {
-  const proposals =
-    trigger === "planning"
-      ? [
-          {
-            title: `Simulated improvement ${attemptId}`,
-            area: "Simulation",
-            whyNow: "Simulated planning run: demonstrates a lead-authored task flowing through its pipeline.",
-            outcome: "A small, verifiable improvement is delivered (simulated).",
-            benefit: "Shows the autonomous loop end to end without cost.",
-            scopeIncluded: ["One small change"],
-            scopeExcluded: ["Anything else"],
-            options: [
-              { id: "A", name: "Small change", approach: "Make the smallest useful change", benefit: "Quick", effort: "Small", risks: "Low", reversibility: "High" },
-              { id: "B", name: "Defer", approach: "Do nothing now", benefit: "No cost", effort: "None", risks: "No improvement", reversibility: "N/A" },
-            ],
-            recommendedOptionId: "A",
-            rationale: "Smallest step that exercises the loop.",
-            uncertainty: "Simulated; no real evidence.",
-            acceptance: ["The simulated change completes review"],
-            patternId: "change",
-            priority: 5,
-          },
-        ]
-      : [];
+  void attemptId; // never part of any title or text
+  const proposals = trigger === "planning" ? [fakePlanningProposal(prompt)] : [];
   const steer = trigger === "message" ? fakeSteer(prompt) : undefined;
   const vision = trigger === "message" ? fakeVision(prompt) : undefined;
   const shaping = trigger === "message" ? fakeShaping(prompt) : undefined;
-  // ORC-013: the simulated lead accepts every finding routed to it, labelled; a real lead weighs each one.
-  const decisions = decisionIds(prompt).map((id) => ({ id, decision: "accept", why: "(Simulated) Accepted as it is; in live mode a real lead weighs the finding against the task's outcome and the vision." }));
+  // ORC-013: the simulated lead accepts every finding routed to it; a real lead weighs each one.
+  const decisions = decisionIds(prompt).map((id) => ({ id, decision: "accept", why: "Accepted as it is; in live mode a real lead weighs the finding against the task's outcome and the vision." }));
+  // The reply carries the simulated chip; the text says what a real lead would do differently.
   const reply =
     trigger === "planning"
-      ? "(Simulated lead) I reviewed the board and proposed one small task."
+      ? "I reviewed the board and proposed one small task."
       : vision
-        ? `(Simulated lead) Here is what I understand: ${newestMessage(prompt) ?? "your message"} (assumption: that is the whole problem). I drafted a living vision from it with marked assumptions, and I have three questions with suggested answers. Accept, edit or dismiss the draft; answer what you can. In live mode a real lead grounds all of this in your answers and the repository.`
+        ? `Here is what I understand: ${newestMessage(prompt) ?? "your message"} (assumption: that is the whole problem). I drafted a living vision from it with marked assumptions, and I have three questions with suggested answers. Accept, edit or dismiss the draft; answer what you can. In live mode a real lead grounds all of this in your answers and the repository.`
         : steer
-          ? "(Simulated lead) Noted the new direction. The service lists below what changed; in live mode a real lead weighs the board first."
+          ? "Noted the new direction. The service lists below what changed; in live mode a real lead weighs the board first."
           : decisions.length && trigger === "decisions"
-            ? "(Simulated lead) I went through the findings waiting for me and accepted them as they are; the service lists each decision below. In live mode a real lead weighs each one."
-            : "(Simulated lead) Noted. In live mode the lead answers here using the board and the repository.";
+            ? "I went through the findings waiting for me and accepted them as they are; the service lists each decision below. In live mode a real lead weighs each one."
+            : "Noted. In live mode the lead answers here using the board and the repository.";
   return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}) }, null, 2)}\n\`\`\`\n`;
 }
 
@@ -174,32 +204,30 @@ function decisionIds(prompt: string): string[] {
 
 /**
  * The final message a well-behaved worker would send: a JSON output block for every declared output.
- * ORC-013: a simulated review reports structured findings. The first round of a task's own review
- * finds one auto-fix finding, so the repair loop is visible once; the repaired round and every
- * dedicated pull-request review are clean. Deterministic, so a demo never waits on chance.
+ * ORC-017: the words come from the story's per-task script (`demoScript.ts`) and fall back to neutral
+ * wording; a run id is never part of a title or a summary. ORC-013: a simulated review reports structured
+ * findings. The first round of a task's own review finds one auto-fix finding, so the repair loop is
+ * visible once; the repaired round and every dedicated pull-request review are clean. Deterministic, so a
+ * demo never waits on chance. `title` is the task's title, for the parts of a goal the story does not name.
  */
-export function fakeFinalText(attemptId: string, outputs: OutputDef[], stepId = "", taskId = ""): string {
-  const block: Record<string, { summary: string; openFindings?: number; findings?: unknown[]; reviewedPaths?: string[] }> = {};
+export function fakeFinalText(attemptId: string, outputs: OutputDef[], stepId = "", taskId = "", title?: string): string {
+  void attemptId; // never part of any title or summary
+  const block: Record<string, { summary: string; openFindings?: number; findings?: unknown[]; reviewedPaths?: string[]; items?: unknown[] }> = {};
   for (const o of outputs) {
+    const scripted = scriptedSummary(taskId, stepId, o.name);
     if (o.kind === "review-findings") {
       const found = !/-i\d+$/.test(stepId) && !/-RV\d+$/.test(taskId) && !/-c\d+$/.test(stepId) ? 1 : 0;
+      const f = scriptedFinding(taskId, stepId) ?? NEUTRAL_FINDING;
       block[o.name] = {
-        summary: found ? "1 finding (simulated)" : "No blocking findings (simulated)",
-        findings: found ? [{ severity: "warning", action: "auto-fix", title: "Simulated finding: a small defect the repair step fixes", detail: "(Simulated) In live mode a real reviewer names the file, the line and the smallest fix.", file: "src/simulated.ts", line: 1 }] : [],
+        summary: scripted ?? neutralSummary(o.kind, { found }),
+        findings: found ? [{ severity: "warning", action: "auto-fix", title: f.title, detail: f.detail, ...(f.file ? { file: f.file } : {}), ...(f.line ? { line: f.line } : {}) }] : [],
         reviewedPaths: [],
       };
-    } else if (o.kind === "code-change") block[o.name] = { summary: "Simulated change; no files were touched" };
-    else if (o.kind === "breakdown") {
-      // First pass proposes two small items; later iterations report the goal as met.
-      const items = /-i\d+$/.test(stepId)
-        ? []
-        : [
-            { title: `Simulated part A (${attemptId})`, outcome: "Part A done (simulated)", approach: "Small change", acceptance: ["Part A verified"], patternId: "change", priority: 3 },
-            { title: `Simulated part B (${attemptId})`, outcome: "Part B done (simulated)", approach: "Small change", acceptance: ["Part B verified"], patternId: "change", priority: 3, dependsOn: [0] },
-          ];
-      block[o.name] = { summary: items.length ? "Split into two parts (simulated)" : "Goal met (simulated)", items } as never;
-    }
-    else block[o.name] = { summary: `${o.kind} (simulated)` };
+    } else if (o.kind === "breakdown") {
+      // A first pass proposes the story's parts (or two neutral ones named after the goal); later iterations report the goal as met.
+      const items = /-i\d+$/.test(stepId) ? [] : breakdownItems(taskId, stepId, title);
+      block[o.name] = { summary: scripted ?? neutralSummary(o.kind, { items: items.length }), items };
+    } else block[o.name] = { summary: scripted ?? neutralSummary(o.kind) };
   }
   return `Done (simulated).\n\n\`\`\`json\n${JSON.stringify({ outputs: block }, null, 2)}\n\`\`\`\n`;
 }
@@ -258,6 +286,7 @@ export class FakeAdapter implements RuntimeAdapter {
     if (p) {
       p.stepId = a.stepId;
       p.taskId = a.taskId;
+      p.title = taskTitleIn(a.prompt);
     }
   }
 
@@ -318,7 +347,7 @@ export class FakeAdapter implements RuntimeAdapter {
       p.progress = Math.min(100, p.progress + this.config.progressPerTick + jitter(id));
       if (p.progress >= 100) {
         this.procs.delete(id);
-        this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt) : fakeFinalText(id, p.outputs, p.stepId, p.taskId) });
+        this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt) : fakeFinalText(id, p.outputs, p.stepId, p.taskId, p.title) });
       } else this.emit({ type: "progress", attemptId: id, percent: p.progress });
     }
   }

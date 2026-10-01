@@ -1139,10 +1139,11 @@ export function rerunStep(state: State, taskId: string, stepId: string, now: str
  * ORC-014: the document set carries forward unless the revision changes it, so every revision records
  * exactly which documents applied.
  */
-function pushVision(s: State, v: Pick<VisionRevision, "author" | "text" | "focus" | "reason" | "source" | "docIds">, now: string, message?: string): VisionRevision {
+function pushVision(s: State, v: Pick<VisionRevision, "author" | "text" | "focus" | "reason" | "source" | "docIds" | "simulated">, now: string, message?: string): VisionRevision {
   const prev = currentVision(s);
   const docIds = v.docIds ?? prev.docIds;
-  const rev: VisionRevision = { rev: prev.rev + 1, at: now, author: v.author, text: v.text, focus: v.focus, reason: v.reason, ...(v.source ? { source: v.source } : {}), ...(docIds ? { docIds: [...docIds] } : {}) };
+  // ORC-017: the simulated flag is structured provenance, set only from the lead run's runtime.
+  const rev: VisionRevision = { rev: prev.rev + 1, at: now, author: v.author, text: v.text, focus: v.focus, reason: v.reason, ...(v.source ? { source: v.source } : {}), ...(docIds ? { docIds: [...docIds] } : {}), ...(v.simulated ? { simulated: true as const } : {}) };
   s.project.visions.push(rev);
   event(s, now, v.author, "vision", message ?? `Vision r${rev.rev}: ${v.reason}`);
   return rev;
@@ -1570,6 +1571,11 @@ export interface RunReport {
   actualModel?: string;
   /** For a step that compared best-of candidates: the step id of the chosen copy. */
   chosen?: string;
+  /**
+   * ORC-017: the run came from the fake runtime (simulated). The server sets it from the adapter that ran
+   * the lead; a lead run's focus change and steering change set then carry a structured `simulated` flag.
+   */
+  simulated?: true;
 }
 
 export function reportCompletion(state: State, attemptId: string, artifacts: string[], now: string, outputs: OutputReport[] = [], run: RunReport = {}): State {
@@ -2573,7 +2579,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   // the change-set id.
   let set: SteeringChangeSet | undefined;
   if (out.steer !== undefined && out.steer !== null && !s.steering.some((cs) => cs.id === `cs-${r.id}`)) {
-    set = steerFromRun(s, r, out.steer, now);
+    set = steerFromRun(s, r, out.steer, now, run.simulated);
     s.steering.push(set);
     if (s.steering.length > 200) s.steering.splice(0, s.steering.length - 200);
     r.changeSetId = set.id;
@@ -2583,7 +2589,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   let visionDraft: VisionDraft | undefined;
   if (out.vision !== undefined && out.vision !== null && !s.visionDrafts.some((d) => d.leadRunId === r.id)) {
     const v = validateVisionDraft(s, r, out.vision);
-    if (v.ok) visionDraft = draftFromRun(s, r, v.draft, now);
+    if (v.ok) visionDraft = draftFromRun(s, r, v.draft, now, run.simulated);
     else rejected.push(`Vision draft: ${v.why}`);
   }
   // ORC-012: coverage lives on the run (the latest stands); questions live on the reply. Both come only
@@ -3036,10 +3042,11 @@ export function validateSteer(s: State, r: LeadRun, steer: unknown): ValidatedSt
 }
 
 /** Validate and apply a completed message run's steering block; returns the authoritative change set. */
-function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string): SteeringChangeSet {
+function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string, simulated?: true): SteeringChangeSet {
   const setId = `cs-${r.id}`;
   const v = validateSteer(s, r, steer);
-  const set: SteeringChangeSet = { id: setId, leadRunId: r.id, messageIds: [...r.messageIds], at: now, mode: s.project.steeringMode, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, reason: v.reason, notes: v.notes, changes: [] };
+  // ORC-017: a set from the simulated lead says so in a structured flag, so the UI labels it without text in the focus.
+  const set: SteeringChangeSet = { id: setId, leadRunId: r.id, messageIds: [...r.messageIds], at: now, mode: s.project.steeringMode, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, reason: v.reason, notes: v.notes, changes: [], ...(simulated ? { simulated: true as const } : {}) };
   if (v.refused) {
     set.refused = v.refused;
     event(s, now, "system", "control", `Lead run ${r.id}: steering refused (${v.refused})`);
@@ -3074,7 +3081,7 @@ function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string): Steeri
     else if (undoneFocus(s, v.focus.value)) row({ kind: "focus", before: cur.focus, after: v.focus.value, why: v.reason, status: "suggested", note: "you undid this focus", visionRev: r.visionRev });
     else if (held || mode === "suggest") row({ kind: "focus", before: cur.focus, after: v.focus.value, why: v.reason, status: "suggested", note: held ? "held: newer direction" : "only suggest (Settings)", visionRev: r.visionRev });
     else {
-      const rev = pushVision(s, { author: "lead", text: cur.text, focus: v.focus.value, reason: v.reason, source: { changeSetId: setId, leadRunId: r.id, messageIds: [...r.messageIds] } }, now, `Focus r${cur.rev + 1} by lead from your message ${from} (${setId}): ${v.reason}`);
+      const rev = pushVision(s, { author: "lead", text: cur.text, focus: v.focus.value, reason: v.reason, source: { changeSetId: setId, leadRunId: r.id, messageIds: [...r.messageIds] }, ...(simulated ? { simulated: true as const } : {}) }, now, `Focus r${cur.rev + 1} by lead from your message ${from} (${setId}): ${v.reason}`);
       row({ kind: "focus", before: cur.focus, after: v.focus.value, why: v.reason, status: "applied", appliedBy: "lead", visionRev: rev.rev });
     }
   }
@@ -3652,7 +3659,7 @@ export function validateVisionDraft(s: State, r: LeadRun, vision: unknown): Vali
 }
 
 /** Record a validated draft as an open suggestion; an older open draft is superseded. Nothing is applied. */
-function draftFromRun(s: State, r: LeadRun, d: { text: string; focus: string; reason: string }, now: string): VisionDraft {
+function draftFromRun(s: State, r: LeadRun, d: { text: string; focus: string; reason: string }, now: string, simulated?: true): VisionDraft {
   for (const old of s.visionDrafts) {
     if (old.status !== "open") continue;
     old.status = "superseded";
@@ -3660,7 +3667,8 @@ function draftFromRun(s: State, r: LeadRun, d: { text: string; focus: string; re
   }
   // ORC-012 review 3: the revision the run saw, not the one current at completion, so a vision that moved
   // meanwhile is shown as moved and Accept never silently replaces it.
-  const draft: VisionDraft = { id: `vd-${r.id}`, at: now, leadRunId: r.id, messageIds: [...r.messageIds], text: d.text, focus: d.focus, reason: d.reason, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, status: "open" };
+  // ORC-017: a draft from the simulated lead carries the flag, which Accept copies onto the revision.
+  const draft: VisionDraft = { id: `vd-${r.id}`, at: now, leadRunId: r.id, messageIds: [...r.messageIds], text: d.text, focus: d.focus, reason: d.reason, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, status: "open", ...(simulated ? { simulated: true as const } : {}) };
   s.visionDrafts.push(draft);
   if (s.visionDrafts.length > MAX_VISION_DRAFTS) s.visionDrafts.splice(0, s.visionDrafts.length - MAX_VISION_DRAFTS);
   event(s, now, "lead", "vision", `Lead run ${r.id} drafted the vision (${draft.id}) from your message ${r.messageIds.join(", ")}: ${d.reason}. It waits for you to accept, edit or dismiss it.`);
@@ -3833,7 +3841,8 @@ export function acceptVisionDraft(state: State, draftId: string, expectedRev: nu
   const draftRec = getVisionDraft(s, draftId);
   const rev = pushVision(
     s,
-    { author: "user", text, focus, reason: `${edited ? "Accepted the lead's draft with edits" : "Accepted the lead's draft"} (${d.id}): ${d.reason}`, source: { draftId: d.id, leadRunId: d.leadRunId, messageIds: [...d.messageIds] } },
+    // ORC-017: a draft the simulated lead wrote stays labelled once it is the vision, edited or not.
+    { author: "user", text, focus, reason: `${edited ? "Accepted the lead's draft with edits" : "Accepted the lead's draft"} (${d.id}): ${d.reason}`, source: { draftId: d.id, leadRunId: d.leadRunId, messageIds: [...d.messageIds] }, ...(d.simulated ? { simulated: true as const } : {}) },
     now,
     `Vision r${cur.rev + 1} by you: accepted the lead's draft ${d.id}${edited ? " with edits" : ""}`,
   );
