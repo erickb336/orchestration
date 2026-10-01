@@ -85,6 +85,8 @@ describe("groups and labels", () => {
 
   it("says in one sentence who may choose a pattern", () => {
     expect(audienceText(builtIn("change"))).toMatch(/^Standard: the lead and breakdowns may choose it/);
+    // Review L1: a standard pattern that breaks down is never a breakdown item's pattern, and the card says so.
+    expect(audienceText(builtIn("goal"))).toBe("Standard: the lead may choose it, and it can be the project default. Breakdowns may not, because it breaks down into child tasks itself.");
     expect(audienceText(builtIn("change-lean"))).toBe("Yours to choose: it is an experiment, so the lead never picks it.");
     expect(audienceText(builtIn("feature-design-gate"))).toBe("Yours to choose: it pauses for you, so the lead never picks it.");
     expect(audienceText(yours({ audience: "user-only", flags: { ...builtIn("change").flags, unreviewed: true } }))).toBe("Yours to choose: it has no independent code review, so the lead never picks it.");

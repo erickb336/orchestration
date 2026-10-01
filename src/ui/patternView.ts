@@ -84,7 +84,10 @@ export function disabledProviders(p: Pattern, enabled: ProviderId[]): ProviderId
 
 /** Why a pattern is the lead's to use or yours only, in one sentence for the card. */
 export function audienceText(p: Pattern): string {
-  if (p.audience === "standard") return "Standard: the lead and breakdowns may choose it, and it can be the project default.";
+  if (p.audience === "standard")
+    return p.flags.breaksDown
+      ? "Standard: the lead may choose it, and it can be the project default. Breakdowns may not, because it breaks down into child tasks itself."
+      : "Standard: the lead and breakdowns may choose it, and it can be the project default.";
   const why = p.experimental ? "it is an experiment" : p.flags.pausesForYou ? "it pauses for you" : "it has no independent code review";
   return `Yours to choose: ${why}, so the lead never picks it.`;
 }

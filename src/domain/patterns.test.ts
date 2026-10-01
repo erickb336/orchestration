@@ -150,8 +150,13 @@ describe("your files", () => {
 
 describe("pattern rules", () => {
   it("F1: a step id that looks like an expansion is refused", () => {
-    expect(resolve(local("xx", { steps: [{ ...oneStep[0], id: "S1-c2" }] })).errors[0].message).toMatch(/S1-c2: step ids ending in -c<n> or -i<n> are reserved/);
+    expect(resolve(local("xx", { steps: [{ ...oneStep[0], id: "S1-c2" }] })).errors[0].message).toMatch(/S1-c2: step ids ending in -c<n>, -i<n> or -r<k>-fix, -r<k>-review, -r<k>-checks are reserved/);
     expect(resolve(local("xx", { steps: [{ ...oneStep[0], id: "S1-i3" }] })).errors[0].message).toMatch(/reserved/);
+  });
+
+  it("F1: a step id that looks like a check round is refused (review L5); a plain id with -r stays allowed", () => {
+    for (const id of ["C2-r1-checks", "C2-r12-review", "C2-r1-fix"]) expect(resolve(local("xx", { steps: [{ ...oneStep[0], id }] })).errors[0]?.message, id).toMatch(/reserved/);
+    for (const id of ["S1-review", "C2-r1", "S1-rename"]) expect(resolve(local("xx", { steps: [{ ...oneStep[0], id }] })).errors, id).toEqual([]);
   });
 
   it("F3: best of N without experimental is refused; with experimental and a hypothesis it loads", () => {

@@ -53,7 +53,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     holdBeforeStart: true,
   });
   const set = (k: keyof typeof f, v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
-  const text =(k: "title" | "area" | "outcome" | "benefit" | "whyNow" | "approach", label: string, required = false, multi = false) => (
+  const text = (k: "title" | "area" | "outcome" | "benefit" | "whyNow" | "approach", label: string, required = false, multi = false) => (
     <label className="field">
       <span>
         {label}
@@ -350,7 +350,7 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
   const work = currentWork(state, task);
   const ev = latestEvent(state, task.id);
   const open = () => (location.hash = `#/task/${encodeURIComponent(task.id)}`);
-  const children = M.childTasks(state, task);
+  const children = M.currentChildren(state, task);
   const childrenDone = children.filter(isSettledTask).length;
   const prio = M.priorityProvenance(state, task);
   // ORC-013: findings waiting for a decision, by whom; check runs in progress, and final checks that failed.

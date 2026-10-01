@@ -361,6 +361,12 @@ describe("steps 2–3 review fixes", () => {
     const later = structuredClone(next);
     task(later, M.currentChildren(later, nt)[0].id).lifecycle = "done";
     expect(M.childrenSettled(later, task(later, id))).toBe(true);
+    expect(M.waitingForChildren(later, task(later, id))).toBeUndefined();
+    // Review M1: an earlier child that is open again (a dropped one restored with Undo, say) is still never waited for.
+    const reopened = structuredClone(later);
+    task(reopened, first[0].id).lifecycle = "active";
+    expect(M.childrenSettled(reopened, task(reopened, id))).toBe(true);
+    expect(M.waitingForChildren(reopened, task(reopened, id))).toBeUndefined();
     // The rule that refuses a change while children are open still stands.
     const paused2 = M.pauseTask(later, id, at(9));
     expect(M.patternChangeBlocker(paused2, task(paused2, id))).toBeUndefined();

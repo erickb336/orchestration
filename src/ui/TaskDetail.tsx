@@ -649,7 +649,7 @@ function ChangePattern({ state, task }: { state: State; task: Task }) {
           title={blocker ?? "Run this task on another pattern; the pipeline starts over and work done so far stays on the record"}
           onClick={() => {
             setOpenedRev(task.pipelineRev);
-            setPatternId(choices.find((p) => p.id !== task.pattern.id)?.id ?? choices[0]?.id ?? "");
+            setPatternId("");
             setNote("");
             setOpen(true);
           }}

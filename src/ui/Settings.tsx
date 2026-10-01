@@ -937,7 +937,7 @@ function Patterns() {
               <span className="chip" title={`Loaded from ${p.file}`}>
                 {sourceLabel(p.source, p.replacesBuiltIn)}
               </span>
-              <span className="chip" title={p.audience === "standard" ? "The lead and breakdowns may choose it" : "Only you can choose it"}>
+              <span className="chip" title={p.audience !== "standard" ? "Only you can choose it" : p.flags.breaksDown ? "The lead may choose it; breakdowns may not, because it breaks down itself" : "The lead and breakdowns may choose it"}>
                 {p.audience}
               </span>
               {patternFlagChips(p)

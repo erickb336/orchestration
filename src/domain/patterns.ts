@@ -64,7 +64,7 @@ export const PATTERN_ID_RE = /^[a-z][a-z0-9-]{1,39}$/;
 export const MAX_EXTENDS_DEPTH = 3;
 export const MAX_PATTERN_STEPS = 30;
 /** Ids the service creates when it expands a step into parallel copies or loop iterations (`baseId` strips them). */
-const EXPANSION_ID_RE = /-[ci]\d+$/;
+const EXPANSION_ID_RE = /-[ci]\d+$|-r\d+-(?:fix|review|checks)$/;
 const OPTIONAL_STEP_FIELDS: readonly string[] = ["runIf", "gate", "iterate", "parallel", "waitForChildren", "independentOf", "checks"];
 /** The catalog ids the service creates tasks from; a file with one of them must stay safe for that (F5). */
 export const SERVICE_PATTERN_IDS = ["change", "bugfix"] as const;
@@ -173,7 +173,7 @@ function chooserOf(steps: StepDef[], i: number): StepDef | undefined {
 /** The pattern rules (design §3.5 F1–F5), after the graph rules passed. The first failure is returned. */
 export function patternRuleError(id: string, steps: StepDef[], experimental: boolean, flags: PatternFlags): string | undefined {
   for (const s of steps) {
-    if (EXPANSION_ID_RE.test(s.id)) return `${s.id}: step ids ending in -c<n> or -i<n> are reserved for the parallel copies and loop iterations the service creates`;
+    if (EXPANSION_ID_RE.test(s.id)) return `${s.id}: step ids ending in -c<n>, -i<n> or -r<k>-fix, -r<k>-review, -r<k>-checks are reserved for the parallel copies, loop iterations and check rounds the service creates`;
     if (s.checks?.only) return `${s.id}.checks.only: ${CHECKS_ONLY_MESSAGE}`;
   }
   for (const [i, s] of steps.entries()) {
