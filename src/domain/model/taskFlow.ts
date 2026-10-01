@@ -31,9 +31,10 @@ type FlowChanger = "user" | "lead";
 export const serviceOwned = (t: Task) => !!(t.reviewTarget || t.checkTarget || t.revertOf || t.deliverInto);
 
 /**
- * Why a task's flow cannot change right now, or undefined. Preconditions 1, 2, 5 and 6 of §7.1: open,
- * not service-owned, no open child task, and either never run or confirmed Paused (held, with no attempt
- * still running or stopping). With `p`, also precondition 4: a child task may not take a flow that breaks down.
+ * Why a task's flow cannot change right now, or undefined: it must be open, not service-owned, without an
+ * open child task, and either never run or confirmed Paused (held, with no attempt still running or
+ * stopping). With `p`, also: a child task may not take a flow that breaks down. These are the preconditions
+ * of docs/design/ORC-016-design.md §7.1.
  */
 export function flowChangeBlocker(s: State, t: Task, p?: Flow, by: FlowChanger = "user"): string | undefined {
   if (t.lifecycle === "done") return "Done tasks keep the pipeline they ran. Create a follow-up and choose its flow there.";
@@ -94,7 +95,8 @@ export function flowChangePreview(s: State, t: Task, p: Flow, by: FlowChanger = 
 /**
  * Replace a task's pipeline with another flow, before it has run or once it shows Paused. The
  * pipeline starts over: every step is new, with a revision above any the id ever had, so no earlier run
- * can report into it (G1), and `flowSince` moves to this revision (G2, G3). Artifacts and attempts
+ * can report into it, and `flowSince` moves to this revision, so a run from before it is discarded and
+ * its artifacts are never edited or consumed again. Artifacts and attempts
  * stay as the record; open decisions are closed; pins carry over on steps with the same id and role.
  * `by`: the user (the command) or, later, the lead.
  */
@@ -116,7 +118,7 @@ export function changeFlow(state: State, taskId: string, expectedRev: number, fl
   const rev = t.pipelineRev + 1;
   const defs = structuredClone(p.steps).map(toDef);
   const pins = pinPlan(t, defs);
-  // Every revision an id ever had on this task: its current step's, and every attempt's snapshot (G1).
+  // Every revision an id ever had on this task: its current step's, and every attempt's snapshot.
   const highest = new Map<string, number>();
   for (const st of t.steps) highest.set(st.id, Math.max(highest.get(st.id) ?? 0, st.revision));
   for (const a of s.attempts) if (a.taskId === t.id) highest.set(a.stepId, Math.max(highest.get(a.stepId) ?? 0, a.snapshot.stepRev));

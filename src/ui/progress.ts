@@ -1,6 +1,7 @@
-// ORC-017 §3.3: progress by area, derived from task state only. Nothing here is stored. Also the one
-// place that says what a task is waiting on the user for (§3.2 "Needs you" badge, §3.4 list), so the
-// board, the Overview and the progress rows agree.
+// Text and counts the shell and Home derive from state: the header's live indicator, the Results and Lead
+// badges, the latest lead reply, and a landed item's verdict. Nothing here is stored. What needs you and
+// progress by area are decided in the domain (src/domain/needsYou.ts and areaProgress.ts), where the demo
+// lead reads them too; they are re-exported here so the UI imports them from one place.
 
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
@@ -24,7 +25,7 @@ export function agentsWorking(state: State): number {
   return M.activeAgentAttempts(state).filter((a) => a.outcome === "running").length;
 }
 
-/** ORC-025: agent runs that were asked to stop and have not acknowledged yet. They are still busy, so the header never says Idle over them. */
+/** Agent runs that were asked to stop and have not acknowledged yet. They are still busy, so the header never says Idle over them. */
 export function agentsStopping(state: State): number {
   return M.activeAgentAttempts(state).filter((a) => a.outcome === "stopping").length;
 }
@@ -37,7 +38,7 @@ export function liveIndicatorText(working: number, stopping: number, shaping = f
   return shaping && working ? `${text} (finishing; shaping)` : text;
 }
 
-// ---------- ORC-025 pass 2: the badges (N7) ----------
+// ---------- the badges ----------
 
 /**
  * The pull requests that wait for you, as the Results page lists them under "Needs you": ready for your merge, or
@@ -55,7 +56,7 @@ export function unreadLeadReplies(state: State, seenAt: string | null): number {
   return state.conversation.filter((m) => m.author === "lead" && (!seenAt || m.at > seenAt)).length;
 }
 
-// ---------- ORC-025 pass 2: "Latest from the lead" (N3) ----------
+// ---------- "Latest from the lead" ----------
 
 export interface LatestReply {
   message: Message;
@@ -96,7 +97,7 @@ export function replyExcerpt(text: string, max = 240): string {
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[,;:.]$/, "")}…`;
 }
 
-// ---------- ORC-025 pass 2: decisions taken in place on Home (H3) ----------
+// ---------- what a landed item passed ----------
 
 /** What a landed item passed, for its row: "Code ✓ Security ✓" from its review evidence, "Checks ✓" when every required check on the merged head succeeded. */
 export function landedVerdict(landed: Landed): string[] {

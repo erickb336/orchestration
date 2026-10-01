@@ -10,7 +10,7 @@ import { openRepair } from "./repair";
 export interface PrLabel {
   text: string;
   tone: "plain" | "strong" | "done" | "danger";
-  /** ORC-025: a demo pull request. The chip shows one small "simulated" mark beside the text; the text itself carries none. */
+  /** A demo pull request. The chip shows one small "simulated" mark beside the text; the text itself carries none. */
   simulated?: true;
 }
 
@@ -20,17 +20,17 @@ export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
   const pr = i?.pr;
   if (!i || !pr) return undefined;
   const sim: { simulated?: true } = pr.simulated ? { simulated: true } : {};
-  // ORC-012 review 1: while shaping, delivery says what it waits for, never "queued" or "preparing".
+  // While shaping, delivery says what it waits for, never "queued" or "preparing".
   const shaping = s.project.stage === "shaping" && !s.project.hold;
   const WAITS = "waits until you start building (shaping)";
   if (i.status !== "integrated") return { text: shaping ? `pull request ${pr.n + 1} ${WAITS}` : `preparing pull request ${pr.n + 1}`, tone: "plain", ...sim };
   const name = pr.number ? `PR #${pr.number}` : "PR";
   const plain = (what: string): PrLabel => ({ text: `${name} ${what}`, tone: "plain", ...sim });
-  // ORC-025: finished work that is in main has "landed"; "new" until you mark it as seen under Results.
+  // Finished work that is in main has "landed"; "new" until you mark it as seen under Results.
   if (pr.phase === "merged") return { text: i.landed?.status === "unreviewed" ? "landed · new" : "landed", tone: "done", ...sim };
   if (pr.phase === "closed") return { text: `${name} closed`, tone: "danger", ...sim };
   if (pr.op?.kind === "merge") return { text: `${name} merging`, tone: "strong", ...sim };
-  // ORC-013 §7: a cancelled check being re-run, and a review bot's verdict, are named as such.
+  // A cancelled check being re-run, and a review bot's verdict, are named as such.
   const rerunning = pr.op?.kind === "rerun" ? rerunsUsed(pr).filter((u) => u.opId === pr.op!.id) : pr.observed?.checksFor === pr.headSha ? rerunsUsed(pr).filter((u) => pr.observed!.checks.some((c) => c.name === u.check && awaitingRerun(pr, c, nowMs))) : [];
   if (rerunning.length) return plain(`re-running ${[...new Set(rerunning.map((u) => u.check))].join(", ")}`);
   if (pr.attention) {

@@ -263,13 +263,13 @@ export function reportObservations(state: State, obs: Observations, now: string,
       const auto = byApp && !!pr.lastMergeIntent?.auto && pr.lastMergeIntent.headSha === o.headSha;
       const names = gateCheckNames(s, pr, o.checks);
       const required = o.checks.filter((c) => names.includes(c.name));
-      // ORC-013 §7.4: with the user's "no CI" declaration and nothing reported, the head has no checks to be judged by.
+      // With the user's "no CI" declaration and nothing reported, the head has no checks to be judged by.
       const declaredNoCi = s.project.prDelivery.noCi && names.length === 0 && o.checksFor === o.headSha && o.checks.length === 0;
       const clean = o.headSha === pr.headSha && !pr.foreignHead && o.checksFor === o.headSha && (declaredNoCi || (names.length > 0 && names.every((n) => required.find((c) => c.name === n)?.conclusion === "SUCCESS")));
       const flags: LandedFlag[] = [
         ...(clean ? [] : (["merged-without-clean-gate"] as const)),
         ...(pr.review.ok && pr.review.clearedByUser ? (["findings-cleared-by-user"] as const) : []),
-        // ORC-013: the review was clean apart from findings someone accepted as they are.
+        // The review was clean apart from findings someone accepted as they are.
         ...(pr.review.ok && pr.review.accepted?.length ? (["findings-accepted"] as const) : []),
         ...(pr.changed.protectedHits.length ? (["protected-paths"] as const) : []),
       ];
@@ -317,9 +317,9 @@ export function reportObservations(state: State, obs: Observations, now: string,
       delete pr.pendingHead;
       cancel.push({ ids: [...pr.reviewTaskIds, ...pr.repairTaskIds], reason: `someone else pushed to ${prName(pr)}` });
     }
-    // ORC-013 §7.3: observations after a re-run request that still show the cancelled run are counted;
+    // Observations after a re-run request that still show the cancelled run are counted;
     // after 2 (or 5 minutes) the check is judged as observed. The observation, not the request, decides.
-    // The driver's own read right after the request never counts (review L8): GitHub has had no time
+    // The driver's own read right after the request never counts: GitHub has had no time
     // to publish the new run, so that read says nothing about it.
     const ownRerunRead = pr.op?.kind === "rerun" && ctx.opId === pr.op.id;
     if (o.checksFor === pr.headSha && !ownRerunRead) {
@@ -335,7 +335,7 @@ export function reportObservations(state: State, obs: Observations, now: string,
         const mine = rerunsUsed(pr).filter((u) => u.opId === pr.op!.id);
         delete pr.op;
         // A definite refusal means the re-run did not happen: the wait is over at once, and the record
-        // says GitHub refused it (review L9). The budget stays spent (I7).
+        // says GitHub refused it. The budget stays spent: a re-run counts once it is requested.
         const definite = !!ctx.actError && !["network", "timeout", "unknown"].includes(ctx.actError.code);
         if (definite) {
           for (const u of mine) {

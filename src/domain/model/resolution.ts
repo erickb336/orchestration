@@ -104,12 +104,12 @@ export function writersOf(s: State, t: Task, st: StepDef): ChangeAuthor[] {
  */
 export function resolveStep(s: State, t: Task, st: Step): Resolution {
   const p = s.project;
-  // ORC-013: a Checks step is run by the service, never by a provider; dispatch never asks for it.
+  // A Checks step is run by the service, never by a provider; dispatch never asks for it.
   if (st.role === "checks") return { ok: false, reason: "run by the service" };
   let selection: ModelSelection;
   let source: SelectionSource;
   let independence: string | undefined;
-  // ORC-021: the security reviewer follows the code reviewer's role default unless it has one of its own.
+  // The security reviewer follows the code reviewer's role default unless it has one of its own.
   const fallback = (): [ModelSelection, SelectionSource] => {
     const d = roleDefaultFor(p, st.role);
     return d ? [d, "project-role"] : [p.defaultSelection, "project-default"];

@@ -32,7 +32,7 @@ export function pendingMessages(s: State): Message[] {
 
 /**
  * Lead-proposed tasks (including child tasks from breakdowns) that are not finished yet: the autonomy
- * cap counts these. ORC-009: deferred work is not counted here, so old-focus work does not block
+ * cap counts these. Deferred work is not counted here, so old-focus work does not block
  * planning for the new focus; `deferredLeadRoots` bounds it separately.
  */
 export function openLeadProposals(s: State): Task[] {
@@ -40,7 +40,7 @@ export function openLeadProposals(s: State): Task[] {
   return s.tasks.filter((t) => t.specs[0]?.author === "lead" && t.lifecycle !== "done" && t.lifecycle !== "cancelled" && !t.reviewTarget && !t.deliverInto && !t.checkTarget && !deferredBy(s, t));
 }
 
-/** ORC-009: lead-authored open roots with their own deferral. Planning stops when these reach the open cap too. */
+/** Lead-authored open roots with their own deferral. Planning stops when these reach the open cap too. */
 export function deferredLeadRoots(s: State): Task[] {
   return s.tasks.filter((t) => t.specs[0]?.author === "lead" && isOpen(t) && !t.parentTaskId && !!t.deferral && !t.reviewTarget && !t.deliverInto && !t.checkTarget);
 }
@@ -67,7 +67,7 @@ export function deliveryNews(s: State, since: string): boolean {
 }
 
 /**
- * A user message. ORC-009: it may carry the task page it was sent from, and it stops a planning run in
+ * A user message. It may carry the task page it was sent from, and it stops a planning run in
  * progress so it is answered next (a reply run is not stopped; see `stopLeadReply`).
  */
 export function postMessage(state: State, text: string, now: string, taskId?: string): State {
@@ -120,16 +120,16 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
     if (!newMessage && nowMs - Date.parse(lastEnd) < Math.min(60, 2 ** (streak - 1)) * 60_000) return null;
   }
   if (pendingMessages(s).length) return "message";
-  // ORC-013: findings routed to the lead hold work up, so a decision run needs neither autonomy,
+  // Findings routed to the lead hold work up, so a decision run needs neither autonomy,
   // operating hours nor room under the planning caps (the failure backoff above still applies). Only
   // decisions no lead run has been shown yet start one: a run that left a decision open does not
   // start another by itself (every later run still lists it, and the user can take it over).
   if (F.decisionsDueForLead(s).length) return "decisions";
-  // ORC-012: while shaping the lead only answers messages; planning is off until the user starts building.
+  // While shaping the lead only answers messages; planning is off until the user starts building.
   if (s.project.stage === "shaping") return null;
   const a = s.project.autonomy;
   if (!a.enabled || !inHours(a.operatingHours, localMinutes)) return null;
-  // ORC-009: deferred lead work does not count toward the open cap, but it cannot pile up without limit either.
+  // Deferred lead work does not count toward the open cap, but it cannot pile up without limit either.
   if (openLeadProposals(s).length >= a.maxOpenProposals || deferredLeadRoots(s).length >= a.maxOpenProposals) return null;
   const last = s.project.lastPlanningAt ? Date.parse(s.project.lastPlanningAt) : 0;
   // Completions, integration conflicts, and blocked work since the last plan wake the lead sooner.
@@ -157,7 +157,7 @@ export function startLeadRun(state: State, init: { provider: ProviderId; model: 
   return { state: s, runId: id };
 }
 
-/** "planning", "reply", or "decisions" (ORC-013: a run started to decide findings routed to the lead). */
+/** "planning", "reply", or "decisions" (a run started to decide findings routed to the lead). */
 function leadTriggerLabel(trigger: LeadTrigger): string {
   return trigger === "planning" ? "planning" : trigger === "decisions" ? "decisions" : "reply";
 }
@@ -236,7 +236,7 @@ export function messageStatus(s: State, m: Message, opts: { blocked?: string; no
   if (s.leadRuns.some((r) => r.outcome === "completed" && r.messageIds.includes(m.id))) return { kind: "answered", text: "Answered" };
   const active = activeLeadRun(s);
   const failure = active?.note?.startsWith("Control failure") ? ` ${active.note}` : "";
-  // Review finding 9: a lead run stopping under a project pause is stopping because of the pause, not to
+  // A lead run stopping under a project pause is stopping because of the pause, not to
   // answer anything. The pause is checked first, and the stop texts below name no reason for the stop.
   if (s.project.hold) return { kind: "project-paused", text: `Project paused; ${active?.outcome === "stopping" ? "the lead run is stopping and " : ""}the lead answers after you resume.${failure}` };
   if (active?.outcome === "running" && active.messageIds.includes(m.id)) return { kind: "working", text: "The lead is working on this…" };
@@ -343,7 +343,7 @@ export function applyAutopilot(state: State, branch: string, now: string): State
     },
     now,
   );
-  // ORC-013: on Autopilot the lead decides ask-user findings, so work does not wait for a person. It
+  // On Autopilot the lead decides ask-user findings, so work does not wait for a person. It
   // never turns checks on or changes the sandbox.
   return F.setTriageRouting(next, "lead", now);
 }

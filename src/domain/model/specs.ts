@@ -80,7 +80,7 @@ interface FollowUpOptions {
   holdBeforeStart?: boolean;
   /** The pipeline to run. Default: the origin's current flow from the catalog, else a copy of its pipeline before any expansion. */
   steps?: StepDef[];
-  /** ORC-016: the provenance of `steps` when the service supplies them. Default: a custom pipeline. */
+  /** The provenance of `steps` when the service supplies them. Default: a custom pipeline. */
   flow?: FlowRef;
   author?: Actor;
   /** Default: the origin task (already done, so it never delays the follow-up). */
@@ -113,8 +113,8 @@ export function createFollowUp(state: State, taskId: string, now: string, opts: 
   const newId = `${root}-F${k}`;
   const author = opts.author ?? "user";
   // Fresh steps: expanded -iN and -cN copies are never copied, and nothing carries run state over.
-  // ORC-016: the origin's flow is re-applied from the current catalog when it is still there (so a
-  // follow-up takes up an updated flow); legacy, custom and internal pipelines are copied as they were.
+  // The origin's flow is re-applied from the current catalog when it is still there (so a follow-up
+  // takes up an updated flow); legacy, custom and internal pipelines are copied as they were.
   let defs: StepDef[];
   let flow: FlowRef;
   let reason: string;

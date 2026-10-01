@@ -19,7 +19,7 @@ function previousRepair(t: Task, st: Step): Step | undefined {
   if (round) {
     const k = Number(round[1]);
     if (st.role !== "coder") return undefined;
-    // Review L4: the first round's fix follows the loop's last repair that ran, when there was one: final
+    // The first round's fix follows the loop's last repair that ran, when there was one: final
     // checks failing the check the loop kept fixing is the strongest case for questioning the premise.
     if (k < 2) return t.steps.filter((x) => x.role === "coder" && x.runIf?.length && !/-r\d+-fix$/.test(x.id) && x.state === "done").pop();
     return t.steps.find((x) => x.role === "coder" && new RegExp(`-r${k - 1}-fix$`).test(x.id));
@@ -85,8 +85,9 @@ export function premiseReason(s: State, t: Task, st: Step, inputs: ConsumedInput
  */
 export function runPrinciples(s: State, t: Task, st: Step, inputs: ConsumedInput[] = consumedInputs(s, t, st)): GivenPrinciple[] {
   const own = stepPrinciples(st);
-  // ORC-026: every agent run also gets "contextualize and write for the reader", on tasks whose steps carry principles at all.
-  // A task copied before ORC-024 carries none anywhere, and its runs get none (review L2), this one included.
+  // Every agent run also gets the every-run principles ("contextualize and write for the reader"), on tasks whose steps
+  // carry principles at all. A task created before steps carried principles has none anywhere, and its runs get none,
+  // this one included.
   const current = t.steps.some((x) => (x.principles?.length ?? 0) > 0);
   const base = current && st.role !== "checks" ? orderPrinciples([...own, ...EVERY_RUN_PRINCIPLE_IDS]) : own;
   const reason = own.length ? premiseReason(s, t, st, inputs) : undefined;

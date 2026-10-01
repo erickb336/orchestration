@@ -84,7 +84,7 @@ const modelOf = (run: Attempt) => run.actualModel ?? run.snapshot.model;
 const findingsText = (n: number) => `${n} open finding${n === 1 ? "" : "s"}`;
 
 /**
- * ORC-013 §5.4: may a review artifact count as evidence for the change `sha`? Findings someone still
+ * May a review artifact count as evidence for the change `sha`? Findings someone still
  * has to fix or decide are evidence whatever the coverage (they keep the gate blocked and drive the
  * repair). A clean review counts only when a person wrote it, or when its coverage is complete for
  * exactly this change, or when the service recorded no changed-path set for the run at all (nothing
@@ -117,7 +117,7 @@ function reviewsOf(s: State, c: Task, pr: PrDelivery, covers: (run: Attempt) => 
 
 /**
  * Evidence from a set of reviews that saw the change: unresolved findings, then independence. Every
- * review's findings count; independence is judged on the code review alone (ORC-021 review 6). A
+ * review's findings count; independence is judged on the code review alone. A
  * security review by the writer's own provider adds findings but is never the independent evidence.
  */
 function judge(s: State, pr: PrDelivery, covering: Covering[], source: "pipeline" | "dedicated", taskId: string): ReviewView {
@@ -141,7 +141,7 @@ function judge(s: State, pr: PrDelivery, covering: Covering[], source: "pipeline
     };
   }
   const cleared = covering.some((x) => x.art.author === "user");
-  // ORC-013: findings someone decided to accept as they are do not block, and the evidence names them.
+  // Findings someone decided to accept as they are do not block, and the evidence names them.
   const accepted = covering.flatMap((x) => F.acceptedFindings(s, x.art));
   const provider = by.run.snapshot.provider;
   return {
@@ -180,12 +180,12 @@ function pipelineReview(s: State, pr: PrDelivery): ReviewView {
   }
   const covering = reviewsOf(s, c, pr, (run) => run.snapshot.inputs.some((i) => i.artifactId === fc.id));
   if (!covering.some((x) => x.role === "code_reviewer")) {
-    // ORC-013: a review that saw the change but did not list the files it covered is not clean evidence.
+    // A review that saw the change but did not list the files it covered is not clean evidence.
     const saw = c.steps.some((st) => st.state === "done" && st.role === "code_reviewer" && lastCompletedRun(s, c.id, st.id)?.snapshot.inputs.some((i) => i.artifactId === fc.id));
     return saw ? { state: "missing", evidence: noReview(pr, `The review of ${h} did not list the files it covered, so it does not count.`) } : missing;
   }
   const v = judge(s, pr, covering, "pipeline", c.id);
-  // ORC-021 review 1: a clean pass also needs a security review that saw the final change; without one the
+  // A clean pass also needs a security review that saw the final change; without one the
   // dedicated review (which has one) runs. Findings and a review that is not independent stand as they are.
   if (v.state === "ok" && !covering.some((x) => x.role === "security_reviewer")) return { state: "missing", evidence: noReview(pr, `No security review saw the final change ${h}.`) };
   return v;
@@ -226,18 +226,18 @@ function finishedReview(s: State, pr: PrDelivery, rv: Task): ReviewView {
   if (rv.lifecycle !== "done") {
     const blocked = rv.steps.find((x) => x.state === "blocked");
     if (blocked) return { state: "blocked", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} cannot run: ${blocked.blockedReason ?? "its step is blocked"}`) };
-    // ORC-009 review finding 1: steering rejects delivery tasks, but a deferral reached by any other path
+    // Steering rejects delivery tasks, but a deferral reached by any other path
     // must be reported as what it is: nothing starts on the review until the deferral is lifted.
     const deferred = !M.activeAttempts(s, rv.id).length && M.deferredBy(s, rv);
     if (deferred) {
       return { state: "blocked", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is deferred${deferred.task.id !== rv.id ? ` with ${deferred.task.id}` : ""}, so it does not run. Run it now to continue, or merge it yourself.`) };
     }
-    // ORC-012 review 1: while shaping the review, like any other work, waits for Start building; it is not queued.
+    // While shaping the review, like any other work, waits for Start building; it is not queued.
     const how = M.activeAttempts(s, rv.id).length ? "running" : rv.hold || rv.holdBeforeStart ? "paused" : s.project.stage === "shaping" ? "held: it waits until you start building (shaping)" : "queued";
     return { state: "pending", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is ${how}.`) };
   }
   // A dedicated review counts only when its run read a worktree detached at exactly this commit, and
-  // (ORC-013) only when it listed the files it covered.
+  // only when it listed the files it covered.
   const all = reviewsOf(s, rv, pr, () => true);
   if (!all.some((x) => x.role === "code_reviewer") || all.some((x) => x.run.snapshot.reviewedSha !== pr.changeSha)) {
     const ran = rv.steps.some((st) => st.state === "done" && st.role === "code_reviewer" && lastCompletedRun(s, rv.id, st.id)?.snapshot.reviewedSha === pr.changeSha);
@@ -261,7 +261,7 @@ export function reviewView(s: State, t: Task): ReviewView {
   const dedicated = dedicatedReview(s, t, pr);
   if (dedicated && dedicated.state !== "missing") return dedicated;
   if (own.state === "findings") return own;
-  // Review 1 (8): above the coverage limit no agent review can ever be shown complete, so none is started; the user merges.
+  // Above the coverage limit no agent review can ever be shown complete, so none is started; the user merges.
   if (pr.changed.files > MAX_PROVEN_PATHS) {
     return { state: "too-large", evidence: noReview(pr, `The change ${sha12(pr.changeSha)} touches ${pr.changed.files} files, too many for a review to show it covered them all (the limit is ${MAX_PROVEN_PATHS}). No review is started; look at it and merge it yourself.`) };
   }
@@ -275,7 +275,7 @@ export function reviewView(s: State, t: Task): ReviewView {
 }
 
 /**
- * Review evidence for a pull request's change (design §9.1): the task's own review when it provably
+ * Review evidence for a pull request's change: the task's own review when it provably
  * covers the final change and was done by another provider than the author, else a finished dedicated
  * review of exactly that change. Evidence always names the change it is for.
  */
@@ -290,8 +290,8 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
   let k = 1;
   while (ids.has(`${t.id}-RV${k}`)) k++;
   const id = `${t.id}-RV${k}`;
-  // ORC-016: the dedicated review pipeline is the service's own; no flow file can replace it.
-  // ORC-021: it carries a security review beside the code review; both are independent of the writer,
+  // The dedicated review pipeline is the service's own; no flow file can replace it.
+  // It carries a security review beside the code review; both are independent of the writer,
   // and the findings of either gate the merge (`judge` counts every review role).
   const review = internalFlow("delivery-review");
   const defs = review.steps.map(toDef);
@@ -303,7 +303,7 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
     if (!named.has(d.role)) d.purpose = `${d.role === "security_reviewer" ? "Security review of" : "Review"} ${t.id} for merge into ${pr.base} at ${h}`;
     named.add(d.role);
   }
-  // The hash is of the steps that run, with the rewritten purpose and the independence rule (step 1 review, finding 5).
+  // The hash is of the steps that run, with the rewritten purpose and the independence rule, so it names exactly what ran.
   const flow: FlowRef = { ...flowRef(review, "service"), hash: flowHash(defs) };
   const content: SpecContent = structuredClone(M.currentSpec(t).content);
   const title = content.title;
@@ -338,7 +338,7 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
 }
 
 /**
- * Make sure one dedicated review exists when the change needs one (design §9.2): coverage failed for a
+ * Make sure one dedicated review exists when the change needs one: coverage failed for a
  * reason a review can cure, and no review of this change exists or is running. Never for open
  * findings (those go to repair), never a second one for the same change, never past the cap.
  */

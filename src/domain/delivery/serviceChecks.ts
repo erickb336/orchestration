@@ -22,7 +22,7 @@ function startChecks(s: State, t: Task, pr: PrDelivery, now: string): string {
   let k = 1;
   while (ids.has(`${t.id}-CK${k}`)) k++;
   const id = `${t.id}-CK${k}`;
-  // ORC-016: the dedicated check pipeline is the service's own; no flow file can replace it.
+  // The dedicated check pipeline is the service's own; no flow file can replace it.
   const checks = internalFlow("delivery-checks");
   const defs = checks.steps.map(toDef);
   const flow = flowRef(checks, "service");
@@ -58,7 +58,7 @@ function startChecks(s: State, t: Task, pr: PrDelivery, now: string): string {
 }
 
 /**
- * Make sure one dedicated check run exists when the change needs one (§6.9): checks are on, the
+ * Make sure one dedicated check run exists when the change needs one: checks are on, the
  * change has no result under the current settings, no check task for it is open, fewer than the cap
  * were started, and nothing is paused. A failed result is a repair's job, never another run's.
  */

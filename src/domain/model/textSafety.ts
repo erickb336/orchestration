@@ -1,14 +1,12 @@
 // Cleaning text an agent supplies before it is stored or shown again: control characters are rejected,
 // invisible characters that change how text reads are stripped, and one-line fields stay on one line.
 
-
-
 // Control characters other than newline and tab (those are whitespace, collapsed by `oneLine`).
 export const CONTROL_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
 /**
- * ORC-012 review 5 and ORC-014 review 3: characters that show nothing but change how text reads or is
- * matched. Text the lead supplies (drafts, questions, options, coverage, steering reasons and the focus)
- * and document text in envelopes lose: C1 controls, the zero-width space, bidi embeddings and overrides
+ * Characters that show nothing but change how text reads or is matched. Text the lead supplies (drafts,
+ * questions, options, coverage, steering reasons and the focus) and document text in envelopes lose:
+ * C1 controls, the zero-width space, bidi embeddings and overrides
  * (U+202A–202E) and isolates (U+2066–2069), the word joiner, the byte-order mark, and tag characters
  * outside a valid emoji tag sequence. Legitimate text keeps what it needs: ZWJ inside emoji sequences
  * and between letters, ZWNJ between letters (Persian, Devanagari), LRM/RLM, variation selectors, and
@@ -62,8 +60,8 @@ export const stripInvisible = (x: string) => stripHostile(x).text;
 /** Text with nothing visible in it counts as empty. */
 export const visibleOrEmpty = (x: string) => (ONLY_INVISIBLE_RE.test(x) ? "" : x);
 /**
- * Review finding 8: every text the lead supplies (focus, reason, why) is one line of plain text. The
- * focus is printed verbatim in every later envelope, so newlines would give injected text a persistent
- * channel; control characters are rejected outright by `CONTROL_RE`, invisible ones are stripped.
+ * Every text the lead supplies (focus, reason, why) is one line of plain text. The focus is printed
+ * verbatim in every later envelope, so newlines would give injected text a persistent channel; control
+ * characters are rejected outright by `CONTROL_RE`, invisible ones are stripped.
  */
 export const oneLine = (x: string) => visibleOrEmpty(stripInvisible(x).replace(/\s+/g, " ").trim());

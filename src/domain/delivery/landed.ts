@@ -27,7 +27,7 @@ export function recordLanded(
   if (!t.integration || t.integration.landed) return false;
   // A link shown as "Open on GitHub" is only ever a github.com address.
   const pr = entry.pr && !entry.simulated && !GITHUB_URL.test(entry.pr.url) ? { number: entry.pr.number, url: "" } : entry.pr;
-  // ORC-013 §6.9: checks the user accepted failing, or no check evidence for the landed change while checks are on.
+  // Flags: checks the user accepted failing, or no check evidence for the landed change while checks are on.
   const changeSha = t.integration.pr?.changeSha ?? M.finalChange(s, t)?.ref?.split(" ")[0];
   const flags = [...new Set([...(entry.flags ?? []), ...C.landedCheckFlags(s, t, changeSha)])];
   t.integration.landed = { at: now, ...entry, ...(pr ? { pr } : {}), flags, status: "unreviewed", notes: [], followUps: [] };
@@ -91,7 +91,7 @@ export function landedReviews(s: State, t: Task): LandedReview[] {
         purpose: st.purpose,
         role: st.role,
         artifactId: a.id,
-        // ORC-013: structured findings count what is still unresolved; accepted findings are not open.
+        // Structured findings count what is still unresolved; accepted findings are not open.
         openFindings: F.unresolved(s, a),
         summary: a.summary,
         ...(provider && isProvider(provider) ? { provider } : {}),
@@ -187,14 +187,14 @@ export function sendBackLanded(state: State, a: { taskId: string; kind: "fix" | 
     if (landed.simulated) throw new ControlError("This item is simulated: there is no commit to revert.");
     const open = openRevertOf(state, landed);
     if (open) throw new ControlError(`${open.id} is already reverting this change.`);
-    // ORC-016: the revert pipeline is the service's own; no flow file can replace it.
+    // The revert pipeline is the service's own; no flow file can replace it.
     const revert = internalFlow("revert");
     steps = revert.steps;
     // The first writer is the one whose workspace holds the prepared revert: name the commit for it.
     const first = steps.find((x) => x.role === "coder");
     if (!first) throw new ControlError("The Revert pipeline has no coder step to complete the revert.");
     first.purpose = `${first.purpose} (revert of ${c12})`;
-    // The hash is of the steps that run, purpose included (step 1 review, finding 5).
+    // The hash is of the steps that run, purpose included, so it names exactly what ran.
     flow = { ...flowRef(revert, "service"), hash: flowHash(steps) };
     fields = { revertOf: { taskId: origin.id, commit: landed.commit } };
   } else {

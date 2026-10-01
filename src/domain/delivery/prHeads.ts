@@ -79,8 +79,8 @@ function changeAuthorsOf(s: State, t: Task): ChangeAuthor[] {
 }
 
 /**
- * A finished fix task's final commit becomes the pending head of the pull request it repairs (design
- * §6.2, §9.3). Nothing is pushed here. `descends`: the commit contains the pull request's current head,
+ * A finished fix task's final commit becomes the pending head of the pull request it repairs; the planner
+ * pushes it later. Nothing is pushed here. `descends`: the commit contains the pull request's current head,
  * so the push is a plain fast-forward; otherwise the fix is stale and is not delivered.
  */
 export function reportRepairHead(state: State, repairTaskId: string, f: PrHeadFacts & { descends: boolean }, now: string): State {
@@ -132,7 +132,7 @@ export function promoteHead(s: State, taskId: string, now: string): State {
   delete pr.baseConflict;
   delete pr.message;
   delete pr.nextAt;
-  // ORC-013 §7.3: the re-run budget is per head.
+  // The re-run budget is per head.
   delete pr.ciReruns;
   pr.counters.mergeAttempts = 0;
   pr.counters.failures = 0;

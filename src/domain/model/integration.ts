@@ -79,7 +79,7 @@ export function reportIntegration(state: State, taskId: string, result: Integrat
 /** Is a delivery attempt due now? Failed attempts wait: 1 minute when skipped, 5 when conflicting. */
 export function deliveryDue(s: State, nowMs: number): boolean {
   const d = s.project.delivery;
-  // ORC-012 review 1: no delivery work starts while shaping.
+  // No delivery work starts while shaping.
   if (!s.project.autonomy.autoDeliver.enabled || !d?.pending || s.project.hold || s.project.stage === "shaping") return false;
   if (!d.lastAttemptAt) return true;
   const wait = d.status === "conflict" ? 5 * 60_000 : 60_000;

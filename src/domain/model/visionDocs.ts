@@ -28,7 +28,7 @@ export function fmtBytes(n: number): string {
  * when joined under it, because no segment is `..` and none is absolute.
  */
 export function visionDocPath(given: string): { ok: true; path: string } | { ok: false; why: string } {
-  // ORC-014 review 9: one spelling per name, so the same name in two encodings replaces rather than duplicates.
+  // One spelling per name, so the same name in two encodings replaces rather than duplicates.
   const raw = typeof given === "string" ? given.normalize("NFC") : "";
   if (!raw.trim()) return { ok: false, why: "The file needs a name." };
   if (raw.length > MAX_VISION_DOC_PATH) return { ok: false, why: `The path is over ${MAX_VISION_DOC_PATH} characters.` };
@@ -71,7 +71,7 @@ export interface VisionDocInput {
   text: boolean;
 }
 
-/** ORC-014 review 9: a staged record whose batch never committed is dropped after this long. */
+/** A staged record whose batch never committed is dropped after this long. */
 export const STAGED_DOC_TTL_MS = 60 * 60 * 1000;
 
 /** Documents uploaded but not yet attached (waiting for their batch). */
@@ -134,7 +134,7 @@ interface StagedDoc {
 }
 
 /**
- * ORC-014 review 9: record one uploaded file, without a revision. The endpoint stores the copy once this
+ * Record one uploaded file, without a revision. The endpoint stores the copy once this
  * succeeds; `attachVisionDocs` then attaches the batch as one revision. Staging the same file twice
  * before the commit reuses the record.
  */
@@ -181,7 +181,7 @@ function nameList(paths: string[]): string {
 }
 
 /**
- * ORC-014 review 9: attach a batch of staged documents as ONE user-authored vision revision ("Attached N
+ * Attach a batch of staged documents as ONE user-authored vision revision ("Attached N
  * documents"). Files are applied in the order given; each is checked against the caps on top of the ones
  * before it, so a batch that overflows attaches what fits and reports the rest by name. A file whose
  * path and content are attached already is reported unchanged. The revision records the whole resulting

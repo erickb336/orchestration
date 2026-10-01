@@ -28,7 +28,7 @@ export function rerunStep(state: State, taskId: string, stepId: string, now: str
 
 /**
  * Rerun a finished step on a draft state: it goes back to pending, everything downstream is invalidated and
- * downstream runs in flight are stopped. ORC-022: shared with the notes that rerun a finished step.
+ * downstream runs in flight are stopped. Also used by a note that reruns a finished step.
  */
 export function rerunInto(s: State, t: Task, st: Step, now: string, actor: "user" | "lead", detail?: string) {
   const stepId = st.id;

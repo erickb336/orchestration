@@ -44,7 +44,7 @@ export function acknowledgeStop(state: State, attemptId: string, now: string): S
   a.outcome = "stopped";
   a.endedAt = now;
   a.artifacts.push(`checkpoint: partial work left in ${a.snapshot.workspace}`);
-  // ORC-016 G2 (steps 2–3 review, finding 6): a run from before the flow changed settles alone; its step belongs to the new flow.
+  // A run from before the flow changed settles alone; its step belongs to the new flow.
   const earlier = beforeFlow(t, a);
   if (earlier) a.note = `Stopped on pipeline r${a.snapshot.pipelineRev}, before the flow changed (r${t.flowSince}); its step was not touched`;
   else settleStoppedStep(s, t, st);
@@ -70,7 +70,7 @@ export function reportRunLost(state: State, attemptId: string, reason: string, n
   a.endedAt = now;
   a.note = `${reason}; no result was produced or integrated`;
   a.artifacts.push(`checkpoint: partial work left in ${a.snapshot.workspace}`);
-  // ORC-016 G2 (steps 2–3 review, finding 6): a run from before the flow changed settles alone; its step belongs to the new flow.
+  // A run from before the flow changed settles alone; its step belongs to the new flow.
   const earlier = beforeFlow(t, a);
   if (earlier) a.note += `; it ran on pipeline r${a.snapshot.pipelineRev}, before the flow changed (r${t.flowSince}), so its step was not touched`;
   else settleStoppedStep(s, t, findStep(t, a.stepId));
@@ -115,7 +115,7 @@ export function reportRunFailed(state: State, attemptId: string, message: string
   if (run.usage) a.usage = run.usage;
   if (run.actualModel) a.actualModel = run.actualModel;
   if (beforeFlow(t, a)) {
-    // G2 (ORC-016 §7.3): the step belongs to the new flow; a failure from the earlier one says nothing about it.
+    // The step belongs to the new flow; a failure from the earlier one says nothing about it.
     discardEarlierFlow(s, t, a, now, `; it failed: ${message}`);
     return s;
   }
@@ -161,11 +161,11 @@ export interface OutputReport {
   summary: string;
   /** Legacy review findings: the worker's count. Ignored when `findings` is present (the service computes it). */
   openFindings?: number;
-  /** ORC-013: structured findings, already validated by the parser. */
+  /** Structured findings, already validated by the parser. */
   findings?: Finding[];
-  /** ORC-013: the changed files the reviewer says it judged (normalised by the parser). */
+  /** The changed files the reviewer says it judged (normalised by the parser). */
   reviewedPaths?: string[];
-  /** ORC-013: a service check run (step 2). */
+  /** A service check run. */
   checkRun?: Artifact["checkRun"];
   /** Breakdown outputs: the work items that become child tasks. */
   items?: unknown[];
@@ -177,7 +177,7 @@ export interface RunReport {
   usage?: Attempt["usage"];
   actualModel?: string;
   /**
-   * ORC-017: the run came from the fake runtime (simulated). The server sets it from the adapter that ran
+   * The run came from the fake runtime (simulated). The server sets it from the adapter that ran
    * the lead; a lead run's focus change and steering change set then carry a structured `simulated` flag.
    */
   simulated?: true;
@@ -195,8 +195,8 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
   if (run.usage) a.usage = run.usage;
   if (run.actualModel) a.actualModel = run.actualModel;
 
-  // G2 (ORC-016 §7.3): a run started before the task's flow changed reports nothing to the new steps,
-  // whatever its step id now means. Checked before G1, so the note names the cause.
+  // A run started before the task's flow changed reports nothing to the new steps, whatever its step id
+  // now means. Checked before the stale-revision check below, so the note names the cause.
   if (beforeFlow(t, a)) {
     discardEarlierFlow(s, t, a, now);
     return s;
@@ -227,10 +227,10 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
       settleSendingNotes(s, a.id, "the run ended before the runtime answered", now);
       return s;
     }
-    // ORC-013 §5.3: a code review that reports nothing must account for every changed file the
+    // A code review that reports nothing must account for every changed file the
     // service showed it. Otherwise it is not accepted: once more with the gap named, then blocked.
     const reviewCoverage = new Map<string, ReturnType<typeof pathCoverageOf>>();
-    // Review 1 (7): a code review that read a real change but got no changed-path set is "unproven", never "not-required".
+    // A code review that read a real change but got no changed-path set is "unproven", never "not-required".
     const readsRealChange = a.snapshot.inputs.some((i) => {
       const art = s.artifacts.find((x) => x.id === i.artifactId);
       return art?.kind === "code-change" && !!art.ref && !art.ref.startsWith("sim-");
@@ -240,10 +240,10 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
       const rep = outputs.find((o) => o.name === def.name)!;
       const cov = st.role !== "code_reviewer" ? notRequired() : a.scope || !readsRealChange ? pathCoverageOf(a.scope, rep.reviewedPaths ?? []) : { state: "unproven" as const, changed: 0, reviewed: (rep.reviewedPaths ?? []).length, missing: [], extra: [] };
       reviewCoverage.set(def.name, cov);
-      // Review 1 (14): a finding an earlier round settled (accepted, followed up) does not make this report "not clean".
+      // A finding an earlier round settled (accepted, followed up) does not make this report "not clean".
       const open = rep.findings ? rep.findings.filter((f) => F.isBlocking(f) && !F.settledByKey(s, t, f)).length : (rep.openFindings ?? 0);
       if (open > 0 || cov.state !== "incomplete") continue;
-      // Review 1 (12): the gap and its retry belong to one change; a different change starts over.
+      // The gap and its retry belong to one change; a different change starts over.
       if (st.coverageGap && st.coverageGap.to !== cov.to) {
         delete st.coverageGap;
         delete st.coverageRetries;
@@ -296,13 +296,13 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
         ...(def.kind === "check-results" && rep.checkRun ? { checkRun: structuredClone(rep.checkRun), ...(rep.findings ? { findings: structuredClone(rep.findings), openFindings: F.blockingCount(rep.findings) } : {}) } : {}),
         ...(def.kind === "breakdown" ? { items: structuredClone(rep.items ?? []) } : {}),
       };
-      // Review 1 (10): open decisions on the version this run replaces cannot be acted on any more; decided ones are the record (and carry forward).
+      // Open decisions on the version this run replaces cannot be acted on any more; decided ones are the record (and carry forward).
       for (const old of s.artifacts) if (old.taskId === t.id && old.stepId === st.id && old.name === def.name) F.supersedeDecisions(s, t.id, now, { artifactId: old.id, reason: `${st.id} ran again and produced ${def.name} v${version}` });
       s.artifacts.push(art);
       produced.push(`${def.name} v${version}`);
-      // ORC-013 §4.4: every blocking ask-user finding becomes a decision, routed as the project is set.
+      // Every blocking ask-user finding becomes a decision, routed as the project is set.
       if (art.findings) F.createDecisions(s, t, art, now);
-      // ORC-013 §6.7: a Final checks step whose run did not pass blocks the task and opens a decision.
+      // A Final checks step whose run did not pass blocks the task and opens a decision.
       // The result stays on the record. The reason never starts with "Last run failed", so automatic
       // retry leaves it alone; only a repair round (lead or user) or the user's acceptance ends it.
       if (def.kind === "check-results" && st.checks?.onFail === "block" && art.checkRun && !C.allPassed(art.checkRun)) {
@@ -331,7 +331,7 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
   }
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
-  // ORC-022: a note the run never acknowledged is not delivered, whatever the result (it is never "delivered" by implication).
+  // A note the run never acknowledged is not delivered, whatever the result (it is never "delivered" by implication).
   settleSendingNotes(s, a.id, "the run ended before the runtime answered", now);
 
   if (t.lifecycle === "active" && t.steps.every(isSettled) && activeAttempts(s, t.id).length === 0 && !t.hold && !s.project.hold) {

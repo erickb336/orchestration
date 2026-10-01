@@ -12,14 +12,14 @@ export type Column = "proposed" | "ready" | "running" | "reviewing" | "paused" |
 export const BOARD_COLUMNS: Column[] = ["proposed", "ready", "running", "reviewing", "paused", "deferred", "blocked", "done"];
 
 /**
- * ORC-009: the deferral that applies to a task: its own, or the nearest ancestor's (walking at most
+ * The deferral that applies to a task: its own, or the nearest ancestor's (walking at most
  * 10 levels). Children are never written, so a root and all its children defer together and one Undo
  * touches one field.
  */
 export function deferredBy(s: State, t: Task): { task: Task; deferral: Deferral } | undefined {
   let cur: Task | undefined = t;
   for (let i = 0; cur && i <= 10; i++) {
-    // Review finding 4: a done or cancelled ancestor's deferral no longer applies, so a deferred root
+    // A done or cancelled ancestor's deferral no longer applies, so a deferred root
     // that finishes does not strand its open children (finishTask clears the deferral as well).
     if (cur.deferral && isOpen(cur)) return { task: cur, deferral: cur.deferral };
     if (!cur.parentTaskId) return undefined;
@@ -95,7 +95,7 @@ export function column(s: State, t: Task): Column {
   }
   if (blockedReason(s, t)) return "blocked";
   if (t.hold) return "paused";
-  // ORC-009: deferred work is idle by design, never "Paused" (a pause is something the runtime confirmed).
+  // Deferred work is idle by design, never "Paused" (a pause is something the runtime confirmed).
   if (deferredBy(s, t)) return "deferred";
   if (t.lifecycle === "proposed") return "proposed";
   // Started but idle: paused by the project hold, otherwise queued for its next step.
@@ -121,9 +121,9 @@ export function stateLabel(s: State, t: Task): string {
   if (col === "cancelled") return "Cancelled";
   if (col === "done") return "Done";
   if (col === "blocked") return "Blocked";
-  // ORC-025: one word for a pause, whether the task or the project is paused; the header says "Project paused".
+  // One word for a pause, whether the task or the project is paused; the header says "Project paused".
   if (col === "paused") return "Paused";
-  // ORC-009: a deferred task keeps working until its current step ends; then nothing new starts.
+  // A deferred task keeps working until its current step ends; then nothing new starts.
   if ((col === "running" || col === "reviewing") && deferredBy(s, t)) return `${col === "running" ? "Running" : "In review"} · deferred after this step`;
   if (col === "reviewing") return "In review";
   if (col === "deferred") return deferredLabel(s, t)!;
@@ -132,24 +132,24 @@ export function stateLabel(s: State, t: Task): string {
     if (open === 0) return "Waiting for child pull requests to merge";
     return `Waiting for ${open} child task${open === 1 ? "" : "s"}`;
   }
-  // ORC-013: a repair that would read undecided findings waits for the decision; nothing is blocked.
+  // A repair that would read undecided findings waits for the decision; nothing is blocked.
   const awaiting = t.lifecycle === "active" && active.length === 0 ? F.awaitingDecision(s, t) : undefined;
   if (awaiting) return F.awaitingLabel(awaiting);
-  // ORC-013 §6.5.4: a Checks step that would start next waits while the sandbox is not ready; nothing runs unsandboxed by itself.
+  // A Checks step that would start next waits while the sandbox is not ready; nothing runs unsandboxed by itself.
   if (t.lifecycle === "active" && active.length === 0 && C.checksHeld(s) && t.steps.some((st) => st.state === "pending" && st.role === "checks" && st.dependsOn.every((d) => isSettled(getStep(t, d))))) return C.HELD_LABEL;
-  // ORC-012: while shaping, a step that would start next waits for Start building; nothing is paused.
+  // While shaping, a step that would start next waits for Start building; nothing is paused.
   if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (shaping)" : "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return waitingLabel(s, t);
-  // ORC-012 review 2: the roadmap's own hold is named as such; the user's hold before start stays its own label.
-  // ORC-014 review 11: what follows Start building is decided by the involvement setting at that moment,
-  // so the label reads it now; a dependency wait is shown under the shaping hold too.
+  // The roadmap's own hold is named as such; the user's hold before start keeps its own label. What follows
+  // Start building is decided by the involvement setting at that moment, so the label reads it now; a
+  // dependency wait is shown under the shaping hold too.
   if (col === "ready" && t.heldForShaping) {
     const dep = waitingOn(s, t);
     return `Planned; waits until you start building${dep ? ` and on ${dep}` : ""}, then ${startBuildingPlan(s).release ? "starts on Autopilot" : "waits for your go-ahead (your involvement setting)"}`;
   }
-  // ORC-025: "Wait for my go-ahead" is the setting; the state names what it waits for. A project pause shows in the header, not here.
+  // "Wait for my go-ahead" is the setting; the state names what it waits for. A project pause shows in the header, not here.
   if (col === "ready" && t.holdBeforeStart) return "Waiting for your go-ahead";
-  // ORC-012 review 13: a dependency wait is shown before the stage, with shaping noted.
+  // A dependency wait is shown before the stage, with shaping noted.
   if (col === "ready" && waitingOn(s, t)) return waitingLabel(s, t);
   if (col === "ready" && s.project.stage === "shaping") return "Ready (shaping)";
   return col[0].toUpperCase() + col.slice(1);

@@ -24,7 +24,7 @@ export interface LeadProposal {
   rationale: string;
   uncertainty: string;
   acceptance: string[];
-  /** ORC-021: the flow to run. Absent: the project default. */
+  /** The flow to run. Absent: the project default. */
   flowId?: string;
   priority: number;
 }
@@ -35,21 +35,21 @@ const namedFlow = (p: LeadProposal): unknown => p.flowId;
 interface LeadOutput {
   reply: string;
   proposals: LeadProposal[];
-  /** ORC-009: the steering block as found in the JSON (untrusted; validated here). Absent or null: none. */
+  /** The steering block as found in the JSON (untrusted; validated by the steering module). Absent or null: none. */
   steer?: unknown;
-  /** ORC-012: the vision draft as found in the JSON (untrusted; validated here). Absent or null: none. */
+  /** The vision draft as found in the JSON (untrusted; validated by the shaping module). Absent or null: none. */
   vision?: unknown;
-  /** ORC-012: the lead's coverage of the vision's areas, as found (untrusted; validated here). */
+  /** The lead's coverage of the vision's areas, as found (untrusted; validated by the shaping module). */
   coverage?: unknown;
-  /** ORC-012: the lead's questions to the user, as found (untrusted; validated here). */
+  /** The lead's questions to the user, as found (untrusted; validated by the shaping module). */
   questions?: unknown;
-  /** ORC-013: the lead's decisions on findings routed to it, as found (untrusted; validated in the findings module). */
+  /** The lead's decisions on findings routed to it, as found (untrusted; validated in the findings module). */
   decisions?: unknown;
   /** Why the output could not be read (no JSON block): recorded on the run and shown under the reply. */
   problem?: string;
 }
 
-/** How long a dropped title stays off limits to planning (ORC-009). */
+/** How long a dropped title stays off limits to planning. */
 const DROP_GUARD_MS = 7 * 24 * 60 * 60_000;
 
 /**
@@ -70,7 +70,7 @@ export function validateProposal(s: State, p: LeadProposal, now?: string, who: "
   if (!isStr(p.rationale, 4000)) return "the decision needs a rationale";
   if (!Array.isArray(p.acceptance) || !p.acceptance.some((x) => typeof x === "string" && x.trim()) || p.acceptance.length > 30) return "it needs one to thirty acceptance checks";
   for (const k of ["scopeIncluded", "scopeExcluded"] as const) if (p[k] !== undefined && (!Array.isArray(p[k]) || p[k].length > 30)) return `"${k}" must be a list`;
-  // ORC-021: the flow is validated as untrusted data; the lead may name any of the six, a breakdown item any but Goal.
+  // The flow is validated as untrusted data; the lead may name any of the six, a breakdown item any but Goal.
   const named = namedFlow(p);
   if (named !== undefined && typeof named !== "string") return "flowId must be text";
   const flowId = named ?? (who === "child" ? childDefault(s) : effectiveDefault(s)).id;
@@ -79,7 +79,7 @@ export function validateProposal(s: State, p: LeadProposal, now?: string, who: "
   if (who === "child" && flow.breaksDown) return `child tasks cannot break down further (flow "${flow.name}"); use a flow without breakdown steps: ${eligibleIds(s, "child").join(", ")}`;
   const title = (p.title as string).trim().toLowerCase();
   if (s.tasks.some((t) => t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === title)) return "a task with this title already exists";
-  // ORC-009: work the lead dropped when the focus changed is not proposed again for a week.
+  // Work the lead dropped when the focus changed is not proposed again for a week.
   const nowMs = now ? Date.parse(now) : Date.now();
   const dropped = s.tasks.find((t) => t.lifecycle === "cancelled" && t.dropped && nowMs - Date.parse(t.dropped.at) < DROP_GUARD_MS && currentSpec(t).content.title.trim().toLowerCase() === title);
   if (dropped) return `dropped when the focus changed on ${dropped.dropped!.at.slice(0, 10)}; the user can restore it`;
@@ -107,7 +107,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     r.note = out.problem;
     rejected.push("The reply had no machine-readable block, so nothing was changed.");
   }
-  // ORC-009: steering, before the proposals so they are created under the new focus and after the
+  // Steering, before the proposals so they are created under the new focus and after the
   // deferrals and drops that make room. Two guards make it apply once: the run-outcome guard above and
   // the change-set id.
   let set: SteeringChangeSet | undefined;
@@ -117,7 +117,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     if (s.steering.length > 200) s.steering.splice(0, s.steering.length - 200);
     r.changeSetId = set.id;
   }
-  // ORC-012: a vision draft. Never applied: it is recorded as a suggestion for the user to accept, edit
+  // A vision draft. Never applied: it is recorded as a suggestion for the user to accept, edit
   // or dismiss. The run-outcome guard above and the draft id (one per run) make it record once.
   let visionDraft: VisionDraft | undefined;
   if (out.vision !== undefined && out.vision !== null && !s.visionDrafts.some((d) => d.leadRunId === r.id)) {
@@ -125,13 +125,13 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     if (v.ok) visionDraft = draftFromRun(s, r, v.draft, now, run.simulated);
     else rejected.push(`Vision draft: ${v.why}`);
   }
-  // ORC-012: coverage lives on the run (the latest stands); questions live on the reply. Both come only
+  // Coverage lives on the run (the latest stands); questions live on the reply. Both come only
   // from runs that answer the user; anything unreadable is left out with a note.
   let questions: LeadQuestion[] = [];
   if (out.coverage !== undefined && out.coverage !== null) {
     const c = validateCoverage(r, out.coverage);
     rejected.push(...c.notes.map((n) => `Coverage: ${n}`));
-    // ORC-012 review 8: a block with no valid entry reports nothing; the previous coverage stands.
+    // A block with no valid entry reports nothing; the previous coverage stands.
     if (c.ok && Object.keys(c.coverage).length === 0) rejected.push("Coverage: no valid entries; the previous coverage stands");
     else if (c.ok) r.coverage = c.coverage;
   }
@@ -140,18 +140,18 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     questions = q.questions;
     rejected.push(...q.notes.map((n) => `Questions: ${n}`));
   }
-  // ORC-013: decisions on findings routed to the lead, after steering and before the proposals (a
+  // Decisions on findings routed to the lead, after steering and before the proposals (a
   // follow-up decision proposes a task under the same caps). The run-outcome guard makes it apply once.
   if (out.decisions !== undefined && out.decisions !== null) rejected.push(...F.applyLeadDecisions(s, r, out.decisions, now));
   const decided = F.leadRunDecisions(s, r.id);
   const limit = Math.max(1, s.project.autonomy.maxProposalsPerCycle);
   const maxOpen = s.project.autonomy.maxOpenProposals;
   const openRoom = Math.max(0, maxOpen - openLeadProposals(s).length);
-  // Review finding 15: the bound on deferred lead work applies to message runs as it does to planning.
+  // The bound on deferred lead work applies to message runs as it does to planning.
   const deferredLead = deferredLeadRoots(s).length;
   // With autonomy off, proposals from a conversation still become tasks, but they wait for the user.
-  // ORC-012: while shaping every proposal is the roadmap: held by its own flag until the user starts
-  // building (review 2); the hold before start follows the involvement setting as for any lead proposal.
+  // While shaping every proposal is the roadmap: held by its own flag until the user starts building;
+  // the hold before start follows the involvement setting as for any lead proposal.
   const shaping = s.project.stage === "shaping";
   const hold = !s.project.autonomy.enabled || s.project.autonomy.holdLeadProposals;
   const created: string[] = [];
@@ -212,7 +212,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     ...(set ? { changeSetId: set.id } : {}),
     ...(visionDraft ? { visionDraftId: visionDraft.id } : {}),
     ...(questions.length ? { questions } : {}),
-    // Review 1 (14): what this reply decided, as recorded now; the user's later changes do not rewrite it.
+    // What this reply decided, as recorded now; the user's later changes do not rewrite it.
     ...(decided.length ? { leadDecisions: decided.map(({ decision: d, what }) => ({ id: d.id, taskId: d.taskId, what, status: d.status, ...(d.why || d.suggestion?.why ? { why: d.why ?? d.suggestion?.why } : {}) })) } : {}),
   });
   event(
@@ -226,8 +226,8 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
 }
 
 /**
- * Create a lead-authored task from a validated proposal on a draft state. Shared with the findings module
- * (ORC-013 follow-ups). `who`: who named the flow when the proposal names one; the project default
+ * Create a lead-authored task from a validated proposal on a draft state. Also used by the findings module
+ * for follow-ups. `who`: who named the flow when the proposal names one; the project default
  * (or the child default for breakdown items) applies otherwise, recorded as chosen by "default".
  */
 export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string, fromShaping = false, who: "lead" | "breakdown" = "lead"): string {

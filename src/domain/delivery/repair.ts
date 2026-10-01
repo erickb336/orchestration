@@ -39,7 +39,7 @@ export function repairTarget(s: State, repair: Task): { task: Task; pr: PrDelive
 
 /**
  * What is wrong with the current head that a fix task could cure: a conflict, a failed required check,
- * or open findings. ORC-013 §7.2: only `code` failures are a fix task's business; a cancelled run, a
+ * or open findings. Only `code` failures are a fix task's business; a cancelled run, a
  * skipped check and a review bot's opinion are not. `byUser` (the Fix this PR button) may also take
  * on a review bot's failing check, by name and link only.
  */
@@ -60,7 +60,7 @@ export function repairCause(s: State, t: Task, o: { byUser?: boolean } = {}): Re
     // Names and links only: CI log text is untrusted input and never reaches an agent.
     if (failed.length) return { kind: "checks", checks: failed.map((c) => ({ name: c.name, ...(c.url && GITHUB_URL.test(c.url) ? { url: c.url } : {}) })) };
   }
-  // ORC-013 §6.9: the service's own checks failed on the change (under the current settings).
+  // The service's own checks failed on the change (under the current settings).
   if (C.checksOn(s.project.checks)) {
     const ev = C.checkEvidence(s, pr.changeSha);
     const art = !ev.ok && ev.attemptId ? s.artifacts.find((a) => a.attemptId === ev.attemptId && a.kind === "check-results") : undefined;
@@ -69,7 +69,7 @@ export function repairCause(s: State, t: Task, o: { byUser?: boolean } = {}): Re
   }
   const v = reviewView(s, t);
   if (v.state === "findings") {
-    // ORC-013: only what a repair may fix is listed (auto-fix findings and those decided "fix"), each
+    // Only what a repair may fix is listed (auto-fix findings and those decided "fix"), each
     // with its decision. When only undecided ask-user findings remain, no fix task can be started.
     const arts = s.artifacts.filter((a) => v.evidence.artifactIds.includes(a.id) && F.unresolved(s, a) > 0);
     const summaries: string[] = [];
@@ -90,7 +90,7 @@ export function repairCause(s: State, t: Task, o: { byUser?: boolean } = {}): Re
   return undefined;
 }
 
-/** ORC-013: the review's open findings are all ask-user findings nobody has decided yet. */
+/** The review's open findings are all ask-user findings nobody has decided yet. */
 export function onlyUndecided(s: State, t: Task): { count: number; to: "lead" | "user" | "both" } | undefined {
   const v = reviewView(s, t);
   if (v.state !== "findings") return undefined;
@@ -119,7 +119,7 @@ function startRepair(state: State, taskId: string, cause: RepairCause, now: stri
   const pr0 = origin.integration!.pr!;
   const title = M.currentSpec(origin).content.title;
   const h = sha12(pr0.headSha);
-  // ORC-016: a fix runs Change, chosen by the service.
+  // A fix runs the Change flow, chosen by the service.
   const change = serviceFlow(state, "change");
   const r = M.createFollowUp(state, taskId, now, {
     steps: structuredClone(change.steps),
@@ -164,7 +164,7 @@ function startRepair(state: State, taskId: string, cause: RepairCause, now: stri
 }
 
 /**
- * One bounded fix task whose result is pushed onto the same pull request (design §9.3). At most
+ * One bounded fix task whose result is pushed onto the same pull request. At most
  * PR_LIMITS.repairs per pull request and one at a time. `byUser`: the Fix this PR button; it does not
  * need automatic repair to be on, and it counts against the same cap.
  */
@@ -213,12 +213,12 @@ export function advanceDelivery(state: State, now: string): State {
   for (const id of trackedPrTasks(s).map((t) => t.id)) {
     dropStaleUpdate(s, getTask(s, id), now);
     getTask(s, id).integration!.pr!.review = reviewView(s, getTask(s, id)).evidence;
-    // ORC-013 §6.9: the service-check evidence for the change it holds, under the current settings.
+    // The service-check evidence for the change it holds, under the current settings.
     if (C.checksOn(s.project.checks)) getTask(s, id).integration!.pr!.checks = C.checkEvidence(s, getTask(s, id).integration!.pr!.changeSha);
     else delete getTask(s, id).integration!.pr!.checks;
     // The one dedicated review the change needs (it returns the same state when none is needed or allowed).
     s = ensureReview(s, id, now);
-    // ORC-013: and the one check run it needs, when the change has no result of its own.
+    // And the one check run it needs, when the change has no result of its own.
     s = ensureChecks(s, id, now);
     let t = getTask(s, id);
     let pr = t.integration!.pr!;

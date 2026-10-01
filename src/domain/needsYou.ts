@@ -18,7 +18,7 @@ export interface NeedsYou {
 const taskHref = (t: Task) => `#/task/${encodeURIComponent(t.id)}`;
 
 /**
- * What a task waits on the user for, or nothing. Reuses the derivations the Review page and the task page
+ * What a task waits on the user for, or nothing. Reuses the derivations the Results page and the task page
  * use; the most pressing item wins when several apply.
  */
 export function needsYouOf(state: State, task: Task, nowMs = Date.now()): NeedsYou | undefined {
@@ -41,7 +41,7 @@ export function needsYouOf(state: State, task: Task, nowMs = Date.now()): NeedsY
   return undefined;
 }
 
-/** The "what" of a pull request that stopped on a problem; the Overview shows the problem's message under it. */
+/** The "what" of a pull request that stopped on a problem; Home shows the problem's message under it. */
 export const PR_PROBLEM = "decide on the pull request";
 
 /** One mark of the verdict line: "Code ✓", "Security ✓", "Checks ✓". */
@@ -52,7 +52,7 @@ export interface VerdictMark {
 
 /**
  * The verdict line of a pull request, from the same merge gate the task page shows. A clean "review" item means
- * both a code review and a security review saw the final change (delivery.ts: a clean pipeline review needs
+ * both a code review and a security review saw the final change (delivery/review.ts: a clean pipeline review needs
  * the security review too, and the dedicated review flow carries both). "Checks" covers GitHub's required checks
  * and, when the project runs its own, the service's checks.
  */

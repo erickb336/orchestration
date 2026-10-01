@@ -7,7 +7,7 @@ export function draft(state: State): State {
   return structuredClone(state);
 }
 
-/** The next generated id for a draft state (mutates `s.seq`). Shared with the findings module (ORC-013). */
+/** The next generated id for a draft state (mutates `s.seq`). Also used by the findings module. */
 export function nextId(s: State, prefix: string): string {
   s.seq += 1;
   return `${prefix}-${s.seq}`;
@@ -38,7 +38,7 @@ export function isSettled(st: Step) {
   return st.state === "done" || st.state === "skipped";
 }
 
-/** Record an activity event on a draft state. Shared with the findings module (ORC-013). */
+/** Record an activity event on a draft state. Also used by the findings module. */
 export function event(s: State, now: string, actor: Actor, kind: EventKind, message: string, taskId?: string) {
   log(s, { at: now, actor, kind, message, taskId });
 }
@@ -59,18 +59,18 @@ export function activeAttempts(s: State, taskId?: string) {
   return s.attempts.filter((a) => isActive(a) && (taskId === undefined || a.taskId === taskId));
 }
 
-/** ORC-013: active runs of agents (a provider's worker). Service runs (checks) count against their own limit. */
+/** Active runs of agents (a provider's worker). Service runs (checks) count against their own limit. */
 export function activeAgentAttempts(s: State) {
   return s.attempts.filter((a) => isActive(a) && isProvider(a.snapshot.provider));
 }
 
-/** ORC-013: active check runs (run by the service), bounded by `checks.maxConcurrent`. */
+/** Active check runs (run by the service), bounded by `checks.maxConcurrent`. */
 export function activeServiceAttempts(s: State) {
   return s.attempts.filter((a) => isActive(a) && a.snapshot.provider === "service");
 }
 
 /**
- * ORC-013 §6.10: the check settings changed, so every active check run is stopped for revision and its
+ * The check settings changed, so every active check run is stopped for revision and its
  * step's revision bumped, so a late result is discarded and the step runs again with the new settings.
  * Mutates the draft; returns how many runs were asked to stop.
  */
@@ -111,7 +111,7 @@ export function settleStoppedStep(s: State, t: Task, st: Step | undefined) {
 }
 
 /**
- * ORC-022: a run reached a terminal outcome. A note still waiting for its acknowledgment can never get one
+ * A run reached a terminal outcome. A note still waiting for its acknowledgment can never get one
  * now; it is recorded as not delivered, never as delivered. (Adapters answer every note themselves; this is
  * the safety net for a run that ended between the hand-over and the answer.)
  */
@@ -126,7 +126,7 @@ export function settleSendingNotes(s: State, attemptId: string, reason: string, 
 }
 
 /**
- * ORC-022 review L1: a queued note whose step can no longer run on its own (its task is done or cancelled, the step
+ * A queued note whose step can no longer run on its own (its task is done or cancelled, the step
  * finished, was skipped or is blocked, or a flow change removed it) is settled as not delivered, so it never waits
  * forever. These are the same reasons a new note to such a step gets (noteRoute).
  */
@@ -159,19 +159,19 @@ export function settleStrandedNotes(s: State, now: string) {
 export function finishTask(t: Task) {
   t.lifecycle = "done";
   t.integration = { status: "pending" };
-  // Review finding 4: a finished task's deferral is spent; its children must not inherit it.
+  // A finished task's deferral is spent; its children must not inherit it.
   t.deferral = undefined;
 }
 
-/** ORC-016 G2: the attempt started under a flow the task has since left (never true for tasks from before flows, whose `flowSince` is 0). */
+/** The attempt started under a flow the task has since left (never true for tasks from before flows, whose `flowSince` is 0). */
 export function beforeFlow(t: Task, a: Attempt): boolean {
   return a.snapshot.pipelineRev < (t.flowSince ?? 0);
 }
 
 /**
- * ORC-016 (steps 2–3 review, finding 6): the revision a step created now starts at, above any revision that
- * id ever had on this task (a current step, or an attempt's snapshot), so no earlier run can report into it
- * (G1). Used for flow changes, parallel copies, loop iterations and check rounds alike.
+ * The revision a step created now starts at, above any revision that id ever had on this task (a current
+ * step, or an attempt's snapshot), so no earlier run can report into it: reportCompletion discards a result
+ * whose step revision is not the current one. Used for flow changes, loop iterations and check rounds alike.
  */
 export function nextRevisionFor(s: State, t: Task, id: string): number {
   let highest = 0;
@@ -180,7 +180,7 @@ export function nextRevisionFor(s: State, t: Task, id: string): number {
   return highest + 1;
 }
 
-/** ORC-016 G2: record a result from before the flow changed as discarded. The step is not touched: no blocked state, no output. */
+/** Record a result from before the flow changed as discarded. The step is not touched: no blocked state, no output. */
 export function discardEarlierFlow(s: State, t: Task, a: Attempt, now: string, detail = "") {
   a.outcome = "discarded";
   a.note = `Result from before the flow changed (pipeline r${a.snapshot.pipelineRev}); not integrated${detail}`;

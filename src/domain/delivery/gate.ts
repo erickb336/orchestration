@@ -109,7 +109,7 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   } else if (pr.policy === "auto") add("policy", "Merges automatically", "ok", "It merges by itself once everything below holds for this exact commit.");
   else add("policy", "You merge this pull request", "waiting", `It merges when you choose Merge for ${h12}, or merge it on GitHub.`);
 
-  // 2. Not paused (ORC-012 review 1: shaping is not a pause, but no delivery work starts until building)
+  // 2. Not paused (shaping is not a pause, but no delivery work starts until building)
   if (s.project.hold) add("not-paused", "Not paused", "waiting", "The project is paused: nothing is pushed, opened, merged or commented.");
   else if (pr.userHold) add("not-paused", "Not paused", "waiting", `Kept for you${pr.userHold.reason ? `: ${pr.userHold.reason}` : ""}. Nothing is pushed, merged or commented until you let it continue.`);
   else if (pr.closeRequested) add("not-paused", "Not paused", "waiting", "You asked to close this pull request.");
@@ -141,7 +141,7 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   else if (ob.headSha !== pr.headSha) add("head", "The commit you saw", "blocked", `GitHub shows ${sha12(ob.headSha)}, not ${h12}.`, "foreign-push");
   else add("head", "The commit you saw", "ok", `GitHub shows ${h12}.`);
 
-  // 6. Required checks, for exactly this head. ORC-013 §7: each failing check is classed (bot,
+  // 6. Required checks, for exactly this head. Each failing check is classed (bot,
   //    provider, not-run, code); a cancelled Actions job is re-run once before anything else; the
   //    user's "no CI" declaration lets their own Merge through with zero checks, never an automatic one.
   const names = gateCheckNames(s, pr, ob?.checks ?? []);
@@ -178,7 +178,7 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
         const used = rerunsUsed(pr).length;
         add("checks", "Required checks", "waiting", `GitHub cancelled ${checks.map((c) => c.name).join(", ")} on ${h12}. It is re-run (${used} of ${cfg.rerunBudget} per check used on this head). ${lines}`);
       } else {
-        // Every failed check was cancelled by GitHub and no re-run is planned right now (review L7):
+        // Every failed check was cancelled by GitHub and no re-run is planned right now:
         // the reason is the true one. A check that cannot be re-run needs a person; a re-run that
         // waits for something (another required check, the pause, a conflict) is a wait, not a block.
         const blocked = checks.map((c) => [c, rerunBlocker(s, pr, c)] as const).find(([, why]) => why);
@@ -245,13 +245,13 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   else if (rv.state === "ok") add("review", REVIEW, "waiting", "The review result is being recorded.", undefined, advisory);
   else add("review", REVIEW, "waiting", `${rv.evidence.reason} One dedicated review is started for it${cfg.enabled && !s.project.hold && !pr.userHold ? "" : " once nothing is paused"}.`, undefined, advisory);
 
-  // 9b. ORC-013 §6.9: the project's own checks, run by the service on exactly this change under the
+  // 9b. The project's own checks, run by the service on exactly this change under the
   // current settings. Shown while checks are on; for a user merge it is advisory, like the review.
   if (C.checksOn(s.project.checks)) {
     const ev = C.checkEvidence(s, pr.changeSha);
     const SC = "Service checks";
     const running = checkTasksFor(s, task, pr).find((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled");
-    // ORC-025: evidence from the service's own check task is named as such, so a task whose check steps
+    // Evidence from the service's own check task is named as such, so a task whose check steps
     // never ran (checks were off at the time) does not read as if they had passed.
     const elsewhere = ev.ok && ev.taskId && ev.taskId !== task.id ? ` Run by the service as ${ev.taskId} on this change${task.steps.some((st) => st.role === "checks" && st.state === "skipped") ? "; the task's own check steps did not run" : ""}.` : "";
     if (ev.ok) add("service-checks", SC, "ok", `${ev.reason}${elsewhere}`, undefined, advisory);
@@ -350,7 +350,7 @@ export function refreshAttention(s: State, t: Task, now: string) {
     // Judged at the time GitHub was last read: a timeout is never declared for a period nobody looked.
     const blocking = prGate(s, t, Date.parse(pr.observed?.at ?? now), { byUser: userGate(pr) }).items.find((i) => i.state === "blocked" && i.code && (pr.phase === "open" || i.id === "review"));
     if (blocking) next = { code: blocking.code!, message: blocking.detail };
-    // ORC-013: open findings that all wait for a decision are a decision, not a fix.
+    // Open findings that all wait for a decision are a decision, not a fix.
     const undecided = blocking?.code === "review-findings" ? onlyUndecided(s, t) : undefined;
     if (undecided) {
       const who = undecided.to === "both" ? "you and the lead" : undecided.to === "lead" ? "the lead" : "you";

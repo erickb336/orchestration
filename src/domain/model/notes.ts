@@ -82,7 +82,7 @@ function noteRoute(s: State, t: Task, st: Step, ifFinished: "report" | "rerun"):
 
 /** Why a finished step is not rerun with a note on the lead's say-so alone: the user decides then. */
 function rerunBlocker(s: State, t: Task, st: Step): string | undefined {
-  // ORC-022 review L3: a project-wide pause is yours too.
+  // A project-wide pause is yours too.
   if (s.project.hold) return "the project is paused by you";
   if (t.hold) return userHold(t) ? "the task is paused by you" : "the task is paused for review";
   const started = [...downstreamOf(t.steps, [st.id])].filter((id) => findStep(t, id)?.state !== "pending");

@@ -27,14 +27,14 @@ const codeConclusion = (c: CheckObs) => c.conclusion !== null && !NOT_CODE.has(c
 const ranMs = (c: CheckObs) => (c.startedAt && c.completedAt ? Date.parse(c.completedAt) - Date.parse(c.startedAt) : undefined);
 
 interface TriageContext {
-  /** Every check observed on the head: a failure elsewhere in the same workflow run makes a cancelled or skipped job a code failure (review M4). */
+  /** Every check observed on the head: a failure elsewhere in the same workflow run makes a cancelled or skipped job a code failure. */
   all?: CheckObs[];
-  /** This run appeared after the re-runs for its name on this head were spent: cancelled again is a code failure (review M4). */
+  /** This run appeared after the re-runs for its name on this head were spent: cancelled again is a code failure. */
   reran?: boolean;
 }
 
 /**
- * Why a cancelled or skipped check is nonetheless the code's fault (review finding M4), or undefined:
+ * Why a cancelled or skipped check is nonetheless the code's fault, or undefined:
  * another job of the same workflow run failed (a fail-fast matrix leg GitHub cancelled, an aggregator
  * skipped by a failed `needs:`), it was cancelled again after its re-run, or it ran to GitHub's time limit.
  */
@@ -101,7 +101,7 @@ export function staleAfterRerun(c: CheckObs, u: { jobId: number; at: string }): 
 
 /**
  * After a re-run was requested for this check, its cancelled run still shows and the wait is not over:
- * at most 2 observations or 5 minutes (§7.3), so a provider that accepts a re-run and never
+ * at most 2 observations or 5 minutes, so a provider that accepts a re-run and never
  * publishes it cannot stall the pull request.
  */
 export function awaitingRerun(pr: PrDelivery, c: CheckObs, nowMs: number): boolean {
@@ -111,8 +111,8 @@ export function awaitingRerun(pr: PrDelivery, c: CheckObs, nowMs: number): boole
 }
 
 /**
- * Why this GitHub-cancelled check cannot be re-run by the app, or undefined when it can (review
- * finding L7: the gate names the true reason). The clause continues "GitHub cancelled X on <sha>".
+ * Why this GitHub-cancelled check cannot be re-run by the app, or undefined when it can, so the gate
+ * names the true reason. The clause continues "GitHub cancelled X on <sha>".
  */
 export function rerunBlocker(s: State, pr: PrDelivery, c: CheckObs): string | undefined {
   const cfg = s.project.prDelivery;
@@ -131,7 +131,7 @@ function rerunnable(s: State, pr: PrDelivery, ob: { checks: CheckObs[] }, c: Che
 }
 
 /**
- * The jobs to re-run on this head, or nothing (§7.3): the pull request is open and seen at this head
+ * The jobs to re-run on this head, or nothing: the pull request is open and seen at this head
  * with checks for it, every required check has settled, at least one failed, every failed one is a
  * re-runnable provider failure with budget left, and nothing conflicts. Any `code` failure suppresses
  * re-runs: a fix is needed anyway. Pure; the planner, the intent and the gate all use it.

@@ -38,8 +38,8 @@ export function steerPermission(s: State, t: Task | undefined, action: SteerActi
   // 1. Not steerable.
   if (!t) return { v: "reject", why: "unknown task" };
   if (t.lifecycle === "done" || t.lifecycle === "cancelled") return { v: "reject", why: `${t.id} is ${t.lifecycle}` };
-  // Review finding 1: the review and fix tasks the service creates for a pull request belong to delivery
-  // (ORC-008), which steering never touches: no priority, deferral or drop, whatever the mode.
+  // The review and fix tasks the service creates for a pull request belong to delivery, which steering
+  // never touches: no priority, deferral or drop, whatever the mode.
   if (t.reviewTarget || t.deliverInto || t.checkTarget) return { v: "reject", why: "delivery task: not steerable" };
   if (t.parentTaskId) return { v: "reject", why: `child of ${t.parentTaskId}: steer ${rootOf(s, t).id}` };
   // 2. Nothing would change.
@@ -93,7 +93,7 @@ interface SteerItem {
   why: string;
 }
 
-/** ORC-022: one entry of the lead's "notes" list, validated. */
+/** One entry of the lead's "notes" list, validated. */
 interface NoteItem {
   task: string;
   step: string;
@@ -108,7 +108,7 @@ interface ValidatedSteer {
   reason: string;
   notes: string[];
   items: ({ ok: true; item: SteerItem } | { ok: false; kind: SteeringChange["kind"]; taskId?: string; why: string; reason: string })[];
-  /** ORC-022: the notes to running stages; a rejected entry keeps what could be read of it for its row. */
+  /** The notes to running steps; a rejected entry keeps what could be read of it for its row. */
   noteItems: ({ ok: true; item: NoteItem } | { ok: false; taskId?: string; stepId?: string; text?: string; reason: string })[];
 }
 
@@ -147,7 +147,7 @@ export function validateSteer(s: State, r: LeadRun, steer: unknown): ValidatedSt
   if (b.tasks !== undefined && b.tasks !== null) {
     if (!Array.isArray(b.tasks)) out.notes.push("tasks ignored: not a list");
     else {
-      // Review finding 5: entries past the cap are counted in one note, never one persisted row each.
+      // Entries past the cap are counted in one note, never one persisted row each.
       const extra = b.tasks.length - MAX_STEER_ITEMS;
       if (extra > 0) out.notes.push(`${extra} more entr${extra === 1 ? "y" : "ies"} ignored: at most ${MAX_STEER_ITEMS} changes in one reply`);
       const seen = new Set<string>();
@@ -186,7 +186,7 @@ export function validateSteer(s: State, r: LeadRun, steer: unknown): ValidatedSt
       });
     }
   }
-  // ORC-022: notes to running stages. Each entry is checked on its own; entries past the cap are counted in one note.
+  // Notes to running steps. Each entry is checked on its own; entries past the cap are counted in one note.
   if (b.notes !== undefined && b.notes !== null) {
     if (!Array.isArray(b.notes)) out.notes.push("notes ignored: not a list");
     else {
@@ -220,7 +220,7 @@ export function validateSteer(s: State, r: LeadRun, steer: unknown): ValidatedSt
 export function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string, simulated?: true): SteeringChangeSet {
   const setId = `cs-${r.id}`;
   const v = validateSteer(s, r, steer);
-  // ORC-017: a set from the simulated lead says so in a structured flag, so the UI labels it without text in the focus.
+  // A set from the simulated lead says so in a structured flag, so the UI labels it without text in the focus.
   const set: SteeringChangeSet = { id: setId, leadRunId: r.id, messageIds: [...r.messageIds], at: now, mode: s.project.steeringMode, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, reason: v.reason, notes: v.notes, changes: [], ...(simulated ? { simulated: true as const } : {}) };
   if (v.refused) {
     set.refused = v.refused;
@@ -230,7 +230,7 @@ export function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string, 
   // Newer direction wins: the run is completed now, so its own messages are covered; anything still
   // pending was posted while it worked. A vision edit meanwhile also holds the set.
   const newer = pendingMessages(s).length > 0;
-  // ORC-014 review 2: only a change to the text or focus holds the set. Documents attached or removed
+  // Only a change to the text or focus holds the set. Documents attached or removed
   // meanwhile are noted truthfully, and the focus still applies.
   const visionMoved = visionContentMovedSince(s, r.visionRev);
   if (newer) set.heldBecause = "You sent another message while the lead was working; its next reply decides.";
@@ -251,7 +251,7 @@ export function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string, 
   if (v.focus) {
     if (!v.focus.ok) row({ kind: "focus", before: cur.focus, after: null, why: v.reason, status: "rejected", note: v.focus.why });
     else if (visionMoved) row({ kind: "focus", before: cur.focus, after: v.focus.value, why: v.reason, status: "rejected", note: `you edited the vision (now r${cur.rev}); your edit stands` });
-    // Review finding 7: an undone change cannot be redone. Task rows are guarded by the pins Undo sets;
+    // An undone change cannot be redone. Task rows are guarded by the pins Undo sets;
     // a focus has no pin, so a focus the user undid can only be suggested again.
     else if (undoneFocus(s, v.focus.value)) row({ kind: "focus", before: cur.focus, after: v.focus.value, why: v.reason, status: "suggested", note: "you undid this focus", visionRev: r.visionRev });
     else if (held || mode === "suggest") row({ kind: "focus", before: cur.focus, after: v.focus.value, why: v.reason, status: "suggested", note: held ? "held: newer direction" : "only suggest (Settings)", visionRev: r.visionRev });
@@ -305,7 +305,7 @@ export function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string, 
       else dropInto(s, task, setId, item.why, now, change.id);
       change.status = "applied";
       change.appliedBy = "lead";
-      // Review finding 12: a row applied on the retry pass drops its "kept: …" note from the first pass.
+      // A row applied on the retry pass drops its "kept: …" note from the first pass.
       if (verdict.note) change.note = verdict.note;
       else delete change.note;
     }
@@ -318,7 +318,7 @@ export function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string, 
     queue = again;
   }
 
-  // ORC-022: notes to running stages, after the task changes (a note to a task dropped above is refused as
+  // Notes to running steps, after the task changes (a note to a task dropped above is refused as
   // cancelled). Each is checked against the state now, sent when allowed, and recorded as a row; "applied"
   // means sent, and the row then shows the note's live status. A note has no Undo.
   for (const entry of v.noteItems) {
@@ -371,14 +371,14 @@ export function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string, 
 
 /**
  * Older suggestions are superseded by a held set's successor, or by a later row for the same target.
- * Review finding 10: only a reply that decided something supersedes. A reply without a steering block,
+ * Only a reply that decided something supersedes. A reply without a steering block,
  * or whose block was refused, leaves the held suggestions for the next one; and only rows the service
  * accepted (applied or suggested) count as a decision on their target.
  */
 export function supersedeSuggestions(s: State, set: SteeringChangeSet | undefined, now: string) {
   if (!set || set.refused) return;
   const accepted = set.changes.filter((x) => x.status === "applied" || x.status === "suggested");
-  // ORC-022: a note's target is its step; a note never supersedes a task change, nor the other way round.
+  // A note's target is its step; a note never supersedes a task change, nor the other way round.
   const same = (x: SteeringChange, c: SteeringChange) => {
     if (x.kind === "focus") return c.kind === "focus";
     if (x.kind === "note") return c.kind === "note" && x.taskId === c.taskId && x.stepId === c.stepId;
@@ -398,7 +398,7 @@ export function supersedeSuggestions(s: State, set: SteeringChangeSet | undefine
 }
 
 /**
- * ORC-014 review 2: attaching or removing a document creates a vision revision without touching the
+ * Attaching or removing a document creates a vision revision without touching the
  * text or focus. Compare-and-set on the lead's focus changes, and the "you edited the vision" hold,
  * therefore compare the text and focus, never the raw revision number: a document-only change
  * invalidates nothing.
@@ -410,7 +410,7 @@ export function visionContentMovedSince(s: State, rev: number | undefined): bool
   return cur.text !== then.text || cur.focus !== then.focus;
 }
 
-/** Review finding 7: did the user undo a lead focus change to exactly this text? Then it is only suggested again. */
+/** Did the user undo a lead focus change to exactly this text? Then it is only suggested again. */
 function undoneFocus(s: State, focus: string): boolean {
   return s.steering.some((cs) => cs.changes.some((c) => c.kind === "focus" && c.status === "undone" && oneLine(String(c.after ?? "")) === focus));
 }

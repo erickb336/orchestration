@@ -48,7 +48,7 @@ export function openVisionDraft(s: State): VisionDraft | undefined {
 }
 
 /**
- * ORC-014 review 11: what Start building would do now. It uses the involvement setting at the moment it
+ * What Start building would do now. It uses the involvement setting at the moment it
  * runs, never one recorded earlier, and lifts only the roadmap's own hold: `roadmap` are the planned
  * tasks it releases or hands to the user's release; `userHeld` are planned tasks whose hold the user
  * took over, which keep waiting for the user either way.
@@ -70,7 +70,7 @@ export function startBuilding(state: State, now: string): State {
   s.project.stage = "building";
   const { release } = startBuildingPlan(s);
   const released: string[] = [];
-  // Review 2: only the roadmap's own hold is lifted. A task the user held before start (which took it
+  // Only the roadmap's own hold is lifted. A task the user held before start (which took it
   // out of the roadmap hold) keeps that hold; the involvement setting decides the rest.
   for (const t of s.tasks) {
     if (!t.heldForShaping) continue;
@@ -93,18 +93,18 @@ export function startShaping(state: State, now: string): State {
   if (state.project.stage === "shaping") throw new ControlError("Already shaping.");
   const s = draft(state);
   s.project.stage = "shaping";
-  // Review 8: a new shaping session; coverage the lead reported in an earlier one is not reused.
+  // A new shaping session; coverage the lead reported in an earlier one is not reused.
   s.project.shapingSince = now;
   const running = activeAttempts(s).length;
   event(s, now, "user", "config", `Shaping the vision; new work waits until you start building${running ? ` (${running} running step${running === 1 ? " finishes" : "s finish"} normally)` : ""}`);
   return s;
 }
 
-/** Control characters other than tab and newline, and invisible characters (review 5), removed from every text the lead drafts. */
+/** Control characters other than tab and newline, and invisible characters, removed from every text the lead drafts. */
 const CONTROL_G = new RegExp(CONTROL_RE.source, "g");
 const cleanText = (x: string) => visibleOrEmpty(stripInvisible(x.replace(CONTROL_G, "")).replace(/\r\n?/g, "\n").trim());
 const cleanLine = (x: string) => oneLine(x.replace(CONTROL_G, ""));
-/** ORC-014 review 3: text the user typed is never altered beyond newline normalization and trimming; joiners and marks stay. */
+/** Text the user typed is never altered beyond newline normalization and trimming; joiners and marks stay. */
 const userText = (x: string) => x.replace(/\r\n?/g, "\n").trim();
 const userLine = (x: string) => x.replace(/\s+/g, " ").trim();
 
@@ -147,9 +147,9 @@ export function draftFromRun(s: State, r: LeadRun, d: { text: string; focus: str
     old.status = "superseded";
     old.resolvedAt = now;
   }
-  // ORC-012 review 3: the revision the run saw, not the one current at completion, so a vision that moved
+  // The revision the run saw, not the one current at completion, so a vision that moved
   // meanwhile is shown as moved and Accept never silently replaces it.
-  // ORC-017: a draft from the simulated lead carries the flag, which Accept copies onto the revision.
+  // A draft from the simulated lead carries the flag, which Accept copies onto the revision.
   const draft: VisionDraft = { id: `vd-${r.id}`, at: now, leadRunId: r.id, messageIds: [...r.messageIds], text: d.text, focus: d.focus, reason: d.reason, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, status: "open", ...(simulated ? { simulated: true as const } : {}) };
   s.visionDrafts.push(draft);
   if (s.visionDrafts.length > MAX_VISION_DRAFTS) s.visionDrafts.splice(0, s.visionDrafts.length - MAX_VISION_DRAFTS);
@@ -235,7 +235,7 @@ export function validateQuestions(r: LeadRun, raw: unknown): { questions: LeadQu
             notes.push(`${n}: an option was ignored: over ${MAX_OPTION_LENGTH} characters`);
             continue;
           }
-          // Review 10: the same option twice is one option.
+          // The same option twice is one option.
           if (options.includes(text)) {
             notes.push(`${n}: a repeated option was ignored`);
             continue;
@@ -258,7 +258,7 @@ export function coverageOf(s: State): Record<ShapingArea, CoverageState> | undef
   const since = s.project.shapingSince;
   for (let i = s.leadRuns.length - 1; i >= 0; i--) {
     const r = s.leadRuns[i];
-    // Review 8: coverage from an earlier shaping session (before this one began) is not reused.
+    // Coverage from an earlier shaping session (before this one began) is not reused.
     if (since && r.startedAt < since) break;
     const c = r.coverage;
     if (r.outcome !== "completed" || !c) continue;
@@ -269,7 +269,7 @@ export function coverageOf(s: State): Record<ShapingArea, CoverageState> | undef
   return undefined;
 }
 
-/** Areas still open by the latest coverage; every area while none was reported (review 8). Informational: never a block. */
+/** Areas still open by the latest coverage of this shaping session; every area while none was reported. Informational: never a block. */
 export function openAreas(s: State): ShapingArea[] {
   const c = coverageOf(s);
   return c ? SHAPING_AREAS.filter((a) => c[a] === "open") : [...SHAPING_AREAS];
@@ -316,13 +316,13 @@ export function acceptVisionDraft(state: State, draftId: string, expectedRev: nu
   if (!text) throw new ControlError("The vision cannot be empty.");
   if (text.length > MAX_VISION_TEXT) throw new ControlError(`The vision is limited to ${MAX_VISION_TEXT} characters.`);
   if (focus.length > MAX_VISION_FOCUS) throw new ControlError(`The focus is limited to ${MAX_VISION_FOCUS} characters.`);
-  // Review 9: accepting what already stands would record a revision that changes nothing.
+  // Accepting what already stands would record a revision that changes nothing.
   if (text === cur.text.trim() && focus === oneLine(cur.focus)) throw new ControlError("Nothing differs from the current vision; change the text or dismiss the draft.");
   const s = draft(state);
   const draftRec = getVisionDraft(s, draftId);
   const rev = pushVision(
     s,
-    // ORC-017: a draft the simulated lead wrote stays labelled once it is the vision, edited or not.
+    // A draft the simulated lead wrote stays labelled once it is the vision, edited or not.
     { author: "user", text, focus, reason: `${edited ? "Accepted the lead's draft with edits" : "Accepted the lead's draft"} (${d.id}): ${d.reason}`, source: { draftId: d.id, leadRunId: d.leadRunId, messageIds: [...d.messageIds] }, ...(d.simulated ? { simulated: true as const } : {}) },
     now,
     `Vision r${cur.rev + 1} by you: accepted the lead's draft ${d.id}${edited ? " with edits" : ""}`,

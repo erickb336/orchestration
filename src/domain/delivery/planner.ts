@@ -62,7 +62,8 @@ function pendingComment(s: State, nowMs: number): { task: Task; noteId: string }
 const publishAllowed = (pr: PrDelivery) => !pr.changed.workflowHits.length || !!pr.workflowPushAllowed;
 
 /**
- * The next operation for the driver, or nothing. Pure; first match wins (design §6.4). The driver
+ * The next operation for the driver, or nothing. Pure; first match wins, in the order of
+ * docs/design/ORC-008-design.md §6.4 (with the re-run step added after 6.2). The driver
  * calls this only while no operation is in flight, so a recorded `pr.op` here is an interrupted one.
  */
 export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
@@ -112,7 +113,7 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
     prs: [...open, ...(withClosed ? closedWatch : [])].slice(0, PR_LIMITS.observeBatch).map((t) => ({ taskId: t.id, number: t.integration!.pr!.number! })),
     commits: mainChecks.slice(0, PR_LIMITS.observeBatch).map((t) => t.integration!.landed!.commit),
   });
-  // ORC-012 review 1: while shaping no delivery work starts (no publish, push, merge or base update);
+  // While shaping no delivery work starts (no publish, push, merge or base update);
   // reads go on, and so do the user's own explicit requests to close or to post a note.
   const writable = !p.hold && cfg.enabled && age(gh.lastMutationAt) >= PR_LIMITS.mutationGapMs && mutationsThisHour(gh, nowMs) < PR_LIMITS.mutationsPerHour;
   const canWrite = writable && p.stage !== "shaping";
@@ -188,7 +189,7 @@ export function nextPrOp(s: State, nowMs: number): PrOp | undefined {
     if (pr.pendingHead?.kind === "update" && autoQueue(s)[0]?.id !== t.id) continue;
     if (pr.pendingHead && !pr.op && pushable(pr) && rested(pr)) return { id, kind: "push", taskId: t.id, n: pr.n, headSha: pr.headSha };
   }
-  // 6.2b ORC-013 §7.3: re-run the GitHub-cancelled jobs of a head, once per check, before any fix task.
+  // 6.2b Re-run the GitHub-cancelled jobs of a head, once per check, before any fix task.
   for (const t of open) {
     const pr = t.integration!.pr!;
     if (pr.op || pr.userHold || pr.foreignHead || pr.closeRequested || pr.pendingHead || stuck(pr) || !rested(pr)) continue;
@@ -233,7 +234,7 @@ export function beginPrOp(state: State, op: PrOp, now: string): { state: State; 
   const p = state.project;
   const gh = p.github;
   if (!opMutates(op) || p.hold || !p.prDelivery.enabled || !gh?.ok || gh.problem) return no;
-  // ORC-012 review 1: delivery work (publish, push, merge) never starts while shaping; the user's own close or note may.
+  // Delivery work (publish, push, merge) never starts while shaping; the user's own close or note may.
   if (p.stage === "shaping" && op.kind !== "close" && op.kind !== "comment") return no;
   if (gh.lastMutationAt && nowMs - Date.parse(gh.lastMutationAt) < PR_LIMITS.mutationGapMs) return no;
   if (mutationsThisHour(gh, nowMs) >= PR_LIMITS.mutationsPerHour) return no;

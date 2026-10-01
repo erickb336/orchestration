@@ -70,7 +70,7 @@ export function setPrDelivery(state: State, patch: Partial<PrDeliveryConfig>, no
   if (!int(next.maxOpenPrs, 1, 20)) throw new ControlError("Open pull requests: between 1 and 20.");
   if (!int(next.maxAutoMergesPerDay, 0, 100)) throw new ControlError("Automatic merges per day: between 0 and 100.");
   for (const k of ["updateBeforeMerge", "autoRepair", "allowLocalWorkers", "noCi"] as const) if (typeof next[k] !== "boolean") throw new ControlError(`${k} must be true or false.`);
-  // ORC-013 §7.5
+  // CI triage settings: re-runs of cancelled checks and the review bots.
   if (!int(next.rerunBudget, 0, 3)) throw new ControlError("Re-runs of a cancelled check: between 0 and 3 per check per head.");
   next.reviewBotApps = [...(patch.reviewBotApps ?? cur.reviewBotApps)].map((x) => String(x).trim()).filter(Boolean);
   if (next.reviewBotApps.length > 10) throw new ControlError("At most 10 review bots.");

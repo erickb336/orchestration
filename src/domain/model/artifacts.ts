@@ -46,7 +46,7 @@ export function staleInputs(s: State, t: Task, a: Attempt): ConsumedInput[] {
 }
 
 /**
- * ORC-016: the pipeline revision an artifact was made under. Stamped on new artifacts; an older one takes
+ * The pipeline revision an artifact was made under. Stamped on new artifacts; an older one takes
  * it from its attempt's snapshot, and an older edit from the version it edited. Unknown counts as 0.
  */
 export function artifactPipelineRev(s: State, art: Artifact): number {
@@ -58,7 +58,7 @@ export function artifactPipelineRev(s: State, art: Artifact): number {
   return prev ? artifactPipelineRev(s, prev) : 0;
 }
 
-/** ORC-016: the artifact was made under a flow the task has since left. Labelled in the UI; never edited or consumed again. */
+/** The artifact was made under a flow the task has since left. Labelled in the UI; never edited or consumed again. */
 export function fromEarlierFlow(s: State, t: Task, art: Artifact): boolean {
   return artifactPipelineRev(s, art) < t.flowSince;
 }
@@ -89,12 +89,12 @@ export function editArtifact(
   if (!base) throw new ControlError(`Unknown artifact ${artifactId}`);
   const t = getTask(s, base.taskId);
   assertOpen(t, "Editing an artifact");
-  // G3 (ORC-016 §7.3): work done under an earlier flow is the record, never an input to the new steps.
+  // Work done under an earlier flow is the record, never an input to the new steps.
   if (artifactPipelineRev(s, base) < t.flowSince) throw new ControlError("This artifact belongs to an earlier flow of this task. It is kept for the record and cannot be edited.");
   const st = getStep(t, base.stepId);
   if (!change.reason.trim()) throw new ControlError("Say why you changed it; the reason goes to the next steps.");
   if (!change.summary.trim()) throw new ControlError("The artifact cannot be empty.");
-  // ORC-013: structured findings are decided one by one; the summary can still be edited and the findings carry over.
+  // Structured findings are decided one by one; the summary can still be edited and the findings carry over.
   if (base.kind === "review-findings" && base.findings && change.openFindings !== undefined) throw new ControlError("These findings are listed one by one: decide each finding instead of editing the open count.");
   if (base.kind === "review-findings" && !base.findings && (!Number.isInteger(change.openFindings) || change.openFindings! < 0)) throw new ControlError("Review findings need a number of open findings.");
   if (change.ref?.trim() && !/^[0-9a-f]{7,40}$/i.test(change.ref.trim())) throw new ControlError("Use a commit hash (7–40 hex characters) for your own change.");
@@ -121,7 +121,7 @@ export function editArtifact(
     ...(change.ref?.trim() ? { ref: change.ref.trim() } : base.ref ? { ref: base.ref } : {}),
   };
   s.artifacts.push(art);
-  // Review 1 (1): the findings carry over with their decisions, which now belong to the new version (the same
+  // The findings carry over with their decisions, which now belong to the new version (the same
   // findings under a new artifact id); any blocking ask-user finding still without a record gets one, so
   // nothing waits on a record that does not exist.
   if (art.findings) {

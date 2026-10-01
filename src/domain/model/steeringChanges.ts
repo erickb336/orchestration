@@ -9,7 +9,7 @@ import { notePermission, rerunWithNoteInto, sendNoteInto } from "./notes";
 import { visionContentMovedSince } from "./steering";
 import { pushVision } from "./vision";
 
-/** Replace the "left as is on <op>: …" segment of a row's note (review finding 12: failed undos must not pile up). */
+/** Replace the "left as is on <op>: …" segment of a row's note, so repeated failed undos do not pile up. */
 function leftNote(note: string | undefined, op: "undo" | "apply", why: string): string {
   const prefix = `left as is on ${op}:`;
   const parts = (note ?? "").split("; ").filter((p) => p && !p.startsWith(prefix));
@@ -66,7 +66,7 @@ function undoRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: strin
       if (t.deferral) return "it was deferred again since";
       const before = c.before as Deferral | null;
       if (!before || typeof before !== "object") return "the earlier deferral is not on record";
-      // Review finding 7: restored as the user's deferral, so the lead can only suggest lifting it again.
+      // Restored as the user's deferral, so the lead can only suggest lifting it again.
       t.deferral = { ...structuredClone(before), by: "user", at: now };
       touch(t, now);
       event(s, now, "user", "control", `Deferral restored by you (undo of ${c.id}); the lead may only suggest lifting it`, t.id);
@@ -98,7 +98,7 @@ export function undoSteering(state: State, changeSetId: string, changeId: string
       if (changeId) result.left.push({ id: c.id, why: "not applied" });
       continue;
     }
-    // ORC-022: a sent note cannot be unsent. Undo all skips it (the row says so); nothing is written on it.
+    // A sent note cannot be unsent. Undo all skips it (the row says so); nothing is written on it.
     if (c.kind === "note") {
       if (changeId) result.left.push({ id: c.id, why: "a sent note cannot be unsent" });
       continue;
@@ -115,7 +115,7 @@ export function undoSteering(state: State, changeSetId: string, changeId: string
       result.undone.push(c.id);
     }
   }
-  // Review finding 12: a repeated failed undo neither grows the note nor logs another event.
+  // A repeated failed undo neither grows the note nor logs another event.
   if (result.undone.length || noted) {
     event(s, now, "user", "control", `Undid ${result.undone.length} of the lead's change${result.undone.length === 1 ? "" : "s"} (${set.id})${result.left.length ? `; ${result.left.length} left as is` : ""}`);
   }
@@ -169,7 +169,7 @@ function applyRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: stri
       cancelInto(s, t, now);
       return undefined;
     }
-    // ORC-022: Send on a suggested note, or Rerun with this note on a suggested rerun.
+    // Send on a suggested note, or Rerun with this note on a suggested rerun.
     case "note": {
       if (!t) return "task not found";
       if (!isOpen(t)) return `${t.id} is ${t.lifecycle}`;
@@ -204,7 +204,7 @@ export function applySteering(state: State, changeSetId: string, changeId: strin
       result.left.push({ id: c.id, why: c.status === "applied" ? "already applied" : `not a suggestion (${c.status})` });
       continue;
     }
-    // ORC-022 review M2: a rerun stops and invalidates downstream work, so it is applied only on its own row, never in bulk.
+    // A rerun stops and invalidates downstream work, so it is applied only on its own row, never in bulk.
     if (!changeId && c.kind === "note" && c.rerun) {
       result.left.push({ id: c.id, why: "needs Rerun with this note" });
       continue;

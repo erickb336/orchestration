@@ -95,7 +95,7 @@ export function importMarkdown(state: State, markdown: string, now: string): { s
       rollback: "",
       effort: "small",
     };
-    // ORC-016: imported tasks run the project default flow.
+    // Imported tasks run the project default flow.
     const flow = effectiveDefault(s);
     const defs = structuredClone(flow.steps).map(toDef);
     const ref = flowRef(flow, "default");

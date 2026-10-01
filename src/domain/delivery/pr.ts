@@ -1,14 +1,13 @@
-// Pull-request delivery: hold and notify (ORC-008 step 2)
+// The pull-request model: its limits, the branch and ref names the app uses, the operations and reports
+// exchanged with the service's PrDriver, and small views of the tracked pull requests.
 //
 // Desired state (config, holds, merge requests), intent (`pr.op`) and observed state (`pr.observed`,
 // `project.github`) are separate fields. "Merged", "posted" and "closed" are written only from an
-// observation. Everything here is pure; the service's PrDriver performs the operations this plans.
+// observation. Everything in delivery/ is pure; the PrDriver performs the operations the planner plans.
 //
-// Independent review coverage, the dedicated review task, bounded repair, the automatic merge of one
-// candidate at a time, the base update and the pause when the base branch fails are step 3 (below).
 // Automatic merging happens only when the pull request's policy is "auto", an independent review is
 // clean for the exact change, every required check passed on the exact head, GitHub reports it
-// mergeable, and nothing is paused or held.
+// mergeable, and nothing is paused or held (the merge gate, gate.ts).
 
 import { ControlError, type CheckObs, type GitHubStatus, type PostureItem, type PrDelivery, type State, type Task } from "../types";
 import { getTask, GITHUB_URL } from "./core";
@@ -39,7 +38,7 @@ export const PR_LIMITS = {
   repairs: 2,
   /** Dedicated reviews the service starts per pull request (the user may ask for more). */
   reviews: 3,
-  /** ORC-013: dedicated check runs the service starts per pull request. */
+  /** Dedicated check runs the service starts per pull request. */
   checks: 3,
   /** An automatic merge needs the base fetched this recently. */
   baseFreshMs: 2 * MIN,
@@ -50,7 +49,7 @@ export const PR_LIMITS = {
   closedWatchEveryMs: 10 * MIN,
   /** A paused automatic merge watches the failing commit this long for a check that passes on a re-run. */
   pausedWatchMs: 24 * 60 * MIN,
-  /** ORC-013 §7.3: re-runs of GitHub-cancelled jobs per pull request over its life, and per operation. */
+  /** Re-runs of GitHub-cancelled jobs per pull request over its life, and per operation. */
   reruns: 5,
   /** After a re-run was requested, the cancelled run still shown counts as pending for this long, or this many observations. */
   rerunWaitMs: 5 * MIN,
@@ -63,11 +62,11 @@ export const OP_TIMEOUT_MS: Record<"publish" | "push" | "merge" | "close" | "rer
 export const BACKOFF_MIN = [1, 2, 4, 8, 15];
 const sanitizeId = (id: string) => id.replace(/[^A-Za-z0-9._-]/g, "_");
 const REPO = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/;
-/** A GitHub app slug (ORC-013 §7.5). */
+/** A GitHub app slug (a review bot's name). */
 export const REVIEW_BOT_SLUG = /^[a-z0-9][a-z0-9-]{0,38}$/;
 const NO_CI_ID = "no-ci";
 
-/** The posture line for the user's "no CI" declaration (ORC-013 §7.4), added or removed. */
+/** The posture line for the user's "no CI" declaration, added or removed. */
 export function withNoCiPosture(posture: PostureItem[], noCi: boolean): PostureItem[] {
   const rest = posture.filter((x) => x.id !== NO_CI_ID);
   return noCi ? [...rest, { id: NO_CI_ID, status: "warn", label: "You declared no CI.", detail: "Your own Merge goes through with no checks on the head. Automatic merging still needs a required check, and any check GitHub does report is honoured." }] : rest;
@@ -158,7 +157,7 @@ export interface OpError {
  * One operation of the driver. "publish", "push", "merge", "close", "comment" and "rerun" write to the
  * remote or to GitHub. "update" is local: it builds the commit that brings a pull request up to date
  * with the base; the push that follows publishes it. `repo` on "observe": the one repository that is
- * read. "rerun" (ORC-013 §7.3) asks GitHub Actions to run cancelled jobs of the head again.
+ * read. "rerun" asks GitHub Actions to run cancelled jobs of the head again.
  */
 export type PrOp =
   | { id: string; kind: "preflight" }

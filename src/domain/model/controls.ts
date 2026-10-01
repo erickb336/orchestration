@@ -64,7 +64,7 @@ export function resumeTask(state: State, taskId: string, now: string): State {
   return s;
 }
 
-/** ORC-012 review 2: any hold change the user makes on a roadmap task takes the task out of the shaping hold; the user's choice then stands. */
+/** Any hold change the user makes on a roadmap task takes the task out of the shaping hold; the user's choice then stands. */
 function takeOverShapingHold(s: State, t: Task, now: string) {
   if (!t.heldForShaping) return;
   delete t.heldForShaping;
@@ -109,7 +109,7 @@ export function cancelInto(s: State, t: Task, now: string, by?: { actor: Actor; 
   const active = activeAttempts(s, t.id);
   event(s, now, by?.actor ?? "user", "control", `Cancelled${by ? ` (${by.reason})` : ""}; spec and partial artifacts retained${active.length ? `; stopping ${active.length} run${active.length === 1 ? "" : "s"}` : ""}`, t.id);
   for (const a of active) requestStop(s, a, "cancel", now);
-  // Review 1 (10): nothing on a cancelled task waits for a decision any more.
+  // Nothing on a cancelled task waits for a decision any more.
   F.supersedeDecisions(s, t.id, now, { reason: `${t.id} was cancelled` });
   // Unfinished child tasks exist only for this task's goal: cancel them too.
   const children = descendants(s, t).filter(isOpen);
@@ -129,7 +129,7 @@ export function cancelInto(s: State, t: Task, now: string, by?: { actor: Actor; 
   }
 }
 
-/** Write a priority. The user's own command also pins it (ORC-009); the lead's write names its change set. */
+/** Write a priority. The user's own command also pins it; the lead's write names its change set. */
 export function writePriority(s: State, t: Task, priority: number, actor: "user" | "lead", now: string, detail?: string) {
   const old = t.priority;
   t.priority = priority;
@@ -159,7 +159,7 @@ export function setPriorityPin(state: State, taskId: string, pinned: boolean, no
   return s;
 }
 
-/** "Keep running whatever the focus": the lead may not defer this task. Pinning a deferred task lifts its deferral (review finding 11). */
+/** "Keep running whatever the focus": the lead may not defer this task. Pinning a deferred task lifts its deferral. */
 export function setRunPin(state: State, taskId: string, pinned: boolean, now: string): State {
   const s = draft(state);
   const t = getTask(s, taskId);
@@ -248,8 +248,8 @@ export const userHold = (t: Task) => t.hold && !t.holdReason && !t.pausedWith;
 
 /**
  * The dependency guard: an open task outside `t`'s tree that depends on a member of the tree. A drop
- * would leave it Blocked whenever it runs again, so for a drop every open dependent counts (review
- * finding 2); a deferral only leaves a not-deferred dependent waiting silently, so a dependent that is
+ * would leave it Blocked whenever it runs again, so for a drop every open dependent counts; a deferral
+ * only leaves a not-deferred dependent waiting silently, so a dependent that is
  * already deferred does not keep a deferral back.
  */
 export function openDependent(s: State, t: Task, action: "defer" | "drop"): Task | undefined {

@@ -93,8 +93,8 @@ export function childTasks(s: State, t: Task): Task[] {
 }
 
 /**
- * ORC-016 (steps 2–3 review, finding 2): the child was created by a breakdown made under a flow the task has
- * since left. It stays on the record, labelled, and is never relinked, waited for or reported to the new steps.
+ * The child was created by a breakdown made under a flow the task has since left. It stays on the record,
+ * labelled, and is never relinked, waited for or reported to the new steps.
  */
 export function childFromEarlierFlow(s: State, t: Task, c: Task): boolean {
   if (!c.parentArtifactId) return false;
@@ -180,7 +180,7 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
   const a = s.project.autonomy;
   const holdBeforeStart = !a.enabled || a.holdLeadProposals;
   const root = rootOf(s, t);
-  // ORC-016 (steps 2–3 review, finding 2): only children of the current flow are reconciled; an earlier flow's children are the record.
+  // Only children of the current flow are reconciled; an earlier flow's children are the record.
   const earlier = currentChildren(s, t).filter((c) => c.parentStepId === st.id && c.parentArtifactId !== artifactId && c.lifecycle !== "cancelled");
   const started = (c: Task) => c.lifecycle === "active" || c.lifecycle === "done" || s.attempts.some((x) => x.taskId === c.id);
   const titleOf = (c: Task) => currentSpec(c).content.title.trim().toLowerCase();
@@ -212,7 +212,7 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
             ],
         recommendedOptionId: typeof it.recommendedOptionId === "string" ? it.recommendedOptionId : "A",
         rationale: typeof it.rationale === "string" && it.rationale.trim() ? it.rationale : `Part of ${t.id}'s breakdown (${st.id}).`,
-        // ORC-021: the item's flow; absent, the child default applies.
+        // The item's flow; absent, the child default applies.
         ...(it.flowId !== undefined ? { flowId: it.flowId } : {}),
         priority: typeof it.priority === "number" ? it.priority : t.priority,
       } as unknown as LeadProposal;

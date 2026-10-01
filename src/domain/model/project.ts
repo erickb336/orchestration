@@ -75,7 +75,7 @@ export function setCatalog(state: State, provider: ProviderId, models: CatalogMo
 
 /**
  * Start a real project: empty board, the given repository and vision. Refused while any run is
- * active, so no live work is orphaned by the replacement. ORC-012: `stage` defaults to building (the
+ * active, so no live work is orphaned by the replacement. `stage` defaults to building (the
  * vision is then required); a project that starts by shaping may leave the vision empty.
  */
 export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string; stage?: ProjectStage }, now: string): State {
@@ -92,7 +92,7 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // A new project starts from provider-neutral defaults, never another project's model choices.
   Object.assign(s.project, autoModelDefaults());
   s.project.visions = [{ rev: 1, at: now, author: "user", text: init.vision.trim(), focus: init.focus.trim(), reason: stage === "shaping" ? "Project created; the vision is shaped with the lead first" : "Project created" }];
-  // ORC-014: documents belong to the project they were attached to; a new project starts with none.
+  // Documents belong to the project they were attached to; a new project starts with none.
   s.project.visionDocs = [];
   s.project.stage = stage;
   if (stage === "shaping") s.project.shapingSince = now;
@@ -103,10 +103,10 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // and with nothing observed about the previous repository.
   s.project.prDelivery = structuredClone(DEFAULT_PR_DELIVERY);
   delete s.project.github;
-  // ORC-013: checks are off until the user turns them on for this repository, and nothing has been probed for it.
+  // Checks are off until the user turns them on for this repository, and nothing has been probed for it.
   s.project.checks = structuredClone(DEFAULT_CHECKS);
   delete s.project.checksHealth;
-  // ORC-016: the catalog is machine-level and stays; the default flow is a project choice.
+  // The catalog is machine-level and stays; the default flow is a project choice.
   s.project.defaultFlowId = "change";
   s.decisions = [];
   s.tasks = [];
@@ -115,7 +115,7 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.events = [];
   s.conversation = [];
   s.leadRuns = [];
-  // Review finding 6: an old project's change sets must not rewrite a new project's task with the same id.
+  // An old project's change sets must not rewrite a new project's task with the same id.
   s.steering = [];
   s.visionDrafts = [];
   s.project.lastPlanningAt = undefined;
@@ -133,11 +133,11 @@ export interface NewTask {
   approach: string;
   priority: number;
   holdBeforeStart: boolean;
-  /** ORC-016: the catalog flow the pipeline comes from. Any flow but an internal one; nothing else supplies steps. */
+  /** The catalog flow the pipeline comes from. Any flow but an internal one; nothing else supplies steps. */
   flowId: string;
   /** Default "user". The service passes "service" for the follow-ups it creates. */
   chosenBy?: ChosenBy;
-  /** ORC-009: the user chose the priority (not the form's default): the lead may not reorder it. */
+  /** The user chose the priority (not the form's default): the lead may not reorder it. */
   priorityPinned?: boolean;
 }
 
