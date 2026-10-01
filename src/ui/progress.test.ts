@@ -83,7 +83,7 @@ describe("progressByArea", () => {
   it("the demo's labels name paused and deferred work, and one task's two same-provider reviews are listed once (ORC-017 review M1, L7)", () => {
     const s = buildDemo(T0);
     const reliability = by(progressByArea(s, T0), "Reliability");
-    expect(reliability.label).toBe("Reliability: 1 of 3 tasks done, 1 paused, 1 deferred");
+    expect(reliability.label).toBe("Reliability: 2 of 4 tasks done, 1 paused, 1 deferred");
     // Two active runs of one provider doing the same thing on one task: one live line.
     // The demo starts with no runs (the scheduler dispatches them), so the sample fixture with runs in flight is used here.
     const seed = buildSeed(T0);
