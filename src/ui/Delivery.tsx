@@ -673,7 +673,7 @@ export function LandedSection({ state, task, children }: { state: State; task: T
 }
 
 /** Send landed work back as a fix or a revert: a linked task through the normal pipeline. */
-function SendBackForm({ state, task, landed, onDone }: { state: State; task: Task; landed: Landed; onDone: () => void }) {
+export function SendBackForm({ state, task, landed, onDone }: { state: State; task: Task; landed: Landed; onDone: () => void }) {
   const { send, disabled } = useStore();
   const [kind, setKind] = useState<"fix" | "revert">("fix");
   const [note, setNote] = useState("");
