@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
+import { flowSteps, setPipeline } from "./testing/pipelines";
 import { validatePipeline } from "./pipeline";
 import { INTERNAL_FLOWS } from "./internalFlows";
-import { builtInCatalog, flowSteps } from "./flows";
+import { builtInCatalog } from "./flows";
 import { buildSeed } from "./seed";
 import type { State, StepDef } from "./types";
 
@@ -23,12 +24,12 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
 }
 
 describe("built-in and internal flows", () => {
-  it("every one is valid and names no product or model (provider ids only under parallel.providers)", () => {
+  it("every one is valid and names no product or model", () => {
     for (const p of [...builtInCatalog(), ...INTERNAL_FLOWS]) {
       // ORC-013: the delivery-checks pipeline is valid only on a task with a checkTarget, like delivery-review on a reviewTarget.
       expect(validatePipeline(p.steps, { checkTarget: p.id === "delivery-checks" }).filter((i) => i.severity === "error"), p.id).toEqual([]);
-      // What workers and people read: names, descriptions and the steps, with the provider assignment of a best-of step set aside.
-      const neutral = { id: p.id, name: p.name, description: p.description, ...("whenToUse" in p ? { whenToUse: p.whenToUse } : {}), steps: p.steps.map((s) => ({ ...s, parallel: s.parallel ? { ...s.parallel, providers: undefined } : undefined })) };
+      // What workers and people read: names, descriptions and the steps.
+      const neutral = { id: p.id, name: p.name, description: p.description, ...("whenToUse" in p ? { whenToUse: p.whenToUse } : {}), steps: p.steps };
       expect(JSON.stringify(neutral), p.id).not.toMatch(/sample|notes|claude|codex/i);
     }
   });
@@ -96,8 +97,8 @@ describe("pipeline edits", () => {
   it("rejects stale and invalid pipelines", () => {
     const s = seed();
     const defs = task(s, "EX-003").steps.map((x) => ({ ...x }));
-    expect(() => M.setPipeline(s, "EX-003", 0, defs, "x", "user", at(0))).toThrow(/Stale/);
-    expect(() => M.setPipeline(s, "EX-003", 1, [{ ...defs[0], dependsOn: ["S9"] }], "x", "user", at(0))).toThrow(/invalid/);
+    expect(() => setPipeline(s, "EX-003", 0, defs, "x", "user", at(0))).toThrow(/Stale/);
+    expect(() => setPipeline(s, "EX-003", 1, [{ ...defs[0], dependsOn: ["S9"] }], "x", "user", at(0))).toThrow(/invalid/);
   });
 
   it("adding a step leaves running work alone", () => {
@@ -105,7 +106,7 @@ describe("pipeline edits", () => {
     const t = task(s, "EX-001");
     const defs: StepDef[] = t.steps.map((x) => ({ ...x }));
     defs.push({ id: "S7", purpose: "Write release notes", role: "designer", dependsOn: ["S6"], inputs: [{ step: "S6", output: "verification" }], outputs: [{ name: "notes", kind: "report" }] });
-    s = M.setPipeline(s, "EX-001", 1, defs, "Add release notes", "user", at(0));
+    s = setPipeline(s, "EX-001", 1, defs, "Add release notes", "user", at(0));
     expect(running(s, "EX-001")[0].outcome).toBe("running");
     expect(step(s, "EX-001", "S7").state).toBe("pending");
     expect(task(s, "EX-001").pipelineRev).toBe(2);
@@ -116,7 +117,7 @@ describe("pipeline edits", () => {
     const t = task(s, "EX-001");
     const defs: StepDef[] = t.steps.map((x) => (x.id === "S1" ? { ...x, outputs: [...x.outputs, { name: "copy", kind: "brief" as const }] } : { ...x }));
     const [impl] = running(s, "EX-001");
-    s = M.setPipeline(s, "EX-001", 1, defs, "Design also delivers copy", "user", at(1));
+    s = setPipeline(s, "EX-001", 1, defs, "Design also delivers copy", "user", at(1));
     expect(step(s, "EX-001", "S1")).toMatchObject({ state: "pending", invalidatedBy: "pipeline r2" });
     expect(s.attempts.find((a) => a.id === impl.id)!.outcome).toBe("stopping");
     expect(step(s, "EX-001", "S3").selection).toEqual({ provider: "codex", model: "codex-sample-fast" });
@@ -128,7 +129,7 @@ describe("pipeline edits", () => {
     let s = seed();
     const defs = flowSteps("change").filter((d) => d.id === "S1"); // drop review/repair/verify
     const [review] = running(s, "EX-002");
-    s = M.setPipeline(s, "EX-002", 1, defs, "Ship without review", "user", at(0));
+    s = setPipeline(s, "EX-002", 1, defs, "Ship without review", "user", at(0));
     expect(s.attempts.find((a) => a.id === review.id)!.outcome).toBe("stopping");
     s = M.reportCompletion(s, review.id, [], at(1), [{ name: "findings", summary: "late", openFindings: 0 }]);
     expect(s.attempts.find((a) => a.id === review.id)!.outcome).toBe("discarded");
@@ -139,7 +140,7 @@ describe("pipeline edits", () => {
   it("editing a paused task's pipeline keeps it paused", () => {
     let s = seed();
     const defs = flowSteps("change");
-    s = M.setPipeline(s, "EX-005", 1, defs, "Swap to change template", "user", at(0));
+    s = setPipeline(s, "EX-005", 1, defs, "Swap to change template", "user", at(0));
     expect(task(s, "EX-005").hold).toBe(true);
     expect(task(s, "EX-005").steps.every((x) => x.state === "paused" || x.state === "pending")).toBe(true);
     s = M.dispatchEligible(s, at(1));
@@ -152,7 +153,7 @@ describe("review regressions (ORC-002)", () => {
     let s = finish(seed(), "EX-001", 1); // S2 implement done
     s = M.dispatchEligible(s, at(2)); // S3 and S4 reviews run (C1, the Checks step, skipped: checks are off)
     const defs = task(s, "EX-001").steps.filter((x) => ["S1", "S2", "C1", "S3"].includes(x.id)).map((x) => ({ ...x }));
-    s = M.setPipeline(s, "EX-001", 1, defs, "Drop UX review, repair, verify", "user", at(3));
+    s = setPipeline(s, "EX-001", 1, defs, "Drop UX review, repair, verify", "user", at(3));
     const s3 = running(s, "EX-001").find((a) => a.stepId === "S3")!;
     s = M.reportCompletion(s, s3.id, [], at(4), [{ name: "findings", summary: "ok", openFindings: 0 }]);
     expect(task(s, "EX-001").lifecycle).toBe("active");
@@ -171,7 +172,7 @@ describe("review regressions (ORC-002)", () => {
       { id: "S6", purpose: "Second repair", role: "coder", dependsOn: ["S5"], inputs: [{ step: "S5", output: "findings" }], outputs: [{ name: "change", kind: "code-change" }], runIf: [{ step: "S5", output: "findings" }] },
       { id: "S7", purpose: "Verify", role: "lead", dependsOn: ["S6"], inputs: [], outputs: [{ name: "verification", kind: "verification" }] },
     ];
-    let s = M.leadPromoteProposals(M.setPipeline(seed(), "EX-003", 1, defs, "custom", "user", at(0)), at(0));
+    let s = M.leadPromoteProposals(setPipeline(seed(), "EX-003", 1, defs, "custom", "user", at(0)), at(0));
     const step6 = () => step(s, "EX-003", "S6");
     let t = 1;
     const drive = (findings: number) => {
@@ -211,15 +212,15 @@ describe("review regressions (ORC-002)", () => {
   it("a removed step's ID cannot be reused by a new step", () => {
     let s = seed();
     const defs = task(s, "EX-007").steps.filter((x) => x.id !== "S4").map((x) => ({ ...x }));
-    s = M.setPipeline(s, "EX-007", 1, defs, "Drop verification", "user", at(0));
+    s = setPipeline(s, "EX-007", 1, defs, "Drop verification", "user", at(0));
     const readd = [...defs, { id: "S4", purpose: "Release notes", role: "designer" as const, dependsOn: ["S3"], inputs: [], outputs: [{ name: "notes", kind: "report" as const }] }];
-    expect(() => M.setPipeline(s, "EX-007", 2, readd, "re-add", "user", at(1))).toThrow(/removed step/);
+    expect(() => setPipeline(s, "EX-007", 2, readd, "re-add", "user", at(1))).toThrow(/removed step/);
   });
 
   it("purpose is the worker instruction: changing it on a running step stops the run", () => {
     let s = seed();
     const defs = task(s, "EX-001").steps.map((x) => ({ ...x, purpose: x.id === "S2" ? "Implement with tests" : x.purpose }));
-    s = M.setPipeline(s, "EX-001", 1, defs, "Clarify instruction", "user", at(0));
+    s = setPipeline(s, "EX-001", 1, defs, "Clarify instruction", "user", at(0));
     expect(running(s, "EX-001")[0].outcome).toBe("stopping");
     s = M.acknowledgeStop(s, running(s, "EX-001")[0].id, at(1));
     s = M.dispatchEligible(s, at(2));
@@ -234,7 +235,7 @@ describe("review regressions (ORC-002)", () => {
 
   it("the internal setPipeline records a custom pipeline as the task's flow", () => {
     // ORC-016: no command reaches setPipeline; what tests build with it is labelled, never mistaken for a catalog flow.
-    const s = M.setPipeline(seed(), "EX-003", 1, flowSteps("change").slice(0, 1), "one step", "user", at(0));
+    const s = setPipeline(seed(), "EX-003", 1, flowSteps("change").slice(0, 1), "one step", "user", at(0));
     expect(task(s, "EX-003").flow).toEqual({ id: "custom", name: "Custom pipeline", source: "custom", chosenBy: "user" });
     expect(task(s, "EX-003").pipelineHistory[1].flow).toMatchObject({ source: "custom" });
   });

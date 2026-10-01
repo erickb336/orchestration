@@ -5,10 +5,11 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
 import * as D from "./delivery";
 import * as M from "./model";
+import { flowSteps, setPipeline } from "./testing/pipelines";
 import { diffLineClasses } from "./diff";
 import { buildEmptyProject, buildSeed } from "./seed";
-import { INTERNAL_FLOW_IDS } from "./internalFlows";
-import { builtInCatalog, flowSteps } from "./flows";
+import { INTERNAL_FLOWS } from "./internalFlows";
+import { builtInCatalog } from "./flows";
 import { reviewedChange, type ReviewedOptions } from "./testing/reviewed";
 import { ControlError, DEFAULT_PR_DELIVERY, type CheckObs, type Integration, type PrDelivery, type State } from "./types";
 
@@ -54,7 +55,7 @@ function securityClean(s: State, id: string, t: number): State {
 describe("data model", () => {
   it("a new project is format 14 with pull-request delivery off and nothing observed", () => {
     for (const s of [seed(), buildEmptyProject(T0)]) {
-      expect(s.version).toBe(17);
+      expect(s.version).toBe(18);
       expect(s.project.prDelivery).toEqual(DEFAULT_PR_DELIVERY);
       expect(s.project.prDelivery).toMatchObject({ enabled: false, merge: "hold" });
       expect(s.project.github).toBeUndefined();
@@ -72,7 +73,7 @@ describe("data model", () => {
 
   it("the revert pipeline is internal and valid", () => {
     // ORC-016: the service owns it; it is not in the catalog and no file may take its id.
-    expect(INTERNAL_FLOW_IDS).toContain("revert");
+    expect(INTERNAL_FLOWS.map((p) => p.id)).toContain("revert");
     expect(builtInCatalog().some((p) => p.id === "revert")).toBe(false);
     // ORC-013: a Final checks step (run by the service) sits between the review and the verification.
     expect(flowSteps("revert").map((s) => s.role)).toEqual(["coder", "code_reviewer", "security_reviewer", "checks", "lead"]);
@@ -384,7 +385,7 @@ describe("createFollowUp", () => {
     // ORC-013: the Change template carries the Checks steps C1 (in the loop) and C2 (final).
     expect(f.steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "SR1", "S3", "C2", "S4"]);
     expect(f.steps.find((x) => x.id === "S3")!.iterate).toEqual({ from: "C1", max: 3 }); // the loop is whole again
-    expect(f.steps.every((x) => x.state === "pending" && x.iteration === undefined && !x.copyOf)).toBe(true);
+    expect(f.steps.every((x) => x.state === "pending" && x.iteration === undefined)).toBe(true);
     expect(f.pipelineHistory[0].steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "SR1", "S3", "C2", "S4"]);
   });
 
@@ -953,7 +954,7 @@ describe("dependencies in pull-request mode", () => {
     s.attempts = [];
     for (const t of s.tasks) for (const st of t.steps) if (st.state === "running") st.state = "pending";
     const r0 = M.createTask(s, { title: "Writes", area: "", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, flowId: "change" }, at(1));
-    const r = { ...r0, state: M.setPipeline(r0.state, r0.newId, 1, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], "one step", "user", at(1)) };
+    const r = { ...r0, state: setPipeline(r0.state, r0.newId, 1, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], "one step", "user", at(1)) };
     const ready = M.leadPromoteProposals(r.state, at(1));
     for (const t of ready.tasks) if (t.id !== r.newId && t.lifecycle !== "done" && t.lifecycle !== "cancelled") t.hold = true;
     expect(task(ready, r.newId).lifecycle).toBe("ready");

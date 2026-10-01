@@ -9,6 +9,7 @@ import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
+import { clip } from "../src/domain/text";
 import {
   FINDING_ACTIONS,
   MAX_NOTES_PER_REPLY,
@@ -66,7 +67,7 @@ export interface ConventionsFile {
   truncated: boolean;
 }
 
-export interface EnvelopeInput {
+interface EnvelopeInput {
   state: State;
   task: Task;
   step: Step;
@@ -211,7 +212,7 @@ function findingsInput(state: State, art: Artifact): string {
 }
 
 /** ORC-013 §11.1: the output of each failed or timed-out check, as the last 60 lines at most, fenced and labelled as the change's own output. */
-export const CHECK_OUTPUT_LINES = 60;
+const CHECK_OUTPUT_LINES = 60;
 function checkOutputInput(art: Artifact): string {
   const run = art.checkRun;
   if (!run) return "";
@@ -428,7 +429,7 @@ ${list(c.acceptance)}
 ${principlesSection(givenPrinciples(state, task, step, attemptId))}${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
 ${inputText}
 
-${notesReceivedSections(state, inputs)}${repairSections(state, task, step, inputs)}${reviewNote(changeUnderReview)}${changedFilesSection(changedPaths, coverageGap, step.role)}${settledSection(state, task, step.role)}${bestOfNote(state, task, step)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
+${notesReceivedSections(state, inputs)}${repairSections(state, task, step, inputs)}${reviewNote(changeUnderReview)}${changedFilesSection(changedPaths, coverageGap, step.role)}${settledSection(state, task, step.role)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
 - Your working directory is an isolated git worktree created for this run. ${access === "write" ? "Edit files only inside it." : "It is read-only for you: do not create, modify, or delete any file."}
 - Do not commit, push, create branches, or change git configuration; the orchestration service records your work.
 - Do not start sub-agents or delegate; this run is tracked and bounded by the orchestration service.
@@ -600,17 +601,15 @@ Do not run git: no commit, merge, revert, reset, or checkout. Edit files only.
 `;
 }
 
-export interface ParsedOutputs {
+interface ParsedOutputs {
   outputs: { name: string; summary: string; openFindings?: number; findings?: Finding[]; reviewedPaths?: string[]; invalidPaths?: number; items?: unknown[] }[];
-  /** Best-of choice reported by a comparing step. */
-  chosen?: string;
   /** Why parsing failed or which declared outputs are missing. Empty when everything was reported. */
   problems: string[];
   /** ORC-013: what the parser corrected or dropped without refusing the output (recorded on the run). */
   notes: string[];
 }
 
-export const MAX_FINDINGS = 50;
+const MAX_FINDINGS = 50;
 const C0 = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 const C0_ALL = /[\u0000-\u001F\u007F]/g;
 
@@ -681,7 +680,7 @@ export function parseFindings(raw: unknown, source: Finding["source"] = "review"
 }
 
 /** ORC-013: the reported reviewed paths, normalised and deduplicated; invalid entries are counted. */
-export function parseReviewedPaths(raw: unknown): { paths: string[]; invalid: number } {
+function parseReviewedPaths(raw: unknown): { paths: string[]; invalid: number } {
   if (!Array.isArray(raw)) return { paths: [], invalid: 0 };
   const seen = new Set<string>();
   let invalid = 0;
@@ -697,7 +696,7 @@ export function parseReviewedPaths(raw: unknown): { paths: string[]; invalid: nu
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** The last fenced JSON object in a message. Summaries may themselves contain ``` fences. */
-export function lastJsonObject(text: string): Record<string, unknown> | undefined {
+function lastJsonObject(text: string): Record<string, unknown> | undefined {
   // Candidates, most likely first: from the last ```json fence to the last closing fence, then each
   // simple fenced block from the end.
   const candidates: string[] = [];
@@ -783,13 +782,10 @@ export function parseOutputs(finalText: string, declared: OutputDef[]): ParsedOu
     }
     outputs.push(out);
   }
-  const chosen = typeof parsed.chosen === "string" ? parsed.chosen.slice(0, 40) : undefined;
-  return { outputs, problems, notes, ...(chosen ? { chosen } : {}) };
+  return { outputs, problems, notes };
 }
 
 // ---------- the lead ----------
-
-const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
 
 const MAX_OPEN_ROWS = 80;
 const STEER_ACTIONS: SteerAction[] = ["priority", "defer", "undefer", "drop"];
@@ -1239,21 +1235,6 @@ export function parseLeadOutput(finalText: string): { reply: string; proposals: 
   const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
   const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
   return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions") };
-}
-
-/** A step that reads best-of candidates must choose one. */
-function bestOfNote(_state: State, task: Task, step: Step): string {
-  const groups = [...new Set(step.inputs.map((r) => task.steps.find((x) => x.id === r.step)?.copyOf).filter((g): g is string => !!g))].filter(
-    (g) => task.steps.find((x) => x.id === g)?.parallel?.mode === "best-of" && !task.bestOf?.[g],
-  );
-  if (!groups.length) return "";
-  const lines = groups.map((g) => `- ${g}: candidates ${task.steps.filter((x) => x.copyOf === g && x.state === "done").map((x) => x.id).join(", ")}`);
-  return `## Choose the best candidate
-Several agents produced alternatives. Compare them and choose one; only the chosen one goes further.
-${lines.join("\n")}
-Add \`"chosen": "<step id>"\` at the top level of your JSON block.
-
-`;
 }
 
 /** A step that waits for child tasks sees how each of them ended. */

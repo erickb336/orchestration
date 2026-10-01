@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
+import { setPipeline } from "./testing/pipelines";
 import { buildSeed } from "./seed";
 import { ControlError, type Deferral, type LeadRun, type State, type SteerAction, type SteeringMode } from "./types";
 
@@ -17,7 +18,7 @@ const oneStep = [{ id: "S1", purpose: "Implement", role: "coder" as const, depen
 /** A user task with a one-step coder pipeline (proposed; `promote` makes it ready). */
 function userTask(s: State, title: string, priority: number, over: Partial<Parameters<typeof M.createTask>[1]> = {}): { state: State; id: string } {
   const r = M.createTask(s, { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority, holdBeforeStart: false, flowId: "change", ...over }, at(0));
-  return { state: M.setPipeline(r.state, r.newId, 1, oneStep, "one step", "user", at(0)), id: r.newId };
+  return { state: setPipeline(r.state, r.newId, 1, oneStep, "one step", "user", at(0)), id: r.newId };
 }
 const promote = (s: State) => M.leadPromoteProposals(s, at(0));
 
@@ -224,7 +225,7 @@ describe("D3 deferral is checked only by dispatch", () => {
     ];
     // Room for every task: the finish branch is only reached while worker slots are free.
     const r0 = M.createTask(M.setWorkerLimit(seed(), 8, at(0)), { title: "Skip", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
-    const r = { ...r0, state: M.setPipeline(r0.state, r0.newId, 1, steps, "custom", "user", at(0)) };
+    const r = { ...r0, state: setPipeline(r0.state, r0.newId, 1, steps, "custom", "user", at(0)) };
     let s = M.dispatchEligible(promote(r.state), at(1));
     s = complete(s, running(s, r.newId)[0].id, at(2));
     s = M.dispatchEligible(s, at(3));

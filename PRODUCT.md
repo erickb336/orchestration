@@ -83,7 +83,7 @@ In the owner's words (2026-10-01): "a starting playground for me to develop and 
 ## Evidence on Hand
 
 - **Real evidence:**
-  - the test suite (878 tests at ORC-016);
+  - the test suite (`npm test` prints the current count);
   - a 25-of-25 pull-request sandbox run against a real GitHub repository, with scripted agents;
   - a real probe of the Codex sandbox on macOS;
   - screenshots in `docs/screenshots/`.
@@ -97,7 +97,7 @@ In the owner's words (2026-10-01): "a starting playground for me to develop and 
 
 1. **Truthful state over optimistic state.** Desired state is shown apart from observed state.
 2. **The user steers; the lead executes.** Specs are published, never forced as approval gates.
-3. **One implementation, then independent review,** by default. Comparisons are opt-in experiments.
+3. **One implementation, then independent review.** No competing implementations.
 4. **Local-first and private by default.**
 5. **Prefer mature open-source tools** to hand-built infrastructure.
 

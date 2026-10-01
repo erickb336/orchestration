@@ -25,10 +25,8 @@ export function areaOf(task: Task): string {
   return M.currentSpec(task).content.area.trim() || OTHER_AREA;
 }
 
-/** Tasks the service made for delivery (dedicated reviews, fixes pushed onto a pull request, check runs) are not the product's work. */
-export function serviceOwned(t: Task): boolean {
-  return !!t.reviewTarget || !!t.deliverInto || !!t.checkTarget;
-}
+/** Tasks the service made for pull-request delivery are not the product's work: the domain's definition, so the board and the domain agree. */
+export const serviceOwned = M.serviceOwned;
 
 const taskHref = (t: Task) => `#/task/${encodeURIComponent(t.id)}`;
 

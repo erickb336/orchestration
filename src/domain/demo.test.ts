@@ -8,7 +8,6 @@ import * as C from "./checks";
 import { runCommand } from "./commands";
 import * as D from "./delivery";
 import { DEMO_DOC_TEXT, DEMO_PROJECT_NAME, DEMO_REPO_PATH, buildDemo } from "./demo";
-import { DEMO_AREAS } from "./demoScript";
 import * as F from "./findings";
 import * as M from "./model";
 import { builtInCatalog } from "./flows";
@@ -27,7 +26,7 @@ const task = (s: State, id: string): Task => {
 
 /** Structural checks any state the service writes must pass. */
 function validate(s: State) {
-  expect(s.version).toBe(17);
+  expect(s.version).toBe(18);
   const catalog = builtInCatalog();
   const ids = new Set<string>();
   for (const t of s.tasks) {
@@ -168,9 +167,9 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(C.checksHeld(s)).toBe(false);
     expect(s.project.catalog.claude[0]).toEqual({ id: "claude-sample-large", label: "Claude large (sample model)" });
     expect(s.project.catalog.codex[0]).toEqual({ id: "codex-sample-large", label: "Codex large (sample model)" });
-    // The areas.
+    // The areas (the sample project's tracks).
     const areas = new Set(s.tasks.map((t) => M.currentSpec(t).content.area));
-    expect([...areas].sort()).toEqual([...DEMO_AREAS].sort());
+    expect([...areas].sort()).toEqual(["Offline maps", "Trip sharing", "Packing lists", "Accessibility", "Reliability"].sort());
     // The vision: r1 an accepted draft from the simulated lead, r2 the steering focus, both flagged, one document.
     const [r1, r2] = s.project.visions;
     expect(s.project.visions).toHaveLength(2);

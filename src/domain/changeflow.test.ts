@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
 import * as F from "./findings";
 import * as M from "./model";
-import { builtInCatalog, flowSteps } from "./flows";
+import { flowSteps, setPipeline } from "./testing/pipelines";
+import { builtInCatalog } from "./flows";
 import { buildSeed } from "./seed";
 import { StaleWriteError, type Finding, type State, type Task } from "./types";
 
@@ -51,7 +52,6 @@ function securityClean(s: State, id: string, t: number): State {
   for (const a of running(next, id)) if (step(next, id, a.stepId).role === "security_reviewer") next = M.reportCompletion(next, a.id, [], at(t), [{ name: "findings", summary: "no security findings", findings: [], openFindings: 0 }]);
   return next;
 }
-
 
 /** A Change task paused after S1 (coder) and S2 (review, with one ask-user finding) are done: checks are off, so C1 skipped. */
 function pausedAfterReview(): { s: State; id: string; before: State } {
@@ -179,11 +179,9 @@ describe("refusals (P7)", () => {
 });
 
 describe("a fresh start while paused (P8)", () => {
-  it("every new step is paused with a revision above every earlier one; decisions close; best-of and pending breakdowns clear; artifacts stay but are never consumed", () => {
+  it("every new step is paused with a revision above every earlier one; decisions close; pending breakdowns clear; artifacts stay but are never consumed", () => {
     const { s: paused, id } = pausedAfterReview();
     const s0 = structuredClone(paused);
-    task(s0, id).bestOf = { S1: "S1" };
-    task(s0, id).bestOfByUser = { S1: at(4) };
     task(s0, id).pendingBreakdowns = [{ stepId: "S2", output: "findings" }];
     task(s0, id).checkRounds = 1;
     task(s0, id).holdReason = "Review S2";
@@ -206,8 +204,6 @@ describe("a fresh start while paused (P8)", () => {
     expect(step(r, id, "S3").revision).toBe(3); // above the pinned step's 2
     expect(step(r, id, "S5").revision).toBe(1); // new id
     expect(t.flowSince).toBe(t.pipelineRev);
-    expect(t.bestOf).toBeUndefined();
-    expect(t.bestOfByUser).toBeUndefined();
     expect(t.pendingBreakdowns).toBeUndefined();
     expect(t.checkRounds).toBeUndefined();
     expect(t.holdReason).toBeUndefined();
@@ -335,16 +331,18 @@ describe("steps 2–3 review fixes", () => {
 
   it("finding 2: child tasks of a breakdown made under the earlier flow are the record: never relinked, never waited for, and told apart", () => {
     let { s, id } = withTask("goal");
-    // A gate after the plan (an engine capability no built-in uses; a test pipeline here) holds the task before its children exist.
-    s = M.setPipeline(s, id, 1, flowSteps("goal").map((d) => (d.id === "S1" ? { ...d, gate: true } : d)), "gate after the plan", "user", at(0));
+    // Step-by-step review (on a custom copy of the Goal steps) holds the task after the plan, before its children exist.
+    s = setPipeline(s, id, 1, flowSteps("goal"), "custom goal", "user", at(0));
+    s = M.setReviewEveryStep(s, id, true, at(0));
     s = go(s, 1);
     expect(running(s, id)[0].stepId).toBe("S1");
     const items = (titles: string[]) => titles.map((title) => ({ title, outcome: `${title} is done`, approach: "do it", acceptance: ["ok"], flowId: "change" }));
     s = M.reportCompletion(s, running(s, id)[0].id, [], at(2), [{ name: "plan", summary: "two parts", items: items(["Part one", "Part two"]) }]);
-    // The gate holds the task; the children are created when you resume.
+    // The review hold keeps the task; the children are created when you resume.
     expect(task(s, id).hold).toBe(true);
     expect(M.childTasks(s, task(s, id))).toHaveLength(0);
     s = M.resumeTask(s, id, at(3));
+    s = M.setReviewEveryStep(s, id, false, at(3));
     const first = M.childTasks(s, task(s, id));
     expect(first.map(titleOf)).toEqual(["Part one", "Part two"]);
     const plan1 = s.artifacts.find((a) => a.taskId === id && a.name === "plan")!;
@@ -419,7 +417,7 @@ describe("steps 2–3 review fixes", () => {
     expect(step(normal, id, "S1").state).toBe("paused");
   });
 
-  it("finding 6: loop iterations and parallel copies created after a change start above any revision their ids had before", () => {
+  it("finding 6: loop iterations created after a change start above any revision their ids had before", () => {
     // Iterations: a Change task whose loop had expanded (S2-i2 ran) before the change to Change without verification.
     let { s, id } = withTask("change");
     s = go(s, 1);
@@ -454,15 +452,5 @@ describe("steps 2–3 review fixes", () => {
     expect(step(n, id, "SR1-i2").revision).toBe(2); // its run before the change was at revision 1 too
     expect(step(n, id, "C1-i2").revision).toBe(1); // never ran (checks are off): nothing to stay above
     expect(step(n, id, "S3-i2").revision).toBe(1);
-    // Copies: a best-of pipeline (an engine capability no built-in uses; a test pipeline here) whose candidates ran, then changed to Change.
-    let { s: b, id: bid } = withTask("change");
-    b = M.setPipeline(b, bid, 1, [{ ...flowSteps("change")[0], parallel: { count: 2, mode: "best-of", providers: ["claude", "codex"] } }, { id: "S2", purpose: "Choose", role: "code_reviewer", dependsOn: ["S1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "findings", kind: "review-findings" }] }], "best of two", "user", at(0));
-    b = go(b, 1);
-    expect(running(b, bid).map((x) => x.stepId).sort()).toEqual(["S1", "S1-c2"]);
-    b = M.pauseTask(b, bid, at(2));
-    for (const a of running(b, bid)) b = M.acknowledgeStop(b, a.id, at(3));
-    b = M.changeFlow(b, bid, task(b, bid).pipelineRev, "change", "", at(4));
-    expect(step(b, bid, "S1").revision).toBe(3); // 1 at creation, 2 when the pipeline gained the best-of (its run), 3 now
-    expect(M.nextRevisionFor(b, task(b, bid), "S1-c2")).toBe(2); // above the stopped candidate's run at revision 1; no step holds the id now
   });
 });

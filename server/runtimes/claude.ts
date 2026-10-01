@@ -27,6 +27,7 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { CatalogModel } from "../../src/domain/types";
+import { truncate as oneLine } from "../../src/domain/text";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 import { homedir } from "node:os";
 import { withoutGitHubTokens } from "../redact";
@@ -36,7 +37,7 @@ import type { AdapterEvent, Assignment, Connection, ProviderHealth, RuntimeAdapt
 // Public types and constants
 
 /** The handle a query returns: an async stream of SDK messages plus the control methods we use. */
-export interface ClaudeQueryHandle extends AsyncIterable<SDKMessage> {
+interface ClaudeQueryHandle extends AsyncIterable<SDKMessage> {
   interrupt?: () => Promise<unknown>;
 }
 
@@ -81,12 +82,12 @@ export const CLAUDE_AUTH_MESSAGE =
  * Anthropic's Agent SDK docs say third-party apps may not offer claude.ai login unless approved, so
  * this is never a default: it needs both variables, and Settings quotes the rule when it is on.
  */
-export const CLAUDE_AUTH_SWITCH = "ORCHESTRATION_CLAUDE_AUTH";
-export const CLAUDE_SUBSCRIPTION_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN";
+const CLAUDE_AUTH_SWITCH = "ORCHESTRATION_CLAUDE_AUTH";
+const CLAUDE_SUBSCRIPTION_TOKEN = "CLAUDE_CODE_OAUTH_TOKEN";
 const ANTHROPIC_RULE =
   "Anthropic's Agent SDK docs say tools built on it may not offer claude.ai login unless Anthropic approved it; using your own token here is your decision.";
 
-export function claudeAuthMode(env: NodeJS.ProcessEnv): "subscription" | "default" {
+function claudeAuthMode(env: NodeJS.ProcessEnv): "subscription" | "default" {
   return env[CLAUDE_AUTH_SWITCH]?.trim().toLowerCase() === "subscription" ? "subscription" : "default";
 }
 
@@ -106,13 +107,13 @@ export function claudeWorkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return out;
 }
 
-export const CLAUDE_MODEL_ALIASES: CatalogModel[] = [
+const CLAUDE_MODEL_ALIASES: CatalogModel[] = [
   { id: "sonnet", label: "Claude Sonnet (latest alias)" },
   { id: "opus", label: "Claude Opus (latest alias)" },
   { id: "haiku", label: "Claude Haiku (latest alias)" },
 ];
 
-export const CLAUDE_CAPABILITIES: CapabilityMap = {
+const CLAUDE_CAPABILITIES: CapabilityMap = {
   start: "supported",
   streamEvents: "supported",
   // ORC-022: notes go onto the input stream and count as delivered only on the CLI's uuid acknowledgment;
@@ -149,7 +150,7 @@ const ENDED_MAX = 500;
 // ---------------------------------------------------------------------------------------------
 // Tool policy and workspace guard (exported for tests)
 
-export interface ToolPolicy {
+interface ToolPolicy {
   /** Base set of built-in tools (`Options.tools`). */
   tools: string[];
   /** Removed from the model's context even if something else would enable them (`Options.disallowedTools`). */
@@ -168,7 +169,7 @@ export function toolPolicy(access: "read" | "write", allowShell = false): ToolPo
   return { tools, disallowedTools };
 }
 
-export type GuardVerdict = { ok: true } | { ok: false; reason: string };
+type GuardVerdict = { ok: true } | { ok: false; reason: string };
 
 function isInside(child: string, root: string): boolean {
   return child === root || child.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
@@ -263,10 +264,7 @@ export function createWorkspaceGuard(workspace: string, allowedTools: readonly s
 // ---------------------------------------------------------------------------------------------
 // Helpers
 
-function truncate(s: string, max = ACTIVITY_MAX): string {
-  const one = s.replace(/\s+/g, " ").trim();
-  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
-}
+const truncate = (s: string, max = ACTIVITY_MAX) => oneLine(s, max);
 
 function redact(s: string): string {
   return s.replace(/sk-ant-[A-Za-z0-9_-]+/g, "sk-ant-[redacted]");

@@ -9,6 +9,7 @@ import { runCommand } from "./commands";
 import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
+import { setPipeline } from "./testing/pipelines";
 import { validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
 import { ControlError, DEFAULT_CHECKS, type CheckRunRecord, type ChecksConfig, type State } from "./types";
@@ -681,7 +682,7 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     c2.checks = { onFail: "block", only: ["tests"] };
     expect(validatePipeline(defs, { checkIds: C.configuredCheckIds(s.project.checks) }).filter((i) => i.severity === "error").map((i) => i.message)).toEqual(["C2 names checks that do not exist: tests. The configured checks are test (Settings → Checks)."]);
     expect(validatePipeline(defs).filter((i) => i.severity === "error")).toEqual([]); // without the ids nothing is known
-    expect(() => M.setPipeline(s, id, task(s, id).pipelineRev, defs, "rename", "user", at(5))).toThrow(/C2 names checks that do not exist: tests/);
+    expect(() => setPipeline(s, id, task(s, id).pipelineRev, defs, "rename", "user", at(5))).toThrow(/C2 names checks that do not exist: tests/);
   });
 
   it("M2: evidence means every configured check passed on the commit; a run of a subset, or one missing a check, is not evidence (mutation check)", () => {

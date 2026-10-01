@@ -10,6 +10,7 @@ import * as F from "./findings";
 import * as M from "./model";
 import { internalFlow, flowHash, flowRef, serviceFlow } from "./flows";
 import { instantiate, toDef } from "./pipeline";
+import { clip } from "./text";
 import {
   ControlError,
   REVIEW_ROLES,
@@ -55,7 +56,6 @@ function getLanded(s: State, taskId: string): { task: Task; landed: Landed } {
   return { task, landed };
 }
 
-const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 const sha12 = (sha: string) => sha.slice(0, 12);
 
 // ---------- delivery mode ----------
@@ -164,7 +164,7 @@ export function needsYou(s: State, nowMs = Date.now()): number {
   return n;
 }
 
-export interface LandedReview {
+interface LandedReview {
   stepId: string;
   purpose: string;
   role: RoleId;
@@ -655,8 +655,8 @@ function nobodyReason(pr: PrDelivery): string {
  * that wrote none of it (or an author is unknown), so no agent's review could be independent.
  * "limit": the service already started as many dedicated reviews as it may.
  */
-export type ReviewState = "ok" | "pending" | "missing" | "not-independent" | "findings" | "blocked" | "limit" | "too-large";
-export interface ReviewView {
+type ReviewState = "ok" | "pending" | "missing" | "not-independent" | "findings" | "blocked" | "limit" | "too-large";
+interface ReviewView {
   state: ReviewState;
   evidence: ReviewEvidence;
   /** The dedicated review task this is about, if any. */
@@ -677,7 +677,6 @@ interface Covering {
 
 const modelOf = (run: Attempt) => run.actualModel ?? run.snapshot.model;
 const findingsText = (n: number) => `${n} open finding${n === 1 ? "" : "s"}`;
-const sameSha = (a: string, b: string) => a === b || (a.length >= 12 && b.length >= 12 && (a.startsWith(b) || b.startsWith(a)));
 
 /**
  * ORC-013 §5.4: may a review artifact count as evidence for the change `sha`? Findings someone still
@@ -692,7 +691,7 @@ function countsFor(s: State, art: Artifact, sha: string): boolean {
   if (F.unresolved(s, art) > 0) return true;
   const c = art.pathCoverage;
   if (!c || !coverageCounts(c)) return false;
-  return c.state === "not-required" || (!!c.to && sameSha(c.to, sha));
+  return c.state === "not-required" || (!!c.to && C.sameSha(c.to, sha));
 }
 
 /** The finished review steps of a task whose accepted findings satisfy `covers` and count for `pr`'s change. */
@@ -1046,7 +1045,7 @@ export function ensureChecks(state: State, taskId: string, now: string): State {
 
 // ---------- repair into the open pull request (design §9.3) ----------
 
-export type RepairCause =
+type RepairCause =
   | { kind: "checks"; checks: { name: string; url?: string }[] }
   | { kind: "service-checks"; sha: string; results: { id: string; label: string; exitCode?: number }[] }
   | { kind: "findings"; summaries: string[] }
@@ -1341,7 +1340,7 @@ const APPROVAL_TEXT =
   "GitHub requires an approval the app cannot give. This may be the ruleset's require_extra_approval_for_unattributed_changes applied to commits authored by Orchestrator. Merge on GitHub, approve from another account, or change the ruleset.";
 
 /** The names of the required checks for a pull request: from the repository's rules and from GitHub's own marking. */
-export function requiredCheckNames(s: State, pr: PrDelivery): string[] {
+function requiredCheckNames(s: State, pr: PrDelivery): string[] {
   return [...new Set([...(s.project.github?.requiredChecks ?? []), ...(pr.observed?.checks.filter((c) => c.required).map((c) => c.name) ?? [])])];
 }
 
@@ -1352,7 +1351,7 @@ export function requiredCheckNames(s: State, pr: PrDelivery): string[] {
  * check that never ran, or the code. Only `code` failures start a fix task; the rest need a person,
  * except a provider failure, which is re-run once per head first.
  */
-export type CiClass = "bot" | "provider" | "not-run" | "code";
+type CiClass = "bot" | "provider" | "not-run" | "code";
 
 /**
  * GitHub cancels a job that reaches its time limit, and reports it CANCELLED, not TIMED_OUT. The limit
@@ -1367,7 +1366,7 @@ const NOT_CODE = new Set(["SUCCESS", "CANCELLED", "SKIPPED", "NEUTRAL", "STALE"]
 const codeConclusion = (c: CheckObs) => c.conclusion !== null && !NOT_CODE.has(c.conclusion);
 const ranMs = (c: CheckObs) => (c.startedAt && c.completedAt ? Date.parse(c.completedAt) - Date.parse(c.startedAt) : undefined);
 
-export interface TriageContext {
+interface TriageContext {
   /** Every check observed on the head: a failure elsewhere in the same workflow run makes a cancelled or skipped job a code failure (review M4). */
   all?: CheckObs[];
   /** This run appeared after the re-runs for its name on this head were spent: cancelled again is a code failure (review M4). */
@@ -1477,7 +1476,7 @@ function rerunnable(s: State, pr: PrDelivery, ob: { checks: CheckObs[] }, c: Che
  * re-runnable provider failure with budget left, and nothing conflicts. Any `code` failure suppresses
  * re-runs: a fix is needed anyway. Pure; the planner, the intent and the gate all use it.
  */
-export function rerunPlan(s: State, pr: PrDelivery, nowMs: number): { check: string; jobId: number }[] | undefined {
+function rerunPlan(s: State, pr: PrDelivery, nowMs: number): { check: string; jobId: number }[] | undefined {
   const ob = pr.observed;
   if (!s.project.prDelivery.enabled || !ob || ob.state !== "OPEN" || ob.headSha !== pr.headSha || ob.checksFor !== pr.headSha) return undefined;
   if (pr.phase !== "open" || pr.number === undefined || pr.pendingHead || pr.foreignHead) return undefined;
@@ -1827,7 +1826,7 @@ export function mergeBody(s: State, t: Task): string {
 
 // ---------- integration in pull-request mode ----------
 
-export interface PrHeadFacts {
+interface PrHeadFacts {
   n: number;
   /** Full SHA of the task's final commit: the pull request head. */
   sha: string;
@@ -1887,16 +1886,11 @@ function changeAuthorOf(s: State, t: Task): ChangeAuthor {
 /**
  * Everyone who authored a commit of a task's change: every run that produced a code change in it (an
  * earlier coder step, a repair round, a run that was done again on another provider), and the user
- * where they supplied a commit. Candidates of a best-of step that were not chosen are not part of it.
+ * where they supplied a commit.
  */
 function changeAuthorsOf(s: State, t: Task): ChangeAuthor[] {
-  const unchosen = (stepId: string) => {
-    const g = t.steps.find((x) => x.id === stepId)?.copyOf;
-    if (!g) return false;
-    return t.bestOf?.[g] ? t.bestOf[g] !== stepId : t.steps.find((x) => x.id === g)?.parallel?.mode === "best-of" && stepId !== g;
-  };
   const out = new Set<ChangeAuthor>();
-  for (const a of s.artifacts) if (a.taskId === t.id && a.kind === "code-change" && !unchosen(a.stepId)) out.add(M.artifactAuthor(s, a));
+  for (const a of s.artifacts) if (a.taskId === t.id && a.kind === "code-change") out.add(M.artifactAuthor(s, a));
   out.add(changeAuthorOf(s, t));
   return [...out];
 }

@@ -44,8 +44,3 @@ export function killGroup(child: ChildProcess, signal: NodeJS.Signals) {
     /* already gone */
   }
 }
-
-/** Live children still tracked (tests). */
-export function liveCount(): number {
-  return LIVE.size;
-}

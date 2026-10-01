@@ -13,6 +13,7 @@ import * as F from "./findings";
 import { CODE_REVIEW_PRINCIPLES, REPAIR_PRINCIPLES, SECURITY_REVIEW_PRINCIPLES } from "./internalFlows";
 import * as M from "./model";
 import { downstreamOf, instantiate, toDef, validatePipeline } from "./pipeline";
+import { seconds } from "./text";
 import { SECRET_NAME } from "./secrets";
 import {
   ControlError,
@@ -42,13 +43,13 @@ export const CHECK_PROGRAMS = [
 ];
 export const MAX_CHECK_COMMANDS = 8;
 export const MAX_PREPARE_COMMANDS = 2;
-export const MAX_ARGV = 32;
-export const MAX_ARG_LENGTH = 400;
-export const MAX_LABEL = 60;
-export const MAX_PROTECTED_INPUTS = 30;
-export const MAX_PASS_ENV = 20;
+const MAX_ARGV = 32;
+const MAX_ARG_LENGTH = 400;
+const MAX_LABEL = 60;
+const MAX_PROTECTED_INPUTS = 30;
+const MAX_PASS_ENV = 20;
 /** At most two repair rounds after failing final checks (§6.7). */
-export const MAX_CHECK_ROUNDS = 2;
+const MAX_CHECK_ROUNDS = 2;
 const ID_RE = /^[a-z][a-z0-9-]{0,23}$/;
 const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]{0,63}$/;
 const PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn", "bun"]);
@@ -85,7 +86,7 @@ const SEPARATE_VALUE: Record<string, Set<string>> = { python: new Set(PY_SEPARAT
  * ruled out, so its installs run offline. Every other prepare command (pip, uv, poetry, bundle,
  * gradle, mix, swift, cargo, go, make, …) runs offline too; the user prefetches in their own environment.
  */
-export const NETWORK_INSTALL_FLAGS: Record<string, string[][]> = {
+const NETWORK_INSTALL_FLAGS: Record<string, string[][]> = {
   npm: [["--ignore-scripts", "--ignore-scripts=true"]],
   pnpm: [
     ["--ignore-scripts", "--ignore-scripts=true"],
@@ -100,7 +101,7 @@ export const NETWORK_RULE = "downloads the network may be used for: npm, pnpm, y
 /** Names a check environment never takes from the settings (§6.6 sets or drops them itself). */
 const RESERVED_ENV = new Set(["PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD"]);
 /** Prefixes a check environment never takes from the settings, whatever the case (L11): package-manager configuration. */
-export const BLOCKED_ENV_PREFIXES = ["NPM_CONFIG_", "YARN_", "PNPM_"];
+const BLOCKED_ENV_PREFIXES = ["NPM_CONFIG_", "YARN_", "PNPM_"];
 export const blockedEnvName = (n: string) => BLOCKED_ENV_PREFIXES.some((p) => n.toUpperCase().startsWith(p));
 
 const inRange = (n: unknown, lo: number, hi: number) => typeof n === "number" && Number.isInteger(n) && n >= lo && n <= hi;
@@ -112,7 +113,7 @@ export const isRebuild = (argv: string[]) => PACKAGE_MANAGERS.has(argv[0]) && RE
 /** The flags an install carries that switch a protection off again (`--no-ignore-scripts`, `--ignore-scripts=false`, `--mode=update-lockfile`, …). */
 export const contradictingFlags = (argv: string[]) => argv.slice(1).filter((a) => CONTRADICTING_FLAG.test(a));
 /** The protections an install lacks: one list of alternatives per missing requirement. */
-export const missingInstallFlags = (argv: string[]) => (NETWORK_INSTALL_FLAGS[argv[0]] ?? []).filter((alternatives) => !alternatives.some((f) => argv.includes(f)));
+const missingInstallFlags = (argv: string[]) => (NETWORK_INSTALL_FLAGS[argv[0]] ?? []).filter((alternatives) => !alternatives.some((f) => argv.includes(f)));
 
 /**
  * Why a prepare command is refused the network, or undefined when it is on the allowlist with every
@@ -284,7 +285,7 @@ export function suggestChecks(files: RepoFile[]): CheckCommand[] {
 
 // ---------- what a Checks step runs (§6.4) ----------
 
-export type PlannedCommand = { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number; offline?: true; offlineReason?: string };
+type PlannedCommand = { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number; offline?: true; offlineReason?: string };
 
 /**
  * The commands a step runs: every prepare command, and the checks its `only` names (all of them without
@@ -380,7 +381,7 @@ function hash12(text: string): string {
   return `${a}${fnv(`${text}|${a}`).slice(0, 4)}`;
 }
 
-export function checkFindingKey(file: string | undefined, title: string, severity: Finding["severity"] = "error"): string {
+function checkFindingKey(file: string | undefined, title: string, severity: Finding["severity"] = "error"): string {
   return hash12(`check|${severity}|${file ?? ""}|${title.toLowerCase().replace(/\s+/g, " ").trim()}`);
 }
 
@@ -428,8 +429,6 @@ export function touchedInputs(cfg: ChecksConfig, changedPaths: string[]): string
 
 export const allPassed = (record: Pick<CheckRunRecord, "results">) => record.results.every((r) => r.status === "passed");
 export const failedResults = (record: Pick<CheckRunRecord, "results">) => record.results.filter((r) => r.status !== "passed" && r.status !== "not-run");
-
-const seconds = (ms: number) => `${Math.max(1, Math.round(ms / 1000))} s`;
 
 /** One line per command: "Checks on abc123 (settings r3, sandboxed): ✓ typecheck 12 s · ✗ test exit 1, 34 s · – build not run". */
 export function runSummary(record: CheckRunRecord): string {
@@ -616,7 +615,7 @@ export function leadDecidesFinalChecks(s: State, d: FindingDecision, kind: "fix"
 // ---------- evidence (§6.9) ----------
 
 /** Failing final checks the user accepted on this task, if any. */
-export function acceptedFailingChecks(s: State, taskId: string): FindingDecision | undefined {
+function acceptedFailingChecks(s: State, taskId: string): FindingDecision | undefined {
   return s.decisions.find((d) => d.kind === "final-checks" && d.taskId === taskId && d.status === "accept");
 }
 
@@ -670,7 +669,7 @@ export function landedCheckFlags(s: State, t: Task, changeSha: string | undefine
 
 // ---------- the user's settings (§9) ----------
 
-export type ChecksInput = Omit<ChecksConfig, "rev">;
+type ChecksInput = Omit<ChecksConfig, "rev">;
 
 const argvText = (c: CheckCommand) => `${c.id}: ${c.argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ")}`;
 

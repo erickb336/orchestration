@@ -15,12 +15,9 @@ import { buildSeed } from "../src/domain/seed";
 import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type FlowRef, type State, type StepDef } from "../src/domain/types";
 import { V13_TEMPLATE_STEPS, V14_TEMPLATES, v14TemplateSteps } from "./legacyTemplates";
 
-export const STATE_FORMAT = 17;
+export const STATE_FORMAT = 18;
 
 export { V13_TEMPLATE_STEPS };
-
-/** The five ORC-016 catalog entries ORC-021 removed; a project default naming one becomes Change. */
-export const REMOVED_FLOW_IDS = ["change-cross-review", "feature-design-gate", "goal-plan-gate", "change-best-of-two", "change-lean"];
 
 /** Step lists compared in their normalised form, so key order and absent optionals do not count as edits. */
 const sameSteps = (a: StepDef[], b: StepDef[]) => JSON.stringify(a.map(toDef)) === JSON.stringify(b.map(toDef));
@@ -29,7 +26,7 @@ const sameSteps = (a: StepDef[], b: StepDef[]) => JSON.stringify(a.map(toDef)) =
  * ORC-016: what a task from before flows ran. Service-owned tasks name their internal flow; every
  * other task is "legacy": the format-14 template its first pipeline revision names, or "custom".
  */
-export function legacyFlowRef(t: { reviewTarget?: unknown; checkTarget?: unknown; revertOf?: unknown; pipelineHistory?: { reason?: string }[] }): FlowRef {
+function legacyFlowRef(t: { reviewTarget?: unknown; checkTarget?: unknown; revertOf?: unknown; pipelineHistory?: { reason?: string }[] }): FlowRef {
   const internal = t.reviewTarget ? "delivery-review" : t.checkTarget ? "delivery-checks" : t.revertOf ? "revert" : undefined;
   // No hash: the format-14 internal template may have been edited, and the task's purposes were rewritten by delivery (step 1 review, finding 5).
   if (internal) {
@@ -199,7 +196,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
         if (builtIn) t.description = builtIn.description;
         t.rev += 1;
         note(`Template ${t.id} gained the Checks steps (run by the service; skipped while checks are off) when the state format was upgraded`);
-      } else note(`Template ${t.id} was edited, so it did not gain the Checks steps; Restore in Settings offers the new built-in`);
+      } else note(`Template ${t.id} was edited, so it did not gain the Checks steps; the built-in flows have them`);
     }
     doc.version = 14;
     return doc;
@@ -276,10 +273,61 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 17;
     return doc;
   },
+  // ORC-025: parallel copies, best-of choices and gate steps are gone. Their fields are dropped from every
+  // task, step and pipeline revision; a task that had any of them gets one event saying what changed. Copies
+  // stay as the ordinary steps they already were (same ids and purposes), so a finished task's record still
+  // reads. An open task whose copies were best-of candidates is held with the reason: every finished copy's
+  // output now goes forward, and a person should look at the pipeline before it continues. A task already
+  // held keeps its hold and reason.
+  17: (doc) => {
+    const now = new Date().toISOString();
+    const events = (doc.events ??= []) as { id: string; at: string; actor: string; kind: string; taskId?: string; message: string }[];
+    const note = (taskId: string, message: string) => {
+      doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
+      events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "pipeline", taskId, message });
+    };
+    type OldStep = { id: string; gate?: boolean; parallel?: { mode?: string }; copyOf?: string };
+    type OldTask = { id: string; lifecycle: string; hold?: boolean; holdReason?: string; steps: OldStep[]; pipelineHistory?: { steps?: OldStep[] }[]; bestOf?: Record<string, string>; bestOfByUser?: unknown };
+    const strip = (s: OldStep) => {
+      delete s.gate;
+      delete s.parallel;
+      delete s.copyOf;
+    };
+    const ordinary = (ids: string[]) => (ids.length === 1 ? `${ids[0]} is now an ordinary step` : `${ids.join(", ")} are now ordinary steps`);
+    const pauses = (ids: string[]) => (ids.length === 1 ? `${ids[0]} is no longer a pause for you` : `${ids.join(", ")} are no longer pauses for you`);
+    const expands = (ids: string[]) => (ids.length === 1 ? `${ids[0]} no longer expands into parallel agents` : `${ids.join(", ")} no longer expand into parallel agents`);
+    for (const t of (doc.tasks ?? []) as OldTask[]) {
+      const copies = t.steps.filter((s) => s.copyOf && s.copyOf !== s.id).map((s) => s.id);
+      const bestOfGroups = t.steps.filter((s) => s.parallel?.mode === "best-of" && t.steps.some((c) => c.copyOf === s.id && c.id !== s.id)).map((s) => s.id);
+      const unexpanded = t.steps.filter((s) => s.parallel && !s.copyOf).map((s) => s.id);
+      const gates = t.steps.filter((s) => s.gate).map((s) => s.id);
+      const choice = Object.entries(t.bestOf ?? {}).map(([group, chosen]) => `${chosen} for ${group}`);
+      const had = copies.length || bestOfGroups.length || unexpanded.length || gates.length || choice.length || t.bestOfByUser !== undefined;
+      t.steps.forEach(strip);
+      for (const h of t.pipelineHistory ?? []) (h.steps ?? []).forEach(strip);
+      delete t.bestOf;
+      delete t.bestOfByUser;
+      if (!had) continue;
+      const parts = [
+        copies.length ? `${ordinary(copies)} (every finished copy's output goes forward)` : "",
+        choice.length ? `the recorded choice (${choice.join(", ")}) is dropped` : "",
+        unexpanded.length ? expands(unexpanded) : "",
+        gates.length ? pauses(gates) : "",
+      ].filter(Boolean);
+      note(t.id, `Parallel copies, best-of choices and gate steps were removed from Orchestrator when the state format was upgraded: ${parts.join("; ")}.`);
+      const open = t.lifecycle !== "done" && t.lifecycle !== "cancelled";
+      if (open && bestOfGroups.length && !t.hold) {
+        t.hold = true;
+        t.holdReason = `Parallel copies were removed in this version: ${ordinary(copies)} and every finished copy's output goes forward. Check the pipeline, then resume.`;
+      }
+    }
+    doc.version = 18;
+    return doc;
+  },
 };
 const SCHEMA_VERSION = 1;
 
-export type FailureKind = "stale" | "control" | "invalid" | "internal";
+type FailureKind = "stale" | "control" | "invalid" | "internal";
 
 export class CommandFailure extends Error {
   kind: FailureKind;

@@ -10,12 +10,12 @@ import { BUILT_IN_FILES } from "./builtInFlows";
 import { INTERNAL_FLOWS, internalFlow, isInternalFlowId, type InternalFlow } from "./internalFlows";
 import { downstreamOf, toDef, validatePipeline } from "./pipeline";
 import { isPrincipleId } from "./principles";
-import type { ChosenBy, Flow, FlowRef, InputRef, OutputDef, ProviderId, RoleId, State, StepDef } from "./types";
+import type { ChosenBy, Flow, FlowRef, InputRef, OutputDef, RoleId, State, StepDef } from "./types";
 
 // ---------- the file format ----------
 
-/** A step as written in a flow file. `$comment` is ignored; `copyOf`, `iteration` and `checks.only` are refused by the schema. */
-export interface RawStep {
+/** A step as written in a flow file. `$comment` is ignored; `iteration` and `checks.only` are refused by the schema. */
+interface RawStep {
   $comment?: string;
   id: string;
   purpose: string;
@@ -24,9 +24,7 @@ export interface RawStep {
   inputs: InputRef[];
   outputs: OutputDef[];
   runIf?: InputRef[];
-  gate?: true;
   iterate?: { from: string; max: number };
-  parallel?: { count: number; mode: "copies" | "best-of"; providers?: ProviderId[] };
   waitForChildren?: true;
   independentOf?: "writer";
   checks?: { onFail: "findings" | "block" };
@@ -51,21 +49,21 @@ export interface FlowFile {
   raw: RawFlow;
 }
 
-export const FLOW_ID_RE = /^[a-z][a-z0-9-]{1,39}$/;
-export const MAX_FLOW_STEPS = 30;
-/** Ids the service creates when it expands a step into parallel copies, loop iterations or check rounds (`baseId` strips them). */
-const EXPANSION_ID_RE = /-[ci]\d+$|-r\d+-(?:fix|review|security|checks)$/;
+const FLOW_ID_RE = /^[a-z][a-z0-9-]{1,39}$/;
+const MAX_FLOW_STEPS = 30;
+/** Ids the service creates when it expands a step into loop iterations or check rounds (`baseId` strips them). */
+const EXPANSION_ID_RE = /-i\d+$|-r\d+-(?:fix|review|security|checks)$/;
 /** The flows the service creates tasks from (fixes and send-back fixes); their files must stay safe for that. */
-export const SERVICE_FLOW_IDS = ["change", "bugfix"] as const;
-export type ServiceFlowId = (typeof SERVICE_FLOW_IDS)[number];
-export const CHECKS_ONLY_MESSAGE = "check commands belong to each project; flows run every configured check";
+const SERVICE_FLOW_IDS = ["change", "bugfix"] as const;
+type ServiceFlowId = (typeof SERVICE_FLOW_IDS)[number];
+const CHECKS_ONLY_MESSAGE = "check commands belong to each project; flows run every configured check";
 
 // ---------- hashing ----------
 
 const sha256Hex = (text: string) => bytesToHex(sha256(utf8ToBytes(text)));
 
 /** RFC 8785 canonical JSON: key order and whitespace do not count. */
-export function canonicalJson(value: unknown): string {
+function canonicalJson(value: unknown): string {
   try {
     return canonicalize(value) ?? "null";
   } catch {
@@ -136,26 +134,16 @@ export function unreviewedReasons(steps: StepDef[]): string[] {
 }
 
 export const breaksDown = (steps: StepDef[]) => steps.some((s) => s.outputs.some((o) => o.kind === "breakdown"));
-export const changesCode = (steps: StepDef[]) => steps.some((s) => s.outputs.some((o) => o.kind === "code-change"));
-
-/** The step that chooses among a best-of step's candidates: the first later step that reads the group. */
-function chooserOf(steps: StepDef[], i: number): StepDef | undefined {
-  return steps.slice(i + 1).find((x) => x.inputs.some((r) => r.step === steps[i].id));
-}
+const changesCode = (steps: StepDef[]) => steps.some((s) => s.outputs.some((o) => o.kind === "code-change"));
 
 /** The flow rules, after the graph rules passed. The first failure is returned. */
-export function flowRuleError(id: string, steps: StepDef[]): string | undefined {
+function flowRuleError(id: string, steps: StepDef[]): string | undefined {
   for (const s of steps) {
-    if (EXPANSION_ID_RE.test(s.id)) return `${s.id}: step ids ending in -c<n>, -i<n> or -r<k>-fix, -r<k>-review, -r<k>-security, -r<k>-checks are reserved for the parallel copies, loop iterations and check rounds the service creates`;
+    if (EXPANSION_ID_RE.test(s.id)) return `${s.id}: step ids ending in -i<n> or -r<k>-fix, -r<k>-review, -r<k>-security, -r<k>-checks are reserved for the loop iterations and check rounds the service creates`;
     if (s.checks?.only) return `${s.id}.checks.only: ${CHECKS_ONLY_MESSAGE}`;
   }
-  for (const [i, s] of steps.entries()) {
-    if (s.parallel?.mode !== "best-of") continue;
-    const chooser = chooserOf(steps, i);
-    if (chooser?.role === "checks") return `${chooser.id} chooses among ${s.id}'s candidates, so it cannot be a Checks step: a service run never chooses`;
-  }
   if ((SERVICE_FLOW_IDS as readonly string[]).includes(id)) {
-    const why = !changesCode(steps) ? "produce a code change" : unreviewedReasons(steps).length ? `have an independent code review of every code change (${unreviewedReasons(steps).join("; ")})` : breaksDown(steps) ? "not break down into child tasks" : steps.some((s) => s.gate) ? "not pause for a person" : undefined;
+    const why = !changesCode(steps) ? "produce a code change" : unreviewedReasons(steps).length ? `have an independent code review of every code change (${unreviewedReasons(steps).join("; ")})` : breaksDown(steps) ? "not break down into child tasks" : undefined;
     if (why) return `the service creates fix tasks from "${id}", so it must ${why}`;
   }
   return undefined;
@@ -163,7 +151,7 @@ export function flowRuleError(id: string, steps: StepDef[]): string | undefined 
 
 // ---------- the resolver ----------
 
-export function flowIdOfFile(file: string): string {
+function flowIdOfFile(file: string): string {
   const name = file.split("/").pop() ?? file;
   return name.replace(/\.json$/i, "");
 }
@@ -218,11 +206,9 @@ export function builtInCatalog(): Flow[] {
 export function stepMarkers(st: StepDef): string {
   const m: string[] = [];
   if (st.runIf?.length) m.push("if findings");
-  if (st.parallel) m.push(`parallel ×${st.parallel.count}${st.parallel.mode === "best-of" ? " best of" : ""}`);
   if (st.iterate) m.push("repeats");
   if (st.waitForChildren) m.push("waits for child tasks");
   if (st.outputs.some((o) => o.kind === "breakdown")) m.push("breakdown");
-  if (st.gate) m.push("pauses for you");
   if (st.independentOf) m.push("reviewed by the other provider");
   if (st.role === "checks") m.push("run by the service");
   return m.length ? ` (${m.join(", ")})` : "";
@@ -281,14 +267,6 @@ export function eligible(p: Flow, who: "lead" | "child" | "default"): boolean {
 
 export function eligibleIds(s: State, who: "lead" | "child" | "default"): string[] {
   return s.flows.filter((p) => eligible(p, who)).map((p) => p.id);
-}
-
-/** The steps of a built-in or internal flow, cloned, for tests and seeds. */
-export function flowSteps(id: string): StepDef[] {
-  const p = builtInCatalog().find((x) => x.id === id);
-  if (p) return structuredClone(p.steps);
-  if (isInternalFlowId(id)) return internalFlow(id).steps;
-  throw new Error(`Unknown flow ${id}`);
 }
 
 /** A built-in or internal flow by id, for seeds. */

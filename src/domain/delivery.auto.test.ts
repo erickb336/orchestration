@@ -7,10 +7,11 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
 import * as D from "./delivery";
 import * as M from "./model";
+import { flowSteps } from "./testing/pipelines";
 import { toDef, validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
-import { INTERNAL_FLOW_IDS, internalFlow } from "./internalFlows";
-import { builtInCatalog, flowHash, flowSteps } from "./flows";
+import { INTERNAL_FLOWS, internalFlow } from "./internalFlows";
+import { builtInCatalog, flowHash } from "./flows";
 import { reviewedChange, type ReviewedOptions } from "./testing/reviewed";
 import type { CheckObs, PrDelivery, ProviderId, State, Task } from "./types";
 
@@ -152,7 +153,7 @@ describe("the delivery-review flow", () => {
       { id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer", principles: ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"] },
       { id: "SR1", purpose: "Security review of the change for merge", role: "security_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer", principles: ["boundary-discipline"] },
     ]);
-    expect(INTERNAL_FLOW_IDS).toContain("delivery-review");
+    expect(INTERNAL_FLOWS.map((p) => p.id)).toContain("delivery-review");
     expect(builtInCatalog().some((p) => p.id === "delivery-review")).toBe(false);
     // ORC-016: no task is created from it by hand, and no flow file may take its id (flows.test.ts).
     expect(() => runCommand(seed(), "createTask", { title: "t", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, flowId: "delivery-review" }, at(2))).toThrow(/used by the service only/);
