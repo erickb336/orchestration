@@ -5,6 +5,11 @@ import { describe, expect, it } from "vitest";
 import { HISTORY_HASH, historyRequested, parseRoute } from "./route";
 
 describe("routes", () => {
+  it("#/kit opens the component kit's gallery, which is not in the navigation", () => {
+    expect(parseRoute("#/kit")).toEqual({ page: "kit" });
+    expect(parseRoute("#/kit/button")).toEqual({ page: "kit" });
+  });
+
   it("#/results is the Results page and #/review still opens it", () => {
     expect(parseRoute("#/results")).toEqual({ page: "review" });
     expect(parseRoute("#/review")).toEqual({ page: "review" });

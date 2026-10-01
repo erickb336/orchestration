@@ -2,13 +2,15 @@
 // (ORC-025 renamed the Review tab); `#/review` still opens it. A query after the page name (`#/overview?history=1`,
 // `#/tasks?area=Maps`) never changes which page opens; the page reads it.
 
-export type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" } | { page: "task"; id: string };
+export type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" | "kit" } | { page: "task"; id: string };
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/");
   const page = parts[0].split("?")[0];
   if (page === "task" && parts[1]) return { page: "task", id: decodeURIComponent(parts[1].split("?")[0]) };
   if (page === "results" || page === "review") return { page: "review" };
+  // The component kit's gallery, #/kit (ORC-025). Not in the navigation.
+  if (page === "kit") return { page: "kit" };
   if (page === "overview" || page === "activity" || page === "settings") return { page };
   return { page: "tasks" };
 }

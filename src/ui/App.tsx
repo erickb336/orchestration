@@ -15,6 +15,7 @@ import { agentsStopping, agentsWorking, liveIndicatorText } from "./progress";
 import { parseRoute } from "./route";
 import { StageChip } from "./Shaping";
 import { TourButton, useFirstRunTour } from "./Tour";
+import { Gallery } from "./kit/Gallery";
 
 /** The tabs: the page each one opens, its label and its address. The Results page keeps `review` as its internal name. */
 const TABS = [
@@ -156,6 +157,7 @@ function Shell() {
         {route.page === "review" && <Review />}
         {route.page === "activity" && <Activity />}
         {route.page === "settings" && <Settings />}
+        {route.page === "kit" && <Gallery />}
       </main>
       {leadOpen && !onOverview && <LeadDrawer onClose={closeLead} />}
       {notice && (
