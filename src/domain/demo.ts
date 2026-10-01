@@ -13,6 +13,10 @@
 // Every one of the six flows has a task in the story (WT-012 is the Investigation, WT-013 the
 // Design), every finished code task has a security review beside each code review, and WT-004.1's security
 // review found what its code review did not, repaired in the loop's second round.
+//
+// What the first visit shows: three decisions on Home (WT-004.3's approach, WT-007's finding, WT-005's pull
+// request), two new results, three agents working once the service starts, and one exchange with the lead that
+// changed the focus and passed a note to WT-005's coder while it ran, delivered and applied.
 
 import * as C from "./checks";
 import * as D from "./delivery";
@@ -477,7 +481,11 @@ class DemoBuilder {
 
   /** A coder step: the change (named by its commit and branch, as the service records it) and, when the step has one, the handoff. */
   private change(id: string, stepId: string, startM: number, endM: number, change: CodeChange, summary: string, handoff?: string): CodeChange {
-    const attemptId = this.dispatch(id, stepId, startM);
+    return this.finishChange(id, stepId, this.dispatch(id, stepId, startM), endM, change, summary, handoff);
+  }
+
+  /** A coder run already dispatched finishes with its change (and handoff). */
+  private finishChange(id: string, stepId: string, attemptId: string, endM: number, change: CodeChange, summary: string, handoff?: string): CodeChange {
     const st = this.step(id, stepId);
     const outputs: M.OutputReport[] = [{ name: "change", summary, ref: `${change.sha.slice(0, 12)} on orchestration/${DEMO_PROJECT_ID}/${id}/${stepId}/${attemptId}` }];
     if (st.outputs.some((o) => o.name === "handoff")) outputs.push({ name: "handoff", summary: handoff ?? "Nothing beyond the change itself." });
@@ -639,7 +647,7 @@ class DemoBuilder {
     const fix = this.bugReproduced(); // WT-009: reproduced; the fix starts
     this.voiceOver(); // WT-007: UX review raised a finding that needs you; the code review runs at start
     this.pauseFix(fix); // WT-009: paused by you, acknowledged by the runtime
-    this.packingListAndConversation(); // WT-005's pull request, the steering exchange, WT-004.3's options
+    this.packingListAndConversation(); // WT-005: the steering exchange and a note to its running coder; its pull request; WT-004.3's options
     // The repository and sandbox checks are recent, so nothing is re-probed at start.
     this.preflight(30);
     this.checksReady(30);
@@ -1099,39 +1107,49 @@ class DemoBuilder {
     if (a.outcome !== "stopped" || this.step(id, "S2").state !== "paused") throw new Error("demo: WT-009's pause was not acknowledged");
   }
 
-  /** WT-005 finishes and its pull request is built (the service publishes it at start); meanwhile the steering exchange and WT-004.3's options. */
+  /**
+   * WT-005's coder is at work when you message the lead: the lead makes offline maps the focus, defers one task
+   * (with Undo) and passes your note to that running coder, whose runtime acknowledges it. The coder finishes with
+   * the note applied, the reviews and checks pass, and its pull request is built (the service publishes it at start).
+   */
   private packingListAndConversation() {
     const id = "WT-005";
-    const change = this.change(id, "S1", 110, 60, { sha: fakeSha("WT-005 S1"), paths: ["src/packing/rules.ts", "src/packing/rules.test.ts", "src/packing/suggest.ts", "src/packing/suggest.test.ts", "src/trip/NewTrip.tsx", "src/trip/weather.ts"], files: 6, additions: 167, deletions: 12 }, "Suggests a packing list from the trail length and the forecast for the trip day (+167 −12, 6 files)", "Rules live in packing/rules.ts; the forecast is the one already fetched for the trip.");
-    this.checks(id, "C1", 59, 57);
-    const review = this.dispatch(id, "S2", 56, { scope: { from: SIM_BASE, to: change.sha, paths: [...change.paths], total: change.paths.length } });
-    const security = this.dispatch(id, "SR1", 56);
+    const coder = this.dispatch(id, "S1", 75);
     // WT-004.3: the lead added the second option and asked you to choose, because the choice changes what data is kept.
     this.revisePackingDecision();
-    // The steering exchange: offline maps ahead of sharing; one task deferred, with Undo; and one note
-    // to the coder of the offline banner. WT-002 is first in line and has not started, so the note waits for
-    // its run and is delivered at its start when the service dispatches it.
-    this.say("Most of our hikes have no signal at the trailhead. Can we put offline maps ahead of sharing? And tell whoever builds the offline banner to show the cache age in whole hours, not minutes.", 47);
-    this.leadReplies(47, 45, "Done. Offline maps is now the focus. I deferred “Weather alerts for the trip day”, since it needs a connection anyway. Everything else keeps its order. I sent the coder of the offline banner a note about the cache age; it reaches them when that step runs.", {
+    this.say("Most of our hikes have no signal at the trailhead. Can we put offline maps ahead of sharing? And tell the coder on the packing list to put a first-aid kit on every list, whatever the trail.", 47);
+    this.leadReplies(47, 45, "Done. Offline maps is now the focus. I deferred “Weather alerts for the trip day”, since it needs a connection anyway; everything else keeps its order. I also passed your note to the coder working on the packing list.", {
       focus: "Offline maps first: the map must work with no signal.",
       reason: "Most trailheads have no signal, so the map must work before sharing matters.",
       tasks: [{ id: "WT-010", defer: true, why: "It needs a connection anyway, and offline maps comes first." }],
-      notes: [{ task: "WT-002", step: "S1", text: "Show the age of the cached map in whole hours, not minutes; the owner asked for it." }],
+      notes: [{ task: id, step: "S1", text: "Put a first-aid kit on every packing list, whatever the trail's length or forecast." }],
     });
     const set = this.s.steering[0];
     if (!set || !set.changes.some((c) => c.kind === "focus" && c.status === "applied") || !set.changes.some((c) => c.kind === "defer" && c.taskId === "WT-010" && c.status === "applied")) throw new Error("demo: the steering exchange was not applied");
     const noteRow = set.changes.find((c) => c.kind === "note");
     const note = noteRow?.noteId ? this.s.notes.find((n) => n.id === noteRow.noteId) : undefined;
-    if (noteRow?.status !== "applied" || note?.status !== "queued" || !note.simulated) throw new Error(`demo: the note to WT-002's coder was not queued (${noteRow?.status ?? "no row"}: ${noteRow?.note ?? ""})`);
-    this.complete(security, 36, [{ name: "findings", summary: "No security findings: the forecast is the one already fetched for the trip; no new network call.", findings: [] }]);
-    this.complete(review, 35, [{ name: "findings", summary: "No findings: the rules are covered by tests for short, long, wet and cold trips.", findings: [], reviewedPaths: [...change.paths] }]);
+    if (noteRow?.status !== "applied" || note?.status !== "sending" || note.via !== "live" || note.attemptId !== coder || !note.simulated) throw new Error(`demo: the note to WT-005's running coder was not sent (${noteRow?.status ?? "no row"}: ${noteRow?.note ?? ""})`);
+    // The simulated runtime acknowledges the note a moment later, as the fake runtime does.
+    this.s = M.reportNoteOutcome(this.s, { attemptId: coder, noteId: note.id, outcome: "delivered" }, this.at(44.9), true);
+    if (this.s.notes.find((n) => n.id === note.id)?.status !== "delivered") throw new Error("demo: the note to WT-005's coder was not delivered");
+    const change = this.finishChange(
+      id,
+      "S1",
+      coder,
+      38,
+      { sha: fakeSha("WT-005 S1"), paths: ["src/packing/rules.ts", "src/packing/rules.test.ts", "src/packing/suggest.ts", "src/packing/suggest.test.ts", "src/trip/NewTrip.tsx", "src/trip/weather.ts"], files: 6, additions: 167, deletions: 12 },
+      "Suggests a packing list from the trail length and the forecast, with a first-aid kit on every list (+167 −12, 6 files)",
+      "Rules live in packing/rules.ts; the forecast is the one already fetched for the trip. The first-aid kit is on every list, as the lead's note asked mid-run.",
+    );
+    this.checks(id, "C1", 37, 35);
+    this.reviews(id, "S2", "SR1", 34, 26, 25, change, "No findings: the rules are covered by tests for short, long, wet and cold trips, and the first-aid kit is on every list.", "No security findings: the forecast is the one already fetched for the trip; no new network call.");
     // You released the second trip-sharing part; it starts when a slot frees.
-    this.s = M.startHeldTask(this.s, "WT-004.2", this.at(35));
-    this.promote(["WT-004.2"], 34.9);
-    this.skip(id, "S3", 34);
-    this.checks(id, "C2", 33, 31);
-    this.output(id, "S4", 30, 22, "A new trip gets a packing list that fits its length and weather; checks passed on the final change.");
-    this.prHead(id, 21, change);
+    this.s = M.startHeldTask(this.s, "WT-004.2", this.at(24));
+    this.promote(["WT-004.2"], 23.9);
+    this.skip(id, "S3", 23);
+    this.checks(id, "C2", 22, 20);
+    this.output(id, "S4", 19, 14, "A new trip gets a packing list that fits its length and weather, with a first-aid kit on every list; checks passed on the final change.");
+    this.prHead(id, 13, change);
     this.say("Thanks. Keep the VoiceOver work going, though.", 12);
     this.leadReplies(12, 10, "It is still running: Claude is reviewing “Make the trail map readable with VoiceOver”. One finding needs your decision: whether distances are read in miles or kilometres.");
   }

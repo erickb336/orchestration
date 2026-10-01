@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { DEMO_SCRIPT, NEUTRAL_FINDING, PLANNING_IDEAS } from "../../src/domain/demoScript";
 import type { OutputDef } from "../../src/domain/types";
 import { parseLeadOutput, parseOutputs } from "../envelope";
-import { fakeFinalText, fakeLeadText, fakePlanningProposal, fakeSteer, taskTitleIn } from "./fake";
+import { fakeFinalText, fakeLeadText, fakePlanningProposal, fakeSteer, fakeVision, taskTitleIn } from "./fake";
 
 const breakdown: OutputDef[] = [{ name: "plan", kind: "breakdown" }];
 const review: OutputDef[] = [{ name: "findings", kind: "review-findings" }];
@@ -93,5 +93,18 @@ describe("fake runtime text (ORC-017)", () => {
     expect(String(steer.reason)).not.toMatch(/\(Simulated\)/);
     expect(steer.tasks).toEqual([{ id: "T-001", defer: true, why: "The lowest-priority work that no longer fits the focus." }]);
     expect(fakeSteer("## Messages to answer now\n- hello there\n\n## Rules\n")).toBeUndefined();
+  });
+
+  it("a simulated vision draft says what the simulation did, never what a real lead would do", () => {
+    const shaping = (convo: string) => ["Project stage: shaping", "", "## Conversation (most recent last)", convo, "", "## Messages to answer now", "- A hiking planner that works offline", "", "## Rules", ""].join("\n");
+    const first = fakeVision(shaping("User: hello"))!;
+    const later = fakeVision(shaping("Lead (claude): Here is what I understand: hello"))!;
+    for (const v of [first, later]) {
+      const all = `${String(v.text)} ${String(v.reason)}`;
+      expect(all).not.toMatch(/real lead|live mode|would fold|a real model/i);
+      expect(String(v.text)).toMatch(/^\(Simulated draft, exchange \d\)/);
+      expect(String(v.text)).toMatch(/The simulation wrote this from your newest message alone/);
+    }
+    expect(String(later.reason)).toBe("Redrawn from your newest message after 2 exchanges; the assumptions are yours to confirm or change.");
   });
 });
