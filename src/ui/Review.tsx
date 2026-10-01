@@ -1,240 +1,294 @@
-// The Results page (ORC-025: the Review tab, renamed; `#/review` still opens it). "Needs you": pull
-// requests that wait for your merge or your attention. "Waiting": pull requests the app is still opening,
-// reviewing, fixing, or merging in turn. "Landed": work that already landed, to look over whenever you
-// like. The landed list never blocks anything, and an item counts as seen only through Mark as seen, never
-// by opening it.
+// The Results page (ORC-025 R1–R3; `#/review` still opens it). First the pull requests that wait for you, each with
+// its verdict line, Merge and Keep for me, and "Why it's ready" (pass 3's PrPanel); then New results: work that
+// landed and you have not marked as seen, with one Mark as seen and one Send back… per item and its details in
+// place. Pull requests still on their way, and closed ones, come last. The landed list never blocks anything, and an
+// item counts as seen only through Mark as seen, never by opening it.
 
 import { useState } from "react";
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
-import type { Task } from "../domain/types";
-import { LandedChips, LandedSection, PrChip, PrPanel } from "./Delivery";
-import { fmtTime, relTime, resumeAutoMergeText } from "./common";
+import type { State, Task } from "../domain/types";
+import { fmtTime, relTime } from "./common";
+import { ChangeView, LandedChips, PrChip, PrPanel, SendBackForm, Verdict } from "./Delivery";
+import { DELIVERY_CONFIRM, LANDED_FLAG_LABEL, landedVerdict, landedWhere, landedWho } from "./deliveryView";
+import { Actions, Banner, Button, ButtonLink, Card, Chip, Disclosure, EmptyState, Row, Rows, SegmentedControl, SimulatedChip, useConfirm } from "./kit";
+import { BULK_LIMIT, FILTER_LABEL, FILTER_TITLE, bulkLabel, emptyText, matchesFilter, prLists, reviewsLine, showBulk, type ResultsFilter } from "./resultsView";
 import { useStore } from "./store";
+import { ago } from "./tasksView";
+import "./task/task.css";
+import "./results.css";
 
-type Filter = "unreviewed" | "all" | "sent-back";
-const FILTERS: { id: Filter; label: string }[] = [
-  { id: "unreviewed", label: "New" },
-  { id: "all", label: "All" },
-  { id: "sent-back", label: "Sent back" },
-];
-/** markLandedReviewed takes at most this many items per request. */
-const BULK_LIMIT = 100;
+const taskHref = (t: Task) => `#/task/${encodeURIComponent(t.id)}`;
+const titleOf = (t: Task) => M.currentSpec(t).content.title;
+const FILTERS: ResultsFilter[] = ["new", "all", "sent-back"];
 
 export function Review() {
   const { state, service, send, disabled } = useStore();
-  const [filter, setFilter] = useState<Filter>("unreviewed");
-  const [open, setOpen] = useState<string | null>(null);
-  const landed = D.landedTasks(state);
-  const unreviewed = landed.filter((t) => t.integration!.landed!.status === "unreviewed");
-  const match = (t: Task) => {
-    const l = t.integration!.landed!;
-    return filter === "all" || (filter === "unreviewed" ? l.status === "unreviewed" : l.followUps.length > 0);
-  };
-  const shown = landed.filter(match);
-  const mode = D.deliveryMode(state);
-  const bulk = unreviewed.slice(0, BULK_LIMIT);
+  const confirm = useConfirm();
+  const [filter, setFilter] = useState<ResultsFilter>("new");
   const now = Date.now();
   const gh = state.project.github;
-  const tracked = D.trackedPrTasks(state);
-  const closed = state.tasks.filter((t) => D.livePr(t)?.phase === "closed" && !t.integration?.landed);
-  // A pull request the app is already fixing does not wait for you.
-  const needs = tracked.filter((t) => (t.integration!.pr!.attention && !D.openRepair(state, t.integration!.pr!)) || D.prReady(state, t, now));
-  const waiting = tracked.filter((t) => !needs.includes(t));
-  const showGitHub = mode === "pr" || tracked.length > 0;
+  const mode = D.deliveryMode(state);
+  const prs = prLists(state, now);
+  const showGitHub = mode === "pr" || prs.problems.length + prs.ready.length + prs.onTheirWay.length > 0;
+  const landed = D.landedTasks(state);
+  const fresh = landed.filter((t) => t.integration!.landed!.status === "unreviewed");
+  const shown = landed.filter((t) => matchesFilter(t.integration!.landed!, filter));
+  const others = [...prs.onTheirWay, ...prs.closed];
+  const empty = emptyText(state, filter, service.runtime);
 
   return (
-    <>
+    <div className="k-stack r-page">
       <h1>Results</h1>
+
       {showGitHub && gh?.problem && (
-        <div className="banner danger" role="alert">
-          <strong>GitHub delivery is stopped.</strong> {gh.problem.message}{" "}
-          <span className="muted">
-            Since {fmtTime(gh.problem.since)}; it is checked again by itself.
-          </span>{" "}
-          <button className="small" disabled={disabled || !!gh.recheck} onClick={() => void send("recheckGitHub")}>
-            {gh.recheck ? "Checking…" : "Check again"}
-          </button>
-        </div>
+        <Banner
+          tone="fail"
+          title="GitHub delivery is stopped."
+          actions={
+            <Button size="small" disabled={disabled} loading={!!gh.recheck} onClick={() => void send("recheckGitHub")}>
+              {gh.recheck ? "Checking…" : "Check again"}
+            </Button>
+          }
+        >
+          {gh.problem.message} <span className="muted">Since {fmtTime(gh.problem.since)}; it is checked again by itself.</span>
+        </Banner>
       )}
-      {showGitHub && state.project.hold && (
-        <div className="banner neutral" role="status">
-          Paused: watching GitHub only; nothing will be pushed, opened, merged or commented.
-        </div>
-      )}
+      {showGitHub && state.project.hold && <Banner>Paused: watching GitHub only; nothing will be pushed, opened, merged or commented.</Banner>}
       {showGitHub && gh?.autoMergePaused && (
-        <div className="banner danger" role="alert">
-          <strong>Automatic merging is paused:</strong> {gh.autoMergePaused.reason}. {gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} Nothing is reverted automatically: send the landed
-          item back as a fix or a revert below if it should be undone.{" "}
-          <button className="small" disabled={disabled} onClick={() => {
-              if (confirm(resumeAutoMergeText(gh?.autoMergePaused?.reason))) void send("resumeAutoMerge");
-            }}>
-            Resume automatic merging
-          </button>
-        </div>
+        <Banner
+          tone="fail"
+          title="Automatic merging is paused."
+          actions={
+            <Button
+              size="small"
+              disabled={disabled}
+              onClick={async () => {
+                if (await confirm(DELIVERY_CONFIRM.resumeAutoMerge(gh.autoMergePaused?.reason))) void send("resumeAutoMerge");
+              }}
+            >
+              Resume automatic merging
+            </Button>
+          }
+        >
+          {gh.autoMergePaused.reason}. {gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again, or when you resume it."} Nothing is reverted automatically: send the
+          landed item back as a fix or a revert below if it should be undone.
+        </Banner>
       )}
-      {showGitHub && (
-        <p className="muted" style={{ fontSize: "0.85rem" }}>
-          {gh?.simulated
-            ? "Pull requests here are simulated: nothing is sent to GitHub."
-            : "The app opens and watches pull requests only while this service is running."}
-          {gh?.observedAt ? ` GitHub was last read ${relTime(gh.observedAt)}.` : ""}
-        </p>
+
+      {prs.problems.length > 0 && (
+        <Card title="Pull requests that need you" count={prs.problems.length} countTone="you">
+          <Rows label="Pull requests that need you">
+            {prs.problems.map((t) => (
+              <PrRow key={t.id} state={state} task={t} />
+            ))}
+          </Rows>
+        </Card>
       )}
 
       {showGitHub && (
+        <Card title="Ready to merge" count={prs.ready.length} countTone={prs.ready.length ? "you" : "neutral"}>
+          {prs.ready.length === 0 ? (
+            <EmptyState title="No pull request is waiting for you.">{others.length ? "The ones still on their way are listed at the end of this page." : undefined}</EmptyState>
+          ) : (
+            <Rows label="Pull requests ready to merge">
+              {prs.ready.map((t) => (
+                <PrRow key={t.id} state={state} task={t} />
+              ))}
+            </Rows>
+          )}
+          {gh && !gh.simulated && (
+            <p className="small muted r-foot">
+              The app opens and watches pull requests only while this service is running.{gh.observedAt ? ` GitHub was last read ${relTime(gh.observedAt)}.` : ""}
+            </p>
+          )}
+        </Card>
+      )}
+
+      <Card
+        title={FILTER_TITLE[filter]}
+        count={shown.length}
+        actions={
+          landed.length > 0 && (
+            <>
+              {filter === "new" && showBulk(fresh.length) && (
+                <Button
+                  size="small"
+                  variant="quiet"
+                  disabled={disabled}
+                  onClick={async () => {
+                    const ids = fresh.slice(0, BULK_LIMIT).map((t) => t.id);
+                    const ok = await confirm({ title: `Mark ${ids.length} results as seen?`, text: "This only records that you looked at them. Nothing is merged, reverted or sent anywhere.", primaryLabel: "Mark as seen" });
+                    if (ok) void send("markLandedReviewed", { taskIds: ids, reviewed: true });
+                  }}
+                >
+                  {bulkLabel(fresh.length)}
+                </Button>
+              )}
+              <SegmentedControl<ResultsFilter> label="Show" size="small" value={filter} onChange={setFilter} options={FILTERS.map((f) => ({ value: f, label: FILTER_LABEL[f] }))} />
+            </>
+          )
+        }
+      >
+        {shown.length === 0 ? (
+          <EmptyState title={empty.title}>{empty.text}</EmptyState>
+        ) : (
+          <Rows label={FILTER_TITLE[filter]}>
+            {shown.map((t) => (
+              <LandedRow key={t.id} state={state} task={t} filter={filter} nowMs={now} />
+            ))}
+          </Rows>
+        )}
+      </Card>
+
+      {others.length > 0 && (
+        <Card title="Other pull requests" count={others.length}>
+          <Rows label="Other pull requests">
+            {prs.onTheirWay.map((t) => (
+              <Row key={t.id} as="li" id={t.id} title={titleOf(t)} href={taskHref(t)} meta={<PrChip state={state} task={t} />}>
+                {/* One you kept stays open, so "Let it continue" is where you look for it. */}
+                <Disclosure label="Details" className="r-details" defaultOpen={!!t.integration?.pr?.userHold}>
+                  <PrPanel state={state} task={t} />
+                </Disclosure>
+              </Row>
+            ))}
+            {prs.closed.map((t) => (
+              <Row
+                key={t.id}
+                as="li"
+                id={t.id}
+                title={titleOf(t)}
+                href={taskHref(t)}
+                meta={
+                  <>
+                    <PrChip state={state} task={t} />
+                    <span>A closed pull request is never reopened; delivering again opens a new one.</span>
+                  </>
+                }
+                actions={
+                  mode === "pr" && (
+                    <Button size="small" disabled={disabled} onClick={() => void send("redeliver", { taskIds: [t.id] })}>
+                      Deliver again
+                    </Button>
+                  )
+                }
+              />
+            ))}
+          </Rows>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/** A pull request that waits for you: the task, then pass 3's panel (verdict line, Merge, Keep for me, Why it's ready). */
+function PrRow({ state, task }: { state: State; task: Task }) {
+  return (
+    <Row as="li" id={task.id} title={titleOf(task)} href={taskHref(task)} className="r-pr">
+      <PrPanel state={state} task={task} />
+    </Row>
+  );
+}
+
+/**
+ * One landed item (R3): when it landed and what passed, what it changed, one Mark as seen (or Mark as new) and one
+ * Send back…; its details expand in place, with the agent reviews in one line.
+ */
+function LandedRow({ state, task, filter, nowMs }: { state: State; task: Task; filter: ResultsFilter; nowMs: number }) {
+  const { send, disabled } = useStore();
+  const [sendingBack, setSendingBack] = useState(false);
+  const [showChanges, setShowChanges] = useState(false);
+  const l = task.integration!.landed!;
+  const verdict = landedVerdict(state, task);
+  const change = M.finalChange(state, task);
+  const github = l.pr && !l.simulated && l.pr.url.startsWith("https://github.com/") ? l.pr.url : undefined;
+  return (
+    <Row
+      as="li"
+      id={task.id}
+      title={titleOf(task)}
+      href={taskHref(task)}
+      className="r-landed"
+      meta={
         <>
-          <h2>Needs you{needs.length ? ` (${needs.length})` : ""}</h2>
-          {needs.length === 0 && (
-            <section className="card">
-              <p className="muted" style={{ margin: 0 }}>
-                No pull request needs you.
-              </p>
-            </section>
-          )}
-          {needs.map((t) => (
-            <section className="card" key={t.id} aria-labelledby={`pr-${t.id}`}>
-              <h3 id={`pr-${t.id}`} style={{ marginTop: 0 }}>
-                <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title}
-              </h3>
-              <PrPanel state={state} task={t} />
-            </section>
-          ))}
-
-          {(waiting.length > 0 || closed.length > 0) && <h2>Waiting</h2>}
-          {waiting.length > 0 && (
-            <section className="card">
-              <ul className="plain">
-                {waiting.map((t) => {
-                  const expanded = open === `pr:${t.id}`;
-                  return (
-                    <li key={t.id} style={{ padding: "0.3rem 0" }}>
-                      <div className="row" style={{ justifyContent: "space-between" }}>
-                        <span>
-                          <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title}
-                        </span>
-                        <span className="row">
-                          <PrChip state={state} task={t} />
-                          <button className="small" aria-expanded={expanded} onClick={() => setOpen(expanded ? null : `pr:${t.id}`)}>
-                            {expanded ? "Hide" : "Details"}
-                          </button>
-                        </span>
-                      </div>
-                      {expanded && (
-                        <div style={{ marginTop: "0.6rem" }}>
-                          <PrPanel state={state} task={t} />
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          )}
-          {closed.length > 0 && (
-            <section className="card">
-              <p className="muted" style={{ marginTop: 0 }}>
-                Closed without merging. A closed pull request is never reopened; delivering again opens a new one.
-              </p>
-              <ul className="plain">
-                {closed.map((t) => (
-                  <li key={t.id} className="row" style={{ justifyContent: "space-between", padding: "0.3rem 0" }}>
-                    <span>
-                      <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title}
-                    </span>
-                    <span className="row">
-                      <PrChip state={state} task={t} />
-                      {mode === "pr" && (
-                        <button className="small" disabled={disabled} onClick={() => void send("redeliver", { taskIds: [t.id] })}>
-                          Deliver again
-                        </button>
-                      )}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
+          <span title={fmtTime(l.at)}>Landed {ago(l.at, nowMs)}</span>
+          {verdict.length > 0 && <Verdict parts={verdict} />}
+          {filter === "new" ? (
+            <>
+              {l.flags.map((f) => (
+                <Chip key={f} tone="fail">
+                  {LANDED_FLAG_LABEL[f]}
+                </Chip>
+              ))}
+              {l.simulated && <SimulatedChip title="Simulated merge: nothing was sent to GitHub." />}
+            </>
+          ) : (
+            <LandedChips landed={l} />
           )}
         </>
-      )}
-
-      <h2>Landed</h2>
-      <p className="muted">
-        Work that already landed. Look it over whenever you like: this list never delays a task or a delivery, and an item counts as seen only when you mark it.
-      </p>
-
-      <div className="toolbar">
-        <div className="segmented" role="group" aria-label="Show">
-          {FILTERS.map((f) => (
-            <button key={f.id} aria-pressed={filter === f.id} onClick={() => setFilter(f.id)}>
-              {f.label}
-              {f.id === "unreviewed" ? ` (${unreviewed.length})` : f.id === "all" ? ` (${landed.length})` : ""}
-            </button>
-          ))}
-        </div>
-        {bulk.length > 1 && (
-          <button
-            disabled={disabled}
-            onClick={() => {
-              if (confirm(`Mark ${bulk.length} landed item${bulk.length === 1 ? "" : "s"} as seen?`)) void send("markLandedReviewed", { taskIds: bulk.map((t) => t.id), reviewed: true });
-            }}
-          >
-            Mark {bulk.length === unreviewed.length ? "all" : "the first"} {bulk.length} as seen
-          </button>
-        )}
-      </div>
-
-      {shown.length === 0 && (
-        <section className="card">
-          <p className="muted" style={{ margin: 0 }}>
-            {landed.length > 0
-              ? filter === "unreviewed"
-                ? "No new results: you have seen everything that landed."
-                : "Nothing has been sent back."
-              : service.runtime === "fake" && mode !== "pr"
-                ? "Nothing has landed. The demo delivers work only as simulated pull requests (Settings → Delivery), so this list stays empty."
-                : mode === "local"
-                  ? `Nothing has landed yet. Finished work appears here after it is delivered to ${state.project.autonomy.autoDeliver.branch}.`
-                  : mode === "pr"
-                    ? `Nothing has landed yet. Finished work appears here after its pull request merges into ${state.project.prDelivery.base}.`
-                    : "Nothing has landed yet. Work appears here after it is delivered to your branch; delivery is off (Settings)."}
+      }
+      actions={
+        <>
+          {l.status === "reviewed" ? (
+            <Button size="small" disabled={disabled} onClick={() => void send("markLandedReviewed", { taskIds: [task.id], reviewed: false })}>
+              Mark as new
+            </Button>
+          ) : (
+            <Button size="small" disabled={disabled} onClick={() => void send("markLandedReviewed", { taskIds: [task.id], reviewed: true })}>
+              Mark as seen
+            </Button>
+          )}
+          <Button size="small" variant="quiet" aria-expanded={sendingBack} onClick={() => setSendingBack(!sendingBack)}>
+            Send back…
+          </Button>
+        </>
+      }
+    >
+      {change && <p className="r-summary" title={change.summary}>{change.summary}</p>}
+      <Disclosure label="Details" className="r-details">
+        <div className="k-stack k-stack--tight">
+          <p className="meta">
+            By {landedWho(l)}, {landedWhere(l)} · commit <span className="mono">{l.commit.slice(0, 12)}</span>
           </p>
-        </section>
-      )}
-      {shown.map((t) => {
-        const l = t.integration!.landed!;
-        const expanded = open === t.id;
-        return (
-          <section className="card" key={t.id} aria-labelledby={`landed-${t.id}`}>
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <h3 id={`landed-${t.id}`} style={{ margin: 0 }}>
-                <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title}
-              </h3>
-              <span className="row">
-                <LandedChips landed={l} />
-                <span className="muted" style={{ fontSize: "0.85rem" }}>
-                  {l.target} · {relTime(l.at)}
-                </span>
-              </span>
-            </div>
-            <div className="controls" style={{ marginTop: "0.5rem" }}>
-              <button aria-expanded={expanded} onClick={() => setOpen(expanded ? null : t.id)}>
-                {expanded ? "Hide details" : "Show details"}
-              </button>
-              {!expanded && l.status === "unreviewed" && (
-                <button disabled={disabled} onClick={() => void send("markLandedReviewed", { taskIds: [t.id], reviewed: true })}>
-                  Mark as seen
-                </button>
-              )}
-            </div>
-            {expanded && (
-              <div style={{ marginTop: "0.8rem" }}>
-                <LandedSection state={state} task={t} />
-              </div>
+          <p className="meta">{reviewsLine(D.landedReviews(state, task))}</p>
+          {l.checks && l.checks.length > 0 && <p className="meta muted">Checks at merge: {l.checks.map((c) => `${c.name} ${(c.conclusion ?? c.status).toLowerCase()}`).join(" · ")}</p>}
+          {l.mainCheck && (
+            <p className="meta">
+              After landing:{" "}
+              {l.mainCheck.state === "pending" ? "the check on the branch is still running." : l.mainCheck.state === "success" ? "the check on the branch passed." : l.mainCheck.state === "failure" ? "the check on the branch failed." : "the check on the branch is not known."}
+            </p>
+          )}
+          {l.followUps.length > 0 && (
+            <p className="meta">
+              Sent back as{" "}
+              {l.followUps.map((f, i) => {
+                const ft = state.tasks.find((x) => x.id === f.taskId);
+                return (
+                  <span key={f.taskId}>
+                    {i > 0 ? ", " : ""}
+                    {f.kind === "revert" ? "a revert" : "a fix"}: <a href={`#/task/${encodeURIComponent(f.taskId)}`}>{f.taskId}</a> <span className="muted">({ft ? M.stateLabel(state, ft) : "no longer in this project"})</span>
+                  </span>
+                );
+              })}
+            </p>
+          )}
+          <Actions>
+            <Button size="small" variant="quiet" aria-expanded={showChanges} onClick={() => setShowChanges(!showChanges)}>
+              {showChanges ? "Hide changes" : "Show changes"}
+            </Button>
+            {github && (
+              <ButtonLink size="small" variant="quiet" href={github} target="_blank" rel="noreferrer">
+                Open on GitHub
+              </ButtonLink>
             )}
-          </section>
-        );
-      })}
-    </>
+            <ButtonLink size="small" variant="quiet" href={taskHref(task)}>
+              Notes and the full record
+            </ButtonLink>
+          </Actions>
+          {showChanges && <ChangeView taskId={task.id} />}
+        </div>
+      </Disclosure>
+      {sendingBack && <SendBackForm state={state} task={task} landed={l} onDone={() => setSendingBack(false)} />}
+    </Row>
   );
 }

@@ -159,7 +159,7 @@ describe("the fake runtime, end to end", () => {
     const undo = store.command("undoSteering", { changeSetId: set.id }, k(), iso(now));
     expect((undo.result as { left: unknown[] }).left).toEqual([]);
     expect(state().steering[0].changes.find((c) => c.kind === "note")!.status).toBe("applied");
-    expect(state().conversation.filter((m) => m.author === "lead").pop()!.text).toMatch(/passed your note on/);
+    expect(state().conversation.filter((m) => m.author === "lead").pop()!.text).toMatch(/^I asked to pass your note on to the coder/);
   });
 });
 

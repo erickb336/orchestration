@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import * as M from "../domain/model";
-import { PROVIDERS, isProvider, type Autonomy, type ModelSelection, type ProviderId, type RoleId, type Runner, type State, type Task } from "../domain/types";
+import { PROVIDERS, type Autonomy, type ModelSelection, type RoleId, type Runner, type State, type Task } from "../domain/types";
 
 export const ROLE_LABEL: Record<RoleId, string> = {
   lead: "Lead",
@@ -79,16 +79,6 @@ export function taskTone(state: State, task: Task): { tone: Tone; paused: boolea
   return { tone: "neutral", paused: false, pulse: false };
 }
 
-export function StatePill({ state, task }: { state: State; task: Task }) {
-  const label = M.stateLabel(state, task);
-  const { tone, paused, pulse } = taskTone(state, task);
-  return (
-    <Pill tone={tone} paused={paused} pulse={pulse}>
-      {label}
-    </Pill>
-  );
-}
-
 /**
  * §3.2: the provider mark. An authored monogram ("C" for Claude, "X" for Codex) in a 14 px rounded square,
  * drawn in the text colour. Never a brand logo. A service run has no mark.
@@ -121,33 +111,6 @@ export function useNarrow(query = "(max-width: 767px)") {
     return () => mq.removeEventListener("change", on);
   }, [query]);
   return narrow;
-}
-
-/** The role/provider currently working, or next up. Shows actual run models, not current defaults. */
-export function currentWork(state: State, task: Task): { role: RoleId; provider?: ProviderId; text: string; live: boolean } | null {
-  const active = M.activeAttempts(state, task.id);
-  if (active.length) {
-    const a = active[0];
-    const st = task.steps.find((x) => x.id === a.stepId)!;
-    const p = a.snapshot.provider;
-    return { role: st.role, ...(isProvider(p) ? { provider: p } : {}), text: `${selectionText(a.snapshot)}${active.length > 1 ? ` +${active.length - 1}` : ""}`, live: true };
-  }
-  if (task.lifecycle === "done" || task.lifecycle === "cancelled") return null;
-  const next = task.steps.find((st) => st.state === "pending" || st.state === "paused" || st.state === "blocked");
-  if (!next) return null;
-  // ORC-013: a Checks step is run by the service; it has no provider or model.
-  if (next.role === "checks") return { role: next.role, text: state.project.checks?.enabled ? "next: run by the service" : "next: skipped (checks are off)", live: false };
-  const r = M.resolveStep(state, task, next);
-  return { role: next.role, provider: r.ok ? r.selection.provider : undefined, text: r.ok ? `next: ${selectionText(r.selection)}` : "next: unresolved", live: false };
-}
-
-export function latestEvent(state: State, taskId: string) {
-  for (let i = state.events.length - 1; i >= 0; i--) if (state.events[i].taskId === taskId) return state.events[i];
-  return undefined;
-}
-
-export function hasNewDecision(state: State, task: Task) {
-  return task.decisionAt > state.project.lastVisitAt;
 }
 
 const INHERIT = "__inherit__";

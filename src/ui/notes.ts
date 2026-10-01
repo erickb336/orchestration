@@ -1,8 +1,10 @@
 // ORC-022: plain-text descriptions of notes to running steps, shared by the task page, the change list
 // and notifications. Read-only derivations over domain state; the domain decides what a note's status is.
+// ORC-025 (L1, L2): also the lead conversation's words: the one line a reply's changes fold into, where a
+// message of yours stands, and a reply's decisions on findings, all without internal ids.
 
 import * as M from "../domain/model";
-import { isProvider, type Note, type State, type SteeringChange, type Task } from "../domain/types";
+import { isProvider, type FindingDecision, type Message, type Note, type State, type SteeringChange, type SteeringChangeSet, type Task } from "../domain/types";
 import { ROLE_LABEL, type Tone } from "./common";
 
 /** The status chip: Queued, Sending, Delivered, Delivered when the run started, or Not delivered with the reason. */
@@ -68,4 +70,101 @@ export function canSendNote(state: State, task: Task, stepId: string): boolean {
   const st = task.steps.find((x) => x.id === stepId);
   if (!st || st.role === "checks") return false;
   return M.activeAttempts(state, task.id).some((a) => a.stepId === stepId && a.outcome === "running");
+}
+
+// ---------- ORC-025 (L1, L2): the lead conversation ----------
+
+/** Rows of a reply's change set, by what became of them; the one place the fold line and the list count from. */
+export interface ChangeGroups {
+  /** Applied changes other than notes: the focus, priorities, deferrals, drops. */
+  changes: SteeringChange[];
+  /** Notes that were sent (applied). A sent note cannot be unsent. */
+  notes: SteeringChange[];
+  suggested: SteeringChange[];
+  /** Skipped or rejected by the service: the lead described them, nothing happened. */
+  notApplied: SteeringChange[];
+  /** Undone by you, dismissed, or superseded by a later reply. */
+  resolved: SteeringChange[];
+}
+
+export function changeGroups(set: Pick<SteeringChangeSet, "changes">): ChangeGroups {
+  const applied = set.changes.filter((c) => c.status === "applied");
+  return {
+    changes: applied.filter((c) => c.kind !== "note"),
+    notes: applied.filter((c) => c.kind === "note"),
+    suggested: set.changes.filter((c) => c.status === "suggested"),
+    notApplied: set.changes.filter((c) => c.status === "skipped" || c.status === "rejected"),
+    resolved: set.changes.filter((c) => c.status === "undone" || c.status === "dismissed" || c.status === "superseded"),
+  };
+}
+
+/**
+ * Whether Undo is offered on an applied row. Review finding 3: a drop the user applied is an ordinary cancel, with
+ * no undo. ORC-022: a sent note cannot be unsent, so its row has no Undo and Undo all leaves it.
+ */
+export function undoable(c: SteeringChange): boolean {
+  return c.status === "applied" && c.kind !== "note" && !(c.kind === "drop" && c.appliedBy === "user");
+}
+
+/** Whether Apply all takes a suggestion. ORC-022 review M2: a rerun with a note is applied only on its own row (it asks first). */
+export function bulkApplicable(c: SteeringChange): boolean {
+  return c.status === "suggested" && !(c.kind === "note" && c.rerun);
+}
+
+const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** The fold line under a reply: "2 changes, 1 note", "2 suggestions", "1 change, 1 not applied", "3 undone or dismissed". */
+export function foldSummary(set: Pick<SteeringChangeSet, "changes">): string {
+  const g = changeGroups(set);
+  const parts = [
+    g.changes.length && count(g.changes.length, "change"),
+    g.notes.length && count(g.notes.length, "note"),
+    g.suggested.length && count(g.suggested.length, "suggestion"),
+    g.notApplied.length && `${g.notApplied.length} not applied`,
+    g.resolved.length && `${g.resolved.length} undone or dismissed`,
+  ].filter(Boolean);
+  return parts.length ? parts.join(", ") : "No changes";
+}
+
+/**
+ * The actions the fold line carries, so the common case needs no opening: Undo (or Undo all) for what can be
+ * undone, and Apply (Send for a note, Apply all for several) for the suggestions Apply all takes. A rerun with a
+ * note is never among them: it asks first, on its own row.
+ */
+export function foldActions(set: Pick<SteeringChangeSet, "changes">): { undo?: "Undo" | "Undo all"; apply?: "Apply" | "Send" | "Apply all" } {
+  const undo = set.changes.filter(undoable).length;
+  const bulk = set.changes.filter(bulkApplicable);
+  const apply = bulk.length > 1 ? "Apply all" : bulk.length === 1 ? (bulk[0].kind === "note" ? "Send" : "Apply") : undefined;
+  return { ...(undo ? { undo: undo === 1 ? "Undo" : "Undo all" } : {}), ...(apply ? { apply } : {}) };
+}
+
+/**
+ * Where a message of yours stands, in the conversation's words. A message sent while the lead writes a reply
+ * waits for that reply and is answered next, by itself: nothing to press (L2 removed "Answer together now").
+ */
+export function messageStatusText(state: State, status: { kind: string; text: string }): string {
+  if (status.kind !== "queued-behind-reply") return status.text;
+  const run = M.activeLeadRun(state);
+  return run && run.messageIds.length ? "The lead answers this right after its reply to your earlier message." : "The lead answers this when its current run ends.";
+}
+
+type DecisionRow = NonNullable<Message["leadDecisions"]>[number];
+
+const DECIDED: Record<FindingDecision["status"], string> = {
+  open: "still open",
+  fix: "to be fixed",
+  accept: "accepted as it is",
+  "follow-up": "a follow-up task",
+  superseded: "no longer open",
+};
+
+/**
+ * One decision a lead reply took on a finding, by the task and the finding's title, never the decision's id:
+ * `WT-007 “Distances are read in miles only”: accepted as it is — why`.
+ */
+export function leadDecisionText(row: DecisionRow, now: FindingDecision | undefined): string {
+  const what = now ? `${row.taskId} “${now.finding.title}”` : `A finding on ${row.taskId}`;
+  const verdict = row.what === "decided" ? (DECIDED[row.status as FindingDecision["status"]] ?? row.status) : row.what === "suggested" ? "the lead suggests a fix; yours to decide" : "handed to you to decide";
+  const since = now && now.status !== row.status && now.status !== "open" ? ` (since then: ${DECIDED[now.status]})` : "";
+  return `${what}: ${verdict}${since}${row.why ? ` — ${row.why}` : ""}`;
 }

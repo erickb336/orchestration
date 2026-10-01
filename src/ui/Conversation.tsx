@@ -1,26 +1,22 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
-import type { LeadRun, Message, State } from "../domain/types";
+import type { Message, State } from "../domain/types";
 import { useStore } from "./store";
 import { PREF_LEAD_SEEN, fmtTime, relTime, selectionText, writePref } from "./common";
+import { Button, Chip, SimulatedChip } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
-import { SteeringChanges } from "./SteeringChanges";
+import { leadDecisionText, messageStatusText } from "./notes";
+import { Fold, SteeringChanges } from "./SteeringChanges";
 
 const MAX_LENGTH = 8000;
 
-function runLabel(r: LeadRun) {
-  return selectionText({ provider: r.provider, model: r.actualModel ?? r.model });
-}
-
-/** How far the lead may go, as shown on the composer. */
-const MODE_SHORT = { apply: "applies changes; undo any of them", "apply-own": "applies changes to its own proposals, suggests for yours", suggest: "only suggests changes" } as const;
-
 /**
- * The lead conversation: messages, where each of yours stands, what the lead changed (with Undo),
- * and a composer. One instance lives on the Overview; the Lead drawer shows another on every other page.
+ * The lead conversation, as the Lead drawer shows it on every page (ORC-025 N3: the one place it is drawn).
+ * ORC-025 L1, L2: it reads like a chat. One quiet line says who the lead is (and "simulated" once, in the demo);
+ * each message is who, when and the text; what a reply changed folds into one line under it; the composer last.
  */
-export function Conversation({ variant = "inline", onClose, focusOnMount }: { variant?: "inline" | "drawer"; onClose?: () => void; focusOnMount?: boolean }) {
+export function Conversation({ onClose, focusOnMount }: { onClose: () => void; focusOnMount?: boolean }) {
   const { state, service, send, disabled } = useStore();
   const lead = useLeadContext();
   const simulated = service.runtime === "fake";
@@ -30,6 +26,7 @@ export function Conversation({ variant = "inline", onClose, focusOnMount }: { va
   const stick = useRef(true);
   const headingId = useId();
   const contextTask = lead.context.taskId ? state.tasks.find((t) => t.id === lead.context.taskId) : undefined;
+  const leadModel = selectionText(state.project.leadSelection);
 
   useLayoutEffect(() => {
     const el = listRef.current;
@@ -42,28 +39,23 @@ export function Conversation({ variant = "inline", onClose, focusOnMount }: { va
   }, [messages]);
 
   return (
-    <section className={variant === "drawer" ? "lead-panel" : "card"} aria-labelledby={headingId} id={variant === "inline" ? "lead-inline" : undefined}>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 id={headingId} style={{ margin: 0 }}>
+    <section className="lead-panel" aria-labelledby={headingId}>
+      <div className="lead-head">
+        <h2 id={headingId} className="lead-title">
           Lead
         </h2>
-        <span className="row" style={{ gap: "0.35rem" }}>
-          <span className="chip strong">{selectionText(state.project.leadSelection)}</span>
-          {onClose && (
-            <button className="small" onClick={onClose} aria-label="Close the lead panel">
-              Close
-            </button>
-          )}
-        </span>
+        <span className="lead-who small muted">{leadModel}</span>
+        {simulated && <SimulatedChip title="Simulated: the demo's lead writes these replies and changes from the board; no model runs and no agent reads its notes." />}
+        <Button size="small" variant="quiet" className="lead-close" onClick={onClose} aria-label="Close the lead panel">
+          Close
+        </Button>
       </div>
-      <p className="muted" style={{ fontSize: "0.82rem", margin: "0.3rem 0 0.6rem" }}>
-        {simulated
-          ? "The lead's replies and changes are simulated, not written by a model."
-          : "When you message the lead, it can change the focus, reorder and defer work, drop its own unstarted proposals, and send a note to a running coder or designer. Every change is listed, with Undo for all but notes. It never pauses or stops running work."}
-      </p>
 
       {messages.length === 0 ? (
-        <p className="muted convo-empty">No messages yet. Message the lead; it answers in its next run.</p>
+        <div className="convo-empty muted">
+          <p>No messages yet. Ask the lead what is going on, or tell it what to focus on; it answers in its next run.</p>
+          <p className="small">It can change the focus and priorities, defer work and pass a note to a running agent. Every change is listed under its reply, with Undo for all but notes.</p>
+        </div>
       ) : (
         <ol
           ref={listRef}
@@ -78,27 +70,26 @@ export function Conversation({ variant = "inline", onClose, focusOnMount }: { va
           }}
         >
           {messages.map((m) => (
-            <MessageItem key={m.id} state={state} message={m} simulated={simulated} blocked={service.leadBlocked} />
+            <MessageItem key={m.id} state={state} message={m} leadModel={leadModel} blocked={service.leadBlocked} />
           ))}
         </ol>
       )}
 
-      <LeadStatus state={state} blocked={service.leadBlocked} />
+      <LeadStatus state={state} />
       {contextTask && (
-        <div className="row" style={{ marginBottom: "0.3rem" }}>
-          <span className="chip strong">
+        <div className="lead-context">
+          <Chip strong title={M.currentSpec(contextTask).content.title}>
             About {contextTask.id} {M.currentSpec(contextTask).content.title.slice(0, 40)}
-            <button className="link" style={{ marginLeft: "0.35rem" }} onClick={lead.clearContext} aria-label={`Stop referring to ${contextTask.id}`}>
-              ×
-            </button>
-          </span>
+          </Chip>
+          <Button size="small" variant="quiet" onClick={lead.clearContext} aria-label={`Stop referring to ${contextTask.id}`}>
+            ×
+          </Button>
         </div>
       )}
       <Composer
         disabled={disabled}
         placeholder={lead.context.placeholder}
         focusOnMount={focusOnMount}
-        mode={MODE_SHORT[state.project.steeringMode]}
         onSend={async (text) => {
           stick.current = true;
           const r = await send("postMessage", contextTask ? { text, taskId: contextTask.id } : { text });
@@ -110,22 +101,24 @@ export function Conversation({ variant = "inline", onClose, focusOnMount }: { va
   );
 }
 
-function MessageItem({ state, message: m, simulated, blocked }: { state: State; message: Message; simulated: boolean; blocked?: string }) {
-  const { send, disabled } = useStore();
+function MessageItem({ state, message: m, leadModel, blocked }: { state: State; message: Message; leadModel: string; blocked?: string }) {
   const run = m.leadRunId ? state.leadRuns.find((r) => r.id === m.leadRunId) : undefined;
+  // The model is said once, at the top; a reply written by another model than today's lead says which.
+  const runModel = run ? selectionText({ provider: run.provider, model: run.actualModel ?? run.model }) : undefined;
   const who = m.author === "user" ? "You" : m.author === "lead" ? "Lead" : "System";
   const status = m.author === "user" ? M.messageStatus(state, m, { blocked, nowMs: Date.now() }) : undefined;
   const set = m.changeSetId ? state.steering.find((cs) => cs.id === m.changeSetId) : undefined;
   const draft = m.visionDraftId ? state.visionDrafts.find((d) => d.id === m.visionDraftId) : undefined;
   const about = m.taskId ? state.tasks.find((t) => t.id === m.taskId) : undefined;
+  const live = status && (status.kind === "working" || status.kind === "stopping-planning" || status.kind === "restarting");
+  const danger = status && (status.kind === "blocked" || status.text.includes("Control failure"));
   return (
     <li className={`msg ${m.author}`} id={`msg-${m.id}`}>
       <div className="msg-head">
         <strong>{who}</strong>
-        {m.author === "lead" && simulated && <span className="chip">simulated</span>}
-        {m.author === "lead" && run && <span className="muted">{runLabel(run)}</span>}
+        {m.author === "lead" && runModel && runModel !== leadModel && <span className="muted">{runModel}</span>}
         {about && (
-          <a href={`#/task/${encodeURIComponent(about.id)}`} className="chip" title={M.currentSpec(about).content.title}>
+          <a href={`#/task/${encodeURIComponent(about.id)}`} className="msg-about" title={M.currentSpec(about).content.title}>
             About {about.id}
           </a>
         )}
@@ -135,36 +128,15 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
       </div>
       <div className="msg-text">{m.text}</div>
       {status && status.kind !== "answered" && (
-        <div className="msg-status muted" role="status">
-          <span className={status.kind === "working" || status.kind === "stopping-planning" || status.kind === "restarting" ? "dot running" : undefined} aria-hidden="true" />
-          <span style={status.kind === "blocked" || status.text.includes("Control failure") ? { color: "var(--s-blocked)" } : undefined}>{status.text}</span>
-          {status.kind === "queued-behind-reply" && (
-            <button className="small" disabled={disabled} onClick={() => void send("stopLeadReply")} title="Stop the reply being written so one run answers everything you sent">
-              Answer together now
-            </button>
-          )}
-        </div>
-      )}
-      {set && <SteeringChanges set={set} />}
-      {m.author === "lead" && m.leadRunId && <LeadDecisions state={state} leadRunId={m.leadRunId} snapshot={m.leadDecisions} />}
-      {draft && (
-        <div className="msg-extra" role="note">
-          <span className="chip strong">Vision draft {draft.id}</span>{" "}
-          <span className="muted">
-            {draft.status === "open"
-              ? "needs you on the Overview: accept, edit or dismiss it; the vision changes only if you accept"
-              : draft.status === "accepted"
-                ? `accepted by you as r${draft.visionRev}`
-                : draft.status === "dismissed"
-                  ? "dismissed by you; the vision is unchanged"
-                  : "replaced by a newer draft"}
-          </span>
+        <div className={`msg-status${danger ? " danger" : ""}`} role="status">
+          {live && <span className="dot running" aria-hidden="true" />}
+          <span>{messageStatusText(state, status)}</span>
+          {status.kind === "blocked" && <a href="#/settings">Settings</a>}
         </div>
       )}
       {!!m.questions?.length && (
         <div className="msg-extra">
-          <span className="muted">Questions:</span>
-          <ol style={{ margin: "0.15rem 0 0", paddingLeft: "1.2rem" }}>
+          <ol className="msg-questions">
             {m.questions.map((q, i) => (
               <li key={i}>
                 {q.question}
@@ -173,8 +145,23 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
               </li>
             ))}
           </ol>
-          {state.project.stage === "shaping" && M.latestQuestions(state)?.message.id === m.id && <div className="muted" style={{ fontSize: "0.82rem" }}>Answer them inline in “Shape the vision”, or reply here.</div>}
+          {state.project.stage === "shaping" && M.latestQuestions(state)?.message.id === m.id && <p className="muted small no-margin">Answer them inline in “Shape the vision” on Home, or reply here.</p>}
         </div>
+      )}
+      {draft && (
+        <p className="msg-extra muted no-margin" role="note">
+          {draft.status === "open" ? (
+            <>
+              This reply drafted the vision. It needs you on <a href="#/overview">Home</a>: accept, edit or dismiss it; the vision changes only if you accept.
+            </>
+          ) : draft.status === "accepted" ? (
+            `You accepted this vision draft (vision revision ${draft.visionRev}).`
+          ) : draft.status === "dismissed" ? (
+            "You dismissed this vision draft; the vision is unchanged."
+          ) : (
+            "A newer vision draft replaced this one."
+          )}
+        </p>
       )}
       {!!m.proposedTaskIds?.length && (
         <div className="msg-extra">
@@ -193,7 +180,7 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
       )}
       {!!m.rejected?.length && (
         <div className="msg-extra muted">
-          Not applied:
+          Not added to the board:
           <ul className="plain">
             {m.rejected.map((r, i) => (
               <li key={i}>{r}</li>
@@ -201,74 +188,63 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
           </ul>
         </div>
       )}
+      {set && <SteeringChanges set={set} />}
+      {m.author === "lead" && m.leadRunId && <LeadDecisions state={state} leadRunId={m.leadRunId} snapshot={m.leadDecisions} />}
     </li>
   );
 }
 
-/** ORC-013: the service's record of what a lead reply decided, suggested or handed over (never the lead's prose), with a way to change it. */
+/** ORC-013: the service's record of what a lead reply decided, suggested or handed over (never the lead's prose), folded like its changes. */
 function LeadDecisions({ state, leadRunId, snapshot }: { state: State; leadRunId: string; snapshot?: NonNullable<Message["leadDecisions"]> }) {
   // Review 1 (14): the reply shows what the run decided then; a message from before the snapshot existed reads the live records.
   const rows = snapshot ?? F.leadRunDecisions(state, leadRunId).map(({ decision: d, what }) => ({ id: d.id, taskId: d.taskId, what, status: d.status, ...(d.why || d.suggestion?.why ? { why: d.why ?? d.suggestion?.why } : {}) }));
   if (!rows.length) return null;
   return (
-    <div className="msg-extra">
-      <span className="muted">Decisions on findings:</span>
-      <ul className="plain">
-        {rows.map((d) => {
-          const now = state.decisions.find((x) => x.id === d.id);
-          return (
-            <li key={d.id}>
-              {d.what === "decided" ? `Decided ${d.id}: ${d.status}` : d.what === "suggested" ? `Suggested fix on ${d.id}: yours to decide` : `Handed ${d.id} over to you`}
-              {d.why ? ` — ${d.why}` : ""} <span className="muted">({d.taskId})</span>
-              {now && now.status !== d.status && now.status !== "open" ? <span className="muted"> · now: {now.status}</span> : ""}{" "}
-              <a href={`#/task/${encodeURIComponent(d.taskId)}`} title="Open the task to change this decision">
-                Change
-              </a>
-            </li>
-          );
-        })}
+    <Fold summary={`${rows.length} decision${rows.length === 1 ? "" : "s"} on findings`}>
+      <ul className="changes-list">
+        {rows.map((d) => (
+          <li key={d.id} className="change">
+            {leadDecisionText(d, state.decisions.find((x) => x.id === d.id))}{" "}
+            <a href={`#/task/${encodeURIComponent(d.taskId)}`} title="Open the task to change this decision">
+              Change
+            </a>
+          </li>
+        ))}
       </ul>
-    </div>
+    </Fold>
   );
 }
 
-/** What the lead is doing now, in the words of the newest waiting message (never "working" while a message is queued). */
-function LeadStatus({ state, blocked }: { state: State; blocked?: string }) {
+/**
+ * What the lead is doing when no message of yours waits (each waiting message says where it stands under it):
+ * a planning or decisions run, a stop in progress, or a run that failed.
+ */
+function LeadStatus({ state }: { state: State }) {
+  if (M.pendingMessages(state).length) return null;
   const run = M.activeLeadRun(state);
-  const pending = M.pendingMessages(state);
   const last = state.leadRuns.length ? state.leadRuns[state.leadRuns.length - 1] : undefined;
   let text: string | null = null;
   let live = false;
   let danger = false;
-  if (pending.length) {
-    const st = M.messageStatus(state, pending[pending.length - 1], { blocked, nowMs: Date.now() });
-    text = pending.length > 1 ? `${pending.length} messages waiting. ${st.text}` : st.text;
-    live = st.kind === "stopping-planning" || st.kind === "restarting";
-    danger = st.kind === "blocked" || st.text.includes("Control failure");
-  } else if (run) {
+  if (run) {
     live = true;
-    text =
-      run.outcome === "stopping"
-        ? `Stopping the lead run (${runLabel(run)})…${run.note?.startsWith("Control failure") ? ` ${run.note}` : ""}`
-        : `Lead is working (${runLabel(run)})…${run.activity ? ` ${run.activity}` : ""}`;
-    danger = !!run.note?.startsWith("Control failure");
+    const failure = run.note?.startsWith("Control failure") ? ` ${run.note}` : "";
+    text = run.outcome === "stopping" ? `The lead's run is stopping…${failure}` : `The lead is working…${run.activity ? ` ${run.activity}` : ""}`;
+    danger = !!failure;
   } else if (last && (last.outcome === "failed" || last.outcome === "lost")) {
     text = `The last lead run ${last.outcome === "lost" ? "was lost" : "failed"}${last.note ? `: ${last.note}` : "."}`;
+    danger = true;
   }
+  if (!text) return null;
   return (
-    <div className="convo-status" role="status">
-      {text && (
-        <>
-          {live && <span className={`dot ${run?.outcome === "stopping" ? "paused" : "running"}`} aria-hidden="true" />}
-          <span style={danger ? { color: "var(--s-blocked)" } : undefined}>{text}</span>
-          {danger && blocked && <a href="#/settings">Settings</a>}
-        </>
-      )}
+    <div className={`convo-status${danger ? " danger" : ""}`} role="status">
+      {live && <span className={`dot ${run?.outcome === "stopping" ? "paused" : "running"}`} aria-hidden="true" />}
+      <span>{text}</span>
     </div>
   );
 }
 
-function Composer({ disabled, placeholder, focusOnMount, mode, onSend }: { disabled: boolean; placeholder?: string; focusOnMount?: boolean; mode: string; onSend: (text: string) => Promise<boolean> }) {
+function Composer({ disabled, placeholder, focusOnMount, onSend }: { disabled: boolean; placeholder?: string; focusOnMount?: boolean; onSend: (text: string) => Promise<boolean> }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const id = useId();
@@ -311,14 +287,13 @@ function Composer({ disabled, placeholder, focusOnMount, mode, onSend }: { disab
           }
         }}
       />
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <span id={`${id}-hint`} className="muted" style={{ fontSize: "0.8rem" }}>
+      <div className="composer-foot">
+        <span id={`${id}-hint`} className={`small ${tooLong ? "composer-error" : "muted"}`}>
           {tooLong ? `Messages are limited to ${MAX_LENGTH} characters.` : disabled ? "Offline: messages cannot be sent." : "⌘/Ctrl + Enter to send"}
-          {" · "}The lead {mode} (<a href="#/settings">Settings</a>)
         </span>
-        <button type="submit" className="primary" disabled={blocked}>
+        <Button type="submit" variant="primary" disabled={blocked} loading={sending}>
           {sending ? "Sending…" : "Send"}
-        </button>
+        </Button>
       </div>
     </form>
   );

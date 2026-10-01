@@ -344,8 +344,6 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
   padding: 0.02rem 0.4rem;
   font-variant-numeric: tabular-nums;
 }
-/* §3.2: what waits for you, on a card. */
-.needs-badge { display: inline-flex; align-items: center; gap: 0.3rem; font-size: var(--fs-small); font-weight: 560; color: var(--st-you); background: var(--st-you-bg); border-radius: var(--radius-chip); padding: 0.05rem 0.5rem; white-space: nowrap; }
 
 .banner {
   border-radius: var(--radius);
@@ -357,77 +355,9 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
 .banner.danger { border-color: var(--danger-border); background: var(--danger-bg); }
 .banner.neutral { border-color: var(--border); background: var(--surface-2); }
 
-/* ---------- board ---------- */
-.toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem 0.9rem; align-items: center; margin-bottom: 1rem; }
-.toolbar label { display: inline-flex; gap: 0.35rem; align-items: center; font-size: var(--fs-meta); color: var(--muted); }
-.segmented { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius-control); overflow: hidden; }
-.segmented button { border: none; border-radius: 0; }
-.segmented button[aria-pressed="true"] { background: var(--surface-2); font-weight: 650; }
-
-.group { margin-bottom: 1.5rem; }
-.group-head { display: flex; align-items: center; gap: 0.5rem; margin: 0 0 0.5rem; }
-.group-head h2 { margin: 0; font-size: var(--fs-body); }
-/* §3.2: the task card. */
-.task-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "head state" "work work" "foot foot";
-  gap: 0.35rem 1rem;
-  padding: 0.7rem 0.9rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  margin-bottom: 0.5rem;
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
-  transition: border-color var(--ease), background-color var(--ease);
-}
-.task-row:hover { border-color: var(--border-strong); background: var(--surface); }
-.task-row .head { grid-area: head; min-width: 0; }
-.task-row .idline { display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; align-items: baseline; font-size: var(--fs-small); color: var(--muted); }
-.task-row .title { font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.task-row .state { grid-area: state; display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
-.task-row .work { grid-area: work; min-width: 0; }
-.task-row .work-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.45rem; font-size: var(--fs-small); color: var(--text); }
-.task-row .work-line .purpose { color: var(--muted); }
-.task-row .foot { grid-area: foot; display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
-.task-row .activity { font-size: var(--fs-small); color: var(--muted); min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-row .prio { font-weight: 560; color: var(--muted); }
-/* Legacy columns some rows still use. */
-.task-row .side { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
-.task-row .meta { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.3rem; align-items: center; }
-/* The step bar: one segment per pipeline step, from the task's real step states. */
-.stepbar { display: flex; gap: 2px; height: 4px; margin-top: 0.35rem; max-width: 22rem; }
-.stepbar > span { flex: 1 1 0; border-radius: 1px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); transition: background-color var(--ease); }
-.stepbar > span.done { background: var(--st-done); box-shadow: none; }
-.stepbar > span.work { background: var(--st-work); box-shadow: none; }
-.stepbar > span.fail { background: var(--st-fail); box-shadow: none; }
+/* ---------- the task list and board: src/ui/tasks.css (ORC-025 pass 4) ---------- */
 /* The provider mark: an authored monogram in a 14 px rounded square, in the text colour. */
 .pmark { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; flex: none; }
-@media (max-width: 700px) {
-  .task-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "state" "work" "foot"; gap: 0.3rem; }
-  .task-row .state { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
-}
-
-.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 0.75rem; overflow-x: auto; padding-bottom: 0.5rem; }
-/* The board uses the page's full width; empty columns are named in one line above it instead of taking a column. */
-main:has(.board) { max-width: none; }
-.board-empty { margin: -0.4rem 0 0.6rem; }
-.step-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.35rem; }
-.step-row .stepbar { flex: 1 1 auto; margin-top: 0; }
-.step-row .num { font-size: var(--fs-small); white-space: nowrap; }
-.board .col { background: var(--surface-2); border-radius: var(--radius); padding: 0.6rem; min-height: 8rem; min-width: 0; }
-.board .col .task-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "state" "work" "foot"; box-shadow: none; }
-.board .col .task-row .state { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
-.board .col .chip { white-space: normal; }
-.board .col .task-row .foot { flex-wrap: wrap; row-gap: 0.25rem; }
-.board .col .task-row .foot .chip { white-space: nowrap; }
-.board .col .task-row .activity { flex-basis: 100%; }
-.board .col .needs-badge { white-space: normal; max-width: 100%; }
-.board .col .pill { align-self: flex-start; }
-.board .col .task-row .side { align-items: flex-start; text-align: left; grid-column: auto; }
 
 /* ---------- progress by area (§3.3) ---------- */
 .areas { list-style: none; margin: 0; padding: 0; }
@@ -569,33 +499,54 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 /* ---------- service connection ---------- */
 .card.connect { max-width: 36rem; margin: 3rem auto; }
 
-/* ---------- lead conversation ---------- */
+/* ---------- lead conversation (ORC-025 L1, L2: a chat; what a reply changed folds into one line under it) ---------- */
+.lead-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: var(--space-2); }
+.lead-head { display: flex; align-items: center; gap: var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid var(--border); min-width: 0; }
+.lead-title { margin: 0; font-size: var(--fs-h3); flex: none; }
+.lead-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lead-head .k-chip { flex: none; }
+.lead-close { margin-left: auto; flex: none; }
 .convo {
   list-style: none;
-  margin: 0 0 0.5rem;
-  padding: 0.25rem 0.25rem 0.25rem 0;
-  max-height: 26rem;
+  margin: 0;
+  padding: var(--space-2) 2px var(--space-2) 0;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-4);
 }
-.msg { border: 1px solid var(--border); border-radius: var(--radius-control); padding: 0.5rem 0.7rem; font-size: var(--fs-meta); }
-.msg.user { background: var(--surface-2); border-color: var(--surface-2); margin-left: 1.5rem; }
-.msg.lead { background: var(--surface); margin-right: 1.5rem; }
-.msg.system { border-style: dashed; color: var(--muted); font-size: var(--fs-small); }
-.msg-head { display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; align-items: baseline; font-size: var(--fs-small); margin-bottom: 0.15rem; }
-.msg-head time { margin-left: auto; }
-.msg-text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.msg-extra { margin-top: 0.35rem; font-size: var(--fs-small); }
-.convo-empty { font-size: var(--fs-meta); }
-.convo-status { display: flex; gap: 0.45rem; align-items: center; min-height: 1.4rem; font-size: var(--fs-small); color: var(--muted); margin-bottom: 0.4rem; }
+.msg { font-size: var(--fs-meta); min-width: 0; }
+.msg.user { align-self: flex-end; max-width: 88%; background: var(--surface-2); border-radius: var(--radius-control); padding: var(--space-2) var(--space-3); }
+.msg.lead { padding: 0 var(--space-1) 0 0; }
+.msg.system { border: 1px dashed var(--border-strong); border-radius: var(--radius-control); padding: var(--space-2) var(--space-3); color: var(--muted); font-size: var(--fs-small); }
+.msg-head { display: flex; flex-wrap: wrap; gap: 0.15rem var(--space-2); align-items: baseline; font-size: var(--fs-small); margin-bottom: 0.15rem; }
+.msg-head strong { font-weight: 650; }
+.msg-about { color: var(--muted); }
+.msg-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+.msg-extra { margin-top: var(--space-2); font-size: var(--fs-small); }
+.msg-questions { margin: 0 0 var(--space-1); padding-left: 1.2rem; }
+.convo-empty { font-size: var(--fs-meta); flex: 1; padding-top: var(--space-3); }
+.convo-status, .msg-status { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; font-size: var(--fs-small); color: var(--muted); }
+.msg-status { margin-top: var(--space-1); }
+.convo-status.danger, .msg-status.danger, .composer-error { color: var(--st-fail); }
 .dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: currentColor; flex: none; animation: pulse 1.4s ease-in-out infinite; }
 .dot.running { color: var(--st-work); }
 .dot.paused { color: var(--muted); }
-.composer textarea { min-height: 3.5rem; margin-bottom: 0.4rem; }
-.msg-status { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; font-size: var(--fs-small); margin-top: 0.3rem; }
-.msg-head a.chip { text-decoration: none; }
+.lead-context { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
+.lead-context .k-chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer { display: grid; gap: var(--space-2); border-top: 1px solid var(--border); padding-top: var(--space-2); }
+.composer textarea { min-height: 3.5rem; width: 100%; resize: vertical; }
+.composer-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+/* The fold line under a reply: "2 changes, 1 note · Undo all"; it opens to the change list. */
+.fold { margin-top: var(--space-2); font-size: var(--fs-small); }
+.fold-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin: 0; }
+.fold-toggle.k-btn { padding-left: var(--space-1); color: var(--text); font-weight: 560; gap: 0.4rem; }
+.fold-toggle::before { content: ""; flex: none; width: 0.38rem; height: 0.38rem; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-1px) rotate(-45deg); transition: transform var(--ease); }
+.fold-toggle[aria-expanded="true"]::before { transform: translateY(-2px) rotate(45deg); }
+.fold-body { margin: var(--space-1) 0 0 var(--space-3); padding-left: var(--space-3); border-left: 1px solid var(--border); }
+.fold-note { margin: 0 0 var(--space-1); }
 
 /* ---------- steering by conversation (ORC-009) ---------- */
 .lead-btn { display: inline-flex; align-items: center; gap: 0.4rem; }
@@ -612,24 +563,29 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
   background: var(--surface);
   border-left: 1px solid var(--border);
   box-shadow: -2px 0 8px rgba(0, 0, 0, 0.08);
-  overflow-y: auto;
-  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--space-3) var(--space-4);
   z-index: 9;
 }
 .lead-drawer.modal { width: 100vw; border-left: none; z-index: 12; }
 .lead-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 11; }
-.lead-panel .convo { max-height: none; flex: 1; }
-.lead-panel { display: flex; flex-direction: column; min-height: 100%; }
 @media (min-width: 768px) {
   main.with-lead { margin-right: min(420px, 100vw); max-width: none; }
 }
-.changes { border-top: 1px solid var(--border); margin-top: 0.45rem; padding-top: 0.35rem; }
-.changes-section { margin-top: 0.35rem; }
-.changes-list { list-style: none; padding: 0; margin: 0.15rem 0 0; }
-.change { padding: 0.3rem 0; border-top: 1px solid var(--border); font-size: var(--fs-small); }
+.changes-section { margin-top: var(--space-2); }
+.changes-section:first-child { margin-top: 0; }
+.changes-title { margin: 0; font-size: var(--fs-small); font-weight: 600; color: var(--muted); }
+.changes-list { list-style: none; padding: 0; margin: 0; }
+.change { padding: var(--space-2) 0; border-top: 1px solid var(--border); font-size: var(--fs-small); min-width: 0; }
 .change:first-child { border-top: none; }
+.change-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.change-what { min-width: 0; overflow-wrap: anywhere; }
+.change-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); margin-left: auto; }
 .change.struck .change-what { text-decoration: line-through; color: var(--muted); }
 .change-why { margin-top: 0.1rem; }
+.focus-diff { font-size: var(--fs-micro); margin: var(--space-1) 0; }
 .focus-banner { display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem; align-items: center; }
 .focus-banner .quote { overflow-wrap: anywhere; }
 .provenance { font-size: var(--fs-small); color: var(--muted); }

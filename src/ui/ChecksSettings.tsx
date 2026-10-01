@@ -1,89 +1,64 @@
-// Settings → Checks (ORC-013 §12): the project's own check commands, run by the service in the Codex
-// sandbox on a throwaway copy of each change. Off until the user turns it on; the commands are the
-// user's settings and nothing an agent writes can change them. The sandbox's health is shown as the
-// service observed it; running without a sandbox is a separate, explicit choice with its own warning.
+// Settings › checks (ORC-013 §12): the project's own check commands, run by the service in the Codex sandbox on a
+// throwaway copy of each change. Off until the person turns it on; the commands are the person's settings and nothing
+// an agent writes can change them. ORC-025 pass 5 (S4) splits the card in two:
+//  - Quality › Checks: on or off, "On · 2 commands", Suggest from repository, and Edit commands (the editor, in place);
+//  - Advanced › Checks sandbox: the sandbox, its health, the network for installs, the limits, protected inputs and
+//    the environment. Running without a sandbox is a separate, explicit choice with its own warning.
+// Both edit their section's draft; each saves the whole configuration with only its own fields changed.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { CheckSuggestions } from "../api";
 import { CHECK_PROGRAMS, MAX_CHECK_COMMANDS, MAX_PREPARE_COMMANDS, validateChecks, validateCommand } from "../domain/checks";
-import type { CheckCommand, ChecksConfig } from "../domain/types";
+import type { CheckCommand, ChecksConfig, State } from "../domain/types";
+import { Actions, Banner, Button, Checkbox, Field, Input, Select, SimulatedChip, StatePill, Textarea, type ConfirmOptions } from "./kit";
 import { fmtTime, relTime } from "./common";
-import { useStore } from "./store";
+import { CONFIRM_CHECKS_ON, CONFIRM_NO_SANDBOX, argvText, checksSummary } from "./settingsText";
+import { useStore, type SendResult } from "./store";
+import { intIn } from "./settings/draft";
+import { Choice, SettingsCard } from "./settings/parts";
+import { cardHref } from "./settings/sections";
 
-type Draft = Omit<ChecksConfig, "rev">;
+type Confirm = (o: ConfirmOptions) => Promise<boolean>;
+type Send = (name: Parameters<ReturnType<typeof useStore>["send"]>[0], args?: object) => Promise<SendResult>;
 
-const ON_TEXT =
-  "Turn checks on?\n\nChecks run the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote.\n\nThe Codex sandbox blocks writes outside a temporary copy of the change, and blocks the network for everything except npm, pnpm and yarn dependency downloads, which run with every install hook off. It does not stop that code from reading your files.\n\nTurn checks on only for repositories whose agents' work you are willing to run.";
-const NO_SANDBOX_TEXT =
-  "Run checks without a sandbox?\n\nEvery check will run with your permissions: it can read and write anywhere you can and reach the network. Code an agent wrote will run that way. The app never chooses this by itself; every such run is labelled as unsandboxed.\n\nChoose this only if the Codex sandbox cannot work on this computer and you accept the risk.";
+/** The whole configuration to save: the live one with a section's fields on top. */
+function configWith(live: ChecksConfig, patch: Partial<Omit<ChecksConfig, "rev">>): Omit<ChecksConfig, "rev"> {
+  const { rev: _rev, ...rest } = live;
+  return { ...rest, ...patch, commands: (patch.commands ?? live.commands).map((c) => ({ ...c, argv: [...c.argv] })) };
+}
 
-const fromConfig = (c: ChecksConfig): Draft => ({
-  enabled: c.enabled,
-  commands: c.commands.map((x) => ({ ...x, argv: [...x.argv] })),
-  sandbox: c.sandbox,
-  prepareNetwork: c.prepareNetwork,
-  commandTimeoutMinutes: c.commandTimeoutMinutes,
-  runTimeoutMinutes: c.runTimeoutMinutes,
-  maxConcurrent: c.maxConcurrent,
-  protectedInputs: [...c.protectedInputs],
-  passEnv: [...c.passEnv],
-});
+const saveArgs = (config: Omit<ChecksConfig, "rev">) => ({ config, ...(config.sandbox === "none" ? { acknowledgeUnsandboxed: true } : {}) });
 
-export function ChecksSettings() {
-  const { state, service, send, disabled } = useStore();
+// ---------- Quality › Checks ----------
+
+export type ChecksDraft = { enabled: boolean; commands: CheckCommand[] };
+
+export const liveChecks = (state: State): ChecksDraft => ({ enabled: state.project.checks.enabled, commands: state.project.checks.commands });
+
+/** Why the draft's commands cannot be saved, in the domain's words (validateChecks), or undefined. */
+export function checksProblem(state: State, v: ChecksDraft): string | undefined {
+  return validateChecks({ ...configWith(state.project.checks, v), rev: state.project.checks.rev }, { acknowledged: true });
+}
+
+/** The command that saves Quality › Checks. Turning checks on asks first, saying what it means; a "no" saves nothing. */
+export async function checksSteps(state: State, v: ChecksDraft, changed: ReadonlySet<keyof ChecksDraft>, send: Send, confirm: Confirm): Promise<(() => Promise<SendResult> | null)[] | null> {
+  if (!changed.size) return [];
+  if (v.enabled && !state.project.checks.enabled && !(await confirm(CONFIRM_CHECKS_ON))) return null;
+  return [() => send("setChecks", saveArgs(configWith(state.project.checks, v)))];
+}
+
+export function ChecksCard({ v, set }: { v: ChecksDraft; set: (p: Partial<ChecksDraft>) => void }) {
+  const { state, service } = useStore();
   const cfg = state.project.checks;
   const health = state.project.checksHealth;
   const real = service.runtime === "real";
   const sampleBlocked = real && state.project.sample;
-  const liveKey = JSON.stringify(cfg);
-  const [draft, setDraft] = useState<Draft>(() => fromConfig(cfg));
-  const [inputs, setInputs] = useState(cfg.protectedInputs.join("\n"));
-  const [passEnv, setPassEnv] = useState(cfg.passEnv.join(", "));
+  const [editing, setEditing] = useState(false);
   const [suggested, setSuggested] = useState<CheckSuggestions | null>(null);
   const [suggesting, setSuggesting] = useState(false);
-  // Follow the live settings when they change elsewhere (another tab, a saved edit).
-  useEffect(() => {
-    setDraft(fromConfig(cfg));
-    setInputs(cfg.protectedInputs.join("\n"));
-    setPassEnv(cfg.passEnv.join(", "));
-  }, [liveKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const problem = checksProblem(state, v);
+  const checksInUse = v.commands.filter((c) => c.kind === "check").length;
 
-  const next: Draft = {
-    ...draft,
-    protectedInputs: inputs.split("\n").map((x) => x.trim()).filter(Boolean),
-    passEnv: passEnv.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean),
-  };
-  const changed = JSON.stringify({ ...next, rev: cfg.rev }) !== liveKey;
-  const problem = validateChecks({ ...next, rev: cfg.rev }, { acknowledged: true });
-  const checksInUse = next.commands.filter((c) => c.kind === "check").length;
-  const patch = (p: Partial<Draft>) => setDraft((d) => ({ ...d, ...p }));
-  const patchCommand = (i: number, p: Partial<CheckCommand>) => setDraft((d) => ({ ...d, commands: d.commands.map((c, j) => (j === i ? { ...c, ...p } : c)) }));
-  const setArg = (i: number, k: number, value: string) => setDraft((d) => ({ ...d, commands: d.commands.map((c, j) => (j === i ? { ...c, argv: c.argv.map((a, l) => (l === k ? value : a)) } : c)) }));
-  const addArg = (i: number) => setDraft((d) => ({ ...d, commands: d.commands.map((c, j) => (j === i ? { ...c, argv: [...c.argv, ""] } : c)) }));
-  const dropArg = (i: number, k: number) => setDraft((d) => ({ ...d, commands: d.commands.map((c, j) => (j === i && c.argv.length > 1 ? { ...c, argv: c.argv.filter((_, l) => l !== k) } : c)) }));
-  const removeCommand = (i: number) => setDraft((d) => ({ ...d, commands: d.commands.filter((_, j) => j !== i) }));
-  const move = (i: number, dir: -1 | 1) =>
-    setDraft((d) => {
-      const cs = [...d.commands];
-      const [x] = cs.splice(i, 1);
-      cs.splice(i + dir, 0, x);
-      return { ...d, commands: cs };
-    });
-  const addCommand = () => {
-    const used = new Set(draft.commands.map((c) => c.id));
-    let n = draft.commands.length + 1;
-    while (used.has(`check-${n}`)) n++;
-    setDraft((d) => ({ ...d, commands: [...d.commands, { id: `check-${n}`, label: `Check ${n}`, kind: "check", argv: ["npm", "test"] }] }));
-  };
-
-  const save = async () => {
-    if (next.enabled && !cfg.enabled && !confirm(ON_TEXT)) return;
-    await send("setChecks", { config: next, ...(next.sandbox === "none" ? { acknowledgeUnsandboxed: true } : {}) });
-  };
-  const chooseSandbox = (sandbox: "codex" | "none") => {
-    if (sandbox === "none" && draft.sandbox !== "none" && !confirm(NO_SANDBOX_TEXT)) return;
-    patch({ sandbox });
-  };
   const suggest = async () => {
     setSuggesting(true);
     setSuggested(null);
@@ -97,287 +72,357 @@ export function ChecksSettings() {
     setSuggesting(false);
   };
 
-  const tone = !cfg.enabled ? "chip" : health?.status === "ready" ? "pill done" : health?.status === "unavailable" ? "pill blocked" : "pill attention";
-  const statusText = !cfg.enabled ? "Off" : cfg.sandbox === "none" ? "On · no sandbox" : health?.status === "ready" ? "On · sandbox ready" : health?.status === "unavailable" ? "On · sandbox unavailable: check steps wait" : "On · sandbox not checked yet";
+  const sandboxLine =
+    cfg.enabled && cfg.sandbox === "none"
+      ? "Checks run without a sandbox, with your permissions."
+      : cfg.enabled && health?.status === "unavailable"
+        ? "The sandbox is unavailable, so check steps wait."
+        : cfg.enabled && health?.status !== "ready"
+          ? "The sandbox is checked before the first run; check steps wait until it is ready."
+          : null;
+  const tone = !v.enabled ? "neutral" : cfg.enabled && health?.status === "unavailable" ? "fail" : cfg.enabled && health?.status === "ready" && cfg.sandbox === "codex" ? "done" : "neutral";
 
   return (
-    <section className="card" aria-labelledby="checks-h">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 id="checks-h" style={{ margin: 0 }}>
-          Checks (run by the service)
-        </h2>
-        <span className={tone}>{statusText}</span>
+    <SettingsCard
+      id="checks"
+      title="Checks"
+      help="The service runs your repository's own commands on a throwaway copy of each change: after the coder, before the review, and on the final change. Agents never choose or change them."
+      actions={
+        <>
+          <Button size="small" disabled={suggesting || sampleBlocked} loading={suggesting} onClick={() => void suggest()}>
+            {suggesting ? "Reading…" : "Suggest from repository"}
+          </Button>
+          <Button size="small" aria-expanded={editing} onClick={() => setEditing((x) => !x)}>
+            {editing ? "Close editor" : "Edit commands"}
+          </Button>
+        </>
+      }
+    >
+      {sampleBlocked && <Banner tone="info">This is the sample project: it has no repository, so its checks cannot be turned on. Start a project of your own in Project.</Banner>}
+      <Checkbox label="Run the project's checks on every change" checked={v.enabled} disabled={sampleBlocked} onChange={(e) => set({ enabled: e.target.checked })} />
+      <div className="s-status">
+        <StatePill tone={tone}>{checksSummary(v.enabled, v.commands)}</StatePill>
+        {!real && <SimulatedChip title="Simulated: in the demo nothing is run and nothing is spawned; the results say so." />}
+        {v.commands.length > 0 && (
+          <span className="s-commands">
+            {v.commands.map((c, i) => (
+              <code key={i} className="s-mono">
+                {argvText(c.argv)}
+              </code>
+            ))}
+          </span>
+        )}
       </div>
-      <p className="muted small" style={{ marginTop: "0.4rem", marginBottom: "0.3rem" }}>
-        The service runs these commands itself on a throwaway copy of each change: after a coder's work, before the review, and once more on the final change before the task finishes.
-      </p>
-      <details className="how">
-        <summary>How this works</summary>
-        <p>A failing command becomes a finding the repair step fixes. If the final change still fails, the task waits for a decision; only you can accept failing checks. Agents never choose or change these commands.</p>
-        <p>
-          Checks run the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote. With the Codex sandbox, that code cannot write outside a throwaway copy of the change
-          and cannot use the network; the one exception is a dependency download by npm, pnpm or yarn, which runs with every install hook off, so no repository code runs while the network is on. The sandbox does not stop that code
-          from reading your files. Turn checks on only for repositories whose agents' work you are willing to run.
+      {sandboxLine && (
+        <p className="s-note">
+          {sandboxLine} <a href={cardHref("sandbox")}>Sandbox details in Advanced</a>.
         </p>
-      </details>
-      {sampleBlocked && <div className="banner">This is the sample project: it has no repository, so its checks cannot be turned on. Start a project of your own in Settings → Project.</div>}
-      {!real && <div className="banner neutral">In the demo, check runs are simulated: nothing is run and nothing is spawned, and the results say so.</div>}
+      )}
 
-      <fieldset className="plain-fieldset" disabled={disabled}>
-        <label className="row field" style={{ gap: "0.4rem" }}>
-          <input type="checkbox" checked={next.enabled} disabled={sampleBlocked} onChange={(e) => patch({ enabled: e.target.checked })} />
-          <strong>Run the project's checks on every change</strong>
-        </label>
-
-        <h3 style={{ margin: "0.8rem 0 0.3rem" }}>Sandbox</h3>
-        {cfg.enabled && (
-          <div style={{ fontSize: "0.85rem", marginBottom: "0.4rem" }}>
-            {health ? (
+      {suggested && (
+        <Banner
+          tone="info"
+          className="s-gap"
+          title={suggested.commands.length ? "Suggested from the repository" : undefined}
+          actions={
+            suggested.commands.length ? (
               <>
-                <span className={health.status === "ready" ? "pill done" : health.status === "unavailable" ? "pill blocked" : "pill attention"}>{health.status === "ready" ? "Ready" : health.status === "unavailable" ? "Unavailable" : "Not verified"}</span>{" "}
-                <span className="muted">
-                  ({health.sandbox === "codex" ? "Codex sandbox" : "no sandbox"}, checked <span title={fmtTime(health.checkedAt)}>{relTime(health.checkedAt)}</span>
-                  {health.recheck ? "; a new check is queued" : ""})
-                </span>
-                <div>{health.detail}</div>
-                {health.probes && (
-                  <div className="muted">
-                    Writes outside the run's directories: {health.probes.writeOutside} · this machine's loopback: {health.probes.loopback ?? "not probed"} · network: {health.probes.network}
-                  </div>
-                )}
-              </>
-            ) : (
-              <span className="muted">The sandbox has not been checked yet; check steps wait until it is ready.</span>
-            )}{" "}
-            <button className="small" disabled={disabled || !cfg.enabled} onClick={() => void send("recheckChecks", {})}>
-              Check again
-            </button>
-          </div>
-        )}
-        {/* ORC-017 §3.10: the radio sits on the label's first line; the description is under the label, indented to its text. */}
-        <label className="choice-radio">
-          <input type="radio" name="checks-sandbox" checked={next.sandbox === "codex"} onChange={() => chooseSandbox("codex")} />
-          <span>
-            <strong>Codex sandbox (recommended)</strong>
-            <span className="choice-desc">
-              Each command runs through the pinned Codex app-server's sandbox under a private, never signed-in home: no network, and writes only inside the copy of the change, its temp directory and a cache. The service probes the sandbox
-              before any run; while the probe fails, check steps wait. Nothing falls back to running without a sandbox by itself.
-            </span>
-          </span>
-        </label>
-        <label className="choice-radio">
-          <input type="radio" name="checks-sandbox" checked={next.sandbox === "none"} onChange={() => chooseSandbox("none")} />
-          <span>
-            <strong>Run without a sandbox</strong>
-            <span className="choice-desc">Only if the sandbox cannot work on this computer. Every check then runs with your permissions.</span>
-          </span>
-        </label>
-        {next.sandbox === "none" && <div className="banner danger">No sandbox: checks run with your permissions. Code an agent wrote can read and write anywhere you can and reach the network. Every such run is labelled "no sandbox".</div>}
-        <label className="row" style={{ gap: "0.4rem", marginTop: "0.4rem", fontSize: "0.9rem" }}>
-          <input type="checkbox" checked={next.prepareNetwork} onChange={(e) => patch({ prepareNetwork: e.target.checked })} />
-          Prepare commands may use the network for dependency downloads
-        </label>
-        <p className="muted" style={{ fontSize: "0.82rem", margin: "0.2rem 0 0 1.5rem" }}>
-          Downloads the network may be used for: npm, pnpm, yarn installs only; other setup commands run offline (prefetch what they need in your own environment). Such an install runs with every hook that could run repository code
-          off: "--ignore-scripts" (npm, pnpm, yarn 1) or "--mode=skip-build" (yarn 2+), plus "--ignore-pnpmfile" for pnpm, all required on the command and set again by the service; yarn never runs the repository's own yarn
-          copy or plugins, and is kept offline when .yarnrc.yml sets yarnPath or plugins. If your project needs its install scripts, add the offline step below: it runs them afterwards in the throwaway copy, with no network.
-        </p>
-        {!next.commands.some((c) => c.kind === "prepare" && c.argv[1] === "rebuild") && (
-          <button
-            className="small"
-            style={{ marginLeft: "1.5rem", marginTop: "0.3rem" }}
-            disabled={next.commands.filter((c) => c.kind === "prepare").length >= MAX_PREPARE_COMMANDS || next.commands.length >= MAX_CHECK_COMMANDS}
-            onClick={() => {
-              const pm = next.commands.find((c) => c.kind === "prepare" && ["npm", "pnpm", "yarn"].includes(c.argv[0]))?.argv[0] ?? "npm";
-              let at = 0;
-              next.commands.forEach((c, i) => {
-                if (c.kind === "prepare") at = i + 1;
-              });
-              setDraft((d) => ({ ...d, commands: [...d.commands.slice(0, at), { id: "install-scripts", label: "Run install scripts (offline)", kind: "prepare", argv: [pm, "rebuild"] }, ...d.commands.slice(at)] }));
-            }}
-          >
-            Add an offline step that runs install scripts
-          </button>
-        )}
-
-        <div className="row" style={{ justifyContent: "space-between", marginTop: "0.9rem" }}>
-          <h3 style={{ margin: 0 }}>Commands</h3>
-          <span className="row" style={{ gap: "0.4rem" }}>
-            <button className="small" disabled={suggesting || sampleBlocked} onClick={() => void suggest()}>
-              {suggesting ? "Reading…" : "Suggest from the repository"}
-            </button>
-            <button className="small" disabled={next.commands.length >= MAX_CHECK_COMMANDS} onClick={addCommand}>
-              Add a command
-            </button>
-          </span>
-        </div>
-        <p className="muted" style={{ fontSize: "0.82rem", margin: "0.25rem 0 0.5rem" }}>
-          Each command is a list of arguments, never a shell line. Only these programs can run: {CHECK_PROGRAMS.join(", ")}. Package managers may only install, test or run a script; interpreters may not run inline code. Prepare commands run
-          first (at most {MAX_PREPARE_COMMANDS}), then the checks, in this order. At most {MAX_CHECK_COMMANDS} in all.
-        </p>
-        {suggested && (
-          <div className="banner neutral" style={{ marginBottom: "0.5rem" }}>
-            {suggested.commands.length ? (
-              <>
-                <div>
-                  Suggested from the repository at <span className="mono">{suggested.ref}</span>. Nothing is saved until you use them and save:
-                </div>
-                <ul className="plain" style={{ margin: "0.3rem 0" }}>
-                  {suggested.commands.map((c) => (
-                    <li key={c.id}>
-                      <span className="chip">{c.kind}</span> <span className="mono">{c.argv.join(" ")}</span>
-                    </li>
-                  ))}
-                </ul>
-                <button
-                  className="small primary"
+                <Button
+                  size="small"
                   onClick={() => {
-                    patch({ commands: suggested.commands.map((c) => ({ ...c, argv: [...c.argv] })) });
+                    set({ commands: suggested.commands.map((c) => ({ ...c, argv: [...c.argv] })) });
                     setSuggested(null);
                   }}
                 >
                   Use these
-                </button>{" "}
-                <button className="small" onClick={() => setSuggested(null)}>
+                </Button>
+                <Button size="small" variant="quiet" onClick={() => setSuggested(null)}>
                   Dismiss
-                </button>
+                </Button>
               </>
             ) : (
-              <>{suggested.reason ?? "Nothing to suggest."}</>
-            )}
-          </div>
-        )}
-        {next.commands.length === 0 && <p className="muted">No commands yet. Checks do nothing until at least one check command is set.</p>}
-        {next.commands.map((c, i) => {
-          const why = validateCommand(c);
-          return (
-            <fieldset key={i} className="option-edit" style={{ margin: "0 0 0.5rem" }}>
-              <legend>
-                <span className="mono">{c.id || "(no id)"}</span> {c.label}
-              </legend>
-              <div className="row" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
-                <label className="field" style={{ margin: 0 }}>
-                  <span>Id</span>
-                  <input type="text" value={c.id} onChange={(e) => patchCommand(i, { id: e.target.value })} style={{ width: "9rem" }} aria-label={`Command ${i + 1} id`} />
-                </label>
-                <label className="field" style={{ margin: 0 }}>
-                  <span>Label</span>
-                  <input type="text" value={c.label} onChange={(e) => patchCommand(i, { label: e.target.value })} style={{ width: "11rem" }} aria-label={`Command ${i + 1} label`} />
-                </label>
-                <label className="field" style={{ margin: 0 }}>
-                  <span>Kind</span>
-                  <select value={c.kind} onChange={(e) => patchCommand(i, { kind: e.target.value as "prepare" | "check" })} aria-label={`Command ${i + 1} kind`}>
-                    <option value="check">check</option>
-                    <option value="prepare">prepare (install)</option>
-                  </select>
-                </label>
-                <label className="field" style={{ margin: 0 }}>
-                  <span>Time limit (min)</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={60}
-                    value={c.timeoutMinutes ?? ""}
-                    placeholder={String(next.commandTimeoutMinutes)}
-                    onChange={(e) => patchCommand(i, { timeoutMinutes: e.target.value === "" ? undefined : Number(e.target.value) })}
-                    style={{ width: "5rem" }}
-                    aria-label={`Command ${i + 1} time limit`}
-                  />
-                </label>
-              </div>
-              <div className="field" style={{ marginTop: "0.4rem" }}>
-                <span>Arguments (the program first)</span>
-                <div className="row" style={{ flexWrap: "wrap", gap: "0.3rem" }}>
-                  {c.argv.map((a, k) => (
-                    <span key={k} className="row" style={{ gap: "0.15rem" }}>
-                      <input type="text" className="mono" value={a} onChange={(e) => setArg(i, k, e.target.value)} style={{ width: k === 0 ? "7rem" : "9rem" }} aria-label={`Command ${i + 1} argument ${k + 1}`} />
-                      {c.argv.length > 1 && (
-                        <button className="link" onClick={() => dropArg(i, k)} aria-label={`Remove argument ${k + 1} of command ${i + 1}`} title="Remove this argument">
-                          ×
-                        </button>
-                      )}
-                    </span>
-                  ))}
-                  <button className="small" onClick={() => addArg(i)} disabled={c.argv.length >= 32}>
-                    + argument
-                  </button>
-                </div>
-              </div>
-              {why && <div style={{ color: "var(--s-blocked)", fontSize: "0.82rem" }}>{why}</div>}
-              <div className="row" style={{ gap: "0.3rem", marginTop: "0.3rem" }}>
-                <button className="small" onClick={() => move(i, -1)} disabled={i === 0}>
-                  Up
-                </button>
-                <button className="small" onClick={() => move(i, 1)} disabled={i === next.commands.length - 1}>
-                  Down
-                </button>
-                <button className="small danger" onClick={() => removeCommand(i)}>
-                  Remove
-                </button>
-              </div>
-            </fieldset>
-          );
-        })}
-
-        <h3 style={{ margin: "0.8rem 0 0.3rem" }}>Limits</h3>
-        <div className="row" style={{ flexWrap: "wrap" }}>
-          <label className="field">
-            <span>Time limit per command (minutes)</span>
-            <input type="number" min={1} max={60} value={next.commandTimeoutMinutes} onChange={(e) => patch({ commandTimeoutMinutes: Number(e.target.value) })} style={{ width: "6rem" }} />
-          </label>
-          <label className="field">
-            <span>Time limit per run (minutes)</span>
-            <input type="number" min={1} max={120} value={next.runTimeoutMinutes} onChange={(e) => patch({ runTimeoutMinutes: Number(e.target.value) })} style={{ width: "6rem" }} />
-          </label>
-          <label className="field">
-            <span>Runs at once</span>
-            <input type="number" min={1} max={3} value={next.maxConcurrent} onChange={(e) => patch({ maxConcurrent: Number(e.target.value) })} style={{ width: "5rem" }} />
-          </label>
-        </div>
-
-        <label className="field">
-          <span>Protected check inputs (one pattern per line)</span>
-          <textarea value={inputs} onChange={(e) => setInputs(e.target.value)} rows={4} className="mono" style={{ fontSize: "0.82rem" }} />
-          <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
-            A change that edits any of these (the files the checks depend on) gets a finding a person decides: a passing result may then mean less than before.
-          </span>
-        </label>
-        <label className="field">
-          <span>Environment variables to pass through (names, comma-separated)</span>
-          <input type="text" value={passEnv} onChange={(e) => setPassEnv(e.target.value)} className="mono" placeholder="none" />
-          <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
-            Commands get an environment built from a fixed allowlist (PATH, HOME, language toolchain homes) plus these. Names that look like a secret (KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL, AUTH) never pass; neither do NODE_OPTIONS,
-            SSH_AUTH_SOCK or any token variable.
-          </span>
-        </label>
-
-        {problem && (
-          <div className="banner danger" role="alert">
-            {problem}
-          </div>
-        )}
-        {next.enabled && checksInUse === 0 && !problem && <div className="banner">Checks are on with no check command: every Checks step is skipped, labelled, until one is added.</div>}
-        <div className="row" style={{ marginTop: "0.5rem" }}>
-          <button className="primary" disabled={disabled || !changed || !!problem || sampleBlocked} onClick={() => void save()}>
-            Save checks{changed ? ` (settings r${cfg.rev + 1})` : ""}
-          </button>
-          {changed && (
-            <button
-              onClick={() => {
-                setDraft(fromConfig(cfg));
-                setInputs(cfg.protectedInputs.join("\n"));
-                setPassEnv(cfg.passEnv.join(", "));
-              }}
-            >
-              Discard changes
-            </button>
+              <Button size="small" variant="quiet" onClick={() => setSuggested(null)}>
+                Dismiss
+              </Button>
+            )
+          }
+        >
+          {suggested.commands.length ? (
+            <>
+              <p className="no-margin">
+                Read at <span className="s-mono">{suggested.ref}</span>. Nothing changes until you use them and save.
+              </p>
+              <ul className="plain">
+                {suggested.commands.map((c) => (
+                  <li key={c.id}>
+                    {c.kind === "prepare" ? "Prepare: " : ""}
+                    <code className="s-mono">{argvText(c.argv)}</code>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            (suggested.reason ?? "Nothing to suggest.")
           )}
-        </div>
-      </fieldset>
-      <p className="muted" style={{ fontSize: "0.8rem", margin: "0.6rem 0 0" }}>
-        Saving a change to the commands, sandbox, limits or inputs stops check runs in progress; they run again with the new settings. Results are bound to the exact commit and to the settings revision they ran with (now r{cfg.rev}). Codex:
-        repository instruction files suppressed for every app-server the service starts (<span className="mono">project_doc_max_bytes=0</span>; not verified yet).
+        </Banner>
+      )}
+
+      {editing && <CommandEditor commands={v.commands} prepareNetwork={cfg.prepareNetwork} defaultTimeout={cfg.commandTimeoutMinutes} onChange={(commands) => set({ commands })} />}
+
+      {problem && (
+        <Banner tone="fail" className="s-gap">
+          {problem}
+        </Banner>
+      )}
+      {v.enabled && checksInUse === 0 && !problem && (
+        <Banner tone="you" className="s-gap">
+          Checks are on with no check command: every Checks step is skipped, and says so, until one is added.
+        </Banner>
+      )}
+    </SettingsCard>
+  );
+}
+
+/** The command list, editable: each command is a list of arguments, never a shell line. */
+function CommandEditor({ commands, prepareNetwork, defaultTimeout, onChange }: { commands: CheckCommand[]; prepareNetwork: boolean; defaultTimeout: number; onChange: (c: CheckCommand[]) => void }) {
+  const patch = (i: number, p: Partial<CheckCommand>) => onChange(commands.map((c, j) => (j === i ? { ...c, ...p } : c)));
+  const setArg = (i: number, k: number, value: string) => patch(i, { argv: commands[i].argv.map((a, l) => (l === k ? value : a)) });
+  const move = (i: number, dir: -1 | 1) => {
+    const cs = [...commands];
+    const [x] = cs.splice(i, 1);
+    cs.splice(i + dir, 0, x);
+    onChange(cs);
+  };
+  const add = () => {
+    const used = new Set(commands.map((c) => c.id));
+    let n = commands.length + 1;
+    while (used.has(`check-${n}`)) n++;
+    onChange([...commands, { id: `check-${n}`, label: `Check ${n}`, kind: "check", argv: ["npm", "test"] }]);
+  };
+  const prepares = commands.filter((c) => c.kind === "prepare").length;
+  const hasRebuild = commands.some((c) => c.kind === "prepare" && c.argv[1] === "rebuild");
+  const addInstallScripts = () => {
+    const pm = commands.find((c) => c.kind === "prepare" && ["npm", "pnpm", "yarn"].includes(c.argv[0]))?.argv[0] ?? "npm";
+    let at = 0;
+    commands.forEach((c, i) => {
+      if (c.kind === "prepare") at = i + 1;
+    });
+    onChange([...commands.slice(0, at), { id: "install-scripts", label: "Run install scripts (offline)", kind: "prepare", argv: [pm, "rebuild"] }, ...commands.slice(at)]);
+  };
+  return (
+    <div className="s-gap">
+      <p className="s-card-help">
+        Only these programs can run: {CHECK_PROGRAMS.join(", ")}. Prepare commands (installs, at most {MAX_PREPARE_COMMANDS}) run first, then the checks, in this order; at most {MAX_CHECK_COMMANDS} in all.
       </p>
-    </section>
+      {commands.length === 0 && <p className="muted">No commands yet. Checks do nothing until at least one check command is set.</p>}
+      {commands.map((c, i) => {
+        const why = validateCommand(c, { networked: prepareNetwork });
+        return (
+          <fieldset key={i} className="s-cmd">
+            <legend>{c.label || c.id || `Command ${i + 1}`}</legend>
+            <div className="s-fields">
+              <Field label="Label">
+                <Input type="text" value={c.label} onChange={(e) => patch(i, { label: e.target.value })} />
+              </Field>
+              <Field label="Kind">
+                <Select
+                  value={c.kind}
+                  onChange={(e) => patch(i, { kind: e.target.value as CheckCommand["kind"] })}
+                  options={[
+                    { value: "check", label: "Check" },
+                    { value: "prepare", label: "Prepare (install)" },
+                  ]}
+                />
+              </Field>
+              <Field label="Id" hint="Lowercase letters, digits and hyphens.">
+                <Input type="text" className="s-mono" value={c.id} onChange={(e) => patch(i, { id: e.target.value })} />
+              </Field>
+              <Field label="Time limit (minutes)" hint={`Empty: ${defaultTimeout}.`}>
+                <Input type="number" min={1} max={60} value={c.timeoutMinutes ?? ""} onChange={(e) => patch(i, { timeoutMinutes: e.target.value === "" ? undefined : Number(e.target.value) })} />
+              </Field>
+            </div>
+            <div className="k-field__label" id={`cmd-${i}-argv`}>
+              Arguments, the program first
+            </div>
+            <div className="s-argv" role="group" aria-labelledby={`cmd-${i}-argv`}>
+              {c.argv.map((a, k) => (
+                <span key={k} className="s-argv__item">
+                  <Input type="text" value={a} onChange={(e) => setArg(i, k, e.target.value)} aria-label={`Command ${i + 1} argument ${k + 1}`} />
+                  {c.argv.length > 1 && (
+                    <Button size="small" variant="quiet" aria-label={`Remove argument ${k + 1} of command ${i + 1}`} title="Remove this argument" onClick={() => patch(i, { argv: c.argv.filter((_, l) => l !== k) })}>
+                      ×
+                    </Button>
+                  )}
+                </span>
+              ))}
+              <Button size="small" disabled={c.argv.length >= 32} onClick={() => patch(i, { argv: [...c.argv, ""] })}>
+                + argument
+              </Button>
+            </div>
+            {why && <p className="s-error">{why}</p>}
+            <Actions>
+              <Button size="small" variant="quiet" disabled={i === 0} onClick={() => move(i, -1)}>
+                Up
+              </Button>
+              <Button size="small" variant="quiet" disabled={i === commands.length - 1} onClick={() => move(i, 1)}>
+                Down
+              </Button>
+              <Button size="small" variant="danger" onClick={() => onChange(commands.filter((_, j) => j !== i))}>
+                Remove
+              </Button>
+            </Actions>
+          </fieldset>
+        );
+      })}
+      <Actions>
+        <Button size="small" disabled={commands.length >= MAX_CHECK_COMMANDS} onClick={add}>
+          Add a command
+        </Button>
+        {!hasRebuild && (
+          <Button size="small" disabled={prepares >= MAX_PREPARE_COMMANDS || commands.length >= MAX_CHECK_COMMANDS} title="Installs run with every install hook off; this step runs the install scripts afterwards, offline." onClick={addInstallScripts}>
+            Add an offline step that runs install scripts
+          </Button>
+        )}
+      </Actions>
+    </div>
+  );
+}
+
+// ---------- Advanced › Checks sandbox ----------
+
+export type SandboxDraft = { sandbox: ChecksConfig["sandbox"]; prepareNetwork: boolean; commandTimeout: string; runTimeout: string; maxConcurrent: string; inputs: string; passEnv: string };
+
+export function liveSandbox(state: State): SandboxDraft {
+  const c = state.project.checks;
+  return {
+    sandbox: c.sandbox,
+    prepareNetwork: c.prepareNetwork,
+    commandTimeout: String(c.commandTimeoutMinutes),
+    runTimeout: String(c.runTimeoutMinutes),
+    maxConcurrent: String(c.maxConcurrent),
+    inputs: c.protectedInputs.join("\n"),
+    passEnv: c.passEnv.join(", "),
+  };
+}
+
+function sandboxPatch(v: SandboxDraft): Partial<Omit<ChecksConfig, "rev">> {
+  return {
+    sandbox: v.sandbox,
+    prepareNetwork: v.prepareNetwork,
+    commandTimeoutMinutes: Number(v.commandTimeout),
+    runTimeoutMinutes: Number(v.runTimeout),
+    maxConcurrent: Number(v.maxConcurrent),
+    protectedInputs: v.inputs.split("\n").map((x) => x.trim()).filter(Boolean),
+    passEnv: v.passEnv.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean),
+  };
+}
+
+export function sandboxErrors(v: SandboxDraft) {
+  return {
+    commandTimeout: intIn(v.commandTimeout, 1, 60) === undefined ? "Between 1 and 60 minutes." : undefined,
+    runTimeout: intIn(v.runTimeout, 1, 120) === undefined ? "Between 1 and 120 minutes." : undefined,
+    maxConcurrent: intIn(v.maxConcurrent, 1, 3) === undefined ? "Between 1 and 3." : undefined,
+  };
+}
+
+/** Why the sandbox settings cannot be saved with today's commands (validateChecks), or undefined. */
+export function sandboxProblem(state: State, v: SandboxDraft): string | undefined {
+  if (Object.values(sandboxErrors(v)).some(Boolean)) return undefined;
+  return validateChecks({ ...configWith(state.project.checks, sandboxPatch(v)), rev: state.project.checks.rev }, { acknowledged: true });
+}
+
+export function sandboxSteps(state: State, v: SandboxDraft, changed: ReadonlySet<keyof SandboxDraft>, send: Send): (() => Promise<SendResult> | null)[] {
+  if (!changed.size) return [];
+  return [() => send("setChecks", saveArgs(configWith(state.project.checks, sandboxPatch(v))))];
+}
+
+export function SandboxCard({ v, set, confirm }: { v: SandboxDraft; set: (p: Partial<SandboxDraft>) => void; confirm: Confirm }) {
+  const { state, send, disabled } = useStore();
+  const cfg = state.project.checks;
+  const health = state.project.checksHealth;
+  const errors = sandboxErrors(v);
+  const problem = sandboxProblem(state, v);
+  const chooseSandbox = async (sandbox: ChecksConfig["sandbox"]) => {
+    if (sandbox === "none" && v.sandbox !== "none" && !(await confirm(CONFIRM_NO_SANDBOX))) return;
+    set({ sandbox });
+  };
+  return (
+    <SettingsCard
+      id="sandbox"
+      title="Checks sandbox"
+      help={`Where and how the check commands run. Saving a change here stops check runs in progress; they run again with the new settings (now r${cfg.rev}).`}
+      actions={
+        <Button size="small" disabled={disabled || !cfg.enabled} disabledReason={!cfg.enabled ? "Checks are off." : undefined} onClick={() => void send("recheckChecks", {})}>
+          Check again
+        </Button>
+      }
+    >
+      <div className="s-status">
+        {health ? (
+          <>
+            <StatePill tone={health.status === "ready" ? "done" : health.status === "unavailable" ? "fail" : "neutral"}>{health.status === "ready" ? "Ready" : health.status === "unavailable" ? "Unavailable" : "Not verified"}</StatePill>
+            <span className="muted">
+              {health.sandbox === "codex" ? "Codex sandbox" : "no sandbox"}, checked <span title={fmtTime(health.checkedAt)}>{relTime(health.checkedAt)}</span>
+              {health.recheck ? "; a new check is queued" : ""}
+            </span>
+          </>
+        ) : (
+          <span className="muted">Not checked yet; check steps wait until it is ready.</span>
+        )}
+      </div>
+      {health && <p className="s-note">{health.detail}</p>}
+      {health?.probes && (
+        <p className="s-note">
+          Writes outside the run's directories: {health.probes.writeOutside} · this machine's loopback: {health.probes.loopback ?? "not probed"} · network: {health.probes.network}
+        </p>
+      )}
+      <fieldset className="s-choices s-gap">
+        <legend className="k-field__label">Sandbox</legend>
+        <Choice
+          name="checks-sandbox"
+          checked={v.sandbox === "codex"}
+          onChange={() => void chooseSandbox("codex")}
+          label="Codex sandbox (recommended)"
+          description="Each command runs in the pinned Codex app-server's sandbox under a private, never signed-in home: no network, and writes only inside the copy of the change. While its probe fails, check steps wait; nothing falls back to no sandbox."
+        />
+        <Choice name="checks-sandbox" checked={v.sandbox === "none"} onChange={() => void chooseSandbox("none")} label="Run without a sandbox" description="Only if the sandbox cannot work on this computer. Every check then runs with your permissions." />
+      </fieldset>
+      {v.sandbox === "none" && (
+        <Banner tone="fail" className="s-gap">
+          No sandbox: code an agent wrote can read and write anywhere you can and reach the network. Every such run is labelled "no sandbox".
+        </Banner>
+      )}
+      <Checkbox
+        className="s-gap"
+        label="Installs may use the network for dependency downloads"
+        hint="npm, pnpm and yarn installs only, with every hook that could run repository code off (--ignore-scripts and the like, set again by the service). Other setup commands run offline."
+        checked={v.prepareNetwork}
+        onChange={(e) => set({ prepareNetwork: e.target.checked })}
+      />
+      <div className="s-fields">
+        <Field label="Minutes per command" error={errors.commandTimeout}>
+          <Input type="number" min={1} max={60} value={v.commandTimeout} onChange={(e) => set({ commandTimeout: e.target.value })} />
+        </Field>
+        <Field label="Minutes per run" error={errors.runTimeout}>
+          <Input type="number" min={1} max={120} value={v.runTimeout} onChange={(e) => set({ runTimeout: e.target.value })} />
+        </Field>
+        <Field label="Runs at once" error={errors.maxConcurrent}>
+          <Input type="number" min={1} max={3} value={v.maxConcurrent} onChange={(e) => set({ maxConcurrent: e.target.value })} />
+        </Field>
+      </div>
+      <Field label="Protected check inputs (one pattern per line)" hint="A change that edits these files the checks depend on gets a finding you decide: a passing result may then mean less than before.">
+        <Textarea className="s-mono" rows={5} value={v.inputs} onChange={(e) => set({ inputs: e.target.value })} />
+      </Field>
+      <Field
+        label="Environment variables to pass through (names, comma-separated)"
+        hint="Commands get a fixed allowlist (PATH, HOME, toolchain homes) plus these. Names that look like a secret (KEY, TOKEN, SECRET, PASSWORD, CREDENTIAL, AUTH) never pass, nor do NODE_OPTIONS and SSH_AUTH_SOCK."
+      >
+        <Input type="text" className="s-mono" placeholder="none" value={v.passEnv} onChange={(e) => set({ passEnv: e.target.value })} />
+      </Field>
+      {problem && <Banner tone="fail">{problem}</Banner>}
+      <p className="s-note">
+        Results are bound to the exact commit and to the settings revision they ran with. Codex: repository instruction files are suppressed for every app-server the service starts (<span className="s-mono">project_doc_max_bytes=0</span>; not verified yet).
+      </p>
+    </SettingsCard>
   );
 }

@@ -36,10 +36,10 @@ function add(t: Tally, u: Usage | undefined) {
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 10_000 ? `${Math.round(n / 1000)}k` : n.toLocaleString());
 const fmtCost = (t: Tally) => (t.costRuns ? `$${t.cost.toFixed(2)}` : "—");
 
-/** Settings → the one card at the end: usage, then the service. */
+/** Settings › Advanced, its last card: usage, then the service. */
 export function DiagnosticsCard() {
   return (
-    <Card title="Usage and service" id="diagnostics">
+    <Card title="Usage and service" id="diagnostics" as="h3">
       <div className="k-stack">
         <UsageCard />
         <ServiceCard />
@@ -83,9 +83,9 @@ export function UsageCard() {
   return (
     <section className="k-stack k-stack--tight" aria-labelledby="usage-h">
       <div className="row">
-        <h3 id="usage-h" className="no-margin">
+        <h4 id="usage-h" className="no-margin">
           Usage
-        </h3>
+        </h4>
         <SegmentedControl
           label="Usage period"
           size="small"
@@ -98,7 +98,7 @@ export function UsageCard() {
         />
       </div>
 
-      <h4 className="no-margin">Running now</h4>
+      <h5 className="no-margin">Running now</h5>
       <table className="usage-table meta">
         <tbody>
           {PROVIDERS.map((pr) => {
@@ -124,9 +124,9 @@ export function UsageCard() {
           </tr>
         </tbody>
       </table>
-      <p className="muted small">Each provider is limited by its own setting and by Agents at once (the Project card above).</p>
+      <p className="muted small">Each provider is limited by its own setting and by Agents at once (Settings › Agents).</p>
 
-      <h4 className="no-margin">{range === "today" ? "Today" : "All time"}</h4>
+      <h5 className="no-margin">{range === "today" ? "Today" : "All time"}</h5>
       {rows.length === 0 ? (
         <p className="muted">No runs {range === "today" ? "today" : "yet"}.</p>
       ) : (
@@ -193,9 +193,9 @@ export function ServiceCard() {
   const { state, status, service } = useStore();
   return (
     <section className="k-stack k-stack--tight" aria-labelledby="svc-h">
-      <h3 id="svc-h" className="no-margin">
+      <h4 id="svc-h" className="no-margin">
         Service
-      </h3>
+      </h4>
       <dl className="kv">
         <dt>Status</dt>
         <dd>{status === "online" ? "Online" : status === "connecting" ? "Connecting…" : "Offline — showing the last known state"}</dd>
