@@ -1,4 +1,4 @@
-// ORC-008 step 1, pure: the data model defaults, delivery-mode exclusivity, the review-later queue,
+// Delivery, pure: the data model defaults, delivery-mode exclusivity, the review-later queue,
 // and the follow-up fixes. Nothing here touches git or GitHub. (Notification keys: src/ui/notifications.test.ts.)
 
 import { describe, expect, it } from "vitest";
@@ -45,7 +45,7 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
   const done = M.reportCompletion(s, a.id, [], at(t), outputs);
   return st.role === "code_reviewer" ? securityClean(done, taskId, t) : done;
 }
-/** ORC-021: the security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
+/** The security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
 function securityClean(s: State, id: string, t: number): State {
   let next = M.dispatchEligible(s, at(t));
   for (const a of M.activeAttempts(next, id)) if (task(next, id).steps.find((x) => x.id === a.stepId)!.role === "security_reviewer") next = M.reportCompletion(next, a.id, [], at(t), [{ name: "findings", summary: "no security findings", openFindings: 0 }]);
@@ -72,10 +72,10 @@ describe("data model", () => {
   });
 
   it("the revert pipeline is internal and valid", () => {
-    // ORC-016: the service owns it; it is not in the catalog and no file may take its id.
+    // The service owns it; it is not in the catalog and no file may take its id.
     expect(INTERNAL_FLOWS.map((p) => p.id)).toContain("revert");
     expect(builtInCatalog().some((p) => p.id === "revert")).toBe(false);
-    // ORC-013: a Final checks step (run by the service) sits between the review and the verification.
+    // A Final checks step (run by the service) sits between the review and the verification.
     expect(flowSteps("revert").map((s) => s.role)).toEqual(["coder", "code_reviewer", "security_reviewer", "checks", "lead"]);
   });
 });
@@ -341,7 +341,7 @@ describe("landed: send back", () => {
 
   it("the revert pipeline is the service's own: no task is created from it by hand, and a send-back records it as chosen by the service", () => {
     const s = landedState();
-    // ORC-016: "revert" is an internal flow; createTask refuses it, whatever the catalog holds.
+    // "revert" is an internal flow; createTask refuses it, whatever the catalog holds.
     expect(s.flows.some((p) => p.id === "revert")).toBe(false);
     expect(() => runCommand(s, "createTask", { title: "t", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, flowId: "revert" }, at(5))).toThrow(/Send back only/);
     const r = D.sendBackLanded(s, { taskId: "EX-006", kind: "revert", note: "", holdBeforeStart: false }, at(5));
@@ -382,7 +382,7 @@ describe("createFollowUp", () => {
     const { state, id } = expandedDoneTask();
     const r = M.createFollowUp(state, id, at(20));
     const f = task(r.state, r.newId);
-    // ORC-013: the Change template carries the Checks steps C1 (in the loop) and C2 (final).
+    // The Change flow carries the Checks steps C1 (in the loop) and C2 (final).
     expect(f.steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "SR1", "S3", "C2", "S4"]);
     expect(f.steps.find((x) => x.id === "S3")!.iterate).toEqual({ from: "C1", max: 3 }); // the loop is whole again
     expect(f.steps.every((x) => x.state === "pending" && x.iteration === undefined)).toBe(true);
@@ -578,7 +578,7 @@ describe("prGate (items 1–8 and 13)", () => {
   });
 
   it("6: required checks must have passed on exactly this head", () => {
-    // ORC-013 §7.2: every non-success blocks; the reason names its class (a cancelled run with no job id cannot be re-run).
+    // Every non-success blocks; the reason names its class (a cancelled run with no job id cannot be re-run).
     const codes: Record<string, string> = { FAILURE: "checks-failed", ERROR: "checks-failed", TIMED_OUT: "checks-failed", ACTION_REQUIRED: "checks-failed", CANCELLED: "ci-infra", SKIPPED: "checks-skipped", NEUTRAL: "checks-skipped" };
     for (const [c, code] of Object.entries(codes)) {
       const s = opened({ checks: [check(c)] });
@@ -688,7 +688,7 @@ describe("nextPrOp and beginPrOp", () => {
     const capped = D.setPrDelivery(s, { maxOpenPrs: 1 }, at(12));
     expect(D.nextPrOp(capped, ms(13))).toBeUndefined();
     expect(D.beginPrOp(capped, second, at(13)).started).toBe(false);
-    // Dogfood ORC-021: a head held back by the cap says why, instead of "preparing".
+    // A head held back by the cap says why, instead of "preparing".
     const waiting = capped.tasks.find((t) => t.integration?.pr?.phase === "built")!;
     expect(D.prLabel(capped, waiting, ms(13))!.text).toBe("PR not opened: 1 of 1 pull requests are open, your limit");
     expect(D.prGate(capped, waiting, ms(13), { byUser: false }).items.find((i) => i.id === "ours")!.detail).toMatch(/^Not opened yet: 1 of 1 pull requests are open, your limit\. It opens when one of them merges or closes/);
@@ -970,7 +970,7 @@ describe("dependencies in pull-request mode", () => {
   });
 });
 
-describe("step 1 review findings (pure)", () => {
+describe("autonomy, the changes viewer and sending work back", () => {
   it("setAutonomy forgets the baseline when the delivery branch changes and queues waiting work when delivery is switched on", () => {
     // Switched on through setAutonomy with integrated work waiting: it is queued.
     const waiting = integrated(seed(), "EX-006");

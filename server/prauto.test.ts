@@ -1,8 +1,8 @@
-// ORC-008 step 3, end to end: independent review and automatic merge (design §17, scenarios 2 to 7),
-// and the step 2 review findings that need a real repository. No test contacts GitHub: a local bare
-// repository is `origin`, FakeGitHub stands in for the GitHub API on top of it, and scripted adapters
-// stand in for Claude and Codex. git fetch, ls-remote, merge-tree and push run for real against the bare
-// repository.
+// Pull-request delivery, end to end: independent review and automatic merge (scenarios 2 to 7 of the test
+// plan in docs/design/ORC-008-design.md), and the delivery edge cases that need a real repository. No test
+// contacts GitHub: a local bare repository is `origin`, FakeGitHub stands in for the GitHub API on top of
+// it, and scripted adapters stand in for Claude and Codex. git fetch, ls-remote, merge-tree and push run
+// for real against the bare repository.
 
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -86,7 +86,7 @@ const drive = async (ids: string[], script: Script = {}) => {
       const role = task(a.taskId).steps.find((x) => x.id === a.stepId)!.role;
       if (role === "coder") ad.finish(a.id, { write: script.write?.(a.taskId, next(`w:${a.taskId}`)) ?? [`${a.taskId}.txt`, `${a.taskId}\n`] });
       else if (role === "code_reviewer") ad.finish(a.id, { findings: script.findings?.(a.taskId, next(`r:${a.taskId}`)) ?? 0 });
-      else if (role === "security_reviewer") ad.finish(a.id, { findings: 0 }); // ORC-021: the security review beside each code review is clean here
+      else if (role === "security_reviewer") ad.finish(a.id, { findings: 0 }); // the security review beside each code review is clean here
       else ad.finish(a.id);
     }
     await tick();
@@ -165,7 +165,7 @@ describe("automatic merge (scenario 2)", () => {
     // It passes. The merge is sent once, bound to the exact head; while GitHub's answer is slow the
     // pull request is "merging", never "merged".
     const release = fake.hold("merge", "after");
-    fake.setCheck(1, "SUCCESS", "check", { replace: true }); // GitHub shows the passing attempt in place of the skipped one (review M3)
+    fake.setCheck(1, "SUCCESS", "check", { replace: true }); // GitHub shows the passing attempt in place of the skipped one
     for (let i = 0; i < 60 && pr(id).op?.kind !== "merge"; i++) {
       now += 5000;
       scheduler.tick(now); // do not wait: the merge stays in flight
@@ -255,7 +255,7 @@ describe("the independent review (scenarios 3 and 4)", () => {
     expect(assignment.prompt).toContain("+same provider line");
     // Its worktree is detached at exactly the commit under review.
     expect(execFileSync("git", ["-C", assignment.workspace.path, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(head);
-    // ORC-021: the security review beside it runs on the same provider, at the same commit; both must be clean.
+    // The security review beside it runs on the same provider, at the same commit; both must be clean.
     const security = M.activeAttempts(st(), rv.id).find((a) => a.stepId === "SR1")!;
     expect(security.snapshot).toMatchObject({ provider: "claude", source: "independence", reviewedSha: head });
     claude.finish(run.id, { findings: 0 });
@@ -456,7 +456,7 @@ describe("a failing required check (scenario 7)", () => {
     expect(lead).toMatch(new RegExp(`- ${id} PR #1 needs attention \\(checks-failed\\)`));
     expect(lead).toContain("You cannot merge, push, comment, close a pull request, send work back or mark anything reviewed");
     // A re-run that passes makes the gate ready again, for the exact head. GitHub shows the passing attempt in
-    // place of the failed one: a failure next to a later success stays red (review M3).
+    // place of the failed one: a failure next to a later success stays red.
     fake.setCheck(1, "SUCCESS", "check", { replace: true });
     await until("it merges", () => pr(id).phase === "merged");
     expect(merges()).toEqual([expect.objectContaining({ number: 1, headSha: heads[2] })]);
@@ -509,10 +509,10 @@ describe("what the reviewer is handed", () => {
 });
 
 // ====================================================================================================
-// Step 2 review findings that need a real repository
+// Delivery edge cases that need a real repository
 // ====================================================================================================
 
-describe("step 2 review: H1, only the pull-request branch is ever pushed", () => {
+describe("only the pull-request branch is ever pushed", () => {
   it("a git configuration that follows tags or recurses into submodules does not make the push publish anything else", async () => {
     // The user's own configuration, as hostile as it gets for a push.
     git("config", "push.followTags", "true");
@@ -540,7 +540,7 @@ describe("step 2 review: H1, only the pull-request branch is ever pushed", () =>
   }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
-describe("step 2 review: H2, a remote that now names another repository", () => {
+describe("a remote that now names another repository", () => {
   it("the app never reads, merges, closes or comments on the same number there; the pull request says why", async () => {
     await prModeOn("hold");
     const id = await openPr("Opened here");
@@ -586,7 +586,7 @@ describe("step 2 review: H2, a remote that now names another repository", () => 
   }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
-describe("step 2 review: M2, a base that cannot be fetched", () => {
+describe("a base that cannot be fetched", () => {
   it("a base branch that does not exist is found by the repository check itself: one notice, no flapping, and a truthful reason", async () => {
     cmd("setDeliveryMode", { mode: "pr" });
     cmd("setPrDelivery", { config: { base: "release" } });
@@ -631,7 +631,7 @@ describe("step 2 review: M2, a base that cannot be fetched", () => {
   }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
-describe("step 2 leftovers", () => {
+describe("switching from local delivery", () => {
   it("switching from local delivery to pull requests warns about Orchestrator commits the remote does not have, and never pushes them", async () => {
     cmd("setDeliveryMode", { mode: "local", branch: "main" });
     const id = newTask("Delivered locally");
@@ -656,8 +656,8 @@ describe("step 2 leftovers", () => {
   }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
-describe("step 3 review: findings 4 and 5", () => {
-  it("finding 4: an observation is stamped when GitHub was read, not when its result is applied; a merge waits for a fresh read", async () => {
+describe("read times and base updates", () => {
+  it("an observation is stamped when GitHub was read, not when its result is applied; a merge waits for a fresh read", async () => {
     await prModeOn("auto");
     const id = await openPr("Slow read");
     await until("its own review covers it", () => pr(id).review.ok, 2000, 30);
@@ -686,7 +686,7 @@ describe("step 3 review: findings 4 and 5", () => {
     expect(fake.count("observe")).toBeGreaterThan(before + 1);
   }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
-  it("finding 5: a pinned commit with the right parents and author but another tree is not adopted as the base update", async () => {
+  it("a pinned commit with the right parents and author but another tree is not adopted as the base update", async () => {
     await prModeOn("hold");
     const id = await openPr("Update me");
     const head = pr(id).headSha;
@@ -710,9 +710,9 @@ describe("step 3 review: findings 4 and 5", () => {
   }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
-// ---------- ORC-013 §6.9: the service's own checks in pull-request mode ----------
+// ---------- the service's own checks in pull-request mode ----------
 
-describe("service checks in pull-request mode (ORC-013 §6.9)", () => {
+describe("service checks in pull-request mode", () => {
   let checks: ScriptedChecks;
   const CONFIG = { ...DEFAULT_CHECKS, enabled: true, commands: [{ id: "test", label: "test", kind: "check" as const, argv: ["npm", "test"] }] };
   beforeEach(async () => {

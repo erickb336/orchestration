@@ -23,12 +23,12 @@ export { V13_TEMPLATE_STEPS };
 const sameSteps = (a: StepDef[], b: StepDef[]) => JSON.stringify(a.map(toDef)) === JSON.stringify(b.map(toDef));
 
 /**
- * ORC-016: what a task from before flows ran. Service-owned tasks name their internal flow; every
+ * What a task from before flows ran. Service-owned tasks name their internal flow; every
  * other task is "legacy": the format-14 template its first pipeline revision names, or "custom".
  */
 function legacyFlowRef(t: { reviewTarget?: unknown; checkTarget?: unknown; revertOf?: unknown; pipelineHistory?: { reason?: string }[] }): FlowRef {
   const internal = t.reviewTarget ? "delivery-review" : t.checkTarget ? "delivery-checks" : t.revertOf ? "revert" : undefined;
-  // No hash: the format-14 internal template may have been edited, and the task's purposes were rewritten by delivery (step 1 review, finding 5).
+  // No hash: the format-14 internal template may have been edited, and the task's purposes were rewritten by delivery.
   if (internal) {
     const { hash: _hash, ...ref } = flowRef(internalFlow(internal), "migration");
     return ref;
@@ -83,7 +83,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 9;
     return doc;
   },
-  // ORC-008: pull-request delivery settings, off. Nothing observed and no review-later items are
+  // Format 10 adds pull-request delivery settings, off. Nothing observed and no review-later items are
   // created: earlier deliveries are never backfilled.
   9: (doc) => {
     const project = doc.project as Record<string, unknown>;
@@ -91,9 +91,9 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 10;
     return doc;
   },
-  // ORC-009: steering by conversation. Priorities the user set with the Set control are pinned from
-  // their events (before ORC-009 only the user could reprioritize). Priorities chosen in the New task
-  // form cannot be told apart from its default, so they are not pinned. Existing lead runs get no
+  // Format 11 adds steering by conversation. Priorities the user set with the Set control are pinned
+  // from their events (before format 11 only the user could reprioritize). Priorities chosen in the New
+  // task form cannot be told apart from its default, so they are not pinned. Existing lead runs get no
   // visionRev: one that completes after the upgrade has its steering refused.
   10: (doc) => {
     const project = doc.project as Record<string, unknown>;
@@ -109,7 +109,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 11;
     return doc;
   },
-  // ORC-012: the shaping stage. Every existing project keeps working as before (building); no drafts yet.
+  // Format 12 adds the shaping stage. Every existing project keeps working as before (building); no drafts yet.
   11: (doc) => {
     const project = doc.project as Record<string, unknown>;
     project.stage ??= "building";
@@ -117,10 +117,10 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 12;
     return doc;
   },
-  // ORC-014: vision documents. No project has any yet; existing revisions record none (`docIds` absent).
-  // ORC-012 review 6: a project of the user's own with an empty vision cannot be building; it shapes first.
-  // ORC-012 review 2: the roadmap's hold while shaping becomes its own flag; the user's hold before start
-  // then follows the involvement setting, as a lead proposal's would.
+  // Format 13 adds vision documents. No project has any yet; existing revisions record none (`docIds`
+  // absent). A project of the user's own with an empty vision cannot be building; it shapes first. The
+  // roadmap's hold while shaping becomes its own flag; the user's hold before start then follows the
+  // involvement setting, as a lead proposal's would.
   12: (doc) => {
     const project = doc.project as Record<string, unknown>;
     project.visionDocs ??= [];
@@ -129,7 +129,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     const now = new Date().toISOString();
     const events = (doc.events ??= []) as { id: string; at: string; actor: string; kind: string; taskId?: string; message: string }[];
     if (!project.sample && !text.trim() && project.stage !== "shaping") {
-      // ORC-014 review 12: a stage change is state the user can see: it is recorded, and shaping starts now.
+      // A stage change is state the user can see: it is recorded, and shaping starts now.
       project.stage = "shaping";
       project.shapingSince = now;
       doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
@@ -138,7 +138,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     if (project.stage === "shaping") {
       project.shapingSince ??= now;
       const a = (project.autonomy ?? {}) as { enabled?: boolean; holdLeadProposals?: boolean };
-      // ORC-014 review 12: a hold the user set on the task themselves stays the user's hold. The last
+      // A hold the user set on the task themselves stays the user's hold. The last
       // hold event decides: "enabled" by the user means theirs; released or removed means the roadmap's.
       const userHeld = new Set<string>();
       for (const e of events) {
@@ -156,7 +156,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 13;
     return doc;
   },
-  // ORC-013: quality gates. Defaults are added: checks off, findings routed to the lead on projects that
+  // Format 14 adds quality gates. Defaults are added: checks off, findings routed to the lead on projects that
   // plan on their own (so Autopilot keeps running) and to the user otherwise, conventions on, the
   // pull-request triage settings. Nothing is backfilled: no artifact gains findings or coverage, no
   // decision is created, and running tasks keep their steps. Built-in templates the user never
@@ -184,14 +184,14 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
       events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message });
     };
-    // ORC-016: this reads the frozen format-14 templates, so the upgrade keeps working now that the live
+    // This reads the frozen format-14 templates, so the upgrade keeps working now that the live
     // code has flows instead of templates.
     for (const t of (project.templates ?? []) as { id: string; builtIn?: boolean; rev: number; steps: StepDef[]; description?: string }[]) {
       const legacy = V13_TEMPLATE_STEPS[t.id];
       if (!t.builtIn || !legacy) continue;
       if (sameSteps(t.steps, legacy)) {
         t.steps = v14TemplateSteps(t.id);
-        // Review 1 (11): the description follows the steps, so the template does not show as "edited".
+        // The description follows the steps, so the template does not show as "edited".
         const builtIn = V14_TEMPLATES[t.id];
         if (builtIn) t.description = builtIn.description;
         t.rev += 1;
@@ -201,12 +201,12 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 14;
     return doc;
   },
-  // ORC-016: pipelines come from the catalog. Custom templates and edited built-ins are retired (ORC-021
-  // dropped the export of retired templates as files: an edited or custom template is simply gone, and an
-  // event says so); unedited built-ins are dropped, since the catalog provides them. Tasks are not touched
-  // (P9): no step, revision, history, pin or state changes, and a run active across the upgrade finishes
-  // normally. Each task records what it ran as a legacy or internal reference, under the format-15 names;
-  // the 15 → 16 upgrade renames them.
+  // Format 15 retires templates: pipelines come from the catalog. Custom templates and edited built-ins
+  // are retired (an edited or custom template is simply gone, and an event says so; it is not exported as
+  // a file); unedited built-ins are dropped, since the catalog provides them. Tasks are not touched: no
+  // step, revision, history, pin or state changes, and a run active across the upgrade finishes normally.
+  // Each task records what it ran as a legacy or internal reference, under the format-15 names; the
+  // 15 → 16 upgrade renames them.
   14: (doc) => {
     const project = doc.project as Record<string, unknown>;
     const now = new Date().toISOString();
@@ -218,7 +218,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     for (const t of (project.templates ?? []) as { id: string; name: string; description: string; steps: StepDef[] }[]) {
       const b = V14_TEMPLATES[t.id];
       const unedited = b && sameSteps(t.steps, b.steps) && t.name === b.name && t.description === b.description;
-      if (unedited) continue; // the built-in flows provide it; the service's own pipelines stay in code (step 1 review, finding 2)
+      if (unedited) continue; // the built-in flows provide it; the service's own pipelines stay in code
       note(`Template "${t.name}" was retired: pipelines now come from the built-in flows. Tasks that ran it keep their steps.`);
     }
     delete project.templates;
@@ -230,7 +230,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 15;
     return doc;
   },
-  // ORC-021: "pattern" becomes "flow". Persisted fields are renamed (task.pattern → task.flow,
+  // Format 16: "pattern" becomes "flow". Persisted fields are renamed (task.pattern → task.flow,
   // task.patternSince → task.flowSince, pipelineHistory[].pattern → .flow, project.defaultPatternId →
   // project.defaultFlowId, state.patterns → state.flows); task.outcome and retiredTemplates are dropped;
   // a reference keeps only id, name, source, hash and chosenBy (the extends chain and the experiment flag
@@ -244,7 +244,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       return { id, name, source, ...(hash !== undefined ? { hash } : {}), chosenBy };
     };
     const stored = typeof project.defaultPatternId === "string" ? project.defaultPatternId : "change";
-    // ORC-021 review 2: personal flow files are gone too, so any id that is not one of the six becomes "change".
+    // Personal flow files are gone too, so any id that is not one of the six becomes "change".
     project.defaultFlowId = builtInCatalog().some((f) => f.id === stored) ? stored : "change";
     delete project.defaultPatternId;
     for (const t of (doc.tasks ?? []) as Record<string, unknown>[]) {
@@ -266,14 +266,14 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 16;
     return doc;
   },
-  // ORC-022: notes to running stages. Older databases have none; nothing else moves (a steering row's kind
+  // Format 17 adds notes to running stages. Older databases have none; nothing else moves (a steering row's kind
   // gains "note", which no stored row has yet).
   16: (doc) => {
     doc.notes ??= [];
     doc.version = 17;
     return doc;
   },
-  // ORC-025: parallel copies, best-of choices and gate steps are gone. Their fields are dropped from every
+  // Format 18: parallel copies, best-of choices and gate steps are gone. Their fields are dropped from every
   // task, step and pipeline revision; a task that had any of them gets one event saying what changed. Copies
   // stay as the ordinary steps they already were (same ids and purposes), so a finished task's record still
   // reads. An open task whose copies were best-of candidates is held with the reason: every finished copy's

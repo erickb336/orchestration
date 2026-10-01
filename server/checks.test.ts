@@ -1,4 +1,4 @@
-// ORC-013 step 2: the check runner with real child processes (DirectChecks, the "no sandbox" path, and
+// The check runner with real child processes (DirectChecks, the "no sandbox" path, and
 // everything the sandboxed path shares with it): pass, fail, timeout with a grandchild that must be gone,
 // a failed prepare, capped and redacted output, the log file, the stop semantics, and the environment a
 // command sees. No sandbox, no model, no network; every command is this Node running a small script.
@@ -7,10 +7,14 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHECK_ENV_COPIED, DirectChecks, EXCERPT_HEAD, EXCERPT_TAIL, OUTPUT_CAP, checkEnv, excerptOf, headOf, pruneCheckLogs, type CheckAssignment, type CheckRunner } from "./checks";
 import { killGroup } from "./processes";
 import type { AdapterEvent } from "./runtimes/types";
+
+// Real child processes, process groups and kill timers per test: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 let dir: string;
 const node = process.execPath;
@@ -47,7 +51,7 @@ function runToEnd(runner: CheckRunner, a: CheckAssignment, during?: (events: Ada
 }
 const completed = (events: AdapterEvent[]) => events.find((e): e is Extract<AdapterEvent, { type: "completed" }> => e.type === "completed")!;
 
-describe("DirectChecks (§6.5.3, and what §6.5.2 shares)", () => {
+describe("DirectChecks, and what the sandbox path shares with it", () => {
   it("runs the commands in order through the reaper, records exit codes, durations and output, and writes one 0600 log per command", async () => {
     const pass = script("pass.js", 'console.log("all good"); console.error("warned");');
     const fail = script("fail.js", 'console.log("1 failing"); process.exit(3);');
@@ -221,7 +225,7 @@ describe("DirectChecks (§6.5.3, and what §6.5.2 shares)", () => {
   });
 });
 
-describe("security review of step 2 (M3): nothing a command started outlives the run", () => {
+describe("nothing a command started outlives the run", () => {
   it("a command that exits but leaves a child that traps SIGTERM: the reaper ends its group before it exits, and the command's own exit code is kept (mutation check: the reaper's final SIGKILL)", async () => {
     const pidA = join(dir, "trap-a.pid");
     const pidB = join(dir, "trap-b.pid");
@@ -252,7 +256,7 @@ describe("security review of step 2 (M3): nothing a command started outlives the
     expect(r.exitCode).toBe(143);
   }, 20_000);
 
-  it("review L10: killGroup signals nothing once the leader has exited (its pid, and so the group id, may be reused); leftovers are the reaper's business", async () => {
+  it("killGroup signals nothing once the leader has exited (its pid, and so the group id, may be reused); leftovers are the reaper's business", async () => {
     const pidFile = join(dir, "orphan.pid");
     const leader = spawn(node, ["-e", `const c = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" }); require("node:fs").writeFileSync(process.argv[1], String(c.pid)); c.unref();`, pidFile], { detached: true, stdio: "ignore" });
     await new Promise((r) => leader.once("exit", r));
@@ -272,7 +276,7 @@ describe("security review of step 2 (M3): nothing a command started outlives the
   });
 });
 
-describe("review finding M5: the exit status comes from the reaper alone, never from anything the command can write", () => {
+describe("the exit status comes from the reaper alone, never from anything the command can write", () => {
   /**
    * The command forges a status file where the old reaper wrote it, prints a test-runner-looking line,
    * and then kills either the group leader (its parent) or the reaper itself (its grandparent).

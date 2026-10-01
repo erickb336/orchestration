@@ -1,4 +1,4 @@
-// ORC-013: structured findings and per-finding triage. Pure functions over the state: derived counts
+// Structured findings and per-finding triage. Pure functions over the state: derived counts
 // (what a repair may fix, what is undecided, what is unresolved), the decisions on `ask-user`
 // findings, their routing to the lead or the user, carry-forward of an earlier decision on the same
 // finding, and the validation of the decisions a lead run reports. Summary-only (legacy) artifacts
@@ -30,7 +30,7 @@ function sameOutput(s: State, a: Pick<Artifact, "id" | "taskId" | "stepId" | "na
 /**
  * The decision record for one finding of one artifact (the newest, if several). A person's edit of the
  * summary makes a new artifact version with the same findings, and `editArtifact` moves the decisions
- * to it (review 1, finding 1), so nothing waits on a record that exists.
+ * to it, so nothing waits on a record that exists.
  */
 export function decisionFor(s: State, art: Pick<Artifact, "id">, f: Pick<Finding, "id">): FindingDecision | undefined {
   let best: FindingDecision | undefined;
@@ -38,7 +38,7 @@ export function decisionFor(s: State, art: Pick<Artifact, "id">, f: Pick<Finding
   return best;
 }
 
-/** A finding decided "accept" or "follow-up" is settled whatever action the report gives it (review 1, finding 3). */
+/** A finding decided "accept" or "follow-up" is settled whatever action the report gives it. */
 const settled = (d: FindingDecision | undefined) => d?.status === "accept" || d?.status === "follow-up";
 
 /** Work a repair may do: auto-fix blocking findings not settled earlier, plus ask-user ones decided "fix". Legacy: openFindings. */
@@ -94,14 +94,14 @@ export function earlierDecision(s: State, t: Task, key: string): FindingDecision
     if (d.key !== key || d.status === "open" || d.status === "superseded" || d.kind !== "finding") continue;
     const owner = d.taskId === t.id ? t : originTask && d.taskId === originTask.id ? originTask : undefined;
     if (!owner) continue;
-    // ORC-016 (steps 2–3 review, finding 1): a decision taken under a flow the task has since left is the record, not a precedent.
+    // A decision taken under a flow the task has since left is the record, not a precedent.
     if (fromEarlierFlow(s, owner, d)) continue;
     earlier = d;
   }
   return earlier;
 }
 
-/** ORC-016: the decision's artifact was made under a flow its task has since left. A decision whose artifact is gone is not. */
+/** The decision's artifact was made under a flow its task has since left. A decision whose artifact is gone is not. */
 export function fromEarlierFlow(s: State, t: Task, d: FindingDecision): boolean {
   const art = s.artifacts.find((a) => a.id === d.artifactId);
   return !!art && M.fromEarlierFlow(s, t, art);
@@ -142,7 +142,7 @@ export function createDecisions(s: State, t: Task, art: Artifact, now: string): 
   for (const f of art.findings) {
     if (!isBlocking(f) || decisionFor(s, art, f)) continue;
     const earlier = earlierDecision(s, t, f.key);
-    // An auto-fix finding needs no record, unless an earlier round settled it: then the record says so (review 1, finding 3).
+    // An auto-fix finding needs no record, unless an earlier round settled it: then the record says so.
     if (f.action !== "ask-user" && !settled(earlier)) continue;
     const d: FindingDecision = {
       id: M.nextId(s, "fd"),
@@ -178,10 +178,10 @@ export function createDecisions(s: State, t: Task, art: Artifact, now: string): 
 }
 
 /**
- * Keep the record bounded (§4.4): decided decisions of settled tasks go first, oldest first. A task is
+ * Keep the record bounded: decided decisions of settled tasks go first, oldest first. A task is
  * settled once cancelled, or done and landed (or done with no delivery to wait for). Open decisions,
- * and decided ones a repair or the gate may still read (an unsettled task), are never dropped
- * (review 1, finding 9): the cap yields rather than reopen a finding.
+ * and decided ones a repair or the gate may still read (an unsettled task), are never dropped: the
+ * cap yields rather than reopen a finding.
  */
 function pruneDecisions(s: State) {
   if (s.decisions.length <= MAX_DECISIONS) return;
@@ -196,7 +196,7 @@ function pruneDecisions(s: State) {
 }
 
 /**
- * Close the open decisions nothing can act on any more (review 1, finding 10): those of a cancelled
+ * Close the open decisions nothing can act on any more: those of a cancelled
  * task, or on an artifact a later run replaced. Decided ones are kept as the record. Mutates the draft.
  */
 export function supersedeDecisions(s: State, taskId: string, now: string, o: { artifactId?: string; reason: string }): number {
@@ -229,7 +229,7 @@ export function awaitingDecision(s: State, t: Task): { count: number; lead: numb
         const d = decisionFor(s, art, f);
         if (d && d.status !== "open") continue;
         count++;
-        // A finding with no record is nobody's yet: it is shown as the user's, never as "the lead's" (review 1, finding 1).
+        // A finding with no record is nobody's yet: it is shown as the user's, never as "the lead's".
         if (d?.routedTo === "lead") lead++;
         else user++;
       }
@@ -238,7 +238,7 @@ export function awaitingDecision(s: State, t: Task): { count: number; lead: numb
   return count ? { count, lead, user } : undefined;
 }
 
-/** ORC-025: "Needs you: decide 2 findings", "The lead is deciding 1 finding", or both when the findings are split. */
+/** The label for undecided findings: "Needs you: decide 2 findings", "The lead is deciding 1 finding", or both when the findings are split. */
 export function awaitingLabel(w: { count: number; lead: number; user: number }): string {
   const findings = (n: number) => `${n} finding${n === 1 ? "" : "s"}`;
   if (w.user && w.lead) return `Needs you: decide ${findings(w.user)}; the lead is deciding ${findings(w.lead)}`;
@@ -274,11 +274,11 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
   const d = getDecision(s, decisionId);
   const t = s.tasks.find((x) => x.id === d.taskId);
   if (!t) throw new ControlError(`Unknown task ${d.taskId}`);
-  // ORC-016 (steps 2–3 review, finding 1): a decision closed by a flow change belongs to the earlier flow; the new flow's review raises its own findings.
+  // A decision closed by a flow change belongs to the earlier flow; the new flow's review raises its own findings.
   if (d.status === "superseded" && d.kind === "finding" && fromEarlierFlow(s, t, d)) {
     throw new ControlError(`${d.id} belongs to an earlier flow of ${t.id}: it was closed when the flow changed and cannot be decided. The new flow's review reports its own findings.`);
   }
-  // ORC-013 §6.7: failing final checks take a repair round, or the user's acceptance (only the user's).
+  // Failing final checks take a repair round, or the user's acceptance (only the user's).
   if (d.kind === "final-checks") {
     C.decideFinalChecks(s, d, decision, why, now);
     return s;
@@ -314,7 +314,7 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
         acceptance: [`The finding no longer applies${where}`],
         priority: t.priority,
         holdBeforeStart: true,
-        // ORC-016: a follow-up fix runs the catalog's Change, chosen by the service.
+        // A follow-up fix runs the catalog's Change, chosen by the service.
         flowId: "change",
         chosenBy: "service",
       },
@@ -361,7 +361,7 @@ export function routeDecision(state: State, decisionId: string, to: "lead" | "us
 /**
  * Open decisions routed to the lead that no completed lead run has been shown yet (routed after the
  * last completed run started). A run that failed or was lost decided nothing, so they are due again;
- * the lead's failure backoff still applies (review 1, finding 5).
+ * the lead's failure backoff still applies.
  */
 export function decisionsDueForLead(s: State): FindingDecision[] {
   let last = "";
@@ -371,7 +371,7 @@ export function decisionsDueForLead(s: State): FindingDecision[] {
 
 /**
  * The task whose specification a decision is really about: a dedicated review or a repair of a pull
- * request acts on that pull request's task, whose spec the user may have written (review 1, finding 6).
+ * request acts on that pull request's task, whose spec the user may have written.
  */
 export function owningTask(s: State, t: Task): Task {
   let cur = t;
@@ -432,7 +432,7 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
     const t = s.tasks.find((x) => x.id === d.taskId);
     if (!t) return void notes.push(`Decision ${id}: its task is gone`);
     const kind = decision as LeadDecision;
-    // ORC-013 §6.7: on failing final checks the lead may add a repair round or hand over; it can never accept.
+    // On failing final checks the lead may add a repair round or hand over; it can never accept.
     if (d.kind === "final-checks") {
       const note = C.leadDecidesFinalChecks(s, d, kind, why, r.id, now);
       if (note) notes.push(note);
@@ -454,7 +454,7 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
       return;
     }
     if (kind === "follow-up") {
-      // Each proposal counts once: what this run already proposed is among the open proposals (review 1, finding 14).
+      // Each proposal counts once: what this run already proposed is among the open proposals.
       if (M.openLeadProposals(s).length >= s.project.autonomy.maxOpenProposals) return void notes.push(`Decision ${id}: follow-up refused; the limit of ${s.project.autonomy.maxOpenProposals} open lead proposals is reached, so it stays open`);
       if (M.deferredLeadRoots(s).length >= s.project.autonomy.maxOpenProposals) return void notes.push(`Decision ${id}: follow-up refused; deferred lead proposals reached their limit, so it stays open`);
       const spec = M.currentSpec(t).content;

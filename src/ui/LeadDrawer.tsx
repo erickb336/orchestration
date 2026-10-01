@@ -1,5 +1,5 @@
-// ORC-009: the Lead panel reachable from every page. On desktop a non-modal aside that stays open while
-// the user moves around the board; below 768 px a modal dialog with a focus trap. ORC-025 (N3): it is the
+// The Lead panel reachable from every page. On desktop a non-modal aside that stays open while
+// the user moves around the board; below 768 px a modal dialog with a focus trap. It is the
 // one place the conversation is drawn; Home shows the lead's latest reply and opens this.
 
 import { createContext, useContext, useEffect, useRef } from "react";
@@ -36,7 +36,7 @@ export function LeadDrawer({ onClose }: { onClose: () => void }) {
   const narrow = useNarrow();
   const ref = useRef<HTMLElement>(null);
 
-  // Review finding 14: while the dialog is modal, Esc closes it wherever focus is, the page behind it is
+  // While the dialog is modal, Esc closes it wherever focus is, the page behind it is
   // inert (so nothing behind can be reached by Tab, click or assistive technology), and focus that still
   // lands outside the dialog (for example on body after a re-render) is returned to it.
   useEffect(() => {

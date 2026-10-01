@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (P1, P7): what the task is for: the outcome, the benefit, and the chosen approach with the
+// What the task is for: the outcome, the benefit, and the chosen approach with the
 // lead's reason, said once.
 
 import * as M from "../../domain/model";

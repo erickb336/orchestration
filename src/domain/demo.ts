@@ -1,4 +1,4 @@
-// ORC-017 §5: the demo state, "Weekend Trips (sample)". Separate from `buildSeed()`, the test fixture,
+// The demo state, "Weekend Trips (sample)". Separate from `buildSeed()`, the test fixture,
 // which stays unchanged. The fake service starts from this state and Reset sample data restores it.
 //
 // How it is built: the project and its task specs are written here; every run record is created the
@@ -10,7 +10,7 @@
 // simulated thing is labelled by the records themselves (simulated runs, pull requests and check runs)
 // rather than by text inside titles and summaries.
 //
-// ORC-021: every one of the six flows has a task in the story (WT-012 is the Investigation, WT-013 the
+// Every one of the six flows has a task in the story (WT-012 is the Investigation, WT-013 the
 // Design), every finished code task has a security review beside each code review, and WT-004.1's security
 // review found what its code review did not, repaired in the loop's second round.
 
@@ -292,7 +292,7 @@ class DemoBuilder {
       steering: [],
       visionDrafts: [{ id: draftId, at: at(4332), leadRunId, messageIds: [], text: visionText, focus: "Trip sharing first.", reason: draftReason, basedOnVisionRev: 0, status: "accepted", resolvedAt: at(4320), visionRev: 1, simulated: true }],
       decisions: [],
-      // ORC-016: the built-in catalog until the server loads the files (it replaces this at start).
+      // The built-in catalog until the server loads the files (it replaces this at start).
       flows: builtInCatalog(),
       notes: [],
       events: [
@@ -440,7 +440,7 @@ class DemoBuilder {
           connections: [],
           purpose: st.purpose,
           inputs: M.consumedInputs(this.s, t, st),
-          // ORC-024: the demo's runs record their principles like real ones.
+          // The demo's runs record their principles like real ones.
           principles: M.runPrinciples(this.s, t, st),
         },
         startedAt: this.at(m),
@@ -508,7 +508,7 @@ class DemoBuilder {
   }
 
   /**
-   * ORC-021: a code review and the security review beside it, dispatched together. The security review finishes
+   * A code review and the security review beside it, dispatched together. The security review finishes
    * first (`secEndM`) with its findings (clean unless given some), then the code review (`endM`) with its own.
    */
   private reviews(id: string, codeStep: string, secStep: string, startM: number, secEndM: number, endM: number, change: CodeChange | undefined, summary: string, secSummary: string, findings: Finding[] = [], secFindings: Finding[] = []) {
@@ -1016,7 +1016,7 @@ class DemoBuilder {
     this.s = M.startHeldTask(this.s, "WT-004.1", this.at(2940));
     this.promote(["WT-004.1"], 2939);
     // WT-004.1: Codex's code review was clean; Claude's security review beside it found that a link opened any
-    // trip, so the repair ran and the loop reviewed the repaired change again (ORC-021: the security review visible).
+    // trip, so the repair ran and the loop reviewed the repaired change again: the story shows what the security review adds.
     const child = "WT-004.1";
     const words = DEMO_SCRIPT[child].outputs!;
     const first = this.change(child, "S1", 2900, 2840, { sha: fakeSha("WT-004.1 S1"), paths: ["src/trip/invite.ts", "src/trip/invite.test.ts", "src/trip/TripPage.tsx", "src/server/links.ts"], files: 4, additions: 132, deletions: 4 }, words["S1.change"], words["S1.handoff"]);
@@ -1108,7 +1108,7 @@ class DemoBuilder {
     const security = this.dispatch(id, "SR1", 56);
     // WT-004.3: the lead added the second option and asked you to choose, because the choice changes what data is kept.
     this.revisePackingDecision();
-    // The steering exchange: offline maps ahead of sharing; one task deferred, with Undo; and (ORC-022) one note
+    // The steering exchange: offline maps ahead of sharing; one task deferred, with Undo; and one note
     // to the coder of the offline banner. WT-002 is first in line and has not started, so the note waits for
     // its run and is delivered at its start when the service dispatches it.
     this.say("Most of our hikes have no signal at the trailhead. Can we put offline maps ahead of sharing? And tell whoever builds the offline banner to show the cache age in whole hours, not minutes.", 47);

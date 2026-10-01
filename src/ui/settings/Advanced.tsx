@@ -1,4 +1,4 @@
-// ORC-025 pass 5, Settings › Advanced (S3): the developer forms and the diagnostics, out of the way of the settings
+// Settings › Advanced: the developer forms and the diagnostics, out of the way of the settings
 // you use. Pull-request options beyond the basics, what the app found on GitHub, the checks sandbox, the agents'
 // environment (real mode), the providers' capabilities, data import and export, and Usage and service.
 // Settings wait for Save; Check again, Download, Import and Remove act at once.

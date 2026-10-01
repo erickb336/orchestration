@@ -1,7 +1,7 @@
-// Home (ORC-025 pass 2, H1–H5): the three things you look at daily, then the focus. Needs you first, with the
-// simple decisions taken in place; Progress by area beside New results and the lead's latest reply; the Focus
-// card last, with the vision text, its revisions and its documents behind "Vision and history". Usage and the
-// service's details live in Settings (Diagnostics.tsx); the lead conversation opens from the header.
+// Home: the three things you look at daily, then the focus. Needs you first, with the simple decisions taken in
+// place; Progress by area beside New results and the lead's latest reply; the Focus card last, with the vision
+// text, its revisions and its documents behind "Vision and history". Usage and the service's details live in
+// Settings (Diagnostics.tsx); the lead conversation opens from the header.
 
 import { useEffect, useRef, useState } from "react";
 import * as D from "../domain/delivery";
@@ -12,6 +12,7 @@ import { useStore } from "./store";
 import { ProviderMark, fmtTime, involvementOf, relTime } from "./common";
 import { useLeadContext } from "./LeadDrawer";
 import { Onboarding } from "./Onboarding";
+import { foldSummary, messageStatusText } from "./notes";
 import { landedVerdict, latestLeadReply, liveText, needsYouItems, optionsLine, progressByArea, replyExcerpt, type AreaProgress, type NeedsYouEntry } from "./progress";
 import { historyRequested } from "./route";
 import { OpenDraft, ShapingPanel } from "./Shaping";
@@ -19,7 +20,7 @@ import { RevisionDocs, VisionDocsList } from "./VisionDocs";
 import { Banner, Button, ButtonLink, Card, Chip, Disclosure, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, Textarea, useConfirm } from "./kit";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task, VisionRevision } from "../domain/types";
 
-/** ORC-025: the one name for each involvement setting, wherever it is shown. */
+/** The one name for each involvement setting, wherever it is shown. */
 export const INVOLVEMENT_NAME: Record<ReturnType<typeof involvementOf>, string> = { autopilot: "Autopilot", checkin: "Check-in", manual: "Manual", custom: "Custom" };
 
 /** Who made a vision revision and from what, in a few words (the history list). */
@@ -44,7 +45,7 @@ export function focusProvenance(v: VisionRevision): string {
 
 export function Overview() {
   const { state } = useStore();
-  // ORC-012: while shaping, the shaping panel leads and stands in for the Focus card (it holds the vision and its editor).
+  // While shaping, the shaping panel leads and stands in for the Focus card (it holds the vision and its editor).
   const shaping = state.project.stage === "shaping";
   return (
     <div className="k-stack home">
@@ -68,7 +69,7 @@ export function Overview() {
   );
 }
 
-// ---------- Needs you (H3) ----------
+// ---------- Needs you ----------
 
 const taskHref = (t: Task) => `#/task/${encodeURIComponent(t.id)}`;
 const titleOf = (t: Task) => M.currentSpec(t).content.title;
@@ -312,7 +313,7 @@ function StartRow({ task }: { task: Task }) {
   );
 }
 
-// ---------- Progress by area (ORC-017 §3.3) ----------
+// ---------- Progress by area ----------
 
 /**
  * One row per area. Name and "done of total"; a bar with one segment per task (done, agents working, needs you,
@@ -426,9 +427,12 @@ function NewResultsCard({ state }: { state: State }) {
   );
 }
 
-// ---------- Latest from the lead (N3) ----------
+// ---------- Latest from the lead ----------
 
-/** The lead's newest reply, its first lines and what it changed. The conversation itself opens from the header. */
+/**
+ * The lead's newest reply, its first lines and what it changed, in the conversation's words: the fold line under a
+ * reply ("2 changes, 1 note") and where your newest message stands. The conversation itself opens from the header.
+ */
 function LatestFromLead({ state }: { state: State }) {
   const { service } = useStore();
   const lead = useLeadContext();
@@ -451,7 +455,7 @@ function LatestFromLead({ state }: { state: State }) {
           <p className="lead-excerpt">{replyExcerpt(latest.message.text)}</p>
           <p className="small muted lead-meta">
             <span>
-              {relTime(latest.message.at)} · {latest.summary}
+              {relTime(latest.message.at)} · {latest.set ? foldSummary(latest.set) : "No changes"}
             </span>
             {service.runtime === "fake" && <SimulatedChip title="Simulated reply: written by the demo's lead, not by a model." />}
           </p>
@@ -460,14 +464,14 @@ function LatestFromLead({ state }: { state: State }) {
       {waiting && waiting.kind !== "answered" && (
         <p className="small muted no-margin" role="status">
           {pending.length > 1 ? `${pending.length} messages waiting: ` : ""}
-          {waiting.text}
+          {messageStatusText(state, waiting)}
         </p>
       )}
     </Card>
   );
 }
 
-// ---------- Focus (H4) ----------
+// ---------- Focus ----------
 
 /** The focus first; where it came from, with Undo for a lead change; the vision text, its revisions, diff and documents behind "Vision and history". */
 function FocusCard({ state }: { state: State }) {

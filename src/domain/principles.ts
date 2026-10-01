@@ -1,4 +1,4 @@
-// ORC-024: principles, pure. The 15 working principles live as Markdown files in principles/ (adapted
+// Principles, pure. The working principles live as Markdown files in principles/ (adapted
 // from pstack, MIT). Nothing can import Markdown, so `npm run principles` compiles them into
 // src/domain/builtInPrinciples.json, which is imported here; CI fails when the two disagree, so the
 // files stay the source of truth. The file format and the table order are in principleFiles.ts; this

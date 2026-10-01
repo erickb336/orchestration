@@ -1,4 +1,4 @@
-// ORC-016 step 2, service level: changing a task's flow through the store and the scheduler with
+// Changing a task's flow, service level: through the store and the scheduler with
 // scripted adapters. Refused while the runtime has not confirmed the stop, accepted once Paused, the new
 // steps dispatched as new attempts on resume, and a changed flow file at a restart never touches the task.
 

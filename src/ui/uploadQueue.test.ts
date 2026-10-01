@@ -1,6 +1,6 @@
-// ORC-014 review 4: the upload queue never reads a stale `busy`. Files enqueued after an async folder
+// The upload queue never reads a stale `busy`. Files enqueued after an async folder
 // walk (which may finish after an earlier drain ended, or while one runs) always drain, and each drain
-// attaches its staged files as one batch (review 9).
+// attaches its staged files as one batch.
 
 import { describe, expect, it } from "vitest";
 import type { AttachVisionDocsResult, VisionDocUploadOk } from "../api";
@@ -44,7 +44,7 @@ function harness() {
   return { queue, uploads, attaches, statuses, last, file, settle };
 }
 
-describe("UploadQueue (review 4)", () => {
+describe("UploadQueue", () => {
   it("files enqueued while a drain runs join its batch; files enqueued after it ended start a new drain and are never left Waiting", async () => {
     const h = harness();
     h.queue.enqueue([h.file("a")]);

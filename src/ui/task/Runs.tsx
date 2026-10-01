@@ -1,5 +1,5 @@
 // Details › Runs: every attempt, newest first, with its snapshot, the context it received, its commands and
-// usage; Rerun on the last completed run of a finished step. This is where run ids and revision numbers live (P3).
+// usage; Rerun on the last completed run of a finished step. This is where run ids and revision numbers live.
 
 import * as M from "../../domain/model";
 import type { Attempt, State, Task } from "../../domain/types";

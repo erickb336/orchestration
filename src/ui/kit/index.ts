@@ -1,4 +1,4 @@
-// The component kit (ORC-025 r3). Screens use these for every role they cover, so the UI stays consistent;
+// The component kit. Screens use these for every role they cover, so the UI stays consistent;
 // the gallery at #/kit (Gallery.tsx) shows each one in every state.
 //
 // Load order: kit.css builds on the tokens in styles.css and overrides some of its element rules, so styles.css

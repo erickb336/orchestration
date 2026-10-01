@@ -1,5 +1,5 @@
-// ORC-017 §5: the demo state is valid by construction, tells the sample story, labels nothing by text
-// inside titles and summaries, and comes back from Reset sample data. ORC-021: it runs all six flows,
+// The demo state is valid by construction, tells the sample story, labels nothing by text
+// inside titles and summaries, and comes back from Reset sample data. It runs all six flows,
 // every finished code task has a security review beside each code review, and one security finding
 // (WT-004.1) was repaired in the loop.
 
@@ -80,10 +80,10 @@ function validate(s: State) {
   for (const set of s.steering) {
     expect(s.leadRuns.some((r) => r.id === set.leadRunId)).toBe(true);
     for (const id of set.messageIds) expect(s.conversation.some((m) => m.id === id)).toBe(true);
-    // ORC-022: a sent note row names a note that exists; a note names its row back.
+    // A sent note row names a note that exists; a note names its row back.
     for (const c of set.changes) if (c.kind === "note" && c.noteId) expect(s.notes.find((n) => n.id === c.noteId)?.from).toMatchObject({ by: "lead", changeSetId: set.id, changeId: c.id });
   }
-  // ORC-022: every note is addressed to a step that exists; a bound one names a run of that step; statuses and their fields agree.
+  // Every note is addressed to a step that exists; a bound one names a run of that step; statuses and their fields agree.
   const noteIds = new Set<string>();
   for (const n of s.notes) {
     expect(noteIds.has(n.id), `duplicate note id ${n.id}`).toBe(false);
@@ -146,7 +146,7 @@ function visibleTexts(s: State): { where: string; text: string }[] {
   return out;
 }
 
-describe("the demo state (ORC-017 §5)", () => {
+describe("the demo state", () => {
   it("is valid by construction and deterministic for a clock; the test fixture is untouched", () => {
     const s = demo();
     validate(s);
@@ -213,7 +213,7 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(M.pendingMessages(s)).toEqual([]);
   });
 
-  it("ORC-022: the lead's note to WT-002's coder waits for its run (the step has not started) and is delivered at start by the first dispatch", () => {
+  it("the lead's note to WT-002's coder waits for its run (the step has not started) and is delivered at start by the first dispatch", () => {
     const s = demo();
     expect(s.notes).toHaveLength(1);
     const n = s.notes[0];
@@ -243,7 +243,7 @@ describe("the demo state (ORC-017 §5)", () => {
     const wt1 = task(s, "WT-001");
     expect(col("WT-001")).toBe("done");
     expect(wt1.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "C1:done", "S2:done", "SR1:done", "S3:done", "C1-i2:done", "S2-i2:done", "SR1-i2:done", "S3-i2:skipped", "C2:done", "S4:done"]);
-    expect(M.acceptedOutput(s, wt1, "SR1", "findings")?.openFindings).toBe(0); // ORC-021: the security review beside the code review
+    expect(M.acceptedOutput(s, wt1, "SR1", "findings")?.openFindings).toBe(0); // the security review beside the code review
     const c1 = M.acceptedOutput(s, wt1, "C1", "checks")!;
     expect(c1.checkRun?.simulated).toBe(true);
     expect(c1.checkRun?.results.map((r) => `${r.id}:${r.status}`)).toEqual(["test:failed", "lint:passed"]);
@@ -275,8 +275,8 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(M.stateLabel(s, goal)).toBe("Waiting for 2 child tasks");
     expect(M.childTasks(s, goal).map((c) => c.id)).toEqual(["WT-004.1", "WT-004.2", "WT-004.3"]);
     expect(M.acceptedOutput(s, goal, "S1", "plan")?.items).toHaveLength(3);
-    // WT-004.1: Codex's code review was clean; Claude's security review beside it found that a link opened any trip
-    // (ORC-021). The repair ran, the loop reviewed the repaired change again, clean; merged and reviewed.
+    // WT-004.1: Codex's code review was clean; Claude's security review beside it found that a link opened any trip.
+    // The repair ran, the loop reviewed the repaired change again, clean; merged and reviewed.
     const invite = task(s, "WT-004.1");
     expect(invite).toMatchObject({ parentTaskId: "WT-004", lifecycle: "done" });
     expect(invite.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "C1:done", "S2:done", "SR1:done", "S3:done", "C1-i2:done", "S2-i2:done", "SR1-i2:done", "S3-i2:skipped", "C2:done", "S4:done"]);
@@ -359,7 +359,7 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(D.unreviewedCount(s)).toBe(2);
   });
 
-  it("runs all six flows, and every finished code task has a finished security review beside each code review (ORC-021)", () => {
+  it("runs all six flows, and every finished code task has a finished security review beside each code review", () => {
     const s = demo();
     const flows = builtInCatalog()
       .map((f) => f.id)
@@ -461,12 +461,12 @@ describe("the demo state (ORC-017 §5)", () => {
     const active = M.activeAgentAttempts(s).map((a) => `${a.taskId} ${a.stepId} ${a.snapshot.provider}`);
     expect(active).toEqual(["WT-002 S1 codex", "WT-004.2 S1 claude", "WT-007 S3 claude"]);
     expect(M.column(s, task(s, "WT-007"))).toBe("reviewing");
-    // The settled tasks, the two without code among them (ORC-021), never dispatch.
+    // The settled tasks, the two without code among them, never dispatch.
     for (const id of ["WT-003", "WT-006", "WT-009", "WT-010", "WT-004.3", "WT-012", "WT-013"]) expect(M.activeAttempts(s, id), id).toEqual([]);
     // WT-004.3 was promoted (the lead moves published specs to Ready) and still waits for you.
     expect(task(s, "WT-004.3")).toMatchObject({ lifecycle: "ready", holdBeforeStart: true });
     expect(M.stateLabel(s, task(s, "WT-004.3"))).toBe("Waiting for your go-ahead");
-    // One more slot goes to WT-007's security review (ORC-021: beside its code review), the next after that to WT-003's designer step on Claude.
+    // One more slot goes to WT-007's security review (beside its code review), the next after that to WT-003's designer step on Claude.
     const wider = M.dispatchEligible({ ...s, project: { ...s.project, workerLimit: 4 } }, iso(T0 + 2000));
     expect(M.activeAgentAttempts(wider).map((a) => `${a.taskId} ${a.stepId} ${a.snapshot.provider}`)).toEqual([...active, "WT-007 SR1 claude"]);
     // With Claude's own limit of three full, the fifth slot goes to WT-006's coder on Codex; WT-003's designer step waits for Claude.
@@ -505,7 +505,7 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(r.notes).toHaveLength(1);
     expect(r.flows).toEqual(s.flows);
     expect(r.seq).toBeGreaterThan(s.seq);
-    // ORC-021: the six flows and the security review's history come back with it.
+    // The six flows and the security review's history come back with it.
     expect([...new Set(r.tasks.map((t) => t.flow.id))].sort()).toEqual(["bugfix", "change", "design", "feature", "goal", "investigation"]);
     expect(task(r, "WT-004.1").steps.map((x) => `${x.id}:${x.state}`)).toEqual(task(s0, "WT-004.1").steps.map((x) => `${x.id}:${x.state}`));
     expect(M.acceptedOutput(r, task(r, "WT-004.1"), "SR1", "findings")?.openFindings).toBe(1);

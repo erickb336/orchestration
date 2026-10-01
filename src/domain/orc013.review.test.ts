@@ -1,6 +1,7 @@
-// ORC-013 step 1 review: regression tests for the findings fixed in step 2 (pure domain). Each test
-// names the finding it covers. The git-based one (special characters in paths) is in
-// server/orc013.review.test.ts.
+// The harder cases of findings, decisions and coverage (pure domain): decisions kept across a summary
+// edit, accepted findings, retried decisions runs, the lead-fix rule in pull-request mode, coverage
+// without a scope, pruning and superseding, and smaller items. The git-based case (special characters in
+// paths) is in server/orc013.review.test.ts.
 
 import { describe, expect, it } from "vitest";
 import { normalizePath } from "./coverage";
@@ -35,13 +36,13 @@ function reviewRunning(o: { author?: "user" | "lead" } = {}): { s: State; id: st
   s = M.dispatchEligible(s, at(3));
   const review = running(s, r.newId)[0].id;
   s = M.reportRunContext(s, review, { scope: { from: SHA2, to: SHA, paths: ["a.ts"], total: 1 } });
-  // ORC-021: the security review beside S2 is completed clean; these tests are about the code review.
+  // The security review beside S2 is completed clean; these tests are about the code review.
   for (const a of running(s, r.newId)) if (step(s, r.newId, a.stepId).role === "security_reviewer") s = M.reportCompletion(s, a.id, [], at(3), [{ name: "findings", summary: "no security findings", findings: [] }]);
   return { s, id: r.newId, review };
 }
 const report = (s: State, run: string, t: number, findings: Finding[], paths = ["a.ts"]) => M.reportCompletion(s, run, [], at(t), [{ name: "findings", summary: "r", findings, reviewedPaths: paths }]);
 
-describe("finding 1: editing a structured review's summary keeps its decisions", () => {
+describe("editing a structured review's summary keeps its decisions", () => {
   it("the decisions move to the edited version; nothing waits on the lead for a finding with no record; the repair sees them", () => {
     const { s: s0, id, review } = reviewRunning();
     let s = report(s0, review, 4, [finding({ action: "ask-user", title: "Accepted one" }), finding({ action: "ask-user", title: "Open one" })]);
@@ -71,7 +72,7 @@ describe("finding 1: editing a structured review's summary keeps its decisions",
   });
 });
 
-describe("finding 3: a finding the user accepted is not fixed in the next round", () => {
+describe("a finding the user accepted is not fixed in the next round", () => {
   it("an auto-fix finding with the key of an accepted decision is settled: not fixable, not unresolved, carried with a record; the reviewer gets every settled decision of the task", () => {
     const { s: s0, id, review } = reviewRunning();
     const key = "abcdefabcdef";
@@ -99,7 +100,7 @@ describe("finding 3: a finding the user accepted is not fixed in the next round"
   });
 });
 
-describe("finding 5: a failed or lost decisions run is retried", () => {
+describe("a failed or lost decisions run is retried", () => {
   it("decisions routed before a run that failed are due again; a completed run settles them", () => {
     const { s: s0, id, review } = reviewRunning();
     let s: State = { ...s0, project: { ...s0.project, triage: { askUserBy: "lead" as const } } };
@@ -118,7 +119,7 @@ describe("finding 5: a failed or lost decisions run is retried", () => {
   });
 });
 
-describe("finding 6: the lead-fix-on-a-user-spec rule holds in pull-request mode", () => {
+describe("the lead-fix-on-a-user-spec rule holds in pull-request mode", () => {
   it("a repair or review task authored by the system resolves to the user's task: the lead's fix becomes a suggestion", () => {
     const { s: s0, id, review } = reviewRunning();
     let s: State = { ...s0, project: { ...s0.project, triage: { askUserBy: "lead" as const } } };
@@ -139,7 +140,7 @@ describe("finding 6: the lead-fix-on-a-user-spec rule holds in pull-request mode
   });
 });
 
-describe("finding 7 and 8: coverage without a scope, and changes too large to prove", () => {
+describe("coverage without a scope, and changes too large to prove", () => {
   it("a code review of a real change with no recorded scope is unproven: accepted for runIf, never clean gate evidence", () => {
     const { s: s0, id, review } = reviewRunning();
     const noScope = { ...s0, attempts: s0.attempts.map((a) => (a.id === review ? { ...a, scope: undefined } : a)) };
@@ -165,7 +166,7 @@ describe("finding 7 and 8: coverage without a scope, and changes too large to pr
   });
 });
 
-describe("finding 9 and 10: pruning and superseding", () => {
+describe("pruning and superseding", () => {
   it("the cap never drops a decision a repair or the gate may still read; decided ones of landed or cancelled tasks go first", () => {
     const { s: s0, id, review } = reviewRunning();
     let s = report(s0, review, 4, [finding({ action: "ask-user" })]);
@@ -207,7 +208,7 @@ describe("finding 9 and 10: pruning and superseding", () => {
   });
 });
 
-describe("findings 11, 13 and 14: small items", () => {
+describe("smaller items", () => {
   it("the default protected paths cover AGENTS.md and CLAUDE.md anywhere; unmodified built-ins keep matching descriptions", () => {
     expect(DEFAULT_PR_DELIVERY.protectedPaths).toEqual(expect.arrayContaining(["**/AGENTS.md", "**/CLAUDE.md"]));
     for (const p of ["AGENTS.md", "docs/AGENTS.md", "a/b/CLAUDE.md"]) expect(DEFAULT_PR_DELIVERY.protectedPaths.some((g) => D.matchGlob(g, p)), p).toBe(true);
@@ -215,7 +216,7 @@ describe("findings 11, 13 and 14: small items", () => {
     for (const b of builtInCatalog()) expect(b.description.length).toBeGreaterThan(0);
   });
 
-  it("a backslash is part of a path name (finding 2, the pure part)", () => {
+  it("a backslash is part of a path name", () => {
     expect(normalizePath("docs/we\\ird.md")).toBe("docs/we\\ird.md");
     expect(normalizePath('docs/quo"te.md')).toBe('docs/quo"te.md');
     expect(normalizePath("docs/café.md")).toBe("docs/café.md");
@@ -254,7 +255,7 @@ describe("findings 11, 13 and 14: small items", () => {
     t = report(t, rerun.id, 12, [finding({ action: "ask-user", key: "keykeykeykey", title: "K" })], ["a.ts"]);
     expect(t.attempts.find((a) => a.id === rerun.id)!.outcome).toBe("failed");
     expect(step(t, id2, "S2")).toMatchObject({ state: "pending", coverageRetries: 1, coverageGap: { missing: ["b.ts"], extra: [], to: SHA } });
-    // The gap is bound to the change: a different change starts over (finding 12).
+    // The gap is bound to the change: a different change starts over.
     const other = { ...t, tasks: t.tasks.map((x) => (x.id === id2 ? { ...x, steps: x.steps.map((y) => (y.id === "S2" ? { ...y, coverageGap: { missing: ["z"], extra: [], to: SHA2 }, coverageRetries: 1 } : y)) } : x)) };
     const again = M.dispatchEligible(other, at(13));
     const run3 = running(again, id2)[0];

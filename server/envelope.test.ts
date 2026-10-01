@@ -1,4 +1,4 @@
-// ORC-013 step 1: the review output contract and its parser, the repair and review sections, the
+// The review output contract and its parser, the repair and review sections, the
 // conventions section (read from the trusted base, never the worktree), the lead's decisions section,
 // and the redaction rules. No model runs, no network.
 
@@ -31,7 +31,7 @@ function finding(over: Partial<Finding> = {}): Finding {
   return { id: `F${n}`, key: `key${n}`.padEnd(12, "0"), source: "review", severity: "error", action: "auto-fix", title: `Finding ${n}`, detail: "what is wrong", ...over };
 }
 
-describe("the parser (§4.2)", () => {
+describe("the parser", () => {
   it("structured findings: a missing action is ask-user and a missing severity is warning (defaulted); the open count is computed and the worker's is ignored", () => {
     const text = block({
       outputs: {
@@ -64,7 +64,7 @@ describe("the parser (§4.2)", () => {
     expect(p.notes).toEqual(expect.arrayContaining([expect.stringMatching(/reported 0 open findings; 2 blocking findings were listed/), expect.stringMatching(/2 finding\(s\) had no valid action or severity/), expect.stringMatching(/3 reviewed path\(s\)/)]));
   });
 
-  it("caps (review 1, finding 4): information is cut first and never a blocking finding; an untitled blocking item keeps a placeholder; more than 50 blocking findings make the report incomplete, never clean; texts are capped; the file drops on an absolute path", () => {
+  it("caps: information is cut first and never a blocking finding; an untitled blocking item keeps a placeholder; more than 50 blocking findings make the report incomplete, never clean; texts are capped; the file drops on an absolute path", () => {
     // 48 blocking findings and 5 information-only ones: the cap cuts information, all blocking ones stay.
     const blocking = Array.from({ length: 48 }, (_, i) => ({ severity: "error", action: "auto-fix", title: `t${i}` }));
     const info = Array.from({ length: 5 }, (_, i) => ({ severity: "info", action: "no-op", title: `note ${i}` }));
@@ -106,7 +106,7 @@ describe("the parser (§4.2)", () => {
   });
 });
 
-/** A seed with a user task from the Change template, its S1 done, so S2 (review) and S3 (repair) can be built. */
+/** A seed with a user task on the Change flow, its S1 done, so S2 (review) and S3 (repair) can be built. */
 function changeTask(): { s: State; id: string } {
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
@@ -122,8 +122,8 @@ function changeTask(): { s: State; id: string } {
   return { s, id: r.newId };
 }
 
-describe("the worker envelope (§4.1, §11.1)", () => {
-  it("ORC-021: the security reviewer gets its own brief, the findings rules and the change under review; the code reviewer keeps its brief", () => {
+describe("the worker envelope", () => {
+  it("the security reviewer gets its own brief, the findings rules and the change under review; the code reviewer keeps its brief", () => {
     const { s, id } = changeTask();
     const sr = step(s, id, "SR1");
     expect(sr.role).toBe("security_reviewer");
@@ -134,7 +134,7 @@ describe("the worker envelope (§4.1, §11.1)", () => {
     expect(text).toContain('"findings": [');
     expect(text).not.toContain("You are an independent code reviewer");
     expect(text).not.toContain("## Changed files you must account for"); // path coverage is the code review's proof
-    // …so it is not told to account for every changed file (ORC-021 review 5).
+    // …so it is not told to account for every changed file.
     expect(text).toContain('- A clean review has an empty "findings" list. List the files you read in "reviewedPaths".');
     expect(text).not.toContain("every changed file in");
     const code = buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S2"), attemptId: "run-c", access: "read" });
@@ -191,7 +191,7 @@ describe("the worker envelope (§4.1, §11.1)", () => {
   });
 });
 
-describe("the conventions section (§8.2)", () => {
+describe("the conventions section", () => {
   let dir: string;
   let repo: string;
   let workspaces: WorkspaceManager;
@@ -262,7 +262,7 @@ describe("the conventions section (§8.2)", () => {
   });
 });
 
-describe("the lead's decisions section (§11.3)", () => {
+describe("the lead's decisions section", () => {
   it("lists open decisions routed to the lead with the task, the finding and the rules; the output contract carries decisions; parseLeadOutput passes them through", () => {
     const { s: s0, id } = changeTask();
     const review = M.activeAttempts(s0, id)[0];
@@ -291,7 +291,7 @@ describe("the lead's decisions section (§11.3)", () => {
   });
 });
 
-describe("redaction (§6.6)", () => {
+describe("redaction", () => {
   it("masks PEM private-key blocks and bearer tokens, on top of the token shapes and secret-named values", () => {
     const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\nABCD\n-----END RSA PRIVATE KEY-----";
     const text = `key:\n${pem}\nauth: Bearer abcdefghijklmnopqrstuvwxyz0123456789 done; ghp_abcdefghijklmnopqrstuvwxyz0123456789; ${"hunter2hunter2"}`;
@@ -302,7 +302,7 @@ describe("redaction (§6.6)", () => {
   });
 });
 
-describe("step purposes describe; instructions travel in the brief (ORC-017 §3.11)", () => {
+describe("step purposes describe; instructions travel in the brief", () => {
   it("the verify steps of the built-in flows read as plain descriptions, and the lead's verify envelope still carries the moved sentence", () => {
     const { s, id } = changeTask();
     const verify = step(s, id, "S4");
@@ -340,7 +340,7 @@ describe("step purposes describe; instructions travel in the brief (ORC-017 §3.
   });
 });
 
-describe("flows in the envelopes (ORC-021)", () => {
+describe("flows in the envelopes", () => {
   it("the lead's prompt lists exactly the six flows, by flowId, with the default; the service's pipelines are not named", () => {
     let s = buildSeed(T0, { inFlightRuns: false });
     s = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "planning" }, at(0)).state;

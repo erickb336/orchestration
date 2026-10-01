@@ -32,7 +32,7 @@ interface ResponseMap {
   "turn/steer": TurnSteerResponse;
   "account/read": GetAccountResponse;
   "model/list": ModelListResponse;
-  // ORC-013: the check runner's sandboxed commands.
+  // The check runner's sandboxed commands.
   "command/exec": CommandExecResponse;
   "command/exec/terminate": CommandExecTerminateResponse;
 }

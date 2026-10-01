@@ -1,4 +1,4 @@
-// ORC-025 pass 3: the task page's structure, rendered statically (there is no DOM test environment in this
+// The task page's structure, rendered statically (there is no DOM test environment in this
 // repository) over the demo's tasks: the order of its parts, each decision once at the top, the ids and the
 // model pickers out of the main view, and the done task's result once.
 
@@ -11,6 +11,8 @@ import type { State } from "../../domain/types";
 import type { ServiceInfo } from "../../api";
 import { StoreContext, type ServiceStore } from "../store";
 import { TaskDetail } from "../TaskDetail";
+import { DetailsCard, type DetailsSectionId } from "./Details";
+import { ModelsSection } from "./Models";
 import { OutputsSection } from "./Outputs";
 import { openCleanPr } from "./needsYouItems.test";
 
@@ -144,6 +146,28 @@ describe("the task page", () => {
     const t = text(html);
     expect(t).toContain("Waiting for 2 child tasks");
     for (const id of ["WT-004.1", "WT-004.2", "WT-004.3"]) expect(t).toContain(id);
+  });
+
+  it("Activity shows the newest events in the Activity page's words and links to all of them there", () => {
+    const s = buildDemo(T0);
+    const t = task(s, "WT-001");
+    const open = { spec: false, outputs: false, runs: false, activity: true, revisions: false, models: false } satisfies Record<DetailsSectionId, boolean>;
+    const html = render(s, <DetailsCard state={s} task={t} open={open} onToggle={() => {}} chooseAtTop={false} decideAbove={() => {}} />);
+    expect(html).toContain('href="#/activity?task=WT-001"');
+    expect(text(html)).toContain("All activity for this task");
+    // Who acted, as the Activity page says it; no role ids in snake case.
+    expect(text(html)).not.toMatch(/\b(system|runtime)\b \d|code_reviewer|security_reviewer/);
+  });
+
+  it("Models links to where the defaults and the checks are set, not to Settings in general", () => {
+    const s = structuredClone(buildDemo(T0));
+    s.project.checks.enabled = false; // a Checks step then says it is skipped, and where checks are switched on
+    const t = s.tasks.find((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled" && x.steps.some((st) => st.role === "checks"))!;
+    const html = render(s, <ModelsSection state={s} task={t} />);
+    expect(html).toContain('href="#/settings/agents/models"');
+    expect(html).toContain('href="#/settings/quality/checks"');
+    expect(text(html)).toContain("checks are off");
+    expect(html).not.toContain('href="#/settings"');
   });
 
   it("a running step keeps Send a note; a missing task says so", () => {

@@ -1,4 +1,4 @@
-// ORC-025 pass 5 (S1): Settings in five sections, each with its own address. `#/settings` opens the first;
+// Settings in five sections, each with its own address. `#/settings` opens the first;
 // `#/settings/<section>` opens one; `#/settings/<section>/<card>` opens it at a card. A card's name alone
 // (`#/settings/delivery`, `#/settings/checks`) also works, so a link never needs to know which section a card is in.
 

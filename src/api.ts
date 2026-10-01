@@ -75,10 +75,10 @@ export interface ChangeError extends CommandError {
 }
 
 /**
- * Body of POST /api/vision-docs (ORC-014): one file per request. The service checks it, records it with
+ * Body of POST /api/vision-docs: one file per request. The service checks it, records it with
  * the `stageVisionDoc` command under the given idempotency key, then keeps a copy by content hash outside
  * any repository. Nothing is attached yet: the client attaches every file of one Add, drop or folder as
- * one vision revision with the `attachVisionDocs` command (review 9). Rejections come back as a
+ * one vision revision with the `attachVisionDocs` command. Rejections come back as a
  * CommandError with a plain reason.
  */
 export interface VisionDocUpload {
@@ -102,7 +102,7 @@ export interface VisionDocUploadOk {
 /** Result of the `attachVisionDocs` command: the revision created, if any, and one row per staged document sent. */
 export type AttachVisionDocsResult = AttachResult;
 
-/** ORC-013: body of GET /api/checks/suggest: the commands the repository's files suggest, read at `ref`. Nothing is saved until the user chooses them. */
+/** Body of GET /api/checks/suggest: the commands the repository's files suggest, read at `ref`. Nothing is saved until the user chooses them. */
 export interface CheckSuggestions {
   commands: CheckCommand[];
   /** The trusted base the files were read at ("" when nothing was read). */
@@ -111,7 +111,7 @@ export interface CheckSuggestions {
   reason?: string;
 }
 
-/** ORC-013: where the full (redacted) log of one check of one run is served from. */
+/** Where the full (redacted) log of one check of one run is served from. */
 export function checkLogUrl(attemptId: string, checkId: string): string {
   return `/api/checks/log?run=${encodeURIComponent(attemptId)}&check=${encodeURIComponent(checkId)}`;
 }

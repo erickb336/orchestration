@@ -1,4 +1,4 @@
-// ORC-013: review coverage. A clean code review must list exactly the changed files it judged; the
+// Review coverage. A clean code review must list exactly the changed files it judged; the
 // service compares that list with the changed-path set it recorded before the run. Pure.
 
 import type { Attempt, PathCoverage } from "./types";
@@ -16,7 +16,7 @@ const MAX_LISTED = 50;
  * A repository-relative path as the service compares it: trimmed, without a leading "./" and with no
  * repeated slashes. Undefined when it is absolute, has a ".." segment, is empty or holds a NUL
  * character. Compared exactly (case-sensitive). A backslash is a character of the name, never a
- * separator (review 1, finding 2): the service runs on macOS and Linux, where git reports "/".
+ * separator: the service runs on macOS and Linux, where git reports "/".
  */
 export function normalizePath(raw: string): string | undefined {
   if (typeof raw !== "string" || raw.includes("\0") || raw.length > 300) return undefined;

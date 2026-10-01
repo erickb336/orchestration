@@ -1,4 +1,4 @@
-// ORC-025: the Review tab became Results. `#/results` and `#/review` open the same page, a query after a page
+// The Results page used to be the Review tab, so `#/results` and `#/review` open the same page; a query after a page
 // name never changes the page, and the Focus banner's History link asks the Overview for the vision history.
 
 import { describe, expect, it } from "vitest";

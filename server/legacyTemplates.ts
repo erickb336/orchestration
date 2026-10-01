@@ -1,14 +1,14 @@
-// ORC-016: frozen copies of the built-in workflow templates as earlier state formats shipped them. The
-// migrations read these, never the live catalog, so 13 → 14 → 15 keeps working after templates are gone,
-// and a test proves the built-in flows equal the format-14 templates apart from the security review beside
-// each code review (ORC-021). Nothing else reads them.
+// Frozen history, kept only to upgrade old databases: the built-in workflow templates as earlier state
+// formats shipped them. The migrations read these, never the live catalog, so 13 → 14 → 15 keeps working
+// after templates are gone, and a test proves the built-in flows equal the format-14 templates apart from
+// the security review beside each code review. Nothing else reads them.
 
 import type { InputRef, StepDef } from "../src/domain/types";
 
 const ref = (step: string, output: string): InputRef => ({ step, output });
 
 /**
- * ORC-013: the code-changing built-in templates exactly as format 13 shipped them. The 13 → 14 upgrade
+ * The code-changing built-in templates exactly as format 13 shipped them. The 13 → 14 upgrade
  * replaces a project's copy with the format-14 built-in only when it still matches one of these; an
  * edited template is left alone.
  */

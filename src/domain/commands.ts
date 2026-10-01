@@ -73,8 +73,8 @@ function array<T>(v: unknown, what: string): T[] {
 }
 
 // Structured payloads (spec content) are shape-checked here and semantically validated by the domain
-// operation that receives them. ORC-016: no command accepts step definitions, templates or a catalog;
-// a task's steps come from the flow it names, and the server alone writes the flows at start.
+// operation that receives them. A client never sends the structure of a pipeline: a task's steps come
+// from the flow it names, and the server alone writes the flows, from the built-in files, at start.
 function specContent(v: unknown): SpecContent {
   const c = obj(v, "content");
   for (const k of ["title", "area", "outcome", "benefit", "selectedOptionId", "recommendedOptionId", "overrideReason"]) str(c, k);
@@ -103,7 +103,7 @@ export const COMMANDS = {
   markVisited: same((s, now) => M.markVisited(s, now)),
   editVision: same((s, now, a) => M.editVision(s, num(a, "expectedRev"), str(a, "text"), str(a, "focus"), str(a, "reason"), now)),
 
-  // shaping the vision with the lead first (ORC-012)
+  // shaping the vision with the lead first
   /** Needs a vision; releases the roadmap on Autopilot, otherwise it keeps waiting for you. */
   startBuilding: same((s, now) => M.startBuilding(s, now)),
   /** Back to shaping: nothing running is stopped; nothing new starts. */
@@ -114,13 +114,13 @@ export const COMMANDS = {
   ),
   dismissVisionDraft: same((s, now, a) => M.dismissVisionDraft(s, str(a, "draftId"), now)),
 
-  // vision documents (ORC-014)
+  // vision documents
   /** Record one uploaded file without a revision (sent by POST /api/vision-docs, never by the UI directly). Returns { docId, status, replaces? }. */
   stageVisionDoc: (s, now, a) => {
     const r = M.stageVisionDoc(s, { path: str(a, "path"), size: num(a, "size"), hash: str(a, "hash"), text: bool(a, "text") }, now);
     return { state: r.state, result: r.result };
   },
-  /** ORC-014 review 9: attach a batch of staged documents as one vision revision. Returns { revision?, docs }. */
+  /** Attach a batch of staged documents as one vision revision. Returns { revision?, docs }. */
   attachVisionDocs: (s, now, a) => {
     if (!Array.isArray(a.docIds) || !a.docIds.every((x) => typeof x === "string")) throw new InvalidCommandError("docIds must be a list of document ids");
     if (a.docIds.length > M.MAX_VISION_DOCS) throw new InvalidCommandError(`docIds may name at most ${M.MAX_VISION_DOCS} documents`);
@@ -156,7 +156,7 @@ export const COMMANDS = {
   rerunStep: same((s, now, a) => M.rerunStep(s, str(a, "taskId"), str(a, "stepId"), now)),
   retryStep: same((s, now, a) => M.retryStep(s, str(a, "taskId"), str(a, "stepId"), now)),
 
-  // flows (ORC-021): the structure of a pipeline is never sent by a client
+  // flows: the structure of a pipeline is never sent by a client
   /** The flow used when a lead proposal or a breakdown item names none. */
   setDefaultFlow: same((s, now, a) => M.setDefaultFlow(s, str(a, "flowId"), now)),
   /** Run a task on another flow, before it starts or while it shows Paused: the pipeline starts over. `expectedRev` is the pipeline revision seen. */
@@ -180,7 +180,7 @@ export const COMMANDS = {
   ),
   setProviderLimit: same((s, now, a) => M.setProviderLimit(s, provider(a.provider), num(a, "limit"), now)),
 
-  // findings and decisions (ORC-013)
+  // findings and decisions
   /** Your decision on one finding: fix, accept (leave it as it is), follow-up (a new held task of yours), or reopen. */
   decideFinding: same((s, now, a) => {
     const decision = str(a, "decision");
@@ -202,7 +202,7 @@ export const COMMANDS = {
   /** Give every run the repository's AGENTS.md and CLAUDE.md (from the trusted base) as project conventions. */
   setConventions: same((s, now, a) => F.setConventions(s, bool(a, "include"), now)),
 
-  // the project's checks, run by the service (ORC-013 §9): the only way the check commands change
+  // the project's checks, run by the service: the only way the check commands change
   /** The whole checks configuration (minus its revision). `acknowledgeUnsandboxed` confirms "no sandbox". */
   setChecks: same((s, now, a) => {
     const c = obj(a.config, "config");
@@ -245,7 +245,7 @@ export const COMMANDS = {
   stopLeadReply: same((s, now) => M.stopLeadReply(s, now)),
   setLeadSelection: same((s, now, a) => M.setLeadSelection(s, selection(a.selection), now)),
 
-  // steering by conversation (ORC-009); every one is compare-and-set and reports what it left alone
+  // steering by conversation; every one is compare-and-set and reports what it left alone
   undoSteering: (s, now, a) => {
     const r = M.undoSteering(s, str(a, "changeSetId"), a.changeId === undefined ? undefined : str(a, "changeId"), now);
     return { state: r.state, result: r.result };
@@ -261,7 +261,7 @@ export const COMMANDS = {
   /** Run now: lift the task's own deferral and keep it running whatever the focus. */
   undeferTask: same((s, now, a) => M.undeferTask(s, str(a, "taskId"), now)),
 
-  // notes to a running stage (ORC-022)
+  // notes to a running stage
   /** Your direct note to a running agent step (any role but checks). Returns { noteId }. */
   sendNote: (s, now, a) => {
     const r = M.sendNote(s, str(a, "taskId"), str(a, "stepId"), str(a, "text"), now);
@@ -308,7 +308,7 @@ export const COMMANDS = {
     return { state: r.state, result: { imported: r.imported, skipped: r.skipped } };
   },
 
-  // delivery and the review-later queue (ORC-008)
+  // delivery and the review-later queue
   /** Off, local branch, or GitHub pull requests: never two at once. */
   setDeliveryMode: same((s, now, a) => {
     const mode = str(a, "mode");
@@ -316,7 +316,7 @@ export const COMMANDS = {
     return D.setDeliveryMode(s, { mode, branch: a.branch === undefined ? undefined : str(a, "branch") }, now);
   }),
   resetDeliveryBaseline: same((s, now) => M.resetDeliveryBaseline(s, now)),
-  /** Pull-request settings (remote, base, limits, protected paths). Automatic merging cannot be chosen yet. */
+  /** Pull-request settings: the remote and base, who merges (you, or automatically), limits and protected paths. */
   setPrDelivery: same((s, now, a) => {
     const c = obj(a.config, "config");
     const patch: Partial<PrDeliveryConfig> = {};
@@ -330,7 +330,7 @@ export const COMMANDS = {
     if (c.protectedPaths !== undefined) patch.protectedPaths = array<unknown>(c.protectedPaths, "protectedPaths").map((x) => String(x));
     if (c.maxOpenPrs !== undefined) patch.maxOpenPrs = num(c, "maxOpenPrs");
     if (c.maxAutoMergesPerDay !== undefined) patch.maxAutoMergesPerDay = num(c, "maxAutoMergesPerDay");
-    // ORC-013 §7.5
+    // how GitHub's checks are judged: re-runs of cancelled jobs, review bots, a repository without CI
     if (c.rerunBudget !== undefined) patch.rerunBudget = num(c, "rerunBudget");
     if (c.reviewBotApps !== undefined) patch.reviewBotApps = array<unknown>(c.reviewBotApps, "reviewBotApps").map((x) => String(x));
     if (c.noCi !== undefined) patch.noCi = bool(c, "noCi");
@@ -378,7 +378,7 @@ export const COMMANDS = {
     return M.setWorkerEnvironment(s, provider(a.provider), env, now);
   }),
   setRunLimits: same((s, now, a) => M.setRunLimits(s, { maxTurns: num(a, "maxTurns"), timeoutMinutes: num(a, "timeoutMinutes"), maxBudgetUsd: num(a, "maxBudgetUsd") }, now)),
-  /** ORC-012: `stage` chooses shaping (the vision may be empty) or building (the default; the vision is required). */
+  /** `stage` chooses shaping (the vision may be empty) or building (the default; the vision is required). */
   initProject: same((s, now, a) => {
     let stage: ProjectStage | undefined;
     if (a.stage !== undefined) {
@@ -410,13 +410,13 @@ export const COMMANDS = {
     return { state: r.state, result: { newId: r.newId } };
   },
 
-  // fake runtime only: replace everything with the sample project ("Weekend Trips (sample)", ORC-017 §5)
+  // fake runtime only: replace everything with the sample project ("Weekend Trips (sample)")
   resetSampleData: (s, now) => {
     const next = buildDemo(Date.parse(now));
     // Never reuse generated ids: a runtime process or event row from before the reset must not
     // be confused with a new run or event that happens to receive the same id.
     next.seq = Math.max(next.seq, s.seq) + 1;
-    // ORC-016: the flows are machine-level, like the files they come from (step 1 review, finding 7).
+    // The flows are machine-level, like the files they come from: a reset keeps them.
     next.flows = structuredClone(s.flows);
     return { state: next };
   },

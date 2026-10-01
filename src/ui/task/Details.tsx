@@ -1,10 +1,11 @@
-// ORC-025 pass 3 (P1, P3, P4): the rest of the task page, a click away: the spec and its options, the outputs,
+// The rest of the task page, a click away: the spec and its options, the outputs,
 // the runs, the activity, the revisions and the models. Each section renders only while open, so the page
 // stays short and the ids and internals stay out of the main view.
 
 import { useState } from "react";
 import { diffLines, specToLines } from "../../domain/diff";
 import type { State, Task } from "../../domain/types";
+import { ACTOR_LABEL, activityHash, eventText } from "../activityView";
 import { fmtTime, relTime } from "../common";
 import { revisionFlowLabel } from "../flowView";
 import { Card, Chip, Disclosure, Field, Select } from "../kit";
@@ -48,21 +49,32 @@ export function DetailsCard({ state, task, open, onToggle, chooseAtTop, decideAb
   );
 }
 
+/** How many of the task's events its page shows; the Activity page has them all. */
+const SHOWN_EVENTS = 25;
+
+/** The task's newest events, in the Activity page's words, and the way to all of them there. */
 function TaskActivity({ state, task }: { state: State; task: Task }) {
-  const evs = state.events.filter((e) => e.taskId === task.id).reverse().slice(0, 25);
+  const all = state.events.filter((e) => e.taskId === task.id);
+  const evs = all.slice(-SHOWN_EVENTS).reverse();
   if (!evs.length) return <p className="muted">Nothing yet.</p>;
   return (
-    <ul className="t-events">
-      {evs.map((e) => (
-        <li key={e.id}>
-          <span className="muted" title={fmtTime(e.at)}>
-            {relTime(e.at)}
-          </span>
-          <span className="muted">{e.actor}</span>
-          <span>{e.message}</span>
-        </li>
-      ))}
-    </ul>
+    <div className="k-stack k-stack--tight">
+      <ul className="t-events">
+        {evs.map((e) => (
+          <li key={e.id}>
+            <span className="muted" title={fmtTime(e.at)}>
+              {relTime(e.at)}
+            </span>
+            <span className="muted">{ACTOR_LABEL[e.actor]}</span>
+            <span>{eventText(e.message)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="small no-margin">
+        {all.length > evs.length ? `The newest ${evs.length} of ${all.length}. ` : ""}
+        <a href={activityHash(task.id)}>All activity for this task</a>
+      </p>
+    </div>
   );
 }
 

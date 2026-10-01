@@ -1,4 +1,4 @@
-// ORC-021: presentation helpers for flows, shared by the picker (New task, Change flow, the project
+// Presentation helpers for flows, shared by the picker (New task, Change flow, the project
 // default), the task page and Settings → Flows. Pure derivations over domain state; no domain logic
 // lives here, and nothing here edits a pipeline.
 
@@ -39,7 +39,7 @@ export function revisionFlowLabel(rev: Pick<PipelineRevision, "flow">): string |
   return rev.flow?.name;
 }
 
-// ---------- ORC-024: principles on the task page ----------
+// ---------- principles on the task page ----------
 
 /**
  * The step's principles line: "Principles: Laziness protocol · Fix root causes · + Attack the premise

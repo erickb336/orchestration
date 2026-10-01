@@ -10,9 +10,9 @@ export { SECRET_NAME };
  * npm (npm_ plus 36 characters), AWS access keys (AKIA/ASIA plus 16), GitLab (glpat-…) and Slack (xox?-…).
  */
 const SECRET_SHAPE = /\b(sk-[A-Za-z0-9_-]{8,}|sk_(?:live|test)_[A-Za-z0-9]{8,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9._-]+|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|npm_[A-Za-z0-9]{36}|(?:AKIA|ASIA)[A-Z0-9]{16}|glpat-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})/g;
-/** ORC-013: a PEM private-key block, whatever its algorithm label, and a bearer token of 20 or more token characters. */
+/** A PEM private-key block, whatever its algorithm label, and a bearer token of 20 or more token characters. */
 const PEM_BLOCK = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
-/** A block cut off by an output cap has no END line: everything from BEGIN to the end of the text goes (L4). */
+/** A block cut off by an output cap has no END line: everything from BEGIN to the end of the text goes. */
 const PEM_OPEN = /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*$/;
 const BEARER = /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/g;
 

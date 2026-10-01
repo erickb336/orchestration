@@ -1,7 +1,7 @@
 // The pipelines the service owns. They stay in code, never among the flows a task can be created from:
 // their steps are a contract with delivery code (a prepared revert, a review pinned to a commit, a check
-// target). ORC-021: the revert and the delivery review carry a security review beside their code review.
-// ORC-024: each step names the principles that fit it, as the flow files do (the table in docs/tasks/ORC-024.md).
+// target). The revert and the delivery review carry a security review beside their code review.
+// Each step names the principles that fit it, as the flow files do (the table in docs/tasks/ORC-024.md).
 
 import type { InputRef, StepDef } from "./types";
 
@@ -9,10 +9,10 @@ const ref = (step: string, output: string): InputRef => ({ step, output });
 
 const FINAL_CHECKS_PURPOSE = "Final checks";
 
-/** ORC-024: the principles every code reviewer and every security reviewer gets, in the flows, here and in check rounds. */
+/** The principles every code reviewer and every security reviewer gets, in the flows, here and in check rounds. */
 export const CODE_REVIEW_PRINCIPLES = ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"];
 export const SECURITY_REVIEW_PRINCIPLES = ["boundary-discipline"];
-/** ORC-024: the principles every repair step gets (loop repairs and check-round fixes); "attack the premise" is added by dispatch when a round fails the same way again. */
+/** The principles every repair step gets (loop repairs and check-round fixes); "attack the premise" is added by dispatch when a round fails the same way again. */
 export const REPAIR_PRINCIPLES = ["laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes"];
 
 export interface InternalFlow {
@@ -55,7 +55,7 @@ const revert: StepDef[] = [
   { id: "C1", purpose: FINAL_CHECKS_PURPOSE, role: "checks", dependsOn: ["S2", "SR1"], inputs: [ref("S1", "change")], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "block" } },
   {
     id: "S3",
-    // ORC-017: the instruction that was here reaches the lead through its role brief (server/envelope.ts VERIFY_CHECKS_NOTE).
+    // How to treat check results reaches the lead through its role brief (server/envelope.ts VERIFY_CHECKS_NOTE), not this purpose.
     purpose: "Verify the revert and integrate",
     role: "lead",
     dependsOn: ["C1"],
@@ -76,7 +76,7 @@ const deliveryReview: StepDef[] = [
 ];
 
 /**
- * ORC-013: the project's checks run once on a pull request's change for merge, when that change has
+ * The project's checks run once on a pull request's change for merge, when that change has
  * no check evidence of its own. The service creates the task itself with a `checkTarget`.
  */
 const deliveryChecks: StepDef[] = [

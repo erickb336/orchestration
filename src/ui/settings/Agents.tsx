@@ -1,4 +1,4 @@
-// ORC-025 pass 5, Settings › Agents: the providers and their status, the lead's model, the model per role, how
+// Settings › Agents: the providers and their status, the lead's model, the model per role, how
 // many agents run at once, and the limits of each run. Settings wait for Save; Check again acts at once. The
 // providers' capability table and sample models are diagnostics, in Advanced.
 

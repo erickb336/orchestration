@@ -1,7 +1,7 @@
-// ORC-025 pass 5: Settings in five sections (S1), one involvement card with the numbers it really sets (S2), the
-// developer forms in Advanced (S3), Checks as one line (S4), one Save per section (S5), and visible help instead of
-// "How this works" (S6). Rendered statically over the demo (there is no DOM test environment in this repository),
-// plus the pure parts: the addresses, the draft, and a check that no Settings file sizes or colours things inline.
+// Settings in five sections, one involvement card with the numbers it really sets, the developer forms in
+// Advanced, Checks as one line, one Save per section, and visible help instead of "How this works". Rendered
+// statically over the demo (there is no DOM test environment in this repository), plus the pure parts: the
+// addresses, the draft, and a check that no Settings file sizes or colours things inline.
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -38,7 +38,7 @@ const text = (html: string) => unescape(html.replace(/<[^>]+>/g, " ").replace(/\
 const count = (html: string, needle: string) => html.split(needle).length - 1;
 const noop = () => {};
 
-describe("Settings addresses (S1)", () => {
+describe("Settings addresses", () => {
   it("#/settings opens Working style; each section has its own address", () => {
     expect(parseSettingsHash("#/settings")).toEqual({ section: "working-style" });
     expect(parseSettingsHash("#/settings/")).toEqual({ section: "working-style" });
@@ -61,7 +61,7 @@ describe("Settings addresses (S1)", () => {
   });
 });
 
-describe("the draft (S5)", () => {
+describe("the draft", () => {
   it("counts only the edits that differ from the live value", () => {
     const live = { a: "1", b: true, c: ["x"] };
     expect(changedKeys(live, { a: "1", b: false })).toEqual(["b"]);
@@ -104,12 +104,12 @@ describe("the Settings page", () => {
     expect(count(html, 'class="s-help"')).toBe(5);
   });
 
-  it("has no 'How this works' disclosure and no browser confirm text (S6, P8)", () => {
+  it("has no 'How this works' disclosure and no browser confirm text", () => {
     expect(text(html)).not.toMatch(/How this works/);
     expect(html).not.toMatch(/class="how"/);
   });
 
-  it("drops the separate planning card: involvement is one card, and its numbers are the ones set (S2)", () => {
+  it("drops the separate planning card: involvement is one card, and its numbers are the ones set", () => {
     const t = text(render(s, <WorkingStyleSection current onDirty={noop} />));
     expect(t).not.toMatch(/Advanced: planning|Let the lead plan and propose tasks on its own/);
     const a = s.project.autonomy;
@@ -123,7 +123,7 @@ describe("the Settings page", () => {
     expect(t).toContain("Notify me in this browser");
   });
 
-  it("Project holds the repository, the stage and delivery basics; the rest of the pull-request options are in Advanced (S1, S3)", () => {
+  it("Project holds the repository, the stage and delivery basics; the rest of the pull-request options are in Advanced", () => {
     const t = text(render(s, <ProjectSection current onDirty={noop} />));
     for (const x of ["Repository path", "Stage", "Back to shaping", "Delivery", "Off", "Local branch", "GitHub pull requests", "Remote", "Base branch", "You merge", "Merges automatically"]) expect(t).toContain(x);
     for (const x of ["Review bots", "This repository has no CI", "Protected files", "Re-run a check GitHub cancelled", "Open pull requests at most"]) expect(t).not.toContain(x);
@@ -138,7 +138,7 @@ describe("the Settings page", () => {
     expect(count(t, "The lead ")).toBe(1);
   });
 
-  it("Quality shows checks as one line with Suggest and Edit; the editor and the sandbox are not in the main view (S4)", () => {
+  it("Quality shows checks as one line with Suggest and Edit; the editor and the sandbox are not in the main view", () => {
     const html = render(s, <QualitySection current onDirty={noop} />);
     const t = text(html);
     expect(t).toContain(`On · ${s.project.checks.commands.length} commands`);
@@ -149,7 +149,7 @@ describe("the Settings page", () => {
     expect(t).toContain("Principles");
   });
 
-  it("Advanced has every developer form and the diagnostics (S3)", () => {
+  it("Advanced has every developer form and the diagnostics", () => {
     const t = text(render(s, <AdvancedSection current onDirty={noop} />));
     for (const x of [
       "Pull requests",

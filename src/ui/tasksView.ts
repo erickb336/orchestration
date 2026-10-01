@@ -1,4 +1,4 @@
-// ORC-025 pass 4 (T1, T2, T7): the task list's words, apart from React. Which group a task sits in ("Needs you"
+// The task list's words, apart from React. Which group a task sits in ("Needs you"
 // first), the short state on its card, the one plain line about what is happening, and a finished task's one result
 // chip. Pure derivations over domain state; nothing here decides anything.
 
@@ -12,7 +12,7 @@ import type { Tone } from "./kit";
 import { PR_PROBLEM, liveAgents, needsYouOf } from "./progress";
 import { stepName } from "./task/stepWords";
 
-// ---------- groups (T1) ----------
+// ---------- groups ----------
 
 /** A group of the list and a column of the board: "Needs you" first, then the board's columns. */
 export type Group = "needs-you" | M.Column;
@@ -50,7 +50,7 @@ export interface CardState {
 
 /**
  * A short state for the card's pill. What agents are doing right now comes first and stays truthful ("Pausing" until
- * the runtime acknowledges); a finished task is "Done" (T7); an open task that waits for you is "Needs you".
+ * the runtime acknowledges); a finished task is "Done"; an open task that waits for you is "Needs you".
  * The detail is the card's line, so the pill stays one or two words.
  */
 export function cardState(state: State, task: Task, nowMs = Date.now()): CardState {
@@ -68,7 +68,7 @@ export function cardState(state: State, task: Task, nowMs = Date.now()): CardSta
   return s(COLUMN_LABEL[col], "neutral");
 }
 
-// ---------- the one line (T2) and the result chip (T7) ----------
+// ---------- the one line and the result chip ----------
 
 /** A finished task's one result chip: it landed, or its pull request waits for you. */
 export interface ResultChip {
@@ -147,7 +147,7 @@ function doneLine(state: State, task: Task, nowMs: number): CardLine {
 }
 
 /**
- * The one plain line a card shows about what is happening (T2): what a finished task delivered, what an open task
+ * The one plain line a card shows about what is happening: what a finished task delivered, what an open task
  * waits for you to do, what an agent is doing now ("Implementing · Codex · step 2 of 7"), or why nothing moves.
  * Never an event message, a run id or a model id.
  */

@@ -1,4 +1,4 @@
-// Settings › delivery: how finished work leaves Orchestrator. ORC-025 pass 5 splits it in two:
+// Settings › delivery: how finished work leaves Orchestrator. It is split in two:
 //  - Project › Delivery: the mode (off, a local branch, GitHub pull requests), the remote and base, and who merges;
 //  - Advanced › Pull requests and Advanced › GitHub: every other pull-request option, and what the app found on GitHub.
 // Both edit their section's draft; nothing here saves by itself. Turning automatic merging on, or loosening what

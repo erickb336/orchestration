@@ -1,7 +1,8 @@
-// ORC-008 step 3, pure: independent review coverage, the dedicated review task, bounded repair, the
+// Pull-request delivery, pure: independent review coverage, the dedicated review task, bounded repair, the
 // automatic merge gate (items 9 to 12), the merge queue of one, the base update, and the pause when the
-// base branch fails. Also the step 2 review findings that live in the domain. Nothing here touches git
-// or GitHub. Each "mutation check" names the guard whose removal makes that test fail.
+// base branch fails. Also the delivery edge cases that live in the domain. Nothing here touches git
+// or GitHub. Item numbers are those of the merge gate in docs/design/ORC-008-design.md. Each "mutation
+// check" names the guard whose removal makes that test fail.
 
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
@@ -155,7 +156,7 @@ describe("the delivery-review flow", () => {
     ]);
     expect(INTERNAL_FLOWS.map((p) => p.id)).toContain("delivery-review");
     expect(builtInCatalog().some((p) => p.id === "delivery-review")).toBe(false);
-    // ORC-016: no task is created from it by hand, and no flow file may take its id (flows.test.ts).
+    // No task is created from it by hand, and no flow file may take its id (flows.test.ts).
     expect(() => runCommand(seed(), "createTask", { title: "t", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, flowId: "delivery-review" }, at(2))).toThrow(/used by the service only/);
     expect(validatePipeline(tpl.steps).map((i) => i.severity)).toEqual(["warning", "warning"]);
     expect(validatePipeline(tpl.steps, { reviewTarget: true })).toEqual([]);
@@ -164,7 +165,7 @@ describe("the delivery-review flow", () => {
   });
 });
 
-describe("reviewCoverage (design §9.1)", () => {
+describe("reviewCoverage", () => {
   it("Codex writes and Claude reviews the final change clean: the task's own review counts, with no extra run", () => {
     const s = built(prMode(), ID, HEAD, { writer: "codex", reviewer: "claude" });
     expect(prOf(s).review).toMatchObject({ ok: true, source: "pipeline", forSha: HEAD, provider: "claude", taskId: ID, attemptId: `fx-review-${ID}`, artifactIds: [`fx-findings-${ID}`, `fx-secfindings-${ID}`] });
@@ -253,7 +254,7 @@ describe("reviewCoverage (design §9.1)", () => {
   });
 });
 
-describe("the independence rung in resolveStep (design §9.2)", () => {
+describe("the independence rung in resolveStep", () => {
   /** A dedicated review of a change Codex wrote, with the reviewer default set to `reviewer`. */
   function reviewOf(reviewer: ProviderId): { state: State; rv: Task } {
     let s = M.setRoleDefault(prMode(), "code_reviewer", { provider: reviewer, model: "auto" }, at(2));
@@ -313,7 +314,7 @@ describe("the independence rung in resolveStep (design §9.2)", () => {
     const again = D.requestPrReview(done, ID, at(8));
     expect(reviewTasks(again)).toHaveLength(2);
     expect(() => D.requestPrReview(again, ID, at(9))).toThrow(/already reviewing/);
-    // ORC-016 step 1 review, finding 5: the recorded hash is of the steps that run, with the purpose rewritten for this pull request.
+    // The recorded hash is of the steps that run, with the purpose rewritten for this pull request.
     const second = reviewTasks(again)[1];
     expect(second.steps[0].purpose).toMatch(/^Review .* for merge into .* at [0-9a-f]{12}$/);
     expect(second.flow).toMatchObject({ id: "delivery-review", source: "internal", chosenBy: "service", hash: flowHash(second.steps.map(toDef)) });
@@ -330,7 +331,7 @@ describe("the independence rung in resolveStep (design §9.2)", () => {
   });
 });
 
-describe("ensureReview (design §9.2)", () => {
+describe("ensureReview", () => {
   it("exactly one dedicated review, an ordinary ready task with the independence rule, and none for open findings", () => {
     const s0 = built(prMode(), ID, HEAD, null);
     const s = D.advanceDelivery(s0, at(4));
@@ -341,7 +342,7 @@ describe("ensureReview (design §9.2)", () => {
     expect(rv.steps).toHaveLength(2);
     expect(rv.steps[0]).toMatchObject({ role: "code_reviewer", purpose: `Review ${ID} for merge into main at ${HEAD.slice(0, 12)}`, independentOf: "writer", inputs: [] });
     expect(rv.steps[1]).toMatchObject({ role: "security_reviewer", purpose: `Security review of ${ID} for merge into main at ${HEAD.slice(0, 12)}`, independentOf: "writer", inputs: [] });
-    // ORC-016: the dedicated review pipeline is the service's own, recorded as such.
+    // The dedicated review pipeline is the service's own, recorded as such.
     expect(rv.flow).toMatchObject({ id: "delivery-review", source: "internal", chosenBy: "service" });
     expect(rv.pipelineHistory[0].flow).toMatchObject({ id: "delivery-review" });
     expect(prOf(s)).toMatchObject({ reviewTaskIds: [rv.id], counters: { reviews: 1 } });
@@ -400,7 +401,7 @@ describe("ensureReview (design §9.2)", () => {
   });
 });
 
-describe("the automatic gate: items 9 to 12 (design §9.5)", () => {
+describe("the automatic gate: items 9 to 12", () => {
   it("ready only when the policy is auto, the review is clean for this exact change, the checks passed on this exact head, and nothing is paused", () => {
     const s = autoOpen();
     expect(prOf(s)).toMatchObject({ policy: "auto", policySource: "project" });
@@ -418,7 +419,7 @@ describe("the automatic gate: items 9 to 12 (design §9.5)", () => {
   });
 
   it("6 and 7 still bind: a required check that is failing, skipped, neutral, missing, running or for another commit; UNKNOWN; no required check", () => {
-    // ORC-013 §7.2: every non-success still blocks; a skipped or cancelled check needs a person, not a fix task.
+    // Every non-success still blocks; a skipped or cancelled check needs a person, not a fix task.
     const codes: Record<string, string> = { FAILURE: "checks-failed", SKIPPED: "checks-skipped", NEUTRAL: "checks-skipped", CANCELLED: "ci-infra", TIMED_OUT: "checks-failed", ACTION_REQUIRED: "checks-failed" };
     for (const [c, code] of Object.entries(codes)) {
       const s = autoOpen({}, { checks: [check(c)] });
@@ -511,7 +512,7 @@ describe("the automatic gate: items 9 to 12 (design §9.5)", () => {
   });
 });
 
-describe("the merge queue of one (design §6.4)", () => {
+describe("the merge queue of one", () => {
   const both = (s: State, second: number, a: Partial<D.PrObservation> = {}, b: Partial<D.PrObservation> = {}) =>
     D.reportObservations(s, { prs: [observation({ number: 12, headSha: HEAD, checksFor: HEAD, ...a }), observation({ number: 13, headSha: HEAD2, checksFor: HEAD2, url: "https://github.com/o/r/pull/13", ...b })], commits: [] }, at(second));
 
@@ -597,7 +598,7 @@ describe("the merge queue of one (design §6.4)", () => {
   });
 });
 
-describe("the base update (design §8)", () => {
+describe("the base update", () => {
   it("the candidate, and only it, is brought up to date: built locally, pushed as a fast-forward, then re-checked; the review is not repeated", () => {
     const s = D.reportBaseFetched(autoOpen(), SHA_B, at(22));
     const op = D.nextPrOp(s, ms(24))!;
@@ -656,7 +657,7 @@ describe("the base update (design §8)", () => {
   });
 });
 
-describe("repair into the open pull request (design §9.3)", () => {
+describe("repair into the open pull request", () => {
   const red = () => autoOpen({}, { checks: [{ ...check("FAILURE"), url: "https://github.com/o/r/actions/runs/1" }] });
 
   it("a failed required check in automatic mode creates one fix task for the same pull request, with names and links only", () => {
@@ -666,7 +667,7 @@ describe("repair into the open pull request (design §9.3)", () => {
     expect(fix).toMatchObject({ id: `${ID}-F1`, holdBeforeStart: false, dependsOn: [], deliverInto: { taskId: ID, n: 1, mergeBase: false }, followUpOf: ID });
     expect(fix.specs[0].author).toBe("system");
     expect(fix.steps.map((x) => x.id)).toEqual(flowSteps("change").map((x) => x.id));
-    // ORC-016: a fix runs the catalog's Change, chosen by the service.
+    // A fix runs the catalog's Change, chosen by the service.
     expect(fix.flow).toMatchObject({ id: "change", source: "built-in", chosenBy: "service", hash: builtInCatalog().find((p) => p.id === "change")!.hash });
     expect(M.currentSpec(fix).content.scopeIncluded).toEqual(['Make the required check "check" pass (https://github.com/o/r/actions/runs/1). Find the cause in the code; do not weaken tests, CI or build scripts.']);
     expect(prOf(s)).toMatchObject({ repairTaskIds: [fix.id], counters: { repairs: 1 }, attention: { code: "checks-failed" } });
@@ -785,7 +786,7 @@ describe("repair into the open pull request (design §9.3)", () => {
   });
 });
 
-describe("main is red: the pause and the breaker (design §9.6)", () => {
+describe("main is red: the pause and the breaker", () => {
   /** PR #12 merged automatically by the app; its commit on the base is still being checked. */
   function landedByApp(): State {
     const s = autoOpen();
@@ -844,7 +845,7 @@ describe("main is red: the pause and the breaker (design §9.6)", () => {
   });
 });
 
-describe("the lead and delivery (design §11)", () => {
+describe("the lead and delivery", () => {
   it("a new attention for a failed check, findings, a conflict or a foreign push, a close by a person, a failed base check, or a new note wakes the lead", () => {
     const base = autoOpen();
     const since = at(21);
@@ -892,10 +893,10 @@ describe("settings and policy", () => {
 });
 
 // ====================================================================================================
-// Step 2 review findings that live in the domain
+// Delivery edge cases that live in the domain
 // ====================================================================================================
 
-describe("step 2 review: H2, another repository", () => {
+describe("another repository", () => {
   it("after the remote names another repository, the app plans nothing for the old pull request and says why", () => {
     const s0 = D.requestPrMerge(opened(built(prMode("hold"))), ID, HEAD, at(21));
     expect(D.nextPrOp(s0, ms(23))).toMatchObject({ kind: "merge" });
@@ -932,7 +933,7 @@ describe("step 2 review: H2, another repository", () => {
   });
 });
 
-describe("step 2 review: M1, merge queues and merge commits", () => {
+describe("merge queues and merge commits", () => {
   it("a repository with a merge queue, or without merge commits, blocks the user's merge and the automatic one alike", () => {
     for (const facts of [{ mergeQueue: true }, { mergeCommitsAllowed: false }]) {
       const report = { ok: true, repo: "o/r", login: "me", requiredChecks: ["check"], autoMergeBlockers: [], posture: [], ...facts };
@@ -951,7 +952,7 @@ describe("step 2 review: M1, merge queues and merge commits", () => {
   });
 });
 
-describe("step 2 review: M2, a fetch that keeps failing", () => {
+describe("a fetch that keeps failing", () => {
   it("is counted and backed off on its own; a passing repository check does not reset it; it is announced once", () => {
     let s = prMode();
     const fetch: D.PrOp = { id: "f", kind: "fetch" };
@@ -988,7 +989,7 @@ describe("step 2 review: M2, a fetch that keeps failing", () => {
   });
 });
 
-describe("step 2 review: M3, merge attempts", () => {
+describe("merge attempts", () => {
   function sent(): { state: State; op: D.PrOp } {
     const s = D.requestPrMerge(opened(built(prMode("hold"))), ID, HEAD, at(21));
     const op = D.nextPrOp(s, ms(23))!;
@@ -1030,7 +1031,7 @@ describe("step 2 review: M3, merge attempts", () => {
   });
 });
 
-describe("step 2 review: M4, notes that cannot be posted", () => {
+describe("notes that cannot be posted", () => {
   it("a note is never left waiting for a post that will not happen", () => {
     const merged = see(opened(built(prMode("hold"))), 30, { state: "MERGED", mergeCommit: MERGE, mergedBy: "octocat" });
     expect(D.cannotPostNote(merged, task(merged, ID))).toBeUndefined();
@@ -1044,8 +1045,8 @@ describe("step 2 review: M4, notes that cannot be posted", () => {
   });
 });
 
-describe("step 2 review: low findings", () => {
-  it("L4: publishing is bounded; after six failures it waits for the user, and a release tries again", () => {
+describe("smaller delivery cases", () => {
+  it("publishing is bounded; after six failures it waits for the user, and a release tries again", () => {
     let s = built(prMode("hold"));
     for (let k = 0; k < 6; k++) {
       const second = 10 + k * 1000;
@@ -1061,7 +1062,7 @@ describe("step 2 review: low findings", () => {
     expect(D.nextPrOp(fresh(released, 9010), ms(9010))).toMatchObject({ kind: "publish" });
   });
 
-  it("L7: a revert in pull-request mode waits for a fetch of the base made after the work landed and after it was asked for", () => {
+  it("a revert in pull-request mode waits for a fetch of the base made after the work landed and after it was asked for", () => {
     const merged = see(opened(built(prMode("hold"))), 30, { state: "MERGED", mergeCommit: MERGE, mergedBy: "octocat" });
     const r = D.sendBackLanded(merged, { taskId: ID, kind: "revert", note: "", holdBeforeStart: false }, at(40));
     const revert = task(r.state, r.newId);
@@ -1076,7 +1077,7 @@ describe("step 2 review: low findings", () => {
     expect(D.revertWaitsForBase(D.setDeliveryMode(r.state, { mode: "off" }, at(41)), revert)).toBe(false);
   });
 
-  it("L8: a pull request that was prepared but never opened is labelled truthfully after the mode is switched off, and its work can go through the current mode", () => {
+  it("a pull request that was prepared but never opened is labelled truthfully after the mode is switched off, and its work can go through the current mode", () => {
     const off = D.setDeliveryMode(built(prMode("hold")), { mode: "off" }, at(5));
     expect(D.prLabel(off, task(off, ID), ms(6))!.text).toBe("PR not opened: delivery is off");
     expect(D.nextPrOp(off, ms(100))).toBeUndefined();
@@ -1086,7 +1087,7 @@ describe("step 2 review: low findings", () => {
     expect(task(D.redeliver(abandoned, [ID], at(8)), ID).integration).toMatchObject({ status: "pending" });
   });
 
-  it("L9: a closed pull request is still read, slowly and for a day, and one that was reopened and merged on GitHub lands", () => {
+  it("a closed pull request is still read, slowly and for a day, and one that was reopened and merged on GitHub lands", () => {
     const closed = see(opened(built(prMode("hold"))), 30, { state: "CLOSED", closedBy: "octocat" });
     expect(D.nextPrOp(D.reportBaseFetched(closed, SHA_A, at(399)), ms(400))).toBeUndefined(); // same ten-minute slot
     const op = D.nextPrOp(D.reportBaseFetched(closed, SHA_A, at(659)), ms(660))!;
@@ -1101,7 +1102,7 @@ describe("step 2 review: low findings", () => {
     expect(D.nextPrOp(fresh(closed, 25 * 3600), ms(25 * 3600))).toBeUndefined();
   });
 
-  it("L10: a merge GitHub reports only after the command seemed to fail is still attributed to the app", () => {
+  it("a merge GitHub reports only after the command seemed to fail is still attributed to the app", () => {
     const s = D.requestPrMerge(opened(built(prMode("hold"))), ID, HEAD, at(21));
     const op = D.nextPrOp(s, ms(23))!;
     const begun = D.beginPrOp(s, op, at(23)).state;
@@ -1117,7 +1118,7 @@ describe("step 2 review: low findings", () => {
     expect(task(D.reportObservations(failed, { prs: [observation({ state: "MERGED", mergeCommit: MERGE, mergedBy: "me", headSha: SHA_B })], commits: [] }, at(60)), ID).integration!.landed!.by).toBe("person");
   });
 
-  it("L11: the chip names what the pull request is actually waiting for", () => {
+  it("the chip names what the pull request is actually waiting for", () => {
     const label = (s: State, second = 21) => D.prLabel(s, task(s, ID), ms(second))!.text;
     expect(label(opened(built(prMode("hold")), ID, 12, 20, { checks: [check(null)] }))).toBe("PR #12 checks");
     expect(label(opened(built(prMode("hold")), ID, 12, 20, { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" }))).toBe("PR #12 waiting on GitHub");

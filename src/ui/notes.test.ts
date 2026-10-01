@@ -1,10 +1,11 @@
-// ORC-022: the task page's and change list's words for notes: the status chip, the source, the target with
-// role and provider, and when "Send a note" is offered.
+// The task page's and the change list's words for notes to a running step: the status chip, the source, the target
+// with role and provider, and when "Send a note" is offered.
 
 import { describe, expect, it } from "vitest";
 import * as M from "../domain/model";
 import { buildSeed } from "../domain/seed";
 import type { Note } from "../domain/types";
+import { fmtTime } from "./common";
 import { canSendNote, noteRowLabel, noteSourceLabel, noteStatusLabel, noteTargetLabel, noteTone } from "./notes";
 import { describeChange } from "./steering";
 
@@ -25,11 +26,17 @@ describe("note labels", () => {
     expect(noteTone({ status: "not-delivered" })).toBe("fail");
   });
 
-  it("the source reads 'from you' or 'from the lead, for your message …'", () => {
-    expect(noteSourceLabel(base)).toBe("from you");
-    expect(noteSourceLabel({ from: { by: "lead", leadRunId: "lead-1", changeSetId: "cs-lead-1", changeId: "cs-lead-1.1", messageIds: ["msg-3"] } })).toBe("from the lead, for your message msg-3");
-    expect(noteSourceLabel({ from: { by: "lead", leadRunId: "lead-1", changeSetId: "cs-lead-1", changeId: "cs-lead-1.1", messageIds: ["msg-3", "msg-4"] } })).toBe("from the lead, for your messages msg-3, msg-4");
-    expect(noteSourceLabel({ from: { by: "lead", leadRunId: "lead-1", changeSetId: "cs-lead-1", changeId: "cs-lead-1.1", messageIds: [] } })).toBe("from the lead");
+  it("the source reads 'from you' or 'from the lead, for your message of <time>', never a message id", () => {
+    const at = new Date(T0 - 60_000).toISOString();
+    const s = { conversation: [{ id: "msg-3", at, author: "user" as const, text: "Tell the coder to skip the README." }] };
+    const lead = (messageIds: string[]) => ({ from: { by: "lead" as const, leadRunId: "lead-1", changeSetId: "cs-lead-1", changeId: "cs-lead-1.1", messageIds } });
+    expect(noteSourceLabel(s, base)).toBe("from you");
+    expect(noteSourceLabel(s, lead(["msg-3"]))).toBe(`from the lead, for your message of ${fmtTime(at)}`);
+    expect(noteSourceLabel(s, lead(["msg-3", "msg-4"]))).toBe(`from the lead, for your 2 messages from ${fmtTime(at)}`);
+    // A message pruned from the conversation still reads as yours, without a time.
+    expect(noteSourceLabel(s, lead(["msg-9"]))).toBe("from the lead, for your message");
+    expect(noteSourceLabel(s, lead([]))).toBe("from the lead");
+    for (const ids of [["msg-3"], ["msg-3", "msg-4"], ["msg-9"]]) expect(noteSourceLabel(s, lead(ids))).not.toMatch(/msg-/);
   });
 
   it("the target names the task, step, role and the provider that runs it; a row reads 'Note to WT-007 S2 (Coder · Claude): \"…\"'", () => {

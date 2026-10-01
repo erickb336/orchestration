@@ -1,11 +1,12 @@
-// ORC-022: plain-text descriptions of notes to running steps, shared by the task page, the change list
-// and notifications. Read-only derivations over domain state; the domain decides what a note's status is.
-// ORC-025 (L1, L2): also the lead conversation's words: the one line a reply's changes fold into, where a
-// message of yours stands, and a reply's decisions on findings, all without internal ids.
+// Plain-text descriptions of notes to running steps, shared by the task page, the change list and
+// notifications. Read-only derivations over domain state; the domain decides what a note's status is. Also the
+// lead conversation's words: the one line a reply's changes fold into, where a message of yours stands (and the
+// Settings card that unblocks the lead), and a reply's decisions on findings, all without internal ids.
 
 import * as M from "../domain/model";
 import { isProvider, type FindingDecision, type Message, type Note, type State, type SteeringChange, type SteeringChangeSet, type Task } from "../domain/types";
-import { ROLE_LABEL, type Tone } from "./common";
+import { ROLE_LABEL, fmtTime, type Tone } from "./common";
+import { cardHref } from "./settings/sections";
 
 /** The status chip: Queued, Sending, Delivered, Delivered when the run started, or Not delivered with the reason. */
 export function noteStatusLabel(n: Pick<Note, "status" | "via" | "reason">): string {
@@ -35,11 +36,17 @@ export function noteTone(n: Pick<Note, "status">): Tone {
   }
 }
 
-/** Who sent it: "from the lead, for your message msg-3" or "from you". */
-export function noteSourceLabel(n: Pick<Note, "from">): string {
+/**
+ * Who sent it: "from you", or "from the lead, for your message of Oct 1, 2:05 PM" (the message's time, never its
+ * id; "your 2 messages from …" names the first of several).
+ */
+export function noteSourceLabel(state: Pick<State, "conversation">, n: Pick<Note, "from">): string {
   if (n.from.by === "user") return "from you";
   const ids = n.from.messageIds;
-  return ids.length ? `from the lead, for your message${ids.length === 1 ? "" : "s"} ${ids.join(", ")}` : "from the lead";
+  if (!ids.length) return "from the lead";
+  const first = state.conversation.find((m) => m.id === ids[0]);
+  if (ids.length === 1) return `from the lead, for your message${first ? ` of ${fmtTime(first.at)}` : ""}`;
+  return `from the lead, for your ${ids.length} messages${first ? ` from ${fmtTime(first.at)}` : ""}`;
 }
 
 /** "WT-007 S2 (Coder · Claude)": the step a note or a note row is addressed to, with the role and the provider that runs (or would run) it. */
@@ -72,7 +79,7 @@ export function canSendNote(state: State, task: Task, stepId: string): boolean {
   return M.activeAttempts(state, task.id).some((a) => a.stepId === stepId && a.outcome === "running");
 }
 
-// ---------- ORC-025 (L1, L2): the lead conversation ----------
+// ---------- the lead conversation ----------
 
 /** Rows of a reply's change set, by what became of them; the one place the fold line and the list count from. */
 export interface ChangeGroups {
@@ -99,14 +106,14 @@ export function changeGroups(set: Pick<SteeringChangeSet, "changes">): ChangeGro
 }
 
 /**
- * Whether Undo is offered on an applied row. Review finding 3: a drop the user applied is an ordinary cancel, with
- * no undo. ORC-022: a sent note cannot be unsent, so its row has no Undo and Undo all leaves it.
+ * Whether Undo is offered on an applied row. A drop the user applied is an ordinary cancel, with no undo. A sent
+ * note cannot be unsent, so its row has no Undo and Undo all leaves it.
  */
 export function undoable(c: SteeringChange): boolean {
   return c.status === "applied" && c.kind !== "note" && !(c.kind === "drop" && c.appliedBy === "user");
 }
 
-/** Whether Apply all takes a suggestion. ORC-022 review M2: a rerun with a note is applied only on its own row (it asks first). */
+/** Whether Apply all takes a suggestion. A rerun with a note is applied only on its own row, because it asks first. */
 export function bulkApplicable(c: SteeringChange): boolean {
   return c.status === "suggested" && !(c.kind === "note" && c.rerun);
 }
@@ -140,12 +147,24 @@ export function foldActions(set: Pick<SteeringChangeSet, "changes">): { undo?: "
 
 /**
  * Where a message of yours stands, in the conversation's words. A message sent while the lead writes a reply
- * waits for that reply and is answered next, by itself: nothing to press (L2 removed "Answer together now").
+ * waits for that reply and is answered next, by itself: there is nothing to press.
  */
 export function messageStatusText(state: State, status: { kind: string; text: string }): string {
   if (status.kind !== "queued-behind-reply") return status.text;
   const run = M.activeLeadRun(state);
   return run && run.messageIds.length ? "The lead answers this right after its reply to your earlier message." : "The lead answers this when its current run ends.";
+}
+
+/**
+ * Where in Settings a blocked lead is unblocked, read from the service's reason: a new project when this is the
+ * sample, the repository when none is usable, the providers when the lead's is unavailable or still being checked,
+ * and otherwise the lead's model (not enabled, or not in the catalog).
+ */
+export function leadBlockedLink(state: Pick<State, "project">, blocked: string): { href: string; label: string } {
+  if (state.project.sample) return { href: cardHref("new-project"), label: "Start a new project in Settings › Project" };
+  if (/repository/i.test(blocked)) return { href: cardHref("repository"), label: "Settings › Project › Repository" };
+  if (/not available|provider/i.test(blocked)) return { href: cardHref("providers"), label: "Settings › Agents › Providers" };
+  return { href: cardHref("models"), label: "Settings › Agents › Models" };
 }
 
 type DecisionRow = NonNullable<Message["leadDecisions"]>[number];

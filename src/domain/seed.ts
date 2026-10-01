@@ -42,7 +42,7 @@ interface SeedOptions {
    */
   inFlightRuns?: boolean;
   /**
-   * ORC-013 §3: the sample project with checks on (two simulated commands, a simulated sandbox shown as
+   * The sample project with checks on (two simulated commands, a simulated sandbox shown as
    * ready, and simulated check results in its story), so the running demo shows the loop. Off by default:
    * the sample is also the neutral fixture of the test suite, whose pipelines never complete a check run.
    */
@@ -56,7 +56,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
   const artifacts: Artifact[] = [];
 
   const task = (id: string, priority: number, content: SpecContent, flowId: string, extra: Partial<Task> = {}): Task => {
-    // ORC-016: sample tasks come from the built-in catalog (or an internal flow), chosen by the lead.
+    // Sample tasks come from the built-in catalog (or an internal flow), chosen by the lead.
     const flow = builtInOrInternal(flowId);
     const defs = structuredClone(flow.steps).map(toDef);
     const ref = flowRef(flow, "lead");
@@ -82,7 +82,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
     tasks.push(t);
     return t;
   };
-  // ORC-013: the sample project has checks on, with two simulated commands, so the demo shows the loop.
+  // With checks on, the sample project has two simulated commands, so the demo shows the loop.
   // A completed Checks step in the sample story carries a simulated check result (nothing ever ran).
   const SAMPLE_COMMANDS = [
     { id: "typecheck", label: "typecheck", kind: "check" as const, argv: ["npm", "run", "typecheck"] },
@@ -256,7 +256,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
   ]);
   checks(ex2, "C1", 20);
   if (inFlightRuns) run(ex2, "S2", "claude", "claude-sample-large", 12, "running", 60);
-  // ORC-021: the security review beside S2 finished clean a little earlier; S2, the code review, is the one still running.
+  // The security review beside S2 finished clean a little earlier; S2, the code review, is the one still running.
   run(ex2, "SR1", "claude", "claude-sample-fast", 14, "completed", 100, [{ name: "findings", summary: "No security findings: the banner reads local state only (sample)", openFindings: 0 }]);
 
   task(
@@ -431,8 +431,8 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       steeringMode: "apply",
       stage: "building",
       prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
-      // ORC-013: the sample has checks on with two simulated commands (§3), so the demo shows the loop; a real
-      // project starts with them off. Findings that need a decision go to the user.
+      // With the `checks` option the sample has checks on with two simulated commands, so the demo shows the
+      // loop; a real project starts with them off. Findings that need a decision go to the user.
       checks: checksOn ? { ...structuredClone(DEFAULT_CHECKS), enabled: true, rev: 1, commands: SAMPLE_COMMANDS.map((c) => ({ ...c, argv: [...c.argv] })) } : structuredClone(DEFAULT_CHECKS),
       ...(checksOn ? { checksHealth: { sandbox: "codex" as const, status: "ready" as const, detail: "Simulated: no command runs and nothing is spawned.", checkedAt: at(60) } } : {}),
       triage: { askUserBy: "user" },
@@ -451,7 +451,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
     steering: [],
     visionDrafts: [],
     decisions: [],
-    // ORC-016: the built-in catalog until the server loads the files (it replaces this at start).
+    // The built-in catalog until the server loads the files (it replaces this at start).
     flows: builtInCatalog(),
     notes: [],
     events: [
@@ -485,7 +485,7 @@ export function buildEmptyProject(nowMs: number = Date.now()): State {
       sample: false,
       name: "New project",
       repoPath: "",
-      // ORC-013: checks are off until the user turns them on for a repository of their own; nothing is probed yet.
+      // Checks are off until the user turns them on for a repository of their own; nothing is probed yet.
       checks: structuredClone(DEFAULT_CHECKS),
       checksHealth: undefined,
       // Real catalogs replace the sample ones at startup; "auto" resolves to each provider's first
@@ -493,7 +493,7 @@ export function buildEmptyProject(nowMs: number = Date.now()): State {
       ...autoModelDefaults(),
       visions: [{ rev: 1, at: now, author: "system", text: "", focus: "", reason: "Empty project; set it up in Settings" }],
       visionDocs: [],
-      // ORC-012 review 6: a project never builds without a vision; an empty one starts by shaping.
+      // A project never builds without a vision; an empty one starts by shaping.
       stage: "shaping",
       shapingSince: now,
       lastVisitAt: now,

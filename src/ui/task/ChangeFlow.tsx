@@ -1,4 +1,4 @@
-// ORC-021: run a task on another flow. Opened from the header's More menu while the task is open and not
+// Run a task on another flow. Opened from the header's More menu while the task is open and not
 // service-owned. The panel shows the picker, what the change does (which steps start over, which pins stay,
 // what is closed) and an optional note. The pipeline revision is the one the panel was opened on; if it moves
 // meanwhile, the panel asks you to review again instead of sending a stale request.

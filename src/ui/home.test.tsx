@@ -1,6 +1,6 @@
-// ORC-025 pass 2: the shell and Home. There is no DOM test environment in this repository, so the screens are
-// rendered through react-dom/server over a fake store, and the decisions Home takes in place are checked
-// through the pure helpers in progress.ts (needsYouItems, mergeVerdict).
+// The shell and Home. There is no DOM test environment in this repository, so the screens are rendered through
+// react-dom/server over a fake store, and the decisions Home takes in place are checked through the pure helpers in
+// progress.ts (needsYouItems, mergeVerdict).
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -10,11 +10,12 @@ import * as M from "../domain/model";
 import { buildDemo } from "../domain/demo";
 import { buildSeed } from "../domain/seed";
 import { reviewedChange } from "../domain/testing/reviewed";
-import type { PrDelivery, State } from "../domain/types";
+import type { PrDelivery, State, SteeringChange } from "../domain/types";
 import { LeadButton, ProjectMenu, ResultsBadge, SimBanner, TABS } from "./App";
 import { ConfirmProvider } from "./kit";
 import { Overview, focusProvenance } from "./Overview";
 import { landedVerdict, mergeVerdict, needsYouItems, optionsLine, prsNeedingYou } from "./progress";
+import { StartBuildingButton } from "./Shaping";
 import { StoreContext, type ServiceStore } from "./store";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -103,7 +104,7 @@ function readyPr(base = T0): State {
   return D.reportObservations(open, { prs: [obs], commits: [], rateRemaining: 5000 }, at(20));
 }
 
-describe("Needs you on Home (H3): the decisions it takes in place", () => {
+describe("Needs you on Home: the decisions it takes in place", () => {
   it("the demo's finding and two-option task act in place; everything else opens the right page", () => {
     const s = buildDemo(T0);
     const items = needsYouItems(s, T0);
@@ -150,7 +151,7 @@ describe("Needs you on Home (H3): the decisions it takes in place", () => {
   });
 });
 
-describe("Home (H1, H2, H4, H5)", () => {
+describe("Home", () => {
   const s = buildDemo(T0);
   const markup = render(<Overview />, store(s));
 
@@ -181,7 +182,7 @@ describe("Home (H1, H2, H4, H5)", () => {
   it("shows the lead's latest reply with one simulated chip and a way to open the conversation", () => {
     expect(markup).toContain("It is still running: Claude is reviewing");
     expect(markup).toContain(">Open the conversation<");
-    // N6: "simulated" is the kit's chip, on things that could pass for real (the reply, landed items), never a suffix.
+    // "Simulated" is the kit's chip, on things that could pass for real (the reply, landed items), never a suffix.
     expect(count(markup, 'class="k-chip k-chip--sim"')).toBeGreaterThanOrEqual(1);
     expect(markup).not.toContain("(simulated)");
     expect(markup).not.toContain("Fake runtime");
@@ -194,7 +195,7 @@ describe("Home (H1, H2, H4, H5)", () => {
   });
 });
 
-describe("The shell (N1, N2, N5, N7)", () => {
+describe("The shell", () => {
   it("has no Activity tab; the Activity page stays at #/activity", () => {
     expect(TABS.map((t) => t.label)).toEqual(["Home", "Tasks", "Results", "Settings"]);
   });
@@ -235,6 +236,60 @@ describe("The shell (N1, N2, N5, N7)", () => {
     expect(done).toContain(">Paused<");
     expect(done).toContain("Project paused");
     expect(done).toContain(">Resume project<");
+  });
+});
+
+describe("Home's latest reply, in the conversation's words", () => {
+  const change = (n: number, kind: SteeringChange["kind"]): SteeringChange => ({ id: `cs-x.${n}`, kind, before: null, after: kind === "note" ? "Skip the README." : "x", why: "", status: "applied", appliedBy: "lead" });
+
+  it("counts a sent note apart from the changes, as the fold line under the reply does", () => {
+    const s = structuredClone(buildSeed(T0, { inFlightRuns: false }));
+    s.steering.push({ id: "cs-x", leadRunId: "lead-x", messageIds: [], at: at(5), mode: "apply", basedOnVisionRev: 1, reason: "", notes: [], changes: [change(1, "focus"), change(2, "priority"), change(3, "note")] });
+    s.conversation.push({ id: "msg-x", at: at(5), author: "lead", text: "Refocused, and passed your note on.", changeSetId: "cs-x" });
+    const markup = render(<Overview />, store(s));
+    expect(markup).toContain("2 changes, 1 note");
+    expect(markup).not.toContain("3 changes");
+  });
+
+  it("a message sent while the lead writes a reply is answered right after it, and Home and the header say so in those words", () => {
+    let s = M.postMessage(buildSeed(T0, { inFlightRuns: false }), "Focus on offline maps.", at(1));
+    s = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "message" }, at(2)).state;
+    s = M.postMessage(s, "And keep the README short.", at(3));
+    const words = "The lead answers this right after its reply to your earlier message.";
+    const home = render(<Overview />, store(s));
+    expect(home).toContain(words);
+    expect(home).not.toContain("Queued behind the current reply");
+    expect(render(<LeadButton open={false} onClick={() => {}} />, store(s))).toContain(words);
+  });
+});
+
+describe("the shaping panel", () => {
+  const shaping = (vision: string) => {
+    const s = structuredClone(M.startShaping(buildSeed(T0, { inFlightRuns: false }), at(1)));
+    s.project.visions[s.project.visions.length - 1].text = vision;
+    return s;
+  };
+
+  it("leads Home while shaping, on the kit: a card with the vision, its documents, what is clear, the planned tasks and Start building", () => {
+    const markup = render(<Overview />, store(shaping("Hikers find trails without signal.")));
+    expect(markup.indexOf(">Shape the vision<")).toBeLessThan(markup.indexOf(">Needs you<"));
+    const start = markup.indexOf('class="k-card v-shape"');
+    expect(start).toBeGreaterThan(-1);
+    const panel = markup.slice(start, markup.indexOf(">Needs you<"));
+    expect(panel).toContain('id="shape"');
+    for (const part of [">Vision so far<", "Vision documents (", ">What is clear so far<", "Planned tasks (", ">Start building<"]) expect(panel).toContain(part);
+    expect(panel).not.toContain("style=");
+    expect(panel).not.toContain('class="banner');
+    expect(panel).not.toContain('class="chip');
+  });
+
+  it("Start building says why it cannot start under the button, and what it will do when it can", () => {
+    const empty = render(<StartBuildingButton />, store(shaping("")));
+    expect(empty).toContain("Write or accept a vision first.");
+    expect(empty).toContain("k-btn-reason");
+    const ready = render(<StartBuildingButton />, store(shaping("Hikers find trails without signal.")));
+    expect(ready).not.toContain("k-btn-reason");
+    expect(ready).toContain("all nine count as open");
   });
 });
 

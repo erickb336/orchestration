@@ -1,12 +1,12 @@
-// ORC-025 pass 5: the words of Settings that depend on the numbers, as pure functions so they are tested
-// without a browser. The involvement card describes each mode with the numbers it actually sets (S2), and
-// the long consent texts that used to sit in browser confirm() dialogs are in-page confirmations here.
+// The words of Settings that depend on the numbers, as pure functions so they are tested
+// without a browser. The involvement card describes each mode with the numbers it actually sets, and
+// the long consent texts are here, as the in-page confirmations that ask for them.
 
 import { AUTOPILOT, type CheckCommand } from "../domain/types";
 import type { ConfirmOptions } from "./kit";
 import type { Involvement } from "./common";
 
-// ---------- the involvement card (S2) ----------
+// ---------- the involvement card ----------
 
 /** The numbers a mode plans with, as the fields hold them. */
 export type PlanNumbers = { interval: number; perCycle: number; maxOpen: number; retries: number; hours: { start: string; end: string } | null };
@@ -56,7 +56,7 @@ export function proposalsLine(open: number, deferred: number, max: number): stri
   return `${openText} ${deferredText}`;
 }
 
-// ---------- checks (S4) ----------
+// ---------- checks ----------
 
 /** "On · 2 commands" / "Off · no commands": the one line Quality shows for checks. */
 export function checksSummary(enabled: boolean, commands: Pick<CheckCommand, "kind">[]): string {
@@ -67,7 +67,7 @@ export function checksSummary(enabled: boolean, commands: Pick<CheckCommand, "ki
 /** A command as it would be typed: `npm run lint`. */
 export const argvText = (argv: string[]) => argv.join(" ");
 
-// ---------- in-page confirmations (they replaced the browser's confirm()) ----------
+// ---------- in-page confirmations ----------
 
 export const CONFIRM_CHECKS_ON: ConfirmOptions = {
   title: "Turn checks on?",

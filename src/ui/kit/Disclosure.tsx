@@ -16,7 +16,7 @@ export type DisclosureProps = {
   children: ReactNode;
 };
 
-/** Details behind a summary (rule 2: the rest is a click away). Native details/summary, so it is keyboard-operable as is. */
+/** Details behind a summary (the rest is a click away). Native details/summary, so it is keyboard-operable as is. */
 export function Disclosure({ label, count, open, defaultOpen, onToggle, inline, className, children }: DisclosureProps) {
   return (
     <details className={cx("k-disc", inline && "k-disc--inline", className)} open={open ?? defaultOpen} onToggle={(e: SyntheticEvent<HTMLDetailsElement>) => onToggle?.(e.currentTarget.open)}>

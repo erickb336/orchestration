@@ -1,4 +1,4 @@
-// ORC-009: steering by conversation, service level. Scripted adapters for both providers and a
+// Steering by conversation, service level. Scripted adapters for both providers and a
 // temporary git repository; no real providers. The user's own example end to end, planning preemption,
 // newer direction, races, modes, the dependency guard, children, drop and re-proposal, idempotency,
 // restart, the format 10 → 11 migration, the envelope, and provider neutrality.
@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as M from "../src/domain/model";
 import type { State, SteeringChangeSet } from "../src/domain/types";
 import { buildLeadEnvelope } from "./envelope";
@@ -16,6 +16,10 @@ import { Scheduler } from "./scheduler";
 import { STATE_FORMAT, Store } from "./store";
 import { ScriptedAdapter, proposal, st, steer } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
+
+// Real git and many scheduler cycles per test: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 let dir: string;
 let repo: string;
@@ -541,7 +545,7 @@ describe("L/M/O/Q. drops, undo idempotency, untrusted output, duplicate events",
     cmd("pauseProject");
     claude.reply(r2.id, "late", [], steer({ tasks: [st.defer(id)] }));
     tick();
-    // Review finding 16: the note must say the steering, not only the proposals, was not applied.
+    // The note must say the steering, not only the proposals, was not applied.
     expect(state().leadRuns.find((x) => x.id === r2.id)).toMatchObject({ outcome: "stopped", note: expect.stringMatching(/^Finished after a stop request; its proposals and steering were not applied\./) });
     expect(state().steering).toHaveLength(1);
     expect(task(id).deferral).toBeUndefined();
@@ -607,7 +611,8 @@ describe("R/S. restart and migration", () => {
     raw.close();
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    // ORC-012 raised the format to 12 and ORC-014 to 13; a format-10 document upgrades through each.
+    // Later features raised the format further (shaping to 12, vision documents to 13, …); a format-10 document
+    // upgrades through each.
     expect(STATE_FORMAT).toBe(18);
     expect(s.version).toBe(18);
     expect(s.steering).toEqual([]);
@@ -673,7 +678,7 @@ describe("T/U. the envelope and provider neutrality", () => {
     expect(text).toMatch(/r2 by lead \(the user's message msg-/);
     expect(text).toMatch(/r3 by user \(undo of cs-/);
     expect(text).toMatch(new RegExp(`${set.changes[2].id}.*deferred — undone by the user`));
-    // Review finding 16: the rules text always contains the word "dismissed"; assert the dismissed row itself.
+    // The rules text always contains the word "dismissed"; assert the dismissed row itself.
     expect(text).toMatch(new RegExp(`- ${set2.changes[0].id.replace(/\\./g, "\\.")} \\(.*\\): ${b} P2 → P1 — dismissed`));
     expect(text.split("\n").filter((l) => l.includes(" — dismissed"))).toHaveLength(1);
     expect(text).toContain(`(sent from ${a} "Open A"`);
@@ -704,8 +709,8 @@ describe("T/U. the envelope and provider neutrality", () => {
   });
 });
 
-describe("R1. independent review findings (service)", () => {
-  it("1: the open-work board leaves out the service's review and fix tasks, and steering them is rejected", () => {
+describe("the service's own review and fix tasks", () => {
+  it("the open-work board leaves out the service's review and fix tasks, and steering them is rejected", () => {
     const a = createTask("Open A", 1);
     const rv = createTask("Review of A's pull request", 1);
     const fx = createTask("Fix for A's pull request", 1);
@@ -732,8 +737,8 @@ describe("R1. independent review findings (service)", () => {
   });
 });
 
-describe("R1. independent review findings (low, service)", () => {
-  it("15: a message run cannot propose past the bound on deferred lead work either", () => {
+describe("the bound on deferred lead work", () => {
+  it("a message run cannot propose past the bound on deferred lead work either", () => {
     autonomy({ maxOpenProposals: 1, maxProposalsPerCycle: 2 });
     tick();
     const p = leadRun()!;

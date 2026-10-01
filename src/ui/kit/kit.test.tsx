@@ -1,4 +1,4 @@
-// ORC-025 r3: the kit's behaviour. There is no DOM test environment in this repository, so the markup is checked
+// The kit's behaviour. There is no DOM test environment in this repository, so the markup is checked
 // through react-dom/server and the keyboard and confirmation logic through its pure helpers (keys.ts, confirmCore.ts).
 
 import { renderToStaticMarkup } from "react-dom/server";

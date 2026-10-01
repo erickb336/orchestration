@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A stand-in for `codex app-server`, for tests of server/checks.ts (ORC-013). It speaks the two
+// A stand-in for `codex app-server`, for tests of server/checks.ts. It speaks the two
 // requests the check runner sends, `initialize` and `command/exec` (plus `command/exec/terminate`), over
 // the same line-delimited JSON-RPC wire, and runs each command for real, without any sandbox: it is
 // the request contract that is under test, not the sandbox. It never contacts anything.

@@ -61,7 +61,7 @@ export class ScriptedAdapter implements RuntimeAdapter {
       this.listeners.delete(l);
     };
   }
-  /** ORC-022: scripted runs acknowledge nothing unless a test says so. */
+  /** Scripted runs acknowledge nothing unless a test says so. */
   note(attemptId: string, note: { id: string; text: string }) {
     this.notes.push({ attemptId, ...note });
   }
@@ -77,7 +77,7 @@ export class ScriptedAdapter implements RuntimeAdapter {
    * Finish a worker run, optionally writing a file first, reporting every declared output. A review
    * reports `findings` as a legacy count (the default, 0) or, with `structured`, as a findings list;
    * like a well-behaved reviewer it lists the changed files the envelope named as `reviewedPaths`
-   * unless `reviewedPaths` overrides that (ORC-013).
+   * unless `reviewedPaths` overrides that.
    */
   finish(id: string, opts: { write?: [string, string]; findings?: number; structured?: unknown[]; reviewedPaths?: string[]; omit?: string; items?: unknown[] } = {}) {
     const a = this.runs.get(id)!;
@@ -95,8 +95,8 @@ export class ScriptedAdapter implements RuntimeAdapter {
     this.emit({ type: "completed", attemptId: id, finalText: `All done.\n\`\`\`json\n${JSON.stringify({ outputs })}\n\`\`\``, usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 }, model: `${a.model}-actual` });
   }
   /**
-   * Answer a lead run with a reply, proposals, (ORC-009) a steering block and (ORC-012) a vision draft plus
-   * coverage and questions, all raw and validated by the service. Each block is written only when given.
+   * Answer a lead run with a reply, proposals, a steering block and a vision draft plus coverage and
+   * questions, all raw and validated by the service. Each block is written only when given.
    */
   reply(id: string, reply: string, proposals: unknown[] = [], steer?: unknown, vision?: unknown, extra: { coverage?: unknown; questions?: unknown } = {}) {
     const block: Record<string, unknown> = { reply, proposals };
@@ -112,7 +112,7 @@ export class ScriptedAdapter implements RuntimeAdapter {
   }
 }
 
-/** ORC-013: the changed files a review envelope asks the reviewer to account for (the JSON array under that heading), or none. */
+/** The changed files a review envelope asks the reviewer to account for (the JSON array under that heading), or none. */
 export function changedFilesIn(prompt: string): string[] {
   const section = /## Changed files you must account for\n[\s\S]*?\n(\[[\s\S]*?\])\n/.exec(prompt);
   if (!section) return [];
@@ -190,7 +190,7 @@ export function proposal(over: Record<string, unknown> = {}) {
   };
 }
 
-// ---------- ORC-013: a controllable check runner for scheduler tests ----------
+// ---------- a controllable check runner for scheduler tests ----------
 
 import type { CheckAssignment, CheckRunner } from "../checks";
 import type { CheckResult, ChecksHealth } from "../../src/domain/types";
@@ -232,7 +232,7 @@ export class ScriptedChecks implements CheckRunner {
     this.probes.push(sandbox);
     return { sandbox, status: this.health, detail: this.health === "ready" ? "scripted: ready" : "scripted: the sandbox is unavailable", checkedAt: new Date().toISOString(), ...(this.health !== "ready" ? { probes: { writeOutside: "allowed" as const, network: "unknown" as const } } : {}) };
   }
-  /** ORC-022: scripted runs acknowledge nothing unless a test says so. */
+  /** Scripted runs acknowledge nothing unless a test says so. */
   note(attemptId: string, note: { id: string; text: string }) {
     this.notes.push({ attemptId, ...note });
   }

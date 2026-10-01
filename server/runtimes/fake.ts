@@ -243,7 +243,7 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message" 
   const vision = trigger === "message" ? fakeVision(prompt) : undefined;
   const shaping = trigger === "message" ? fakeShaping(prompt) : undefined;
   // ORC-013: the simulated lead accepts every finding routed to it; a real lead weighs each one.
-  const decisions = decisionIds(prompt).map((id) => ({ id, decision: "accept", why: "Accepted as it is; in live mode a real lead weighs the finding against the task's outcome and the vision." }));
+  const decisions = decisionIds(prompt).map((id) => ({ id, decision: "accept", why: "Accepted as it is: the demo's lead accepts every finding it is asked to decide, without weighing it." }));
   const newest = newestMessageLine(prompt);
   const question = trigger === "message" && !vision && !steer && board && newest ? statusQuestion(board, newest.text, newest.fromTaskId) : undefined;
   const notes = (steer?.notes ?? []) as { task: string }[];
@@ -252,14 +252,14 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message" 
     trigger === "planning"
       ? "I reviewed the board and proposed one small task."
       : vision
-        ? `Here is what I understand: ${newestMessage(prompt) ?? "your message"} (assumption: that is the whole problem). I drafted a living vision from it with marked assumptions, and I have three questions with suggested answers. Accept, edit or dismiss the draft; answer what you can. In live mode a real lead grounds all of this in your answers and the repository.`
+        ? `Here is what I understand: ${newestMessage(prompt) ?? "your message"} (assumption: that is the whole problem). I drafted a vision from your words with the assumptions marked, and three questions with suggested answers. Accept, edit or dismiss the draft, and answer what you can.`
         : // The envelope's rule for every lead: never claim a change in the reply; the service's list under it says what happened.
           steer && !steer.focus
           ? `I asked to pass your note on to ${notes.length ? noteRecipient(prompt, notes[0]) : "the agent"}. The line under this reply shows whether it was sent and has reached them.`
           : steer
             ? `Noted the new direction. I asked to make your words the focus${(steer.tasks as unknown[]).length ? " and to defer the lowest-priority work that no longer fits it" : ""}${notes.length ? `, and to pass your note on to ${noteRecipient(prompt, notes[0])}` : ""}. The line under this reply shows what the service applied.`
           : decisions.length && trigger === "decisions"
-            ? "I went through the findings waiting for me and accepted them as they are; the service lists each decision below. In live mode a real lead weighs each one."
+            ? "I accepted every finding that was waiting for me as it is, without weighing it; the service lists each decision below."
             : question && board
               ? statusAnswer(board, question, nowMs)
               : "Noted; I changed nothing. Ask me what is running, what needs you or how a task is going; tell me what to focus on; or ask me to tell the coder on a task something.";

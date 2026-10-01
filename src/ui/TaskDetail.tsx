@@ -1,4 +1,4 @@
-// The task page (ORC-025 pass 3). Top to bottom: the header (title, state, Pause or Resume, Message the lead,
+// The task page. Top to bottom: the header (title, state, Pause or Resume, Message the lead,
 // More), what stands in the way, what the task needs from you (once), what it is for, its steps, its result,
 // and Details: the spec and options, outputs, runs, activity, revisions and models.
 // The parts live in src/ui/task/; this file only composes them.

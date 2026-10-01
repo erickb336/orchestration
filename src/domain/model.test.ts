@@ -267,7 +267,7 @@ describe("step model configuration", () => {
   });
 });
 
-describe("review regressions", () => {
+describe("stale results, state labels and closed tasks", () => {
   it("rerunning upstream stops in-flight downstream work so its stale result never integrates", () => {
     let s = seed();
     const [review] = running(s, "EX-002"); // S2 running on S1's output
@@ -285,7 +285,7 @@ describe("review regressions", () => {
     let s = M.pauseProject(seed(), at(0));
     for (const a of running(s)) s = M.acknowledgeStop(s, a.id, at(1));
     expect(M.column(s, task(s, "EX-001"))).toBe("paused");
-    // ORC-025: one word for a pause; the header says "Project paused".
+    // One word for a pause; the header says "Project paused".
     expect(M.stateLabel(s, task(s, "EX-001"))).toBe("Paused");
   });
 
@@ -300,7 +300,7 @@ describe("review regressions", () => {
   it("stop label reflects the real reason after a project resume", () => {
     let s = M.pauseProject(seed(), at(0));
     s = M.resumeProject(s, at(1));
-    // ORC-025: the pause was lifted, so the task resumes once the run has stopped; the banner says a run is still stopping.
+    // The pause was lifted, so the task resumes once the run has stopped; the banner says a run is still stopping.
     expect(M.stateLabel(s, task(s, "EX-001"))).toBe("Resuming");
   });
 

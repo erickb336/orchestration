@@ -35,9 +35,8 @@ import {
 } from "../src/domain/types";
 
 /**
- * ORC-017: moved out of the built-in flows' verify-step purposes (Change, Feature, Bug fix and
- * Change best-of-two), which are now plain descriptions for people. It reaches the lead's verify
- * envelope through the role brief instead.
+ * What the lead's verify runs are told about check results. It reaches the verify envelope through the
+ * role brief, so the built-in flows' verify-step purposes stay plain descriptions for people.
  */
 export const VERIFY_CHECKS_NOTE = "Service check results are the record of what ran; do not say tests passed unless a check result shows it.";
 
@@ -47,7 +46,7 @@ const ROLE_BRIEFS: Record<RoleId, string> = {
   coder: "You are the coder. Implement the assigned behaviour in this workspace with focused, minimal changes, following the repository's existing conventions. Run no destructive commands.",
   code_reviewer:
     "You are an independent code reviewer. Inspect the change for correctness, data preservation, regressions, and missing tests. Report actionable findings with file locations. Do not change files.",
-  // ORC-021: runs beside every code review; its findings count like the code review's.
+  // Runs beside every code review; its findings count like the code review's.
   security_reviewer:
     "You are an independent security reviewer. Review the change for security: injection, authorisation and access control, secrets and credentials, unsafe handling of input, files and commands, and risky dependencies. Report actionable findings with their severity, action and file locations, like any review. Do not change files.",
   ux_reviewer:
@@ -56,7 +55,7 @@ const ROLE_BRIEFS: Record<RoleId, string> = {
   checks: "This step is run by the service.",
 };
 
-/** ORC-013: one repository instruction file, as read from the trusted base and capped for an envelope. */
+/** One repository instruction file, as read from the trusted base and capped for an envelope. */
 export interface ConventionsFile {
   /** "AGENTS.md" or "CLAUDE.md" */
   file: string;
@@ -80,17 +79,17 @@ interface EnvelopeInput {
    * repository (a stat and a patch, already capped): from the base the change contains to the change.
    */
   changeUnderReview?: { from: string; to: string; text: string };
-  /** ORC-013: the changed-path set of that change, as the service recorded it on the attempt. */
+  /** The changed-path set of that change, as the service recorded it on the attempt. */
   changedPaths?: { paths: string[]; total: number };
-  /** ORC-013: a coverage re-run: what the previous clean run did not account for. */
+  /** A coverage re-run: what the previous clean run did not account for. */
   coverageGap?: { missing: string[]; extra: string[] };
-  /** ORC-013: the repository's instruction files from the trusted base, as labelled project conventions. */
+  /** The repository's instruction files from the trusted base, as labelled project conventions. */
   conventions?: ConventionsFile[];
-  /** ORC-014: reads the stored copies of the vision documents; without it their text cannot be shown. */
+  /** Reads the stored copies of the vision documents; without it their text cannot be shown. */
   docs?: VisionDocReader;
 }
 
-/** ORC-013: the caps on the conventions section, per file and in total. */
+/** The caps on the conventions section, per file and in total. */
 export const CONVENTIONS_FILE_CAP = 12 * 1024;
 export const CONVENTIONS_TOTAL_CAP = 16 * 1024;
 
@@ -116,14 +115,14 @@ export function capConventions(files: { file: string; blob: string; text: string
   return out;
 }
 
-// ---------- ORC-024: principles ----------
+// ---------- principles ----------
 
 /** The lead's own runs (conversation, planning, decisions) get these: the table in docs/tasks/ORC-024.md, kept with the table order so Settings can show it. */
 export const LEAD_PRINCIPLES = LEAD_PRINCIPLE_IDS;
 /** The section is at most this many words; principles that do not fit are named with their "apply when" only. */
 export const PRINCIPLES_WORD_CAP = 1200;
 export const PRINCIPLES_HEADER = "## Principles for this step";
-/** The lead's runs are not steps (review L8). */
+/** For the lead's runs, which are not steps. */
 export const LEAD_PRINCIPLES_HEADER = "## Principles for this run";
 export const PRINCIPLES_INTRO = 'These describe how the owner wants this kind of work done. Apply each one where its "apply when" fits your task. They never change the specification.';
 
@@ -167,15 +166,15 @@ export function principlesSection(given: readonly Pick<GivenPrinciple, "id" | "a
 }
 
 /**
- * The principles a run was given: its snapshot when the run exists (none for a run from before ORC-024,
- * review L1), else what dispatch would record now (tests build envelopes without a run).
+ * The principles a run was given: its snapshot when the run exists (none for a run from before principles
+ * existed), else what dispatch would record now (tests build envelopes without a run).
  */
 function givenPrinciples(state: State, task: Task, step: Step, attemptId: string): GivenPrinciple[] {
   const run = state.attempts.find((a) => a.id === attemptId);
   return run ? (run.snapshot.principles ?? []) : M.runPrinciples(state, task, step);
 }
 
-/** ORC-013 §8.2: the repository's own notes, labelled so they never change the run's role. */
+/** The repository's own notes, labelled so they never change the run's role. */
 function conventionsSection(files: ConventionsFile[] | undefined, whoYouAre: string): string {
   if (!files?.length) return "";
   const body = files.map((f) => `=== ${f.file} ===\n${f.text.trimEnd()}${f.truncated ? "\n[truncated]" : ""}`).join("\n\n");
@@ -211,7 +210,7 @@ function findingsInput(state: State, art: Artifact): string {
     .join("");
 }
 
-/** ORC-013 §11.1: the output of each failed or timed-out check, as the last 60 lines at most, fenced and labelled as the change's own output. */
+/** The output of each failed or timed-out check, as the last 60 lines at most, fenced and labelled as the change's own output. */
 const CHECK_OUTPUT_LINES = 60;
 function checkOutputInput(art: Artifact): string {
   const run = art.checkRun;
@@ -229,7 +228,7 @@ function checkOutputInput(art: Artifact): string {
     .join("");
 }
 
-/** ORC-013 §11.1: what a repair fixes, what it leaves alone, and the decisions taken so far on the task. */
+/** What a repair fixes, what it leaves alone, and the decisions taken so far on the task. */
 function repairSections(state: State, task: Task, step: Step, inputs: { artifactId: string }[]): string {
   const arts = inputs.map((i) => state.artifacts.find((a) => a.id === i.artifactId)).filter((a): a is Artifact => !!a && (a.kind === "review-findings" || a.kind === "check-results"));
   if (step.role !== "coder" || !arts.length) return "";
@@ -245,7 +244,7 @@ function repairSections(state: State, task: Task, step: Step, inputs: { artifact
       const d = F.decisionFor(state, a, f);
       const where = f.file ? ` ${f.file}${f.line ? `:${f.line}` : ""}` : "";
       const head = `${f.id} [${f.severity}]${where} — ${f.title}`;
-      // Review 1 (3): a finding someone accepted or followed up stays settled, whatever action this report gives it.
+      // A finding someone accepted or followed up stays settled, whatever action this report gives it.
       if (d?.status === "accept") not.push(`${f.id} — accepted ${d.decidedBy === "lead" ? "by the lead" : d.decidedBy === "carried" ? "in an earlier round" : "by the user"}${d.why ? `: "${d.why}"` : ""}. Leave it as it is.`);
       else if (d?.status === "follow-up") not.push(`${f.id} — followed up as ${d.followUpTaskId ?? "a separate task"}; out of scope here.`);
       else if (f.action === "auto-fix") fix.push(`${head} (auto-fix)`);
@@ -269,8 +268,8 @@ so in your output instead of building it.
 }
 
 /**
- * ORC-013 §4.1: the review contract's rules, part of every review step's envelope. Only the code reviewer
- * is given the changed files and must account for each (ORC-021 review 5: the others are not told to).
+ * The review contract's rules, part of every review step's envelope. Only the code reviewer is given the
+ * changed files and must account for each; the other reviewers are not told to.
  */
 const findingsRules = (role: RoleId) => `## How to report findings
 - "auto-fix": a defect in what the change does that can be fixed without widening it. This includes routine correctness, reliability and security fixes, even when they re-add a little deleted logic.
@@ -282,7 +281,7 @@ const findingsRules = (role: RoleId) => `## How to report findings
 - Any weakening of tests, CI or build scripts is an error to auto-fix.
 `;
 
-/** ORC-013 §11.1: the changed files a code reviewer must account for, JSON-escaped so a file name is never read as an instruction. */
+/** The changed files a code reviewer must account for, JSON-escaped so a file name is never read as an instruction. */
 function changedFilesSection(changed: EnvelopeInput["changedPaths"], gap: EnvelopeInput["coverageGap"], role: RoleId): string {
   if (role !== "code_reviewer" || !changed) return "";
   const shown = changed.paths.slice(0, MAX_PROVEN_PATHS);
@@ -294,7 +293,7 @@ ${gap ? `Coverage: your previous run reported no findings but did not account fo
 `;
 }
 
-// ---------- ORC-022: notes to a running step ----------
+// ---------- notes to a running step ----------
 
 /** Who sent a note, as an envelope says it. */
 const noteSender = (n: Note) => (n.from.by === "lead" ? `the lead, relaying the user's message ${n.from.messageIds.join(", ") || "(none)"}` : "the user");
@@ -339,9 +338,9 @@ ${notes.map((n) => `- ${n.settledAt ?? n.at}, from ${noteSender(n)}${n.via === "
 }
 
 /**
- * ORC-013 §11.1: decisions already taken on this task's findings, for a reviewer. Every settled decision of
- * the task (and, for a pull-request repair, of its origin task), not only those on artifacts the step
- * reads: a reviewer in a later round never reads the earlier round's findings (review 1, finding 3).
+ * Decisions already taken on this task's findings, for a reviewer. Every settled decision of the task
+ * (and, for a pull-request repair, of its origin task), not only those on artifacts the step reads: a
+ * reviewer in a later round never reads the earlier round's findings.
  */
 function settledSection(state: State, task: Task, role: RoleId): string {
   if (!REVIEW_ROLES.includes(role)) return "";
@@ -397,7 +396,7 @@ export function buildEnvelope({ state, task, step, attemptId, access, seed, chan
       return `    "${o.name}": { "summary": "<your ${o.kind}>" }`;
     })
     .join(",\n");
-  // ORC-021: a child task may use any flow but Goal; the item may leave it out for the default.
+  // A child task may use any flow but Goal; the item may leave it out for the default.
   const breakdownNote = step.outputs.some((o) => o.kind === "breakdown")
     ? `\nBreakdown items: pick "flowId" from: ${state.flows
         .filter((p) => eligible(p, "child"))
@@ -464,9 +463,9 @@ Report as findings only issues that must be fixed or decided before merging. Any
 `;
 }
 
-// ---------- ORC-014: vision documents ----------
+// ---------- vision documents ----------
 
-/** What reading a stored copy gave: its text, or why it is not used (review 7: a copy is verified against its hash). */
+/** What reading a stored copy gave: its text, or why it is not used (a copy is verified against its hash). */
 export type VisionDocRead = { text: string } | { missing: true } | { changed: true };
 
 /** Reads the stored copy of a vision document when an envelope is built. */
@@ -510,15 +509,15 @@ export function fairShares(texts: { key: string; text: string }[], cap: number):
   return out;
 }
 
-/** A document name as shown to an agent: quoted, with quotes and backslashes escaped (review 8). */
+/** A document name as shown to an agent: quoted, with quotes and backslashes escaped. */
 const docName = (d: Pick<VisionDoc, "path">) => JSON.stringify(d.path);
 
 /**
  * The "Vision documents" section for one role. The lead and designers get every readable document's
  * text inside one fenced data block, capped fairly (`cap` bytes in total); every other role gets the
  * list of names and sizes. The full list is always shown; a document that is not text is listed by
- * name only; a copy missing or changed on disk says so and is not used. Review 8: tag and bidi
- * control characters are removed from document text before it enters the envelope, and the section
+ * name only; a copy missing or changed on disk says so and is not used. Tag and bidi control
+ * characters are removed from document text before it enters the envelope, and the section
  * says from which documents; names are quoted, and the fence outlives any backticks in names or text.
  */
 export function visionDocsSection(state: State, role: RoleId, docs?: VisionDocReader, cap = role === "lead" ? LEAD_DOCS_CAP : DESIGNER_DOCS_CAP): string {
@@ -605,7 +604,7 @@ interface ParsedOutputs {
   outputs: { name: string; summary: string; openFindings?: number; findings?: Finding[]; reviewedPaths?: string[]; invalidPaths?: number; items?: unknown[] }[];
   /** Why parsing failed or which declared outputs are missing. Empty when everything was reported. */
   problems: string[];
-  /** ORC-013: what the parser corrected or dropped without refusing the output (recorded on the run). */
+  /** What the parser corrected or dropped without refusing the output (recorded on the run). */
   notes: string[];
 }
 
@@ -615,7 +614,7 @@ const C0_ALL = /[\u0000-\u001F\u007F]/g;
 
 /** The carry-forward identity of a finding: 12 hex characters of sha256(source | file | normalised title). */
 export function findingKey(source: Finding["source"], file: string | undefined, title: string, severity: Severity = "warning"): string {
-  // Review 1 (14): the severity is part of the identity, so an error and a warning with one title are two findings.
+  // The severity is part of the identity, so an error and a warning with one title are two findings.
   return createHash("sha256")
     .update(`${source}|${severity}|${file ?? ""}|${title.toLowerCase().replace(/\s+/g, " ").trim()}`)
     .digest("hex")
@@ -623,14 +622,14 @@ export function findingKey(source: Finding["source"], file: string | undefined, 
 }
 
 /**
- * ORC-013 §4.2: validate a structured findings list. At most 50 items; an item without a title is
+ * Validate a structured findings list. At most 50 items; an item without a title is
  * dropped; an unknown severity becomes "warning" and an unknown action "ask-user", both marked
  * `defaulted`; texts are capped; a file is normalised (an absolute path or a ".." segment drops it).
  */
 export function parseFindings(raw: unknown, source: Finding["source"] = "review"): { findings: Finding[]; notes: string[]; incomplete?: true } {
   const notes: string[] = [];
   if (!Array.isArray(raw)) return { findings: [], notes: ['"findings" is not a list; treated as none'] };
-  // Review 1 (4): what is dropped can never make a review clean. Blocking items (error or warning that
+  // What is dropped can never make a review clean. Blocking items (error or warning that
   // is not information only) come first and keep a placeholder title; only information is cut by the cap.
   let dropped = 0;
   let defaulted = 0;
@@ -679,7 +678,7 @@ export function parseFindings(raw: unknown, source: Finding["source"] = "review"
   return { findings: out, notes };
 }
 
-/** ORC-013: the reported reviewed paths, normalised and deduplicated; invalid entries are counted. */
+/** The reported reviewed paths, normalised and deduplicated; invalid entries are counted. */
 function parseReviewedPaths(raw: unknown): { paths: string[]; invalid: number } {
   if (!Array.isArray(raw)) return { paths: [], invalid: 0 };
   const seen = new Set<string>();
@@ -748,7 +747,7 @@ export function parseOutputs(finalText: string, declared: OutputDef[]): ParsedOu
       continue;
     }
     if (d.kind === "review-findings") {
-      // ORC-013 §4.2: structured when "findings" is a list; legacy when only openFindings is given; else a problem.
+      // Structured when "findings" is a list; legacy when only openFindings is given; else a problem.
       if (Array.isArray(entry!.findings)) {
         const f = parseFindings(entry!.findings, "review");
         if (f.incomplete) {
@@ -813,12 +812,12 @@ function openWorkLine(state: State, t: Task, mode: SteeringMode): string {
     else if (action === "defer") not.push("defer (already deferred)");
   }
   const perms = [may.length && `may: ${may.join(", ")}`, suggest.length && `suggest: ${suggest.join(", ")}`, not.length && `not: ${not.join(", ")}`].filter(Boolean).join(" · ") || "not steerable";
-  // ORC-022: the running and pending steps, so the lead can address a note to one; open child tasks follow with theirs.
+  // The running and pending steps, so the lead can address a note to one; open child tasks follow with theirs.
   const children = kids.filter((k) => k.lifecycle !== "done").map((k) => `\n  child ${k.id} [${M.stateLabel(state, k)}] "${clip(M.currentSpec(k).content.title, 60)}"${stepsLine(state, k)}`);
   return `- ${t.id} [${M.stateLabel(state, t)}] P${t.priority}${t.userSet?.priority ? " (set by you)" : ""} "${clip(c.title, 90)}" area:${clip(c.area, 30)} · by ${t.specs[0].author}${kids.length ? ` · ${kids.length} child task${kids.length === 1 ? "" : "s"}` : ""}${notes.length ? ` · notes: ${notes.join(" | ")}` : ""} · ${perms}${stepsLine(state, t)}${children.join("")}`;
 }
 
-/** ORC-022: "· steps: S1 coder running (Codex, run-12), S2 code_reviewer pending (Claude)": what a note can be addressed to. */
+/** "· steps: S1 coder running (Codex, run-12), S2 code_reviewer pending (Claude)": what a note can be addressed to. */
 function stepsLine(state: State, t: Task): string {
   const shown = t.steps.filter((st) => st.state === "running" || st.state === "stopping" || st.state === "pending" || st.state === "paused");
   if (!shown.length) return "";
@@ -833,7 +832,7 @@ function stepsLine(state: State, t: Task): string {
   return ` · steps: ${parts.join(", ")}`;
 }
 
-/** ORC-022: the notes of the last 24 hours, from the lead or the user, with where each stands. */
+/** The notes of the last 24 hours, from the lead or the user, with where each stands. */
 function notesSection(state: State, nowMs: number): string {
   const notes = M.recentNotes(state, nowMs);
   if (!notes.length) return "- None in the last 24 hours.";
@@ -899,7 +898,7 @@ function recentSteering(state: State): string {
                   : c.kind === "note"
                     ? `note to ${c.taskId ?? "?"} ${c.stepId ?? "?"} "${clip(String(c.after ?? ""), 80)}"`
                     : `${c.taskId ?? "?"} (unreadable entry)`;
-      // ORC-022: a sent note shows where it stands (applied means sent).
+      // A sent note shows where it stands (applied means sent).
       const live = c.kind === "note" && c.noteId ? M.noteOf(state, c.noteId) : undefined;
       const status =
         c.status === "applied"
@@ -926,13 +925,13 @@ function recentSteering(state: State): string {
   return lines.join("\n");
 }
 
-/** ORC-012: every area with the state the lead last reported (open until it reports). */
+/** Every area with the state the lead last reported (open until it reports). */
 function coverageLines(state: State): string {
   const c = M.coverageOf(state);
   return SHAPING_AREAS.map((a) => `- ${a}: ${SHAPING_AREA_LABEL[a]} — ${c ? c[a] : "open (not reported yet)"}`).join("\n");
 }
 
-/** ORC-012: the last 3 vision drafts and what the user did with them, so the lead does not repeat a dismissed one. */
+/** The last 3 vision drafts and what the user did with them, so the lead does not repeat a dismissed one. */
 function draftHistory(state: State): string {
   const drafts = state.visionDrafts.slice(-3).reverse();
   if (!drafts.length) return "";
@@ -943,7 +942,7 @@ function draftHistory(state: State): string {
   return `\nYour vision drafts (newest first):\n${lines.join("\n")}`;
 }
 
-/** ORC-013 §11.3: the findings routed to the lead that wait for its decision, with what it may decide. */
+/** The findings routed to the lead that wait for its decision, with what it may decide. */
 function decisionsSection(state: State): string {
   const open = F.openDecisions(state, "lead");
   if (!open.length) return "";
@@ -984,13 +983,13 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
   // Steering is available only to runs that answer user messages, never decided by the trigger.
   const canSteer = run.messageIds.length > 0;
   const mode = p.steeringMode;
-  // ORC-012: the shaping brief and the vision contract go to message runs while shaping. A planning run
-  // never starts while shaping; if one from before finishes now, it cannot draft (the domain refuses).
+  // The shaping brief and the vision contract go to message runs while shaping. A planning run never
+  // starts while shaping; if one from before finishes now, it cannot draft (the domain refuses).
   const shaping = p.stage === "shaping";
   const canDraft = shaping && canSteer;
   const roots = state.tasks.filter((t) => !t.parentTaskId);
-  // Review finding 1: the review and fix tasks the service creates for a pull request are delivery's, not
-  // steerable, and not the lead's to see on its board (`steerPermission` rejects them as well).
+  // The review and fix tasks the service creates for a pull request are delivery's, not steerable, and
+  // not the lead's to see on its board (`steerPermission` rejects them as well).
   const openRoots = roots.filter((t) => t.lifecycle !== "done" && t.lifecycle !== "cancelled" && !t.reviewTarget && !t.deliverInto && !t.checkTarget).sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id));
   const board = openRoots.length
     ? [...openRoots.slice(0, MAX_OPEN_ROWS).map((t) => openWorkLine(state, t, mode)), ...(openRoots.length > MAX_OPEN_ROWS ? [`${openRoots.length - MAX_OPEN_ROWS} more open tasks not shown (lowest priority)`] : [])].join("\n")
@@ -1010,7 +1009,7 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
     .filter((a) => a.kind === "review-findings" || a.kind === "verification" || a.kind === "report" || a.kind === "check-results")
     .slice(-10)
     .map((a) => {
-      // ORC-013: structured findings show what is unresolved, what waits for a decision and what was decided.
+      // Structured findings show what is unresolved, what waits for a decision and what was decided.
       const counts = a.findings ? `, ${F.unresolved(state, a)} unresolved, ${F.undecided(state, a)} undecided, ${F.decisionsOf(state, a.taskId).filter((d) => d.artifactId === a.id && d.status !== "open").length} decided` : a.openFindings !== undefined ? `, ${a.openFindings} open` : "";
       return `- ${a.taskId} ${a.stepId}.${a.name} (${a.kind}${counts}): ${clip(a.summary.replace(/\n/g, " "), 240)}`;
     })
@@ -1025,7 +1024,7 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
     const t = m.taskId ? state.tasks.find((x) => x.id === m.taskId) : undefined;
     return t ? `(sent from ${t.id} "${clip(M.currentSpec(t).content.title, 60)}" [${M.stateLabel(state, t)}]) ` : "";
   };
-  // ORC-021: the lead may name any of the six flows.
+  // The lead may name any of the six flows.
   const flows = state.flows
     .filter((x) => eligible(x, "lead"))
     .map((x) => `- ${x.id}: ${x.name}. ${x.description} Use when: ${x.whenToUse} Steps: ${flowSummary(x.steps)}`)
@@ -1225,8 +1224,8 @@ ${last.length ? `The user's latest notes on landed work:\n${last.map((x) => x.li
 
 /**
  * Parse the lead's final message. A reply without a JSON block is still a reply (with no proposals).
- * ORC-009: the steering block is passed through as found (a missing value or null becomes undefined);
- * type checks happen in the domain, which treats it as untrusted data. ORC-012: the vision draft too.
+ * The steering block and the vision draft are passed through as found (a missing value or null becomes
+ * undefined); type checks happen in the domain, which treats them as untrusted data.
  */
 export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; problem?: string } {
   const obj = lastJsonObject(finalText);
@@ -1240,7 +1239,7 @@ export function parseLeadOutput(finalText: string): { reply: string; proposals: 
 /** A step that waits for child tasks sees how each of them ended. */
 function childrenNote(state: State, task: Task, step: Step): string {
   if (!step.waitForChildren) return "";
-  // ORC-016 (steps 2–3 review, finding 2): children of an earlier flow are the record, not results of this breakdown.
+  // Children of an earlier flow are the record, not results of this breakdown.
   const kids = M.currentChildren(state, task);
   if (!kids.length) return "## Child tasks\n- None were created.\n\n";
   const lines = kids.map((c) => {

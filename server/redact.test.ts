@@ -1,9 +1,9 @@
-// ORC-013 step 2 review (L4): the token shapes redaction masks, and a PEM block cut off by an output cap.
+// The token shapes redaction masks, and a PEM block cut off by an output cap.
 
 import { describe, expect, it } from "vitest";
 import { redact } from "./redact";
 
-describe("redact (L4)", () => {
+describe("redact", () => {
   it("masks npm, AWS, GitLab, Slack and Stripe token shapes, next to the ones it already knew", () => {
     const cases: [string, string][] = [
       [`token npm_${"a1B2".repeat(9)} end`, "token *** end"],

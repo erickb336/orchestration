@@ -6,7 +6,7 @@
 //
 // Flow per attempt: initialize -> initialized -> thread/start -> [started] -> turn/start -> ...
 // item/completed notes -> turn/completed -> exactly one terminal event -> child terminated.
-// ORC-022: a note mid-run is a `turn/steer` on that turn (expectedTurnId pins it); the app-server's
+// A note mid-run is a `turn/steer` on that turn (expectedTurnId pins it); the app-server's
 // answer decides delivered or not-delivered.
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
@@ -48,7 +48,7 @@ function runTmpDir(a: Assignment): string {
 }
 
 /**
- * Every app-server the service starts: native sub-agents off, and (ORC-013) the repository's own
+ * Every app-server the service starts: native sub-agents off, and the repository's own
  * instruction files never loaded by Codex itself (`project_doc_max_bytes=0`; the pinned 0.159.2
  * binary ships the key with a default of 32768). The worktree copy of AGENTS.md is agent-written;
  * the service passes the trusted base's copy in the envelope as labelled project conventions instead.
@@ -89,7 +89,7 @@ export const LOGIN_GUIDANCE =
 const CAPABILITIES: CapabilityMap = {
   start: "supported",
   streamEvents: "supported",
-  // ORC-022: turn/steer is wired for notes and tested against the stub app-server; unverified against a real model run.
+  // turn/steer is wired for notes and tested against the stub app-server; unverified against a real model run.
   steer: "unverified",
   interrupt: "supported",
   // thread/resume exists; threads are persisted by Codex, but resume is not wired or tested.
@@ -139,7 +139,7 @@ interface Run {
   stderrTail: string;
   done: boolean;
   timers: Set<ReturnType<typeof setTimeout>>;
-  /** ORC-022: ids of notes whose turn/steer is still unanswered. */
+  /** Ids of notes whose turn/steer is still unanswered. */
   notes: Set<string>;
 }
 
@@ -346,7 +346,7 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 
   /**
-   * ORC-022: steer the run's live turn with the note (`turn/steer`, pinned to this run's thread and turn by
+   * Steer the run's live turn with the note (`turn/steer`, pinned to this run's thread and turn by
    * `expectedTurnId`, so it can never land in another turn). The app-server's answer is the outcome: a
    * response is delivered, an error (no active turn, turn mismatch, a non-steerable review or compact turn)
    * is not-delivered with its message. Exactly one "note" event follows, also when the run is not live.
@@ -384,7 +384,7 @@ export class CodexAdapter implements RuntimeAdapter {
     return truncate(`Codex app-server error: ${this.clean(e instanceof Error ? e.message : String(e))}`, 300);
   }
 
-  /** ORC-022: report every note still awaiting the app-server's answer as not delivered. */
+  /** Report every note still awaiting the app-server's answer as not delivered. */
   private settleNotes(run: Run, reason: string) {
     for (const noteId of run.notes) {
       run.notes.delete(noteId);

@@ -1,7 +1,7 @@
-// ORC-013 §6.5: the check runners. A check run is an attempt like an agent's (the scheduler dispatches
-// it, stops it, reconciles it and applies its report), but the service runs it itself: every command
-// is an argv vector from the user's settings, started through the reaper (server/check-reaper.mjs),
-// never through a shell.
+// The check runners (see docs/design/ORC-013-design.md §6.5). A check run is an attempt like an
+// agent's (the scheduler dispatches it, stops it, reconciles it and applies its report), but the
+// service runs it itself: every command is an argv vector from the user's settings, started through
+// the reaper (server/check-reaper.mjs), never through a shell.
 //
 //   CodexSandboxChecks  the default: each command runs through the pinned Codex app-server's
 //                       `command/exec` in a workspaceWrite sandbox (no network outside prepare, writes
@@ -11,7 +11,7 @@
 //   CheckRunners        the facade the scheduler talks to; it routes each run by its sandbox.
 //
 // Output is redacted and capped (an excerpt in the state, the full log in a file), the command
-// environment is built from an allowlist (§6.6), and every run ends with exactly one terminal event.
+// environment is built from an allowlist, and every run ends with exactly one terminal event.
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -31,7 +31,7 @@ import type { AdapterEvent, CheckRunReport } from "./runtimes/types";
 
 export type { CheckRunReport };
 
-// ---------- the contract (§6.5.1) ----------
+// ---------- the contract ----------
 
 interface PlannedCheck {
   id: string;
@@ -39,7 +39,7 @@ interface PlannedCheck {
   kind: "prepare" | "check";
   argv: string[];
   timeoutMs: number;
-  /** A prepare command that never gets the network: a rebuild step, or a download that is not on the allowlist (H1). */
+  /** A prepare command that never gets the network: a rebuild step, or a download that is not on the allowlist. */
   offline?: true;
   /** Why the network was refused to this prepare command, when the settings would have allowed it. */
   offlineReason?: string;
@@ -48,7 +48,7 @@ interface PlannedCheck {
 }
 
 /**
- * H1: repository code never runs while the network is on. The network goes only to npm, pnpm and yarn
+ * Repository code never runs while the network is on. The network goes only to npm, pnpm and yarn
  * installs with every hook that runs repository code switched off (the flags, re-added here whatever
  * the settings say, and this environment); a rebuild command (the offline way to run install scripts)
  * and every other prepare command run offline. The result is what the runner starts.
@@ -103,7 +103,7 @@ export interface CheckAssignment {
   runTimeoutMs: number;
   sandbox: "codex" | "none";
   prepareNetwork: boolean;
-  /** The command environment, built by `checkEnv` (§6.6). */
+  /** The command environment, built by `checkEnv`. */
   env: Record<string, string>;
   tmpDir: string;
   cacheDir: string;
@@ -123,7 +123,7 @@ export interface CheckRunner {
   has(attemptId: string): boolean;
   ids(): string[];
   onEvent(l: (e: AdapterEvent) => void): () => void;
-  /** Whether the sandbox works on this machine (§6.5.4). Never touches the repository. */
+  /** Whether the sandbox works on this machine. Never touches the repository. */
   probe(sandbox: "codex" | "none"): Promise<ChecksHealth>;
   shutdown(): Promise<void>;
 }
@@ -141,13 +141,13 @@ const ANSWER_GRACE_MS = 15_000;
 const EXIT_GRACE_MS = 3_000;
 export const REAPER = fileURLToPath(new URL("./check-reaper.mjs", import.meta.url));
 
-// ---------- the command environment (§6.6) ----------
+// ---------- the command environment ----------
 
 /** Copied from the service's environment when present. */
 export const CHECK_ENV_COPIED = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "JAVA_HOME", "GOPATH", "GOROOT", "CARGO_HOME", "RUSTUP_HOME", "PYENV_ROOT", "VOLTA_HOME", "NVM_DIR", "ASDF_DATA_DIR", "DEVELOPER_DIR", "SDKROOT"];
 /** Never present, whatever the settings say. */
 const NEVER_PASSED = new Set(["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "SSH_AUTH_SOCK", "NODE_OPTIONS", "LD_PRELOAD"]);
-/** Compared case-insensitively (L11): NPM_CONFIG_*, YARN_* and PNPM_* configure the package managers whatever their case. */
+/** Compared case-insensitively: NPM_CONFIG_*, YARN_* and PNPM_* configure the package managers whatever their case. */
 const NEVER_PREFIXES = ["AWS_", "DYLD_", "ORCHESTRATION_", "GIT_", "NPM_CONFIG_", "YARN_", "PNPM_"];
 
 /** The environment a check command sees: an allowlist copied from `base`, plus what the service sets. Secrets never pass. */
@@ -173,7 +173,7 @@ export function checkEnv(base: NodeJS.ProcessEnv, cfg: Pick<ChecksConfig, "passE
   return out;
 }
 
-// ---------- output: redaction, excerpt and log (§6.5.2 step 4) ----------
+// ---------- output: redaction, excerpt and log ----------
 
 interface Captured {
   exitCode: number | undefined;
@@ -185,7 +185,7 @@ interface Captured {
   ended: boolean;
   /** Bytes the command produced on both streams, including what the cap discarded (when known). */
   produced?: number;
-  /** The check process (the reaper) was ended by this signal instead of reporting an exit (M5): the run is failed, whatever the output says. */
+  /** The check process (the reaper) was ended by this signal instead of reporting an exit: the run is failed, whatever the output says. */
   killed?: string;
 }
 
@@ -209,7 +209,7 @@ function resultOf(c: PlannedCheck, cap: Captured, durationMs: number, env: NodeJ
   } catch {
     /* no log file: the excerpt still records the result */
   }
-  // M5: the exit status is the reaper's own; a reaper ended by a signal reported none, so the command failed.
+  // The exit status is the reaper's own; a reaper ended by a signal reported none, so the command failed.
   const status: CheckResult["status"] = cap.timedOut ? "timed-out" : cap.exitCode === 0 && !cap.killed ? "passed" : "failed";
   return {
     id: c.id,
@@ -227,7 +227,7 @@ function resultOf(c: PlannedCheck, cap: Captured, durationMs: number, env: NodeJ
 
 const notRun = (c: PlannedCheck): CheckResult => ({ id: c.id, label: c.label, kind: c.kind, status: "not-run", durationMs: 0, excerpt: "", bytes: 0, truncated: false });
 
-// ---------- the workspace's commit (§6.10: the runner refuses a worktree that is not at the target) ----------
+// ---------- the workspace's commit (the runner refuses a worktree that is not at the target) ----------
 
 /** The commit a git worktree (or repository) is checked out at, read from its files; undefined when it cannot be told. */
 export function headOf(workspace: string): string | undefined {
@@ -380,7 +380,7 @@ abstract class BaseChecks implements CheckRunner {
       /* the command reports it */
     }
     for (const planned of a.commands) {
-      // What runs is the hardened command (H1); the record keeps the id and label the settings gave it.
+      // What runs is the hardened command; the record keeps the id and label the settings gave it.
       // Yarn's own configuration is read from the copy just before the install runs there.
       const c = hardenCommand(planned, a, planned.argv[0] === "yarn" ? readYarnRc(a.workspace) : {});
       if (run.done || run.stopRequested) break;
@@ -432,7 +432,7 @@ abstract class BaseChecks implements CheckRunner {
   }
 }
 
-// ---------- no sandbox (§6.5.3) ----------
+// ---------- no sandbox ----------
 
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
@@ -443,7 +443,7 @@ function reaperArgs(argv: string[], o: { pidFile?: string } = {}): string[] {
 
 /**
  * The verdict of a probe command that prints "DENIED <code>" and exits 3 when the sandbox refused it,
- * or `success` when it got through (L5): only an explicit refusal (EPERM or EACCES) is a denial. An
+ * or `success` when it got through: only an explicit refusal (EPERM or EACCES) is a denial. An
  * unreachable network, a missing directory or a timeout proves nothing and stays "unknown".
  */
 export function probeVerdict(stdout: string, exitCode: number | undefined, success: string): "denied" | "allowed" | "unknown" {
@@ -486,7 +486,7 @@ function spawnReaper(spawnFn: SpawnFn, argv: string[], o: { cwd: string; env: No
     const settle = (code: number | null, signal: NodeJS.Signals | null, error?: Error) => {
       if (settled) return;
       settled = true;
-      // M5: the exit status is the reaper's own (it exits with the command's code, or 128 plus the
+      // The exit status is the reaper's own (it exits with the command's code, or 128 plus the
       // signal). A reaper that was itself ended by a signal reported nothing: the run is failed.
       const killed = code === null && !error ? (signal ?? "signal") : undefined;
       resolveDone({ exitCode: code ?? undefined, stdout: Buffer.concat(out).toString("utf8"), stderr: `${Buffer.concat(err).toString("utf8")}${error ? `\n${error.message}` : ""}`, timedOut: false, capped, ended: false, produced, ...(killed ? { killed } : {}) });
@@ -544,7 +544,7 @@ export class DirectChecks extends BaseChecks {
   }
 }
 
-// ---------- the Codex sandbox (§6.5.2) ----------
+// ---------- the Codex sandbox ----------
 
 interface CodexSandboxOptions {
   /** Path to the Codex CLI. Default: ./node_modules/.bin/codex, falling back to `codex` on PATH. A .js/.mjs path is run with this Node. */
@@ -669,7 +669,7 @@ export class CodexSandboxChecks extends BaseChecks {
   /**
    * The `command/exec` request for one command: argv through the reaper, the run's directories
    * writable, network only for an allowlisted download (never for a rebuild or anything else), when
-   * allowed. The command is hardened here too (H1), whatever the caller passed, with yarn's own
+   * allowed. The command is hardened here too, whatever the caller passed, with yarn's own
    * configuration read from the copy the install runs in.
    */
   static execParams(a: Pick<CheckAssignment, "attemptId" | "workspace" | "prepareNetwork" | "env" | "tmpDir" | "cacheDir">, c0: PlannedCheck, o: { pidFile?: string } = {}): CommandExecParams {
@@ -731,7 +731,7 @@ export class CodexSandboxChecks extends BaseChecks {
     const elapsed = Date.now() - t0;
     if (elapsed >= c.timeoutMs) timedOut = true;
     if (!answer) return { exitCode: undefined, stdout: "", stderr: error ?? "no answer", timedOut, capped: false, ended };
-    // M5: the app-server reports the reaper's own exit status: the command's code, or 128 plus a signal
+    // The app-server reports the reaper's own exit status: the command's code, or 128 plus a signal
     // when the command died of one. The same shape is what a reaper killed from outside leaves, so a
     // signal-shaped status that the runner did not cause is recorded as the check process being killed.
     const reported = typeof answer.exitCode === "number" ? answer.exitCode : undefined;
@@ -761,10 +761,10 @@ export class CodexSandboxChecks extends BaseChecks {
   }
 
   /**
-   * The probe (§6.5.4): service-owned commands in a scratch directory, never the repository. A write
+   * The probe: service-owned commands in a scratch directory, never the repository. A write
    * inside the writable root must work; a write into $HOME must be refused; a connection to this
-   * machine's own loopback (where the service listens, H1) and to 1.1.1.1:443 must be refused; a
-   * grandchild the reaper started must be gone after terminate. Only an explicit refusal counts (L5).
+   * machine's own loopback (where the service listens) and to 1.1.1.1:443 must be refused; a
+   * grandchild the reaper started must be gone after terminate. Only an explicit refusal counts.
    * `checkedAt` is when the probe began, so a "Check again" asked for meanwhile is not lost.
    */
   async probe(sandbox: "codex" | "none"): Promise<ChecksHealth> {
@@ -802,7 +802,7 @@ export class CodexSandboxChecks extends BaseChecks {
       const out = await runIt("write-outside", [node, "-e", `try { require("node:fs").writeFileSync(process.argv[1], "x"); console.log("WROTE") } catch (e) { console.log("DENIED " + e.code); process.exit(3) }`, outside]);
       probes.writeOutside = existsSync(outside) ? "allowed" : probeVerdict(out.stdout, out.exitCode, "WROTE");
       if (probes.writeOutside !== "denied") return unavailable(probes.writeOutside === "allowed" ? "The sandbox let a command write outside its directory; checks are held until it is fixed or you choose to run without a sandbox." : `Could not prove the sandbox blocks writes outside the run (${out.stdout.trim().slice(0, 60) || "no answer"}). Check again.`);
-      // 3. This machine's own loopback must be refused: the service's control API listens there (H1).
+      // 3. This machine's own loopback must be refused: the service's control API listens there.
       //    The probe listens itself, on 127.0.0.1 and ::1, so the answer does not depend on the service's port.
       const targets: { host: string; port: number }[] = [];
       for (const host of ["127.0.0.1", "::1"]) {
@@ -875,7 +875,7 @@ export class CodexSandboxChecks extends BaseChecks {
   }
 }
 
-// ---------- the facade (§6.5.1) ----------
+// ---------- the facade ----------
 
 export class CheckRunners implements CheckRunner {
   readonly simulated = false;
@@ -921,7 +921,7 @@ export class CheckRunners implements CheckRunner {
   }
 }
 
-// ---------- the simulated runner (§6.8) ----------
+// ---------- the simulated runner ----------
 
 type SimulatedScript = (a: CheckAssignment, n: number) => CheckResult[];
 
@@ -1022,7 +1022,7 @@ export class SimulatedChecks implements CheckRunner {
   }
 }
 
-// ---------- logs (§6.6) ----------
+// ---------- logs ----------
 
 const LOG_MAX_AGE_MS = 14 * 24 * 60 * 60_000;
 const LOG_MAX_BYTES = 200 * 1024 * 1024;
