@@ -15,7 +15,10 @@ web
 - **What they need from it.** They check in between other work: to see progress, steer priorities, answer the few decisions that need them, and review what landed.
 - **What they do not want.** They do not want to read code or approve every step. Autopilot is the default, and human review is optional.
 - **Phone use** (to see progress or talk to the lead) is wanted later and not built yet.
-- **Second audience (inferred):** developers who find the public repository and decide from the README and the demo whether to try it.
+- **Audience for the README and the demo** (confirmed by the owner, 2026-10-01): future employers and developers who find the public repository.
+  - Employers judge the engineering and the craft.
+  - Developers decide in seconds whether to try it.
+  - The sample project in the demo is only a backdrop; what is shown is Orchestrator itself.
 
 ## Product Purpose
 
