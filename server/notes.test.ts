@@ -298,6 +298,25 @@ describe("the scripted adapters", () => {
     expect(reviewPrompt).toMatch(/## Notes the S1 agent received\n- .*, from the user \(at the start of its run\): "Keep the greeting in one file\."\n- .*, from the user: "Use the existing helper\."\n\n/);
   });
 
+  it("ORC-022 review M1: a note written into a run's instructions is confirmed only when the runtime reports the run started; a run that fails first leaves it not delivered", async () => {
+    const f = scriptedService();
+    const { id, run } = await setUp(f);
+    f.cmd("pauseTask", { taskId: id });
+    const queued = (f.cmd("sendNote", { taskId: id, stepId: "S1", text: "Keep the greeting in one file." }).result as { noteId: string }).noteId;
+    f.tick();
+    f.codex.emit({ type: "stopped", attemptId: run.id, how: "interrupted" });
+    f.tick();
+    f.codex.reportsStart = false; // e.g. the binary is missing or sign-in fails before the run gets going
+    f.cmd("resumeTask", { taskId: id });
+    f.tick();
+    const next = runOf(f.state(), id, "S1")!;
+    expect(f.codex.started.find((a) => a.attemptId === next.id)!.prompt).toContain("## Notes for this run");
+    expect(note(f.state(), queued)).toMatchObject({ status: "sending", via: "start", attemptId: next.id });
+    f.codex.emit({ type: "failed", attemptId: next.id, message: "codex: not signed in" });
+    f.tick();
+    expect(note(f.state(), queued).status).toBe("not-delivered");
+  });
+
   it("the user's note to a running reviewer is allowed; the lead's is rejected; a note to a check run is refused", async () => {
     const f = scriptedService();
     const { id, run } = await setUp(f);
@@ -390,5 +409,17 @@ describe("the envelopes", () => {
     const lead = buildLeadEnvelope(run.state, run.state.leadRuns.find((r) => r.id === run.runId)!, "read");
     expect(lead).toContain("## Notes to running stages (last 24 hours; yours and the user's)\n- None in the last 24 hours.");
     expect(lead).toMatch(/- EX-001 \[.*\] P1 .* · steps: S2 coder running \(Codex, run-\d+\), C1 checks pending \(the service\), S3 code_reviewer pending \(Claude\)/);
+  });
+
+  it("ORC-022 review L4: a note settled before it reached any run is listed to the lead as recorded, not sent", () => {
+    const s = buildSeed(T0);
+    const first = M.startLeadRun(M.postMessage(s, "tell the coder on EX-002 to skip the README", iso(T0)), { provider: "claude", model: "m", trigger: "message" }, iso(T0 + 1000));
+    const done = M.completeLeadRun(first.state, first.runId, { reply: "Sent.", proposals: [], steer: { notes: [{ task: "EX-002", step: "S1", text: "Skip the README." }] } }, iso(T0 + 2000));
+    const n = done.notes[done.notes.length - 1];
+    expect(n).toMatchObject({ status: "not-delivered", reason: "S1 had finished" });
+    expect(n.attemptId).toBeUndefined();
+    const next = M.startLeadRun(M.postMessage(done, "and now?", iso(T0 + 3000)), { provider: "claude", model: "m", trigger: "message" }, iso(T0 + 4000));
+    const lead = buildLeadEnvelope(next.state, next.state.leadRuns.find((r) => r.id === next.runId)!, "read");
+    expect(lead).toMatch(/note to EX-002 S1 "Skip the README\." — recorded; not delivered: S1 had finished/);
   });
 });

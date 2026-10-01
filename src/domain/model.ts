@@ -200,6 +200,37 @@ function settleSendingNotes(s: State, attemptId: string, reason: string, now: st
   }
 }
 
+/**
+ * ORC-022 review L1: a queued note whose step can no longer run on its own (its task is done or cancelled, the step
+ * finished, was skipped or is blocked, or a flow change removed it) is settled as not delivered, so it never waits
+ * forever. These are the same reasons a new note to such a step gets (noteRoute).
+ */
+function settleStrandedNotes(s: State, now: string) {
+  for (const n of s.notes) {
+    if (n.status !== "queued") continue;
+    const t = s.tasks.find((x) => x.id === n.taskId);
+    const st = t && findStep(t, n.stepId);
+    const reason = !t
+      ? "the task no longer exists"
+      : t.lifecycle === "done" || t.lifecycle === "cancelled"
+        ? `${t.id} is ${t.lifecycle}`
+        : !st
+          ? `the pipeline changed; ${n.stepId} is no longer in it`
+          : st.state === "done"
+            ? `${n.stepId} had finished`
+            : st.state === "skipped"
+              ? `${n.stepId} was skipped`
+              : st.state === "blocked"
+                ? `${n.stepId} is blocked: its last run failed`
+                : undefined;
+    if (!reason) continue;
+    n.status = "not-delivered";
+    n.reason = reason;
+    n.settledAt = now;
+    event(s, now, "system", "control", `Note ${n.id} to ${n.stepId} not delivered: ${reason}`, n.taskId);
+  }
+}
+
 function finishTask(t: Task) {
   t.lifecycle = "done";
   t.integration = { status: "pending" };
@@ -1261,6 +1292,7 @@ export function dispatchRank(s: State, t: Task): [number, number] {
 
 export function dispatchEligible(state: State, now: string, opts: DispatchOptions = {}): State {
   const s = draft(state);
+  settleStrandedNotes(s, now);
   if (s.project.hold) return s;
   const vision = currentVision(s);
   // ORC-012: while shaping no worker step starts, on any task. Like a deferral (and unlike a hold),
@@ -3484,6 +3516,11 @@ export function applySteering(state: State, changeSetId: string, changeId: strin
       result.left.push({ id: c.id, why: c.status === "applied" ? "already applied" : `not a suggestion (${c.status})` });
       continue;
     }
+    // ORC-022 review M2: a rerun stops and invalidates downstream work, so it is applied only on its own row, never in bulk.
+    if (!changeId && c.kind === "note" && c.rerun) {
+      result.left.push({ id: c.id, why: "needs Rerun with this note" });
+      continue;
+    }
     const why = applyRow(s, set, c, now);
     if (why) {
       c.note = leftNote(c.note, "apply", why);
@@ -3643,7 +3680,7 @@ export function noteRoute(s: State, t: Task, st: Step, ifFinished: "report" | "r
       return { v: "not-delivered", reason: `${st.id} was skipped` };
     case "done": {
       if (ifFinished !== "rerun") return { v: "not-delivered", reason: `${st.id} had finished` };
-      const why = rerunBlocker(t, st);
+      const why = rerunBlocker(s, t, st);
       return why ? { v: "rerun-suggest", why } : { v: "rerun" };
     }
     default:
@@ -3652,7 +3689,9 @@ export function noteRoute(s: State, t: Task, st: Step, ifFinished: "report" | "r
 }
 
 /** Why a finished step is not rerun with a note on the lead's say-so alone: the user decides then. */
-function rerunBlocker(t: Task, st: Step): string | undefined {
+function rerunBlocker(s: State, t: Task, st: Step): string | undefined {
+  // ORC-022 review L3: a project-wide pause is yours too.
+  if (s.project.hold) return "the project is paused by you";
   if (t.hold) return userHold(t) ? "the task is paused by you" : "the task is paused for review";
   const started = [...downstreamOf(t.steps, [st.id])].filter((id) => findStep(t, id)?.state !== "pending");
   if (started.length) return `${started.join(", ")} already started on its result`;

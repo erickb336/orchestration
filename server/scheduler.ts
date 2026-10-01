@@ -790,8 +790,6 @@ export class Scheduler {
       }
       const conventions = this.conventionsFor(state, Date.now());
       const decisions = F.decisionsForStep(state, task, step).map((d) => d.id);
-      // ORC-022: the notes dispatch bound to this run; the envelope carries them, and a successful start confirms them.
-      const startNotes = M.notesAtStart(state, attemptId);
       this.launched.set(attemptId, { provider: a.snapshot.provider, access, workspace, stepId: step.id, taskId: task.id });
       // ORC-013 §10.3: queued before the run starts, so it is applied no later than any event from the run.
       this.queue.push({ type: "context", attemptId, ...(scope ? { scope } : {}), ...(conventions.length ? { conventions: conventions.map((c) => ({ file: c.file, blob: c.blob, bytes: c.bytes, truncated: c.truncated })) } : {}), ...(decisions.length ? { decisions } : {}) });
@@ -821,9 +819,8 @@ export class Scheduler {
         outputs: step.outputs,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
-      // The run started with the notes in its instructions: that is their delivery ("via start"). A start that
-      // throws reaches neither this line nor the agent; the failed run then settles them as not delivered.
-      for (const n of startNotes) this.queue.push({ type: "note", attemptId, noteId: n.id, outcome: "delivered" });
+      // Notes written into the instructions ("via start") are confirmed when the runtime reports the run started
+      // (ORC-022 review M1): a run that fails before it starts settles them as not delivered.
       return undefined;
     } catch (e) {
       this.launched.delete(attemptId);
@@ -962,8 +959,12 @@ export class Scheduler {
     if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now, { startedAt: e.startedAt });
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
-      case "started":
-        return M.reportRunStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
+      case "started": {
+        let next = M.reportRunStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
+        const simulated = this.simulatedRun(next, e.attemptId);
+        for (const n of M.notesAtStart(next, e.attemptId)) if (n.status === "sending") next = M.reportNoteOutcome(next, { attemptId: e.attemptId, noteId: n.id, outcome: "delivered" }, now, simulated);
+        return next;
+      }
       case "progress":
         return M.reportProgress(s, e.attemptId, e.percent);
       case "activity":
@@ -989,11 +990,15 @@ export class Scheduler {
       case "note": {
         // ORC-022: the runtime's answer (or the service's, for a note written into a run that started). An answer
         // from the fake runtime is recorded as simulated. A stale answer changes nothing (the domain checks the run).
-        const a = s.attempts.find((x) => x.id === e.attemptId);
-        const simulated = a && isProvider(a.snapshot.provider) && this.adapters[a.snapshot.provider] instanceof FakeAdapter ? (true as const) : undefined;
-        return M.reportNoteOutcome(s, e, now, simulated);
+        return M.reportNoteOutcome(s, e, now, this.simulatedRun(s, e.attemptId));
       }
     }
+  }
+
+  /** Whether a run is the fake runtime's: its note outcomes are recorded as simulated. */
+  private simulatedRun(s: State, attemptId: string): true | undefined {
+    const a = s.attempts.find((x) => x.id === attemptId);
+    return a && isProvider(a.snapshot.provider) && this.adapters[a.snapshot.provider] instanceof FakeAdapter ? true : undefined;
   }
 
   private applyLeadEvent(s: State, e: AdapterEvent, now: string): State {

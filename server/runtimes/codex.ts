@@ -25,7 +25,6 @@ import type { ThreadStartParams } from "./codex-protocol/v2/ThreadStartParams";
 import type { TurnError } from "./codex-protocol/v2/TurnError";
 import type { TurnStartParams } from "./codex-protocol/v2/TurnStartParams";
 import type { TurnSteerParams } from "./codex-protocol/v2/TurnSteerParams";
-import type { TurnSteerResponse } from "./codex-protocol/v2/TurnSteerResponse";
 import { killGroup, trackLive } from "../processes";
 import { redact, withoutGitHubTokens } from "../redact";
 import { JsonRpcConnection, RpcClosedError, RpcError } from "./codexRpc";
@@ -369,7 +368,7 @@ export class CodexAdapter implements RuntimeAdapter {
     run.rpc.request("turn/steer", params).then(
       (res) => {
         if (!run.notes.delete(note.id)) return; // settled already (the run ended first)
-        const steered = (res as TurnSteerResponse | undefined)?.turnId;
+        const steered = res?.turnId;
         if (steered !== undefined && steered !== run.turnId) return settle("not-delivered", `Codex steered turn ${steered}, not this run's turn`);
         settle("delivered");
       },

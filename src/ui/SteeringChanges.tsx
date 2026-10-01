@@ -30,6 +30,8 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
   // Review finding 3: a drop the user applies is an ordinary cancel with no undo, so it is never Undo-able here.
   // ORC-022: a sent note cannot be unsent; its row has no Undo and Undo all skips it.
   const undoable = (c: SteeringChange) => !(c.kind === "drop" && c.appliedBy === "user") && c.kind !== "note";
+  // ORC-022 review M2: a suggested rerun with a note is applied only on its own row (it asks first); Apply all leaves it.
+  const bulk = suggested.filter((c) => !(c.kind === "note" && c.rerun));
   const applyAll = () => {
     const drops = suggested.filter((c) => c.kind === "drop");
     if (drops.length && !confirmDrops(state, drops)) return;
@@ -93,7 +95,7 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
         </Section>
       )}
       {suggested.length > 0 && (
-        <Section title="Suggested" action={suggested.length > 1 ? <button className="small" disabled={off} onClick={applyAll}>Apply all</button> : undefined}>
+        <Section title="Suggested" action={bulk.length > 1 ? <button className="small" disabled={off} onClick={applyAll}>Apply all</button> : undefined}>
           {suggested.map((c) => (
             <Row key={c.id} state={state} c={c}>
               {c.kind === "note" && c.rerun && c.noteId && c.taskId && c.stepId ? (
@@ -189,7 +191,10 @@ function Row({ state, c, struck, children }: { state: State; c: SteeringChange; 
         : c.status === "superseded"
           ? "superseded by a later reply"
           : c.status === "applied" && c.kind === "note"
-            ? `sent${c.appliedBy === "user" ? " by you" : ""}; a sent note cannot be unsent`
+            ? // ORC-022 review L4: a note settled before it reached any run was recorded, not sent.
+              note?.status === "not-delivered" && !note.attemptId
+              ? `recorded${c.appliedBy === "user" ? " by you" : ""}; it did not reach an agent`
+              : `sent${c.appliedBy === "user" ? " by you" : ""}; a sent note cannot be unsent`
             : c.status === "applied" && c.appliedBy === "user"
               ? `applied by you${resolved ? ` ${resolved}` : ""}`
               : undefined;
