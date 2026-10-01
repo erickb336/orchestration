@@ -11,7 +11,9 @@ import { Settings } from "./Settings";
 import { PREF_LEAD_SEEN, relTime, usePref } from "./common";
 import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { useBrowserNotifications } from "./notifications";
+import { agentsWorking } from "./progress";
 import { StageChip } from "./Shaping";
+import { TourButton, useFirstRunTour } from "./Tour";
 
 type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" } | { page: "task"; id: string };
 
@@ -78,9 +80,13 @@ function Gate() {
 
 function Shell() {
   const route = useRoute();
-  const { notice, setNotice } = useStore();
+  const { notice, setNotice, service } = useStore();
   const tab = route.page === "task" ? "tasks" : route.page;
+  const demo = service.runtime === "fake";
   useBrowserNotifications();
+  // ORC-017 §4: the first-run tour, demo only, once per browser. Focus lands on the Tour button when it ends.
+  const tourButton = useRef<HTMLDivElement>(null);
+  useFirstRunTour(demo, route.page === "overview", () => tourButton.current?.querySelector("button")?.focus());
 
   // ORC-009: the Lead panel. It stays open across routes; on the Overview the inline conversation is used instead.
   const [leadOpen, setLeadOpen] = useState(false);
@@ -124,15 +130,21 @@ function Shell() {
         </div>
         <nav className="tabs" aria-label="Main">
           {(["overview", "tasks", "review", "activity", "settings"] as const).map((p) => (
-            <a key={p} href={`#/${p}`} aria-current={tab === p ? "page" : undefined}>
+            <a key={p} href={`#/${p}`} aria-current={tab === p ? "page" : undefined} data-tour={p === "tasks" ? "tab-tasks" : p === "review" ? "tab-review" : undefined}>
               {p[0].toUpperCase() + p.slice(1)}
               {p === "review" && <ReviewBadge />}
             </a>
           ))}
         </nav>
         <div className="right">
+          <LiveIndicator />
           <LeadButton buttonRef={leadButton} open={leadOpen && !onOverview} onClick={() => (leadOpen && !onOverview ? closeLead() : openLead())} />
           <StageChip />
+          {demo && (
+            <div ref={tourButton} style={{ display: "contents" }}>
+              <TourButton />
+            </div>
+          )}
           <ProjectControl />
         </div>
       </header>
@@ -172,7 +184,7 @@ function LeadButton({ buttonRef, open, onClick }: { buttonRef: React.RefObject<H
   const title = status ? (pending.length > 1 ? `${pending.length} messages waiting: ${status.text}` : status.text) : run ? "The lead is working" : "Message the lead";
   const parts = [unread ? `${unread} new repl${unread === 1 ? "y" : "ies"}` : "", suggestions ? `${suggestions} suggestion${suggestions === 1 ? "" : "s"}` : ""].filter(Boolean).join(", ");
   return (
-    <button ref={buttonRef} className="lead-btn" onClick={onClick} aria-expanded={open} aria-haspopup="dialog" title={parts ? `${title} · ${parts}` : title}>
+    <button ref={buttonRef} className="lead-btn" onClick={onClick} aria-expanded={open} aria-haspopup="dialog" title={parts ? `${title} · ${parts}` : title} data-tour="lead">
       {dot && <span className={`dot ${dot}`} aria-hidden="true" />}
       Lead
       {badge > 0 && (
@@ -223,37 +235,63 @@ function SimBanner() {
       </div>
     );
   }
+  // ORC-017 §3.6: one line; the controls keep their labels inside the Simulation popover.
   return (
-    <div className="sim-banner" role="note">
-      <strong>SIMULATED EXECUTION</strong>
-      <span>
-        Runs come from the service's fake runtime; no agents are running. Tasks and runs are sample data.
-        {state.project.prDelivery.enabled ? " Pull requests, checks and merges are simulated: nothing is sent to GitHub." : ""}
+    <div className="sim-banner" role="note" data-tour="demo-bar">
+      <strong>Demo</strong>
+      <span className="sim-text">
+        Every run is simulated: no agents run and nothing leaves this computer.
+        {service.scheduler === "observer" ? " (Another service instance holds the scheduler.)" : ""}
       </span>
-      {service.scheduler === "observer" && <span>(another service instance holds the scheduler)</span>}
-      <span className="spacer" />
-      <button onClick={() => void setSim({ auto: !sim.auto })} aria-pressed={sim.auto} disabled={disabled}>
-        {sim.auto ? "Pause simulation clock" : "Run simulation clock"}
-      </button>
-      <button onClick={() => void step()} disabled={disabled || sim.auto} title={sim.auto ? "Pause the simulation clock to step manually" : undefined}>
-        Step
-      </button>
-      <label>
-        <span className="sr-only">Simulated stop acknowledgment</span>
-        <select value={sim.ackMode} disabled={disabled} onChange={(e) => void setSim({ ackMode: e.target.value as "normal" | "never" })}>
-          <option value="normal">Runtime acknowledges stops</option>
-          <option value="never">Runtime ignores stops (test failure)</option>
-        </select>
-      </label>
-      <button
-        disabled={disabled}
-        onClick={() => {
-          if (confirm("Replace all data in the service with the sample project?")) void reset();
-        }}
-      >
-        Reset sample data
-      </button>
+      <details className="sim-menu">
+        <summary>Simulation</summary>
+        <div className="sim-pop">
+          <p>
+            Runs come from the service's fake runtime; no agents are running. Tasks and runs are sample data.
+            {state.project.prDelivery.enabled ? " Pull requests, checks and merges are simulated: nothing is sent to GitHub." : ""}
+          </p>
+          <div className="row">
+            <button onClick={() => void setSim({ auto: !sim.auto })} aria-pressed={sim.auto} disabled={disabled}>
+              {sim.auto ? "Pause simulation clock" : "Run simulation clock"}
+            </button>
+            <button onClick={() => void step()} disabled={disabled || sim.auto} title={sim.auto ? "Pause the simulation clock to step manually" : undefined}>
+              Step
+            </button>
+          </div>
+          <label>
+            <span className="sr-only">Simulated stop acknowledgment</span>
+            <select value={sim.ackMode} disabled={disabled} onChange={(e) => void setSim({ ackMode: e.target.value as "normal" | "never" })}>
+              <option value="normal">Runtime acknowledges stops</option>
+              <option value="never">Runtime ignores stops (test failure)</option>
+            </select>
+          </label>
+          <div className="row">
+            <button
+              disabled={disabled}
+              onClick={() => {
+                if (confirm("Replace all data in the service with the sample project?")) void reset();
+              }}
+            >
+              Reset sample data
+            </button>
+          </div>
+        </div>
+      </details>
     </div>
+  );
+}
+
+/** ORC-017 §3.7: how many agents work right now, with the pulsing work dot; "Idle" otherwise. The demo says so. */
+function LiveIndicator() {
+  const { state, service } = useStore();
+  const n = agentsWorking(state);
+  const simulated = service.runtime !== "real";
+  const text = n ? `${n} agent${n === 1 ? "" : "s"} working${simulated ? " (simulated)" : ""}${state.project.stage === "shaping" ? " (finishing; shaping)" : ""}` : "Idle";
+  return (
+    <span className={`live${n ? " working" : ""}`} aria-live="polite" title={n ? "Runs in progress, including the service's check runs" : "No run is in progress"}>
+      {n > 0 && <span className="dot" aria-hidden="true" />}
+      {text}
+    </span>
   );
 }
 
@@ -279,21 +317,18 @@ function ConnectionBanner() {
 }
 
 function ProjectControl() {
-  const { state, send, disabled, service } = useStore();
+  const { state, send, disabled } = useStore();
   // A stopping lead run counts too: the pause is not confirmed until the lead acknowledges as well.
   const stopping = M.activeAttempts(state).filter((a) => a.outcome === "stopping").length + (M.activeLeadRun(state)?.outcome === "stopping" ? 1 : 0);
-  const running = M.activeAttempts(state).filter((a) => a.outcome === "running").length;
-  // ORC-012: while shaping nothing is paused; the stage chip says what waits, and the count stays truthful.
-  const status = state.project.hold
-    ? stopping
-      ? `Pausing — ${stopping} run(s) still stopping`
-      : "Project paused"
-    : `${running} ${service.runtime === "real" ? "" : "simulated "}run(s) active${state.project.stage === "shaping" && running ? " (finishing; shaping)" : ""}`;
+  // ORC-017 §3.7: the live indicator says how many agents work; this says only what the pause is doing.
+  const status = state.project.hold ? (stopping ? `Pausing — ${stopping} run(s) still stopping` : "Project paused") : null;
   return (
     <>
-      <span className="muted" aria-live="polite">
-        {status}
-      </span>
+      {status && (
+        <span className="muted" aria-live="polite">
+          {status}
+        </span>
+      )}
       {state.project.hold ? (
         <button className="primary" disabled={disabled} onClick={() => void send("resumeProject")}>
           Resume project

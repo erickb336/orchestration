@@ -1,5 +1,5 @@
-import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // Loopback only: the control UI must not be reachable from other hosts.
 export default defineConfig({
@@ -14,4 +14,8 @@ export default defineConfig({
     proxy: { "/api": { target: `http://127.0.0.1:${process.env.ORCHESTRATION_PORT ?? 5319}` } },
   },
   preview: { host: "127.0.0.1", port: 5318 },
+  test: {
+    // Agent worktrees live under .claude/worktrees and carry their own copies of every test.
+    exclude: [...configDefaults.exclude, ".claude/**"],
+  },
 });

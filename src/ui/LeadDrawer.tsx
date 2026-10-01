@@ -2,7 +2,8 @@
 // the user moves around the board; below 768 px a modal dialog with a focus trap. The Overview keeps
 // its inline conversation, so the shell scrolls to that instead of opening a second copy.
 
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef } from "react";
+import { useNarrow } from "./common";
 import { Conversation } from "./Conversation";
 
 export interface LeadContext {
@@ -26,18 +27,6 @@ export const LeadDrawerContext = createContext<LeadDrawerApi>(noop);
 
 export function useLeadContext(): LeadDrawerApi {
   return useContext(LeadDrawerContext);
-}
-
-function useNarrow(query = "(max-width: 767px)") {
-  const [narrow, setNarrow] = useState(() => (typeof window !== "undefined" && "matchMedia" in window ? window.matchMedia(query).matches : false));
-  useEffect(() => {
-    if (!("matchMedia" in window)) return;
-    const mq = window.matchMedia(query);
-    const on = () => setNarrow(mq.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, [query]);
-  return narrow;
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';

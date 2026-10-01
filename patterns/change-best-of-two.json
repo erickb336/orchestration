@@ -85,7 +85,7 @@
     },
     {
       "id": "S5",
-      "purpose": "Verify and integrate. Service check results are the record of what ran; do not say tests passed unless a check result shows it.",
+      "purpose": "Verify and integrate",
       "role": "lead",
       "dependsOn": ["C2"],
       "inputs": [
