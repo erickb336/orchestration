@@ -51,7 +51,7 @@ export interface FlowFile {
 export const FLOW_ID_RE = /^[a-z][a-z0-9-]{1,39}$/;
 export const MAX_FLOW_STEPS = 30;
 /** Ids the service creates when it expands a step into parallel copies, loop iterations or check rounds (`baseId` strips them). */
-const EXPANSION_ID_RE = /-[ci]\d+$|-r\d+-(?:fix|review|checks)$/;
+const EXPANSION_ID_RE = /-[ci]\d+$|-r\d+-(?:fix|review|security|checks)$/;
 /** The flows the service creates tasks from (fixes and send-back fixes); their files must stay safe for that. */
 export const SERVICE_FLOW_IDS = ["change", "bugfix"] as const;
 export type ServiceFlowId = (typeof SERVICE_FLOW_IDS)[number];
@@ -143,7 +143,7 @@ function chooserOf(steps: StepDef[], i: number): StepDef | undefined {
 /** The flow rules, after the graph rules passed. The first failure is returned. */
 export function flowRuleError(id: string, steps: StepDef[]): string | undefined {
   for (const s of steps) {
-    if (EXPANSION_ID_RE.test(s.id)) return `${s.id}: step ids ending in -c<n>, -i<n> or -r<k>-fix, -r<k>-review, -r<k>-checks are reserved for the parallel copies, loop iterations and check rounds the service creates`;
+    if (EXPANSION_ID_RE.test(s.id)) return `${s.id}: step ids ending in -c<n>, -i<n> or -r<k>-fix, -r<k>-review, -r<k>-security, -r<k>-checks are reserved for the parallel copies, loop iterations and check rounds the service creates`;
     if (s.checks?.only) return `${s.id}.checks.only: ${CHECKS_ONLY_MESSAGE}`;
   }
   for (const [i, s] of steps.entries()) {

@@ -414,7 +414,12 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
     expect(r1.decisions.find((x) => x.id === d.id)).toMatchObject({ status: "fix", decidedBy: "lead" });
     const t1 = task(r1, id);
     expect(t1.checkRounds).toBe(1);
-    expect(t1.steps.map((x) => x.id)).toEqual(expect.arrayContaining(["C2-r1-fix", "C2-r1-review", "C2-r1-checks"]));
+    expect(t1.steps.map((x) => x.id)).toEqual(expect.arrayContaining(["C2-r1-fix", "C2-r1-review", "C2-r1-security", "C2-r1-checks"]));
+    // ORC-021: the round's security review runs beside its code review, and the round's checks wait for both.
+    const sec = t1.steps.find((x) => x.id === "C2-r1-security")!;
+    expect(sec.role).toBe("security_reviewer");
+    expect(sec.dependsOn).toEqual(["C2-r1-fix"]);
+    expect(t1.steps.find((x) => x.id === "C2-r1-checks")!.dependsOn).toEqual(["C2-r1-review", "C2-r1-security"]);
     const fix = step(r1, id, "C2-r1-fix");
     expect(fix).toMatchObject({ role: "coder", dependsOn: ["C2"], inputs: expect.arrayContaining([{ step: "C2", output: "final" }]) });
     expect(step(r1, id, "C2-r1-checks")).toMatchObject({ role: "checks", checks: { onFail: "block" }, inputs: expect.arrayContaining([{ step: "C2-r1-fix", output: "change" }]) });
@@ -427,9 +432,12 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
     expect(running(r1, id)[0].stepId).toBe("C2-r1-fix");
     r1 = M.reportCompletion(r1, running(r1, id)[0].id, [], at(53), [{ name: "change", summary: "f", ref: `${SHA2} on b` }, { name: "handoff", summary: "h" }]);
     r1 = M.dispatchEligible(r1, at(54));
-    const rv = running(r1, id)[0];
-    r1 = M.reportRunContext(r1, rv.id, { scope: { from: SHA, to: SHA2, paths: ["a"], total: 1 } });
-    r1 = M.reportCompletion(r1, rv.id, [], at(55), [{ name: "findings", summary: "clean", findings: [], reviewedPaths: ["a"] }]);
+    // The round's code review and security review run side by side (ORC-021); both finish clean.
+    expect(running(r1, id).map((a) => a.stepId).sort()).toEqual(["C2-r1-review", "C2-r1-security"]);
+    for (const rv of running(r1, id)) {
+      r1 = M.reportRunContext(r1, rv.id, { scope: { from: SHA, to: SHA2, paths: ["a"], total: 1 } });
+      r1 = M.reportCompletion(r1, rv.id, [], at(55), [{ name: "findings", summary: "clean", findings: [], reviewedPaths: ["a"] }]);
+    }
     r1 = M.dispatchEligible(r1, at(56));
     expect(running(r1, id)[0]).toMatchObject({ stepId: "C2-r1-checks", snapshot: { checks: { target: { ref: SHA2 } } } });
     r1 = finishRun(r1, id, 57, failed(SHA2));
