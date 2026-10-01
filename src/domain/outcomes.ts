@@ -20,7 +20,7 @@ function stepOfAttempt(t: Task, a: Attempt): StepDef | undefined {
 }
 
 /** The role an attempt ran as (`gen_ai.agent.name`): stamped at dispatch; older attempts take the step's role from their pipeline revision. */
-function roleOfAttempt(t: Task, a: Attempt): RoleId {
+export function roleOfAttempt(t: Task, a: Attempt): RoleId {
   return a.snapshot.role ?? stepOfAttempt(t, a)?.role ?? (a.snapshot.provider === "service" ? "checks" : "coder");
 }
 
@@ -204,6 +204,41 @@ export interface DeliveryOutcome {
   flags: string[];
 }
 
-export function deliveryOutcome(_t: Task): DeliveryOutcome {
-  throw new Error("ORC-018 B1: deliveryOutcome is not implemented yet");
+/**
+ * Everything comes from `t.integration` and `t.outcome?.firstRunAt` (design §2):
+ * - no integration record, or one still pending: `not-delivered`;
+ * - a review-later item: `landed`, with who landed it (the app, or a person on GitHub), how, the time
+ *   from the first run, and whether it was sent back (`sent-back`, or a fix or revert follow-up; a
+ *   revert wins over a fix);
+ * - a pull request observed as `CLOSED` (or closed from the app) and not landed: `closed`;
+ * - otherwise the integration's own status: `integrated` (an open pull request is `pr-open`), `conflict`, `not-needed`.
+ */
+export function deliveryOutcome(t: Task): DeliveryOutcome {
+  const i = t.integration;
+  if (!i) return { status: "not-delivered", flags: [] };
+  const landed = i.landed;
+  if (landed) {
+    const firstRunAt = t.outcome?.firstRunAt;
+    const span = firstRunAt ? Math.max(0, ms(landed.at) - ms(firstRunAt)) : undefined;
+    const kinds = new Set(landed.followUps.map((f) => f.kind));
+    const sentBack: DeliveryOutcome["sentBack"] | undefined = kinds.has("revert") ? "revert" : kinds.has("fix") || landed.status === "sent-back" ? "fix" : undefined;
+    return {
+      status: "landed",
+      landedAt: landed.at,
+      landedBy: landed.by,
+      via: landed.via,
+      ...(span !== undefined ? { timeToLandedMs: span } : {}),
+      ...(sentBack ? { sentBack } : {}),
+      flags: [...landed.flags],
+    };
+  }
+  if (i.status === "not-needed") return { status: "not-needed", flags: [] };
+  if (i.status === "conflict") return { status: "conflict", flags: [] };
+  if (i.status === "pending") return { status: "not-delivered", flags: [] };
+  const pr = i.pr;
+  if (pr) {
+    if (pr.phase === "closed" || pr.observed?.state === "CLOSED") return { status: "closed", flags: [] };
+    return { status: "pr-open", flags: [] };
+  }
+  return { status: "integrated", flags: [] };
 }

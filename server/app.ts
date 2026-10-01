@@ -20,6 +20,7 @@ import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { TelemetryExporter, appVersion, parseOtlpHeaders } from "./telemetry";
 import { VisionDocStore } from "./visiondocs";
 import { WorkspaceManager } from "./workspaces";
 
@@ -109,8 +110,11 @@ try {
 } catch (e) {
   log(`Patterns: loading failed, the built-in catalog stays in effect: ${e instanceof Error ? e.message : String(e)}`);
 }
+// ORC-018: the trace export, off until the user turns it on in Settings → Traces. Headers come only from
+// OTEL_EXPORTER_OTLP_HEADERS, read once here and held in memory; a change needs a restart.
+const telemetry = new TelemetryExporter(store, { headers: parseOtlpHeaders(process.env.OTEL_EXPORTER_OTLP_HEADERS), serviceVersion: appVersion(), log });
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
-const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir });
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir, telemetry });
 // ORC-013: check logs are pruned at start and once a day (older than 14 days, or beyond 200 MiB in all).
 const pruneLogs = () => {
   try {
@@ -133,6 +137,7 @@ const server = createHttpServer({
   visionDocs,
   dataDir,
   patternsDir,
+  telemetry,
   startedAt: new Date().toISOString(),
   allowedHosts,
   staticDir,
@@ -166,6 +171,7 @@ function shutdown(reason: string) {
   log(`${reason}: stopping scheduler and closing the database`);
   try {
     void scheduler.stop();
+    void telemetry.shutdown();
     server.close();
     server.closeAllConnections();
     store.close();
