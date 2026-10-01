@@ -893,7 +893,9 @@ function SendNote({ state, task, st }: { state: State; task: Task; st: Step }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  if (!canSendNote(state, task, st.id)) return null;
+  // An open form with a draft stays when the run ends meanwhile, so the text is not lost; Send waits for a run.
+  const can = canSendNote(state, task, st.id);
+  if (!can && !(open && text)) return null;
   const length = text.replace(/\s+/g, " ").trim().length;
   const tooLong = length > MAX_NOTE_LENGTH;
   const id = `note-${task.id}-${st.id}`;
@@ -909,7 +911,7 @@ function SendNote({ state, task, st }: { state: State; task: Task; st: Step }) {
       aria-label={`Note to ${st.id}`}
       onSubmit={async (e) => {
         e.preventDefault();
-        if (!length || tooLong || busy) return;
+        if (!can || !length || tooLong || busy) return;
         setBusy(true);
         const r = await send("sendNote", { taskId: task.id, stepId: st.id, text });
         setBusy(false);
@@ -920,16 +922,22 @@ function SendNote({ state, task, st }: { state: State; task: Task; st: Step }) {
       }}
     >
       <label className="field" htmlFor={id} style={{ margin: 0 }}>
-        <span>Note to the {ROLE_LABEL[st.role].toLowerCase()} running {st.id}</span>
+        <span>
+          Note to the {ROLE_LABEL[st.role].toLowerCase()} {can ? "running" : "of"} {st.id}
+        </span>
         <textarea id={id} value={text} onChange={(e) => setText(e.target.value)} autoFocus rows={3} aria-describedby={`${id}-hint`} aria-invalid={tooLong} placeholder="For example: skip the README; I will write it." />
       </label>
       <div className="row" style={{ justifyContent: "space-between" }}>
         <span id={`${id}-hint`} className="muted small">
-          {tooLong ? `Notes are limited to ${MAX_NOTE_LENGTH} characters.` : `One paragraph, ${length}/${MAX_NOTE_LENGTH}. Guidance within the spec; the agent keeps its work so far.`}
-          {service.runtime === "fake" ? " Simulated: the fake runtime acknowledges after a moment." : ""}
+          {!can
+            ? `${st.id} is no longer running, so this note cannot reach it. Ask the lead to rerun ${st.id} with it, or cancel.`
+            : tooLong
+              ? `Notes are limited to ${MAX_NOTE_LENGTH} characters.`
+              : `One paragraph, ${length}/${MAX_NOTE_LENGTH}. Guidance within the spec; the agent keeps its work so far.`}
+          {can && service.runtime === "fake" ? " Simulated: the fake runtime acknowledges after a moment." : ""}
         </span>
         <span className="row" style={{ gap: "0.3rem" }}>
-          <button type="submit" className="small primary" disabled={disabled || busy || !length || tooLong}>
+          <button type="submit" className="small primary" disabled={disabled || busy || !can || !length || tooLong}>
             {busy ? "Sending…" : "Send"}
           </button>
           <button
