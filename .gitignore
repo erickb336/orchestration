@@ -3,3 +3,7 @@ dist
 *.tsbuildinfo
 .DS_Store
 evidence/
+
+# Impeccable design hook: local cache and private overrides
+.impeccable/hook.cache.json
+.impeccable/config.local.json
