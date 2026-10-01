@@ -6,9 +6,10 @@ import type { Flow, FlowRef, PipelineRevision, Task } from "../domain/types";
 
 // ---------- the flow line on the task page ----------
 
-/** The task page's flow line in two parts: "Flow: " + "Change"; "From before flows: " + "Feature"; "" + "Custom pipeline". */
+/** The task page's flow line in two parts: "Flow: " + "Change"; "From before flows: " + "Feature"; "" + "Custom pipeline". A task that ran a personal file keeps its name. */
 export function flowLineParts(ref: FlowRef): { prefix: string; name: string } {
   if (ref.source === "legacy") return { prefix: "From before flows: ", name: ref.name };
+  if (ref.source === "local") return { prefix: "From your own file (no longer used): ", name: ref.name };
   if (ref.source === "custom") return { prefix: "", name: "Custom pipeline" };
   return { prefix: "Flow: ", name: ref.name };
 }

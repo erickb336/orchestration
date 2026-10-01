@@ -970,6 +970,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
           <summary>Task role overrides</summary>
           <p className="muted" style={{ fontSize: "0.85rem" }}>
             Apply to every unpinned step of this role in this task.
+            {usedRoles.includes("security_reviewer") ? " The security reviewer has its own row: an override of the code reviewer does not change it." : ""}
           </p>
           <dl className="kv">
             {ROLES.filter((r) => usedRoles.includes(r)).map((role) => (
@@ -981,7 +982,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                     label={`Task override for ${ROLE_LABEL[role]}`}
                     value={task.roleOverrides[role] ?? null}
                     allowInherit
-                    inheritLabel="Project default"
+                    inheritLabel={role === "security_reviewer" && !state.project.roleDefaults.security_reviewer ? "Project default (the code reviewer's)" : "Project default"}
                     disabled={disabled}
                     onChange={(v) => void send("setTaskRoleOverride", { taskId: task.id, role, selection: v })}
                   />

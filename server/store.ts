@@ -238,7 +238,7 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
   // project.defaultFlowId, state.patterns → state.flows); task.outcome and retiredTemplates are dropped;
   // a reference keeps only id, name, source, hash and chosenBy (the extends chain and the experiment flag
   // are gone). Tasks that ran a removed catalog entry keep their steps and their recorded id and name;
-  // nothing about any pipeline changes. A default that named a removed entry becomes "change".
+  // nothing about any pipeline changes. A default that named a removed entry or a personal file becomes "change".
   15: (doc) => {
     const project = doc.project as Record<string, unknown>;
     const ref = (p: unknown): FlowRef | undefined => {
@@ -247,7 +247,8 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       return { id, name, source, ...(hash !== undefined ? { hash } : {}), chosenBy };
     };
     const stored = typeof project.defaultPatternId === "string" ? project.defaultPatternId : "change";
-    project.defaultFlowId = REMOVED_FLOW_IDS.includes(stored) ? "change" : stored;
+    // ORC-021 review 2: personal flow files are gone too, so any id that is not one of the six becomes "change".
+    project.defaultFlowId = builtInCatalog().some((f) => f.id === stored) ? stored : "change";
     delete project.defaultPatternId;
     for (const t of (doc.tasks ?? []) as Record<string, unknown>[]) {
       const flow = ref(t.pattern);

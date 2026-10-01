@@ -448,6 +448,25 @@ describe("migration 15 → 16 (ORC-021)", () => {
     expect(s.tasks[0].flowSince).toBe(0);
     upgraded.close();
   });
+
+  it("a default that named a personal file becomes change; a task that ran one keeps its steps and its local reference (ORC-021 review 2, 3)", () => {
+    const path = join(dir, "v15-local.sqlite");
+    format15(path);
+    const doc = readDoc(path);
+    doc.project.defaultPatternId = "my-change";
+    const ref = { id: "my-change", name: "My change", source: "local", hash: "3".repeat(64), chain: ["my-change", "change"], chosenBy: "user" };
+    doc.tasks[0].pattern = ref;
+    (doc.tasks[0].pipelineHistory as Record<string, unknown>[])[0].pattern = ref;
+    const steps = structuredClone(doc.tasks[0].steps);
+    writeDoc(path, 15, doc);
+    const upgraded = new Store(path);
+    const s = upgraded.read().state;
+    expect(s.project.defaultFlowId).toBe("change");
+    expect(s.tasks[0].flow).toEqual({ id: "my-change", name: "My change", source: "local", hash: "3".repeat(64), chosenBy: "user" });
+    expect(s.tasks[0].pipelineHistory[0].flow).toEqual(s.tasks[0].flow);
+    expect(s.tasks[0].steps).toEqual(steps);
+    upgraded.close();
+  });
 });
 
 describe("a running custom pipeline across the upgrade", () => {

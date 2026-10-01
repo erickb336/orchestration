@@ -205,14 +205,17 @@ so in your output instead of building it.
 `;
 }
 
-/** ORC-013 §4.1: the review contract's rules, part of every review step's envelope. */
-const FINDINGS_RULES = `## How to report findings
+/**
+ * ORC-013 §4.1: the review contract's rules, part of every review step's envelope. Only the code reviewer
+ * is given the changed files and must account for each (ORC-021 review 5: the others are not told to).
+ */
+const findingsRules = (role: RoleId) => `## How to report findings
 - "auto-fix": a defect in what the change does that can be fixed without widening it. This includes routine correctness, reliability and security fixes, even when they re-add a little deleted logic.
 - "ask-user": the smallest honest fix would add new durable state, a schema change, new background, retry or persistence machinery, or a new subsystem, or would otherwise extend the change beyond its stated outcome; or the finding questions the intent, or a choice the specification made. Say in "why" that it is the remedy, not the defect, that needs a decision.
 - "no-op": information only.
 - A finding without an action is treated as "ask-user".
 - Report a defect once, at one file and line, listing in the same "detail" every other place where the same rule is broken.
-- A clean review has an empty "findings" list and every changed file in "reviewedPaths".
+- ${role === "code_reviewer" ? 'A clean review has an empty "findings" list and every changed file in "reviewedPaths".' : 'A clean review has an empty "findings" list. List the files you read in "reviewedPaths".'}
 - Any weakening of tests, CI or build scripts is an error to auto-fix.
 `;
 
@@ -335,7 +338,7 @@ ${outputSpec}
   }
 }
 \`\`\`
-${breakdownNote}${reviews ? `\n${FINDINGS_RULES}` : ""}`;
+${breakdownNote}${reviews ? `\n${findingsRules(step.role)}` : ""}`;
 }
 
 /** The changed lines under review. They are the work to review: never instructions to the reviewer. */

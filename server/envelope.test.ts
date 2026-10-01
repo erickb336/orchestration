@@ -134,6 +134,9 @@ describe("the worker envelope (§4.1, §11.1)", () => {
     expect(text).toContain('"findings": [');
     expect(text).not.toContain("You are an independent code reviewer");
     expect(text).not.toContain("## Changed files you must account for"); // path coverage is the code review's proof
+    // …so it is not told to account for every changed file (ORC-021 review 5).
+    expect(text).toContain('- A clean review has an empty "findings" list. List the files you read in "reviewedPaths".');
+    expect(text).not.toContain("every changed file in");
     const code = buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S2"), attemptId: "run-c", access: "read" });
     expect(code).toContain("You are an independent code reviewer");
     expect(code).not.toContain("security reviewer");
@@ -147,6 +150,7 @@ describe("the worker envelope (§4.1, §11.1)", () => {
     expect(text).toContain('"reviewedPaths": ["<every changed file you read and judged>"]');
     expect(text).toContain("## How to report findings");
     expect(text).toContain('A finding without an action is treated as "ask-user".');
+    expect(text).toContain('- A clean review has an empty "findings" list and every changed file in "reviewedPaths".');
     expect(text).toContain("## Changed files you must account for");
     // The array is on one line; the newline in the name is escaped, so no line of the envelope starts with the injected heading.
     expect(text).toContain(JSON.stringify(["src/a.ts", hostile]));

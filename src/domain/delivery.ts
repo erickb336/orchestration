@@ -711,7 +711,11 @@ function reviewsOf(s: State, c: Task, pr: PrDelivery, covers: (run: Attempt) => 
   return out;
 }
 
-/** Evidence from a set of reviews that saw the change: unresolved findings, then independence. */
+/**
+ * Evidence from a set of reviews that saw the change: unresolved findings, then independence. Every
+ * review's findings count; independence is judged on the code review alone (ORC-021 review 6). A
+ * security review by the writer's own provider adds findings but is never the independent evidence.
+ */
 function judge(s: State, pr: PrDelivery, covering: Covering[], source: "pipeline" | "dedicated", taskId: string): ReviewView {
   const h = sha12(pr.changeSha);
   const base = { source, forSha: pr.changeSha, taskId, artifactIds: covering.map((x) => x.art.id) };

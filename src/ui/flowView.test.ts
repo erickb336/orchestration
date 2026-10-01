@@ -23,6 +23,8 @@ describe("the task page", () => {
     expect(flowLineText(ref({ source: "internal", id: "revert", name: "Revert" }))).toBe("Flow: Revert");
     expect(flowLineParts(ref({ source: "legacy", id: "feature", name: "Feature", hash: undefined }))).toEqual({ prefix: "From before flows: ", name: "Feature" });
     expect(flowLineParts(ref({ source: "custom", id: "custom", name: "Custom pipeline", hash: undefined }))).toEqual({ prefix: "", name: "Custom pipeline" });
+    // ORC-021 review 3: a task that ran a personal file (removed in ORC-021) keeps that file's name.
+    expect(flowLineText(ref({ source: "local", id: "my-change", name: "My change" }))).toBe("From your own file (no longer used): My change");
     expect(flowLineText(ref({ source: "custom", id: "custom", name: "Custom pipeline", hash: undefined }))).toBe("Custom pipeline");
     expect(flowLineText(ref({}))).not.toContain("abcdef");
   });

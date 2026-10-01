@@ -120,7 +120,7 @@ describe("the resolver's rules (a broken file is a test failure, never a runtime
   });
 
   it("step ids the service reserves and checks.only are refused; a Checks step may not choose among best-of candidates", () => {
-    for (const id of ["S1-c2", "S1-i3", "C2-r1-checks", "C2-r12-review", "C2-r1-fix"]) expect(() => resolve(file("xx", { steps: [{ ...oneStep[0], id }] })), id).toThrow(/reserved/);
+    for (const id of ["S1-c2", "S1-i3", "C2-r1-checks", "C2-r12-review", "C2-r1-fix", "C2-r1-security"]) expect(() => resolve(file("xx", { steps: [{ ...oneStep[0], id }] })), id).toThrow(/reserved/);
     for (const id of ["S1-review", "C2-r1", "S1-rename"]) expect(() => resolve(file("xx", { steps: [...reviewed.map((s) => (s.id === "S1" ? { ...s, id } : { ...s, dependsOn: [id], inputs: [{ step: id, output: "change" }] }))] })), id).not.toThrow();
     const only: StepDef[] = [...reviewed, { id: "C1", purpose: "Checks", role: "checks", dependsOn: ["S1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "checks", kind: "check-results" }], checks: { onFail: "findings", only: ["lint"] } }];
     expect(() => resolve(file("xx", { steps: only }))).toThrow(/C1\.checks\.only: check commands belong to each project; flows run every configured check/);

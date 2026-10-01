@@ -661,13 +661,14 @@ export interface Flow {
 
 /**
  * What a task ran. Recorded on each pipeline revision that applied a flow, and as the task's current
- * one. "internal": a service-owned pipeline. "legacy": made from a template before ORC-016. "custom":
- * built by the internal `setPipeline` (tests).
+ * one. "internal": a service-owned pipeline. "legacy": made from a template before ORC-016. "local": from
+ * a personal file in ~/.orchestration/patterns (ORC-016; removed in ORC-021), kept on tasks that ran one.
+ * "custom": built by the internal `setPipeline` (tests).
  */
 export interface FlowRef {
   id: string;
   name: string;
-  source: FlowSource | "internal" | "legacy" | "custom";
+  source: FlowSource | "internal" | "legacy" | "local" | "custom";
   /** Absent for legacy and custom pipelines. */
   hash?: string;
   chosenBy: ChosenBy;
