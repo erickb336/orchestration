@@ -13,6 +13,7 @@ import type { State } from "../src/domain/types";
 import { loadPatternCatalog } from "./patterns";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
+import type { TelemetryExporter } from "./telemetry";
 import type { VisionDocStore } from "./visiondocs";
 import type { WorkspaceManager } from "./workspaces";
 import { CommandFailure, type CommandResult, type Store } from "./store";
@@ -29,6 +30,8 @@ export interface HttpOptions {
   dataDir?: string;
   /** ORC-016: the directory of the user's pattern files; POST /api/patterns/reload re-reads it. Without it, reload is refused. */
   patternsDir?: string;
+  /** ORC-018 §5.2: the trace exporter; its status is reported in `ServiceInfo.telemetry`, and backfill and retry act on it. */
+  telemetry?: TelemetryExporter;
   startedAt: string;
   /** host:port values accepted in the Host header (the service's own address plus the dev UI). */
   allowedHosts: string[];
@@ -98,6 +101,8 @@ export function createHttpServer(opts: HttpOptions): Server {
         out.repo = { ok: c.ok, reason: c.reason, branch: c.branch };
       }
     }
+    // ORC-018 §5.2: counts from the trace_exports table; never the headers.
+    if (opts.telemetry) out.telemetry = opts.telemetry.status(store.read().state);
     return out;
   };
   const payload = (): StatePayload => ({ ...store.read(), service: info() });
@@ -322,6 +327,19 @@ export function createHttpServer(opts: HttpOptions): Server {
         store.update((s) => setPatternCatalog(s, catalog, now), now);
         for (const e of catalog.errors) log(`patterns: ${e.file}${e.line !== undefined ? `:${e.line}:${e.column ?? 1}` : ""} ${e.message}`);
         return send(res, 200, { loadedAt: catalog.loadedAt, patterns: catalog.patterns.length, errors: catalog.errors.length } satisfies PatternsReloadResponse);
+      }
+      // ORC-018 §5.2: the trace export's two requests. Both passed the host, origin and client-header
+      // checks above like every other POST; neither takes arguments, and repeating either is harmless.
+      if (path === "/api/telemetry/backfill") {
+        if (!opts.telemetry) return fail(res, 400, "control", "This service has no trace exporter.");
+        if (!store.read().state.project.telemetry?.enabled) return fail(res, 400, "control", "Turn on Send traces first; finished tasks are then queued for the endpoint you chose.");
+        const queued = opts.telemetry.backfill();
+        if (queued) store.emit();
+        return send(res, 200, { queued, service: info() });
+      }
+      if (path === "/api/telemetry/retry") {
+        if (!opts.telemetry) return fail(res, 400, "control", "This service has no trace exporter.");
+        return send(res, 200, { retried: opts.telemetry.retryFailed(), service: info() });
       }
       if (path.startsWith("/api/sim") && (real || !fakeConfig)) return fail(res, 400, "control", "Simulation controls are only available with the fake runtime.");
       if (path === "/api/maintenance/prune") {

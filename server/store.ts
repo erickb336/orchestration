@@ -271,6 +271,17 @@ export interface CommandResult {
   replayed: boolean;
 }
 
+/** ORC-018 §5.2: one row of `trace_exports`: a task's settle and whether its trace was sent. */
+export interface TraceExportRow {
+  taskId: string;
+  settledAt: string;
+  status: "pending" | "sent" | "failed";
+  tries: number;
+  nextAt: number | null;
+  lastError: string | null;
+  sentAt: string | null;
+}
+
 export class Store {
   readonly path: string;
   private db: DatabaseSync;
@@ -316,6 +327,12 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS events_task ON events (task_id, at);
       CREATE TABLE IF NOT EXISTS leases (name TEXT PRIMARY KEY, holder TEXT NOT NULL, expires_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS trace_exports (
+        task_id TEXT NOT NULL, settled_at TEXT NOT NULL,
+        status TEXT NOT NULL,
+        tries INTEGER NOT NULL DEFAULT 0, next_at INTEGER, last_error TEXT, sent_at TEXT,
+        PRIMARY KEY (task_id, settled_at)
+      );
     `);
     this.db.prepare("INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT (key) DO NOTHING").run(String(SCHEMA_VERSION));
   }
@@ -476,6 +493,57 @@ export class Store {
 
   releaseLease(name: string, holder: string) {
     this.db.prepare("DELETE FROM leases WHERE name = ? AND holder = ?").run(name, holder);
+  }
+
+  // ---- ORC-018 §5.2: the trace export's bookkeeping, one row per (task, settle), outside the state ----
+
+  /** Queue the settles that have no row yet as `pending`. Returns how many were new. */
+  queueTraceExports(keys: { taskId: string; settledAt: string }[]): number {
+    const insert = this.db.prepare("INSERT OR IGNORE INTO trace_exports (task_id, settled_at, status, tries) VALUES (?, ?, 'pending', 0)");
+    let n = 0;
+    this.tx(() => {
+      for (const k of keys) n += Number(insert.run(k.taskId, k.settledAt).changes);
+    });
+    return n;
+  }
+
+  /** The pending rows due at `nowMs`, oldest settle first, at most `limit`. */
+  dueTraceExports(nowMs: number, limit: number): TraceExportRow[] {
+    return this.db.prepare("SELECT task_id AS taskId, settled_at AS settledAt, status, tries, next_at AS nextAt, last_error AS lastError, sent_at AS sentAt FROM trace_exports WHERE status = 'pending' AND (next_at IS NULL OR next_at <= ?) ORDER BY settled_at ASC, task_id ASC LIMIT ?").all(nowMs, limit) as unknown as TraceExportRow[];
+  }
+
+  /** One row (any status), for tests and the exporter's stale check. */
+  traceExport(taskId: string, settledAt: string): TraceExportRow | undefined {
+    return this.db.prepare("SELECT task_id AS taskId, settled_at AS settledAt, status, tries, next_at AS nextAt, last_error AS lastError, sent_at AS sentAt FROM trace_exports WHERE task_id = ? AND settled_at = ?").get(taskId, settledAt) as unknown as TraceExportRow | undefined;
+  }
+
+  /** Mark one row: `sent` (with `sentAt`), `pending` again after a failure (with `tries`, `nextAt` and the error), or `failed`. */
+  markTraceExport(taskId: string, settledAt: string, mark: { status: "sent"; sentAt: string } | { status: "pending" | "failed"; tries: number; nextAt: number | null; error: string }) {
+    if (mark.status === "sent") this.db.prepare("UPDATE trace_exports SET status = 'sent', sent_at = ?, next_at = NULL, last_error = NULL WHERE task_id = ? AND settled_at = ?").run(mark.sentAt, taskId, settledAt);
+    else this.db.prepare("UPDATE trace_exports SET status = ?, tries = ?, next_at = ?, last_error = ? WHERE task_id = ? AND settled_at = ?").run(mark.status, mark.tries, mark.nextAt, mark.error, taskId, settledAt);
+  }
+
+  /** A settle that no longer matches the task's outcome (it settled again): nothing to send for it. */
+  dropTraceExport(taskId: string, settledAt: string) {
+    this.db.prepare("DELETE FROM trace_exports WHERE task_id = ? AND settled_at = ?").run(taskId, settledAt);
+  }
+
+  /** "Retry failed": every failed row becomes pending and due now. Returns how many. */
+  retryFailedTraceExports(): number {
+    return Number(this.db.prepare("UPDATE trace_exports SET status = 'pending', tries = 0, next_at = NULL WHERE status = 'failed'").run().changes);
+  }
+
+  /** Counts by status, the last success, and the most recent error still recorded. */
+  traceExportCounts(): { pending: number; sent: number; failed: number; lastSentAt?: string; lastError?: string } {
+    const out = { pending: 0, sent: 0, failed: 0 } as { pending: number; sent: number; failed: number; lastSentAt?: string; lastError?: string };
+    for (const r of this.db.prepare("SELECT status, COUNT(*) AS n FROM trace_exports GROUP BY status").all() as { status: string; n: number }[]) {
+      if (r.status === "pending" || r.status === "sent" || r.status === "failed") out[r.status] = Number(r.n);
+    }
+    const sent = this.db.prepare("SELECT MAX(sent_at) AS at FROM trace_exports WHERE status = 'sent'").get() as { at: string | null };
+    if (sent.at) out.lastSentAt = sent.at;
+    const err = this.db.prepare("SELECT last_error AS e FROM trace_exports WHERE last_error IS NOT NULL ORDER BY COALESCE(next_at, 0) DESC, settled_at DESC LIMIT 1").get() as { e: string } | undefined;
+    if (err?.e) out.lastError = err.e;
+    return out;
   }
 
   commandCount(): number {

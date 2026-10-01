@@ -20,6 +20,7 @@ import { PrDriver } from "./prdelivery";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
+import type { TelemetryExporter } from "./telemetry";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
 
@@ -48,6 +49,8 @@ export interface SchedulerOptions {
   checks?: CheckRunner;
   /** ORC-013: the service's data directory (next to the database): check caches and logs live under it. */
   dataDir?: string;
+  /** ORC-018 §5.2: the trace exporter, run on each tick of the lease holder only. */
+  telemetry?: TelemetryExporter;
 }
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
@@ -110,6 +113,7 @@ export class Scheduler {
   private failedStarts = 0;
   private readonly workspaces?: WorkspaceManager;
   private readonly visionDocs?: VisionDocStore;
+  private readonly telemetry?: TelemetryExporter;
   private queue: QueueEvent[] = [];
   private launched = new Map<string, Launched>();
   /** ORC-013: conventions read this cycle, by trusted ref, so the files are read once per cycle. */
@@ -127,6 +131,7 @@ export class Scheduler {
     this.adapters = adapters;
     this.workspaces = opts.workspaces;
     this.visionDocs = opts.visionDocs;
+    this.telemetry = opts.telemetry;
     this.dataDir = opts.dataDir;
     this.checks = opts.checks ?? (this.workspaces ? undefined : new SimulatedChecks());
     this.checks?.onEvent((e) => this.queue.push(e));
@@ -973,9 +978,20 @@ export class Scheduler {
     }
   }
 
-  /** Timer tick: renew the lease; run a cycle (the fake clock can be paused). */
+  /** Timer tick: renew the lease; run a cycle (the fake clock can be paused); then let the lease holder export traces. */
   tick(nowMs: number) {
-    if (this.heartbeat(nowMs) && (this.auto || !this.isFake)) this.cycle(nowMs);
+    if (!this.heartbeat(nowMs)) return;
+    if (this.auto || !this.isFake) this.cycle(nowMs);
+    this.exportTraces(nowMs);
+  }
+
+  /**
+   * ORC-018 §5.2: the trace exporter runs on the lease holder only, after the cycle, so an observer
+   * instance never sends. The pass is asynchronous and guards itself against overlap; a lease lost
+   * during the cycle deactivated this instance, and then nothing is sent.
+   */
+  private exportTraces(nowMs: number) {
+    if (this.isActive && this.telemetry) void this.telemetry.pass(nowMs);
   }
 
   /** Manual single step (simulation clock paused). Renews the lease first. */
@@ -988,6 +1004,7 @@ export class Scheduler {
     } finally {
       this.auto = auto;
     }
+    this.exportTraces(nowMs);
     return true;
   }
 
