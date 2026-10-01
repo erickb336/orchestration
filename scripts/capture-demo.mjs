@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 // Regenerate the README media from the demo.
 //
-//   node scripts/capture-demo.mjs [--out docs] [--only overview,board] [--no-tour]
+//   node scripts/capture-demo.mjs [--out docs] [--only home,results] [--no-tour]
 //
 // It starts the service on the fake runtime in a throwaway data directory (a temporary HOME, so the real
 // ~/.orchestration is never touched), drives the installed Google Chrome through playwright-core, and writes
 //   <out>/screenshots/<name>.png   every image README.md references (the list is read from its image links),
-//   <out>/media/hero.png           scripts/media/hero.html around the Overview screenshot,
-//   <out>/media/tour.gif           a short recorded tour (Chrome's screencast frames, then ffmpeg palettegen/paletteuse).
-// It needs Google Chrome (or CHROME_PATH pointing at a Chrome/Chromium binary) and ffmpeg; it never downloads a
-// browser. The simulation clock is paused and stepped, so each shot shows a known state. On every exit path,
-// success, error or Ctrl-C, the service is stopped and the temporary directory removed.
+//   <out>/media/hero.png           scripts/media/hero.html around the Home screenshot,
+//   <out>/media/tour.gif           the demo's own first-run tour, recorded stop by stop (Chrome's screencast
+//                                  frames, then ffmpeg palettegen/paletteuse).
+// Everything is captured in the app's one dark theme. Stills have no tour popover and no cursor. It needs Google
+// Chrome (or CHROME_PATH pointing at a Chrome/Chromium binary) and ffmpeg; it never downloads a browser. The
+// simulation clock is paused and stepped for the stills, so each shows a known state, and runs during the tour.
+// On every exit path, success, error or Ctrl-C, the service is stopped and the temporary directory removed.
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -23,10 +25,15 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const README = join(ROOT, "README.md");
 const HERO_HTML = join(ROOT, "scripts", "media", "hero.html");
 const VIEWPORT = { width: 1440, height: 900 };
+/** A still that is clipped to its content is never taller than this (CSS px). */
+const MAX_SHOT_HEIGHT = 1400;
+/** Space kept under the element a still is clipped to: less than the gap to the next card, so none of it shows. */
+const CLIP_MARGIN = 12;
 const SHOT_WIDTH = 1600;
 const HERO_MAX_BYTES = 700_000;
 const TOUR_MAX_BYTES = 5_000_000;
-const HOLD = { read: 2300, short: 1700 };
+/** How long the tour holds a stop: enough to read it, from its length. */
+const READ = { base: 1300, perWord: 55, last: 1800 };
 
 // ---------- arguments ----------
 
@@ -88,7 +95,8 @@ const wanted = [...readme.matchAll(/!\[[^\]]*\]\(docs\/screenshots\/([a-z0-9-]+)
 if (!wanted.length) fail("README.md references no docs/screenshots/*.png image.");
 
 // ---------- scenes ----------
-// Each scene puts one page into the state its README paragraph describes and takes one viewport screenshot.
+// Each scene puts one page into the state its README caption describes. It may return `clipTo`, a selector: the
+// still then ends just under that element (on a page taller than the window, it reaches below the fold).
 // `open` reloads the page at a hash and waits for a marker, so a stale route never leaks into the next shot.
 
 async function open(page, api, hash, ready) {
@@ -102,105 +110,57 @@ async function open(page, api, hash, ready) {
   await page.waitForTimeout(350);
 }
 
-/** Scroll the window so the first element matching `selector` (or the first `tag` whose text starts with `text`) sits `offset` px under the top edge. */
-async function scrollTo(page, where, offset = 16) {
-  await page.evaluate(
-    ({ where, offset }) => {
-      let el = null;
-      if (where.selector) el = document.querySelector(where.selector);
-      else if (where.text) el = [...document.querySelectorAll(where.tag ?? "*")].find((e) => e.children.length < 12 && (e.textContent ?? "").trim().startsWith(where.text)) ?? null;
-      if (!el) throw new Error(`Nothing to scroll to: ${JSON.stringify(where)}`);
-      window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - offset, behavior: "instant" });
-    },
-    { where, offset },
-  );
-  await page.waitForTimeout(250);
+/** The line about using your own repository is for someone exploring the demo; the README says it in words. */
+async function hideTryLine(page) {
+  const hide = page.locator(".try-shaping button", { hasText: "Hide" });
+  if (await hide.count()) {
+    await hide.first().click();
+    await page.waitForTimeout(250);
+  }
 }
 
-/** The lead message that carried the demo's steering exchange. */
-function steeringMessage(state) {
-  const set = state.steering.find((s) => s.changes.some((c) => c.kind === "focus"));
-  const msg = set && state.conversation.find((m) => m.author === "lead" && m.leadRunId === set.leadRunId);
-  if (!msg) throw new Error("The demo's steering exchange was not found in the conversation.");
-  return msg;
+/** The demo's exchange with the lead: your message and the reply that changed the focus and sent the note. */
+function steeringExchange(state) {
+  const set = state.steering.find((s) => s.changes.some((c) => c.kind === "focus") && s.changes.some((c) => c.kind === "note"));
+  const reply = set && state.conversation.find((m) => m.author === "lead" && m.leadRunId === set.leadRunId);
+  const asked = set && state.conversation.find((m) => m.id === set.messageIds[0]);
+  if (!reply || !asked) throw new Error("The demo's exchange with the lead (a focus change and a note) was not found in the conversation.");
+  return { asked, reply };
 }
 
 const SCENES = {
-  // The start of the demo: three agents working, the clock paused.
-  overview: async ({ page, api }) => {
-    await open(page, api, "#/overview", { selector: '[data-tour="progress"]' });
-    // The line about using your own repository is for someone exploring the demo; the README says it in words.
-    const hide = page.locator(".try-shaping button", { hasText: "Hide" });
-    if (await hide.count()) {
-      await hide.first().click();
-      await page.waitForTimeout(250);
-    }
+  // Home at the start of the demo: three agents working, the clock paused. The hero is made from this capture.
+  home: async ({ page, api }) => {
+    await open(page, api, "#/overview", { selector: '[data-tour="progress"]', text: "Needs you" });
+    await hideTryLine(page);
+    return { clipTo: ".home .k-grid-2" };
   },
-  board: async ({ page, api }) => open(page, api, "#/tasks", { selector: ".board" }),
-  steering: async ({ page, api }) => {
-    await open(page, api, "#/tasks", { selector: ".board" });
-    const msg = steeringMessage(await api.state());
+  // The board shows every column in one window (the stills' browser prefers the board view).
+  tasks: async ({ page, api }) => open(page, api, "#/tasks", { selector: ".board" }),
+  // A task that needs you: WT-007's finding to decide, and its steps in plain words.
+  task: async ({ page, api }) => {
+    await open(page, api, "#/task/WT-007", { selector: '[data-tour="steps"]', text: "Decide a finding" });
+    return { clipTo: '[data-tour="steps"]' };
+  },
+  results: async ({ page, api }) => {
+    await open(page, api, "#/results", { text: "Ready to merge" });
+    return { clipTo: ".r-page" };
+  },
+  // The lead conversation, open on Home, with the reply's changes unfolded: the focus, the deferral and the note, delivered.
+  lead: async ({ page, api }) => {
+    const { asked, reply } = steeringExchange(await api.state());
+    await open(page, api, "#/overview", { selector: '[data-tour="progress"]' });
+    await hideTryLine(page);
     await page.click("button.lead-btn");
-    await page.waitForSelector(`aside.lead-drawer #msg-${msg.id}`);
-    await page.evaluate((id) => document.getElementById(`msg-${id}`)?.scrollIntoView({ block: "start" }), msg.id);
+    await page.waitForSelector(`aside.lead-drawer #msg-${reply.id} .fold-toggle`);
+    await page.click(`aside.lead-drawer #msg-${reply.id} .fold-toggle`);
+    await page.waitForFunction((id) => document.getElementById(`msg-${id}`)?.querySelector(".fold-body:not([hidden])")?.textContent?.includes("Delivered"), reply.id);
+    await page.evaluate((id) => document.getElementById(`msg-${id}`)?.scrollIntoView({ block: "start" }), asked.id);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    // The message box keeps focus when the drawer opens; a still shows no focus ring or caret.
+    await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
     await page.waitForTimeout(300);
   },
-  review: async ({ page, api }) => open(page, api, "#/review", { text: "Needs you" }),
-  landed: async ({ page, api }) => {
-    await open(page, api, "#/review", { text: "Landed" });
-    await page.getByRole("button", { name: "Show details" }).first().click();
-    await page.waitForSelector("text=Hide details");
-    await scrollTo(page, { tag: "h2", text: "Landed" });
-  },
-  "goal-task": async ({ page, api }) => open(page, api, "#/task/WT-004", { selector: "#children-h" }),
-  // A pipeline whose security review found something, repaired and reviewed again.
-  pipeline: async ({ page, api }) => {
-    await open(page, api, "#/task/WT-004.1", { selector: "#steps-h" });
-    await scrollTo(page, { selector: 'section[aria-labelledby="steps-h"]' });
-  },
-  artifacts: async ({ page, api }) => {
-    await open(page, api, "#/task/WT-011", { selector: "#arts-h" });
-    await scrollTo(page, { selector: 'section[aria-labelledby="outcome-h"]' });
-  },
-  findings: async ({ page, api }) => {
-    await open(page, api, "#/task/WT-001", { selector: "#arts-h" });
-    await page.evaluate(() => {
-      const row = [...document.querySelectorAll(".artifact-row")].find((r) => (r.querySelector(".mono")?.textContent ?? "").trim().startsWith("S2.findings"));
-      if (!row) throw new Error("WT-001's S2.findings artifact was not found.");
-      window.scrollTo({ top: row.getBoundingClientRect().top + window.scrollY - 16, behavior: "instant" });
-    });
-    await page.waitForTimeout(250);
-  },
-  // Settings opens one section per address (#/settings/<section>/<card>); each card's element id is its name.
-  settings: async ({ page, api }) => open(page, api, "#/settings/working-style/involvement", { selector: "#involvement" }),
-  "checks-settings": async ({ page, api }) => {
-    await open(page, api, "#/settings/quality/checks", { selector: "#checks" });
-    await scrollTo(page, { selector: "#checks" });
-  },
-  "delivery-settings": async ({ page, api }) => {
-    await open(page, api, "#/settings/project/delivery", { selector: "#delivery" });
-    await scrollTo(page, { selector: "#delivery" });
-  },
-  flows: async ({ page, api }) => {
-    await open(page, api, "#/settings/quality/flows", { selector: "#flows" });
-    await scrollTo(page, { selector: "#flows" });
-  },
-  // Later in the demo: WT-006 finished and its pull request waits on a failed check (see the pr group below).
-  "pr-checks": async ({ page, api }) => open(page, api, "#/task/WT-006", { selector: "#delivery-h", text: "Needs you" }),
-  // The shaping stage, after a message to the lead.
-  shaping: async ({ page, api }) => {
-    await open(page, api, "#/overview", { selector: "#shape", text: "The lead asks" });
-    await scrollTo(page, { selector: "#shape" });
-  },
-  "vision-docs": async ({ page, api }) => {
-    await open(page, api, "#/overview", { selector: "#shape", text: "The lead asks" });
-    await scrollTo(page, { tag: "h3", text: "Vision documents" });
-  },
-};
-const GROUPS = {
-  start: ["overview", "board", "steering", "review", "landed", "goal-task", "pipeline", "artifacts", "findings", "settings", "checks-settings", "delivery-settings", "flows"],
-  pr: ["pr-checks"],
-  shaping: ["shaping", "vision-docs"],
 };
 
 const unknown = wanted.filter((n) => !SCENES[n]);
@@ -226,7 +186,6 @@ async function freePort() {
 
 function makeApi(port) {
   const base = `http://127.0.0.1:${port}`;
-  let n = 0;
   async function post(path, body) {
     const r = await fetch(base + path, { method: "POST", headers: { "Content-Type": "application/json", "X-Orchestration-Client": "1" }, body: JSON.stringify(body) });
     if (!r.ok) throw new Error(`${path} answered ${r.status}: ${(await r.text()).slice(0, 300)}`);
@@ -239,7 +198,6 @@ function makeApi(port) {
       if (!r.ok) throw new Error(`/api/state answered ${r.status}`);
       return (await r.json()).state;
     },
-    command: (name, args = {}) => post("/api/commands", { name, args, idempotencyKey: `capture-${process.pid}-${++n}-${name}` }),
     sim: (patch) => post("/api/sim", patch),
     async step(count = 1) {
       for (let i = 0; i < count; i++) await post("/api/sim/step", {});
@@ -255,7 +213,7 @@ function makeApi(port) {
     },
     /**
      * The start of the demo with the clock paused: the three starting runs dispatched and WT-005's pull
-     * request seen on the simulated GitHub, so it is held for you. A few ticks do both.
+     * request seen on the simulated GitHub, so it is ready for you to merge. A few ticks do both.
      */
     async settle() {
       await api.sim({ auto: false });
@@ -355,93 +313,41 @@ async function startScreencast(page, dir) {
   };
 }
 
+/**
+ * The demo's own tour, as a first visit sees it: the bare address opens Home and the tour starts by itself.
+ * Each stop is held long enough to read, then Next; stops on other pages open them. The last stop's button
+ * goes back to Home. The simulation clock runs throughout, so the work moves while the tour talks.
+ */
 async function recordTour(browser, api, tmp) {
-  await api.sim({ auto: true });
   const ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, colorScheme: "dark" });
-  await ctx.addInitScript(() => {
-    try {
-      localStorage.setItem("orchestration.view", "board");
-    } catch {}
-  });
   const page = await ctx.newPage();
-  /** Run the paused-clock stepper while the real clock also runs, so the Overview changes while it is on screen. */
-  async function hold(ms, steps = 0) {
-    const end = Date.now() + ms;
-    while (Date.now() < end) {
-      if (steps > 0) {
-        await api.step(1);
-        steps--;
-      }
-      await sleep(steps > 0 ? Math.max(40, ms / 60) : Math.min(200, end - Date.now()));
-    }
-  }
-
-  // 1. A first visit: the bare address lands on the Overview and the tour's first stop shows. Recording starts
-  //    once the document exists; every later navigation changes only the hash, so the screencast continues.
   await page.goto(`${api.base}/`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector("header.top", { timeout: 20_000 });
   const cast = await startScreencast(page, join(tmp, "frames"));
+  await api.sim({ auto: true });
   await page.waitForSelector(".driver-popover", { timeout: 20_000 });
-  await hold(HOLD.read);
-  await page.keyboard.press("Escape");
-  await page.waitForSelector(".driver-popover", { state: "detached" });
+  const progress = () => page.evaluate(() => document.querySelector(".driver-popover-progress-text")?.textContent ?? "");
+  const total = Number(/of (\d+)/.exec(await progress())?.[1]);
+  if (!total) throw new Error("The tour's first stop shows no progress (\"1 of N\").");
+  const stops = [];
+  for (let n = 1; n <= total; n++) {
+    await page.waitForFunction((n) => document.querySelector(".driver-popover-progress-text")?.textContent?.startsWith(`${n} of`), n, { timeout: 15_000 });
+    // Let the highlight finish moving before the reading time starts.
+    await page.waitForTimeout(450);
+    const title = (await page.textContent(".driver-popover-title"))?.trim() ?? "";
+    const words = ((await page.textContent(".driver-popover-description")) ?? "").trim().split(/\s+/).length;
+    stops.push(title);
+    await sleep(READ.base + READ.perWord * words);
+    await page.click(".driver-popover-next-btn");
+  }
+  await page.waitForSelector(".driver-popover", { state: "detached", timeout: 15_000 });
+  await page.waitForFunction(() => location.hash === "#/overview", undefined, { timeout: 15_000 });
   await page.waitForSelector('[data-tour="progress"]');
-  await hold(HOLD.read + 600, 20);
-
-  // 2. The lead, from the same page: "Focus on offline maps", then the change list.
-  await page.click("button.lead-btn");
-  await page.waitForTimeout(400);
-  await page.keyboard.type("Focus on offline maps", { delay: 30 });
-  await page.waitForTimeout(300);
-  const before = (await api.state()).conversation.length;
-  await page.click("#lead-inline button[type=submit]");
-  await page.waitForTimeout(500);
-  await api.stepUntil("the lead's reply", (s) => s.conversation.length > before && s.conversation.at(-1).author === "lead" && !s.leadRuns.some((r) => !r.endedAt), 120, 2);
-  await page.waitForTimeout(400);
-  await page.evaluate(() => {
-    const list = document.querySelector("#lead-inline ol.convo");
-    if (list) list.scrollTop = list.scrollHeight;
-  });
-  await hold(HOLD.read + 300);
-
-  // 3. The board.
-  await page.goto(`${api.base}/#/tasks`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(".board");
-  await hold(HOLD.short + 300);
-
-  // 4. WT-002 and its pipeline: provider and model per step.
-  await api.stepUntil("an agent working on WT-002", (s) => s.attempts.some((a) => a.taskId === "WT-002" && !a.endedAt && a.outcome === "running" && !/^C\d/.test(a.stepId)), 200, 2);
-  await page.click('.task-row[aria-label^="WT-002 "]');
-  await page.waitForSelector("#steps-h");
-  await page.waitForTimeout(400);
-  await scrollTo(page, { selector: 'section[aria-labelledby="steps-h"]' });
-  await hold(HOLD.read);
-
-  // 5. Pause, until the runtime acknowledges and the task shows Paused.
-  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
-  await page.waitForTimeout(500);
-  await page.getByRole("button", { name: "Pause", exact: true }).first().click();
-  const paused = (s) => {
-    const t = s.tasks.find((x) => x.id === "WT-002");
-    return !!t?.hold && !s.attempts.some((a) => a.taskId === "WT-002" && !a.endedAt);
-  };
-  for (let i = 0; i < 60 && !paused(await api.state()); i++) await sleep(250);
-  await page.waitForFunction(() => document.body.innerText.includes("Paused"), undefined, { timeout: 15_000 });
-  await hold(HOLD.short);
-
-  // 6. Resume.
-  await page.getByRole("button", { name: "Resume", exact: true }).first().click();
-  for (let i = 0; i < 60 && !(await api.state()).attempts.some((a) => a.taskId === "WT-002" && !a.endedAt); i++) await sleep(250);
-  await hold(HOLD.short - 200);
-
-  // 7. Review.
-  await page.goto(`${api.base}/#/review`, { waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => document.body.innerText.includes("Needs you"));
-  await hold(HOLD.read);
-
+  await sleep(READ.last);
   const rec = await cast.stop(1.0);
   await ctx.close();
   await api.sim({ auto: false });
-  return rec;
+  return { ...rec, stops };
 }
 
 // ---------- main ----------
@@ -505,75 +411,51 @@ try {
   } catch (e) {
     throw new Error(`Google Chrome could not be started (${chromePath ? `CHROME_PATH=${chromePath}` : "the installed Chrome"}). Install Google Chrome or set CHROME_PATH to a Chrome/Chromium binary.\n${e.message.split("\n")[0]}`);
   }
-  const stills = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 2, colorScheme: "dark", reducedMotion: "reduce" });
-  await stills.addInitScript(() => {
-    try {
-      localStorage.setItem("orc.tour.v1", "done");
-      localStorage.setItem("orchestration.view", "board");
-    } catch {}
-  });
-  const page = await stills.newPage();
   const written = [];
   const raw = {};
 
+  /**
+   * One still, in a browser of its own, so nothing one scene does (opening the lead marks its replies as read,
+   * Hide is remembered) shows in the next: twice the pixels, then downscaled; no motion, and the tour marked
+   * as seen so no popover shows.
+   */
   async function shoot(name) {
     log(`screenshot ${name}`);
-    await SCENES[name]({ page, api });
+    const stills = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 2, colorScheme: "dark", reducedMotion: "reduce" });
+    await stills.addInitScript(() => {
+      try {
+        localStorage.setItem("orc.tour.v1", "done");
+        localStorage.setItem("orchestration.view", "board");
+      } catch {}
+    });
+    const page = await stills.newPage();
+    const r = (await SCENES[name]({ page, api })) ?? {};
+    if (await page.locator(".driver-popover").count()) throw new Error(`${name}: a tour popover is showing.`);
     raw[name] = join(tmp, "shots", `${name}@2x.png`);
-    await page.screenshot({ path: raw[name], animations: "disabled", caret: "hide" });
+    let clip;
+    if (r.clipTo) {
+      const bottom = await page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) throw new Error(`Nothing to clip to: ${sel}`);
+        return el.getBoundingClientRect().bottom + window.scrollY;
+      }, r.clipTo);
+      clip = { x: 0, y: 0, width: VIEWPORT.width, height: Math.min(MAX_SHOT_HEIGHT, Math.ceil(bottom + CLIP_MARGIN)) };
+    }
+    await page.screenshot({ path: raw[name], animations: "disabled", caret: "hide", ...(clip ? { clip, fullPage: true } : {}) });
+    await stills.close();
     const out = join(outDir, "screenshots", `${name}.png`);
     downscale(raw[name], out, SHOT_WIDTH);
     written.push(out);
   }
 
-  const inGroup = (g) => selected.filter((n) => GROUPS[g].includes(n));
-  for (const name of inGroup("start")) await shoot(name);
+  for (const name of selected) await shoot(name);
 
-  if (inGroup("pr").length) {
-    // A pull request waiting on a failed check. The simulated checks fail `test` once per task tree, on its first
-    // check run; so WT-006 runs with checks off (its check steps are skipped), and checks are turned back on once
-    // its pull request is open. The service then runs its merge checks on that change, and the first one fails.
-    log("pr-checks: WT-006 runs with checks off; checks are turned on once its pull request is open");
-    const cfg = (await api.state()).project.checks;
-    const config = (enabled) => ({ ...cfg, enabled, rev: undefined });
-    await api.command("setChecks", { config: config(false) });
-    await api.stepUntil("WT-006's pull request open", (s) => s.tasks.find((t) => t.id === "WT-006")?.integration?.pr?.phase === "open", 1500, 5);
-    await api.command("setChecks", { config: config(true) });
-    await api.stepUntil(
-      "WT-006's pull request waiting on a failed check",
-      // Once the service's own check fails, the pull request waits for you.
-      (s) => s.tasks.find((t) => t.id === "WT-006")?.integration?.pr?.attention?.code === "service-checks",
-      300,
-      2,
-    );
-    // The simulated GitHub is read on the service's own schedule (every 30 s while a pull request is new), in real
-    // time; wait for that first read so the card shows what GitHub says rather than "not read yet".
-    const readBy = Date.now() + 60_000;
-    while (!(await api.state()).tasks.find((t) => t.id === "WT-006")?.integration?.pr?.observed) {
-      if (Date.now() > readBy) throw new Error("WT-006's pull request was not read from the simulated GitHub within 60 s.");
-      await api.step(1);
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-    for (const name of inGroup("pr")) await shoot(name);
-    await api.restart();
-  }
-
-  if (inGroup("shaping").length) {
-    log("shaping: back to the shaping stage, a message to the lead, and its questions");
-    await api.command("startShaping");
-    const before = (await api.state()).conversation.length;
-    await api.command("postMessage", { text: "Weekend Trips is a small app for planning weekend hikes with friends. Most trailheads have no signal, so the map has to work offline." });
-    await api.stepUntil("the lead's shaping reply", (s) => s.conversation.length > before && s.conversation.at(-1).author === "lead" && !s.leadRuns.some((r) => !r.endedAt), 200, 2);
-    for (const name of inGroup("shaping")) await shoot(name);
-    await api.restart();
-  }
-
-  // The hero: scripts/media/hero.html around the full-resolution Overview capture.
-  if (!only.length || only.includes("overview")) {
+  // The hero: scripts/media/hero.html around the full-resolution Home capture.
+  if (!only.length || only.includes("home")) {
     log("hero");
-    if (!raw.overview) await shoot("overview");
+    if (!raw.home) await shoot("home");
     const heroPage = await browser.newPage({ viewport: { width: 2400, height: 1350 }, deviceScaleFactor: 1, colorScheme: "dark" });
-    await heroPage.goto(`${pathToFileURL(HERO_HTML).href}?shot=${encodeURIComponent(pathToFileURL(raw.overview).href)}`);
+    await heroPage.goto(`${pathToFileURL(HERO_HTML).href}?shot=${encodeURIComponent(pathToFileURL(raw.home).href)}`);
     await heroPage.waitForFunction(() => {
       const img = document.getElementById("shot");
       return img && img.complete && img.naturalWidth > 0;
@@ -592,8 +474,6 @@ try {
     log(`hero.png: ${width} px wide, ${kb(statSync(hero).size)}`);
   }
 
-  await page.close();
-
   if (!noTour && !only.length) {
     log("tour: recording");
     await api.restart();
@@ -602,6 +482,7 @@ try {
     mkdirSync(mediaDir, { recursive: true });
     const tour = convertTour(rec.list, mediaDir);
     written.push(tour.out);
+    log(`tour stops: ${rec.stops.join(" → ")}`);
     log(`${tour.file}: ${tour.fps} fps, ${tour.width} px wide, ${rec.seconds.toFixed(1)} s from ${rec.frames} screencast frames, ${kb(tour.bytes)}`);
   }
 

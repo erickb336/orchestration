@@ -198,7 +198,7 @@ describe("the demo state", () => {
     expect(set.changes.map((c) => [c.kind, c.status, c.taskId])).toEqual([
       ["focus", "applied", undefined],
       ["defer", "applied", "WT-010"],
-      ["note", "applied", "WT-002"],
+      ["note", "applied", "WT-005"],
     ]);
     expect(set.reason).not.toMatch(/\(Simulated/);
     expect(task(s, "WT-010").deferral).toMatchObject({ by: "lead", changeSetId: set.id });
@@ -213,25 +213,31 @@ describe("the demo state", () => {
     expect(M.pendingMessages(s)).toEqual([]);
   });
 
-  it("the lead's note to WT-002's coder waits for its run (the step has not started) and is delivered at start by the first dispatch", () => {
+  it("the lead's note reached WT-005's coder while it ran: sent live, acknowledged by the simulated runtime, applied in the change", () => {
     const s = demo();
     expect(s.notes).toHaveLength(1);
     const n = s.notes[0];
     const row = s.steering[0].changes[2];
-    expect(n).toMatchObject({ taskId: "WT-002", stepId: "S1", status: "queued", simulated: true, text: "Show the age of the cached map in whole hours, not minutes; the owner asked for it." });
+    const run = s.attempts.find((a) => a.id === n.attemptId)!;
+    expect(n).toMatchObject({ taskId: "WT-005", stepId: "S1", status: "delivered", via: "live", simulated: true, text: "Put a first-aid kit on every packing list, whatever the trail's length or forecast." });
     expect(n.from).toEqual({ by: "lead", leadRunId: s.steering[0].leadRunId, changeSetId: s.steering[0].id, changeId: row.id, messageIds: [s.conversation[0].id] });
     expect(row).toMatchObject({ kind: "note", status: "applied", appliedBy: "lead", noteId: n.id, stepId: "S1", after: n.text });
-    expect(s.conversation[0].text).toMatch(/tell whoever builds the offline banner/);
-    expect(s.conversation[1].text).toMatch(/I sent the coder of the offline banner a note/);
-    expect(s.events.some((e) => e.taskId === "WT-002" && e.message.startsWith(`Note ${n.id} queued for S1's next run (the step has not started)`))).toBe(true);
-    // The service's first dispatch binds it to WT-002 S1's run and writes it into the run's instructions; a confirmed start delivers it.
+    expect(s.conversation[0].text).toMatch(/tell the coder on the packing list to put a first-aid kit on every list/);
+    expect(s.conversation[1].text).toMatch(/I also passed your note to the coder working on the packing list\.$/);
+    // The coder was running when the note was sent and when it was acknowledged, and finished after it.
+    expect(run).toMatchObject({ taskId: "WT-005", stepId: "S1", outcome: "completed", snapshot: { provider: "codex", role: "coder" } });
+    expect(run.startedAt < n.sentAt! && n.sentAt! <= n.settledAt! && n.settledAt! < run.endedAt!).toBe(true);
+    expect(s.events.some((e) => e.taskId === "WT-005" && e.message.startsWith(`Note ${n.id} sent to S1's run ${run.id}`))).toBe(true);
+    expect(s.events.some((e) => e.taskId === "WT-005" && e.message === `Note ${n.id} delivered to S1's run ${run.id}`)).toBe(true);
+    expect(M.notesReceived(s, run.id).map((x) => x.id)).toEqual([n.id]);
+    // What the coder handed on says the note was applied.
+    const packing = task(s, "WT-005");
+    expect(M.acceptedOutput(s, packing, "S1", "change")?.summary).toMatch(/with a first-aid kit on every list/);
+    expect(M.acceptedOutput(s, packing, "S1", "handoff")?.summary).toMatch(/as the lead's note asked mid-run/);
+    // Nothing is left waiting for a run, so the service's first dispatch binds no note.
     const now = iso(T0 + 1000);
     const d = M.dispatchEligible(M.leadPromoteProposals(s, now), now);
-    const run = M.activeAttempts(d, "WT-002").find((a) => a.stepId === "S1")!;
-    expect(d.notes[0]).toMatchObject({ status: "sending", via: "start", attemptId: run.id });
-    expect(M.notesAtStart(d, run.id).map((x) => x.id)).toEqual([n.id]);
-    const delivered = M.reportNoteOutcome(d, { attemptId: run.id, noteId: n.id, outcome: "delivered" }, iso(T0 + 2000), true);
-    expect(delivered.notes[0]).toMatchObject({ status: "delivered", via: "start", simulated: true });
+    expect(d.notes).toEqual(s.notes);
   });
 
   it("shows each capability once: the tasks and their states at the start of the demo", () => {

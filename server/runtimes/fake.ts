@@ -150,9 +150,9 @@ function exchanges(prompt: string): number {
 
 /**
  * ORC-012: a simulated vision draft, built only from the envelope while the project is shaping. The newest
- * message becomes the problem statement and every other part is a marked assumption, as a real lead's
- * living draft would be from the first exchange. The draft's body says it is simulated (nothing else
- * labels a draft's text once it is the vision); the focus and reason are labelled by the structured flag.
+ * message becomes the problem statement and every other part is a marked assumption. The draft's body says it is
+ * simulated and what the simulation did (nothing else labels a draft's text once it is the vision); the focus
+ * and reason are labelled by the structured flag.
  */
 export function fakeVision(prompt: string): Record<string, unknown> | undefined {
   if (!/^Project stage: shaping$/m.test(prompt)) return undefined;
@@ -170,10 +170,10 @@ export function fakeVision(prompt: string): Record<string, unknown> | undefined 
       "Risks: the problem is broader than one message shows (assumption).",
       "First milestone: one thing you can try yourself within a day (assumption).",
       "",
-      "A real lead grounds each line in your answers, the vision documents and the repository, and improves the draft every turn.",
+      "The simulation wrote this from your newest message alone: it restates the message and marks every other line as an assumption. It reads no document or code and does not carry earlier answers forward.",
     ].join("\n"),
     focus: short.length > 120 ? `${short.slice(0, 119)}…` : short,
-    reason: n === 1 ? "A first living draft from your message; the assumptions are yours to confirm or change." : `Improved after ${n} exchanges; a real lead would fold your answers in.`,
+    reason: n === 1 ? "A first living draft from your message; the assumptions are yours to confirm or change." : `Redrawn from your newest message after ${n} exchanges; the assumptions are yours to confirm or change.`,
   };
 }
 
