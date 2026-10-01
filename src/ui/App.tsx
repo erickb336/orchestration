@@ -11,18 +11,20 @@ import { Settings } from "./Settings";
 import { PREF_LEAD_SEEN, relTime, usePref } from "./common";
 import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { useBrowserNotifications } from "./notifications";
-import { agentsWorking } from "./progress";
+import { agentsStopping, agentsWorking, liveIndicatorText } from "./progress";
+import { parseRoute } from "./route";
 import { StageChip } from "./Shaping";
 import { TourButton, useFirstRunTour } from "./Tour";
+import { Gallery } from "./kit/Gallery";
 
-type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" } | { page: "task"; id: string };
-
-function parseRoute(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, "").split("/");
-  if (parts[0] === "task" && parts[1]) return { page: "task", id: decodeURIComponent(parts[1]) };
-  if (parts[0] === "overview" || parts[0] === "review" || parts[0] === "activity" || parts[0] === "settings") return { page: parts[0] };
-  return { page: "tasks" };
-}
+/** The tabs: the page each one opens, its label and its address. The Results page keeps `review` as its internal name. */
+const TABS = [
+  { page: "overview", label: "Overview", href: "#/overview" },
+  { page: "tasks", label: "Tasks", href: "#/tasks", tour: "tab-tasks" },
+  { page: "review", label: "Results", href: "#/results", tour: "tab-results" },
+  { page: "activity", label: "Activity", href: "#/activity" },
+  { page: "settings", label: "Settings", href: "#/settings" },
+] as const;
 
 function useRoute() {
   const [route, setRoute] = useState(() => parseRoute(location.hash));
@@ -129,10 +131,10 @@ function Shell() {
           <ProjectName />
         </div>
         <nav className="tabs" aria-label="Main">
-          {(["overview", "tasks", "review", "activity", "settings"] as const).map((p) => (
-            <a key={p} href={`#/${p}`} aria-current={tab === p ? "page" : undefined} data-tour={p === "tasks" ? "tab-tasks" : p === "review" ? "tab-review" : undefined}>
-              {p[0].toUpperCase() + p.slice(1)}
-              {p === "review" && <ReviewBadge />}
+          {TABS.map((t) => (
+            <a key={t.page} href={t.href} aria-current={tab === t.page ? "page" : undefined} data-tour={"tour" in t ? t.tour : undefined}>
+              {t.label}
+              {t.page === "review" && <ResultsBadge />}
             </a>
           ))}
         </nav>
@@ -155,6 +157,7 @@ function Shell() {
         {route.page === "review" && <Review />}
         {route.page === "activity" && <Activity />}
         {route.page === "settings" && <Settings />}
+        {route.page === "kit" && <Gallery />}
       </main>
       {leadOpen && !onOverview && <LeadDrawer onClose={closeLead} />}
       {notice && (
@@ -197,13 +200,13 @@ function LeadButton({ buttonRef, open, onClick }: { buttonRef: React.RefObject<H
   );
 }
 
-/** What waits in the Review list. Persistent: it does not reset when the page is visited. */
-function ReviewBadge() {
+/** What waits under Results: pull requests that need you, and new results. Persistent: it does not reset when the page is visited. */
+function ResultsBadge() {
   const { state } = useStore();
   const needs = D.needsYou(state);
   const unreviewed = D.unreviewedCount(state);
   if (needs + unreviewed === 0) return null;
-  const parts = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : "", unreviewed ? `${unreviewed} landed, not reviewed` : ""].filter(Boolean).join(" · ");
+  const parts = [needs ? `${needs} need${needs === 1 ? "s" : ""} you` : "", unreviewed ? `${unreviewed} new result${unreviewed === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
   return (
     <span className="badge-new" style={{ marginLeft: "0.35rem" }} title={parts} aria-label={parts}>
       {needs + unreviewed}
@@ -247,7 +250,7 @@ function SimBanner() {
         <summary>Simulation</summary>
         <div className="sim-pop">
           <p>
-            Runs come from the service's fake runtime; no agents are running. Tasks and runs are sample data.
+            Runs come from the service's fake runtime; no agents run. Tasks and runs are sample data.
             {state.project.prDelivery.enabled ? " Pull requests, checks and merges are simulated: nothing is sent to GitHub." : ""}
           </p>
           <div className="row">
@@ -281,15 +284,20 @@ function SimBanner() {
   );
 }
 
-/** ORC-017 §3.7: how many agents work right now, with the pulsing work dot; "Idle" otherwise. The demo says so. */
+/**
+ * ORC-017 §3.7: how many agents work right now, with the pulsing work dot. ORC-025: runs that are still
+ * stopping count as busy ("2 agents stopping"); "Idle" only when no agent run is active. The demo bar says
+ * once that everything is simulated, so this says nothing about it.
+ */
 function LiveIndicator() {
-  const { state, service } = useStore();
-  const n = agentsWorking(state);
-  const simulated = service.runtime !== "real";
-  const text = n ? `${n} agent${n === 1 ? "" : "s"} working${simulated ? " (simulated)" : ""}${state.project.stage === "shaping" ? " (finishing; shaping)" : ""}` : "Idle";
+  const { state } = useStore();
+  const working = agentsWorking(state);
+  const stopping = agentsStopping(state);
+  const busy = working + stopping > 0;
+  const text = liveIndicatorText(working, stopping, state.project.stage === "shaping");
   return (
-    <span className={`live${n ? " working" : ""}`} aria-live="polite" title={n ? "Agent runs in progress; the service's check runs are not counted" : "No agent run is in progress"}>
-      {n > 0 && <span className="dot" aria-hidden="true" />}
+    <span className={`live${busy ? " working" : ""}`} aria-live="polite" title={busy ? "Agent runs in progress; the service's check runs are not counted" : "No agent run is in progress"}>
+      {busy && <span className="dot" aria-hidden="true" />}
       {text}
     </span>
   );
@@ -321,7 +329,7 @@ function ProjectControl() {
   // A stopping lead run counts too: the pause is not confirmed until the lead acknowledges as well.
   const stopping = M.activeAttempts(state).filter((a) => a.outcome === "stopping").length + (M.activeLeadRun(state)?.outcome === "stopping" ? 1 : 0);
   // ORC-017 §3.7: the live indicator says how many agents work; this says only what the pause is doing.
-  const status = state.project.hold ? (stopping ? `Pausing — ${stopping} run(s) still stopping` : "Project paused") : null;
+  const status = state.project.hold ? (stopping ? `Pausing… ${stopping} run${stopping === 1 ? "" : "s"} still stopping` : "Project paused") : null;
   return (
     <>
       {status && (

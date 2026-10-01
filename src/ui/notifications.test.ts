@@ -40,7 +40,7 @@ describe("notifications: local delivery", () => {
     const s4 = M.reportDeliveryResult(s3, { status: "delivered", message: "main fast-forwarded to aaaaaaaaaaaa.", sha: SHA_A }, at(182));
     const fired = deliveryEvents(s3, s4);
     expect(fired).toHaveLength(1);
-    expect(fired[0]).toMatchObject({ title: "Work delivered", taskId: "EX-006" });
+    expect(fired[0]).toMatchObject({ title: "Work landed", taskId: "EX-006" });
     expect(deliveryEvents(s4, M.markVisited(s4, at(200)))).toEqual([]);
   });
 });
@@ -120,7 +120,7 @@ describe("notifications: pull requests", () => {
     const green = see(red, 380);
     expect(prEvents(red, green).map((e) => e.key)).toEqual([`pr-ready:EX-006:${HEAD}`]);
     const merged = see(green, 500, { state: "MERGED", mergeCommit: "d".repeat(40), mergedBy: "octocat" });
-    expect(prEvents(green, merged)).toEqual([expect.objectContaining({ key: "pr-merged:EX-006:1", title: "PR #7 merged by octocat; review it when you like" })]);
+    expect(prEvents(green, merged)).toEqual([expect.objectContaining({ key: "pr-merged:EX-006:1", title: "PR #7 landed by octocat; look at it when you like" })]);
     expect(prEvents(merged, M.markVisited(merged, at(501)))).toEqual([]);
     const closed = see(s0, 140, { state: "CLOSED" });
     expect(prEvents(s0, closed).map((e) => e.key)).toEqual(["pr-closed:EX-006:1"]);

@@ -4,7 +4,7 @@ Build a project workspace where the user talks to one lead agent, sees the work 
 
 Every task carries a durable, versioned specification. It explains the problem, options, tradeoffs, and the agent's chosen approach. The user can return later to understand decisions, pause unfinished work, revise it, and resume execution.
 
-Status: proposed implementation specification. The task board, live controls, runtime adapter, and scheduler described here are not built. The existing repository Markdown board and role briefs are the starting inputs. Working product name: Orchestrator. SimpleApps is its first managed project; this is development tooling, not a new consumer app in the suite.
+Status: built. This is the specification the product was built from; the task records in `docs/tasks/` say what each milestone added, and the README says what exists today. Product name: Orchestrator. SimpleApps was its first managed project; this is development tooling, not a new consumer app in the suite.
 
 ## Product outcome
 
@@ -19,7 +19,7 @@ Success means the lead can explain why it chose a task and an approach, the user
 - Designer, coding, code-review, and UX-review roles collaborate under the lead.
 - Claude and Codex must run concurrently on the same project. Roles are provider-independent, and either provider can supply the lead. One active lead owns the project at a time.
 - Provider and model are configurable independently for every workflow step, including planning, design, implementation, review, and repair. Support mixed providers and different models within one task.
-- Default to one implementation per task, followed by independent review and repair if needed. Using Claude and Codex together means assigning providers per step or to distinct tasks. Competing implementations and best-of selection are optional, off by default, and enabled only when the user chooses a comparison experiment. Do not duplicate implementation to fill provider capacity.
+- Default to one implementation per task, followed by independent review and repair if needed. Using Claude and Codex together means assigning providers per step or to distinct tasks. There are no competing implementations and no best-of selection (removed in ORC-025). Do not duplicate implementation to fill provider capacity.
 - Tasks accumulate over time and remain visible with stable identifiers.
 - Every task has an attached specification with options, tradeoffs, a recommendation, and an explicit selected approach decided by the agent unless overridden by the user.
 - Reviewing specifications is optional. Their existence is not an approval gate. Human-in-the-loop is optional throughout (user direction, 2026-09-29): the tool must be able to run end to end on autopilot at large scale, while every control (pause, review gates, artifact edits, resubmission) remains available.
@@ -227,6 +227,8 @@ Use deterministic fake-runtime tests for state races and failure recovery, plus 
 
 ## Implementation milestones
 
+The order the product was built in. All five are done; the later work is recorded task by task in `docs/tasks/`.
+
 | Milestone | Deliverable | Exit criteria |
 | --- | --- | --- |
 | 1: Interface prototype | Board, task detail, editable spec/options, per-step provider/model controls, decision history, and pause/resume feedback | User can inspect and redirect a clearly labeled simulated task; no live execution claims |
@@ -235,7 +237,7 @@ Use deterministic fake-runtime tests for state races and failure recovery, plus 
 | 4: Autonomous team loop | Provider-independent designer and review roles, agent-created tasks, serial integration, bounded scheduler | Vision → spec → mixed-provider implementation → independent review → verified completion works without task-by-task prompting; either provider can lead |
 | 5: Reliability and usability | Recovery, operating controls, notifications, onboarding, import/export | Interruption/restart scenarios pass and the user can understand work without reading raw logs |
 
-Recommended first build: Milestone 1. Use the task detail and specification editor as the central interaction, then add reliable runtime control behind it. Do not build a general graph editor or cloud deployment before the core review-and-steer loop is usable.
+Milestone 1 came first: the task detail and specification editor as the central interaction, with reliable runtime control added behind it. There is no general graph editor and no cloud deployment.
 
 ## Delivery of finished work (ORC-008)
 

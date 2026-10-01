@@ -12,6 +12,7 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
+import { truncate as oneLine } from "../../src/domain/text";
 import type { CatalogModel, ProviderId } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 import type { InitializeParams } from "./codex-protocol/InitializeParams";
@@ -31,7 +32,7 @@ import { JsonRpcConnection, RpcClosedError, RpcError } from "./codexRpc";
 import type { AdapterEvent, Assignment, Connection, ProviderHealth, RuntimeAdapter, Usage } from "./types";
 
 /** The @openai/codex version the generated protocol types were produced from. */
-export const PINNED_CODEX_VERSION = "0.159.2";
+const PINNED_CODEX_VERSION = "0.159.2";
 
 /**
  * Extra CLI arguments for every app-server we start. Both verified against 0.159.2:
@@ -40,7 +41,7 @@ export const PINNED_CODEX_VERSION = "0.159.2";
  * false with `--disable multi_agent`). Together they keep native subagents off.
  */
 /** A run's private temp directory: a sibling of its worktree (never inside it, so nothing is committed). */
-export function runTmpDir(a: Assignment): string {
+function runTmpDir(a: Assignment): string {
   const dir = `${a.workspace.path}.tmp`;
   mkdirSync(dir, { recursive: true });
   return dir;
@@ -142,15 +143,13 @@ interface Run {
   notes: Set<string>;
 }
 
-function defaultCodexPath() {
+/** The Codex CLI this project installs, or `codex` from the PATH. Shared with the check runner. */
+export function defaultCodexPath() {
   const local = resolve(process.cwd(), "node_modules/.bin/codex");
   return existsSync(local) ? local : "codex";
 }
 
-function truncate(s: string, max = NOTE_MAX) {
-  const one = s.replace(/\s+/g, " ").trim();
-  return one.length > max ? one.slice(0, max - 1) + "…" : one;
-}
+const truncate = (s: string, max = NOTE_MAX) => oneLine(s, max);
 
 // Redaction is shared with the service's other child processes (see ../redact.ts).
 export { redact };

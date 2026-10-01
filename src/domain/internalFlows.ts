@@ -22,14 +22,14 @@ export interface InternalFlow {
   steps: StepDef[];
 }
 
-export type InternalFlowId = "revert" | "delivery-review" | "delivery-checks";
+type InternalFlowId = "revert" | "delivery-review" | "delivery-checks";
 
 /**
  * Pipelines the service uses itself and that are never offered for a new task: a task made from
  * "revert" by hand would have nothing prepared in its workspace, one made from "delivery-review" would
  * have no pull request to review, and one made from "delivery-checks" would have no change to check.
  */
-export const INTERNAL_FLOW_IDS: InternalFlowId[] = ["revert", "delivery-review", "delivery-checks"];
+const INTERNAL_FLOW_IDS: InternalFlowId[] = ["revert", "delivery-review", "delivery-checks"];
 
 export const isInternalFlowId = (id: string): id is InternalFlowId => (INTERNAL_FLOW_IDS as string[]).includes(id);
 

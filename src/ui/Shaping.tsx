@@ -283,8 +283,8 @@ export function StartBuildingButton({ className = "primary" }: { className?: str
   // Review 8: no coverage reported means every area is still open, and the confirmation says so.
   const stillOpen = !M.coverageOf(state) ? "The lead has not reported which areas are clear yet, so all nine count as open." : open.length ? `Still open: ${open.map((x) => SHAPING_AREA_LABEL[x].toLowerCase()).join(", ")}.` : "";
   const outcome = [
-    roadmap ? (plan.release ? `With your involvement set to Autopilot now, the ${roadmap} planned task${roadmap === 1 ? " starts" : "s start"} right away.` : `With your involvement setting as it is now, the ${roadmap} planned task${roadmap === 1 ? "" : "s"} wait${roadmap === 1 ? "s" : ""} for you to release ${roadmap === 1 ? "it" : "them"}.`) : "",
-    held ? `${held} planned task${held === 1 ? "" : "s"} you held keep${held === 1 ? "s" : ""} waiting for your release.` : "",
+    roadmap ? (plan.release ? `With your involvement set to Autopilot now, the ${roadmap} planned task${roadmap === 1 ? " starts" : "s start"} right away.` : `With your involvement setting as it is now, the ${roadmap} planned task${roadmap === 1 ? "" : "s"} wait${roadmap === 1 ? "s" : ""} for your go-ahead.`) : "",
+    held ? `${held} planned task${held === 1 ? "" : "s"} you set to wait keep${held === 1 ? "s" : ""} waiting for your go-ahead.` : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -463,7 +463,7 @@ export function ShapingPanel() {
           {roadmap.map((t) => (
             <li key={t.id}>
               <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="chip">P{t.priority}</span>{" "}
-              <span className="chip">{t.heldForShaping ? `held until building, then ${plan.release ? "starts on Autopilot" : "waits for your release"}` : t.holdBeforeStart ? "held by you; waits for your release" : "starts when building starts"}</span>
+              <span className="chip">{t.heldForShaping ? `waits until building, then ${plan.release ? "starts on Autopilot" : "waits for your go-ahead"}` : t.holdBeforeStart ? "waits for your go-ahead" : "starts when building starts"}</span>
             </li>
           ))}
         </ul>
@@ -503,7 +503,7 @@ export function StageControl() {
             Back to shaping
           </button>
         )}
-        {!shaping && running > 0 && <span className="muted" style={{ fontSize: "0.85rem" }}>{running} running step(s) would finish normally.</span>}
+        {!shaping && running > 0 && <span className="muted" style={{ fontSize: "0.85rem" }}>{running} running step{running === 1 ? "" : "s"} would finish normally.</span>}
       </div>
     </div>
   );

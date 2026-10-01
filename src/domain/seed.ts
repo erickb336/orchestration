@@ -34,7 +34,7 @@ function spec(partial: Partial<SpecContent> & Pick<SpecContent, "title" | "area"
   };
 }
 
-export interface SeedOptions {
+interface SeedOptions {
   /**
    * Include runs that appear to be executing. Pure domain tests use them; the service does not,
    * because no runtime process would exist for them. The service's scheduler dispatches those
@@ -386,7 +386,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 17,
+    version: 18,
     seq: 1000,
     project: {
       id: "sample",

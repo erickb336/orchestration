@@ -8,7 +8,7 @@ export type RoleId = "lead" | "designer" | "coder" | "code_reviewer" | "security
 /** Agent roles: they have role defaults, task role overrides and a resolved provider. */
 export const ROLES: RoleId[] = ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
 /** ORC-013: roles the service runs itself; never resolved to a provider. */
-export const SERVICE_ROLES: RoleId[] = ["checks"];
+const SERVICE_ROLES: RoleId[] = ["checks"];
 /** What a step definition may use. */
 export const STEP_ROLES: RoleId[] = [...ROLES, ...SERVICE_ROLES];
 /** Roles whose findings gate repairs and merges. */
@@ -163,7 +163,7 @@ export interface Deferral {
 }
 
 export type SteerAction = "priority" | "defer" | "undefer" | "drop";
-export type SteeringValue = string | number | Deferral | null;
+type SteeringValue = string | number | Deferral | null;
 
 export interface SteeringChange {
   /** `${setId}.${n}` */
@@ -201,8 +201,7 @@ export interface SteeringChange {
  * handed to the runtime (or bound to a run that is starting), not yet acknowledged. "delivered": the runtime
  * acknowledged it (`via` says how). "not-delivered": it reached no agent; `reason` says why.
  */
-export type NoteStatus = "queued" | "sending" | "delivered" | "not-delivered";
-export const NOTE_STATUSES: NoteStatus[] = ["queued", "sending", "delivered", "not-delivered"];
+type NoteStatus = "queued" | "sending" | "delivered" | "not-delivered";
 
 /** Who sent a note: the lead (from a reply to the user's messages, as a row of its change set) or the user directly. */
 export type NoteSource = { by: "lead"; leadRunId: string; changeSetId: string; changeId: string; messageIds: string[] } | { by: "user" };
@@ -399,7 +398,7 @@ export interface SpecContent {
   effort: "small" | "medium" | "large";
 }
 
-export interface SpecRevision {
+interface SpecRevision {
   rev: number;
   at: string;
   author: Actor;
@@ -407,7 +406,7 @@ export interface SpecRevision {
   content: SpecContent;
 }
 
-export type StepState =
+type StepState =
   | "pending" // not yet dispatched (or requeued)
   | "running"
   | "stopping" // stop requested, awaiting runtime acknowledgment
@@ -653,8 +652,6 @@ export interface StepDef {
   outputs: OutputDef[];
   /** Run only if any referenced review-findings artifact has open findings; otherwise skip. */
   runIf?: InputRef[];
-  /** Pause the task after this step completes, so a person can review or edit its artifacts. */
-  gate?: boolean;
   /**
    * Loop: set on the LAST step of a loop body that starts at `from`. When this step completes
    * (and, for a breakdown step, created new child tasks), the service appends the next iteration of
@@ -662,18 +659,10 @@ export interface StepDef {
    * (for example a repair with no open findings).
    */
   iterate?: { from: string; max: number };
-  /**
-   * Run this step as `count` parallel agents. "copies": every copy's output goes forward (review
-   * findings are summed). "best-of": the next step that reads them must choose one; only the chosen
-   * copy's work goes further. `providers` assigns copies round-robin (e.g. one Claude, one Codex).
-   */
-  parallel?: { count: number; mode: "copies" | "best-of"; providers?: ProviderId[] };
   /** Do not start this step until every child task created by this task's breakdowns has settled. */
   waitForChildren?: boolean;
   /** A review that must run on another provider than the one that wrote the change under review. */
   independentOf?: "writer";
-  /** Set by expansion: the parallel group (original step id) this copy belongs to. */
-  copyOf?: string;
   /** Set by expansion: which loop iteration this step belongs to (first = 1). */
   iteration?: number;
   /**
@@ -709,7 +698,7 @@ export interface GivenPrinciple {
 export type ChosenBy = "user" | "lead" | "breakdown" | "default" | "service" | "follow-up" | "migration";
 
 /** Every flow a task can be created from is one of the six files in the repository's flows/ folder. */
-export type FlowSource = "built-in";
+type FlowSource = "built-in";
 
 /** One of the six flows, resolved from its file: Change, Bug fix, Feature, Design, Investigation or Goal. */
 export interface Flow {
@@ -843,7 +832,7 @@ export interface RunSnapshot {
   };
 }
 
-export type AttemptOutcome =
+type AttemptOutcome =
   | "running"
   | "stopping"
   | "stopped" // acknowledged stop; partial work checkpointed
@@ -882,9 +871,9 @@ export interface Attempt {
   conventions?: { file: string; blob: string; bytes: number; truncated: boolean }[];
 }
 
-export type Lifecycle = "proposed" | "ready" | "active" | "done" | "cancelled";
+type Lifecycle = "proposed" | "ready" | "active" | "done" | "cancelled";
 
-export interface ControlFailure {
+interface ControlFailure {
   at: string;
   message: string;
 }
@@ -917,10 +906,6 @@ export interface Task {
   parentArtifactId?: string;
   /** Breakdowns waiting at a review gate: children are created from the latest version on resume. */
   pendingBreakdowns?: { stepId: string; output: string }[];
-  /** Best-of groups: the copy (step id) chosen by the step that compared them. */
-  bestOf?: Record<string, string>;
-  /** Best-of groups a person chose (group → when). A later comparison does not override them. */
-  bestOfByUser?: Record<string, string>;
   /** Set when this task was paused because an ancestor was paused; resuming that ancestor resumes it. */
   pausedWith?: string;
   /** Why the task is held, when a review gate (not a person) paused it. */
@@ -993,7 +978,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 17;
+  version: 18;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -1395,7 +1380,7 @@ export interface ReviewEvidence {
 
 export type LandedFlag = "main-check-failed" | "merged-without-clean-gate" | "findings-cleared-by-user" | "protected-paths" | "checks-accepted-failing" | "checks-not-run" | "findings-accepted";
 
-export interface LandedNote {
+interface LandedNote {
   id: string;
   at: string;
   text: string;

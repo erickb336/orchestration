@@ -29,7 +29,7 @@ export interface RepoRef {
   name: string;
 }
 
-export type GhErrorCode = Extract<OpErrorCode, "auth" | "not-found" | "head-mismatch" | "rejected" | "rate-limit" | "network" | "timeout" | "unknown">;
+type GhErrorCode = Extract<OpErrorCode, "auth" | "not-found" | "head-mismatch" | "rejected" | "rate-limit" | "network" | "timeout" | "unknown">;
 
 export class GhError extends Error {
   code: GhErrorCode;
@@ -87,7 +87,7 @@ export function parsePrUrl(text: string): { number: number; url: string } | unde
 }
 
 /** "gh version 2.101.0 (2026-09-15)" or "git version 2.55.0" → [2, 101, 0]. */
-export function parseVersion(text: string): [number, number, number] | undefined {
+function parseVersion(text: string): [number, number, number] | undefined {
   const m = /version (\d+)\.(\d+)(?:\.(\d+))?/.exec(text);
   return m ? [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)] : undefined;
 }
@@ -120,7 +120,7 @@ const API_BODY_FLAGS = new Set(["-f", "--raw-field", "-F", "--field", "--input"]
 /** Other gh api flags that take a value (separately, or attached as `-Hx`, `--jq=x`): the value is never the endpoint. */
 const API_VALUE_FLAGS = new Set(["--jq", "-q", "-H", "--header", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
 
-export interface ApiCall {
+interface ApiCall {
   /** Upper case. The last -X / --method wins; a body makes it POST when nothing is given. */
   method: string;
   /** A body flag is present: gh would send the request as a POST unless a method is given, and the guard treats it as a write either way. */

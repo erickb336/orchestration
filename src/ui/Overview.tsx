@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as C from "../domain/checks";
@@ -10,7 +10,8 @@ import { PrChip } from "./Delivery";
 import { DecisionQueue } from "./Findings";
 import { Conversation } from "./Conversation";
 import { Onboarding } from "./Onboarding";
-import { liveText, needsYouOf, progressByArea, type AreaProgress } from "./progress";
+import { PR_PROBLEM, liveText, needsYouOf, progressByArea, type AreaProgress } from "./progress";
+import { historyRequested } from "./route";
 import { OpenDraft, ShapingPanel } from "./Shaping";
 import { RevisionDocs, VisionDocsList } from "./VisionDocs";
 import { PROVIDERS, isProvider, type Attempt, type ProviderId, type State, type Task, type VisionRevision } from "../domain/types";
@@ -30,7 +31,12 @@ export function revisionSource(v: VisionRevision): string {
 function VisionProvenance({ state }: { state: State }) {
   const { send, disabled } = useStore();
   const [busy, setBusy] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
+  // ORC-025: the Focus banner's History link arrives as `#/overview?history=1` and opens the history.
+  const [showHistory, setShowHistory] = useState(() => historyRequested(location.hash));
+  const historyRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    if (historyRequested(location.hash)) historyRef.current?.scrollIntoView({ block: "start" });
+  }, []);
   const visions = state.project.visions;
   const v = visions[visions.length - 1];
   const prev = visions.length > 1 ? visions[visions.length - 2] : undefined;
@@ -44,7 +50,7 @@ function VisionProvenance({ state }: { state: State }) {
           r{v.rev} · {revisionSource(v)} · {fmtTime(v.at)}
         </span>
         {isSimulated(v) && (
-          <span className="chip" title="Written by the fake runtime's lead, not by a model">
+          <span className="chip" title="Written by the demo's lead, not by a model">
             simulated
           </span>
         )}
@@ -87,7 +93,7 @@ function VisionProvenance({ state }: { state: State }) {
         </details>
       )}
       {showHistory && (
-        <ul className="events" style={{ marginBottom: "0.6rem" }}>
+        <ul className="events" ref={historyRef} id="vision-history" aria-label="Vision history" style={{ marginBottom: "0.6rem" }}>
           {[...visions].reverse().map((r) => (
             <li key={r.rev}>
               <span className="mono">r{r.rev}</span>
@@ -223,15 +229,15 @@ export function Overview() {
             <h2 id="outcomes-h">Latest outcomes</h2>
             {(unreviewed > 0 || D.landedTasks(state).length > 0) && (
               <p>
-                Landed, not reviewed: <strong>{unreviewed}</strong> · <a href="#/review">Review</a>
+                New results: <strong>{unreviewed}</strong> · <a href="#/results">Results</a>
               </p>
             )}
-            {outcomes.length === 0 && <p className="muted">Nothing delivered yet.</p>}
+            {outcomes.length === 0 && <p className="muted">Nothing has landed yet.</p>}
             <ul className="plain">
               {outcomes.map((t) => (
                 <li key={t.id}>
                   <a href={`#/task/${t.id}`}>{t.id}</a> {M.currentSpec(t).content.title} <span className="muted">· {relTime(t.updatedAt)}</span>{" "}
-                  {t.integration?.delivered?.status === "delivered" && <span className="chip done">delivered</span>}
+                  {t.integration?.delivered?.status === "delivered" && <span className="chip done">landed</span>}
                   {t.integration?.pr && <PrChip state={state} task={t} />}
                   {(t.integration?.status === "conflict" || t.integration?.delivered?.status === "conflict") && <span className="chip danger">conflict</span>}
                 </li>
@@ -256,7 +262,7 @@ export function Overview() {
                 <b>{newProposals}</b>new proposals
               </div>
               <div className="stat">
-                <b>{completed}</b>completed
+                <b>{completed}</b>done
               </div>
               <div className="stat">
                 <b>{blocked}</b>blocked now
@@ -270,7 +276,7 @@ export function Overview() {
           <section className="card" aria-labelledby="team-h">
             <h2 id="team-h">Team now</h2>
             <p className="muted" style={{ fontSize: "0.85rem" }}>
-              Worker slots: {active.length} of {state.project.workerLimit} in use. {service.runtime === "real" ? "Runs are live Claude and Codex agents." : "Runs are simulated."}
+              Agents: {active.length} of {state.project.workerLimit} at once.{service.runtime === "real" ? " Runs are live Claude and Codex agents." : ""}
             </p>
             {active.length === 0 && <p className="muted">No active runs.</p>}
             <table>
@@ -290,7 +296,7 @@ export function Overview() {
                         {a.outcome === "stopping" ? (
                           <span className="pill work transition">Stopping</span>
                         ) : a.progress > 0 ? (
-                          <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} ${service.runtime === "real" ? "" : "simulated "}progress`}>
+                          <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} progress`}>
                             <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
                           </div>
                         ) : (
@@ -317,13 +323,13 @@ export function Overview() {
               <dd>{fmtTime(service.startedAt)}</dd>
               <dt>Scheduler role</dt>
               <dd>{service.scheduler === "active" ? "Active — this instance holds the scheduler lease" : "Observer — another service instance holds the scheduler lease"}</dd>
-              <dt>Runtime</dt>
+              <dt>Agents</dt>
               <dd>
                 {service.runtime === "real"
                   ? `Real: ${Object.values(service.providers)
                       .map((p) => p.label)
                       .join(", ")}`
-                  : "Fake runtime (simulated). Start with ORCHESTRATION_RUNTIME=real to run Claude and Codex."}
+                  : "Simulated: no agent runs. Start with ORCHESTRATION_RUNTIME=real to run Claude and Codex."}
               </dd>
               <dt>Database</dt>
               <dd className="mono">{service.dbPath}</dd>
@@ -331,10 +337,11 @@ export function Overview() {
               <dd className="mono">{state.project.repoPath}</dd>
               <dt>Scheduler</dt>
               <dd>
+                {INVOLVEMENT_NAME[involvementOf(state.project.autonomy, state.project.prDelivery.enabled)]}:{" "}
                 {state.project.autonomy.enabled
-                  ? `Autonomous planning on: every ${state.project.autonomy.planningIntervalMinutes} min${state.project.autonomy.operatingHours ? ` between ${state.project.autonomy.operatingHours.start} and ${state.project.autonomy.operatingHours.end}` : ""}, while this service runs`
-                  : "Autonomous planning off; the lead runs only when you message it"}
-                {service.runtime === "fake" ? " (simulated)" : ""}. Nothing runs while this service is stopped or the computer sleeps.
+                  ? `the lead plans every ${state.project.autonomy.planningIntervalMinutes} min${state.project.autonomy.operatingHours ? ` between ${state.project.autonomy.operatingHours.start} and ${state.project.autonomy.operatingHours.end}` : ""}, while this service runs`
+                  : "the lead runs only when you message it"}
+                . Nothing runs while this service is stopped or the computer sleeps.
               </dd>
             </dl>
           </section>
@@ -415,12 +422,12 @@ function NeedsYouCard({ state }: { state: State }) {
   const leadDecisions = F.openDecisions(state, "lead").length;
   const items: { key: string; task?: Task; what: string; detail?: string; action: string; href: string }[] = [];
   if (ghProblem) items.push({ key: "gh", what: "GitHub delivery is stopped", detail: ghProblem.message, action: "Settings", href: "#/settings" });
-  if (gh?.autoMergePaused) items.push({ key: "auto", what: "automatic merging is paused", detail: `${gh.autoMergePaused.reason}. ${gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}`, action: "Review", href: "#/review" });
+  if (gh?.autoMergePaused) items.push({ key: "auto", what: "automatic merging is paused", detail: `${gh.autoMergePaused.reason}. ${gh.autoMergePaused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}`, action: "Open", href: "#/results" });
   for (const t of [...state.tasks].sort((a, b) => a.priority - b.priority || a.id.localeCompare(b.id))) {
     const n = needsYouOf(state, t, nowMs);
     if (!n) continue;
     const pr = t.integration?.pr;
-    items.push({ key: t.id, task: t, what: n.what, detail: n.what === "look at the pull request" ? pr?.attention?.message : undefined, action: n.action, href: n.href });
+    items.push({ key: t.id, task: t, what: n.what, detail: n.what === PR_PROBLEM ? pr?.attention?.message : undefined, action: n.action, href: n.href });
   }
   return (
     <section className="card" aria-labelledby="needs-h" data-tour="needs-you">
@@ -479,6 +486,9 @@ function NeedsYouCard({ state }: { state: State }) {
   );
 }
 
+/** ORC-025: the one name for each involvement setting, wherever it is shown. */
+export const INVOLVEMENT_NAME: Record<ReturnType<typeof involvementOf>, string> = { autopilot: "Autopilot", checkin: "Check-in", manual: "Manual", custom: "Custom" };
+
 /** One line saying how much runs without the user, with a link to change it. */
 function ModeSummary({ state }: { state: State }) {
   const a = state.project.autonomy;
@@ -486,28 +496,24 @@ function ModeSummary({ state }: { state: State }) {
   const mode = involvementOf(a, prMode);
   const paused = state.project.hold;
   const pr = state.project.prDelivery;
-  let pill: string;
+  const pill = INVOLVEMENT_NAME[mode];
   let text: string;
   switch (mode) {
     case "autopilot":
-      pill = "Autopilot on";
-      text = prMode ? `opening verified work as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "held for you to merge"}` : `delivering verified work to ${a.autoDeliver.branch}`;
+      text = prMode ? `opening verified work as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "for you to merge"}` : `delivering verified work to ${a.autoDeliver.branch}`;
       break;
     case "checkin":
-      pill = "Check-in";
-      text = "the lead plans on its own; each task it proposes waits for you to release it";
+      text = "the lead plans on its own; each task it proposes waits for your go-ahead";
       break;
     case "manual":
-      pill = "Manual";
       text = "the lead works when you message it or add tasks";
       break;
     default:
-      pill = "Custom";
-      text = `lead planning on${a.autoDeliver.enabled ? `, delivering to ${a.autoDeliver.branch}` : ", work stays on the integration branch"}`;
+      text = `the lead plans on its own${a.autoDeliver.enabled ? `, delivering to ${a.autoDeliver.branch}` : "; work stays on the integration branch"}`;
   }
   // Manual and check-in say nothing about delivery by themselves: name the mode when it is on.
   if (mode === "manual" || mode === "checkin") {
-    if (prMode) text += `; finished work is opened as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "held for you"}`;
+    if (prMode) text += `; finished work is opened as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "for you to merge"}`;
     else if (a.autoDeliver.enabled) text += `; finished work is delivered to ${a.autoDeliver.branch}`;
   }
   // ORC-013: whether the service runs the project's checks, and whether it can right now.
@@ -523,7 +529,7 @@ function ModeSummary({ state }: { state: State }) {
       <span className={mode === "manual" ? "chip strong" : "pill work"}>{pill}</span>
       <span>
         {checksText}
-        {paused ? " · project paused" : ""}
+        {paused ? " · paused" : ""}
         {!paused && state.project.stage === "shaping" ? ` · ${M.SHAPING_LABEL.toLowerCase()}` : ""}
       </span>
       <details className="how inline">
@@ -567,7 +573,7 @@ function UsageCard({ state }: { state: State }) {
   startOfToday.setHours(0, 0, 0, 0);
   const inRange = (iso: string) => range === "all" || Date.parse(iso) >= startOfToday.getTime();
 
-  // Workers and lead runs, each with the model the provider reported when known.
+  // Agent and lead runs, each with the model the provider reported when known.
   // ORC-013: service runs (checks) use no model tokens and are not counted.
   const rows: { provider: ProviderId; model: string; at: string; usage?: Usage; lead: boolean }[] = [
     ...state.attempts.flatMap((a) => (isProvider(a.snapshot.provider) ? [{ provider: a.snapshot.provider, model: a.actualModel ?? a.snapshot.model, at: a.endedAt ?? a.startedAt, usage: a.usage, lead: false }] : [])),
@@ -615,14 +621,14 @@ function UsageCard({ state }: { state: State }) {
               <tr key={pr}>
                 <td>{M.providerLabel(pr)}</td>
                 <td className="num">
-                  {n} of {Math.min(limit, p.workerLimit)} worker slots
+                  {n} of {Math.min(limit, p.workerLimit)} agents
                 </td>
                 <td className="muted">{!enabled ? "not enabled" : limit === 0 ? "limit 0: no runs" : lead?.provider === pr ? "+ lead run" : ""}</td>
               </tr>
             );
           })}
           <tr>
-            <td>All workers</td>
+            <td>All agents</td>
             <td className="num">
               {active.length} of {p.workerLimit}
             </td>
@@ -631,7 +637,7 @@ function UsageCard({ state }: { state: State }) {
         </tbody>
       </table>
       <p className="muted" style={{ fontSize: "0.8rem", margin: "0.3rem 0 0.8rem" }}>
-        Each provider is limited by its own setting and by the total worker limit. <a href="#/settings">Change limits</a>
+        Each provider is limited by its own setting and by Agents at once. <a href="#/settings">Change limits</a>
       </p>
 
       <h3 style={{ fontSize: "0.9rem", margin: "0.3rem 0" }}>{range === "today" ? "Today" : "All time"}</h3>
@@ -668,8 +674,8 @@ function UsageCard({ state }: { state: State }) {
         </div>
       )}
       <p className="muted" style={{ fontSize: "0.8rem", marginBottom: 0 }}>
-        Includes worker and lead runs. Cost is the provider's estimate; Codex reports tokens only.
-        {total.runs > total.reported ? ` ${total.runs - total.reported} run(s) reported no token counts.` : ""}
+        Includes agent and lead runs. Cost is the provider's estimate; Codex reports tokens only.
+        {total.runs > total.reported ? ` ${total.runs - total.reported} run${total.runs - total.reported === 1 ? "" : "s"} reported no token counts.` : ""}
       </p>
     </section>
   );

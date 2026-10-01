@@ -28,7 +28,7 @@ export const ORPHAN_GRACE_MS = 60 * 60 * 1000;
 const invalid = (why: string) => new CommandFailure("invalid", why);
 
 /** Valid UTF-8 with no NUL byte. */
-export function isTextContent(buf: Buffer): boolean {
+function isTextContent(buf: Buffer): boolean {
   if (buf.includes(0)) return false;
   try {
     new TextDecoder("utf-8", { fatal: true }).decode(buf);

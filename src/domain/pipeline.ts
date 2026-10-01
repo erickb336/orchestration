@@ -10,12 +10,9 @@ export function instantiate(defs: StepDef[]): Step[] {
 export function toDef(st: StepDef): StepDef {
   const d: StepDef = { id: st.id, purpose: st.purpose, role: st.role, dependsOn: [...st.dependsOn], inputs: structuredClone(st.inputs), outputs: structuredClone(st.outputs) };
   if (st.runIf?.length) d.runIf = structuredClone(st.runIf);
-  if (st.gate) d.gate = true;
   if (st.iterate) d.iterate = { ...st.iterate };
-  if (st.parallel) d.parallel = { ...st.parallel, ...(st.parallel.providers ? { providers: [...st.parallel.providers] } : {}) };
   if (st.waitForChildren) d.waitForChildren = true;
   if (st.independentOf) d.independentOf = st.independentOf;
-  if (st.copyOf) d.copyOf = st.copyOf;
   if (st.iteration && st.iteration > 1) d.iteration = st.iteration;
   if (st.checks) d.checks = { onFail: st.checks.onFail, ...(st.checks.only?.length ? { only: [...st.checks.only] } : {}) };
   // ORC-024: part of what the agent receives, so part of the definition and of the flow hash; table order, no duplicates.
@@ -34,7 +31,6 @@ export function structuralKey(st: StepDef): string {
     outputs: st.outputs.map((o) => `${o.name}:${o.kind}`).sort(),
     runIf: refs(st.runIf),
     iterate: st.iterate ?? null,
-    parallel: st.parallel ?? null,
     waitForChildren: !!st.waitForChildren,
     ...(st.independentOf ? { independentOf: st.independentOf } : {}),
     ...(st.checks ? { checks: { onFail: st.checks.onFail, only: [...(st.checks.only ?? [])].sort() } } : {}),
@@ -43,7 +39,7 @@ export function structuralKey(st: StepDef): string {
 }
 
 /** Steps reachable upstream from `id` through dependencies. */
-export function upstreamOf(defs: StepDef[], id: string): Set<string> {
+function upstreamOf(defs: StepDef[], id: string): Set<string> {
   const byId = new Map(defs.map((d) => [d.id, d]));
   const seen = new Set<string>();
   const stack = [...(byId.get(id)?.dependsOn ?? [])];
@@ -74,7 +70,7 @@ export function downstreamOf(defs: StepDef[], ids: Iterable<string>): Set<string
   return out;
 }
 
-export interface PipelineIssue {
+interface PipelineIssue {
   step?: string;
   severity: "error" | "warning";
   message: string;
@@ -145,24 +141,11 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
       if (fromIdx < 0 || fromIdx > i) err(d.id, `${d.id} loops back to ${d.iterate.from}, which must be this step or an earlier one.`);
       if (!Number.isInteger(d.iterate.max) || d.iterate.max < 1 || d.iterate.max > 10) err(d.id, `${d.id} can loop 1–10 times.`);
     }
-    if (d.parallel) {
-      if (!Number.isInteger(d.parallel.count) || d.parallel.count < 2 || d.parallel.count > 5) err(d.id, `${d.id} can run 2–5 parallel agents.`);
-      if (d.parallel.mode !== "copies" && d.parallel.mode !== "best-of") err(d.id, `${d.id} parallel mode must be "copies" or "best-of".`);
-      const chooser = defs.slice(i + 1).find((x) => x.inputs.some((r) => r.step === d.id));
-      if (d.parallel.mode === "best-of" && !chooser) err(d.id, `${d.id} is best-of, so a later step must read its output to choose one.`);
-      if (d.parallel.mode === "best-of" && d.runIf?.length) err(d.id, `${d.id} is best-of, so it must always run (remove its condition).`);
-      if (d.parallel.mode === "best-of" && chooser?.runIf?.length) err(chooser.id, `${chooser.id} chooses among ${d.id}'s candidates, so it must always run (remove its condition).`);
-      if (d.parallel.mode === "best-of" && chooser?.parallel) err(chooser.id, `${chooser.id} chooses among ${d.id}'s candidates, so it cannot itself run in parallel.`);
-      if (d.parallel.mode === "copies" && d.outputs.some((o) => o.kind === "code-change")) err(d.id, `${d.id} changes code, and parallel copies cannot all be merged; use best-of to pick one.`);
-      if (d.outputs.some((o) => o.kind === "breakdown")) err(d.id, `${d.id} creates child tasks, so it cannot run in parallel.`);
-    }
     if (d.iterate) {
-      // Loop bodies: no parallel steps inside (their copies cannot be repeated), and no overlaps.
+      // Loop bodies: no overlaps.
       const fromIdx = defs.findIndex((x) => x.id === d.iterate!.from);
       if (fromIdx >= 0 && fromIdx <= i) {
         const body = defs.slice(fromIdx, i + 1);
-        const par = body.find((x) => x.parallel || (x.copyOf && x.copyOf !== x.id));
-        if (par) err(d.id, `${d.id}'s loop contains ${par.id}, which runs in parallel; parallel steps cannot be inside a loop.`);
         const other = body.find((x) => x !== d && x.iterate);
         if (other) err(d.id, `${d.id}'s loop overlaps ${other.id}'s loop; loops cannot overlap or nest.`);
       }
@@ -172,7 +155,7 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
       if (d.outputs.length !== 1 || d.outputs[0].kind !== "check-results") err(d.id, `${d.id} is a Checks step, so it produces exactly one output of kind check-results.`);
       const readsChange = d.inputs.some((r) => defs.find((x) => x.id === r.step)?.outputs.find((o) => o.name === r.output)?.kind === "code-change");
       if (!readsChange && !opts.checkTarget) err(d.id, `${d.id} is a Checks step, so it must read a code change to check.`);
-      if (d.parallel || d.independentOf || d.iterate) err(d.id, `${d.id} is a Checks step, which cannot run in parallel, require independence, or end a loop.`);
+      if (d.independentOf || d.iterate) err(d.id, `${d.id} is a Checks step, which cannot require independence or end a loop.`);
       if (d.checks && d.checks.onFail !== "findings" && d.checks.onFail !== "block") err(d.id, `${d.id}: when checks fail, choose "findings" (for the repair step) or "block" (stop and ask for a decision).`);
       if ((d.checks?.only?.length ?? 0) > MAX_CHECK_ONLY) err(d.id, `${d.id} can name at most ${MAX_CHECK_ONLY} commands.`);
       if (opts.checkIds && d.checks?.only?.length) {
@@ -189,12 +172,4 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
     issues.push({ severity: "warning", message: "No service checks run on this change: add a Checks step (run by the service) to run the project's checks on it." });
   }
   return issues;
-}
-
-/** A new step ID never used in this draft or in `reserved` (IDs the task has ever used). */
-export function nextStepId(defs: StepDef[], reserved: Iterable<string> = []): string {
-  const ids = new Set([...defs.map((d) => d.id), ...reserved]);
-  let n = defs.length + 1;
-  while (ids.has(`S${n}`)) n++;
-  return `S${n}`;
 }

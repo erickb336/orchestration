@@ -127,7 +127,7 @@ export function SpecEditor({ task, onClose }: { task: Task; onClose: () => void 
       )}
       {task.lifecycle === "active" && activeRuns > 0 && (
         <div className="banner">
-          This task has {activeRuns} active run(s). Saving freezes integration and stops them; their results will not integrate, and completed steps will be revalidated against the new revision.
+          This task has {activeRuns} active run{activeRuns === 1 ? "" : "s"}. Saving freezes integration and stops {activeRuns === 1 ? "it" : "them"}; {activeRuns === 1 ? "its result" : "their results"} will not integrate, and completed steps will be revalidated against the new revision.
         </div>
       )}
       {task.hold && <div className="banner neutral">This task is paused. Saving keeps it paused.</div>}

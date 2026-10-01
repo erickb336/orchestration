@@ -1,6 +1,6 @@
 import type { SpecContent } from "./types";
 
-export type DiffLine = { kind: "same" | "add" | "del"; text: string };
+type DiffLine = { kind: "same" | "add" | "del"; text: string };
 
 /** Render a spec as labeled lines so revisions can be compared field by field. */
 export function specToLines(c: SpecContent): string[] {

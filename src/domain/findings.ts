@@ -6,17 +6,16 @@
 
 import * as C from "./checks";
 import * as M from "./model";
+import { clip } from "./text";
 import { ControlError, type Artifact, type Finding, type FindingDecision, type LeadRun, type State, type Step, type Task } from "./types";
 
 export const MAX_DECISIONS = 2000;
 export const MAX_DECISION_WHY = 300;
-export const MAX_LEAD_DECISIONS = 20;
+const MAX_LEAD_DECISIONS = 20;
 export const DECISION_OPTIONS = ["fix", "accept", "follow-up", "reopen"] as const;
 export type UserDecision = (typeof DECISION_OPTIONS)[number];
 const LEAD_OPTIONS = ["fix", "accept", "follow-up", "ask-user"] as const;
 type LeadDecision = (typeof LEAD_OPTIONS)[number];
-
-const clip = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
 
 /** A finding that must be fixed or decided: an error or warning that is not information only. */
 export const isBlocking = (f: Finding) => f.severity !== "info" && f.action !== "no-op";
@@ -172,7 +171,7 @@ export function createDecisions(s: State, t: Task, art: Artifact, now: string): 
     s.decisions.push(d);
     out.push(d);
     if (earlier) M.event(s, now, "system", "decision", `${d.id}: ${f.id} "${clip(f.title, 80)}" decided as before (${earlier.id}: ${earlier.status} by ${earlier.decidedBy === "carried" ? "an earlier round" : earlier.decidedBy === "lead" ? "the lead" : "you"})`, t.id);
-    else M.event(s, now, "system", "decision", `${d.id}: ${f.id} "${clip(f.title, 80)}" needs a decision (${d.routedTo === "lead" ? "the lead" : "you"})`, t.id);
+    else M.event(s, now, "system", "decision", `${d.id}: ${f.id} "${clip(f.title, 80)}" ${d.routedTo === "lead" ? "waits for the lead's decision" : "needs you to decide"}`, t.id);
   }
   pruneDecisions(s);
   return out;
@@ -239,10 +238,12 @@ export function awaitingDecision(s: State, t: Task): { count: number; lead: numb
   return count ? { count, lead, user } : undefined;
 }
 
-/** "Waiting for a decision on 2 findings (the lead)". */
+/** ORC-025: "Needs you: decide 2 findings", "The lead is deciding 1 finding", or both when the findings are split. */
 export function awaitingLabel(w: { count: number; lead: number; user: number }): string {
-  const who = w.lead && w.user ? "you and the lead" : w.lead ? "the lead" : "you";
-  return `Waiting for a decision on ${w.count} finding${w.count === 1 ? "" : "s"} (${who})`;
+  const findings = (n: number) => `${n} finding${n === 1 ? "" : "s"}`;
+  if (w.user && w.lead) return `Needs you: decide ${findings(w.user)}; the lead is deciding ${findings(w.lead)}`;
+  if (w.lead) return `The lead is deciding ${findings(w.lead)}`;
+  return `Needs you: decide ${findings(w.count)}`;
 }
 
 /** A pending step with `runIf` whose findings are still undecided: neither dispatched nor skipped. */

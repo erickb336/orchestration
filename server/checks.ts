@@ -25,7 +25,7 @@ import { SECRET_NAME, redact } from "./redact";
 import type { CommandExecParams } from "./runtimes/codex-protocol/v2/CommandExecParams";
 import type { CommandExecResponse } from "./runtimes/codex-protocol/v2/CommandExecResponse";
 import type { SandboxPolicy } from "./runtimes/codex-protocol/v2/SandboxPolicy";
-import { APP_SERVER_ARGS, ISOLATION_CONFIG_ARGS, ISOLATION_FEATURE_ARGS } from "./runtimes/codex";
+import { APP_SERVER_ARGS, ISOLATION_CONFIG_ARGS, ISOLATION_FEATURE_ARGS, defaultCodexPath } from "./runtimes/codex";
 import { JsonRpcConnection, RpcClosedError } from "./runtimes/codexRpc";
 import type { AdapterEvent, CheckRunReport } from "./runtimes/types";
 
@@ -33,7 +33,7 @@ export type { CheckRunReport };
 
 // ---------- the contract (§6.5.1) ----------
 
-export interface PlannedCheck {
+interface PlannedCheck {
   id: string;
   label: string;
   kind: "prepare" | "check";
@@ -62,8 +62,8 @@ export const NO_SCRIPTS_ENV: Record<string, string> = {
   YARN_IGNORE_PATH: "1",
 };
 /** Yarn's own configuration files in the copy the install runs in, as `yarnrcRefusal` reads them. */
-export type YarnRc = { yarnrcYml?: string; yarnrc?: string };
-export function hardenCommand(c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">, rc: YarnRc = {}): PlannedCheck {
+type YarnRc = { yarnrcYml?: string; yarnrc?: string };
+function hardenCommand(c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">, rc: YarnRc = {}): PlannedCheck {
   if (c.kind !== "prepare") return c;
   if (c.offline || isRebuild(c.argv)) return { ...c, offline: true };
   if (!a.prepareNetwork) return c;
@@ -75,10 +75,10 @@ export function hardenCommand(c: PlannedCheck, a: Pick<CheckAssignment, "prepare
   return { ...c, argv, env: { ...(c.env ?? {}), ...NO_SCRIPTS_ENV } };
 }
 /** Does this command get the network: only a hardened prepare command on the allowlist, when the settings allow it. */
-export const networkFor = (c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">) => c.kind === "prepare" && a.prepareNetwork && !c.offline && !isRebuild(c.argv) && networkRefusal(c.argv) === undefined;
+const networkFor = (c: PlannedCheck, a: Pick<CheckAssignment, "prepareNetwork">) => c.kind === "prepare" && a.prepareNetwork && !c.offline && !isRebuild(c.argv) && networkRefusal(c.argv) === undefined;
 
 /** Yarn's configuration files from the copy, read just before a yarn install runs there (at most 64 KB each). */
-export function readYarnRc(workspace: string): YarnRc {
+function readYarnRc(workspace: string): YarnRc {
   const read = (name: string) => {
     try {
       return readFileSync(join(workspace, name), "utf8").slice(0, 64 * 1024);
@@ -437,7 +437,7 @@ abstract class BaseChecks implements CheckRunner {
 export type SpawnFn = (command: string, args: string[], options: SpawnOptions) => ChildProcess;
 
 /** The reaper's arguments: its options, then "--", then the command's argv exactly as given. */
-export function reaperArgs(argv: string[], o: { pidFile?: string } = {}): string[] {
+function reaperArgs(argv: string[], o: { pidFile?: string } = {}): string[] {
   return [REAPER, ...(o.pidFile ? ["--pid-file", o.pidFile] : []), "--", ...argv];
 }
 
@@ -546,7 +546,7 @@ export class DirectChecks extends BaseChecks {
 
 // ---------- the Codex sandbox (§6.5.2) ----------
 
-export interface CodexSandboxOptions {
+interface CodexSandboxOptions {
   /** Path to the Codex CLI. Default: ./node_modules/.bin/codex, falling back to `codex` on PATH. A .js/.mjs path is run with this Node. */
   codexBin?: string;
   /** A private CODEX_HOME for the check app-servers (mode 0700, never signed in). */
@@ -875,11 +875,6 @@ export class CodexSandboxChecks extends BaseChecks {
   }
 }
 
-function defaultCodexPath() {
-  const local = resolve(process.cwd(), "node_modules/.bin/codex");
-  return existsSync(local) ? local : "codex";
-}
-
 // ---------- the facade (§6.5.1) ----------
 
 export class CheckRunners implements CheckRunner {
@@ -928,10 +923,10 @@ export class CheckRunners implements CheckRunner {
 
 // ---------- the simulated runner (§6.8) ----------
 
-export type SimulatedScript = (a: CheckAssignment, n: number) => CheckResult[];
+type SimulatedScript = (a: CheckAssignment, n: number) => CheckResult[];
 
 /** The default story: in a task tree's first run the "test" command fails; every later run passes. */
-export function defaultSimulatedScript(a: CheckAssignment, n: number): CheckResult[] {
+function defaultSimulatedScript(a: CheckAssignment, n: number): CheckResult[] {
   return a.commands.map((c) => {
     const fail = n === 0 && c.id === "test";
     return {
@@ -1029,8 +1024,8 @@ export class SimulatedChecks implements CheckRunner {
 
 // ---------- logs (§6.6) ----------
 
-export const LOG_MAX_AGE_MS = 14 * 24 * 60 * 60_000;
-export const LOG_MAX_BYTES = 200 * 1024 * 1024;
+const LOG_MAX_AGE_MS = 14 * 24 * 60 * 60_000;
+const LOG_MAX_BYTES = 200 * 1024 * 1024;
 
 /** Remove check logs older than 14 days, then the oldest runs until the total is under 200 MiB. Returns how many run directories went. */
 export function pruneCheckLogs(root: string, nowMs = Date.now()): number {

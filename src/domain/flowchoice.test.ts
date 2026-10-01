@@ -7,6 +7,7 @@ import { runCommand } from "./commands";
 import * as D from "./delivery";
 import { buildDemo } from "./demo";
 import * as M from "./model";
+import { setPipeline } from "./testing/pipelines";
 import { builtInCatalog, childDefault, effectiveDefault, flowHash, internalFlow } from "./flows";
 import { toDef } from "./pipeline";
 import { buildSeed } from "./seed";
@@ -217,7 +218,7 @@ describe("follow-ups", () => {
 
   it("a follow-up of a custom (or legacy) task copies its steps and keeps its source", () => {
     const r = newTask(seed(), {});
-    let s = M.setPipeline(r.state, r.newId, 1, oneStep, "one step", "user", at(1));
+    let s = setPipeline(r.state, r.newId, 1, oneStep, "one step", "user", at(1));
     const t = task(s, r.newId);
     t.lifecycle = "done";
     for (const st of t.steps) st.state = "done";

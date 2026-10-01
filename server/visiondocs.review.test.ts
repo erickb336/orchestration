@@ -369,7 +369,7 @@ describe("12: migration 12 → 13 keeps state visible", () => {
     });
     expect(s.tasks.find((t) => t.id === "EX-004")).toMatchObject({ holdBeforeStart: true });
     expect(s.tasks.find((t) => t.id === "EX-004")!.heldForShaping).toBeUndefined();
-    expect(M.stateLabel(s, s.tasks.find((t) => t.id === "EX-004")!)).toBe("Held before start");
+    expect(M.stateLabel(s, s.tasks.find((t) => t.id === "EX-004")!)).toBe("Waiting for your go-ahead");
     expect(s.tasks.find((t) => t.id === "EX-003")).toMatchObject({ heldForShaping: true, holdBeforeStart: false });
     const released = reopen((d) => {
       d.project.stage = "shaping";

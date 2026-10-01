@@ -73,8 +73,8 @@ describe("migration 13 → 14", () => {
     const upgraded = new Store(path);
     const s = upgraded.read().state;
     // ORC-016 raised the format to 15; a format-13 document upgrades through 14 (templates) and 15 (flows).
-    expect(STATE_FORMAT).toBe(17);
-    expect(s.version).toBe(17);
+    expect(STATE_FORMAT).toBe(18);
+    expect(s.version).toBe(18);
     expect(upgraded.read().version).toBe(v0 + 1);
     expect(s.project.checks).toEqual(DEFAULT_CHECKS);
     expect(s.project.triage).toEqual({ askUserBy: "user" }); // the sample project does not plan on its own
@@ -105,7 +105,7 @@ describe("migration 13 → 14", () => {
     expect(upgraded.read().state.project.conventions.include).toBe(false);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(17);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_13_%'").get()).toBeDefined();
     check.close();
   });
@@ -117,7 +117,7 @@ describe("migration 13 → 14", () => {
     const upgraded = new Store(path);
     expect(upgraded.read().state.project.triage).toEqual({ askUserBy: "lead" });
     upgraded.close();
-    expect(buildSeed(now).version).toBe(17);
+    expect(buildSeed(now).version).toBe(18);
   });
 });
 
@@ -243,7 +243,7 @@ describe("the scheduler: the context event, coverage re-runs and conventions", (
     tick();
     tick();
     expect(M.activeAttempts(st(), id)).toHaveLength(0); // the repair waits for the decision
-    expect(M.stateLabel(st(), task(id))).toBe("Waiting for a decision on 1 finding (you)");
+    expect(M.stateLabel(st(), task(id))).toBe("Needs you: decide 1 finding");
     cmd("decideFinding", { decisionId: st().decisions[0].id, decision: "accept", note: "by design" });
     tick();
     tick();

@@ -131,7 +131,7 @@ describe("runIf and the repair's wait (Q8)", () => {
     let s = go(s0, 5);
     expect(running(s, id)).toHaveLength(0);
     expect(step(s, id, "S3").state).toBe("pending");
-    expect(M.stateLabel(s, task(s, id))).toBe("Waiting for a decision on 1 finding (you)");
+    expect(M.stateLabel(s, task(s, id))).toBe("Needs you: decide 1 finding");
     const d = s.decisions[0];
     const accepted = go(F.decideFinding(s, d.id, "accept", "fine as it is", at(6)), 7);
     expect(step(accepted, id, "S3").state).toBe("skipped");
@@ -344,7 +344,7 @@ describe("the lead's decisions (applyLeadDecisions, Q9)", () => {
 describe("applyAutopilot and the sample project", () => {
   it("Autopilot routes decisions to the lead; the sample project starts with checks off, decisions to the user and conventions on", () => {
     const s = buildSeed(T0);
-    expect(s.version).toBe(17);
+    expect(s.version).toBe(18);
     expect(s.project.checks.enabled).toBe(false);
     expect(s.project.triage).toEqual({ askUserBy: "user" });
     expect(s.project.conventions).toEqual({ include: true });

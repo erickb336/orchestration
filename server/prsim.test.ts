@@ -73,7 +73,7 @@ describe("fake runtime (scenario 19)", () => {
     expect(st().project.github).toMatchObject({ ok: true, simulated: true, repo: "simulated/repository", requiredChecks: ["simulated-check"], base: { sha: "sim-base" } });
     expect(pr).toMatchObject({ phase: "open", simulated: true, number: 1000, url: "simulated://pr/1000", policy: "hold", headSha: simSha(`${id}-1`) });
     expect(simSha(`${id}-1`)).toMatch(/^sim[0-9a-f]{9}$/); // shown whole: commits are cut to 12 characters
-    expect(D.prLabel(st(), task(id), now)).toEqual({ text: "PR #1000 waiting for you (simulated)", tone: "strong" });
+    expect(D.prLabel(st(), task(id), now)).toEqual({ text: "PR #1000 ready to merge", tone: "strong", simulated: true });
     expect(st().events.some((e) => e.message.includes("Opened pull request #1000") && e.message.includes("(simulated)"))).toBe(true);
 
     // Held: it merges only when asked.

@@ -25,7 +25,7 @@ export interface ServiceInfo {
   repo?: { ok: boolean; reason?: string; branch?: string };
 }
 
-export interface ProviderInfo {
+interface ProviderInfo {
   label: string;
   capabilities: CapabilityMap;
   health?: { status: "ready" | "not-configured" | "unavailable"; detail: string; checkedAt: string };

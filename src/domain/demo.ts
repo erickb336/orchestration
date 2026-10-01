@@ -41,12 +41,12 @@ import {
   type VisionDoc,
 } from "./types";
 
-export const DEMO_PROJECT_ID = "sample";
+const DEMO_PROJECT_ID = "sample";
 export const DEMO_PROJECT_NAME = "Weekend Trips (sample)";
 export const DEMO_REPO_PATH = "~/code/weekend-trips";
 
 /** The sample model ids are kept (they are honest); the labels say what they are. */
-export const DEMO_CATALOG = {
+const DEMO_CATALOG = {
   claude: [
     { id: "claude-sample-large", label: "Claude large (sample model)" },
     { id: "claude-sample-fast", label: "Claude fast (sample model)" },
@@ -227,7 +227,7 @@ class DemoBuilder {
       "Weekend Trips helps a small group of friends plan a weekend hike together: pick a trail, share the plan, pack the right things, and keep the map working with no signal. It should feel calm and dependable on a phone at a trailhead. Fewer, clearer screens beat more features.";
     const draftReason = "Drafted from the shaping conversation and the trail research note";
     return {
-      version: 17,
+      version: 18,
       seq: 1001,
       project: {
         id: DEMO_PROJECT_ID,
@@ -1067,7 +1067,7 @@ class DemoBuilder {
     this.output(id, "S1", 400, 350, DEMO_SCRIPT[id].outputs!.design);
     this.change(id, "S2", 349, 260, { sha: fakeSha("WT-007 S2"), paths: ["src/map/Pins.tsx", "src/map/MapView.tsx", "src/map/a11y.ts", "src/map/a11y.test.ts", "src/map/WaypointRotor.tsx", "src/trail/distance.ts"], files: 6, additions: 142, deletions: 11 }, DEMO_SCRIPT[id].outputs!["S2.change"], DEMO_SCRIPT[id].outputs!["S2.handoff"]);
     this.checks(id, "C1", 259, 257);
-    this.review(id, "S4", 256, 230, undefined, "1 finding needs a decision: the unit distances are read in.", [
+    this.review(id, "S4", 256, 230, undefined, "1 finding for you to decide: the unit distances are read in.", [
       finding("F1", {
         severity: "warning",
         action: "ask-user",

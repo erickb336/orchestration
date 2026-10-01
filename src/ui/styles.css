@@ -1,25 +1,27 @@
-/* ORC-017 §2: tokens. Ink on paper; colour means state and nothing else. */
+/* Tokens. Colour means state and nothing else. */
 :root {
-  --bg: #f6f6f4;
-  --surface: #ffffff;
-  --surface-2: #efefec;
-  --border: #e4e4e0;
-  --border-strong: #c9c9c4;
-  --text: #111111;
-  --muted: #5f5f5b;
-  --accent: #111111;
-  --accent-contrast: #ffffff;
-  --focus: #111111;
-  /* State hues: agents working, needs you, failed, done. Each with a tint for backgrounds. */
-  --st-work: #1f5f99;
-  --st-you: #8a5a00;
-  --st-fail: #b0372a;
-  --st-done: #2f6f3a;
-  --st-work-bg: color-mix(in srgb, var(--st-work) 12%, var(--surface));
-  --st-you-bg: color-mix(in srgb, var(--st-you) 12%, var(--surface));
-  --st-fail-bg: color-mix(in srgb, var(--st-fail) 12%, var(--surface));
-  --st-done-bg: color-mix(in srgb, var(--st-done) 12%, var(--surface));
-  /* Older names, kept for every rule that still uses them; they resolve to the four hues or to neutral. */
+  /* ORC-025: dark is the only theme (the owner, 2026-10-01). Near-black surfaces with a cool cast, light ink,
+     and colour only where it means a state. Matches the UI audit's look. */
+  --bg: #121315;
+  --surface: #1a1b1e;
+  --surface-2: #222327;
+  --border: #2b2d31;
+  --border-strong: #3a3c42;
+  --text: #ececea;
+  --muted: #a3a6ad;
+  --accent: #ececea;
+  --accent-contrast: #121315;
+  --focus: #7fa4f5;
+  /* State colours: work, you, fail, done. Used for meaning only. */
+  --st-work: #7fa4f5;
+  --st-you: #e3a14a;
+  --st-fail: #ef8a83;
+  --st-done: #6cc28b;
+  --st-work-bg: color-mix(in srgb, var(--st-work) 14%, var(--surface));
+  --st-you-bg: color-mix(in srgb, var(--st-you) 14%, var(--surface));
+  --st-fail-bg: color-mix(in srgb, var(--st-fail) 14%, var(--surface));
+  --st-done-bg: color-mix(in srgb, var(--st-done) 14%, var(--surface));
+  /* Task-state aliases. */
   --s-proposed: var(--muted);
   --s-ready: var(--muted);
   --s-running: var(--st-work);
@@ -31,13 +33,13 @@
   --s-warn: var(--st-you);
   --add-bg: var(--st-done-bg);
   --del-bg: var(--st-fail-bg);
-  --warn-bg: color-mix(in srgb, var(--st-you) 9%, var(--surface));
-  --warn-border: color-mix(in srgb, var(--st-you) 35%, var(--surface));
+  --warn-bg: color-mix(in srgb, var(--st-you) 10%, var(--surface));
+  --warn-border: color-mix(in srgb, var(--st-you) 38%, var(--surface));
   --danger-bg: var(--st-fail-bg);
-  --danger-border: color-mix(in srgb, var(--st-fail) 40%, var(--surface));
-  --sim-bg: #111111;
-  --sim-text: #f5f5f3;
-  /* Type scale (fixed rem, ratio about 1.2). */
+  --danger-border: color-mix(in srgb, var(--st-fail) 42%, var(--surface));
+  /* The demo bar is inverted so it reads as "not the product". */
+  --sim-bg: #ececea;
+  --sim-text: #121315;
   --fs-micro: 0.75rem;
   --fs-small: 0.8125rem;
   --fs-meta: 0.875rem;
@@ -49,51 +51,7 @@
   --radius-chip: 6px;
   --radius-control: 8px;
   --radius: 12px;
-  --shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 2px 8px rgb(0 0 0 / 0.04);
   --ease: 150ms ease-out;
-  color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0e0e0d;
-    --surface: #181817;
-    --surface-2: #222220;
-    --border: #31312e;
-    --border-strong: #484844;
-    --text: #f2f2ef;
-    --muted: #a6a6a0;
-    --accent: #f2f2ef;
-    --accent-contrast: #111111;
-    --focus: #f2f2ef;
-    --st-work: #7cb6e8;
-    --st-you: #e2b25c;
-    --st-fail: #ef8f80;
-    --st-done: #8cc796;
-    --sim-bg: #050505;
-    --sim-text: #f2f2ef;
-    --shadow: none;
-    color-scheme: dark;
-  }
-}
-
-:root[data-theme="dark"] {
-  --bg: #0e0e0d;
-  --surface: #181817;
-  --surface-2: #222220;
-  --border: #31312e;
-  --border-strong: #484844;
-  --text: #f2f2ef;
-  --muted: #a6a6a0;
-  --accent: #f2f2ef;
-  --accent-contrast: #111111;
-  --focus: #f2f2ef;
-  --st-work: #7cb6e8;
-  --st-you: #e2b25c;
-  --st-fail: #ef8f80;
-  --st-done: #8cc796;
-  --sim-bg: #050505;
-  --sim-text: #f2f2ef;
   --shadow: none;
   color-scheme: dark;
 }
@@ -197,7 +155,7 @@ details.how.inline > summary:hover { color: var(--text); }
 .sim-banner button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
 .sim-banner select option { color: #222; }
 .sim-banner .spacer { flex: 1; }
-.sim-banner.live { background: var(--st-fail); color: #fff; }
+.sim-banner.live { background: var(--st-fail); color: var(--accent-contrast); }
 .sim-menu { position: relative; margin-left: auto; }
 .sim-menu > summary { list-style: none; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.35); border-radius: var(--radius-control); padding: 0.1rem 0.6rem; font-size: var(--fs-small); font-weight: 560; display: inline-flex; align-items: center; gap: 0.35rem; }
 .sim-menu > summary::-webkit-details-marker { display: none; }
@@ -792,4 +750,19 @@ ul.doc-list.uploads > li.skipped, ul.doc-list.uploads > li.queued { color: var(-
 /* §3.12: nothing moves under reduced motion. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* ---------- kit tokens (ORC-025 r3, pass 1″) ---------- */
+/* One spacing scale for the component kit (src/ui/kit). The type scale is --fs-* at the top of this file.
+   The kit's own rules live in src/ui/kit/kit.css, loaded after this file. */
+:root {
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  /* The scrim under a dialog and the shadow of anything that floats. Not state colours. */
+  --scrim: rgb(0 0 0 / 0.55);
+  --shadow-pop: 0 12px 32px rgb(0 0 0 / 0.4);
 }

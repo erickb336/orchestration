@@ -11,7 +11,7 @@ import type { Artifact, CheckRunRecord, Finding, FindingDecision, PathCoverage, 
 import { relTime } from "./common";
 import { useStore } from "./store";
 
-const ACTION_LABEL: Record<Finding["action"], string> = { "auto-fix": "auto-fix", "ask-user": "needs a decision", "no-op": "information" };
+const ACTION_LABEL: Record<Finding["action"], string> = { "auto-fix": "auto-fix", "ask-user": "a person decides", "no-op": "information" };
 
 /** "error", "warning", "info" as a chip, and what the finding asks for. */
 export function FindingChips({ finding }: { finding: Finding }) {
@@ -29,7 +29,7 @@ export function FindingChips({ finding }: { finding: Finding }) {
 /** Where a decision stands, in one line. */
 function decisionState(d: FindingDecision): string {
   if (d.suggestion && d.status === "open") return `The lead suggests: fix — ${d.suggestion.why}`;
-  if (d.status === "open") return `Waiting for a decision (${d.routedTo === "lead" ? "the lead" : "you"})`;
+  if (d.status === "open") return d.routedTo === "lead" ? "The lead decides" : "Needs you: decide";
   const by = d.decidedBy === "carried" ? `same as ${d.carriedFrom ?? "an earlier round"}` : d.decidedBy === "lead" ? "by the lead" : "by you";
   if (d.status === "superseded") return `No longer open${d.why ? `: ${d.why}` : ""}`;
   const what = d.status === "fix" ? (d.kind === "final-checks" ? "Fix round added" : "Fix") : d.status === "accept" ? (d.kind === "final-checks" ? "Failing checks accepted" : "Accepted as is") : `Followed up as ${d.followUpTaskId ?? "a separate task"}`;
@@ -60,7 +60,7 @@ export function DecisionControls({ decision: d }: { decision: FindingDecision })
             {final ? "Accept failing checks" : "Accept as is"}
           </button>
           {!final && (
-            <button className="small" disabled={off} onClick={() => decide("follow-up")} title="A new task of yours, held before start, seeded from the finding">
+            <button className="small" disabled={off} onClick={() => decide("follow-up")} title="A new task of yours, seeded from the finding; it waits for your go-ahead">
               Follow up
             </button>
           )}
@@ -119,7 +119,7 @@ export function FindingsList({ state, artifact, controls = true }: { state: Stat
                 {editable && <DecisionControls decision={d} />}
               </div>
             )}
-            {!d && F.isBlocking(f) && f.action === "ask-user" && <div className="muted" style={{ fontSize: "0.82rem" }}>Waiting for a decision.</div>}
+            {!d && F.isBlocking(f) && f.action === "ask-user" && <div className="muted" style={{ fontSize: "0.82rem" }}>A person decides this one.</div>}
           </li>
         );
       })}

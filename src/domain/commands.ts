@@ -178,7 +178,6 @@ export const COMMANDS = {
       now,
     ),
   ),
-  chooseCandidate: same((s, now, a) => M.chooseCandidate(s, str(a, "taskId"), str(a, "group"), str(a, "stepId"), now)),
   setProviderLimit: same((s, now, a) => M.setProviderLimit(s, provider(a.provider), num(a, "limit"), now)),
 
   // findings and decisions (ORC-013)
@@ -425,7 +424,7 @@ export const COMMANDS = {
 
 export type CommandName = keyof typeof COMMANDS;
 
-export function isCommandName(name: string): name is CommandName {
+function isCommandName(name: string): name is CommandName {
   return Object.prototype.hasOwnProperty.call(COMMANDS, name);
 }
 

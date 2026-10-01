@@ -1,11 +1,11 @@
-// ORC-022: plain-text descriptions of notes to running stages, shared by the task page, the change list
+// ORC-022: plain-text descriptions of notes to running steps, shared by the task page, the change list
 // and notifications. Read-only derivations over domain state; the domain decides what a note's status is.
 
 import * as M from "../domain/model";
 import { isProvider, type Note, type State, type SteeringChange, type Task } from "../domain/types";
 import { ROLE_LABEL, type Tone } from "./common";
 
-/** The status chip: Queued, Sending, Delivered, Delivered at start, or Not delivered with the reason. */
+/** The status chip: Queued, Sending, Delivered, Delivered when the run started, or Not delivered with the reason. */
 export function noteStatusLabel(n: Pick<Note, "status" | "via" | "reason">): string {
   switch (n.status) {
     case "queued":
@@ -13,7 +13,7 @@ export function noteStatusLabel(n: Pick<Note, "status" | "via" | "reason">): str
     case "sending":
       return "Sending";
     case "delivered":
-      return n.via === "start" ? "Delivered at start" : "Delivered";
+      return n.via === "start" ? "Delivered when the run started" : "Delivered";
     case "not-delivered":
       return `Not delivered: ${n.reason ?? "no reason recorded"}`;
   }

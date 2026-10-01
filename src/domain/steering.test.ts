@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
+import { setPipeline } from "./testing/pipelines";
 import { buildSeed } from "./seed";
 import { ControlError, type Deferral, type LeadRun, type State, type SteerAction, type SteeringMode } from "./types";
 
@@ -17,7 +18,7 @@ const oneStep = [{ id: "S1", purpose: "Implement", role: "coder" as const, depen
 /** A user task with a one-step coder pipeline (proposed; `promote` makes it ready). */
 function userTask(s: State, title: string, priority: number, over: Partial<Parameters<typeof M.createTask>[1]> = {}): { state: State; id: string } {
   const r = M.createTask(s, { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority, holdBeforeStart: false, flowId: "change", ...over }, at(0));
-  return { state: M.setPipeline(r.state, r.newId, 1, oneStep, "one step", "user", at(0)), id: r.newId };
+  return { state: setPipeline(r.state, r.newId, 1, oneStep, "one step", "user", at(0)), id: r.newId };
 }
 const promote = (s: State) => M.leadPromoteProposals(s, at(0));
 
@@ -107,7 +108,7 @@ describe("D1 permission matrix (steerPermission)", () => {
   });
 
   it("held before start: the priority applies but the hold is never released", () => {
-    expect(verdict(seed(), "EX-004", "priority", "apply", 1)).toEqual({ v: "apply", note: "still waits for your release" });
+    expect(verdict(seed(), "EX-004", "priority", "apply", 1)).toEqual({ v: "apply", note: "still waits for your go-ahead" });
   });
 
   it("the dependency guard keeps a prerequisite: EX-007 depends on EX-002", () => {
@@ -224,7 +225,7 @@ describe("D3 deferral is checked only by dispatch", () => {
     ];
     // Room for every task: the finish branch is only reached while worker slots are free.
     const r0 = M.createTask(M.setWorkerLimit(seed(), 8, at(0)), { title: "Skip", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
-    const r = { ...r0, state: M.setPipeline(r0.state, r0.newId, 1, steps, "custom", "user", at(0)) };
+    const r = { ...r0, state: setPipeline(r0.state, r0.newId, 1, steps, "custom", "user", at(0)) };
     let s = M.dispatchEligible(promote(r.state), at(1));
     s = complete(s, running(s, r.newId)[0].id, at(2));
     s = M.dispatchEligible(s, at(3));
@@ -272,7 +273,7 @@ describe("D4 presentation", () => {
     expect(M.column(run, task(run, "EX-001"))).toBe("running");
     expect(M.stateLabel(run, task(run, "EX-001"))).toBe("Running · deferred after this step");
     const review = deferred(s0, "EX-002");
-    expect(M.stateLabel(review, task(review, "EX-002"))).toBe("Reviewing · deferred after this step");
+    expect(M.stateLabel(review, task(review, "EX-002"))).toBe("In review · deferred after this step");
     const both = deferred(s0, "EX-005");
     expect(M.stateLabel(both, task(both, "EX-005"))).toBe("Paused"); // the hold wins
     expect(M.stateLabel(review, task(review, "EX-007"))).toBe("Waiting on EX-002 (deferred)");

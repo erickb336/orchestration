@@ -79,7 +79,7 @@ export class ScriptedAdapter implements RuntimeAdapter {
    * like a well-behaved reviewer it lists the changed files the envelope named as `reviewedPaths`
    * unless `reviewedPaths` overrides that (ORC-013).
    */
-  finish(id: string, opts: { write?: [string, string]; findings?: number; structured?: unknown[]; reviewedPaths?: string[]; omit?: string; items?: unknown[]; chosen?: string } = {}) {
+  finish(id: string, opts: { write?: [string, string]; findings?: number; structured?: unknown[]; reviewedPaths?: string[]; omit?: string; items?: unknown[] } = {}) {
     const a = this.runs.get(id)!;
     if (opts.write) writeFileSync(join(a.workspace.path, opts.write[0]), opts.write[1]);
     const outputs: Record<string, unknown> = {};
@@ -92,8 +92,7 @@ export class ScriptedAdapter implements RuntimeAdapter {
             ? { summary: `${o.name} by ${this.provider}`, items: opts.items ?? [] }
             : { summary: `${o.name} by ${this.provider}` };
     }
-    const block = opts.chosen ? { outputs, chosen: opts.chosen } : { outputs };
-    this.emit({ type: "completed", attemptId: id, finalText: `All done.\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\``, usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 }, model: `${a.model}-actual` });
+    this.emit({ type: "completed", attemptId: id, finalText: `All done.\n\`\`\`json\n${JSON.stringify({ outputs })}\n\`\`\``, usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 }, model: `${a.model}-actual` });
   }
   /**
    * Answer a lead run with a reply, proposals, (ORC-009) a steering block and (ORC-012) a vision draft plus

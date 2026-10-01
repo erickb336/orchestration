@@ -67,17 +67,24 @@ afterEach(async () => {
 });
 
 describe("review gates and human edits", () => {
-  it("a gated step pauses the pipeline; an edited artifact is what the next step receives", () => {
-    const id = newTask("Gated");
-    const defs = task(id).steps.map((x) => ({ ...x, gate: x.id === "S2" }));
-    setTestPipeline(store, id, defs, iso(), "review after code review");
+  it("step-by-step review pauses the pipeline; an edited artifact is what the next step receives", () => {
+    const id = newTask("Reviewed");
+    cmd("setReviewEveryStep", { taskId: id, value: true });
     tick();
     codex.finish(run(id).id, { write: ["a.txt", "a\n"] });
     tick();
+    expect(task(id).holdReason).toMatch(/Review S1/);
+    cmd("resumeTask", { taskId: id });
     tick();
-    claude.finish(M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!.id, { findings: 0 }); // ORC-021: the security review beside it, clean, first
     tick();
-    claude.finish(run(id).id, { findings: 0 });
+    expect(run(id).stepId).toBe("S2");
+    // ORC-021: the security review beside the code review finishes first; its pause is resumed at once (a result that
+    // arrives while the task is held is not integrated, so the reviews are not finished under one hold).
+    claude.finish(M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!.id, { findings: 0 });
+    tick();
+    expect(task(id).holdReason).toMatch(/Review SR1/);
+    cmd("resumeTask", { taskId: id });
+    claude.finish(run(id).id, { findings: 0 }); // the code review, clean: the task pauses on it
     tick();
     expect(task(id).hold).toBe(true);
     expect(task(id).holdReason).toMatch(/Review S2/);
@@ -111,18 +118,6 @@ describe("review gates and human edits", () => {
     const again = run(id);
     expect(again.stepId).toBe("S2");
     expect(again.snapshot.inputs.find((i) => i.output === "change")!.version).toBe(2);
-  });
-
-  it("a review gate can be turned off again", () => {
-    const id = newTask("Toggle gate");
-    const on = task(id).steps.map((x) => ({ ...x, gate: x.id === "S1" }));
-    setTestPipeline(store, id, on, iso(), "gate on", 1);
-    expect(step(id, "S1").gate).toBe(true);
-    const off = task(id).steps.map((x) => ({ ...x, gate: false }));
-    expect(() => setTestPipeline(store, id, off, iso(), "gate off", 1)).toThrow(/Stale write/); // the first save made revision 2
-    setTestPipeline(store, id, off, iso(), "gate off", 2);
-    expect(step(id, "S1").gate).toBeUndefined();
-    expect(task(id).pipelineRev).toBe(3);
   });
 
   it("step-by-step mode pauses after every step", () => {

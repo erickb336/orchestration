@@ -49,7 +49,6 @@ export function Conversation({ variant = "inline", onClose, focusOnMount }: { va
         </h2>
         <span className="row" style={{ gap: "0.35rem" }}>
           <span className="chip strong">{selectionText(state.project.leadSelection)}</span>
-          {simulated && <span className="chip">simulated replies</span>}
           {onClose && (
             <button className="small" onClick={onClose} aria-label="Close the lead panel">
               Close
@@ -59,12 +58,12 @@ export function Conversation({ variant = "inline", onClose, focusOnMount }: { va
       </div>
       <p className="muted" style={{ fontSize: "0.82rem", margin: "0.3rem 0 0.6rem" }}>
         {simulated
-          ? "Fake runtime: lead replies and steering are simulated, not written by a model."
-          : "When you give direction, the lead can change the focus, reorder and defer work, drop its own unstarted proposals, and send a note to a running coder or designer. Every change is listed, with Undo for all but notes. It never pauses or stops running work."}
+          ? "The lead's replies and changes are simulated, not written by a model."
+          : "When you message the lead, it can change the focus, reorder and defer work, drop its own unstarted proposals, and send a note to a running coder or designer. Every change is listed, with Undo for all but notes. It never pauses or stops running work."}
       </p>
 
       {messages.length === 0 ? (
-        <p className="muted convo-empty">No messages yet. Ask the lead a question or give it direction; it answers in its next run.</p>
+        <p className="muted convo-empty">No messages yet. Message the lead; it answers in its next run.</p>
       ) : (
         <ol
           ref={listRef}
@@ -114,7 +113,7 @@ export function Conversation({ variant = "inline", onClose, focusOnMount }: { va
 function MessageItem({ state, message: m, simulated, blocked }: { state: State; message: Message; simulated: boolean; blocked?: string }) {
   const { send, disabled } = useStore();
   const run = m.leadRunId ? state.leadRuns.find((r) => r.id === m.leadRunId) : undefined;
-  const who = m.author === "user" ? "You" : m.author === "lead" ? (simulated ? "Lead (simulated)" : "Lead") : "System";
+  const who = m.author === "user" ? "You" : m.author === "lead" ? "Lead" : "System";
   const status = m.author === "user" ? M.messageStatus(state, m, { blocked, nowMs: Date.now() }) : undefined;
   const set = m.changeSetId ? state.steering.find((cs) => cs.id === m.changeSetId) : undefined;
   const draft = m.visionDraftId ? state.visionDrafts.find((d) => d.id === m.visionDraftId) : undefined;
@@ -123,6 +122,7 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
     <li className={`msg ${m.author}`} id={`msg-${m.id}`}>
       <div className="msg-head">
         <strong>{who}</strong>
+        {m.author === "lead" && simulated && <span className="chip">simulated</span>}
         {m.author === "lead" && run && <span className="muted">{runLabel(run)}</span>}
         {about && (
           <a href={`#/task/${encodeURIComponent(about.id)}`} className="chip" title={M.currentSpec(about).content.title}>
@@ -152,7 +152,7 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
           <span className="chip strong">Vision draft {draft.id}</span>{" "}
           <span className="muted">
             {draft.status === "open"
-              ? "waiting for you on the Overview: accept, edit or dismiss it; the vision changes only if you accept"
+              ? "needs you on the Overview: accept, edit or dismiss it; the vision changes only if you accept"
               : draft.status === "accepted"
                 ? `accepted by you as r${draft.visionRev}`
                 : draft.status === "dismissed"
@@ -301,7 +301,7 @@ function Composer({ disabled, placeholder, focusOnMount, mode, onSend }: { disab
         id={id}
         ref={ref}
         value={text}
-        placeholder={placeholder ?? "Ask the lead or give direction…"}
+        placeholder={placeholder ?? "Message the lead…"}
         aria-describedby={`${id}-hint`}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -314,7 +314,7 @@ function Composer({ disabled, placeholder, focusOnMount, mode, onSend }: { disab
       <div className="row" style={{ justifyContent: "space-between" }}>
         <span id={`${id}-hint`} className="muted" style={{ fontSize: "0.8rem" }}>
           {tooLong ? `Messages are limited to ${MAX_LENGTH} characters.` : disabled ? "Offline: messages cannot be sent." : "⌘/Ctrl + Enter to send"}
-          {" · "}Steering: the lead {mode} (<a href="#/settings">Settings</a>)
+          {" · "}The lead {mode} (<a href="#/settings">Settings</a>)
         </span>
         <button type="submit" className="primary" disabled={blocked}>
           {sending ? "Sending…" : "Send"}

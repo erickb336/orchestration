@@ -23,4 +23,4 @@ Run Claude and Codex concurrently through separate adapters under the same lead 
 
 ## Single implementation by default
 
-Assign one coder to each bounded implementation. Another provider can review that result; repair addresses concrete findings in the same line of work. Multiple coders normally own different tasks or disjoint parts of a change. Best-of comparisons are optional experiments the user may enable, not a requirement for mixed-provider teams. Keep parallel agents off on normal implementation steps.
+Assign one coder to each bounded implementation. Another provider can review that result; repair addresses concrete findings in the same line of work. Multiple coders normally own different tasks or disjoint parts of a change. There are no best-of comparisons and no parallel copies of a step (removed in ORC-025); a mixed-provider team splits work across tasks and steps.

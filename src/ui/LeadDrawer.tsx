@@ -7,9 +7,9 @@ import { useNarrow } from "./common";
 import { Conversation } from "./Conversation";
 
 export interface LeadContext {
-  /** The task a message is about ("Ask the lead about this task"). */
+  /** The task a message is about ("Message the lead about this task"). */
   taskId?: string;
-  /** A composer placeholder, for example from the board's Steer button. */
+  /** A composer placeholder, for example from the board's "Message the lead" button. */
   placeholder?: string;
 }
 

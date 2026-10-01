@@ -15,9 +15,9 @@ const STOPS: { anchor?: string; title: string; text: string }[] = [
   { anchor: "demo-bar", title: "This is a demo", text: "Every run is simulated: no agents run, and nothing touches your code or GitHub." },
   { anchor: "progress", title: "Progress by area", text: "Each part of the product, how far along it is, and which agent is on it right now." },
   { anchor: "needs-you", title: "Only what needs you", text: "A pull request to merge, an option to choose, a finding to decide." },
-  { anchor: "tab-tasks", title: "Tasks", text: "Every task has a spec, a pipeline and a truthful state. Claude and Codex work on different tasks at the same time." },
-  { anchor: "lead", title: "The lead", text: "Talk to the lead from any page. It can change the focus or defer work, and every change has an Undo." },
-  { anchor: "tab-review", title: "Review", text: "Work that has landed waits here for your review, at your own pace. Send it back if it is wrong." },
+  { anchor: "tab-tasks", title: "Tasks", text: "Every task has a spec, a pipeline and a truthful state. Claude and Codex agents work on different tasks at the same time." },
+  { anchor: "lead", title: "The lead", text: "Message the lead from any page. It can change the focus or defer work, and every change has an Undo." },
+  { anchor: "tab-results", title: "Results", text: "What landed waits here for you to look at, at your own pace. Send it back if it is wrong." },
   { title: "Explore", text: "Open any task to see its pipeline: provider and model per step, Pause and Resume. Replay this tour from Tour." },
 ];
 
@@ -95,7 +95,7 @@ export function TourButton() {
     window.setTimeout(() => startTour(() => ref.current?.focus()), onOverview ? 0 : 120);
   }, []);
   return (
-    <button ref={ref} onClick={start} title="A short tour of the demo: progress, what needs you, the board, the lead and Review">
+    <button ref={ref} onClick={start} title="A short tour of the demo: progress, what needs you, the board, the lead and Results">
       Tour
     </button>
   );

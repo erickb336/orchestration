@@ -443,7 +443,7 @@ const deliveryChecks14: StepDef[] = [
   { id: "S1", purpose: "Run the project's checks on the change for merge", role: "checks", dependsOn: [], inputs: [], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "findings" } },
 ];
 
-export interface V14Template {
+interface V14Template {
   id: string;
   name: string;
   description: string;

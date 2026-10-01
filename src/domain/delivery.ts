@@ -10,6 +10,7 @@ import * as F from "./findings";
 import * as M from "./model";
 import { internalFlow, flowHash, flowRef, serviceFlow } from "./flows";
 import { instantiate, toDef } from "./pipeline";
+import { clip } from "./text";
 import {
   ControlError,
   REVIEW_ROLES,
@@ -55,7 +56,6 @@ function getLanded(s: State, taskId: string): { task: Task; landed: Landed } {
   return { task, landed };
 }
 
-const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
 const sha12 = (sha: string) => sha.slice(0, 12);
 
 // ---------- delivery mode ----------
@@ -133,7 +133,7 @@ export function recordLanded(
   const changeSha = t.integration.pr?.changeSha ?? M.finalChange(s, t)?.ref?.split(" ")[0];
   const flags = [...new Set([...(entry.flags ?? []), ...C.landedCheckFlags(s, t, changeSha)])];
   t.integration.landed = { at: now, ...entry, ...(pr ? { pr } : {}), flags, status: "unreviewed", notes: [], followUps: [] };
-  event(s, now, "system", "integration", `Landed on ${entry.target} (${sha12(entry.commit)})${entry.simulated ? " (simulated)" : ""}; listed for review, which never blocks anything`, t.id);
+  event(s, now, "system", "integration", `Landed on ${entry.target} (${sha12(entry.commit)})${entry.simulated ? " (simulated)" : ""}; listed under Results, which never blocks anything`, t.id);
   return true;
 }
 
@@ -164,7 +164,7 @@ export function needsYou(s: State, nowMs = Date.now()): number {
   return n;
 }
 
-export interface LandedReview {
+interface LandedReview {
   stepId: string;
   purpose: string;
   role: RoleId;
@@ -219,7 +219,7 @@ export function markLandedReviewed(state: State, taskIds: string[], reviewed: bo
     if (landed.status === status) continue;
     landed.status = status;
     landed.statusAt = now;
-    event(s, now, "user", "integration", reviewed ? "Marked reviewed in the Review list" : "Marked not reviewed in the Review list", task.id);
+    event(s, now, "user", "integration", reviewed ? "Marked as seen under Results" : "Marked as new under Results", task.id);
   }
   return s;
 }
@@ -341,7 +341,7 @@ export function sendBackLanded(state: State, a: { taskId: string; kind: "fix" | 
     s.seq += 1;
     l.notes.push({ id: `note-${s.seq}`, at: now, text: note });
   }
-  event(s, now, "user", "integration", `Sent back as a ${a.kind}: ${r.newId}${a.holdBeforeStart ? " (held before start)" : ""}`, origin.id);
+  event(s, now, "user", "integration", `Sent back as a ${a.kind}: ${r.newId}${a.holdBeforeStart ? " (waits for your go-ahead)" : ""}`, origin.id);
   return { state: s, newId: r.newId };
 }
 
@@ -655,8 +655,8 @@ function nobodyReason(pr: PrDelivery): string {
  * that wrote none of it (or an author is unknown), so no agent's review could be independent.
  * "limit": the service already started as many dedicated reviews as it may.
  */
-export type ReviewState = "ok" | "pending" | "missing" | "not-independent" | "findings" | "blocked" | "limit" | "too-large";
-export interface ReviewView {
+type ReviewState = "ok" | "pending" | "missing" | "not-independent" | "findings" | "blocked" | "limit" | "too-large";
+interface ReviewView {
   state: ReviewState;
   evidence: ReviewEvidence;
   /** The dedicated review task this is about, if any. */
@@ -677,7 +677,6 @@ interface Covering {
 
 const modelOf = (run: Attempt) => run.actualModel ?? run.snapshot.model;
 const findingsText = (n: number) => `${n} open finding${n === 1 ? "" : "s"}`;
-const sameSha = (a: string, b: string) => a === b || (a.length >= 12 && b.length >= 12 && (a.startsWith(b) || b.startsWith(a)));
 
 /**
  * ORC-013 §5.4: may a review artifact count as evidence for the change `sha`? Findings someone still
@@ -692,7 +691,7 @@ function countsFor(s: State, art: Artifact, sha: string): boolean {
   if (F.unresolved(s, art) > 0) return true;
   const c = art.pathCoverage;
   if (!c || !coverageCounts(c)) return false;
-  return c.state === "not-required" || (!!c.to && sameSha(c.to, sha));
+  return c.state === "not-required" || (!!c.to && C.sameSha(c.to, sha));
 }
 
 /** The finished review steps of a task whose accepted findings satisfy `covers` and count for `pr`'s change. */
@@ -1046,7 +1045,7 @@ export function ensureChecks(state: State, taskId: string, now: string): State {
 
 // ---------- repair into the open pull request (design §9.3) ----------
 
-export type RepairCause =
+type RepairCause =
   | { kind: "checks"; checks: { name: string; url?: string }[] }
   | { kind: "service-checks"; sha: string; results: { id: string; label: string; exitCode?: number }[] }
   | { kind: "findings"; summaries: string[] }
@@ -1341,7 +1340,7 @@ const APPROVAL_TEXT =
   "GitHub requires an approval the app cannot give. This may be the ruleset's require_extra_approval_for_unattributed_changes applied to commits authored by Orchestrator. Merge on GitHub, approve from another account, or change the ruleset.";
 
 /** The names of the required checks for a pull request: from the repository's rules and from GitHub's own marking. */
-export function requiredCheckNames(s: State, pr: PrDelivery): string[] {
+function requiredCheckNames(s: State, pr: PrDelivery): string[] {
   return [...new Set([...(s.project.github?.requiredChecks ?? []), ...(pr.observed?.checks.filter((c) => c.required).map((c) => c.name) ?? [])])];
 }
 
@@ -1352,7 +1351,7 @@ export function requiredCheckNames(s: State, pr: PrDelivery): string[] {
  * check that never ran, or the code. Only `code` failures start a fix task; the rest need a person,
  * except a provider failure, which is re-run once per head first.
  */
-export type CiClass = "bot" | "provider" | "not-run" | "code";
+type CiClass = "bot" | "provider" | "not-run" | "code";
 
 /**
  * GitHub cancels a job that reaches its time limit, and reports it CANCELLED, not TIMED_OUT. The limit
@@ -1367,7 +1366,7 @@ const NOT_CODE = new Set(["SUCCESS", "CANCELLED", "SKIPPED", "NEUTRAL", "STALE"]
 const codeConclusion = (c: CheckObs) => c.conclusion !== null && !NOT_CODE.has(c.conclusion);
 const ranMs = (c: CheckObs) => (c.startedAt && c.completedAt ? Date.parse(c.completedAt) - Date.parse(c.startedAt) : undefined);
 
-export interface TriageContext {
+interface TriageContext {
   /** Every check observed on the head: a failure elsewhere in the same workflow run makes a cancelled or skipped job a code failure (review M4). */
   all?: CheckObs[];
   /** This run appeared after the re-runs for its name on this head were spent: cancelled again is a code failure (review M4). */
@@ -1477,7 +1476,7 @@ function rerunnable(s: State, pr: PrDelivery, ob: { checks: CheckObs[] }, c: Che
  * re-runnable provider failure with budget left, and nothing conflicts. Any `code` failure suppresses
  * re-runs: a fix is needed anyway. Pure; the planner, the intent and the gate all use it.
  */
-export function rerunPlan(s: State, pr: PrDelivery, nowMs: number): { check: string; jobId: number }[] | undefined {
+function rerunPlan(s: State, pr: PrDelivery, nowMs: number): { check: string; jobId: number }[] | undefined {
   const ob = pr.observed;
   if (!s.project.prDelivery.enabled || !ob || ob.state !== "OPEN" || ob.headSha !== pr.headSha || ob.checksFor !== pr.headSha) return undefined;
   if (pr.phase !== "open" || pr.number === undefined || pr.pendingHead || pr.foreignHead) return undefined;
@@ -1515,13 +1514,13 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
   // 1. Policy
   if (o.byUser) {
     if (pr.mergeRequested?.headSha === pr.headSha) add("policy", "Merge requested", "ok", `You asked to merge ${h12}.`);
-    else add("policy", "You merge this pull request", "waiting", `Hold and notify: it merges when you choose Merge for ${h12}, or merge it on GitHub.`);
+    else add("policy", "You merge this pull request", "waiting", `It merges when you choose Merge for ${h12}, or merge it on GitHub.`);
   } else if (pr.policy === "auto") add("policy", "Merges automatically", "ok", "It merges by itself once everything below holds for this exact commit.");
-  else add("policy", "You merge this pull request", "waiting", `Hold and notify: it merges when you choose Merge for ${h12}, or merge it on GitHub.`);
+  else add("policy", "You merge this pull request", "waiting", `It merges when you choose Merge for ${h12}, or merge it on GitHub.`);
 
   // 2. Not paused (ORC-012 review 1: shaping is not a pause, but no delivery work starts until building)
   if (s.project.hold) add("not-paused", "Not paused", "waiting", "The project is paused: nothing is pushed, opened, merged or commented.");
-  else if (pr.userHold) add("not-paused", "Not paused", "waiting", `You are holding this pull request${pr.userHold.reason ? `: ${pr.userHold.reason}` : ""}.`);
+  else if (pr.userHold) add("not-paused", "Not paused", "waiting", `Kept for you${pr.userHold.reason ? `: ${pr.userHold.reason}` : ""}. Nothing is pushed, merged or commented until you let it continue.`);
   else if (pr.closeRequested) add("not-paused", "Not paused", "waiting", "You asked to close this pull request.");
   else if (s.project.stage === "shaping") add("not-paused", "Not paused", "waiting", "Shaping: nothing is pushed, opened, merged or brought up to date until you start building. Nothing is paused.");
   else add("not-paused", "Not paused", "ok", "No pause or hold.");
@@ -1661,7 +1660,10 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
     const ev = C.checkEvidence(s, pr.changeSha);
     const SC = "Service checks";
     const running = checkTasksFor(s, task, pr).find((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled");
-    if (ev.ok) add("service-checks", SC, "ok", ev.reason, undefined, advisory);
+    // ORC-025: evidence from the service's own check task is named as such, so a task whose check steps
+    // never ran (checks were off at the time) does not read as if they had passed.
+    const elsewhere = ev.ok && ev.taskId && ev.taskId !== task.id ? ` Run by the service as ${ev.taskId} on this change${task.steps.some((st) => st.role === "checks" && st.state === "skipped") ? "; the task's own check steps did not run" : ""}.` : "";
+    if (ev.ok) add("service-checks", SC, "ok", `${ev.reason}${elsewhere}`, undefined, advisory);
     else if (ev.attemptId) add("service-checks", SC, "blocked", `${ev.reason}${note}`, "service-checks", advisory);
     else if (running) add("service-checks", SC, "waiting", `${ev.reason} ${running.id} runs them.`, undefined, advisory);
     else if ((pr.counters.checks ?? 0) >= PR_LIMITS.checks) add("service-checks", SC, "blocked", `${ev.reason} ${PR_LIMITS.checks} check runs were already started for this pull request. Merge it yourself.`, "service-checks", advisory);
@@ -1672,10 +1674,10 @@ export function prGate(s: State, task: Task, nowMs: number, o: { byUser: boolean
     // 10. Paths and workers
     const local = s.project.enabledProviders.filter((p) => s.project.workerEnvironment[p] === "local");
     if (pr.changed.protectedHits.length)
-      add("paths", "Protected files and workers", "blocked", `It touches protected files (${pr.changed.protectedHits.slice(0, 5).join(", ")}), which control the checks or the build, so it is never merged automatically. Look at it and merge it yourself.`, "protected-path");
+      add("paths", "Protected files and agents", "blocked", `It touches protected files (${pr.changed.protectedHits.slice(0, 5).join(", ")}), which control the checks or the build, so it is never merged automatically. Look at it and merge it yourself.`, "protected-path");
     else if (local.length && !cfg.allowLocalWorkers)
-      add("paths", "Protected files and workers", "blocked", `A worker environment is set to "local" (${local.map(M.providerLabel).join(", ")}), which may expose your GitHub sign-in or a GitHub MCP server to agents. Automatic merging is off until the environment is isolated, or you allow local workers in Settings → Delivery. You can merge it yourself.`, "local-workers");
-    else add("paths", "Protected files and workers", "ok", local.length ? "No protected file is touched. Local worker environments are allowed by your setting." : "No protected file is touched, and workers run isolated.");
+      add("paths", "Protected files and agents", "blocked", `An agent environment is set to "local" (${local.map(M.providerLabel).join(", ")}), which may expose your GitHub sign-in or a GitHub MCP server to agents. Automatic merging is off until the environment is isolated, or you allow local agents in Settings → Delivery. You can merge it yourself.`, "local-workers");
+    else add("paths", "Protected files and agents", "ok", local.length ? "No protected file is touched. Local agent environments are allowed by your setting." : "No protected file is touched, and agents run isolated.");
 
     // 11. Automatic merging is available
     const used = autoMergesToday(gh, nowMs);
@@ -1752,7 +1754,7 @@ function refreshAttention(s: State, t: Task, now: string) {
   else if (pr.changed.workflowHits.length && !pr.workflowPushAllowed && (pr.phase === "built" || pr.pendingHead))
     next = { code: "workflow-change", message: `It changes CI workflow files (${pr.changed.workflowHits.slice(0, 5).join(", ")}), so it is not pushed until you allow it.` };
   else if (pr.phase === "built" && pr.counters.failures >= PR_LIMITS.publishFailures)
-    next = { code: "publish-failed", message: `Pushing the branch and opening the pull request failed ${pr.counters.failures} times${pr.message ? `: ${pr.message}` : ""}. Hold and release it to try again, or close it and deliver again.` };
+    next = { code: "publish-failed", message: `Pushing the branch and opening the pull request failed ${pr.counters.failures} times${pr.message ? `: ${pr.message}` : ""}. Choose Keep for me and then let it continue to try again, or close it and deliver again.` };
   else {
     // Judged at the time GitHub was last read: a timeout is never declared for a period nobody looked.
     const blocking = prGate(s, t, Date.parse(pr.observed?.at ?? now), { byUser: userGate(pr) }).items.find((i) => i.state === "blocked" && i.code && (pr.phase === "open" || i.id === "review"));
@@ -1824,7 +1826,7 @@ export function mergeBody(s: State, t: Task): string {
 
 // ---------- integration in pull-request mode ----------
 
-export interface PrHeadFacts {
+interface PrHeadFacts {
   n: number;
   /** Full SHA of the task's final commit: the pull request head. */
   sha: string;
@@ -1884,16 +1886,11 @@ function changeAuthorOf(s: State, t: Task): ChangeAuthor {
 /**
  * Everyone who authored a commit of a task's change: every run that produced a code change in it (an
  * earlier coder step, a repair round, a run that was done again on another provider), and the user
- * where they supplied a commit. Candidates of a best-of step that were not chosen are not part of it.
+ * where they supplied a commit.
  */
 function changeAuthorsOf(s: State, t: Task): ChangeAuthor[] {
-  const unchosen = (stepId: string) => {
-    const g = t.steps.find((x) => x.id === stepId)?.copyOf;
-    if (!g) return false;
-    return t.bestOf?.[g] ? t.bestOf[g] !== stepId : t.steps.find((x) => x.id === g)?.parallel?.mode === "best-of" && stepId !== g;
-  };
   const out = new Set<ChangeAuthor>();
-  for (const a of s.artifacts) if (a.taskId === t.id && a.kind === "code-change" && !unchosen(a.stepId)) out.add(M.artifactAuthor(s, a));
+  for (const a of s.artifacts) if (a.taskId === t.id && a.kind === "code-change") out.add(M.artifactAuthor(s, a));
   out.add(changeAuthorOf(s, t));
   return [...out];
 }
@@ -2036,8 +2033,8 @@ function localPosture(s: State, ctx: ReportContext): PostureItem[] {
     out.push({
       id: "local-workers",
       status: "warn",
-      label: "A worker environment is set to local",
-      detail: `A worker environment set to "local" (${local.map(M.providerLabel).join(", ")}) may expose your GitHub sign-in or a GitHub MCP server to agents.`,
+      label: "An agent environment is set to local",
+      detail: `An agent environment set to "local" (${local.map(M.providerLabel).join(", ")}) may expose your GitHub sign-in or a GitHub MCP server to agents.`,
     });
   if (ctx.workerShell) out.push({ id: "worker-shell", status: "warn", label: "Claude workers have shell access", detail: "With shell access, the app cannot claim that only the service reaches GitHub." });
   return out;
@@ -2128,7 +2125,7 @@ export function reportBaseFetched(state: State, sha: string, now: string, unpush
         label: `${unpushed.count} Orchestrator commit${unpushed.count === 1 ? "" : "s"} on ${unpushed.branch} ${unpushed.count === 1 ? "is" : "are"} not on ${cfg.remote}/${cfg.base}`,
         detail: `Local delivery put ${unpushed.count === 1 ? "it" : "them"} on your branch ${unpushed.branch}. The app does not push ${unpushed.count === 1 ? "it" : "them"}, and new work starts from ${cfg.remote}/${cfg.base}, which does not have ${unpushed.count === 1 ? "it" : "them"}. Push ${unpushed.branch} yourself if pull requests should build on that work.`,
       });
-      if (!had) event(s, now, "system", "config", `${unpushed.count} Orchestrator commit(s) on ${unpushed.branch} are not on ${cfg.remote}/${cfg.base}; the app does not push them`);
+      if (!had) event(s, now, "system", "config", `${unpushed.count} Orchestrator commit${unpushed.count === 1 ? " is" : "s are"} on ${unpushed.branch} and not on ${cfg.remote}/${cfg.base}; the app does not push ${unpushed.count === 1 ? "it" : "them"}`);
     }
   }
   if (first) event(s, now, "system", "integration", `Fetched ${cfg.remote}/${cfg.base} (${sha12(sha)}); new work starts from it`);
@@ -2809,7 +2806,7 @@ export function reportPrOp(state: State, r: PrOpResult, now: string, ctx: Report
       pr.counters.failures = 0;
       delete pr.nextAt;
       delete pr.message;
-      event(s, now, "system", "integration", `Opened pull request #${pr.number} for ${pr.branch} into ${pr.base}${pr.simulated ? " (simulated)" : ""}; ${pr.policy === "auto" ? "it merges by itself after an independent review and passing required checks" : "it is held for you"}`, t.id);
+      event(s, now, "system", "integration", `Opened pull request #${pr.number} for ${pr.branch} into ${pr.base}${pr.simulated ? " (simulated)" : ""}; ${pr.policy === "auto" ? "it merges by itself after an independent review and passing required checks" : "you merge it"}`, t.id);
       refreshAttention(s, t, now);
       return s;
     }
@@ -2885,7 +2882,7 @@ export function setPrDelivery(state: State, patch: Partial<PrDeliveryConfig>, no
     now,
     "user",
     "config",
-    `Pull-request settings: ${next.remote}/${next.base}, ${next.merge === "auto" ? `merge automatically after an independent review (${next.reviewer === "any-agent" ? "any agent" : "another provider than the writer"}) and passing required checks, at most ${next.maxAutoMergesPerDay} a day` : "hold and notify"}, at most ${next.maxOpenPrs} open${next.noCi !== cur.noCi ? (next.noCi ? "; you declared this repository has no CI (your own Merge works with no checks; automatic merging still needs a required check)" : "; the no-CI declaration was withdrawn") : ""}${next.rerunBudget !== cur.rerunBudget ? `; a check GitHub cancelled is re-run ${next.rerunBudget === 0 ? "never" : `${next.rerunBudget} time${next.rerunBudget === 1 ? "" : "s"} per head`}` : ""}`,
+    `Pull-request settings: ${next.remote}/${next.base}, ${next.merge === "auto" ? `merge automatically after an independent review (${next.reviewer === "any-agent" ? "any agent" : "another provider than the writer"}) and passing required checks, at most ${next.maxAutoMergesPerDay} a day` : "you merge"}, at most ${next.maxOpenPrs} open${next.noCi !== cur.noCi ? (next.noCi ? "; you declared this repository has no CI (your own Merge works with no checks; automatic merging still needs a required check)" : "; the no-CI declaration was withdrawn") : ""}${next.rerunBudget !== cur.rerunBudget ? `; a check GitHub cancelled is re-run ${next.rerunBudget === 0 ? "never" : `${next.rerunBudget} time${next.rerunBudget === 1 ? "" : "s"} per head`}` : ""}`,
   );
   // Another rule for who may review: a dedicated review that could not start is tried again under it.
   if (next.reviewer !== cur.reviewer) {
@@ -2949,7 +2946,7 @@ export function holdPr(state: State, taskId: string, reason: string | undefined,
   dropStaleUpdate(s, task, now);
   // A hold withdraws a merge request that has not been sent yet.
   if (!pr.op) delete pr.mergeRequested;
-  event(s, now, "user", "integration", `${prName(pr)} held by you${pr.op ? "; the operation already sent to GitHub cannot be interrupted" : ""}`, task.id);
+  event(s, now, "user", "integration", `${prName(pr)} kept for you${pr.op ? "; the operation already sent to GitHub cannot be interrupted" : ""}`, task.id);
   return s;
 }
 
@@ -2982,7 +2979,7 @@ export function setPrPolicy(state: State, taskId: string, policy: "hold" | "auto
   pr.policySource = source;
   if (next === "auto") delete pr.mergeRequested;
   dropStaleUpdate(s, task, now);
-  event(s, now, "user", "integration", `${prName(pr)}: ${next === "auto" ? "merges automatically after an independent review and passing required checks" : "hold and notify"}${policy === null ? " (follows the project)" : ""}`, task.id);
+  event(s, now, "user", "integration", `${prName(pr)}: ${next === "auto" ? "merges automatically after an independent review and passing required checks" : "you merge"}${policy === null ? " (follows the project)" : ""}`, task.id);
   refreshAttention(s, task, now);
   return s;
 }
@@ -3103,6 +3100,8 @@ export function retryLandedComment(state: State, taskId: string, noteId: string,
 export interface PrLabel {
   text: string;
   tone: "plain" | "strong" | "done" | "danger";
+  /** ORC-025: a demo pull request. The chip shows one small "simulated" mark beside the text; the text itself carries none. */
+  simulated?: true;
 }
 
 /** One short, truthful label for a task's delivery: what it is doing, or exactly what it waits for. */
@@ -3110,31 +3109,32 @@ export function prLabel(s: State, t: Task, nowMs: number): PrLabel | undefined {
   const i = t.integration;
   const pr = i?.pr;
   if (!i || !pr) return undefined;
-  const sim = pr.simulated ? " (simulated)" : "";
+  const sim: { simulated?: true } = pr.simulated ? { simulated: true } : {};
   // ORC-012 review 1: while shaping, delivery says what it waits for, never "queued" or "preparing".
   const shaping = s.project.stage === "shaping" && !s.project.hold;
   const WAITS = "waits until you start building (shaping)";
-  if (i.status !== "integrated") return { text: shaping ? `pull request ${pr.n + 1} ${WAITS}` : `preparing pull request ${pr.n + 1}`, tone: "plain" };
+  if (i.status !== "integrated") return { text: shaping ? `pull request ${pr.n + 1} ${WAITS}` : `preparing pull request ${pr.n + 1}`, tone: "plain", ...sim };
   const name = pr.number ? `PR #${pr.number}` : "PR";
-  const plain = (what: string): PrLabel => ({ text: `${name} ${what}${sim}`, tone: "plain" });
-  if (pr.phase === "merged") return { text: i.landed?.status === "unreviewed" ? `merged · review${sim}` : `merged${sim}`, tone: "done" };
-  if (pr.phase === "closed") return { text: `${name} closed${sim}`, tone: "danger" };
-  if (pr.op?.kind === "merge") return { text: `${name} merging${sim}`, tone: "strong" };
+  const plain = (what: string): PrLabel => ({ text: `${name} ${what}`, tone: "plain", ...sim });
+  // ORC-025: finished work that is in main has "landed"; "new" until you mark it as seen under Results.
+  if (pr.phase === "merged") return { text: i.landed?.status === "unreviewed" ? "landed · new" : "landed", tone: "done", ...sim };
+  if (pr.phase === "closed") return { text: `${name} closed`, tone: "danger", ...sim };
+  if (pr.op?.kind === "merge") return { text: `${name} merging`, tone: "strong", ...sim };
   // ORC-013 §7: a cancelled check being re-run, and a review bot's verdict, are named as such.
   const rerunning = pr.op?.kind === "rerun" ? rerunsUsed(pr).filter((u) => u.opId === pr.op!.id) : pr.observed?.checksFor === pr.headSha ? rerunsUsed(pr).filter((u) => pr.observed!.checks.some((c) => c.name === u.check && awaitingRerun(pr, c, nowMs))) : [];
   if (rerunning.length) return plain(`re-running ${[...new Set(rerunning.map((u) => u.check))].join(", ")}`);
   if (pr.attention) {
     const fixing = openRepair(s, pr);
     if (fixing || pr.pendingHead?.kind === "repair") return plain("being fixed");
-    if (pr.attention.code === "bot-check") return { text: `${name} bot check · needs you${sim}`, tone: "danger" };
-    return { text: `${name} needs you${sim}`, tone: "danger" };
+    if (pr.attention.code === "bot-check") return { text: `${name} bot check · needs you`, tone: "danger", ...sim };
+    return { text: `${name} needs you`, tone: "danger", ...sim };
   }
-  if (pr.userHold) return plain("held by you");
+  if (pr.userHold) return plain("kept for you");
   if (pr.phase === "built") return plain(!s.project.prDelivery.enabled ? "not opened: delivery is off" : s.project.hold ? "not opened: paused" : shaping ? `not opened: ${WAITS}` : openSlotsFull(s) ? `not opened: ${openSlotsFull(s)}` : "preparing");
-  if (prReady(s, t, nowMs)) return { text: `${name} waiting for you${sim}`, tone: "strong" };
+  if (prReady(s, t, nowMs)) return { text: `${name} ready to merge`, tone: "strong", ...sim };
   const byUser = userGate(pr);
   const waits = prGate(s, t, nowMs, { byUser }).items.find((x) => !x.ok && x.id !== "policy");
-  if (!waits) return pr.policy === "auto" && !byUser ? { text: `${name} merging next${sim}`, tone: "strong" } : pr.mergeRequested ? { text: `${name} merge requested${sim}`, tone: "strong" } : plain("open");
+  if (!waits) return pr.policy === "auto" && !byUser ? { text: `${name} merging next`, tone: "strong", ...sim } : pr.mergeRequested ? { text: `${name} merge requested`, tone: "strong", ...sim } : plain("open");
   switch (waits.id) {
     case "not-paused":
       return plain(pr.closeRequested ? "closing" : shaping && !pr.userHold ? WAITS : "paused");

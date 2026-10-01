@@ -9,7 +9,7 @@ const KINDS: { kind: EventKind | ""; label: string }[] = [
   { kind: "spec", label: "Spec revisions" },
   { kind: "control", label: "Controls" },
   { kind: "dispatch", label: "Dispatch" },
-  { kind: "runtime", label: "Runtime" },
+  { kind: "runtime", label: "Agent runs" },
   { kind: "integration", label: "Integration" },
   { kind: "blocked", label: "Blockers" },
   { kind: "config", label: "Configuration" },
@@ -35,7 +35,7 @@ export function Activity() {
             ))}
           </select>
         </label>
-        <span className="muted">Append-only. {service.runtime === "real" ? "Events marked runtime come from the Claude and Codex runtimes." : "Events marked runtime come from the service's fake (simulated) runtime."}</span>
+        <span className="muted">Append-only. {service.runtime === "real" ? "Events marked runtime come from the Claude and Codex agents." : "Events marked runtime come from the simulated agents."}</span>
       </div>
       <section className="card">
         <ul className="events">

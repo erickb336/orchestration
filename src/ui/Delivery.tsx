@@ -1,8 +1,8 @@
-// Delivery views shared by the Review page, the board and the task page.
+// Delivery views shared by the Results page, the board and the task page.
 //   - The pull-request panel: what you asked for (desired), what is being sent (intent) and what
 //     GitHub reports (observed), kept apart, with the merge checklist and the explicit actions.
 //   - The landed section: what landed, the agent review, the changes, the user's notes, and the
-//     explicit actions (mark reviewed, leave a note, send back). Showing an item never changes it.
+//     explicit actions (mark as seen, leave a note, send back). Showing an item never changes it.
 
 import { useEffect, useState } from "react";
 import type { ChangeError, ChangeResponse } from "../api";
@@ -23,7 +23,8 @@ const FLAG_LABEL: Record<LandedFlag, string> = {
   "findings-accepted": "findings accepted as is",
 };
 
-const STATUS_LABEL: Record<Landed["status"], string> = { unreviewed: "Not reviewed", reviewed: "Reviewed", "sent-back": "Sent back" };
+/** ORC-025: a landed item is "New" until you mark it as seen; the words "review" and "reviewed" belong to the agents. */
+const STATUS_LABEL: Record<Landed["status"], string> = { unreviewed: "New", reviewed: "Seen", "sent-back": "Sent back" };
 
 type ChangeResult = { ok: true; change: ChangeResponse } | { ok: false; error: string; url?: string };
 
@@ -88,11 +89,16 @@ export function ChangeView({ taskId }: { taskId: string }) {
 
 const TONE_CLASS: Record<D.PrLabel["tone"], string> = { plain: "chip", strong: "chip strong", done: "chip done", danger: "chip danger" };
 
-/** The board chip for a task delivered as a pull request. */
+/** The board chip for a task delivered as a pull request, with one small "simulated" mark beside it in the demo. */
 export function PrChip({ state, task }: { state: State; task: Task }) {
   const label = D.prLabel(state, task, Date.now());
   if (!label) return null;
-  return <span className={TONE_CLASS[label.tone]}>{label.text}</span>;
+  return (
+    <>
+      <span className={TONE_CLASS[label.tone]}>{label.text}</span>
+      {label.simulated && <span className="chip">simulated</span>}
+    </>
+  );
 }
 
 
@@ -143,6 +149,8 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
   const linked = (ids: string[]) => ids.map((id) => state.tasks.find((x) => x.id === id)).filter((x): x is Task => !!x);
   const reviews = linked(pr.reviewTaskIds);
   const repairs = linked(pr.repairTaskIds);
+  // ORC-025: the service's own check runs on this change, named so the checklist's evidence has a visible source.
+  const checkTasks = state.tasks.filter((x) => x.checkTarget?.taskId === task.id && x.checkTarget.n === pr.n);
   const fixing = live ? D.openRepair(state, pr) : undefined;
   const openReview = reviews.find((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled" && x.reviewTarget?.headSha === pr.changeSha);
   // The user's Fix this PR may also take on a review bot's failing check (by name and link); nothing automatic does.
@@ -193,9 +201,9 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
       <dl className="kv">
         <dt>You</dt>
         <dd>
-          {auto ? "Merge automatically after an independent review and passing required checks, for exactly the commit shown." : "Hold and notify: you merge it, here or on GitHub."}{" "}
+          {auto ? "Merges automatically after an independent review and passing required checks, for exactly the commit shown." : "You merge it, here or on GitHub."}{" "}
           <span className="muted">{pr.policySource === "user" ? "Your choice for this pull request." : "The project's setting."}</span>
-          {pr.userHold ? ` Held by you${pr.userHold.reason ? ` (${pr.userHold.reason})` : ""}.` : ""}
+          {pr.userHold ? ` Kept for you${pr.userHold.reason ? ` (${pr.userHold.reason})` : ""}.` : ""}
         </dd>
         {auto && live && place >= 0 && (
           <>
@@ -213,7 +221,7 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
             <dd>{intent}</dd>
           </>
         )}
-        <dt>GitHub{pr.simulated ? " (simulated)" : ""}</dt>
+        <dt>GitHub</dt>
         <dd>
           {pr.number ? `PR #${pr.number}: ` : ""}
           {pr.phase === "merged" ? `merged${pr.observed?.mergedBy ? ` by ${pr.observed.mergedBy}` : ""}` : pr.phase === "closed" ? `closed without merging${pr.observed?.closedBy ? ` by ${pr.observed.closedBy}` : ""}` : observedLine(pr)}
@@ -268,6 +276,18 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
             </div>
           ))}
         </dd>
+        {checkTasks.length > 0 && (
+          <>
+            <dt>Service checks</dt>
+            <dd>
+              {checkTasks.map((x) => (
+                <div key={x.id}>
+                  Check task <a href={`#/task/${encodeURIComponent(x.id)}`}>{x.id}</a> <span className="muted">{M.stateLabel(state, x)}{x.checkTarget?.sha !== pr.changeSha ? " · for an earlier change, not counted" : ""}</span>
+                </div>
+              ))}
+            </dd>
+          </>
+        )}
         {reruns.length > 0 && (
           <>
             <dt>Re-runs</dt>
@@ -332,8 +352,8 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
           </button>
         )}
         {live && prOn && !elsewhere && !pr.foreignHead && !pr.closeRequested && (auto ? (
-          <button disabled={disabled} onClick={() => void send("setPrPolicy", { taskId: task.id, policy: "hold" })}>
-            Hold this one for me
+          <button disabled={disabled} title="This pull request waits for your Merge instead of merging by itself" onClick={() => void send("setPrPolicy", { taskId: task.id, policy: "hold" })}>
+            You merge this one
           </button>
         ) : (
           <button
@@ -373,12 +393,12 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
           </button>
         )}
         {live && (pr.userHold ? (
-          <button disabled={disabled} onClick={() => void send("releasePr", { taskId: task.id })}>
-            Release hold
+          <button disabled={disabled} title={auto ? "It goes back to merging by itself once the checklist holds" : "It goes back to waiting for your Merge"} onClick={() => void send("releasePr", { taskId: task.id })}>
+            {auto ? "Let it merge" : "Let it continue"}
           </button>
         ) : (
-          <button disabled={disabled} onClick={() => void send("holdPr", { taskId: task.id })}>
-            Hold
+          <button disabled={disabled} title="Nothing is pushed, merged or commented on this pull request until you let it continue" onClick={() => void send("holdPr", { taskId: task.id })}>
+            Keep for me
           </button>
         ))}
         {live && pr.changed.workflowHits.length > 0 && !pr.workflowPushAllowed && (
@@ -490,7 +510,6 @@ export function LandedSection({ state, task }: { state: State; task: Task }) {
         <dt>Landed</dt>
         <dd>
           <span title={fmtTime(landed.at)}>{relTime(landed.at)}</span> by {who}, {where}
-          {landed.simulated ? " (simulated)" : ""}
         </dd>
         <dt>Commit</dt>
         <dd className="mono">{landed.commit.slice(0, 12)}</dd>
@@ -550,11 +569,11 @@ export function LandedSection({ state, task }: { state: State; task: Task }) {
       <div className="controls">
         {landed.status === "reviewed" ? (
           <button disabled={disabled} onClick={() => void send("markLandedReviewed", { taskIds: [task.id], reviewed: false })}>
-            Mark not reviewed
+            Mark as new
           </button>
         ) : (
           <button className="primary" disabled={disabled} onClick={() => void send("markLandedReviewed", { taskIds: [task.id], reviewed: true })}>
-            Mark reviewed
+            Mark as seen
           </button>
         )}
         <button aria-expanded={showChanges} onClick={() => setShowChanges(!showChanges)}>
@@ -637,7 +656,7 @@ export function LandedSection({ state, task }: { state: State; task: Task }) {
             Save note
           </button>{" "}
           <span className="muted" style={{ fontSize: "0.85rem" }}>
-            Notes stay in Orchestrator unless you choose to post one. A note does not mark the item reviewed.
+            Notes stay in Orchestrator unless you choose to post one. A note does not mark the item as seen.
           </span>
         </form>
       </div>
@@ -685,7 +704,7 @@ function SendBackForm({ state, task, landed, onDone }: { state: State; task: Tas
         <textarea value={note} maxLength={D.MAX_NOTE_CHARS} onChange={(e) => setNote(e.target.value)} style={{ minHeight: "3.5rem" }} />
       </label>
       <label style={{ marginBottom: "0.5rem" }}>
-        <input type="checkbox" checked={hold} onChange={(e) => setHold(e.target.checked)} /> Hold the new task until I start it
+        <input type="checkbox" checked={hold} onChange={(e) => setHold(e.target.checked)} /> Wait for my go-ahead
       </label>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
         The new task runs through the normal pipeline: it is reviewed and delivered like any other. Nothing is undone until that task lands.

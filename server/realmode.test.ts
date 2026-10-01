@@ -201,11 +201,11 @@ describe("real-mode scheduling with scripted adapters", () => {
     expect(M.stateLabel(st(), task(b))).toBe("Pausing");
     codex.emit({ type: "stopped", attemptId: ra.id, how: "interrupted" });
     tick();
-    expect(M.stateLabel(st(), task(a))).toBe("Paused (project)");
+    expect(M.stateLabel(st(), task(a))).toBe("Paused");
     expect(M.stateLabel(st(), task(b))).toBe("Pausing"); // Claude has not confirmed yet
     claude.emit({ type: "stopped", attemptId: rb.id, how: "killed" });
     tick();
-    expect(M.stateLabel(st(), task(b))).toBe("Paused (project)");
+    expect(M.stateLabel(st(), task(b))).toBe("Paused");
     cmd("resumeProject");
     tick();
     expect(runOf(a, "S1").id).not.toBe(ra.id); // fresh attempt after resume

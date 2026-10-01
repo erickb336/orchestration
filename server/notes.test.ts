@@ -237,7 +237,7 @@ describe("the scripted adapters", () => {
     f.cmd("postMessage", { text: "and now?" });
     f.tick();
     const env = f.claude.started[f.claude.started.length - 1].prompt;
-    expect(env).toMatch(new RegExp(`## Notes to running stages \\(last 24 hours; yours and the user's\\)\\n- ${n.id} \\(.*\\) by you \\(from msg-\\d+\\) → ${id} S1 \\(${run.id}\\): "Skip the README; the owner will write it\\." — not delivered: turn/steer: no active turn`));
+    expect(env).toMatch(new RegExp(`## Notes to running steps \\(last 24 hours; yours and the user's\\)\\n- ${n.id} \\(.*\\) by you \\(from msg-\\d+\\) → ${id} S1 \\(${run.id}\\): "Skip the README; the owner will write it\\." — not delivered: turn/steer: no active turn`));
     expect(env).toMatch(/· steps: S1 coder running \(Codex, run-\d+\), C1 checks pending \(the service\), S2 code_reviewer pending \(Claude\)/);
     expect(env).toMatch(/"notes": \[\n\s+\{ "task": "<task id>", "step": "<coder or designer step id>"/);
     expect(env).toMatch(/- "notes": when the user's message should change what running work does/);
@@ -383,14 +383,14 @@ describe("the format 16 → 17 migration", () => {
     const upgraded = new Store(path);
     opened.push(upgraded);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(17);
-    expect(s.version).toBe(17);
+    expect(STATE_FORMAT).toBe(18);
+    expect(s.version).toBe(18);
     expect(s.notes).toEqual([]);
     expect(s.tasks.map((t) => t.id)).toEqual((doc.tasks as { id: string }[]).map((t) => t.id));
     expect(s.steering).toEqual(doc.steering);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(17);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_16_%'").get()).toBeDefined();
     check.close();
   });
@@ -407,7 +407,7 @@ describe("the envelopes", () => {
     expect(env).not.toContain("agent received");
     const run = M.startLeadRun(M.postMessage(s, "hi", iso(T0)), { provider: "claude", model: "m", trigger: "message" }, iso(T0 + 1000));
     const lead = buildLeadEnvelope(run.state, run.state.leadRuns.find((r) => r.id === run.runId)!, "read");
-    expect(lead).toContain("## Notes to running stages (last 24 hours; yours and the user's)\n- None in the last 24 hours.");
+    expect(lead).toContain("## Notes to running steps (last 24 hours; yours and the user's)\n- None in the last 24 hours.");
     expect(lead).toMatch(/- EX-001 \[.*\] P1 .* · steps: S2 coder running \(Codex, run-\d+\), C1 checks pending \(the service\), S3 code_reviewer pending \(Claude\)/);
   });
 
