@@ -1,0 +1,98 @@
+/* Settings (ORC-025 pass 5). Layout only: colour and type come from the tokens and the kit. Every class is
+   prefixed s- so nothing collides with other screens. */
+
+.s-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); min-width: 0; }
+.s-page > h1 { margin: 0; }
+/* The side menu stays in view while a long section scrolls. */
+@media (min-width: 768px) { .s-layout > .k-sidenav { position: sticky; top: var(--space-4); } }
+
+/* ---------- a section: its heading, its help line, its cards, its Save bar ---------- */
+.s-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); max-width: 54rem; min-width: 0; }
+.s-section[hidden] { display: none; }
+.s-section__head { display: grid; gap: var(--space-1); }
+.s-section__head > h2 { margin: 0; }
+.s-help { margin: 0; color: var(--muted); font-size: var(--fs-meta); max-width: 70ch; }
+.s-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); min-width: 0; }
+.s-card-help { margin: 0 0 var(--space-3); color: var(--muted); font-size: var(--fs-meta); }
+.s-card .k-card__body > :last-child { margin-bottom: 0; }
+/* A card's anchor lands below the top edge, not under it. */
+.s-card { scroll-margin-top: var(--space-4); }
+
+/* The Save bar sits at the end of the section; with an unsaved change it stays in view while you scroll. */
+.s-savebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.s-savebar--dirty { position: sticky; bottom: var(--space-2); z-index: 5; border-color: var(--border-strong); box-shadow: var(--shadow-pop); }
+.s-savebar__state { font-size: var(--fs-meta); color: var(--muted); display: inline-flex; align-items: center; gap: var(--space-2); }
+.s-savebar__state--dirty { color: var(--text); font-weight: 560; }
+.s-savebar__state--dirty::before { content: ""; width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--st-you); flex: none; }
+.s-savebar__state--saved::before { content: "✓"; color: var(--st-done); font-weight: 700; }
+
+/* The side menu marks a section with unsaved changes (the dot has a text twin for screen readers). */
+.s-nav-dirty { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--st-you); flex: none; }
+
+/* ---------- radio choices ---------- */
+.s-choices { border: none; margin: 0; padding: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+.s-choices > legend { padding: 0; margin-bottom: var(--space-1); }
+.s-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 var(--space-2); align-items: start; cursor: pointer; min-width: 0; }
+.s-choice__input { margin: 0.3rem 0 0; }
+.s-choice__text { display: grid; gap: 0.1rem; min-width: 0; }
+.s-choice__label { font-weight: 600; display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.s-choice__desc { font-size: var(--fs-meta); color: var(--muted); overflow-wrap: anywhere; }
+.s-choice__more { grid-column: 2; margin-top: var(--space-2); min-width: 0; }
+.s-choice--boxed { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-control); }
+.s-choice--boxed.s-choice--on { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+.s-choice:has(.s-choice__input:disabled) { opacity: 0.55; cursor: not-allowed; }
+.s-choice__input:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ---------- fields side by side ---------- */
+.s-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 12rem), 1fr)); gap: 0 var(--space-4); align-items: start; min-width: 0; }
+.s-fields > .k-field { align-content: start; }
+.s-fields--wide { grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr)); }
+.s-inline { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); min-width: 0; }
+.s-inline input.k-control { width: auto; }
+.s-inline .k-check { margin: 0; }
+.s-sub { margin: var(--space-4) 0 var(--space-2); font-size: var(--fs-body); }
+.s-sub:first-child { margin-top: 0; }
+.s-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-3); font-size: var(--fs-meta); }
+.s-note { margin: var(--space-2) 0 0; color: var(--muted); font-size: var(--fs-small); }
+.s-error { margin: 0 0 var(--space-2); color: var(--st-fail); font-size: var(--fs-small); font-weight: 560; }
+.s-mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--fs-small); overflow-wrap: anywhere; }
+.s-gap { margin-top: var(--space-3); }
+
+/* ---------- lists: providers, commands, flows, principles ---------- */
+.s-list { list-style: none; margin: 0; padding: 0; min-width: 0; }
+.s-list > li { padding: var(--space-3) 0; border-top: 1px solid var(--border); min-width: 0; }
+.s-list > li:first-child { border-top: 0; padding-top: 0; }
+.s-list > li:last-child { padding-bottom: 0; }
+.s-list__title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-weight: 600; }
+.s-list__meta { font-size: var(--fs-meta); color: var(--muted); overflow-wrap: anywhere; }
+.s-commands { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
+.s-commands > code { padding: 0.05rem 0.45rem; border-radius: var(--radius-chip); background: var(--surface-2); }
+/* The words after a Disclosure's label ("Fine-tune · planning interval, …") read as a hint, not as the label. */
+.s-disc-label { flex: none; white-space: nowrap; }
+.s-disc-hint { font-weight: 450; }
+
+/* ---------- the command editor (Quality › Checks › Edit commands) ---------- */
+.s-cmd { border: 1px solid var(--border); border-radius: var(--radius-control); padding: var(--space-3); margin: 0 0 var(--space-3); min-width: 0; }
+.s-cmd > legend { padding: 0 var(--space-1); font-size: var(--fs-meta); font-weight: 600; }
+.s-argv { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; margin-bottom: var(--space-2); min-width: 0; }
+.s-argv__item { display: inline-flex; align-items: center; gap: 0.15rem; min-width: 0; }
+.s-argv__item input.k-control { width: 9rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--fs-small); }
+@media (max-width: 600px) { .s-argv__item input.k-control { width: 7.5rem; } }
+
+/* ---------- tables in Advanced ---------- */
+.s-table { width: 100%; border-collapse: collapse; font-size: var(--fs-meta); }
+.s-table th, .s-table td { text-align: left; padding: var(--space-1) var(--space-2) var(--space-1) 0; border-bottom: 1px solid var(--border); vertical-align: top; }
+.s-table th { color: var(--muted); font-weight: 560; }
+.s-tables { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr)); gap: var(--space-4); }
+/* Usage and service (Diagnostics.tsx) sits one level down in Advanced: its sub-headings are h5. */
+.s-section h5 { margin: 0; font-size: var(--fs-meta); font-weight: 650; }

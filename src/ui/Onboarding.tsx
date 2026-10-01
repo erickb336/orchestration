@@ -126,7 +126,7 @@ export function Onboarding() {
       label: "Connect your repository",
       done: !!service.repo?.ok,
       detail: service.repo?.ok ? <span className="mono">{state.project.repoPath}</span> : service.repo?.reason,
-      action: <a href="#/settings">Open Settings</a>,
+      action: <a href="#/settings/project/repository">Open Settings</a>,
     },
     {
       id: "providers",
@@ -144,7 +144,7 @@ export function Onboarding() {
           })}
         </span>
       ),
-      action: <a href="#/settings">Check providers</a>,
+      action: <a href="#/settings/agents/providers">Check providers</a>,
     },
     {
       id: "vision",
@@ -173,7 +173,7 @@ export function Onboarding() {
       id: "involvement",
       label: "Choose how involved you want to be (Autopilot runs end to end)",
       done: state.project.autonomy.enabled || involvementChosen === "1",
-      action: <a href="#/settings">Choose</a>,
+      action: <a href="#/settings/working-style/involvement">Choose</a>,
     },
     // ORC-013: once a repository is set, the service can run its checks on every change.
     ...(service.repo?.ok
@@ -182,7 +182,7 @@ export function Onboarding() {
             id: "checks",
             label: "Turn on checks (recommended): the service runs your repository's tests and build on every change, in a sandbox",
             done: !!state.project.checks?.enabled,
-            action: <a href="#/settings">Settings → Checks</a>,
+            action: <a href="#/settings/quality/checks">Settings → Checks</a>,
           } satisfies Step,
         ]
       : []),
