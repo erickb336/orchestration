@@ -1128,6 +1128,8 @@ Dependencies: B2 needs B1's provenance (`patternSince`). B3 needs B2's `patternS
 
 ## 19. Later: seams left on purpose
 
+**Update, 2026-10-01 (owner's decision):** none of these follow-ups will be built. ORC-018 (the comparison view and trace export) was built in pull request #11 and closed without merging; ORC-019 (SWE-bench runs) and ORC-020 (automatic pattern rotation) were dropped with it; ORC-015 (phone access) is dropped for now. ORC-021 replaces the pattern catalog with six plain flows.
+
 - **ORC-018, comparison.** Outcomes grouped by `pattern.id` and `hash`, with sample sizes, using `TaskOutcome` and `deliveryOutcome(t)`. An OTLP exporter maps §10.4 to Phoenix or Langfuse, off by default.
 - **ORC-019, SWE-bench Verified through patterns.** `createTask` with a `patternId` over HTTP, and the outcome records.
 - **Automatic assignment.** `ChosenBy` gains `"rotation"` and `PatternRef.assignment = { experimentId, arm }`, plus a project setting that rotates two patterns for new tasks of one kind. It needs rules for lead-created tasks and holds.
