@@ -6,9 +6,10 @@ import { diffLines } from "../domain/diff";
 import * as M from "../domain/model";
 import type { State, SteeringChange, SteeringChangeSet } from "../domain/types";
 import { useStore } from "./store";
-import { isSimulated, relTime } from "./common";
+import { Pill, isSimulated, relTime } from "./common";
+import { noteStatusLabel, noteTargetLabel, noteTone } from "./notes";
 
-type Act = { name: "undoSteering" | "applySteering" | "dismissSteering" | "postMessage"; args: object };
+type Act = { name: "undoSteering" | "applySteering" | "dismissSteering" | "postMessage" | "rerunWithNote"; args: object };
 
 export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
   const { state, send, disabled } = useStore();
@@ -27,7 +28,8 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
   // (the run in progress already answers the newest message).
   const leadBusy = !!M.activeLeadRun(state);
   // Review finding 3: a drop the user applies is an ordinary cancel with no undo, so it is never Undo-able here.
-  const undoable = (c: SteeringChange) => !(c.kind === "drop" && c.appliedBy === "user");
+  // ORC-022: a sent note cannot be unsent; its row has no Undo and Undo all skips it.
+  const undoable = (c: SteeringChange) => !(c.kind === "drop" && c.appliedBy === "user") && c.kind !== "note";
   const applyAll = () => {
     const drops = suggested.filter((c) => c.kind === "drop");
     if (drops.length && !confirmDrops(state, drops)) return;
@@ -94,16 +96,30 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
         <Section title="Suggested" action={suggested.length > 1 ? <button className="small" disabled={off} onClick={applyAll}>Apply all</button> : undefined}>
           {suggested.map((c) => (
             <Row key={c.id} state={state} c={c}>
-              <button
-                className="small"
-                disabled={off}
-                onClick={() => {
-                  if (c.kind === "drop" && !confirmDrops(state, [c])) return;
-                  void run(c.id, { name: "applySteering", args: { changeSetId: set.id, changeId: c.id } });
-                }}
-              >
-                Apply
-              </button>
+              {c.kind === "note" && c.rerun && c.noteId && c.taskId && c.stepId ? (
+                <button
+                  className="small"
+                  disabled={off}
+                  title="The same as Rerun on the task page, with the note written into the new run's instructions"
+                  onClick={() => {
+                    if (!confirm(`Rerun ${c.stepId} with this note? Results of steps that depend on it will need revalidation, and any of them still running will be stopped.`)) return;
+                    void run(c.id, { name: "rerunWithNote", args: { taskId: c.taskId, stepId: c.stepId, noteId: c.noteId } });
+                  }}
+                >
+                  Rerun with this note
+                </button>
+              ) : (
+                <button
+                  className="small"
+                  disabled={off}
+                  onClick={() => {
+                    if (c.kind === "drop" && !confirmDrops(state, [c])) return;
+                    void run(c.id, { name: "applySteering", args: { changeSetId: set.id, changeId: c.id } });
+                  }}
+                >
+                  {c.kind === "note" ? "Send" : "Apply"}
+                </button>
+              )}
               <button className="small" disabled={off} onClick={() => void run(`${c.id}-dismiss`, { name: "dismissSteering", args: { changeSetId: set.id, changeId: c.id } })}>
                 Dismiss
               </button>
@@ -163,6 +179,8 @@ function confirmDrops(state: State, rows: SteeringChange[]): boolean {
 function Row({ state, c, struck, children }: { state: State; c: SteeringChange; struck?: boolean; children?: React.ReactNode }) {
   const t = c.taskId ? state.tasks.find((x) => x.id === c.taskId) : undefined;
   const resolved = c.resolvedAt ? relTime(c.resolvedAt) : undefined;
+  // ORC-022: a note row reads "Note to WT-007 S2 (Coder · Claude): "…"" and, once sent, shows the note's live status.
+  const note = c.kind === "note" && c.noteId ? M.noteOf(state, c.noteId) : undefined;
   const statusNote =
     c.status === "undone"
       ? `undone by you${resolved ? ` ${resolved}` : ""}`
@@ -170,9 +188,35 @@ function Row({ state, c, struck, children }: { state: State; c: SteeringChange; 
         ? `dismissed${resolved ? ` ${resolved}` : ""}`
         : c.status === "superseded"
           ? "superseded by a later reply"
-          : c.status === "applied" && c.appliedBy === "user"
-            ? `applied by you${resolved ? ` ${resolved}` : ""}`
-            : undefined;
+          : c.status === "applied" && c.kind === "note"
+            ? `sent${c.appliedBy === "user" ? " by you" : ""}; a sent note cannot be unsent`
+            : c.status === "applied" && c.appliedBy === "user"
+              ? `applied by you${resolved ? ` ${resolved}` : ""}`
+              : undefined;
+  if (c.kind === "note") {
+    return (
+      <li className={`change${struck ? " struck" : ""}`}>
+        <div className="row" style={{ gap: "0.35rem", alignItems: "baseline" }}>
+          <span className="change-what">
+            Note to {t ? <a href={`#/task/${encodeURIComponent(t.id)}`}>{noteTargetLabel(state, c.taskId, c.stepId)}</a> : <span className="mono">{noteTargetLabel(state, c.taskId, c.stepId)}</span>}: “{String(c.after ?? "")}”
+          </span>
+          {note && (
+            <Pill tone={noteTone(note)} pulse={note.status === "sending"}>
+              {noteStatusLabel(note)}
+            </Pill>
+          )}
+          {note?.simulated && (
+            <span className="chip" title="Written by the fake runtime's lead, or acknowledged by a simulated run; no agent read it">
+              simulated
+            </span>
+          )}
+          {statusNote && <span className="muted" style={{ fontSize: "0.8rem" }}>{statusNote}</span>}
+          {c.note && c.status !== "applied" && <span className="muted" style={{ fontSize: "0.8rem" }}>— {c.note}</span>}
+          {children && <span className="row" style={{ gap: "0.3rem", marginLeft: "auto" }}>{children}</span>}
+        </div>
+      </li>
+    );
+  }
   return (
     <li className={`change${struck ? " struck" : ""}`}>
       <div className="row" style={{ gap: "0.35rem", alignItems: "baseline" }}>

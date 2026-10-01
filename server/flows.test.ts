@@ -243,8 +243,8 @@ describe("migration 14 → 15 → 16 (an ORC-016-era database)", () => {
     });
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(16);
-    expect(s.version).toBe(16);
+    expect(STATE_FORMAT).toBe(17);
+    expect(s.version).toBe(17);
     expect(upgraded.read().version).toBe(v0 + 1);
     expect((s.project as unknown as { templates?: unknown }).templates).toBeUndefined();
     expect((s.project as unknown as { defaultPatternId?: unknown }).defaultPatternId).toBeUndefined();
@@ -280,7 +280,7 @@ describe("migration 14 → 15 → 16 (an ORC-016-era database)", () => {
     expect(task(s, "EX-002-RV1").flow).toEqual({ id: "delivery-review", name: "Delivery review", source: "internal", chosenBy: "migration" });
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(16);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(17);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_14_%'").get()).toBeDefined();
     check.close();
   });
@@ -294,7 +294,7 @@ describe("migration 14 → 15 → 16 (an ORC-016-era database)", () => {
     const upgraded = new Store(path);
     const s = upgraded.read().state;
     expect(s.tasks[0].flow).toEqual({ id: "custom", name: "Custom pipeline", source: "legacy", chosenBy: "migration" });
-    expect(s.version).toBe(16);
+    expect(s.version).toBe(17);
     upgraded.close();
   });
 });
@@ -375,7 +375,7 @@ describe("migration 15 → 16 (ORC-021)", () => {
     expect(before.tasks.filter((t) => Object.keys(REMOVED).includes((t.pattern as { id: string }).id))).toHaveLength(5);
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(s.version).toBe(16);
+    expect(s.version).toBe(17);
     expect(upgraded.read().version).toBe(v0 + 1);
     // The project.
     expect(s.project.defaultFlowId).toBe("change");
@@ -428,7 +428,7 @@ describe("migration 15 → 16 (ORC-021)", () => {
     expect(task(upgraded.read().state, rm.id).steps.map((x) => x.id)).toEqual(["S1", "C1", "S2", "SR1", "S3", "C2", "S4"]);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(16);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(17);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_15_%'").get()).toBeDefined();
     check.close();
   });
@@ -514,7 +514,7 @@ describe("a running custom pipeline across the upgrade", () => {
     await scheduler2.refreshHealth();
     try {
       const upgraded = task(store2.read().state, id);
-      expect(store2.read().state.version).toBe(16);
+      expect(store2.read().state.version).toBe(17);
       expect(upgraded.steps).toEqual(stepsBefore);
       expect(upgraded.flow).toEqual({ id: "custom", name: "Custom pipeline", source: "legacy", chosenBy: "migration" });
       expect(upgraded.flowSince).toBe(0);

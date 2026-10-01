@@ -227,7 +227,7 @@ class DemoBuilder {
       "Weekend Trips helps a small group of friends plan a weekend hike together: pick a trail, share the plan, pack the right things, and keep the map working with no signal. It should feel calm and dependable on a phone at a trailhead. Fewer, clearer screens beat more features.";
     const draftReason = "Drafted from the shaping conversation and the trail research note";
     return {
-      version: 16,
+      version: 17,
       seq: 1001,
       project: {
         id: DEMO_PROJECT_ID,
@@ -294,6 +294,7 @@ class DemoBuilder {
       decisions: [],
       // ORC-016: the built-in catalog until the server loads the files (it replaces this at start).
       flows: builtInCatalog(),
+      notes: [],
       events: [
         { id: "ev-1", at: at(4340), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; shaping the vision with the lead` },
         { id: "ev-2", at: at(4332), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the shaping conversation: ${draftReason}. It waits for you to accept, edit or dismiss it.` },
@@ -1105,15 +1106,21 @@ class DemoBuilder {
     const security = this.dispatch(id, "SR1", 56);
     // WT-004.3: the lead added the second option and asked you to choose, because the choice changes what data is kept.
     this.revisePackingDecision();
-    // The steering exchange: offline maps ahead of sharing; one task deferred, with Undo.
-    this.say("Most of our hikes have no signal at the trailhead. Can we put offline maps ahead of sharing?", 47);
-    this.leadReplies(47, 45, "Done. Offline maps is now the focus. I deferred “Weather alerts for the trip day”, since it needs a connection anyway. Everything else keeps its order.", {
+    // The steering exchange: offline maps ahead of sharing; one task deferred, with Undo; and (ORC-022) one note
+    // to the coder of the offline banner. WT-002 is first in line and has not started, so the note waits for
+    // its run and is delivered at its start when the service dispatches it.
+    this.say("Most of our hikes have no signal at the trailhead. Can we put offline maps ahead of sharing? And tell whoever builds the offline banner to show the cache age in whole hours, not minutes.", 47);
+    this.leadReplies(47, 45, "Done. Offline maps is now the focus. I deferred “Weather alerts for the trip day”, since it needs a connection anyway. Everything else keeps its order. I sent the coder of the offline banner a note about the cache age; it reaches them when that step runs.", {
       focus: "Offline maps first: the map must work with no signal.",
       reason: "Most trailheads have no signal, so the map must work before sharing matters.",
       tasks: [{ id: "WT-010", defer: true, why: "It needs a connection anyway, and offline maps comes first." }],
+      notes: [{ task: "WT-002", step: "S1", text: "Show the age of the cached map in whole hours, not minutes; the owner asked for it." }],
     });
     const set = this.s.steering[0];
     if (!set || !set.changes.some((c) => c.kind === "focus" && c.status === "applied") || !set.changes.some((c) => c.kind === "defer" && c.taskId === "WT-010" && c.status === "applied")) throw new Error("demo: the steering exchange was not applied");
+    const noteRow = set.changes.find((c) => c.kind === "note");
+    const note = noteRow?.noteId ? this.s.notes.find((n) => n.id === noteRow.noteId) : undefined;
+    if (noteRow?.status !== "applied" || note?.status !== "queued" || !note.simulated) throw new Error(`demo: the note to WT-002's coder was not queued (${noteRow?.status ?? "no row"}: ${noteRow?.note ?? ""})`);
     this.complete(security, 36, [{ name: "findings", summary: "No security findings: the forecast is the one already fetched for the trip; no new network call.", findings: [] }]);
     this.complete(review, 35, [{ name: "findings", summary: "No findings: the rules are covered by tests for short, long, wet and cold trips.", findings: [], reviewedPaths: [...change.paths] }]);
     // You released the second trip-sharing part; it starts when a slot frees.

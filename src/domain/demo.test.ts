@@ -27,7 +27,7 @@ const task = (s: State, id: string): Task => {
 
 /** Structural checks any state the service writes must pass. */
 function validate(s: State) {
-  expect(s.version).toBe(16);
+  expect(s.version).toBe(17);
   const catalog = builtInCatalog();
   const ids = new Set<string>();
   for (const t of s.tasks) {
@@ -81,6 +81,23 @@ function validate(s: State) {
   for (const set of s.steering) {
     expect(s.leadRuns.some((r) => r.id === set.leadRunId)).toBe(true);
     for (const id of set.messageIds) expect(s.conversation.some((m) => m.id === id)).toBe(true);
+    // ORC-022: a sent note row names a note that exists; a note names its row back.
+    for (const c of set.changes) if (c.kind === "note" && c.noteId) expect(s.notes.find((n) => n.id === c.noteId)?.from).toMatchObject({ by: "lead", changeSetId: set.id, changeId: c.id });
+  }
+  // ORC-022: every note is addressed to a step that exists; a bound one names a run of that step; statuses and their fields agree.
+  const noteIds = new Set<string>();
+  for (const n of s.notes) {
+    expect(noteIds.has(n.id), `duplicate note id ${n.id}`).toBe(false);
+    noteIds.add(n.id);
+    const t = task(s, n.taskId);
+    expect(t.steps.some((st) => st.id === n.stepId), `${n.id} step ${n.stepId}`).toBe(true);
+    if (n.attemptId) expect(s.attempts.find((a) => a.id === n.attemptId)?.stepId, `${n.id} run`).toBe(n.stepId);
+    if (n.status === "queued") expect(n.attemptId, `${n.id} queued without a run`).toBeUndefined();
+    if (n.status === "delivered" || n.status === "not-delivered") expect(n.settledAt, `${n.id} settledAt`).toBeDefined();
+    if (n.status === "delivered") expect(n.reason, `${n.id} reason`).toBeUndefined();
+    if (n.status === "not-delivered") expect(n.reason, `${n.id} reason`).toBeDefined();
+    expect(n.text.length).toBeGreaterThan(0);
+    expect(n.text.length).toBeLessThanOrEqual(500);
   }
   expect(s.project.visions.map((v) => v.rev)).toEqual(s.project.visions.map((_, i) => i + 1));
   for (const v of s.project.visions) for (const id of v.docIds ?? []) expect(s.project.visionDocs.some((d) => d.id === id)).toBe(true);
@@ -126,6 +143,7 @@ function visibleTexts(s: State): { where: string; text: string }[] {
   }
   for (const d of s.decisions) out.push({ where: d.id, text: `${d.finding.title} ${d.finding.detail} ${d.finding.why ?? ""}` });
   for (const t of s.tasks) if (t.deferral) out.push({ where: `${t.id} deferral`, text: t.deferral.reason });
+  for (const n of s.notes) out.push({ where: n.id, text: n.text });
   return out;
 }
 
@@ -181,17 +199,40 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(set.changes.map((c) => [c.kind, c.status, c.taskId])).toEqual([
       ["focus", "applied", undefined],
       ["defer", "applied", "WT-010"],
+      ["note", "applied", "WT-002"],
     ]);
     expect(set.reason).not.toMatch(/\(Simulated/);
     expect(task(s, "WT-010").deferral).toMatchObject({ by: "lead", changeSetId: set.id });
     expect(M.column(s, task(s, "WT-010"))).toBe("deferred");
     expect(M.currentFocusChange(s)?.set.id).toBe(set.id);
-    // Undo works: the focus goes back and the deferral is lifted.
+    // Undo works: the focus goes back and the deferral is lifted; the note has no Undo and is skipped.
     const undone = M.undoSteering(s, set.id, undefined, iso(T0));
-    expect(undone.result.undone).toHaveLength(2);
+    expect(undone.result).toEqual({ undone: [set.changes[1].id, set.changes[0].id], left: [] });
     expect(M.currentVision(undone.state).focus).toBe("Trip sharing first.");
     expect(task(undone.state, "WT-010").deferral).toBeUndefined();
+    expect(undone.state.steering[0].changes[2].status).toBe("applied");
     expect(M.pendingMessages(s)).toEqual([]);
+  });
+
+  it("ORC-022: the lead's note to WT-002's coder waits for its run (the step has not started) and is delivered at start by the first dispatch", () => {
+    const s = demo();
+    expect(s.notes).toHaveLength(1);
+    const n = s.notes[0];
+    const row = s.steering[0].changes[2];
+    expect(n).toMatchObject({ taskId: "WT-002", stepId: "S1", status: "queued", simulated: true, text: "Show the age of the cached map in whole hours, not minutes; the owner asked for it." });
+    expect(n.from).toEqual({ by: "lead", leadRunId: s.steering[0].leadRunId, changeSetId: s.steering[0].id, changeId: row.id, messageIds: [s.conversation[0].id] });
+    expect(row).toMatchObject({ kind: "note", status: "applied", appliedBy: "lead", noteId: n.id, stepId: "S1", after: n.text });
+    expect(s.conversation[0].text).toMatch(/tell whoever builds the offline banner/);
+    expect(s.conversation[1].text).toMatch(/I sent the coder of the offline banner a note/);
+    expect(s.events.some((e) => e.taskId === "WT-002" && e.message.startsWith(`Note ${n.id} queued for S1's next run (the step has not started)`))).toBe(true);
+    // The service's first dispatch binds it to WT-002 S1's run and writes it into the run's instructions; a confirmed start delivers it.
+    const now = iso(T0 + 1000);
+    const d = M.dispatchEligible(M.leadPromoteProposals(s, now), now);
+    const run = M.activeAttempts(d, "WT-002").find((a) => a.stepId === "S1")!;
+    expect(d.notes[0]).toMatchObject({ status: "sending", via: "start", attemptId: run.id });
+    expect(M.notesAtStart(d, run.id).map((x) => x.id)).toEqual([n.id]);
+    const delivered = M.reportNoteOutcome(d, { attemptId: run.id, noteId: n.id, outcome: "delivered" }, iso(T0 + 2000), true);
+    expect(delivered.notes[0]).toMatchObject({ status: "delivered", via: "start", simulated: true });
   });
 
   it("shows each capability once: the tasks and their states at the start of the demo", () => {
@@ -462,6 +503,7 @@ describe("the demo state (ORC-017 §5)", () => {
     expect(r.tasks.map((t) => t.id)).toEqual(s0.tasks.map((t) => t.id));
     expect(task(r, "WT-002").hold).toBe(false);
     expect(r.conversation).toHaveLength(4);
+    expect(r.notes).toHaveLength(1);
     expect(r.flows).toEqual(s.flows);
     expect(r.seq).toBeGreaterThan(s.seq);
     // ORC-021: the six flows and the security review's history come back with it.

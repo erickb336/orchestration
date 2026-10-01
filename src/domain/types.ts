@@ -168,10 +168,12 @@ export type SteeringValue = string | number | Deferral | null;
 export interface SteeringChange {
   /** `${setId}.${n}` */
   id: string;
-  /** "invalid": an entry the service could not read as one of the four actions (always rejected). */
-  kind: "focus" | "priority" | "defer" | "undefer" | "drop" | "invalid";
+  /** "invalid": an entry the service could not read as one of the actions (always rejected). ORC-022: "note", a note to a running stage. */
+  kind: "focus" | "priority" | "defer" | "undefer" | "drop" | "note" | "invalid";
   taskId?: string;
-  /** focus text | priority | deferral | lifecycle */
+  /** ORC-022, notes: the step the note is addressed to. */
+  stepId?: string;
+  /** focus text | priority | deferral | lifecycle | note text */
   before: SteeringValue;
   after: SteeringValue;
   /** The lead's reason (plain text, at most 300 characters). */
@@ -184,7 +186,57 @@ export interface SteeringChange {
   visionRev?: number;
   /** undo / apply / dismiss / supersede time */
   resolvedAt?: string;
+  /** ORC-022, notes: the `Note` record once the note was sent ("applied" means sent; the row shows the note's live status). */
+  noteId?: string;
+  /** ORC-022, notes: what the lead asked for when the step had already finished ("report" when absent). */
+  ifFinished?: "report" | "rerun";
+  /** ORC-022, notes: a suggested rerun of the finished step with the note (the row offers "Rerun with this note"). */
+  rerun?: true;
 }
+
+// ---------- notes to a running stage (ORC-022) ----------
+
+/**
+ * Desired state apart from observed state. "queued": accepted, waiting for a run of the step. "sending":
+ * handed to the runtime (or bound to a run that is starting), not yet acknowledged. "delivered": the runtime
+ * acknowledged it (`via` says how). "not-delivered": it reached no agent; `reason` says why.
+ */
+export type NoteStatus = "queued" | "sending" | "delivered" | "not-delivered";
+export const NOTE_STATUSES: NoteStatus[] = ["queued", "sending", "delivered", "not-delivered"];
+
+/** Who sent a note: the lead (from a reply to the user's messages, as a row of its change set) or the user directly. */
+export type NoteSource = { by: "lead"; leadRunId: string; changeSetId: string; changeId: string; messageIds: string[] } | { by: "user" };
+
+/** A short instruction for the agent running one step of one task. It never changes the spec, the pipeline, a pin or a setting. */
+export interface Note {
+  /** `note-${seq}` */
+  id: string;
+  taskId: string;
+  stepId: string;
+  /** The run it went to, once known. A result for another run is ignored. */
+  attemptId?: string;
+  /** 1–500 characters, one paragraph. */
+  text: string;
+  from: NoteSource;
+  at: string;
+  status: NoteStatus;
+  /** "live": pushed into a running agent. "start": written into the instructions of the step's next run. */
+  via?: "live" | "start";
+  /** not-delivered: why. */
+  reason?: string;
+  /** When it was handed to the runtime or bound to a starting run. */
+  sentAt?: string;
+  /** When it was delivered or found undeliverable. */
+  settledAt?: string;
+  /** The acknowledgment (or the note itself) came from the fake runtime. The UI labels it. */
+  simulated?: true;
+}
+
+/** Caps on notes: per lead reply, per run, and in the state (settled notes of finished tasks are pruned first). */
+export const MAX_NOTES_PER_REPLY = 3;
+export const MAX_NOTES_PER_RUN = 10;
+export const MAX_NOTES = 2000;
+export const MAX_NOTE_LENGTH = 500;
 
 /** What one lead reply changed, suggested, skipped or rejected. Written by the service, never by the lead's prose. */
 export interface SteeringChangeSet {
@@ -924,7 +976,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 16;
+  version: 17;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -941,6 +993,8 @@ export interface State {
   decisions: FindingDecision[];
   /** ORC-021: the six built-in flows, machine-level like the files they come from. Only the server writes them (at start); initProject leaves them alone. */
   flows: Flow[];
+  /** ORC-022: notes sent to running stages (at most 2000; settled notes of finished tasks are pruned first). */
+  notes: Note[];
 }
 
 /** One entry in the lead conversation. */

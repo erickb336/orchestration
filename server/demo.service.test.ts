@@ -91,6 +91,11 @@ describe("the demo in the fake service (ORC-017)", () => {
     expect(active(s)).toEqual(["WT-002 S1 codex", "WT-004.2 S1 claude", "WT-007 S3 claude"]);
     expect(M.column(s, task(s, "WT-007"))).toBe("reviewing");
     for (const id of ["WT-003", "WT-006", "WT-009", "WT-010", "WT-004.3"]) expect(M.activeAttempts(s, id), id).toEqual([]);
+    // ORC-022: the lead's note to WT-002's coder (queued in the story) went into the run's instructions and is delivered at start, labelled simulated.
+    const wt2Run = M.activeAttempts(s, "WT-002").find((a) => a.stepId === "S1")!;
+    expect(s.notes).toHaveLength(1);
+    expect(s.notes[0]).toMatchObject({ taskId: "WT-002", stepId: "S1", attemptId: wt2Run.id, status: "delivered", via: "start", simulated: true });
+    expect(s.events.some((e) => e.message === `Note ${s.notes[0].id} delivered to S1's run ${wt2Run.id} at start`)).toBe(true);
     // The pull request of WT-005 is published on the simulated GitHub and observed: open, checks passed, held for you.
     for (let i = 0; i < 12 && !D.prReady(store.read().state, task(store.read().state, "WT-005"), now); i++) s = await tick();
     const pr = task(s, "WT-005").integration!.pr!;

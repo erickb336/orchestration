@@ -15,7 +15,7 @@ import { buildSeed } from "../src/domain/seed";
 import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type FlowRef, type State, type StepDef } from "../src/domain/types";
 import { V13_TEMPLATE_STEPS, V14_TEMPLATES, v14TemplateSteps } from "./legacyTemplates";
 
-export const STATE_FORMAT = 16;
+export const STATE_FORMAT = 17;
 
 export { V13_TEMPLATE_STEPS };
 
@@ -267,6 +267,13 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     delete doc.patterns;
     delete doc.retiredTemplates;
     doc.version = 16;
+    return doc;
+  },
+  // ORC-022: notes to running stages. Older databases have none; nothing else moves (a steering row's kind
+  // gains "note", which no stored row has yet).
+  16: (doc) => {
+    doc.notes ??= [];
+    doc.version = 17;
     return doc;
   },
 };

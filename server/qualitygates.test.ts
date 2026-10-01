@@ -73,8 +73,8 @@ describe("migration 13 → 14", () => {
     const upgraded = new Store(path);
     const s = upgraded.read().state;
     // ORC-016 raised the format to 15; a format-13 document upgrades through 14 (templates) and 15 (flows).
-    expect(STATE_FORMAT).toBe(16);
-    expect(s.version).toBe(16);
+    expect(STATE_FORMAT).toBe(17);
+    expect(s.version).toBe(17);
     expect(upgraded.read().version).toBe(v0 + 1);
     expect(s.project.checks).toEqual(DEFAULT_CHECKS);
     expect(s.project.triage).toEqual({ askUserBy: "user" }); // the sample project does not plan on its own
@@ -105,7 +105,7 @@ describe("migration 13 → 14", () => {
     expect(upgraded.read().state.project.conventions.include).toBe(false);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(16);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(17);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_13_%'").get()).toBeDefined();
     check.close();
   });
@@ -117,7 +117,7 @@ describe("migration 13 → 14", () => {
     const upgraded = new Store(path);
     expect(upgraded.read().state.project.triage).toEqual({ askUserBy: "lead" });
     upgraded.close();
-    expect(buildSeed(now).version).toBe(16);
+    expect(buildSeed(now).version).toBe(17);
   });
 });
 
