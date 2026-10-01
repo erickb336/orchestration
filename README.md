@@ -1,5 +1,7 @@
 # Orchestrator
 
+![Orchestrator: one lead, Claude and Codex workers, every step visible, pausable and yours to steer](docs/media/hero.png)
+
 A local orchestrator for teams of AI coding agents. You talk to one **lead**; it plans the work, writes a specification for every task (options, trade-offs, the approach it chose), and runs each task through a pipeline pattern you choose, staffed by **Claude** and **Codex** workers: designers, coders, and independent reviewers, running concurrently. You can let it run on autopilot or step in anywhere: pause, read and edit any artifact, and resubmit it through the rest of the pipeline.
 
 **Default: one implementation, then independent review.** Choose Claude or Codex and a model for each step. Using both providers does not require building the same change twice. Competing implementations (Best of N) are an experimental pattern only you can choose; no standard pattern uses them.
@@ -23,6 +25,10 @@ A single Claude Code or Codex chat is one agent, one conversation, and one provi
 | You copy results into your branch yourself. | Verified work is merged in order and delivered to your branch or as GitHub pull requests. A pull request can wait for you, or merge by itself once an independent review is clean and your required checks pass. |
 | You read everything before it lands, or you do not look at all. | Everything that landed sits in a review-later list. Look at it when you like, mark it reviewed, or send it back as a fix or a revert. The list never blocks delivery. |
 | The way of working is whatever you typed this time. | Pipelines come from patterns: tested workflows (design → implement → review → repair → verify, and variants), each a small JSON file versioned like code. You choose one per task. |
+
+![A short tour: progress by area, steering the lead, the board, a pipeline with provider and model per step, pause and resume, review](docs/media/tour.gif)
+
+*The demo: a sample project on the simulated runtime. No agents run, and every run shown is simulated.*
 
 In short: a chat is one pair of hands on one track. Orchestrator is a team on many tracks, with a lead, a process, a record, and one place to see how each track is going. You decide how involved to be, from approving each task to letting it run end to end.
 
@@ -76,7 +82,7 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
 
 All screenshots show the built-in sample project on the simulated runtime: no agents are running, and the pull requests and check runs are simulated.
 
-**Tasks board.** Every task has a spec, a pipeline, and a truthful state. Child tasks link to the goal they came from.
+**Tasks board.** Every task has a spec, a pipeline, and a truthful state. A card shows which provider is on it and at which step, and what needs you. Child tasks link to the goal they came from.
 
 ![Tasks board](docs/screenshots/board.png)
 
@@ -110,13 +116,13 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 
 **Optional comparison example: best of two.** This task runs the experimental pattern "Change, best of two implementations", which only you can choose; it is not the default workflow. Codex and Claude each implement, and a reviewer compares the two and chooses one. Normally a single agent implements, followed by independent review and repair only if needed.
 
-![Best-of pipeline with an iteration](docs/screenshots/best-of-pipeline.png)
+![Best-of pipeline: two candidates, one chosen](docs/screenshots/best-of-pipeline.png)
 
 **Checks and findings.** The service runs your project's own checks on each change. A failing test becomes a finding marked "error, auto-fix", next to the review's own findings, each with its severity, its action, and the file and line. The repair step fixes them, and the checks run again.
 
 ![Checks and findings](docs/screenshots/findings.png)
 
-**Checks gate the pull request.** If a check fails on the pull request's commit, it waits for you, and the card says why.
+**Checks gate the pull request.** The service runs the project's checks on the pull request's commit before it merges. If one fails, the pull request waits for you, and the card says why.
 
 ![A pull request waiting on a failed check](docs/screenshots/pr-checks.png)
 
@@ -132,7 +138,7 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 
 ![Settings → Patterns: the default pattern, its steps, and a pattern file with errors](docs/screenshots/patterns.png)
 
-**Overview and the lead.** The Overview shows the vision, what changed since your last visit, and the conversation with the lead.
+**Overview.** Progress by area: how far each part of the product is, which provider is working on it right now, and what needs you. Below it: everything waiting for you, the vision, and the conversation with the lead.
 
 ![Overview](docs/screenshots/overview.png)
 
@@ -231,6 +237,8 @@ Environment variables:
 - `ORCHESTRATION_RUNTIME` (`fake` or `real`)
 - `ORCHESTRATION_DB` (default `~/.orchestration/orchestration.db`)
 - `ORCHESTRATION_PORT` (default 5319)
+
+**Regenerating the screenshots.** `npm run capture` retakes every README image, the hero and the animated tour from the demo. It needs Google Chrome (or `CHROME_PATH` pointing at a Chrome binary) and ffmpeg, starts the service in a throwaway data directory, and never touches `~/.orchestration`.
 
 ## Getting large goals done
 

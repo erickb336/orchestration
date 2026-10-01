@@ -15,7 +15,8 @@
     "test": "vitest run",
     "preview": "vite preview",
     "setup": "node scripts/orchestrator.mjs setup",
-    "status": "node scripts/orchestrator.mjs status"
+    "status": "node scripts/orchestrator.mjs status",
+    "capture": "node scripts/capture-demo.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.285",
@@ -33,6 +34,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
+    "playwright-core": "1.63.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
