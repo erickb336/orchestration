@@ -110,9 +110,14 @@ npm run capture    # retake the README images from the demo (needs Chrome and ff
 
 ## Status
 
-This is a personal tool under active development. It was built in milestones (ORC-001 to ORC-021), each with a spec and an independent review.
+This is a personal tool under active development. It was built in milestones (ORC-001 to ORC-024), each with a spec and an independent review.
 
-**In progress:** [ORC-022](docs/tasks/ORC-022.md). The lead can send a note to an agent while its stage is running, so you can change course without stopping the work. Note delivery to real models is unverified.
+**Recent:**
+
+- [ORC-022](docs/tasks/ORC-022.md): the lead can send a note to an agent while its stage runs, so you can change course without stopping the work. Note delivery to real models is unverified.
+- [ORC-024](docs/tasks/ORC-024.md): the working principles above.
+
+**Next:** a pass over the UI to simplify it. [ORC-023](docs/tasks/ORC-023.md), talking to the lead from Claude Code, is planned.
 
 **Not yet verified with real models.** Every feature is tested against simulated and scripted Claude and Codex runtimes. Runs with real models still need checking: `node scripts/real-run-test.mjs` does it with your credentials.
 
