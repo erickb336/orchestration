@@ -22,6 +22,8 @@ web
 
 ## Product Purpose
 
+In the owner's words (2026-10-01): "a starting playground for me to develop and test different patterns for and ways of using multiple agents in my workflows. My goal is to remove myself from the loop as much as possible and review only artifacts and working prototypes rather than spending too much time on details and instead focus on building working solutions that are testable end-to-end."
+
 - **What it is.** Orchestrator is a local tool in which the user talks to one lead.
 - **How it works.**
   - The lead plans tasks within a recorded vision, publishes a versioned spec for each, and runs it through a pipeline of steps.
@@ -65,6 +67,12 @@ web
   - simulated execution is always labelled;
   - the app never stores credentials;
   - SimpleApps code is never modified as a side effect.
+
+## How it is presented
+
+- **For employers,** the README shows creativity: tools built to add value to the owner's own workflow, what is measured, and the care given to UX. Engineering rigour supports this; it is not the headline.
+- **How it was built,** stated plainly: the owner steered, AI agents in Claude Code (a lead, plus designer, coder and reviewer agents) wrote the specs and the code, and every step had an independent review.
+- **No author line or byline.**
 
 ## Brand Commitments
 
