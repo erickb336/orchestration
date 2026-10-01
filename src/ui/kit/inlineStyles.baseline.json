@@ -2,16 +2,12 @@
   "Board.tsx": 4,
   "ChecksSettings.tsx": 9,
   "Conversation.tsx": 3,
-  "Delivery.tsx": 4,
   "DeliverySettings.tsx": 14,
-  "Findings.tsx": 13,
-  "FlowPicker.tsx": 5,
   "Onboarding.tsx": 3,
   "Overview.tsx": 12,
   "Review.tsx": 2,
   "Settings.tsx": 35,
   "Shaping.tsx": 14,
   "SteeringChanges.tsx": 12,
-  "TaskDetail.tsx": 28,
   "VisionDocs.tsx": 8
 }
