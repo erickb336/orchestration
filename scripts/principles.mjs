@@ -6,7 +6,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PRINCIPLE_IDS, parsePrincipleFile } from "../src/domain/principles.ts";
+import { PRINCIPLE_IDS, parsePrincipleFile } from "../src/domain/principleFiles.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DIR = join(ROOT, "principles");

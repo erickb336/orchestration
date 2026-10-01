@@ -17,6 +17,6 @@ Do not fix symptoms. Trace each problem to its root cause and fix it there.
 - Fix every instance, not just this one: search for the same shape elsewhere.
 - When stuck, measure instead of guessing: add logging, read the actual error.
 
-**Failures after a restart.** Suspect stale persistent state before code: configuration files, caches, lock files, serialised state.
+**Failures after a restart.** Suspect stale persistent state before code: configuration files, caches, lock files, serialised state. If clearing state fixes it, validate that state.
 
 **Stop** when the reproduction no longer fails for the reason you found, not when the symptom is hidden.

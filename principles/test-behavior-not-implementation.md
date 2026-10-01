@@ -12,3 +12,5 @@ A test calls the code the way its users do and compares what they observe with a
 **Shapes that pass anyway:** a weak or missing assertion (`toBeDefined`, `not.toThrow`); only a mock or an absence (`toHaveBeenCalled`, `toEqual([])`); an expected value taken from the code under test; a constant pin that restates a default or a prompt string; a fixture asserting itself.
 
 **The fix.** Call the subject with one concrete input and assert the literal output or the observable effect. For an absence, assert the presence on another input too. For a constant, test the mechanism that reads it. For a mock, assert the payload or the state after the call.
+
+**Keep** tests of a relation across a table's rows (a key in two tables) and compile-time type tests.

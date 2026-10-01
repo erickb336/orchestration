@@ -755,6 +755,8 @@ function StepHead({ state, task, st }: { state: State; task: Task; st: Step }) {
  * before ORC-024, checks steps) or an older run that recorded none.
  */
 function StepPrinciples({ state, task, st }: { state: State; task: Task; st: Step }) {
+  // Review L5: a skipped step never ran, so no agent was given anything.
+  if (st.state === "skipped") return null;
   const { shownRun } = stepRuns(state, task, st);
   const given = shownRun?.snapshot.principles ?? (shownRun ? [] : stepPrinciples(st).map((id) => ({ id })));
   if (!given.length) return null;

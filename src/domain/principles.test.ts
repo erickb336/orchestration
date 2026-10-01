@@ -364,7 +364,7 @@ describe("the automatic 'attack the premise'", () => {
     expect(design("The error copy blames the user").map((p) => p.id)).toEqual(["experience-first"]);
   });
 
-  it("a check-round fix after a round that failed the same check gets it; the first round's fix does not", () => {
+  it("a check-round fix after a round that failed the same check gets it; the first round's fix gets it when the loop's last repair failed the same check (review L4)", () => {
     const { s: blocked, id } = blockedFinal();
     // The loop's own repairs: S3 had none, S3-i2 and S3-i3 had it.
     const loopRepairs = blocked.attempts.filter((a) => a.taskId === id && /^S3/.test(a.stepId)).map((a) => [a.stepId, a.snapshot.principles!.find((p) => p.id === PREMISE_ID)?.added]);
@@ -377,7 +377,7 @@ describe("the automatic 'attack the premise'", () => {
     let s = M.dispatchEligible(F.decideFinding(blocked, d1.id, "fix", undefined, at(50)), at(50));
     const fix1 = running(s, id)[0];
     expect(fix1.stepId).toBe("C2-r1-fix");
-    expect(fix1.snapshot.principles!.map((p) => p.id)).toEqual(CHECK_ROUND.fix);
+    expect(fix1.snapshot.principles).toEqual([...CHECK_ROUND.fix, PREMISE_ID].map((pid) => ({ id: pid, hash: principle(pid)!.hash, ...(pid === PREMISE_ID ? { added: "added: check `test` failed again after S3-i3" } : {}) })));
     s = M.reportCompletion(s, fix1.id, [], at(51), [{ name: "change", summary: "f", ref: `${"d".repeat(40)} on b` }, { name: "handoff", summary: "h" }]);
     s = finishReviews(s, id, 52);
     expect(running(s, id)[0].stepId).toBe("C2-r1-checks");
@@ -402,6 +402,12 @@ describe("the automatic 'attack the premise'", () => {
     expect(repairRun.stepId).toBe("S3");
     expect(repairRun.snapshot.principles).toEqual([]);
     expect(stepPrinciples(step(old, id, "S3"))).toEqual([]);
+    // Review L2: not even the automatic one, when its second repair fails the same check.
+    old = repair(old, id, 6, SHA2);
+    old = round(old, id, 7, ["test"], [], SHA2);
+    const second = running(old, id)[0];
+    expect(second.stepId).toBe("S3-i2");
+    expect(second.snapshot.principles).toEqual([]);
   });
 
   it("a flow step that names 'attack the premise' itself keeps it without a reason; the trigger adds nothing twice", () => {

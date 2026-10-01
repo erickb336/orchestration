@@ -5227,7 +5227,10 @@ function previousRepair(t: Task, st: Step): Step | undefined {
   const round = /-r(\d+)-fix$/.exec(st.id);
   if (round) {
     const k = Number(round[1]);
-    if (k < 2 || st.role !== "coder") return undefined;
+    if (st.role !== "coder") return undefined;
+    // Review L4: the first round's fix follows the loop's last repair that ran, when there was one: final
+    // checks failing the check the loop kept fixing is the strongest case for questioning the premise.
+    if (k < 2) return t.steps.filter((x) => x.role === "coder" && x.runIf?.length && !/-r\d+-fix$/.test(x.id) && x.state === "done").pop();
     return t.steps.find((x) => x.role === "coder" && new RegExp(`-r${k - 1}-fix$`).test(x.id));
   }
   const k = st.iteration ?? 1;
@@ -5291,7 +5294,8 @@ export function premiseReason(s: State, t: Task, st: Step, inputs: ConsumedInput
  */
 export function runPrinciples(s: State, t: Task, st: Step, inputs: ConsumedInput[] = consumedInputs(s, t, st)): GivenPrinciple[] {
   const own = stepPrinciples(st);
-  const reason = premiseReason(s, t, st, inputs);
+  // Review L2: a step copied before ORC-024 carries no principles, and its runs get none, the automatic one included.
+  const reason = own.length ? premiseReason(s, t, st, inputs) : undefined;
   const ids = reason ? orderPrinciples([...own, PREMISE_ID]) : own;
   return ids.map((id) => ({ id, hash: principle(id)?.hash ?? "", ...(reason && id === PREMISE_ID && !own.includes(PREMISE_ID) ? { added: reason } : {}) }));
 }

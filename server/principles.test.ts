@@ -16,7 +16,7 @@ import * as M from "../src/domain/model";
 import { LEAD_PRINCIPLE_IDS, PREMISE_ID, PRINCIPLES, PRINCIPLE_IDS, PSTACK_COMMIT, parsePrincipleFile, principle, stepPrinciples, wordCount } from "../src/domain/principles";
 import { buildSeed } from "../src/domain/seed";
 import { DEFAULT_CHECKS, type CheckRunRecord, type ProviderId, type State } from "../src/domain/types";
-import { LEAD_PRINCIPLES, PRINCIPLES_HEADER, PRINCIPLES_INTRO, PRINCIPLES_WORD_CAP, buildEnvelope, buildLeadEnvelope, principlesSection } from "./envelope";
+import { LEAD_PRINCIPLES, LEAD_PRINCIPLES_HEADER, PRINCIPLES_HEADER, PRINCIPLES_INTRO, PRINCIPLES_WORD_CAP, buildEnvelope, buildLeadEnvelope, principlesSection } from "./envelope";
 
 const DIR = fileURLToPath(new URL("../principles", import.meta.url));
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -27,12 +27,12 @@ const SHA = "a".repeat(40);
 const SHA2 = "b".repeat(40);
 
 /** The section alone: from its header to the next "## " heading. */
-function sectionOf(text: string): string | undefined {
-  const start = text.indexOf(PRINCIPLES_HEADER);
+function sectionOf(text: string, header = PRINCIPLES_HEADER): string | undefined {
+  const start = text.indexOf(header);
   if (start < 0) return undefined;
-  const rest = text.slice(start + PRINCIPLES_HEADER.length);
+  const rest = text.slice(start + header.length);
   const end = rest.search(/\n## /);
-  return PRINCIPLES_HEADER + (end < 0 ? rest : rest.slice(0, end));
+  return header + (end < 0 ? rest : rest.slice(0, end));
 }
 
 /** A Change task whose implementation is done, so S2, SR1 and S3 can be built; `provider` is the project's default for every role. */
@@ -141,22 +141,23 @@ describe("the section", () => {
     expect(section).toContain(`### Attack the premise\nApply when: ${principle(PREMISE_ID)!.applyWhen}\nAdded for this run: the finding "Null check" came back after S3.\n${principle(PREMISE_ID)!.body}`);
   });
 
-  it("the lead's runs get the lead's set, in table order, with the same header", () => {
+  it("the lead's runs get the lead's set, in table order, under their own header (review L8)", () => {
     let s = buildSeed(T0, { inFlightRuns: false });
     s = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "planning" }, at(0)).state;
     const text = buildLeadEnvelope(s, M.activeLeadRun(s)!, "read");
-    const section = sectionOf(text)!;
-    expect(section.startsWith(`${PRINCIPLES_HEADER}\n${PRINCIPLES_INTRO}\n`)).toBe(true);
+    expect(text).not.toContain(PRINCIPLES_HEADER);
+    const section = sectionOf(text, LEAD_PRINCIPLES_HEADER)!;
+    expect(section.startsWith(`${LEAD_PRINCIPLES_HEADER}\n${PRINCIPLES_INTRO}\n`)).toBe(true);
     expect([...section.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Experience first", "Sequence verifiable units", "Never block on the human", "Encode lessons in structure"]);
     expect(LEAD_PRINCIPLES).toBe(LEAD_PRINCIPLE_IDS);
     for (const id of LEAD_PRINCIPLES) expect(PRINCIPLE_IDS).toContain(id);
     expect(wordCount(section)).toBeLessThanOrEqual(PRINCIPLES_WORD_CAP);
     // Before the project conventions and the open work, after the vision.
-    expect(text.indexOf("## Vision (")).toBeLessThan(text.indexOf(PRINCIPLES_HEADER));
-    expect(text.indexOf(PRINCIPLES_HEADER)).toBeLessThan(text.indexOf("## Open work"));
+    expect(text.indexOf("## Vision (")).toBeLessThan(text.indexOf(LEAD_PRINCIPLES_HEADER));
+    expect(text.indexOf(LEAD_PRINCIPLES_HEADER)).toBeLessThan(text.indexOf("## Open work"));
     // A message run and a decisions run get the same set.
     const msg = M.startLeadRun(buildSeed(T0, { inFlightRuns: false }), { provider: "codex", model: "codex-sample-large", trigger: "message" }, at(0));
-    expect(sectionOf(buildLeadEnvelope(msg.state, M.activeLeadRun(msg.state)!, "read"))).toBe(section);
+    expect(sectionOf(buildLeadEnvelope(msg.state, M.activeLeadRun(msg.state)!, "read"), LEAD_PRINCIPLES_HEADER)).toBe(section);
   });
 
   it("Claude and Codex get identical sections and identical envelopes for the same step", () => {
@@ -233,7 +234,11 @@ describe("the cap", () => {
     const fullNames = [...capped.matchAll(/^### (.+)$/gm)].map((m) => m[1]);
     const shortNames = [...capped.matchAll(/^- (.+?)\. Apply when: (.+)$/gm)].map((m) => m[1]);
     expect(fullNames.length + shortNames.length).toBe(15);
-    expect([...fullNames, ...shortNames]).toEqual(PRINCIPLES.map((p) => p.name));
+    // Each list keeps table order; a later principle may still fit in full after an earlier one was named only.
+    const order = PRINCIPLES.map((p) => p.name);
+    expect(fullNames).toEqual(order.filter((n) => fullNames.includes(n)));
+    expect(shortNames).toEqual(order.filter((n) => shortNames.includes(n)));
+    expect(new Set([...fullNames, ...shortNames])).toEqual(new Set(order));
     for (const name of shortNames) {
       const p = PRINCIPLES.find((x) => x.name === name)!;
       expect(capped).toContain(`- ${p.name}. Apply when: ${p.applyWhen}\n`);

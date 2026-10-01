@@ -110,7 +110,7 @@ npm run capture    # retake the README images from the demo (needs Chrome and ff
 
 ## Status
 
-This is a personal tool under active development. It was built in milestones (ORC-001 to ORC-024), each with a spec and an independent review.
+This is a personal tool under active development. It was built in milestones, each with a spec and an independent review; the latest is ORC-024.
 
 **Recent:**
 

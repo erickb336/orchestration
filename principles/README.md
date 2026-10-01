@@ -10,7 +10,7 @@ One file per principle, `<id>.md`. The frontmatter carries `id` (the file name),
 
 ## Changing one
 
-Edit the file and run `npm test`. The tests first compile these files into `src/domain/builtInPrinciples.json` (the copy the app imports; nothing can import Markdown), then check every file: the frontmatter, the id, the 200-word limit, the credit, and that no step's section passes its 1,000-word cap. Commit the file and the regenerated JSON together. `npx vitest run` alone does not regenerate; its test then names `npm run principles`.
+Edit the file and run `npm test`. The tests first compile these files into `src/domain/builtInPrinciples.json` (the copy the app imports; nothing can import Markdown), then check every file: the frontmatter, the id, the 200-word limit, the credit, and that no step's section passes its 1,000-word cap. Commit the file and the regenerated JSON together; CI fails if they differ. `npx vitest run` alone does not regenerate; its test then names `npm run principles`.
 
 ## Credit
 

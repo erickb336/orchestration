@@ -11,7 +11,7 @@ Encode a recurring fix in a mechanism (a check, a type, a script, a lint rule) i
 
 **What to do.** When you catch yourself writing the same instruction a second time:
 1. Ask whether it can be a lint rule, a type, a runtime check or a script.
-2. If yes, encode it and delete the instruction.
+2. If yes, encode it and delete the instruction. The instruction was the symptom.
 3. If it needs judgement, make the instruction prominent and add an example of the failure.
 
 **Pick the strongest mechanism** the situation allows: a state that cannot be represented, then a check that fails the build, then a canonical helper, then a runtime check. Agents copy what the surrounding code does, so a weak guard becomes the next template.

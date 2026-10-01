@@ -11,7 +11,7 @@ Structural decisions protect your options later. Code-level decisions protect si
 
 At code level, avoid repeating structure, not every line. Types and data models should converge. Three similar statements still beat a premature abstraction. Prefer explicit over clever.
 
-**Shared state.** Before two actors share state, ask what happens when one changes it while the other reads it. If the answer is not "nothing", isolate.
+**Shared state.** Before two actors share state, ask what happens if another one changes it at the same time. If the answer is not "nothing", isolate.
 
 **Scaffold first.** If something helps every later phase, do it first: build and test infrastructure, shared types, a check that runs on every change. Setup before features, tests before fixes. Keep each change small and single-purpose. Each increment should land one coherent abstraction or deepen one that exists, not spread a new capability across callers as special cases.
 
