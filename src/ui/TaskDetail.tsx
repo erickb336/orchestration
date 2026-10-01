@@ -613,6 +613,40 @@ function PatternLine({ task }: { task: Task }) {
   );
 }
 
+/**
+ * ORC-016 step 2: the basic control to run a task on another pattern (the full panel with its consequences is
+ * step 4). Shown while the task is open and not service-owned; disabled, with the reason, while it is running
+ * or not yet confirmed Paused.
+ */
+function ChangePattern({ state, task }: { state: State; task: Task }) {
+  const { send, disabled } = useStore();
+  const choices = state.patterns.patterns.filter((p) => !(task.parentTaskId && p.flags.breaksDown));
+  const [patternId, setPatternId] = useState(choices.find((p) => p.id !== task.pattern.id)?.id ?? choices[0]?.id ?? "");
+  const chosen = choices.find((p) => p.id === patternId);
+  const blocker = M.patternChangeBlocker(state, task, chosen);
+  if (task.reviewTarget || task.checkTarget || task.revertOf || task.deliverInto) return null;
+  return (
+    <span className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }} title={blocker ?? "The pipeline starts over from the chosen pattern; work done so far stays on the record"}>
+      <label className="row" style={{ gap: "0.3rem" }}>
+        Change pattern
+        <select value={patternId} disabled={disabled || !!blocker} onChange={(e) => setPatternId(e.target.value)} aria-label="Pattern to change to">
+          {choices.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+              {p.source === "local" ? " (yours)" : ""}
+              {p.experimental ? " (experiment)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button className="small" disabled={disabled || !!blocker || !chosen || (chosen.id === task.pattern.id && chosen.hash === task.pattern.hash)} onClick={() => void send("changePattern", { taskId: task.id, expectedRev: task.pipelineRev, patternId })}>
+        Use {chosen?.name ?? "pattern"}
+      </button>
+      {blocker && <span className="muted">{blocker}</span>}
+    </span>
+  );
+}
+
 function StepsCard({ state, task }: { state: State; task: Task }) {
   const { send, disabled, service } = useStore();
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
@@ -633,6 +667,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
         </span>
       </div>
       <PatternLine task={task} />
+      {open && <ChangePattern state={state} task={task} />}
       <p className="muted" style={{ fontSize: "0.85rem" }}>
         The pipeline comes from the pattern; built-in patterns change through commits, and yours live in {state.patterns.localDir || "the patterns directory"}. Each step receives the vision, the current spec, and only the
         upstream artifacts it reads. Models resolve step pin → task role override → project role default → project default. Completed steps show the model that actually ran.{" "}
@@ -932,6 +967,8 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
           const latest = M.latestArtifact(state, task, a.stepId, a.name);
           const used = consumers(a.id);
           const edited = a.author === "user";
+          // ORC-016: work from before the task's pattern changed is the record; it is never edited or consumed again.
+          const earlier = M.fromEarlierPattern(state, task, a);
           return (
             <li key={a.id} style={{ gridTemplateColumns: "6.5rem 1fr" }}>
               <span className="mono">
@@ -939,6 +976,13 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
               </span>
               <span>
                 <span className="chip">{a.kind}</span> {edited && <span className="chip edited">edited by you</span>}{" "}
+                {earlier && (
+                  <>
+                    <span className="chip" title="Made before the task's pattern changed; kept for the record, not used by the new steps">
+                      earlier pattern (r{M.artifactPipelineRev(state, a)})
+                    </span>{" "}
+                  </>
+                )}
                 {notChosen(task, a.stepId) && (
                   <>
                     <span className="chip" title="Another candidate was chosen; this one's work stays visible and on its branch">
@@ -972,12 +1016,12 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                   {used.length ? ` · read by ${used.join(", ")}` : " · not read by any run yet"}
                   {latest && latest.version > a.version ? ` · superseded by v${latest.version}` : ""}
                 </div>
-                {open && editingId !== a.id && (
+                {open && !earlier && editingId !== a.id && (
                   <button className="small" style={{ marginTop: "0.3rem" }} aria-label={`Edit ${a.stepId}.${a.name} v${a.version}`} disabled={disabled} onClick={() => setEditingId(a.id)}>
                     Edit
                   </button>
                 )}
-                {open && editingId === a.id && <ArtifactEditor state={state} task={task} artifactId={a.id} onClose={() => setEditingId(null)} />}
+                {open && !earlier && editingId === a.id && <ArtifactEditor state={state} task={task} artifactId={a.id} onClose={() => setEditingId(null)} />}
               </span>
             </li>
           );

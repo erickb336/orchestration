@@ -84,6 +84,7 @@ try {
   const exported = exportRetiredTemplates(store, patternsDir);
   if (exported.written.length) log(`Patterns: saved ${exported.written.length} template${exported.written.length === 1 ? "" : "s"} from before patterns as files in ${patternsDir}`);
   if (exported.failed.length) log(`Patterns: ${exported.failed.length} template${exported.failed.length === 1 ? "" : "s"} from before patterns could not be saved; see Settings → Patterns`);
+  if (exported.problem) log(`Patterns: ${exported.problem}`);
 } catch (e) {
   log(`Patterns: saving retired templates failed: ${e instanceof Error ? e.message : String(e)}`);
 }

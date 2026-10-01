@@ -159,6 +159,8 @@ export const COMMANDS = {
   // pipeline patterns (ORC-016): the structure of a pipeline is never sent by a client
   /** The standard pattern used when a lead proposal or a breakdown item names none. */
   setDefaultPattern: same((s, now, a) => M.setDefaultPattern(s, str(a, "patternId"), now)),
+  /** Run a task on another catalog pattern, before it starts or while it shows Paused: the pipeline starts over. `expectedRev` is the pipeline revision seen. */
+  changePattern: same((s, now, a) => M.changePattern(s, str(a, "taskId"), num(a, "expectedRev"), str(a, "patternId"), a.note === undefined ? "" : str(a, "note"), now)),
 
   // review and editing
   setReviewEveryStep: same((s, now, a) => M.setReviewEveryStep(s, str(a, "taskId"), bool(a, "value"), now)),
@@ -406,6 +408,9 @@ export const COMMANDS = {
     // Never reuse generated ids: a runtime process or event row from before the reset must not
     // be confused with a new run or event that happens to receive the same id.
     next.seq = Math.max(next.seq, s.seq) + 1;
+    // ORC-016: the catalog and the templates retired at the upgrade are machine-level, like the files they come from (step 1 review, finding 7).
+    next.patterns = structuredClone(s.patterns);
+    next.retiredTemplates = structuredClone(s.retiredTemplates);
     return { state: next };
   },
 } satisfies Record<string, Handler>;

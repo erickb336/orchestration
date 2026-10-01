@@ -187,8 +187,6 @@ function listLocalFiles(dir: string): LocalFile[] {
  * copy of the schema there, validates everything, and never throws because of a pattern file.
  */
 export function loadPatternCatalog(dir: string, nowIso: string): PatternCatalog {
-  mkdirSync(dir, { recursive: true });
-  ensureSchemaCopy(dir);
   const validate = patternValidator();
   const errors: PatternError[] = [];
   const files: PatternFile[] = [];
@@ -200,7 +198,27 @@ export function loadPatternCatalog(dir: string, nowIso: string): PatternCatalog 
     else for (const d of describeSchemaErrors(validate.errors ?? [])) errors.push({ file: b.file, id: b.raw.id, message: d.message, effect: "skipped" });
   }
   const effectFor = (id: unknown): PatternError["effect"] => (typeof id === "string" && builtInIds.has(id) ? "built-in kept" : "skipped");
-  const local = listLocalFiles(dir);
+  const dirDisplay = displayPath(dir);
+  const problem = (what: string, e: unknown) => errors.push({ file: dirDisplay, message: `${what}: ${e instanceof Error ? e.message : String(e)}`, effect: "skipped" });
+  // Step 1 review, finding 6: an unwritable directory or a failed schema copy is a load warning, never a failure.
+  let local: LocalFile[] = [];
+  let dirOk = false;
+  try {
+    mkdirSync(dir, { recursive: true });
+    local = listLocalFiles(dir);
+    dirOk = true;
+  } catch (e) {
+    problem("your patterns directory could not be created or read, so none of your files were loaded", e);
+  }
+  if (dirOk) {
+    try {
+      ensureSchemaCopy(dir);
+    } catch (e) {
+      problem(`the schema copy ${SCHEMA_FILE} could not be written there`, e);
+    }
+  }
+  // Each file's parse tree, so resolver errors (which the pure resolver reports without a position) can point at a key.
+  const trees = new Map<string, { text: string; tree: Node }>();
   for (const [i, f] of local.entries()) {
     const file = displayPath(f.path);
     const idGuess = f.name.replace(/\.jsonc?$/i, "");
@@ -219,6 +237,8 @@ export function loadPatternCatalog(dir: string, nowIso: string): PatternCatalog 
       errors.push({ file, id: idGuess, message: `could not be read: ${e instanceof Error ? e.message : String(e)}`, effect: effectFor(idGuess) });
       continue;
     }
+    // A UTF-8 byte order mark (some editors write one) is not part of the JSON.
+    if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
     const parseErrors: ParseError[] = [];
     const tree: Node | undefined = parseTree(text, parseErrors, { allowTrailingComma: true, disallowComments: false });
     if (parseErrors.length) {
@@ -239,6 +259,7 @@ export function loadPatternCatalog(dir: string, nowIso: string): PatternCatalog 
     const ok: boolean = validate(raw);
     if (ok) {
       files.push({ file, source: "local", raw });
+      trees.set(file, { text, tree });
       continue;
     }
     const id = typeof raw.id === "string" ? raw.id : idGuess;
@@ -250,7 +271,33 @@ export function loadPatternCatalog(dir: string, nowIso: string): PatternCatalog 
     }
   }
   const r = resolveCatalog(files, errors);
-  return { loadedAt: nowIso, localDir: displayPath(dir), patterns: r.patterns, errors: r.errors };
+  return { loadedAt: nowIso, localDir: dirDisplay, patterns: r.patterns, errors: r.errors.map((e) => locateResolverError(e, trees.get(e.file))) };
+}
+
+/**
+ * The key a resolver error is about: `extends` for base problems, the named step (and field) under
+ * `stepOverrides` for override problems, otherwise `id` (identity, graph and rule errors concern the whole
+ * pattern). Errors that already carry a position, and errors on built-ins, are returned as they are.
+ */
+function locateResolverError(e: PatternError, src: { text: string; tree: Node } | undefined): PatternError {
+  if (!src || e.line !== undefined) return e;
+  const override = /^stepOverrides\.([A-Za-z][A-Za-z0-9-]*)(?:\.([A-Za-z$][A-Za-z0-9]*))?/.exec(e.message);
+  const path: (string | number)[] = e.message.startsWith("extends ") || /^a pattern either lists "steps" or "extends"/.test(e.message) ? ["extends"] : override ? ["stepOverrides", override[1], ...(override[2] && override[2] !== "id" ? [override[2]] : [])] : ["id"];
+  let node: Node | undefined = findNodeAtLocation(src.tree, path);
+  while (!node && path.length > 1) {
+    path.pop();
+    node = findNodeAtLocation(src.tree, path);
+  }
+  const at = node?.parent?.type === "property" ? node.parent.offset : (node ?? src.tree).offset;
+  return { ...e, ...positionOf(src.text, at) };
+}
+
+function existingText(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 /** Write the schema copy when it is missing or differs. That file is the app's: it is rewritten and it is not a pattern. */
@@ -314,6 +361,8 @@ export function retiredTemplateFile(t: RetiredTemplate, id: string, name: string
     return d as StepDef & Record<string, unknown>;
   });
   const bestOf = steps.some((s) => s.parallel?.mode === "best-of");
+  // An edited copy of a pipeline the service owns is an experiment, so it never reaches the lead (step 1 review, finding 2).
+  const experiment = t.internal ? "Exported from your edited internal template; review before use" : bestOf ? "Edit this file to say what the best-of experiment should show." : undefined;
   const file: Record<string, unknown> = {
     $schema: `./${SCHEMA_FILE}`,
     $comment: `Saved from your template "${t.name}" when pipelines became patterns (ORC-016).`,
@@ -321,7 +370,7 @@ export function retiredTemplateFile(t: RetiredTemplate, id: string, name: string
     name,
     description: t.description.trim().slice(0, 300) || "Saved from your template.",
     whenToUse: "Your template from before patterns. Edit this file to say when to use it.",
-    ...(bestOf ? { experimental: true, hypothesis: "Edit this file to say what the best-of experiment should show." } : {}),
+    ...(experiment ? { experimental: true, hypothesis: experiment } : {}),
     steps,
   };
   return { id, json: `${JSON.stringify(file, null, 2)}\n`, stripped };
@@ -334,12 +383,17 @@ export type ExportResult = { exportedTo: string; exportedId: string; stripped: s
  * in `dir`, once, never overwriting (`wx`). The outcome is recorded on the state so a second start exports
  * nothing again (P10). The loader then lists the new file like any other.
  */
-export function exportRetiredTemplates(store: Store, dir: string): { written: string[]; failed: string[] } {
+export function exportRetiredTemplates(store: Store, dir: string): { written: string[]; failed: string[]; problem?: string } {
   const written: string[] = [];
   const failed: string[] = [];
   const pending = store.read().state.retiredTemplates.filter((t) => !t.exportedTo && !t.exportError);
   if (!pending.length) return { written, failed };
-  mkdirSync(dir, { recursive: true });
+  try {
+    mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    // Step 1 review, finding 6: never fatal. Nothing is recorded, so the export is tried again at the next start.
+    return { written, failed, problem: `Could not create ${displayPath(dir)}: ${e instanceof Error ? e.message : String(e)}; ${pending.length} template${pending.length === 1 ? "" : "s"} from before patterns not saved yet` };
+  }
   const taken = new Set<string>([...builtInCatalog().patterns.map((p) => p.id), ...INTERNAL_PATTERNS.map((p) => p.id), ...store.read().state.retiredTemplates.map((t) => t.exportedId).filter((x): x is string => !!x)]);
   for (const t of pending) {
     const now = new Date().toISOString();
@@ -358,8 +412,15 @@ export function exportRetiredTemplates(store: Store, dir: string): { written: st
         written.push(path);
       } catch (e) {
         const code = (e as NodeJS.ErrnoException).code;
-        result = { exportError: code === "EEXIST" ? `A file named ${displayPath(path)} already exists; nothing was written.` : `Could not write ${displayPath(path)}: ${e instanceof Error ? e.message : String(e)}` };
-        failed.push(path);
+        // Step 1 review, finding 4: a file with exactly this content was written already (an earlier start that
+        // did not get to record it), so it counts as exported; anything else is the user's and is kept.
+        if (code === "EEXIST" && existingText(path) === out.json) {
+          result = { exportedTo: displayPath(path), exportedId: id, stripped: out.stripped };
+          written.push(path);
+        } else {
+          result = { exportError: code === "EEXIST" ? `A file named ${displayPath(path)} already exists; yours was kept.` : `Could not write ${displayPath(path)}: ${e instanceof Error ? e.message : String(e)}` };
+          failed.push(path);
+        }
       }
     } catch (e) {
       result = { exportError: `Could not build the pattern file: ${e instanceof Error ? e.message : String(e)}` };

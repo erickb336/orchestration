@@ -8,7 +8,7 @@ import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import canonicalize from "canonicalize";
 import { BUILT_IN_FILES } from "./builtInPatterns";
 import { INTERNAL_PATTERNS, internalPattern, isInternalPatternId, type InternalPattern } from "./internalPatterns";
-import { toDef, validatePipeline } from "./pipeline";
+import { downstreamOf, toDef, validatePipeline } from "./pipeline";
 import type { ChosenBy, InputRef, OutputDef, Pattern, PatternCatalog, PatternChainEntry, PatternError, PatternFlags, PatternRef, PatternSource, ProviderId, RoleId, State, StepDef } from "./types";
 
 // ---------- the file format ----------
@@ -101,13 +101,46 @@ function kindOf(steps: StepDef[], r: InputRef) {
   return steps.find((s) => s.id === r.step)?.outputs.find((o) => o.name === r.output)?.kind;
 }
 
+/** Roles that read, judge, plan or design: a code change from one of them has no independent review by construction. */
+const NON_CODING_ROLES: readonly RoleId[] = ["code_reviewer", "ux_reviewer", "lead", "designer"];
+const ROLE_WORD: Record<RoleId, string> = { lead: "lead", designer: "designer", coder: "coder", code_reviewer: "code reviewer", ux_reviewer: "UX reviewer", checks: "checks" };
+
+/**
+ * Why a pattern has no effective independent code review, one line per offending step; empty when every
+ * code change is reviewed (step 1 review, finding 1). A code change counts as reviewed when a
+ * `code_reviewer` step with no `runIf` downstream of it reads that change, or when the step lies in an
+ * `iterate` loop whose body holds such a reviewer: the next iteration re-points the reviewer at the newest
+ * change of the finished one. The structure alone is checked, not what a worker does with it.
+ */
+export function unreviewedReasons(steps: StepDef[]): string[] {
+  const reasons: string[] = [];
+  const reviewers = steps.filter((s) => s.role === "code_reviewer" && !s.runIf?.length && s.inputs.some((r) => kindOf(steps, r) === "code-change"));
+  const bodies: Set<string>[] = [];
+  steps.forEach((d, i) => {
+    if (!d.iterate) return;
+    const from = steps.findIndex((x) => x.id === d.iterate!.from);
+    if (from >= 0 && from <= i) bodies.push(new Set(steps.slice(from, i + 1).map((b) => b.id)));
+  });
+  for (const x of steps) {
+    if (!x.outputs.some((o) => o.kind === "code-change")) continue;
+    if (NON_CODING_ROLES.includes(x.role)) {
+      reasons.push(`${x.id} changes code as a ${ROLE_WORD[x.role]}; only coder steps may change code`);
+      continue;
+    }
+    const down = downstreamOf(steps, [x.id]);
+    if (reviewers.some((r) => down.has(r.id) && r.inputs.some((i) => i.step === x.id && kindOf(steps, i) === "code-change"))) continue;
+    if (bodies.some((body) => body.has(x.id) && reviewers.some((r) => body.has(r.id)))) continue;
+    const conditional = steps.some((r) => r.role === "code_reviewer" && r.runIf?.length && down.has(r.id));
+    reasons.push(`${x.id}'s code change is not read by a code reviewer that always runs${conditional ? " (a review with runIf may be skipped)" : ""}`);
+  }
+  return reasons;
+}
+
 export function patternFlags(steps: StepDef[]): PatternFlags {
-  const changesCode = steps.some((s) => s.outputs.some((o) => o.kind === "code-change"));
-  const reviewed = steps.some((s) => s.role === "code_reviewer" && s.inputs.some((r) => kindOf(steps, r) === "code-change"));
   return {
     breaksDown: steps.some((s) => s.outputs.some((o) => o.kind === "breakdown")),
     pausesForYou: steps.some((s) => !!s.gate),
-    unreviewed: changesCode && !reviewed,
+    unreviewed: unreviewedReasons(steps).length > 0,
     bestOf: steps.some((s) => s.parallel?.mode === "best-of"),
     needsProviders: [...new Set(steps.flatMap((s) => s.parallel?.providers ?? []))],
   };
@@ -194,7 +227,7 @@ function toPattern(r: Resolved): Pattern {
   const experimental = r.raw.experimental === true;
   const flags = patternFlags(r.steps);
   const warnings = [...r.warnings];
-  if (flags.unreviewed) warnings.push("No independent code review: some step changes code and no code reviewer reads a code change.");
+  if (flags.unreviewed) warnings.push(`No independent code review: ${unreviewedReasons(r.steps).join("; ")}.`);
   return {
     id: r.raw.id,
     name: r.raw.name,
@@ -224,11 +257,15 @@ export function resolveCatalog(files: PatternFile[], preErrors: PatternError[] =
   const builtIns = new Map<string, PatternFile>();
   const locals = new Map<string, PatternFile>();
   const duplicates = new Map<string, PatternFile[]>();
+  const builtInIds = new Set(files.filter((f) => f.source === "built-in" && typeof f.raw?.id === "string").map((f) => f.raw.id));
   for (const f of files) {
     const id = typeof f.raw?.id === "string" ? f.raw.id : patternIdOfFile(f.file);
     if (f.source === "built-in") {
       if (builtIns.has(id)) errors.push({ file: f.file, id, message: `the built-in id "${id}" appears twice in the manifest`, effect: "skipped" });
       else builtIns.set(id, f);
+    } else if (patternIdOfFile(f.file) !== id) {
+      // Step 1 review, finding 3: a misnamed file fails on its own, before ids are grouped, so it cannot knock out the correctly named file.
+      errors.push({ file: f.file, id, message: `the file is named "${patternIdOfFile(f.file)}" but declares the id "${id}"; a pattern's file is <id>.json or <id>.jsonc`, effect: builtInIds.has(id) ? "built-in kept" : "skipped" });
     } else if (locals.has(id) || duplicates.has(id)) {
       const list = duplicates.get(id) ?? [locals.get(id)!];
       list.push(f);
@@ -241,6 +278,7 @@ export function resolveCatalog(files: PatternFile[], preErrors: PatternError[] =
   }
 
   const memo = new Map<string, Resolved | null>();
+  const memoBuiltIn = new Map<string, Resolved | null>();
   const visiting: string[] = [];
   const cycleMembers = new Set<string>();
 
@@ -263,13 +301,17 @@ export function resolveCatalog(files: PatternFile[], preErrors: PatternError[] =
         if (raw.steps) fail(`a pattern either lists "steps" or "extends" another pattern, not both`);
         let base: Resolved | null;
         try {
-          // Extending its own id (a file of yours over the built-in with that id) is a cycle too.
-          base = resolve(raw.extends);
+          // Step 1 review, finding 6: a file of yours that extends its own id is a variant of the built-in it
+          // replaces, so it resolves against that built-in; without one there is nothing to extend.
+          if (raw.extends === id && f.source === "local") {
+            if (!builtIns.has(id)) fail(`extends "${id}", its own id, but there is no built-in "${id}" to extend`);
+            base = resolveBuiltIn(id);
+          } else base = resolve(raw.extends);
         } catch (e) {
           if (e instanceof CycleFailure) fail(`extends "${raw.extends}", which leads back to "${id}" (a cycle: ${e.members.join(" → ")})`);
           throw e;
         }
-        if (!base) fail(cycleMembers.has(raw.extends) ? `extends "${raw.extends}", which is part of an extends cycle` : `extends "${raw.extends}", which is not a pattern in the catalog`);
+        if (!base) fail(cycleMembers.has(raw.extends) ? `extends "${raw.extends}", which is part of an extends cycle` : raw.extends === id ? `extends "${id}", its own id, but the built-in "${id}" did not load` : `extends "${raw.extends}", which is not a pattern in the catalog`);
         if (base.chain.length > MAX_EXTENDS_DEPTH) fail(`extends "${raw.extends}", which would make the extends chain deeper than ${MAX_EXTENDS_DEPTH}`);
         steps = applyOverrides(base.steps, raw.stepOverrides ?? {}, fail);
         chain = [own, ...base.chain];
@@ -295,6 +337,15 @@ export function resolveCatalog(files: PatternFile[], preErrors: PatternError[] =
     }
   };
 
+  /** The built-in with this id on its own, whatever file of yours replaces it. Its own `extends` resolve as usual. */
+  function resolveBuiltIn(id: string): Resolved | null {
+    if (memoBuiltIn.has(id)) return memoBuiltIn.get(id)!;
+    const b = builtIns.get(id);
+    const out = b ? (tryFile(b) ?? null) : null;
+    memoBuiltIn.set(id, out);
+    return out;
+  }
+
   function resolve(id: string): Resolved | null {
     if (memo.has(id)) return memo.get(id)!;
     const at = visiting.indexOf(id);
@@ -308,10 +359,7 @@ export function resolveCatalog(files: PatternFile[], preErrors: PatternError[] =
       let out: Resolved | undefined;
       const local = locals.get(id);
       if (local) out = tryFile(local);
-      if (!out) {
-        const b = builtIns.get(id);
-        if (b) out = tryFile(b);
-      }
+      if (!out) out = resolveBuiltIn(id) ?? undefined;
       memo.set(id, out ?? null);
       return out ?? null;
     } finally {

@@ -99,13 +99,44 @@ describe("your files", () => {
     expect(byId(withVariant, "feature-x")!.chain[1]).toMatchObject({ id: "feature", source: "built-in" });
   });
 
-  it("duplicate ids among your files skip both; a file whose name differs from its id is skipped", () => {
+  it("duplicate ids among your files skip both; a misnamed file fails alone and never knocks out the correctly named one (step 1 review, finding 3)", () => {
     const dup = resolve(local("mine", { steps: reviewed }), local("mine", { steps: reviewed }, "jsonc"));
     expect(byId(dup, "mine")).toBeUndefined();
     expect(dup.errors).toHaveLength(2);
     expect(dup.errors.map((e) => e.file).sort()).toEqual(["~/.orchestration/patterns/mine.json", "~/.orchestration/patterns/mine.jsonc"]);
     const misnamed: PatternFile = { file: "~/.orchestration/patterns/other.json", source: "local", raw: raw("mine", { steps: reviewed }) };
     expect(resolve(misnamed).errors[0].message).toMatch(/named "other" but declares the id "mine"/);
+    // The misnamed file is checked before ids are grouped: mine.json loads, other.json alone is listed.
+    const both = resolve(local("mine", { steps: reviewed }), misnamed);
+    expect(byId(both, "mine")).toMatchObject({ source: "local", file: "~/.orchestration/patterns/mine.json" });
+    expect(both.errors).toEqual([expect.objectContaining({ file: "~/.orchestration/patterns/other.json", id: "mine", effect: "skipped", message: expect.stringMatching(/named "other" but declares the id "mine"/) })]);
+    // A misnamed file declaring a built-in's id leaves that built-in in effect.
+    const overBuiltIn: PatternFile = { file: "~/.orchestration/patterns/other.json", source: "local", raw: raw("change", { steps: reviewed }) };
+    expect(resolve(overBuiltIn).errors[0]).toMatchObject({ id: "change", effect: "built-in kept" });
+    expect(byId(resolve(overBuiltIn), "change")!.source).toBe("built-in");
+  });
+
+  it("a file of yours that extends its own built-in id is a variant of that built-in (step 1 review, finding 6)", () => {
+    const r = resolve(local("change", { extends: "change", stepOverrides: { S2: { independentOf: "writer" } } }));
+    expect(r.errors).toEqual([]);
+    const p = byId(r, "change")!;
+    expect(p).toMatchObject({ source: "local", replacesBuiltIn: true, audience: "standard" });
+    expect(p.steps).toEqual(builtIn("change-cross-review").steps);
+    expect(p.chain.map((c) => [c.id, c.source])).toEqual([
+      ["change", "local"],
+      ["change", "built-in"],
+    ]);
+    // Variants of "change" now build on the file of yours.
+    expect(byId(r, "change-cross-review")!.chain.map((c) => [c.id, c.source])).toEqual([
+      ["change-cross-review", "built-in"],
+      ["change", "local"],
+      ["change", "built-in"],
+    ]);
+    // Without a built-in of that id there is nothing to extend; a cycle through another file is still a cycle.
+    expect(resolve(local("solo", { extends: "solo", stepOverrides: {} })).errors[0].message).toMatch(/extends "solo", its own id, but there is no built-in "solo" to extend/);
+    const viaOther = resolve(local("feature", { extends: "feature-x", stepOverrides: {} }), local("feature-x", { extends: "feature", stepOverrides: {} }));
+    expect(byId(viaOther, "feature")!.source).toBe("built-in");
+    expect(viaOther.errors.map((e) => e.id).sort()).toEqual(["feature", "feature-x"]);
   });
 
   it("the ids of the service's own pipelines are refused", () => {
@@ -153,8 +184,9 @@ describe("pattern rules", () => {
     expect(byId(noCode, "bugfix")!.source).toBe("built-in");
     expect(noCode.errors[0].message).toMatch(/must produce a code change/);
     const paused = resolve(local("change", { extends: "change", stepOverrides: { S1: { gate: true } } }));
-    // Extending its own id is a cycle, so the variant form fails before F5; a full file that pauses fails F5.
+    // A variant of the built-in it replaces (step 1 review, finding 6) that pauses fails F5 like a full file would.
     expect(byId(paused, "change")!.source).toBe("built-in");
+    expect(paused.errors[0]).toMatchObject({ id: "change", effect: "built-in kept", message: expect.stringMatching(/must be a standard pattern/) });
     const gated = resolve(local("change", { steps: builtIn("change").steps.map((s) => (s.id === "S1" ? { ...s, gate: true as const } : s)) }));
     expect(gated.errors[0].message).toMatch(/must be a standard pattern/);
     expect(byId(gated, "change")!.source).toBe("built-in");
@@ -163,6 +195,56 @@ describe("pattern rules", () => {
   it("checks.only is refused with the message about check commands", () => {
     const steps: StepDef[] = [...reviewed, { id: "C1", purpose: "Checks", role: "checks", dependsOn: ["S1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "checks", kind: "check-results" }], checks: { onFail: "findings", only: ["lint"] } }];
     expect(resolve(local("xx", { steps })).errors[0].message).toMatch(/C1\.checks\.only: check commands belong to each project; patterns run every configured check/);
+  });
+});
+
+describe("effective review (step 1 review, finding 1)", () => {
+  const checks = (id: string, after: string): StepDef => ({ id, purpose: "Checks", role: "checks", dependsOn: [after], inputs: [{ step: after, output: "change" }], outputs: [{ name: "checks", kind: "check-results" }], checks: { onFail: "findings" } });
+  const variant = (over: Record<string, unknown>) => byId(resolve(local("quiet", { extends: "change", stepOverrides: over })), "quiet")!;
+
+  it("a review that may be skipped (runIf) is not a review: the variant is user-only and the lead cannot choose it", () => {
+    const p = variant({ S2: { runIf: [{ step: "C1", output: "checks" }] } });
+    expect(p.flags.unreviewed).toBe(true);
+    expect(p.audience).toBe("user-only");
+    // The repair S3 loses its review too: the loop no longer returns through an unconditional one.
+    expect(p.warnings).toEqual(["No independent code review: S1's code change is not read by a code reviewer that always runs (a review with runIf may be skipped); S3's code change is not read by a code reviewer that always runs."]);
+    expect(eligible(p, "lead")).toBe(false);
+    expect(eligible(p, "default")).toBe(false);
+  });
+
+  it("an unconditional coder step after the review whose change nobody reads, and code from a reviewer, lead or designer, are unreviewed", () => {
+    const afterReview: StepDef[] = [...reviewed, { id: "S3", purpose: "Polish", role: "coder", dependsOn: ["S2"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "change", kind: "code-change" }] }];
+    const p = byId(resolve(local("polish", { steps: afterReview })), "polish")!;
+    expect(p.flags.unreviewed).toBe(true);
+    expect(p.warnings).toContain("No independent code review: S3's code change is not read by a code reviewer that always runs.");
+    for (const role of ["code_reviewer", "ux_reviewer", "lead", "designer"] as const) {
+      const steps: StepDef[] = [...reviewed, { id: "S3", purpose: "Tweak", role, dependsOn: ["S2"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "change", kind: "code-change" }] }, { id: "S4", purpose: "Review again", role: "code_reviewer", dependsOn: ["S3"], inputs: [{ step: "S3", output: "change" }], outputs: [{ name: "findings", kind: "review-findings" }] }];
+      const q = byId(resolve(local("tweak", { steps })), "tweak")!;
+      expect(q.flags.unreviewed, role).toBe(true);
+      const word = role === "code_reviewer" ? "code reviewer" : role === "ux_reviewer" ? "UX reviewer" : role;
+      expect(q.warnings.some((w) => w.includes(`S3 changes code as a ${word}; only coder steps may change code`)), role).toBe(true);
+    }
+  });
+
+  it("a repair inside a loop is reviewed by the next iteration's unconditional review; one whose loop review has runIf is not", () => {
+    const loop: StepDef[] = [oneStep[0], checks("C1", "S1"), { ...reviewed[1], dependsOn: ["S1", "C1"] }, { id: "S3", purpose: "Repair", role: "coder", dependsOn: ["S2"], inputs: [{ step: "S1", output: "change" }, { step: "S2", output: "findings" }], outputs: [{ name: "change", kind: "code-change" }], runIf: [{ step: "S2", output: "findings" }], iterate: { from: "C1", max: 3 } }];
+    const good = resolve(local("loop", { steps: loop }));
+    expect(good.errors).toEqual([]);
+    expect(byId(good, "loop")).toMatchObject({ audience: "standard", flags: expect.objectContaining({ unreviewed: false }) });
+    const skippable = loop.map((s) => (s.id === "S2" ? { ...s, runIf: [{ step: "C1", output: "checks" }] } : s));
+    const worse = resolve(local("loop", { steps: skippable }));
+    expect(worse.errors).toEqual([]);
+    const bad = byId(worse, "loop")!;
+    expect(bad.flags.unreviewed).toBe(true);
+    expect(bad.warnings.some((w) => /S1's code change is not read by a code reviewer that always runs \(a review with runIf may be skipped\); S3's code change is not read/.test(w))).toBe(true);
+    // The built-ins' repair steps all sit in such loops.
+    for (const id of ["change", "change-lean", "feature", "bugfix", "change-best-of-two"]) expect(builtIn(id).flags.unreviewed, id).toBe(false);
+  });
+
+  it("a file of yours for change or bugfix that loses its effective review is refused and the built-in kept, so the service never uses it", () => {
+    const r = resolve(local("change", { extends: "change", stepOverrides: { S2: { runIf: [{ step: "C1", output: "checks" }] } } }));
+    expect(byId(r, "change")).toMatchObject({ source: "built-in", audience: "standard" });
+    expect(r.errors).toEqual([expect.objectContaining({ id: "change", effect: "built-in kept", message: expect.stringMatching(/the service creates fix tasks from "change", so it must be a standard pattern/) })]);
   });
 });
 

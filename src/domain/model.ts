@@ -186,6 +186,20 @@ function finishTask(t: Task) {
   t.deferral = undefined;
 }
 
+/** ORC-016 G2: the attempt started under a pattern the task has since left (never true for tasks from before patterns, whose `patternSince` is 0). */
+function beforePattern(t: Task, a: Attempt): boolean {
+  return a.snapshot.pipelineRev < (t.patternSince ?? 0);
+}
+
+/** ORC-016 G2: record a result from before the pattern changed as discarded. The step is not touched: no blocked state, no output. */
+function discardEarlierPattern(s: State, t: Task, a: Attempt, now: string, detail = "") {
+  a.outcome = "discarded";
+  a.note = `Result from before the pattern changed (pipeline r${a.snapshot.pipelineRev}); not integrated${detail}`;
+  if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
+  touch(t, now);
+  event(s, now, "runtime", "integration", `${a.id} finished on pipeline r${a.snapshot.pipelineRev}, before the pattern changed (r${t.patternSince}); result discarded, not integrated`, t.id);
+}
+
 function touch(t: Task, now: string) {
   t.updatedAt = now;
 }
@@ -1301,6 +1315,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
             visionRev: vision.rev,
             workspace: opts.workspaceFor ? opts.workspaceFor(t.id, st.id, attemptId) : `${s.project.repoPath}/.orchestration/worktrees/${t.id}-${st.id}`,
             pipelineRev: t.pipelineRev,
+            role: st.role,
             purpose: st.purpose,
             inputs: consumedInputs(s, t, st),
             checks: { configRev: cfg.rev, sandbox: cfg.sandbox, target, commands: C.commandsFor(cfg, st), ...(reuse ? { reusedFrom: reuse.attempt.id } : {}) },
@@ -1368,6 +1383,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           visionRev: vision.rev,
           workspace: opts.workspaceFor ? opts.workspaceFor(t.id, st.id, attemptId) : `${s.project.repoPath}/.orchestration/worktrees/${t.id}-${st.id}`,
           pipelineRev: t.pipelineRev,
+          role: st.role,
           environment: s.project.workerEnvironment[r.selection.provider],
           connections: [...s.project.workerConnections[r.selection.provider]],
           purpose: st.purpose,
@@ -1468,11 +1484,16 @@ export function reportRunFailed(state: State, attemptId: string, message: string
   const t = getTask(s, a.taskId);
   const st = findStep(t, a.stepId);
   const wasStopping = a.outcome === "stopping";
-  a.outcome = "failed";
   a.endedAt = now;
-  a.note = message;
   if (run.usage) a.usage = run.usage;
   if (run.actualModel) a.actualModel = run.actualModel;
+  if (beforePattern(t, a)) {
+    // G2 (ORC-016 §7.3): the step belongs to the new pattern; a failure from the earlier one says nothing about it.
+    discardEarlierPattern(s, t, a, now, `; it failed: ${message}`);
+    return s;
+  }
+  a.outcome = "failed";
+  a.note = message;
   if (st) {
     if (wasStopping) settleStoppedStep(s, t, st);
     else {
@@ -1543,6 +1564,12 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
   if (run.usage) a.usage = run.usage;
   if (run.actualModel) a.actualModel = run.actualModel;
 
+  // G2 (ORC-016 §7.3): a run started before the task's pattern changed reports nothing to the new steps,
+  // whatever its step id now means. Checked before G1, so the note names the cause.
+  if (beforePattern(t, a)) {
+    discardEarlierPattern(s, t, a, now);
+    return s;
+  }
   const stale = !st || a.snapshot.specRev !== currentSpec(t).rev || a.snapshot.stepRev !== st.revision;
   if (stale) {
     a.outcome = "discarded";
@@ -1630,6 +1657,7 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
         version,
         summary: rep.summary,
         createdAt: now,
+        pipelineRev: t.pipelineRev,
         ...(rep.ref ? { ref: rep.ref } : {}),
         ...(def.kind === "review-findings" ? { openFindings: findings ? F.blockingCount(findings) : (rep.openFindings ?? 0), ...(findings ? { findings } : {}), pathCoverage: reviewCoverage.get(def.name) ?? notRequired() } : {}),
         ...(def.kind === "check-results" && rep.checkRun ? { checkRun: structuredClone(rep.checkRun), ...(rep.findings ? { findings: structuredClone(rep.findings), openFindings: F.blockingCount(rep.findings) } : {}) } : {}),
@@ -1739,6 +1767,24 @@ export function consumedInputs(s: State, t: Task, st: StepDef): ConsumedInput[] 
 /** Inputs a completed run consumed that have since been superseded by a newer version. */
 export function staleInputs(s: State, t: Task, a: Attempt): ConsumedInput[] {
   return a.snapshot.inputs.filter((i) => (latestArtifact(s, t, i.step, i.output)?.version ?? 0) > i.version);
+}
+
+/**
+ * ORC-016: the pipeline revision an artifact was made under. Stamped on new artifacts; an older one takes
+ * it from its attempt's snapshot, and an older edit from the version it edited. Unknown counts as 0.
+ */
+export function artifactPipelineRev(s: State, art: Artifact): number {
+  if (art.pipelineRev !== undefined) return art.pipelineRev;
+  const run = s.attempts.find((a) => a.id === art.attemptId);
+  if (run) return run.snapshot.pipelineRev;
+  let prev: Artifact | undefined;
+  for (const x of s.artifacts) if (x.taskId === art.taskId && x.stepId === art.stepId && x.name === art.name && x.version < art.version && (!prev || x.version > prev.version)) prev = x;
+  return prev ? artifactPipelineRev(s, prev) : 0;
+}
+
+/** ORC-016: the artifact was made under a pattern the task has since left. Labelled in the UI; never edited or consumed again. */
+export function fromEarlierPattern(s: State, t: Task, art: Artifact): boolean {
+  return artifactPipelineRev(s, art) < t.patternSince;
 }
 
 // ---------- pipeline editing ----------
@@ -1855,6 +1901,127 @@ export function creationPattern(s: State, patternId: string): Pattern {
   const p = findPattern(s, patternId) ?? (patternId === "change" || patternId === "bugfix" ? servicePattern(s, patternId) : undefined);
   if (!p) throw new ControlError(`Unknown pattern ${patternId}`);
   return p;
+}
+
+// ---------- changing a task's pattern (ORC-016 §7) ----------
+
+/** Who asks for a pattern change. The lead has no verb for it yet; when it gets one, it may choose standard patterns only. */
+export type PatternChanger = "user" | "lead";
+
+const serviceOwned = (t: Task) => !!(t.reviewTarget || t.checkTarget || t.revertOf || t.deliverInto);
+
+/**
+ * Why a task's pattern cannot change right now, or undefined. Preconditions 1, 2, 5 and 6 of §7.1: open,
+ * not service-owned, no open child task, and either never run or confirmed Paused (held, with no attempt
+ * still running or stopping). With `p`, also precondition 4's pattern checks.
+ */
+export function patternChangeBlocker(s: State, t: Task, p?: Pattern, by: PatternChanger = "user"): string | undefined {
+  if (t.lifecycle === "done") return "Done tasks keep the pipeline they ran. Create a follow-up and choose its pattern there.";
+  if (t.lifecycle === "cancelled") return `${t.id} is cancelled.`;
+  if (serviceOwned(t)) return "This task's pipeline is set by pull-request delivery.";
+  if (p) {
+    if (t.parentTaskId && p.flags.breaksDown) return `${p.name} breaks down into child tasks, which a child task cannot do.`;
+    if (by === "lead" && !eligible(p, t.parentTaskId ? "child" : "lead")) return `pattern "${p.id}" is not available to the lead; choose one of: ${eligibleIds(s, t.parentTaskId ? "child" : "lead").join(", ")}`;
+  }
+  if (descendants(s, t).some(isOpen)) return "It has child tasks; cancel them or let them finish first.";
+  if (s.attempts.some((a) => a.taskId === t.id)) {
+    const active = activeAttempts(s, t.id);
+    if (!t.hold) return "Pause the task first; patterns change only before a task starts or while it is paused.";
+    if (active.length) return "Wait until it shows Paused.";
+  }
+  return undefined;
+}
+
+interface PinPlan {
+  kept: string[];
+  dropped: { step: string; why: "role changed" | "no such step" }[];
+  /** The pin each new step takes: the old step's, when a step with the same id has the same role. */
+  selectionFor: (id: string) => ModelSelection | null;
+}
+
+function pinPlan(t: Task, steps: StepDef[]): PinPlan {
+  const kept: string[] = [];
+  const dropped: PinPlan["dropped"] = [];
+  const keep = new Map<string, ModelSelection>();
+  for (const old of t.steps) {
+    if (!old.selection) continue;
+    const next = steps.find((d) => d.id === old.id);
+    if (!next) dropped.push({ step: old.id, why: "no such step" });
+    else if (next.role !== old.role) dropped.push({ step: old.id, why: "role changed" });
+    else {
+      kept.push(old.id);
+      keep.set(old.id, old.selection);
+    }
+  }
+  return { kept, dropped, selectionFor: (id) => (keep.has(id) ? { ...keep.get(id)! } : null) };
+}
+
+/** What changing `t` to pattern `p` would do (pure; shared by the UI and the pipeline event). */
+export function patternChangePreview(s: State, t: Task, p: Pattern, by: PatternChanger = "user"): { allowed: boolean; why?: string; redo: string[]; pinsKept: string[]; pinsDropped: PinPlan["dropped"]; artifactsKept: number; decisionsClosed: number } {
+  const why = patternChangeBlocker(s, t, p, by);
+  const pins = pinPlan(t, p.steps);
+  return {
+    allowed: !why,
+    ...(why ? { why } : {}),
+    redo: t.steps.filter(isSettled).map((st) => st.id),
+    pinsKept: pins.kept,
+    pinsDropped: pins.dropped,
+    artifactsKept: s.artifacts.filter((a) => a.taskId === t.id).length,
+    decisionsClosed: s.decisions.filter((d) => d.taskId === t.id && d.status === "open").length,
+  };
+}
+
+/**
+ * Replace a task's pipeline with another catalog pattern, before it has run or once it shows Paused. The
+ * pipeline starts over: every step is new, with a revision above any the id ever had, so no earlier run
+ * can report into it (G1), and `patternSince` moves to this revision (G2, G3). Artifacts and attempts
+ * stay as the record; open decisions are closed; pins carry over on steps with the same id and role.
+ * `by`: the user (the command) or, later, the lead, who may choose standard patterns only.
+ */
+export function changePattern(state: State, taskId: string, expectedRev: number, patternId: string, note: string, now: string, by: PatternChanger = "user"): State {
+  const t0 = getTask(state, taskId);
+  const early = patternChangeBlocker(state, t0);
+  if (early) throw new ControlError(early);
+  if (t0.pipelineRev !== expectedRev) throw new StaleWriteError(expectedRev, t0.pipelineRev);
+  const p = creationPattern(state, patternId);
+  const why = patternChangeBlocker(state, t0, p, by);
+  if (why) throw new ControlError(why);
+  const errors = validatePipeline(p.steps, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
+  if (errors.length) throw new ControlError(`Pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
+  if (t0.pattern.id === p.id && t0.pattern.hash === p.hash && t0.pattern.source === p.source) return state;
+
+  const s = draft(state);
+  const t = getTask(s, taskId);
+  const preview = patternChangePreview(s, t, p, by);
+  const rev = t.pipelineRev + 1;
+  const defs = structuredClone(p.steps).map(toDef);
+  const pins = pinPlan(t, defs);
+  // Every revision an id ever had on this task: its current step's, and every attempt's snapshot (G1).
+  const highest = new Map<string, number>();
+  for (const st of t.steps) highest.set(st.id, Math.max(highest.get(st.id) ?? 0, st.revision));
+  for (const a of s.attempts) if (a.taskId === t.id) highest.set(a.stepId, Math.max(highest.get(a.stepId) ?? 0, a.snapshot.stepRev));
+  t.steps = instantiate(defs).map((st) => ({ ...st, revision: 1 + (highest.get(st.id) ?? 0), state: t.hold ? ("paused" as const) : ("pending" as const), selection: pins.selectionFor(st.id) }));
+  const before = t.pattern;
+  const ref = patternRef(p, by);
+  t.pipelineRev = rev;
+  t.patternSince = rev;
+  t.pattern = ref;
+  t.pipelineHistory.push({ rev, at: now, author: by, reason: `Pattern changed from ${before.name} to ${p.name}${note.trim() ? `: ${note.trim()}` : ""}`, steps: defs, pattern: ref });
+  // These belong to the old steps. The hold itself stays.
+  delete t.bestOf;
+  delete t.bestOfByUser;
+  delete t.pendingBreakdowns;
+  delete t.checkRounds;
+  delete t.holdReason;
+  F.supersedeDecisions(s, t.id, now, { reason: "the task's pattern changed" });
+  touch(t, now);
+  const parts = [
+    preview.redo.length ? `${preview.redo.length} completed step${preview.redo.length === 1 ? "" : "s"} start${preview.redo.length === 1 ? "s" : ""} over` : "nothing had run",
+    ...(preview.pinsKept.length ? [`pins kept: ${preview.pinsKept.join(", ")}`] : []),
+    ...(preview.pinsDropped.length ? [`dropped: ${preview.pinsDropped.map((d) => `${d.step} (${d.why})`).join(", ")}`] : []),
+  ];
+  event(s, now, by, "pipeline", `Pipeline r${rev}: pattern ${before.name} → ${p.name}; ${parts.join("; ")}`, t.id);
+  return s;
 }
 
 /**
@@ -4299,6 +4466,8 @@ export function editArtifact(
   if (!base) throw new ControlError(`Unknown artifact ${artifactId}`);
   const t = getTask(s, base.taskId);
   assertOpen(t, "Editing an artifact");
+  // G3 (ORC-016 §7.3): work done under an earlier pattern is the record, never an input to the new steps.
+  if (artifactPipelineRev(s, base) < t.patternSince) throw new ControlError("This artifact belongs to an earlier pattern of this task. It is kept for the record and cannot be edited.");
   const st = getStep(t, base.stepId);
   if (!change.reason.trim()) throw new ControlError("Say why you changed it; the reason goes to the next steps.");
   if (!change.summary.trim()) throw new ControlError("The artifact cannot be empty.");
@@ -4318,6 +4487,7 @@ export function editArtifact(
     version,
     summary: change.summary.slice(0, 20000),
     createdAt: now,
+    pipelineRev: t.pipelineRev,
     author: "user",
     editReason: change.reason.trim(),
     ...(base.kind === "review-findings" && !base.findings ? { openFindings: change.openFindings } : {}),

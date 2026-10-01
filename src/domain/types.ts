@@ -716,6 +716,8 @@ export interface RetiredTemplate {
   description: string;
   steps: StepDef[];
   kind: "custom" | "edited-built-in";
+  /** An edited copy of a pipeline the service owns (revert, delivery review, delivery checks): exported as an experiment, so the lead never gets it. */
+  internal?: true;
   retiredAt: string;
   /** Display path of the file written. */
   exportedTo?: string;
@@ -755,6 +757,12 @@ export interface Artifact {
   author?: "user";
   /** Why the person changed it. */
   editReason?: string;
+  /**
+   * ORC-016: the task's pipeline revision when this version was made. Below the task's `patternSince`, the
+   * artifact belongs to an earlier pattern: kept for the record, never edited or consumed again. Absent on
+   * older artifacts, which take it from their attempt's snapshot (an edit from the version it edited).
+   */
+  pipelineRev?: number;
 }
 
 /** A consumed input, recorded in the run snapshot. */
@@ -796,6 +804,8 @@ export interface RunSnapshot {
   visionRev: number;
   workspace: string;
   pipelineRev: number;
+  /** ORC-016: the step's role at dispatch, for outcome records and a later trace export. Absent on older attempts, which take it from the pipeline revision named by `pipelineRev`. */
+  role?: RoleId;
   /** The worker environment the run was started with (absent on runs from before the setting existed). */
   environment?: WorkerEnvironment;
   /** Connections (MCP servers) an isolated run was allowed to use. */
@@ -933,6 +943,74 @@ export interface Task {
   pattern: PatternRef;
   /** ORC-016: the pipeline revision that applied the current pattern; 0 for tasks from before patterns. */
   patternSince: number;
+  /**
+   * ORC-016: written once by the store when the task becomes done or cancelled, from data already kept;
+   * replaced only if the task is reopened and settles again. Read-only afterwards. Tasks settled before
+   * the upgrade have none.
+   */
+  outcome?: TaskOutcome;
+}
+
+// ---------- ORC-016: outcome records ----------
+
+/**
+ * A snapshot of what a task cost and produced, taken when it settles. Field names follow the
+ * OpenTelemetry GenAI semantic conventions where one exists (design §10.4): a `RunTally` row is one
+ * `gen_ai.client.token.usage` / `gen_ai.client.operation.duration` series by provider, model and agent
+ * name (`role`); the task-level numbers are `orc.*` attributes. Delivery results are not copied: they
+ * stay on `Task.integration` and are derived later (ORC-017).
+ */
+export interface TaskOutcome {
+  v: 1;
+  result: "done" | "cancelled";
+  settledAt: string;
+  /** The pattern in effect at settle. */
+  pattern: PatternRef;
+  /** Pipeline revisions that applied a pattern, after the first. */
+  patternChanges: number;
+  /** Attempts started under an earlier pattern (`snapshot.pipelineRev < patternSince`). */
+  runsBeforePattern: number;
+  createdAt: string;
+  firstRunAt?: string;
+  /** firstRunAt → settledAt. */
+  wallMs?: number;
+  /** The sum of agent attempt durations (service check runs excluded). */
+  agentMs: number;
+  /** One row per (role, runner, model). */
+  runs: RunTally[];
+  /** Per provider. `costUsd` is null when no run of that provider reported a cost. */
+  usage: { provider: ProviderId; inputTokens: number; outputTokens: number; costUsd: number | null; runsWithoutUsage: number }[];
+  /** `rounds`: completed runs of repair steps (coder with `runIf`), iterations included. `iterations`: the highest loop iteration reached (0 without a loop). */
+  repair: { rounds: number; iterations: number; finalCheckRounds: number };
+  /** Structured findings raised by runs; `summaryOnly` sums the open counts of artifacts without structured findings; `openAtEnd` is the blocking count of the done review and check steps' accepted outputs. */
+  findings: { raised: Record<Severity, number>; byAction: Record<FindingAction, number>; summaryOnly: number; openAtEnd: number };
+  /** Captured at settle because decisions are pruned later. */
+  decisions: { total: number; byUser: number; byLead: number; fix: number; accept: number; followUp: number; superseded: number; open: number };
+  /** `finalPassed`: the last blocking Checks step's accepted run, or null when it was skipped or did not run. */
+  checks: { runs: number; failedRuns: number; finalPassed: boolean | null; acceptedFailing: boolean };
+  /** Path coverage of the code reviews runs produced (`not-required` excluded), and how many clean reviews ran again for a coverage gap. */
+  coverage: { reviews: number; complete: number; incomplete: number; unproven: number; retries: number };
+  human: { artifactEdits: number; pinnedSteps: number; candidateChoices: number };
+  bestOf?: { groups: number; candidates: number; chosenByUser: number };
+}
+
+/** One (role, runner, model) series of attempts. `model` is the model that actually ran when the provider reported it. */
+export interface RunTally {
+  role: RoleId;
+  runner: Runner;
+  model: string;
+  /** Every attempt, including any still stopping at settle. */
+  runs: number;
+  completed: number;
+  failed: number;
+  stopped: number;
+  lost: number;
+  discarded: number;
+  ms: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** null when no attempt in the row reported a cost. */
+  costUsd: number | null;
 }
 
 export interface PipelineRevision {

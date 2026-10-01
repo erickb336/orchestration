@@ -9,6 +9,7 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InvalidCommandError, runCommand } from "../src/domain/commands";
 import { INTERNAL_PATTERN_IDS, internalPattern } from "../src/domain/internalPatterns";
+import { captureOutcomes } from "../src/domain/outcomes";
 import { builtInCatalog, patternRef } from "../src/domain/patterns";
 import { toDef } from "../src/domain/pipeline";
 import { buildSeed } from "../src/domain/seed";
@@ -28,7 +29,11 @@ const sameSteps = (a: StepDef[], b: StepDef[]) => JSON.stringify(a.map(toDef)) =
  */
 export function legacyPatternRef(t: { reviewTarget?: unknown; checkTarget?: unknown; revertOf?: unknown; pipelineHistory?: { reason?: string }[] }): PatternRef {
   const internal = t.reviewTarget ? "delivery-review" : t.checkTarget ? "delivery-checks" : t.revertOf ? "revert" : undefined;
-  if (internal) return patternRef(internalPattern(internal), "migration");
+  // No hash: the format-14 internal template may have been edited, and the task's purposes were rewritten by delivery (step 1 review, finding 5).
+  if (internal) {
+    const { hash: _hash, ...ref } = patternRef(internalPattern(internal), "migration");
+    return ref;
+  }
   const reason = t.pipelineHistory?.[0]?.reason ?? "";
   const named = /(?:from|applied) the (.+) template/.exec(reason)?.[1]?.trim();
   const v14 = named ? Object.values(V14_TEMPLATES).find((x) => x.name === named || x.id === named) : undefined;
@@ -213,10 +218,11 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     const retired = (doc.retiredTemplates ??= []) as RetiredTemplate[];
     for (const t of (project.templates ?? []) as { id: string; name: string; description: string; steps: StepDef[] }[]) {
       const b = V14_TEMPLATES[t.id];
-      const unedited = b && !(INTERNAL_PATTERN_IDS as string[]).includes(t.id) && sameSteps(t.steps, b.steps) && t.name === b.name && t.description === b.description;
-      if (unedited) continue; // the catalog provides it
-      retired.push({ id: t.id, name: t.name, description: t.description, steps: t.steps.map(toDef), kind: b ? "edited-built-in" : "custom", retiredAt: now });
-      note(`Template "${t.name}" was retired: pipelines now come from patterns. It is saved as a pattern file of yours when the service starts.`);
+      const internal = (INTERNAL_PATTERN_IDS as string[]).includes(t.id);
+      const unedited = b && sameSteps(t.steps, b.steps) && t.name === b.name && t.description === b.description;
+      if (unedited) continue; // the catalog provides it; the service's own pipelines stay in code (step 1 review, finding 2)
+      retired.push({ id: t.id, name: t.name, description: t.description, steps: t.steps.map(toDef), kind: b ? "edited-built-in" : "custom", ...(internal ? { internal: true as const } : {}), retiredAt: now });
+      note(`Template "${t.name}" was retired: pipelines now come from patterns. It is saved as a pattern file of yours when the service starts${internal ? ", marked experimental: the service keeps its own copy of this pipeline" : ""}.`);
     }
     delete project.templates;
     project.defaultPatternId ??= "change";
@@ -426,7 +432,8 @@ export class Store {
         return { version: cur.version, replayed: false };
       }
       // Errors from here on are storage failures: they roll the whole transaction back.
-      const version = this.persist(cur.version, cur.state, outcome.state, now);
+      // ORC-016 P11: a task that settled in this command gets its outcome record here, in the same transaction.
+      const version = this.persist(cur.version, cur.state, captureOutcomes(cur.state, outcome.state, now), now);
       record.run(idempotencyKey, name, JSON.stringify(args ?? {}), now, version, outcome.result === undefined ? null : JSON.stringify(outcome.result), null, null);
       return { version, result: outcome.result, replayed: false };
     });
@@ -447,7 +454,8 @@ export class Store {
         if (!row || row.holder !== lease.holder || row.expires_at <= lease.nowMs) throw new LeaseLostError(lease.name);
       }
       const cur = this.load();
-      const next = fn(cur.state);
+      // ORC-016 P11: the other capture point; together with `command` these are the only writes.
+      const next = captureOutcomes(cur.state, fn(cur.state), now);
       const json = JSON.stringify(next);
       if (json === cur.json) return { version: cur.version, changed: false };
       return { version: this.persist(cur.version, cur.state, next, now), changed: true };

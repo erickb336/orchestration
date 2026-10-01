@@ -419,11 +419,11 @@ describe("review regressions: pipeline rules", () => {
     const steps: StepDef[] = [base, review("S2", "S1", { parallel: { count: 3, mode: "copies" }, waitForChildren: true }), repair("S3", "S2", { iterate: { from: "S3", max: 3 } })];
     const id = newTask("Unset", "change", steps);
     const plain = steps.map((d) => ({ ...d, parallel: undefined, iterate: undefined, waitForChildren: undefined }));
-    setTestPipeline(store, id, plain, iso(), "simpler");
+    setTestPipeline(store, id, plain, iso(), "simpler", 2); // newTask's pipeline was revision 2
     const s2 = task(id).steps.find((x) => x.id === "S2")!;
     expect([s2.parallel, s2.waitForChildren, task(id).steps.find((x) => x.id === "S3")!.iterate]).toEqual([undefined, undefined, undefined]);
     const revs = task(id).steps.map((x) => x.revision);
-    setTestPipeline(store, id, plain, iso(), "same again");
+    setTestPipeline(store, id, plain, iso(), "same again", 3);
     expect(task(id).steps.map((x) => x.revision)).toEqual(revs);
     settle();
     complete(id, "S1", { write: ["u.txt", "1\n"] });

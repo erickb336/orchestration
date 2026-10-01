@@ -114,11 +114,13 @@ describe("review gates and human edits", () => {
   it("a review gate can be turned off again", () => {
     const id = newTask("Toggle gate");
     const on = task(id).steps.map((x) => ({ ...x, gate: x.id === "S1" }));
-    setTestPipeline(store, id, on, iso(), "gate on");
+    setTestPipeline(store, id, on, iso(), "gate on", 1);
     expect(step(id, "S1").gate).toBe(true);
     const off = task(id).steps.map((x) => ({ ...x, gate: false }));
-    setTestPipeline(store, id, off, iso(), "gate off");
+    expect(() => setTestPipeline(store, id, off, iso(), "gate off", 1)).toThrow(/Stale write/); // the first save made revision 2
+    setTestPipeline(store, id, off, iso(), "gate off", 2);
     expect(step(id, "S1").gate).toBeUndefined();
+    expect(task(id).pipelineRev).toBe(3);
   });
 
   it("step-by-step mode pauses after every step", () => {

@@ -8,7 +8,7 @@ import * as C from "./checks";
 import { MAX_PROVEN_PATHS, coverageCounts } from "./coverage";
 import * as F from "./findings";
 import * as M from "./model";
-import { internalPattern, patternRef, servicePattern } from "./patterns";
+import { internalPattern, patternHash, patternRef, servicePattern } from "./patterns";
 import { instantiate, toDef } from "./pipeline";
 import {
   ControlError,
@@ -292,11 +292,12 @@ export function sendBackLanded(state: State, a: { taskId: string; kind: "fix" | 
     // ORC-016: the revert pipeline is the service's own; no pattern file can replace it.
     const revert = internalPattern("revert");
     steps = revert.steps;
-    pattern = patternRef(revert, "service");
     // The first writer is the one whose workspace holds the prepared revert: name the commit for it.
     const first = steps.find((x) => x.role === "coder");
     if (!first) throw new ControlError("The Revert pipeline has no coder step to complete the revert.");
     first.purpose = `${first.purpose} (revert of ${c12})`;
+    // The hash is of the steps that run, purpose included (step 1 review, finding 5).
+    pattern = { ...patternRef(revert, "service"), hash: patternHash(steps) };
     fields = { revertOf: { taskId: origin.id, commit: landed.commit } };
   } else {
     const bugfix = servicePattern(state, "bugfix");
@@ -873,7 +874,6 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
   // ORC-016: the dedicated review pipeline is the service's own; no pattern file can replace it.
   const review = internalPattern("delivery-review");
   const defs = review.steps.map(toDef);
-  const pattern = patternRef(review, "service");
   let named = false;
   for (const d of defs) {
     if (d.role !== "code_reviewer") continue;
@@ -882,6 +882,8 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
     if (!named) d.purpose = `Review ${t.id} for merge into ${pr.base} at ${h}`;
     named = true;
   }
+  // The hash is of the steps that run, with the rewritten purpose and the independence rule (step 1 review, finding 5).
+  const pattern: PatternRef = { ...patternRef(review, "service"), hash: patternHash(defs) };
   const content: SpecContent = structuredClone(M.currentSpec(t).content);
   const title = content.title;
   content.title = `Review for merge: ${title}`;

@@ -7,10 +7,10 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
 import * as D from "./delivery";
 import * as M from "./model";
-import { validatePipeline } from "./pipeline";
+import { toDef, validatePipeline } from "./pipeline";
 import { buildSeed } from "./seed";
 import { INTERNAL_PATTERN_IDS, internalPattern } from "./internalPatterns";
-import { builtInCatalog, patternSteps } from "./patterns";
+import { builtInCatalog, patternHash, patternSteps } from "./patterns";
 import { reviewedChange, type ReviewedOptions } from "./testing/reviewed";
 import type { CheckObs, PrDelivery, ProviderId, State, Task } from "./types";
 
@@ -309,6 +309,11 @@ describe("the independence rung in resolveStep (design §9.2)", () => {
     const again = D.requestPrReview(done, ID, at(8));
     expect(reviewTasks(again)).toHaveLength(2);
     expect(() => D.requestPrReview(again, ID, at(9))).toThrow(/already reviewing/);
+    // ORC-016 step 1 review, finding 5: the recorded hash is of the steps that run, with the purpose rewritten for this pull request.
+    const second = reviewTasks(again)[1];
+    expect(second.steps[0].purpose).toMatch(/^Review .* for merge into .* at [0-9a-f]{12}$/);
+    expect(second.pattern).toMatchObject({ id: "delivery-review", source: "internal", chosenBy: "service", hash: patternHash(second.steps.map(toDef)) });
+    expect(second.pattern.hash).not.toBe(patternHash(internalPattern("delivery-review").steps));
   });
 
   it("a review step of an ordinary pipeline marked independent follows the writer of its input", () => {

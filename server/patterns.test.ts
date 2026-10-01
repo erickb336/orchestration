@@ -22,7 +22,7 @@ import { ARTIFACT_KINDS, PROVIDERS, STEP_ROLES, type RetiredTemplate, type State
 import schema from "../patterns/pattern.schema.json";
 import { createHttpServer } from "./http";
 import { V14_TEMPLATES } from "./legacyTemplates";
-import { SCHEMA_FILE, SCHEMA_TEXT, exportRetiredTemplates, loadPatternCatalog, patternValidator, positionOf } from "./patterns";
+import { SCHEMA_FILE, SCHEMA_TEXT, exportRetiredTemplates, loadPatternCatalog, patternValidator, positionOf, retiredTemplateFile } from "./patterns";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
 import { STATE_FORMAT, Store } from "./store";
@@ -139,6 +139,39 @@ describe("reading your files", () => {
     const c = load();
     expect(c.errors).toEqual([expect.objectContaining({ file: join(patterns, "other.json"), message: expect.stringMatching(/named "other" but declares the id "mine"/), effect: "skipped" })]);
     expect(c.patterns.some((p) => p.id === "nested" || p.id === "mine")).toBe(false);
+  });
+
+  it("a UTF-8 byte order mark is not part of the file; resolver errors point at the extends, stepOverrides or id key (step 1 review, finding 6)", () => {
+    write("bom.json", `﻿${pretty({ id: "bom", name: "BOM", description: "d", whenToUse: "w", extends: "change", stepOverrides: { S2: { independentOf: "writer" } } })}`);
+    const unknownBase = pretty({ id: "orphan", name: "Orphan", description: "d", whenToUse: "w", extends: "nope", stepOverrides: { S1: { gate: true } } });
+    write("orphan.json", unknownBase);
+    const badOverride = pretty({ id: "override", name: "Override", description: "d", whenToUse: "w", extends: "change", stepOverrides: { S9: { gate: true } } });
+    write("override.json", badOverride);
+    const badGraph = pretty({ id: "graph", name: "Graph", description: "d", whenToUse: "w", steps: [{ ...oneStep[0], dependsOn: ["S9"] }] });
+    write("graph.json", badGraph);
+    const c = load();
+    expect(c.patterns.find((p) => p.id === "bom")).toMatchObject({ source: "local", steps: builtIn("change-cross-review").steps });
+    const errorFor = (id: string) => c.errors.find((e) => e.id === id)!;
+    expect(errorFor("orphan")).toMatchObject({ message: expect.stringMatching(/extends "nope", which is not a pattern/), ...where(unknownBase, '"extends"') });
+    expect(errorFor("override")).toMatchObject({ message: expect.stringMatching(/stepOverrides\.S9: the base pattern has no step S9/), ...where(badOverride, '"S9"') });
+    expect(errorFor("graph")).toMatchObject({ message: expect.stringMatching(/S1 depends on S9/), ...where(badGraph, '"id"') });
+    expect(c.errors).toHaveLength(3);
+  });
+
+  it("an unwritable patterns directory or a failed schema copy is a load warning, never a failure (step 1 review, finding 6)", () => {
+    rmSync(patterns, { recursive: true, force: true });
+    writeFileSync(patterns, "not a directory\n"); // a file where the directory should be
+    const c = load();
+    expect(c.patterns.map((p) => p.id)).toEqual(builtInCatalog().patterns.map((p) => p.id));
+    expect(c.errors).toEqual([expect.objectContaining({ file: patterns, message: expect.stringMatching(/your patterns directory could not be created or read, so none of your files were loaded/), effect: "skipped" })]);
+    expect(c.errors[0].line).toBeUndefined();
+    // The schema copy cannot be written where a file of yours takes its name as a directory; your files still load.
+    rmSync(patterns, { force: true });
+    mkdirSync(join(patterns, SCHEMA_FILE), { recursive: true });
+    write("mine.json", pretty({ id: "mine", name: "Mine", description: "d", whenToUse: "w", extends: "change", stepOverrides: { S2: { independentOf: "writer" } } }));
+    const d = load();
+    expect(d.patterns.find((p) => p.id === "mine")).toBeDefined();
+    expect(d.errors).toEqual([expect.objectContaining({ file: patterns, message: expect.stringMatching(/the schema copy pattern\.schema\.json could not be written there/) })]);
   });
 
   it("more than 100 files, or a file over 64 KiB, is refused and listed", () => {
@@ -275,6 +308,13 @@ describe("over HTTP: reload and the removed commands", () => {
     write("broken.json", "{\n  oops\n}");
     expect(await j(await post("/api/patterns/reload", {}))).toMatchObject({ errors: 1 });
     expect((await state()).patterns.errors).toEqual([expect.objectContaining({ id: "broken", line: 2, column: 3, effect: "skipped" })]);
+    // Step 1 review, finding 6: a directory that cannot be read is a listed warning, never a 500.
+    rmSync(patterns, { recursive: true, force: true });
+    writeFileSync(patterns, "in the way\n");
+    const blocked = await post("/api/patterns/reload", {});
+    expect(blocked.status).toBe(200);
+    expect(await j(blocked)).toMatchObject({ patterns: builtInCatalog().patterns.length, errors: 1 });
+    expect((await state()).patterns.errors[0].message).toMatch(/your patterns directory could not be created or read/);
   });
 
   it("P1: the removed commands are unknown over HTTP, the registry has no catalog writers, and createTask ignores steps", async () => {
@@ -396,12 +436,44 @@ describe("migration 14 → 15", () => {
     expect(task(s, "EX-003").pattern).toEqual({ id: "feature", name: "Feature", source: "legacy", chosenBy: "migration" });
     expect(task(s, "EX-001").pattern).toMatchObject({ source: "legacy", chosenBy: "migration" });
     expect(["change", "feature", "bugfix", "investigation", "design", "goal"]).toContain(task(s, "EX-001").pattern.id);
-    expect(task(s, "EX-002-RV1").pattern).toMatchObject({ id: "delivery-review", name: "Delivery review", source: "internal", chosenBy: "migration", hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    // No hash on a migrated service task: its format-14 internal template may have been edited, and delivery rewrote its purposes (step 1 review, finding 5).
+    expect(task(s, "EX-002-RV1").pattern).toEqual({ id: "delivery-review", name: "Delivery review", source: "internal", chosenBy: "migration" });
     upgraded.close();
     const check = new DatabaseSync(path);
     expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(15);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_14_%'").get()).toBeDefined();
     check.close();
+  });
+
+  it("an unedited internal template is dropped silently; an edited one is retired as internal and exported as an experiment the lead never gets (step 1 review, finding 2)", () => {
+    const path = join(dir, "old.sqlite");
+    format14(path, (doc) => {
+      const v14 = (id: string) => ({ ...structuredClone(V14_TEMPLATES[id]), builtIn: true, rev: 1 });
+      const editedReview = v14("delivery-review");
+      (editedReview.steps as { purpose: string }[])[0].purpose = "Review it my way";
+      doc.project.templates = [v14("revert"), v14("delivery-checks"), editedReview];
+    });
+    const store = new Store(path);
+    try {
+      const s = store.read().state;
+      expect(s.retiredTemplates.map((t) => [t.id, t.kind, t.internal])).toEqual([["delivery-review", "edited-built-in", true]]);
+      expect(s.events.filter((e) => /was retired/.test(e.message)).map((e) => e.message)).toEqual([
+        'Template "Delivery review" was retired: pipelines now come from patterns. It is saved as a pattern file of yours when the service starts, marked experimental: the service keeps its own copy of this pipeline.',
+      ]);
+      const r = exportRetiredTemplates(store, patterns);
+      expect(r.written.map((p) => basename(p))).toEqual(["delivery-review-yours.json"]);
+      const file = JSON.parse(readFileSync(join(patterns, "delivery-review-yours.json"), "utf8"));
+      expect(file).toMatchObject({ id: "delivery-review-yours", name: "Delivery review (yours)", experimental: true, hypothesis: "Exported from your edited internal template; review before use" });
+      expect(file.steps[0].purpose).toBe("Review it my way");
+      const c = loadPatternCatalog(patterns, iso());
+      const loaded = c.patterns.find((p) => p.id === "delivery-review-yours")!;
+      expect(loaded).toMatchObject({ source: "local", experimental: true, audience: "user-only" });
+      expect(c.errors).toEqual([]);
+      // The service's own revert, review and checks pipelines still come from code.
+      expect(c.patterns.some((p) => INTERNAL_PATTERNS.some((i) => i.id === p.id))).toBe(false);
+    } finally {
+      store.close();
+    }
   });
 
   it("a task whose first revision names no template is legacy custom; a project without templates migrates cleanly", () => {
@@ -434,7 +506,7 @@ describe("exporting retired templates at start (P10)", () => {
       const byId = (id: string) => s.retiredTemplates.find((t) => t.id === id)!;
       expect(byId("feature")).toMatchObject({ exportedTo: join(patterns, "feature-yours.json"), exportedId: "feature-yours" });
       expect(byId("feature").stripped).toBeUndefined();
-      expect(byId("quick-fix-1")).toMatchObject({ exportError: `A file named ${join(patterns, "quick-fix.json")} already exists; nothing was written.` });
+      expect(byId("quick-fix-1")).toMatchObject({ exportError: `A file named ${join(patterns, "quick-fix.json")} already exists; yours was kept.` });
       expect(byId("quick-fix-1").exportedTo).toBeUndefined();
       expect(byId("two-shots-9")).toMatchObject({ exportedTo: join(patterns, "two-shots.json"), exportedId: "two-shots" });
       const feature = JSON.parse(readFileSync(join(patterns, "feature-yours.json"), "utf8"));
@@ -456,6 +528,45 @@ describe("exporting retired templates at start (P10)", () => {
       const second = exportRetiredTemplates(store, patterns);
       expect(second).toEqual({ written: [], failed: [] });
       expect(store.read().state.events.filter((e) => /from before patterns/.test(e.message))).toHaveLength(3);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("a file that already holds exactly what would be written counts as exported; any other file of that name is kept (step 1 review, finding 4)", () => {
+    const path = join(dir, "old.sqlite");
+    format14(path);
+    const store = new Store(path);
+    try {
+      // An earlier start wrote feature-yours.json but did not get to record it.
+      const feature = store.read().state.retiredTemplates.find((t) => t.id === "feature")!;
+      write("feature-yours.json", retiredTemplateFile(feature, "feature-yours", "Feature (yours)").json);
+      write("two-shots.json", pretty({ id: "two-shots", name: "Mine already", description: "d", whenToUse: "w", steps: oneStep }));
+      const r = exportRetiredTemplates(store, patterns);
+      expect(r.written.map((p) => basename(p)).sort()).toEqual(["feature-yours.json", "quick-fix.json"]);
+      expect(r.failed.map((p) => basename(p))).toEqual(["two-shots.json"]);
+      const s = store.read().state;
+      expect(s.retiredTemplates.find((t) => t.id === "feature")).toMatchObject({ exportedTo: join(patterns, "feature-yours.json"), exportedId: "feature-yours" });
+      expect(s.retiredTemplates.find((t) => t.id === "two-shots-9")).toMatchObject({ exportError: `A file named ${join(patterns, "two-shots.json")} already exists; yours was kept.` });
+      expect(JSON.parse(readFileSync(join(patterns, "two-shots.json"), "utf8")).name).toBe("Mine already");
+      expect(exportRetiredTemplates(store, patterns)).toEqual({ written: [], failed: [] });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("an unwritable patterns directory records nothing, so the export is tried again at the next start (step 1 review, finding 6)", () => {
+    const path = join(dir, "old.sqlite");
+    format14(path);
+    rmSync(patterns, { recursive: true, force: true });
+    writeFileSync(patterns, "in the way\n");
+    const store = new Store(path);
+    try {
+      const r = exportRetiredTemplates(store, patterns);
+      expect(r).toMatchObject({ written: [], failed: [], problem: expect.stringMatching(/Could not create .*3 templates from before patterns not saved yet/) });
+      expect(store.read().state.retiredTemplates.every((t) => !t.exportedTo && !t.exportError)).toBe(true);
+      rmSync(patterns, { force: true });
+      expect(exportRetiredTemplates(store, patterns).written).toHaveLength(3);
     } finally {
       store.close();
     }

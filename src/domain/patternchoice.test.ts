@@ -7,7 +7,8 @@ import { BUILT_IN_FILES } from "./builtInPatterns";
 import { runCommand } from "./commands";
 import * as D from "./delivery";
 import * as M from "./model";
-import { builtInCatalog, childDefault, effectiveDefault, resolveCatalog, type PatternFile } from "./patterns";
+import { builtInCatalog, childDefault, effectiveDefault, internalPattern, patternHash, resolveCatalog, type PatternFile } from "./patterns";
+import { toDef } from "./pipeline";
 import { buildSeed } from "./seed";
 import type { State, StepDef } from "./types";
 
@@ -256,8 +257,13 @@ describe("the service's own paths", () => {
     expect(task(fix.state, fix.newId).pattern).toMatchObject({ id: "bugfix", source: "built-in", chosenBy: "service", hash: builtIn("bugfix").hash });
     expect(task(fix.state, fix.newId).steps.map((x) => x.id)).toEqual(builtIn("bugfix").steps.map((x) => x.id));
     const revert = D.sendBackLanded(fix.state, { taskId: "EX-006", kind: "revert", note: "", holdBeforeStart: false }, at(2));
-    expect(task(revert.state, revert.newId).pattern).toMatchObject({ id: "revert", name: "Revert", source: "internal", chosenBy: "service" });
-    expect(task(revert.state, revert.newId).pattern.hash).toMatch(/^[0-9a-f]{64}$/);
+    const rt = task(revert.state, revert.newId);
+    expect(rt.pattern).toMatchObject({ id: "revert", name: "Revert", source: "internal", chosenBy: "service" });
+    // Step 1 review, finding 5: the hash is of the steps that run, with the commit named in the first writer's purpose.
+    expect(rt.steps[0].purpose).toMatch(/\(revert of [0-9a-f]{12}\)$/);
+    expect(rt.pattern.hash).toBe(patternHash(rt.steps.map(toDef)));
+    expect(rt.pattern.hash).not.toBe(patternHash(internalPattern("revert").steps));
+    expect(rt.pipelineHistory[0].pattern).toEqual(rt.pattern);
     // A file of yours that replaces bugfix is what a fix uses.
     const mine = withLocal(s, localFile("bugfix", { steps: builtIn("bugfix").steps.map((st) => (st.id === "S1" ? { ...st, purpose: "Reproduce it my way" } : st)) }));
     const fix2 = D.sendBackLanded(mine, { taskId: "EX-006", kind: "fix", note: "broken", holdBeforeStart: false }, at(3));
@@ -273,6 +279,16 @@ describe("the service's own paths", () => {
     expect(t.pattern).toMatchObject({ id: "investigation", chosenBy: "default" });
     expect(t.steps.map((x) => x.id)).toEqual(["S1", "S2", "S3"]);
     expect(t.patternSince).toBe(1);
+  });
+
+  it("resetSampleData keeps the catalog and the retired templates, like initProject (step 1 review, finding 7)", () => {
+    const s = withLocal(seed(), localFile("mine", { steps: builtIn("change").steps }));
+    s.retiredTemplates = [{ id: "old", name: "Old", description: "", steps: oneStep, kind: "custom", retiredAt: at(0), exportedTo: "~/.orchestration/patterns/old.json", exportedId: "old" }];
+    const r = runCommand(s, "resetSampleData", {}, at(1)).state;
+    expect(r.patterns).toEqual(s.patterns);
+    expect(r.patterns.patterns.some((p) => p.id === "mine" && p.source === "local")).toBe(true);
+    expect(r.retiredTemplates).toEqual(s.retiredTemplates);
+    expect(r.tasks.map((t) => t.id)).toEqual(seed().tasks.map((t) => t.id)); // the sample tasks are back
   });
 
   it("initProject keeps the catalog and resets the default; the seed's tasks carry built-in references", () => {

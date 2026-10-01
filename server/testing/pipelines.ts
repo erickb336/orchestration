@@ -6,13 +6,15 @@ import type { StepDef } from "../../src/domain/types";
 import type { Store } from "../store";
 
 /**
- * Replace a task's pipeline with `steps` at its current revision. `store.update` rethrows the domain
- * error after rolling back, so `expect(() => setTestPipeline(…)).toThrow(/…/)` works for refusals.
+ * Replace a task's pipeline with `steps` at its current revision, or at `expectedRev` when a test asserts
+ * the revision it expects (a stale one throws `StaleWriteError`, as the removed command did). `store.update`
+ * rethrows the domain error after rolling back, so `expect(() => setTestPipeline(…)).toThrow(/…/)` works
+ * for refusals.
  */
-export function setTestPipeline(store: Store, taskId: string, steps: StepDef[], now = new Date().toISOString(), reason = "test pipeline") {
+export function setTestPipeline(store: Store, taskId: string, steps: StepDef[], now = new Date().toISOString(), reason = "test pipeline", expectedRev?: number) {
   return store.update((s) => {
     const t = s.tasks.find((x) => x.id === taskId);
     if (!t) throw new Error(`Unknown task ${taskId}`);
-    return M.setPipeline(s, taskId, t.pipelineRev, steps, reason, "user", now);
+    return M.setPipeline(s, taskId, expectedRev ?? t.pipelineRev, steps, reason, "user", now);
   }, now);
 }
