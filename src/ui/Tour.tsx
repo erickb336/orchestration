@@ -5,7 +5,7 @@
 import { driver, type Driver } from "driver.js";
 import "driver.js/dist/driver.css";
 import { useCallback, useEffect, useRef } from "react";
-import { browserStore, createTourGate, firstVisitRedirect } from "./tourState";
+import { browserStore, createTourGate, demoLandingRedirect } from "./tourState";
 
 /** One gate per page load. */
 const gate = createTourGate(browserStore);
@@ -71,9 +71,9 @@ export function startTour(onEnd?: () => void) {
  * blocked). It waits a moment so the Overview's anchors exist.
  */
 export function useFirstRunTour(demo: boolean, onOverview: boolean, returnFocus: () => void) {
-  // A first visit to the bare address lands on the Overview, where the tour lives; a link to any page is left alone.
+  // In the demo the bare address opens the Overview, where Progress by area and the tour live; a link to any page is left alone.
   useEffect(() => {
-    const to = firstVisitRedirect(demo, location.hash, browserStore);
+    const to = demoLandingRedirect(demo, location.hash);
     if (to) location.replace(to);
   }, [demo]);
   useEffect(() => {

@@ -81,7 +81,8 @@ function newestMessage(prompt: string): string | undefined {
 /** How many simulated shaping replies the conversation in the envelope already holds. */
 function exchanges(prompt: string): number {
   const convo = /## Conversation \(most recent last\)\n([\s\S]*?)\n\n## /.exec(prompt)?.[1] ?? "";
-  return (convo.match(/Here is what I understand/g) ?? []).length;
+  // Only the lead's own lines count; a user who quotes the phrase does not add an exchange.
+  return (convo.match(/^Lead \([^)]*\): Here is what I understand/gm) ?? []).length;
 }
 
 /**

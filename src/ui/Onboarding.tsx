@@ -87,7 +87,7 @@ export function Onboarding() {
     return (
       <p className="try-shaping" aria-label="About the sample project">
         <span>
-          Your own repository: start the service with <code>ORCHESTRATION_RUNTIME=real npm start</code>.
+          Your own repository: start the service with <code>ORCHESTRATION_RUNTIME=real npm start</code>. You will then be guided through connecting a repository, Claude or Codex, and your vision.
         </span>
         {!shaping && stageChosen !== "1" && (
           <>

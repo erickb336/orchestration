@@ -290,7 +290,7 @@ export function Overview() {
                         {a.outcome === "stopping" ? (
                           <span className="pill work transition">Stopping</span>
                         ) : a.progress > 0 ? (
-                          <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`}>
+                          <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} ${service.runtime === "real" ? "" : "simulated "}progress`}>
                             <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
                           </div>
                         ) : (

@@ -409,6 +409,11 @@ describe("F. coverage and questions (revision 2)", () => {
     expect(done.conversation[done.conversation.length - 1].questions).toHaveLength(3);
     expect(done.conversation[done.conversation.length - 1].rejected).toBeUndefined();
     expect(M.coverageOf(done)!.intent).toBe("partial");
+    // ORC-017 review L2: a user who quotes the lead's phrase does not add an exchange; only the lead's own lines count.
+    const quoting = M.postMessage(done, "You wrote: Here is what I understand. Yes, that is right.", iso());
+    const run3 = M.startLeadRun(quoting, { provider: "claude", model: "m", trigger: "message" }, iso());
+    const out3 = parseLeadOutput(fakeLeadText(run3.runId, "message", buildLeadEnvelope(run3.state, M.activeLeadRun(run3.state)!, "read")));
+    expect(String((out3.vision as { text: string }).text)).toMatch(/^\(Simulated draft, exchange 2\)/);
     // Second exchange: the coverage improves and the draft says so; still a suggestion.
     const answered = M.postMessage(done, "Just me. I use it daily.", iso());
     const run2 = M.startLeadRun(answered, { provider: "claude", model: "m", trigger: "message" }, iso());

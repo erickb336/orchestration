@@ -1,7 +1,7 @@
 // ORC-017 §4: the tour's seen-state. Blocked storage never breaks the page and never loops the tour.
 
 import { describe, expect, it } from "vitest";
-import { TOUR_DONE, TOUR_KEY, createTourGate, firstVisitRedirect, readTourDone, writeTourDone, type KeyValueStore } from "./tourState";
+import { TOUR_DONE, TOUR_KEY, createTourGate, demoLandingRedirect, readTourDone, writeTourDone, type KeyValueStore } from "./tourState";
 
 function memoryStore(initial: Record<string, string> = {}): KeyValueStore & { data: Record<string, string> } {
   const data = { ...initial };
@@ -69,14 +69,11 @@ describe("the tour's seen-state", () => {
     expect(gate.started()).toBe(true);
   });
 
-  it("a first visit to the demo's bare address goes to the Overview, where the tour starts; nothing else is redirected", () => {
-    const empty = () => memoryStore();
-    for (const hash of ["", "#", "#/"]) expect(firstVisitRedirect(true, hash, empty), hash).toBe("#/overview");
-    // A link to a page, a seen tour, real mode, or storage that throws (treated as not seen) decide the rest.
-    expect(firstVisitRedirect(true, "#/tasks", empty)).toBeUndefined();
-    expect(firstVisitRedirect(true, "#/task/WT-002", empty)).toBeUndefined();
-    expect(firstVisitRedirect(true, "", () => memoryStore({ [TOUR_KEY]: TOUR_DONE }))).toBeUndefined();
-    expect(firstVisitRedirect(false, "", empty)).toBeUndefined();
-    expect(firstVisitRedirect(true, "", () => throwing)).toBe("#/overview");
+  it("the demo's bare address goes to the Overview, where the tour starts, before and after the tour; nothing else is redirected", () => {
+    for (const hash of ["", "#", "#/"]) expect(demoLandingRedirect(true, hash), hash).toBe("#/overview");
+    // A link to any page is left alone, and real mode never redirects.
+    expect(demoLandingRedirect(true, "#/tasks")).toBeUndefined();
+    expect(demoLandingRedirect(true, "#/task/WT-002")).toBeUndefined();
+    expect(demoLandingRedirect(false, "")).toBeUndefined();
   });
 });

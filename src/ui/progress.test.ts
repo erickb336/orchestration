@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "../domain/model";
+import { buildDemo } from "../domain/demo";
 import { buildSeed } from "../domain/seed";
 import { OTHER_AREA, agentsWorking, areaOf, liveAgents, liveText, needsYouOf, progressByArea } from "./progress";
 
@@ -26,7 +27,9 @@ describe("progressByArea", () => {
     expect(by(rows, "Onboarding")).toMatchObject({ total: 1, done: 0, needsYou: 0, segments: ["rest"] });
     expect(by(rows, "Export").label).toBe("Export: 1 of 1 task done");
     expect(by(rows, "Capture").label).toBe("Capture: 0 of 1 task done, 1 needs you");
-    expect(by(rows, "Storage").label).toBe("Storage: 0 of 1 task done, 1 with agents working");
+    expect(by(rows, "Storage").label).toBe("Storage: 0 of 1 task done, 1 in progress");
+    // Review M1: a task the user paused is called paused, not "not started".
+    expect(by(rows, "Onboarding").label).toBe("Onboarding: 0 of 1 task done, 1 paused");
   });
 
   it("the live line names the provider and what it is doing on which task", () => {
@@ -73,7 +76,21 @@ describe("progressByArea", () => {
     expect(again.total).toBe(2);
     expect(again.done).toBe(1);
     expect(again.segments).toEqual(["rest", "done"]);
-    expect(again.label).toBe("Export: 1 of 2 tasks done, 1 not started");
+    // EX-001 has started and nothing runs on it now: waiting, not "not started" (review M1).
+    expect(again.label).toBe("Export: 1 of 2 tasks done, 1 waiting");
+  });
+
+  it("the demo's labels name paused and deferred work, and one task's two same-provider reviews are listed once (ORC-017 review M1, L7)", () => {
+    const s = buildDemo(T0);
+    const reliability = by(progressByArea(s, T0), "Reliability");
+    expect(reliability.label).toBe("Reliability: 1 of 3 tasks done, 1 paused, 1 deferred");
+    // Two active runs of one provider doing the same thing on one task: one live line.
+    // The demo starts with no runs (the scheduler dispatches them), so the sample fixture with runs in flight is used here.
+    const seed = buildSeed(T0);
+    const t = seed.tasks.find((x) => M.activeAttempts(seed, x.id).length)!;
+    const a = M.activeAttempts(seed, t.id)[0];
+    seed.attempts.push({ ...structuredClone(a), id: `${a.id}-twin` });
+    expect(liveAgents(seed, t)).toHaveLength(1);
   });
 
   it("needsYouOf names what waits: a held task with options, a review gate, failing final checks, a user decision", () => {

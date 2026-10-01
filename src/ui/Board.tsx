@@ -9,7 +9,7 @@ import { COLUMN_LABEL, ProviderMark, ROLE_LABEL, StatePill, currentWork, hasNewD
 import { isSettledTask } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
 import { PatternPicker } from "./PatternPicker";
-import { OTHER_AREA, areaOf, liveAgents, needsYouOf } from "./progress";
+import { OTHER_AREA, areaOf, liveAgents, needsYouOf, serviceOwned } from "./progress";
 import { ShapingBanner } from "./Shaping";
 import { FocusDiff } from "./SteeringChanges";
 
@@ -218,7 +218,8 @@ export function Board() {
   const filtered = state.tasks
     .filter((t) => {
       const work = currentWork(state, t);
-      if (area && areaOf(t) !== area) return false;
+      // The same tasks Progress by area counts: the service's own merge checks and reviews are listed under every area.
+      if (area && (areaOf(t) !== area || serviceOwned(t))) return false;
       if (status && M.column(state, t) !== status) return false;
       if (role && work?.role !== role) return false;
       if (provider && !involvesProvider(state, t, provider)) return false;
@@ -271,6 +272,7 @@ export function Board() {
             {areas.map((a) => (
               <option key={a}>{a}</option>
             ))}
+            {area && !areas.includes(area) && <option value={area}>{area} (no tasks)</option>}
           </select>
         </label>
         <label>
@@ -321,7 +323,7 @@ export function Board() {
 
       {area && (
         <p className="muted meta" style={{ margin: "-0.5rem 0 0.75rem" }}>
-          Showing the area <strong>{area}</strong>.{" "}
+          Showing the area <strong>{area}</strong>, as Progress by area counts it; the service&apos;s own merge checks and reviews are listed under every area.{" "}
           <button className="link" onClick={() => setArea("")}>
             Show every area
           </button>
@@ -497,7 +499,7 @@ function StepBar({ task }: { task: Task }) {
   return (
     <div className="stepbar" aria-hidden="true">
       {task.steps.map((st) => (
-        <span key={st.id} className={st.state === "done" ? "done" : st.state === "running" || st.state === "stopping" ? "work" : ""} title={`${st.id} ${st.purpose}: ${st.state}`} />
+        <span key={st.id} className={st.state === "done" ? "done" : st.state === "running" || st.state === "stopping" ? "work" : st.state === "blocked" ? "fail" : ""} title={`${st.id} ${st.purpose}: ${st.state}`} />
       ))}
     </div>
   );

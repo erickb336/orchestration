@@ -941,7 +941,7 @@ export function defaultSimulatedScript(a: CheckAssignment, n: number): CheckResu
       status: fail ? "failed" : "passed",
       exitCode: fail ? 1 : 0,
       durationMs: 1200,
-      excerpt: fail ? "(simulated) 1 failing test\n  ✗ exported dates keep their timezone" : `(simulated) ${c.label} passed`,
+      excerpt: fail ? "(simulated) 1 failing test" : `(simulated) ${c.label} passed`,
       bytes: 0,
       truncated: false,
     };
@@ -1009,7 +1009,9 @@ export class SimulatedChecks implements CheckRunner {
       p.progress = Math.min(100, p.progress + this.progressPerTick);
       if (p.progress >= 100) {
         this.procs.delete(id);
-        const root = p.a.taskId.replace(/\..*$/, "");
+        // The tree's root: child tasks (WT-004.2) and the service's own merge checks and reviews (WT-002-CK1, WT-002-RV1)
+        // count as their root, so only a tree's very first check run fails, as the story intends.
+        const root = p.a.taskId.replace(/\..*$/, "").replace(/(-(?:CK|RV)\d+)+$/, "");
         const n = this.seen.get(root) ?? 0;
         this.seen.set(root, n + 1);
         const results = this.script(p.a, n);
