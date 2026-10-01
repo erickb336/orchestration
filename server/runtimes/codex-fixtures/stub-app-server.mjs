@@ -6,6 +6,10 @@
 //   complete            normal turn: command, file change, agent messages, token usage, completed
 //   interrupt-honoured  turn stays running; turn/interrupt -> turn/completed(interrupted)
 //   interrupt-ignored   turn stays running; turn/interrupt is acknowledged but never completes
+//   steer               turn stays running; turn/steer with the active turn id is accepted, echoed as an
+//                       agent message "steered: <text>", and the turn then completes (interrupts honoured)
+//   steer-refused       like steer, but turn/steer answers with a JSON-RPC error (non-steerable turn)
+//   steer-wrong-turn    like steer, but the turn/steer response names another turn id
 //   grandchild          like interrupt-ignored, and spawns a long-lived child (pid -> CODEX_STUB_PID_FILE)
 //   auth-fail           error notification (unauthorized) then turn/completed(failed)
 //   crash               exits with code 101 mid-turn after writing a panic to stderr
@@ -16,6 +20,7 @@
 //   hang                never answers initialize
 // CODEX_STUB_LOG: file to append every received message and argv to (JSON lines).
 // CODEX_STUB_VERSION_EXIT: exit code for --version (default 0).
+// CODEX_STUB_STEER_SILENT=1: turn/steer is never answered (any mode).
 
 import { spawn } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
@@ -53,6 +58,9 @@ const later = (ms, fn) => setTimeout(fn, ms);
 let serverReqId = 0;
 const awaiting = new Map();
 let cwd = "/tmp";
+/** The turn in progress (null between turns); turn/steer needs it, like the real app-server. */
+let activeTurn = null;
+const STEER_MODES = new Set(["steer", "steer-refused", "steer-wrong-turn"]);
 
 function turnObj(status, error = null, items = []) {
   return { id: TURN, items, itemsView: "full", status, error, startedAt: 1, completedAt: status === "inProgress" ? null : 2, durationMs: null };
@@ -61,6 +69,11 @@ function threadObj(model) {
   return { id: THREAD, sessionId: THREAD, forkedFromId: null, parentThreadId: null, preview: "", ephemeral: false, modelProvider: "openai", model, status: { type: "idle" }, cwd, turns: [] };
 }
 const item = (it) => notify("item/completed", { item: it, threadId: THREAD, turnId: TURN, completedAtMs: Date.now() });
+const completeTurn = (status, error = null) => {
+  activeTurn = null;
+  notify("turn/completed", { threadId: THREAD, turn: turnObj(status, error) });
+};
+const agentMessage = (id, text, phase) => ({ type: "agentMessage", id, text, phase, memoryCitation: null, delivery: null, questions: null });
 
 const FINAL = [
   "All done.",
@@ -71,6 +84,7 @@ const FINAL = [
 ].join("\n");
 
 function runTurn() {
+  activeTurn = TURN;
   notify("turn/started", { threadId: THREAD, turn: turnObj("inProgress") });
   switch (mode) {
     case "complete":
@@ -88,11 +102,14 @@ function runTurn() {
           },
         });
         item({ type: "agentMessage", id: "i4", text: FINAL, phase: "final_answer", memoryCitation: null, delivery: null, questions: null });
-        notify("turn/completed", { threadId: THREAD, turn: turnObj("completed") });
+        completeTurn("completed");
       });
       return;
     case "interrupt-honoured":
     case "interrupt-ignored":
+    case "steer":
+    case "steer-refused":
+    case "steer-wrong-turn":
       later(10, () => notify("item/started", { item: { type: "commandExecution", id: "i1", command: "sleep 100" }, threadId: THREAD, turnId: TURN }));
       return;
     case "grandchild": {
@@ -104,7 +121,7 @@ function runTurn() {
       const error = { message: "401 Unauthorized: missing bearer token", codexErrorInfo: "unauthorized", additionalDetails: null, misalignment: null };
       later(10, () => {
         notify("error", { error, willRetry: false, threadId: THREAD, turnId: TURN });
-        notify("turn/completed", { threadId: THREAD, turn: turnObj("failed", error) });
+        completeTurn("failed", error);
       });
       return;
     }
@@ -120,7 +137,7 @@ function runTurn() {
         const decision = msg.result?.decision;
         later(5, () => {
           item({ type: "agentMessage", id: "i9", text: `decision=${JSON.stringify(decision)}`, phase: "final_answer", memoryCitation: null, delivery: null, questions: null });
-          notify("turn/completed", { threadId: THREAD, turn: turnObj("completed") });
+          completeTurn("completed");
         });
       });
       send({ id, method: "item/commandExecution/requestApproval", params: { kind: "command", threadId: THREAD, turnId: TURN, itemId: "i1", startedAtMs: Date.now(), environmentId: null, command: "rm -rf /" } });
@@ -183,8 +200,34 @@ function handle(msg) {
       return;
     case "turn/interrupt":
       send({ id, result: {} });
-      if (mode === "interrupt-honoured") later(20, () => notify("turn/completed", { threadId: THREAD, turn: turnObj("interrupted") }));
+      if (mode === "interrupt-honoured" || STEER_MODES.has(mode)) later(20, () => completeTurn("interrupted"));
       return;
+    case "turn/steer": {
+      if (process.env.CODEX_STUB_STEER_SILENT === "1") return;
+      // Like the real app-server: a steer needs an active turn whose id matches expectedTurnId.
+      const text = params?.input?.map((i) => (i.type === "text" ? i.text : `<${i.type}>`)).join("") ?? "";
+      if (mode === "steer-refused") {
+        send({ id, error: { code: -32600, message: "turn/steer failed: the active turn is not steerable (review)" } });
+        return;
+      }
+      if (activeTurn === null) {
+        send({ id, error: { code: -32600, message: "turn/steer failed: no active turn" } });
+        return;
+      }
+      if (params?.threadId !== THREAD || params?.expectedTurnId !== activeTurn) {
+        send({ id, error: { code: -32600, message: `turn/steer failed: expected turn ${params?.expectedTurnId} is not the active turn ${activeTurn}` } });
+        return;
+      }
+      send({ id, result: { turnId: mode === "steer-wrong-turn" ? "turn_other" : activeTurn } });
+      if (mode === "steer") {
+        later(10, () => {
+          item(agentMessage("i5", `steered: ${text}`, "commentary"));
+          item(agentMessage("i6", FINAL, "final_answer"));
+          completeTurn("completed");
+        });
+      }
+      return;
+    }
     default:
       if (id !== undefined) send({ id, error: { code: -32601, message: `stub: unknown method ${method}` } });
   }
