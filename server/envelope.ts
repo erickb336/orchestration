@@ -120,7 +120,7 @@ export function capConventions(files: { file: string; blob: string; text: string
 /** The lead's own runs (conversation, planning, decisions) get these: the table in docs/tasks/ORC-024.md, kept with the table order so Settings can show it. */
 export const LEAD_PRINCIPLES = LEAD_PRINCIPLE_IDS;
 /** The section is at most this many words; principles that do not fit are named with their "apply when" only. */
-export const PRINCIPLES_WORD_CAP = 1000;
+export const PRINCIPLES_WORD_CAP = 1200;
 export const PRINCIPLES_HEADER = "## Principles for this step";
 /** The lead's runs are not steps (review L8). */
 export const LEAD_PRINCIPLES_HEADER = "## Principles for this run";

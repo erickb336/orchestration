@@ -924,7 +924,7 @@ function Flows() {
 }
 
 /**
- * ORC-024: the 15 working principles, read-only. Each flow step names the ones that fit it (listed under
+ * ORC-024: the working principles, read-only. Each flow step names the ones that fit it (listed under
  * its steps above); the service adds them to the agent's instructions. They change by editing their files
  * in principles/ and running the tests, never here.
  */
@@ -933,14 +933,14 @@ function Principles() {
     <section className="card" aria-labelledby="principles-h">
       <h2 id="principles-h">Principles</h2>
       <p className="muted small" style={{ marginBottom: "0.3rem" }}>
-        Short working principles each agent gets with its instructions, chosen per flow step (shown under each step above). The lead&apos;s own runs get {LEAD_PRINCIPLE_IDS.map(principleName).join(", ")}.
+        Short working principles each agent gets with its instructions, chosen per flow step (shown under each step above). Every agent and the lead also get &quot;{principleName("contextualize-and-write-for-the-reader")}&quot;, so you can come in cold and understand the problem, the decisions and what is left. The lead&apos;s own runs get {LEAD_PRINCIPLE_IDS.map(principleName).join(", ")}.
         &quot;{principleName("attack-the-premise")}&quot; is added by the service to a repair round that follows a round which failed the same way.
       </p>
       <details className="how">
         <summary>How this works</summary>
         <p>
           Nothing here edits a principle: the {PRINCIPLES.length} live in the repository&apos;s <code>principles/</code> folder, one file each with its name, its &quot;apply when&quot; line and a body of at most 200 words. To change one, edit its file and run <code>npm test</code>. Each run records which principles
-          it was given (on the task page, under the run). They are adapted from pstack by Lauren Tan (MIT), at commit <code>{PSTACK_COMMIT.slice(0, 7)}</code> of github.com/cursor/plugins; the license is in <code>principles/LICENSE-pstack</code>.
+          it was given (on the task page, under the run). Apart from &quot;{principleName("contextualize-and-write-for-the-reader")}&quot;, which is Orchestrator&apos;s own, they are adapted from pstack by Lauren Tan (MIT), at commit <code>{PSTACK_COMMIT.slice(0, 7)}</code> of github.com/cursor/plugins; the license is in <code>principles/LICENSE-pstack</code>.
         </p>
       </details>
       <ul className="flow-list">
