@@ -74,11 +74,19 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
 
 ## Screenshots
 
-All screenshots show the built-in sample project on the simulated runtime: no agents are running, and the pull requests are simulated.
+All screenshots show the built-in sample project on the simulated runtime: no agents are running, and the pull requests and check runs are simulated.
 
 **Tasks board.** Every task has a spec, a pipeline, and a truthful state. Child tasks link to the goal they came from.
 
 ![Tasks board](docs/screenshots/board.png)
+
+**Shape the vision first.** In the shaping stage nothing runs. The lead asks a few targeted questions, each with a reason and suggested answers, which you can answer by tapping. It keeps a living draft of the vision with its assumptions marked, and shows which parts are clear and which are still open. Vision documents you attach are listed here, and the lead reads them.
+
+![Shaping the vision with the lead](docs/screenshots/shaping.png)
+
+**Vision documents.** Attach files or a folder. Copies stay outside your repository, and each upload becomes one vision revision.
+
+![Vision documents and the lead's questions](docs/screenshots/vision-docs.png)
 
 **Steering by conversation.** You tell the lead what to focus on, from any page, while work continues. The reply lists exactly what changed (here a new focus and one deferred task), and each change has an Undo.
 
@@ -103,6 +111,18 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 **Optional comparison example: best of two.** This screenshot demonstrates an explicitly enabled experiment, not the default workflow. Codex and Claude each implement, and the review chooses one. Normally a single agent implements, followed by independent review and repair only if needed.
 
 ![Best-of pipeline with an iteration](docs/screenshots/best-of-pipeline.png)
+
+**Checks and findings.** The service runs your project's own checks on each change. A failing test becomes a finding marked "error, auto-fix", next to the review's own findings, each with its severity, its action, and the file and line. The repair step fixes them, and the checks run again.
+
+![Checks and findings](docs/screenshots/findings.png)
+
+**Checks gate the pull request.** If a check fails on the pull request's commit, it waits for you, and the card says why.
+
+![A pull request waiting on a failed check](docs/screenshots/pr-checks.png)
+
+**Checks settings.** Only you set the commands. They run in the Codex sandbox, and the page says plainly what that sandbox does and does not stop.
+
+![Checks settings](docs/screenshots/checks-settings.png)
 
 **Versioned artifacts.** Every step's output is kept, and you can edit any of them. Candidates that were not chosen stay visible.
 
