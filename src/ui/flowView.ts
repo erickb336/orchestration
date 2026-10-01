@@ -2,7 +2,8 @@
 // default), the task page and Settings → Flows. Pure derivations over domain state; no domain logic
 // lives here, and nothing here edits a pipeline.
 
-import type { Flow, FlowRef, PipelineRevision, Task } from "../domain/types";
+import { principleName } from "../domain/principles";
+import type { Flow, FlowRef, GivenPrinciple, PipelineRevision, Task } from "../domain/types";
 
 // ---------- the flow line on the task page ----------
 
@@ -36,6 +37,18 @@ export function earlierFlowLabel(task: Pick<Task, "pipelineHistory" | "flow">, r
 /** The flow's name for a pipeline revision that applied one; undefined for expansions and check rounds. */
 export function revisionFlowLabel(rev: Pick<PipelineRevision, "flow">): string | undefined {
   return rev.flow?.name;
+}
+
+// ---------- ORC-024: principles on the task page ----------
+
+/**
+ * The step's principles line: "Principles: Laziness protocol · Fix root causes · + Attack the premise
+ * (added: check `test` failed again after S3)". An automatic one is marked "+" with its recorded reason.
+ * Empty for a run that recorded none (older runs) and for a step without principles.
+ */
+export function principlesText(given: readonly (Pick<GivenPrinciple, "id"> & Partial<GivenPrinciple>)[] | undefined): string {
+  if (!given?.length) return "";
+  return `Principles: ${given.map((g) => (g.added ? `+ ${principleName(g.id)} (${g.added})` : principleName(g.id))).join(" · ")}`;
 }
 
 // ---------- the Change flow panel ----------

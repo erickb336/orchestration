@@ -7,7 +7,7 @@ import { builtInCatalog } from "../domain/flows";
 import { buildSeed } from "../domain/seed";
 import { ROLES, type FlowRef, type State } from "../domain/types";
 import { ROLE_LABEL } from "./common";
-import { PIPELINE_CHANGED_MESSAGE, changeConsequences, defaultFlowNote, earlierFlowLabel, flowAtRev, flowLineParts, flowLineText, revisionFlowLabel, sameFlow } from "./flowView";
+import { PIPELINE_CHANGED_MESSAGE, changeConsequences, defaultFlowNote, earlierFlowLabel, flowAtRev, flowLineParts, flowLineText, principlesText, revisionFlowLabel, sameFlow } from "./flowView";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
 const at = (s: number) => new Date(T0 + s * 1000).toISOString();
@@ -115,5 +115,16 @@ describe("Settings → Flows", () => {
     expect(defaultFlowNote("change", catalog, builtIn("change"))).toBeUndefined();
     expect(defaultFlowNote("goal", catalog, builtIn("goal"))).toBeUndefined();
     expect(defaultFlowNote("change-lean", catalog, builtIn("change"))).toBe('Using Change: "change-lean" is not one of the flows.');
+  });
+});
+
+describe("principles on the task page (ORC-024)", () => {
+  it("names a run's principles in order, marks an automatic one with its reason, and says nothing for a run that recorded none", () => {
+    expect(principlesText([{ id: "laziness-protocol", hash: "x" }, { id: "fix-root-causes", hash: "y" }])).toBe("Principles: Laziness protocol · Fix root causes");
+    expect(principlesText([{ id: "fix-root-causes" }, { id: "attack-the-premise", added: "added: check `test` failed again after S3" }])).toBe("Principles: Fix root causes · + Attack the premise (added: check `test` failed again after S3)");
+    expect(principlesText(undefined)).toBe("");
+    expect(principlesText([])).toBe("");
+    // An id no file carries any more is shown as it was recorded.
+    expect(principlesText([{ id: "gone-principle" }])).toBe("Principles: gone-principle");
   });
 });

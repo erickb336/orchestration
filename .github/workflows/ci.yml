@@ -20,4 +20,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # ORC-024 review M1: `npm test` regenerates the compiled principles first; a commit that changed
+      # principles/*.md without the compiled copy fails here instead of shipping the old text.
+      - name: The compiled principles match principles/*.md
+        run: git diff --exit-code -- src/domain/builtInPrinciples.json
       - run: npm run build

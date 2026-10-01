@@ -1,12 +1,19 @@
 // The pipelines the service owns. They stay in code, never among the flows a task can be created from:
 // their steps are a contract with delivery code (a prepared revert, a review pinned to a commit, a check
 // target). ORC-021: the revert and the delivery review carry a security review beside their code review.
+// ORC-024: each step names the principles that fit it, as the flow files do (the table in docs/tasks/ORC-024.md).
 
 import type { InputRef, StepDef } from "./types";
 
 const ref = (step: string, output: string): InputRef => ({ step, output });
 
 const FINAL_CHECKS_PURPOSE = "Final checks";
+
+/** ORC-024: the principles every code reviewer and every security reviewer gets, in the flows, here and in check rounds. */
+export const CODE_REVIEW_PRINCIPLES = ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"];
+export const SECURITY_REVIEW_PRINCIPLES = ["boundary-discipline"];
+/** ORC-024: the principles every repair step gets (loop repairs and check-round fixes); "attack the premise" is added by dispatch when a round fails the same way again. */
+export const REPAIR_PRINCIPLES = ["laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes"];
 
 export interface InternalFlow {
   id: InternalFlowId;
@@ -41,9 +48,10 @@ const revert: StepDef[] = [
       { name: "change", kind: "code-change" },
       { name: "handoff", kind: "handoff" },
     ],
+    principles: ["laziness-protocol"],
   },
-  { id: "S2", purpose: "Code review", role: "code_reviewer", dependsOn: ["S1"], inputs: [ref("S1", "change"), ref("S1", "handoff")], outputs: [{ name: "findings", kind: "review-findings" }] },
-  { id: "SR1", purpose: "Security review", role: "security_reviewer", dependsOn: ["S1"], inputs: [ref("S1", "change"), ref("S1", "handoff")], outputs: [{ name: "findings", kind: "review-findings" }] },
+  { id: "S2", purpose: "Code review", role: "code_reviewer", dependsOn: ["S1"], inputs: [ref("S1", "change"), ref("S1", "handoff")], outputs: [{ name: "findings", kind: "review-findings" }], principles: [...CODE_REVIEW_PRINCIPLES] },
+  { id: "SR1", purpose: "Security review", role: "security_reviewer", dependsOn: ["S1"], inputs: [ref("S1", "change"), ref("S1", "handoff")], outputs: [{ name: "findings", kind: "review-findings" }], principles: [...SECURITY_REVIEW_PRINCIPLES] },
   { id: "C1", purpose: FINAL_CHECKS_PURPOSE, role: "checks", dependsOn: ["S2", "SR1"], inputs: [ref("S1", "change")], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "block" } },
   {
     id: "S3",
@@ -53,6 +61,7 @@ const revert: StepDef[] = [
     dependsOn: ["C1"],
     inputs: [ref("S1", "change"), ref("S2", "findings"), ref("SR1", "findings"), ref("C1", "final")],
     outputs: [{ name: "verification", kind: "verification" }],
+    principles: ["prove-it-works"],
   },
 ];
 
@@ -62,8 +71,8 @@ const revert: StepDef[] = [
  * the changed lines. The findings of either gate the merge.
  */
 const deliveryReview: StepDef[] = [
-  { id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
-  { id: "SR1", purpose: "Security review of the change for merge", role: "security_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer" },
+  { id: "S1", purpose: "Review the change for merge", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer", principles: [...CODE_REVIEW_PRINCIPLES] },
+  { id: "SR1", purpose: "Security review of the change for merge", role: "security_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "findings", kind: "review-findings" }], independentOf: "writer", principles: [...SECURITY_REVIEW_PRINCIPLES] },
 ];
 
 /**

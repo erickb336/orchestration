@@ -266,7 +266,8 @@ describe("interruption (§6.10)", () => {
 
   it("a pipeline edit during a run discards its result; a settings change stops it for revision and it runs again with the new revision (mutation check: stale results)", async () => {
     const { id, run } = await checkRunning();
-    const defs = task(id).steps.map((s) => ({ id: s.id, purpose: s.id === "C1" ? "Run the checks, edited" : s.purpose, role: s.role, dependsOn: s.dependsOn, inputs: s.inputs, outputs: s.outputs, ...(s.runIf ? { runIf: s.runIf } : {}), ...(s.iterate ? { iterate: s.iterate } : {}), ...(s.checks ? { checks: s.checks } : {}) }));
+    // ORC-024: the principles travel with the edit; dropping them would change what S1's agent received and restart it.
+    const defs = task(id).steps.map((s) => ({ id: s.id, purpose: s.id === "C1" ? "Run the checks, edited" : s.purpose, role: s.role, dependsOn: s.dependsOn, inputs: s.inputs, outputs: s.outputs, ...(s.runIf ? { runIf: s.runIf } : {}), ...(s.iterate ? { iterate: s.iterate } : {}), ...(s.checks ? { checks: s.checks } : {}), ...(s.principles ? { principles: s.principles } : {}) }));
     setTestPipeline(store, id, defs, iso(), "edit");
     expect(st().attempts.find((a) => a.id === run.id)!.outcome).toBe("stopping");
     checks.finish(run.id);

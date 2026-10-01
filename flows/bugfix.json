@@ -12,7 +12,8 @@
       "role": "coder",
       "dependsOn": [],
       "inputs": [],
-      "outputs": [{ "name": "reproduction", "kind": "report" }]
+      "outputs": [{ "name": "reproduction", "kind": "report" }],
+      "principles": ["fix-root-causes", "prove-it-works"]
     },
     {
       "id": "S2",
@@ -23,7 +24,8 @@
       "outputs": [
         { "name": "change", "kind": "code-change" },
         { "name": "handoff", "kind": "handoff" }
-      ]
+      ],
+      "principles": ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "fix-root-causes", "prove-it-works"]
     },
     {
       "id": "C1",
@@ -45,7 +47,8 @@
         { "step": "S2", "output": "handoff" },
         { "step": "C1", "output": "checks" }
       ],
-      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+      "outputs": [{ "name": "findings", "kind": "review-findings" }],
+      "principles": ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"]
     },
     {
       "id": "SR1",
@@ -58,7 +61,8 @@
         { "step": "S2", "output": "handoff" },
         { "step": "C1", "output": "checks" }
       ],
-      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+      "outputs": [{ "name": "findings", "kind": "review-findings" }],
+      "principles": ["boundary-discipline"]
     },
     {
       "id": "S4",
@@ -77,7 +81,8 @@
         { "step": "S3", "output": "findings" },
         { "step": "SR1", "output": "findings" }
       ],
-      "iterate": { "from": "C1", "max": 3 }
+      "iterate": { "from": "C1", "max": 3 },
+      "principles": ["laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes"]
     },
     {
       "id": "C2",
@@ -104,7 +109,8 @@
         { "step": "SR1", "output": "findings" },
         { "step": "C2", "output": "final" }
       ],
-      "outputs": [{ "name": "verification", "kind": "verification" }]
+      "outputs": [{ "name": "verification", "kind": "verification" }],
+      "principles": ["prove-it-works"]
     }
   ]
 }

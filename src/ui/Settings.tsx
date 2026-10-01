@@ -4,6 +4,7 @@ import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { AUTOPILOT, PROVIDERS, ROLES, STEERING_MODES, type Autonomy, type SteeringMode } from "../domain/types";
 import { effectiveDefault } from "../domain/flows";
+import { LEAD_PRINCIPLE_IDS, PRINCIPLES, PSTACK_COMMIT, principleName } from "../domain/principles";
 import { FlowPicker, FlowSteps } from "./FlowPicker";
 import { defaultFlowNote } from "./flowView";
 import { ChecksSettings } from "./ChecksSettings";
@@ -101,6 +102,7 @@ export function Settings() {
             </p>
           </section>
           <Flows />
+          <Principles />
         </div>
 
         <div>
@@ -914,6 +916,45 @@ function Flows() {
               </summary>
               <FlowSteps steps={p.steps} />
             </details>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * ORC-024: the 15 working principles, read-only. Each flow step names the ones that fit it (listed under
+ * its steps above); the service adds them to the agent's instructions. They change by editing their files
+ * in principles/ and running the tests, never here.
+ */
+function Principles() {
+  return (
+    <section className="card" aria-labelledby="principles-h">
+      <h2 id="principles-h">Principles</h2>
+      <p className="muted small" style={{ marginBottom: "0.3rem" }}>
+        Short working principles each agent gets with its instructions, chosen per flow step (shown under each step above). The lead&apos;s own runs get {LEAD_PRINCIPLE_IDS.map(principleName).join(", ")}.
+        &quot;{principleName("attack-the-premise")}&quot; is added by the service to a repair round that follows a round which failed the same way.
+      </p>
+      <details className="how">
+        <summary>How this works</summary>
+        <p>
+          Nothing here edits a principle: the {PRINCIPLES.length} live in the repository&apos;s <code>principles/</code> folder, one file each with its name, its &quot;apply when&quot; line and a body of at most 200 words. To change one, edit its file and run <code>npm test</code>. Each run records which principles
+          it was given (on the task page, under the run). They are adapted from pstack by Lauren Tan (MIT), at commit <code>{PSTACK_COMMIT.slice(0, 7)}</code> of github.com/cursor/plugins; the license is in <code>principles/LICENSE-pstack</code>.
+        </p>
+      </details>
+      <ul className="flow-list">
+        {PRINCIPLES.map((p) => (
+          <li key={p.id}>
+            <div className="row" style={{ gap: "0.3rem" }}>
+              <strong>{p.name}</strong>
+              <span className="mono muted" style={{ fontSize: "0.78rem" }}>
+                {p.id}
+              </span>
+            </div>
+            <div className="muted" style={{ fontSize: "0.85rem" }}>
+              <strong>Apply when:</strong> {p.applyWhen}
+            </div>
           </li>
         ))}
       </ul>

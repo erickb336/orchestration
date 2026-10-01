@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Orchestrator flow",
-  "description": "One flow: the steps a task runs, in order, with their roles, inputs and outputs. The built-in flows live in the repository's flows/ directory and change through commits; a test checks every file against this schema and the pipeline graph rules.",
+  "description": "One flow: the steps a task runs, in order, with their roles, inputs, outputs and principles. The built-in flows live in the repository's flows/ directory and change through commits; a test checks every file against this schema and the pipeline graph rules.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "name", "description", "whenToUse", "steps"],
@@ -20,6 +20,26 @@
     "role": { "enum": ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer", "checks"] },
     "kind": { "enum": ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results"] },
     "provider": { "enum": ["claude", "codex"] },
+    "principle": {
+      "enum": [
+        "exhaust-the-design-space",
+        "experience-first",
+        "foundational-thinking",
+        "sequence-verifiable-units",
+        "laziness-protocol",
+        "subtract-before-you-add",
+        "test-behavior-not-implementation",
+        "migrate-callers-then-delete-legacy-apis",
+        "fix-root-causes",
+        "attack-the-premise",
+        "prove-it-works",
+        "boundary-discipline",
+        "minimize-reader-load",
+        "never-block-on-the-human",
+        "encode-lessons-in-structure"
+      ],
+      "description": "ORC-024: the id of a file in principles/. The list equals PRINCIPLE_IDS in src/domain/principles.ts."
+    },
     "ref": {
       "type": "object",
       "additionalProperties": false,
@@ -70,6 +90,13 @@
           "required": ["onFail"],
           "properties": { "onFail": { "enum": ["findings", "block"] } },
           "description": "Checks steps only. No `only`: check commands belong to each project; flows run every configured check."
+        },
+        "principles": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 15,
+          "items": { "$ref": "#/$defs/principle" },
+          "description": "ORC-024: the working principles the step's agent receives, added to its instructions. Not on Checks steps. \"attack-the-premise\" is added by the service to a repair round that follows a round which failed the same way."
         }
       }
     }

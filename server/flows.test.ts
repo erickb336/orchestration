@@ -20,6 +20,7 @@ import { INTERNAL_FLOWS } from "../src/domain/internalFlows";
 import * as M from "../src/domain/model";
 import { builtInCatalog } from "../src/domain/flows";
 import { toDef } from "../src/domain/pipeline";
+import { PRINCIPLE_IDS } from "../src/domain/principles";
 import { ARTIFACT_KINDS, PROVIDERS, STEP_ROLES, type State, type StepDef } from "../src/domain/types";
 import schema from "../flows/flow.schema.json";
 import { VERIFY_CHECKS_NOTE } from "./envelope";
@@ -85,18 +86,32 @@ describe("the built-in files", () => {
     expect(schema.$defs.role.enum).toContain("security_reviewer");
     expect(schema.$defs.kind.enum).toEqual(ARTIFACT_KINDS);
     expect(schema.$defs.provider.enum).toEqual(PROVIDERS);
+    // ORC-024: the principle ids too.
+    expect(schema.$defs.principle.enum).toEqual([...PRINCIPLE_IDS]);
   });
 
-  it("the six flows and the three internal pipelines equal the format-14 templates apart from the security review beside each code review", () => {
+  it("ORC-024: the schema accepts a step's principles and refuses an unknown id, a repeated id and a non-list", () => {
+    const validate = validator();
+    const change = structuredClone(BUILT_IN_FILES.find((f) => f.raw.id === "change")!.raw) as unknown as { steps: Record<string, unknown>[] };
+    const withS1 = (principles: unknown) => ({ ...change, steps: change.steps.map((st) => (st.id === "S1" ? { ...st, principles } : st)) });
+    expect(validate(withS1(["laziness-protocol", "prove-it-works"]))).toBe(true);
+    expect(validate(withS1([]))).toBe(true);
+    expect(validate(withS1(["be-nice"]))).toBe(false);
+    expect(validate(withS1(["laziness-protocol", "laziness-protocol"]))).toBe(false);
+    expect(validate(withS1("laziness-protocol"))).toBe(false);
+    expect(validate(withS1([...PRINCIPLE_IDS, "laziness-protocol"]))).toBe(false);
+  });
+
+  it("the six flows and the three internal pipelines equal the format-14 templates apart from the security review beside each code review and the principles", () => {
     // ORC-017 §3.11: the verify purposes are plain descriptions now; the format-14 record keeps the sentence that moved to the
     // lead's role brief, so it is stripped here. ORC-021: the security review step and every reference to it are stripped too,
-    // so that nothing else changed.
+    // so that nothing else changed. ORC-024: the principles are stripped as well (principles.test.ts pins them step by step).
     const described = (st: StepDef): StepDef => ({ ...st, purpose: st.purpose.replace(` ${VERIFY_CHECKS_NOTE}`, "").replace(/\.$/, "") });
     const withoutSecurity = (steps: StepDef[]): StepDef[] => {
       const sec = new Set(steps.filter((s) => s.role === "security_reviewer").map((s) => s.id));
       return steps
         .filter((s) => !sec.has(s.id))
-        .map((s) => toDef({ ...s, dependsOn: s.dependsOn.filter((d) => !sec.has(d)), inputs: s.inputs.filter((r) => !sec.has(r.step)), ...(s.runIf ? { runIf: s.runIf.filter((r) => !sec.has(r.step)) } : {}) }));
+        .map(({ principles: _p, ...s }) => toDef({ ...s, dependsOn: s.dependsOn.filter((d) => !sec.has(d)), inputs: s.inputs.filter((r) => !sec.has(r.step)), ...(s.runIf ? { runIf: s.runIf.filter((r) => !sec.has(r.step)) } : {}) }));
     };
     for (const id of ["change", "feature", "bugfix", "investigation", "design", "goal"]) {
       const p = builtIn(id);

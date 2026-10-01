@@ -24,7 +24,7 @@ It opens a sample project on a simulated runtime, with a short tour. It needs No
 1. **Shape the vision with the lead.** It asks targeted questions and drafts the vision with you. Nothing runs yet.
 2. **The lead plans tasks.** Each task gets a spec: the options, their trade-offs, and the chosen approach.
 3. **It picks a flow for each task** (see below), and a provider and model for each stage.
-4. **Each stage is a fresh agent** working in its own copy of the repository. Stages pass work on as artifacts: the design, the change, findings, check results, the verification.
+4. **Each stage is a fresh agent** working in its own copy of the repository. Stages pass work on as artifacts: the design, the change, findings, check results, the verification. Each stage also gets a few short working principles that fit its job (fix the root cause, the smallest change, prove it works), adapted from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT).
 5. **The service runs your project's checks** (tests, lint, build). **Then a code review and a security review run side by side.** The coder repairs whatever any of them found, and they run again until all are clean.
 6. **The lead verifies the result against the spec.** The work is then delivered as a branch or a pull request, which is held for you or merged automatically.
 7. **You review later** whatever landed, and can send it back as a fix or a revert.
@@ -110,9 +110,14 @@ npm run capture    # retake the README images from the demo (needs Chrome and ff
 
 ## Status
 
-This is a personal tool under active development. It was built in milestones (ORC-001 to ORC-021), each with a spec and an independent review.
+This is a personal tool under active development. It was built in milestones, each with a spec and an independent review; the latest is ORC-024.
 
-**In progress:** [ORC-022](docs/tasks/ORC-022.md). The lead can send a note to an agent while its stage is running, so you can change course without stopping the work. Note delivery to real models is unverified.
+**Recent:**
+
+- [ORC-022](docs/tasks/ORC-022.md): the lead can send a note to an agent while its stage runs, so you can change course without stopping the work. Note delivery to real models is unverified.
+- [ORC-024](docs/tasks/ORC-024.md): the working principles above.
+
+**Next:** a pass over the UI to simplify it. [ORC-023](docs/tasks/ORC-023.md), talking to the lead from Claude Code, is planned.
 
 **Not yet verified with real models.** Every feature is tested against simulated and scripted Claude and Codex runtimes. Runs with real models still need checking: `node scripts/real-run-test.mjs` does it with your credentials.
 

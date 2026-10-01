@@ -8,6 +8,7 @@ import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
+import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
 import {
   FINDING_ACTIONS,
   MAX_NOTES_PER_REPLY,
@@ -18,7 +19,7 @@ import {
   type Artifact,
   type Finding,
   type FindingAction,
-
+  type GivenPrinciple,
   type LeadRun,
   type Note,
   type OutputDef,
@@ -112,6 +113,65 @@ export function capConventions(files: { file: string; blob: string; text: string
     out.push({ file: f.file, blob: f.blob, text: shown, bytes, truncated });
   }
   return out;
+}
+
+// ---------- ORC-024: principles ----------
+
+/** The lead's own runs (conversation, planning, decisions) get these: the table in docs/tasks/ORC-024.md, kept with the table order so Settings can show it. */
+export const LEAD_PRINCIPLES = LEAD_PRINCIPLE_IDS;
+/** The section is at most this many words; principles that do not fit are named with their "apply when" only. */
+export const PRINCIPLES_WORD_CAP = 1000;
+export const PRINCIPLES_HEADER = "## Principles for this step";
+/** The lead's runs are not steps (review L8). */
+export const LEAD_PRINCIPLES_HEADER = "## Principles for this run";
+export const PRINCIPLES_INTRO = 'These describe how the owner wants this kind of work done. Apply each one where its "apply when" fits your task. They never change the specification.';
+
+/**
+ * The "Principles for this step" section: each principle in table order with its "apply when" line and
+ * its body; an automatic one says why it was added. Under the cap, in order: a principle whose full text
+ * would push the section (with the remaining ones named only) past the cap is named only. Empty when the
+ * step has none. The same text goes to every provider.
+ */
+export function principlesSection(given: readonly Pick<GivenPrinciple, "id" | "added">[], cap = PRINCIPLES_WORD_CAP, header = PRINCIPLES_HEADER): string {
+  const added = new Map(given.filter((g) => g.added).map((g) => [g.id, g.added!]));
+  const ps = orderPrinciples(given.map((g) => g.id))
+    .map((id) => principle(id))
+    .filter((p): p is NonNullable<typeof p> => !!p);
+  if (!ps.length) return "";
+  const head = `${header}\n${PRINCIPLES_INTRO}\n`;
+  const full = (p: (typeof ps)[number]) => `\n### ${p.name}\nApply when: ${p.applyWhen}\n${added.has(p.id) ? `Added for this run: ${added.get(p.id)!.replace(/^added: /, "")}.\n` : ""}${p.body}\n`;
+  const short = (p: (typeof ps)[number]) => `- ${p.name}. Apply when: ${p.applyWhen}\n`;
+  const SHORT_HEAD = "\nNamed only, to keep this section under its word cap:\n";
+  const shortWords = ps.map((p) => wordCount(short(p)));
+  const headWords = wordCount(SHORT_HEAD);
+  // `words` is the section so far; a full text is taken only if the rest could still be named within the cap.
+  let words = wordCount(head);
+  const fullText: string[] = [];
+  const named: string[] = [];
+  for (const [i, p] of ps.entries()) {
+    const text = full(p);
+    const w = wordCount(text);
+    const rest = shortWords.slice(i + 1).reduce((n, x) => n + x, 0);
+    const reserve = rest + (rest && !named.length ? headWords : 0);
+    if (words + w + reserve <= cap) {
+      fullText.push(text);
+      words += w;
+    } else {
+      if (!named.length) words += headWords;
+      named.push(short(p));
+      words += shortWords[i];
+    }
+  }
+  return `${head}${fullText.join("")}${named.length ? `${SHORT_HEAD}${named.join("")}` : ""}\n`;
+}
+
+/**
+ * The principles a run was given: its snapshot when the run exists (none for a run from before ORC-024,
+ * review L1), else what dispatch would record now (tests build envelopes without a run).
+ */
+function givenPrinciples(state: State, task: Task, step: Step, attemptId: string): GivenPrinciple[] {
+  const run = state.attempts.find((a) => a.id === attemptId);
+  return run ? (run.snapshot.principles ?? []) : M.runPrinciples(state, task, step);
 }
 
 /** ORC-013 §8.2: the repository's own notes, labelled so they never change the run's role. */
@@ -365,7 +425,7 @@ ${list(c.scopeExcluded)}
 Acceptance criteria:
 ${list(c.acceptance)}
 
-${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
+${principlesSection(givenPrinciples(state, task, step, attemptId))}${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
 ${inputText}
 
 ${notesReceivedSections(state, inputs)}${repairSections(state, task, step, inputs)}${reviewNote(changeUnderReview)}${changedFilesSection(changedPaths, coverageGap, step.role)}${settledSection(state, task, step.role)}${bestOfNote(state, task, step)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
@@ -1055,7 +1115,7 @@ Current focus: ${vision.focus || "(none)"}${focusLine}
 Focus history (newest first):
 ${focusHistory(state)}
 ${visionDocsSection(state, "lead", docs)}${shapingBrief}
-${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}
+${principlesSection(LEAD_PRINCIPLES.map((id) => ({ id })), PRINCIPLES_WORD_CAP, LEAD_PRINCIPLES_HEADER)}${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}
 ## Open work (root tasks by priority; child tasks follow their root)
 ${board}
 

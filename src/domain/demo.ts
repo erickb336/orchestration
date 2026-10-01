@@ -440,6 +440,8 @@ class DemoBuilder {
           connections: [],
           purpose: st.purpose,
           inputs: M.consumedInputs(this.s, t, st),
+          // ORC-024: the demo's runs record their principles like real ones.
+          principles: M.runPrinciples(this.s, t, st),
         },
         startedAt: this.at(m),
         outcome: "running",

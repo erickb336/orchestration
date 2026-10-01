@@ -1,0 +1,122 @@
+[
+  {
+    "id": "exhaust-the-design-space",
+    "name": "Exhaust the design space",
+    "applyWhen": "a new interaction or an architectural choice has no precedent in the code.",
+    "source": "pstack principle-exhaust-the-design-space, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "When the right answer is not obvious, do not build the first idea. Sketch two or three competing designs and compare them side by side before you commit. Building the wrong thing costs more than exploring three options. A second flavour of the first shape does not count as an alternative.\n\n**When it applies.**\n- A new interaction with no prior art in the code.\n- An architectural choice with more than one viable approach.\n- A product decision that depends on feel, not logic.\n\n**When it does not.**\n- Mechanical work with an established way of doing it.\n- A bug fix or a refactor with a clear target state.\n- A change where the constraints leave one viable approach.\n\n**Stop** exploring once the options are concrete enough to compare and one is clearly better. Record the options you rejected and why, in a few lines, so the reviewer sees the choice.",
+    "hash": "e7ff9b2a86e496a542930159e94125f6a07e8f055ccdf8a83fc6956266675383"
+  },
+  {
+    "id": "experience-first",
+    "name": "Experience first",
+    "applyWhen": "a product, UX or scope trade-off comes up.",
+    "source": "pstack principle-experience-first, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "When implementation convenience conflicts with the user's experience, choose the experience.\n\n- Every feature, control and option has to justify itself.\n- Ship less, ship better: a polished experience with three features beats a rough one with ten.\n- Prototype before committing; a design decision is cheaper in a throwaway sketch than in production code.\n- Get the details right: transitions, alignment, spacing, feedback, error states.\n- Tighten the core loop: every feature serves the central workflow or gets out of the way.\n\nThe user is whoever consumes the work. For a UI that is the end user. For a library or an internal API it is the colleague who imports it. The engineer who maintains the code next is a user too. Weigh their experience the same way, and explain impact from their perspective.\n\nFoundations should serve the experience: foundational thinking governs the order of the work, this principle governs the target.\n\n**Stop** when a feature cannot be justified from the user's side. Cut it rather than polish it.",
+    "hash": "c0df105b3ee58d0fd60816f4b494b815e2cf01feb6c6dbc0ae1c775c18770d6c"
+  },
+  {
+    "id": "foundational-thinking",
+    "name": "Foundational thinking",
+    "applyWhen": "before writing logic, when choosing core types and data structures or ordering scaffold against features.",
+    "source": "pstack principle-foundational-thinking, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "Structural decisions protect your options later. Code-level decisions protect simplicity.\n\n**Data structures first.** Get the shape of the data right before writing logic. Define the core types early, trace every way the data is accessed, and choose structures that fit the dominant paths. Once the data is right, the code around it becomes obvious.\n\nAt code level, avoid repeating structure, not every line. Types and data models should converge. Three similar statements still beat a premature abstraction. Prefer explicit over clever.\n\n**Shared state.** Before two actors share state, ask what happens if another one changes it at the same time. If the answer is not \"nothing\", isolate.\n\n**Scaffold first.** If something helps every later phase, do it first: build and test infrastructure, shared types, a check that runs on every change. Setup before features, tests before fixes. Keep each change small and single-purpose. Each increment should land one coherent abstraction or deepen one that exists, not spread a new capability across callers as special cases.\n\nSubtraction comes before scaffolding: remove dead code first, then lay foundations.",
+    "hash": "79d5330ed7be2a5d26ef026d23fa4f3cc85d9d9d8d61c5b76525ace2facecaba"
+  },
+  {
+    "id": "sequence-verifiable-units",
+    "name": "Sequence verifiable units",
+    "applyWhen": "multi-step work (a sweep, a migration, a run of similar edits) or the order of commits in a change.",
+    "source": "pstack principle-sequence-verifiable-units, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "Order the work as a sequence of small units, each ending in a state you can check, and do not advance until the current one passes.\n\n**Why.** A break caught at the unit that caused it is cheap to find. A break caught after a batch is buried, and you have already built on a broken base. A sequence a reviewer can replay turns \"trust me\" into \"watch it go red, then green\".\n\n**Doing the work.** In a sweep, a migration or any run of similar edits, verify each change before starting the next. Each unit is a bracket: a known-good state, one change, the check, then on. Start from a clean base so every check measures against the real baseline. When a script does the edits, the per-unit check is nearly free; run it anyway.\n\n**Delivery.** Order the units, and the commits that will carry them, so the sequence proves the work: the failing test first, then the fix; a removal before the reshape; the scaffold before the feature. Each unit stands on its own, and the sequence reads as an argument.\n\nKeep each check real (see \"prove it works\").",
+    "hash": "46d4f3defc22cddb6fb703b6aaa1ec1ab7c1d1ad76edc0778994a09863c70b43"
+  },
+  {
+    "id": "laziness-protocol",
+    "name": "Laziness protocol",
+    "applyWhen": "refactoring, judging a diff's size, or tempted to add an abstraction, a layer or a threaded signal.",
+    "source": "pstack principle-laziness-protocol, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "Aim for the most result with the least code and complexity.\n\n- **Prefer deletion.** When asked to refactor or improve, look for removals before additions.\n- **Keep the call hierarchy flat.** If answering a question means tracing through more than three files or layers, flatten it. A rich interface that hides real work is fine; a chain of thin layers is not.\n- **Consolidate decisions.** Do not repeat the same choice in several places. Put it behind one source of truth and pass the result on.\n- **Minimise the diff.** Make the smallest change that solves the problem. Fewer lines beat elegant boilerplate.\n- **Question the threading.** If the task asks you to pass a new signal through types, schemas, pipelines or similar layers, look for a more direct path first.\n- **Sweat the small leaks.** Remove tiny pass-throughs and duplicated choices before they spread.\n\n**The test.** If a developer would find the code exhausting to maintain, it is a bad solution.",
+    "hash": "1be8e0c88aac33c6db220e8dfa122f321d86458d056af01e957abc2e336d1d2b"
+  },
+  {
+    "id": "subtract-before-you-add",
+    "name": "Subtract before you add",
+    "applyWhen": "ordering an addition, a refactor or a rewrite.",
+    "source": "pstack principle-subtract-before-you-add, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "When evolving a system, remove complexity first, then build.\n\n**Why.** Adding to a complex system compounds its complexity. Removing first leaves less code, shows the essential structure, and usually makes the next design obvious. Default to subtraction.\n\nTreat simplification as a continual investment. Leave the design a little simpler, and a little more capable, behind the same or a smaller surface than you found it.\n\n**What to do.**\n- Remove before you construct.\n- Cut before you polish: get to the minimum before investing in quality.\n- Design for observed usage, not speculative edge cases.\n- No speculative validators, parsers or guards beyond what the specification demands.\n- Simplify instructions and prompts: remove redundant lines and excess templates.\n- When a reference has no content of its own, delete it rather than leaving a stub.\n\n**Stop** subtracting when the next removal would change behaviour the specification asks for. Report that instead.",
+    "hash": "7a0dabc74bb9fbc0017bed3cad50dedd46dad02da823eeddc051fe4e3a163dd6"
+  },
+  {
+    "id": "test-behavior-not-implementation",
+    "name": "Test behaviour, not implementation",
+    "applyWhen": "writing, changing or keeping a test.",
+    "source": "pstack principle-test-behavior-not-implementation, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "A test calls the code the way its users do and compares what they observe with a literal expected value. A test that asserts which calls the code made, or restates a constant the code contains, does neither.\n\n**The check.** Before you keep a test, ask whether it would still pass if every function it imports returned `undefined`. If yes, it cannot fail for a defect. Rewrite the assertion or delete the test.\n\n**Shapes that pass anyway:** a weak or missing assertion (`toBeDefined`, `not.toThrow`); only a mock or an absence (`toHaveBeenCalled`, `toEqual([])`); an expected value taken from the code under test; a constant pin that restates a default or a prompt string; a fixture asserting itself.\n\n**The fix.** Call the subject with one concrete input and assert the literal output or the observable effect. For an absence, assert the presence on another input too. For a constant, test the mechanism that reads it. For a mock, assert the payload or the state after the call.\n\n**Keep** tests of a relation across a table's rows (a key in two tables) and compile-time type tests.",
+    "hash": "7118a19e8fbfcc6435b3a5e285ad9f1c0cf07d00846310db2ff0d67a776fe63a"
+  },
+  {
+    "id": "migrate-callers-then-delete-legacy-apis",
+    "name": "Migrate callers, then delete legacy APIs",
+    "applyWhen": "a change introduces a new internal API while callers of the old one still exist.",
+    "source": "pstack principle-migrate-callers-then-delete-legacy-apis, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "When a new internal API is the right design, migrate its callers and remove the old one in the same change, instead of keeping a compatibility layer.\n\n**The rule.**\n- Do not keep an old path only because internal callers still use it.\n- List the callers, migrate them, and delete the old API now.\n- Treat a temporary adapter as exceptional and short-lived, not as architecture.\n- Update tests to assert the new contract; delete tests that only protected the old implementation.\n\n**Why.** Keeping both paths doubles the ways through the code, slows cleanup, and makes the code feel append-only.\n\n**Where it applies.** Internal code that your change replaced, within this task. An external caller, or a public interface others depend on, is not yours to break: report it and leave it working. A repair stays within its task; a legacy path outside it is reported, not removed.\n\n**Stop** when the old API has no callers left and is gone.",
+    "hash": "5986356c6c5787f895bdbc55ae3eeda453808ec283f580316061731572a538b3"
+  },
+  {
+    "id": "fix-root-causes",
+    "name": "Fix root causes",
+    "applyWhen": "debugging a failure or repairing a finding.",
+    "source": "pstack principle-fix-root-causes, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "Do not fix symptoms. Trace each problem to its root cause and fix it there.\n\n**Why.** Symptom fixes accumulate. Each workaround makes the system harder to reason about, and the real defect stays. A root-cause fix is slower up front and cheaper in total.\n\n**What to do.**\n- Reproduce first.\n- Ask \"why\" until you reach the cause.\n- Do not add guards: a nil check that silences a crash is a symptom fix.\n- If a workaround needs a paragraph to justify it, the code is wrong. Fix the code, not the comment.\n- Fix every instance, not just this one: search for the same shape elsewhere.\n- When stuck, measure instead of guessing: add logging, read the actual error.\n\n**Failures after a restart.** Suspect stale persistent state before code: configuration files, caches, lock files, serialised state. If clearing state fixes it, validate that state.\n\n**Stop** when the reproduction no longer fails for the reason you found, not when the symptom is hidden.",
+    "hash": "d1e5352f0a65f16a96d28cb8307d4d546009523f333e8add990302a53d4fc728"
+  },
+  {
+    "id": "attack-the-premise",
+    "name": "Attack the premise",
+    "applyWhen": "two or more fixes that share one premise have failed the same check or review.",
+    "source": "pstack principle-attack-the-premise, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "When two or more fixes that share one premise have failed the same gate, suspect the premise, not the fixes. Each failure under a shared premise is evidence about the premise.\n\n**What to do.**\n- **Write the premise down.** It is the one sentence every failed fix assumed.\n- **Before the next fix, list what each failed fix assumed and what still failed.** Look for the factor present every time: the same input, path, component or ordering.\n- **Follow that factor.** If one thing is present in every failure, something puts it there. Find what does; that is the next \"why\" (see \"fix root causes\").\n- **Remove the cause instead of compensating for it.** A retry, a fallback, a special case or a periodic cleanup leaves the cause in place and adds work on every run.\n\n**Stop.**\n- Do not start the next fix before the premise is written down and the list exists.\n- If no factor is common to the failures, the premise is not the cause. Look elsewhere and keep the list as evidence.\n\nSay in your output which premise you questioned and what you found.",
+    "hash": "729e7071eba9c149e15dfc61f7d631b27539e19de883ea7d74279a2a0008e799"
+  },
+  {
+    "id": "prove-it-works",
+    "name": "Prove it works",
+    "applyWhen": "before declaring a task done, or when judging a claim that something works.",
+    "source": "pstack principle-prove-it-works, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "Verify the result by checking the real thing directly. Do not infer it from a proxy, a self-report or \"it compiles\".\n\n**Why.** Unverified work has unknown correctness. Indirect checks (a file's timestamp, fresh-looking output, an agent's own report, a cached screenshot) feel cheaper than direct observation, and acting on a wrong inference costs far more.\n\n**Check the real thing.**\n- Run the feature, read the actual value, inspect the diff.\n- Check that a process is alive directly, not through state derived from it.\n- When a check fails, suspect the way you observed before you suspect the system.\n\n**Script the check when you can.** The strongest proof is a command that re-runs the same comparison, not a one-time look. Write it, run it, and keep its output where a reviewer can re-run it.\n\n**Stop** claiming when the evidence stops. Say what you ran and what you saw, and what you did not verify.",
+    "hash": "ed9eeedfe9a17ce217892ab0706f75a8d85378ce3613b988bf2dec19beeb9e79"
+  },
+  {
+    "id": "boundary-discipline",
+    "name": "Boundary discipline",
+    "applyWhen": "reviewing or writing validation, error handling or framework adapters.",
+    "source": "pstack principle-boundary-discipline, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "Put validation, type narrowing and error handling at the system's boundaries. Trust internal code. Keep business logic in pure functions; keep the shell thin and mechanical.\n\n**Why.** Scattered validation is noisy, redundant, and gives a false sense of safety. Logic kept out of framework wiring can be tested without the framework.\n\n**What to do.**\n- At a boundary (command-line arguments, configuration files, external APIs, network input, files): validate, return errors, handle defensively.\n- Inside: typed data, errors propagated, no re-validation. Trust the types.\n- Across the boundary: expose domain concepts, not the boundary's private representation. Keep general mechanism inside and special-purpose policy at the edge.\n\n**In practice.** Parse raw data into domain types at the boundary. Do not re-export transport, storage or framework types through the public surface. No redundant nil checks deep in call chains when the boundary already validated. Prompt construction, parsing and scoring are pure transforms.\n\n**Two tests.** \"Is this data crossing a boundary right now?\" If not, validation is redundant. \"Can this be a pure function the shell calls?\" If yes, extract it.\n\nAs a reviewer, report input that reaches logic unvalidated.",
+    "hash": "d64aa0482b4b8ef168cf97ce34a4d06ecc259578fde11d4329d2cd08c7e51f86"
+  },
+  {
+    "id": "minimize-reader-load",
+    "name": "Minimise reader load",
+    "applyWhen": "reviewing or shaping code that is hard to follow.",
+    "source": "pstack principle-minimize-reader-load, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "Maintainability is the work a reader must do to understand the code. Track two things:\n1. **Layers to trace.** How many indirections sit between the question and the answer.\n2. **State to hold.** How much hidden or mutable context the reader must keep in their head.\n\n**Why.** Code is read far more than it is written. The two axes are independent: a flat file with fifty globals is as hard as a six-layer adapter stack.\n\n**What to do.**\n- Collapse layers that cost more than they save: wrappers with one caller, adapters with no second implementation, indirection that was never needed.\n- Make adjacent layers change the abstraction. A layer that repeats the same methods and arguments adds load without compression.\n- Shrink the scope of state: pure functions over mutation, locals over fields, fields over module state. Derive instead of synchronising.\n- Name the invariant once, at the boundary, not in every consumer.\n- Before adding a layer or state, ask whether it saves at least as much reader load elsewhere.\n\n**The test.** Can a new reader answer \"where does X come from?\" and \"what can change X?\" in thirty seconds? If not, say so in a finding.",
+    "hash": "27362e3cd40583e8a82b28ce1762c4acb2fc61286f86aac2d753dfc855b5ddd8"
+  },
+  {
+    "id": "never-block-on-the-human",
+    "name": "Never block on the human",
+    "applyWhen": "tempted to ask \"should I do X?\" about reversible work.",
+    "source": "pstack principle-never-block-on-the-human, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "The user supervises asynchronously. Stay unblocked: make a reasonable decision, proceed, and let the user correct course afterwards.\n\n**Why.** Every pause for permission stalls the pipeline and makes the user the bottleneck. Code changes are reversible and reviewable, so a wrong decision usually costs less than waiting.\n\n**What to do.**\n- Proceed, then present. Do the work and show the result with the reason, instead of asking \"should I do X?\".\n- When you notice a problem, record it and fix it in the next round.\n\n**Boundaries.**\n- Irreversible actions still need confirmation: deleting data, force-pushing, sending messages outside, spending money.\n- Reversible actions proceed: writing code, editing notes, splitting tasks.\n- Product direction comes from the user. Execution does not wait for them.\n\nHere, the user steers through the vision and the specs, and reviews results. Ask only when a decision changes what they asked for, and say what you decided and why in your output.",
+    "hash": "322cd5fe40a7af18f48eed7d765675b5e01b48cfbedc7a20d567a20584ff34fc"
+  },
+  {
+    "id": "encode-lessons-in-structure",
+    "name": "Encode lessons in structure",
+    "applyWhen": "writing the same instruction a second time, or noticing a correction that keeps recurring.",
+    "source": "pstack principle-encode-lessons-in-structure, MIT, Copyright (c) 2026 Lauren Tan, github.com/cursor/plugins at 12d587d, adapted",
+    "body": "Encode a recurring fix in a mechanism (a check, a type, a script, a lint rule) instead of in more text. Every error, correction and unexpected outcome is a lesson: capture it, put it in the right place, and close the loop.\n\n**Why.** A written instruction needs the reader to notice, remember and comply. A mechanism enforces the rule without cooperation.\n\n**What to do.** When you catch yourself writing the same instruction a second time:\n1. Ask whether it can be a lint rule, a type, a runtime check or a script.\n2. If yes, encode it and delete the instruction. The instruction was the symptom.\n3. If it needs judgement, make the instruction prominent and add an example of the failure.\n\n**Pick the strongest mechanism** the situation allows: a state that cannot be represented, then a check that fails the build, then a canonical helper, then a runtime check. Agents copy what the surrounding code does, so a weak guard becomes the next template.\n\n**Close the loop.** A one-off correction gets a note; a recurring fix gets a check or a rule; a systemic issue changes the vision or a flow. Acknowledging without recording changes nothing.",
+    "hash": "7c737f2ac77eb7f4d71a5e0e51e29d02e699dbf18857ef7c250d94bf068505c7"
+  }
+]

@@ -9,6 +9,7 @@ import canonicalize from "canonicalize";
 import { BUILT_IN_FILES } from "./builtInFlows";
 import { INTERNAL_FLOWS, internalFlow, isInternalFlowId, type InternalFlow } from "./internalFlows";
 import { downstreamOf, toDef, validatePipeline } from "./pipeline";
+import { isPrincipleId } from "./principles";
 import type { ChosenBy, Flow, FlowRef, InputRef, OutputDef, ProviderId, RoleId, State, StepDef } from "./types";
 
 // ---------- the file format ----------
@@ -29,6 +30,8 @@ export interface RawStep {
   waitForChildren?: true;
   independentOf?: "writer";
   checks?: { onFail: "findings" | "block" };
+  /** ORC-024: ids of files in principles/, the ones that fit the step's job. */
+  principles?: string[];
 }
 
 export interface RawFlow {
@@ -71,7 +74,7 @@ export function canonicalJson(value: unknown): string {
   }
 }
 
-/** What runs: the resolved steps in their normalised form. Names, descriptions and comments do not count. */
+/** What runs: the resolved steps in their normalised form, principles included (ORC-024). Names, descriptions and comments do not count. */
 export function flowHash(steps: StepDef[]): string {
   return sha256Hex(canonicalJson(steps.map(toDef)));
 }
@@ -182,6 +185,12 @@ export function resolveFlows(files: FlowFile[]): Flow[] {
     if (out.some((x) => x.id === raw.id)) fail(`the id "${raw.id}" appears twice`);
     if (!Array.isArray(raw.steps) || raw.steps.length === 0 || raw.steps.length > MAX_FLOW_STEPS) fail(`a flow needs 1–${MAX_FLOW_STEPS} steps`);
     if (typeof raw.whenToUse !== "string" || !raw.whenToUse.trim()) fail("whenToUse is required");
+    // ORC-024: toDef orders and deduplicates a step's principles, so an unknown or repeated id is checked on the raw step.
+    for (const s of raw.steps) {
+      const unknown = (s.principles ?? []).filter((p) => !isPrincipleId(p));
+      if (unknown.length) fail(`${s.id} names principles that do not exist: ${unknown.join(", ")} (the files in principles/)`);
+      if (new Set(s.principles ?? []).size !== (s.principles ?? []).length) fail(`${s.id} names a principle twice`);
+    }
     // toDef copies the known fields only, so a step's $comment is dropped here.
     const steps = raw.steps.map((s) => toDef(s as StepDef));
     const graphErrors = validatePipeline(steps).filter((i) => i.severity === "error");

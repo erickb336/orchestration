@@ -3,15 +3,17 @@
 // comes from a flow file.
 
 import { stepMarkers } from "../domain/flows";
+import { principleName, stepPrinciples } from "../domain/principles";
 import type { Flow, StepDef } from "../domain/types";
 import { ROLE_LABEL } from "./common";
 
-/** One row per step: id, purpose, role and the step's markers (if findings, repeats, pauses for you, …). */
+/** One row per step: id, purpose, role, the step's markers (if findings, repeats, pauses for you, …) and its principles (ORC-024). */
 export function FlowSteps({ steps }: { steps: StepDef[] }) {
   return (
     <ol className="flow-steps">
       {steps.map((st) => {
         const markers = stepMarkers(st).replace(/^ \(|\)$/g, "");
+        const principles = stepPrinciples(st);
         return (
           <li key={st.id}>
             <span className="mono">{st.id}</span>
@@ -23,6 +25,11 @@ export function FlowSteps({ steps }: { steps: StepDef[] }) {
                 {st.dependsOn.length ? ` · after ${st.dependsOn.join(", ")}` : ""}
                 {markers ? ` · ${markers}` : ""}
               </span>
+              {principles.length > 0 && (
+                <div className="muted" style={{ fontSize: "0.8rem" }}>
+                  Principles: {principles.map(principleName).join(" · ")}
+                </div>
+              )}
             </span>
           </li>
         );

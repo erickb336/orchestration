@@ -15,7 +15,8 @@ import { SpecEditor } from "./SpecEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
 import { FlowPicker } from "./FlowPicker";
-import { PIPELINE_CHANGED_MESSAGE, changeConsequences, earlierFlowLabel, flowLineParts, revisionFlowLabel, sameFlow } from "./flowView";
+import { PIPELINE_CHANGED_MESSAGE, changeConsequences, earlierFlowLabel, flowLineParts, principlesText, revisionFlowLabel, sameFlow } from "./flowView";
+import { stepPrinciples } from "../domain/principles";
 
 export function TaskDetail({ id }: { id: string }) {
   const { state } = useStore();
@@ -743,8 +744,23 @@ function StepHead({ state, task, st }: { state: State; task: Task; st: Step }) {
       <div className="muted small">
         {st.dependsOn.length ? `after ${st.dependsOn.join(", ")}` : "first"} · config r{st.revision}
       </div>
+      <StepPrinciples state={state} task={task} st={st} />
     </>
   );
+}
+
+/**
+ * ORC-024: the principles the step's agent gets: what its run recorded when it has one, else the step's
+ * own set. An automatic one shows why it was added. Nothing for a step without principles (steps copied
+ * before ORC-024, checks steps) or an older run that recorded none.
+ */
+function StepPrinciples({ state, task, st }: { state: State; task: Task; st: Step }) {
+  // Review L5: a skipped step never ran, so no agent was given anything.
+  if (st.state === "skipped") return null;
+  const { shownRun } = stepRuns(state, task, st);
+  const given = shownRun?.snapshot.principles ?? (shownRun ? [] : stepPrinciples(st).map((id) => ({ id })));
+  if (!given.length) return null;
+  return <div className="muted small">{principlesText(given)}</div>;
 }
 
 /** The context disclosure, plus the note about outdated inputs. */
@@ -1468,6 +1484,12 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
               </dd>
               <dt>Routing</dt>
               <dd>{a.snapshot.routingReason}</dd>
+              {a.snapshot.principles && a.snapshot.principles.length > 0 && (
+                <>
+                  <dt>Principles</dt>
+                  <dd>{principlesText(a.snapshot.principles).replace(/^Principles: /, "")}</dd>
+                </>
+              )}
               {a.snapshot.checks && (
                 <>
                   <dt>Commands</dt>
