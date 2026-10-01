@@ -1,9 +1,7 @@
 {
-  "$schema": "./pattern.schema.json",
-  "$comment": "ORC-016: a 1:1 transcription of the built-in Investigation template (state format 14).",
+  "$schema": "./flow.schema.json",
   "id": "investigation",
   "name": "Investigation",
-  "order": 40,
   "description": "Gather evidence, review it, and propose a follow-up implementation spec.",
   "whenToUse": "The cause or the right change is unknown; the result is a spec, not code.",
   "steps": [

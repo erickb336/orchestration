@@ -173,15 +173,16 @@ const SCENES = {
   settings: async ({ page, api }) => open(page, api, "#/settings", { selector: "#inv-h" }),
   "checks-settings": async ({ page, api }) => {
     await open(page, api, "#/settings", { selector: "#checks-h" });
-    await scrollTo(page, { selector: 'section[aria-labelledby="checks-h"]' }, 72); // the Patterns card beside it starts a little higher
+    await scrollTo(page, { selector: 'section[aria-labelledby="checks-h"]' }, 72); // the Flows card beside it starts a little higher
   },
   "delivery-settings": async ({ page, api }) => {
     await open(page, api, "#/settings", { selector: "#delivery" });
     await scrollTo(page, { selector: "#delivery" });
   },
+  // ORC-021: Settings → Flows. The image keeps its file name until the screenshots are retaken.
   patterns: async ({ page, api }) => {
-    await open(page, api, "#/settings", { selector: "#pat-h" });
-    await scrollTo(page, { selector: 'section[aria-labelledby="pat-h"]' });
+    await open(page, api, "#/settings", { selector: "#flows-h" });
+    await scrollTo(page, { selector: 'section[aria-labelledby="flows-h"]' });
   },
   // Later in the demo: WT-006 finished and its pull request waits on a failed check (see the pr group below).
   "pr-checks": async ({ page, api }) => open(page, api, "#/task/WT-006", { selector: "#delivery-h", text: "Needs you" }),
@@ -221,19 +222,6 @@ async function freePort() {
   }
   throw new Error("No free port between 5391 and 5399.");
 }
-
-const BROKEN_PATTERN = `{
-  "$schema": "./pattern.schema.json",
-  "id": "change-pause-after-review",
-  "name": "Change, pause after the review",
-  "description": "Change that pauses after the code review so you can read the findings first.",
-  "whenToUse": "Changes where you want to read the findings before the repair starts.",
-  "extends": "change",
-  "stepOverrides": {
-    "S9": { "gate": true }
-  }
-}
-`;
 
 function makeApi(port) {
   const base = `http://127.0.0.1:${port}`;
@@ -461,9 +449,7 @@ const t0 = Date.now();
 const tmp = mkdtempSync(join(tmpdir(), "orc-capture-"));
 const home = join(tmp, "home");
 const dataDir = join(home, ".orchestration");
-mkdirSync(join(dataDir, "patterns"), { recursive: true });
 mkdirSync(join(tmp, "shots"), { recursive: true });
-writeFileSync(join(dataDir, "patterns", "change-pause-after-review.json"), BROKEN_PATTERN);
 
 let service;
 let browser;

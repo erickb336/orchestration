@@ -1,7 +1,7 @@
 // Sample data for the prototype. Clearly labeled as sample content in the UI;
 // it is not imported from any real repository.
 
-import { builtInCatalog, builtInOrInternal, patternRef } from "./patterns";
+import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
 import { runSummary } from "./checks";
 import { DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type CheckResult, type CheckRunRecord, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
@@ -55,11 +55,11 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
   const attempts: Attempt[] = [];
   const artifacts: Artifact[] = [];
 
-  const task = (id: string, priority: number, content: SpecContent, patternId: string, extra: Partial<Task> = {}): Task => {
-    // ORC-016: sample tasks come from the built-in catalog (or an internal pattern), chosen by the lead.
-    const pattern = builtInOrInternal(patternId);
-    const defs = structuredClone(pattern.steps).map(toDef);
-    const ref = patternRef(pattern, "lead");
+  const task = (id: string, priority: number, content: SpecContent, flowId: string, extra: Partial<Task> = {}): Task => {
+    // ORC-016: sample tasks come from the built-in catalog (or an internal flow), chosen by the lead.
+    const flow = builtInOrInternal(flowId);
+    const defs = structuredClone(flow.steps).map(toDef);
+    const ref = flowRef(flow, "lead");
     const t: Task = {
       id,
       priority,
@@ -69,9 +69,9 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       specs: [{ rev: 1, at: at(600), author: "lead", reason: "Initial spec published by lead", content }],
       steps: instantiate(defs),
       pipelineRev: 1,
-      pipelineHistory: [{ rev: 1, at: at(600), author: "lead", reason: `Created from the ${pattern.name} pattern`, steps: defs, pattern: ref }],
-      pattern: ref,
-      patternSince: 1,
+      pipelineHistory: [{ rev: 1, at: at(600), author: "lead", reason: `Created from the ${flow.name} flow`, steps: defs, flow: ref }],
+      flow: ref,
+      flowSince: 1,
       roleOverrides: {},
       dependsOn: [],
       createdAt: at(600),
@@ -256,6 +256,8 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
   ]);
   checks(ex2, "C1", 20);
   if (inFlightRuns) run(ex2, "S2", "claude", "claude-sample-large", 12, "running", 60);
+  // ORC-021: the security review beside S2 finished clean a little earlier; S2, the code review, is the one still running.
+  run(ex2, "SR1", "claude", "claude-sample-fast", 14, "completed", 100, [{ name: "findings", summary: "No security findings: the banner reads local state only (sample)", openFindings: 0 }]);
 
   task(
     "EX-003",
@@ -384,7 +386,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 15,
+    version: 16,
     seq: 1000,
     project: {
       id: "sample",
@@ -439,7 +441,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       workerConnections: { claude: [], codex: [] },
       hold: false,
       lastVisitAt: at(60),
-      defaultPatternId: "change",
+      defaultFlowId: "change",
     },
     tasks,
     attempts,
@@ -450,8 +452,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
     visionDrafts: [],
     decisions: [],
     // ORC-016: the built-in catalog until the server loads the files (it replaces this at start).
-    patterns: builtInCatalog(),
-    retiredTemplates: [],
+    flows: builtInCatalog(),
     events: [
       { id: "ev-1", at: at(600), actor: "lead", kind: "spec", message: "Published specs for EX-001…EX-007 from vision r1", taskId: undefined },
       { id: "ev-2", at: at(2200), actor: "user", kind: "decision", taskId: "EX-006", message: "Selected option B (Per-note export); override: I mostly export single notes to share them." },

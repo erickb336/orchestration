@@ -11,8 +11,10 @@
 //
 // Limits: 12 turns, 5 minutes, $0.50 (Claude) per attempt; Claude uses the "haiku" alias.
 //
-// Pipeline (ORC-016): the test's one-step coder pattern is a pattern file of its own, written into the
-// throwaway data directory's patterns/ folder before the service starts, so no command defines a pipeline.
+// Flow (ORC-021): the built-in Investigation flow, the smallest of the six that still runs a worker on each
+// provider at once (one task's first step pinned to Codex, the other's to Claude), then a reviewer and the
+// lead: three agent runs per task, no code change, no checks. Nothing is written into the data directory
+// before the service starts; the script says which flow it uses.
 
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -53,27 +55,10 @@ git("add", "-A");
 git("-c", "user.name=Orchestration test", "-c", "user.email=test@localhost", "commit", "-q", "-m", "Initial commit");
 evidence.repo = repo;
 
-// The service reads your patterns from <data dir>/patterns, and the data dir is the database's folder. A
-// one-step coder pipeline keeps a real run cheap. It has no review step, so it is flagged "no independent
-// review" and is yours to choose, which is what createTask does.
-const PATTERN_ID = "one-step";
-mkdirSync(join(work, "patterns"), { recursive: true });
-writeFileSync(
-  join(work, "patterns", `${PATTERN_ID}.json`),
-  `${JSON.stringify(
-    {
-      $schema: "./pattern.schema.json",
-      $comment: "Written by scripts/real-run-test.mjs for one run; the data directory is throwaway.",
-      id: PATTERN_ID,
-      name: "One coder step",
-      description: "Real-run test: one coder step that commits a change, with no review or verification.",
-      whenToUse: "Only for the real-run test.",
-      steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }],
-    },
-    null,
-    2,
-  )}\n`,
-);
+// The flow every task in this test runs. Investigation: S1 investigate and gather evidence (coder) → S2 review the
+// evidence for gaps (code reviewer) → S3 propose a follow-up spec (lead). One task's S1 is pinned to Codex and the
+// other's to Claude, so both providers run at once; the reviewer and the lead follow the project's role defaults.
+const FLOW_ID = "investigation";
 
 const service = spawn(process.execPath, ["--import", "tsx", "server/main.ts"], {
   cwd: resolve(import.meta.dirname, ".."),
@@ -136,32 +121,31 @@ async function main() {
     await until("sample runs stopped", (x) => x.state.attempts.every((a) => a.outcome !== "running" && a.outcome !== "stopping"), 60000);
   }
 
-  // Project and limits. The one-step pattern was read from the test's own file when the service started.
+  // Project and limits.
   await cmd("initProject", { name: "Real-run test", repoPath: repo, vision: "Keep the greeting module small and correct.", focus: "Real-run test" });
   await cmd("setRunLimits", { maxTurns: 12, timeoutMinutes: 5, maxBudgetUsd: 0.5 });
   s = await state();
-  const pattern = s.state.patterns.patterns.find((p) => p.id === PATTERN_ID);
-  const patternErrors = s.state.patterns.errors.filter((e) => e.file.endsWith(`${PATTERN_ID}.json`));
-  check("the test's pattern file loaded as a pattern of yours", !!pattern && pattern.source === "local" && pattern.steps.length === 1, pattern ? { file: pattern.file, hash: pattern.hash.slice(0, 8), warnings: pattern.warnings } : { errors: patternErrors });
-  if (!pattern) throw new Error(`The pattern file was not loaded: ${JSON.stringify(patternErrors)}`);
+  const flow = s.state.flows.find((p) => p.id === FLOW_ID);
+  check(`the built-in ${FLOW_ID} flow is loaded with its three steps`, !!flow && flow.source === "built-in" && flow.steps.map((st) => st.role).join(",") === "coder,code_reviewer,lead", flow ? { name: flow.name, steps: flow.steps.map((st) => `${st.id} ${st.purpose}`), hash: flow.hash.slice(0, 8) } : null);
+  if (!flow) throw new Error(`The built-in ${FLOW_ID} flow is not in the state`);
+  log(`Flow: ${flow.name} (${FLOW_ID}): ${flow.steps.map((st) => `${st.id} ${st.purpose} (${st.role})`).join(" → ")}`);
   const codexModel = FAKE ? s.state.project.catalog.codex[0].id : "auto";
   const claudeModel = FAKE ? s.state.project.catalog.claude[0].id : "haiku";
   const create = async (title, outcome, approach) =>
-    (await cmd("createTask", { title, area: "Test", outcome, benefit: "Exercise the runtime", whyNow: "", approach, acceptance: ["The change is small and correct"], priority: 1, holdBeforeStart: true, patternId: PATTERN_ID }))
-      .result.newId;
-  const codexTask = await create("Add shout()", "greeting.js exports shout(s) returning the input uppercased with a trailing '!'.", "Add the function next to greet(); keep the file style.");
-  const claudeTask = await create("Document usage", "README.md has a short Usage section showing greet().", "Add a 'Usage' section with one code example.");
+    (await cmd("createTask", { title, area: "Test", outcome, benefit: "Exercise the runtime", whyNow: "", approach, acceptance: ["The report names the files it read"], priority: 1, holdBeforeStart: true, flowId: FLOW_ID })).result.newId;
+  const codexTask = await create("Where would shout() go?", "A short report says where a shout(s) function belongs in greeting.js and what tests it needs.", "Read greeting.js and report; change no file.");
+  const claudeTask = await create("What is missing from the README?", "A short report lists what the README should say about greet().", "Read README.md and greeting.js and report; change no file.");
   await cmd("setStepSelection", { taskId: codexTask, stepId: "S1", selection: { provider: "codex", model: codexModel } });
   await cmd("setStepSelection", { taskId: claudeTask, stepId: "S1", selection: { provider: "claude", model: claudeModel } });
   await cmd("startHeldTask", { taskId: codexTask });
   await cmd("startHeldTask", { taskId: claudeTask });
   s = await state();
   check(
-    "both tasks record the pattern they run (id, hash, source)",
-    [codexTask, claudeTask].every((id) => task(s, id).pattern.id === PATTERN_ID && task(s, id).pattern.hash === pattern.hash && task(s, id).pattern.source === "local" && task(s, id).pattern.chosenBy === "user"),
-    { pattern: PATTERN_ID, hash: pattern.hash.slice(0, 8) },
+    "both tasks record the flow they run (id, hash, source)",
+    [codexTask, claudeTask].every((id) => task(s, id).flow.id === FLOW_ID && task(s, id).flow.hash === flow.hash && task(s, id).flow.source === "built-in" && task(s, id).flow.chosenBy === "user"),
+    { flow: FLOW_ID, hash: flow.hash.slice(0, 8) },
   );
-  record("tasks created", { codexTask, claudeTask, codexModel, claudeModel, pattern: PATTERN_ID });
+  record("tasks created", { codexTask, claudeTask, codexModel, claudeModel, flow: FLOW_ID });
 
   // 1. Concurrency: both providers running at the same moment.
   ({ s } = await until("both workers running concurrently", (x) => active(x, codexTask).length && active(x, claudeTask).length, 60000));
@@ -222,30 +206,27 @@ async function main() {
   await cmd("resumeProject");
   record("project resumed");
 
-  // 4. Let both finish.
+  // 4. Let both finish: the reviewer and the lead run with the project's role defaults.
   const { s: final } = await until("both tasks done or blocked", (x) => [codexTask, claudeTask].every((id) => ["done"].includes(task(x, id).lifecycle) || task(x, id).steps.some((st) => st.state === "blocked")), 600000);
   for (const [label, id] of [
     ["codex", codexTask],
     ["claude", claudeTask],
   ]) {
     const t = task(final, id);
-    const runs = final.state.attempts.filter((a) => a.taskId === id).map((a) => ({ id: a.id, provider: a.snapshot.provider, model: a.snapshot.model, actualModel: a.actualModel ?? null, outcome: a.outcome, usage: a.usage ?? null, note: a.note ?? null }));
-    const art = final.state.artifacts.find((a) => a.taskId === id && a.name === "change");
-    let commit = null;
-    if (art?.ref && !FAKE) {
-      const sha = art.ref.split(" ")[0];
-      commit = { ref: art.ref, files: git("show", "--name-only", "--format=", sha).split("\n").filter(Boolean) };
-    }
-    record(`${label}: result`, { lifecycle: t.lifecycle, blocked: t.steps.find((st) => st.state === "blocked")?.blockedReason ?? null, runs, artifact: art ? { summary: art.summary, ref: art.ref ?? null } : null, commit });
+    const runs = final.state.attempts.filter((a) => a.taskId === id).map((a) => ({ id: a.id, step: a.stepId, provider: a.snapshot.provider, model: a.snapshot.model, actualModel: a.actualModel ?? null, outcome: a.outcome, usage: a.usage ?? null, note: a.note ?? null }));
+    const report = final.state.artifacts.find((a) => a.taskId === id && a.name === "report");
+    const brief = final.state.artifacts.find((a) => a.taskId === id && a.name === "brief");
+    record(`${label}: result`, { lifecycle: t.lifecycle, blocked: t.steps.find((st) => st.state === "blocked")?.blockedReason ?? null, runs, report: report ? { summary: report.summary } : null, brief: brief ? { summary: brief.summary } : null });
   }
   for (const [label, id] of [
     ["codex", codexTask],
     ["claude", claudeTask],
   ]) {
-    const art = final.state.artifacts.find((a) => a.taskId === id && a.name === "change");
-    check(`${label}: task completed with a recorded change`, task(final, id).lifecycle === "done" && !!art && (FAKE || !!art.ref));
+    const report = final.state.artifacts.find((a) => a.taskId === id && a.name === "report");
+    const brief = final.state.artifacts.find((a) => a.taskId === id && a.name === "brief");
+    check(`${label}: task completed with a recorded report and brief`, task(final, id).lifecycle === "done" && !!report && !!brief);
   }
-  check("managed repository main branch untouched", git("rev-list", "--count", "main") === "1" && git("status", "--porcelain") === "");
+  check("managed repository main branch untouched, and nothing committed by the investigation", git("rev-list", "--count", "main") === "1" && git("status", "--porcelain") === "");
   evidence.ok = Object.values(evidence.checks).length >= 9 && Object.values(evidence.checks).every((c) => c.ok);
 }
 

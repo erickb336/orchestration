@@ -39,7 +39,7 @@ const status = (m = state().conversation.filter((x) => x.author === "user").pop(
 const autonomy = (over: Record<string, unknown> = {}) =>
   cmd("setAutonomy", { enabled: true, planningIntervalMinutes: 60, maxProposalsPerCycle: 3, maxOpenProposals: 5, holdLeadProposals: false, operatingHours: null, ...over });
 const createTask = (title: string, priority: number, over: Record<string, unknown> = {}) =>
-  (cmd("createTask", { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority, holdBeforeStart: false, patternId: "change", ...over }).result as { newId: string }).newId;
+  (cmd("createTask", { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority, holdBeforeStart: false, flowId: "change", ...over }).result as { newId: string }).newId;
 const FOCUS_MSG = "focus more on building out the apps working locally vs automating the deployment process";
 
 /** Post a message and start its reply run. */
@@ -174,7 +174,7 @@ describe("A. the user's example, end to end", () => {
     expect(task(b.previews)).toMatchObject({ lifecycle: "ready", userSet: { run: expect.any(String) } });
     expect(task(b.health).deferral).toBeUndefined();
     tick();
-    expect(M.activeAttempts(state(), b.health)).toHaveLength(1); // its next step started
+    expect(M.activeAttempts(state(), b.health)).toHaveLength(2); // its next steps started: the code review and the security review beside it
 
     // 6. A later message that re-defers the same task now only suggests it.
     const r2 = ask("deployment can wait, honestly");
@@ -608,8 +608,8 @@ describe("R/S. restart and migration", () => {
     const upgraded = new Store(path);
     const s = upgraded.read().state;
     // ORC-012 raised the format to 12 and ORC-014 to 13; a format-10 document upgrades through each.
-    expect(STATE_FORMAT).toBe(15);
-    expect(s.version).toBe(15);
+    expect(STATE_FORMAT).toBe(16);
+    expect(s.version).toBe(16);
     expect(s.steering).toEqual([]);
     expect(s.project.steeringMode).toBe("apply");
     expect(s.tasks.find((t) => t.id === "EX-002")!.userSet).toEqual({ priority: "2026-09-01T00:00:00.000Z" });

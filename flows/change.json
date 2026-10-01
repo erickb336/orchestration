@@ -1,10 +1,9 @@
 {
-  "$schema": "./pattern.schema.json",
-  "$comment": "ORC-016: a 1:1 transcription of the built-in Change template (state format 14). The service runs the two Checks steps itself; both skip while checks are off.",
+  "$schema": "./flow.schema.json",
+  "$comment": "The default flow. The service runs the two Checks steps itself; both skip while checks are off. ORC-021: SR1 is a security review that runs beside the code review; the repair runs when either has findings.",
   "id": "change",
   "name": "Change",
-  "order": 10,
-  "description": "Code change without interaction design: implement, checks, review, repair if needed, final checks, verify.",
+  "description": "Code change without interaction design: implement, checks, code and security review in parallel, repair if needed, final checks, verify.",
   "whenToUse": "Most code changes: a fix you already understand, a refactor, a small feature without new screens or flows.",
   "steps": [
     {
@@ -40,19 +39,33 @@
       "outputs": [{ "name": "findings", "kind": "review-findings" }]
     },
     {
+      "id": "SR1",
+      "purpose": "Security review",
+      "role": "security_reviewer",
+      "dependsOn": ["S1", "C1"],
+      "inputs": [
+        { "step": "S1", "output": "change" },
+        { "step": "S1", "output": "handoff" },
+        { "step": "C1", "output": "checks" }
+      ],
+      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+    },
+    {
       "id": "S3",
       "purpose": "Repair review findings and failing checks",
       "role": "coder",
-      "dependsOn": ["S2"],
+      "dependsOn": ["S2", "SR1"],
       "inputs": [
         { "step": "S1", "output": "change" },
         { "step": "S2", "output": "findings" },
+        { "step": "SR1", "output": "findings" },
         { "step": "C1", "output": "checks" }
       ],
       "outputs": [{ "name": "change", "kind": "code-change" }],
       "runIf": [
         { "step": "C1", "output": "checks" },
-        { "step": "S2", "output": "findings" }
+        { "step": "S2", "output": "findings" },
+        { "step": "SR1", "output": "findings" }
       ],
       "iterate": { "from": "C1", "max": 3 }
     },
@@ -77,6 +90,7 @@
         { "step": "S1", "output": "change" },
         { "step": "S3", "output": "change" },
         { "step": "S2", "output": "findings" },
+        { "step": "SR1", "output": "findings" },
         { "step": "C2", "output": "final" }
       ],
       "outputs": [{ "name": "verification", "kind": "verification" }]

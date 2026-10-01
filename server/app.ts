@@ -9,13 +9,13 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { DEMO_DOC_HASH, DEMO_DOC_TEXT, buildDemo } from "../src/domain/demo";
-import { setPatternCatalog } from "../src/domain/model";
+import { builtInCatalog } from "../src/domain/flows";
+import { setFlows } from "../src/domain/model";
 import { buildEmptyProject } from "../src/domain/seed";
 import type { ProviderId } from "../src/domain/types";
 import { pruneCheckLogs, type CheckRunner } from "./checks";
 import type { GitHubHost } from "./github";
 import { createHttpServer } from "./http";
-import { exportRetiredTemplates, loadPatternCatalog } from "./patterns";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
 import { Scheduler } from "./scheduler";
@@ -88,26 +88,13 @@ if (mode === "fake") {
     log(`Vision documents: could not write the sample document: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
-// ORC-016: pipeline patterns. Templates retired by the 14 → 15 upgrade are written once as files of the
-// user's (never overwriting), then the catalog is read from the built-ins and <dataDir>/patterns. A broken
-// file is listed, never fatal: start never fails because of a pattern file.
-const patternsDir = join(dataDir, "patterns");
-try {
-  const exported = exportRetiredTemplates(store, patternsDir);
-  if (exported.written.length) log(`Patterns: saved ${exported.written.length} template${exported.written.length === 1 ? "" : "s"} from before patterns as files in ${patternsDir}`);
-  if (exported.failed.length) log(`Patterns: ${exported.failed.length} template${exported.failed.length === 1 ? "" : "s"} from before patterns could not be saved; see Settings → Patterns`);
-  if (exported.problem) log(`Patterns: ${exported.problem}`);
-} catch (e) {
-  log(`Patterns: saving retired templates failed: ${e instanceof Error ? e.message : String(e)}`);
-}
-try {
+// ORC-021: the six flows are compiled in from flows/; the state's copy is refreshed at start so a changed
+// flow file takes effect after a restart. Tasks keep the steps they were created with.
+{
   const now = new Date().toISOString();
-  const catalog = loadPatternCatalog(patternsDir, now);
-  store.update((s) => setPatternCatalog(s, catalog, now), now);
-  log(`Patterns: ${catalog.patterns.length} loaded (${catalog.patterns.filter((p) => p.source === "local").length} yours, from ${patternsDir})`);
-  for (const e of catalog.errors) log(`patterns: ${e.file}${e.line !== undefined ? `:${e.line}:${e.column ?? 1}` : ""} ${e.message}`);
-} catch (e) {
-  log(`Patterns: loading failed, the built-in catalog stays in effect: ${e instanceof Error ? e.message : String(e)}`);
+  const flows = builtInCatalog();
+  store.update((s) => setFlows(s, flows, now), now);
+  log(`Flows: ${flows.map((f) => f.name).join(", ")}`);
 }
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
 const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir });
@@ -132,7 +119,6 @@ const server = createHttpServer({
   workspaces,
   visionDocs,
   dataDir,
-  patternsDir,
   startedAt: new Date().toISOString(),
   allowedHosts,
   staticDir,

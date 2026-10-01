@@ -44,7 +44,7 @@ function proposal(over: Partial<M.LeadProposal> = {}): M.LeadProposal {
     rationale: "Smallest useful step.",
     uncertainty: "None.",
     acceptance: ["greet() returns a greeting"],
-    patternId: "change",
+    flowId: "change",
     priority: 2,
     ...over,
   };
@@ -121,7 +121,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
   });
 
   it("a task whose last step completes while shaping still becomes Done and is queued for integration", () => {
-    const r0 = M.createTask(seed(), { title: "Last", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
+    const r0 = M.createTask(seed(), { title: "Last", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(0));
     const r = { ...r0, state: M.setPipeline(r0.state, r0.newId, 1, oneStep, "one step", "user", at(0)) };
     let s = M.dispatchEligible(M.leadPromoteProposals(r.state, at(0)), at(1));
     const [a] = running(s, r.newId);

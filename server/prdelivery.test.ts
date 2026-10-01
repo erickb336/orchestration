@@ -58,7 +58,7 @@ const run = (id: string) => M.activeAttempts(st(), id)[0];
 let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
 const newTask = (title: string) =>
-  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
 const oneStep = (id: string) =>
   setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
 const branches = () => remote("for-each-ref", "--format=%(refname)", "refs/heads/").split("\n").filter((r) => r.includes("orchestration/"));
@@ -89,11 +89,12 @@ const finishTask = async (title: string, file: string, text: string) => {
 const reviewed = async (id: string, findings = 0) => {
   for (let i = 0; i < 8; i++) {
     const rv = st().tasks.find((t) => t.reviewTarget?.taskId === id && t.reviewTarget.headSha === pr(id).changeSha && t.lifecycle !== "done" && t.lifecycle !== "cancelled");
-    const r = rv && M.activeAttempts(st(), rv.id)[0];
-    if (r && claude.runs.has(r.id)) {
-      claude.finish(r.id, { findings });
+    const runs = rv ? M.activeAttempts(st(), rv.id).filter((x) => claude.runs.has(x.id)) : [];
+    if (rv && runs.length) {
+      // ORC-021: the code review reports `findings`; the security review beside it is clean.
+      for (const r of runs) claude.finish(r.id, { findings: task(rv.id).steps.find((x) => x.id === r.stepId)!.role === "security_reviewer" ? 0 : findings });
       await ticks(3);
-      return rv!.id;
+      return rv.id;
     }
     await tick();
   }

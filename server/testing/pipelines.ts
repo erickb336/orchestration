@@ -1,4 +1,4 @@
-// ORC-016: how tests build pipelines that patterns do not offer. No command reaches `M.setPipeline` any
+// ORC-016: how tests build pipelines that flows do not offer. No command reaches `M.setPipeline` any
 // more; this helper applies it through the store, so the rest of a scheduler test works as before.
 
 import * as M from "../../src/domain/model";

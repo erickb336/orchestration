@@ -11,7 +11,7 @@ import { dirname, join } from "node:path";
 export const CLAUDE_CHOICES = ["api-key", "subscription", "cloud", "none"];
 export const RUNTIMES = ["real", "fake"];
 export const DEFAULT_PORT = 5319;
-export const ROLES = ["lead", "designer", "coder", "code_reviewer", "ux_reviewer"];
+export const ROLES = ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
 
 /** Keychain items (service names) for each Claude choice that needs a secret. */
 export const KEYCHAIN = {

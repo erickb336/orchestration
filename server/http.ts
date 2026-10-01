@@ -6,11 +6,10 @@
 import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
-import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type PatternsReloadResponse, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
+import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
 import { suggestChecks, type RepoFile } from "../src/domain/checks";
-import { exportMarkdown, setPatternCatalog, trustedBaseRef } from "../src/domain/model";
+import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
-import { loadPatternCatalog } from "./patterns";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
 import type { VisionDocStore } from "./visiondocs";
@@ -27,8 +26,6 @@ export interface HttpOptions {
   visionDocs?: VisionDocStore;
   /** ORC-013: the service's data directory; check logs are served from <dataDir>/check-logs. */
   dataDir?: string;
-  /** ORC-016: the directory of the user's pattern files; POST /api/patterns/reload re-reads it. Without it, reload is refused. */
-  patternsDir?: string;
   startedAt: string;
   /** host:port values accepted in the Host header (the service's own address plus the dev UI). */
   allowedHosts: string[];
@@ -313,15 +310,6 @@ export function createHttpServer(opts: HttpOptions): Server {
         const result = (r.result ?? {}) as { docId?: string; status?: "staged" | "unchanged"; replaces?: string };
         opts.visionDocs.store(store.read().state.project.id, upload.input.hash, upload.buf);
         return send(res, 200, { version: r.version, docId: result.docId ?? "", status: result.status ?? "staged", ...(result.replaces ? { replaces: result.replaces } : {}) } satisfies VisionDocUploadOk);
-      }
-      // ORC-016: re-read the pattern files. No arguments; the server alone reads files, and repeating it changes nothing.
-      if (path === "/api/patterns/reload") {
-        if (!opts.patternsDir) return fail(res, 400, "control", "This service has no patterns directory.");
-        const now = new Date().toISOString();
-        const catalog = loadPatternCatalog(opts.patternsDir, now);
-        store.update((s) => setPatternCatalog(s, catalog, now), now);
-        for (const e of catalog.errors) log(`patterns: ${e.file}${e.line !== undefined ? `:${e.line}:${e.column ?? 1}` : ""} ${e.message}`);
-        return send(res, 200, { loadedAt: catalog.loadedAt, patterns: catalog.patterns.length, errors: catalog.errors.length } satisfies PatternsReloadResponse);
       }
       if (path.startsWith("/api/sim") && (real || !fakeConfig)) return fail(res, 400, "control", "Simulation controls are only available with the fake runtime.");
       if (path === "/api/maintenance/prune") {

@@ -50,7 +50,7 @@ In the owner's words (2026-10-01): "a starting playground for me to develop and 
 - It runs locally against the user's git repositories, using git worktrees for isolation.
 - It is optionally connected to GitHub through `gh`.
 - **The demo mode** runs a fake runtime with a sample project. Every simulated run is labelled as simulated.
-- **Pipelines** come from JSON pattern files edited in code. They are never edited in the UI.
+- **Pipelines** come from six flows (Change, Bug fix, Feature, Design, Investigation, Goal), each a JSON file edited in code. They are never edited in the UI.
 
 ## Capabilities and Constraints
 
@@ -60,7 +60,7 @@ In the owner's words (2026-10-01): "a starting playground for me to develop and 
   - steering by conversation, with Undo;
   - pull-request delivery, with a review-later queue;
   - quality gates (sandboxed checks, triaged findings, review coverage);
-  - pipeline patterns, with provenance and outcome records.
+  - six flows, with a code review and a security review beside it wherever code changes (ORC-021).
 - **Not yet verified in this environment:** real Claude and Codex model runs. The README must say so until evidence exists.
 - **Constraints:**
   - nothing claims a capability without evidence;

@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
-import { effectiveDefault } from "../domain/patterns";
+import { effectiveDefault } from "../domain/flows";
 import { PROVIDERS, ROLES, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { PrChip } from "./Delivery";
 import { COLUMN_LABEL, ProviderMark, ROLE_LABEL, StatePill, currentWork, hasNewDecision, isSimulated, latestEvent, relTime } from "./common";
 import { isSettledTask } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
-import { PatternPicker } from "./PatternPicker";
+import { FlowPicker } from "./FlowPicker";
 import { OTHER_AREA, areaOf, liveAgents, needsYouOf, serviceOwned } from "./progress";
 import { ShapingBanner } from "./Shaping";
 import { FocusDiff } from "./SteeringChanges";
@@ -48,8 +48,8 @@ function usePref<T extends string>(key: string, initial: T) {
 
 function NewTaskForm({ onClose }: { onClose: () => void }) {
   const { state, send, disabled } = useStore();
-  // ORC-016: the catalog never holds the service's own pipelines; everything in it is yours to choose.
-  const patterns = state.patterns.patterns;
+  // ORC-021: the six flows; the service's own pipelines are never among them.
+  const flows = state.flows;
   const [f, setF] = useState({
     title: "",
     area: "",
@@ -60,7 +60,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     acceptance: "",
     // "auto": priority 3, not pinned, so the lead may reorder it when you steer. A number is your choice and stays.
     priority: "auto",
-    patternId: effectiveDefault(state).id,
+    flowId: effectiveDefault(state).id,
     holdBeforeStart: true,
   });
   const set = (k: keyof typeof f, v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
@@ -90,7 +90,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
           priority: f.priority === "auto" ? 3 : Number(f.priority) || 3,
           priorityPinned: f.priority !== "auto",
           holdBeforeStart: f.holdBeforeStart,
-          patternId: f.patternId,
+          flowId: f.flowId,
         });
         const id = newIdOf(r);
         if (id) {
@@ -101,7 +101,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     >
       <h2 id="new-task-h">New task</h2>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        You write the outcome and approach; the pipeline comes from the pattern you choose. You can pin a provider and model for each step on the task page. Hold before start is on by default so you can review the spec before anything runs.
+        You write the outcome and approach; the pipeline comes from the flow you choose. You can pin a provider and model for each step on the task page. Hold before start is on by default so you can review the spec before anything runs.
       </p>
       {text("title", "Title", true)}
       {text("outcome", "Outcome (what should be true when done)", true, true)}
@@ -113,7 +113,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
       {text("benefit", "User benefit")}
       {text("area", "Area")}
       {text("whyNow", "Why now")}
-      <PatternPicker state={state} patterns={patterns} value={f.patternId} onChange={(v) => set("patternId", v)} />
+      <FlowPicker flows={flows} value={f.flowId} onChange={(v) => set("flowId", v)} />
       <label className="field">
         <span>Priority</span>
         <select value={f.priority} onChange={(e) => set("priority", e.target.value)}>
@@ -130,7 +130,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
         Hold before start
       </label>
       <div className="row">
-        <button type="submit" className="primary" disabled={disabled || !patterns.length}>
+        <button type="submit" className="primary" disabled={disabled || !flows.length}>
           Create task
         </button>
         <button type="button" onClick={onClose}>
@@ -435,11 +435,6 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
           )}
           {task.reviewTarget && <span title={`An independent review of ${task.reviewTarget.taskId}'s pull request at ${task.reviewTarget.headSha.slice(0, 12)}, created by the service`}>PR review · {task.reviewTarget.taskId}</span>}
           {task.deliverInto && <span title={`A fix whose result is pushed onto ${task.deliverInto.taskId}'s pull request, created ${task.specs[0]?.author === "user" ? "by you" : "by the service"}`}>PR repair · {task.deliverInto.taskId}</span>}
-          {task.pattern.experimental && (
-            <span className="chip" title="This task runs an experimental pattern you chose">
-              experiment
-            </span>
-          )}
           {task.legacySpecUnavailable && <span className="chip">legacy spec unavailable</span>}
           {hasNewDecision(state, task) && <span className="badge-new">New decision</span>}
         </div>
