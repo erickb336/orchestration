@@ -437,11 +437,21 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
   .task-row .state { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
 }
 
-.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(250px, 1fr); gap: 0.75rem; overflow-x: auto; padding-bottom: 0.5rem; }
+.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 0.75rem; overflow-x: auto; padding-bottom: 0.5rem; }
+/* The board uses the page's full width; empty columns are named in one line above it instead of taking a column. */
+main:has(.board) { max-width: none; }
+.board-empty { margin: -0.4rem 0 0.6rem; }
+.step-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.35rem; }
+.step-row .stepbar { flex: 1 1 auto; margin-top: 0; }
+.step-row .num { font-size: var(--fs-small); white-space: nowrap; }
 .board .col { background: var(--surface-2); border-radius: var(--radius); padding: 0.6rem; min-height: 8rem; min-width: 0; }
 .board .col .task-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "state" "work" "foot"; box-shadow: none; }
 .board .col .task-row .state { align-items: flex-start; flex-direction: row; flex-wrap: wrap; }
 .board .col .chip { white-space: normal; }
+.board .col .task-row .foot { flex-wrap: wrap; row-gap: 0.25rem; }
+.board .col .task-row .foot .chip { white-space: nowrap; }
+.board .col .task-row .activity { flex-basis: 100%; }
+.board .col .needs-badge { white-space: normal; max-width: 100%; }
 .board .col .pill { align-self: flex-start; }
 .board .col .task-row .side { align-items: flex-start; text-align: left; grid-column: auto; }
 
@@ -495,6 +505,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
 .needs-list .who { min-width: 0; }
 .needs-list .who .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .needs-list .act { white-space: nowrap; }
+.needs-list .pr-line { display: block; margin-top: 0.15rem; }
 .needs-empty { margin: 0.2rem 0 0; color: var(--muted); }
 @media (max-width: 600px) {
   .needs-list > li { grid-template-columns: minmax(0, 1fr); }

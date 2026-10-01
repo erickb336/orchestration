@@ -440,10 +440,15 @@ function NeedsYouCard({ state }: { state: State }) {
                 </span>
                 {it.task ? (
                   <span className="t" title={M.currentSpec(it.task).content.title}>
-                    <span className="mono muted">{it.task.id}</span> {M.currentSpec(it.task).content.title} {it.task.integration?.pr && <PrChip state={state} task={it.task} />}
+                    <span className="mono muted">{it.task.id}</span> {M.currentSpec(it.task).content.title}
                   </span>
                 ) : (
                   <span className="t">{it.detail}</span>
+                )}
+                {it.task?.integration?.pr && (
+                  <span className="pr-line">
+                    <PrChip state={state} task={it.task} />
+                  </span>
                 )}
                 {it.task && it.detail && <span className="muted small">{it.detail}</span>}
               </span>

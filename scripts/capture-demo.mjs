@@ -127,7 +127,15 @@ function steeringMessage(state) {
 
 const SCENES = {
   // The start of the demo: three agents working, the clock paused.
-  overview: async ({ page, api }) => open(page, api, "#/overview", { selector: '[data-tour="progress"]' }),
+  overview: async ({ page, api }) => {
+    await open(page, api, "#/overview", { selector: '[data-tour="progress"]' });
+    // The line about using your own repository is for someone exploring the demo; the README says it in words.
+    const hide = page.locator(".try-shaping button", { hasText: "Hide" });
+    if (await hide.count()) {
+      await hide.first().click();
+      await page.waitForTimeout(250);
+    }
+  },
   board: async ({ page, api }) => open(page, api, "#/tasks", { selector: ".board" }),
   steering: async ({ page, api }) => {
     await open(page, api, "#/tasks", { selector: ".board" });
@@ -546,11 +554,19 @@ try {
     await api.command("setChecks", { config: config(true) });
     await api.stepUntil(
       "WT-006's pull request waiting on a failed check",
-      // Once the service's own check fails, the pull request waits for you and is not read from GitHub again.
+      // Once the service's own check fails, the pull request waits for you.
       (s) => s.tasks.find((t) => t.id === "WT-006")?.integration?.pr?.attention?.code === "service-checks",
       300,
       2,
     );
+    // The simulated GitHub is read on the service's own schedule (every 30 s while a pull request is new), in real
+    // time; wait for that first read so the card shows what GitHub says rather than "not read yet".
+    const readBy = Date.now() + 60_000;
+    while (!(await api.state()).tasks.find((t) => t.id === "WT-006")?.integration?.pr?.observed) {
+      if (Date.now() > readBy) throw new Error("WT-006's pull request was not read from the simulated GitHub within 60 s.");
+      await api.step(1);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
     for (const name of inGroup("pr")) await shoot(name);
     await api.restart();
   }

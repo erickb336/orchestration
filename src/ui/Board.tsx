@@ -348,8 +348,14 @@ export function Board() {
           );
         })
       ) : (
+        <>
+          {M.BOARD_COLUMNS.some((c) => byColumn(c).length === 0) && (
+            <p className="muted meta board-empty">
+              Empty: {M.BOARD_COLUMNS.filter((c) => byColumn(c).length === 0).map((c) => COLUMN_LABEL[c]).join(", ")}
+            </p>
+          )}
         <div className="board">
-          {M.BOARD_COLUMNS.map((c) => (
+          {M.BOARD_COLUMNS.filter((c) => byColumn(c).length > 0).map((c) => (
             <section className="col" key={c} aria-label={COLUMN_LABEL[c]}>
               <div className="group-head">
                 <h2>{COLUMN_LABEL[c]}</h2>
@@ -361,6 +367,7 @@ export function Board() {
             </section>
           ))}
         </div>
+        </>
       )}
 
       {cancelled.length > 0 && (
@@ -455,14 +462,16 @@ function TaskCard({ state, task }: { state: State; task: Task }) {
                 <ProviderMark provider={live.provider} />
                 <span>{M.providerLabel(live.provider)}</span>
                 <span className="purpose">· {live.purpose}</span>
-                {liveStep >= 0 && (
-                  <span className="muted num">
-                    · step {liveStep + 1} of {task.steps.length}
-                  </span>
-                )}
                 {agents.length > 1 && <span className="muted">· +{agents.length - 1} more</span>}
               </div>
-              <StepBar task={task} />
+              <div className="step-row">
+                <StepBar task={task} />
+                {liveStep >= 0 && (
+                  <span className="muted num">
+                    step {liveStep + 1} of {task.steps.length}
+                  </span>
+                )}
+              </div>
             </>
           )}
           {next && (
