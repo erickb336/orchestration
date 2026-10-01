@@ -244,6 +244,9 @@ export function Board() {
           <button className="small" disabled={disabled} onClick={() => lead.openLead({ placeholder: "Tell the lead what to focus on…" })} title="The lead can change the focus, reorder and defer work, and drop its own unstarted proposals">
             Message the lead
           </button>
+          <a href="#/activity" className="small" title="Every event, newest first">
+            All activity
+          </a>
         </span>
         {newCount > 0 && (
           <span className="row">
