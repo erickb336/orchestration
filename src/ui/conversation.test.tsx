@@ -72,8 +72,10 @@ describe("the lead conversation", () => {
     // Inside: the focus diff, the deferral with Undo, and the note with its status chip and no Undo.
     expect(markup).toContain('aria-label="Focus change"');
     expect(words).toContain("Weather alerts for the trip day : Deferred (after its current step)");
-    expect(words).toMatch(/Note to WT-002 S1 \(Coder · Codex\) : “Show the age of the cached map/);
-    expect(words).toContain("Queued");
+    // The note reached the packing list's coder while it ran, so it reads Delivered.
+    expect(words).toMatch(/Note to WT-005 S1 \(Coder · Codex\) : “Put a first-aid kit on every packing list/);
+    expect(words).toMatch(/\bDelivered\b/);
+    expect(words).not.toContain("Delivered when the run started");
     expect(words).toContain("sent; no Undo: a sent note cannot be unsent");
     expect(count(markup, ">Undo</button>")).toBe(2); // the deferral's and the focus's rows; never the note's
   });

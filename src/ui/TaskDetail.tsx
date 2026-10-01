@@ -54,7 +54,7 @@ export function TaskDetail({ id }: { id: string }) {
       ) : (
         <>
           <NeedsYouCard state={state} task={task} items={items} onCompare={() => openSection("spec")} />
-          <div className="t-grid">
+          <div className="t-grid" data-tour="steps">
             <PurposeCard task={task} />
             <StepsCard state={state} task={task} />
           </div>

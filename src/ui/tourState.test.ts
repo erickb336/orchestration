@@ -1,7 +1,8 @@
-// The tour's seen-state. Blocked storage never breaks the page and never loops the tour.
+// The tour: its seen-state (blocked storage never breaks the page and never loops the tour) and its stops.
 
 import { describe, expect, it } from "vitest";
-import { TOUR_DONE, TOUR_KEY, createTourGate, demoLandingRedirect, readTourDone, writeTourDone, type KeyValueStore } from "./tourState";
+import { parseRoute } from "./route";
+import { TOUR_DONE, TOUR_KEY, TOUR_STOPS, TOUR_TASK_ID, createTourGate, demoLandingRedirect, readTourDone, tourNeedsNavigation, writeTourDone, type KeyValueStore } from "./tourState";
 
 function memoryStore(initial: Record<string, string> = {}): KeyValueStore & { data: Record<string, string> } {
   const data = { ...initial };
@@ -75,5 +76,55 @@ describe("the tour's seen-state", () => {
     expect(demoLandingRedirect(true, "#/tasks")).toBeUndefined();
     expect(demoLandingRedirect(true, "#/task/WT-002")).toBeUndefined();
     expect(demoLandingRedirect(false, "")).toBeUndefined();
+  });
+});
+
+/** The screen files as source text, to check that each stop's element is rendered by some screen. */
+const screenSources = Object.values(import.meta.glob<string>(["./**/*.tsx", "!./**/*.test.tsx"], { query: "?raw", import: "default", eager: true })).join("\n");
+
+describe("the tour's stops", () => {
+  it("are six or seven short stops in the order a first visitor needs, each one or two plain sentences", () => {
+    expect(TOUR_STOPS.length).toBeGreaterThanOrEqual(6);
+    expect(TOUR_STOPS.length).toBeLessThanOrEqual(7);
+    expect(TOUR_STOPS.map((s) => s.title)).toEqual(["This is a demo", "Needs you", "Progress by area", "Message the lead", "A task's steps", "Results", "How involved you are"]);
+    // It opens on the demo bar: the visitor learns first that everything is simulated.
+    expect(TOUR_STOPS[0]).toMatchObject({ element: '[data-tour="demo-bar"]', page: "#/overview" });
+    expect(TOUR_STOPS[0].text).toMatch(/simulated/);
+    for (const s of TOUR_STOPS) {
+      const sentences = s.text.split(/(?<=[.!?])\s+/).filter(Boolean);
+      expect(sentences.length, s.title).toBeGreaterThanOrEqual(1);
+      expect(sentences.length, s.title).toBeLessThanOrEqual(2);
+      expect(s.text.length, s.title).toBeLessThanOrEqual(200);
+      // Plain words: no run ids, no internal names.
+      expect(s.text, s.title).not.toMatch(/\brun-\d+|\bstage\b|\bworker\b|\bruntime\b/);
+    }
+    // The last stop says where to replay it.
+    expect(TOUR_STOPS.at(-1)!.text).toMatch(/Replay this tour from the Simulation menu/);
+  });
+
+  it("each stop points at an element a screen renders, on a page that exists", () => {
+    for (const s of TOUR_STOPS) {
+      const anchor = /^\[data-tour="([a-z-]+)"\]$/.exec(s.element)?.[1];
+      const id = /^#([a-z-]+)$/.exec(s.element)?.[1];
+      expect(anchor ?? id, s.element).toBeDefined();
+      // A data-tour attribute in a screen (the tabs carry theirs as `tour: "…"`), or a Settings card's id.
+      if (anchor) expect(screenSources.includes(`data-tour="${anchor}"`) || screenSources.includes(`tour: "${anchor}"`), anchor).toBe(true);
+      if (id) expect(screenSources.includes(`id="${id}"`), id).toBe(true);
+      if (s.page) expect(s.page.startsWith("#/"), s.page).toBe(true);
+    }
+    expect(TOUR_STOPS.map((s) => s.page && parseRoute(s.page))).toEqual([{ page: "overview" }, { page: "overview" }, { page: "overview" }, undefined, { page: "task", id: TOUR_TASK_ID }, { page: "review" }, { page: "settings" }]);
+  });
+
+  it("opens a stop's page only when it is not shown already", () => {
+    const home = { page: "#/overview" };
+    expect(tourNeedsNavigation("#/overview", home, true)).toBe(false);
+    expect(tourNeedsNavigation("#/tasks", home, false)).toBe(true);
+    // The Results tab is in the header on every page, so the page itself decides.
+    expect(tourNeedsNavigation("#/task/WT-002", { page: "#/results" }, true)).toBe(true);
+    expect(tourNeedsNavigation("#/review", { page: "#/results" }, true)).toBe(false);
+    // Settings open on another section: the card is not shown, so the stop's address opens it.
+    expect(tourNeedsNavigation("#/settings/project/delivery", { page: "#/settings/working-style/involvement" }, false)).toBe(true);
+    // A stop without a page (the lead's button, in the header) stays where you are.
+    expect(tourNeedsNavigation("#/task/WT-002", {}, true)).toBe(false);
   });
 });
