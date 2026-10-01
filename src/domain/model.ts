@@ -3,7 +3,10 @@
 // Operations are applied one at a time, which serializes races such as
 // pause-vs-completion: whichever is applied first determines the outcome.
 
-import { recordLanded, undeliveredTasks } from "./delivery";
+import * as C from "./checks";
+import { coverageOf as pathCoverageOf, gapText, notRequired } from "./coverage";
+import { prBaseRef, recordLanded, undeliveredTasks } from "./delivery";
+import * as F from "./findings";
 import { downstreamOf, instantiate, structuralKey, toDef, validatePipeline } from "./pipeline";
 import { INTERNAL_TEMPLATE_IDS } from "./templates";
 import {
@@ -13,6 +16,7 @@ import {
   type Attempt,
   type CatalogModel,
   type ChangeAuthor,
+  type CheckRunRecord,
   type Deferral,
   type PrDelivery,
   type RunLimits,
@@ -34,11 +38,13 @@ import {
   type ModelSelection,
   type Coverage,
   type CoverageState,
+  type Finding,
   type LeadQuestion,
   type ProjectStage,
   type ShapingArea,
   type ProviderId,
   type RoleId,
+  type Runner,
   type SelectionSource,
   type SpecContent,
   type State,
@@ -54,7 +60,9 @@ import {
   SHAPING_AREAS,
   autoModelDefaults,
   AUTOPILOT,
+  DEFAULT_CHECKS,
   DEFAULT_PR_DELIVERY,
+  isProvider,
   StaleWriteError,
 } from "./types";
 
@@ -64,7 +72,8 @@ function draft(state: State): State {
   return structuredClone(state);
 }
 
-function nextId(s: State, prefix: string): string {
+/** The next generated id for a draft state (mutates `s.seq`). Shared with the findings module (ORC-013). */
+export function nextId(s: State, prefix: string): string {
   s.seq += 1;
   return `${prefix}-${s.seq}`;
 }
@@ -94,7 +103,8 @@ export function isSettled(st: Step) {
   return st.state === "done" || st.state === "skipped";
 }
 
-function event(s: State, now: string, actor: Actor, kind: EventKind, message: string, taskId?: string) {
+/** Record an activity event on a draft state. Shared with the findings module (ORC-013). */
+export function event(s: State, now: string, actor: Actor, kind: EventKind, message: string, taskId?: string) {
   log(s, { at: now, actor, kind, message, taskId });
 }
 
@@ -112,6 +122,34 @@ export function isActive(a: Attempt) {
 
 export function activeAttempts(s: State, taskId?: string) {
   return s.attempts.filter((a) => isActive(a) && (taskId === undefined || a.taskId === taskId));
+}
+
+/** ORC-013: active runs of agents (a provider's worker). Service runs (checks) count against their own limit. */
+export function activeAgentAttempts(s: State) {
+  return s.attempts.filter((a) => isActive(a) && isProvider(a.snapshot.provider));
+}
+
+/** ORC-013: active check runs (run by the service), bounded by `checks.maxConcurrent`. */
+export function activeServiceAttempts(s: State) {
+  return s.attempts.filter((a) => isActive(a) && a.snapshot.provider === "service");
+}
+
+/**
+ * ORC-013 §6.10: the check settings changed, so every active check run is stopped for revision and its
+ * step's revision bumped, so a late result is discarded and the step runs again with the new settings.
+ * Mutates the draft; returns how many runs were asked to stop.
+ */
+export function stopServiceRuns(s: State, now: string): number {
+  let n = 0;
+  for (const a of activeServiceAttempts(s)) {
+    if (a.outcome !== "running") continue;
+    const t = getTask(s, a.taskId);
+    const st = findStep(t, a.stepId);
+    if (st) st.revision += 1;
+    requestStop(s, a, "revision", now);
+    n++;
+  }
+  return n;
 }
 
 function assertOpen(t: Task, what: string) {
@@ -177,7 +215,8 @@ export function artifactAuthor(s: State, art: Artifact): ChangeAuthor {
     if (!sameCommit(run, art)) return "user";
     made = run;
   }
-  return s.attempts.find((a) => a.id === made.attemptId)?.snapshot.provider ?? "unknown";
+  const p = s.attempts.find((a) => a.id === made.attemptId)?.snapshot.provider;
+  return p && isProvider(p) ? p : "unknown";
 }
 
 /** Everyone who authored a change a pull request holds. Records from before the set was kept name only the newest author. */
@@ -235,6 +274,8 @@ export function writersOf(s: State, t: Task, st: StepDef): ChangeAuthor[] {
  */
 export function resolveStep(s: State, t: Task, st: Step): Resolution {
   const p = s.project;
+  // ORC-013: a Checks step is run by the service, never by a provider; dispatch never asks for it.
+  if (st.role === "checks") return { ok: false, reason: "run by the service" };
   let selection: ModelSelection;
   let source: SelectionSource;
   let independence: string | undefined;
@@ -279,12 +320,14 @@ export function resolveStep(s: State, t: Task, st: Step): Resolution {
   return { ok: true, selection, source, reason: sourceLabel(source) };
 }
 
-export function providerLabel(p: ProviderId) {
-  return p === "claude" ? "Claude" : "Codex";
+export function providerLabel(p: Runner) {
+  return p === "claude" ? "Claude" : p === "codex" ? "Codex" : "Service";
 }
 
 export function sourceLabel(src: SelectionSource) {
   switch (src) {
+    case "service":
+      return "Run by the service";
     case "step":
       return "Pinned on this step";
     case "task-role":
@@ -422,6 +465,11 @@ export function stateLabel(s: State, t: Task): string {
     if (open === 0) return "Waiting for child pull requests to merge";
     return `Waiting for ${open} child task${open === 1 ? "" : "s"}`;
   }
+  // ORC-013: a repair that would read undecided findings waits for the decision; nothing is blocked.
+  const awaiting = t.lifecycle === "active" && active.length === 0 ? F.awaitingDecision(s, t) : undefined;
+  if (awaiting) return F.awaitingLabel(awaiting);
+  // ORC-013 §6.5.4: a Checks step that would start next waits while the sandbox is not ready; nothing runs unsandboxed by itself.
+  if (t.lifecycle === "active" && active.length === 0 && C.checksHeld(s) && t.steps.some((st) => st.state === "pending" && st.role === "checks" && st.dependsOn.every((d) => isSettled(getStep(t, d))))) return C.HELD_LABEL;
   // ORC-012: while shaping, a step that would start next waits for Start building; nothing is paused.
   if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (shaping)" : "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return waitingLabel(s, t);
@@ -581,7 +629,7 @@ export function createFollowUp(state: State, taskId: string, now: string, opts: 
   const author = opts.author ?? "user";
   // Fresh steps: expanded -iN and -cN copies are never copied, and nothing carries run state over.
   const defs = (opts.steps ? structuredClone(opts.steps) : unexpandedSteps(t)).map(toDef);
-  const errors = validatePipeline(defs).filter((i) => i.severity === "error");
+  const errors = validatePipeline(defs, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`The follow-up's pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
   const steps = instantiate(defs);
   // A copied pipeline keeps the models the user pinned on its steps.
@@ -715,6 +763,8 @@ function cancelInto(s: State, t: Task, now: string, by?: { actor: Actor; reason:
   const active = activeAttempts(s, t.id);
   event(s, now, by?.actor ?? "user", "control", `Cancelled${by ? ` (${by.reason})` : ""}; spec and partial artifacts retained${active.length ? `; stopping ${active.length} run(s)` : ""}`, t.id);
   for (const a of active) requestStop(s, a, "cancel", now);
+  // Review 1 (10): nothing on a cancelled task waits for a decision any more.
+  F.supersedeDecisions(s, t.id, now, { reason: `${t.id} was cancelled` });
   // Unfinished child tasks exist only for this task's goal: cancel them too.
   const children = descendants(s, t).filter(isOpen);
   for (const c of children) {
@@ -724,6 +774,7 @@ function cancelInto(s: State, t: Task, now: string, by?: { actor: Actor; reason:
     const runs = activeAttempts(s, c.id);
     event(s, now, "user", "control", `Cancelled with ${t.id}${runs.length ? `; stopping ${runs.length} run(s)` : ""}`, c.id);
     for (const a of runs) requestStop(s, a, "cancel", now);
+    F.supersedeDecisions(s, c.id, now, { reason: `${c.id} was cancelled with ${t.id}` });
   }
   const gone = new Set([t.id, ...children.map((c) => c.id)]);
   for (const d of s.tasks.filter((x) => isOpen(x) && !gone.has(x.id))) {
@@ -956,11 +1007,11 @@ export function setWorkerLimit(state: State, limit: number, now: string): State 
   return s;
 }
 
-/** Configuration changed; let the next dispatch re-resolve blocked steps. */
+/** Configuration changed; let the next dispatch re-resolve blocked steps. A Checks step resolves no provider, so it stays as it is. */
 function unblockConfigSteps(s: State) {
   for (const t of s.tasks) {
     if (t.lifecycle === "done" || t.lifecycle === "cancelled") continue;
-    for (const st of t.steps) if (st.state === "blocked") {
+    for (const st of t.steps) if (st.state === "blocked" && st.role !== "checks") {
       st.state = "pending";
       st.blockedReason = undefined;
     }
@@ -1076,7 +1127,8 @@ export function leadPromoteProposals(state: State, now: string): State {
     // ORC-009: a deferred proposal stays proposed until the deferral is lifted.
     if (deferredBy(s, t)) continue;
     if (blockedReason(s, t) || waitingOn(s, t)) continue;
-    const unresolved = t.steps.map((st) => resolveStep(s, t, st)).find((r) => !r.ok);
+    // ORC-013: a Checks step is run by the service and never resolves to a provider.
+    const unresolved = t.steps.filter((st) => st.role !== "checks").map((st) => resolveStep(s, t, st)).find((r) => !r.ok);
     if (unresolved) continue;
     t.lifecycle = "ready";
     touch(t, now);
@@ -1099,6 +1151,8 @@ export interface DispatchOptions {
   holdWriters?: string;
   /** Tasks whose first writer must wait for a fresh base (a revert, before the base was fetched again). */
   staleBase?: (t: Task) => boolean;
+  /** ORC-013: the checks sandbox is not ready: Checks steps wait, labelled, and nothing falls back to running unsandboxed. */
+  checksHeld?: boolean;
 }
 
 /**
@@ -1118,10 +1172,12 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
   // ORC-012: while shaping no worker step starts, on any task. Like a deferral (and unlike a hold),
   // running work finishes and its result is accepted, settled tasks become Done, and nothing is paused.
   const shaping = s.project.stage === "shaping";
+  // ORC-013: Final checks steps that repeat an earlier run of the same commit and settings complete in this same transaction.
+  const reused: { attemptId: string; outputs: OutputReport[] }[] = [];
   // A stable sort: tasks the lead did not name keep their relative (creation) order.
   const tasks = s.tasks.map((t) => ({ t, rank: dispatchRank(s, t) })).sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map((x) => x.t);
   for (const t of tasks) {
-    if (activeAttempts(s).length >= s.project.workerLimit) break;
+    if (activeAgentAttempts(s).length >= s.project.workerLimit) break;
     if (t.lifecycle !== "ready" && t.lifecycle !== "active") continue;
     if (t.hold || t.holdBeforeStart || t.heldForShaping || t.controlFailure || t.legacySpecUnavailable) continue;
     if (waitingOn(s, t) || blockedReason(s, t)) continue;
@@ -1146,7 +1202,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       }
     }
     for (const st of [...t.steps]) {
-      if (activeAttempts(s).length >= s.project.workerLimit) break;
+      if (activeAgentAttempts(s).length >= s.project.workerLimit) break;
       if (st.state !== "pending") continue;
       const depsDone = st.dependsOn.every((d) => isSettled(getStep(t, d)));
       if (!depsDone) continue;
@@ -1161,20 +1217,100 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
         event(s, now, "lead", "dispatch", `Skipped ${st.id}: the previous iteration ended clean`, t.id);
         continue;
       }
+      // ORC-013: a Checks step is run by the service, never by a provider. While checks are off for the
+      // project it settles by skipping, so the pipeline continues (a settle-by-skip is allowed even
+      // while deferred or shaping, as for a condition with nothing to do).
+      if (st.role === "checks") {
+        const cfg = s.project.checks ?? DEFAULT_CHECKS;
+        if (!C.checksOn(cfg)) {
+          st.state = "skipped";
+          st.invalidatedBy = undefined;
+          touch(t, now);
+          event(s, now, "lead", "dispatch", `Skipped ${st.id}: checks are off for this project (Settings → Checks)`, t.id);
+          continue;
+        }
+        const target = C.checkTargetOf(s, t, st);
+        if (!target) {
+          st.state = "skipped";
+          st.invalidatedBy = undefined;
+          touch(t, now);
+          event(s, now, "lead", "dispatch", `Skipped ${st.id}: nothing to check: no code change reached this step`, t.id);
+          continue;
+        }
+        // M2: a step that would run no check command never counts as passing; it blocks and says why.
+        const missing = C.missingChecks(cfg, st);
+        if (missing.length || !C.commandsFor(cfg, st).some((c) => c.kind === "check")) {
+          const reason = missing.length ? `this step names checks that do not exist: ${missing.join(", ")}. Fix the pipeline, or the check settings.` : "this step runs no check command: every check it names was removed from the settings.";
+          st.state = "blocked";
+          st.blockedReason = reason;
+          touch(t, now);
+          event(s, now, "system", "blocked", `${st.id} blocked: ${reason}`, t.id);
+          continue;
+        }
+        if (deferred) continue; // settling by skipping is allowed while deferred or shaping; starting is not
+        // The sandbox is not ready: the step waits, labelled; nothing ever falls back to running unsandboxed (Q3).
+        if (opts.checksHeld ?? C.checksHeld(s)) continue;
+        if (activeServiceAttempts(s).length >= cfg.maxConcurrent) continue;
+        const targetSha = target.ref;
+        const reuse = st.checks?.onFail === "block" ? C.reusableRun(s, t, st, targetSha) : undefined;
+        const attemptId = nextId(s, "run");
+        const a: Attempt = {
+          id: attemptId,
+          taskId: t.id,
+          stepId: st.id,
+          snapshot: {
+            provider: "service",
+            model: "checks",
+            source: "service",
+            routingReason: reuse ? `Same commit and settings as ${reuse.attempt.stepId}'s run ${reuse.attempt.id}; not run again` : `Run by the service (${cfg.sandbox === "codex" ? "sandboxed" : "no sandbox"})`,
+            specRev: spec.rev,
+            stepRev: st.revision,
+            visionRev: vision.rev,
+            workspace: opts.workspaceFor ? opts.workspaceFor(t.id, st.id, attemptId) : `${s.project.repoPath}/.orchestration/worktrees/${t.id}-${st.id}`,
+            pipelineRev: t.pipelineRev,
+            purpose: st.purpose,
+            inputs: consumedInputs(s, t, st),
+            checks: { configRev: cfg.rev, sandbox: cfg.sandbox, target, commands: C.commandsFor(cfg, st), ...(reuse ? { reusedFrom: reuse.attempt.id } : {}) },
+          },
+          startedAt: now,
+          outcome: "running",
+          progress: 0,
+          artifacts: [],
+        };
+        s.attempts.push(a);
+        st.state = "running";
+        if (t.lifecycle === "ready") t.lifecycle = "active";
+        touch(t, now);
+        event(s, now, "lead", "dispatch", `Dispatched ${st.id} (checks) to the service as ${a.id} on ${targetSha.slice(0, 12)} with settings r${cfg.rev}${reuse ? `; same commit and settings as ${reuse.attempt.id}, not run again` : ""}`, t.id);
+        // Reuse (a Final checks step whose commit the loop already checked with these settings): it completes in this same transaction with a copy of that result.
+        if (reuse) {
+          const record: CheckRunRecord = { ...structuredClone(reuse.artifact.checkRun!), reusedFrom: reuse.attempt.id };
+          const findings = reuse.artifact.findings ? structuredClone(reuse.artifact.findings) : undefined;
+          reused.push({ attemptId, outputs: [{ name: st.outputs[0].name, summary: C.runSummary(record), checkRun: record, ...(findings ? { findings } : {}) }] });
+        }
+        continue;
+      }
+      // ORC-013: a step conditioned on findings waits, neither dispatched nor skipped, while an
+      // ask-user finding it would read is undecided. Deferral, holds and pauses apply as usual.
+      if (F.stepAwaitsDecision(s, t, st)) continue;
       if (st.runIf?.length) {
-        const open = st.runIf.reduce((n, r) => n + (acceptedOutput(s, t, r.step, r.output)?.openFindings ?? 0), 0);
+        // Only what a repair may do counts: auto-fix findings and those someone decided to fix.
+        const open = st.runIf.reduce((n, r) => {
+          const art = acceptedOutput(s, t, r.step, r.output);
+          return n + (art ? F.fixable(s, art) : 0);
+        }, 0);
         if (open === 0) {
           st.state = "skipped";
           st.invalidatedBy = undefined;
           touch(t, now);
-          event(s, now, "lead", "dispatch", `Skipped ${st.id}: no open findings in ${st.runIf.map((r) => `${r.step}.${r.output}`).join(", ")}`, t.id);
+          event(s, now, "lead", "dispatch", `Skipped ${st.id}: nothing to fix in ${st.runIf.map((r) => `${r.step}.${r.output}`).join(", ")}`, t.id);
           continue;
         }
       }
       if (deferred) continue; // ORC-009: nothing new starts on a deferred task; ORC-012: nor on any task while shaping
       const r = resolveStep(s, t, st);
       if (r.ok && opts.deferred?.includes(r.selection.provider)) continue;
-      if (r.ok && activeAttempts(s).filter((x) => x.snapshot.provider === r.selection.provider).length >= (s.project.providerLimits?.[r.selection.provider] ?? s.project.workerLimit)) continue;
+      if (r.ok && activeAgentAttempts(s).filter((x) => x.snapshot.provider === r.selection.provider).length >= (s.project.providerLimits?.[r.selection.provider] ?? s.project.workerLimit)) continue;
       const down = r.ok ? opts.unavailable?.[r.selection.provider] : undefined;
       if (!r.ok || down) {
         // Never substitute another provider: block with the reason and let the user act.
@@ -1218,7 +1354,9 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       event(s, now, "lead", "dispatch", `Dispatched ${st.id} (${st.role}) to ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model} as ${a.id} on spec r${spec.rev}`, t.id);
     }
   }
-  return s;
+  let out: State = s;
+  for (const r of reused) out = reportCompletion(out, r.attemptId, [], now, r.outputs);
+  return out;
 }
 
 export function reportProgress(state: State, attemptId: string, progress: number): State {
@@ -1339,7 +1477,14 @@ export function retryStop(state: State, taskId: string, now: string): State {
 export interface OutputReport {
   name: string;
   summary: string;
+  /** Legacy review findings: the worker's count. Ignored when `findings` is present (the service computes it). */
   openFindings?: number;
+  /** ORC-013: structured findings, already validated by the parser. */
+  findings?: Finding[];
+  /** ORC-013: the changed files the reviewer says it judged (normalised by the parser). */
+  reviewedPaths?: string[];
+  /** ORC-013: a service check run (step 2). */
+  checkRun?: Artifact["checkRun"];
   /** Breakdown outputs: the work items that become child tasks. */
   items?: unknown[];
   /** Durable reference, e.g. "<sha> on orchestration/run-12". */
@@ -1390,14 +1535,58 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
       touch(t, now);
       return s;
     }
+    // ORC-013 §5.3: a code review that reports nothing must account for every changed file the
+    // service showed it. Otherwise it is not accepted: once more with the gap named, then blocked.
+    const reviewCoverage = new Map<string, ReturnType<typeof pathCoverageOf>>();
+    // Review 1 (7): a code review that read a real change but got no changed-path set is "unproven", never "not-required".
+    const readsRealChange = a.snapshot.inputs.some((i) => {
+      const art = s.artifacts.find((x) => x.id === i.artifactId);
+      return art?.kind === "code-change" && !!art.ref && !art.ref.startsWith("sim-");
+    });
+    for (const def of st.outputs) {
+      if (def.kind !== "review-findings") continue;
+      const rep = outputs.find((o) => o.name === def.name)!;
+      const cov = st.role !== "code_reviewer" ? notRequired() : a.scope || !readsRealChange ? pathCoverageOf(a.scope, rep.reviewedPaths ?? []) : { state: "unproven" as const, changed: 0, reviewed: (rep.reviewedPaths ?? []).length, missing: [], extra: [] };
+      reviewCoverage.set(def.name, cov);
+      // Review 1 (14): a finding an earlier round settled (accepted, followed up) does not make this report "not clean".
+      const open = rep.findings ? rep.findings.filter((f) => F.isBlocking(f) && !F.settledByKey(s, t, f)).length : (rep.openFindings ?? 0);
+      if (open > 0 || cov.state !== "incomplete") continue;
+      // Review 1 (12): the gap and its retry belong to one change; a different change starts over.
+      if (st.coverageGap && st.coverageGap.to !== cov.to) {
+        delete st.coverageGap;
+        delete st.coverageRetries;
+      }
+      const gap = gapText(cov);
+      a.outcome = "failed";
+      const files = [...cov.missing, ...cov.extra].slice(0, 10).join(", ");
+      if (!st.coverageRetries) {
+        st.coverageRetries = 1;
+        st.coverageGap = { missing: [...cov.missing], extra: [...cov.extra], ...(cov.to ? { to: cov.to } : {}) };
+        settleStoppedStep(s, t, st); // pending, or paused under a hold
+        a.note = `Reported no findings but ${gap}; not accepted. It runs again with those files named.`;
+        event(s, now, "runtime", "runtime", `${a.id} reported no findings but ${gap}; ${st.id} runs again with those files named`, t.id);
+      } else {
+        st.state = "blocked";
+        st.blockedReason = `Last run failed: the clean review did not cover ${files} (twice). Retry it, or edit its findings to accept it.`;
+        a.note = `Reported no findings but ${gap} (twice); not accepted.`;
+        event(s, now, "runtime", "blocked", `${a.id} reported no findings but ${gap} (twice); ${st.id} blocked`, t.id);
+      }
+      if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
+      touch(t, now);
+      return s;
+    }
     a.outcome = "completed";
     st.state = "done";
     st.invalidatedBy = undefined;
     st.autoRetries = 0;
+    delete st.coverageGap;
+    delete st.coverageRetries;
     const produced: string[] = [];
     for (const def of st.outputs) {
       const rep = outputs.find((o) => o.name === def.name)!;
       const version = s.artifacts.filter((x) => x.taskId === t.id && x.stepId === st.id && x.name === def.name).length + 1;
+      // Structured findings: the open count is computed here from the findings, never taken from the worker.
+      const findings = def.kind === "review-findings" && rep.findings ? structuredClone(rep.findings) : undefined;
       const art: Artifact = {
         id: nextId(s, "art"),
         taskId: t.id,
@@ -1409,11 +1598,24 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
         summary: rep.summary,
         createdAt: now,
         ...(rep.ref ? { ref: rep.ref } : {}),
-        ...(def.kind === "review-findings" ? { openFindings: rep.openFindings ?? 0 } : {}),
+        ...(def.kind === "review-findings" ? { openFindings: findings ? F.blockingCount(findings) : (rep.openFindings ?? 0), ...(findings ? { findings } : {}), pathCoverage: reviewCoverage.get(def.name) ?? notRequired() } : {}),
+        ...(def.kind === "check-results" && rep.checkRun ? { checkRun: structuredClone(rep.checkRun), ...(rep.findings ? { findings: structuredClone(rep.findings), openFindings: F.blockingCount(rep.findings) } : {}) } : {}),
         ...(def.kind === "breakdown" ? { items: structuredClone(rep.items ?? []) } : {}),
       };
+      // Review 1 (10): open decisions on the version this run replaces cannot be acted on any more; decided ones are the record (and carry forward).
+      for (const old of s.artifacts) if (old.taskId === t.id && old.stepId === st.id && old.name === def.name) F.supersedeDecisions(s, t.id, now, { artifactId: old.id, reason: `${st.id} ran again and produced ${def.name} v${version}` });
       s.artifacts.push(art);
       produced.push(`${def.name} v${version}`);
+      // ORC-013 §4.4: every blocking ask-user finding becomes a decision, routed as the project is set.
+      if (art.findings) F.createDecisions(s, t, art, now);
+      // ORC-013 §6.7: a Final checks step whose run did not pass blocks the task and opens a decision.
+      // The result stays on the record. The reason never starts with "Last run failed", so automatic
+      // retry leaves it alone; only a repair round (lead or user) or the user's acceptance ends it.
+      if (def.kind === "check-results" && st.checks?.onFail === "block" && art.checkRun && !C.allPassed(art.checkRun)) {
+        const d = C.openFinalChecksDecision(s, t, st, art, now);
+        st.state = "blocked";
+        st.blockedReason = `Checks failed on the final change ${art.checkRun.sha.slice(0, 12)}: ${C.failedResults(art.checkRun).map((r) => r.label).join(", ")}. A decision is needed (${d.id}).`;
+      }
     }
     event(s, now, "runtime", "runtime", `${st.id} completed by ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model}${produced.length ? `; produced ${produced.join(", ")}` : ""}`, t.id);
     // Best-of: record which candidate this step chose (default: the first completed copy).
@@ -1531,7 +1733,7 @@ export function setPipeline(state: State, taskId: string, expectedRev: number, d
     if (prev?.iteration && prev.iteration > 1) n.iteration = prev.iteration;
     return n;
   });
-  const errors = validatePipeline(defs).filter((i) => i.severity === "error");
+  const errors = validatePipeline(defs, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`Pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
   for (const d of defs) {
     const prev = old.get(d.id);
@@ -1615,7 +1817,7 @@ export function saveTemplate(state: State, template: WorkflowTemplate, expectedR
   if (expectedRev === null && existing) throw new ControlError(`A template with ID ${template.id} already exists.`);
   if (expectedRev !== null && !existing) throw new ControlError(`"${template.name}" was deleted while you were editing it.`);
   if (existing && existing.rev !== expectedRev) throw new StaleWriteError(expectedRev!, existing.rev);
-  const errors = validatePipeline(template.steps).filter((i) => i.severity === "error");
+  const errors = validatePipeline(template.steps, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`Template is invalid: ${errors.map((e) => e.message).join(" ")}`);
   const clean: WorkflowTemplate = { ...structuredClone(template), rev: (existing?.rev ?? 0) + 1, steps: template.steps.map(toDef) };
   const i = s.project.templates.findIndex((x) => x.id === template.id);
@@ -1708,6 +1910,10 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // and with nothing observed about the previous repository.
   s.project.prDelivery = structuredClone(DEFAULT_PR_DELIVERY);
   delete s.project.github;
+  // ORC-013: checks are off until the user turns them on for this repository, and nothing has been probed for it.
+  s.project.checks = structuredClone(DEFAULT_CHECKS);
+  delete s.project.checksHealth;
+  s.decisions = [];
   s.tasks = [];
   s.attempts = [];
   s.artifacts = [];
@@ -1744,7 +1950,7 @@ export interface NewTask {
  */
 export function createTask(state: State, t: NewTask, now: string): { state: State; newId: string } {
   if (!t.title.trim() || !t.outcome.trim() || !t.approach.trim()) throw new ControlError("Title, outcome, and approach are required.");
-  const errors = validatePipeline(t.steps).filter((i) => i.severity === "error");
+  const errors = validatePipeline(t.steps, { checkIds: C.configuredCheckIds(state.project.checks) }).filter((i) => i.severity === "error");
   if (errors.length) throw new ControlError(`Pipeline is invalid: ${errors.map((e) => e.message).join(" ")}`);
   const s = draft(state);
   let n = s.tasks.length + 1;
@@ -1816,12 +2022,12 @@ export function pendingMessages(s: State): Message[] {
  */
 export function openLeadProposals(s: State): Task[] {
   // Review and fix tasks the service creates for a pull request are never the lead's proposals.
-  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && t.lifecycle !== "done" && t.lifecycle !== "cancelled" && !t.reviewTarget && !t.deliverInto && !deferredBy(s, t));
+  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && t.lifecycle !== "done" && t.lifecycle !== "cancelled" && !t.reviewTarget && !t.deliverInto && !t.checkTarget && !deferredBy(s, t));
 }
 
 /** ORC-009: lead-authored open roots with their own deferral. Planning stops when these reach the open cap too. */
 export function deferredLeadRoots(s: State): Task[] {
-  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && isOpen(t) && !t.parentTaskId && !!t.deferral && !t.reviewTarget && !t.deliverInto);
+  return s.tasks.filter((t) => t.specs[0]?.author === "lead" && isOpen(t) && !t.parentTaskId && !!t.deferral && !t.reviewTarget && !t.deliverInto && !t.checkTarget);
 }
 
 /** Pull-request codes that wake the lead when they are new. */
@@ -1899,6 +2105,11 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
     if (!newMessage && nowMs - Date.parse(lastEnd) < Math.min(60, 2 ** (streak - 1)) * 60_000) return null;
   }
   if (pendingMessages(s).length) return "message";
+  // ORC-013: findings routed to the lead hold work up, so a decision run needs neither autonomy,
+  // operating hours nor room under the planning caps (the failure backoff above still applies). Only
+  // decisions no lead run has been shown yet start one: a run that left a decision open does not
+  // start another by itself (every later run still lists it, and the user can take it over).
+  if (F.decisionsDueForLead(s).length) return "decisions";
   // ORC-012: while shaping the lead only answers messages; planning is off until the user starts building.
   if (s.project.stage === "shaping") return null;
   const a = s.project.autonomy;
@@ -1927,8 +2138,13 @@ export function startLeadRun(state: State, init: { provider: ProviderId; model: 
   // visionRev is a precondition recorded by the server: steering is refused if the vision moved meanwhile.
   s.leadRuns.push({ id, trigger: init.trigger, provider: init.provider, model: init.model, startedAt: now, outcome: "running", messageIds: pendingMessages(s).map((m) => m.id), visionRev: currentVision(s).rev });
   if (init.trigger === "planning") s.project.lastPlanningAt = now;
-  event(s, now, "lead", "dispatch", `Lead ${init.trigger === "planning" ? "planning" : "reply"} run ${id} started on ${providerLabel(init.provider)} · ${init.model}`);
+  event(s, now, "lead", "dispatch", `Lead ${leadTriggerLabel(init.trigger)} run ${id} started on ${providerLabel(init.provider)} · ${init.model}`);
   return { state: s, runId: id };
+}
+
+/** "planning", "reply", or "decisions" (ORC-013: a run started to decide findings routed to the lead). */
+export function leadTriggerLabel(trigger: LeadTrigger): string {
+  return trigger === "planning" ? "planning" : trigger === "decisions" ? "decisions" : "reply";
 }
 
 function requestLeadStop(s: State, r: LeadRun, reason: string, now: string) {
@@ -2013,6 +2229,8 @@ export interface LeadOutput {
   coverage?: unknown;
   /** ORC-012: the lead's questions to the user, as found (untrusted; validated here). */
   questions?: unknown;
+  /** ORC-013: the lead's decisions on findings routed to it, as found (untrusted; validated in the findings module). */
+  decisions?: unknown;
   /** Why the output could not be read (no JSON block): recorded on the run and shown under the reply. */
   problem?: string;
 }
@@ -2101,6 +2319,10 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     questions = q.questions;
     rejected.push(...q.notes.map((n) => `Questions: ${n}`));
   }
+  // ORC-013: decisions on findings routed to the lead, after steering and before the proposals (a
+  // follow-up decision proposes a task under the same caps). The run-outcome guard makes it apply once.
+  if (out.decisions !== undefined && out.decisions !== null) rejected.push(...F.applyLeadDecisions(s, r, out.decisions, now));
+  const decided = F.leadRunDecisions(s, r.id);
   const limit = Math.max(1, s.project.autonomy.maxProposalsPerCycle);
   const maxOpen = s.project.autonomy.maxOpenProposals;
   const openRoom = Math.max(0, maxOpen - openLeadProposals(s).length);
@@ -2150,19 +2372,77 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     author: "lead",
     text:
       out.reply.trim() ||
-      (visionDraft ? "I drafted the vision; see below." : questions.length ? "I have a few questions; see below." : applied ? "I made the changes listed below." : suggested ? "I suggest the changes listed below." : created.length ? "I proposed new work; see the linked tasks." : "No reply."),
+      (visionDraft
+        ? "I drafted the vision; see below."
+        : questions.length
+          ? "I have a few questions; see below."
+          : applied
+            ? "I made the changes listed below."
+            : suggested
+              ? "I suggest the changes listed below."
+              : decided.length
+                ? "I went through the findings that were waiting for me; see below."
+                : created.length
+                  ? "I proposed new work; see the linked tasks."
+                  : "No reply."),
     leadRunId: r.id,
     ...(created.length ? { proposedTaskIds: created } : {}),
     ...(rejected.length ? { rejected } : {}),
     ...(set ? { changeSetId: set.id } : {}),
     ...(visionDraft ? { visionDraftId: visionDraft.id } : {}),
     ...(questions.length ? { questions } : {}),
+    // Review 1 (14): what this reply decided, as recorded now; the user's later changes do not rewrite it.
+    ...(decided.length ? { leadDecisions: decided.map(({ decision: d, what }) => ({ id: d.id, taskId: d.taskId, what, status: d.status, ...(d.why || d.suggestion?.why ? { why: d.why ?? d.suggestion?.why } : {}) })) } : {}),
   });
-  event(s, now, "lead", "spec", `Lead run ${r.id} replied${visionDraft ? " and drafted the vision" : ""}${created.length ? ` and proposed ${created.join(", ")}${shaping ? " (roadmap, held while shaping)" : ""}` : ""}${rejected.length ? `; ${rejected.length} item(s) rejected` : ""}`);
+  event(
+    s,
+    now,
+    "lead",
+    "spec",
+    `Lead run ${r.id} replied${visionDraft ? " and drafted the vision" : ""}${decided.length ? ` and went through ${decided.length} decision${decided.length === 1 ? "" : "s"}` : ""}${created.length ? ` and proposed ${created.join(", ")}${shaping ? " (roadmap, held while shaping)" : ""}` : ""}${rejected.length ? `; ${rejected.length} item(s) rejected` : ""}`,
+  );
   return s;
 }
 
-function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string, fromShaping = false): string {
+// ---------- ORC-013: the trusted base, and what the service recorded about a run before it started ----------
+
+/**
+ * The commit whose files the service trusts: the fetched remote base with pull-request delivery on,
+ * the delivery branch with local delivery on, else HEAD of the user's repository. Never a worktree,
+ * which agents write.
+ */
+export function trustedBaseRef(s: State): string {
+  const p = s.project;
+  if (p.prDelivery.enabled && p.github?.base) return prBaseRef(p.id);
+  if (p.autonomy.autoDeliver.enabled) return `refs/heads/${p.autonomy.autoDeliver.branch}`;
+  return "HEAD";
+}
+
+export interface RunContext {
+  /** The changed-path set a review run was shown. */
+  scope?: NonNullable<Attempt["scope"]>;
+  /** The repository instruction files the run was given as project conventions. */
+  conventions?: NonNullable<Attempt["conventions"]>;
+  /** Decisions the run's envelope carried, so a later change applies only to later repairs. */
+  decisions?: string[];
+}
+
+/** Record what the service gave a run (queued before the run starts; applied only while the run is active). The snapshot stays immutable. */
+export function reportRunContext(state: State, attemptId: string, ctx: RunContext): State {
+  const s = draft(state);
+  const a = s.attempts.find((x) => x.id === attemptId);
+  if (!a || !isActive(a)) return s;
+  if (ctx.scope) a.scope = { from: ctx.scope.from, to: ctx.scope.to, paths: ctx.scope.paths.slice(0, 500), total: ctx.scope.total };
+  if (ctx.conventions) a.conventions = ctx.conventions.map((c) => ({ ...c }));
+  for (const id of ctx.decisions ?? []) {
+    const d = s.decisions.find((x) => x.id === id);
+    if (d && !d.usedBy.includes(attemptId)) d.usedBy.push(attemptId);
+  }
+  return s;
+}
+
+/** Create a lead-authored task from a validated proposal on a draft state. Shared with the findings module (ORC-013 follow-ups). */
+export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string, fromShaping = false): string {
   let n = s.tasks.length + 1;
   const ids = new Set(s.tasks.map((x) => x.id));
   while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
@@ -2262,7 +2542,7 @@ export function steerPermission(s: State, t: Task | undefined, action: SteerActi
   if (t.lifecycle === "done" || t.lifecycle === "cancelled") return { v: "reject", why: `${t.id} is ${t.lifecycle}` };
   // Review finding 1: the review and fix tasks the service creates for a pull request belong to delivery
   // (ORC-008), which steering never touches: no priority, deferral or drop, whatever the mode.
-  if (t.reviewTarget || t.deliverInto) return { v: "reject", why: "delivery task: not steerable" };
+  if (t.reviewTarget || t.deliverInto || t.checkTarget) return { v: "reject", why: "delivery task: not steerable" };
   if (t.parentTaskId) return { v: "reject", why: `child of ${t.parentTaskId}: steer ${rootOf(s, t).id}` };
   // 2. Nothing would change.
   if (action === "priority" && value === t.priority) return { v: "noop" };
@@ -3739,7 +4019,7 @@ export function resetDeliveryBaseline(state: State, now: string): State {
  */
 export function applyAutopilot(state: State, branch: string, now: string): State {
   const a = state.project.autonomy;
-  return setAutonomy(
+  const next = setAutonomy(
     state,
     {
       enabled: true,
@@ -3753,6 +4033,9 @@ export function applyAutopilot(state: State, branch: string, now: string): State
     },
     now,
   );
+  // ORC-013: on Autopilot the lead decides ask-user findings, so work does not wait for a person. It
+  // never turns checks on or changes the sandbox.
+  return F.setTriageRouting(next, "lead", now);
 }
 
 // ---------- Markdown import / export ----------
@@ -3911,7 +4194,9 @@ export function editArtifact(
   const st = getStep(t, base.stepId);
   if (!change.reason.trim()) throw new ControlError("Say why you changed it; the reason goes to the next steps.");
   if (!change.summary.trim()) throw new ControlError("The artifact cannot be empty.");
-  if (base.kind === "review-findings" && (!Number.isInteger(change.openFindings) || change.openFindings! < 0)) throw new ControlError("Review findings need a number of open findings.");
+  // ORC-013: structured findings are decided one by one; the summary can still be edited and the findings carry over.
+  if (base.kind === "review-findings" && base.findings && change.openFindings !== undefined) throw new ControlError("These findings are listed one by one: decide each finding instead of editing the open count.");
+  if (base.kind === "review-findings" && !base.findings && (!Number.isInteger(change.openFindings) || change.openFindings! < 0)) throw new ControlError("Review findings need a number of open findings.");
   if (change.ref?.trim() && !/^[0-9a-f]{7,40}$/i.test(change.ref.trim())) throw new ControlError("Use a commit hash (7–40 hex characters) for your own change.");
   if (change.items !== undefined && (base.kind !== "breakdown" || !Array.isArray(change.items) || change.items.length > 50)) throw new ControlError("Items can be edited only on breakdowns (at most 50).");
   const version = Math.max(...s.artifacts.filter((a) => a.taskId === t.id && a.stepId === st.id && a.name === base.name).map((a) => a.version)) + 1;
@@ -3927,11 +4212,21 @@ export function editArtifact(
     createdAt: now,
     author: "user",
     editReason: change.reason.trim(),
-    ...(base.kind === "review-findings" ? { openFindings: change.openFindings } : {}),
+    ...(base.kind === "review-findings" && !base.findings ? { openFindings: change.openFindings } : {}),
+    ...(base.kind === "review-findings" && base.findings ? { openFindings: base.openFindings, findings: structuredClone(base.findings) } : {}),
+    ...(base.kind === "review-findings" && base.pathCoverage ? { pathCoverage: structuredClone(base.pathCoverage) } : {}),
+    ...(base.kind === "check-results" && base.checkRun ? { checkRun: structuredClone(base.checkRun), ...(base.findings ? { findings: structuredClone(base.findings), openFindings: base.openFindings } : {}) } : {}),
     ...(base.kind === "breakdown" ? { items: structuredClone(change.items ?? base.items ?? []) } : {}),
     ...(change.ref?.trim() ? { ref: change.ref.trim() } : base.ref ? { ref: base.ref } : {}),
   };
   s.artifacts.push(art);
+  // Review 1 (1): the findings carry over with their decisions, which now belong to the new version (the same
+  // findings under a new artifact id); any blocking ask-user finding still without a record gets one, so
+  // nothing waits on a record that does not exist.
+  if (art.findings) {
+    for (const d of s.decisions) if (d.artifactId === base.id) d.artifactId = art.id;
+    F.createDecisions(s, t, art, now);
+  }
   // Re-submit: everything downstream of this step that consumed it (directly or transitively).
   const downstream = new Set<string>();
   let grew = true;

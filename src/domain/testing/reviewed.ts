@@ -33,7 +33,20 @@ export function reviewedChange(state: State, taskId: string, sha: string, at: st
   );
   s.artifacts.push(
     { id: change, taskId, stepId: "S1", attemptId: `fx-write-${taskId}`, name: "change", kind: "code-change", version: 1, summary: "the change", ref: `${sha.slice(0, 12)} on orchestration/fixture`, createdAt: at },
-    { id: `fx-findings-${taskId}`, taskId, stepId: "S2", attemptId: `fx-review-${taskId}`, name: "findings", kind: "review-findings", version: 1, summary: o.findings ? "a finding that must be fixed" : "no findings", openFindings: o.findings ?? 0, createdAt: at },
+    {
+      id: `fx-findings-${taskId}`,
+      taskId,
+      stepId: "S2",
+      attemptId: `fx-review-${taskId}`,
+      name: "findings",
+      kind: "review-findings",
+      version: 1,
+      summary: o.findings ? "a finding that must be fixed" : "no findings",
+      openFindings: o.findings ?? 0,
+      // ORC-013: "reviewed exactly this change" includes accounting for every changed file of it.
+      pathCoverage: { state: "complete", from: "0".repeat(40), to: o.sawTheChange === false ? "1".repeat(40) : sha, changed: 1, reviewed: 1, missing: [], extra: [] },
+      createdAt: at,
+    },
   );
   return s;
 }

@@ -18,6 +18,9 @@ const FLAG_LABEL: Record<LandedFlag, string> = {
   "merged-without-clean-gate": "merged without a clean gate",
   "findings-cleared-by-user": "findings cleared by you",
   "protected-paths": "touches protected files",
+  "checks-accepted-failing": "failing checks accepted by you",
+  "checks-not-run": "no service checks ran",
+  "findings-accepted": "findings accepted as is",
 };
 
 const STATUS_LABEL: Record<Landed["status"], string> = { unreviewed: "Not reviewed", reviewed: "Reviewed", "sent-back": "Sent back" };
@@ -142,13 +145,23 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
   const repairs = linked(pr.repairTaskIds);
   const fixing = live ? D.openRepair(state, pr) : undefined;
   const openReview = reviews.find((x) => x.lifecycle !== "done" && x.lifecycle !== "cancelled" && x.reviewTarget?.headSha === pr.changeSha);
-  const cause = live && prOn && !elsewhere ? D.repairCause(state, task) : undefined;
+  // The user's Fix this PR may also take on a review bot's failing check (by name and link); nothing automatic does.
+  const cause = live && prOn && !elsewhere ? D.repairCause(state, task, { byUser: true }) : undefined;
   const canFix = !!cause && !fixing && !pr.foreignHead && pr.counters.repairs < D.PR_LIMITS.repairs && pr.pendingHead?.kind !== "repair";
   const canAskReview = live && prOn && !elsewhere && !openReview && !pr.foreignHead && review?.state !== "ok";
   const queue = auto && live ? D.autoQueue(state) : [];
   const place = queue.findIndex((x) => x.id === task.id);
   const paused = gh?.autoMergePaused;
-  const causeText = cause?.kind === "checks" ? `the failed check${cause.checks.length === 1 ? "" : "s"} ${cause.checks.map((c) => c.name).join(", ")}` : cause?.kind === "findings" ? "the open review findings" : `the conflict with ${pr.base}`;
+  const causeText =
+    cause?.kind === "checks"
+      ? `the failed check${cause.checks.length === 1 ? "" : "s"} ${cause.checks.map((c) => c.name).join(", ")}`
+      : cause?.kind === "service-checks"
+        ? `the failed project check${cause.results.length === 1 ? "" : "s"} ${cause.results.map((c) => c.label).join(", ")}`
+        : cause?.kind === "findings"
+          ? "the open review findings"
+          : `the conflict with ${pr.base}`;
+  // ORC-013 §7.3: re-runs of GitHub-cancelled jobs on this head, as recorded when each was requested.
+  const reruns = live && pr.ciReruns?.headSha === pr.headSha ? pr.ciReruns.used : [];
   return (
     <div className="stack">
       <div className="row">
@@ -255,6 +268,30 @@ export function PrPanel({ state, task }: { state: State; task: Task }) {
             </div>
           ))}
         </dd>
+        {reruns.length > 0 && (
+          <>
+            <dt>Re-runs</dt>
+            <dd>
+              {reruns.map((u) => (
+                <div key={`${u.opId}:${u.check}`}>
+                  {u.refused ? (
+                    <>
+                      GitHub refused the re-run of {u.check} asked for at {fmtTime(u.at)} (job {u.jobId}): <span className="muted">{u.refused}</span>
+                    </>
+                  ) : (
+                    <>
+                      Re-ran {u.check} at {fmtTime(u.at)}: GitHub had cancelled it (job {u.jobId}).{" "}
+                      <span className="muted">{pr.op?.id === u.opId ? "Sent; waiting for GitHub to report the new run." : (u.seen ?? 0) >= D.PR_LIMITS.rerunObservations ? "The new run did not appear; judged by what GitHub shows." : ""}</span>
+                    </>
+                  )}
+                </div>
+              ))}
+              <div className="muted">
+                {reruns.length} on this head ({cfg.rerunBudget} per check per head); {pr.counters.reruns ?? 0} of {D.PR_LIMITS.reruns} re-runs used for this pull request over all its heads.
+              </div>
+            </dd>
+          </>
+        )}
         {pr.message && live && (
           <>
             <dt>Last problem</dt>

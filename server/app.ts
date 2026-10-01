@@ -8,8 +8,9 @@
 
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { buildEmptyProject } from "../src/domain/seed";
+import { buildEmptyProject, buildSeed } from "../src/domain/seed";
 import type { ProviderId } from "../src/domain/types";
+import { pruneCheckLogs, type CheckRunner } from "./checks";
 import type { GitHubHost } from "./github";
 import { createHttpServer } from "./http";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
@@ -32,7 +33,8 @@ if (process.env.ORCHESTRATION_RUNTIME && !["real", "fake"].includes(process.env.
 
 let store: Store;
 try {
-  store = new Store(dbPath, mode === "real" ? () => buildEmptyProject() : undefined);
+  // The fake service starts from the sample with checks on (simulated), so the demo shows the loop.
+  store = new Store(dbPath, mode === "real" ? () => buildEmptyProject() : () => buildSeed(Date.now(), { inFlightRuns: false, checks: true }));
 } catch (e) {
   log(e instanceof Error ? e.message : String(e));
   process.exit(1);
@@ -41,15 +43,20 @@ const fakeConfig = defaultFakeConfig();
 let adapters: Record<ProviderId, RuntimeAdapter>;
 let workspaces: WorkspaceManager | undefined;
 let github: GitHubHost | undefined;
+/** ORC-013: the project's checks, run by the service: the Codex sandbox by default, direct only when the user chose "no sandbox". Fake mode simulates them. */
+let checks: CheckRunner | undefined;
 /** True when Claude workers run with shell access: the app then cannot claim that only the service reaches GitHub. */
 let workerShell = false;
+const dataDir = dirname(dbPath);
 if (mode === "real") {
   // Loaded only in real mode, so the simulated service never loads provider SDKs.
-  const [{ ClaudeAdapter }, { CodexAdapter }] = await Promise.all([import("./runtimes/claude"), import("./runtimes/codex")]);
+  const [{ ClaudeAdapter }, { CodexAdapter }, { CheckRunners, CodexSandboxChecks, DirectChecks }] = await Promise.all([import("./runtimes/claude"), import("./runtimes/codex"), import("./checks")]);
   const claude = new ClaudeAdapter({ log });
   adapters = { claude, codex: new CodexAdapter({ log }) };
   workerShell = claude.allowShell;
-  workspaces = new WorkspaceManager(join(dirname(dbPath), "worktrees"));
+  workspaces = new WorkspaceManager(join(dataDir, "worktrees"));
+  // A private, never signed-in CODEX_HOME for the check app-servers: the user's Codex configuration does not apply to them.
+  checks = new CheckRunners(new CodexSandboxChecks({ home: join(dataDir, "checks-codex-home"), log }), new DirectChecks({ log }));
   // Pull-request delivery uses the user's own gh sign-in, from an empty directory the service owns.
   // Nothing is contacted until the user switches the delivery mode to pull requests.
   const { GhCliHost } = await import("./github");
@@ -68,7 +75,18 @@ try {
   log(`Vision documents: cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
 }
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
-const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs });
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir });
+// ORC-013: check logs are pruned at start and once a day (older than 14 days, or beyond 200 MiB in all).
+const pruneLogs = () => {
+  try {
+    const n = pruneCheckLogs(join(dataDir, "check-logs"));
+    if (n) log(`Check logs: removed ${n} old run director${n === 1 ? "y" : "ies"}`);
+  } catch (e) {
+    log(`Check logs: cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+};
+pruneLogs();
+setInterval(pruneLogs, 24 * 60 * 60_000).unref();
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
 
@@ -78,6 +96,7 @@ const server = createHttpServer({
   fakeConfig: mode === "fake" ? fakeConfig : undefined,
   workspaces,
   visionDocs,
+  dataDir,
   startedAt: new Date().toISOString(),
   allowedHosts,
   staticDir,

@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { nextStepId, upstreamOf, validatePipeline } from "../domain/pipeline";
 import * as M from "../domain/model";
-import { ARTIFACT_KINDS, PROVIDERS, ROLES, type ArtifactKind, type InputRef, type ProviderId, type RoleId, type StepDef, type WorkflowTemplate } from "../domain/types";
+import { ARTIFACT_KINDS, PROVIDERS, STEP_ROLES, type ArtifactKind, type InputRef, type ProviderId, type RoleId, type StepDef, type WorkflowTemplate } from "../domain/types";
 import { ROLE_LABEL } from "./common";
 
 const refKey = (r: InputRef) => `${r.step}.${r.output}`;
+/** Kinds a step may be conditioned on (ORC-013: check results as well as review findings). */
+const CONDITION_KINDS = new Set<ArtifactKind>(["review-findings", "check-results"]);
 
 /**
  * Draft editor for an ordered step list. Dependencies may only point to earlier steps; inputs and
@@ -20,6 +22,9 @@ export function PipelineEditor({
   header,
   warning,
   reviewTarget,
+  checkTarget,
+  checksEnabled,
+  checkCommands,
   onSave,
   onCancel,
 }: {
@@ -35,6 +40,12 @@ export function PipelineEditor({
   warning?: React.ReactNode;
   /** The task is a dedicated review of a pull request: the service hands its reviewer the change. */
   reviewTarget?: boolean;
+  /** ORC-013: the task is a dedicated check run of a pull request's change: its Checks step reads no change. */
+  checkTarget?: boolean;
+  /** ORC-013: whether the project's checks are on; off, every Checks step is skipped, labelled. */
+  checksEnabled?: boolean;
+  /** ORC-013: the project's check commands, so a Checks step can be limited to some of them (`only`). */
+  checkCommands?: { id: string; label: string; kind: "prepare" | "check" }[];
   /** May be async; the save button stays disabled until it settles. */
   onSave: (defs: StepDef[], reason: string) => Promise<unknown> | void;
   onCancel: () => void;
@@ -42,10 +53,23 @@ export function PipelineEditor({
   const [defs, setDefs] = useState<StepDef[]>(() => structuredClone(initial));
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
-  const issues = validatePipeline(defs, { reviewTarget });
+  // A Checks step may name only configured checks (M2); the editor shows that before the save refuses it.
+  const issues = validatePipeline(defs, { reviewTarget, checkTarget, ...(checkCommands ? { checkIds: checkCommands.filter((c) => c.kind === "check").map((c) => c.id) } : {}) });
   const errors = issues.filter((i) => i.severity === "error");
 
   const update = (i: number, patch: Partial<StepDef>) => setDefs((ds) => ds.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+  /** ORC-013: a step that becomes a Checks step produces check results and nothing else; leaving the role drops its check settings. */
+  const setRole = (i: number, role: RoleId) =>
+    setDefs((ds) =>
+      ds.map((d, j) => {
+        if (j !== i) return d;
+        if (role === "checks") return { ...d, role, outputs: [{ name: "checks", kind: "check-results" as const }], checks: d.checks ?? { onFail: "findings" as const } };
+        const next: StepDef = { ...d, role };
+        delete next.checks;
+        if (next.outputs.some((o) => o.kind === "check-results")) next.outputs = next.outputs.filter((o) => o.kind !== "check-results");
+        return next;
+      }),
+    );
   /** Set or clear an optional field (cleared fields are removed, not left as undefined). */
   const setOpt = <K extends "iterate" | "parallel" | "waitForChildren">(i: number, key: K, value: StepDef[K] | undefined) =>
     setDefs((ds) =>
@@ -147,15 +171,57 @@ export function PipelineEditor({
               </label>
               <label className="field">
                 <span>Role</span>
-                <select value={d.role} onChange={(e) => update(i, { role: e.target.value as RoleId })}>
-                  {ROLES.map((r) => (
+                <select value={d.role} onChange={(e) => setRole(i, e.target.value as RoleId)}>
+                  {STEP_ROLES.map((r) => (
                     <option key={r} value={r}>
-                      {ROLE_LABEL[r]}
+                      {r === "checks" ? "Checks (run by the service)" : ROLE_LABEL[r]}
                     </option>
                   ))}
                 </select>
               </label>
             </div>
+            {d.role === "checks" && (
+              <div className="field">
+                <span>When checks fail</span>
+                <div className="row">
+                  <select aria-label={`${d.id} when checks fail`} value={d.checks?.onFail ?? "findings"} onChange={(e) => update(i, { checks: { ...(d.checks ?? {}), onFail: e.target.value as "findings" | "block" } })}>
+                    <option value="findings">Findings for the repair step</option>
+                    <option value="block">Stop and ask for a decision</option>
+                  </select>
+                  <span className="muted" style={{ fontSize: "0.8rem" }}>
+                    Run by the service on the code change it reads; no provider or model. {checksEnabled ? "Checks are on for this project." : "Checks are off for this project, so this step is skipped, labelled, until they are turned on."}
+                  </span>
+                </div>
+                {!!checkCommands?.some((c) => c.kind === "check") && (
+                  <div style={{ marginTop: "0.3rem" }}>
+                    <span style={{ fontSize: "0.85rem" }}>Commands this step runs (prepare commands always run):</span>
+                    <div className="row" style={{ flexWrap: "wrap" }}>
+                      {checkCommands
+                        .filter((c) => c.kind === "check")
+                        .map((c) => {
+                          const only = d.checks?.only;
+                          const on = !only?.length || only.includes(c.id);
+                          return (
+                            <label key={c.id} className="row" style={{ gap: "0.25rem" }}>
+                              <input
+                                type="checkbox"
+                                checked={on}
+                                onChange={(e) => {
+                                  const all = checkCommands.filter((x) => x.kind === "check").map((x) => x.id);
+                                  const current = only?.length ? only : all;
+                                  const next = e.target.checked ? [...new Set([...current, c.id])] : current.filter((x) => x !== c.id);
+                                  update(i, { checks: { onFail: d.checks?.onFail ?? "findings", ...(next.length && next.length < all.length ? { only: next } : {}) } });
+                                }}
+                              />
+                              <span className="mono">{c.id}</span>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="field">
               <span>Runs after</span>
@@ -225,12 +291,12 @@ export function PipelineEditor({
               </button>
             </div>
 
-            {available.some((r) => r.kind === "review-findings") && (
+            {available.some((r) => CONDITION_KINDS.has(r.kind)) && d.role !== "checks" && (
               <div className="field">
-                <span>Run only if these reviews have open findings (otherwise skip)</span>
+                <span>Run only if these reviews or check results have findings to fix (otherwise skip)</span>
                 <div className="row">
                   {available
-                    .filter((r) => r.kind === "review-findings")
+                    .filter((r) => CONDITION_KINDS.has(r.kind))
                     .map((r) => (
                       <label key={refKey(r)} className="row" style={{ gap: "0.25rem" }}>
                         <input type="checkbox" checked={(d.runIf ?? []).some((x) => refKey(x) === refKey(r))} onChange={(ev) => toggleRef("runIf", r, ev.target.checked)} />

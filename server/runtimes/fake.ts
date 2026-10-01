@@ -18,9 +18,10 @@ interface Proc {
   progress: number;
   outputs: OutputDef[];
   stepId?: string;
+  taskId?: string;
   interruptAt?: number;
   /** Lead runs answer with a reply (and, when planning, one proposal) instead of step outputs. */
-  lead?: "planning" | "message";
+  lead?: "planning" | "message" | "decisions";
   /** The lead envelope, kept so a simulated message run can steer from what it was shown. */
   prompt?: string;
 }
@@ -116,7 +117,7 @@ export function fakeShaping(prompt: string): { questions: Record<string, unknown
 }
 
 /** A simulated lead reply in the required JSON shape. Planning runs propose one small task; message runs may steer or draft the vision. */
-export function fakeLeadText(attemptId: string, trigger: "planning" | "message", prompt = ""): string {
+export function fakeLeadText(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = ""): string {
   const proposals =
     trigger === "planning"
       ? [
@@ -144,6 +145,8 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message",
   const steer = trigger === "message" ? fakeSteer(prompt) : undefined;
   const vision = trigger === "message" ? fakeVision(prompt) : undefined;
   const shaping = trigger === "message" ? fakeShaping(prompt) : undefined;
+  // ORC-013: the simulated lead accepts every finding routed to it, labelled; a real lead weighs each one.
+  const decisions = decisionIds(prompt).map((id) => ({ id, decision: "accept", why: "(Simulated) Accepted as it is; in live mode a real lead weighs the finding against the task's outcome and the vision." }));
   const reply =
     trigger === "planning"
       ? "(Simulated lead) I reviewed the board and proposed one small task."
@@ -151,8 +154,10 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message",
         ? `(Simulated lead) Here is what I understand: ${newestMessage(prompt) ?? "your message"} (assumption: that is the whole problem). I drafted a living vision from it with marked assumptions, and I have three questions with suggested answers. Accept, edit or dismiss the draft; answer what you can. In live mode a real lead grounds all of this in your answers and the repository.`
         : steer
           ? "(Simulated lead) Noted the new direction. The service lists below what changed; in live mode a real lead weighs the board first."
-          : "(Simulated lead) Noted. In live mode the lead answers here using the board and the repository.";
-  return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}) }, null, 2)}\n\`\`\`\n`;
+          : decisions.length && trigger === "decisions"
+            ? "(Simulated lead) I went through the findings waiting for me and accepted them as they are; the service lists each decision below. In live mode a real lead weighs each one."
+            : "(Simulated lead) Noted. In live mode the lead answers here using the board and the repository.";
+  return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}) }, null, 2)}\n\`\`\`\n`;
 }
 
 function jitter(id: string) {
@@ -161,13 +166,28 @@ function jitter(id: string) {
   return Math.abs(h % 7);
 }
 
-/** The final message a well-behaved worker would send: a JSON output block for every declared output. */
-export function fakeFinalText(attemptId: string, outputs: OutputDef[], stepId = ""): string {
-  const block: Record<string, { summary: string; openFindings?: number }> = {};
+/** ORC-013: the decisions the envelope lists as waiting for the lead ("- fd-12 on T-003 …"). */
+function decisionIds(prompt: string): string[] {
+  const section = /## Decisions waiting for you[^\n]*\n([\s\S]*?)\n## /.exec(prompt)?.[1] ?? "";
+  return [...section.matchAll(/^- (fd-\d+) on /gm)].map((m) => m[1]);
+}
+
+/**
+ * The final message a well-behaved worker would send: a JSON output block for every declared output.
+ * ORC-013: a simulated review reports structured findings. The first round of a task's own review
+ * finds one auto-fix finding, so the repair loop is visible once; the repaired round and every
+ * dedicated pull-request review are clean. Deterministic, so a demo never waits on chance.
+ */
+export function fakeFinalText(attemptId: string, outputs: OutputDef[], stepId = "", taskId = ""): string {
+  const block: Record<string, { summary: string; openFindings?: number; findings?: unknown[]; reviewedPaths?: string[] }> = {};
   for (const o of outputs) {
     if (o.kind === "review-findings") {
-      const found = jitter(attemptId) % 2;
-      block[o.name] = { summary: found ? "1 open finding (simulated)" : "No blocking findings (simulated)", openFindings: found };
+      const found = !/-i\d+$/.test(stepId) && !/-RV\d+$/.test(taskId) && !/-c\d+$/.test(stepId) ? 1 : 0;
+      block[o.name] = {
+        summary: found ? "1 finding (simulated)" : "No blocking findings (simulated)",
+        findings: found ? [{ severity: "warning", action: "auto-fix", title: "Simulated finding: a small defect the repair step fixes", detail: "(Simulated) In live mode a real reviewer names the file, the line and the smallest fix.", file: "src/simulated.ts", line: 1 }] : [],
+        reviewedPaths: [],
+      };
     } else if (o.kind === "code-change") block[o.name] = { summary: "Simulated change; no files were touched" };
     else if (o.kind === "breakdown") {
       // First pass proposes two small items; later iterations report the goal as met.
@@ -229,13 +249,16 @@ export class FakeAdapter implements RuntimeAdapter {
   start(a: Assignment) {
     if (a.role === "lead" && a.stepId === "LEAD") {
       if (this.procs.has(a.attemptId)) return;
-      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : "message", prompt: a.prompt });
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : /^# Lead run \S+ \(decisions on findings\)/.test(a.prompt) ? "decisions" : "message", prompt: a.prompt });
       this.emit({ type: "started", attemptId: a.attemptId });
       return;
     }
     this.startAt(a.attemptId, a.outputs, 0);
     const p = this.procs.get(a.attemptId);
-    if (p) p.stepId = a.stepId;
+    if (p) {
+      p.stepId = a.stepId;
+      p.taskId = a.taskId;
+    }
   }
 
   /** Start with a given progress (tests and restart scenarios). */
@@ -295,7 +318,7 @@ export class FakeAdapter implements RuntimeAdapter {
       p.progress = Math.min(100, p.progress + this.config.progressPerTick + jitter(id));
       if (p.progress >= 100) {
         this.procs.delete(id);
-        this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt) : fakeFinalText(id, p.outputs, p.stepId) });
+        this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt) : fakeFinalText(id, p.outputs, p.stepId, p.taskId) });
       } else this.emit({ type: "progress", attemptId: id, percent: p.progress });
     }
   }

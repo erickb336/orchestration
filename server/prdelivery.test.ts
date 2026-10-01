@@ -172,7 +172,7 @@ describe("hold and notify (scenario 1)", () => {
     expect(existsSync(join(repo, ".git", "FETCH_HEAD"))).toBe(false);
     expect(branches()).toEqual([]);
     expect(st().project.github!.posture.some((p) => p.id === "sandbox-verified" && p.status === "ok")).toBe(true);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("one pull request whose head is exactly the final commit; one ready notice; a merge bound to that head; the item lands unreviewed", async () => {
     await prModeOn();
@@ -241,7 +241,7 @@ describe("hold and notify (scenario 1)", () => {
     // Local delivery never touches a task delivered as a pull request.
     expect(task(id).integration!.delivered).toBeUndefined();
     expect(git("status", "--porcelain")).toBe("");
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a merge waits for GitHub: requested early, it is sent only once the required check passed on that head", async () => {
     await prModeOn();
@@ -252,12 +252,14 @@ describe("hold and notify (scenario 1)", () => {
     fake.setCheck(1, "SKIPPED"); // a skipped required check is not a pass
     await ticks(3, 31_000);
     expect(fake.count("merge")).toBe(0);
-    expect(pr(id).attention?.code).toBe("checks-failed");
-    fake.setCheck(1, "SUCCESS");
+    expect(pr(id).attention?.code).toBe("checks-skipped"); // ORC-013: it needs a person, not a fix task
+    // A person re-runs it on GitHub and it passes; GitHub shows the new attempt in place of the skipped one
+    // (review M3: a skipped run next to a later success would stay red).
+    fake.setCheck(1, "SUCCESS", "check", { replace: true });
     await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(1);
     expect(pr(id).phase).toBe("merged");
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("the changes of an open pull request can be shown, from the base it contains to its head", async () => {
     await prModeOn();
@@ -265,7 +267,7 @@ describe("hold and notify (scenario 1)", () => {
     const d = workspaces.changeDiff({ repoPath: repo, commit: pr(id).headSha, from: pr(id).baseSha })!;
     expect(d.diff).toContain("+shown line");
     expect(pr(id).changed).toMatchObject({ files: 1, additions: 1, deletions: 0, paths: ["shown.txt"], protectedHits: [], workflowHits: [] });
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("what is never published", () => {
@@ -281,7 +283,7 @@ describe("what is never published", () => {
     expect(() => assertSafePush(["push", "origin", `${sha}:refs/heads/orchestration/p1/integration`])).toThrow(/not one of the app's/);
     expect(() => assertSafePush(["push", "origin", `main:refs/heads/orchestration/p1/pr/T-1-1`])).toThrow(/refusing/);
     expect(() => assertSafePush(["push", "origin"])).toThrow(/refusing/);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 9: work built on the user's unpushed commit is not pushed; the task names the author", async () => {
     // The task starts from the local HEAD, which holds a commit the user never pushed.
@@ -302,7 +304,7 @@ describe("what is never published", () => {
     const full = git("rev-parse", sha);
     await expect(workspaces.pushHead({ repoPath: repo, projectId: st().project.id, remote: "origin", branch: `orchestration/${st().project.id}/pr/${id}-1`, sha: full })).rejects.toThrow(/not made by Orchestrator/);
     expect(branches()).toEqual([]);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 10: a change to CI workflow files is not pushed until it is allowed; then it is pushed and marked protected", async () => {
     await prModeOn();
@@ -325,7 +327,7 @@ describe("what is never published", () => {
     await green(id);
     await mergeFromApp(id);
     expect(task(id).integration!.landed!.flags).toEqual(["protected-paths"]);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a remote branch that holds something else is never overwritten", async () => {
     await prModeOn();
@@ -343,7 +345,7 @@ describe("what is never published", () => {
     await ticks(5, 120_000);
     expect(remote("rev-parse", `refs/heads/${branch}`)).toBe(theirs);
     expect(fake.count("createPr")).toBe(0);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("people on GitHub", () => {
@@ -376,7 +378,7 @@ describe("people on GitHub", () => {
     fake.mergeByPerson(1);
     await seen();
     expect(task(id).integration!.landed).toMatchObject({ by: "person", mergedBy: "octocat", flags: ["merged-without-clean-gate"] });
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 11: merged by a person → landed by that person; closed by a person → never reopened, and Deliver again opens number 2", async () => {
     await prModeOn();
@@ -410,7 +412,7 @@ describe("people on GitHub", () => {
     expect(pr(b).number).not.toBe(n);
     expect(fake.pr(n).state).toBe("CLOSED");
     expect(branches()).toHaveLength(3); // a-1, b-1 (kept) and b-2
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 16: GitHub BLOCKED with green checks is reported as an approval the app cannot give, and never bypassed", async () => {
     await prModeOn();
@@ -439,7 +441,7 @@ describe("people on GitHub", () => {
     fake.pr(1).mergeStateStatus = "CLEAN";
     await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(pr(id).phase).toBe("merged");
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a merge GitHub refuses is tried twice for a head, then waits for the user", async () => {
     await prModeOn();
@@ -453,7 +455,7 @@ describe("people on GitHub", () => {
     expect(pr(id)).toMatchObject({ phase: "open", attention: { code: "merge-rejected" }, counters: { mergeAttempts: 2 } });
     expect(pr(id).attention!.message).toContain("base branch policy prohibits");
     expect(task(id).integration!.landed).toBeUndefined();
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("pause and hold (scenario 12)", () => {
@@ -500,7 +502,7 @@ describe("pause and hold (scenario 12)", () => {
     await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(1);
     expect(pr(id).phase).toBe("merged");
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a merge already sent to GitHub when the pause arrives is recorded with its real outcome", async () => {
     await prModeOn();
@@ -524,7 +526,7 @@ describe("pause and hold (scenario 12)", () => {
     expect(pr(id).phase).toBe("merged");
     expect(task(id).integration!.landed).toMatchObject({ by: "app", commit: remote("rev-parse", "main") });
     expect(fake.count("merge")).toBe(1);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("Close: the pull request is closed on GitHub, shows as closed only once GitHub reports it, and the branch is kept", async () => {
     await prModeOn();
@@ -542,7 +544,7 @@ describe("pause and hold (scenario 12)", () => {
     cmd("closePr", { taskId: other });
     expect(pr(other).phase).toBe("closed");
     expect(fake.count("close")).toBe(1);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("interruption (scenarios 13 and 14)", () => {
@@ -639,7 +641,7 @@ describe("interruption (scenarios 13 and 14)", () => {
     expect(fake.count("comment")).toBe(1);
     expect(fake.pr(1).comments).toHaveLength(1);
     expect(fake.pr(1).comments[0].body).toBe(`Worth a second look at naming.\n\n<!-- orchestration:note:${st().project.id}/${noteId} -->`);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("scenario 14: a lease lost during a slow create drops the late result; the new holder reconciles to exactly one pull request", async () => {
     await scheduler.stop();
@@ -680,7 +682,7 @@ describe("interruption (scenarios 13 and 14)", () => {
     expect(fake.count("createPr")).toBe(1);
     expect(fake.prs.size).toBe(1);
     expect(branches()).toHaveLength(1);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("nothing starts without a committed intent: a write planned on a state that changed meanwhile is dropped", async () => {
     await prModeOn();
@@ -698,7 +700,7 @@ describe("interruption (scenarios 13 and 14)", () => {
     expect(fake.calls.length).toBe(calls);
     expect(branches()).toEqual([]);
     expect(pr(id).op).toBeUndefined();
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a stale result changes nothing: another operation id, another number, or another head", async () => {
     await prModeOn();
@@ -719,7 +721,7 @@ describe("interruption (scenarios 13 and 14)", () => {
     expect(applied.tasks.find((t) => t.id === id)!.integration!.pr).toMatchObject({ phase: "open", number: 7 });
     // A second intent cannot start while one is recorded and may still be running.
     expect(D.beginPrOp(begun.state, { ...op, id: "again" }, new Date(now + 10_000).toISOString()).started).toBe(false);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("GitHub problems (scenario 15)", () => {
@@ -747,7 +749,7 @@ describe("GitHub problems (scenario 15)", () => {
     expect(st().project.github!.problem).toBeUndefined();
     await seen();
     expect(D.prReady(st(), task(id), now)).toBe(true);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a repository that is not GitHub, or a remote that moved, stops before anything is pushed", async () => {
     git("remote", "set-url", "origin", join(dir, "elsewhere.git"));
@@ -768,7 +770,7 @@ describe("GitHub problems (scenario 15)", () => {
     expect(run(id)).toBeDefined();
     // The writer starts from the fetched base, never from the local checkout.
     expect(execFileSync("git", ["-C", codex.runs.get(run(id).id)!.workspace.path, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(remote("rev-parse", "main"));
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("sample projects never contact GitHub", () => {
@@ -806,7 +808,7 @@ describe("sample projects never contact GitHub", () => {
     expect(sample.read().state.project.github?.checkedAt).toBeUndefined();
     await s2.stop();
     sample.close();
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
 describe("dependent tasks (scenario 20)", () => {
@@ -841,7 +843,7 @@ describe("dependent tasks (scenario 20)", () => {
     for (let i = 0; i < 8 && task(b).integration?.pr?.phase !== "open"; i++) await tick(2000);
     expect(remote("log", "--format=%an", `main..${pr(b).branch}`)).toBe("Orchestration");
     expect(pr(b).changed.paths).toEqual(["use.txt"]);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("a prerequisite whose pull request was closed blocks its dependents with the reason, until it is delivered again", async () => {
     await prModeOn();
@@ -855,7 +857,7 @@ describe("dependent tasks (scenario 20)", () => {
     cmd("redeliver", { taskIds: [a] });
     expect(M.blockedReason(st(), task(b))).toBeUndefined();
     expect(M.waitingOn(st(), task(b))).toBe(a);
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 
   it("switching pull-request delivery off leaves open pull requests watched and unwritten; local delivery skips their tasks", async () => {
     await prModeOn();
@@ -873,5 +875,120 @@ describe("dependent tasks (scenario 20)", () => {
     fake.mergeByPerson(1);
     await seen();
     expect(task(id).integration!.landed).toMatchObject({ via: "pr", by: "person" });
-  });
+  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
+});
+
+describe("CI triage (ORC-013 step 3)", () => {
+  /** Ticks until `pred` holds, reading GitHub in between; fails with `what` otherwise. */
+  const until = async (what: string, pred: () => boolean, ms = 5000, max = 120) => {
+    for (let i = 0; i < max && !pred(); i++) await tick(ms);
+    expect(pred(), what).toBe(true);
+  };
+  const repairTasks = (id: string) => st().tasks.filter((t) => t.deliverInto?.taskId === id);
+  const reruns = () => fake.calls.filter((c) => c.method === "rerunJob").map((c) => c.args as { jobId: number });
+  /** An open, reviewed pull request that merges automatically, so a fix task would start if anything let it. */
+  const autoPr = async (title: string, file: string) => {
+    const id = await openPr(title, file, `${file}\n`);
+    cmd("setPrDelivery", { config: { merge: "auto" } });
+    expect(pr(id).policy).toBe("auto");
+    return id;
+  };
+
+  it("a cancelled required check is re-run once (intent, then `rerunJob`), the new run passes, the pull request merges, and no fix task ever starts", async () => {
+    await prModeOn();
+    const id = await autoPr("Cancelled once", "c1.txt");
+    fake.setCheck(1, "CANCELLED");
+    const before = fake.runsOf(1).length;
+    await until("the re-run was requested", () => reruns().length === 1, 5000, 60);
+    expect(reruns()[0].jobId).toBe(fake.runsOf(1)[0].databaseId);
+    expect(fake.runsOf(1)).toHaveLength(before + 1); // GitHub appended a new, running run of the same job
+    expect(pr(id).ciReruns).toMatchObject({ headSha: pr(id).headSha, used: [{ check: "check", jobId: reruns()[0].jobId }] });
+    expect(pr(id).counters.reruns).toBe(1);
+    expect(events("Re-running check on PR #1")).toHaveLength(1);
+    expect(repairTasks(id)).toHaveLength(0);
+    // While the new run is going the pull request waits; nothing is repaired and nothing is re-run again.
+    await ticks(3, 31_000);
+    expect(pr(id).attention).toBeUndefined();
+    expect(D.prGate(st(), task(id), now, { byUser: false }).items.find((i) => i.id === "checks")).toMatchObject({ state: "waiting" });
+    expect(reruns()).toHaveLength(1);
+    // The new run passes: the name is green (newest run wins over the cancelled one), and the merge follows.
+    fake.setCheck(1, "SUCCESS");
+    await until("it merged", () => pr(id).phase === "merged", 5000, 60);
+    expect(fake.count("merge")).toBe(1);
+    expect(repairTasks(id)).toHaveLength(0);
+    expect(reruns()).toHaveLength(1);
+    expect(task(id).integration!.landed!.checks).toEqual([expect.objectContaining({ name: "check", conclusion: "SUCCESS" })]);
+    expect(JSON.stringify(fake.calls)).not.toMatch(/--admin|--auto|--force/);
+  }, 30_000);
+
+  it("cancelled twice: the second cancellation, after the re-run, is the code's (review M4); one fix task, no second re-run", async () => {
+    await prModeOn();
+    const id = await autoPr("Cancelled twice", "c2.txt");
+    fake.setCheck(1, "CANCELLED");
+    await until("the re-run was requested", () => reruns().length === 1, 5000, 60);
+    fake.setCheck(1, "CANCELLED"); // the new run is cancelled too
+    await until("a fix task starts", () => repairTasks(id).length === 1, 31_000, 30);
+    expect(pr(id).attention?.code).toBe("checks-failed");
+    expect(pr(id).attention!.message).toMatch(/check: cancelled \(the code: cancelled again after its re-run, github-actions/);
+    await ticks(6, 61_000);
+    expect(reruns()).toHaveLength(1);
+    expect(repairTasks(id)).toHaveLength(1);
+    expect(fake.count("merge")).toBe(0);
+  }, 30_000);
+
+
+  it("a review bot's failing check is bot-check, and a skipped required check is checks-skipped: no fix task and no re-run for either", async () => {
+    await prModeOn();
+    const id = await autoPr("Bot and skipped", "b.txt");
+    fake.setCheck(1, "FAILURE", "check", { app: "coderabbitai" });
+    await until("the bot's verdict needs a person", () => pr(id).attention?.code === "bot-check", 31_000, 30);
+    expect(pr(id).attention!.message).toMatch(/^The review bot coderabbitai reports failure on [0-9a-f]{12}\. A bot's opinion is not fixed automatically\./);
+    await ticks(4, 61_000);
+    expect(repairTasks(id)).toHaveLength(0);
+    expect(reruns()).toHaveLength(0);
+    expect(D.repairCause(st(), task(id))).toBeUndefined();
+    expect(D.repairCause(st(), task(id), { byUser: true })).toEqual({ kind: "checks", checks: [{ name: "check", url: "https://github.com/test/repo/actions/runs/1" }] });
+    // A skipped required check (a later run of the same name that was skipped).
+    fake.setCheck(1, "SKIPPED");
+    await until("the skipped check needs a person", () => pr(id).attention?.code === "checks-skipped", 31_000, 30);
+    await ticks(4, 61_000);
+    expect(repairTasks(id)).toHaveLength(0);
+    expect(reruns()).toHaveLength(0);
+    expect(() => cmd("repairPr", { taskId: id })).toThrow(/re-run on GitHub, not fixed/);
+    expect(fake.count("merge")).toBe(0);
+  }, 30_000);
+
+  it("a restart during a re-run intent: the new service observes and never sends the re-run again", async () => {
+    await prModeOn();
+    const id = await autoPr("Restart mid re-run", "r.txt");
+    fake.setCheck(1, "CANCELLED");
+    const release = fake.hold("rerunJob", "after"); // GitHub accepts it, but the answer is slow
+    for (let i = 0; i < 120 && pr(id).op?.kind !== "rerun"; i++) {
+      now += 5000;
+      scheduler.tick(now); // do not wait: the re-run stays in flight
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    expect(pr(id).op).toMatchObject({ kind: "rerun" });
+    expect(pr(id).ciReruns!.used).toHaveLength(1); // the budget was spent with the intent
+    for (let i = 0; i < 200 && reruns().length === 0; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(reruns()).toHaveLength(1);
+    await scheduler.stop(); // the in-flight result is dropped, like a process that died
+    scheduler = newScheduler();
+    await scheduler.refreshHealth();
+    release();
+    // Inside the timeout and grace nothing is assumed and nothing is sent; after it, an observation settles the intent.
+    await ticks(3, 10_000);
+    expect(pr(id).op).toMatchObject({ kind: "rerun" });
+    expect(reruns()).toHaveLength(1);
+    await tick(D.OP_TIMEOUT_MS.rerun + D.PR_LIMITS.graceMs);
+    await ticks(3, 5000);
+    expect(pr(id).op).toBeUndefined();
+    expect(reruns()).toHaveLength(1);
+    expect(pr(id).ciReruns!.used).toHaveLength(1);
+    // The new run (which GitHub did start) passes: merged, still with one re-run in the record.
+    fake.setCheck(1, "SUCCESS");
+    await until("it merged", () => pr(id).phase === "merged", 5000, 60);
+    expect(reruns()).toHaveLength(1);
+    expect(repairTasks(id)).toHaveLength(0);
+  }, 30_000);
 });

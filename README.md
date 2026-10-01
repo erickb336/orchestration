@@ -12,6 +12,8 @@ A single Claude Code or Codex chat is one agent, one conversation, and one provi
 | --- | --- |
 | One thread of work. To know where things stand, you scroll the transcript or ask. | A board shows every feature's progress at once: what is proposed, running, in review, waiting for you, or done. You can look into any track without interrupting the others. |
 | One agent works on one thing at a time. | A team works at once: up to 16 workers across many tasks, each in its own copy of your repository. |
+| You start building before the goal is clear. | You can shape the vision first. The lead asks targeted questions, suggests what you missed, and drafts the vision and a first roadmap with you. Nothing runs until you say so. |
+| Whether the tests ran depends on the agent. | The service runs your own test, lint and build commands in a sandbox before work is delivered, and failures go back for repair. |
 | The agent that wrote the code also checks it. | An independent reviewer checks every change, from the other provider if you choose (Codex writes, Claude reviews, or the reverse). Repairs repeat until the review is clean. |
 | You prompt for every next step. | A lead plans toward your vision, writes a spec for each task, and keeps work moving on a cadence and within limits you set. |
 | Work lives in a transcript and is gone when the chat ends. | Every task keeps its spec, the decision and why, the artifacts, and what was verified. You can come back days later and see all of it. |
@@ -40,6 +42,13 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
   - **Only when I ask.**
 
   Independently of these, you can add review gates to single steps, or turn on step-by-step review for a task. Pause always works, and "Paused" is shown only after the runtime confirms the stop.
+- **Shape the vision first** (optional). A new project can start in a shaping stage where nothing runs. The lead works with you as an active partner:
+  - it asks a few targeted questions at a time, each with a reason and suggested answers;
+  - it keeps a living draft of the vision, with its assumptions marked, and tracks which parts are clear and which are still open;
+  - it proposes a first roadmap.
+
+  You accept, edit or dismiss each draft, then choose **Start building**. Or skip shaping and start building right away.
+- **Vision documents.** Attach files or a whole folder to the vision. The lead and designers read them; other roles see the list. Copies stay outside your repository, and each upload is one vision revision.
 - **Steering by conversation.**
   - You can message the lead from any page while work continues. A message stops a planning run in progress, so yours is answered next.
   - From its reply the lead can change the focus, reprioritise open tasks, defer work that no longer fits (the current step finishes first), and drop its own proposals that have not started.
@@ -52,6 +61,11 @@ I wanted my own agent orchestration tool, one I can quickly edit and extend with
   - **Off:** verified work is merged serially into an integration branch for you to merge.
   - **Local branch:** that branch is fast-forwarded into a branch of your repository, only when that is safe.
   - **GitHub pull requests:** one pull request per finished task. It is either held for you, or merged automatically after an independent review and passing required checks.
+- **Quality gates.**
+  - **Your own checks** (Settings → Checks, off by default). The service runs your project's test, lint and build commands on a throwaway copy of each change, in the Codex sandbox, and failures go to the repair step. Only you set the commands, and only you can accept failing checks.
+  - **Sorted findings.** Each finding is marked "fix automatically", "needs a decision" or "no action", and repairs fix only what is decided. On Autopilot the lead makes those decisions; otherwise you do.
+  - **Proof of review.** A review counts as clean only if it covered every changed file.
+  - **CI triage.** In pull-request mode, a job GitHub cancelled is re-run once before a fix is spent on it, and review-bot failures come to you.
 - **Review after it lands.** The Review page lists the pull requests that need you and everything that has landed. For each landed item you can read the summary, the agent review, the checks, and the diff. You can mark it reviewed, leave a note, or send it back as a fix or a revert.
 - **Truthful and durable.**
   - Every change is a transaction in a local SQLite database.
@@ -99,8 +113,6 @@ All screenshots show the built-in sample project on the simulated runtime: no ag
 ![Pipeline editor](docs/screenshots/pipeline-editor.png)
 
 **Overview and the lead.** The Overview shows the vision, what changed since your last visit, and the conversation with the lead.
-
-**Vision documents.** Attach files or a whole folder to the vision on the Overview (or in the shaping panel). The lead reads their text whenever it plans, answers or drafts the vision, designers read them too, and other roles see the list of names and sizes. Each Add, folder or drop becomes one vision revision, and every revision records which documents applied. Copies are kept by content hash under `~/.orchestration/vision-docs/`, outside your repository, and verified against their hash when they are read. A removed or replaced document stays on disk while the vision history refers to it; only copies no revision names (refused or abandoned uploads, and a replaced project's directory) are deleted.
 
 ![Overview](docs/screenshots/overview.png)
 
@@ -245,7 +257,8 @@ docs/         the project specification, research, and one versioned spec per bu
 
 - **Network:** the service binds to 127.0.0.1. It rejects foreign `Host` headers, cross-origin requests, and state changes without its client header.
 - **Git:** all of the service's git commands run with hooks and fsmonitor disabled. A worktree whose git metadata was tampered with is not recorded.
-- **Claude workers:** file tools are confined to their worktree, with no shell unless you enable it.
+- **Claude workers:** file tools are confined to their worktree, with no shell unless you enable it. **With shell access switched on (an opt-in), a Claude worker runs as you: it can reach this service's local API and your files.** Leave it off unless you need it.
+- **Checks (ORC-013):** when you turn checks on, the service runs the repository's own code on this computer: its test scripts, its build, and whatever those start, including code agents wrote. In the Codex sandbox that code cannot write outside a throwaway copy of the change and cannot use the network; the one exception is a dependency download by npm, pnpm or yarn, which runs with every install hook off (`--ignore-scripts` or yarn's `--mode=skip-build`, `--ignore-pnpmfile` for pnpm, and yarn's own `yarnPath` and plugins never used), so no repository code runs while the network is on. Every other setup command (bun, pip, uv, poetry, bundle, gradle, mix, swift, cargo, go, make, …) runs offline; scripts a project needs run afterwards, offline, in a separate step. The sandbox does not stop that code from reading your files. The sandbox is probed before any run (writes outside the copy, connections to this machine's own loopback and to the network must all be refused), and nothing ever falls back to running unsandboxed by itself. Each command's exit status comes from the service's own wrapper process, never from anything the command can write. A cancelled CI job is re-run once through `gh api -X POST …/actions/jobs/<id>/rerun`, recorded like every other GitHub write, and only that endpoint, a pull request's comments and the read-only GraphQL query are ever sent as writes; a review bot's verdict and a skipped required check wait for you instead of starting a fix task, while a job cancelled because another job of its workflow run failed, cancelled again after its re-run, or cancelled at GitHub's job time limit is treated as a code failure.
 - **Codex workers:** they run in Codex's sandbox. Writes are limited to their worktree and a private temp directory, and network access for commands is off. **They can still read files elsewhere on your machine.**
 - **Connections:** MCP servers and plugins you allow run with your permissions and are not sandboxed.
 - **GitHub:** only the service runs `gh` and `git push`. It never uses `--admin`, GitHub's own auto-merge, a forced push, a branch deletion or the merge API; the only merge is `gh pr merge --merge --match-head-commit <sha>`. A change to CI workflow files is not pushed until you allow it for that pull request, and a change to other protected files is never merged automatically. A worker environment set to "local", or Claude workers with a shell, can reach your GitHub sign-in: automatic merging is refused for local environments unless you allow it, and both are listed as warnings in Settings → Delivery. An agent review is not a human review; the required checks, the protected paths, the daily cap and the Review list are the independent layers.
@@ -266,6 +279,11 @@ This is a personal tool under active development. It is built in milestones (see
 | Fan-out: parallel agents per step, iteration loops, breakdowns into child tasks | ORC-007 |
 | Pull-request delivery, independent review and automatic merge, review-later list | ORC-008 |
 | Steering by conversation: focus, priorities, defer and drop, with undo | ORC-009 |
+| Opt-in Claude subscription token for personal use | ORC-010 |
+| Guided setup and one-command start | ORC-011 |
+| Shape the vision with the lead first | ORC-012 |
+| Quality gates: service-run checks, finding triage, review coverage, CI triage, project conventions | ORC-013 |
+| Vision documents | ORC-014 |
 
 Real-provider behaviour is covered by adapter tests against scripted runtimes, plus `node scripts/real-run-test.mjs`. That test runs Claude and Codex workers concurrently against a throwaway repository, then pauses and resumes them, and records evidence. It needs your credentials; `--fake` runs the same checks at no cost. Steering by conversation (ORC-009) has been exercised only with scripted and simulated leads; no real Claude or Codex lead run has steered yet.
 

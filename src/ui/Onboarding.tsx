@@ -173,6 +173,17 @@ export function Onboarding() {
       done: state.project.autonomy.enabled || involvementChosen === "1",
       action: <a href="#/settings">Choose</a>,
     },
+    // ORC-013: once a repository is set, the service can run its checks on every change.
+    ...(service.repo?.ok
+      ? [
+          {
+            id: "checks",
+            label: "Turn on checks (recommended): the service runs your repository's tests and build on every change, in a sandbox",
+            done: !!state.project.checks?.enabled,
+            action: <a href="#/settings">Settings → Checks</a>,
+          } satisfies Step,
+        ]
+      : []),
   ];
   const remaining = steps.filter((s) => !s.done).length;
   if (remaining === 0) return null;

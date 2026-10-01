@@ -2,7 +2,9 @@
 // The service validates argument shapes, applies commands inside a transaction, and records them.
 // Clients send `{ name, args }`; they never ship functions or whole states.
 
+import * as C from "./checks";
 import * as D from "./delivery";
+import * as F from "./findings";
 import * as M from "./model";
 import { buildSeed } from "./seed";
 import { INTERNAL_TEMPLATE_IDS, PROJECT_TEMPLATES } from "./templates";
@@ -11,6 +13,7 @@ import {
   PROJECT_STAGES,
   PROVIDERS,
   ROLES,
+  STEP_ROLES,
   STEERING_MODES,
   type ModelSelection,
   type PrDeliveryConfig,
@@ -56,8 +59,14 @@ function provider(v: unknown): ProviderId {
   if (!PROVIDERS.includes(v as ProviderId)) throw new InvalidCommandError(`unknown provider ${String(v)}`);
   return v as ProviderId;
 }
+/** An agent role: what has model defaults and overrides. */
 function role(v: unknown): RoleId {
   if (!ROLES.includes(v as RoleId)) throw new InvalidCommandError(`unknown role ${String(v)}`);
+  return v as RoleId;
+}
+/** A step role: an agent role, or one the service runs itself (ORC-013: checks). */
+function stepRole(v: unknown): RoleId {
+  if (!STEP_ROLES.includes(v as RoleId)) throw new InvalidCommandError(`unknown role ${String(v)}`);
   return v as RoleId;
 }
 function selection(v: unknown): ModelSelection {
@@ -85,7 +94,7 @@ function stepDefs(v: unknown): StepDef[] {
     const d = obj(x, "step");
     str(d, "id");
     str(d, "purpose");
-    role(d.role);
+    stepRole(d.role);
     array(d.dependsOn, "step.dependsOn");
     array(d.inputs, "step.inputs");
     array(d.outputs, "step.outputs");
@@ -201,6 +210,64 @@ export const COMMANDS = {
   chooseCandidate: same((s, now, a) => M.chooseCandidate(s, str(a, "taskId"), str(a, "group"), str(a, "stepId"), now)),
   setProviderLimit: same((s, now, a) => M.setProviderLimit(s, provider(a.provider), num(a, "limit"), now)),
 
+  // findings and decisions (ORC-013)
+  /** Your decision on one finding: fix, accept (leave it as it is), follow-up (a new held task of yours), or reopen. */
+  decideFinding: same((s, now, a) => {
+    const decision = str(a, "decision");
+    if (!F.DECISION_OPTIONS.includes(decision as F.UserDecision)) throw new InvalidCommandError("decision must be fix, accept, follow-up, or reopen");
+    return F.decideFinding(s, str(a, "decisionId"), decision as F.UserDecision, a.note === undefined ? undefined : str(a, "note"), now);
+  }),
+  /** Who decides ask-user findings from now on: the lead or you. Open decisions stay where they are. */
+  setTriageRouting: same((s, now, a) => {
+    const to = str(a, "askUserBy");
+    if (to !== "lead" && to !== "user") throw new InvalidCommandError("askUserBy must be lead or user");
+    return F.setTriageRouting(s, to, now);
+  }),
+  /** Move one open decision to the lead or to you. */
+  routeDecision: same((s, now, a) => {
+    const to = str(a, "to");
+    if (to !== "lead" && to !== "user") throw new InvalidCommandError("to must be lead or user");
+    return F.routeDecision(s, str(a, "decisionId"), to, now);
+  }),
+  /** Give every run the repository's AGENTS.md and CLAUDE.md (from the trusted base) as project conventions. */
+  setConventions: same((s, now, a) => F.setConventions(s, bool(a, "include"), now)),
+
+  // the project's checks, run by the service (ORC-013 §9): the only way the check commands change
+  /** The whole checks configuration (minus its revision). `acknowledgeUnsandboxed` confirms "no sandbox". */
+  setChecks: same((s, now, a) => {
+    const c = obj(a.config, "config");
+    const commands = array<unknown>(c.commands, "config.commands").map((x) => {
+      const d = obj(x, "command");
+      const argv = array<unknown>(d.argv, "command.argv").map((v) => {
+        if (typeof v !== "string") throw new InvalidCommandError("command.argv must be strings");
+        return v;
+      });
+      const kind = str(d, "kind");
+      if (kind !== "prepare" && kind !== "check") throw new InvalidCommandError("command.kind must be prepare or check");
+      return { id: str(d, "id"), label: str(d, "label"), kind: kind as "prepare" | "check", argv, ...(d.timeoutMinutes === undefined ? {} : { timeoutMinutes: num(d, "timeoutMinutes") }) };
+    });
+    const sandbox = str(c, "sandbox");
+    if (sandbox !== "codex" && sandbox !== "none") throw new InvalidCommandError("config.sandbox must be codex or none");
+    return C.setChecks(
+      s,
+      {
+        enabled: bool(c, "enabled"),
+        commands,
+        sandbox,
+        prepareNetwork: bool(c, "prepareNetwork"),
+        commandTimeoutMinutes: num(c, "commandTimeoutMinutes"),
+        runTimeoutMinutes: num(c, "runTimeoutMinutes"),
+        maxConcurrent: num(c, "maxConcurrent"),
+        protectedInputs: array<unknown>(c.protectedInputs, "config.protectedInputs").map((x) => String(x)),
+        passEnv: array<unknown>(c.passEnv, "config.passEnv").map((x) => String(x)),
+      },
+      a.acknowledgeUnsandboxed === undefined ? false : bool(a, "acknowledgeUnsandboxed"),
+      now,
+    );
+  }),
+  /** Probe the checks sandbox now. */
+  recheckChecks: same((s, now) => C.recheckChecks(s, now)),
+
   // the lead
   /** A message stops a planning run in progress so it is answered next; `taskId` names the task page it was sent from. */
   postMessage: same((s, now, a) => M.postMessage(s, str(a, "text"), now, a.taskId === undefined ? undefined : str(a, "taskId"))),
@@ -284,6 +351,10 @@ export const COMMANDS = {
     if (c.protectedPaths !== undefined) patch.protectedPaths = array<unknown>(c.protectedPaths, "protectedPaths").map((x) => String(x));
     if (c.maxOpenPrs !== undefined) patch.maxOpenPrs = num(c, "maxOpenPrs");
     if (c.maxAutoMergesPerDay !== undefined) patch.maxAutoMergesPerDay = num(c, "maxAutoMergesPerDay");
+    // ORC-013 §7.5
+    if (c.rerunBudget !== undefined) patch.rerunBudget = num(c, "rerunBudget");
+    if (c.reviewBotApps !== undefined) patch.reviewBotApps = array<unknown>(c.reviewBotApps, "reviewBotApps").map((x) => String(x));
+    if (c.noCi !== undefined) patch.noCi = bool(c, "noCi");
     return D.setPrDelivery(s, patch, now);
   }),
   /** Run the read-only repository check now. */
@@ -367,7 +438,7 @@ export const COMMANDS = {
 
   // prototype only: replace everything with the labeled sample project
   resetSampleData: (s, now) => {
-    const next = buildSeed(Date.parse(now), { inFlightRuns: false });
+    const next = buildSeed(Date.parse(now), { inFlightRuns: false, checks: true });
     // Never reuse generated ids: a runtime process or event row from before the reset must not
     // be confused with a new run or event that happens to receive the same id.
     next.seq = Math.max(next.seq, s.seq) + 1;

@@ -3,7 +3,8 @@
 
 import { instantiate, toDef } from "./pipeline";
 import { PROJECT_TEMPLATES, templateSteps } from "./templates";
-import { DEFAULT_AUTONOMY, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
+import { runSummary } from "./checks";
+import { DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type CheckResult, type CheckRunRecord, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
 
 type SampleOutput = { name: string; summary: string; openFindings?: number };
 
@@ -40,9 +41,15 @@ export interface SeedOptions {
    * steps itself instead.
    */
   inFlightRuns?: boolean;
+  /**
+   * ORC-013 §3: the sample project with checks on (two simulated commands, a simulated sandbox shown as
+   * ready, and simulated check results in its story), so the running demo shows the loop. Off by default:
+   * the sample is also the neutral fixture of the test suite, whose pipelines never complete a check run.
+   */
+  checks?: boolean;
 }
 
-export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: SeedOptions = {}): State {
+export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, checks: checksOn = false }: SeedOptions = {}): State {
   const at = (m: number) => minutesAgo(nowMs, m);
   const tasks: Task[] = [];
   const attempts: Attempt[] = [];
@@ -69,6 +76,54 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     };
     tasks.push(t);
     return t;
+  };
+  // ORC-013: the sample project has checks on, with two simulated commands, so the demo shows the loop.
+  // A completed Checks step in the sample story carries a simulated check result (nothing ever ran).
+  const SAMPLE_COMMANDS = [
+    { id: "typecheck", label: "typecheck", kind: "check" as const, argv: ["npm", "run", "typecheck"] },
+    { id: "test", label: "test", kind: "check" as const, argv: ["npm", "test"] },
+  ];
+  const checks = (t: Task, stepId: string, startedMin: number, failing: string[] = []) => {
+    const st = t.steps.find((x) => x.id === stepId)!;
+    if (!checksOn) {
+      // Checks off: the service skips the step, so the story shows it skipped.
+      st.state = "skipped";
+      return;
+    }
+    const change = st.inputs.map((r) => (t.steps.find((x) => x.id === r.step)?.state === "done" ? latest(t, r.step, r.output) : undefined)).filter((a): a is Artifact => !!a && a.kind === "code-change").pop();
+    const sha = change?.ref?.split(" ")[0] ?? `sim-${t.id}-${stepId}`;
+    const results: CheckResult[] = SAMPLE_COMMANDS.map((c) => {
+      const fail = failing.includes(c.id);
+      return { id: c.id, label: c.label, kind: c.kind, status: fail ? "failed" : "passed", exitCode: fail ? 1 : 0, durationMs: fail ? 34_000 : 12_000, excerpt: fail ? "(simulated) 1 failing test\n  ✗ exported dates keep their timezone" : `(simulated) ${c.label} passed`, bytes: 0, truncated: false };
+    });
+    const record: CheckRunRecord = { sha, configRev: 1, sandbox: "codex", simulated: true, touchedInputs: [], results, durationMs: results.reduce((n, r) => n + r.durationMs, 0) };
+    const a: Attempt = {
+      id: `run-${attempts.length + 1}`,
+      taskId: t.id,
+      stepId,
+      snapshot: {
+        provider: "service",
+        model: "checks",
+        source: "service",
+        routingReason: "Run by the service (sandboxed)",
+        specRev: t.specs[t.specs.length - 1].rev,
+        stepRev: st.revision,
+        visionRev: 1,
+        workspace: `~/code/example-notes/.orchestration/worktrees/${t.id}-${stepId}`,
+        pipelineRev: t.pipelineRev,
+        purpose: st.purpose,
+        inputs: change ? [{ step: change.stepId, output: change.name, artifactId: change.id, version: change.version }] : [],
+        checks: { configRev: 1, sandbox: "codex", target: { artifactId: change?.id ?? "", ref: sha }, commands: SAMPLE_COMMANDS.map((c) => ({ ...c, timeoutMs: 600_000 })) },
+      },
+      startedAt: at(startedMin),
+      endedAt: at(Math.max(0, startedMin - 1)),
+      outcome: "completed",
+      progress: 100,
+      artifacts: [],
+    };
+    attempts.push(a);
+    st.state = "done";
+    artifacts.push({ id: `art-${artifacts.length + 1}`, taskId: t.id, stepId, attemptId: a.id, name: st.outputs[0].name, kind: "check-results", version: (latest(t, stepId, st.outputs[0].name)?.version ?? 0) + 1, summary: runSummary(record), createdAt: a.endedAt!, checkRun: record, ...(failing.length ? { openFindings: failing.length, findings: failing.map((id, i) => ({ id: `F${i + 1}`, key: `sample${id}`.padEnd(12, "0").slice(0, 12), source: "check" as const, severity: "error" as const, action: "auto-fix" as const, title: `${id} failed (exit 1)`, detail: "(simulated) 1 failing test", checkId: id })) } : { openFindings: 0, findings: [] }) });
   };
 
   const latest = (t: Task, step: string, output: string) =>
@@ -194,6 +249,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     { name: "change", summary: "Backup write errors surface a persistent banner with Retry (sample diff, +42 −6)" },
     { name: "handoff", summary: "Fault injection test added; retry path not yet tested offline (sample)" },
   ]);
+  checks(ex2, "C1", 20);
   if (inFlightRuns) run(ex2, "S2", "claude", "claude-sample-large", 12, "running", 60);
 
   task(
@@ -316,12 +372,14 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     { name: "change", summary: "Per-note Markdown export with front matter (sample diff, +88)" },
     { name: "handoff", summary: "Attachments are linked, not embedded (sample)" },
   ]);
+  checks(ex6, "C1", 2000, ["test"]);
   run(ex6, "S2", "claude", "claude-sample-large", 1900, "completed", 100, [{ name: "findings", summary: "1 finding: exported dates lose their timezone (sample)", openFindings: 1 }]);
   run(ex6, "S3", "codex", "codex-sample-fast", 1700, "completed", 100, [{ name: "change", summary: "Dates exported in ISO 8601 with offset (sample diff, +3 −1)" }]);
+  checks(ex6, "C2", 1600);
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 13,
+    version: 14,
     seq: 1000,
     project: {
       id: "sample",
@@ -366,6 +424,12 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
       steeringMode: "apply",
       stage: "building",
       prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
+      // ORC-013: the sample has checks on with two simulated commands (§3), so the demo shows the loop; a real
+      // project starts with them off. Findings that need a decision go to the user.
+      checks: checksOn ? { ...structuredClone(DEFAULT_CHECKS), enabled: true, rev: 1, commands: SAMPLE_COMMANDS.map((c) => ({ ...c, argv: [...c.argv] })) } : structuredClone(DEFAULT_CHECKS),
+      ...(checksOn ? { checksHealth: { sandbox: "codex" as const, status: "ready" as const, detail: "Simulated: no command runs and nothing is spawned.", checkedAt: at(60) } } : {}),
+      triage: { askUserBy: "user" },
+      conventions: { include: true },
       workerEnvironment: { claude: "isolated", codex: "isolated" },
       workerConnections: { claude: [], codex: [] },
       hold: false,
@@ -379,6 +443,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true }: S
     leadRuns: [],
     steering: [],
     visionDrafts: [],
+    decisions: [],
     events: [
       { id: "ev-1", at: at(600), actor: "lead", kind: "spec", message: "Published specs for EX-001…EX-007 from vision r1", taskId: undefined },
       { id: "ev-2", at: at(2200), actor: "user", kind: "decision", taskId: "EX-006", message: "Selected option B (Per-note export); override: I mostly export single notes to share them." },
@@ -410,6 +475,9 @@ export function buildEmptyProject(nowMs: number = Date.now()): State {
       sample: false,
       name: "New project",
       repoPath: "",
+      // ORC-013: checks are off until the user turns them on for a repository of their own; nothing is probed yet.
+      checks: structuredClone(DEFAULT_CHECKS),
+      checksHealth: undefined,
       // Real catalogs replace the sample ones at startup; "auto" resolves to each provider's first
       // listed model, so no sample model id survives into a real project.
       ...autoModelDefaults(),

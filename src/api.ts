@@ -2,7 +2,7 @@
 
 import type { CommandName } from "./domain/commands";
 import type { AttachResult } from "./domain/model";
-import type { ProviderId, State } from "./domain/types";
+import type { CheckCommand, ProviderId, State } from "./domain/types";
 import type { CapabilityMap } from "./runtime/adapter";
 
 export const CLIENT_HEADER = "X-Orchestration-Client";
@@ -101,3 +101,17 @@ export interface VisionDocUploadOk {
 
 /** Result of the `attachVisionDocs` command: the revision created, if any, and one row per staged document sent. */
 export type AttachVisionDocsResult = AttachResult;
+
+/** ORC-013: body of GET /api/checks/suggest: the commands the repository's files suggest, read at `ref`. Nothing is saved until the user chooses them. */
+export interface CheckSuggestions {
+  commands: CheckCommand[];
+  /** The trusted base the files were read at ("" when nothing was read). */
+  ref: string;
+  /** Why there is nothing to suggest, when the list is empty. */
+  reason?: string;
+}
+
+/** ORC-013: where the full (redacted) log of one check of one run is served from. */
+export function checkLogUrl(attemptId: string, checkId: string): string {
+  return `/api/checks/log?run=${encodeURIComponent(attemptId)}&check=${encodeURIComponent(checkId)}`;
+}

@@ -8,7 +8,9 @@
 //   FAKE_GH_REPO    "owner/name": the one repository this fake serves. A call that names another one
 //                   (by -R, in a repos/<owner>/<name> path, or in a GraphQL repository(...) selector)
 //                   fails like GitHub would: "Not Found (HTTP 404)", exit 1.
-// Without a matching rule it prints nothing and exits 0.
+// Without a matching rule it prints nothing and exits 0 (a job re-run, `-X POST …/actions/jobs/<id>/rerun`,
+// answers that way unless a rule says otherwise: GitHub returns an empty 201). The forbidden-flag guard
+// runs in the app before this script is ever spawned; the log shows what reached it.
 
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 

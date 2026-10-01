@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import * as D from "../domain/delivery";
+import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { AUTOPILOT, PROVIDERS, ROLES, STEERING_MODES, type Autonomy, type SteeringMode, type WorkflowTemplate } from "../domain/types";
 import { BUILT_IN_TEMPLATES, PROJECT_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
+import { ChecksSettings } from "./ChecksSettings";
 import { DeliverySettings } from "./DeliverySettings";
 import { PipelineEditor } from "./PipelineEditor";
 import { pipelineSummary } from "./fanout";
@@ -103,6 +105,7 @@ export function Settings() {
 
         <div>
           <Providers />
+          <ChecksSettings />
           <DeliverySettings />
           <SteeringCard />
           <AutonomyCard />
@@ -375,7 +378,30 @@ function InvolvementCard() {
           </button>
         </div>
       </div>
+      <TriageRouting />
     </section>
+  );
+}
+
+/** ORC-013: who decides review findings whose fix would widen a task. Autopilot sets the lead; the user can change it. */
+function TriageRouting() {
+  const { state, send, disabled } = useStore();
+  const to = state.project.triage?.askUserBy ?? "user";
+  const open = F.openDecisions(state, "lead").length + F.openDecisions(state, "user").length;
+  return (
+    <div style={{ marginTop: "0.8rem", fontSize: "0.9rem" }}>
+      <label className="row" style={{ gap: "0.4rem" }}>
+        <span>Findings that need a decision go to:</span>
+        <select aria-label="Who decides findings that need a decision" value={to} disabled={disabled} onChange={(e) => void send("setTriageRouting", { askUserBy: e.target.value })}>
+          <option value="lead">the lead</option>
+          <option value="user">me</option>
+        </select>
+      </label>
+      <p className="muted" style={{ fontSize: "0.82rem", margin: "0.25rem 0 0" }}>
+        A reviewer marks a finding "ask-user" when the smallest honest fix would widen the task or questions what was asked. The repair loop fixes only what is decided. Autopilot sets the lead; a lead "fix" on a spec you wrote comes back to you as a suggestion.
+        {open ? ` Open decisions (${open}) stay where they are; move one from its task page.` : ""}
+      </p>
+    </div>
   );
 }
 
@@ -754,6 +780,16 @@ function ProjectSetup() {
         {repoOk ? <span className="pill done">Ready{service.repo?.branch ? ` (${service.repo.branch})` : ""}</span> : <span className="pill blocked">Not usable</span>}
       </p>
       {!repoOk && service.repo?.reason && <div className="banner danger">{service.repo.reason}</div>}
+      <label className="row" style={{ gap: "0.4rem", fontSize: "0.9rem", alignItems: "flex-start" }}>
+        <input type="checkbox" checked={state.project.conventions?.include ?? true} disabled={disabled} onChange={(e) => void send("setConventions", { include: e.target.checked })} style={{ marginTop: "0.25rem" }} />
+        <span>
+          Give every run the repository's AGENTS.md and CLAUDE.md as project conventions
+          <span className="muted" style={{ display: "block", fontSize: "0.82rem" }}>
+            Read from the trusted base (the fetched remote base, the delivery branch, or HEAD), never from a worktree agents write, and labelled so they never change a run's role. No worker loads them by itself: Claude runs without project settings, and Codex is
+            started with <span className="mono">project_doc_max_bytes=0</span> (present in the pinned binary; that it suppresses AGENTS.md is not verified yet).
+          </span>
+        </span>
+      </label>
       <details open={!repoOk}>
         <summary>Start a new project</summary>
         <p className="muted" style={{ fontSize: "0.85rem" }}>
@@ -830,6 +866,8 @@ function Templates() {
         <h2 id="tpl-h">{draft!.baseRev !== null ? `Edit template: ${editing.name}` : "New template"}</h2>
         <PipelineEditor
           initial={editing.steps}
+          checksEnabled={!!state.project.checks?.enabled}
+          checkCommands={state.project.checks?.commands}
           saveLabel="Save template"
           requireReason={false}
           saveBlocked={disabled ? "The service is offline" : undefined}

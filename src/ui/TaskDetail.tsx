@@ -1,13 +1,17 @@
 import { useEffect, useState } from "react";
 import * as D from "../domain/delivery";
+import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
 import { toDef } from "../domain/pipeline";
 import { INTERNAL_TEMPLATE_IDS } from "../domain/templates";
 import { ROLES, type Artifact, type Attempt, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
+import { checkLogUrl } from "../api";
+import * as C from "../domain/checks";
 import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } from "./common";
 import { DeliveryCard } from "./Delivery";
+import { CheckResults, CoverageChip, DecisionControls, DecisionQueue, FindingsList } from "./Findings";
 import { SpecEditor } from "./SpecEditor";
 import { PipelineEditor } from "./PipelineEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
@@ -262,6 +266,41 @@ function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEd
         )}
       </div>,
     );
+  // ORC-013: findings that wait for a decision. A step that would read them is neither started nor skipped.
+  const awaiting = task.lifecycle === "active" ? F.awaitingDecision(state, task) : undefined;
+  const myDecisions = F.openDecisions(state, "user").filter((d) => d.taskId === task.id);
+  const leadDecisions = F.openDecisions(state, "lead").filter((d) => d.taskId === task.id);
+  if (awaiting || myDecisions.length || leadDecisions.length)
+    out.push(
+      <div className="banner review" role="status" key="decisions">
+        <strong>{awaiting ? `${F.awaitingLabel(awaiting)}.` : "Findings need a decision."}</strong>{" "}
+        {myDecisions.length ? "Decide each finding below; the repair fixes only what is decided “Fix” or marked auto-fix." : ""}
+        {leadDecisions.length ? ` The lead is deciding ${leadDecisions.length} finding${leadDecisions.length === 1 ? "" : "s"}; you can take any of them over from the artifact below.` : ""}
+        {myDecisions.length > 0 && (
+          <div style={{ marginTop: "0.4rem" }}>
+            <DecisionQueue state={state} taskId={task.id} showLead={false} />
+          </div>
+        )}
+      </div>,
+    );
+  // ORC-013 §6.7: a Final checks step whose run did not pass waits for a decision: a repair round, or the user's acceptance.
+  const finalChecks = task.steps.filter((st) => st.role === "checks" && st.state === "blocked" && st.blockedReason?.startsWith("Checks failed"));
+  for (const st of finalChecks) {
+    const d = state.decisions.find((x) => x.kind === "final-checks" && x.taskId === task.id && x.status === "open" && state.artifacts.find((a) => a.id === x.artifactId)?.stepId === st.id);
+    out.push(
+      <div className="banner danger" role="alert" key={`final-${st.id}`}>
+        <strong>Checks failed on the final change.</strong> {st.blockedReason}{" "}
+        {d ? (
+          <>
+            {d.routedTo === "lead" && d.status === "open" ? <span className="muted">The lead is deciding whether to add a repair round; only you can accept failing checks. </span> : null}
+            <DecisionControls decision={d} />
+          </>
+        ) : (
+          <span className="muted">The decision is recorded on the artifact below.</span>
+        )}
+      </div>,
+    );
+  }
   const heldWriters = task.lifecycle !== "done" && task.lifecycle !== "cancelled" ? D.writersHeld(state) : undefined;
   if (heldWriters && task.steps.some((st) => st.state === "pending" && st.role === "coder"))
     out.push(
@@ -578,6 +617,9 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
           reservedIds={task.pipelineHistory.flatMap((p) => p.steps.map((x) => x.id))}
           templates={state.project.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id))}
           reviewTarget={!!task.reviewTarget}
+          checkTarget={!!task.checkTarget}
+          checksEnabled={!!state.project.checks?.enabled}
+          checkCommands={state.project.checks?.commands}
           saveLabel={`Save pipeline r${task.pipelineRev + 1}`}
           saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : disabled ? "The service is offline" : undefined}
           requireReason
@@ -688,7 +730,25 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                   </td>
                   <td>{ROLE_LABEL[st.role]}</td>
                   <td>
-                    {done && lastRun ? (
+                    {st.role === "checks" ? (
+                      // ORC-013: a Checks step is run by the service; it has no provider or model to choose.
+                      <>
+                        <span>Run by the service{C.checksOn(state.project.checks) ? ` · ${state.project.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}` : ""}</span>
+                        <div className="muted" style={{ fontSize: "0.8rem" }}>
+                          {C.checksOn(state.project.checks) ? (
+                            <>
+                              {st.checks?.onFail === "block" ? "Stops the task and asks for a decision when checks fail" : "Failing checks become findings for the repair step"}.
+                              {st.state === "pending" && C.checksHeld(state) ? ` ${C.HELD_LABEL}.` : ""}
+                              {activeRun ? ` Running as ${activeRun.id}${activeRun.activity ? `: ${activeRun.activity}` : ""}.` : lastRun && done ? ` Ran as ${lastRun.id}.` : ""}
+                            </>
+                          ) : (
+                            <>
+                              {st.state === "skipped" ? "Skipped: checks are off" : "Will be skipped: checks are off"} (<a href="#/settings">Settings</a>).
+                            </>
+                          )}
+                        </div>
+                      </>
+                    ) : done && lastRun ? (
                       <>
                         <span>{selectionText(lastRun.snapshot)}</span>
                         <div className="muted" style={{ fontSize: "0.8rem" }}>
@@ -710,7 +770,7 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
                         )}
                       </>
                     ) : st.state === "skipped" ? (
-                      <span className="muted">Not run: its condition had no open findings. Re-evaluated if an upstream step reruns.</span>
+                      <span className="muted">Not run: its condition had nothing to fix. Re-evaluated if an upstream step reruns.</span>
                     ) : open ? (
                       <>
                         {activeRun && (
@@ -841,7 +901,7 @@ function StepIO({ state, task, stepId, run }: { state: State; task: Task; stepId
     <details style={{ fontSize: "0.8rem", marginTop: "0.2rem" }}>
       <summary className="muted">
         reads {st.inputs.length ? st.inputs.map((r) => `${r.step}.${r.output}`).join(", ") : "nothing upstream"} · produces {st.outputs.length ? st.outputs.map((o) => o.name).join(", ") : "nothing"}
-        {st.runIf?.length ? ` · only if ${st.runIf.map((r) => `${r.step}.${r.output}`).join(" or ")} has open findings` : ""}
+        {st.runIf?.length ? ` · only if ${st.runIf.map((r) => `${r.step}.${r.output}`).join(" or ")} has findings to fix` : ""}
       </summary>
       <div className="stack" style={{ padding: "0.3rem 0 0.2rem" }}>
         <div>
@@ -934,7 +994,19 @@ function ArtifactsCard({ state, task }: { state: State; task: Task }) {
                     {a.ref}
                   </div>
                 )}
-                {a.openFindings !== undefined && <span className="chip strong" style={{ marginLeft: "0.3rem" }}>{a.openFindings} open</span>}
+                {a.openFindings !== undefined && (
+                  <span className="chip strong" style={{ marginLeft: "0.3rem" }} title={a.findings ? "Unresolved: auto-fix findings, and ask-user findings not yet accepted or followed up" : undefined}>
+                    {a.findings ? F.unresolved(state, a) : a.openFindings} open
+                  </span>
+                )}
+                {a.pathCoverage && (
+                  <>
+                    {" "}
+                    <CoverageChip coverage={a.pathCoverage} />
+                  </>
+                )}
+                {a.checkRun && <CheckResults run={a.checkRun} attemptId={a.attemptId} />}
+                {a.findings && <FindingsList state={state} artifact={a} controls={latest?.id === a.id} />}
                 {edited && a.editReason && <div style={{ fontSize: "0.82rem" }}>Why you changed it: “{a.editReason}”</div>}
                 <div className="muted" style={{ fontSize: "0.8rem" }}>
                   {edited ? `edited ${relTime(a.createdAt)}` : `from ${a.attemptId}`}
@@ -969,7 +1041,9 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
   if (!found) return null;
   const base = found;
   const latest = M.latestArtifact(state, task, base.stepId, base.name) ?? base;
-  const isFindings = base.kind === "review-findings";
+  // ORC-013: structured findings are decided one by one; only the summary of such an artifact can be edited.
+  const isFindings = base.kind === "review-findings" && !base.findings;
+  const isStructured = base.kind === "review-findings" && !!base.findings;
   const isCode = base.kind === "code-change";
   const findingsOk = !isFindings || (/^\d+$/.test(findings.trim()) && Number(findings) >= 0);
   const isBreakdown = base.kind === "breakdown";
@@ -1021,6 +1095,11 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
           </span>
         </label>
       )}
+      {isStructured && (
+        <p className="muted" style={{ fontSize: "0.8rem", margin: 0 }}>
+          The findings are listed one by one and carry over unchanged: decide each finding on the artifact instead of editing a count.
+        </p>
+      )}
       {isCode && (
         <label className="field" style={{ margin: 0 }}>
           <span>Use this commit instead (optional)</span>
@@ -1059,6 +1138,7 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
 }
 
 function RunsCard({ state, task }: { state: State; task: Task }) {
+  const { service } = useStore();
   const runs = state.attempts.filter((a) => a.taskId === task.id).reverse();
   return (
     <section className="card" aria-labelledby="runs-h">
@@ -1076,7 +1156,7 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
             )}
             {(a.outcome === "running" || a.outcome === "stopping") && a.progress > 0 && (
               <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`} style={{ marginTop: "0.3rem" }}>
-                <div style={{ width: `${a.progress}%` }} />
+                <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
               </div>
             )}
             {(a.outcome === "running" || a.outcome === "stopping") && a.activity && (
@@ -1107,6 +1187,30 @@ function RunsCard({ state, task }: { state: State; task: Task }) {
             </dd>
             <dt>Routing</dt>
             <dd>{a.snapshot.routingReason}</dd>
+            {a.snapshot.checks && (
+              <>
+                <dt>Commands</dt>
+                <dd>
+                  {a.snapshot.checks.commands.map((c) => (
+                    <div key={c.id}>
+                      <span className="chip">{c.kind}</span> <span className="mono">{c.argv.join(" ")}</span>
+                      {state.artifacts.find((x) => x.attemptId === a.id)?.checkRun?.results.find((r) => r.id === c.id)?.log && service.runtime === "real" ? (
+                        <>
+                          {" · "}
+                          <a href={checkLogUrl(a.id, c.id)} target="_blank" rel="noreferrer">
+                            log
+                          </a>
+                        </>
+                      ) : null}
+                    </div>
+                  ))}
+                  <div className="muted">
+                    on {a.snapshot.checks.target.ref.slice(0, 12)} · settings r{a.snapshot.checks.configRev} · {a.snapshot.checks.sandbox === "codex" ? "sandboxed" : "no sandbox"}
+                    {a.snapshot.checks.reusedFrom ? ` · same as ${a.snapshot.checks.reusedFrom}` : ""}
+                  </div>
+                </dd>
+              </>
+            )}
             {a.actualModel && a.actualModel !== a.snapshot.model && (
               <>
                 <dt>Model reported</dt>

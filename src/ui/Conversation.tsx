@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import type { LeadRun, Message, State } from "../domain/types";
 import { useStore } from "./store";
@@ -145,6 +146,7 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
         </div>
       )}
       {set && <SteeringChanges set={set} />}
+      {m.author === "lead" && m.leadRunId && <LeadDecisions state={state} leadRunId={m.leadRunId} snapshot={m.leadDecisions} />}
       {draft && (
         <div className="msg-extra" role="note">
           <span className="chip strong">Vision draft {draft.id}</span>{" "}
@@ -200,6 +202,33 @@ function MessageItem({ state, message: m, simulated, blocked }: { state: State; 
         </div>
       )}
     </li>
+  );
+}
+
+/** ORC-013: the service's record of what a lead reply decided, suggested or handed over (never the lead's prose), with a way to change it. */
+function LeadDecisions({ state, leadRunId, snapshot }: { state: State; leadRunId: string; snapshot?: NonNullable<Message["leadDecisions"]> }) {
+  // Review 1 (14): the reply shows what the run decided then; a message from before the snapshot existed reads the live records.
+  const rows = snapshot ?? F.leadRunDecisions(state, leadRunId).map(({ decision: d, what }) => ({ id: d.id, taskId: d.taskId, what, status: d.status, ...(d.why || d.suggestion?.why ? { why: d.why ?? d.suggestion?.why } : {}) }));
+  if (!rows.length) return null;
+  return (
+    <div className="msg-extra">
+      <span className="muted">Decisions on findings:</span>
+      <ul className="plain">
+        {rows.map((d) => {
+          const now = state.decisions.find((x) => x.id === d.id);
+          return (
+            <li key={d.id}>
+              {d.what === "decided" ? `Decided ${d.id}: ${d.status}` : d.what === "suggested" ? `Suggested fix on ${d.id}: yours to decide` : `Handed ${d.id} over to you`}
+              {d.why ? ` — ${d.why}` : ""} <span className="muted">({d.taskId})</span>
+              {now && now.status !== d.status && now.status !== "open" ? <span className="muted"> · now: {now.status}</span> : ""}{" "}
+              <a href={`#/task/${encodeURIComponent(d.taskId)}`} title="Open the task to change this decision">
+                Change
+              </a>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 

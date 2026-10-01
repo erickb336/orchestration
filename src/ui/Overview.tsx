@@ -1,15 +1,18 @@
 import { useState } from "react";
 import * as D from "../domain/delivery";
+import * as F from "../domain/findings";
+import * as C from "../domain/checks";
 import * as M from "../domain/model";
 import { diffLines } from "../domain/diff";
 import { useStore } from "./store";
 import { ROLE_LABEL, fmtTime, involvementOf, relTime, selectionText } from "./common";
 import { PrChip } from "./Delivery";
+import { DecisionQueue } from "./Findings";
 import { Conversation } from "./Conversation";
 import { Onboarding } from "./Onboarding";
 import { OpenDraft, ShapingPanel } from "./Shaping";
 import { RevisionDocs, VisionDocsList } from "./VisionDocs";
-import { PROVIDERS, type Attempt, type ProviderId, type State, type VisionRevision } from "../domain/types";
+import { PROVIDERS, isProvider, type Attempt, type ProviderId, type State, type VisionRevision } from "../domain/types";
 
 /** Who made a vision revision and from what, in a few words. */
 export function revisionSource(v: VisionRevision): string {
@@ -119,6 +122,9 @@ export function Overview() {
   const prNeeds = D.trackedPrTasks(state).filter((t) => (t.integration!.pr!.attention && !D.openRepair(state, t.integration!.pr!)) || D.prReady(state, t, nowMs));
   const flagged = D.landedTasks(state).filter((t) => t.integration!.landed!.status === "unreviewed" && t.integration!.landed!.flags.length > 0);
   const ghProblem = gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0) ? gh.problem : undefined;
+  // ORC-013: findings routed to you wait here; the lead's own are news, not a request.
+  const myDecisions = F.openDecisions(state, "user").length;
+  const leadDecisions = F.openDecisions(state, "lead").length;
   const outcomes = state.tasks.filter((t) => t.lifecycle === "done").sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4);
   // ORC-012: while shaping, the panel replaces the Vision card; a draft the lead sent while building shows on the card.
   const shaping = state.project.stage === "shaping";
@@ -238,9 +244,19 @@ export function Overview() {
             </p>
           </section>
 
-          {(prNeeds.length > 0 || flagged.length > 0 || ghProblem || gh?.autoMergePaused) && (
+          {(prNeeds.length > 0 || flagged.length > 0 || ghProblem || gh?.autoMergePaused || myDecisions > 0 || leadDecisions > 0) && (
             <section className="card" aria-labelledby="needs-h">
               <h2 id="needs-h">Needs you</h2>
+              {(myDecisions > 0 || leadDecisions > 0) && (
+                <div style={{ marginBottom: "0.5rem" }}>
+                  {myDecisions > 0 && (
+                    <p style={{ margin: "0 0 0.3rem" }}>
+                      <span className="chip strong">decision</span> {myDecisions} review finding{myDecisions === 1 ? "" : "s"} wait{myDecisions === 1 ? "s" : ""} for your decision: fix it, accept it as it is, or follow it up as a separate task.
+                    </p>
+                  )}
+                  <DecisionQueue state={state} />
+                </div>
+              )}
               <ul className="plain">
                 {ghProblem && (
                   <li>
@@ -319,7 +335,7 @@ export function Overview() {
                           <span className="pill paused transition">Stopping</span>
                         ) : a.progress > 0 ? (
                           <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={a.progress} aria-label={`${a.id} simulated progress`}>
-                            <div style={{ width: `${a.progress}%` }} />
+                            <div style={{ transform: `scaleX(${Math.max(0, Math.min(100, a.progress)) / 100})` }} />
                           </div>
                         ) : (
                           <span className="muted" style={{ fontSize: "0.8rem" }}>
@@ -403,11 +419,19 @@ function ModeSummary({ state }: { state: State }) {
     if (prMode) text += `; finished work is opened as GitHub pull requests into ${pr.remote}/${pr.base}, ${pr.merge === "auto" ? "merged automatically after an independent review and passing required checks" : "held for you"}`;
     else if (a.autoDeliver.enabled) text += `; finished work is delivered to ${a.autoDeliver.branch}`;
   }
+  // ORC-013: whether the service runs the project's checks, and whether it can right now.
+  const checks = state.project.checks;
+  const checksText = !C.checksOn(checks)
+    ? "checks off"
+    : C.checksHeld(state)
+      ? "checks waiting: sandbox unavailable"
+      : `checks on (${checks.commands.filter((c) => c.kind === "check").length} command${checks.commands.filter((c) => c.kind === "check").length === 1 ? "" : "s"}, ${checks.sandbox === "codex" ? "sandboxed" : "no sandbox"})`;
   return (
     <p className="mode-line" aria-live="polite">
       <span className={mode === "manual" ? "chip strong" : "pill running"}>{pill}</span>
       <span>
         {text}
+        {` · ${checksText}`}
         {paused ? " · project paused" : ""}
         {!paused && state.project.stage === "shaping" ? ` · ${M.SHAPING_LABEL.toLowerCase()}` : ""}
       </span>
@@ -450,8 +474,9 @@ function UsageCard({ state }: { state: State }) {
   const inRange = (iso: string) => range === "all" || Date.parse(iso) >= startOfToday.getTime();
 
   // Workers and lead runs, each with the model the provider reported when known.
+  // ORC-013: service runs (checks) use no model tokens and are not counted.
   const rows: { provider: ProviderId; model: string; at: string; usage?: Usage; lead: boolean }[] = [
-    ...state.attempts.map((a) => ({ provider: a.snapshot.provider, model: a.actualModel ?? a.snapshot.model, at: a.endedAt ?? a.startedAt, usage: a.usage, lead: false })),
+    ...state.attempts.flatMap((a) => (isProvider(a.snapshot.provider) ? [{ provider: a.snapshot.provider, model: a.actualModel ?? a.snapshot.model, at: a.endedAt ?? a.startedAt, usage: a.usage, lead: false }] : [])),
     ...state.leadRuns.map((r) => ({ provider: r.provider, model: r.actualModel ?? r.model, at: r.endedAt ?? r.startedAt, usage: r.usage, lead: true })),
   ].filter((r) => inRange(r.at));
 

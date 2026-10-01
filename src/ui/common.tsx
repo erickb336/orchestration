@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import * as M from "../domain/model";
-import { PROVIDERS, type Autonomy, type ModelSelection, type ProviderId, type RoleId, type State, type Task } from "../domain/types";
+import { PROVIDERS, isProvider, type Autonomy, type ModelSelection, type ProviderId, type RoleId, type Runner, type State, type Task } from "../domain/types";
 
 export const ROLE_LABEL: Record<RoleId, string> = {
   lead: "Lead",
@@ -8,6 +8,7 @@ export const ROLE_LABEL: Record<RoleId, string> = {
   coder: "Coder",
   code_reviewer: "Code reviewer",
   ux_reviewer: "UX reviewer",
+  checks: "Checks",
 };
 
 export const COLUMN_LABEL: Record<M.Column, string> = {
@@ -36,7 +37,8 @@ export function fmtTime(iso: string) {
   return new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-export function selectionText(sel: ModelSelection) {
+/** "Claude · model"; a service run (ORC-013 checks) reads "Service · checks". */
+export function selectionText(sel: { provider: Runner; model: string }) {
   return `${M.providerLabel(sel.provider)} · ${sel.model}`;
 }
 
@@ -54,11 +56,14 @@ export function currentWork(state: State, task: Task): { role: RoleId; provider?
   if (active.length) {
     const a = active[0];
     const st = task.steps.find((x) => x.id === a.stepId)!;
-    return { role: st.role, provider: a.snapshot.provider, text: `${selectionText(a.snapshot)}${active.length > 1 ? ` +${active.length - 1}` : ""}`, live: true };
+    const p = a.snapshot.provider;
+    return { role: st.role, ...(isProvider(p) ? { provider: p } : {}), text: `${selectionText(a.snapshot)}${active.length > 1 ? ` +${active.length - 1}` : ""}`, live: true };
   }
   if (task.lifecycle === "done" || task.lifecycle === "cancelled") return null;
   const next = task.steps.find((st) => st.state === "pending" || st.state === "paused" || st.state === "blocked");
   if (!next) return null;
+  // ORC-013: a Checks step is run by the service; it has no provider or model.
+  if (next.role === "checks") return { role: next.role, text: state.project.checks?.enabled ? "next: run by the service" : "next: skipped (checks are off)", live: false };
   const r = M.resolveStep(state, task, next);
   return { role: next.role, provider: r.ok ? r.selection.provider : undefined, text: r.ok ? `next: ${selectionText(r.selection)}` : "next: unresolved", live: false };
 }

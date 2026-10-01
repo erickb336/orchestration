@@ -106,6 +106,25 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
     }
   }
 
+  // ORC-013: a finding newly routed to the user (created for them, sent to them, or suggested by the lead) is one event; polling is not.
+  const prevDecisions = new Map((prev.decisions ?? []).map((d) => [d.id, d]));
+  for (const d of next.decisions ?? []) {
+    if (d.status !== "open" || d.routedTo !== "user") continue;
+    const before = prevDecisions.get(d.id);
+    if (before && before.status === "open" && before.routedTo === "user" && !!before.suggestion === !!d.suggestion) continue;
+    out.push({
+      key: `decision:${d.id}:${d.suggestion ? "suggested" : "open"}`,
+      title: d.suggestion ? "The lead suggests a fix; yours to decide" : "A finding needs your decision",
+      body: clip(`${taskTitle(next, d.taskId)} · ${d.finding.title}${d.finding.why ? ` — ${d.finding.why}` : ""}`),
+      taskId: d.taskId,
+    });
+  }
+
+  // ORC-013: the checks sandbox became unavailable (keyed on that observation, never on polling); check steps wait until it is ready.
+  const ch = next.project.checksHealth;
+  if (ch?.status === "unavailable" && next.project.checks?.enabled && (prev.project.checksHealth?.status !== "unavailable" || prev.project.checksHealth.checkedAt !== ch.checkedAt) && (prev.project.checksHealth?.status !== "unavailable"))
+    out.push({ key: `checks-sandbox:${ch.status}:${ch.checkedAt}`, title: "The checks sandbox is not available", body: clip(`${ch.detail} Check steps wait until it is ready, or until you choose to run without a sandbox (Settings → Checks).`) });
+
   const paused = next.project.github?.autoMergePaused;
   if (paused && paused.since !== prev.project.github?.autoMergePaused?.since)
     out.push({ key: `auto-merge-paused:${paused.since}`, title: "Automatic merging is paused", body: clip(`${paused.reason}. ${paused.sticky ? "It stays paused until you resume it." : "It resumes when the check passes again."}`), ...(paused.taskId ? { taskId: paused.taskId } : {}) });
