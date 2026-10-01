@@ -12,7 +12,7 @@ import { INTERNAL_FLOWS } from "./internalFlows";
 import { builtInCatalog, flowHash, resolveFlows, type FlowFile, type RawFlow } from "./flows";
 import * as M from "./model";
 import { structuralKey, toDef, validatePipeline } from "./pipeline";
-import { LEAD_PRINCIPLE_IDS, PREMISE_ID, PRINCIPLES, PRINCIPLE_BODY_WORDS, PRINCIPLE_IDS, PSTACK_COMMIT, orderPrinciples, parsePrincipleFile, principle, stepPrinciples, wordCount } from "./principles";
+import { EVERY_RUN_PRINCIPLE_IDS, LEAD_PRINCIPLE_IDS, PREMISE_ID, PRINCIPLES, PRINCIPLE_BODY_WORDS, PRINCIPLE_IDS, PSTACK_COMMIT, orderPrinciples, parsePrincipleFile, principle, stepPrinciples, wordCount } from "./principles";
 import { buildSeed } from "./seed";
 import { DEFAULT_CHECKS, type CheckRunRecord, type ChecksConfig, type Finding, type State, type StepDef } from "./types";
 
@@ -60,19 +60,24 @@ const TABLE: Record<string, Record<string, string[]>> = {
 };
 const CHECK_ROUND = { fix: ["laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes"], review: ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"], security: ["boundary-discipline"], checks: [] };
 
+/** ORC-026: an agent run's recorded set is "contextualize and write for the reader" plus its step's own (table order puts it first). */
+const run = (ids: string[]) => orderPrinciples([...EVERY_RUN_PRINCIPLE_IDS, ...ids]);
 const SOURCE_RE = /^pstack principle-[a-z-]+, MIT, Copyright \(c\) 2026 Lauren Tan, github\.com\/cursor\/plugins at 12d587d, adapted$/;
 
 describe("the compiled principles", () => {
-  it("15, in table order, each with a name, a one-line apply-when, a body of at most 200 words, a hash and a source naming pstack and the commit", () => {
+  it("16, in table order, each with a name, a one-line apply-when, a body of at most 200 words, a hash and a source: pstack and the commit, or Orchestrator's own (ORC-026)", () => {
     expect(PRINCIPLES.map((p) => p.id)).toEqual([...PRINCIPLE_IDS]);
-    expect(PRINCIPLES).toHaveLength(15);
+    expect(PRINCIPLES).toHaveLength(16);
     for (const p of PRINCIPLES) {
       expect(p.name.length, p.id).toBeGreaterThan(3);
       expect(p.applyWhen, p.id).not.toMatch(/\n/);
       expect(wordCount(p.applyWhen), p.id).toBeLessThanOrEqual(25);
       expect(wordCount(p.body), p.id).toBeLessThanOrEqual(PRINCIPLE_BODY_WORDS);
-      expect(p.source, p.id).toMatch(SOURCE_RE);
-      expect(p.source, p.id).toContain(`principle-${p.id}`);
+      if (p.id === "contextualize-and-write-for-the-reader") expect(p.source).toMatch(/^Orchestrator's own, from the owner's direction \(2026-10-01\)/);
+      else {
+        expect(p.source, p.id).toMatch(SOURCE_RE);
+        expect(p.source, p.id).toContain(`principle-${p.id}`);
+      }
       expect(PSTACK_COMMIT.startsWith("12d587d")).toBe(true);
       expect(p.hash, p.id).toMatch(/^[0-9a-f]{64}$/);
       expect(principle(p.id)).toBe(p);
@@ -91,7 +96,8 @@ describe("the compiled principles", () => {
     expect(premise.body).toContain("list what each failed fix assumed and what still failed");
     expect(premise.body).toContain("the factor present every time");
     expect(premise.body).not.toMatch(/census|\bactors?\b/i);
-    expect(LEAD_PRINCIPLE_IDS).toEqual(["experience-first", "sequence-verifiable-units", "never-block-on-the-human", "encode-lessons-in-structure"]);
+    expect(LEAD_PRINCIPLE_IDS).toEqual(["contextualize-and-write-for-the-reader", "experience-first", "sequence-verifiable-units", "never-block-on-the-human", "encode-lessons-in-structure"]);
+    expect(EVERY_RUN_PRINCIPLE_IDS).toEqual(["contextualize-and-write-for-the-reader"]);
   });
 
   it("the parser refuses a missing frontmatter, a wrong id, an unknown or repeated field, a missing field, a multi-line applyWhen and a long body, naming the file", () => {
@@ -263,12 +269,12 @@ describe("the automatic 'attack the premise'", () => {
     s = round(s, id, 4, ["test"]);
     const first = running(s, id)[0];
     expect(first.stepId).toBe("S3");
-    expect(first.snapshot.principles).toEqual(TABLE.change.S3.map((pid) => ({ id: pid, hash: principle(pid)!.hash })));
+    expect(first.snapshot.principles).toEqual(run(TABLE.change.S3).map((pid) => ({ id: pid, hash: principle(pid)!.hash })));
     expect(first.snapshot.principles!.some((p) => p.added)).toBe(false);
     expect(M.premiseReason(s, task(s, id), step(s, id, "S3"))).toBeUndefined();
     // The implementation's run recorded its own set too; the check run none.
     const impl = s.attempts.find((a) => a.taskId === id && a.stepId === "S1")!;
-    expect(impl.snapshot.principles!.map((p) => p.id)).toEqual(TABLE.change.S1);
+    expect(impl.snapshot.principles!.map((p) => p.id)).toEqual(run(TABLE.change.S1));
     expect(s.attempts.find((a) => a.taskId === id && a.stepId === "C1")!.snapshot.principles).toBeUndefined();
   });
 
@@ -280,8 +286,8 @@ describe("the automatic 'attack the premise'", () => {
     const second = running(s, id)[0];
     expect(second.stepId).toBe("S3-i2");
     // Table order: laziness, migrate, fix-root-causes, then attack-the-premise, which the table lists after fix-root-causes.
-    expect(second.snapshot.principles).toEqual([...TABLE.change.S3, PREMISE_ID].map((pid) => ({ id: pid, hash: principle(pid)!.hash, ...(pid === PREMISE_ID ? { added: "added: check `test` failed again after S3" } : {}) })));
-    expect(second.snapshot.principles!.map((p) => p.id)).toEqual(["laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes", PREMISE_ID]);
+    expect(second.snapshot.principles).toEqual(run([...TABLE.change.S3, PREMISE_ID]).map((pid) => ({ id: pid, hash: principle(pid)!.hash, ...(pid === PREMISE_ID ? { added: "added: check `test` failed again after S3" } : {}) })));
+    expect(second.snapshot.principles!.map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes", PREMISE_ID]);
     s = repair(s, id, 9, SHA3);
     s = round(s, id, 10, ["test", "lint"], [], SHA3);
     const third = running(s, id)[0];
@@ -296,7 +302,7 @@ describe("the automatic 'attack the premise'", () => {
     s = round(s, id, 7, ["lint"], [finding({ title: "Unused import", file: "src/a.ts", line: 1 })], SHA2);
     const second = running(s, id)[0];
     expect(second.stepId).toBe("S3-i2");
-    expect(second.snapshot.principles!.map((p) => p.id)).toEqual(TABLE.change.S3);
+    expect(second.snapshot.principles!.map((p) => p.id)).toEqual(run(TABLE.change.S3));
     expect(M.premiseReason(s, task(s, id), step(s, id, "S3-i2"))).toBeUndefined();
   });
 
@@ -347,7 +353,7 @@ describe("the automatic 'attack the premise'", () => {
       s = M.dispatchEligible(s, at(5));
       const revise = running(s, id)[0];
       expect(revise.stepId).toBe("S3");
-      expect(revise.snapshot.principles!.map((p) => p.id)).toEqual(["experience-first"]);
+      expect(revise.snapshot.principles!.map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "experience-first"]);
       s = M.reportCompletion(s, revise.id, [], at(6), [{ name: "design", summary: "revised" }]);
       s = M.dispatchEligible(s, at(7));
       expect(running(s, id)[0].stepId).toBe("S2-i2");
@@ -358,10 +364,11 @@ describe("the automatic 'attack the premise'", () => {
       return again.snapshot.principles!;
     };
     expect(design("The empty state has no next step")).toEqual([
+      { id: "contextualize-and-write-for-the-reader", hash: principle("contextualize-and-write-for-the-reader")!.hash },
       { id: "experience-first", hash: principle("experience-first")!.hash },
       { id: PREMISE_ID, hash: principle(PREMISE_ID)!.hash, added: 'added: the finding "The empty state has no next step" came back after S3' },
     ]);
-    expect(design("The error copy blames the user").map((p) => p.id)).toEqual(["experience-first"]);
+    expect(design("The error copy blames the user").map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "experience-first"]);
   });
 
   it("a check-round fix after a round that failed the same check gets it; the first round's fix gets it when the loop's last repair failed the same check (review L4)", () => {
@@ -377,7 +384,7 @@ describe("the automatic 'attack the premise'", () => {
     let s = M.dispatchEligible(F.decideFinding(blocked, d1.id, "fix", undefined, at(50)), at(50));
     const fix1 = running(s, id)[0];
     expect(fix1.stepId).toBe("C2-r1-fix");
-    expect(fix1.snapshot.principles).toEqual([...CHECK_ROUND.fix, PREMISE_ID].map((pid) => ({ id: pid, hash: principle(pid)!.hash, ...(pid === PREMISE_ID ? { added: "added: check `test` failed again after S3-i3" } : {}) })));
+    expect(fix1.snapshot.principles).toEqual(run([...CHECK_ROUND.fix, PREMISE_ID]).map((pid) => ({ id: pid, hash: principle(pid)!.hash, ...(pid === PREMISE_ID ? { added: "added: check `test` failed again after S3-i3" } : {}) })));
     s = M.reportCompletion(s, fix1.id, [], at(51), [{ name: "change", summary: "f", ref: `${"d".repeat(40)} on b` }, { name: "handoff", summary: "h" }]);
     s = finishReviews(s, id, 52);
     expect(running(s, id)[0].stepId).toBe("C2-r1-checks");
@@ -386,7 +393,7 @@ describe("the automatic 'attack the premise'", () => {
     s = M.dispatchEligible(F.decideFinding(s, d2.id, "fix", undefined, at(54)), at(54));
     const fix2 = running(s, id)[0];
     expect(fix2.stepId).toBe("C2-r1-checks-r2-fix");
-    expect(fix2.snapshot.principles).toEqual([...CHECK_ROUND.fix, PREMISE_ID].map((pid) => ({ id: pid, hash: principle(pid)!.hash, ...(pid === PREMISE_ID ? { added: "added: check `test` failed again after C2-r1-fix" } : {}) })));
+    expect(fix2.snapshot.principles).toEqual(run([...CHECK_ROUND.fix, PREMISE_ID]).map((pid) => ({ id: pid, hash: principle(pid)!.hash, ...(pid === PREMISE_ID ? { added: "added: check `test` failed again after C2-r1-fix" } : {}) })));
   });
 
   it("a run before ORC-024 recorded none, and nothing is invented for it; a step from before ORC-024 gives its runs none", () => {
