@@ -59,7 +59,7 @@ describe("finding 1: editing a structured review's summary keeps its decisions",
     expect(F.decisionFor(edited, v2, v2.findings![1])).toMatchObject({ id: d2.id, status: "open", routedTo: "user" });
     expect(F.undecided(edited, v2)).toBe(1);
     expect(F.fixable(edited, v2)).toBe(0);
-    expect(M.stateLabel(edited, task(edited, id))).toBe("Waiting for a decision on 1 finding (you)");
+    expect(M.stateLabel(edited, task(edited, id))).toBe("Needs you: decide 1 finding");
     // Never "the lead" for a finding without a record.
     const stripped = { ...edited, decisions: [] };
     expect(F.awaitingDecision(stripped, task(stripped, id))).toEqual({ count: 2, lead: 0, user: 2 });

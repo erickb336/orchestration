@@ -1121,7 +1121,7 @@ describe("step 2 review: low findings", () => {
     expect(label(opened(built(prMode("hold")), ID, 12, 20, { checks: [check(null)] }))).toBe("PR #12 checks");
     expect(label(opened(built(prMode("hold")), ID, 12, 20, { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" }))).toBe("PR #12 waiting on GitHub");
     expect(label(opened(D.advanceDelivery(built(prMode("hold"), ID, HEAD, null), at(4))))).toBe("PR #12 review");
-    expect(label(opened(built(prMode("hold"))))).toBe("PR #12 waiting for you");
+    expect(label(opened(built(prMode("hold"))))).toBe("PR #12 ready to merge");
     expect(label(M.pauseProject(opened(built(prMode("hold")), ID, 12, 20, { checks: [check(null)] }), at(21)))).toBe("PR #12 paused");
     expect(label(D.reportBaseFetched(autoOpen(), SHA_B, at(22)), 23)).toBe("PR #12 updating");
     expect(label(autoOpen())).toBe("PR #12 merging next");

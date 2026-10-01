@@ -102,7 +102,8 @@ describe("the demo in the fake service (ORC-017)", () => {
     expect(pr).toMatchObject({ phase: "open", simulated: true, number: 1000, policy: "hold", url: "simulated://pr/1000" });
     expect(pr.attention).toBeUndefined();
     expect(D.prReady(s, task(s, "WT-005"), now)).toBe(true);
-    expect(D.prLabel(s, task(s, "WT-005"), now)).toEqual({ text: "PR #1000 waiting for you (simulated)", tone: "strong" });
+    // ORC-025: the chip's text carries no "(simulated)" suffix; the label's flag puts one small chip beside it.
+    expect(D.prLabel(s, task(s, "WT-005"), now)).toEqual({ text: "PR #1000 ready to merge", tone: "strong", simulated: true });
     const gate = D.prGate(s, task(s, "WT-005"), now, { byUser: true });
     expect(gate.items.filter((i) => !i.ok).map((i) => i.id)).toEqual(["policy"]);
     expect(gate.items.find((i) => i.id === "review")).toMatchObject({ ok: true });

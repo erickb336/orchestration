@@ -66,7 +66,7 @@ describe("review 2: the roadmap hold is its own flag", () => {
     expect(task(held, a.id).heldForShaping).toBeUndefined();
     expect(held.events.at(-2)!.message).toMatch(/No longer held by the roadmap/);
     const p = promote(held);
-    expect(M.stateLabel(p, task(p, a.id))).toBe("Held before start");
+    expect(M.stateLabel(p, task(p, a.id))).toBe("Waiting for your go-ahead");
     expect(M.stateLabel(p, task(p, b.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
     const built = M.startBuilding(p, at(5));
     expect(task(built, a.id).holdBeforeStart).toBe(true); // never overridden
@@ -75,7 +75,7 @@ describe("review 2: the roadmap hold is its own flag", () => {
     const ran = promote(built, 6);
     expect(running(ran).map((x) => x.taskId)).toContain(b.id);
     expect(running(ran, a.id)).toHaveLength(0);
-    expect(M.stateLabel(ran, task(ran, a.id))).toBe("Held before start");
+    expect(M.stateLabel(ran, task(ran, a.id))).toBe("Waiting for your go-ahead");
   });
 
   it("with check-in the roadmap carries both holds and says so; releasing by hand takes it out of the roadmap hold and still waits for Start building", () => {
@@ -83,7 +83,7 @@ describe("review 2: the roadmap hold is its own flag", () => {
     const [t] = M.roadmapTasks(c);
     expect(t).toMatchObject({ heldForShaping: true, holdBeforeStart: true });
     const p = promote(c);
-    expect(M.stateLabel(p, task(p, t.id))).toBe("Planned; waits until you start building, then waits for your release (your involvement setting)");
+    expect(M.stateLabel(p, task(p, t.id))).toBe("Planned; waits until you start building, then waits for your go-ahead (your involvement setting)");
     const started = M.startHeldTask(p, t.id, at(5));
     expect(task(started, t.id).holdBeforeStart).toBe(false);
     expect(task(started, t.id).heldForShaping).toBeUndefined();
@@ -99,7 +99,7 @@ describe("review 2: the roadmap hold is its own flag", () => {
     const mb = M.startBuilding(m, at(5));
     expect(task(mb, mt.id)).toMatchObject({ holdBeforeStart: true });
     expect(task(mb, mt.id).heldForShaping).toBeUndefined();
-    expect(mb.events.some((e) => e.taskId === mt.id && /waits for your release/.test(e.message))).toBe(true);
+    expect(mb.events.some((e) => e.taskId === mt.id && /waits for your go-ahead/.test(e.message))).toBe(true);
   });
 });
 

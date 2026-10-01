@@ -293,7 +293,7 @@ ${gap ? `Coverage: your previous run reported no findings but did not account fo
 `;
 }
 
-// ---------- ORC-022: notes to a running stage ----------
+// ---------- ORC-022: notes to a running step ----------
 
 /** Who sent a note, as an envelope says it. */
 const noteSender = (n: Note) => (n.from.by === "lead" ? `the lead, relaying the user's message ${n.from.messageIds.join(", ") || "(none)"}` : "the user");
@@ -800,7 +800,7 @@ function openWorkLine(state: State, t: Task, mode: SteeringMode): string {
   const kids = M.childTasks(state, t).filter((k) => k.lifecycle !== "cancelled");
   const notes = [
     t.dependsOn.length && `depends on ${t.dependsOn.join(", ")}`,
-    t.holdBeforeStart && t.lifecycle !== "active" && "held before start",
+    t.holdBeforeStart && t.lifecycle !== "active" && "waiting for the user's go-ahead",
     t.hold && (t.holdReason ? "paused for review" : "paused by the user"),
     t.controlFailure && "control failure",
     t.userSet?.run && "the user asked it to keep running",
@@ -1133,7 +1133,7 @@ ${deliveryNote(state)}
 ## Recent steering (what you changed, and what the user undid or dismissed)
 ${recentSteering(state)}
 
-## Notes to running stages (last 24 hours; yours and the user's)
+## Notes to running steps (last 24 hours; yours and the user's)
 ${notesSection(state, Date.parse(run.startedAt))}
 
 ## Conversation (most recent last)

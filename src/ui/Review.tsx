@@ -1,7 +1,8 @@
-// The Review page. "Needs you": pull requests waiting for your merge or your attention. "Waiting":
-// pull requests the app is still opening, reviewing, fixing, or merging in turn. "Landed": work that already
-// landed, to look over whenever you like. The landed list never blocks anything, and an item becomes
-// "reviewed" only through Mark reviewed, never by opening it.
+// The Results page (ORC-025: the Review tab, renamed; `#/review` still opens it). "Needs you": pull
+// requests that wait for your merge or your attention. "Waiting": pull requests the app is still opening,
+// reviewing, fixing, or merging in turn. "Landed": work that already landed, to look over whenever you
+// like. The landed list never blocks anything, and an item counts as seen only through Mark as seen, never
+// by opening it.
 
 import { useState } from "react";
 import * as D from "../domain/delivery";
@@ -13,7 +14,7 @@ import { useStore } from "./store";
 
 type Filter = "unreviewed" | "all" | "sent-back";
 const FILTERS: { id: Filter; label: string }[] = [
-  { id: "unreviewed", label: "Not reviewed" },
+  { id: "unreviewed", label: "New" },
   { id: "all", label: "All" },
   { id: "sent-back", label: "Sent back" },
 ];
@@ -44,7 +45,7 @@ export function Review() {
 
   return (
     <>
-      <h1>Review</h1>
+      <h1>Results</h1>
       {showGitHub && gh?.problem && (
         <div className="banner danger" role="alert">
           <strong>GitHub delivery is stopped.</strong> {gh.problem.message}{" "}
@@ -87,7 +88,7 @@ export function Review() {
           {needs.length === 0 && (
             <section className="card">
               <p className="muted" style={{ margin: 0 }}>
-                No pull request is waiting for you.
+                No pull request needs you.
               </p>
             </section>
           )}
@@ -159,7 +160,7 @@ export function Review() {
 
       <h2>Landed</h2>
       <p className="muted">
-        Work that already landed. Look it over whenever you like: this list never delays a task or a delivery, and an item counts as reviewed only when you mark it.
+        Work that already landed. Look it over whenever you like: this list never delays a task or a delivery, and an item counts as seen only when you mark it.
       </p>
 
       <div className="toolbar">
@@ -175,10 +176,10 @@ export function Review() {
           <button
             disabled={disabled}
             onClick={() => {
-              if (confirm(`Mark ${bulk.length} landed item${bulk.length === 1 ? "" : "s"} as reviewed?`)) void send("markLandedReviewed", { taskIds: bulk.map((t) => t.id), reviewed: true });
+              if (confirm(`Mark ${bulk.length} landed item${bulk.length === 1 ? "" : "s"} as seen?`)) void send("markLandedReviewed", { taskIds: bulk.map((t) => t.id), reviewed: true });
             }}
           >
-            Mark {bulk.length === unreviewed.length ? "all" : "first"} {bulk.length} reviewed
+            Mark {bulk.length === unreviewed.length ? "all" : "the first"} {bulk.length} as seen
           </button>
         )}
       </div>
@@ -188,10 +189,10 @@ export function Review() {
           <p className="muted" style={{ margin: 0 }}>
             {landed.length > 0
               ? filter === "unreviewed"
-                ? "Everything that landed has been reviewed."
+                ? "No new results: you have seen everything that landed."
                 : "Nothing has been sent back."
               : service.runtime === "fake" && mode !== "pr"
-                ? "Nothing has landed. The simulated runtime delivers work only as simulated pull requests (Settings → Delivery), so this list stays empty."
+                ? "Nothing has landed. The demo delivers work only as simulated pull requests (Settings → Delivery), so this list stays empty."
                 : mode === "local"
                   ? `Nothing has landed yet. Finished work appears here after it is delivered to ${state.project.autonomy.autoDeliver.branch}.`
                   : mode === "pr"
@@ -222,7 +223,7 @@ export function Review() {
               </button>
               {!expanded && l.status === "unreviewed" && (
                 <button disabled={disabled} onClick={() => void send("markLandedReviewed", { taskIds: [t.id], reviewed: true })}>
-                  Mark reviewed
+                  Mark as seen
                 </button>
               )}
             </div>

@@ -243,7 +243,7 @@ describe("the scheduler: the context event, coverage re-runs and conventions", (
     tick();
     tick();
     expect(M.activeAttempts(st(), id)).toHaveLength(0); // the repair waits for the decision
-    expect(M.stateLabel(st(), task(id))).toBe("Waiting for a decision on 1 finding (you)");
+    expect(M.stateLabel(st(), task(id))).toBe("Needs you: decide 1 finding");
     cmd("decideFinding", { decisionId: st().decisions[0].id, decision: "accept", note: "by design" });
     tick();
     tick();

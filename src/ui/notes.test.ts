@@ -12,11 +12,11 @@ const T0 = Date.parse("2026-10-01T12:00:00Z");
 const base: Note = { id: "note-1", taskId: "EX-001", stepId: "S2", text: "Skip the README.", from: { by: "user" }, at: new Date(T0).toISOString(), status: "queued" };
 
 describe("note labels", () => {
-  it("the status chip reads Queued, Sending, Delivered, Delivered at start, or Not delivered with the reason, in the matching tone", () => {
+  it("the status chip reads Queued, Sending, Delivered, Delivered when the run started, or Not delivered with the reason, in the matching tone", () => {
     expect(noteStatusLabel(base)).toBe("Queued");
     expect(noteStatusLabel({ ...base, status: "sending" })).toBe("Sending");
     expect(noteStatusLabel({ ...base, status: "delivered", via: "live" })).toBe("Delivered");
-    expect(noteStatusLabel({ ...base, status: "delivered", via: "start" })).toBe("Delivered at start");
+    expect(noteStatusLabel({ ...base, status: "delivered", via: "start" })).toBe("Delivered when the run started");
     expect(noteStatusLabel({ ...base, status: "not-delivered", reason: "S2 had finished" })).toBe("Not delivered: S2 had finished");
     expect(noteStatusLabel({ ...base, status: "not-delivered" })).toBe("Not delivered: no reason recorded");
     expect(noteTone(base)).toBe("neutral");

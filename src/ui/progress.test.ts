@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import * as M from "../domain/model";
 import { buildDemo } from "../domain/demo";
 import { buildSeed } from "../domain/seed";
-import { OTHER_AREA, agentsWorking, areaOf, liveAgents, liveText, needsYouOf, progressByArea } from "./progress";
+import { OTHER_AREA, agentsStopping, agentsWorking, areaOf, liveAgents, liveIndicatorText, liveText, needsYouOf, progressByArea } from "./progress";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
 const by = (rows: ReturnType<typeof progressByArea>, area: string) => rows.find((r) => r.area === area)!;
@@ -93,12 +93,35 @@ describe("progressByArea", () => {
     expect(liveAgents(seed, t)).toHaveLength(1);
   });
 
+  it("ORC-025: the header counts stopping runs as busy and never says Idle over them", () => {
+    const s = buildSeed(T0);
+    expect(agentsWorking(s)).toBe(2);
+    expect(agentsStopping(s)).toBe(0);
+    // A project pause asks every run to stop; until the agents acknowledge, they are still working.
+    const pausing = M.pauseProject(s, new Date(T0 + 1000).toISOString());
+    expect(agentsWorking(pausing)).toBe(0);
+    expect(agentsStopping(pausing)).toBe(2);
+    expect(liveIndicatorText(agentsWorking(pausing), agentsStopping(pausing))).toBe("2 agents stopping");
+    // A stopping check run is the service's, not an agent's.
+    const service = structuredClone(pausing);
+    service.attempts.find((a) => a.outcome === "stopping")!.snapshot.provider = "service";
+    expect(agentsStopping(service)).toBe(1);
+    expect(liveIndicatorText(0, 1)).toBe("1 agent stopping");
+    expect(liveIndicatorText(3, 1)).toBe("3 agents working, 1 stopping");
+    expect(liveIndicatorText(1, 0)).toBe("1 agent working");
+    expect(liveIndicatorText(0, 0)).toBe("Idle");
+    expect(liveIndicatorText(2, 0, true)).toBe("2 agents working (finishing; shaping)");
+    expect(liveIndicatorText(0, 2, true)).toBe("2 agents stopping");
+    // The text says nothing about the simulation: the demo bar says it once.
+    expect(liveIndicatorText(3, 0)).not.toMatch(/simulated/);
+  });
+
   it("needsYouOf names what waits: a held task with options, a review gate, failing final checks, a user decision", () => {
     const s = buildSeed(T0, { inFlightRuns: false });
     const held = s.tasks.find((t) => t.id === "EX-004")!;
     expect(needsYouOf(s, held, T0)).toMatchObject({ what: "choose an option", href: "#/task/EX-004" });
     M.currentSpec(held).content.options = M.currentSpec(held).content.options.slice(0, 1);
-    expect(needsYouOf(s, held, T0)?.what).toBe("release it");
+    expect(needsYouOf(s, held, T0)?.what).toBe("give the go-ahead");
     // A paused task is the user's own choice, not a request for attention.
     expect(needsYouOf(s, s.tasks.find((t) => t.id === "EX-005")!, T0)).toBeUndefined();
     // A review gate waits for you.

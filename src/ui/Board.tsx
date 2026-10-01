@@ -10,6 +10,7 @@ import { isSettledTask } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
 import { FlowPicker } from "./FlowPicker";
 import { OTHER_AREA, areaOf, liveAgents, needsYouOf, serviceOwned } from "./progress";
+import { HISTORY_HASH } from "./route";
 import { ShapingBanner } from "./Shaping";
 import { FocusDiff } from "./SteeringChanges";
 
@@ -101,7 +102,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     >
       <h2 id="new-task-h">New task</h2>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        You write the outcome and approach; the pipeline comes from the flow you choose. You can pin a provider and model for each step on the task page. Hold before start is on by default so you can review the spec before anything runs.
+        You write the outcome and approach; the pipeline comes from the flow you choose. You can pin a provider and model for each step on the task page. "Wait for my go-ahead" is on by default, so you can read the spec before anything runs.
       </p>
       {text("title", "Title", true)}
       {text("outcome", "Outcome (what should be true when done)", true, true)}
@@ -127,7 +128,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
       </label>
       <label className="row" style={{ fontSize: "0.9rem", marginBottom: "0.8rem" }}>
         <input type="checkbox" checked={f.holdBeforeStart} onChange={(e) => set("holdBeforeStart", e.target.checked)} />
-        Hold before start
+        Wait for my go-ahead
       </label>
       <div className="row">
         <button type="submit" className="primary" disabled={disabled || !flows.length}>
@@ -156,7 +157,7 @@ function FocusBanner() {
         <strong>Focus r{v.rev}</strong> · set by the lead from your message · {relTime(v.at)}:
       </span>
       {(isSimulated(v) || isSimulated(change.set)) && (
-        <span className="chip" title="Set by the fake runtime's lead, not by a model">
+        <span className="chip" title="Set by the demo's lead, not by a model">
           simulated
         </span>
       )}
@@ -176,7 +177,7 @@ function FocusBanner() {
         >
           Undo
         </button>
-        <a className="button-link" style={{ padding: "0.15rem 0.55rem", fontSize: "0.85rem" }} href="#/overview" title={msg ? `Set from message ${msg}` : undefined}>
+        <a className="button-link" style={{ padding: "0.15rem 0.55rem", fontSize: "0.85rem" }} href={HISTORY_HASH} title={`Open the vision history${msg ? ` (set from message ${msg})` : ""}`}>
           History
         </a>
       </span>
@@ -240,13 +241,15 @@ export function Board() {
           <button className="small" disabled={disabled} onClick={() => setCreating(true)}>
             New task
           </button>
-          <button className="small" disabled={disabled} onClick={() => lead.openLead({ placeholder: "Tell the lead what to focus on…" })} title="Message the lead: it can change the focus, reorder and defer work, and drop its own unstarted proposals">
-            Steer
+          <button className="small" disabled={disabled} onClick={() => lead.openLead({ placeholder: "Tell the lead what to focus on…" })} title="The lead can change the focus, reorder and defer work, and drop its own unstarted proposals">
+            Message the lead
           </button>
         </span>
         {newCount > 0 && (
           <span className="row">
-            <span className="muted">{newCount} decision(s) since your last visit.</span>
+            <span className="muted">
+              {newCount} decision{newCount === 1 ? "" : "s"} since your last visit.
+            </span>
             <button className="small" disabled={disabled} onClick={() => void send("markVisited")} title="Only updates what counts as new; does not approve or pause anything">
               Mark all seen
             </button>
@@ -517,8 +520,9 @@ function IntegrationChip({ state, task }: { state: State; task: Task }) {
     case "integrated":
       // A fix that was pushed onto another task's pull request lands with that pull request.
       if (D.deliveredInto(task)) return <span className="chip done">pushed onto {task.deliverInto!.taskId}'s PR</span>;
-      if (i.landed) return <span className="chip done">{i.landed.status === "unreviewed" ? "delivered · review" : "delivered"}</span>;
-      return <span className="chip done">integrated</span>;
+      // ORC-025: "landed" is work in your branch; "new" until you mark it as seen under Results.
+      if (i.landed) return <span className="chip done">{i.landed.status === "unreviewed" ? "landed · new" : "landed"}</span>;
+      return <span className="chip done">on the integration branch</span>;
     case "conflict":
       return <span className="chip danger">integration conflict</span>;
     case "pending":

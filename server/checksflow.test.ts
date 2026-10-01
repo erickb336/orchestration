@@ -379,7 +379,7 @@ describe("Final checks and protected inputs (§6.7)", () => {
     claude.finish(runOf(id, "SR1").id, { findings: 0 });
     settle();
     expect(M.activeAttempts(st(), id)).toEqual([]);
-    expect(M.stateLabel(st(), task(id))).toBe("Waiting for a decision on 1 finding (you)");
+    expect(M.stateLabel(st(), task(id))).toBe("Needs you: decide 1 finding");
     cmd("decideFinding", { decisionId: st().decisions[0].id, decision: "accept", note: "intended" });
     settle();
     expect(stepOf(id, "S3").state).toBe("skipped");

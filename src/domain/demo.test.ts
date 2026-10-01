@@ -466,7 +466,7 @@ describe("the demo state (ORC-017 §5)", () => {
     for (const id of ["WT-003", "WT-006", "WT-009", "WT-010", "WT-004.3", "WT-012", "WT-013"]) expect(M.activeAttempts(s, id), id).toEqual([]);
     // WT-004.3 was promoted (the lead moves published specs to Ready) and still waits for you.
     expect(task(s, "WT-004.3")).toMatchObject({ lifecycle: "ready", holdBeforeStart: true });
-    expect(M.stateLabel(s, task(s, "WT-004.3"))).toBe("Held before start");
+    expect(M.stateLabel(s, task(s, "WT-004.3"))).toBe("Waiting for your go-ahead");
     // One more slot goes to WT-007's security review (ORC-021: beside its code review), the next after that to WT-003's designer step on Claude.
     const wider = M.dispatchEligible({ ...s, project: { ...s.project, workerLimit: 4 } }, iso(T0 + 2000));
     expect(M.activeAgentAttempts(wider).map((a) => `${a.taskId} ${a.stepId} ${a.snapshot.provider}`)).toEqual([...active, "WT-007 SR1 claude"]);

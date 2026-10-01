@@ -250,7 +250,7 @@ describe("11: Start building's labels tell the truth", () => {
     expect(M.stateLabel(a, a.tasks.find((t) => t.id === id)!)).toBe(`Planned; waits until you start building and on ${dep}, then starts on Autopilot`);
     const c = checkin(a);
     expect(M.startBuildingPlan(c).release).toBe(false);
-    expect(M.stateLabel(c, c.tasks.find((t) => t.id === id)!)).toBe(`Planned; waits until you start building and on ${dep}, then waits for your release (your involvement setting)`);
+    expect(M.stateLabel(c, c.tasks.find((t) => t.id === id)!)).toBe(`Planned; waits until you start building and on ${dep}, then waits for your go-ahead (your involvement setting)`);
     // The setting changed after the proposal: what Start building does follows the setting now, as the label said.
     const started = M.startBuilding(c, at(4)).tasks.find((t) => t.id === id)!;
     expect(started.holdBeforeStart).toBe(true);
@@ -264,7 +264,7 @@ describe("11: Start building's labels tell the truth", () => {
     const { state, id } = roadmap();
     const held = M.setHoldBeforeStart(autopilot(state), id, true, at(3));
     expect(M.startBuildingPlan(held)).toMatchObject({ release: true, roadmap: [], userHeld: [expect.objectContaining({ id })] });
-    expect(M.stateLabel(held, held.tasks.find((t) => t.id === id)!)).toBe("Held before start");
+    expect(M.stateLabel(held, held.tasks.find((t) => t.id === id)!)).toBe("Waiting for your go-ahead");
     const started = M.startBuilding(held, at(4));
     expect(started.tasks.find((t) => t.id === id)).toMatchObject({ holdBeforeStart: true });
   });

@@ -207,7 +207,7 @@ describe("the note's life", () => {
     expect(n.from).toEqual({ by: "lead", leadRunId: set.leadRunId, changeSetId: set.id, changeId: set.changes[0].id, messageIds: set.messageIds });
     expect(set.changes[0]).toMatchObject({ kind: "note", status: "applied", appliedBy: "lead", noteId: n.id, after: n.text, before: null });
     expect(s.events.filter((e) => e.taskId === "EX-001").pop()!.message).toMatch(new RegExp(`Note ${n.id} sent to S2's run ${run.id} by lead from msg-\\d+: "Skip the README`));
-    expect(s.events.find((e) => /steered from/.test(e.message))!.message).toMatch(/: 1 note\(s\) sent \(cs-/);
+    expect(s.events.find((e) => /steered from/.test(e.message))!.message).toMatch(/: 1 note sent \(cs-/);
     // Delivered only on the acknowledgment.
     const d = M.reportNoteOutcome(s, { attemptId: run.id, noteId: n.id, outcome: "delivered" }, at(6));
     expect(note(d, n.id)).toMatchObject({ status: "delivered", via: "live", settledAt: at(6) });

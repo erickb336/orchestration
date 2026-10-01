@@ -649,7 +649,8 @@ export function checkEvidence(s: State, sha: string): CheckEvidence {
   // covers the failures the user saw, never checks that never ran.
   if (missing.length) return { ok: false, ...base, reason: `The run on ${h} did not run every configured check (missing: ${missing.join(", ")}).` };
   const unresolved = F.unresolved(s, best);
-  if (!failing.length && unresolved === 0) return { ok: true, ...base, reason: `${run.results.filter((r) => r.kind === "check").map((r) => r.label).join(", ") || "The checks"} passed on ${h}${run.sandbox === "codex" ? "" : " (no sandbox)"}${run.simulated ? " (simulated)" : ""}.` };
+  // ORC-025: the record's `simulated` flag labels a demo run; the text carries no suffix.
+  if (!failing.length && unresolved === 0) return { ok: true, ...base, reason: `${run.results.filter((r) => r.kind === "check").map((r) => r.label).join(", ") || "The checks"} passed on ${h}${run.sandbox === "codex" ? "" : " (no sandbox)"}.` };
   const accepted = s.decisions.find((d) => d.kind === "final-checks" && d.artifactId === best!.id && d.status === "accept");
   if (accepted) return { ok: true, ...base, acceptedByUser: true, reason: `You accepted failing checks on ${h} (${failing.map((r) => r.label).join(", ")}).` };
   if (failing.length) return { ok: false, ...base, reason: `${failing.map((r) => r.label).join(", ")} failed on ${h}.` };

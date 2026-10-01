@@ -91,7 +91,7 @@ export function Onboarding() {
         </span>
         {!shaping && stageChosen !== "1" && (
           <>
-            <span>Or try shaping the vision with the (simulated) lead first:</span> <StageChoice onChosen={() => setStageChosen("1")} />
+            <span>Or try shaping the vision with the lead first:</span> <StageChoice onChosen={() => setStageChosen("1")} />
           </>
         )}
         {hide}
