@@ -1,4 +1,4 @@
-// The gh adapter's contract (ORC-008 §17), against a fake `gh` script that records each invocation:
+// The gh adapter's contract, against a fake `gh` script that records each invocation:
 // its arguments, stdin, working directory and environment. Nothing here contacts GitHub.
 
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -204,7 +204,7 @@ describe("preflight (read-only)", () => {
     expect(r.requiredChecks).toEqual([]);
     expect(r.autoMergeBlockers).toEqual(["no required check", "a merge queue is required", "merge commits are not allowed", "2 approving review(s) required"]);
     expect(r.posture.find((x) => x.id === "required-checks")).toMatchObject({ status: "fail" });
-    // M1: kept as facts, so the gate can refuse a merge for the user's path too (gh would enqueue it).
+    // Kept as facts, so the gate can refuse a merge for the user's path too (gh would enqueue it).
     expect(r).toMatchObject({ mergeQueue: true, mergeCommitsAllowed: false });
     expect(r.posture.find((x) => x.id === "merge-queue")!.detail).toMatch(/would enqueue the pull request or switch on GitHub's own auto-merge/);
     rules(PREFLIGHT);
@@ -213,7 +213,7 @@ describe("preflight (read-only)", () => {
     expect(plain.mergeCommitsAllowed).toBeUndefined();
   });
 
-  it("L6: a ruleset that cannot be read does not hide the others, and approvals required by classic protection count", async () => {
+  it("a ruleset that cannot be read does not hide the others, and approvals required by classic protection count", async () => {
     rules([
       { match: "protection/required_pull_request_reviews", stdout: "2\n" },
       { match: "rulesets/111", stderr: "gh: Not Found (HTTP 404)\n", code: 1 },
@@ -382,8 +382,8 @@ describe("parsing", () => {
   });
 });
 
-describe("step 2 review findings in the adapter", () => {
-  it("L1: when a check name reports more than once, anything that is not a success wins over a success", () => {
+describe("adapter edge cases", () => {
+  it("when a check name reports more than once, anything that is not a success wins over a success", () => {
     const run = (name: string, conclusion: string | null, isRequired = false) => ({ __typename: "CheckRun", name, status: conclusion ? "COMPLETED" : "IN_PROGRESS", conclusion, isRequired });
     const one = (nodes: unknown[]) => parseChecks({ contexts: { nodes: nodes as never } }).find((c) => c.name === "check")!;
     expect(one([run("check", "FAILURE", true), run("check", "SUCCESS")])).toMatchObject({ conclusion: "FAILURE", required: true });
@@ -396,7 +396,7 @@ describe("step 2 review findings in the adapter", () => {
     expect(one([{ __typename: "StatusContext", context: "check", state: "FAILURE" }, run("check", "SUCCESS")])).toMatchObject({ conclusion: "FAILURE" });
   });
 
-  it("L3: only the endpoint and the query are scanned, so a note that names a mutation can be posted, and a mutation in a query still cannot", async () => {
+  it("only the endpoint and the query are scanned, so a note that names a mutation can be posted, and a mutation in a query still cannot", async () => {
     const note = "Please do not use mergePullRequest or enablePullRequestAutoMerge here; see /pulls/5/merge and deleteRef.";
     expect(() => assertAllowedGh(["api", "-X", "POST", "repos/octo/app/issues/5/comments", "--input", "-"], JSON.stringify({ body: note }))).not.toThrow();
     rules([{ match: "-X POST", stdout: JSON.stringify({ html_url: "https://github.com/octo/app/pull/5#issuecomment-9" }) }]);
@@ -410,7 +410,7 @@ describe("step 2 review findings in the adapter", () => {
     expect(() => assertAllowedGh(["api", "graphql", "--input", "-"], JSON.stringify({ query: "query{viewer{login}}", variables: { text: "mergePullRequest" } }))).not.toThrow();
   });
 
-  it("L5: gh's hints about --auto and --admin are never shown as the problem", () => {
+  it("gh's hints about --auto and --admin are never shown as the problem", () => {
     const stderr = "X Pull request octo/app#5 is not mergeable: the base branch policy prohibits the merge.\nTo have the pull request merged after all the requirements have been met, add the `--auto` flag.\nTo use administrator privileges to immediately merge the pull request, add the `--admin` flag.\n";
     const msg = shortError(stderr);
     expect(msg).toBe("X Pull request octo/app#5 is not mergeable: the base branch policy prohibits the merge.");
@@ -419,7 +419,7 @@ describe("step 2 review findings in the adapter", () => {
     expect(shortError("")).toBe("");
   });
 
-  it("H2: the fake gh honours the repository argument, and every per-pull-request call names its repository", async () => {
+  it("the fake gh honours the repository argument, and every per-pull-request call names its repository", async () => {
     setEnv("FAKE_GH_REPO", "octo/app");
     rules([
       { match: "pr list", stdout: "[]" },
@@ -500,7 +500,7 @@ describe("errors", () => {
   });
 });
 
-describe("ORC-013 step 3: CI triage in the adapter", () => {
+describe("CI triage in the adapter", () => {
   const T = (s: string) => `2026-09-30T12:${s}Z`;
   /** The observation's own time: every dated run below started before it unless a test says otherwise. */
   const NOW = Date.parse("2026-09-30T13:00:00Z");
@@ -517,10 +517,10 @@ describe("ORC-013 step 3: CI triage in the adapter", () => {
   });
   const one = (nodes: unknown[], name = "check", nowMs = NOW) => parseChecks({ contexts: { nodes: nodes as never } }, nowMs).find((c) => c.name === name)!;
 
-  it("parseChecks: a newer run wins only over a completed, dated CANCELLED run of the same app, workflow and job name that started strictly before it and not in the future (review M3; mutation check: the strict 'before')", () => {
+  it("parseChecks: a newer run wins only over a completed, dated CANCELLED run of the same app, workflow and job name that started strictly before it and not in the future (mutation check: the strict 'before')", () => {
     // Cancelled, then a later success: green, carrying the winning run's ids.
     expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, isRequired: true }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "SUCCESS", jobId: 2, runId: 77, workflowId: 5, workflowName: "CI", event: "pull_request", required: true, startedAt: T("05:00") });
-    // Only a cancelled run is superseded: a failure, a skipped or a stale run next to a later success stays (review M3).
+    // Only a cancelled run is superseded: a failure, a skipped or a stale run next to a later success stays.
     for (const older of ["FAILURE", "TIMED_OUT", "SKIPPED", "STALE", "NEUTRAL", "ACTION_REQUIRED"]) expect(one([run("check", older, { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })]).conclusion, older).toBe(older);
     // The same workflow, by id; or by name and event when the id is missing; never across workflows or apps.
     expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1, workflowId: 6 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2, workflowId: 5 })])).toMatchObject({ conclusion: "CANCELLED", jobId: 1 });
@@ -533,7 +533,7 @@ describe("ORC-013 step 3: CI triage in the adapter", () => {
     // A success dated in the future (after the observation) supersedes nothing (mutation check).
     expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })], "check", Date.parse(T("04:59")))).toMatchObject({ conclusion: "CANCELLED" });
     expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), id: 1 }), run("check", "SUCCESS", { startedAt: T("05:00"), id: 2 })], "check", Date.parse(T("05:00")))).toMatchObject({ conclusion: "SUCCESS" });
-    // completedAt is carried for the timing rule (review M4).
+    // completedAt is carried for the timing rule.
     expect(one([run("check", "CANCELLED", { startedAt: T("00:00"), completedAt: T("30:00"), id: 1 })])).toMatchObject({ conclusion: "CANCELLED", startedAt: T("00:00"), completedAt: T("30:00") });
     // A success, then a later cancel: red (the cancel is newer).
     expect(one([run("check", "SUCCESS", { startedAt: T("00:00"), id: 1 }), run("check", "CANCELLED", { startedAt: T("05:00"), id: 2 })])).toMatchObject({ conclusion: "CANCELLED", jobId: 2 });
@@ -580,7 +580,7 @@ describe("ORC-013 step 3: CI triage in the adapter", () => {
     expect(o.prs[0].checks).toEqual([{ name: "build", required: true, status: "COMPLETED", conclusion: "CANCELLED", kind: "run", app: "github-actions", jobId: 4242, runId: 77, workflowId: 5, workflowName: "CI", event: "pull_request", startedAt: T("00:00"), completedAt: T("01:00") }]);
   });
 
-  it("review M2: gh is allow-listed by subcommand; a gh api write goes only to comments, job re-runs and the scanned graphql, whatever way the method or body is spelled", () => {
+  it("gh is allow-listed by subcommand; a gh api write goes only to comments, job re-runs and the scanned graphql, whatever way the method or body is spelled", () => {
     // The app's own invocations.
     for (const args of [
       ["--version"],
@@ -651,7 +651,7 @@ describe("ORC-013 step 3: CI triage in the adapter", () => {
     }
     await expect(host().rerunJob({ repo: { owner: "o\"", name: "r" }, jobId: 1 })).rejects.toThrow(/invalid repository/);
     expect(calls()).toHaveLength(1); // nothing else was spawned
-    // I1 narrowed: a POST goes only to a pull request's comments or a job re-run; everything else ORC-008 refused stays refused.
+    // A POST goes only to a pull request's comments or a job re-run; every other write stays refused.
     expect(() => assertAllowedGh(["api", "-X", "POST", "repos/octo/app/actions/jobs/123/rerun"])).not.toThrow();
     expect(() => assertAllowedGh(["api", "-X", "POST", "repos/octo/app/issues/5/comments", "--input", "-"], "{}")).not.toThrow();
     for (const args of [

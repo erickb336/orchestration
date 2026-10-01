@@ -1,4 +1,4 @@
-// ORC-011: the launcher's pure parts. Saved answers never hold a secret; credentials come from the
+// The launcher's pure parts. Saved answers never hold a secret; credentials come from the
 // environment first and the Keychain second; explicit variables beat saved answers.
 
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";

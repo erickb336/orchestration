@@ -1,6 +1,6 @@
-/* The component kit (ORC-025 r3, src/ui/kit).
+/* The component kit (src/ui/kit).
    Tokens only: colour means state (--st-*), sizes come from the --fs-* and --space-* scales in styles.css.
-   Every class is prefixed k- so nothing collides with the screen rules that passes 2–6 replace.
+   Every class is prefixed k- so nothing collides with the screens' own rules.
    Loaded once, from src/ui/kit/index.ts, after styles.css. Button-like rules say :hover:not(:disabled)
    so they outrank the global `button:hover:not(:disabled)` rule in styles.css. */
 

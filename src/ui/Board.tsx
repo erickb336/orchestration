@@ -1,4 +1,4 @@
-// The Tasks page (ORC-025 pass 4, T1–T7): every task once, as a list or a board. "Needs you" comes first, in the
+// The Tasks page: every task once, as a list or a board. "Needs you" comes first, in the
 // list and on the board; each card says in one plain line what is happening; a finished task is Done with at most
 // one result chip. New task starts with "Describe it to the lead"; writing the spec yourself is one click away.
 
@@ -16,7 +16,7 @@ import { newIdOf, useStore } from "./store";
 import { GROUPS, GROUP_LABEL, cardLine, cardState, groupOf, lineText, type Group } from "./tasksView";
 import "./tasks.css";
 
-/** ORC-017 §3.3: the board reads `#/tasks?area=<name>`; a row on the Overview's progress list sets it. */
+/** The board reads `#/tasks?area=<name>`; a row on the Overview's progress list sets it. */
 export function areaFromHash(hash: string): string {
   const q = hash.indexOf("?");
   if (q < 0) return "";
@@ -51,7 +51,7 @@ function usePref<T extends string>(key: string, initial: T) {
 
 const taskHref = (id: string) => `#/task/${encodeURIComponent(id)}`;
 
-// ---------- New task (T5) ----------
+// ---------- New task ----------
 
 /** Describe it to the lead first: one message ("Create a task: …") through the conversation. The spec form is the second way. */
 function NewTask({ onClose }: { onClose: () => void }) {
@@ -107,7 +107,7 @@ function NewTask({ onClose }: { onClose: () => void }) {
 /** Today's form: you write the outcome and approach; the steps come from the flow you choose. */
 function SpecForm({ onClose, onDescribe }: { onClose: () => void; onDescribe: () => void }) {
   const { state, send, disabled } = useStore();
-  // ORC-021: the six flows; the service's own pipelines are never among them.
+  // The six flows; the service's own pipelines are never among them.
   const flows = state.flows;
   const [f, setF] = useState({
     title: "",
@@ -302,7 +302,7 @@ export function Board() {
             );
           })
         ) : (
-          // T4: the columns share the page's width; an empty one is narrow and keeps its name. Past the width the board scrolls inside itself, never the page.
+          // The columns share the page's width; an empty one is narrow and keeps its name. Past the width the board scrolls inside itself, never the page.
           <div className="tl-board board" role="list" aria-label="Board">
             {shownGroups.map((g) => {
               const items = inGroup(g);
@@ -334,7 +334,7 @@ export function Board() {
 }
 
 /**
- * The card (T2, T7): the id, the title, a short state, and one plain line about what is happening, with the
+ * The card: the id, the title, a short state, and one plain line about what is happening, with the
  * provider mark while an agent works and the step bar beside it. A finished task's line carries its one result
  * chip. The whole card opens the task (its title is the link, stretched over the card).
  */

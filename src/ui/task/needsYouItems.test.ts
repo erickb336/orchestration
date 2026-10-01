@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (P2): what a task needs from you, each thing once, for the top of the task page.
+// What a task needs from you, each thing once, for the top of the task page.
 
 import { describe, expect, it } from "vitest";
 import { buildDemo } from "../../domain/demo";

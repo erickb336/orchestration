@@ -6,15 +6,15 @@ import { useStore } from "./store";
 import { PREF_LEAD_SEEN, fmtTime, relTime, selectionText, writePref } from "./common";
 import { Button, Chip, SimulatedChip } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
-import { leadDecisionText, messageStatusText } from "./notes";
+import { leadBlockedLink, leadDecisionText, messageStatusText } from "./notes";
 import { Fold, SteeringChanges } from "./SteeringChanges";
 
 const MAX_LENGTH = 8000;
 
 /**
- * The lead conversation, as the Lead drawer shows it on every page (ORC-025 N3: the one place it is drawn).
- * ORC-025 L1, L2: it reads like a chat. One quiet line says who the lead is (and "simulated" once, in the demo);
- * each message is who, when and the text; what a reply changed folds into one line under it; the composer last.
+ * The lead conversation, as the lead drawer shows it on every page (the one place it is drawn). It reads like a
+ * chat. One quiet line says who the lead is (and "simulated" once, in the demo); each message is who, when and the
+ * text; what a reply changed folds into one line under it; the composer last.
  */
 export function Conversation({ onClose, focusOnMount }: { onClose: () => void; focusOnMount?: boolean }) {
   const { state, service, send, disabled } = useStore();
@@ -131,7 +131,7 @@ function MessageItem({ state, message: m, leadModel, blocked }: { state: State; 
         <div className={`msg-status${danger ? " danger" : ""}`} role="status">
           {live && <span className="dot running" aria-hidden="true" />}
           <span>{messageStatusText(state, status)}</span>
-          {status.kind === "blocked" && <a href="#/settings">Settings</a>}
+          {status.kind === "blocked" && blocked && <a href={leadBlockedLink(state, blocked).href}>{leadBlockedLink(state, blocked).label}</a>}
         </div>
       )}
       {!!m.questions?.length && (
@@ -194,9 +194,10 @@ function MessageItem({ state, message: m, leadModel, blocked }: { state: State; 
   );
 }
 
-/** ORC-013: the service's record of what a lead reply decided, suggested or handed over (never the lead's prose), folded like its changes. */
+/** The service's record of what a lead reply decided, suggested or handed over (never the lead's prose), folded like its changes. */
 function LeadDecisions({ state, leadRunId, snapshot }: { state: State; leadRunId: string; snapshot?: NonNullable<Message["leadDecisions"]> }) {
-  // Review 1 (14): the reply shows what the run decided then; a message from before the snapshot existed reads the live records.
+  // The reply shows what the run decided then, not what the decisions became; a message from before replies kept that
+  // snapshot reads the live records.
   const rows = snapshot ?? F.leadRunDecisions(state, leadRunId).map(({ decision: d, what }) => ({ id: d.id, taskId: d.taskId, what, status: d.status, ...(d.why || d.suggestion?.why ? { why: d.why ?? d.suggestion?.why } : {}) }));
   if (!rows.length) return null;
   return (

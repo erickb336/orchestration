@@ -1,4 +1,4 @@
-// Milestone 4: the lead conversation, planning with bounded autonomy, lead-authored tasks flowing
+// The autonomous team loop: the lead conversation, planning with bounded autonomy, lead-authored tasks flowing
 // through mixed-provider pipelines, serial integration, and lead controls. Scripted adapters and a
 // temporary git repository; no real providers.
 
@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as M from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import { buildLeadEnvelope, parseLeadOutput } from "./envelope";
@@ -15,6 +15,10 @@ import { Store } from "./store";
 import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter, proposal } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
+
+// Real git and many scheduler cycles per test: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 let dir: string;
 let repo: string;
@@ -176,7 +180,7 @@ describe("autonomy", () => {
     tick();
     const review = M.activeAttempts(st(), id)[0];
     expect(review.snapshot.provider).toBe("claude"); // independent reviewer on the other provider
-    const security = M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!; // ORC-021: the security review runs beside it, on the same reviewer provider
+    const security = M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!; // the security review runs beside it, on the same reviewer provider
     expect(security.snapshot.provider).toBe("claude");
     claude.finish(review.id, { findings: 0 });
     claude.finish(security.id, { findings: 0 });
@@ -305,8 +309,8 @@ describe("lead envelope and parser", () => {
   });
 });
 
-describe("review regressions (ORC-005)", () => {
-  it("H1: repeated lead failures back off and then wait for a new message instead of looping", () => {
+describe("lead and integration edge cases", () => {
+  it("repeated lead failures back off and then wait for a new message instead of looping", () => {
     cmd("postMessage", { text: "hello" });
     let starts = 0;
     for (let i = 0; i < 30; i++) {
@@ -323,7 +327,7 @@ describe("review regressions (ORC-005)", () => {
     expect(leadRun()).toBeDefined();
   });
 
-  it("H2: a malformed proposal is rejected on its own; the reply and valid proposals survive", () => {
+  it("a malformed proposal is rejected on its own; the reply and valid proposals survive", () => {
     cmd("postMessage", { text: "plan" });
     tick();
     const r = leadRun()!;
@@ -336,7 +340,7 @@ describe("review regressions (ORC-005)", () => {
     expect(leadRun()).toBeUndefined();
   });
 
-  it("M1: completions wake planning no sooner than the minimum gap, and never more than 48 times a day", () => {
+  it("completions wake planning no sooner than the minimum gap, and never more than 48 times a day", () => {
     autonomy({ planningIntervalMinutes: 1440, maxProposalsPerCycle: 1, maxOpenProposals: 50 });
     tick();
     const first = leadRun()!;
@@ -348,7 +352,7 @@ describe("review regressions (ORC-005)", () => {
     expect(st().leadRuns).toHaveLength(1); // a quick change does not re-plan within the gap
   });
 
-  it("M2: with autonomy off, proposals from a conversation wait for the user", () => {
+  it("with autonomy off, proposals from a conversation wait for the user", () => {
     cmd("postMessage", { text: "plan please" });
     tick();
     claude.reply(leadRun()!.id, "ok", [proposal()]);
@@ -359,7 +363,7 @@ describe("review regressions (ORC-005)", () => {
     expect(M.activeAttempts(st(), t.id)).toHaveLength(0);
   });
 
-  it("M4: an invalid lead selection is refused; a lead that cannot run explains why", () => {
+  it("an invalid lead selection is refused; a lead that cannot run explains why", () => {
     expect(() => cmd("setLeadSelection", { selection: { provider: "claude", model: "no-such-model" } })).toThrow(/not in the Claude catalog/);
     claude.healthStatus = "not-configured";
     return scheduler.refreshHealth().then(() => {
@@ -369,7 +373,7 @@ describe("review regressions (ORC-005)", () => {
     });
   });
 
-  it("H3: a missing integration workspace is recovered, not recorded as a conflict", () => {
+  it("a missing integration workspace is recovered, not recorded as a conflict", () => {
     const id = (cmd("createTask", { title: "I", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
     setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
     tick();
@@ -397,7 +401,7 @@ describe("review regressions (ORC-005)", () => {
     expect(task(id2).integration?.status).toBe("integrated");
   });
 
-  it("M5: a lead run's read-only checkout is removed when the run ends", () => {
+  it("a lead run's read-only checkout is removed when the run ends", () => {
     cmd("postMessage", { text: "hi" });
     tick();
     const r = leadRun()!;

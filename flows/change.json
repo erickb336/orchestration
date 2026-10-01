@@ -1,6 +1,6 @@
 {
   "$schema": "./flow.schema.json",
-  "$comment": "The default flow. The service runs the two Checks steps itself; both skip while checks are off. ORC-021: SR1 is a security review that runs beside the code review; the repair runs when either has findings.",
+  "$comment": "The default flow. The service runs the two Checks steps itself; both skip while checks are off. SR1 is a security review that runs beside the code review; the repair runs when either has findings.",
   "id": "change",
   "name": "Change",
   "description": "Code change without interaction design: implement, checks, code and security review in parallel, repair if needed, final checks, verify.",

@@ -1,4 +1,4 @@
-// ORC-021 item 11: the security reviewer. The role everywhere roles are enumerated, its provider and model
+// The security reviewer. The role everywhere roles are enumerated, its provider and model
 // (the code reviewer's unless configured), and the delivery gate: wherever the code review's findings
 // gate a merge or start a repair, the security review's findings count the same way, in the task's own
 // pipeline and in the dedicated delivery review. Pure; nothing here touches git or GitHub.
@@ -159,13 +159,13 @@ describe("the delivery gate counts the security review's findings like the code 
     expect(prOf(clean).review).toMatchObject({ ok: true, source: "pipeline", provider: "claude", attemptId: `fx-review-${ID}`, artifactIds: [`fx-findings-${ID}`, `fx-secfindings-${ID}`] });
     expect(D.reviewView(clean, task(clean, ID)).state).toBe("ok");
     // A security review that saw an earlier change says nothing about this one, either way (its findings are
-    // not counted), and a clean code review alone is not a pass (ORC-021 review 1): the dedicated review runs.
+    // not counted), and a clean code review alone is not a pass: the dedicated review runs.
     const stale = built(prMode(), { security: 1, securitySaw: false });
     expect(prOf(stale).review).toMatchObject({ ok: false, source: "none", reason: `No security review saw the final change ${HEAD.slice(0, 12)}.` });
     expect(D.reviewView(stale, task(stale, ID)).state).toBe("missing");
     const [dedicated] = reviewTasks(D.advanceDelivery(stale, at(4)));
     expect(dedicated.steps.map((st) => st.role)).toEqual(["code_reviewer", "security_reviewer"]);
-    // A pipeline from before ORC-021, with no security review at all, is the same.
+    // An older pipeline with no security review at all is the same.
     const legacy = D.reportPrHead(reviewedChange(prMode(), ID, HEAD, at(2), { noSecurity: true }), ID, { n: 1, sha: HEAD, baseSha: SHA_A, changed: CHANGED }, at(3));
     expect(D.reviewView(legacy, task(legacy, ID)).state).toBe("missing");
     // Code findings still stand when the security review is missing: they go to repair, not to a new review.

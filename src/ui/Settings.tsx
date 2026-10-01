@@ -1,7 +1,7 @@
-// Settings (ORC-025 pass 5, S1): five sections with a side menu, instead of one 9,000 px page.
+// Settings: five sections with a side menu, so no section is a long scroll.
 //   Working style · Project · Agents · Quality · Advanced
-// Each section has its address (#/settings/<section>, #/settings opens the first) and its own draft with one Save
-// (S5). All five stay mounted while you switch, so an unsaved change in one survives a visit to another; the menu
+// Each section has its address (#/settings/<section>, #/settings opens the first) and its own draft with one Save.
+// All five stay mounted while you switch, so an unsaved change in one survives a visit to another; the menu
 // marks a section that has one, and the browser asks before the page is closed with one.
 
 import { useCallback, useEffect, useState } from "react";

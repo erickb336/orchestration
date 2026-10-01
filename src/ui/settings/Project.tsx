@@ -1,4 +1,4 @@
-// ORC-025 pass 5, Settings › Project: the repository, the stage, and how finished work leaves (the delivery mode,
+// Settings › Project: the repository, the stage, and how finished work leaves (the delivery mode,
 // the remote and base, who merges). Settings wait for Save; Start building and Back to shaping are actions and
 // act at once. In real mode, Start a new project is its own form with its own button.
 
@@ -94,7 +94,7 @@ function StageCard() {
       help={shaping ? `${M.SHAPING_LABEL}; the lead answers your messages and drafts the vision.` : "Work runs as usual. Back to shaping stops nothing that is running; nothing new starts."}
     >
       {shaping ? (
-        <StartBuildingButton className="" />
+        <StartBuildingButton variant="secondary" />
       ) : (
         <div className="s-inline">
           <Button
@@ -127,8 +127,8 @@ function NewProjectCard({ openByDefault }: { openByDefault: boolean }) {
   const [repo, setRepo] = useState("");
   const [vision, setVision] = useState("");
   const [focus, setFocus] = useState("");
-  // ORC-012: shape the vision with the lead first (the vision may stay empty), or start building now.
-  // ORC-014 review 10: until you choose, the stage follows the vision: shaping while it is empty, building once written.
+  // Shape the vision with the lead first (the vision may stay empty), or start building now. Until you choose, the
+  // stage follows the vision: shaping while it is empty (building needs a vision), building once written.
   const [stageChoice, setStageChoice] = useState<"shaping" | "building" | null>(null);
   const stage = newProjectStage(stageChoice, vision);
   const docCount = M.currentVisionDocs(state).length;

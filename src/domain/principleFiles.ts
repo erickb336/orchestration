@@ -1,6 +1,6 @@
-// ORC-024: what a principle file is, pure, with no import of the compiled copy, so the generator
-// (scripts/principles.mjs) can rebuild src/domain/builtInPrinciples.json even when it is missing or stale
-// (review M2). principles.ts adds the compiled copies on top of this.
+// What a principle file is, pure, with no import of the compiled copy, so the generator
+// (scripts/principles.mjs) can rebuild src/domain/builtInPrinciples.json even when it is missing or stale.
+// principles.ts adds the compiled copies on top of this.
 
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
@@ -25,8 +25,9 @@ export const PSTACK_COMMIT = "12d587dfb20741cafc376c42c696c5f6e2a64487";
 export const PRINCIPLE_BODY_WORDS = 200;
 
 /**
- * The 15, in the order of the spec's table (docs/tasks/ORC-024.md). Envelopes and records list a step's
- * principles in this order. "attack-the-premise" is given to no step directly: dispatch adds it to a
+ * Every principle, in table order: the table in docs/tasks/ORC-024.md, with contextualize-and-write-for-the-reader
+ * first so it is always given in full (docs/tasks/ORC-026.md). Envelopes and records list a step's principles in
+ * this order. "attack-the-premise" is given to no step directly: dispatch adds it to a
  * repair round that follows a round which failed the same way.
  */
 export const PRINCIPLE_IDS = [
@@ -52,7 +53,7 @@ export const PREMISE_ID: PrincipleId = "attack-the-premise";
 /** The lead's own runs (conversation, planning, decisions) get these; the envelope builder adds them. */
 export const LEAD_PRINCIPLE_IDS: readonly PrincipleId[] = ["contextualize-and-write-for-the-reader", "experience-first", "sequence-verifiable-units", "never-block-on-the-human", "encode-lessons-in-structure"];
 /**
- * ORC-026: given to every agent run on top of its step's own set (and to the lead), so whatever an agent writes
+ * Given to every agent run on top of its step's own set (and to the lead), so whatever an agent writes
  * can be understood cold: the problem, the decisions and what is left. Not named in flow files.
  */
 export const EVERY_RUN_PRINCIPLE_IDS: readonly PrincipleId[] = ["contextualize-and-write-for-the-reader"];

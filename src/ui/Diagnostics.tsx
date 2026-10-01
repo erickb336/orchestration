@@ -1,4 +1,4 @@
-// ORC-025 pass 2 (H2): usage and the service's details, moved from Home to Settings. They are diagnostics,
+// Usage and the service's details, shown in Settings rather than on Home. They are diagnostics,
 // not the daily view: token use and provider-reported cost per model, how busy each provider is now, and
 // where the service runs. Settings renders them as one card, "Usage and service".
 
@@ -57,7 +57,7 @@ export function UsageCard() {
   const inRange = (iso: string) => range === "all" || Date.parse(iso) >= startOfToday.getTime();
 
   // Agent and lead runs, each with the model the provider reported when known.
-  // ORC-013: service runs (checks) use no model tokens and are not counted.
+  // Service runs (checks) use no model tokens and are not counted.
   const rows: { provider: ProviderId; model: string; at: string; usage?: Usage; lead: boolean }[] = [
     ...state.attempts.flatMap((a) => (isProvider(a.snapshot.provider) ? [{ provider: a.snapshot.provider, model: a.actualModel ?? a.snapshot.model, at: a.endedAt ?? a.startedAt, usage: a.usage, lead: false }] : [])),
     ...state.leadRuns.map((r) => ({ provider: r.provider, model: r.actualModel ?? r.model, at: r.endedAt ?? r.startedAt, usage: r.usage, lead: true })),

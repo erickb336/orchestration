@@ -26,7 +26,7 @@ let warnedNoProvider = false;
 
 /**
  * `const confirm = useConfirm(); if (await confirm({ title: "Reset sample data?", text: "…" })) …`
- * Replaces window.confirm (P8). Without a ConfirmProvider it falls back to window.confirm and warns once.
+ * Replaces window.confirm. Without a ConfirmProvider it falls back to window.confirm and warns once.
  */
 export function useConfirm(): (opts: ConfirmOptions | string) => Promise<boolean> {
   const ask = useContext(ConfirmContext);

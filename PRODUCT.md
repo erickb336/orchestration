@@ -60,7 +60,8 @@ In the owner's words (2026-10-01): "a starting playground for me to develop and 
   - steering by conversation, with Undo;
   - pull-request delivery, with a review-later queue;
   - quality gates (sandboxed checks, triaged findings, review coverage);
-  - six flows, with a code review and a security review beside it wherever code changes (ORC-021).
+  - six flows, with a code review and a security review beside it wherever code changes (ORC-021);
+  - one component kit for every screen, shown at `#/kit`, so the UI stays consistent (ORC-025).
 - **Not yet verified in this environment:** real Claude and Codex model runs. The README must say so until evidence exists.
 - **Constraints:**
   - nothing claims a capability without evidence;

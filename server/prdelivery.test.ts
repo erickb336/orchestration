@@ -1,7 +1,7 @@
-// ORC-008 step 2, end to end: pull-request delivery in hold-and-notify mode (design §17, scenarios 1,
-// 8–16 and 20; scenario 19 is in prsim.test.ts). No test contacts GitHub: a local bare repository is
-// `origin`, FakeGitHub stands in for the GitHub API on top of it, and scripted adapters stand in for
-// Claude and Codex. git fetch, ls-remote and push run for real against the bare repository.
+// Pull-request delivery in hold-and-notify mode, end to end (scenarios 1, 8–16 and 20 of the test plan in
+// docs/design/ORC-008-design.md; scenario 19 is in prsim.test.ts). No test contacts GitHub: a local bare
+// repository is `origin`, FakeGitHub stands in for the GitHub API on top of it, and scripted adapters stand
+// in for Claude and Codex. git fetch, ls-remote and push run for real against the bare repository.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -91,7 +91,7 @@ const reviewed = async (id: string, findings = 0) => {
     const rv = st().tasks.find((t) => t.reviewTarget?.taskId === id && t.reviewTarget.headSha === pr(id).changeSha && t.lifecycle !== "done" && t.lifecycle !== "cancelled");
     const runs = rv ? M.activeAttempts(st(), rv.id).filter((x) => claude.runs.has(x.id)) : [];
     if (rv && runs.length) {
-      // ORC-021: the code review reports `findings`; the security review beside it is clean.
+      // The code review reports `findings`; the security review beside it is clean.
       for (const r of runs) claude.finish(r.id, { findings: task(rv.id).steps.find((x) => x.id === r.stepId)!.role === "security_reviewer" ? 0 : findings });
       await ticks(3);
       return rv.id;
@@ -254,9 +254,9 @@ describe("hold and notify (scenario 1)", () => {
     fake.setCheck(1, "SKIPPED"); // a skipped required check is not a pass
     await ticks(3, 31_000);
     expect(fake.count("merge")).toBe(0);
-    expect(pr(id).attention?.code).toBe("checks-skipped"); // ORC-013: it needs a person, not a fix task
+    expect(pr(id).attention?.code).toBe("checks-skipped"); // it needs a person, not a fix task
     // A person re-runs it on GitHub and it passes; GitHub shows the new attempt in place of the skipped one
-    // (review M3: a skipped run next to a later success would stay red).
+    // (a skipped run next to a later success would stay red).
     fake.setCheck(1, "SUCCESS", "check", { replace: true });
     await ticks(14, 5000); // fine ticks: a merge is sent only on a read of GitHub at most 15 s old
     expect(fake.count("merge")).toBe(1);
@@ -880,7 +880,7 @@ describe("dependent tasks (scenario 20)", () => {
   }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
 });
 
-describe("CI triage (ORC-013 step 3)", () => {
+describe("CI triage", () => {
   /** Ticks until `pred` holds, reading GitHub in between; fails with `what` otherwise. */
   const until = async (what: string, pred: () => boolean, ms = 5000, max = 120) => {
     for (let i = 0; i < max && !pred(); i++) await tick(ms);
@@ -923,7 +923,7 @@ describe("CI triage (ORC-013 step 3)", () => {
     expect(JSON.stringify(fake.calls)).not.toMatch(/--admin|--auto|--force/);
   }, 30_000);
 
-  it("cancelled twice: the second cancellation, after the re-run, is the code's (review M4); one fix task, no second re-run", async () => {
+  it("cancelled twice: the second cancellation, after the re-run, is the code's; one fix task, no second re-run", async () => {
     await prModeOn();
     const id = await autoPr("Cancelled twice", "c2.txt");
     fake.setCheck(1, "CANCELLED");

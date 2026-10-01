@@ -15,7 +15,7 @@ export function toDef(st: StepDef): StepDef {
   if (st.independentOf) d.independentOf = st.independentOf;
   if (st.iteration && st.iteration > 1) d.iteration = st.iteration;
   if (st.checks) d.checks = { onFail: st.checks.onFail, ...(st.checks.only?.length ? { only: [...st.checks.only] } : {}) };
-  // ORC-024: part of what the agent receives, so part of the definition and of the flow hash; table order, no duplicates.
+  // Part of what the agent receives, so part of the definition and of the flow hash; table order, no duplicates.
   if (st.principles?.length) d.principles = orderPrinciples(st.principles);
   return d;
 }
@@ -83,9 +83,9 @@ const MAX_CHECK_ONLY = 8;
 /**
  * Validate a pipeline. Errors block saving; warnings are advisory. `reviewTarget`: the task is a
  * dedicated review of a pull request, whose reviewer is handed the change by the service, so a review
- * step without inputs is expected there. `checkTarget` (ORC-013): the task is a dedicated check run of
+ * step without inputs is expected there. `checkTarget`: the task is a dedicated check run of
  * a pull request's change, so a checks step without a code-change input is expected there.
- * `checkIds`: the configured check commands; a step's `only` may name nothing else (M2).
+ * `checkIds`: the configured check commands; a step's `only` may name nothing else (it would run nothing).
  */
 export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean; checkTarget?: boolean; checkIds?: string[] } = {}): PipelineIssue[] {
   const issues: PipelineIssue[] = [];
@@ -95,7 +95,7 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
   };
   if (defs.length === 0) err(undefined, "A pipeline needs at least one step.");
   const seen = new Set<string>();
-  // ORC-013: the steps inside a loop body, so a blocking checks step is never repeated.
+  // The steps inside a loop body, so a blocking checks step is never repeated.
   const inLoop = new Set<string>();
   defs.forEach((d, i) => {
     if (!d.iterate) return;
@@ -108,7 +108,7 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
     seen.add(d.id);
     if (!d.purpose.trim()) err(d.id, `${d.id} needs a purpose.`);
     if (!STEP_ROLES.includes(d.role)) err(d.id, `${d.id} has an unknown role "${String(d.role)}".`);
-    // ORC-024: a principle is one of the files in principles/; a checks step is run by the service and gets none.
+    // A principle is one of the files in principles/; a checks step is run by the service and gets none.
     for (const p of d.principles ?? []) if (!isPrincipleId(p)) err(d.id, `${d.id} names a principle that does not exist: "${String(p)}".`);
     if (d.role === "checks" && d.principles?.length) err(d.id, `${d.id} is a Checks step, run by the service; it takes no principles.`);
     const earlier = new Set(defs.slice(0, i).map((x) => x.id));
@@ -150,7 +150,7 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
         if (other) err(d.id, `${d.id}'s loop overlaps ${other.id}'s loop; loops cannot overlap or nest.`);
       }
     }
-    // ORC-013: a Checks step is run by the service on a code change; it produces check results and nothing else.
+    // A Checks step is run by the service on a code change; it produces check results and nothing else.
     if (d.role === "checks") {
       if (d.outputs.length !== 1 || d.outputs[0].kind !== "check-results") err(d.id, `${d.id} is a Checks step, so it produces exactly one output of kind check-results.`);
       const readsChange = d.inputs.some((r) => defs.find((x) => x.id === r.step)?.outputs.find((o) => o.name === r.output)?.kind === "code-change");
@@ -167,7 +167,7 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
     if (REVIEW_ROLES.includes(d.role) && d.inputs.length === 0 && !opts.reviewTarget) issues.push({ step: d.id, severity: "warning", message: `${d.id} is a review with no inputs, so it has nothing specific to review.` });
     if (d.outputs.length === 0) issues.push({ step: d.id, severity: "warning", message: `${d.id} produces no artifacts, so later steps cannot use its work.` });
   });
-  // ORC-013: a pipeline that changes code with no Checks step runs no service checks on the change.
+  // A pipeline that changes code with no Checks step runs no service checks on the change.
   if (defs.some((d) => d.outputs.some((o) => o.kind === "code-change")) && !defs.some((d) => d.role === "checks")) {
     issues.push({ severity: "warning", message: "No service checks run on this change: add a Checks step (run by the service) to run the project's checks on it." });
   }

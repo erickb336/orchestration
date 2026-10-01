@@ -1,4 +1,4 @@
-// ORC-017: the structured `simulated` flag. It is set from the run report the server passes for a lead run on
+// The structured `simulated` flag. It is set from the run report the server passes for a lead run on
 // the fake runtime, never from the text, and it travels: a focus change and its change set carry it, a draft
 // carries it and Accept copies it onto the revision. A run reported without it leaves nothing flagged.
 
@@ -17,7 +17,7 @@ function messageRun(simulated: boolean, out: Parameters<typeof M.completeLeadRun
   return M.completeLeadRun(r.state, r.runId, out, at(3), simulated ? { simulated: true } : {});
 }
 
-describe("the simulated flag (ORC-017)", () => {
+describe("the simulated flag", () => {
   it("marks the focus change and the change set of a simulated lead run, and nothing of a real one", () => {
     const steer = { focus: "Sync first", reason: "You asked", tasks: [] };
     const sim = messageRun(true, { reply: "Noted", proposals: [], steer });

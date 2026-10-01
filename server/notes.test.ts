@@ -1,4 +1,4 @@
-// ORC-022: notes to a running stage, service level. The fake runtime end to end through the scheduler
+// Notes to a running stage, service level. The fake runtime end to end through the scheduler
 // (sending, then delivered after its simulated delay; not delivered when the run ends or stops first), the
 // scripted adapters (the note handed over once, stale answers ignored, a restart while sending), queued notes
 // written into the next run's envelope and confirmed at start, the downstream and lead envelopes, the fake
@@ -298,7 +298,7 @@ describe("the scripted adapters", () => {
     expect(reviewPrompt).toMatch(/## Notes the S1 agent received\n- .*, from the user \(at the start of its run\): "Keep the greeting in one file\."\n- .*, from the user: "Use the existing helper\."\n\n/);
   });
 
-  it("ORC-022 review M1: a note written into a run's instructions is confirmed only when the runtime reports the run started; a run that fails first leaves it not delivered", async () => {
+  it("a note written into a run's instructions is confirmed only when the runtime reports the run started; a run that fails first leaves it not delivered", async () => {
     const f = scriptedService();
     const { id, run } = await setUp(f);
     f.cmd("pauseTask", { taskId: id });
@@ -411,7 +411,7 @@ describe("the envelopes", () => {
     expect(lead).toMatch(/- EX-001 \[.*\] P1 .* · steps: S2 coder running \(Codex, run-\d+\), C1 checks pending \(the service\), S3 code_reviewer pending \(Claude\)/);
   });
 
-  it("ORC-022 review L4: a note settled before it reached any run is listed to the lead as recorded, not sent", () => {
+  it("a note settled before it reached any run is listed to the lead as recorded, not sent", () => {
     const s = buildSeed(T0);
     const first = M.startLeadRun(M.postMessage(s, "tell the coder on EX-002 to skip the README", iso(T0)), { provider: "claude", model: "m", trigger: "message" }, iso(T0 + 1000));
     const done = M.completeLeadRun(first.state, first.runId, { reply: "Sent.", proposals: [], steer: { notes: [{ task: "EX-002", step: "S1", text: "Skip the README." }] } }, iso(T0 + 2000));

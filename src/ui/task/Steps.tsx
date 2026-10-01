@@ -1,5 +1,5 @@
-// ORC-025 pass 3 (P6): the task's steps as a plain list: name, who works on it, and the state in words. The
-// running step keeps "Send a note" (ORC-022) and its notes; a blocked step keeps Retry. Models, run ids and
+// The task's steps as a plain list: name, who works on it, and the state in words. The running step keeps
+// "Send a note" and its notes; a blocked step keeps Retry. Models, run ids and
 // context sit under Details.
 
 import { useState } from "react";
@@ -80,7 +80,7 @@ function StepAction({ state, task, st }: { state: State; task: Task; st: Step })
 }
 
 /**
- * ORC-022: the "Send a note" control on a running agent step (never a Checks step), and the one-paragraph
+ * The "Send a note" control on a running agent step (never a Checks step), and the one-paragraph
  * form it opens. The note is guidance within the spec; the service decides which run gets it.
  */
 function SendNote({ state, task, st }: { state: State; task: Task; st: Step }) {
@@ -142,8 +142,9 @@ function SendNote({ state, task, st }: { state: State; task: Task; st: Step }) {
   );
 }
 
-/** ORC-022: notes, each with its status, its source and its time; "simulated" in the demo. */
+/** Notes, each with its status, its source and its time; "simulated" in the demo. */
 export function NotesList({ notes, label }: { notes: Note[]; label: string }) {
+  const { state } = useStore();
   if (!notes.length) return null;
   return (
     <ul className="t-notes" aria-label={label}>
@@ -155,7 +156,7 @@ export function NotesList({ notes, label }: { notes: Note[]; label: string }) {
             </StatePill>
             {n.simulated && <SimulatedChip title="Written by the demo's lead, or acknowledged by a simulated run; no agent read it." />}
             <span>
-              {noteSourceLabel(n)} ·{" "}
+              {noteSourceLabel(state, n)} ·{" "}
               <time dateTime={n.at} title={fmtTime(n.at)}>
                 {relTime(n.at)}
               </time>

@@ -1,4 +1,4 @@
-// ORC-014 review 10: the first Get-started step can always be completed, "Start building now" asks for
+// The first Get-started step can always be completed, "Start building now" asks for
 // a vision first, the new-project stage follows the vision until chosen, and the confirmation says
 // what happens to attached documents.
 
@@ -12,7 +12,7 @@ const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
 /** An empty project of the user's own: it starts by shaping, with no vision, no tasks and no conversation. */
 const empty = () => M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Mine", repoPath: "/tmp/mine", vision: "", focus: "", stage: "shaping" }, at(0));
 
-describe("the first step (review 10)", () => {
+describe("the first step", () => {
   it("is not done for an empty shaping project until the user chooses; choosing to keep shaping completes it; a written vision or a task completes it too", () => {
     const s = empty();
     expect(s.project.stage).toBe("shaping");
@@ -33,7 +33,7 @@ describe("the first step (review 10)", () => {
   });
 });
 
-describe("the new-project form (review 10)", () => {
+describe("the new-project form", () => {
   it("defaults the stage to shaping while the vision is empty and to building once it is written; an explicit choice stands", () => {
     expect(newProjectStage(null, "")).toBe("shaping");
     expect(newProjectStage(null, "   ")).toBe("shaping");

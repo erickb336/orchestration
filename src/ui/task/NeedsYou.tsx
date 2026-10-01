@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (P2): everything the task needs from you, once, at the top of the page, each with the buttons
+// Everything the task needs from you, once, at the top of the page, each with the buttons
 // that settle it: a pull request to merge or keep, failing final checks, findings to decide, an approach to
 // choose, the go-ahead.
 

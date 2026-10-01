@@ -51,7 +51,7 @@ class ScriptedAdapter implements RuntimeAdapter {
     this.listeners.add(l);
     return () => this.listeners.delete(l);
   }
-  /** ORC-022: scripted runs acknowledge nothing unless a test says so. */
+  /** Scripted runs acknowledge no note unless a test says so. */
   note(attemptId: string, note: { id: string; text: string }) {
     this.notes.push({ attemptId, ...note });
   }
@@ -63,7 +63,7 @@ class ScriptedAdapter implements RuntimeAdapter {
     if (e.type === "completed" || e.type === "failed" || e.type === "stopped") this.runs.delete(e.attemptId);
     for (const l of this.listeners) l(e);
   }
-  /** Finish a run, optionally writing a file in its worktree first, reporting every declared output (a review lists the changed files it was shown, ORC-013). */
+  /** Finish a run, optionally writing a file in its worktree first, reporting every declared output (a review lists the changed files it was shown). */
   finish(id: string, opts: { write?: [string, string]; findings?: number; omit?: string } = {}) {
     const a = this.runs.get(id)!;
     if (opts.write) writeFileSync(join(a.workspace.path, opts.write[0]), opts.write[1]);
@@ -338,7 +338,7 @@ describe("real-mode safety", () => {
     other.close();
   });
 
-  it("M5: the sample project is never dispatched, even after pointing it at a real repository", async () => {
+  it("the sample project is never dispatched, even after pointing it at a real repository", async () => {
     const other = new Store(join(dir, "sample2.sqlite")); // sample project (fake-mode seed)
     other.command("setRepoPath", { repoPath: repo }, "rp", iso());
     const c = new ScriptedAdapter("claude");
@@ -362,8 +362,8 @@ describe("real-mode safety", () => {
   });
 });
 
-describe("review regressions (ORC-004)", () => {
-  it("H1: agent-planted git hooks never run in the service's own git calls", () => {
+describe("agent-written git hooks, the worktree's .git file and output blocks", () => {
+  it("agent-planted git hooks never run in the service's own git calls", () => {
     // The managed repo uses a relative hooks path (husky-style), which resolves inside each worktree.
     git("config", "core.hooksPath", ".githooks");
     const a = newTask("Hooks");
@@ -382,7 +382,7 @@ describe("review regressions (ORC-004)", () => {
     expect(existsSync(marker)).toBe(false);
   });
 
-  it("H1: a run that rewrites the worktree's .git file is not recorded", () => {
+  it("a run that rewrites the worktree's .git file is not recorded", () => {
     const a = newTask("Gitdir");
     tick();
     const r = runOf(a, "S1");
@@ -395,7 +395,7 @@ describe("review regressions (ORC-004)", () => {
     expect(git("log", "--oneline").split("\n")).toHaveLength(1); // nothing committed to the user's branch
   });
 
-  it("H2: a null output block fails the run instead of wedging it", () => {
+  it("a null output block fails the run instead of wedging it", () => {
     const a = newTask("Null");
     tick();
     const r = runOf(a, "S1");
@@ -405,7 +405,7 @@ describe("review regressions (ORC-004)", () => {
     expect(st().attempts.find((x) => x.id === r.id)!.outcome).toBe("failed");
   });
 
-  it("low: summaries containing their own code fences still parse", () => {
+  it("summaries containing their own code fences still parse", () => {
     const block = JSON.stringify({ outputs: { notes: { summary: "Use:\n```js\nx()\n```\nok" } } }, null, 2);
     const text = `Done.\n\`\`\`json\n${block}\n\`\`\``;
     const parsed = parseOutputs(text, [{ name: "notes", kind: "report" }]);

@@ -1,4 +1,4 @@
-// ORC-013 step 1, the service side: the 13 → 14 migration, the context event the scheduler records
+// Quality gates, the service side: the 13 → 14 migration, the context event the scheduler records
 // before a run can report, the coverage re-run end to end, and the conventions read from the trusted
 // base rather than the worktree. Scripted adapters, a temporary repository, no model runs.
 
@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
@@ -17,6 +17,10 @@ import { Scheduler } from "./scheduler";
 import { STATE_FORMAT, Store, V13_TEMPLATE_STEPS } from "./store";
 import { ScriptedAdapter } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
+
+// Real git and many scheduler cycles per test: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 let dir: string;
 let now = Date.parse("2026-09-30T12:00:00Z");
@@ -43,7 +47,7 @@ describe("migration 13 → 14", () => {
     delete doc.project.conventions;
     delete doc.decisions;
     for (const k of ["rerunBudget", "reviewBotApps", "noCi"]) delete doc.project.prDelivery[k];
-    // ORC-016: the seed has flows, not templates; a format-13 project carried the six pickable templates as that format shipped them.
+    // The seed has flows, not templates; a format-13 project carried the six pickable templates as that format shipped them.
     delete doc.project.defaultFlowId;
     delete doc.flows;
     delete doc.retiredTemplates;
@@ -72,7 +76,7 @@ describe("migration 13 → 14", () => {
     });
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    // ORC-016 raised the format to 15; a format-13 document upgrades through 14 (templates) and 15 (flows).
+    // A format-13 document upgrades through 14 (templates), 15 (flows) and each later format.
     expect(STATE_FORMAT).toBe(18);
     expect(s.version).toBe(18);
     expect(upgraded.read().version).toBe(v0 + 1);
@@ -85,7 +89,7 @@ describe("migration 13 → 14", () => {
     expect(s.artifacts.every((a) => a.findings === undefined && a.pathCoverage === undefined)).toBe(true);
     // 13 → 14: unmodified built-ins gained the Checks steps (so they equal the format-14 built-ins and are dropped by
     // 14 → 15, the flows providing them); the edited bugfix was left alone, with an event, and 14 → 15 retired it
-    // (ORC-021: retired templates are no longer written as files; 15 → 16 drops the list).
+    // (retired templates are no longer written as files; 15 → 16 drops the list).
     expect((s.project as unknown as { templates?: unknown }).templates).toBeUndefined();
     expect((s as unknown as { retiredTemplates?: unknown }).retiredTemplates).toBeUndefined();
     expect((s as unknown as { patterns?: unknown }).patterns).toBeUndefined();
@@ -239,7 +243,7 @@ describe("the scheduler: the context event, coverage re-runs and conventions", (
     expect(art.openFindings).toBe(2);
     expect(st().decisions).toHaveLength(1);
     expect(st().attempts.find((a) => a.id === review.id)!.note).toContain("had no valid action or severity");
-    claude.finish(M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!.id, { findings: 0 }); // ORC-021: the security review beside it is clean
+    claude.finish(M.activeAttempts(st(), id).find((a) => a.stepId === "SR1")!.id, { findings: 0 }); // the security review beside it is clean
     tick();
     tick();
     expect(M.activeAttempts(st(), id)).toHaveLength(0); // the repair waits for the decision

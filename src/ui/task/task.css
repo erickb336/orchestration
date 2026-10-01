@@ -1,4 +1,4 @@
-/* The task page (ORC-025 pass 3). Layout only: every part is a kit component, so colour and type come from
+/* The task page. Layout only: every part is a kit component, so colour and type come from
    the tokens and kit.css. Every class is prefixed t- so nothing collides with other screens. */
 
 .t-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); min-width: 0; }

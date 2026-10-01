@@ -1,4 +1,4 @@
-// ORC-021: flows, pure. The shape of a flow file, the resolver that turns the six built-in files into the
+// Flows, pure. The shape of a flow file, the resolver that turns the six built-in files into the
 // catalog, the rules the service relies on, hashing, summaries and the lookups the domain uses. No I/O:
 // the built-in files are compiled in through src/domain/builtInFlows.ts, and a broken file is a test
 // failure in the repository, never a runtime state.
@@ -28,7 +28,7 @@ interface RawStep {
   waitForChildren?: true;
   independentOf?: "writer";
   checks?: { onFail: "findings" | "block" };
-  /** ORC-024: ids of files in principles/, the ones that fit the step's job. */
+  /** Ids of files in principles/, the ones that fit the step's job. */
   principles?: string[];
 }
 
@@ -72,7 +72,7 @@ function canonicalJson(value: unknown): string {
   }
 }
 
-/** What runs: the resolved steps in their normalised form, principles included (ORC-024). Names, descriptions and comments do not count. */
+/** What runs: the resolved steps in their normalised form, principles included. Names, descriptions and comments do not count. */
 export function flowHash(steps: StepDef[]): string {
   return sha256Hex(canonicalJson(steps.map(toDef)));
 }
@@ -90,7 +90,7 @@ const ROLE_WORD: Record<RoleId, string> = { lead: "lead", designer: "designer", 
 /**
  * Why a flow has no effective independent code review, one line per offending step; empty when every
  * code change is reviewed. A qualifying reviewer is a `code_reviewer` step with no `runIf` that reads a
- * code change and reports `review-findings`; the security review (ORC-021) is an additional checker, never
+ * code change and reports `review-findings`; the security review is an additional checker, never
  * a replacement. A code change counts as reviewed when such a reviewer downstream of it reads that change,
  * or when the next iteration of an `iterate` loop reviews it: the loop runs at least twice (`max` ≥ 2),
  * the reviewer sits before the coder in the loop body, the coder's change is the newest in the body (so
@@ -173,7 +173,7 @@ export function resolveFlows(files: FlowFile[]): Flow[] {
     if (out.some((x) => x.id === raw.id)) fail(`the id "${raw.id}" appears twice`);
     if (!Array.isArray(raw.steps) || raw.steps.length === 0 || raw.steps.length > MAX_FLOW_STEPS) fail(`a flow needs 1–${MAX_FLOW_STEPS} steps`);
     if (typeof raw.whenToUse !== "string" || !raw.whenToUse.trim()) fail("whenToUse is required");
-    // ORC-024: toDef orders and deduplicates a step's principles, so an unknown or repeated id is checked on the raw step.
+    // toDef orders and deduplicates a step's principles, so an unknown or repeated id is checked on the raw step.
     for (const s of raw.steps) {
       const unknown = (s.principles ?? []).filter((p) => !isPrincipleId(p));
       if (unknown.length) fail(`${s.id} names principles that do not exist: ${unknown.join(", ")} (the files in principles/)`);

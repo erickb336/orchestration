@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (R2): the one verdict line of a pull request, the landed line, and the delivery confirmations.
+// The one verdict line of a pull request, the landed line, and the delivery confirmations.
 
 import { describe, expect, it } from "vitest";
 import { buildDemo } from "../domain/demo";

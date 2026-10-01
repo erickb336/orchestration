@@ -1,4 +1,4 @@
-/* Settings (ORC-025 pass 5). Layout only: colour and type come from the tokens and the kit. Every class is
+/* Settings. Layout only: colour and type come from the tokens and the kit. Every class is
    prefixed s- so nothing collides with other screens. */
 
 .s-page { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); min-width: 0; }

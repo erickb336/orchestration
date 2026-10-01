@@ -1,6 +1,6 @@
-// ORC-014 independent review, domain level: document-only revisions never invalidate the lead's focus
-// changes (2), invisible characters are handled by context and never altered in the user's own text
-// (3), a batch attaches as one revision (9), and Start building's labels tell the truth (11).
+// Vision documents, the harder cases at domain level: document-only revisions never invalidate the lead's
+// focus changes, invisible characters are handled by context and never altered in the user's own text, a
+// batch attaches as one revision, and Start building's labels tell the truth.
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
@@ -36,7 +36,7 @@ const LEGIT = [FAMILY, SCOTLAND, PERSIAN, DEVANAGARI, HEBREW, ARABIC, HEART];
 // Hostile: overrides, isolates, BOM, word joiner, zero-width space, C1 controls, lone and malformed tags.
 const HOSTILE = "‮‪⁦⁩﻿⁠​\u0085\u009F\u{E0041}\u{E0001}";
 
-describe("2: a document-only revision never invalidates the lead's focus changes", () => {
+describe("a document-only revision never invalidates the lead's focus changes", () => {
   it("a focus change applies when only documents changed while the lead worked, with a truthful note; a text edit still holds it", () => {
     const attached = steerRun(seed(), { reason: "you asked", focus: "Speed" }, (s) => M.addVisionDoc(s, doc("brief.md", 1), at(3)).state);
     expect(attached.set.heldBecause).toBeUndefined();
@@ -85,7 +85,7 @@ describe("2: a document-only revision never invalidates the lead's focus changes
   });
 });
 
-describe("3: invisible characters", () => {
+describe("invisible characters", () => {
   it("lead-authored text keeps emoji ZWJ sequences, subdivision flags, joiners between letters, LRM/RLM and variation selectors, and loses hostile characters", () => {
     for (const t of LEGIT) expect(M.stripInvisible(t)).toBe(t);
     const s = M.stripHostile(`a${HOSTILE}b`);
@@ -131,7 +131,7 @@ describe("3: invisible characters", () => {
   });
 });
 
-describe("9: a batch attaches as one revision", () => {
+describe("a batch attaches as one revision", () => {
   it("staged files attach as one revision with the batch's name; the same file again is unchanged; a batch keeps the first of a path replaced by a later file", () => {
     let s = seed();
     const ids: string[] = [];
@@ -223,12 +223,12 @@ describe("9: a batch attaches as one revision", () => {
   });
 });
 
-describe("11: Start building's labels tell the truth", () => {
+describe("Start building's labels tell the truth", () => {
   const oneStep = [{ id: "S1", purpose: "Implement", role: "coder" as const, dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" as const }] }];
   /** A ready roadmap task under the shaping hold, and a proposed task it depends on. */
   function roadmap(): { state: State; id: string; dep: string } {
     let s = M.startShaping(seed(), at(0));
-    // ORC-016: tasks come from a flow; the one-step pipeline is applied through the internal setPipeline.
+    // Tasks come from a flow; the one-step pipeline is applied through the internal setPipeline.
     const dep0 = M.createTask(s, { title: "Dep", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(1));
     const dep = { ...dep0, state: setPipeline(dep0.state, dep0.newId, 1, oneStep, "one step", "user", at(1)) };
     const t0 = M.createTask(dep.state, { title: "Planned", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 2, holdBeforeStart: true, flowId: "change" }, at(2));

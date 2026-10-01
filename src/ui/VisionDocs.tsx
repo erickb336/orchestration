@@ -1,16 +1,17 @@
-// ORC-014: the "Vision documents" list shown under the vision (Overview) and in the shaping panel:
-// Add files, Add folder (relative paths kept), drag-and-drop, one upload request per file with its own
-// status and reason, Remove with confirmation, and each document's size and whether it is readable.
-// The service keeps copies in its own directory; nothing is written into a repository. Review 9: every
-// file of one Add, folder or drop is attached as one vision revision. Review 4: the queue lives in a
-// ref (`UploadQueue`), so a folder walk that finishes late still drains.
+// The "Vision documents" list, shown under the vision (Home's Focus card) and in the shaping panel: Add files,
+// Add folder (relative paths kept), drag-and-drop, one upload request per file with its own status and reason,
+// Remove with confirmation, and each document's size and whether it is readable. The service keeps copies in its
+// own directory; nothing is written into a repository. Every file of one Add, folder or drop is attached as one
+// vision revision. The queue lives in a ref (`UploadQueue`), so a folder walk that finishes late still drains.
 
 import { useRef, useState } from "react";
 import type { AttachVisionDocsResult } from "../api";
 import * as M from "../domain/model";
 import type { State, VisionDoc, VisionRevision } from "../domain/types";
+import { Button, Chip, Disclosure, useConfirm } from "./kit";
 import { useStore } from "./store";
 import { UploadQueue, type UploadStatus } from "./uploadQueue";
+import "./vision.css";
 
 interface Upload {
   key: string;
@@ -82,8 +83,9 @@ async function entriesOf(items: DataTransferItemList): Promise<Picked[]> {
 const isHidden = (path: string) => path.split("/").some((seg) => seg.startsWith("."));
 
 /** The list of documents, the uploader, and this session's upload results. */
-export function VisionDocsList({ compact = false }: { compact?: boolean }) {
+export function VisionDocsList() {
   const { state, send, disabled, uploadVisionDoc } = useStore();
+  const confirm = useConfirm();
   const docs = M.currentVisionDocs(state);
   const total = M.visionDocsBytes(docs);
   const [uploads, setUploads] = useState<Upload[]>([]);
@@ -149,7 +151,13 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
   };
 
   const remove = async (d: VisionDoc) => {
-    if (!confirm(`Remove ${d.path} from the vision?\n\nThe lead stops seeing it. Earlier vision revisions keep it in their history, and its copy stays on disk for them.`)) return;
+    const ok = await confirm({
+      title: `Remove ${d.path} from the vision?`,
+      text: "The lead stops seeing it. Earlier vision revisions keep it in their history, and its copy stays on disk for them.",
+      primaryLabel: "Remove",
+      danger: true,
+    });
+    if (!ok) return;
     setRemoving(d.id);
     await send("removeVisionDoc", { docId: d.id });
     setRemoving(null);
@@ -166,22 +174,19 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
   const summary = [`${added} added`, unchanged ? `${unchanged} unchanged` : "", failed ? `${failed} not added` : "", skipped ? `${skipped} skipped` : ""].filter(Boolean).join(", ");
 
   return (
-    <div className="vision-docs" style={{ marginTop: compact ? "0.6rem" : "0.8rem" }}>
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0 }}>Vision documents ({docs.length})</h3>
-        <span className="muted" style={{ fontSize: "0.82rem" }}>
+    <section className="v-docs" aria-label="Vision documents">
+      <div className="v-docs__head">
+        <h3>Vision documents ({docs.length})</h3>
+        <span className="small muted">
           {M.fmtBytes(total)} of {M.fmtBytes(M.MAX_VISION_DOCS_BYTES)} · up to {M.MAX_VISION_DOCS} files, {M.fmtBytes(M.MAX_VISION_DOC_BYTES)} each
         </span>
       </div>
-      <p className="muted small" style={{ margin: "0.2rem 0 0.3rem" }}>
-        Files the lead reads whenever it plans, answers or drafts the vision; designers read them too, and other roles see the list.
-      </p>
-      <details className="how" style={{ marginBottom: "0.5rem" }}>
-        <summary>How this works</summary>
-        <p>Copies are kept by the service, outside your repository; attach a file again to update it. Each Add, folder or drop becomes one vision revision.</p>
-      </details>
+      <p className="small muted">Files the lead reads whenever it plans, answers or drafts the vision; designers read them too, and other roles see the list.</p>
+      <Disclosure label="How this works">
+        <p className="small muted">Copies are kept by the service, outside your repository; attach a file again to update it. Each Add, folder or drop becomes one vision revision.</p>
+      </Disclosure>
       <div
-        className={`dropzone${over ? " over" : ""}`}
+        className={`v-dropzone${over ? " v-dropzone--over" : ""}`}
         onDragOver={(e) => {
           e.preventDefault();
           if (!disabled) setOver(true);
@@ -194,16 +199,14 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
           void entriesOf(e.dataTransfer.items).then(enqueue);
         }}
       >
-        <div className="row">
-          <button type="button" className="small" disabled={disabled} onClick={() => filesRef.current?.click()}>
+        <div className="k-actions">
+          <Button size="small" disabled={disabled} onClick={() => filesRef.current?.click()}>
             Add files
-          </button>
-          <button type="button" className="small" disabled={disabled} onClick={() => folderRef.current?.click()}>
+          </Button>
+          <Button size="small" disabled={disabled} onClick={() => folderRef.current?.click()}>
             Add folder
-          </button>
-          <span className="muted" style={{ fontSize: "0.82rem" }}>
-            or drop files or a folder here. A folder keeps its relative paths.
-          </span>
+          </Button>
+          <span className="small muted">or drop files or a folder here. A folder keeps its relative paths.</span>
         </div>
         <input
           ref={filesRef}
@@ -232,63 +235,57 @@ export function VisionDocsList({ compact = false }: { compact?: boolean }) {
       </div>
 
       {docs.length === 0 ? (
-        <p className="muted" style={{ fontSize: "0.85rem", margin: "0.5rem 0" }}>
-          None attached.
-        </p>
+        <p className="small muted">None attached.</p>
       ) : (
-        <ul className="plain doc-list" aria-label="Vision documents">
+        <ul className="v-doc-list" aria-label="Vision documents">
           {docs.map((d) => (
             <li key={d.id}>
               <span className="mono" title={d.path}>
                 {d.path}
               </span>
               <span className="muted">{M.fmtBytes(d.size)}</span>
-              <span className={d.text ? "chip" : "chip strong"} title={d.text ? "Its text goes to the lead and designers." : "Only its name reaches the lead."}>
+              <Chip strong={!d.text} title={d.text ? "Its text goes to the lead and designers." : "Only its name reaches the lead."}>
                 {d.text ? "text" : "not readable as text"}
-              </span>
-              <button type="button" className="small" disabled={disabled || removing === d.id} onClick={() => void remove(d)} aria-label={`Remove ${d.path}`}>
+              </Chip>
+              <Button size="small" variant="quiet" disabled={disabled || removing === d.id} loading={removing === d.id} onClick={() => void remove(d)} aria-label={`Remove ${d.path}`}>
                 {removing === d.id ? "Removing…" : "Remove"}
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
       )}
       {office.length > 0 && (
-        <p className="muted" style={{ fontSize: "0.82rem", margin: "0.3rem 0" }}>
+        <p className="small muted">
           PDF and Word text is not read yet: {office.map((d) => d.name).join(", ")} {office.length === 1 ? "is" : "are"} listed by name only. Attach the text as Markdown or plain text for the lead to read it.
         </p>
       )}
-      {unreadable.length > office.length && (
-        <p className="muted" style={{ fontSize: "0.82rem", margin: "0.3rem 0" }}>
-          A document that is not readable as text (an image, an archive, a file that is not UTF-8) is kept and listed; the lead sees its name only.
-        </p>
-      )}
+      {unreadable.length > office.length && <p className="small muted">A document that is not readable as text (an image, an archive, a file that is not UTF-8) is kept and listed; the lead sees its name only.</p>}
 
       {uploads.length > 0 && (
-        <div style={{ marginTop: "0.5rem" }} aria-live="polite">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <span style={{ fontSize: "0.85rem" }}>{inFlight ? progress : `${summary}.`}</span>
+        <div className="v-uploads" aria-live="polite">
+          <div className="v-docs__head">
+            <span className="meta">{inFlight ? progress : `${summary}.`}</span>
             {!inFlight && (
-              <button type="button" className="link" style={{ fontSize: "0.82rem" }} onClick={() => setUploads([])}>
+              <Button size="small" variant="quiet" onClick={() => setUploads([])}>
                 Clear
-              </button>
+              </Button>
             )}
           </div>
-          <ul className="plain doc-list uploads" aria-label="Uploads">
+          <ul className="v-doc-list v-doc-list--uploads" aria-label="Uploads">
             {uploads.map((u) => (
               <li key={u.key} className={u.status}>
                 <span className="mono" title={u.path}>
                   {u.path}
                 </span>
                 <span className="muted">{M.fmtBytes(u.size)}</span>
-                <span className={u.status === "failed" ? "chip danger" : "chip"}>{STATUS_LABEL[u.status]}</span>
-                {u.detail && <span className="muted" style={{ fontSize: "0.82rem" }}>{u.detail}</span>}
+                <Chip tone={u.status === "failed" ? "fail" : "neutral"}>{STATUS_LABEL[u.status]}</Chip>
+                {u.detail && <span className="small muted">{u.detail}</span>}
               </li>
             ))}
           </ul>
         </div>
       )}
-    </div>
+    </section>
   );
 }
 

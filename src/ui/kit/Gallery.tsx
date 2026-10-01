@@ -1,5 +1,5 @@
 // The kit gallery, at #/kit (not in the navigation). Every component in every state, on the dark theme, with the
-// product's words. This is how the owner and the coders of passes 2–6 check that screens stay consistent.
+// product's words. Use it to check that screens stay consistent.
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Actions,

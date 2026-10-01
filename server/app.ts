@@ -36,8 +36,8 @@ if (process.env.ORCHESTRATION_RUNTIME && !["real", "fake"].includes(process.env.
 
 let store: Store;
 try {
-  // ORC-017: the fake service starts from the sample story, "Weekend Trips (sample)" (design §5); no run is in
-  // flight in it, so the scheduler dispatches the running steps itself. The test fixture `buildSeed` is not used here.
+  // The fake service starts from the sample story, "Weekend Trips (sample)"; no run is in flight in it,
+  // so the scheduler dispatches the running steps itself. The test fixture `buildSeed` is not used here.
   store = new Store(dbPath, mode === "real" ? () => buildEmptyProject() : () => buildDemo(Date.now()));
 } catch (e) {
   log(e instanceof Error ? e.message : String(e));
@@ -47,7 +47,7 @@ const fakeConfig = defaultFakeConfig();
 let adapters: Record<ProviderId, RuntimeAdapter>;
 let workspaces: WorkspaceManager | undefined;
 let github: GitHubHost | undefined;
-/** ORC-013: the project's checks, run by the service: the Codex sandbox by default, direct only when the user chose "no sandbox". Fake mode simulates them. */
+/** The project's checks, run by the service: the Codex sandbox by default, direct only when the user chose "no sandbox". Fake mode simulates them. */
 let checks: CheckRunner | undefined;
 /** True when Claude workers run with shell access: the app then cannot claim that only the service reaches GitHub. */
 let workerShell = false;
@@ -67,20 +67,20 @@ if (mode === "real") {
   github = new GhCliHost({ cwd: join(dirname(dbPath), "gh-neutral") });
 } else {
   const catalog = store.read().state.project.catalog;
-  // ORC-025 (L3): the simulated lead reads the board (read-only) to answer "what needs me?" and the like.
+  // The simulated lead reads the board (read-only) to answer "what needs me?" and the like.
   const board = () => store.read().state;
   adapters = { claude: new FakeAdapter("claude", fakeConfig, catalog.claude, board), codex: new FakeAdapter("codex", fakeConfig, catalog.codex, board) };
 }
-// ORC-014: copies of the user's vision documents live next to the database, never in a repository.
+// Copies of the user's vision documents live next to the database, never in a repository.
 const visionDocs = new VisionDocStore(join(dirname(dbPath), "vision-docs"));
-// Review 6: copies no document record refers to (and other projects' directories) are cleaned up at start.
+// Copies no document record refers to (and other projects' directories) are cleaned up at start.
 try {
   const swept = visionDocs.sweep(store.read().state);
   if (swept.removed.length || swept.removedDirs.length) log(`Vision documents: removed ${swept.removed.length} orphan cop${swept.removed.length === 1 ? "y" : "ies"} and ${swept.removedDirs.length} old project director${swept.removedDirs.length === 1 ? "y" : "ies"}`);
 } catch (e) {
   log(`Vision documents: cleanup failed: ${e instanceof Error ? e.message : String(e)}`);
 }
-// ORC-017: the sample story's one vision document exists as a copy on disk, like any attached document,
+// The sample story's one vision document exists as a copy on disk, like any attached document,
 // so the lead and the page can read it. Written once (by hash); only for the sample project in fake mode.
 if (mode === "fake") {
   try {
@@ -90,7 +90,7 @@ if (mode === "fake") {
     log(`Vision documents: could not write the sample document: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
-// ORC-021: the six flows are compiled in from flows/; the state's copy is refreshed at start so a changed
+// The six flows are compiled in from flows/; the state's copy is refreshed at start so a changed
 // flow file takes effect after a restart. Tasks keep the steps they were created with.
 {
   const now = new Date().toISOString();
@@ -100,7 +100,7 @@ if (mode === "fake") {
 }
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
 const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir });
-// ORC-013: check logs are pruned at start and once a day (older than 14 days, or beyond 200 MiB in all).
+// Check logs are pruned at start and once a day (older than 14 days, or beyond 200 MiB in all).
 const pruneLogs = () => {
   try {
     const n = pruneCheckLogs(join(dataDir, "check-logs"));

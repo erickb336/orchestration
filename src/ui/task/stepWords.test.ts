@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (P6): a step's words on the task page: name, who (only while running or done), state in words.
+// A step's words on the task page: name, who (only while running or done), state in words.
 
 import { describe, expect, it } from "vitest";
 import { buildDemo } from "../../domain/demo";

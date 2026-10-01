@@ -1,4 +1,4 @@
-// ORC-017: the demo in the fake service. It loads through the store at the current format; after start
+// The demo in the fake service. It loads through the store at the current format; after start
 // and a few scheduler cycles three agents work at the worker limit, WT-005's pull request is held for you
 // on the simulated GitHub, the landed items stay in the review-later list, the paused task stays paused;
 // and the simulated flag comes from the fake runtime, never from a scripted (real) lead.
@@ -49,7 +49,7 @@ function openDemo() {
 const task = (s: State, id: string) => s.tasks.find((t) => t.id === id)!;
 const active = (s: State) => M.activeAgentAttempts(s).map((a) => `${a.taskId} ${a.stepId} ${a.snapshot.provider}`);
 
-describe("the demo in the fake service (ORC-017)", () => {
+describe("the demo in the fake service", () => {
   it("loads through the store at the current format; no migration touches it", () => {
     const store = openDemo();
     const { state } = store.read();
@@ -91,7 +91,7 @@ describe("the demo in the fake service (ORC-017)", () => {
     expect(active(s)).toEqual(["WT-002 S1 codex", "WT-004.2 S1 claude", "WT-007 S3 claude"]);
     expect(M.column(s, task(s, "WT-007"))).toBe("reviewing");
     for (const id of ["WT-003", "WT-006", "WT-009", "WT-010", "WT-004.3"]) expect(M.activeAttempts(s, id), id).toEqual([]);
-    // ORC-022: the lead's note to WT-002's coder (queued in the story) went into the run's instructions and is delivered at start, labelled simulated.
+    // The lead's note to WT-002's coder (queued in the story) went into the run's instructions and is delivered at start, labelled simulated.
     const wt2Run = M.activeAttempts(s, "WT-002").find((a) => a.stepId === "S1")!;
     expect(s.notes).toHaveLength(1);
     expect(s.notes[0]).toMatchObject({ taskId: "WT-002", stepId: "S1", attemptId: wt2Run.id, status: "delivered", via: "start", simulated: true });
@@ -102,7 +102,7 @@ describe("the demo in the fake service (ORC-017)", () => {
     expect(pr).toMatchObject({ phase: "open", simulated: true, number: 1000, policy: "hold", url: "simulated://pr/1000" });
     expect(pr.attention).toBeUndefined();
     expect(D.prReady(s, task(s, "WT-005"), now)).toBe(true);
-    // ORC-025: the chip's text carries no "(simulated)" suffix; the label's flag puts one small chip beside it.
+    // The chip's text carries no "(simulated)" suffix; the label's flag puts one small chip beside it.
     expect(D.prLabel(s, task(s, "WT-005"), now)).toEqual({ text: "PR #1000 ready to merge", tone: "strong", simulated: true });
     const gate = D.prGate(s, task(s, "WT-005"), now, { byUser: true });
     expect(gate.items.filter((i) => !i.ok).map((i) => i.id)).toEqual(["policy"]);
@@ -117,7 +117,7 @@ describe("the demo in the fake service (ORC-017)", () => {
     expect(M.stateLabel(s, task(s, "WT-009"))).toBe("Paused");
     expect(s.attempts.filter((a) => a.taskId === "WT-009").map((a) => a.outcome)).toEqual(["completed", "stopped"]);
     expect(M.stateLabel(s, task(s, "WT-010"))).toBe("Deferred by lead");
-    // Pause WT-002: the runtime acknowledges, the freed slot goes to WT-007's security review on Claude (ORC-021), the next in line.
+    // Pause WT-002: the runtime acknowledges, the freed slot goes to WT-007's security review on Claude, the next in line.
     store.command("pauseTask", { taskId: "WT-002" }, "k-pause", iso(now));
     for (let i = 0; i < 6 && !M.activeAttempts(store.read().state, "WT-007").some((a) => a.stepId === "SR1"); i++) s = await tick();
     expect(M.stateLabel(s, task(s, "WT-002"))).toBe("Paused");

@@ -1,6 +1,6 @@
-// ORC-009: the change list under a lead reply. The service wrote it; the lead's prose never is the
+// The change list under a lead reply. The service wrote it; the lead's prose never is the
 // record. Every row shows the task's live state, and every control is a keyed, compare-and-set command.
-// ORC-025 (L1): the list folds into one line under the reply ("2 changes, 1 note · Undo all") that opens to
+// The list folds into one line under the reply ("2 changes, 1 note · Undo all") that opens to
 // the rows, so the conversation reads first. The fold line carries Undo (all) and Apply (all); each row keeps its own.
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -176,7 +176,7 @@ function Section({ title, rows, state, struck, children }: { title: string; rows
 
 /**
  * A drop the user applies is an ordinary cancel, with no undo: say what each one stops and blocks first.
- * Review finding 3: "Apply all" confirms its drops the same way, in one dialog.
+ * "Apply all" confirms its drops the same way, in one dialog.
  */
 async function confirmDrops(confirm: Ask, state: State, rows: SteeringChange[]): Promise<boolean> {
   const lines: string[] = [];
@@ -206,7 +206,7 @@ function statusNote(state: State, c: SteeringChange): string | undefined {
   if (c.status === "dismissed") return `dismissed${resolved ? ` ${resolved}` : ""}`;
   if (c.status === "superseded") return "superseded by a later reply";
   if (c.status === "applied" && c.kind === "note") {
-    // ORC-022 review L4: a note settled before it reached any run was recorded, not sent.
+    // A note settled before it reached any run was recorded, not sent.
     const note = c.noteId ? M.noteOf(state, c.noteId) : undefined;
     return note?.status === "not-delivered" && !note.attemptId ? `recorded${c.appliedBy === "user" ? " by you" : ""}; it did not reach an agent` : `sent${c.appliedBy === "user" ? " by you" : ""}; no Undo: a sent note cannot be unsent`;
   }
@@ -221,7 +221,7 @@ function Row({ state, c, struck, children }: { state: State; c: SteeringChange; 
   // A sent note's own note repeats its status chip ("queued: the step has not started"); other rows say why they were left as is.
   const why = c.note && !(c.kind === "note" && c.status === "applied") ? c.note : undefined;
   const taskLink = t ? <a href={`#/task/${encodeURIComponent(t.id)}`}>{t.id}</a> : <span className="mono">{c.taskId ?? "?"}</span>;
-  // ORC-022: a note row reads "Note to WT-007 S2 (Coder · Claude): "…"" and shows the note's live status.
+  // A note row reads "Note to WT-007 S2 (Coder · Claude): "…"" and shows the note's live status.
   const what =
     c.kind === "note" ? (
       <>

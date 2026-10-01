@@ -1,4 +1,4 @@
-// ORC-014: vision documents, domain level. Safe relative paths, admission against the caps, one
+// Vision documents, domain level. Safe relative paths, admission against the caps, one
 // user-authored revision per attach or removal that records the resulting set, replacement at the
 // same path, and history that keeps what earlier revisions had.
 

@@ -1,4 +1,4 @@
-// ORC-025 pass 4 (R1, R3): the Results page's words and lists, apart from React. Which pull requests wait for you
+// The Results page's words and lists, apart from React. Which pull requests wait for you
 // and which are on their way, the New / All / Sent back filter, when the bulk "Mark all as seen" appears, the
 // agent reviews of a landed item in one line, and what the page says when nothing has landed.
 
@@ -50,7 +50,7 @@ export function matchesFilter(landed: Landed, filter: ResultsFilter): boolean {
   return landed.status === "sent-back" || landed.followUps.length > 0;
 }
 
-/** The bulk "Mark all as seen" earns its place only past a handful of new items (R3). */
+/** The bulk "Mark all as seen" earns its place only past a handful of new items. */
 export const BULK_FROM = 4;
 export const showBulk = (newCount: number) => newCount >= BULK_FROM;
 /** markLandedReviewed takes at most this many items per request. */

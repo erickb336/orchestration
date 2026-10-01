@@ -36,7 +36,7 @@ export function OutputsSection({ state, task, decideAbove }: { state: State; tas
           const latest = M.latestArtifact(state, task, a.stepId, a.name);
           const used = consumers(a.id);
           const edited = a.author === "user";
-          // ORC-016: work from before the task's flow changed is the record; it is never edited or consumed again.
+          // Work from before the task's flow changed is the record; it is never edited or consumed again.
           const earlier = M.fromEarlierFlow(state, task, a);
           return (
             <li key={a.id}>
@@ -99,7 +99,7 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
   if (!found) return null;
   const base = found;
   const latest = M.latestArtifact(state, task, base.stepId, base.name) ?? base;
-  // ORC-013: structured findings are decided one by one; only the summary of such an artifact can be edited.
+  // Structured findings are decided one by one; only the summary of such an artifact can be edited.
   const isFindings = base.kind === "review-findings" && !base.findings;
   const isStructured = base.kind === "review-findings" && !!base.findings;
   const isCode = base.kind === "code-change";

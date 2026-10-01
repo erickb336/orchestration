@@ -264,7 +264,7 @@ export function useServiceStore() {
   );
 
   /**
-   * ORC-014: attach one file to the vision. The file is read in the browser, sent base64-encoded with
+   * Attach one file to the vision. The file is read in the browser, sent base64-encoded with
    * its relative path and its own idempotency key, and recorded by the service once its copy is stored.
    * A rejection (over a limit, duplicate, unsafe name) comes back as the reason, for the per-file list,
    * not as a global notice; only an unreachable service raises one.

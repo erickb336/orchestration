@@ -106,7 +106,7 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
     }
   }
 
-  // ORC-013: a finding newly routed to the user (created for them, sent to them, or suggested by the lead) is one event; polling is not.
+  // A finding newly routed to the user (created for them, sent to them, or suggested by the lead) is one event; polling is not.
   const prevDecisions = new Map((prev.decisions ?? []).map((d) => [d.id, d]));
   for (const d of next.decisions ?? []) {
     if (d.status !== "open" || d.routedTo !== "user") continue;
@@ -120,7 +120,7 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
     });
   }
 
-  // ORC-013: the checks sandbox became unavailable (keyed on that observation, never on polling); check steps wait until it is ready.
+  // The checks sandbox became unavailable (keyed on that observation, never on polling); check steps wait until it is ready.
   const ch = next.project.checksHealth;
   if (ch?.status === "unavailable" && next.project.checks?.enabled && (prev.project.checksHealth?.status !== "unavailable" || prev.project.checksHealth.checkedAt !== ch.checkedAt) && (prev.project.checksHealth?.status !== "unavailable"))
     out.push({ key: `checks-sandbox:${ch.status}:${ch.checkedAt}`, title: "The checks sandbox is not available", body: clip(`${ch.detail} Check steps wait until it is ready, or until you choose to run without a sandbox (Settings → Checks).`) });
@@ -143,7 +143,7 @@ export function detectEvents(prev: State, next: State): NotifyEvent[] {
   for (const m of next.conversation) {
     if (m.author !== "lead" || seen.has(m.id)) continue;
     const proposed = m.proposedTaskIds?.length ?? 0;
-    // ORC-009: a reply that steered says what changed instead of the generic "Lead replied".
+    // A reply that steered says what changed instead of the generic "Lead replied".
     const set = m.changeSetId ? next.steering.find((cs) => cs.id === m.changeSetId) : undefined;
     if (set && !set.refused && set.changes.length) {
       const rows = set.changes.filter((c) => c.status === "applied" || c.status === "suggested").slice(0, 3);

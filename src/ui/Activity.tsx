@@ -1,6 +1,6 @@
 // The Activity page (`#/activity`, reached from Tasks › All activity): every event, newest first, filtered by task
 // (`#/activity?task=WT-001`) and by kind. The log is the service's own record; who acted and the role names are
-// said in words (ORC-025 pass 4).
+// said in words.
 
 import { useEffect, useState } from "react";
 import type { EventKind } from "../domain/types";

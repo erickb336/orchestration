@@ -1,4 +1,4 @@
-// ORC-013 step 2, pure: the checks configuration and its validation (commands come only from the user's
+// Service-run checks, pure: the checks configuration and its validation (commands come only from the user's
 // settings, argv only, an allowlist of programs), the suggestions, what a Checks step checks and when
 // an earlier run is reused, the findings a run becomes, the repair rounds after failing final checks,
 // the evidence a change has, and the merge-gate item. No process is started anywhere here.
@@ -26,7 +26,7 @@ const cfg = (over: Partial<ChecksConfig> = {}): ChecksConfig => ({ ...structured
 const ok = (c: ChecksConfig) => expect(C.validateChecks(c, { acknowledged: true })).toBeUndefined();
 const bad = (c: ChecksConfig, re: RegExp) => expect(C.validateChecks(c, { acknowledged: true })).toMatch(re);
 
-describe("validateChecks (§6.1)", () => {
+describe("validateChecks", () => {
   it("accepts the allowlisted programs and refuses everything else, exactly by name", () => {
     for (const p of ["npm", "pnpm", "yarn", "bun", "make", "cargo", "go", "pytest", "./gradlew", "tsc", "vitest"]) ok(cfg({ commands: [cmd("c", p === "npm" || p === "pnpm" || p === "yarn" || p === "bun" ? [p, "test"] : [p, "build"])] }));
     for (const p of ["sh", "bash", "zsh", "env", "sudo", "curl", "wget", "npx", "git", "gh", "/usr/bin/node", "./node_modules/.bin/vitest", "NPM", "node.exe"]) bad(cfg({ commands: [cmd("c", [p, "x"])] }), /is not one of the programs checks may run/);
@@ -79,7 +79,7 @@ describe("validateChecks (§6.1)", () => {
   });
 });
 
-describe("the user's settings (§9, Q1)", () => {
+describe("the user's settings", () => {
   const s0 = buildSeed(T0, { inFlightRuns: false });
   const input = (over: Partial<ChecksConfig> = {}) => {
     const c: Partial<ChecksConfig> = { ...cfg(over) };
@@ -134,7 +134,7 @@ describe("the user's settings (§9, Q1)", () => {
   });
 });
 
-describe("suggestChecks (§6.2)", () => {
+describe("suggestChecks", () => {
   it("reads this repository's package.json and lockfile into npm ci, typecheck, test and build", () => {
     const pkg = JSON.stringify({ scripts: { dev: "x", build: "tsc", typecheck: "tsc", test: "vitest run", lint: undefined } });
     expect(C.suggestChecks([{ path: "package.json", text: pkg }, { path: "package-lock.json", text: "{}" }])).toEqual([
@@ -161,7 +161,7 @@ function record(sha: string, over: Partial<CheckRunRecord> = {}): CheckRunRecord
 }
 const failed = (sha: string, over: Partial<CheckRunRecord> = {}) => record(sha, { results: [{ id: "test", label: "test", kind: "check", status: "failed", exitCode: 1, durationMs: 1000, excerpt: "1 failing", bytes: 9, truncated: false }], ...over });
 
-/** A user task on the Change template with checks on and the sandbox ready; S1 done at SHA; C1 running. */
+/** A user task on the Change flow with checks on and the sandbox ready; S1 done at SHA; C1 running. */
 function withChecks(over: Partial<ChecksConfig> = {}): { s: State; id: string } {
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
@@ -174,7 +174,7 @@ function withChecks(over: Partial<ChecksConfig> = {}): { s: State; id: string } 
   return { s, id: r.newId };
 }
 
-/** ORC-021: the security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
+/** The security review runs beside the code review. These tests are about the code review, so once it completes the security review is dispatched and completed clean. */
 function securityClean(s: State, id: string, t: number): State {
   let next = M.dispatchEligible(s, at(t));
   for (const a of running(next, id)) if (step(next, id, a.stepId).role === "security_reviewer") next = M.reportCompletion(next, a.id, [], at(t), [{ name: "findings", summary: "no security findings", findings: [], openFindings: 0 }]);
@@ -187,7 +187,7 @@ const finishRun = (s: State, id: string, t: number, rec: CheckRunRecord) => {
   return M.reportCompletion(s, a.id, [], at(t), [{ name: task(s, id).steps.find((x) => x.id === a.stepId)!.outputs[0].name, summary: C.runSummary(rec), checkRun: rec, findings }]);
 };
 
-describe("dispatch, target and reuse (§6.4)", () => {
+describe("dispatch, target and reuse", () => {
   it("checks off: every Checks step skips with the reason; on with no check command: the same; on: C1 runs on the change's commit", () => {
     let s = buildSeed(T0, { inFlightRuns: false });
     for (const t of s.tasks) t.hold = true;
@@ -206,7 +206,7 @@ describe("dispatch, target and reuse (§6.4)", () => {
     expect(running(on, id)[0].snapshot.routingReason).toBe("Run by the service (sandboxed)");
   });
 
-  it("the sandbox not ready holds check steps, labelled, and never falls back to running unsandboxed (Q3, mutation check)", () => {
+  it("the sandbox not ready holds check steps, labelled, and never falls back to running unsandboxed (mutation check)", () => {
     for (const health of [undefined, { sandbox: "codex" as const, status: "unavailable" as const, detail: "x", checkedAt: at(0) }, { sandbox: "codex" as const, status: "unverified" as const, detail: "x", checkedAt: at(0) }, { sandbox: "none" as const, status: "ready" as const, detail: "x", checkedAt: at(0) }]) {
       const { s: base, id } = withChecks();
       const held = { ...base, attempts: base.attempts.filter((a) => a.snapshot.provider !== "service"), project: { ...base.project, checksHealth: health } };
@@ -268,7 +268,7 @@ describe("dispatch, target and reuse (§6.4)", () => {
   });
 });
 
-describe("findings from a run (§6.7)", () => {
+describe("findings from a run", () => {
   it("a failing check is an auto-fix error with the output tail; a timeout names the limit; a failed prepare and touched inputs need a decision", () => {
     const rec: CheckRunRecord = {
       sha: SHA,
@@ -322,7 +322,7 @@ describe("findings from a run (§6.7)", () => {
   });
 });
 
-describe("Final checks: the decision, check rounds and acceptance (§6.7)", () => {
+describe("Final checks: the decision, check rounds and acceptance", () => {
   /** The loop ended with a failing check on the final change: C2 ran (reused the failing C1) and blocked. */
   function blockedFinal(routeTo: "lead" | "user" = "user"): { s: State; id: string } {
     let { s, id } = withChecks();
@@ -386,7 +386,7 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
     expect(task(done, id).lifecycle).toBe("done");
   });
 
-  it("review M6: accepting failing checks never covers a configured check that did not run; the missing-check rule is applied first (mutation check)", () => {
+  it("accepting failing checks never covers a configured check that did not run; the missing-check rule is applied first (mutation check)", () => {
     const { s, id } = blockedFinal();
     const d = s.decisions.find((x) => x.kind === "final-checks")!;
     const accepted = F.decideFinding(s, d.id, "accept", "ship it", at(52));
@@ -416,7 +416,7 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
     const t1 = task(r1, id);
     expect(t1.checkRounds).toBe(1);
     expect(t1.steps.map((x) => x.id)).toEqual(expect.arrayContaining(["C2-r1-fix", "C2-r1-review", "C2-r1-security", "C2-r1-checks"]));
-    // ORC-021: the round's security review runs beside its code review, and the round's checks wait for both.
+    // The round's security review runs beside its code review, and the round's checks wait for both.
     const sec = t1.steps.find((x) => x.id === "C2-r1-security")!;
     expect(sec.role).toBe("security_reviewer");
     expect(sec.dependsOn).toEqual(["C2-r1-fix"]);
@@ -433,7 +433,7 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
     expect(running(r1, id)[0].stepId).toBe("C2-r1-fix");
     r1 = M.reportCompletion(r1, running(r1, id)[0].id, [], at(53), [{ name: "change", summary: "f", ref: `${SHA2} on b` }, { name: "handoff", summary: "h" }]);
     r1 = M.dispatchEligible(r1, at(54));
-    // The round's code review and security review run side by side (ORC-021); both finish clean.
+    // The round's code review and security review run side by side; both finish clean.
     expect(running(r1, id).map((a) => a.stepId).sort()).toEqual(["C2-r1-review", "C2-r1-security"]);
     for (const rv of running(r1, id)) {
       r1 = M.reportRunContext(r1, rv.id, { scope: { from: SHA, to: SHA2, paths: ["a"], total: 1 } });
@@ -459,7 +459,7 @@ describe("Final checks: the decision, check rounds and acceptance (§6.7)", () =
   });
 });
 
-describe("evidence and the merge gate (§6.9)", () => {
+describe("evidence and the merge gate", () => {
   const seed = () => {
     const s = buildSeed(T0, { inFlightRuns: false });
     return { ...s, project: { ...s.project, checks: { ...cfg(), rev: 3 } } };
@@ -481,7 +481,7 @@ describe("evidence and the merge gate (§6.9)", () => {
     expect(C.checkEvidence({ ...s, project: { ...s.project, checks: { ...s.project.checks, enabled: false } } }, SHA).ok).toBe(false);
   });
 
-  it("ORC-025: evidence from the service's own check task is named, and a task whose check steps never ran says so (WT-006's checklist)", () => {
+  it("evidence from the service's own check task is named, and a task whose check steps never ran says so (WT-006's checklist)", () => {
     const s = seed();
     const h = SHA.slice(0, 12);
     const pr = D.reportPrHead(D.setDeliveryMode({ ...s, tasks: s.tasks.map((t) => (t.id === "EX-006" ? { ...t, lifecycle: "done" as const, integration: { status: "pending" as const } } : t)) }, { mode: "pr" }, at(0)), "EX-006", { n: 1, sha: SHA, baseSha: SHA2, changed: { files: 1, additions: 1, deletions: 0, paths: ["a"], protectedHits: [], workflowHits: [] } }, at(1));
@@ -524,7 +524,7 @@ describe("evidence and the merge gate (§6.9)", () => {
     expect(ck).toMatchObject({ id: "EX-006-CK1", checkTarget: { taskId: "EX-006", n: 1, sha: SHA }, lifecycle: "ready" });
     expect(ck.steps.map((x) => x.role)).toEqual(["checks"]);
     expect(ck.specs[0].author).toBe("system");
-    // ORC-016: the dedicated check pipeline is the service's own, recorded as such.
+    // The dedicated check pipeline is the service's own, recorded as such.
     expect(ck.flow).toMatchObject({ id: "delivery-checks", source: "internal", chosenBy: "service" });
     expect(ck.flowSince).toBe(1);
     expect(D.ensureChecks(started, "EX-006", at(4)).tasks.filter((t) => t.checkTarget).length).toBe(1);
@@ -539,13 +539,13 @@ describe("evidence and the merge gate (§6.9)", () => {
   });
 });
 
-describe("security review of step 2 (H1, M2, L5, L6)", () => {
+describe("running checks safely: installs, flags, missing checks and probes", () => {
   const withArt = (s: State, rec: CheckRunRecord) => ({
     ...s,
     artifacts: [...s.artifacts, { id: "art-x", taskId: "EX-006", stepId: "C2", attemptId: "run-x", name: "final", kind: "check-results" as const, version: 1, summary: "s", createdAt: at(1), checkRun: rec, findings: C.findingsFromRun(rec), openFindings: C.findingsFromRun(rec).length }],
   });
 
-  it("H1: an install that may use the network must carry its package manager's no-scripts flags; offline it need not; a rebuild step is allowed and marked offline (mutation check)", () => {
+  it("an install that may use the network must carry its package manager's no-scripts flags; offline it need not; a rebuild step is allowed and marked offline (mutation check)", () => {
     for (const argv of [["npm", "ci"], ["npm", "install"], ["pnpm", "install", "--frozen-lockfile"], ["pnpm", "install", "--ignore-scripts"], ["yarn", "install", "--immutable"]]) {
       bad(cfg({ prepareNetwork: true, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }), /must carry/);
       ok(cfg({ prepareNetwork: false, commands: [cmd("i", argv, "prepare"), cmd("t", ["npm", "test"])] }));
@@ -571,7 +571,7 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     expect(C.suggestChecks([{ path: "package.json", text: "{}" }, { path: "pnpm-lock.yaml", text: "" }])[0].argv).toEqual(["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"]);
   });
 
-  it("review H1: the network goes only to npm, pnpm and yarn installs with every repository-code hook off; everything else runs offline with the reason (mutation check: the allowlist)", () => {
+  it("the network goes only to npm, pnpm and yarn installs with every repository-code hook off; everything else runs offline with the reason (mutation check: the allowlist)", () => {
     // Not on the allowlist: allowed as prepare commands, but marked offline with the rule, whatever the settings say.
     for (const argv of [["make", "deps"], ["./gradlew", "dependencies"], ["bundle", "install"], ["node", "scripts/setup.js"], ["python3", "-m", "pip", "install", "-e", "."], ["uv", "sync"], ["poetry", "install"], ["mix", "deps.get"], ["swift", "package", "resolve"], ["cargo", "fetch"], ["go", "mod", "download"]]) {
       expect(C.networkRefusal(argv), argv.join(" ")).toBe(`${C.NETWORK_RULE}.`);
@@ -612,7 +612,7 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     expect(C.yarnrcRefusal({ yarnrc: 'registry "https://registry.npmjs.org"\n' })).toBeUndefined();
   });
 
-  it("review L11: contradicting flags are refused; NPM_CONFIG_*, YARN_* and PNPM_* never pass through; interpreter flags with a separate value are skipped (mutation check)", () => {
+  it("contradicting flags are refused; NPM_CONFIG_*, YARN_* and PNPM_* never pass through; interpreter flags with a separate value are skipped (mutation check)", () => {
     for (const argv of [
       ["npm", "ci", "--ignore-scripts", "--no-ignore-scripts"],
       ["npm", "ci", "--ignore-scripts=false"],
@@ -644,7 +644,7 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     ok(cfg({ commands: [cmd("c", ["node", "-C", "development", "scripts/check.mjs"])] }));
   });
 
-  it("L6: interpreter flags are matched by prefix and in clusters, deno eval is refused, and scanning stops at -m, -- or the script (mutation check)", () => {
+  it("interpreter flags are matched by prefix and in clusters, deno eval is refused, and scanning stops at -m, -- or the script (mutation check)", () => {
     for (const a of ["-cprint(1)", "-e1", "-pe", "-rfoo", "-Ec", "-ic", "--eval=1", "--require=x", "--import", "--loader"]) bad(cfg({ commands: [cmd("c", ["python3", a, "x"])] }), /inline code or preload/);
     for (const a of ["-cprint(1)", "-e1", "-pe", "-rfoo"]) bad(cfg({ commands: [cmd("c", ["node", a])] }), /inline code or preload/);
     bad(cfg({ commands: [cmd("c", ["ruby", "-rjson", "x.rb"])] }), /inline code or preload/);
@@ -659,7 +659,7 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     ok(cfg({ commands: [cmd("c", ["deno", "test", "-r"])] }));
   });
 
-  it("M2: a Checks step that names checks that do not exist, or would run no check, blocks with the reason instead of counting as passing (mutation check)", () => {
+  it("a Checks step that names checks that do not exist, or would run no check, blocks with the reason instead of counting as passing (mutation check)", () => {
     const { s, id } = withChecks();
     // Rename the step's `only` to an id that is not configured: the pending Final checks step blocks at dispatch.
     const s1 = structuredClone(s);
@@ -676,7 +676,7 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     const s2cfg = { ...s2, project: { ...s2.project, checks: { ...cfg({ commands: [cmd("i", ["npm", "ci", "--ignore-scripts"], "prepare"), cmd("test", ["npm", "test"])] }), rev: 1 } } };
     expect(step(M.dispatchEligible(s2cfg, at(4)), id, "C2")).toMatchObject({ state: "blocked", blockedReason: expect.stringMatching(/names checks that do not exist: i\./) });
     expect(C.missingChecks(cfg({ commands: [cmd("test", ["npm", "test"])] }), { checks: { onFail: "block", only: ["tests", "test"] } })).toEqual(["tests"]);
-    // Saving a pipeline or a template that names an unknown check is refused with the same words.
+    // Saving a pipeline that names an unknown check is refused with the same words.
     const defs = task(s, id).steps.map((x) => ({ id: x.id, purpose: x.purpose, role: x.role, dependsOn: [...x.dependsOn], inputs: [...x.inputs], outputs: [...x.outputs], ...(x.checks ? { checks: { ...x.checks } } : {}), ...(x.runIf ? { runIf: [...x.runIf] } : {}), ...(x.iterate ? { iterate: { ...x.iterate } } : {}) }));
     const c2 = defs.find((d) => d.id === "C2")!;
     c2.checks = { onFail: "block", only: ["tests"] };
@@ -685,7 +685,7 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     expect(() => setPipeline(s, id, task(s, id).pipelineRev, defs, "rename", "user", at(5))).toThrow(/C2 names checks that do not exist: tests/);
   });
 
-  it("M2: evidence means every configured check passed on the commit; a run of a subset, or one missing a check, is not evidence (mutation check)", () => {
+  it("evidence means every configured check passed on the commit; a run of a subset, or one missing a check, is not evidence (mutation check)", () => {
     const base = { ...buildSeed(T0, { inFlightRuns: false }) };
     const two = { ...base, project: { ...base.project, checks: { ...cfg({ commands: [cmd("lint", ["npm", "run", "lint"]), cmd("test", ["npm", "test"])] }), rev: 1 } } };
     const both = record(SHA, { results: [{ id: "lint", label: "lint", kind: "check", status: "passed", exitCode: 0, durationMs: 1, excerpt: "", bytes: 0, truncated: false }, ...record(SHA).results] });
@@ -698,7 +698,7 @@ describe("security review of step 2 (H1, M2, L5, L6)", () => {
     expect(C.landedCheckFlags(withArt(two, both), task(two, "EX-006"), SHA)).toEqual([]);
   });
 
-  it("L5: a probe result does not clear a 'Check again' asked for after the probe began (mutation check)", () => {
+  it("a probe result does not clear a 'Check again' asked for after the probe began (mutation check)", () => {
     let s = buildSeed(T0, { inFlightRuns: false });
     s = { ...s, project: { ...s.project, checks: cfg() } };
     const asked = C.recheckChecks(s, at(10)); // the probe starts on this request

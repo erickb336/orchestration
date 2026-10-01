@@ -22,9 +22,9 @@ interface HttpOptions {
   /** Shared simulation settings of the fake adapters (fake mode only). */
   fakeConfig?: FakeRuntimeConfig;
   workspaces?: WorkspaceManager;
-  /** ORC-014: where POST /api/vision-docs keeps copies of the user's documents. Without it uploads are refused. */
+  /** Where POST /api/vision-docs keeps copies of the user's documents. Without it uploads are refused. */
   visionDocs?: VisionDocStore;
-  /** ORC-013: the service's data directory; check logs are served from <dataDir>/check-logs. */
+  /** The service's data directory; check logs are served from <dataDir>/check-logs. */
   dataDir?: string;
   startedAt: string;
   /** host:port values accepted in the Host header (the service's own address plus the dev UI). */
@@ -52,7 +52,7 @@ export function createHttpServer(opts: HttpOptions): Server {
   const hosts = new Set(opts.allowedHosts.map((h) => h.toLowerCase()));
   const origins = new Set([...hosts].map((h) => `http://${h}`));
   const log = opts.log ?? (() => {});
-  /** The copies a batch names, so a refused file's copy can go at once (review 6). */
+  /** The copies a batch names, so a refused file's copy can go at once. */
   const stagedHashes = (state: State, args: unknown): string[] => {
     const ids = (args as { docIds?: unknown } | undefined)?.docIds;
     if (!Array.isArray(ids)) return [];
@@ -130,7 +130,7 @@ export function createHttpServer(opts: HttpOptions): Server {
     return send(res, 200, { taskId, commit, target: landed ? landed.target : `${pr!.repo} ${pr!.base}`, diff: out.diff, truncated: out.truncated } satisfies ChangeResponse);
   };
 
-  /** ORC-013 §6.2: the check commands the repository's own files suggest, read at the trusted base. Nothing is saved. */
+  /** The check commands the repository's own files suggest, read at the trusted base. Nothing is saved. */
   const suggest = (res: ServerResponse) => {
     const { state } = store.read();
     if (!real || !opts.workspaces) return send(res, 200, { commands: [], ref: "", reason: "Suggestions read the repository's files; the simulated runtime has none. The sample project's commands are simulated." } satisfies CheckSuggestions);
@@ -149,7 +149,7 @@ export function createHttpServer(opts: HttpOptions): Server {
     return send(res, 200, { commands, ref, ...(commands.length ? {} : { reason: `No package.json scripts, lockfile, Cargo.toml, go.mod or pyproject.toml with pytest at ${ref}.` }) } satisfies CheckSuggestions);
   };
 
-  /** ORC-013: the full (redacted) log of one check of one run, from the service's own directory. Ids are validated; nothing else is served. */
+  /** The full (redacted) log of one check of one run, from the service's own directory. Ids are validated; nothing else is served. */
   const checkLog = (res: ServerResponse, run: string, check: string) => {
     const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/;
     if (!ID.test(run) || !ID.test(check) || !opts.dataDir) return fail(res, 404, "invalid", "No such log.");
@@ -278,12 +278,12 @@ export function createHttpServer(opts: HttpOptions): Server {
         // A sample project never contacts GitHub.
         if (real && body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr" && store.read().state.project.sample)
           return fail(res, 400, "control", "This is the sample project; pull-request delivery needs a project of your own. Start a new project in Settings.");
-        // ORC-013 §13: the sample project has no repository to run checks on; nothing of it ever runs on this computer.
+        // The sample project has no repository to run checks on; nothing of it ever runs on this computer.
         if (real && body.name === "setChecks" && ((body.args as { config?: { enabled?: unknown } } | undefined)?.config?.enabled === true) && store.read().state.project.sample)
           return fail(res, 400, "control", "This is the sample project; checks run a repository's commands, and it has no repository. Start a project of your own in Settings.");
-        // ORC-014 review 6: once a batch commits (refused files lose their records) and once a project is
-        // replaced, copies no record refers to are deleted. A batch's own copies go at once; others wait
-        // out the grace period in case their batch is still uploading.
+        // Once a batch commits (refused files lose their records) and once a project is replaced, copies
+        // no record refers to are deleted. A batch's own copies go at once; others wait out the grace
+        // period in case their batch is still uploading.
         const sweepAfter = !!opts.visionDocs && (body.name === "attachVisionDocs" || body.name === "initProject");
         const batchHashes = sweepAfter && body.name === "attachVisionDocs" ? stagedHashes(store.read().state, body.args) : [];
         let r: CommandResult;
@@ -295,12 +295,12 @@ export function createHttpServer(opts: HttpOptions): Server {
         if (body.name === "resetSampleData") scheduler.resetRuntime();
         return send(res, 200, { version: r.version, result: r.result });
       }
-      // ORC-014: one file per request. The same host, origin and client-header checks as every other
+      // One file per request. The same host, origin and client-header checks as every other
       // state change already ran above; the body cap (MAX_BODY) bounds the base64 upload.
       if (path === "/api/vision-docs") {
         if (typeof body.path !== "string" || typeof body.content !== "string" || typeof body.idempotencyKey !== "string") return fail(res, 400, "invalid", "path, content and idempotencyKey are required");
         if (!opts.visionDocs) return fail(res, 400, "control", "This service has no place to keep documents.");
-        // Review 5: every field, the idempotency key and the project's caps are checked, and the command
+        // Every field, the idempotency key and the project's caps are checked, and the command
         // recorded, before any byte reaches the disk. A retry replays the recorded outcome (a different
         // file under the same key is refused by the store). The copy is written, or found already
         // present, only once the command succeeded; nothing is attached until `attachVisionDocs`.

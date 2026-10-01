@@ -1,4 +1,4 @@
-/* The Tasks page (ORC-025 pass 4): the list, the board and the card. Layout only: colour and type come from the
+/* The Tasks page: the list, the board and the card. Layout only: colour and type come from the
    tokens and the kit. Every class is prefixed tl- so nothing collides with other screens. */
 
 /* ---------- head and filters ---------- */
@@ -82,7 +82,7 @@
   .tl-card__state { justify-self: start; }
 }
 
-/* ---------- the board (T4) ---------- */
+/* ---------- the board ---------- */
 /* The columns share the page's width. An empty column is narrow and keeps its name; past the width the board
    scrolls inside itself, never the page. */
 main:has(.tl-board) { max-width: none; }

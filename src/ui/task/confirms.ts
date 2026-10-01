@@ -1,5 +1,5 @@
-// ORC-025 pass 3 (P8): the in-page confirmations of the task page, as data. Each says what the action does and
-// what is kept, so the dialog carries the explanation the browser's confirm() used to.
+// The in-page confirmations of the task page, as data. Each says what the action does and
+// what is kept, so the dialog itself carries the explanation.
 
 import type { ConfirmOptions } from "../kit/confirmCore";
 

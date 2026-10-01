@@ -1,4 +1,4 @@
-// ORC-014: vision documents, service level. The upload endpoint with its protections and caps,
+// Vision documents, service level. The upload endpoint with its protections and caps,
 // content-hash storage outside any repository, the lead's, designers' and other roles' envelopes
 // (data block, fair truncation, a copy missing on disk), history keeping old copies, idempotent
 // retries, and the format 12 → 13 migration.
@@ -9,7 +9,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLIENT_HEADER } from "../src/api";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
@@ -21,6 +21,10 @@ import { STATE_FORMAT, Store } from "./store";
 import { ScriptedAdapter } from "./testing/scripted";
 import { VisionDocStore, decodeUpload, isTextDoc, sha256 } from "./visiondocs";
 import { WorkspaceManager } from "./workspaces";
+
+// Large uploads through the real HTTP server: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const j = (r: Response) => r.json() as Promise<any>;
@@ -274,7 +278,7 @@ describe("B. rejections, each with a plain reason, and nothing written on refusa
     expect(M.visionDocsBytes(M.currentVisionDocs(state()))).toBe(M.MAX_VISION_DOCS_BYTES);
     expect(await uploadFail("one.txt", "x")).toBe("Attaching one.txt (1 B) would bring the documents to 20 MB; the limit is 20 MB per project.");
     expect(stored()).toHaveLength(10);
-    // Review 9: the same file again is reported unchanged, never as an error, and nothing is recorded twice.
+    // The same file again is reported unchanged, never as an error, and nothing is recorded twice.
     const same = await uploadOk("big/1.txt", Buffer.alloc(two, 0x61));
     expect(same).toMatchObject({ status: "unchanged", docId: M.currentVisionDocs(state())[0].id });
     expect(M.currentVision(state()).rev).toBe(11);

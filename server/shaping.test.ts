@@ -1,4 +1,4 @@
-// ORC-012: shaping the vision with the lead first, service level. Scripted adapters for both providers
+// Shaping the vision with the lead first, service level. Scripted adapters for both providers
 // and a temporary git repository; no real providers. Shaping end to end (no planning, no dispatch, the
 // shaping brief, a draft accepted, Start building releasing the roadmap), a planning run that cannot
 // draft, going back to shaping with a live run, the format 11 → 12 migration, the simulated lead's
@@ -310,7 +310,7 @@ describe("D. migration and the simulated lead", () => {
     const prompt = buildLeadEnvelope(run.state, M.activeLeadRun(run.state)!, "read");
     const v = fakeVision(prompt)!;
     expect(v.text).toMatch(/^\(Simulated draft, exchange 1\) Problem: Build a notes app that syncs offline/);
-    // ORC-017: the focus and reason carry no "(Simulated)" prefix; the structured flag labels them.
+    // The focus and reason carry no "(Simulated)" prefix; the structured flag labels them.
     expect(v.focus).toBe("Build a notes app that syncs offline");
     expect(String(v.reason)).not.toMatch(/\(Simulated\)/);
     const text = fakeLeadText(run.runId, "message", prompt);
@@ -331,7 +331,7 @@ describe("D. migration and the simulated lead", () => {
   });
 });
 
-describe("F. coverage and questions (revision 2)", () => {
+describe("F. coverage and questions", () => {
   it("a shaping reply with a draft, questions and coverage is stored and survives a reopen of the store; the answers arrive as one message", () => {
     init("shaping");
     const r = ask("I want fast note capture on my phone.");
@@ -396,7 +396,7 @@ describe("F. coverage and questions (revision 2)", () => {
     expect(String((out.vision as { text: string }).text)).toMatch(/^\(Simulated draft, exchange 1\)/);
     expect(String((out.vision as { text: string }).text)).toContain("(assumption");
     expect(out.questions).toHaveLength(3);
-    // ORC-017: the questions sit inside a reply that carries the simulated chip, so they carry no prefix.
+    // The questions sit inside a reply that carries the simulated chip, so they carry no prefix.
     for (const q of out.questions as { question: string; why: string }[]) {
       expect(q.question).not.toMatch(/\(Simulated/);
       expect(q.why).not.toMatch(/\(Simulated/);
@@ -409,7 +409,7 @@ describe("F. coverage and questions (revision 2)", () => {
     expect(done.conversation[done.conversation.length - 1].questions).toHaveLength(3);
     expect(done.conversation[done.conversation.length - 1].rejected).toBeUndefined();
     expect(M.coverageOf(done)!.intent).toBe("partial");
-    // ORC-017 review L2: a user who quotes the lead's phrase does not add an exchange; only the lead's own lines count.
+    // A user who quotes the lead's phrase does not add an exchange; only the lead's own lines count.
     const quoting = M.postMessage(done, "You wrote: Here is what I understand. Yes, that is right.", iso());
     const run3 = M.startLeadRun(quoting, { provider: "claude", model: "m", trigger: "message" }, iso());
     const out3 = parseLeadOutput(fakeLeadText(run3.runId, "message", buildLeadEnvelope(run3.state, M.activeLeadRun(run3.state)!, "read")));

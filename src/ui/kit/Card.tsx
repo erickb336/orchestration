@@ -16,7 +16,7 @@ export type CardProps = {
   children: ReactNode;
 };
 
-/** A card: a title with an optional count and actions, then a body. One card per thing (rule 1). */
+/** A card: a title with an optional count and actions, then a body. One card per thing. */
 export function Card({ title, as: Heading = "h2", count, countTone = "neutral", actions, id, className, children }: CardProps) {
   const autoId = useId();
   const titleId = `${id ?? autoId}-title`;

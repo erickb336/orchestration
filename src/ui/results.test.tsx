@@ -1,4 +1,4 @@
-// ORC-025 pass 4: the Results page (R1–R3). Ready to merge first (pass 3's verdict line, Merge and Keep for me),
+// The Results page. Ready to merge first (the verdict line, Merge and Keep for me),
 // then New results with one Mark as seen and one Send back… per item. The lists and words come from resultsView.ts;
 // the page is rendered through react-dom/server over a fake store, as in home.test.tsx.
 
@@ -121,7 +121,7 @@ describe("the pull requests of the Results page", () => {
   });
 });
 
-describe("landed items (R3)", () => {
+describe("landed items", () => {
   const base: Landed = { at: at(0), via: "pr", target: "o/r main", commit: HEAD, by: "app", flags: [], status: "unreviewed", notes: [], followUps: [] };
 
   it("filters New, All and Sent back, with a title that never calls a seen item new", () => {

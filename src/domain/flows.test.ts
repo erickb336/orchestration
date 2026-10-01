@@ -1,4 +1,4 @@
-// ORC-021: the pure flow resolver. The six built-in files resolve in order; every flow passes the graph
+// The pure flow resolver. The six built-in files resolve in order; every flow passes the graph
 // rules, every flow that changes code has an independent code review and a security review beside it,
 // every flow has `whenToUse`; the rules the service relies on; who may use what; hashes and summaries.
 // No files are read here: the built-ins are compiled in.
@@ -58,7 +58,7 @@ describe("the six flows", () => {
     for (const p of builtInCatalog()) expect(p.steps.some((s) => s.independentOf), p.id).toBe(false);
   });
 
-  it("ORC-021: a security review runs beside every code review, reads the same inputs, feeds the repair and the verification, and is never a replacement", () => {
+  it("a security review runs beside every code review, reads the same inputs, feeds the repair and the verification, and is never a replacement", () => {
     const beside = { change: ["S2", "SR1", "S3", "S4"], bugfix: ["S3", "SR1", "S4", "S5"], feature: ["S3", "SR1", "S5", "S6"] } as const;
     for (const [id, [code, sec, repair, verify]] of Object.entries(beside)) {
       const steps = builtIn(id).steps;

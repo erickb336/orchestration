@@ -1,4 +1,4 @@
-// ORC-025 pass 5, Settings › Working style: how involved you are (S2: one card, the numbers each mode really
+// Settings › Working style: how involved you are (one card, the numbers each mode really
 // sets, Fine-tune inside it), what the lead may do when you message it, who decides findings, and notifications.
 // Everything here waits for Save.
 

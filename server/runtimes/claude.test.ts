@@ -5,7 +5,7 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   CLAUDE_AUTH_MESSAGE,
@@ -18,6 +18,10 @@ import {
 } from "./claude";
 import { redact } from "../redact";
 import type { AdapterEvent, Assignment } from "./types";
+
+// Real worker environments and child processes in some tests: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 // --- scripted fake SDK stream ----------------------------------------------------------------
 
@@ -270,7 +274,7 @@ describe("ClaudeAdapter", () => {
     await waitFor(() => calls.length === 1);
 
     const opts = calls[0].options;
-    // ORC-022: the prompt is an input stream whose first message is the envelope, shaped like the SDK's own string prompt.
+    // The prompt is an input stream whose first message is the envelope, shaped like the SDK's own string prompt.
     await waitFor(() => inputs.length === 1);
     expect(inputs[0]).toEqual(ENVELOPE_MESSAGE);
     expect(input.closed).toBe(false);
@@ -620,7 +624,7 @@ describe("ClaudeAdapter", () => {
     expect(terminals(events)).toHaveLength(0);
   });
 
-  describe("notes (ORC-022)", () => {
+  describe("notes", () => {
     const NOTE = "Note from the lead, relaying the user (mid-run, 10:00): skip the README; the owner will write it.";
     /** Start a run, bring it to the started state, send one note and return the message the adapter streamed. */
     async function started(opts: ClaudeAdapterOptions = {}) {
@@ -708,7 +712,7 @@ describe("ClaudeAdapter", () => {
       await waitFor(() => s.input.closed);
     });
 
-    it("ORC-022 review M3: the note's turn hits the spend or turn limit: the run completes on the earlier result, with the total usage, and says so", async () => {
+    it("the note's turn hits the spend or turn limit: the run completes on the earlier result, with the total usage, and says so", async () => {
       for (const subtype of ["error_max_budget_usd", "error_max_turns"] as const) {
         const s = await started();
         const sent = await sendNote(s);
@@ -776,7 +780,7 @@ describe("ClaudeAdapter", () => {
       expect(terminals(s.events)).toHaveLength(1);
     });
 
-    it("ORC-022 review L5: while the CLI reports a turn running, the wait is renewed instead of completing under it; once idle, it gives up as before", async () => {
+    it("while the CLI reports a turn running, the wait is renewed instead of completing under it; once idle, it gives up as before", async () => {
       const s = await started({ noteAckGraceMs: 40 });
       const sent = await sendNote(s);
       s.stream.push(result("success", { result: "First turn." }));
@@ -970,7 +974,7 @@ describe("worker environment and connections", () => {
     expect(deny?.behavior).toBe("deny");
   });
 
-  it("never loads project or local settings in either environment (ORC-013: the worktree's instruction files and hooks are agent-written)", async () => {
+  it("never loads project or local settings in either environment (the worktree's instruction files and hooks are agent-written)", async () => {
     for (const environment of ["isolated", "local"] as const) {
       const { adapter, calls } = setup({ claudeConfigPath: configWith({}) });
       adapter.start(assignment({ environment }));

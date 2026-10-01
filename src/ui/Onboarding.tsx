@@ -11,11 +11,11 @@ function scrollToHeading(id: string) {
 }
 
 /**
- * ORC-012: the first choice: shape the vision with the lead first, or start building now (the usual
- * behaviour). Review 6: an empty project of your own starts by shaping, so "Start building now" is a
- * real Start building. ORC-014 review 10: the step is done once you chose: "Shape" counts as chosen while
- * already shaping, and "Start building now" asks for a vision first, with the way there. ORC-025 (H5):
- * "Start building now" is offered only while shaping; on a project that is already building it did nothing.
+ * The first choice: shape the vision with the lead first, or start building now (the usual behaviour).
+ * An empty project of your own starts by shaping, so "Start building now" is a real Start building. The
+ * step is done once you chose: "Shape" counts as chosen while already shaping, and "Start building now"
+ * asks for a vision first, with the way there. "Start building now" is offered only while shaping; on a
+ * project that is already building it would do nothing.
  */
 function StageChoice({ onChosen }: { onChosen: () => void }) {
   const { state, send, disabled } = useStore();
@@ -85,7 +85,7 @@ export function Onboarding() {
   const shaping = state.project.stage === "shaping";
 
   if (service.runtime !== "real") {
-    // ORC-025 (H5): one line. The demo bar says what is simulated; this says how to use your own repository, and offers the shaping stage once.
+    // One line. The demo bar says what is simulated; this says how to use your own repository, and offers the shaping stage once.
     return (
       <p className="try-shaping" aria-label="About the sample project">
         <span>
@@ -175,7 +175,7 @@ export function Onboarding() {
       done: state.project.autonomy.enabled || involvementChosen === "1",
       action: <a href="#/settings/working-style/involvement">Choose</a>,
     },
-    // ORC-013: once a repository is set, the service can run its checks on every change.
+    // Once a repository is set, the service can run its checks on every change.
     ...(service.repo?.ok
       ? [
           {

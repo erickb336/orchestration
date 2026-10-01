@@ -1,4 +1,4 @@
-// ORC-009: steering by conversation, domain level. The permission matrix, strict validation of the
+// Steering by conversation, domain level. The permission matrix, strict validation of the
 // lead's untrusted steering block, deferral (dispatch-only, never a hold), the derived priority tier,
 // compare-and-set Undo/Apply/Dismiss, drop and reopen, message status, pins, and determinism.
 
@@ -168,7 +168,7 @@ describe("D2 validateSteer is strict", () => {
     const many = Array.from({ length: 21 }, (_, i) => ({ id: `T-${i}`, defer: true }));
     const r = v({ tasks: many, reason: 42 });
     expect(r.items.filter((i) => i.ok)).toHaveLength(20);
-    expect(r.items).toHaveLength(20); // review finding 5: the rest is one note, not one row each
+    expect(r.items).toHaveLength(20); // the rest is one note, not one row each
     expect(r.notes).toContain("1 more entry ignored: at most 20 changes in one reply");
     expect(reasons({ tasks: [{ id: "EX-003", defer: true }, { id: "EX-003", priority: 1 }] })).toEqual(["ok", "one change per task per reply"]);
     expect(r.reason).toBe("From your message");
@@ -549,10 +549,11 @@ describe("D11 pins from commands", () => {
   });
 });
 
-// Regressions for the independent review of ORC-009 (findings 2–8; finding 1 is in delivery.review3.test.ts
-// and server/steering.test.ts, and finding 3's confirmation dialog is UI-only).
-describe("R1. independent review findings", () => {
-  it("2: a drop counts every open dependent, deferred or not, so it never leaves a task Blocked", () => {
+// Harder cases: drops and their dependents, deferral, undo, the cap on entries and plain-text fields. The
+// service's own review and fix tasks are covered in delivery.review3.test.ts and server/steering.test.ts; the
+// confirmation dialog for a drop is UI-only.
+describe("drops, deferral, undo and plain text", () => {
+  it("a drop counts every open dependent, deferred or not, so it never leaves a task Blocked", () => {
     const base = userTask(seed(), "Mine", 5);
     const s = structuredClone(base.state);
     task(s, base.id).dependsOn = ["EX-003"];
@@ -573,7 +574,7 @@ describe("R1. independent review findings", () => {
     expect(both.set.changes.map((c) => c.status)).toEqual(["applied", "applied"]);
   });
 
-  it("3: a drop the user applied is an ordinary cancel; Undo says so instead of failing on reopen", () => {
+  it("a drop the user applied is an ordinary cancel; Undo says so instead of failing on reopen", () => {
     const r = steerRun(M.setSteeringMode(seed(), "suggest", at(0)), { tasks: [{ id: "EX-003", drop: true }] });
     expect(r.set.changes[0]).toMatchObject({ kind: "drop", status: "suggested" });
     const applied = M.applySteering(r.state, r.set.id, undefined, at(5));
@@ -586,7 +587,7 @@ describe("R1. independent review findings", () => {
     expect(task(undo.state, "EX-003").lifecycle).toBe("cancelled");
   });
 
-  it("4: a deferred root that finishes no longer defers its children, and finishing clears the deferral", () => {
+  it("a deferred root that finishes no longer defers its children, and finishing clears the deferral", () => {
     let s = structuredClone(seed());
     task(s, "EX-004").parentTaskId = "EX-003";
     s = deferred(s, "EX-003");
@@ -605,7 +606,7 @@ describe("R1. independent review findings", () => {
     expect(task(u, id)).toMatchObject({ lifecycle: "done", deferral: undefined });
   });
 
-  it("5: entries past the cap of 20 are one note, never one persisted row each", () => {
+  it("entries past the cap of 20 are one note, never one persisted row each", () => {
     const many = Array.from({ length: 5000 }, (_, i) => ({ id: `T-${i}`, defer: true }));
     const v = M.validateSteer(seed(), messageRun, { tasks: many });
     expect(v.items).toHaveLength(20);
@@ -615,7 +616,7 @@ describe("R1. independent review findings", () => {
     expect(r.set.notes).toEqual(["4980 more entries ignored: at most 20 changes in one reply"]);
   });
 
-  it("6: a new project starts with no change sets, so old ones cannot rewrite its tasks", () => {
+  it("a new project starts with no change sets, so old ones cannot rewrite its tasks", () => {
     const r = steerRun(buildSeed(T0, { inFlightRuns: false }), { focus: "Local first", tasks: [{ id: "EX-003", priority: 1 }] });
     expect(r.state.steering).toHaveLength(1);
     const fresh = M.initProject(r.state, { name: "New", repoPath: "/tmp/new", vision: "v", focus: "f" }, at(10));
@@ -623,7 +624,7 @@ describe("R1. independent review findings", () => {
     expect(() => M.undoSteering(fresh, r.set.id, undefined, at(11))).toThrow(ControlError);
   });
 
-  it("7: an undone focus change or undefer cannot be redone by the lead; it is only suggested", () => {
+  it("an undone focus change or undefer cannot be redone by the lead; it is only suggested", () => {
     const first = steerRun(seed(), { focus: "Local first", tasks: [] });
     expect(first.set.changes[0]).toMatchObject({ kind: "focus", status: "applied" });
     const undone = M.undoSteering(first.state, first.set.id, undefined, at(10)).state;
@@ -647,7 +648,7 @@ describe("R1. independent review findings", () => {
     expect(task(redo.state, "EX-003").deferral).toBeDefined();
   });
 
-  it("8: focus, reason and why are one line of plain text: control characters are rejected, whitespace collapses", () => {
+  it("focus, reason and why are one line of plain text: control characters are rejected, whitespace collapses", () => {
     const v = M.validateSteer(seed(), messageRun, {
       focus: "Local\n\nfirst,\tthen   deploy",
       reason: "because\u0007",
@@ -673,8 +674,8 @@ describe("R1. independent review findings", () => {
   });
 });
 
-describe("R1. independent review findings (low)", () => {
-  it("10: a refused set or a reply without a block decides nothing; only accepted rows supersede a target", () => {
+describe("superseding, Keep running and retries", () => {
+  it("a refused set or a reply without a block decides nothing; only accepted rows supersede a target", () => {
     const held = steerRun(seed(), { tasks: [{ id: "EX-003", priority: 1 }] }, { during: (s) => M.postMessage(s, "newer", at(2)) });
     expect(held.set.heldBecause).toBeDefined();
     expect(held.set.changes[0].status).toBe("suggested");
@@ -693,13 +694,13 @@ describe("R1. independent review findings (low)", () => {
     expect(accepted.state.steering[0].changes[0].status).toBe("superseded");
   });
 
-  it("11: Keep running whatever the focus lifts the task's deferral", () => {
+  it("Keep running whatever the focus lifts the task's deferral", () => {
     const pinned = M.setRunPin(deferred(seed(), "EX-003"), "EX-003", true, at(1));
     expect(task(pinned, "EX-003").deferral).toBeUndefined();
     expect(task(pinned, "EX-003").userSet?.run).toBe(at(1));
   });
 
-  it("12: a row applied on the retry pass loses its kept note; a repeated failed undo neither grows the note nor logs again", () => {
+  it("a row applied on the retry pass loses its kept note; a repeated failed undo neither grows the note nor logs again", () => {
     const base = userTask(seed(), "Mine", 5);
     const s = structuredClone(base.state);
     task(s, base.id).dependsOn = ["EX-003"];

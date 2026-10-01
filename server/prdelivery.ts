@@ -1,4 +1,4 @@
-// The driver of pull-request delivery (ORC-008). It runs inside the scheduler's cycle and follows
+// The driver of pull-request delivery. It runs inside the scheduler's cycle and follows
 // intent → act → observe:
 //
 //   1. results of finished operations are applied, lease-checked and stale-guarded;
@@ -13,7 +13,7 @@
 // lease are dropped by a generation counter.
 //
 // Only this driver runs gh and git push. It never forces a push and never bypasses GitHub's rules.
-// ORC-013: a re-run of a GitHub-cancelled job is a write like any other: intent (budget spent) → act
+// A re-run of a GitHub-cancelled job is a write like any other: intent (budget spent) → act
 // → observe; an interrupted one is observed, never sent again.
 
 import * as D from "../src/domain/delivery";
@@ -317,7 +317,7 @@ export class PrDriver {
         }
       }
       case "rerun": {
-        // ORC-013 §7.3: the intent (and its budget) is already recorded. Each job id was seen on the
+        // The intent (and its budget) is already recorded. Each job id was seen on the
         // app's own pull request at its current head and is checked as an integer before use.
         const t = state.tasks.find((x) => x.id === op.taskId)!;
         const pr = t.integration!.pr!;

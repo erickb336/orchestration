@@ -1,4 +1,4 @@
-// ORC-017 §4: whether the first-run tour has been seen. The record is a per-viewer convenience in
+// Whether the first-run tour has been seen. The record is a per-viewer convenience in
 // browser storage (see Tour.tsx for the tour itself); every access is wrapped, so blocked storage never breaks the page. When storage
 // throws, the tour may start once per page load and never loops.
 

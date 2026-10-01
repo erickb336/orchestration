@@ -1,4 +1,4 @@
-// ORC-017 §3.3: progress by area is derived from state only. Counts, ordering, the "Other" group, the
+// Progress by area is derived from state only. Counts, ordering, the "Other" group, the
 // live line, and what a task waits on the user for.
 
 import { describe, expect, it } from "vitest";
@@ -28,7 +28,7 @@ describe("progressByArea", () => {
     expect(by(rows, "Export").label).toBe("Export: 1 of 1 task done");
     expect(by(rows, "Capture").label).toBe("Capture: 0 of 1 task done, 1 needs you");
     expect(by(rows, "Storage").label).toBe("Storage: 0 of 1 task done, 1 in progress");
-    // Review M1: a task the user paused is called paused, not "not started".
+    // A task the user paused is called paused, not "not started".
     expect(by(rows, "Onboarding").label).toBe("Onboarding: 0 of 1 task done, 1 paused");
   });
 
@@ -76,11 +76,11 @@ describe("progressByArea", () => {
     expect(again.total).toBe(2);
     expect(again.done).toBe(1);
     expect(again.segments).toEqual(["rest", "done"]);
-    // EX-001 has started and nothing runs on it now: waiting, not "not started" (review M1).
+    // EX-001 has started and nothing runs on it now: waiting, not "not started".
     expect(again.label).toBe("Export: 1 of 2 tasks done, 1 waiting");
   });
 
-  it("the demo's labels name paused and deferred work, and one task's two same-provider reviews are listed once (ORC-017 review M1, L7)", () => {
+  it("the demo's labels name paused and deferred work, and one task's two same-provider reviews are listed once", () => {
     const s = buildDemo(T0);
     const reliability = by(progressByArea(s, T0), "Reliability");
     expect(reliability.label).toBe("Reliability: 2 of 4 tasks done, 1 paused, 1 deferred");
@@ -93,7 +93,7 @@ describe("progressByArea", () => {
     expect(liveAgents(seed, t)).toHaveLength(1);
   });
 
-  it("ORC-025: the header counts stopping runs as busy and never says Idle over them", () => {
+  it("the header counts stopping runs as busy and never says Idle over them", () => {
     const s = buildSeed(T0);
     expect(agentsWorking(s)).toBe(2);
     expect(agentsStopping(s)).toBe(0);
@@ -142,7 +142,7 @@ describe("progressByArea", () => {
   });
 });
 
-describe("ORC-025 pass 2: the badges and the lead's latest reply", () => {
+describe("the badges and the lead's latest reply", () => {
   it("the Lead badge counts replies newer than the last one shown, and nothing else", () => {
     const s = buildDemo(T0);
     const replies = s.conversation.filter((m) => m.author === "lead");

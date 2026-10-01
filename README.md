@@ -105,6 +105,7 @@ npm run capture    # retake the README images from the demo (needs Chrome and ff
 - `src/domain/`: pure state and commands, no I/O.
 - `server/`: the SQLite store, the scheduler, the Claude and Codex adapters, git worktrees, and the HTTP API.
 - `src/ui/`: the React app.
+- `src/ui/kit/`: the component kit every screen is built from. Open `#/kit` in the running app to see each component in every state. A test fails when a screen sets a font size or a colour inline, or uses the browser's `confirm()`, so new screens use the kit.
 - `flows/`: the flows.
 - `docs/tasks/`: one spec per feature.
 

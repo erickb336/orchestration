@@ -1,4 +1,4 @@
-// ORC-025 pass 5 (S5): one way of saving. Each Settings section edits a draft and saves it with one button.
+// One way of saving. Each Settings section edits a draft and saves it with one button.
 // The draft holds only what the person changed; every other field follows the live value, so a change made
 // elsewhere (another tab, the lead, the service) still shows, and the person's own edits are never overwritten.
 

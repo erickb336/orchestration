@@ -38,7 +38,7 @@
         "never-block-on-the-human",
         "encode-lessons-in-structure"
       ],
-      "description": "ORC-024: the id of a file in principles/. The list equals PRINCIPLE_IDS in src/domain/principles.ts."
+      "description": "The id of a file in principles/. The list equals PRINCIPLE_IDS in src/domain/principles.ts."
     },
     "ref": {
       "type": "object",
@@ -83,9 +83,9 @@
         "principles": {
           "type": "array",
           "uniqueItems": true,
-          "maxItems": 15,
+          "maxItems": 16,
           "items": { "$ref": "#/$defs/principle" },
-          "description": "ORC-024: the working principles the step's agent receives, added to its instructions. Not on Checks steps. \"attack-the-premise\" is added by the service to a repair round that follows a round which failed the same way."
+          "description": "The working principles the step's agent receives, added to its instructions. Not on Checks steps. \"attack-the-premise\" is added by the service to a repair round that follows a round which failed the same way."
         }
       }
     }

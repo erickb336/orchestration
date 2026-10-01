@@ -1,7 +1,7 @@
-// ORC-008 step 1, end to end without GitHub: the format 9 → 10 migration, local delivery feeding the
-// review-later queue, the changes endpoint, and a revert sent back through the normal pipeline
-// (design §17, scenarios 17 for local delivery and 18). Real git in a temporary repository; scripted
-// adapters stand in for Claude and Codex.
+// Delivery and the review-later queue, end to end without GitHub: the format 9 → 10 migration, local
+// delivery feeding the review-later queue, the changes endpoint, and a revert sent back through the normal
+// pipeline (scenarios 17 for local delivery and 18 of the test plan in docs/design/ORC-008-design.md). Real
+// git in a temporary repository; scripted adapters stand in for Claude and Codex.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as D from "../src/domain/delivery";
 import * as M from "../src/domain/model";
 import { DEFAULT_PR_DELIVERY, type State } from "../src/domain/types";
@@ -21,6 +21,10 @@ import { STATE_FORMAT, Store } from "./store";
 import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter } from "./testing/scripted";
 import { MAX_CHANGE_DIFF_BYTES, WorkspaceManager } from "./workspaces";
+
+// Real git and many scheduler cycles per test: a busy machine can take
+// several times vitest's 5 s default, so these tests get 20 s. A real hang still fails.
+vi.setConfig({ testTimeout: 20_000 });
 
 let dir: string;
 let repo: string;
@@ -104,7 +108,8 @@ describe("state format 10", () => {
 
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    // ORC-009 raised the format to 11, ORC-012 to 12 and ORC-014 to 13; a format-9 document upgrades through each.
+    // Later features raised the format further (steering to 11, shaping to 12, vision documents to 13, …); a
+    // format-9 document upgrades through each.
     expect(STATE_FORMAT).toBe(18);
     expect(s.version).toBe(18);
     expect(s.project.visionDocs).toEqual([]);
@@ -387,7 +392,7 @@ describe("send back as a revert, local delivery (scenario 17)", () => {
     expect(git("show", `${change.ref!.split(" ")[0]}:README.md`)).toBe("hello from B, without A");
     finishRest(rv);
     expect(git("show", "main:README.md")).toBe("hello from B, without A");
-  }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
+  });
 
   it("a revert is refused when its starting point does not contain the landed commit", () => {
     const a = deliverTask("Adds a file", "feature.txt", "feature\n");
@@ -441,7 +446,7 @@ describe("credentials", () => {
   });
 });
 
-describe("review findings on step 1", () => {
+describe("empty changes, conflict markers and reverts", () => {
   it("a task whose coder changed nothing lands nothing: it never takes another task's commit as its own", () => {
     const a = deliverTask("Real change", "one.txt", "1\n");
     const la = structuredClone(task(a).integration!.landed!);

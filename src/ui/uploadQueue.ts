@@ -1,4 +1,4 @@
-// ORC-014 review 4 and 9: the upload queue behind the "Vision documents" list, kept out of React state so
+// The upload queue behind the "Vision documents" list, kept out of React state so
 // no drain ever reads a stale `busy`. Files enqueued while a drain runs (a folder walk that finishes
 // after a drop, a second drop) join the batch being uploaded; files enqueued after a drain ended start a
 // new one. Each drain uploads every queued file, one request each, then attaches the staged ones as ONE

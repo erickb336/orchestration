@@ -1,4 +1,4 @@
-// The shell (ORC-025 pass 2, N1–N7): the demo bar with its Simulation menu, the header with Home · Tasks ·
+// The shell: the demo bar with its Simulation menu, the header with Home · Tasks ·
 // Results · Settings, the live indicator, "Message the lead" (the one primary action) and the Project menu
 // that pauses and resumes. The lead drawer opens from the header on every page. The kit's ConfirmProvider
 // and ToastRegion are mounted once here, so every screen can confirm in page and show one toast.
@@ -14,6 +14,7 @@ import { Review } from "./Review";
 import { Settings } from "./Settings";
 import { PREF_LEAD_SEEN, relTime, usePref } from "./common";
 import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
+import { messageStatusText } from "./notes";
 import { useBrowserNotifications } from "./notifications";
 import { agentsStopping, agentsWorking, liveIndicatorText, prsNeedingYou, unreadLeadReplies } from "./progress";
 import { parseRoute } from "./route";
@@ -23,7 +24,7 @@ import { Gallery } from "./kit/Gallery";
 import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm } from "./kit";
 import { cx } from "./kit/cx";
 
-/** The tabs: the page each one opens, its label and its address. Home keeps `overview` and Results keeps `review` as internal names. Activity (N1) is reached from Tasks. */
+/** The tabs: the page each one opens, its label and its address. Home keeps `overview` and Results keeps `review` as internal names. Activity is reached from Tasks. */
 export const TABS = [
   { page: "overview", label: "Home", href: "#/overview" },
   { page: "tasks", label: "Tasks", href: "#/tasks", tour: "tab-tasks" },
@@ -96,10 +97,10 @@ function Shell() {
   const tab = route.page === "task" ? "tasks" : route.page;
   const demo = service.runtime === "fake";
   useBrowserNotifications();
-  // ORC-017 §4: the first-run tour, demo only, once per browser.
+  // The first-run tour, demo only, once per browser.
   useFirstRunTour(demo, route.page === "overview");
 
-  // ORC-009: the Lead drawer. It stays open across routes, Home included (ORC-025 N3).
+  // The lead drawer. It stays open across routes, Home included.
   const [leadOpen, setLeadOpen] = useState(false);
   const [leadCtx, setLeadCtx] = useState<LeadContext>({});
   const openLead = useCallback((ctx: LeadContext = {}) => {
@@ -142,7 +143,7 @@ function Shell() {
           <ProjectMenu />
         </div>
       </header>
-      {/* N4: no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel and the board its own banner. */}
+      {/* There is no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel and the board its own banner. */}
       {route.page !== "tasks" && route.page !== "overview" && (
         <div className="shell-banner">
           <ShapingBanner />
@@ -203,7 +204,10 @@ function Menu({ label, id, className, children }: { label: string; id?: string; 
   );
 }
 
-/** The header's main action: it opens the lead drawer. A status dot (working, stopping, waiting, blocked) and a badge for unread replies only (N7). */
+/**
+ * The header's main action: it opens the lead drawer. A status dot (working, stopping, waiting, blocked) and a badge
+ * for unread replies only. Its title says where your newest message stands, in the conversation's words.
+ */
 export function LeadButton({ open, onClick }: { open: boolean; onClick: () => void }) {
   const { state, service } = useStore();
   const [seenAt] = usePref(PREF_LEAD_SEEN);
@@ -213,7 +217,8 @@ export function LeadButton({ open, onClick }: { open: boolean; onClick: () => vo
   const status = pending.length ? M.messageStatus(state, pending[pending.length - 1], { blocked: service.leadBlocked, nowMs: now }) : undefined;
   const unread = unreadLeadReplies(state, seenAt);
   const dot = status?.kind === "blocked" ? "blocked" : status?.kind === "stopping-planning" || status?.kind === "restarting" || run?.outcome === "stopping" ? "paused" : run ? "running" : pending.length ? "waiting" : undefined;
-  const title = status ? (pending.length > 1 ? `${pending.length} messages waiting: ${status.text}` : status.text) : run ? "The lead is working" : "Message the lead";
+  const statusText = status ? messageStatusText(state, status) : "";
+  const title = status ? (pending.length > 1 ? `${pending.length} messages waiting: ${statusText}` : statusText) : run ? "The lead is working" : "Message the lead";
   const unreadText = unread ? `${unread} new repl${unread === 1 ? "y" : "ies"}` : "";
   return (
     <Button id={LEAD_BUTTON_ID} variant="primary" className="lead-btn" onClick={onClick} aria-expanded={open} aria-haspopup="dialog" title={unreadText ? `${title} · ${unreadText}` : title} data-tour="lead">
@@ -230,7 +235,7 @@ export function LeadButton({ open, onClick }: { open: boolean; onClick: () => vo
   );
 }
 
-/** N7: the Results badge counts the pull requests that wait for you there, and nothing else. Persistent: it does not reset when the page is visited. */
+/** The Results badge counts the pull requests that wait for you there, and nothing else. Persistent: it does not reset when the page is visited. */
 export function ResultsBadge() {
   const { state } = useStore();
   const n = prsNeedingYou(state).length;
@@ -248,7 +253,7 @@ function ProjectName() {
   return <small>{state.project.name}</small>;
 }
 
-/** N5: the demo bar is one line, and the Simulation menu holds the clock, the tour and the reset. */
+/** The demo bar is one line, and the Simulation menu holds the clock, the tour and the reset. */
 export function SimBanner() {
   const { state, service, setSim, step, reset, disabled } = useStore();
   const confirm = useConfirm();
@@ -306,8 +311,8 @@ export function SimBanner() {
 }
 
 /**
- * ORC-017 §3.7: how many agents work right now, with the pulsing work dot. ORC-025: runs that are still
- * stopping count as busy ("2 agents stopping"); "Idle" only when no agent run is active. The demo bar says
+ * How many agents work right now, with the pulsing work dot. Runs that are still stopping count as busy
+ * ("2 agents stopping"); "Idle" only when no agent run is active. The demo bar says
  * once that everything is simulated, so this says nothing about it.
  */
 function LiveIndicator() {
@@ -353,7 +358,7 @@ function ConnectionBanner() {
 }
 
 /**
- * N2: Pause project and Resume project live in a small Project menu. The header still says truthfully when the
+ * Pause project and Resume project live in a small Project menu. The header still says truthfully when the
  * project is paused or pausing: "Paused" only once every run acknowledged the stop, "Pausing…" until then.
  */
 export function ProjectMenu() {

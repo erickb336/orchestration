@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ORC-017 §6: regenerate the README media from the demo.
+// Regenerate the README media from the demo.
 //
 //   node scripts/capture-demo.mjs [--out docs] [--only overview,board] [--no-tour]
 //
@@ -117,7 +117,7 @@ async function scrollTo(page, where, offset = 16) {
   await page.waitForTimeout(250);
 }
 
-/** The lead message that carried the demo's steering exchange (design §5, message 2). */
+/** The lead message that carried the demo's steering exchange. */
 function steeringMessage(state) {
   const set = state.steering.find((s) => s.changes.some((c) => c.kind === "focus"));
   const msg = set && state.conversation.find((m) => m.author === "lead" && m.leadRunId === set.leadRunId);
@@ -153,7 +153,7 @@ const SCENES = {
     await scrollTo(page, { tag: "h2", text: "Landed" });
   },
   "goal-task": async ({ page, api }) => open(page, api, "#/task/WT-004", { selector: "#children-h" }),
-  // A pipeline whose security review found something, repaired and reviewed again (ORC-021).
+  // A pipeline whose security review found something, repaired and reviewed again.
   pipeline: async ({ page, api }) => {
     await open(page, api, "#/task/WT-004.1", { selector: "#steps-h" });
     await scrollTo(page, { selector: 'section[aria-labelledby="steps-h"]' });
@@ -171,29 +171,29 @@ const SCENES = {
     });
     await page.waitForTimeout(250);
   },
-  settings: async ({ page, api }) => open(page, api, "#/settings", { selector: "#inv-h" }),
+  // Settings opens one section per address (#/settings/<section>/<card>); each card's element id is its name.
+  settings: async ({ page, api }) => open(page, api, "#/settings/working-style/involvement", { selector: "#involvement" }),
   "checks-settings": async ({ page, api }) => {
-    await open(page, api, "#/settings", { selector: "#checks-h" });
-    await scrollTo(page, { selector: 'section[aria-labelledby="checks-h"]' }, 72); // the Flows card beside it starts a little higher
+    await open(page, api, "#/settings/quality/checks", { selector: "#checks" });
+    await scrollTo(page, { selector: "#checks" });
   },
   "delivery-settings": async ({ page, api }) => {
-    await open(page, api, "#/settings", { selector: "#delivery" });
+    await open(page, api, "#/settings/project/delivery", { selector: "#delivery" });
     await scrollTo(page, { selector: "#delivery" });
   },
-  // ORC-021: Settings → Flows.
   flows: async ({ page, api }) => {
-    await open(page, api, "#/settings", { selector: "#flows-h" });
-    await scrollTo(page, { selector: 'section[aria-labelledby="flows-h"]' });
+    await open(page, api, "#/settings/quality/flows", { selector: "#flows" });
+    await scrollTo(page, { selector: "#flows" });
   },
   // Later in the demo: WT-006 finished and its pull request waits on a failed check (see the pr group below).
   "pr-checks": async ({ page, api }) => open(page, api, "#/task/WT-006", { selector: "#delivery-h", text: "Needs you" }),
   // The shaping stage, after a message to the lead.
   shaping: async ({ page, api }) => {
-    await open(page, api, "#/overview", { selector: "#shape-h", text: "The lead asks" });
-    await scrollTo(page, { selector: 'section[aria-labelledby="shape-h"]' });
+    await open(page, api, "#/overview", { selector: "#shape", text: "The lead asks" });
+    await scrollTo(page, { selector: "#shape" });
   },
   "vision-docs": async ({ page, api }) => {
-    await open(page, api, "#/overview", { selector: "#shape-h", text: "The lead asks" });
+    await open(page, api, "#/overview", { selector: "#shape", text: "The lead asks" });
     await scrollTo(page, { tag: "h3", text: "Vision documents" });
   },
 };
@@ -255,7 +255,7 @@ function makeApi(port) {
     },
     /**
      * The start of the demo with the clock paused: the three starting runs dispatched and WT-005's pull
-     * request seen on the simulated GitHub, so it is held for you (design §5). A few ticks do both.
+     * request seen on the simulated GitHub, so it is held for you. A few ticks do both.
      */
     async settle() {
       await api.sim({ auto: false });
@@ -291,7 +291,7 @@ function downscale(src, dst, width) {
 const PALETTE = (fps, width) => `fps=${fps},scale=${width}:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle`;
 
 /**
- * The tour: a GIF at 12 fps and 1200 px, or the fallbacks of design §8 (10 fps, 1000 px, then WebP) until it
+ * The tour: a GIF at 12 fps and 1200 px, or the fallbacks (10 fps, 1000 px, then WebP) until it
  * fits 5 MB. `frames` is an ffmpeg concat list: one JPEG per repaint with its real duration (Chrome sends a
  * screencast frame only when something changed), which `fps=` resamples to a constant rate.
  */
@@ -319,7 +319,7 @@ function convertTour(frames, mediaDir) {
   throw new Error("The tour does not fit 5 MB even as WebP at 10 fps and 1000 px.");
 }
 
-// ---------- the tour recording (design §6) ----------
+// ---------- the tour recording ----------
 
 /**
  * Record the page through Chrome's screencast (what Playwright's own video recorder uses underneath; its

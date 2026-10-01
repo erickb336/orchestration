@@ -1,10 +1,10 @@
-// Claude runtime adapter (ORC-004), built on the pinned @anthropic-ai/claude-agent-sdk.
+// Claude runtime adapter, built on the pinned @anthropic-ai/claude-agent-sdk.
 //
-// One `query()` per attempt with streaming input (ORC-022): the assignment envelope is the first
+// One `query()` per attempt with streaming input: the assignment envelope is the first
 // message of an input stream that stays open while the run lasts, and notes are pushed onto it as
 // user messages. The adapter never touches the store: it turns the SDK message stream into
 // AdapterEvents. Every option used here was checked against the installed sdk.d.ts of the pinned
-// version (see the ORC-004 W3 report; the streaming and note fields against 0.3.285 for ORC-022).
+// version (the streaming and note fields against 0.3.285).
 //
 // Worktree containment is enforced twice, independently:
 //   1. a PreToolUse hook, which the CLI runs before EVERY tool call regardless of permission mode, and
@@ -56,7 +56,7 @@ export interface ClaudeAdapterOptions {
   /** After an abort, how long to wait for the stream to settle before reporting "killed" anyway. Default 5000. */
   killSettleMs?: number;
   /**
-   * ORC-022: after a turn ends with a note still unacknowledged, how long to wait for the next turn to
+   * After a turn ends with a note still unacknowledged, how long to wait for the next turn to
    * acknowledge it before the note is reported not-delivered and the run completes. Default 90000.
    */
   noteAckGraceMs?: number;
@@ -116,7 +116,7 @@ const CLAUDE_MODEL_ALIASES: CatalogModel[] = [
 const CLAUDE_CAPABILITIES: CapabilityMap = {
   start: "supported",
   streamEvents: "supported",
-  // ORC-022: notes go onto the input stream and count as delivered only on the CLI's uuid acknowledgment;
+  // Notes go onto the input stream and count as delivered only on the CLI's uuid acknowledgment;
   // wired and tested against a scripted SDK, unverified against a real model run.
   steer: "unverified",
   // Confirmed by the message stream ending after interrupt(); falls back to aborting the process.
@@ -371,7 +371,7 @@ function describeToolUse(name: string, input: Rec, workspace: string): string {
 }
 
 /**
- * ORC-022: a query's input stream. The envelope is pushed first and notes follow while the run lasts;
+ * A query's input stream. The envelope is pushed first and notes follow while the run lasts;
  * the SDK writes each message to the CLI as it arrives and closes the CLI's stdin once the stream ends.
  * The SDK is the only consumer, so one pending reader is enough.
  */
@@ -416,17 +416,17 @@ interface Run {
   a: Assignment;
   abort: AbortController;
   handle?: ClaudeQueryHandle;
-  /** ORC-022: the query's input; closed on every terminal path so the CLI exits. */
+  /** The query's input; closed on every terminal path so the CLI exits. */
   input: InputStream;
-  /** ORC-022: notes sent and not yet acknowledged, keyed by the uuid they were sent with. */
+  /** Notes sent and not yet acknowledged, keyed by the uuid they were sent with. */
   notes: Map<string, string>;
-  /** ORC-022: the result of the last turn, kept while a note is outstanding; the run completes on it if no acknowledgment comes. */
+  /** The result of the last turn, kept while a note is outstanding; the run completes on it if no acknowledgment comes. */
   lastResult?: Extract<AdapterEvent, { type: "completed" }>;
   /** The CLI's last reported session state (`system/session_state_changed`); undefined if it never reported one. */
   sessionState?: string;
-  /** ORC-022: the timer bounding the wait for that acknowledgment. */
+  /** The timer bounding the wait for that acknowledgment. */
   noteWait?: ReturnType<typeof setTimeout>;
-  /** ORC-022: summed per-turn `usage` of earlier turns (the fallback when a result has no modelUsage). */
+  /** Summed per-turn `usage` of earlier turns (the fallback when a result has no modelUsage). */
   priorTurnUsage?: Usage;
   /** A terminal event was emitted (or the run was killed); nothing else may be emitted. */
   terminal: boolean;
@@ -519,7 +519,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     run.input.close();
   }
 
-  /** ORC-022: report every unacknowledged note of a run as not delivered. */
+  /** Report every unacknowledged note of a run as not delivered. */
   private settleNotes(run: Run, reason: string) {
     for (const [uuid, noteId] of run.notes) {
       run.notes.delete(uuid);
@@ -851,7 +851,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
   }
 
   /**
-   * ORC-022: the CLI echoes the client uuids a turn has consumed on its reply frames (`user_message_uuid`,
+   * The CLI echoes the client uuids a turn has consumed on its reply frames (`user_message_uuid`,
    * `user_message_uuids`): the turn's first top-level assistant message, and the result, whose list also
    * holds the messages folded into the turn between tool rounds. A note counts as delivered only when one
    * of those frames names its uuid; a write to the process is never enough.
@@ -906,7 +906,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
         usage,
         model: run.model ?? firstModel(m),
       };
-      // ORC-022: a note sent but not yet acknowledged is queued in the CLI, which starts the next turn with
+      // A note sent but not yet acknowledged is queued in the CLI, which starts the next turn with
       // it. The run goes on and completes on a later result; this one is kept in case no acknowledgment
       // ever comes (the wait is bounded, see giveUpOnNotes).
       if (run.notes.size > 0) {
@@ -921,9 +921,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
 
     // Error subtypes.
     if (run.interruptRequested) return stopped();
-    // ORC-022 review M3: a turn started by a note shares the run's turn and spend limits. When it hits one, the
-    // run had already finished its work on the earlier turn: complete on that result (with the total usage) and
-    // say so, rather than discarding finished work as a failure.
+    // A turn started by a note shares the run's turn and spend limits. When it hits one, the run had already
+    // finished its work on the earlier turn: complete on that result (with the total usage) and say so, rather
+    // than discarding finished work as a failure.
     if (run.lastResult && (m.subtype === "error_max_turns" || m.subtype === "error_max_budget_usd")) {
       this.activity(run, `The note's turn reached the ${m.subtype === "error_max_turns" ? "turn" : "spend"} limit; the run completes on the result it had before the note`);
       return this.finish(run, { ...run.lastResult, usage });
@@ -952,14 +952,14 @@ export class ClaudeAdapter implements RuntimeAdapter {
   }
 
   /**
-   * ORC-022: no turn acknowledged the outstanding notes within the grace period after the last turn ended.
+   * No turn acknowledged the outstanding notes within the grace period after the last turn ended.
    * They were not delivered, and the run completes on that turn's result. The session is then ended in
    * case it did start a turn after all, so nothing continues unreported.
    */
   private giveUpOnNotes(run: Run) {
     if (run.terminal || run.forgotten || !run.lastResult) return;
-    // ORC-022 review L5: a turn is still running (the CLI says so), most likely the note's own turn before its first
-    // frame. Completing now would read a worktree it is still editing; wait again. The run's time limit still applies.
+    // A turn is still running (the CLI says so), most likely the note's own turn before its first frame.
+    // Completing now would read a worktree it is still editing; wait again. The run's time limit still applies.
     if (run.sessionState !== undefined && run.sessionState !== "idle") {
       this.activity(run, "A turn is still running; waiting for it to take up the note");
       run.noteWait = this.timer(run, this.noteAckGraceMs, () => this.giveUpOnNotes(run));
@@ -981,7 +981,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     if (run.aborting) return this.finish(run, { type: "stopped", attemptId: id, how: "killed" });
     // The stream ending after interrupt() is the confirmation that nothing is running.
     if (run.interruptRequested) return this.finish(run, { type: "stopped", attemptId: id, how: "interrupted" });
-    // ORC-022: the session ended after a turn whose notes were never acknowledged: those notes were not
+    // The session ended after a turn whose notes were never acknowledged: those notes were not
     // delivered, and the run completes on that turn's result (its output block is the work done).
     if (run.lastResult) {
       this.settleNotes(run, "the Claude session ended before the agent read it");
@@ -998,7 +998,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
   }
 
   /**
-   * ORC-022: push a note onto the run's input stream as a user message. `priority: "next"` lets the CLI
+   * Push a note onto the run's input stream as a user message. `priority: "next"` lets the CLI
    * fold it into the running turn between tool rounds (or start the next turn with it), `client_composed`
    * keeps the text as written, and the uuid is what the CLI echoes back to acknowledge it (`acknowledge`).
    * The outcome arrives as one "note" event; until the acknowledgment the note is only sent, not delivered.
@@ -1025,7 +1025,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     const run = this.runs.get(attemptId);
     if (!run || run.terminal || run.forgotten || run.interruptRequested) return;
     run.interruptRequested = true;
-    // ORC-022: a stopping run acts on nothing more, and the input closes so the CLI exits once the turn stops.
+    // A stopping run acts on nothing more, and the input closes so the CLI exits once the turn stops.
     this.settleNotes(run, "the run was stopped first");
     run.input.close();
     // Not started yet: drive() sees the flag after the SDK loads and confirms the stop without a run.

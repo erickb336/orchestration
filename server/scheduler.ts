@@ -39,20 +39,20 @@ interface SchedulerOptions {
   github?: GitHubHost;
   /** True when Claude workers run with shell access; shown as a GitHub posture warning. */
   workerShell?: boolean;
-  /** ORC-014: where the user's vision documents are kept; their text goes into the lead's and designers' envelopes. */
+  /** Where the user's vision documents are kept; their text goes into the lead's and designers' envelopes. */
   visionDocs?: VisionDocStore;
   /**
-   * ORC-013: the runner for the project's checks. Real mode passes the sandboxed runners; without one
+   * The runner for the project's checks. Real mode passes the sandboxed runners; without one
    * and without workspaces (the fake runtime) a simulated runner is used, which spawns nothing.
    */
   checks?: CheckRunner;
-  /** ORC-013: the service's data directory (next to the database): check caches and logs live under it. */
+  /** The service's data directory (next to the database): check caches and logs live under it. */
   dataDir?: string;
 }
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
 const WRITER_ROLES = new Set(["coder"]);
-/** ORC-013: the repository instruction files read from the trusted base as project conventions. */
+/** The repository instruction files read from the trusted base as project conventions. */
 const CONVENTION_FILES = ["AGENTS.md", "CLAUDE.md"];
 
 interface Launched {
@@ -63,15 +63,15 @@ interface Launched {
   workspace?: PreparedWorkspace;
   stepId: string;
   taskId: string;
-  /** ORC-013: a check run: the protected inputs its change touched, computed at launch, recorded with the result. */
+  /** A check run: the protected inputs its change touched, computed at launch, recorded with the result. */
   touchedInputs?: string[];
 }
 
 /**
- * ORC-013 §10.3: what the service recorded about a run before it started (the changed-path set a
- * reviewer was shown, the conventions it was given, the decisions its envelope carried). Queued
- * before the run starts, so it is applied in the same drain as, or an earlier one than, any event
- * from the run. A lost lease drops it with the run.
+ * What the service recorded about a run before it started (the changed-path set a reviewer was shown,
+ * the conventions it was given, the decisions its envelope carried). Queued before the run starts, so
+ * it is applied in the same drain as, or an earlier one than, any event from the run. A lost lease
+ * drops it with the run.
  */
 interface ContextEvent {
   type: "context";
@@ -80,12 +80,12 @@ interface ContextEvent {
   conventions?: NonNullable<M.RunContext["conventions"]>;
   decisions?: string[];
 }
-/** ORC-013 §6.5.4: a sandbox probe's result, applied under the lease like every other observation. */
+/** A sandbox probe's result, applied under the lease like every other observation. */
 interface HealthEvent {
   type: "checks-health";
   attemptId: "";
   health: ChecksHealth;
-  /** When the probe began (the scheduler's clock): a "Check again" asked for later is not cleared by this result (L5). */
+  /** When the probe began (the scheduler's clock): a "Check again" asked for later is not cleared by this result. */
   startedAt: string;
 }
 type QueueEvent = AdapterEvent | ContextEvent | HealthEvent;
@@ -105,7 +105,7 @@ export class Scheduler {
   private readonly log: (msg: string) => void;
   private readonly store: Store;
   readonly adapters: Record<ProviderId, RuntimeAdapter>;
-  /** ORC-013: the check runner, if this service has one. */
+  /** The check runner, if this service has one. */
   readonly checks?: CheckRunner;
   private readonly dataDir?: string;
   /** A sandbox probe in flight (at most one), and how many check runs in a row failed to start. */
@@ -115,9 +115,9 @@ export class Scheduler {
   private readonly visionDocs?: VisionDocStore;
   private queue: QueueEvent[] = [];
   private launched = new Map<string, Launched>();
-  /** ORC-022: notes this instance handed to an adapter, so each is handed over once; cleared with the runs. */
+  /** Notes this instance handed to an adapter, so each is handed over once; cleared with the runs. */
   private notesSent = new Set<string>();
-  /** ORC-013: conventions read this cycle, by trusted ref, so the files are read once per cycle. */
+  /** Conventions read this cycle, by trusted ref, so the files are read once per cycle. */
   private conventionsCache: { ref: string; at: number; files: ConventionsFile[] } | undefined;
   private healthState: Partial<Record<ProviderId, ProviderHealth>> = {};
   private connectionsState: Partial<Record<ProviderId, Connection[] | null>> = {};
@@ -167,7 +167,7 @@ export class Scheduler {
     return { name: SCHEDULER_LEASE, holder: this.holder, nowMs };
   }
 
-  /** Every runner: the provider adapters and (ORC-013) the check runner. */
+  /** Every runner: the provider adapters and the check runner. */
   private allRunners(): RuntimeAdapter[] {
     return [...Object.values(this.adapters), ...(this.checks ? [this.checks as unknown as RuntimeAdapter] : [])];
   }
@@ -254,7 +254,7 @@ export class Scheduler {
     const now = new Date(nowMs).toISOString();
     this.store.update(
       (s) => {
-        // ORC-022: a note handed over before the restart gets no answer now; it is never shown as delivered.
+        // A note handed over before the restart gets no answer now; it is never shown as delivered.
         // Before the runs, so its reason names the restart rather than the lost run.
         let next = M.reconcileNotes(s, now);
         for (const a of M.activeAttempts(next)) {
@@ -269,7 +269,7 @@ export class Scheduler {
       now,
       this.lease(nowMs),
     );
-    // L7: the worktrees of check runs are throwaway by design. Any left by a crash (dirty from a build
+    // The worktrees of check runs are throwaway by design. Any left by a crash (dirty from a build
     // or an install, which is why the ordinary prune keeps them) go now, together with their temp dirs.
     this.pruneCheckWorkspaces();
   }
@@ -293,7 +293,7 @@ export class Scheduler {
   }
 
   /**
-   * ORC-013: who runs an attempt: a provider's adapter, or the service's check runner. Undefined for a
+   * Who runs an attempt: a provider's adapter, or the service's check runner. Undefined for a
    * service run while this service has no runner, so such a run is reconciled as lost.
    */
   private runnerFor(p: Runner): RuntimeAdapter | undefined {
@@ -382,11 +382,11 @@ export class Scheduler {
         if (a.stopRequestedAt && nowMs - Date.parse(a.stopRequestedAt) >= this.ackTimeoutMs) timeouts.push(a.id);
       }
     }
-    // ORC-013 §6.5.4: two check runs in a row that could not start ask for a new sandbox probe.
+    // Two check runs in a row that could not start ask for a new sandbox probe.
     if (failedToStart.some((f) => active.get(f.id)?.snapshot.provider === "service")) this.failedStarts++;
     else if (dispatched.size && [...dispatched].some((id) => active.get(id)?.snapshot.provider === "service")) this.failedStarts = 0;
     this.planProbe(state, nowMs);
-    // ORC-022: notes the user sent since the last cycle go to their live runs.
+    // Notes the user sent since the last cycle go to their live runs.
     this.sendNotes(state);
 
     // 2b. The lead: supervise the active lead run, or start one when a message or planning is due.
@@ -493,12 +493,12 @@ export class Scheduler {
       if (e.type !== "completed" && e.type !== "failed" && e.type !== "stopped") continue;
       const info = this.launched.get(e.attemptId);
       // Lead checkouts are only for reading the repository during the run: remove them afterwards.
-      // ORC-013: a check run's throwaway copy of the change goes too, pass or fail.
+      // A check run's throwaway copy of the change goes too, pass or fail.
       if ((info?.taskId === "LEAD" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
       this.launched.delete(e.attemptId);
     }
     this.conventionsCache = undefined;
-    // ORC-022: notes the lead's reply just sent (applied in the drain above) go to their live runs now.
+    // Notes the lead's reply just sent (applied in the drain above) go to their live runs now.
     this.sendNotes(this.store.read().state);
 
     // 5. Integration: one finished task per cycle, frozen while the project is paused; then delivery.
@@ -512,7 +512,7 @@ export class Scheduler {
   }
 
   /**
-   * ORC-022: hand every note the domain marked "sending" for a live run to that run's adapter, once. The
+   * Hand every note the domain marked "sending" for a live run to that run's adapter, once. The
    * adapter answers with exactly one "note" event (also when it has no such run); the domain records the
    * answer, and a restart marks the unanswered ones not delivered. Notes written into a starting run's
    * instructions (`via: "start"`) are confirmed by `launch`, not here.
@@ -537,7 +537,7 @@ export class Scheduler {
   private integrateNext(nowMs: number, lease: { name: string; holder: string; nowMs: number }) {
     const now = new Date(nowMs).toISOString();
     const { state } = this.store.read();
-    // ORC-012 review 1: integration is delivery work; none starts while shaping (nothing is paused).
+    // Integration is delivery work; none starts while shaping (nothing is paused).
     if (state.project.hold || state.project.stage === "shaping") return;
     const t = M.nextIntegration(state, nowMs);
     if (!t) return;
@@ -639,7 +639,7 @@ export class Scheduler {
     this.store.update((s) => M.reportDeliveryResult(s, result, now), now, lease);
   }
 
-  /** Remove workspaces of runs that are no longer active (real mode). Check worktrees go even when dirty (L7). */
+  /** Remove workspaces of runs that are no longer active (real mode). Check worktrees go even when dirty. */
   prune(): number {
     if (!this.workspaces) return 0;
     const { state } = this.store.read();
@@ -658,9 +658,9 @@ export class Scheduler {
   }
 
   /**
-   * ORC-013 §8.2: the repository's AGENTS.md and CLAUDE.md at the trusted base (never a worktree),
-   * capped and labelled for an envelope. Read at most once per cycle; nothing when the setting is
-   * off, in the fake runtime, or when the repository cannot be read.
+   * The repository's AGENTS.md and CLAUDE.md at the trusted base (never a worktree), capped and
+   * labelled for an envelope. Read at most once per cycle; nothing when the setting is off, in the
+   * fake runtime, or when the repository cannot be read.
    */
   private conventionsFor(state: State, nowMs: number): ConventionsFile[] {
     if (!this.workspaces || !state.project.conventions?.include || state.project.sample || !state.project.repoPath) return [];
@@ -777,7 +777,7 @@ export class Scheduler {
             });
             if (diff) {
               changeUnderReview = { from: diff.from, to: diff.to, text: diff.text };
-              // ORC-013 §5.1: the changed-path set a reviewer must account for, recorded before the run can report anything.
+              // The changed-path set a reviewer must account for, recorded before the run can report anything.
               if (REVIEW_ROLES.includes(step.role)) scope = { from: diff.from, to: diff.to, paths: diff.paths, total: diff.total };
             }
             // A dedicated review without the change in front of it would prove nothing.
@@ -791,7 +791,7 @@ export class Scheduler {
       const conventions = this.conventionsFor(state, Date.now());
       const decisions = F.decisionsForStep(state, task, step).map((d) => d.id);
       this.launched.set(attemptId, { provider: a.snapshot.provider, access, workspace, stepId: step.id, taskId: task.id });
-      // ORC-013 §10.3: queued before the run starts, so it is applied no later than any event from the run.
+      // Queued before the run starts, so it is applied no later than any event from the run.
       this.queue.push({ type: "context", attemptId, ...(scope ? { scope } : {}), ...(conventions.length ? { conventions: conventions.map((c) => ({ file: c.file, blob: c.blob, bytes: c.bytes, truncated: c.truncated })) } : {}), ...(decisions.length ? { decisions } : {}) });
       adapter.start({
         attemptId,
@@ -819,8 +819,8 @@ export class Scheduler {
         outputs: step.outputs,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
-      // Notes written into the instructions ("via start") are confirmed when the runtime reports the run started
-      // (ORC-022 review M1): a run that fails before it starts settles them as not delivered.
+      // Notes written into the instructions ("via start") are confirmed when the runtime reports the run started:
+      // a run that fails before it starts settles them as not delivered.
       return undefined;
     } catch (e) {
       this.launched.delete(attemptId);
@@ -829,9 +829,9 @@ export class Scheduler {
   }
 
   /**
-   * ORC-013 §10.2: start a check run. A throwaway worktree detached at the target commit (removed after
-   * the run, pass or fail), the protected inputs the change touched, and the command environment from
-   * the allowlist. The runner is the service's own; no envelope, no provider.
+   * Start a check run. A throwaway worktree detached at the target commit (removed after the run, pass
+   * or fail), the protected inputs the change touched, and the command environment from the allowlist.
+   * The runner is the service's own; no envelope, no provider.
    */
   private launchChecks(state: State, attemptId: string, task: Task, step: Step): string | undefined {
     const a = state.attempts.find((x) => x.id === attemptId)!;
@@ -887,9 +887,9 @@ export class Scheduler {
   }
 
   /**
-   * ORC-013 §6.5.4: probe the sandbox when checks were switched on, on request, every six hours, and
-   * after two check runs in a row failed to start. At most one probe at a time; its result is queued
-   * and applied under the lease. No probe with the simulated runner beyond its own answer.
+   * Probe the sandbox when checks were switched on, on request, every six hours, and after two check
+   * runs in a row failed to start. At most one probe at a time; its result is queued and applied under
+   * the lease. No probe with the simulated runner beyond its own answer.
    */
   private planProbe(state: State, nowMs: number) {
     const runner = this.checks;
@@ -915,7 +915,7 @@ export class Scheduler {
     const step = task?.steps.find((x) => x.id === a!.stepId);
     if (!a || !step) return { outputs: [], problems: [] };
     const info = this.launched.get(e.attemptId);
-    // ORC-013 §10.2: a check run's report is never parsed from text; it becomes the step's one output.
+    // A check run's report is never parsed from text; it becomes the step's one output.
     if (a.snapshot.provider === "service") {
       if (!e.checks || !step.outputs[0]) return { outputs: [], problems: ["The check run ended without a report."] };
       const record = { sha: e.checks.sha, configRev: a.snapshot.checks?.configRev ?? state.project.checks.rev, sandbox: e.checks.sandbox, ...(e.checks.simulated ? { simulated: true as const } : {}), touchedInputs: info?.touchedInputs ?? [], results: e.checks.results, durationMs: e.checks.durationMs };
@@ -923,7 +923,7 @@ export class Scheduler {
       return { outputs: [{ name: step.outputs[0].name, summary: C.runSummary(record), checkRun: record, findings }], problems: [] };
     }
     const parsed = parseOutputs(e.finalText, step.outputs);
-    // ORC-013: what the parser corrected is recorded on the run, without refusing the result.
+    // What the parser corrected is recorded on the run, without refusing the result.
     parsed.problems.push(...parsed.notes);
     const outputs: M.OutputReport[] = parsed.outputs.map((o) => ({ ...o }));
     // The fake runtime commits nothing: a simulated change is named by its run, so a check step has something to check.
@@ -954,7 +954,7 @@ export class Scheduler {
   }
 
   private applyEvent(s: State, e: QueueEvent, completions: Map<string, { outputs: M.OutputReport[]; problems: string[] }>, now: string): State {
-    // ORC-013: the service's own record of what a run was given; applied only while the run is active.
+    // The service's own record of what a run was given; applied only while the run is active.
     if (e.type === "context") return M.reportRunContext(s, e.attemptId, { scope: e.scope, conventions: e.conventions, decisions: e.decisions });
     if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now, { startedAt: e.startedAt });
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
@@ -988,8 +988,8 @@ export class Scheduler {
         return next;
       }
       case "note": {
-        // ORC-022: the runtime's answer (or the service's, for a note written into a run that started). An answer
-        // from the fake runtime is recorded as simulated. A stale answer changes nothing (the domain checks the run).
+        // The runtime's answer (or the service's, for a note written into a run that started). An answer from
+        // the fake runtime is recorded as simulated. A stale answer changes nothing (the domain checks the run).
         return M.reportNoteOutcome(s, e, now, this.simulatedRun(s, e.attemptId));
       }
     }
@@ -1016,10 +1016,10 @@ export class Scheduler {
         return M.reportLeadFailed(s, e.attemptId, e.message, now, e.usage);
       case "completed": {
         const out = parseLeadOutput(e.finalText);
-        // ORC-017: a reply from the fake runtime is recorded as simulated on what it changed (the focus, the change set, a draft).
+        // A reply from the fake runtime is recorded as simulated on what it changed (the focus, the change set, a draft).
         const run = s.leadRuns.find((r) => r.id === e.attemptId);
         const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
-        // ORC-009/ORC-012/ORC-013: the steering block, the vision draft, the decisions and any parse problem go through as found; the domain validates them.
+        // The steering block, the vision draft, the decisions and any parse problem go through as found; the domain validates them.
         return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, problem: out.problem }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
       }
     }

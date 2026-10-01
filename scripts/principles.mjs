@@ -1,4 +1,4 @@
-// ORC-024: compile principles/*.md into src/domain/builtInPrinciples.json, the copy the app imports
+// Compile principles/*.md into src/domain/builtInPrinciples.json, the copy the app imports
 // (nothing can import Markdown: the server runs through tsx, the UI through Vite). The files are the
 // source of truth; `npm test` runs this first and then checks that the two agree. Run through tsx so the
 // parser is the domain's own: `node --import tsx scripts/principles.mjs`.

@@ -1,4 +1,4 @@
-// ORC-025 pass 3 (P2): what a task needs from the person, each thing once, for the top of the task page.
+// What a task needs from the person, each thing once, for the top of the task page.
 // Pure derivations over domain state, so the page and its tests agree on what is shown.
 
 import * as D from "../../domain/delivery";
@@ -43,7 +43,7 @@ export function waitsForGoAhead(task: Task): boolean {
 
 /**
  * Everything the task needs from you, most pressing first: the pull request, failing final checks, findings
- * to decide, then the option choice or the go-ahead. Each appears once on the page, at the top (P2).
+ * to decide, then the option choice or the go-ahead. Each appears once on the page, at the top.
  */
 export function needsYouItems(state: State, task: Task, nowMs: number): NeedsYouItem[] {
   const out: NeedsYouItem[] = [];

@@ -1,4 +1,4 @@
-// Notification events are keyed on what changed, never on when something was retried (ORC-008 §14).
+// Notification events are keyed on what changed, never on when something was retried.
 
 import { describe, expect, it } from "vitest";
 import * as D from "../domain/delivery";

@@ -1,10 +1,11 @@
-// ORC-008 step 3, findings of the independent review. Regression tests, pure:
-//   1. independence is judged against everyone who authored a change on the pull request;
-//   2. a user's edit of a summary does not make them the author, and an unknown author fails closed;
-//   3. a dedicated review the user cancelled is not started again;
-//   4. an observation is as old as the read of GitHub, not as its arrival;
-//   6. a prepared base update is not pushed once the pull request stops being the merge candidate;
-//   8. ensureReview respects a pause.
+// Pull-request delivery, the harder cases of review and merge. Pure:
+//   - independence is judged against everyone who authored a change on the pull request;
+//   - a user's edit of a summary does not make them the author, and an unknown author fails closed;
+//   - a dedicated review the user cancelled is not started again;
+//   - an observation is as old as the read of GitHub, not as its arrival;
+//   - a prepared base update is not pushed once the pull request stops being the merge candidate;
+//   - ensureReview respects a pause;
+//   - the review and fix tasks of a pull request are not steerable.
 
 import { describe, expect, it } from "vitest";
 import * as D from "./delivery";
@@ -102,7 +103,7 @@ const fixReady = (s: State) => {
   return D.reportRepairHead(done, FIX, { n: 1, sha: HEAD2, baseSha: SHA_A, changed: CHANGED, descends: true }, at(50));
 };
 
-describe("finding 1: independence is judged against every author of the pull request", () => {
+describe("independence is judged against every author of the pull request", () => {
   it("a fix from another provider does not make the first provider independent of its own work: X's code never merges on X's review alone", () => {
     // Codex wrote the original. Claude writes the fix, and Codex reviews the fix task's change.
     const s = fixReady(reviewedChange(redWithFix(), FIX, HEAD2, at(30), { writer: "claude", reviewer: "codex" }));
@@ -200,7 +201,7 @@ describe("finding 1: independence is judged against every author of the pull req
   });
 });
 
-describe("finding 2: who the author is", () => {
+describe("who the author is", () => {
   const edit = (x: State, ref: string | undefined) =>
     x.artifacts.push({ ...x.artifacts.find((a) => a.id === `fx-change-${ID}`)!, id: "edited", attemptId: "edit", version: 2, summary: "a better summary", author: "user", editReason: "clearer", ...(ref ? { ref } : {}), createdAt: at(2) });
 
@@ -257,7 +258,7 @@ describe("finding 2: who the author is", () => {
   });
 });
 
-describe("finding 3: a dedicated review the user cancelled", () => {
+describe("a dedicated review the user cancelled", () => {
   it("leaves the pull request waiting for the user; the service does not start another", () => {
     const s = opened(D.advanceDelivery(built(prMode(), { writer: "codex", sawTheChange: false }), at(4)));
     const cancelled = M.cancelTask(s, `${ID}-RV1`, at(21));
@@ -286,7 +287,7 @@ describe("finding 3: a dedicated review the user cancelled", () => {
   });
 });
 
-describe("finding 4: an observation is as old as the read of GitHub", () => {
+describe("an observation is as old as the read of GitHub", () => {
   it("is stamped with the read time the driver recorded, so a late result is not fresh enough to merge on", () => {
     const base = opened(built(prMode(), { writer: "codex", reviewer: "claude" }));
     // Read at second 30, applied only at second 60 (the operation was slow, or the service was busy).
@@ -305,7 +306,7 @@ describe("finding 4: an observation is as old as the read of GitHub", () => {
   });
 });
 
-describe("finding 6: a prepared base update and a pull request that stops being the merge candidate", () => {
+describe("a prepared base update and a pull request that stops being the merge candidate", () => {
   const UPDATE = "9".repeat(40);
   function prepared(): State {
     const s = D.reportBaseFetched(opened(built(prMode(), { writer: "codex", reviewer: "claude" })), SHA_B, at(22));
@@ -344,7 +345,7 @@ describe("finding 6: a prepared base update and a pull request that stops being 
   });
 });
 
-describe("finding 8: ensureReview is what the service calls", () => {
+describe("ensureReview is what the service calls", () => {
   it("creates nothing while the project is paused, the pull request is held, or delivery is off", () => {
     const s = built(prMode(), { writer: "codex", sawTheChange: false });
     const paused = M.pauseProject(s, at(4));
@@ -360,7 +361,7 @@ describe("finding 8: ensureReview is what the service calls", () => {
   });
 });
 
-describe("ORC-009 review finding 1: the review and fix tasks of a pull request are not steerable", () => {
+describe("the review and fix tasks of a pull request are not steerable", () => {
   it("a message run in PR auto mode that defers the review or reprioritizes the fix is rejected; a deferred review is reported as such", () => {
     const s0 = redWithFix();
     const rv = `${ID}-RV1`;

@@ -1,4 +1,4 @@
-// ORC-021: every path that creates a task chooses a flow and records who chose it. You and the lead may
+// Every path that creates a task chooses a flow and records who chose it. You and the lead may
 // choose any of the six; a breakdown item any flow but Goal; the project default any of the six; the
 // service's own paths name theirs; follow-ups re-apply the current flow.
 
@@ -276,7 +276,7 @@ describe("the service's own paths", () => {
     const s = M.setFlows(seed(), builtInCatalog().map((p) => (p.id === "change" ? { ...p, hash: "e".repeat(64) } : p)), at(0));
     const r = runCommand(s, "resetSampleData", {}, at(1)).state;
     expect(r.flows).toEqual(s.flows);
-    // ORC-017: the reset restores the demo story (not the test fixture); its tasks are back.
+    // The reset restores the demo story (not the test fixture); its tasks are back.
     expect(r.tasks.map((t) => t.id)).toEqual(buildDemo(Date.parse(at(1))).tasks.map((t) => t.id));
     expect(r.project.name).toBe("Weekend Trips (sample)");
   });

@@ -1,4 +1,4 @@
-/* The Results page (ORC-025 pass 4). Layout only: every part is a kit component or pass 3's delivery panel, so
+/* The Results page. Layout only: every part is a kit component or the delivery panel (Delivery.tsx), so
    colour and type come from the tokens. Every class is prefixed r- so nothing collides with other screens. */
 
 .r-page { gap: var(--space-4); }

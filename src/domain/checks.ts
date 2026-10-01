@@ -1,4 +1,4 @@
-// ORC-013 §6: the project's own checks, run by the service. Pure functions over the state: the
+// The project's own checks, run by the service. Pure functions over the state: the
 // configuration and its validation (commands come only from the user's settings, as argv vectors,
 // never a shell string, and only programs on an allowlist run), the suggestions read from files at
 // the trusted base, what a Checks step checks and when an earlier run is reused, the findings a run
@@ -33,7 +33,7 @@ import {
   type Task,
 } from "./types";
 
-// ---------- configuration and validation (§6.1) ----------
+// ---------- configuration and validation ----------
 
 /** Programs a check command may start: a bare name, or the two wrapper scripts. No paths, no shells, no network tools. */
 export const CHECK_PROGRAMS = [
@@ -48,7 +48,7 @@ const MAX_ARG_LENGTH = 400;
 const MAX_LABEL = 60;
 const MAX_PROTECTED_INPUTS = 30;
 const MAX_PASS_ENV = 20;
-/** At most two repair rounds after failing final checks (§6.7). */
+/** At most two repair rounds after failing final checks. */
 const MAX_CHECK_ROUNDS = 2;
 const ID_RE = /^[a-z][a-z0-9-]{0,23}$/;
 const ENV_NAME_RE = /^[A-Z_][A-Z0-9_]{0,63}$/;
@@ -65,7 +65,7 @@ const INLINE_FLAGS = ["-e", "--eval", "-p", "--print", "-c", "-r", "--require", 
 /** Short flags whose value is attached (`-Werror`, `-Ilib`): not a cluster of single-letter flags. */
 const ATTACHED_VALUE: Record<string, RegExp> = { python: /^-[WX]/, python3: /^-[WX]/, ruby: /^-[CEFIKTW0x]/, node: /^-C/ };
 /**
- * Flags that take the NEXT argument as their value when nothing is attached (review finding L11):
+ * Flags that take the NEXT argument as their value when nothing is attached:
  * `python -W x -c …`, `ruby -I lib -e …`, `node --input-type module -e …`. The value is skipped, so
  * the scan reaches the inline flag behind it instead of taking the value for the script's name.
  */
@@ -79,9 +79,9 @@ const NODE_SEPARATE = [
 ];
 const SEPARATE_VALUE: Record<string, Set<string>> = { python: new Set(PY_SEPARATE), python3: new Set(PY_SEPARATE), ruby: new Set(["-C", "-E", "-F", "-I", "-K", "--encoding", "--external-encoding", "--internal-encoding", "--dump", "--backtrace-limit", "--crash-report"]), node: new Set(NODE_SEPARATE) };
 /**
- * The only commands the network is given to (review finding H1: repository code never runs while the
- * network is on): dependency downloads by npm, pnpm and yarn with every hook that runs repository code
- * switched off. Each entry lists what the command must carry; any flag of an inner list satisfies it.
+ * The only commands the network is given to (repository code never runs while the network is on):
+ * dependency downloads by npm, pnpm and yarn with every hook that runs repository code switched off.
+ * Each entry lists what the command must carry; any flag of an inner list satisfies it.
  * bun is not here: bun install has hooks beyond lifecycle scripts (bunfig.toml) that could not be
  * ruled out, so its installs run offline. Every other prepare command (pip, uv, poetry, bundle,
  * gradle, mix, swift, cargo, go, make, …) runs offline too; the user prefetches in their own environment.
@@ -95,12 +95,12 @@ const NETWORK_INSTALL_FLAGS: Record<string, string[][]> = {
   // Yarn 1 takes --ignore-scripts; Yarn Berry has no such flag and takes --mode=skip-build.
   yarn: [["--ignore-scripts", "--mode=skip-build"]],
 };
-/** Flags that switch those protections back on. Refused wherever they appear next to an install that may use the network (L11: contradicting flags). */
+/** Flags that switch those protections back on. Refused wherever they appear next to an install that may use the network. */
 const CONTRADICTING_FLAG = /^--(no-ignore-scripts|ignore-scripts=(?!true$).*|no-ignore-pnpmfile|ignore-pnpmfile=(?!true$).*|mode=(?!skip-build$).*)$/;
 export const NETWORK_RULE = "downloads the network may be used for: npm, pnpm, yarn installs only; other setup commands run offline";
-/** Names a check environment never takes from the settings (§6.6 sets or drops them itself). */
+/** Names a check environment never takes from the settings (the service sets or drops them itself). */
 const RESERVED_ENV = new Set(["PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD"]);
-/** Prefixes a check environment never takes from the settings, whatever the case (L11): package-manager configuration. */
+/** Prefixes a check environment never takes from the settings, whatever the case: package-manager configuration. */
 const BLOCKED_ENV_PREFIXES = ["NPM_CONFIG_", "YARN_", "PNPM_"];
 export const blockedEnvName = (n: string) => BLOCKED_ENV_PREFIXES.some((p) => n.toUpperCase().startsWith(p));
 
@@ -131,7 +131,7 @@ export function networkRefusal(argv: string[]): string | undefined {
   return undefined;
 }
 
-/** The install as the runner starts it (H1): contradicting flags dropped and every missing protection appended, whatever the settings say. */
+/** The install as the runner starts it: contradicting flags dropped and every missing protection appended, whatever the settings say. */
 export function hardenedInstall(argv: string[]): string[] {
   if (!isInstall(argv) || !NETWORK_INSTALL_FLAGS[argv[0]]) return argv;
   const kept = argv.filter((a, i) => i === 0 || !CONTRADICTING_FLAG.test(a));
@@ -172,7 +172,7 @@ export function validateCommand(c: CheckCommand, o: { networked?: boolean } = {}
     const sub = c.argv[1] ?? "";
     if (c.kind === "prepare" && !PREPARE_SUBCOMMANDS.has(sub)) return `${c.id}: a prepare command with ${program} is "${program} ci", "${program} install", "${program} i" or "${program} rebuild".`;
     if (c.kind === "check" && !CHECK_SUBCOMMANDS.has(sub)) return `${c.id}: a check with ${program} is "${program} test", "${program} run <script>" or "${program} run-script <script>"; "${program} ${sub}" is not allowed.`;
-    // H1: an install that may use the network never runs the repository's install scripts (they could
+    // An install that may use the network never runs the repository's install scripts (they could
     // reach this machine's own control API). Scripts that are needed run offline in a "rebuild" step.
     // bun and everything that is not npm, pnpm or yarn simply run offline (the runner refuses the network).
     if (c.kind === "prepare" && o.networked && isInstall(c.argv) && NETWORK_INSTALL_FLAGS[program]) {
@@ -236,13 +236,13 @@ export function validateChecks(cfg: ChecksConfig, opts: { acknowledged?: boolean
     if (typeof n !== "string" || !ENV_NAME_RE.test(n)) return `"${String(n).slice(0, 40)}" is not a variable name (uppercase letters, digits and underscores).`;
     if (SECRET_NAME.test(n)) return `${n} looks like a secret and is never passed to a check.`;
     if (RESERVED_ENV.has(n) || n.toUpperCase().startsWith("DYLD_")) return `${n} is set by the service itself and cannot be passed through.`;
-    // L11: package-manager configuration (NPM_CONFIG_*, YARN_*, PNPM_*) could switch install scripts back on, whatever the case of the name.
+    // Package-manager configuration (NPM_CONFIG_*, YARN_*, PNPM_*) could switch install scripts back on, whatever the case of the name.
     if (blockedEnvName(n)) return `${n} configures a package manager and cannot be passed through.`;
   }
   return undefined;
 }
 
-// ---------- suggestions from the repository (§6.2) ----------
+// ---------- suggestions from the repository ----------
 
 export interface RepoFile {
   path: string;
@@ -268,7 +268,7 @@ export function suggestChecks(files: RepoFile[]): CheckCommand[] {
       /* not JSON: no scripts */
     }
     const pm = file("pnpm-lock.yaml") ? "pnpm" : file("yarn.lock") ? "yarn" : file("bun.lock") || file("bun.lockb") ? "bun" : "npm";
-    // Installs never run install scripts or pnpmfiles (H1); a project that needs scripts adds an offline "rebuild" step. bun installs run offline.
+    // Installs never run install scripts or pnpmfiles; a project that needs scripts adds an offline "rebuild" step. bun installs run offline.
     const install: Record<string, string[]> = { npm: ["npm", "ci", "--ignore-scripts"], pnpm: ["pnpm", "install", "--frozen-lockfile", "--ignore-scripts", "--ignore-pnpmfile"], yarn: ["yarn", "install", "--immutable", "--mode=skip-build"], bun: ["bun", "install", "--frozen-lockfile", "--ignore-scripts"] };
     if (pm !== "npm" || file("package-lock.json")) out.push({ id: "install", label: "Install dependencies", kind: "prepare", argv: install[pm] });
     for (const name of CHECK_SCRIPTS) {
@@ -283,13 +283,13 @@ export function suggestChecks(files: RepoFile[]): CheckCommand[] {
   return out.slice(0, MAX_CHECK_COMMANDS);
 }
 
-// ---------- what a Checks step runs (§6.4) ----------
+// ---------- what a Checks step runs ----------
 
 type PlannedCommand = { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number; offline?: true; offlineReason?: string };
 
 /**
  * The commands a step runs: every prepare command, and the checks its `only` names (all of them without
- * `only`). A prepare command that is not an allowlisted download is marked offline with the reason (H1);
+ * `only`). A prepare command that is not an allowlisted download is marked offline with the reason;
  * the runner decides the rest (yarn's own configuration) just before the command runs.
  */
 export function commandsFor(cfg: ChecksConfig, st: Pick<StepDef, "checks">): PlannedCommand[] {
@@ -307,7 +307,7 @@ export function commandsFor(cfg: ChecksConfig, st: Pick<StepDef, "checks">): Pla
 /** The ids of the configured check commands (the ones a step's `only` may name). */
 export const configuredCheckIds = (cfg: ChecksConfig | undefined) => (cfg?.commands ?? []).filter((c) => c.kind === "check").map((c) => c.id);
 
-/** Ids a step's `only` names that are not configured checks (M2: such a step runs nothing and must never count as passing). */
+/** Ids a step's `only` names that are not configured checks (such a step runs nothing and must never count as passing). */
 export function missingChecks(cfg: ChecksConfig, st: Pick<StepDef, "checks">): string[] {
   const ids = new Set(configuredCheckIds(cfg));
   return (st.checks?.only ?? []).filter((id) => !ids.has(id));
@@ -317,7 +317,7 @@ export function missingChecks(cfg: ChecksConfig, st: Pick<StepDef, "checks">): s
 export const checksOn = (cfg: ChecksConfig | undefined) => !!cfg?.enabled && cfg.commands.some((c) => c.kind === "check");
 
 /**
- * The checks sandbox is not ready (§6.5.4): Checks steps wait, labelled, and nothing falls back to
+ * The checks sandbox is not ready: Checks steps wait, labelled, and nothing falls back to
  * running without a sandbox. Never held with sandbox "none", which the user chose explicitly.
  */
 export function checksHeld(s: State): boolean {
@@ -365,7 +365,7 @@ export function reusableRun(s: State, t: Task, st: Step, targetSha: string): { a
   return best;
 }
 
-// ---------- from results to findings (§6.7) ----------
+// ---------- from results to findings ----------
 
 /** FNV-1a over the text, twice, as 12 hex characters: the carry-forward identity of a check finding (pure, no crypto). */
 function hash12(text: string): string {
@@ -442,7 +442,7 @@ export function runSummary(record: CheckRunRecord): string {
   return `Checks on ${sha12(record.sha)} (settings r${record.configRev}, ${how}): ${parts.join(" · ") || "no commands"}`;
 }
 
-// ---------- the Final checks decision and check rounds (§6.7) ----------
+// ---------- the Final checks decision and check rounds ----------
 
 /**
  * Open the one decision on a Final checks step whose run did not pass, routed as the project is set.
@@ -493,7 +493,7 @@ function blockedStepOf(s: State, d: FindingDecision): { t: Task; st: Step; art: 
 }
 
 /**
- * Add a repair round after a blocked Final checks step (§6.7): a coder fixes the failing checks, a
+ * Add a repair round after a blocked Final checks step: a coder fixes the failing checks, a
  * reviewer reads the fix, and a Final checks step runs again. The blocked step becomes done with its
  * failing result on the record; everything downstream also waits for the round. Mutates the draft.
  * Returns why it was refused, or undefined.
@@ -513,11 +513,11 @@ export function addCheckRound(s: State, t: Task, st: Step, now: string, actor: "
   if (t.steps.some((x) => x.id === fixId || x.id === reviewId || x.id === securityId || x.id === checksId)) return `Round ${k} of ${st.id} already exists.`;
   const codeInputs = st.inputs.filter((r) => t.steps.find((x) => x.id === r.step)?.outputs.find((o) => o.name === r.output)?.kind === "code-change");
   const results = { step: st.id, output: out.name };
-  // ORC-024: the round's steps carry the same principles as a flow's repair and reviews; dispatch adds "attack the premise" to a fix after a round that failed the same way.
+  // The round's steps carry the same principles as a flow's repair and reviews; dispatch adds "attack the premise" to a fix after a round that failed the same way.
   const defs: StepDef[] = [
     { id: fixId, purpose: `Fix the failing checks (round ${k}): ${failing}`, role: "coder", dependsOn: [st.id], inputs: [...codeInputs, results], outputs: [{ name: "change", kind: "code-change" }, { name: "handoff", kind: "handoff" }], principles: [...REPAIR_PRINCIPLES] },
     { id: reviewId, purpose: `Code review of the fix (round ${k})`, role: "code_reviewer", dependsOn: [fixId], inputs: [{ step: fixId, output: "change" }, { step: fixId, output: "handoff" }, results], outputs: [{ name: "findings", kind: "review-findings" }], principles: [...CODE_REVIEW_PRINCIPLES] },
-    // ORC-021: a security review beside every code review, the check rounds included.
+    // A security review beside every code review, the check rounds included.
     { id: securityId, purpose: `Security review of the fix (round ${k})`, role: "security_reviewer", dependsOn: [fixId], inputs: [{ step: fixId, output: "change" }, { step: fixId, output: "handoff" }, results], outputs: [{ name: "findings", kind: "review-findings" }], principles: [...SECURITY_REVIEW_PRINCIPLES] },
     { id: checksId, purpose: `Final checks (round ${k})`, role: "checks", dependsOn: [reviewId, securityId], inputs: [...codeInputs, { step: fixId, output: "change" }], outputs: [{ name: "final", kind: "check-results" }], checks: { onFail: "block" } },
   ];
@@ -527,7 +527,7 @@ export function addCheckRound(s: State, t: Task, st: Step, now: string, actor: "
   const at = t.steps.indexOf(st);
   st.state = "done";
   st.blockedReason = undefined;
-  // ORC-016 (steps 2–3 review, finding 6): a round's step ids start above any revision they had before, so no earlier run can report into them.
+  // A round's step ids start above any revision they had before, so no earlier run can report into them.
   const copies: Step[] = instantiate(defs).map((c) => ({ ...c, revision: M.nextRevisionFor(s, t, c.id), state: t.hold ? "paused" : "pending" }));
   t.steps.splice(at + 1, 0, ...copies);
   for (const d of t.steps) {
@@ -552,7 +552,7 @@ export function addCheckRound(s: State, t: Task, st: Step, now: string, actor: "
 }
 
 /**
- * The user's decision on failing final checks (§6.7): "fix" adds a repair round; "accept" (the user
+ * The user's decision on failing final checks: "fix" adds a repair round; "accept" (the user
  * only) ends the step with the failing result on the record, flagged on the landed item. Mutates the draft.
  */
 export function decideFinalChecks(s: State, d: FindingDecision, decision: "fix" | "accept" | "follow-up" | "reopen", why: string | undefined, now: string) {
@@ -583,7 +583,7 @@ export function decideFinalChecks(s: State, d: FindingDecision, decision: "fix" 
 }
 
 /**
- * The lead's decision on failing final checks (§4.4): "fix" adds a repair round while rounds are left,
+ * The lead's decision on failing final checks: "fix" adds a repair round while rounds are left,
  * else the decision goes to the user; "ask-user" hands it over; "accept" is never the lead's. Returns
  * the note for the lead's reply when the entry was refused or handed over.
  */
@@ -612,7 +612,7 @@ export function leadDecidesFinalChecks(s: State, d: FindingDecision, kind: "fix"
   return undefined;
 }
 
-// ---------- evidence (§6.9) ----------
+// ---------- evidence ----------
 
 /** Failing final checks the user accepted on this task, if any. */
 function acceptedFailingChecks(s: State, taskId: string): FindingDecision | undefined {
@@ -642,13 +642,13 @@ export function checkEvidence(s: State, sha: string): CheckEvidence {
   const run = best.checkRun!;
   const base = { forSha: sha, configRev: run.configRev, attemptId: best.attemptId, taskId: best.taskId, sandbox: run.sandbox };
   const failing = failedResults(run);
-  // M2: evidence means every configured check passed on this commit, not only the ones a step chose to run.
+  // Evidence means every configured check passed on this commit, not only the ones a step chose to run.
   const missing = configuredCheckIds(cfg).filter((id) => run.results.find((r) => r.id === id)?.status !== "passed" && !failing.some((r) => r.id === id));
-  // Review finding M6: a check that did not run is judged before any acceptance. Accepting failures
-  // covers the failures the user saw, never checks that never ran.
+  // A check that did not run is judged before any acceptance. Accepting failures covers the failures
+  // the user saw, never checks that never ran.
   if (missing.length) return { ok: false, ...base, reason: `The run on ${h} did not run every configured check (missing: ${missing.join(", ")}).` };
   const unresolved = F.unresolved(s, best);
-  // ORC-025: the record's `simulated` flag labels a demo run; the text carries no suffix.
+  // The record's `simulated` flag labels a demo run; the text carries no suffix.
   if (!failing.length && unresolved === 0) return { ok: true, ...base, reason: `${run.results.filter((r) => r.kind === "check").map((r) => r.label).join(", ") || "The checks"} passed on ${h}${run.sandbox === "codex" ? "" : " (no sandbox)"}.` };
   const accepted = s.decisions.find((d) => d.kind === "final-checks" && d.artifactId === best!.id && d.status === "accept");
   if (accepted) return { ok: true, ...base, acceptedByUser: true, reason: `You accepted failing checks on ${h} (${failing.map((r) => r.label).join(", ")}).` };
@@ -657,8 +657,8 @@ export function checkEvidence(s: State, sha: string): CheckEvidence {
 }
 
 /**
- * Flags for a landed item (§6.9): checks the user accepted failing, and no check evidence for the landed
- * change while checks are on. Both can hold (review M6): an acceptance never covers a check that did not run.
+ * Flags for a landed item: checks the user accepted failing, and no check evidence for the landed
+ * change while checks are on. Both can hold: an acceptance never covers a check that did not run.
  */
 export function landedCheckFlags(s: State, t: Task, changeSha: string | undefined): LandedFlag[] {
   const out: LandedFlag[] = [];
@@ -667,14 +667,14 @@ export function landedCheckFlags(s: State, t: Task, changeSha: string | undefine
   return out;
 }
 
-// ---------- the user's settings (§9) ----------
+// ---------- the user's settings ----------
 
 type ChecksInput = Omit<ChecksConfig, "rev">;
 
 const argvText = (c: CheckCommand) => `${c.id}: ${c.argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ")}`;
 
 /**
- * The only way the check commands change (Q1): the user's command. Validates, bumps the settings
+ * The only way the check commands change: the user's command. Validates, bumps the settings
  * revision, asks for a sandbox probe when checks are switched on or the sandbox changes, and stops
  * active check runs whose settings changed so they run again with the new ones. The event lists every
  * command's exact argv.
@@ -720,7 +720,7 @@ export function recheckChecks(state: State, now: string): State {
 
 /**
  * The service's probe result (observed state, written only by the service). `startedAt`: when the
- * probe began; a "Check again" asked for after that (L5) is kept, so the newer request still runs.
+ * probe began; a "Check again" asked for after that is kept, so the newer request still runs.
  */
 export function reportChecksHealth(state: State, health: ChecksHealth, now: string, o: { startedAt?: string } = {}): State {
   const s = structuredClone(state);
@@ -736,7 +736,7 @@ export function reportChecksHealth(state: State, health: ChecksHealth, now: stri
   return s;
 }
 
-/** Is a probe due (§6.5.4): checks on, and no result, a requested recheck, a different sandbox than probed, or a result older than six hours. */
+/** Is a probe due: checks on, and no result, a requested recheck, a different sandbox than probed, or a result older than six hours. */
 export function probeDue(s: State, nowMs: number): boolean {
   const cfg = s.project.checks;
   if (!checksOn(cfg)) return false;

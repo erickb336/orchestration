@@ -1,6 +1,6 @@
-// ORC-024, pure: the compiled principles (the 200-word bodies, the credit, the parser), the mapping table
-// pinned step by step for the six flows, the internal flows and the check rounds, the resolver's and the
-// pipeline rules' refusals, the hash, and the automatic "attack the premise": added to a repair round
+// Principles in every flow, pure: the compiled principles (the 200-word bodies, the credit, the parser), the
+// mapping table pinned step by step for the six flows, the internal flows and the check rounds, the resolver's
+// and the pipeline rules' refusals, the hash, and the automatic "attack the premise": added to a repair round
 // after a round that failed the same way, with its reason, and to nothing else. The files on disk are
 // compared with the compiled copy in server/principles.test.ts (this directory has no file access).
 
@@ -60,12 +60,12 @@ const TABLE: Record<string, Record<string, string[]>> = {
 };
 const CHECK_ROUND = { fix: ["laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes"], review: ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"], security: ["boundary-discipline"], checks: [] };
 
-/** ORC-026: an agent run's recorded set is "contextualize and write for the reader" plus its step's own (table order puts it first). */
+/** An agent run's recorded set is "contextualize and write for the reader" plus its step's own (table order puts it first). */
 const run = (ids: string[]) => orderPrinciples([...EVERY_RUN_PRINCIPLE_IDS, ...ids]);
 const SOURCE_RE = /^pstack principle-[a-z-]+, MIT, Copyright \(c\) 2026 Lauren Tan, github\.com\/cursor\/plugins at 12d587d, adapted$/;
 
 describe("the compiled principles", () => {
-  it("16, in table order, each with a name, a one-line apply-when, a body of at most 200 words, a hash and a source: pstack and the commit, or Orchestrator's own (ORC-026)", () => {
+  it("16, in table order, each with a name, a one-line apply-when, a body of at most 200 words, a hash and a source: pstack and the commit, or Orchestrator's own", () => {
     expect(PRINCIPLES.map((p) => p.id)).toEqual([...PRINCIPLE_IDS]);
     expect(PRINCIPLES).toHaveLength(16);
     for (const p of PRINCIPLES) {
@@ -371,7 +371,7 @@ describe("the automatic 'attack the premise'", () => {
     expect(design("The error copy blames the user").map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "experience-first"]);
   });
 
-  it("a check-round fix after a round that failed the same check gets it; the first round's fix gets it when the loop's last repair failed the same check (review L4)", () => {
+  it("a check-round fix after a round that failed the same check gets it; the first round's fix gets it when the loop's last repair failed the same check", () => {
     const { s: blocked, id } = blockedFinal();
     // The loop's own repairs: S3 had none, S3-i2 and S3-i3 had it.
     const loopRepairs = blocked.attempts.filter((a) => a.taskId === id && /^S3/.test(a.stepId)).map((a) => [a.stepId, a.snapshot.principles!.find((p) => p.id === PREMISE_ID)?.added]);
@@ -396,12 +396,12 @@ describe("the automatic 'attack the premise'", () => {
     expect(fix2.snapshot.principles).toEqual(run([...CHECK_ROUND.fix, PREMISE_ID]).map((pid) => ({ id: pid, hash: principle(pid)!.hash, ...(pid === PREMISE_ID ? { added: "added: check `test` failed again after C2-r1-fix" } : {}) })));
   });
 
-  it("a run before ORC-024 recorded none, and nothing is invented for it; a step from before ORC-024 gives its runs none", () => {
+  it("a run from before principles recorded none, and nothing is invented for it; a step from before principles gives its runs none", () => {
     const s = buildSeed(T0, { inFlightRuns: true });
     // The seed's own runs are written by hand, as runs from before the field: none carries principles.
     expect(s.attempts.length).toBeGreaterThan(0);
     for (const a of s.attempts) expect(a.snapshot.principles, a.id).toBeUndefined();
-    // A task whose copied steps have no principles (created before ORC-024): its new runs record an empty list.
+    // A task whose copied steps have no principles (an older task): its new runs record an empty list.
     let { s: old, id } = withChecks();
     for (const st of task(old, id).steps) delete st.principles;
     old = round(old, id, 4, ["test"]);
@@ -409,7 +409,7 @@ describe("the automatic 'attack the premise'", () => {
     expect(repairRun.stepId).toBe("S3");
     expect(repairRun.snapshot.principles).toEqual([]);
     expect(stepPrinciples(step(old, id, "S3"))).toEqual([]);
-    // Review L2: not even the automatic one, when its second repair fails the same check.
+    // Not even the automatic one, when its second repair fails the same check.
     old = repair(old, id, 6, SHA2);
     old = round(old, id, 7, ["test"], [], SHA2);
     const second = running(old, id)[0];

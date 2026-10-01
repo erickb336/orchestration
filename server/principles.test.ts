@@ -1,4 +1,4 @@
-// ORC-024, the service side: the files in principles/ against the compiled copy the app imports (the
+// Principles, the service side: the files in principles/ against the compiled copy the app imports (the
 // frontmatter, the 200-word bodies, the license, the README), the "Principles for this step" section of
 // the envelope (its exact header and wording, table order, placement after the spec, the automatic one
 // with its reason), the 1,000-word cap for every built-in, internal and check-round step with the
@@ -81,7 +81,7 @@ describe("the files", () => {
 });
 
 describe("the section", () => {
-  it("appears after the spec with the exact header and wording, each principle in table order with its apply-when line and body; every agent step gets 'write for the reader' (ORC-026); a task from before principles gets no section", () => {
+  it("appears after the spec with the exact header and wording, each principle in table order with its apply-when line and body; every agent step gets 'write for the reader'; a task from before principles gets no section", () => {
     const { s, id } = changeTask();
     const text = buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S2"), attemptId: "run-x", access: "read" });
     const section = sectionOf(text)!;
@@ -146,7 +146,7 @@ describe("the section", () => {
     expect(section).toContain(`### Attack the premise\nApply when: ${principle(PREMISE_ID)!.applyWhen}\nAdded for this run: the finding "Null check" came back after S3.\n${principle(PREMISE_ID)!.body}`);
   });
 
-  it("the lead's runs get the lead's set, in table order, under their own header (review L8)", () => {
+  it("the lead's runs get the lead's set, in table order, under their own header", () => {
     let s = buildSeed(T0, { inFlightRuns: false });
     s = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "planning" }, at(0)).state;
     const text = buildLeadEnvelope(s, M.activeLeadRun(s)!, "read");
