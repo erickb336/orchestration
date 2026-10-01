@@ -964,8 +964,11 @@ export class Scheduler {
         return M.reportLeadFailed(s, e.attemptId, e.message, now, e.usage);
       case "completed": {
         const out = parseLeadOutput(e.finalText);
+        // ORC-017: a reply from the fake runtime is recorded as simulated on what it changed (the focus, the change set, a draft).
+        const run = s.leadRuns.find((r) => r.id === e.attemptId);
+        const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
         // ORC-009/ORC-012/ORC-013: the steering block, the vision draft, the decisions and any parse problem go through as found; the domain validates them.
-        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, problem: out.problem }, now, { usage: e.usage, actualModel: e.model });
+        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, problem: out.problem }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
       }
     }
   }
