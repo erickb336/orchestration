@@ -80,8 +80,8 @@ It is deliberately small, local and readable, so that changing it is cheap. Fork
 
 - I set the direction and made the calls. AI agents in Claude Code wrote the specs and the code: a lead, plus designer, coder and reviewer agents.
 - Every feature started as a versioned spec with options and trade-offs ([`docs/tasks/`](docs/tasks/)).
-- Each implementation was reviewed by a separate agent, and every finding was fixed with a regression test.
-- The UI was then audited (about 300 controls on 13 screens, "needs you" worded four ways) and rebuilt UI first, from target screens I approved, on one component kit ([ORC-025](docs/tasks/ORC-025.md)).
+- Each feature's implementation was reviewed by a separate agent, and every finding was fixed with a regression test.
+- The UI was then audited (about 300 controls on 13 screens, "needs you" worded four ways) and rebuilt UI first, from target screens I approved, on one component kit ([ORC-025](docs/tasks/ORC-025.md)). Each pass was checked in the browser at desktop and phone widths.
 
 ## Use it on your own repository
 
@@ -129,7 +129,7 @@ npm run capture    # retake the README images from the demo (needs Chrome and ff
 
 ## Status
 
-A personal tool under active development, built in milestones ORC-001 to ORC-026 (the gaps were dropped), each with a spec and an independent review.
+A personal tool under active development, built in milestones ORC-001 to ORC-026, each with a spec. ORC-015 and ORC-018 to ORC-020 were dropped; ORC-023 is planned.
 
 **Recent:** notes to a running agent ([ORC-022](docs/tasks/ORC-022.md)), the working principles ([ORC-024](docs/tasks/ORC-024.md), [ORC-026](docs/tasks/ORC-026.md)), and the UI audit and rebuild ([ORC-025](docs/tasks/ORC-025.md)).
 
