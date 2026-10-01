@@ -81,7 +81,7 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
           whyNow: "Nobody can see a plan yet except the person who made it.",
           outcome: "A trip has a link that opens it for anyone who has it.",
           benefit: "Inviting is one message, not an account per friend.",
-          approach: "Signed invite links that expire after 7 days",
+          approach: "Signed invite links that expire after 7 days, on the invite sheet designed in WT-013",
           acceptance: ["A link opens the trip", "An expired link says so"],
           flowId: "change",
         },
@@ -127,6 +127,23 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
           flowId: "change",
         },
       ],
+    },
+  },
+  "WT-004.1": {
+    outputs: {
+      "S1.change": "Signed invite links that expire after 7 days (+132 −4, 4 files)",
+      "S1.handoff": "Links are signed with the app's link key; expiry is checked when the link is opened.",
+      "S3.change": "Signs the trip id into the invite link and refuses a link opened on another trip (+23 −6, 2 files)",
+      verification: "A link opens only its own trip and an expired link says so; checks passed on the final change.",
+    },
+    // ORC-021: the security review beside the code review found what the code review did not; the repair round fixed it.
+    findings: {
+      SR1: {
+        title: "Invite links are not scoped to the trip",
+        detail: "The signature covers the token and its expiry but not the trip id, so a valid link for one trip opened another when the id in the address was swapped. Sign the trip id into the link and refuse a link opened on a different trip.",
+        file: "src/server/links.ts",
+        line: 48,
+      },
     },
   },
   "WT-004.2": {
@@ -193,6 +210,26 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
       verification: "A weather alert shows for the trip day and hides when stale; checks passed on the final change.",
     },
     findings: { "*": { title: "A stale forecast is shown as current", detail: "Hide the alert when the forecast is older than a day.", file: "src/trip/Weather.tsx", line: 27 } },
+  },
+  // ORC-021: an Investigation. The result is a spec, not code; the review of the evidence leaves one note that blocks nothing.
+  "WT-012": {
+    outputs: {
+      report: "GPS is polled once a second for the whole hike, screen off included, and every fix redraws the hidden map: together 61% of the drain over a 5-hour recording (GPS 38%, redraws 23%). Tile loading and the rest account for the remainder.",
+      "S2.findings": "No gaps that block a spec. One note: the figures come from one phone on one hike.",
+      brief: "Proposed follow-up: a Change task that polls the location every 30 seconds while the screen is off and stops redrawing the map while it is hidden. Expected to cut the drain by about half; its acceptance is a second phone's recording of the same hike.",
+    },
+    findings: { S2: { title: "Figures from one phone on one hike", detail: "The recording is one phone on one hike. The shares are large enough to act on; the follow-up should confirm the saving on a second phone." } },
+  },
+  // ORC-021: a Design. The UX review's one finding is revised away; the lead's brief hands the design to the invite-link part of trip sharing.
+  "WT-013": {
+    outputs: {
+      "S1.design": "An invite sheet from a Share button on the trip page: the link, who it is for and when it expires, with Copy and Share. States: no link yet (Make a link), link ready, link expired (Make a new link). Plain copy; no account mentioned anywhere.",
+      "S2.findings": "1 finding: the expiry reads as a date.",
+      "S3.design": "Revised: the sheet says “Expires in 6 days” with “After that, make a new link” under it; the expired state leads with Make a new link and keeps the old link out of reach.",
+      "S2-i2.findings": "No findings: the expiry reads as time left, and each state has one clear action.",
+      brief: "Build the invite sheet as designed: a Share button on the trip page, the link with the time left before it expires, Copy and Share, and an expired state that leads with Make a new link. The invite-link part of trip sharing builds from this.",
+    },
+    findings: { S2: { title: "The expiry is shown as a date only", detail: "A date under a trip link reads as the trip date. Say how long is left (“Expires in 6 days”) and what happens after it." } },
   },
 };
 
