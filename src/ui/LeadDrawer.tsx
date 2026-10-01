@@ -97,7 +97,7 @@ export function LeadDrawer({ onClose }: { onClose: () => void }) {
     <>
       {narrow && <div className="lead-backdrop" onClick={onClose} aria-hidden="true" />}
       <aside ref={ref} className={`lead-drawer${narrow ? " modal" : ""}`} aria-label="Lead" role={narrow ? "dialog" : undefined} aria-modal={narrow ? true : undefined} onKeyDown={onKeyDown}>
-        <Conversation variant="drawer" onClose={onClose} focusOnMount />
+        <Conversation onClose={onClose} focusOnMount />
       </aside>
     </>
   );
