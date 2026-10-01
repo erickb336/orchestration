@@ -14,12 +14,15 @@ import { useBrowserNotifications } from "./notifications";
 import { agentsWorking } from "./progress";
 import { StageChip } from "./Shaping";
 import { TourButton, useFirstRunTour } from "./Tour";
+import { Gallery } from "./kit/Gallery";
 
-type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" } | { page: "task"; id: string };
+type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" | "kit" } | { page: "task"; id: string };
 
 function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/");
   if (parts[0] === "task" && parts[1]) return { page: "task", id: decodeURIComponent(parts[1]) };
+  // ORC-025: the kit gallery, #/kit or #/kit/<section>. Not in the navigation.
+  if (parts[0] === "kit") return { page: "kit" };
   if (parts[0] === "overview" || parts[0] === "review" || parts[0] === "activity" || parts[0] === "settings") return { page: parts[0] };
   return { page: "tasks" };
 }
@@ -155,6 +158,7 @@ function Shell() {
         {route.page === "review" && <Review />}
         {route.page === "activity" && <Activity />}
         {route.page === "settings" && <Settings />}
+        {route.page === "kit" && <Gallery />}
       </main>
       {leadOpen && !onOverview && <LeadDrawer onClose={closeLead} />}
       {notice && (

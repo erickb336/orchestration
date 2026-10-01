@@ -751,3 +751,18 @@ ul.doc-list.uploads > li.skipped, ul.doc-list.uploads > li.queued { color: var(-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- kit tokens (ORC-025 r3, pass 1″) ---------- */
+/* One spacing scale for the component kit (src/ui/kit). The type scale is --fs-* at the top of this file.
+   The kit's own rules live in src/ui/kit/kit.css, loaded after this file. */
+:root {
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  /* The scrim under a dialog and the shadow of anything that floats. Not state colours. */
+  --scrim: rgb(0 0 0 / 0.55);
+  --shadow-pop: 0 12px 32px rgb(0 0 0 / 0.4);
+}
