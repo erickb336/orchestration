@@ -1,0 +1,100 @@
+{
+  "$schema": "./pattern.schema.json",
+  "$comment": "S2 is the step that chooses among the candidates, so it may not be a Checks step. S1 sits outside the repair loop because parallel steps cannot be inside one. After S2 chooses, the later steps receive only the chosen candidate.",
+  "id": "change-best-of-two",
+  "name": "Change, best of two implementations",
+  "order": 90,
+  "experimental": true,
+  "hypothesis": "For hard changes, two independent first implementations, compared before review, give a better starting change than one. It costs about one more implementation and one comparison run.",
+  "description": "Two agents implement the change separately, one on each provider; a reviewer compares them and chooses one; then checks, review, repair if needed, final checks, verify.",
+  "whenToUse": "A hard change where you want to compare two first attempts. Not for everyday work.",
+  "steps": [
+    {
+      "id": "S1",
+      "purpose": "Implement",
+      "role": "coder",
+      "dependsOn": [],
+      "inputs": [],
+      "outputs": [
+        { "name": "change", "kind": "code-change" },
+        { "name": "handoff", "kind": "handoff" }
+      ],
+      "parallel": { "count": 2, "mode": "best-of", "providers": ["claude", "codex"] }
+    },
+    {
+      "id": "S2",
+      "purpose": "Compare the two implementations and choose the better one",
+      "role": "code_reviewer",
+      "dependsOn": ["S1"],
+      "inputs": [
+        { "step": "S1", "output": "change" },
+        { "step": "S1", "output": "handoff" }
+      ],
+      "outputs": [{ "name": "comparison", "kind": "report" }]
+    },
+    {
+      "id": "C1",
+      "purpose": "Run the project's checks",
+      "role": "checks",
+      "dependsOn": ["S2"],
+      "inputs": [{ "step": "S1", "output": "change" }],
+      "outputs": [{ "name": "checks", "kind": "check-results" }],
+      "checks": { "onFail": "findings" }
+    },
+    {
+      "id": "S3",
+      "purpose": "Code review",
+      "role": "code_reviewer",
+      "dependsOn": ["C1"],
+      "inputs": [
+        { "step": "S1", "output": "change" },
+        { "step": "S1", "output": "handoff" },
+        { "step": "S2", "output": "comparison" },
+        { "step": "C1", "output": "checks" }
+      ],
+      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+    },
+    {
+      "id": "S4",
+      "purpose": "Repair review findings and failing checks",
+      "role": "coder",
+      "dependsOn": ["S3"],
+      "inputs": [
+        { "step": "S1", "output": "change" },
+        { "step": "S3", "output": "findings" },
+        { "step": "C1", "output": "checks" }
+      ],
+      "outputs": [{ "name": "change", "kind": "code-change" }],
+      "runIf": [
+        { "step": "C1", "output": "checks" },
+        { "step": "S3", "output": "findings" }
+      ],
+      "iterate": { "from": "C1", "max": 3 }
+    },
+    {
+      "id": "C2",
+      "purpose": "Final checks",
+      "role": "checks",
+      "dependsOn": ["S4"],
+      "inputs": [
+        { "step": "S1", "output": "change" },
+        { "step": "S4", "output": "change" }
+      ],
+      "outputs": [{ "name": "final", "kind": "check-results" }],
+      "checks": { "onFail": "block" }
+    },
+    {
+      "id": "S5",
+      "purpose": "Verify and integrate. Service check results are the record of what ran; do not say tests passed unless a check result shows it.",
+      "role": "lead",
+      "dependsOn": ["C2"],
+      "inputs": [
+        { "step": "S1", "output": "change" },
+        { "step": "S4", "output": "change" },
+        { "step": "S3", "output": "findings" },
+        { "step": "C2", "output": "final" }
+      ],
+      "outputs": [{ "name": "verification", "kind": "verification" }]
+    }
+  ]
+}

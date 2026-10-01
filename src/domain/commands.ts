@@ -7,13 +7,11 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
 import { buildSeed } from "./seed";
-import { INTERNAL_TEMPLATE_IDS, PROJECT_TEMPLATES } from "./templates";
 import {
   ControlError,
   PROJECT_STAGES,
   PROVIDERS,
   ROLES,
-  STEP_ROLES,
   STEERING_MODES,
   type ModelSelection,
   type PrDeliveryConfig,
@@ -23,8 +21,6 @@ import {
   type SpecContent,
   type State,
   type SteeringMode,
-  type StepDef,
-  type WorkflowTemplate,
 } from "./types";
 
 export class InvalidCommandError extends Error {
@@ -64,11 +60,6 @@ function role(v: unknown): RoleId {
   if (!ROLES.includes(v as RoleId)) throw new InvalidCommandError(`unknown role ${String(v)}`);
   return v as RoleId;
 }
-/** A step role: an agent role, or one the service runs itself (ORC-013: checks). */
-function stepRole(v: unknown): RoleId {
-  if (!STEP_ROLES.includes(v as RoleId)) throw new InvalidCommandError(`unknown role ${String(v)}`);
-  return v as RoleId;
-}
 function selection(v: unknown): ModelSelection {
   const o = obj(v, "selection");
   return { provider: provider(o.provider), model: str(o, "model") };
@@ -81,32 +72,14 @@ function array<T>(v: unknown, what: string): T[] {
   return v as T[];
 }
 
-// Structured payloads (spec content, step definitions, templates) are shape-checked here and
-// semantically validated by the domain operation that receives them.
+// Structured payloads (spec content) are shape-checked here and semantically validated by the domain
+// operation that receives them. ORC-016: no command accepts step definitions, templates or a catalog;
+// a task's steps come from the pattern it names, and the server alone writes the catalog from files.
 function specContent(v: unknown): SpecContent {
   const c = obj(v, "content");
   for (const k of ["title", "area", "outcome", "benefit", "selectedOptionId", "recommendedOptionId", "overrideReason"]) str(c, k);
   array(c.options, "content.options");
   return c as unknown as SpecContent;
-}
-function stepDefs(v: unknown): StepDef[] {
-  return array<unknown>(v, "steps").map((x) => {
-    const d = obj(x, "step");
-    str(d, "id");
-    str(d, "purpose");
-    stepRole(d.role);
-    array(d.dependsOn, "step.dependsOn");
-    array(d.inputs, "step.inputs");
-    array(d.outputs, "step.outputs");
-    return d as unknown as StepDef;
-  });
-}
-function template(v: unknown): WorkflowTemplate {
-  const t = obj(v, "template");
-  str(t, "id");
-  str(t, "name");
-  str(t, "description");
-  return { ...(t as unknown as WorkflowTemplate), steps: stepDefs(t.steps) };
 }
 
 // ---- registry ----
@@ -183,13 +156,9 @@ export const COMMANDS = {
   rerunStep: same((s, now, a) => M.rerunStep(s, str(a, "taskId"), str(a, "stepId"), now)),
   retryStep: same((s, now, a) => M.retryStep(s, str(a, "taskId"), str(a, "stepId"), now)),
 
-  // pipelines and templates
-  setPipeline: same((s, now, a) => M.setPipeline(s, str(a, "taskId"), num(a, "expectedRev"), stepDefs(a.steps), str(a, "reason"), "user", now)),
-  saveTemplate: same((s, now, a) => M.saveTemplate(s, template(a.template), a.expectedRev === null ? null : num(a, "expectedRev"), now)),
-  deleteTemplate: same((s, now, a) => M.deleteTemplate(s, str(a, "templateId"), now)),
-  restoreBuiltInTemplates: same((s, now) =>
-    PROJECT_TEMPLATES.filter((b) => !s.project.templates.some((t) => t.id === b.id)).reduce((acc, b) => M.saveTemplate(acc, structuredClone(b), null, now), s),
-  ),
+  // pipeline patterns (ORC-016): the structure of a pipeline is never sent by a client
+  /** The standard pattern used when a lead proposal or a breakdown item names none. */
+  setDefaultPattern: same((s, now, a) => M.setDefaultPattern(s, str(a, "patternId"), now)),
 
   // review and editing
   setReviewEveryStep: same((s, now, a) => M.setReviewEveryStep(s, str(a, "taskId"), bool(a, "value"), now)),
@@ -409,12 +378,8 @@ export const COMMANDS = {
     }
     return M.initProject(s, { name: str(a, "name"), repoPath: str(a, "repoPath"), vision: str(a, "vision"), focus: str(a, "focus"), ...(stage ? { stage } : {}) }, now);
   }),
-  /** Create a user-authored task from one of the project's templates. Returns { newId }. */
+  /** Create a user-authored task from a catalog pattern (`patternId`). Any `steps` sent are ignored. Returns { newId }. */
   createTask: (s, now, a) => {
-    const templateId = str(a, "templateId");
-    const tpl = s.project.templates.find((t) => t.id === templateId);
-    if (!tpl) throw new InvalidCommandError(`Unknown template ${templateId}`);
-    if (INTERNAL_TEMPLATE_IDS.includes(templateId)) throw new InvalidCommandError(templateId === "revert" ? `The ${tpl.name} template is used by Send back only.` : `The ${tpl.name} template is used by the service only.`);
     const r = M.createTask(
       s,
       {
@@ -427,8 +392,7 @@ export const COMMANDS = {
         acceptance: array<unknown>(a.acceptance, "acceptance").map((x) => String(x)),
         priority: num(a, "priority"),
         holdBeforeStart: bool(a, "holdBeforeStart"),
-        steps: structuredClone(tpl.steps),
-        templateName: tpl.name,
+        patternId: str(a, "patternId"),
         priorityPinned: a.priorityPinned === undefined ? false : bool(a, "priorityPinned"),
       },
       now,

@@ -190,7 +190,7 @@ describe("A. attaching and removing through the endpoint", () => {
     const prompt2 = ask("and now?");
     expect(prompt2).toContain('=== "brief.md" (91 B, complete) ===');
     // Workers: designers read the text under their cap; coders and reviewers see names and sizes only.
-    const { newId } = cmd("createTask", { title: "Feature", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "feature" }).result as { newId: string };
+    const { newId } = cmd("createTask", { title: "Feature", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "feature" }).result as { newId: string };
     const s = state();
     const task = s.tasks.find((t) => t.id === newId)!;
     const designer = task.steps.find((st) => st.role === "designer")!;
@@ -501,8 +501,8 @@ describe("E. migration", () => {
     raw.close();
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(14);
-    expect(s.version).toBe(14);
+    expect(STATE_FORMAT).toBe(15);
+    expect(s.version).toBe(15);
     expect(s.project.visionDocs).toEqual([]);
     expect(s.project.visions.every((v) => v.docIds === undefined)).toBe(true);
     expect(M.currentVisionDocs(s)).toEqual([]);
@@ -516,7 +516,7 @@ describe("E. migration", () => {
     expect(M.currentVisionDocs(upgraded.read().state)).toEqual([]);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(14);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(15);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_12_%'").get()).toBeDefined();
     check.close();
   });

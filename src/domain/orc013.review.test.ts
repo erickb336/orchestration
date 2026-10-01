@@ -8,7 +8,7 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
 import { buildSeed } from "./seed";
-import { BUILT_IN_TEMPLATES, templateSteps } from "./templates";
+import { builtInCatalog } from "./patterns";
 import { DEFAULT_PR_DELIVERY, type Finding, type State } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -27,7 +27,7 @@ function finding(over: Partial<Finding> = {}): Finding {
 function reviewRunning(o: { author?: "user" | "lead" } = {}): { s: State; id: string; review: string } {
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
-  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, steps: templateSteps("change"), templateName: "Change" }, at(0));
+  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
   s = r.state;
   if (o.author === "lead") task(s, r.newId).specs[0].author = "lead";
   s = M.dispatchEligible(M.leadPromoteProposals(s, at(1)), at(1));
@@ -122,7 +122,7 @@ describe("finding 6: the lead-fix-on-a-user-spec rule holds in pull-request mode
     let s: State = { ...s0, project: { ...s0.project, triage: { askUserBy: "lead" as const } } };
     s = report(s, review, 4, [finding({ action: "ask-user" })]);
     // Pretend this task is a repair of a user-authored task (as pull-request delivery creates them).
-    const owner = M.createTask(s, { title: "Owner", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: true, steps: templateSteps("change"), templateName: "Change" }, at(5));
+    const owner = M.createTask(s, { title: "Owner", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: true, patternId: "change" }, at(5));
     s = owner.state;
     task(s, id).specs[0].author = "system";
     task(s, id).deliverInto = { taskId: owner.newId, n: 1, mergeBase: false };
@@ -210,7 +210,7 @@ describe("findings 11, 13 and 14: small items", () => {
     expect(DEFAULT_PR_DELIVERY.protectedPaths).toEqual(expect.arrayContaining(["**/AGENTS.md", "**/CLAUDE.md"]));
     for (const p of ["AGENTS.md", "docs/AGENTS.md", "a/b/CLAUDE.md"]) expect(DEFAULT_PR_DELIVERY.protectedPaths.some((g) => D.matchGlob(g, p)), p).toBe(true);
     expect(DEFAULT_PR_DELIVERY.protectedPaths.some((g) => D.matchGlob(g, "src/agents.ts"))).toBe(false);
-    for (const b of BUILT_IN_TEMPLATES) expect(b.description.length).toBeGreaterThan(0);
+    for (const b of builtInCatalog().patterns) expect(b.description.length).toBeGreaterThan(0);
   });
 
   it("a backslash is part of a path name (finding 2, the pure part)", () => {

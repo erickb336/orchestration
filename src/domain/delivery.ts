@@ -8,8 +8,8 @@ import * as C from "./checks";
 import { MAX_PROVEN_PATHS, coverageCounts } from "./coverage";
 import * as F from "./findings";
 import * as M from "./model";
-import { instantiate, toDef, validatePipeline } from "./pipeline";
-import { templateSteps } from "./templates";
+import { internalPattern, patternRef, servicePattern } from "./patterns";
+import { instantiate, toDef } from "./pipeline";
 import {
   ControlError,
   REVIEW_ROLES,
@@ -20,6 +20,7 @@ import {
   type LandedFlag,
   type PostureItem,
   type PrAttentionCode,
+  type PatternRef,
   type PrDelivery,
   type PrDeliveryConfig,
   type ChangeAuthor,
@@ -268,12 +269,6 @@ export function openRevertOf(s: State, landed: Landed): Task | undefined {
   return s.tasks.find((x) => x.revertOf?.commit === landed.commit && x.lifecycle !== "done" && x.lifecycle !== "cancelled");
 }
 
-/** A project template's steps (the user may have edited it), else the built-in. */
-function stepsOf(s: State, templateId: string): StepDef[] {
-  const t = s.project.templates.find((x) => x.id === templateId);
-  return t ? structuredClone(t.steps) : templateSteps(templateId);
-}
-
 /**
  * Send landed work back through the normal pipeline as a linked follow-up task.
  * "fix": a bug-fix task seeded with the note, the open review findings and a failed check on the
@@ -288,20 +283,28 @@ export function sendBackLanded(state: State, a: { taskId: string; kind: "fix" | 
   const c12 = sha12(landed.commit);
   const title = M.currentSpec(origin).content.title;
   let steps: StepDef[];
+  let pattern: PatternRef;
   let fields: Partial<Task> | undefined;
   if (a.kind === "revert") {
     if (landed.simulated) throw new ControlError("This item is simulated: there is no commit to revert.");
     const open = openRevertOf(state, landed);
     if (open) throw new ControlError(`${open.id} is already reverting this change.`);
-    steps = stepsOf(state, "revert");
+    // ORC-016: the revert pipeline is the service's own; no pattern file can replace it.
+    const revert = internalPattern("revert");
+    steps = revert.steps;
+    pattern = patternRef(revert, "service");
     // The first writer is the one whose workspace holds the prepared revert: name the commit for it.
     const first = steps.find((x) => x.role === "coder");
-    if (!first) throw new ControlError("The Revert template has no coder step to complete the revert.");
+    if (!first) throw new ControlError("The Revert pipeline has no coder step to complete the revert.");
     first.purpose = `${first.purpose} (revert of ${c12})`;
     fields = { revertOf: { taskId: origin.id, commit: landed.commit } };
-  } else steps = stepsOf(state, "bugfix");
+  } else {
+    const bugfix = servicePattern(state, "bugfix");
+    steps = structuredClone(bugfix.steps);
+    pattern = patternRef(bugfix, "service");
+  }
 
-  const r = M.createFollowUp(state, origin.id, now, { steps, holdBeforeStart: a.holdBeforeStart, author: "user", fields });
+  const r = M.createFollowUp(state, origin.id, now, { steps, pattern, holdBeforeStart: a.holdBeforeStart, author: "user", fields });
   const content: SpecContent = structuredClone(M.currentSpec(getTask(r.state, r.newId)).content);
   const selected = content.options.find((o) => o.id === content.selectedOptionId);
   if (a.kind === "revert") {
@@ -860,13 +863,6 @@ export function reviewCoverage(s: State, t: Task): ReviewEvidence {
   return reviewView(s, t).evidence;
 }
 
-/** A project template's steps for the dedicated review, falling back to the built-in when the edited one cannot review. */
-function reviewSteps(s: State): StepDef[] {
-  const usable = (d: StepDef[]) => d.some((x) => x.role === "code_reviewer" && x.outputs.some((o) => o.kind === "review-findings")) && !validatePipeline(d, { reviewTarget: true }).some((i) => i.severity === "error");
-  const mine = stepsOf(s, "delivery-review").map(toDef);
-  return usable(mine) ? mine : templateSteps("delivery-review");
-}
-
 /** Create the dedicated review task. Mutates the draft `s`. */
 function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "user" | "system"): string {
   const h = sha12(pr.changeSha);
@@ -874,11 +870,14 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
   let k = 1;
   while (ids.has(`${t.id}-RV${k}`)) k++;
   const id = `${t.id}-RV${k}`;
-  const defs = reviewSteps(s);
+  // ORC-016: the dedicated review pipeline is the service's own; no pattern file can replace it.
+  const review = internalPattern("delivery-review");
+  const defs = review.steps.map(toDef);
+  const pattern = patternRef(review, "service");
   let named = false;
   for (const d of defs) {
     if (d.role !== "code_reviewer") continue;
-    // The independence rule is not the template's to drop.
+    // The independence rule is not the pipeline's to drop.
     d.independentOf = "writer";
     if (!named) d.purpose = `Review ${t.id} for merge into ${pr.base} at ${h}`;
     named = true;
@@ -905,7 +904,9 @@ function startReview(s: State, t: Task, pr: PrDelivery, now: string, actor: "use
     decisionAt: now,
     reviewTarget: { taskId: t.id, n: pr.n, headSha: pr.changeSha, baseSha: pr.baseSha },
     pipelineRev: 1,
-    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery review template", steps: defs.map(toDef) }],
+    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery review pattern", steps: defs.map(toDef), pattern }],
+    pattern,
+    patternSince: 1,
   });
   pr.reviewTaskIds.push(id);
   pr.counters.reviews += 1;
@@ -962,13 +963,6 @@ function checkTasksFor(s: State, t: Task, pr: PrDelivery, anySha = false): Task[
   return s.tasks.filter((x) => x.checkTarget?.taskId === t.id && x.checkTarget.n === pr.n && (anySha || x.checkTarget.sha === pr.changeSha));
 }
 
-/** A project template's steps for the dedicated check run, falling back to the built-in when the edited one cannot check. */
-function checkSteps(s: State): StepDef[] {
-  const usable = (d: StepDef[]) => d.some((x) => x.role === "checks" && x.outputs.some((o) => o.kind === "check-results")) && !validatePipeline(d, { checkTarget: true }).some((i) => i.severity === "error");
-  const mine = stepsOf(s, "delivery-checks").map(toDef);
-  return usable(mine) ? mine : templateSteps("delivery-checks");
-}
-
 /** Create the dedicated check task for the change the pull request holds. Mutates the draft `s`. */
 function startChecks(s: State, t: Task, pr: PrDelivery, now: string): string {
   const h = sha12(pr.changeSha);
@@ -976,7 +970,10 @@ function startChecks(s: State, t: Task, pr: PrDelivery, now: string): string {
   let k = 1;
   while (ids.has(`${t.id}-CK${k}`)) k++;
   const id = `${t.id}-CK${k}`;
-  const defs = checkSteps(s);
+  // ORC-016: the dedicated check pipeline is the service's own; no pattern file can replace it.
+  const checks = internalPattern("delivery-checks");
+  const defs = checks.steps.map(toDef);
+  const pattern = patternRef(checks, "service");
   const content: SpecContent = structuredClone(M.currentSpec(t).content);
   const title = content.title;
   content.title = `Checks for merge: ${title}`;
@@ -999,7 +996,9 @@ function startChecks(s: State, t: Task, pr: PrDelivery, now: string): string {
     decisionAt: now,
     checkTarget: { taskId: t.id, n: pr.n, sha: pr.changeSha },
     pipelineRev: 1,
-    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery checks template", steps: defs.map(toDef) }],
+    pipelineHistory: [{ rev: 1, at: now, author: "system", reason: "Created from the Delivery checks pattern", steps: defs.map(toDef), pattern }],
+    pattern,
+    patternSince: 1,
   });
   pr.counters.checks = (pr.counters.checks ?? 0) + 1;
   event(s, now, "system", "integration", `Check run ${id} created for ${prName(pr)} at ${h}: no service-check result for this change under the current settings`, t.id);
@@ -1132,8 +1131,11 @@ function startRepair(state: State, taskId: string, cause: RepairCause, now: stri
   const pr0 = origin.integration!.pr!;
   const title = M.currentSpec(origin).content.title;
   const h = sha12(pr0.headSha);
+  // ORC-016: a fix runs the catalog's Change (standard by the pattern rules), chosen by the service.
+  const change = servicePattern(state, "change");
   const r = M.createFollowUp(state, taskId, now, {
-    steps: stepsOf(state, "change"),
+    steps: structuredClone(change.steps),
+    pattern: patternRef(change, "service"),
     holdBeforeStart: false,
     author: actor,
     dependsOn: [],

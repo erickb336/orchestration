@@ -49,7 +49,7 @@ describe("SimulatedChecks in the fake runtime", () => {
     ]);
     // A new task runs through the loop on the simulated runner.
     let key = 0;
-    const id = (store.command("createTask", { title: "Sim", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }, `k${++key}`, new Date(now).toISOString()).result as { newId: string }).newId;
+    const id = (store.command("createTask", { title: "Sim", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, `k${++key}`, new Date(now).toISOString()).result as { newId: string }).newId;
     for (let i = 0; i < 80 && st().tasks.find((t) => t.id === id)!.lifecycle !== "done"; i++) {
       now += 1000;
       scheduler.tick(now);

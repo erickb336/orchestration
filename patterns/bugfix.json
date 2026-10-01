@@ -1,0 +1,94 @@
+{
+  "$schema": "./pattern.schema.json",
+  "$comment": "ORC-016: a 1:1 transcription of the built-in Bug fix template (state format 14).",
+  "id": "bugfix",
+  "name": "Bug fix",
+  "order": 30,
+  "description": "Reproduce first, fix, checks, review, repair if needed, final checks, verify the reproduction no longer fails.",
+  "whenToUse": "A defect you can reproduce.",
+  "steps": [
+    {
+      "id": "S1",
+      "purpose": "Reproduce and diagnose",
+      "role": "coder",
+      "dependsOn": [],
+      "inputs": [],
+      "outputs": [{ "name": "reproduction", "kind": "report" }]
+    },
+    {
+      "id": "S2",
+      "purpose": "Fix",
+      "role": "coder",
+      "dependsOn": ["S1"],
+      "inputs": [{ "step": "S1", "output": "reproduction" }],
+      "outputs": [
+        { "name": "change", "kind": "code-change" },
+        { "name": "handoff", "kind": "handoff" }
+      ]
+    },
+    {
+      "id": "C1",
+      "purpose": "Run the project's checks",
+      "role": "checks",
+      "dependsOn": ["S2"],
+      "inputs": [{ "step": "S2", "output": "change" }],
+      "outputs": [{ "name": "checks", "kind": "check-results" }],
+      "checks": { "onFail": "findings" }
+    },
+    {
+      "id": "S3",
+      "purpose": "Code review",
+      "role": "code_reviewer",
+      "dependsOn": ["S2", "C1"],
+      "inputs": [
+        { "step": "S1", "output": "reproduction" },
+        { "step": "S2", "output": "change" },
+        { "step": "S2", "output": "handoff" },
+        { "step": "C1", "output": "checks" }
+      ],
+      "outputs": [{ "name": "findings", "kind": "review-findings" }]
+    },
+    {
+      "id": "S4",
+      "purpose": "Repair review findings and failing checks",
+      "role": "coder",
+      "dependsOn": ["S3"],
+      "inputs": [
+        { "step": "S2", "output": "change" },
+        { "step": "S3", "output": "findings" },
+        { "step": "C1", "output": "checks" }
+      ],
+      "outputs": [{ "name": "change", "kind": "code-change" }],
+      "runIf": [
+        { "step": "C1", "output": "checks" },
+        { "step": "S3", "output": "findings" }
+      ],
+      "iterate": { "from": "C1", "max": 3 }
+    },
+    {
+      "id": "C2",
+      "purpose": "Final checks",
+      "role": "checks",
+      "dependsOn": ["S4"],
+      "inputs": [
+        { "step": "S2", "output": "change" },
+        { "step": "S4", "output": "change" }
+      ],
+      "outputs": [{ "name": "final", "kind": "check-results" }],
+      "checks": { "onFail": "block" }
+    },
+    {
+      "id": "S5",
+      "purpose": "Verify the reproduction no longer fails, then integrate. Service check results are the record of what ran; do not say tests passed unless a check result shows it.",
+      "role": "lead",
+      "dependsOn": ["C2"],
+      "inputs": [
+        { "step": "S1", "output": "reproduction" },
+        { "step": "S2", "output": "change" },
+        { "step": "S4", "output": "change" },
+        { "step": "C2", "output": "final" }
+      ],
+      "outputs": [{ "name": "verification", "kind": "verification" }]
+    }
+  ]
+}

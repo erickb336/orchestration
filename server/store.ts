@@ -8,225 +8,32 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { InvalidCommandError, runCommand } from "../src/domain/commands";
+import { INTERNAL_PATTERN_IDS, internalPattern } from "../src/domain/internalPatterns";
+import { builtInCatalog, patternRef } from "../src/domain/patterns";
 import { toDef } from "../src/domain/pipeline";
 import { buildSeed } from "../src/domain/seed";
-import { BUILT_IN_TEMPLATES, templateSteps } from "../src/domain/templates";
-import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type State, type StepDef } from "../src/domain/types";
+import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type PatternRef, type RetiredTemplate, type State, type StepDef } from "../src/domain/types";
+import { V13_TEMPLATE_STEPS, V14_TEMPLATES, v14TemplateSteps } from "./legacyTemplates";
 
-export const STATE_FORMAT = 14;
+export const STATE_FORMAT = 15;
 
-/**
- * ORC-013: the code-changing built-in templates exactly as format 13 shipped them. The 13 → 14 upgrade
- * replaces a project's copy with the new built-in only when it still matches one of these; an edited
- * template is left alone (it shows "Modified", and Restore offers the new steps).
- */
-export const V13_TEMPLATE_STEPS: Record<string, StepDef[]> = {
-  feature: [
-    { id: "S1", purpose: "Plan and design the change", role: "designer", dependsOn: [], inputs: [], outputs: [{ name: "design", kind: "design" }] },
-    {
-      id: "S2",
-      purpose: "Implement",
-      role: "coder",
-      dependsOn: ["S1"],
-      inputs: [{ step: "S1", output: "design" }],
-      outputs: [
-        { name: "change", kind: "code-change" },
-        { name: "handoff", kind: "handoff" },
-      ],
-    },
-    {
-      id: "S3",
-      purpose: "Code review",
-      role: "code_reviewer",
-      dependsOn: ["S2"],
-      inputs: [
-        { step: "S1", output: "design" },
-        { step: "S2", output: "change" },
-        { step: "S2", output: "handoff" },
-      ],
-      outputs: [{ name: "findings", kind: "review-findings" }],
-    },
-    {
-      id: "S4",
-      purpose: "UX review",
-      role: "ux_reviewer",
-      dependsOn: ["S2"],
-      inputs: [
-        { step: "S1", output: "design" },
-        { step: "S2", output: "change" },
-      ],
-      outputs: [{ name: "findings", kind: "review-findings" }],
-    },
-    {
-      id: "S5",
-      purpose: "Repair review findings",
-      role: "coder",
-      dependsOn: ["S3", "S4"],
-      inputs: [
-        { step: "S2", output: "change" },
-        { step: "S3", output: "findings" },
-        { step: "S4", output: "findings" },
-      ],
-      outputs: [{ name: "change", kind: "code-change" }],
-      runIf: [
-        { step: "S3", output: "findings" },
-        { step: "S4", output: "findings" },
-      ],
-      iterate: { from: "S3", max: 3 },
-    },
-    {
-      id: "S6",
-      purpose: "Verify and integrate",
-      role: "lead",
-      dependsOn: ["S5"],
-      inputs: [
-        { step: "S2", output: "change" },
-        { step: "S5", output: "change" },
-        { step: "S3", output: "findings" },
-        { step: "S4", output: "findings" },
-      ],
-      outputs: [{ name: "verification", kind: "verification" }],
-    },
-  ],
-  change: [
-    {
-      id: "S1",
-      purpose: "Implement",
-      role: "coder",
-      dependsOn: [],
-      inputs: [],
-      outputs: [
-        { name: "change", kind: "code-change" },
-        { name: "handoff", kind: "handoff" },
-      ],
-    },
-    {
-      id: "S2",
-      purpose: "Code review",
-      role: "code_reviewer",
-      dependsOn: ["S1"],
-      inputs: [
-        { step: "S1", output: "change" },
-        { step: "S1", output: "handoff" },
-      ],
-      outputs: [{ name: "findings", kind: "review-findings" }],
-    },
-    {
-      id: "S3",
-      purpose: "Repair review findings",
-      role: "coder",
-      dependsOn: ["S2"],
-      inputs: [
-        { step: "S1", output: "change" },
-        { step: "S2", output: "findings" },
-      ],
-      outputs: [{ name: "change", kind: "code-change" }],
-      runIf: [{ step: "S2", output: "findings" }],
-      iterate: { from: "S2", max: 3 },
-    },
-    {
-      id: "S4",
-      purpose: "Verify and integrate",
-      role: "lead",
-      dependsOn: ["S3"],
-      inputs: [
-        { step: "S1", output: "change" },
-        { step: "S3", output: "change" },
-        { step: "S2", output: "findings" },
-      ],
-      outputs: [{ name: "verification", kind: "verification" }],
-    },
-  ],
-  bugfix: [
-    { id: "S1", purpose: "Reproduce and diagnose", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "reproduction", kind: "report" }] },
-    {
-      id: "S2",
-      purpose: "Fix",
-      role: "coder",
-      dependsOn: ["S1"],
-      inputs: [{ step: "S1", output: "reproduction" }],
-      outputs: [
-        { name: "change", kind: "code-change" },
-        { name: "handoff", kind: "handoff" },
-      ],
-    },
-    {
-      id: "S3",
-      purpose: "Code review",
-      role: "code_reviewer",
-      dependsOn: ["S2"],
-      inputs: [
-        { step: "S1", output: "reproduction" },
-        { step: "S2", output: "change" },
-        { step: "S2", output: "handoff" },
-      ],
-      outputs: [{ name: "findings", kind: "review-findings" }],
-    },
-    {
-      id: "S4",
-      purpose: "Repair review findings",
-      role: "coder",
-      dependsOn: ["S3"],
-      inputs: [
-        { step: "S2", output: "change" },
-        { step: "S3", output: "findings" },
-      ],
-      outputs: [{ name: "change", kind: "code-change" }],
-      runIf: [{ step: "S3", output: "findings" }],
-      iterate: { from: "S3", max: 3 },
-    },
-    {
-      id: "S5",
-      purpose: "Verify the reproduction no longer fails, then integrate",
-      role: "lead",
-      dependsOn: ["S4"],
-      inputs: [
-        { step: "S1", output: "reproduction" },
-        { step: "S2", output: "change" },
-        { step: "S4", output: "change" },
-      ],
-      outputs: [{ name: "verification", kind: "verification" }],
-    },
-  ],
-  revert: [
-    {
-      id: "S1",
-      purpose: "Complete the prepared revert: resolve any conflicts, keep later work",
-      role: "coder",
-      dependsOn: [],
-      inputs: [],
-      outputs: [
-        { name: "change", kind: "code-change" },
-        { name: "handoff", kind: "handoff" },
-      ],
-    },
-    {
-      id: "S2",
-      purpose: "Code review",
-      role: "code_reviewer",
-      dependsOn: ["S1"],
-      inputs: [
-        { step: "S1", output: "change" },
-        { step: "S1", output: "handoff" },
-      ],
-      outputs: [{ name: "findings", kind: "review-findings" }],
-    },
-    {
-      id: "S3",
-      purpose: "Verify the revert and integrate",
-      role: "lead",
-      dependsOn: ["S2"],
-      inputs: [
-        { step: "S1", output: "change" },
-        { step: "S2", output: "findings" },
-      ],
-      outputs: [{ name: "verification", kind: "verification" }],
-    },
-  ],
-};
+export { V13_TEMPLATE_STEPS };
 
 /** Step lists compared in their normalised form, so key order and absent optionals do not count as edits. */
 const sameSteps = (a: StepDef[], b: StepDef[]) => JSON.stringify(a.map(toDef)) === JSON.stringify(b.map(toDef));
+
+/**
+ * ORC-016: what a task from before patterns ran. Service-owned tasks name their internal pattern; every
+ * other task is "legacy": the format-14 template its first pipeline revision names, or "custom".
+ */
+export function legacyPatternRef(t: { reviewTarget?: unknown; checkTarget?: unknown; revertOf?: unknown; pipelineHistory?: { reason?: string }[] }): PatternRef {
+  const internal = t.reviewTarget ? "delivery-review" : t.checkTarget ? "delivery-checks" : t.revertOf ? "revert" : undefined;
+  if (internal) return patternRef(internalPattern(internal), "migration");
+  const reason = t.pipelineHistory?.[0]?.reason ?? "";
+  const named = /(?:from|applied) the (.+) template/.exec(reason)?.[1]?.trim();
+  const v14 = named ? Object.values(V14_TEMPLATES).find((x) => x.name === named || x.id === named) : undefined;
+  return { id: v14?.id ?? "custom", name: v14?.name ?? named ?? "Custom pipeline", source: "legacy", chosenBy: "migration" };
+}
 
 /** In-place upgrades of the state document, keyed by the format they upgrade from. */
 const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string, unknown>> = {
@@ -373,19 +180,52 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
       events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message });
     };
+    // ORC-016: this reads the frozen format-14 templates, so the upgrade keeps working now that the live
+    // code has patterns instead of templates.
     for (const t of (project.templates ?? []) as { id: string; builtIn?: boolean; rev: number; steps: StepDef[]; description?: string }[]) {
       const legacy = V13_TEMPLATE_STEPS[t.id];
       if (!t.builtIn || !legacy) continue;
       if (sameSteps(t.steps, legacy)) {
-        t.steps = templateSteps(t.id);
+        t.steps = v14TemplateSteps(t.id);
         // Review 1 (11): the description follows the steps, so the template does not show as "edited".
-        const builtIn = BUILT_IN_TEMPLATES.find((b) => b.id === t.id);
+        const builtIn = V14_TEMPLATES[t.id];
         if (builtIn) t.description = builtIn.description;
         t.rev += 1;
         note(`Template ${t.id} gained the Checks steps (run by the service; skipped while checks are off) when the state format was upgraded`);
       } else note(`Template ${t.id} was edited, so it did not gain the Checks steps; Restore in Settings offers the new built-in`);
     }
     doc.version = 14;
+    return doc;
+  },
+  // ORC-016: pipelines come from patterns. Custom templates and edited built-ins are retired into
+  // `retiredTemplates` (the server writes each once as a pattern file of yours at the next start, never
+  // overwriting); unedited built-ins are dropped, since the catalog provides them. Tasks are not touched
+  // (P9): no step, revision, history, pin or state changes, and a run active across the upgrade finishes
+  // normally. Each task records what it ran as a legacy or internal pattern reference.
+  14: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    const now = new Date().toISOString();
+    const events = (doc.events ??= []) as { id: string; at: string; actor: string; kind: string; taskId?: string; message: string }[];
+    const note = (message: string) => {
+      doc.seq = (typeof doc.seq === "number" ? doc.seq : 0) + 1;
+      events.push({ id: `ev-${doc.seq}`, at: now, actor: "system", kind: "config", message });
+    };
+    const retired = (doc.retiredTemplates ??= []) as RetiredTemplate[];
+    for (const t of (project.templates ?? []) as { id: string; name: string; description: string; steps: StepDef[] }[]) {
+      const b = V14_TEMPLATES[t.id];
+      const unedited = b && !(INTERNAL_PATTERN_IDS as string[]).includes(t.id) && sameSteps(t.steps, b.steps) && t.name === b.name && t.description === b.description;
+      if (unedited) continue; // the catalog provides it
+      retired.push({ id: t.id, name: t.name, description: t.description, steps: t.steps.map(toDef), kind: b ? "edited-built-in" : "custom", retiredAt: now });
+      note(`Template "${t.name}" was retired: pipelines now come from patterns. It is saved as a pattern file of yours when the service starts.`);
+    }
+    delete project.templates;
+    project.defaultPatternId ??= "change";
+    doc.patterns = builtInCatalog(); // the server replaces it at start
+    for (const t of (doc.tasks ?? []) as Record<string, unknown>[]) {
+      t.pattern ??= legacyPatternRef(t as Parameters<typeof legacyPatternRef>[0]);
+      t.patternSince ??= 0;
+    }
+    doc.version = 15;
     return doc;
   },
 };

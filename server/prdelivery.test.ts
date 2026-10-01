@@ -18,6 +18,7 @@ import { GhError } from "./github";
 import { PrDriver } from "./prdelivery";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { setTestPipeline } from "./testing/pipelines";
 import { FakeGitHub } from "./testing/fakeGitHub";
 import { ScriptedAdapter } from "./testing/scripted";
 import { WorkspaceManager, assertSafePush } from "./workspaces";
@@ -57,9 +58,9 @@ const run = (id: string) => M.activeAttempts(st(), id)[0];
 let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
 const newTask = (title: string) =>
-  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
+  (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
 const oneStep = (id: string) =>
-  cmd("setPipeline", { taskId: id, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+  setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
 const branches = () => remote("for-each-ref", "--format=%(refname)", "refs/heads/").split("\n").filter((r) => r.includes("orchestration/"));
 const events = (text: string) => st().events.filter((e) => e.message.includes(text));
 const newScheduler = (leaseMs = 120_000) => {

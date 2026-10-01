@@ -9,8 +9,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
+import { eligibleIds } from "../src/domain/patterns";
 import { buildSeed } from "../src/domain/seed";
-import { templateSteps } from "../src/domain/templates";
 import type { Finding, State } from "../src/domain/types";
 import { CONVENTIONS_FILE_CAP, CONVENTIONS_TOTAL_CAP, buildEnvelope, buildLeadEnvelope, capConventions, findingKey, parseFindings, parseLeadOutput, parseOutputs } from "./envelope";
 import { redact } from "./redact";
@@ -108,7 +108,7 @@ describe("the parser (§4.2)", () => {
 function changeTask(): { s: State; id: string } {
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
-  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, steps: templateSteps("change"), templateName: "Change" }, at(0));
+  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
   s = r.state;
   s = M.dispatchEligible(M.leadPromoteProposals(s, at(1)), at(1));
   const impl = M.activeAttempts(s, r.newId)[0];
@@ -277,5 +277,42 @@ describe("redaction (§6.6)", () => {
     expect(out).not.toContain("MIIEow");
     expect(out).toContain("key:\n***\nauth: Bearer *** done; ***; ***");
     expect(redact("Bearer short")).toBe("Bearer short");
+  });
+});
+
+describe("pipeline patterns in the envelopes (ORC-016)", () => {
+  it("the lead's prompt lists exactly the standard patterns, by patternId, with the default; experiments, pauses and the service's pipelines are not named", () => {
+    let s = buildSeed(T0, { inFlightRuns: false });
+    s = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "planning" }, at(0)).state;
+    const text = buildLeadEnvelope(s, M.activeLeadRun(s)!, "read");
+    const section = /## Pipeline patterns\n([\s\S]*?)\nExperiments and patterns that pause for the user are the user's to choose; do not name them\./.exec(text);
+    expect(section).not.toBeNull();
+    const listed = [...section![1].matchAll(/^- ([a-z0-9-]+): /gm)].map((m) => m[1]);
+    expect(listed).toEqual(eligibleIds(s, "lead"));
+    expect(listed).toEqual(["change", "change-cross-review", "feature", "bugfix", "investigation", "design", "goal"]);
+    expect(text).toContain('Pick "patternId" from these. Leave it out to use the project default ("change").');
+    expect(text).toContain("- change: Change. Code change without interaction design");
+    expect(text).toContain("Use when: Most code changes");
+    expect(text).toContain("Steps: S1 Implement → C1 Run the project's checks (run by the service) → S2 Code review");
+    expect(text).toContain('"patternId": "<pattern id>"');
+    for (const id of ["change-best-of-two", "change-lean", "feature-design-gate", "goal-plan-gate", "revert", "delivery-review", "delivery-checks"]) expect(text, id).not.toMatch(new RegExp(`^- ${id}:`, "m"));
+    expect(text).not.toContain("templateId");
+    // The default follows the project setting.
+    const feature = M.setDefaultPattern(s, "feature", at(1));
+    expect(buildLeadEnvelope(feature, M.activeLeadRun(feature)!, "read")).toContain('project default ("feature")');
+  });
+
+  it("a breakdown step's contract names patternId and lists the child-eligible patterns with the default; other steps say nothing about patterns", () => {
+    let s = buildSeed(T0, { inFlightRuns: false });
+    for (const t of s.tasks) t.hold = true;
+    const r = M.createTask(s, { title: "Goal", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "goal" }, at(0));
+    s = M.dispatchEligible(M.leadPromoteProposals(r.state, at(1)), at(1));
+    const text = buildEnvelope({ state: s, task: task(s, r.newId), step: step(s, r.newId, "S1"), attemptId: "run-g", access: "read" });
+    expect(text).toContain('"patternId": "<id>"');
+    expect(text).toContain(`Breakdown items: pick "patternId" from: ${eligibleIds(s, "child").map((id) => `${id} (${s.patterns.patterns.find((p) => p.id === id)!.name})`).join(", ")}. Leave it out for the default (change). Child tasks cannot break down again.`);
+    expect(text).not.toMatch(/goal \(Goal\)/);
+    expect(text).not.toContain("templateId");
+    const { s: cs, id } = changeTask();
+    expect(buildEnvelope({ state: cs, task: task(cs, id), step: step(cs, id, "S2"), attemptId: "run-c", access: "read" })).not.toContain("Breakdown items");
   });
 });

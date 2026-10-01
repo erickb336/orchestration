@@ -41,7 +41,7 @@ const lastReply = () => state().conversation.filter((m) => m.author === "lead").
 const autonomy = (over: Record<string, unknown> = {}) =>
   cmd("setAutonomy", { enabled: true, planningIntervalMinutes: 60, maxProposalsPerCycle: 3, maxOpenProposals: 5, holdLeadProposals: false, operatingHours: null, ...over });
 const createTask = (title: string, priority: number, over: Record<string, unknown> = {}) =>
-  (cmd("createTask", { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority, holdBeforeStart: false, templateId: "change", ...over }).result as { newId: string }).newId;
+  (cmd("createTask", { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority, holdBeforeStart: false, patternId: "change", ...over }).result as { newId: string }).newId;
 
 /** Start a project in the given stage; role defaults and the lead are set afterwards (initProject resets them). */
 function init(stage: "shaping" | "building", vision = "") {
@@ -289,8 +289,8 @@ describe("D. migration and the simulated lead", () => {
     raw.close();
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(14);
-    expect(s.version).toBe(14);
+    expect(STATE_FORMAT).toBe(15);
+    expect(s.version).toBe(15);
     expect(s.project.stage).toBe("building");
     expect(s.visionDrafts).toEqual([]);
     expect(s.tasks.every((t) => t.fromShaping === undefined)).toBe(true);
@@ -298,7 +298,7 @@ describe("D. migration and the simulated lead", () => {
     expect(upgraded.read().state.project.stage).toBe("shaping");
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(14);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(15);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_11_%'").get()).toBeDefined();
     check.close();
   });

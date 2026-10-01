@@ -6,7 +6,6 @@
 
 import * as C from "./checks";
 import * as M from "./model";
-import { templateSteps } from "./templates";
 import { ControlError, type Artifact, type Finding, type FindingDecision, type LeadRun, type State, type Step, type Task } from "./types";
 
 export const MAX_DECISIONS = 2000;
@@ -286,7 +285,6 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
   if (decision === "follow-up") {
     if (d.followUpTaskId && s.tasks.some((x) => x.id === d.followUpTaskId && x.lifecycle !== "cancelled")) throw new ControlError(`${d.followUpTaskId} already follows up ${d.id}.`);
     const spec = M.currentSpec(t).content;
-    const tpl = s.project.templates.find((x) => x.id === "change");
     const where = d.finding.file ? ` (${d.finding.file}${d.finding.line ? `:${d.finding.line}` : ""})` : "";
     const r = M.createTask(
       s,
@@ -300,8 +298,9 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
         acceptance: [`The finding no longer applies${where}`],
         priority: t.priority,
         holdBeforeStart: true,
-        steps: tpl ? structuredClone(tpl.steps) : templateSteps("change"),
-        templateName: tpl?.name ?? "Change",
+        // ORC-016: a follow-up fix runs the catalog's Change, chosen by the service.
+        patternId: "change",
+        chosenBy: "service",
       },
       now,
     );
@@ -461,7 +460,7 @@ export function applyLeadDecisions(s: State, r: LeadRun, raw: unknown, now: stri
         rationale: clip(why, 300),
         uncertainty: "",
         acceptance: [`The finding no longer applies${where}`],
-        templateId: "change",
+        patternId: "change",
         priority: t.priority,
       };
       const problem = M.validateProposal(s, p, now);

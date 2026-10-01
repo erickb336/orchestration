@@ -11,6 +11,7 @@ import { toDef } from "../src/domain/pipeline";
 import type { State, StepDef } from "../src/domain/types";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
 
@@ -37,9 +38,9 @@ const finishRun = (runId: string, opts: Parameters<ScriptedAdapter["finish"]>[1]
 };
 let key = 0;
 const cmd = (name: string, args: object = {}) => store.command(name, args, `k${++key}`, iso());
-const newTask = (title: string, templateId = "change", steps?: StepDef[]) => {
-  const id = (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId }).result as { newId: string }).newId;
-  if (steps) cmd("setPipeline", { taskId: id, expectedRev: 1, steps, reason: "test pipeline" });
+const newTask = (title: string, patternId = "change", steps?: StepDef[]) => {
+  const id = (cmd("createTask", { title, area: "", outcome: `${title} outcome`, benefit: "", whyNow: "", approach: "do it", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId }).result as { newId: string }).newId;
+  if (steps) setTestPipeline(store, id, steps, iso(), "test pipeline");
   return id;
 };
 
@@ -128,7 +129,7 @@ describe("parallel agents per step", () => {
   it("rejects invalid parallel settings", () => {
     const bad: StepDef[] = [{ id: "S1", purpose: "x", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }], parallel: { count: 2, mode: "best-of" } }];
     const id = newTask("Bad");
-    expect(() => cmd("setPipeline", { taskId: id, expectedRev: 1, steps: bad, reason: "x" })).toThrow(/must read its output to choose/);
+    expect(() => setTestPipeline(store, id, bad, iso(), "x")).toThrow(/must read its output to choose/);
   });
 });
 
@@ -189,8 +190,8 @@ describe("breakdowns into child tasks", () => {
     expect(claude.runs.get(plan.id)!.prompt).toContain('"items"');
     finishRun(plan.id, {
       items: [
-        { title: "Part one", outcome: "one done", approach: "small", acceptance: ["one works"], templateId: "change" },
-        { title: "Part two", outcome: "two done", approach: "small", acceptance: ["two works"], templateId: "change", dependsOn: [0] },
+        { title: "Part one", outcome: "one done", approach: "small", acceptance: ["one works"], patternId: "change" },
+        { title: "Part two", outcome: "two done", approach: "small", acceptance: ["two works"], patternId: "change", dependsOn: [0] },
         { title: "No acceptance", outcome: "x", approach: "y", acceptance: [] },
       ],
     });
@@ -216,7 +217,7 @@ describe("breakdowns into child tasks", () => {
     const evaluate = running(id)[0];
     expect(evaluate.stepId).toBe("S2");
     expect(claude.runs.get(evaluate.id)!.prompt).toContain("Child tasks (results of the breakdown)");
-    finishRun(evaluate.id, { items: [{ title: "Part three", outcome: "three", approach: "z", acceptance: ["three works"], templateId: "change" }] });
+    finishRun(evaluate.id, { items: [{ title: "Part three", outcome: "three", approach: "z", acceptance: ["three works"], patternId: "change" }] });
     tick();
     expect(task(id).steps.some((x) => x.id === "S2-i2")).toBe(true); // next round planned
     cmd("cancelTask", { taskId: `${id}.3` });
@@ -239,7 +240,7 @@ describe("breakdowns into child tasks", () => {
     ];
     const id = newTask("Gated plan", "change", steps);
     tick();
-    finishRun(running(id)[0].id, { items: [{ title: "Worker idea", outcome: "c", approach: "a", acceptance: ["ok"], templateId: "change" }] });
+    finishRun(running(id)[0].id, { items: [{ title: "Worker idea", outcome: "c", approach: "a", acceptance: ["ok"], patternId: "change" }] });
     tick();
     expect(task(id).hold).toBe(true);
     expect(M.childTasks(st(), task(id))).toHaveLength(0); // nothing created yet
@@ -249,8 +250,8 @@ describe("breakdowns into child tasks", () => {
       summary: "Two parts instead",
       reason: "Split differently",
       items: [
-        { title: "Part X", outcome: "x", approach: "x", acceptance: ["x ok"], templateId: "change" },
-        { title: "Part Y", outcome: "y", approach: "y", acceptance: ["y ok"], templateId: "change" },
+        { title: "Part X", outcome: "x", approach: "x", acceptance: ["x ok"], patternId: "change" },
+        { title: "Part Y", outcome: "y", approach: "y", acceptance: ["y ok"], patternId: "change" },
       ],
     });
     cmd("resumeTask", { taskId: id });
@@ -304,7 +305,7 @@ const complete = (taskId: string, stepId: string, opts: Parameters<ScriptedAdapt
   finishRun(r.id, opts);
   settle();
 };
-const items = (...titles: string[]): Record<string, unknown>[] => titles.map((title) => ({ title, outcome: `${title} done`, approach: "small", acceptance: [`${title} works`], templateId: "change" }));
+const items = (...titles: string[]): Record<string, unknown>[] => titles.map((title) => ({ title, outcome: `${title} done`, approach: "small", acceptance: [`${title} works`], patternId: "change" }));
 const bestOfSteps = (): StepDef[] => [
   { id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }], parallel: { count: 2, mode: "best-of" } },
   { id: "S2", purpose: "Compare", role: "code_reviewer", dependsOn: ["S1"], inputs: [{ step: "S1", output: "change" }], outputs: [{ name: "findings", kind: "review-findings" }] },
@@ -411,18 +412,18 @@ describe("review regressions: pipeline rules", () => {
   ];
   it.each(cases)("rejects %s", (name, steps, msg) => {
     const id = newTask(`Bad ${name}`);
-    expect(() => cmd("setPipeline", { taskId: id, expectedRev: 1, steps, reason: "x" })).toThrow(msg);
+    expect(() => setTestPipeline(store, id, steps, iso(), "x")).toThrow(msg);
   });
 
   it("removing parallel, iterate, or waiting from a step removes it, and an identical re-save changes nothing", () => {
     const steps: StepDef[] = [base, review("S2", "S1", { parallel: { count: 3, mode: "copies" }, waitForChildren: true }), repair("S3", "S2", { iterate: { from: "S3", max: 3 } })];
     const id = newTask("Unset", "change", steps);
     const plain = steps.map((d) => ({ ...d, parallel: undefined, iterate: undefined, waitForChildren: undefined }));
-    cmd("setPipeline", { taskId: id, expectedRev: 2, steps: plain, reason: "simpler" });
+    setTestPipeline(store, id, plain, iso(), "simpler");
     const s2 = task(id).steps.find((x) => x.id === "S2")!;
     expect([s2.parallel, s2.waitForChildren, task(id).steps.find((x) => x.id === "S3")!.iterate]).toEqual([undefined, undefined, undefined]);
     const revs = task(id).steps.map((x) => x.revision);
-    cmd("setPipeline", { taskId: id, expectedRev: 3, steps: plain, reason: "same again" });
+    setTestPipeline(store, id, plain, iso(), "same again");
     expect(task(id).steps.map((x) => x.revision)).toEqual(revs);
     settle();
     complete(id, "S1", { write: ["u.txt", "1\n"] });
@@ -437,7 +438,7 @@ describe("review regressions: pipeline rules", () => {
     const before = running(id);
     expect(before.map((r) => r.stepId).sort()).toEqual(["S2", "S2-c2"]);
     const defs = task(id).steps.map(toDef).map((d) => (d.id === "S2" ? { ...d, purpose: "Review for security" } : d));
-    cmd("setPipeline", { taskId: id, expectedRev: task(id).pipelineRev, steps: defs, reason: "focus" });
+    setTestPipeline(store, id, defs, iso(), "focus");
     expect(task(id).steps.find((x) => x.id === "S2-c2")!.purpose).toBe("Review for security (copy 2 of 2)");
     expect(before.map((r) => st().attempts.find((a) => a.id === r.id)!.outcome)).toEqual(["stopping", "stopping"]);
   });
@@ -452,7 +453,7 @@ describe("review regressions: child tasks", () => {
       const r = running(id)[0];
       if (!r) break;
       const batch = items(...Array.from({ length: 20 }, (_, j) => `R${round} item ${j + 1}`));
-      if (round === 1) batch[0].templateId = "goal";
+      if (round === 1) batch[0].patternId = "goal";
       complete(id, r.stepId, { items: batch });
     }
     const kids = M.descendants(st(), task(id));
@@ -580,22 +581,22 @@ describe("review regressions (re-verification)", () => {
     const current = () => task(id).steps.map(toDef);
     // Changing the count after the step has expanded is refused rather than ignored.
     const more = current().map((d) => (d.id === "S1" ? { ...d, parallel: { count: 4, mode: "best-of" as const } } : d));
-    expect(() => cmd("setPipeline", { taskId: id, expectedRev: task(id).pipelineRev, steps: more, reason: "more" })).toThrow(/cannot change/);
+    expect(() => setTestPipeline(store, id, more, iso(), "more")).toThrow(/cannot change/);
     // Renaming the leader's output without updating readers of the copies is refused (copies follow the leader).
     const renamed = current().map((d) =>
       d.id === "S1" ? { ...d, outputs: [{ name: "patch", kind: "code-change" as const }] } : d.id === "S2" ? { ...d, inputs: d.inputs.map((r) => (r.step === "S1" ? { ...r, output: "patch" } : r)) } : d,
     );
-    expect(() => cmd("setPipeline", { taskId: id, expectedRev: task(id).pipelineRev, steps: renamed, reason: "rename" })).toThrow(/Parallel copies follow/);
+    expect(() => setTestPipeline(store, id, renamed, iso(), "rename")).toThrow(/Parallel copies follow/);
     // A client that omits copyOf does not break the group.
     const stripped = current().map(({ copyOf: _c, iteration: _i, ...d }) => d);
-    cmd("setPipeline", { taskId: id, expectedRev: task(id).pipelineRev, steps: stripped, reason: "same, without service fields" });
+    setTestPipeline(store, id, stripped, iso(), "same, without service fields");
     expect(task(id).steps.find((x) => x.id === "S1-c2")!.copyOf).toBe("S1");
     // A best-of step must always run.
     const cond = [{ ...impl, runIf: [] }, compare].map((d) => d);
     const id2 = newTask("Conditional best-of");
     const pre: StepDef = { id: "S0", purpose: "Review first", role: "code_reviewer", dependsOn: [], inputs: [], outputs: [{ name: "f", kind: "review-findings" }] };
     const bad = [pre, { ...cond[0], dependsOn: ["S0"], runIf: [{ step: "S0", output: "f" }] }, cond[1]];
-    expect(() => cmd("setPipeline", { taskId: id2, expectedRev: 1, steps: bad, reason: "x" })).toThrow(/is best-of, so it must always run/);
+    expect(() => setTestPipeline(store, id2, bad, iso(), "x")).toThrow(/is best-of, so it must always run/);
   });
 
   it("resuming a child resumes the grandchildren that were paused with an ancestor", () => {
@@ -603,7 +604,7 @@ describe("review regressions (re-verification)", () => {
     settle();
     complete(id, "S1", { items: items("Child") });
     const child = `${id}.1`;
-    cmd("setPipeline", { taskId: child, expectedRev: task(child).pipelineRev, steps: planSteps(), reason: "break this down too" });
+    setTestPipeline(store, child, planSteps(), iso(), "break this down too");
     cmd("startHeldTask", { taskId: child });
     settle();
     complete(child, "S1", { items: items("Grandchild") });

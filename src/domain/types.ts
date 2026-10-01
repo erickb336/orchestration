@@ -254,7 +254,12 @@ export interface Project {
   /** Desired state: project-wide pause. */
   hold: boolean;
   lastVisitAt: string;
-  templates: WorkflowTemplate[];
+  /**
+   * ORC-016: the pattern used when a lead proposal or a breakdown item names none, and when nothing else
+   * chooses. It must be a standard pattern; when it leaves the catalog, `effectiveDefault` falls back to
+   * "change" without rewriting this field.
+   */
+  defaultPatternId: string;
 }
 
 /**
@@ -566,7 +571,7 @@ export interface InputRef {
   output: string;
 }
 
-/** Structural definition of a step, shared by templates and task pipelines. */
+/** Structural definition of a step, shared by patterns and task pipelines. */
 export interface StepDef {
   id: string;
   purpose: string;
@@ -607,14 +612,117 @@ export interface StepDef {
   checks?: { onFail: "findings" | "block"; only?: string[] };
 }
 
-export interface WorkflowTemplate {
+// ---------- ORC-016: pipeline patterns ----------
+
+/**
+ * Who chose a task's pattern. "default": nothing named one, so the project default applied. "service":
+ * a pipeline the service created (fix, revert, delivery review or checks). "follow-up": copied or
+ * re-applied from the origin task. "migration": recorded for tasks from before patterns existed.
+ * A later automatic assignment (spec: excluded) would add "rotation".
+ */
+export type ChosenBy = "user" | "lead" | "breakdown" | "default" | "service" | "follow-up" | "migration";
+
+export type PatternSource = "built-in" | "local";
+
+/** One file in a pattern's `extends` chain, nearest first. `fileHash` changes with any field of that file. */
+export interface PatternChainEntry {
+  id: string;
+  source: PatternSource;
+  file: string;
+  fileHash: string;
+}
+
+export interface PatternFlags {
+  /** An output has the kind `breakdown`: the pattern creates child tasks. */
+  breaksDown: boolean;
+  /** A step has `gate: true`: the task pauses for a person. */
+  pausesForYou: boolean;
+  /** Some step changes code and no code_reviewer step reads a code change. */
+  unreviewed: boolean;
+  /** A step runs as best-of candidates. */
+  bestOf: boolean;
+  /** The union of `parallel.providers`; the picker warns when one is disabled. */
+  needsProviders: ProviderId[];
+}
+
+/**
+ * A resolved catalog pattern: its steps after `extends` and `stepOverrides`, with derived flags.
+ * "standard": not experimental, no pause for a person, and an independent review of any code change; the
+ * lead, breakdowns and the project default may use it. Everything else is "user-only".
+ */
+export interface Pattern {
   id: string;
   name: string;
   description: string;
-  builtIn: boolean;
-  /** Bumps on every save; guards against overwriting a newer edit. */
-  rev: number;
+  whenToUse: string;
+  order: number;
+  experimental?: true;
+  hypothesis?: string;
+  source: PatternSource;
+  /** A file of yours with a built-in's id. */
+  replacesBuiltIn?: true;
+  /** Display path: "patterns/change.json" or "~/.orchestration/patterns/x.jsonc". */
+  file: string;
+  /** Nearest first: this file, then each base. */
+  chain: PatternChainEntry[];
+  /** SHA-256 of the canonical resolved steps: what runs. Names, descriptions and comments do not count. */
+  hash: string;
   steps: StepDef[];
+  flags: PatternFlags;
+  audience: "standard" | "user-only";
+  /** validatePipeline warnings, and "no independent code review" when it applies. */
+  warnings: string[];
+}
+
+export interface PatternError {
+  file: string;
+  id?: string;
+  message: string;
+  line?: number;
+  column?: number;
+  /** "built-in kept": the broken file of yours would have replaced a built-in, which stays in effect. */
+  effect: "skipped" | "built-in kept";
+}
+
+/** The catalog, loaded by the server from files and written to the state through `setPatternCatalog` only. */
+export interface PatternCatalog {
+  loadedAt: string;
+  /** Display path of the directory of your patterns. */
+  localDir: string;
+  patterns: Pattern[];
+  errors: PatternError[];
+}
+
+/**
+ * What a task ran. Recorded on each pipeline revision that applied a pattern, and as the task's current
+ * one. "internal": a service-owned pipeline. "legacy": made from a template before ORC-016. "custom":
+ * built by the internal `setPipeline` (tests).
+ */
+export interface PatternRef {
+  id: string;
+  name: string;
+  source: PatternSource | "internal" | "legacy" | "custom";
+  /** Absent for legacy and custom pipelines. */
+  hash?: string;
+  chain?: PatternChainEntry[];
+  experimental?: true;
+  chosenBy: ChosenBy;
+}
+
+/** A custom or edited template retired by migration 14 → 15, written once as a pattern file of yours at start. */
+export interface RetiredTemplate {
+  id: string;
+  name: string;
+  description: string;
+  steps: StepDef[];
+  kind: "custom" | "edited-built-in";
+  retiredAt: string;
+  /** Display path of the file written. */
+  exportedTo?: string;
+  exportedId?: string;
+  exportError?: string;
+  /** What the export had to leave out, e.g. "C2.checks.only (lint, test)". */
+  stripped?: string[];
 }
 
 /** An accepted output of a completed run. Immutable; a rerun produces a new version. */
@@ -821,6 +929,10 @@ export interface Task {
   pipelineRev: number;
   pipelineHistory: PipelineRevision[];
   legacySpecUnavailable?: boolean;
+  /** ORC-016: the pattern the current pipeline came from. */
+  pattern: PatternRef;
+  /** ORC-016: the pipeline revision that applied the current pattern; 0 for tasks from before patterns. */
+  patternSince: number;
 }
 
 export interface PipelineRevision {
@@ -829,6 +941,8 @@ export interface PipelineRevision {
   author: Actor;
   reason: string;
   steps: StepDef[];
+  /** ORC-016: set on revisions that applied a pattern. Expansions and check rounds leave it unset. */
+  pattern?: PatternRef;
 }
 
 export type EventKind =
@@ -853,7 +967,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 14;
+  version: 15;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -868,6 +982,10 @@ export interface State {
   visionDrafts: VisionDraft[];
   /** ORC-013: decisions on findings (at most 2000; decided ones of settled tasks are pruned first, open ones never). */
   decisions: FindingDecision[];
+  /** ORC-016: the pattern catalog, machine-level like the files it comes from. Only the server writes it; initProject leaves it alone. */
+  patterns: PatternCatalog;
+  /** ORC-016: templates retired by migration 14 → 15, exported once as pattern files of yours. */
+  retiredTemplates: RetiredTemplate[];
 }
 
 /** One entry in the lead conversation. */

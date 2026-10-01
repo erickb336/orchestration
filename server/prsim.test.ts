@@ -31,6 +31,7 @@ import type { State } from "../src/domain/types";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { setTestPipeline } from "./testing/pipelines";
 
 let dir: string;
 let store: Store;
@@ -63,8 +64,8 @@ afterEach(async () => {
 describe("fake runtime (scenario 19)", () => {
   it("the whole flow runs on the simulated GitHub: zero processes, every record labelled simulated", async () => {
     cmd("setDeliveryMode", { mode: "pr" });
-    const id = (cmd("createTask", { title: "Simulated change", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
-    cmd("setPipeline", { taskId: id, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+    const id = (cmd("createTask", { title: "Simulated change", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+    setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
     cmd("setPriority", { taskId: id, priority: 1 });
 
     for (let i = 0; i < 200 && !(task(id).integration?.pr?.phase === "open" && D.prReady(st(), task(id), now)); i++) await tick();
@@ -99,8 +100,8 @@ describe("fake runtime (scenario 19)", () => {
     cmd("setPrDelivery", { config: { merge: "auto" } });
     cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "auto" } });
     cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "auto" } });
-    const id = (cmd("createTask", { title: "Simulated automatic change", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
-    cmd("setPipeline", { taskId: id, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+    const id = (cmd("createTask", { title: "Simulated automatic change", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+    setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
     cmd("setPriority", { taskId: id, priority: 1 });
     for (let i = 0; i < 400 && task(id).integration?.pr?.phase !== "merged"; i++) await tick(2000);
     const pr = task(id).integration!.pr!;

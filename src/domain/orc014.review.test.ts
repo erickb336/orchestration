@@ -227,8 +227,11 @@ describe("11: Start building's labels tell the truth", () => {
   /** A ready roadmap task under the shaping hold, and a proposed task it depends on. */
   function roadmap(): { state: State; id: string; dep: string } {
     let s = M.startShaping(seed(), at(0));
-    const dep = M.createTask(s, { title: "Dep", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, steps: oneStep, templateName: "T" }, at(1));
-    const t = M.createTask(dep.state, { title: "Planned", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 2, holdBeforeStart: true, steps: oneStep, templateName: "T" }, at(2));
+    // ORC-016: tasks come from a pattern; the one-step pipeline is applied through the internal setPipeline.
+    const dep0 = M.createTask(s, { title: "Dep", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(1));
+    const dep = { ...dep0, state: M.setPipeline(dep0.state, dep0.newId, 1, oneStep, "one step", "user", at(1)) };
+    const t0 = M.createTask(dep.state, { title: "Planned", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 2, holdBeforeStart: true, patternId: "change" }, at(2));
+    const t = { ...t0, state: M.setPipeline(t0.state, t0.newId, 1, oneStep, "one step", "user", at(2)) };
     s = structuredClone(t.state);
     const task = s.tasks.find((x) => x.id === t.newId)!;
     task.lifecycle = "ready";

@@ -38,7 +38,7 @@ function proposal(over: Partial<M.LeadProposal> = {}): M.LeadProposal {
     rationale: "Smallest useful step.",
     uncertainty: "None.",
     acceptance: ["greet() returns a greeting"],
-    templateId: "change",
+    patternId: "change",
     priority: 2,
     ...over,
   };

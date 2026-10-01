@@ -2,12 +2,12 @@ import { useMemo, useState } from "react";
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
-import { INTERNAL_TEMPLATE_IDS } from "../domain/templates";
+import { effectiveDefault, patternSummary } from "../domain/patterns";
 import { PROVIDERS, ROLES, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { PrChip } from "./Delivery";
 import { COLUMN_LABEL, ROLE_LABEL, StatePill, currentWork, hasNewDecision, latestEvent, relTime } from "./common";
-import { isSettledTask, pipelineSummary } from "./fanout";
+import { isSettledTask } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
 import { ShapingBanner } from "./Shaping";
 import { FocusDiff } from "./SteeringChanges";
@@ -36,7 +36,8 @@ function usePref<T extends string>(key: string, initial: T) {
 
 function NewTaskForm({ onClose }: { onClose: () => void }) {
   const { state, send, disabled } = useStore();
-  const templates = state.project.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id));
+  // ORC-016: the catalog never holds the service's own pipelines; everything in it is yours to choose.
+  const patterns = state.patterns.patterns;
   const [f, setF] = useState({
     title: "",
     area: "",
@@ -47,11 +48,11 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     acceptance: "",
     // "auto": priority 3, not pinned, so the lead may reorder it when you steer. A number is your choice and stays.
     priority: "auto",
-    templateId: templates.find((t) => t.id === "change")?.id ?? templates[0]?.id ?? "",
+    patternId: effectiveDefault(state).id,
     holdBeforeStart: true,
   });
   const set = (k: keyof typeof f, v: string | boolean) => setF((x) => ({ ...x, [k]: v }));
-  const tpl = templates.find((t) => t.id === f.templateId);
+  const pattern = patterns.find((p) => p.id === f.patternId);
   const text = (k: "title" | "area" | "outcome" | "benefit" | "whyNow" | "approach", label: string, required = false, multi = false) => (
     <label className="field">
       <span>
@@ -78,7 +79,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
           priority: f.priority === "auto" ? 3 : Number(f.priority) || 3,
           priorityPinned: f.priority !== "auto",
           holdBeforeStart: f.holdBeforeStart,
-          templateId: f.templateId,
+          patternId: f.patternId,
         });
         const id = newIdOf(r);
         if (id) {
@@ -89,7 +90,7 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
     >
       <h2 id="new-task-h">New task</h2>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        You write the outcome and approach; the pipeline comes from a template and can be edited afterwards. Hold before start is on by default so you can review the spec and pipeline before anything runs.
+        You write the outcome and approach; the pipeline comes from the pattern you choose. You can pin a provider and model for each step on the task page. Hold before start is on by default so you can review the spec before anything runs.
       </p>
       {text("title", "Title", true)}
       {text("outcome", "Outcome (what should be true when done)", true, true)}
@@ -103,11 +104,13 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
       {text("whyNow", "Why now")}
       <div className="row">
         <label className="field">
-          <span>Pipeline template</span>
-          <select value={f.templateId} onChange={(e) => set("templateId", e.target.value)}>
-            {templates.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
+          <span>Pattern</span>
+          <select value={f.patternId} onChange={(e) => set("patternId", e.target.value)}>
+            {patterns.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.source === "local" ? (p.replacesBuiltIn ? " (yours, replaces built-in)" : " (yours)") : ""}
+                {p.experimental ? " (experiment)" : p.flags.pausesForYou ? " (pauses for you)" : ""}
               </option>
             ))}
           </select>
@@ -124,17 +127,28 @@ function NewTaskForm({ onClose }: { onClose: () => void }) {
           </select>
         </label>
       </div>
-      {tpl && (
-        <p className="mono muted" style={{ fontSize: "0.78rem" }}>
-          {pipelineSummary(tpl.steps)}
-        </p>
+      {pattern && (
+        <div aria-live="polite" style={{ marginBottom: "0.6rem" }}>
+          <p className="muted" style={{ fontSize: "0.85rem", margin: "0 0 0.25rem" }}>
+            {pattern.description} <strong>Use when:</strong> {pattern.whenToUse}
+            {pattern.hypothesis ? (
+              <>
+                {" "}
+                <strong>Hypothesis:</strong> {pattern.hypothesis}
+              </>
+            ) : null}
+          </p>
+          <p className="mono muted" style={{ fontSize: "0.78rem", margin: 0 }}>
+            {patternSummary(pattern.steps)}
+          </p>
+        </div>
       )}
       <label className="row" style={{ fontSize: "0.9rem", marginBottom: "0.8rem" }}>
         <input type="checkbox" checked={f.holdBeforeStart} onChange={(e) => set("holdBeforeStart", e.target.checked)} />
         Hold before start
       </label>
       <div className="row">
-        <button type="submit" className="primary" disabled={disabled || !templates.length}>
+        <button type="submit" className="primary" disabled={disabled || !patterns.length}>
           Create task
         </button>
         <button type="button" onClick={onClose}>

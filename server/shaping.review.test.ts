@@ -10,10 +10,11 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as D from "../src/domain/delivery";
 import * as M from "../src/domain/model";
-import type { State } from "../src/domain/types";
+import type { State, StepDef } from "../src/domain/types";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { setTestPipeline } from "./testing/pipelines";
 
 let dir: string;
 let store: Store;
@@ -29,10 +30,10 @@ const tick = async (ms = 1000) => {
   scheduler.tick(now);
   await scheduler.prIdle();
 };
-const oneStep = [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }];
+const oneStep: StepDef[] = [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }];
 function createOneStep(title: string) {
-  const id = (cmd("createTask", { title, area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
-  cmd("setPipeline", { taskId: id, expectedRev: 1, steps: oneStep, reason: "one step" });
+  const id = (cmd("createTask", { title, area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+  setTestPipeline(store, id, oneStep, iso(), "one step");
   cmd("setPriority", { taskId: id, priority: 1 });
   return id;
 }
@@ -142,7 +143,7 @@ describe("migration 12 → 13 (reviews 2 and 6)", () => {
       doc.project.visions[doc.project.visions.length - 1].text = "  ";
     });
     expect(empty.project.stage).toBe("shaping");
-    expect(empty.version).toBe(14);
+    expect(empty.version).toBe(15);
     const sample = reopen((d) => {
       (d as unknown as Doc).project.visions[0].text = "";
     });

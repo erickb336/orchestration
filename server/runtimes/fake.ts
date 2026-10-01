@@ -137,7 +137,7 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message" 
             rationale: "Smallest step that exercises the loop.",
             uncertainty: "Simulated; no real evidence.",
             acceptance: ["The simulated change completes review"],
-            templateId: "change",
+            patternId: "change",
             priority: 5,
           },
         ]
@@ -194,8 +194,8 @@ export function fakeFinalText(attemptId: string, outputs: OutputDef[], stepId = 
       const items = /-i\d+$/.test(stepId)
         ? []
         : [
-            { title: `Simulated part A (${attemptId})`, outcome: "Part A done (simulated)", approach: "Small change", acceptance: ["Part A verified"], templateId: "change", priority: 3 },
-            { title: `Simulated part B (${attemptId})`, outcome: "Part B done (simulated)", approach: "Small change", acceptance: ["Part B verified"], templateId: "change", priority: 3, dependsOn: [0] },
+            { title: `Simulated part A (${attemptId})`, outcome: "Part A done (simulated)", approach: "Small change", acceptance: ["Part A verified"], patternId: "change", priority: 3 },
+            { title: `Simulated part B (${attemptId})`, outcome: "Part B done (simulated)", approach: "Small change", acceptance: ["Part B verified"], patternId: "change", priority: 3, dependsOn: [0] },
           ];
       block[o.name] = { summary: items.length ? "Split into two parts (simulated)" : "Goal met (simulated)", items } as never;
     }

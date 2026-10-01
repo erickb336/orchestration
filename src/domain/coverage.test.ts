@@ -7,7 +7,6 @@ import { coverageCounts, coverageLabel, coverageOf, gapText, normalizePath } fro
 import * as D from "./delivery";
 import * as M from "./model";
 import { buildSeed } from "./seed";
-import { templateSteps } from "./templates";
 import { reviewedChange } from "./testing/reviewed";
 import type { Attempt, Finding, State } from "./types";
 
@@ -55,7 +54,7 @@ describe("normalisation and the comparison", () => {
 function reviewRunning(): { s: State; id: string; review: Attempt } {
   let s = buildSeed(T0, { inFlightRuns: false });
   for (const t of s.tasks) t.hold = true;
-  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, steps: templateSteps("change"), templateName: "Change" }, at(0));
+  const r = M.createTask(s, { title: "Change", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
   s = r.state;
   const id = r.newId;
   const go = (t: number) => (s = M.dispatchEligible(M.leadPromoteProposals(s, at(t)), at(t)));

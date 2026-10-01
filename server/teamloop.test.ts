@@ -12,6 +12,7 @@ import type { State } from "../src/domain/types";
 import { buildLeadEnvelope, parseLeadOutput } from "./envelope";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { setTestPipeline } from "./testing/pipelines";
 import { ScriptedAdapter, proposal } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
 
@@ -95,7 +96,7 @@ describe("lead conversation", () => {
     claude.reply(r.id, "Here is the plan.", [
       proposal(),
       proposal({ title: "No options", options: [] }),
-      proposal({ title: "Bad template", templateId: "nope" }),
+      proposal({ title: "Bad pattern", patternId: "nope" }),
       proposal({ title: "Add a greeting" }), // duplicate of the first
     ]);
     tick();
@@ -104,9 +105,9 @@ describe("lead conversation", () => {
     const t = task(msg.proposedTaskIds![0]);
     expect(t.specs[0].author).toBe("lead");
     expect(M.currentSpec(t).content).toMatchObject({ decidedBy: "lead", selectedOptionId: "A", recommendedOptionId: "A" });
-    expect(t.pipelineHistory[0].reason).toMatch(/Change template/);
+    expect(t.pipelineHistory[0].reason).toMatch(/Change pattern/);
     expect(msg.rejected!.join(" ")).toMatch(/two to four options/);
-    expect(msg.rejected!.join(" ")).toMatch(/unknown template/);
+    expect(msg.rejected!.join(" ")).toMatch(/not available to the lead/);
     expect(msg.rejected!.join(" ")).toMatch(/already exists/);
   });
 
@@ -193,8 +194,8 @@ describe("autonomy", () => {
 
 describe("integration queue", () => {
   const finishChange = (title: string, file: string, content: string) => {
-    const id = (cmd("createTask", { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
-    cmd("setPipeline", { taskId: id, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+    const id = (cmd("createTask", { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+    setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
     tick();
     const r = M.activeAttempts(st(), id)[0];
     return { id, r, done: () => codex.finish(r.id, { write: [file, content] }) };
@@ -366,8 +367,8 @@ describe("review regressions (ORC-005)", () => {
   });
 
   it("H3: a missing integration workspace is recovered, not recorded as a conflict", () => {
-    const id = (cmd("createTask", { title: "I", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
-    cmd("setPipeline", { taskId: id, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+    const id = (cmd("createTask", { title: "I", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+    setTestPipeline(store, id, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
     tick();
     codex.finish(M.activeAttempts(st(), id)[0].id, { write: ["i.txt", "i\n"] });
     tick();
@@ -384,8 +385,8 @@ describe("review regressions (ORC-005)", () => {
     };
     walk(wsRoot);
     rmSync(found[0], { recursive: true, force: true });
-    const id2 = (cmd("createTask", { title: "J", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, templateId: "change" }).result as { newId: string }).newId;
-    cmd("setPipeline", { taskId: id2, expectedRev: 1, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], reason: "one step" });
+    const id2 = (cmd("createTask", { title: "J", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }).result as { newId: string }).newId;
+    setTestPipeline(store, id2, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], iso(), "one step");
     tick();
     codex.finish(M.activeAttempts(st(), id2)[0].id, { write: ["j.txt", "j\n"] });
     tick();

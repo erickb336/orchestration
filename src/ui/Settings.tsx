@@ -2,12 +2,11 @@ import { useEffect, useState } from "react";
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
-import { AUTOPILOT, PROVIDERS, ROLES, STEERING_MODES, type Autonomy, type SteeringMode, type WorkflowTemplate } from "../domain/types";
-import { BUILT_IN_TEMPLATES, PROJECT_TEMPLATES, isModifiedBuiltIn } from "../domain/templates";
+import { AUTOPILOT, PROVIDERS, ROLES, STEERING_MODES, type Autonomy, type SteeringMode } from "../domain/types";
+import { effectiveDefault, eligible, patternSummary } from "../domain/patterns";
+import type { PatternsReloadResponse } from "../api";
 import { ChecksSettings } from "./ChecksSettings";
 import { DeliverySettings } from "./DeliverySettings";
-import { PipelineEditor } from "./PipelineEditor";
-import { pipelineSummary } from "./fanout";
 import type { CapabilityMap } from "../runtime/adapter";
 import { useStore } from "./store";
 import { ModelPicker, PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, ROLE_LABEL, autonomyArgs, fmtTime, involvementOf, relTime, usePref } from "./common";
@@ -100,7 +99,7 @@ export function Settings() {
               steps such as verification.
             </p>
           </section>
-          <Templates />
+          <Patterns />
         </div>
 
         <div>
@@ -851,127 +850,125 @@ function ProjectSetup() {
   );
 }
 
-function Templates() {
-  const { state, send, disabled } = useStore();
-  // baseRev: the template revision the draft started from; null for a new template.
-  const [draft, setDraft] = useState<{ tpl: WorkflowTemplate; baseRev: number | null } | null>(null);
-  const editing = draft?.tpl ?? null;
-  const setEditing = (tpl: WorkflowTemplate) => setDraft((d) => (d ? { ...d, tpl } : d));
-  const templates = state.project.templates;
-  const missingBuiltIns = PROJECT_TEMPLATES.filter((b) => !templates.some((t) => t.id === b.id));
-
-  if (editing) {
-    return (
-      <section className="card" aria-labelledby="tpl-h">
-        <h2 id="tpl-h">{draft!.baseRev !== null ? `Edit template: ${editing.name}` : "New template"}</h2>
-        <PipelineEditor
-          initial={editing.steps}
-          checksEnabled={!!state.project.checks?.enabled}
-          checkCommands={state.project.checks?.commands}
-          saveLabel="Save template"
-          requireReason={false}
-          saveBlocked={disabled ? "The service is offline" : undefined}
-          header={
-            <>
-              <label className="field">
-                <span>Name</span>
-                <input type="text" value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
-              </label>
-              <label className="field">
-                <span>When to use it</span>
-                <input type="text" value={editing.description} onChange={(e) => setEditing({ ...editing, description: e.target.value })} />
-              </label>
-              <p className="muted" style={{ fontSize: "0.85rem" }}>
-                Templates describe kinds of work, not a specific app. Saving never changes existing task pipelines.
-              </p>
-            </>
-          }
-          onSave={async (steps) => {
-            // A 409 (someone else saved this template first) keeps the draft open; the notice explains it.
-            const r = await send("saveTemplate", { template: { ...editing, steps }, expectedRev: draft!.baseRev });
-            if (r.ok) setDraft(null);
-          }}
-          onCancel={() => setDraft(null)}
-        />
-      </section>
-    );
-  }
-
+/**
+ * ORC-016: the pattern catalog, read-only. Built-in patterns change through commits; a file of yours in
+ * the patterns directory is picked up by Reload. Step 4 of ORC-016 completes this card.
+ */
+function Patterns() {
+  const { state, send, disabled, postJson } = useStore();
+  const [reloading, setReloading] = useState(false);
+  const [last, setLast] = useState<PatternsReloadResponse | null>(null);
+  const catalog = state.patterns;
+  const stored = state.project.defaultPatternId;
+  const effective = effectiveDefault(state);
+  const standard = catalog.patterns.filter((p) => eligible(p, "default"));
+  const retired = state.retiredTemplates;
   return (
-    <section className="card" aria-labelledby="tpl-h">
+    <section className="card" aria-labelledby="pat-h">
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <h2 id="tpl-h">Workflow templates</h2>
+        <h2 id="pat-h">Patterns</h2>
         <button
           className="small"
-          onClick={() =>
-            setDraft({
-              baseRev: null,
-              tpl: {
-              id: `custom-${Date.now().toString(36)}`,
-              name: "",
-              description: "",
-              builtIn: false,
-              rev: 0,
-              steps: [{ id: "S1", purpose: "", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }],
-              },
-            })
-          }
+          disabled={disabled || reloading}
+          onClick={async () => {
+            setReloading(true);
+            const r = await postJson("/api/patterns/reload", {});
+            setReloading(false);
+            if (r.ok) setLast(r.body as PatternsReloadResponse);
+          }}
         >
-          New template
+          {reloading ? "Reloading…" : "Reload patterns"}
         </button>
       </div>
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        Starting pipelines for any project goal. A task's pipeline can be replaced from a template while editing it.
+        Every task runs one pattern from this catalog. Built-in patterns live in the repository's <code>patterns/</code> directory and change through commits; drop a <code>.json</code> or <code>.jsonc</code> file of yours into{" "}
+        <code>{catalog.localDir || "the patterns directory"}</code> and choose Reload. A file with a built-in's id replaces it.
+        {catalog.loadedAt ? ` Loaded ${relTime(catalog.loadedAt)}.` : ""}
+        {last ? ` Reload: ${last.patterns} patterns, ${last.errors} file error${last.errors === 1 ? "" : "s"}.` : ""}
       </p>
-      {templates.length === 0 && <p className="muted">No templates.</p>}
+      <label className="field">
+        <span>Default pattern (used by the lead and by breakdowns when they name none; standard patterns only)</span>
+        <select value={standard.some((p) => p.id === stored) ? stored : effective.id} disabled={disabled} onChange={(e) => void send("setDefaultPattern", { patternId: e.target.value })}>
+          {standard.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} ({p.id})
+            </option>
+          ))}
+        </select>
+        {!standard.some((p) => p.id === stored) && (
+          <span className="muted" style={{ fontSize: "0.85rem" }}>
+            Using {effective.name}: "{stored}" is no longer a standard pattern in the catalog.
+          </span>
+        )}
+      </label>
+      {catalog.errors.length > 0 && (
+        <div className="banner danger" role="alert">
+          <strong>Pattern files with errors</strong>
+          <ul className="plain" style={{ margin: "0.3rem 0 0" }}>
+            {catalog.errors.map((e, i) => (
+              <li key={i} className="mono" style={{ fontSize: "0.8rem" }}>
+                {e.file}
+                {e.line !== undefined ? `:${e.line}:${e.column ?? 1}` : ""} {e.message} ({e.effect})
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <ul className="events">
-        {templates.map((t) => (
-          <li key={t.id} style={{ gridTemplateColumns: "1fr auto" }}>
+        {catalog.patterns.map((p) => (
+          <li key={p.id} style={{ gridTemplateColumns: "1fr" }}>
             <span>
-              <strong>{t.name}</strong> {t.builtIn && <span className="chip">{isModifiedBuiltIn(t) ? "built-in, edited" : "built-in"}</span>}
+              <strong>{p.name}</strong> <span className="chip">{p.source === "local" ? (p.replacesBuiltIn ? "yours, replaces built-in" : "yours") : "built-in"}</span>
+              {p.audience === "standard" ? <span className="chip"> standard</span> : <span className="chip"> user-only</span>}
+              {p.experimental && <span className="chip"> experiment</span>}
+              {p.flags.pausesForYou && <span className="chip"> pauses for you</span>}
+              {p.flags.unreviewed && <span className="chip"> no independent review</span>}
+              {p.flags.breaksDown && <span className="chip"> breaks down into child tasks</span>}
               <div className="muted" style={{ fontSize: "0.85rem" }}>
-                {t.description}
+                {p.description} <strong>Use when:</strong> {p.whenToUse}
+                {p.hypothesis ? (
+                  <>
+                    {" "}
+                    <strong>Hypothesis:</strong> {p.hypothesis}
+                  </>
+                ) : null}
               </div>
               <div className="mono muted" style={{ fontSize: "0.78rem" }}>
-                {pipelineSummary(t.steps)}
+                {p.file} · {p.hash.slice(0, 8)}
               </div>
-            </span>
-            <span className="row" style={{ alignItems: "flex-start" }}>
-              <button className="small" onClick={() => setDraft({ tpl: structuredClone(t), baseRev: t.rev })}>
-                Edit
-              </button>
-              <button className="small" onClick={() => setDraft({ tpl: { ...structuredClone(t), id: `custom-${Date.now().toString(36)}`, name: `${t.name} copy`, builtIn: false, rev: 0 }, baseRev: null })}>
-                Duplicate
-              </button>
-              {isModifiedBuiltIn(t) && (
-                <button
-                  className="small"
-                  disabled={disabled}
-                  onClick={() => {
-                    const b = BUILT_IN_TEMPLATES.find((x) => x.id === t.id)!;
-                    if (confirm(`Reset "${t.name}" to the built-in version?`)) void send("saveTemplate", { template: structuredClone(b), expectedRev: t.rev });
-                  }}
-                >
-                  Reset
-                </button>
-              )}
-              <button
-                className="small danger"
-                disabled={disabled}
-                onClick={() => {
-                  if (confirm(`Delete the "${t.name}" template? Task pipelines already created from it are unchanged.`)) void send("deleteTemplate", { templateId: t.id });
-                }}
-              >
-                Delete
-              </button>
+              <details>
+                <summary className="muted" style={{ fontSize: "0.8rem" }}>
+                  {p.steps.length} steps
+                </summary>
+                <div className="mono muted" style={{ fontSize: "0.78rem" }}>
+                  {patternSummary(p.steps)}
+                </div>
+              </details>
             </span>
           </li>
         ))}
       </ul>
-      {missingBuiltIns.length > 0 && (
-        <button className="small" style={{ marginTop: "0.5rem" }} disabled={disabled} onClick={() => void send("restoreBuiltInTemplates")}>
-          Restore {missingBuiltIns.length} deleted built-in template(s)
-        </button>
+      {retired.length > 0 && (
+        <details style={{ marginTop: "0.5rem" }}>
+          <summary>Templates from before patterns ({retired.length})</summary>
+          <ul className="plain">
+            {retired.map((t) => (
+              <li key={t.id} style={{ fontSize: "0.85rem" }}>
+                <strong>{t.name}</strong> ({t.kind === "custom" ? "custom" : "edited built-in"}):{" "}
+                {t.exportedTo ? (
+                  <>
+                    saved as <code>{t.exportedTo}</code>
+                    {t.stripped?.length ? ` (left out: ${t.stripped.join("; ")})` : ""}
+                  </>
+                ) : t.exportError ? (
+                  <span style={{ color: "var(--s-blocked)" }}>{t.exportError}</span>
+                ) : (
+                  "saved as a pattern file at the next start"
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
     </section>
   );

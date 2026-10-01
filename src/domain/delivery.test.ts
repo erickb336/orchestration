@@ -7,7 +7,8 @@ import * as D from "./delivery";
 import * as M from "./model";
 import { diffLineClasses } from "./diff";
 import { buildEmptyProject, buildSeed } from "./seed";
-import { BUILT_IN_TEMPLATES, templateSteps } from "./templates";
+import { INTERNAL_PATTERN_IDS } from "./internalPatterns";
+import { builtInCatalog, patternSteps } from "./patterns";
 import { reviewedChange, type ReviewedOptions } from "./testing/reviewed";
 import { ControlError, DEFAULT_PR_DELIVERY, type CheckObs, type Integration, type PrDelivery, type State } from "./types";
 
@@ -46,7 +47,7 @@ function finish(s: State, taskId: string, t: number, findings = 0): State {
 describe("data model", () => {
   it("a new project is format 14 with pull-request delivery off and nothing observed", () => {
     for (const s of [seed(), buildEmptyProject(T0)]) {
-      expect(s.version).toBe(14);
+      expect(s.version).toBe(15);
       expect(s.project.prDelivery).toEqual(DEFAULT_PR_DELIVERY);
       expect(s.project.prDelivery).toMatchObject({ enabled: false, merge: "hold" });
       expect(s.project.github).toBeUndefined();
@@ -62,10 +63,12 @@ describe("data model", () => {
     expect(s.project.github).toBeUndefined();
   });
 
-  it("the revert template is built in and valid", () => {
-    expect(BUILT_IN_TEMPLATES.some((t) => t.id === "revert")).toBe(true);
+  it("the revert pipeline is internal and valid", () => {
+    // ORC-016: the service owns it; it is not in the catalog and no file may take its id.
+    expect(INTERNAL_PATTERN_IDS).toContain("revert");
+    expect(builtInCatalog().patterns.some((p) => p.id === "revert")).toBe(false);
     // ORC-013: a Final checks step (run by the service) sits between the review and the verification.
-    expect(templateSteps("revert").map((s) => s.role)).toEqual(["coder", "code_reviewer", "checks", "lead"]);
+    expect(patternSteps("revert").map((s) => s.role)).toEqual(["coder", "code_reviewer", "checks", "lead"]);
   });
 });
 
@@ -283,7 +286,7 @@ describe("landed: send back", () => {
     const fix = task(s, r.newId);
     expect(fix).toMatchObject({ followUpOf: "EX-006", holdBeforeStart: false, dependsOn: ["EX-006"], lifecycle: "proposed" });
     expect(fix.revertOf).toBeUndefined();
-    expect(fix.steps.map((x) => x.id)).toEqual(templateSteps("bugfix").map((x) => x.id));
+    expect(fix.steps.map((x) => x.id)).toEqual(patternSteps("bugfix").map((x) => x.id));
     expect(fix.steps.every((x) => x.state === "pending")).toBe(true);
     const c = M.currentSpec(fix).content;
     expect(c.title).toMatch(/^Fix: /);
@@ -328,16 +331,16 @@ describe("landed: send back", () => {
     expect(D.sendBackLanded(s, { taskId: "EX-006", kind: "fix", note: "also fix", holdBeforeStart: false }, at(7)).newId).toBe("EX-006-F2");
   });
 
-  it("uses the project's own (edited) template when it has one", () => {
+  it("the revert pipeline is the service's own: no task is created from it by hand, and a send-back records it as chosen by the service", () => {
     const s = landedState();
-    // The revert template is built in but not one of the project's pickable templates.
-    expect(s.project.templates.some((t) => t.id === "revert")).toBe(false);
-    expect(() => runCommand(M.saveTemplate(s, structuredClone(BUILT_IN_TEMPLATES.find((t) => t.id === "revert")!), null, at(4)), "createTask", { title: "t", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, templateId: "revert" }, at(5))).toThrow(/Send back only/);
-    const tpl = structuredClone(BUILT_IN_TEMPLATES.find((t) => t.id === "revert")!);
-    tpl.steps[0].purpose = "Undo it carefully";
-    s.project.templates.push(tpl);
+    // ORC-016: "revert" is an internal pattern; createTask refuses it, whatever the catalog holds.
+    expect(s.patterns.patterns.some((p) => p.id === "revert")).toBe(false);
+    expect(() => runCommand(s, "createTask", { title: "t", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, patternId: "revert" }, at(5))).toThrow(/Send back only/);
     const r = D.sendBackLanded(s, { taskId: "EX-006", kind: "revert", note: "", holdBeforeStart: false }, at(5));
-    expect(task(r.state, r.newId).steps[0].purpose).toBe(`Undo it carefully (revert of ${SHA_A.slice(0, 12)})`);
+    const revert = task(r.state, r.newId);
+    expect(revert.steps[0].purpose).toBe(`Complete the prepared revert: resolve any conflicts, keep later work (revert of ${SHA_A.slice(0, 12)})`);
+    expect(revert.pattern).toMatchObject({ id: "revert", name: "Revert", source: "internal", chosenBy: "service" });
+    expect(revert.pipelineHistory[0].pattern).toMatchObject({ id: "revert", source: "internal" });
   });
 });
 
@@ -346,7 +349,7 @@ describe("createFollowUp", () => {
   function expandedDoneTask(): { state: State; id: string } {
     let s = seed();
     s.attempts = [];
-    const r = M.createTask(s, { title: "Loop", area: "", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, steps: templateSteps("change"), templateName: "Change" }, at(0));
+    const r = M.createTask(s, { title: "Loop", area: "", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, patternId: "change" }, at(0));
     s = r.state;
     const id = r.newId;
     for (const other of s.tasks) if (other.id !== id) other.hold = true;
@@ -404,11 +407,11 @@ describe("createFollowUp", () => {
   it("holds before start by default and honours the option", () => {
     const s = seed();
     expect(task(M.createFollowUp(s, "EX-006", at(1)).state, "EX-006-F1").holdBeforeStart).toBe(true);
-    const r = M.createFollowUp(s, "EX-006", at(1), { holdBeforeStart: false, steps: templateSteps("bugfix"), author: "system", dependsOn: [], fields: { revertOf: { taskId: "EX-006", commit: SHA_A } } });
+    const r = M.createFollowUp(s, "EX-006", at(1), { holdBeforeStart: false, steps: patternSteps("bugfix"), author: "system", dependsOn: [], fields: { revertOf: { taskId: "EX-006", commit: SHA_A } } });
     const f = task(r.state, r.newId);
     expect(f).toMatchObject({ holdBeforeStart: false, dependsOn: [], revertOf: { taskId: "EX-006", commit: SHA_A } });
     expect(f.specs[0].author).toBe("system");
-    expect(f.steps.map((x) => x.id)).toEqual(templateSteps("bugfix").map((x) => x.id));
+    expect(f.steps.map((x) => x.id)).toEqual(patternSteps("bugfix").map((x) => x.id));
   });
 });
 
@@ -937,7 +940,8 @@ describe("dependencies in pull-request mode", () => {
     let s = D.setDeliveryMode(seed(), { mode: "pr" }, at(0));
     s.attempts = [];
     for (const t of s.tasks) for (const st of t.steps) if (st.state === "running") st.state = "pending";
-    const r = M.createTask(s, { title: "Writes", area: "", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, steps: [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], templateName: "One step" }, at(1));
+    const r0 = M.createTask(s, { title: "Writes", area: "", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: [], priority: 1, holdBeforeStart: false, patternId: "change" }, at(1));
+    const r = { ...r0, state: M.setPipeline(r0.state, r0.newId, 1, [{ id: "S1", purpose: "Implement", role: "coder", dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" }] }], "one step", "user", at(1)) };
     const ready = M.leadPromoteProposals(r.state, at(1));
     for (const t of ready.tasks) if (t.id !== r.newId && t.lifecycle !== "done" && t.lifecycle !== "cancelled") t.hold = true;
     expect(task(ready, r.newId).lifecycle).toBe("ready");

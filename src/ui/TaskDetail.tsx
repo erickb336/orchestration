@@ -3,8 +3,6 @@ import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
 import { diffLines, specToLines } from "../domain/diff";
-import { toDef } from "../domain/pipeline";
-import { INTERNAL_TEMPLATE_IDS } from "../domain/templates";
 import { ROLES, type Artifact, type Attempt, type State, type Task } from "../domain/types";
 import { newIdOf, useStore } from "./store";
 import { checkLogUrl } from "../api";
@@ -13,7 +11,6 @@ import { ModelPicker, ROLE_LABEL, StatePill, fmtTime, relTime, selectionText } f
 import { DeliveryCard } from "./Delivery";
 import { CheckResults, CoverageChip, DecisionControls, DecisionQueue, FindingsList } from "./Findings";
 import { SpecEditor } from "./SpecEditor";
-import { PipelineEditor } from "./PipelineEditor";
 import { childrenOfArtifact, copyGroup, isSettledTask, notChosen, stepChips } from "./fanout";
 import { useLeadContext } from "./LeadDrawer";
 
@@ -596,65 +593,30 @@ function DetailsCard({ task }: { task: Task }) {
   );
 }
 
+/** ORC-016: "Pattern: Change" with its source, or what a task from before patterns ran. */
+function PatternLine({ task }: { task: Task }) {
+  const p = task.pattern;
+  const source = p.source === "legacy" ? "from before patterns" : p.source === "custom" ? "custom pipeline" : p.source === "internal" ? "internal" : p.source === "local" ? "yours" : "built-in";
+  return (
+    <span className="row" style={{ gap: "0.3rem", fontSize: "0.85rem" }}>
+      <span>Pattern: <strong>{p.name}</strong></span>
+      <span className="chip" title={p.chain?.map((c) => c.file).join(", ") ?? source}>
+        {source}
+      </span>
+      {p.hash && (
+        <span className="chip mono" title={`Content hash ${p.hash}`}>
+          {p.hash.slice(0, 8)}
+        </span>
+      )}
+      {p.experimental && <span className="chip">experiment</span>}
+    </span>
+  );
+}
+
 function StepsCard({ state, task }: { state: State; task: Task }) {
   const { send, disabled, service } = useStore();
-  const [editing, setEditing] = useState<number | null>(null); // pipeline rev the draft started from
-  const [saving, setSaving] = useState(false);
   const open = task.lifecycle !== "done" && task.lifecycle !== "cancelled";
   const usedRoles = [...new Set(task.steps.map((s) => s.role))];
-  const activeCount = M.activeAttempts(state, task.id).length;
-
-  if (editing !== null) {
-    // While our own save is in flight the stream may deliver the revision it created; that is not a conflict.
-    const stale = !saving && task.pipelineRev !== editing;
-    return (
-      <section className="card" aria-labelledby="steps-h">
-        <h2 id="steps-h">
-          Edit pipeline — draft from r{editing}, saves as r{task.pipelineRev + 1}
-        </h2>
-        <PipelineEditor
-          initial={task.steps.map(toDef)}
-          reservedIds={task.pipelineHistory.flatMap((p) => p.steps.map((x) => x.id))}
-          templates={state.project.templates.filter((t) => !INTERNAL_TEMPLATE_IDS.includes(t.id))}
-          reviewTarget={!!task.reviewTarget}
-          checkTarget={!!task.checkTarget}
-          checksEnabled={!!state.project.checks?.enabled}
-          checkCommands={state.project.checks?.commands}
-          saveLabel={`Save pipeline r${task.pipelineRev + 1}`}
-          saveBlocked={!open ? `${task.id} is ${task.lifecycle}` : stale ? "The pipeline changed" : disabled ? "The service is offline" : undefined}
-          requireReason
-          warning={
-            <>
-              {!open && (
-                <div className="banner danger" role="alert">
-                  {task.id} was {task.lifecycle === "done" ? "delivered" : "cancelled"} while you were editing, so this pipeline can no longer change. Your draft stays here for reference
-                  {task.lifecycle === "done" ? "; create a follow-up task to apply it." : "."}
-                </div>
-              )}
-              {stale && open && (
-                <div className="banner danger" role="alert">
-                  The pipeline changed to r{task.pipelineRev} while you were editing. Discard this draft and start again from the current pipeline.
-                </div>
-              )}
-              {activeCount > 0 && (
-                <div className="banner">
-                  {activeCount} run(s) are active. Saving stops runs on changed or removed steps and anything downstream of a change; completed steps that changed are revalidated. Model pins are kept for steps that keep their ID.
-                </div>
-              )}
-              {task.hold && <div className="banner neutral">This task is paused. Saving keeps it paused.</div>}
-            </>
-          }
-          onSave={async (defs, reason) => {
-            setSaving(true);
-            const r = await send("setPipeline", { taskId: task.id, expectedRev: editing, steps: defs, reason });
-            setSaving(false);
-            if (r.ok) setEditing(null);
-          }}
-          onCancel={() => setEditing(null)}
-        />
-      </section>
-    );
-  }
 
   return (
     <section className="card" aria-labelledby="steps-h">
@@ -668,16 +630,13 @@ function StepsCard({ state, task }: { state: State; task: Task }) {
             </label>
           )}
           <span className="chip">pipeline r{task.pipelineRev}</span>
-          {open && (
-            <button className="small" onClick={() => setEditing(task.pipelineRev)}>
-              Edit pipeline
-            </button>
-          )}
         </span>
       </div>
+      <PatternLine task={task} />
       <p className="muted" style={{ fontSize: "0.85rem" }}>
-        Each step receives the vision, the current spec, and only the upstream artifacts it reads. Models resolve step pin → task role override → project role default → project default. Completed steps show the model that
-        actually ran. {service.runtime === "real" ? "Models come from each provider's catalog." : "Model catalog is sample data."}
+        The pipeline comes from the pattern; built-in patterns change through commits, and yours live in {state.patterns.localDir || "the patterns directory"}. Each step receives the vision, the current spec, and only the
+        upstream artifacts it reads. Models resolve step pin → task role override → project role default → project default. Completed steps show the model that actually ran.{" "}
+        {service.runtime === "real" ? "Models come from each provider's catalog." : "Model catalog is sample data."}
       </p>
       <div className="table-wrap">
         <table className="steps-table">
@@ -1115,7 +1074,7 @@ function ArtifactEditor({ state, task, artifactId, onClose }: { state: State; ta
           <span>Work items (each becomes a child task)</span>
           <textarea className="mono" style={{ minHeight: "10rem" }} value={items} onChange={(e) => setItems(e.target.value)} aria-invalid={parsedItems === null} />
           <span className="muted" style={{ fontSize: "0.8rem", fontWeight: 400 }}>
-            A JSON list of {`{ "title", "outcome", "approach", "acceptance": [...], "templateId", "priority", "dependsOn": [index] }`}.
+            A JSON list of {`{ "title", "outcome", "approach", "acceptance": [...], "patternId", "priority", "dependsOn": [index] }`}.
             {task.pendingBreakdowns?.length ? " Child tasks are created from this list when you resume." : ""}
           </span>
           {parsedItems === null && <span style={{ color: "var(--s-blocked)", fontSize: "0.8rem" }}>Not a valid JSON list.</span>}
