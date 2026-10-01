@@ -153,8 +153,9 @@ const SCENES = {
     await scrollTo(page, { tag: "h2", text: "Landed" });
   },
   "goal-task": async ({ page, api }) => open(page, api, "#/task/WT-004", { selector: "#children-h" }),
-  "best-of-pipeline": async ({ page, api }) => {
-    await open(page, api, "#/task/WT-011", { selector: "#steps-h" });
+  // A pipeline whose security review found something, repaired and reviewed again (ORC-021).
+  pipeline: async ({ page, api }) => {
+    await open(page, api, "#/task/WT-004.1", { selector: "#steps-h" });
     await scrollTo(page, { selector: 'section[aria-labelledby="steps-h"]' });
   },
   artifacts: async ({ page, api }) => {
@@ -179,8 +180,8 @@ const SCENES = {
     await open(page, api, "#/settings", { selector: "#delivery" });
     await scrollTo(page, { selector: "#delivery" });
   },
-  // ORC-021: Settings → Flows. The image keeps its file name until the screenshots are retaken.
-  patterns: async ({ page, api }) => {
+  // ORC-021: Settings → Flows.
+  flows: async ({ page, api }) => {
     await open(page, api, "#/settings", { selector: "#flows-h" });
     await scrollTo(page, { selector: 'section[aria-labelledby="flows-h"]' });
   },
@@ -197,7 +198,7 @@ const SCENES = {
   },
 };
 const GROUPS = {
-  start: ["overview", "board", "steering", "review", "landed", "goal-task", "best-of-pipeline", "artifacts", "findings", "settings", "checks-settings", "delivery-settings", "patterns"],
+  start: ["overview", "board", "steering", "review", "landed", "goal-task", "pipeline", "artifacts", "findings", "settings", "checks-settings", "delivery-settings", "flows"],
   pr: ["pr-checks"],
   shaping: ["shaping", "vision-docs"],
 };
