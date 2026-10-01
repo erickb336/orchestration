@@ -357,7 +357,7 @@ async function startScreencast(page, dir) {
 
 async function recordTour(browser, api, tmp) {
   await api.sim({ auto: true });
-  const ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, colorScheme: "light" });
+  const ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 1, colorScheme: "dark" });
   await ctx.addInitScript(() => {
     try {
       localStorage.setItem("orchestration.view", "board");
@@ -505,7 +505,7 @@ try {
   } catch (e) {
     throw new Error(`Google Chrome could not be started (${chromePath ? `CHROME_PATH=${chromePath}` : "the installed Chrome"}). Install Google Chrome or set CHROME_PATH to a Chrome/Chromium binary.\n${e.message.split("\n")[0]}`);
   }
-  const stills = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 2, colorScheme: "light", reducedMotion: "reduce" });
+  const stills = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: 2, colorScheme: "dark", reducedMotion: "reduce" });
   await stills.addInitScript(() => {
     try {
       localStorage.setItem("orc.tour.v1", "done");
@@ -572,7 +572,7 @@ try {
   if (!only.length || only.includes("overview")) {
     log("hero");
     if (!raw.overview) await shoot("overview");
-    const heroPage = await browser.newPage({ viewport: { width: 2400, height: 1350 }, deviceScaleFactor: 1, colorScheme: "light" });
+    const heroPage = await browser.newPage({ viewport: { width: 2400, height: 1350 }, deviceScaleFactor: 1, colorScheme: "dark" });
     await heroPage.goto(`${pathToFileURL(HERO_HTML).href}?shot=${encodeURIComponent(pathToFileURL(raw.overview).href)}`);
     await heroPage.waitForFunction(() => {
       const img = document.getElementById("shot");

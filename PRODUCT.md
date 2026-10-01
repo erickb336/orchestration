@@ -77,7 +77,7 @@ In the owner's words (2026-10-01): "a starting playground for me to develop and 
 ## Brand Commitments
 
 - **Name:** Orchestrator.
-- **Look:** a black-and-white, ink-on-paper look, with black primary actions and the platform's sans-serif font (incumbent in code). Colour is used only to mean something.
+- **Look:** dark only (the owner, 2026-10-01): near-black surfaces with a cool cast, light text, light primary actions, and the platform's sans-serif font. Colour is used only to mean something: blue for running, amber for "needs you", green for done, red for failed.
 - **Voice:** plain and literal. Short sentences; no hype; it says what is and is not done.
 
 ## Evidence on Hand
@@ -105,4 +105,4 @@ In the owner's words (2026-10-01): "a starting playground for me to develop and 
 
 - **Inferred, from existing code:** keyboard-operable controls, visible focus, and `prefers-reduced-motion` respected.
 - State is never conveyed by colour alone.
-- **Light and dark themes** follow the system setting.
+- **One dark theme,** whatever the system setting.
