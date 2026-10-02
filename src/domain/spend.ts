@@ -31,10 +31,11 @@ export type NoCostReason = "no-price" | "no-usage";
  * One run's cost. Every figure is an estimate: a cost the runtime reports (Claude) is computed by the
  * runtime at list prices and is not billed on a subscription, and no run records how it was billed.
  * `not-started`: the run ended before its runtime started it, so nothing ran: a known $0 (see `neverStarted`).
+ * `simulated`: the fake runtime ran it (a studio run records it); no agent ran, so it spent nothing: a known $0.
  * `unknown`: the run has no recorded cost (no reported cost, and no usage or no price to work one out);
  * unknown, never zero.
  */
-export type RunCost = { basis: "reported" | "priced" | "not-started"; usd: number; estimated: true } | { basis: "unknown"; usd: null; estimated: true; reason: NoCostReason };
+export type RunCost = { basis: "reported" | "priced" | "not-started" | "simulated"; usd: number; estimated: true } | { basis: "unknown"; usd: null; estimated: true; reason: NoCostReason };
 
 /** A task step's run, a lead run, or a studio run (Vision's). */
 type Run = Attempt | LeadRun | StudioRun;
@@ -75,6 +76,7 @@ export function estimateUsd(run: Run, prices: readonly ModelPrice[]): RunCost {
   const u = run.usage;
   if (u?.costUsd !== undefined) return { basis: "reported", usd: u.costUsd, estimated: true };
   if (neverStarted(run)) return { basis: "not-started", usd: 0, estimated: true };
+  if ("simulated" in run && run.simulated) return { basis: "simulated", usd: 0, estimated: true };
   if (u?.inputTokens === undefined || u.outputTokens === undefined) return { basis: "unknown", usd: null, estimated: true, reason: "no-usage" };
   const { provider, model } = ranOn(run);
   const price = prices.find((p) => p.provider === provider && p.model === model);
@@ -97,7 +99,7 @@ export interface Spend {
   usd: number;
   /** Finished runs counted. */
   runs: number;
-  /** Finished runs with no recorded cost: unknown, never zero, so the budget cannot count them. */
+  /** Finished runs with no recorded cost: unknown, never zero. The budget stop counts each at its run limit (`budgetStop`). */
   unknown: UnknownCost[];
 }
 
@@ -122,14 +124,40 @@ export function buildingSpend(s: State, prices: readonly ModelPrice[] = PRICES):
 }
 
 /**
- * The building budget is reached: nothing new starts until the owner raises it or continues past it.
- * Undefined while no building budget is set, below it, or after the owner chose to continue past this amount.
+ * The most one run on this provider may spend, or undefined when it has no limit. Claude's is its spend cap, the
+ * project's run limit (a run does not record its own, so one started under another limit counts at today's). Codex
+ * has no spend cap.
  */
-export function budgetStop(s: State, prices: readonly ModelPrice[] = PRICES): { budgetUsd: number; spend: Spend } | undefined {
+export const runLimitUsd = (s: State, provider: Runner): number | undefined => (provider === "claude" ? s.project.runLimits.maxBudgetUsd : undefined);
+
+/** Why nothing new starts at the building budget. */
+export interface BudgetStop {
+  budgetUsd: number;
+  spend: Spend;
+  /** The spend with each run of no recorded cost counted at its run limit; null when one has no limit, so the spend cannot be checked. */
+  countedUsd: number | null;
+  /** Why, in one line for the owner. */
+  why: string;
+}
+
+/**
+ * The building budget is reached, or the spend cannot be checked against it: nothing new starts until the owner raises
+ * it or continues past it. Undefined while no building budget is set, below it, or after the owner chose to continue
+ * past this amount. A finished run with no recorded cost is unknown, never $0 (review finding 4): it counts at its run
+ * limit, the most it could have spent (the rule of the studio trial, scripts/trialSpend.mjs); a run with no limit
+ * cannot be counted, so the stop holds new runs and says why.
+ */
+export function budgetStop(s: State, prices: readonly ModelPrice[] = PRICES): BudgetStop | undefined {
   const budgetUsd = s.project.budgets.buildingUsd;
   if (budgetUsd === null || s.project.budgetContinued?.buildingUsd === budgetUsd) return undefined;
   const spend = buildingSpend(s, prices);
-  return spend.usd >= budgetUsd ? { budgetUsd, spend } : undefined;
+  const runs = (n: number) => `${n} run${n === 1 ? "" : "s"}`;
+  const unlimited = spend.unknown.filter((u) => runLimitUsd(s, u.provider) === undefined).length;
+  if (unlimited) return { budgetUsd, spend, countedUsd: null, why: `The building spend cannot be checked against the ${fmtUsd(budgetUsd)} budget: ${runs(unlimited)} with no recorded cost ${unlimited === 1 ? "has" : "have"} no spend limit` };
+  const countedUsd = spend.unknown.reduce((usd, u) => usd + runLimitUsd(s, u.provider)!, spend.usd);
+  if (countedUsd < budgetUsd) return undefined;
+  const counted = spend.unknown.length ? `, counting ${runs(spend.unknown.length)} with no recorded cost at the ${fmtUsd(s.project.runLimits.maxBudgetUsd)} run limit` : "";
+  return { budgetUsd, spend, countedUsd, why: `The building budget is reached: ${fmtUsd(countedUsd)} of ${fmtUsd(budgetUsd)}${counted}` };
 }
 
 /** "$12.34". */

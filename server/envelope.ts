@@ -14,7 +14,7 @@ import { buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate } from ".
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import * as S from "../src/domain/studio/studio";
-import { DOCUMENT_KINDS, UNGATED_KINDS, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
+import { DOCUMENT_KINDS, UNGATED_KINDS, isUnderWay, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
 import { clip, truncate } from "../src/domain/text";
 import type { RepoGlance } from "./studio/existing";
 import {
@@ -1029,20 +1029,25 @@ const STUDIO_PINS = 3;
 const EARLIER_ROUNDS = 3;
 const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what exists", experience: "the experience", data: "the data", flows: "the flows" };
 
-/** Where PE review of a version stands, in a few words for the lead. */
+/** Where PE review of a version stands, in a few words for the lead, made from the studio's one value (`S.peReview`). */
 function peLine(state: State, a: StudioArtifact): string {
-  if (UNGATED_KINDS.includes(a.kind)) return "not reviewed (what the user brought)";
+  if (UNGATED_KINDS.includes(a.kind)) return `not reviewed (${a.kind === "material" ? "what the user brought" : "a probe's evidence"})`;
   const r = S.peReview(state, a);
-  const reasons = (vs: PeVerdict[]) => vs.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.reasons, 140)}${v.overruled ? " (the user overruled it)" : ""}`).join("; ");
-  if (r.status === "waiting") return "PE: reviewing";
-  const asks = (vs: PeVerdict[]) => vs.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.change ?? v.reasons, 120)}`).join("; ");
-  if (r.status === "revising") {
-    const parts = [r.objections.length ? `objects: ${reasons(r.objections)}` : "", r.changes.length ? `asks for changes: ${asks(r.changes)}` : ""].filter(Boolean);
-    return `the designer revises for the PE (pass ${r.pass}); ${parts.join("; ")}`;
+  const said = (x: { asks: PeVerdict[]; objections: PeVerdict[] }) => {
+    const objects = x.objections.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.reasons, 140)}${v.overruled ? " (the user overruled it)" : ""}`);
+    const asks = x.asks.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.change ?? v.reasons, 120)}`);
+    return [objects.length ? `; objects: ${objects.join("; ")}` : "", asks.length ? `; asks for changes: ${asks.join("; ")}` : ""].join("");
+  };
+  switch (r.status) {
+    case "waiting":
+      return "PE: reviewing";
+    case "agreed":
+      return `PE agreed (pass ${r.pass})`;
+    case "revising":
+      return `the designer revises for the PE (pass ${r.pass})${said(r)}`;
+    case "ended":
+      return `PE review ended ${r.pass ? `after pass ${r.pass}` : "with no pass"} (${S.LOOP_END_WORDS[r.ended]}${r.note ? `: ${truncate(r.note, 200)}` : ""}), shown to the user${said(r)}`;
   }
-  if (r.status === "objections") return `PE still objects after pass ${r.pass}, shown to the user: ${reasons(r.objections)}`;
-  const changes = state.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version && v.pass === r.pass && v.verdict === "feasible-if" && v.change);
-  return `PE agreed (pass ${r.pass})${changes.length ? `, if: ${changes.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.change!, 120)}`).join("; ")}` : ""}`;
 }
 
 /** One artifact of the open round: id, title, version, kind, variants, devices, "as is" provenance, and PE review. */
@@ -1092,15 +1097,19 @@ export function studioBriefSection(state: State, repo?: RepoGlance): string {
   const start = rounds.length
     ? ""
     : repo?.codeFiles
-      ? `\nNo round yet, and the repository has code. Unless the user said otherwise, start with round 0, "as it is today": openRound { "focus": "material", "summary": "As it is today: <what the code does now>" }, and ask the designer to reproduce the key screens, or the interface and core algorithms, or the topology, from the code (one take each, kinds by the domains). The designer reads the code read-only; the service labels each artifact "as is" with the files it came from. The user corrects them, and later rounds change them.`
+      ? `\nNo round yet, and the repository has code. Unless the user said otherwise, start with round 0, "as it is today": openRound { "focus": "material", "summary": "As it is today: <what the code does now>" }, and ask the designer to reproduce the key screens, or the interface and core algorithms, or the topology, from the code (one take each, kinds by the domains). The designer reads the code read-only; the service labels each artifact "as is" with the files it came from. The PE checks only that each reproduction is faithful to the code, and the designer does not revise it for the PE: the user corrects it, and later rounds change it.`
       : "\nNo round yet: open round 1 on the experience once you know enough to brief the designer.";
   const latest = S.latestArtifacts(state);
   const openRows = open ? latest.filter((a) => a.round === open.n) : [];
-  const runs = state.studio.runs.filter((r) => r.status === "queued" || r.status === "running" || r.status === "stopping");
-  const runLine = runs.length ? `\n  Runs under way: ${runs.slice(0, 8).map((r) => `${r.id} ${r.kind} ${r.status}${r.fromLead ? ` (asked by lead run ${r.fromLead.leadRunId})` : ""}`).join(", ")}${runs.length > 8 ? `, and ${runs.length - 8} more` : ""}.` : "";
+  const runs = state.studio.runs.filter(isUnderWay);
+  const runLine = runs.length ? `\n  Runs under way: ${runs.slice(0, 8).map((r) => `${r.id} ${r.kind} ${r.status} (asked by ${r.fromLead ? `lead run ${r.fromLead.leadRunId}` : "the service"})`).join(", ")}${runs.length > 8 ? `, and ${runs.length - 8} more` : ""}.` : "";
+  // What the service did not do of the lead's last studio block (leadOutput.ts labels those notes "Studio: ").
+  const notes = (state.conversation.filter((m) => m.author === "lead").at(-1)?.rejected ?? []).filter((n) => n.startsWith("Studio: ")).map((n) => `- ${truncate(n.slice("Studio: ".length), 300)}`);
+  const busy = open ? S.roundBusy(state, open.n) : undefined;
   const roundLines = open
     ? [
         `- Round ${open.n} (${FOCUS_WORDS[open.focus]}), open: ${truncate(open.summary, 300) || "(no summary)"}`,
+        ...(busy ? [`  It cannot close yet: ${busy}.`] : []),
         ...(openRows.length ? openRows.slice(0, STUDIO_ARTIFACT_ROWS).map((a) => studioArtifactLine(state, a)) : ["  - No artifacts yet."]),
         ...(openRows.length > STUDIO_ARTIFACT_ROWS ? [`  - and ${openRows.length - STUDIO_ARTIFACT_ROWS} more, in the studio`] : []),
         ...(open.lead?.questions.length ? [`  Your questions in this round: ${open.lead.questions.map((q, i) => `${i + 1}. ${truncate(q.text, 160)}`).join(" ")}`] : []),
@@ -1113,28 +1122,32 @@ export function studioBriefSection(state: State, repo?: RepoGlance): string {
   const answers = studioAnswers(state);
   return `
 ## The studio
-You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between; the PE reviews every option before the user sees it. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
+You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between. The PE reviews every option before the user sees it; when it asks for a change or objects, the designer revises, up to ${S.MAX_PE_PASSES} passes, and then the user sees it with what the PE still says. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
 
 Order of focus, aiming at a design that is complete before the factory starts (revisit a focus when the user's answers call for it):
 1. experience: the key screens or commands, or the interface, or the topology, and how they behave;
 2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary;
 3. flows: every rule and edge case decided, as tables of cases and outcomes (empty, loading, error, offline, first run), because a case the design leaves open becomes special-casing in code.
 
-Domains (the user's to choose; until they do, propose them as one question with options, from the vision and the repository; you never set them):
+Product domains: the kind of product this is, which decides what the designer makes. A domain is not the product's subject (travel, finance, "a web app"). There are three:
+- screen: people use it on a screen: in a browser, on a desktop or a phone, or in a terminal;
+- code: other programs use it: a library, an engine, a compiler;
+- infrastructure: systems that run other software: servers, queues, pipelines, deployment.
+The user chooses the domains in the app. You never set them, and you do not ask about them in "questions"; you may recommend domains in one sentence of your reply. The user's choice:
 ${domainLines(p.domains).map((l) => `- ${l}`).join("\n")}
 Devices (the user's scope): ${p.devices.join(", ")}.
 ${repoLine}${start}
 
 Rounds:
 ${roundLines}${earlier.length ? `\n${earlier.join("\n")}` : ""}
-
+${notes.length ? `\nWhat the service did not do of your last studio block:\n${notes.join("\n")}\n` : ""}
 The user's marks, picks, pins and notes since your last reply (their answers to your questions are in their messages below):
 ${answers.length ? answers.join("\n") : "- None."}
 
 Rules for "studio":
-- One round is open at a time: "closeRound" the open one before "openRound" opens the next.
+- One round is open at a time: "closeRound" the open one before "openRound" opens the next. A round closes only once its studio runs have ended and the PE's review of each of its versions has ended; until then the service refuses "closeRound" and says why.
 - "designerRuns": at most ${MAX_DESIGNER_RUNS} per reply. Brief the designer on what to make and why, from the vision, the documents and the user's marks. Ask for 2–${MAX_RUN_VARIANTS} variants only where a real choice is open, otherwise 1. Devices come from the scope; documents (${DOCUMENT_KINDS.join(", ")}) have none. "revises" makes an artifact's next version, carrying the user's open pins.
-- "questions": at most 5, about this round's choices (a variant, an undecided case, the domains), each with why and up to 4 options; they show beside the round. Keep "questions" outside "studio" for the vision's areas, and never ask one question in both.
+- "questions": at most 5, about this round's choices (a variant, an undecided case), each with why and up to 4 options; they show beside the round. Keep "questions" outside "studio" for the vision's areas, and never ask one question in both.
 `;
 }
 

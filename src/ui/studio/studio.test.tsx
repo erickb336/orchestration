@@ -419,10 +419,7 @@ describe("where a variant is served from", () => {
 });
 
 describe("PE review in the right column", () => {
-  /**
-   * The sample, with a PE run on Codex (simulated) that made one pass with these verdicts. The loop ended there: the
-   * designer's two runs revising it failed (ORC-029 pass 4), so the version is the owner's at pass 1.
-   */
+  /** The sample, with a PE run on Codex (simulated) that made one pass with these verdicts. */
   function reviewed(verdicts: object[]) {
     const { s: designed, id, n } = withSample({ pe: false });
     let s = R.askForPeReviews(designed, at(6));
@@ -430,11 +427,16 @@ describe("PE review in the right column", () => {
     const pe = s.studio.runs.find((r) => r.kind === "pe")!;
     s = S.addPeVerdicts(s, { artifactId: id, version: 1, verdicts: verdicts as S.VerdictInput[], by: { provider: "codex", model: pe.model, runId: pe.id } }, at(8)).state;
     s = R.completeStudioRun(s, pe.id, at(8), { summary: "pass 1" });
+    return { s, id, n };
+  }
+  /** The loop on that pass ended: the designer's two runs revising it failed (ORC-029 pass 4), so the version is the owner's at pass 1. */
+  function revisionsFailed(x: { s: State; id: string; n: number }): State {
+    let s = x.s;
     for (const sec of [9, 10]) {
-      const r = run<{ runId: string }>(s, "startStudioRun", { kind: "designer", round: n, artifactId: id, brief: "Revise it for the PE." }, at(sec));
+      const r = run<{ runId: string }>(s, "startStudioRun", { kind: "designer", round: x.n, artifactId: x.id, brief: "Revise it for the PE." }, at(sec));
       s = R.reportStudioRunFailed(R.dispatchStudioRuns(r.state, at(sec), { simulated: ["claude"] }).state, r.result.runId, "The simulated designer could not revise.", at(sec));
     }
-    return { s, id };
+    return s;
   }
 
   /**
@@ -453,23 +455,42 @@ describe("PE review in the right column", () => {
   }
   const BUDGET = { buildUsd: [40, 90] as [number, number], maintenanceUsdPerMonth: [0, 5] as [number, number], basis: "Recorded designer runs of this size." };
 
-  it("once the PE agrees: its verdict on each variant with the change and the budget effect, labelled simulated, and the marks unlocked", () => {
+  it("once the PE agrees: its verdict on each variant with the budget effect, labelled simulated, and the marks unlocked", () => {
     const { s } = reviewed([
       { variant: "a", verdict: "feasible", reasons: "A static page with a drawn map." },
-      { variant: "b", verdict: "feasible-if", reasons: "Long trips need paging.", change: "Page the days after a week.", budget: BUDGET },
+      { variant: "b", verdict: "feasible", reasons: "A list of days, paged after a week.", budget: BUDGET },
     ]);
+    // A real agreement: every variant feasible on the PE's pass, with no revision run at all.
+    expect(S.peReview(s, S.latestVersion(s, s.studio.artifacts[0].id)!)).toEqual({ status: "agreed", pass: 1 });
+    expect(s.studio.runs.filter((r) => r.kind === "designer" && r.artifactId)).toEqual([]);
     const html = render(<Studio />, s);
     expect(html).toContain(">Agreed<");
-    expect(html).toContain("The PE agreed on pass 1: every option is feasible, some only with the change it states. It is yours to mark.");
+    expect(html).toContain("The PE agreed on pass 1: every option is feasible. It is yours to mark.");
     expect(html).toContain("PE · Codex · codex-sample-large");
     expect(html).toContain("Simulated: the fake runtime&#x27;s PE answered; no agent judged this.");
     expect(html).toMatch(/A · Map first<\/b><span class="k-chip k-chip--done">Feasible</);
-    expect(html).toMatch(/B · Day by day<\/b><span class="k-chip k-chip--you">Feasible if changed</);
-    expect(html).toContain("The change: Page the days after a week.");
+    expect(html).toMatch(/B · Day by day<\/b><span class="k-chip k-chip--done">Feasible</);
     expect(html).toContain("Budget effect: building $40–$90, maintenance $0–$5 a month. Basis: Recorded designer runs of this size.");
     // The lock is gone: nothing says the PE is still reviewing, and the marks can be pressed.
     expect(html).not.toContain("Waiting for PE review. You can look at it now");
     expect(html).not.toContain("with the PE");
+    expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
+  });
+
+  it("a loop that ended with the PE still asking for a change is never shown as agreed: the change, why review ended, and the marks unlocked", () => {
+    const x = reviewed([
+      { variant: "a", verdict: "feasible", reasons: "A static page with a drawn map." },
+      { variant: "b", verdict: "feasible-if", reasons: "Long trips need paging.", change: "Page the days after a week.", budget: BUDGET },
+    ]);
+    // While the designer may still revise, it is not yours yet.
+    expect(render(<Studio />, x.s)).toMatch(/aria-disabled="true"[^>]*>Keep</);
+    const s = revisionsFailed(x);
+    expect(S.peReview(s, S.getArtifact(s, x.id, 1))).toMatchObject({ status: "ended", ended: "no-revision", pass: 1, objections: [], asks: [{ variant: "b" }] });
+    const html = render(<Studio />, s);
+    expect(html).not.toContain(">Agreed<");
+    expect(html).toContain("The PE still asks for changes to B · Day by day. PE review ended: the designer&#x27;s runs revising it ended 2 times without a new version.");
+    expect(html).toMatch(/B · Day by day<\/b><span class="k-chip k-chip--you">Feasible if changed</);
+    expect(html).toContain("The change: Page the days after a week.");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
   });
 
@@ -485,7 +506,7 @@ describe("PE review in the right column", () => {
     const { s } = threePasses();
     const html = render(<Studio />, s);
     expect(html).toContain(">Objects: waiting for you<");
-    expect(html).toContain("The PE still objects to B · Day by day after 3 passes, and the designer revises no more. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.");
+    expect(html).toContain("The PE still objects to B · Day by day. PE review ended: the PE made its 3 passes in the round. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.");
     expect(html).toMatch(/<span class="k-chip k-chip--fail">Not feasible</);
     expect(html).toContain("What would change the verdict: A free source of prices.");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
@@ -498,7 +519,7 @@ describe("PE review in the right column", () => {
     expect(versionHistory(s, S.getArtifact(s, id, 3))).toEqual([
       { version: 1, round: 1, current: false, tone: "neutral", state: "objected", text: "PE pass 1: objected to B · Day by day; the designer revised it as v2." },
       { version: 2, round: 1, current: false, tone: "neutral", state: "objected", text: "PE pass 2: objected to B · Day by day; the designer revised it as v3." },
-      { version: 3, round: 1, current: true, tone: "you", state: "waiting for you", text: "PE pass 3, the last: still objects to B · Day by day. This is waiting for you." },
+      { version: 3, round: 1, current: true, tone: "you", state: "waiting for you", text: "PE pass 3: still objects to B · Day by day; review ended: the PE made its 3 passes in the round. This is waiting for you." },
     ]);
     const html = render(<Studio />, s);
     expect(html).toContain('aria-label="Versions of Trip plan (simulated sample)"');
@@ -556,7 +577,7 @@ describe("PE review in the right column", () => {
     expect(other).toContain("PE · Codex · codex-sample-large");
   });
 
-  it("a PE run that ended without a verdict says so, and says when it is asked again", () => {
+  it("a PE run that ended without a verdict says so and is asked again; after the second, review ends and the version is yours, never left waiting", () => {
     const { s: designed } = withSample({ pe: false });
     let s = R.dispatchStudioRuns(R.askForPeReviews(designed, at(6)), at(7)).state;
     const first = s.studio.runs.find((r) => r.kind === "pe")!;
@@ -564,7 +585,9 @@ describe("PE review in the right column", () => {
     expect(render(<Studio />, s)).toContain("The PE&#x27;s run ended without a verdict (Its verdicts were refused: its answer has no JSON block with the verdicts); it is asked again.");
     s = R.dispatchStudioRuns(R.askForPeReviews(s, at(9)), at(10)).state;
     s = R.reportStudioRunStopped(s, s.studio.runs.filter((r) => r.kind === "pe")[1].id, at(11), { lost: true });
-    expect(render(<Studio />, s)).toContain(">No verdict<");
+    const html = render(<Studio />, s);
+    expect(html).toContain("The PE did not review it. PE review ended: the PE&#x27;s runs on it ended 2 times without a verdict.");
+    expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
   });
 });
 

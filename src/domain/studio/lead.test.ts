@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import * as M from "../model";
 import { buildSeed } from "../seed";
 import { startFactoryAsOwner } from "../testing/factory";
-import { addScreen, openRound, pePass, run } from "../testing/studio";
+import { addScreen, openRound, peAgrees, pePass, run } from "../testing/studio";
 import type { State } from "../types";
 import * as R from "./runs";
 import * as S from "./studio";
@@ -25,6 +25,14 @@ function reply(s: State, out: Record<string, unknown>, sec = 10, trigger: "messa
 const lastReply = (s: State) => s.conversation.filter((m) => m.author === "lead").at(-1)!;
 const notes = (s: State) => lastReply(s).rejected ?? [];
 const SCREEN_RUN = { brief: "Make the trip plan screen: the place, the dates, who is going, the day plan.", kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] };
+/** Every studio run under way starts and completes. */
+function finishRuns(s: State, sec: number): State {
+  while (s.studio.runs.some((r) => r.status === "queued" || r.status === "running")) {
+    const d = R.dispatchStudioRuns(s, at(sec));
+    s = R.activeStudioRuns(d.state).reduce((x, r) => R.completeStudioRun(x, r.id, at(sec), { summary: "done" }), d.state);
+  }
+  return s;
+}
 
 describe("the lead's studio block", () => {
   it("opens a round, asks the designer through the service's path, and stores its message and questions on the round", () => {
@@ -60,6 +68,9 @@ describe("the lead's studio block", () => {
     const revision = s.studio.runs.at(-1)!;
     expect(revision).toMatchObject({ artifactId: a.id, baseVersion: 1, fromLead: { kinds: ["screen"], variants: 1, devices: [] } });
     expect(S.currentRound(s)!.lead).toEqual({ message: "B it is; one more take on it.", questions: [{ text: "Keep the cost per person?" }] });
+    // The round's runs end and the PE agrees on its version: now it can close.
+    s = finishRuns(s, 35);
+    s = peAgrees(s, a.id, 1, ["A", "B", "C"], at(37));
     s = reply(s, { reply: "On to the data.", studio: { closeRound: { summary: "B, with the cost per person." }, openRound: { focus: "data", summary: "The trip, the people, the costs." } } }, 40);
     expect(s.studio.rounds.map((r) => [r.n, r.focus, !!r.closedAt, r.summary])).toEqual([
       [1, "experience", true, "B, with the cost per person."],
@@ -69,6 +80,25 @@ describe("the lead's studio block", () => {
     // Closing alone leaves the closed round with the closing message.
     s = reply(s, { reply: "That settles the data.", studio: { closeRound: true } }, 50);
     expect(s.studio.rounds[1]).toMatchObject({ closedAt: at(52), lead: { message: "That settles the data.", questions: [] } });
+  });
+
+  it("cannot close a round while a version waits for the PE or the designer revises it: the round stays open, with a note the lead sees (review finding 1)", () => {
+    const opened = reply(fresh(), { studio: { openRound: { focus: "experience", summary: "The trip plan." } } });
+    const a = addScreen(opened, 1, at(20));
+    const moveOn = { reply: "On to the data.", studio: { closeRound: { summary: "Map first." }, openRound: { focus: "data", summary: "The trip's things." } } };
+    // v1 waits for the PE, whose run is queued: the lead's close is refused, so the PE's run is not made stale.
+    const waiting = R.askForPeReviews(a.state, at(21));
+    let s = reply(waiting, moveOn, 30);
+    expect(s.studio.rounds.map((r) => [r.n, !!r.closedAt])).toEqual([[1, false]]);
+    const pe = s.studio.runs.find((r) => r.kind === "pe")!;
+    expect(notes(s)).toEqual([`Studio: closeRound: round 1 stays open while the PE's run ${pe.id} is queued; close it once the round's runs and PE review have ended`, "Studio: openRound: Round 1 is still open; close it first."]);
+    // The PE asks for a change on pass 1: the designer revises, so the round stays open and the version is not "agreed".
+    s = finishRuns(s, 31);
+    s = pePass(s, a.id, 1, [{ variant: "A", verdict: "feasible-if", change: "Page the days." }, { variant: "B", verdict: "feasible" }, { variant: "C", verdict: "feasible" }], at(32));
+    s = reply(s, moveOn, 40);
+    expect(notes(s)[0]).toBe("Studio: closeRound: round 1 stays open while the designer revises Trip plan v1 for the PE; close it once the round's runs and PE review have ended");
+    expect(S.peReview(s, S.latestVersion(s, a.id)!).status).toBe("revising");
+    expect(S.currentRound(s)!.n).toBe(1);
   });
 
   it("is checked and capped: at most 3 designer runs, 1 to 3 variants, known kinds, devices in scope, a brief; at most 5 questions with 4 options; notes say what was left out", () => {
@@ -147,7 +177,7 @@ describe("the lead can never approve, overrule, lock in, start the factory, or s
     let s = pePass(a.state, a.id, 1, [{ variant: "A", verdict: "feasible" }, { variant: "B", verdict: "not-feasible" }], at(3));
     s = pePass(s, a.id, 1, [{ variant: "A", verdict: "feasible" }, { variant: "B", verdict: "not-feasible" }], at(4));
     s = pePass(s, a.id, 1, [{ variant: "A", verdict: "feasible" }, { variant: "B", verdict: "not-feasible" }], at(5));
-    expect(S.peReview(s, S.latestVersion(s, a.id)!).status).toBe("objections");
+    expect(S.peReview(s, S.latestVersion(s, a.id)!).status).toBe("ended");
     // The owner can do each of these; the lead must not be able to.
     expect(() => run(s, "approveArtifact", { artifactId: a.id, version: 1, variant: "A" }, at(6))).not.toThrow();
     return { s, id: a.id, objection: s.studio.verdicts.filter((v) => v.verdict === "not-feasible").at(-1)!.id };

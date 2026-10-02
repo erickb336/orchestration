@@ -32,7 +32,19 @@ describe("the lead's studio brief", () => {
     expect(brief).toContain("1. experience: the key screens or commands, or the interface, or the topology, and how they behave;");
     expect(brief).toContain("2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary;");
     expect(brief).toContain("3. flows: every rule and edge case decided, as tables of cases and outcomes (empty, loading, error, offline, first run), because a case the design leaves open becomes special-casing in code.");
-    expect(brief).toContain("Domains (the user's to choose; until they do, propose them as one question with options, from the vision and the repository; you never set them):\n- Not chosen yet by the owner.\nDevices (the user's scope): desktop, mobile.");
+    // The three product domains in plain words (real trial finding 3: the lead asked about the subject, "Travel and group planning").
+    expect(brief).toContain(
+      [
+        "Product domains: the kind of product this is, which decides what the designer makes. A domain is not the product's subject (travel, finance, \"a web app\"). There are three:",
+        "- screen: people use it on a screen: in a browser, on a desktop or a phone, or in a terminal;",
+        "- code: other programs use it: a library, an engine, a compiler;",
+        "- infrastructure: systems that run other software: servers, queues, pipelines, deployment.",
+        'The user chooses the domains in the app. You never set them, and you do not ask about them in "questions"; you may recommend domains in one sentence of your reply. The user\'s choice:',
+        "- Not chosen yet by the owner.",
+        "Devices (the user's scope): desktop, mobile.",
+      ].join("\n"),
+    );
+    expect(brief).toContain('- "questions": at most 5, about this round\'s choices (a variant, an undecided case), each with why and up to 4 options;');
     expect(brief).toContain("Repository: no code yet (1 tracked file, documents only).\nNo round yet: open round 1 on the experience once you know enough to brief the designer.");
     expect(brief).toContain('- "designerRuns": at most 3 per reply.');
     expect(text).toContain('"studio": {\n    "closeRound": { "summary": "<what came of the open round>" },\n    "openRound": { "focus": "material | experience | data | flows"');
@@ -67,12 +79,33 @@ describe("the lead's studio brief", () => {
     s = run(s, "startStudioRun", { kind: "designer", round: one.n, brief: "One more take." }, at(11)).state;
     s.studio.rounds[1].lead = { message: "Two takes.", questions: [{ text: "Map or timeline first?" }] };
     const brief = section(envelope(s, CODE));
-    expect(brief).toContain("Domains (the user's to choose; until they do, propose them as one question with options, from the vision and the repository; you never set them):\n- A screen product (screen, terminal-demo, tui):");
-    expect(brief).toContain(`- Round 1 (the experience), open: (no summary)\n  - ${plan.id} "Trip plan" v1 · screen · 2 variants: A Map first, B Timeline · desktop, mobile · the designer revises for the PE (pass 1); asks for changes: A: cache the map tiles`);
+    expect(brief).toContain("The user's choice:\n- A screen product (screen, terminal-demo, tui):");
+    const asked = s.studio.runs.at(-1)!.id;
+    expect(brief).toContain(`- Round 1 (the experience), open: (no summary)\n  It cannot close yet: the designer's run ${asked} is queued.\n  - ${plan.id} "Trip plan" v1 · screen · 2 variants: A Map first, B Timeline · desktop, mobile · the designer revises for the PE (pass 1); asks for changes: A: cache the map tiles`);
     expect(brief).toContain(`  - ${cli.id} "Packing list" v1 · screen · desktop, mobile · the designer revises for the PE (pass 1); objects: a: No packing data exists anywhere.`);
     expect(brief).toContain("  Your questions in this round: 1. Map or timeline first?");
-    expect(brief).toMatch(/\n  Runs under way: studio-\d+ designer queued\.\n/);
+    expect(brief).toContain(`\n  Runs under way: ${asked} designer queued (asked by the service).\n`);
     expect(brief).toContain("- Round 0 (what exists), closed: The trip list as the code has it. (1 artifacts)");
+  });
+
+  it("says why PE review ended, with what the PE still says, and what the service did not do of the lead's last block", () => {
+    const r = openRound(fresh(), "experience", at(1));
+    const plan = addScreen(r.state, r.n, at(2), { variants: [{ id: "A", label: "Map first" }, { id: "B", label: "Timeline" }] });
+    let s = plan.state;
+    for (const v of [1, 2, 3]) {
+      if (v > 1) s = addScreen(s, r.n, at(10 * v), { artifactId: plan.id, variants: [{ id: "A", label: "Map first" }, { id: "B", label: "Timeline" }] }).state;
+      s = pePass(s, plan.id, v, [{ variant: "A", verdict: "feasible-if", change: `page the days (${v})` }, { variant: "B", verdict: "not-feasible", reasons: "Live prices need a paid API." }], at(10 * v + 1));
+    }
+    expect(section(envelope(s, DOCS))).toContain(
+      `  - ${plan.id} "Trip plan" v3 · screen · 2 variants: A Map first, B Timeline · desktop, mobile · PE review ended after pass 3 (the PE made its 3 passes in the round), shown to the user; objects: B: Live prices need a paid API.; asks for changes: A: page the days (3)`,
+    );
+    // The lead's close of a busy round was refused: its next brief says so (review finding 1).
+    const busy = addScreen(s, r.n, at(40), { title: "Packing list", variants: [{ id: "a", label: "One list" }] });
+    const asked = M.startLeadRun(M.postMessage(busy.state, "Move on.", at(41)), { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(42));
+    s = M.completeLeadRun(asked.state, asked.runId, { reply: "Moving on.", proposals: [], studio: { closeRound: true } } as never, at(43));
+    const brief = section(envelope(s, DOCS));
+    expect(brief).toContain(`What the service did not do of your last studio block:\n- closeRound: round 1 stays open while Packing list v1 waits for PE review; close it once the round's runs and PE review have ended\n`);
+    expect(brief).toContain(`  It cannot close yet: Packing list v1 waits for PE review.\n`);
   });
 
   it("lists the user's marks, picks, pins and notes since the lead's last reply, not before it, and never the pins a revision carried", () => {

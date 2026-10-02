@@ -19,8 +19,8 @@ import { providerLabel } from "../model/resolution";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
 import { budgetStop } from "../spend";
 import { ControlError, PROVIDERS, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
-import { artifactName, endedWithoutResult, latestArtifacts, latestVersion, peReview } from "./studio";
-import { UNGATED_KINDS, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
+import { artifactName, endReview, latestArtifacts, latestVersion, peReview, peRunsOf } from "./studio";
+import { UNGATED_KINDS, isUnderWay, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
 
 /** The longest brief a run takes, in characters. */
 const MAX_BRIEF = 20_000;
@@ -145,47 +145,36 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
   };
   s.studio.runs.push(run);
   const what = !base ? "" : req.kind === "pe" ? `, reviewing ${artifactName(base)}` : `, revising ${artifactName(base)}`;
-  event(s, now, req.kind === "pe" ? "system" : "lead", "vision", `${studioRunName(run)} asked for in round ${round.n}${what}, on ${providerLabel(provider)} · ${model}${note ? ` (${note})` : ""}`);
+  // Who asked: the lead, from its studio block (`fromLead`), or the service (the PE's runs, the loop's revisions; review finding 8).
+  event(s, now, req.fromLead ? "lead" : "system", "vision", `${studioRunName(run)} asked for in round ${round.n}${what}, on ${providerLabel(provider)} · ${model}${note ? ` (${note})` : ""}`);
   return { state: s, runId: id };
 }
 
 // ---------- the PE's runs, asked for by the service ----------
 
-/** How many PE runs a version gets that end without a verdict (failed or lost) before the service stops asking: one retry. */
-export const MAX_PE_RUNS = 2;
-
-/** The PE's runs on one version, oldest first. */
-export function peRunsOf(s: State, artifactId: string, version: number): StudioRun[] {
-  return s.studio.runs.filter((r) => r.kind === "pe" && r.artifactId === artifactId && r.baseVersion === version);
-}
-
 /**
- * Whether a version needs the PE now, and if not, why not. It does when it is the newest version of a reviewed kind,
- * in an open round, in Vision, with its screenshots or recording done, no PE pass yet, and no PE run under way or
- * finished; a version whose PE runs ended without a verdict is asked again up to MAX_PE_RUNS runs in all.
+ * Whether a version needs the PE now: it is the newest version of a reviewed kind, in Vision, with its screenshots or
+ * recording done, its review waiting (no pass yet, and not ended), and no PE run on it under way. A PE run that
+ * ended without a verdict is asked for again until review ends (`no-review`, studio.ts); a run a pause stopped was
+ * asked for again in the same write (retryOf), and that run is among these.
  */
 export function peRunDue(s: State, a: StudioArtifact): boolean {
   if (s.project.stage !== "shaping" || UNGATED_KINDS.includes(a.kind)) return false;
   if (latestVersion(s, a.id)?.version !== a.version) return false;
-  const round = s.studio.rounds.find((r) => r.n === a.round);
-  if (!round || round.closedAt) return false;
   // The PE reads the screenshots and the recording: it waits until the service has made them.
   if (a.shots?.status === "pending" || a.demo?.status === "pending") return false;
   if (peReview(s, a).status !== "waiting") return false;
-  const runs = peRunsOf(s, a.id, a.version);
-  // One under way, or finished, needs no other. A run a pause stopped was asked for again in the same write
-  // (retryOf), and that run is among these: it neither blocks a later retry nor counts toward the limit.
-  if (runs.some((r) => r.status === "queued" || r.status === "running" || r.status === "stopping" || r.status === "completed")) return false;
-  return endedWithoutResult(runs) < MAX_PE_RUNS;
+  return !peRunsOf(s, a.id, a.version).some(isUnderWay);
 }
 
 /** The PE's brief for a version: what the run record says it was asked to do (the envelope has the rest). */
-export const peBrief = (a: StudioArtifact) => `PE review of ${artifactName(a)}: feasibility, scale, longevity and budget, a verdict for each variant.`;
+export const peBrief = (a: StudioArtifact) =>
+  a.provenance ? `PE review of ${artifactName(a)}, a reproduction of the code as it is today: is it faithful, a verdict for each variant.` : `PE review of ${artifactName(a)}: feasibility, scale, longevity and budget, a verdict for each variant.`;
 
 /**
  * Ask for a PE run on every version that needs one (the service, on each cycle: after an import, after the
- * screenshots or recording, and when the project returns to Vision). A version whose PE cannot be resolved (no
- * provider enabled) is skipped and asked again on a later cycle; peRunBlocker says why.
+ * screenshots or recording, and when the project returns to Vision). When no enabled provider can run the PE, its
+ * review ends there (`no-provider`, with the reason) and the version goes to the owner unreviewed, never left waiting.
  */
 export function askForPeReviews(state: State, now: string): State {
   if (state.project.stage !== "shaping") return state;
@@ -196,20 +185,10 @@ export function askForPeReviews(state: State, now: string): State {
       s = requestStudioRun(s, { kind: "pe", round: a.round, artifactId: a.id, brief: peBrief(a) }, now).state;
     } catch (e) {
       if (!(e instanceof ControlError)) throw e;
+      s = endReview(s, a.id, a.version, `the PE cannot run: ${e.message}`, now);
     }
   }
   return s;
-}
-
-/** Why the PE cannot be asked to review a version that needs it, or undefined (for the studio to say). */
-export function peRunBlocker(s: State, a: StudioArtifact): string | undefined {
-  if (!peRunDue(s, a)) return undefined;
-  try {
-    requestStudioRun(s, { kind: "pe", round: a.round, artifactId: a.id, brief: peBrief(a) }, new Date(0).toISOString());
-    return undefined;
-  } catch (e) {
-    return e instanceof Error ? e.message : String(e);
-  }
 }
 
 /** The labelled stand-in for the lead's studio brief (pass 4): the vision and the round's focus, nothing else. */

@@ -1,8 +1,8 @@
 // Project domains (ORC-029 r9): what kind of product the project is, which decides what the studio's designer makes.
-// The owner confirms them (`setDomains`, the owner's command); the lead proposes them, as a question, and never sets
-// them. Designer briefs follow them: screens, terminal demos and TUIs for a screen product; the interface and the core
-// algorithms for a code product; the topology, with failure and recovery and scale and cost, for an infrastructure
-// system. Pure.
+// The owner chooses them in the app (`setDomains`, the owner's command). The lead may recommend them in its message;
+// it never asks about them in its questions and never sets them (real trial finding 3). Designer briefs follow them:
+// screens, terminal demos and TUIs for a screen product; the interface and the core algorithms for a code product; the
+// topology, with failure and recovery and scale and cost, for an infrastructure system. Pure.
 
 import { draft, event } from "../model/core";
 import { ControlError, PROJECT_DOMAINS, type ProjectDomain, type State } from "../types";
@@ -35,8 +35,8 @@ export function domainLines(domains: readonly ProjectDomain[]): string[] {
 
 /**
  * The owner confirms the product's domains: at least one, each once, in a fixed order. Any time: they decide what the
- * studio's designer makes, and nothing in the factory reads them. The lead never calls this; it proposes domains as
- * a question.
+ * studio's designer makes, and nothing in the factory reads them. The lead never calls this; it may recommend domains
+ * in its message.
  */
 export function setDomains(state: State, domains: ProjectDomain[], now: string): State {
   const chosen = PROJECT_DOMAINS.filter((d) => domains.includes(d));

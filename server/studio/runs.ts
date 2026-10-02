@@ -16,7 +16,7 @@ import { DESIGNER_KINDS, DOCUMENT_KINDS, type StudioRun } from "../../src/domain
 import type { ModelSelection, State } from "../../src/domain/types";
 import type { Store } from "../store";
 import { FILE_TYPES, MAX_ARTIFACT_BYTES, MAX_FILE_BYTES, ManifestError, NO_MODULES, STUDIO_MANIFEST, type StagedArtifact, versionDir, writeVersion } from "./artifacts";
-import { repoFiles, repoGlance } from "./existing";
+import { repoGlance, trackedAmong } from "./existing";
 
 /**
  * Ask for a designer run in a round (the service: from pass 4, the lead's studio loop). Without a brief it gets the
@@ -122,12 +122,13 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     "- `files`: every file of the artifact, as paths relative to your working directory, each listed once; every entry is one of them.",
     `- File types: ${FILE_TYPES.join(", ")}. At most ${MAX_FILE_BYTES / 1024 / 1024} MB a file and ${MAX_ARTIFACT_BYTES / 1024 / 1024} MB an artifact. Names use only letters, digits, ".", "_", "-" and spaces. No links. The folders shots/, recording/ and __orchestrator/ are the service's.`,
     `- A document (${DOCUMENT_KINDS.join(", ")}) is plain files: Markdown (.md) with code blocks and tables, and Mermaid (.mmd) for diagrams, which the app renders. Its variant's entry is its main .md file; it has no devices. Write rules and edge cases as tables of cases and outcomes.`,
-    "- A terminal demo or TUI variant's entry is a VHS `.tape`, which the service records in a sandbox: `Set Columns` and `Set Rows` to 80×24, 100×30 or 120×40, `Set Shell` bash or zsh, `Output` .webm, .gif and .txt (one each), no Copy, Paste, Screenshot or Env.",
+    "- A terminal demo or TUI variant's entry is a VHS `.tape`, which the service records in a container: `Set Columns` and `Set Rows` to 80×24, 100×30 or 120×40, `Set Shell bash`, `Output` .webm, .gif and .txt (one each), no Copy, Paste, Screenshot or Env.",
+    "  - Use bash: the recorder has no zsh. A tape that sets zsh is not recorded; the variant then shows its hand-written frames, with the reason.",
     "  - The tape's shell starts at the artifact's root, with a copy of every file the artifact lists, so paths in the tape's commands are relative to the artifact's root, as in studio.json: a tape at `demo/demo.tape` runs `node demo/trips.js`, not `node trips.js`.",
     "  - VHS's own `Output` and `Source` paths are relative to the tape's folder: `Output demo.gif` (the service writes it into recording/<variant>/), and Source only of a .tape in that folder.",
     "  - The demo runs with no network (not even localhost) and no access to the home folder (`~`); it can write only inside the artifact's copy.",
     "  - A CLI that does not exist yet is a `.js` script the tape runs with `node` (no .sh files, and files are not kept executable, so never `./trips.js`).",
-    '  - It must run cleanly in the sandbox, from the artifact\'s root. The service scans each recording\'s transcript: a failure on screen (such as "Cannot find module", "command not found", "No such file or directory", "Permission denied", a line starting "Error:", or a traceback) marks it "recorded with errors" for the PE and the owner. A demo meant to show an error path sets `"showsError": true` on its variant.',
+    '  - It must run cleanly in the container, from the artifact\'s root. The service scans each recording\'s transcript: a failure on screen (such as "Cannot find module", "command not found", "No such file or directory", "Permission denied", a line starting "Error:", or a traceback) marks it "recorded with errors" for the PE and the owner. A demo meant to show an error path sets `"showsError": true` on its variant.',
     "  - Hand-written frames beside the entry, an asciicast v3 `.cast` or `.ans` text, are shown when the tape is not recorded; either can also be the entry instead of a tape.",
     ...(prev ? [`- You revise ${prev.title}: hand in exactly one artifact, its new version (kind ${prev.kind}).`] : []),
     "- Only what studio.json lists is kept; anything else in your working directory is discarded.",
@@ -138,28 +139,40 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
 }
 
 /**
+ * What a designer run handed in, read outside the store's transaction (review finding 11): its artifacts, and which of
+ * the repository files their provenance names the repository tracks at HEAD (round 0 only; undefined when the
+ * repository cannot be read).
+ */
+export interface HandedIn {
+  artifacts: StagedArtifact[];
+  tracked: ReadonlySet<string> | undefined;
+}
+
+/** Read what a run handed in, with its provenance looked up in git: in the scheduler, before the transaction that imports it. */
+export function handedIn(state: State, runId: string, artifacts: StagedArtifact[]): HandedIn {
+  const named = R.getStudioRun(state, runId)?.round === 0 ? [...new Set(artifacts.flatMap((a) => a.provenance ?? []))] : [];
+  return { artifacts, tracked: named.length ? trackedAmong(state.project.repoPath, named) : new Set() };
+}
+
+/**
  * Record a designer run's artifacts and write their version folders. A run that revises an artifact hands in exactly
  * one artifact: its new version. Throws a ManifestError (or the domain's ControlError) when something cannot be
  * recorded; then nothing is recorded and no folder is left. Returns the state, a summary for the run's record, and
- * the versions it recorded.
+ * the versions it recorded. It reads no repository: `handedIn` did.
  */
-export function importDesignerRun(state: State, runId: string, staged: StagedArtifact[], root: string, now: string): { state: State; summary: string; imported: { artifactId: string; version: number }[] } {
+export function importDesignerRun(state: State, runId: string, given: HandedIn, root: string, now: string): { state: State; summary: string; imported: { artifactId: string; version: number }[] } {
   const run = R.getStudioRun(state, runId);
   if (!run) throw new Error(`Unknown studio run ${runId}.`);
+  const staged = given.artifacts;
   const revising = run.artifactId === undefined ? undefined : S.latestVersion(state, run.artifactId);
   if (revising && staged.length !== 1) throw new ManifestError(`a revision hands in exactly one artifact, the new version of ${revising.title}; it listed ${staged.length}.`);
   // Provenance is kept only in round 0, where the designer reproduces the existing code "as is"; a later round's
   // artifacts are proposals, so a provenance listed there is not recorded. Each file named must be one the repository
-  // tracks, so the owner is never shown a source the code does not have. The repository is read once, when needed.
-  let tracked: Set<string> | undefined;
+  // tracks, so the owner is never shown a source the code does not have.
   const provenanceOf = (a: StagedArtifact): { files: string[] } | undefined => {
     if (!a.provenance || run.round !== 0) return undefined;
-    if (!tracked) {
-      const files = repoFiles(state.project.repoPath);
-      if (!files) throw new ManifestError(`the provenance of "${a.title}" cannot be checked: the repository cannot be read.`);
-      tracked = new Set(files);
-    }
-    const missing = a.provenance.filter((p) => !tracked!.has(p));
+    if (!given.tracked) throw new ManifestError(`the provenance of "${a.title}" cannot be checked: the repository cannot be read.`);
+    const missing = a.provenance.filter((p) => !given.tracked!.has(p));
     if (missing.length) throw new ManifestError(`the provenance of "${a.title}" names ${missing.slice(0, 3).map((p) => JSON.stringify(p)).join(", ")}${missing.length > 3 ? ` and ${missing.length - 3} more` : ""}, which the repository does not have.`);
     return { files: a.provenance };
   };

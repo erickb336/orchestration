@@ -16,7 +16,7 @@ import { validateQuestions } from "../model/shaping";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
 import { ControlError, DEVICES, type Device, type LeadRun, type State } from "../types";
 import { requestStudioRun, type StudioRunRequest } from "./runs";
-import { artifactName, closeRound, currentRound, latestVersion, openRound } from "./studio";
+import { artifactName, closeRound, currentRound, latestVersion, openRound, roundBusy } from "./studio";
 import { DESIGNER_KINDS, DOCUMENT_KINDS, ROUND_FOCUSES, type RoundFocus, type RoundQuestion, type StudioArtifactKind } from "./types";
 
 /** The most designer runs one reply asks for. */
@@ -110,8 +110,11 @@ export function applyStudioBlock(state: State, r: LeadRun, raw: unknown, now: st
   if (raw.closeRound !== undefined && raw.closeRound !== null && raw.closeRound !== false) {
     const c = raw.closeRound;
     const open = currentRound(s);
+    const busy = open && roundBusy(s, open.n);
     if (c !== true && !(isObj(c) && (c.summary === undefined || typeof c.summary === "string"))) notes.push('closeRound is true or { "summary": "<what came of it>" }; the round stays open');
     else if (!open) notes.push("closeRound: no round is open");
+    // Closing now would end PE review early: a version waiting for the PE would wait forever (review finding 1).
+    else if (busy) notes.push(`closeRound: round ${open.n} stays open while ${busy}; close it once the round's runs and PE review have ended`);
     else {
       try {
         s = closeRound(s, open.n, isObj(c) && typeof c.summary === "string" ? c.summary : undefined, now);

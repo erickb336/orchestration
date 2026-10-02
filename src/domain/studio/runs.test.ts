@@ -8,7 +8,7 @@ import * as M from "../model";
 import { buildSeed } from "../seed";
 import { startFactoryAsOwner } from "../testing/factory";
 import { buildingSpend } from "../spend";
-import { addScreen, openRound, peAgrees, run } from "../testing/studio";
+import { addScreen, openRound, peAgrees, pePass, run } from "../testing/studio";
 import type { State } from "../types";
 import * as R from "./runs";
 import * as S from "./studio";
@@ -51,7 +51,7 @@ describe("asking for a studio run", () => {
     expect(runOf(d.state, d.result.runId)).toMatchObject({ kind: "designer", round: 0, status: "queued" });
     const a = addScreen(d.state, 0, at(3), { title: "Trip list (as is)", variants: [{ id: "a", label: "As it is today" }], provenance: { files: ["src/TripList.tsx"] } });
     const pe = R.askForPeReviews(a.state, at(4));
-    expect(R.peRunsOf(pe, a.id, 1)).toEqual([expect.objectContaining({ kind: "pe", round: 0, status: "queued", provider: "codex" })]);
+    expect(S.peRunsOf(pe, a.id, 1)).toEqual([expect.objectContaining({ kind: "pe", round: 0, status: "queued", provider: "codex" })]);
   });
 
   it("a revision names the artifact and the version it revises", () => {
@@ -296,6 +296,24 @@ describe("the PE's runs (pass 3)", () => {
     const lost = R.reportStudioRunStopped(dispatch(again, 8).state, peRuns(again)[1].id, at(9), { lost: true });
     expect(R.askForPeReviews(lost, at(10))).toBe(lost);
     expect(R.peRunDue(lost, S.latestVersion(lost, id)!)).toBe(false);
+    // Review ended there: the version is the owner's, never left waiting for a PE that is not asked again (review finding 6).
+    expect(S.peReview(lost, S.latestVersion(lost, id)!)).toEqual({ status: "ended", ended: "no-review", pass: 0, asks: [], objections: [] });
+    expect(S.readyForOwner(lost, S.latestVersion(lost, id)!)).toBe(true);
+  });
+
+  it("a revision the PE fails to review twice is not hidden behind the version it replaced: it goes to the owner (review finding 6)", () => {
+    const { s, id, n } = imported();
+    let x = pePass(s, id, 1, [{ variant: "A", verdict: "feasible-if" }, { variant: "B", verdict: "feasible" }, { variant: "C", verdict: "feasible" }], at(3));
+    x = addScreen(x, n, at(4), { artifactId: id }).state;
+    for (const sec of [5, 8]) {
+      x = R.askForPeReviews(x, at(sec));
+      x = R.reportStudioRunFailed(dispatch(x, sec + 1).state, peRuns(x).at(-1)!.id, "The PE's answer had no verdicts.", at(sec + 2));
+    }
+    const v2 = S.latestVersion(x, id)!;
+    expect(v2.version).toBe(2);
+    expect(S.peReview(x, v2)).toEqual({ status: "ended", ended: "no-review", pass: 0, asks: [], objections: [] });
+    expect(S.readyForOwner(x, v2)).toBe(true);
+    expect(R.askForPeReviews(x, at(11))).toBe(x);
   });
 
   it("a pause stops it and asks for it again, like any studio run", () => {
@@ -343,12 +361,20 @@ describe("the PE's runs (pass 3)", () => {
     expect(dispatch(atBudget, 8).started).toEqual([]);
   });
 
-  it("says why the PE cannot be asked when no provider can run it", () => {
+  it("when no enabled provider can run the PE, review ends there: the version goes to the owner unreviewed, with the reason, and stays theirs (review finding 6)", () => {
     const { s, id } = imported();
     const chosen = runCommand(s, "setRoleDefault", { role: "pe", selection: { provider: "codex", model: "auto" } }, at(3)).state;
     const off = runCommand(chosen, "setProviderEnabled", { provider: "codex", enabled: false }, at(3)).state;
-    expect(R.askForPeReviews(off, at(4))).toBe(off);
-    expect(R.peRunBlocker(off, S.latestVersion(off, id)!)).toBe("Codex is not enabled. Enable it in Settings or choose another provider for the PE.");
+    const ended = R.askForPeReviews(off, at(4));
+    const why = "the PE cannot run: Codex is not enabled. Enable it in Settings or choose another provider for the PE.";
+    expect(S.peReview(ended, S.latestVersion(ended, id)!)).toEqual({ status: "ended", ended: "no-provider", note: why, pass: 0, asks: [], objections: [] });
+    expect(S.readyForOwner(ended, S.latestVersion(ended, id)!)).toBe(true);
+    expect(peRuns(ended)).toEqual([]);
+    expect(ended.events.at(-1)).toMatchObject({ actor: "system", message: `PE review of Trip plan v1: review ended: no enabled provider could run the next step (${why}); it goes to the owner` });
+    // The owner may already be marking it: enabling Codex later does not take it back for review.
+    const on = runCommand(ended, "setProviderEnabled", { provider: "codex", enabled: true }, at(5)).state;
+    expect(peRuns(R.askForPeReviews(on, at(6)))).toEqual([]);
+    expect(S.readyForOwner(on, S.latestVersion(on, id)!)).toBe(true);
   });
 });
 

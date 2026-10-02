@@ -110,7 +110,28 @@ export interface StudioArtifact {
   shots?: ArtifactShots;
   /** How a terminal demo or TUI is shown, which the service settles after import (pass 3). Absent when this service records none. */
   demo?: ArtifactDemo;
+  /**
+   * The end of PE review of this version, when the service recorded it because no other record shows it: no enabled
+   * provider could run the next step, or the version was reviewed under pass 3's rule (recorded at the upgrade).
+   * Every other end is read from the verdicts, the runs and the round (studio.ts, `peReview`).
+   */
+  reviewEnd?: { reason: RecordedEnd; at: string; note?: string };
 }
+
+/**
+ * Why PE review of a version ended before the PE agreed. The version then goes to the owner with what the PE still
+ * asks for and objects to (studio.ts, the loop rule).
+ * - passes: the PE made its last pass in the round;
+ * - as-is: the version reproduces the code as it is today (round 0): the designer does not revise it for the PE;
+ * - round-closed: its round closed first (a round closed before the lead's close waited for PE review);
+ * - no-revision: the designer's runs revising it ended without a new version, twice;
+ * - no-review: the PE's runs on it ended without a verdict, twice;
+ * - no-provider: no enabled provider could run the next step (the PE or the designer's revision);
+ * - earlier-rule: the PE reviewed it under pass 3's rule, one pass and no revision (recorded at the upgrade).
+ */
+export type LoopEnd = "passes" | "as-is" | "round-closed" | "no-revision" | "no-review" | "no-provider" | "earlier-rule";
+/** The ends the service records on the version (`reviewEnd`), because no other record shows them. */
+export type RecordedEnd = Extract<LoopEnd, "no-provider" | "earlier-rule">;
 
 /** Where an "as is" artifact came from: labelled as is, with the repository files the designer reproduced it from. */
 export interface Provenance {
@@ -184,6 +205,8 @@ export interface Feedback {
 
 export type Verdict = "feasible" | "feasible-if" | "not-feasible";
 export const VERDICTS: Verdict[] = ["feasible", "feasible-if", "not-feasible"];
+/** A verdict in words: "feasible if changed". */
+export const VERDICT_WORDS: Record<Verdict, string> = { feasible: "feasible", "feasible-if": "feasible if changed", "not-feasible": "not feasible" };
 
 /** A cost estimate: dollar ranges, low to high, and what they are based on (recorded runs, price lists, a probe). */
 export interface BudgetEstimate {
@@ -281,6 +304,8 @@ export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", 
 
 /** queued → running → (stopping →) stopped, completed, failed or lost. A queued run waits for dispatch, which happens in Vision only. */
 export type StudioRunStatus = "queued" | "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";
+/** A run under way: asked for and not ended (queued, running, or stopping until the runtime confirms the stop). */
+export const isUnderWay = (r: { status: StudioRunStatus }) => r.status === "queued" || r.status === "running" || r.status === "stopping";
 
 /**
  * One agent run of the studio (ORC-029 pass 3): a designer's, the PE's or a probe's, during Vision. Its own record,

@@ -42,18 +42,47 @@ describe("asking for the designer's revision", () => {
     expect(askForRevisions(asked, at(6))).toBe(asked);
   });
 
-  it("falls back to the designer's default when the maker's provider cannot run it, and waits while none can", () => {
+  it("falls back to the designer's default when the maker's provider cannot run it; when none can, review ends and the owner sees why (review finding 6)", () => {
     const { s, id } = sentBack();
     const codexDesigner = runCommand(s, "setRoleDefault", { role: "designer", selection: { provider: "codex", model: "auto" } }, at(5)).state;
     const claudeOff = runCommand(codexDesigner, "setProviderEnabled", { provider: "claude", enabled: false }, at(5)).state;
     expect(designerRuns(askForRevisions(claudeOff, at(6))).at(-1)).toMatchObject({ baseVersion: 1, provider: "codex", model: "codex-sample-large" });
-    // Neither can run it: nothing is queued now, and it is asked for once one can.
+    // Neither can run it: nothing is queued, and the version is never left "revising" with no revision coming.
     const noneCan = runCommand(runCommand(s, "setProviderEnabled", { provider: "claude", enabled: false }, at(5)).state, "setRoleDefault", { role: "designer", selection: { provider: "claude", model: "auto" } }, at(5)).state;
-    const waiting = askForRevisions(noneCan, at(6));
-    expect(waiting).toBe(noneCan);
-    expect(S.revisionDue(waiting, S.getArtifact(waiting, id, 1))).toBe(true);
-    const back = runCommand(waiting, "setProviderEnabled", { provider: "claude", enabled: true }, at(7)).state;
-    expect(designerRuns(askForRevisions(back, at(8))).at(-1)).toMatchObject({ baseVersion: 1, status: "queued" });
+    const ended = askForRevisions(noneCan, at(6));
+    const v1 = () => S.getArtifact(ended, id, 1);
+    expect(designerRuns(ended)).toHaveLength(1);
+    expect(S.peReview(ended, v1())).toMatchObject({
+      status: "ended",
+      ended: "no-provider",
+      note: "the designer's revision cannot run: Claude is not enabled. Enable it in Settings or choose another provider for the designer.",
+      pass: 1,
+      asks: [{ variant: "B", change: "Daily forecasts." }],
+      objections: [],
+    });
+    expect(S.readyForOwner(ended, v1())).toBe(true);
+    expect(S.revisionDue(ended, v1())).toBe(false);
+    // Once the owner can see it, enabling Claude does not take it back to the designer.
+    const back = runCommand(ended, "setProviderEnabled", { provider: "claude", enabled: true }, at(7)).state;
+    expect(askForRevisions(back, at(8))).toBe(back);
+  });
+
+  it("the lead's own revision is not the loop's: its failures do not end the loop, and while it runs the loop asks for no second one (review finding 8)", () => {
+    const { s, id } = sentBack();
+    // The lead asks the designer to revise v1 (its `revises`), and that run fails twice.
+    let x = s;
+    for (const sec of [5, 6]) {
+      const leadRun = { leadRunId: "lead-1", kinds: ["screen" as const], variants: 1, devices: [] };
+      const asked = R.requestStudioRun(x, { kind: "designer", round: 1, artifactId: id, brief: "Tighten B.", fromLead: leadRun }, at(sec));
+      expect(asked.state.events.at(-1)).toMatchObject({ actor: "lead" });
+      if (sec === 5) expect(askForRevisions(asked.state, at(sec))).toBe(asked.state);
+      x = R.reportStudioRunFailed(R.dispatchStudioRuns(asked.state, at(sec)).state, asked.runId, "studio.json was refused: it lists no artifact", at(sec));
+    }
+    expect(S.peReview(x, S.getArtifact(x, id, 1)).status).toBe("revising");
+    // The loop's own revision is the service's, logged as the system's.
+    const loop = askForRevisions(x, at(7));
+    expect(designerRuns(loop).at(-1)).toMatchObject({ status: "queued", baseVersion: 1 });
+    expect(loop.events.at(-1)).toMatchObject({ actor: "system", message: expect.stringMatching(/^Designer run studio-\d+ asked for in round 1, revising Trip plan v1, on Claude/) });
   });
 
   it("asks for none when the PE agreed, outside Vision, or after the round closed", () => {

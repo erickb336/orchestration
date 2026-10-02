@@ -16,7 +16,7 @@ import * as S from "../../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../../src/domain/studio/types";
 import { ControlError, type State } from "../../src/domain/types";
 import { ManifestError, readStaged, studioRoot, versionDir, writeVersion } from "./artifacts";
-import { importDesignerRun } from "./runs";
+import { handedIn, importDesignerRun } from "./runs";
 
 const T0 = Date.parse("2026-10-02T09:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -107,7 +107,7 @@ describe("reading studio.json", () => {
     ]);
     const { s, runId } = withRun();
     const root = studioRoot(dir, "p-1");
-    const art = S.latestArtifacts(importDesignerRun(s, runId, read(), root, at(4)).state)[0];
+    const art = S.latestArtifacts(importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4)).state)[0];
     expect(JSON.parse(readFileSync(join(versionDir(root, art.id, 1), "manifest.json"), "utf8")).variants).toEqual([
       { id: "a", label: "A", entry: "a/demo.tape", showsError: true },
       { id: "b", label: "B", entry: "a/demo.tape" },
@@ -254,7 +254,7 @@ describe("importing a designer run", () => {
     stage();
     const { s, runId } = withRun();
     const root = studioRoot(dir, "p-1");
-    const r = importDesignerRun(s, runId, read(), root, at(4));
+    const r = importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4));
     const art = S.latestArtifacts(r.state)[0];
     expect(art).toEqual({
       id: art.id,
@@ -298,16 +298,16 @@ describe("importing a designer run", () => {
     stage();
     const first = withRun();
     const root = studioRoot(dir, "p-1");
-    const v1 = importDesignerRun(first.s, first.runId, read(), root, at(4));
+    const v1 = importDesignerRun(first.s, first.runId, handedIn(first.s, first.runId, read()), root, at(4));
     const id = S.latestArtifacts(v1.state)[0].id;
     const v1Manifest = readFileSync(join(versionDir(root, id, 1), "manifest.json"), "utf8");
     const second = withRun(id, R.completeStudioRun(v1.state, first.runId, at(5), { summary: v1.summary }));
     rmSync(staging, { recursive: true, force: true });
     mkdirSync(staging, { recursive: true });
     stage({ artifacts: [TRIP_PLAN, { ...TRIP_PLAN, title: "Packing list" }] });
-    expect(refusal(() => importDesignerRun(second.s, second.runId, read(), root, at(6)))).toBe("a revision hands in exactly one artifact, the new version of Trip plan; it listed 2.");
+    expect(refusal(() => importDesignerRun(second.s, second.runId, handedIn(second.s, second.runId, read()), root, at(6)))).toBe("a revision hands in exactly one artifact, the new version of Trip plan; it listed 2.");
     stage({ artifacts: [{ ...TRIP_PLAN, title: "Trip plan, tightened" }] });
-    const v2 = importDesignerRun(second.s, second.runId, read(), root, at(6));
+    const v2 = importDesignerRun(second.s, second.runId, handedIn(second.s, second.runId, read()), root, at(6));
     expect(S.versionsOf(v2.state, id).map((a) => [a.version, a.title])).toEqual([
       [1, "Trip plan"],
       [2, "Trip plan, tightened"],
@@ -322,7 +322,7 @@ describe("importing a designer run", () => {
     const root = studioRoot(dir, "p-1");
     let thrown: unknown;
     try {
-      importDesignerRun(s, runId, read(), root, at(4));
+      importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4));
     } catch (e) {
       thrown = e;
     }
@@ -363,26 +363,39 @@ describe("importing a designer run", () => {
       stage({ artifacts: [{ ...ONE, provenance: ["src/index.html", "src/trips.css"] }] });
       const { s, runId } = asIsRun();
       const root = studioRoot(dir, "p-1");
-      const r = importDesignerRun(s, runId, read(), root, at(4));
+      const r = importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4));
       const art = S.latestArtifacts(r.state)[0];
       expect(art).toMatchObject({ round: 0, kind: "screen", title: "Trip list (as is)", provenance: { asIs: true, files: ["src/index.html", "src/trips.css"] } });
       expect(JSON.parse(readFileSync(join(versionDir(root, art.id, 1), "manifest.json"), "utf8")).provenance).toEqual({ asIs: true, files: ["src/index.html", "src/trips.css"] });
+    });
+
+    it("the import reads no repository: the provenance is looked up before the store's transaction (review finding 11)", () => {
+      stage({ artifacts: [{ ...ONE, provenance: ["src/index.html"] }] });
+      const { s, runId } = asIsRun();
+      const given = handedIn(s, runId, read());
+      expect(given.tracked).toEqual(new Set(["src/index.html"]));
+      // The repository is gone by the time the transaction runs: the import still records what was looked up.
+      rmSync(s.project.repoPath, { recursive: true, force: true });
+      const r = importDesignerRun(s, runId, given, studioRoot(dir, "p-1"), at(4));
+      expect(S.latestArtifacts(r.state)[0].provenance).toEqual({ asIs: true, files: ["src/index.html"] });
+      // Looked up from a repository that cannot be read, the provenance cannot be checked, and nothing is recorded.
+      expect(refusal(() => importDesignerRun(s, runId, handedIn(s, runId, read()), studioRoot(dir, "p-1"), at(4)))).toBe('the provenance of "Trip list (as is)" cannot be checked: the repository cannot be read.');
     });
 
     it("refuses a provenance the repository does not have, and a reproduction without provenance; nothing is recorded", () => {
       const { s, runId } = asIsRun();
       const root = studioRoot(dir, "p-1");
       stage({ artifacts: [{ ...ONE, provenance: ["src/index.html", "src/TripList.tsx"] }] });
-      expect(refusal(() => importDesignerRun(s, runId, read(), root, at(4)))).toBe('the provenance of "Trip list (as is)" names "src/TripList.tsx", which the repository does not have.');
+      expect(refusal(() => importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4)))).toBe('the provenance of "Trip list (as is)" names "src/TripList.tsx", which the repository does not have.');
       stage({ artifacts: [ONE] });
-      expect(() => importDesignerRun(s, runId, read(), root, at(4))).toThrow(/^Round 0 holds what already exists/);
+      expect(() => importDesignerRun(s, runId, handedIn(s, runId, read()), root, at(4))).toThrow(/^Round 0 holds what already exists/);
       expect(S.latestArtifacts(s)).toEqual([]);
     });
 
     it("outside round 0, a provenance the designer lists is not recorded: a later round's artifacts are proposals", () => {
       stage({ artifacts: [{ ...TRIP_PLAN, provenance: ["src/index.html"] }] });
       const { s, runId } = withRun();
-      const r = importDesignerRun(s, runId, read(), studioRoot(dir, "p-1"), at(4));
+      const r = importDesignerRun(s, runId, handedIn(s, runId, read()), studioRoot(dir, "p-1"), at(4));
       expect(S.latestArtifacts(r.state)[0].provenance).toBeUndefined();
     });
   });

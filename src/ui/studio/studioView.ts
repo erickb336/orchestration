@@ -426,7 +426,7 @@ export function usdRange([lo, hi]: [number, number], perMonth = false): string {
 export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" | "codex") => string): PeView | undefined {
   if (UNGATED_KINDS.includes(a.kind)) return undefined;
   const r = S.peReview(s, a);
-  const runs = R.peRunsOf(s, a.id, a.version);
+  const runs = S.peRunsOf(s, a.id, a.version);
   const run = runs.at(-1);
   const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
   const pass = mine.length ? Math.max(...mine.map((v) => v.pass)) : 0;
@@ -445,14 +445,16 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
   switch (r.status) {
     case "agreed":
       return { ...base, tone: "done", state: "Agreed", text: `The PE agreed on pass ${r.pass}: every option is feasible${verdicts.some((v) => v.verdict === "feasible-if") ? ", some only with the change it states" : ""}. It is yours to mark.` };
-    case "objections": {
+    case "ended": {
       const open = verdicts.filter((v) => v.verdict === "not-feasible" && !v.overruled);
-      if (!open.length) return { ...base, tone: "done", state: "Overruled", text: "You overruled the PE's objections; they stay recorded." };
+      const asks = verdicts.filter((v) => v.verdict === "feasible-if");
+      if (r.objections.length && !open.length && !asks.length) return { ...base, tone: "done", state: "Overruled", text: "You overruled the PE's objections; they stay recorded." };
+      const said = open.length ? `The PE still objects to ${names(open)}` : asks.length ? `The PE still asks for changes to ${names(asks)}` : "The PE did not review it";
       return {
         ...base,
         tone: "you",
-        state: "Objects: waiting for you",
-        text: `The PE still objects to ${names(open)} after ${r.pass} pass${r.pass === 1 ? "" : "es"}, and the designer revises no more. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.`,
+        state: open.length ? "Objects: waiting for you" : "Waiting for you",
+        text: `${said}. PE review ended: ${S.LOOP_END_WORDS[r.ended]}${r.note ? ` (${r.note})` : ""}. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.`,
       };
     }
     case "revising":
@@ -462,9 +464,7 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
   if (a.shots?.status === "pending" || a.demo?.status === "pending") return { ...base, tone: "neutral", state: "Waiting", text: `The PE reviews it once the ${a.shots?.status === "pending" ? "screenshots are taken" : "recording is made"}.` };
   if (run && (run.status === "running" || run.status === "stopping")) return { ...base, tone: "work", state: "Reviewing", text: "The PE is reading this version: its files, screenshots and recordings." };
   if (run?.status === "queued") return { ...base, tone: "neutral", state: "Queued", text: runLine(s, run, providerLabel).text };
-  const blocked = R.peRunBlocker(s, a);
-  if (blocked) return { ...base, tone: "fail", state: "Cannot start", text: `The PE cannot be asked: ${blocked}` };
-  if (run && (run.status === "failed" || run.status === "lost" || run.status === "stopped")) {
+  if (run &&(run.status === "failed" || run.status === "lost" || run.status === "stopped")) {
     const why = run.note ?? `its run was ${run.status}`;
     return R.peRunDue(s, a)
       ? { ...base, tone: "work", state: "Asking again", text: `The PE's run ended without a verdict (${why}); it is asked again.` }
@@ -514,12 +514,13 @@ export function versionHistory(s: State, a: StudioArtifact): VersionLine[] {
         return next
           ? line("neutral", "objected", `PE pass ${r.pass}: objected to ${names(r.objections)}; the designer revised it as v${next.version}.`)
           : line("work", "revising", `PE pass ${r.pass}: objects to ${names(r.objections)}; the designer is revising it.`);
-      case "objections": {
+      case "ended": {
         const open = r.objections.filter((o) => !o.overruled);
-        if (!open.length) return line("done", "overruled", `PE pass ${r.pass}: you overruled its objections.`);
-        return next
-          ? line("neutral", "objected", `PE pass ${r.pass}: still objected to ${names(open)}; it went to you, and v${next.version} followed.`)
-          : line("you", "waiting for you", `PE pass ${r.pass}, the last: still objects to ${names(open)}. This is waiting for you.`);
+        if (r.objections.length && !open.length && !r.asks.length) return line("done", "overruled", `PE pass ${r.pass}: you overruled its objections.`);
+        const said = [open.length ? `still objects to ${names(open)}` : "", r.asks.length ? `still asks for changes to ${names(r.asks)}` : ""].filter(Boolean).join("; ");
+        const why = `review ended: ${S.LOOP_END_WORDS[r.ended]}`;
+        const head = r.pass ? `PE pass ${r.pass}: ${said ? `${said}; ` : ""}${why}` : `PE ${why}`;
+        return next ? line("neutral", "ended", `${head}. It went to you, and v${next.version} followed.`) : line("you", "waiting for you", `${head}. This is waiting for you.`);
       }
     }
   });

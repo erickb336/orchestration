@@ -39,7 +39,9 @@
 // block, and that the PE reviewed what they made; then the sandbox, the owner's feedback, the stage and the cap.
 //
 // The cap (review finding 8): Claude's spend counts each run with no recorded cost at its run limit, never as $0
-// (scripts/trialSpend.mjs). In the fake runtime nothing is spent.
+// (scripts/trialSpend.mjs). In the fake runtime nothing is spent. The service starts runs of its own too (the PE's,
+// the designer's revisions), so while it waits the trial adds the runs under way at their limits, and pauses the
+// project once that reaches the cap, with a step that says so (review finding 9).
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -47,20 +49,19 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 
 import { homedir, hostname, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { leaksIn, scrubHomePaths } from "./recordLeaks.mjs";
-import { claudeSpend as claudeSpendOf } from "./trialSpend.mjs";
+import { claudeExposure as claudeExposureOf, claudeSpend as claudeSpendOf } from "./trialSpend.mjs";
 
 // The service's and the domain's own code, through tsx (the npm script starts node with it).
 const loaded = await Promise.all([
   import("../server/store.ts"),
   import("../server/studio/runs.ts"),
   import("../src/domain/studio/studio.ts"),
-  import("../src/domain/studio/runs.ts"),
   import("../src/domain/spend.ts"),
 ]).catch((e) => {
   console.error(`Run this with \`npm run trial:studio\` (node --import tsx): ${e instanceof Error ? e.message : e}`);
   process.exit(2);
 });
-const [{ Store }, { startDesignerRun }, S, R, Spend] = loaded;
+const [{ Store }, { startDesignerRun }, S, Spend] = loaded;
 
 const args = process.argv.slice(2);
 const FAKE = args.includes("--fake");
@@ -151,6 +152,7 @@ async function until(what, pred, timeoutMs, pollMs = 1000) {
   const start = Date.now();
   for (;;) {
     const s = await state();
+    await capGuard(s.state);
     const v = await pred(s);
     if (v) return { s, v, waitedMs: Date.now() - start };
     if (service.exitCode !== null) throw new Error(`The service stopped while waiting for: ${what}`);
@@ -188,9 +190,26 @@ function setLimit(usd) {
   limitsSet.push(usd);
   return cmd("setRunLimits", { maxTurns: 80, timeoutMinutes: 20, maxBudgetUsd: usd });
 }
+const spendOpts = { estimate: (r) => Spend.estimateUsd(r, Spend.PRICES), limitOf: (r) => runLimits.get(r.id) ?? (limitsSet.length ? Math.max(...limitsSet) : 2), simulated: FAKE };
 /** Claude's estimated spend so far, every run of the project included; each with no recorded cost counted at its run limit (review finding 8). */
-function claudeSpend(s) {
-  return claudeSpendOf(s, { estimate: (r) => Spend.estimateUsd(r, Spend.PRICES), limitOf: (r) => runLimits.get(r.id) ?? (limitsSet.length ? Math.max(...limitsSet) : 2), simulated: FAKE });
+const claudeSpend = (s) => claudeSpendOf(s, spendOpts);
+/** Claude's spend in the trial's earlier projects (--lead runs two). */
+let carriedUsd = 0;
+/** Set once the trial paused the project at the cap: then it starts nothing more. */
+let capPause = null;
+/**
+ * On every wait: when the spend so far, plus each Claude run under way at its limit, reaches the cap, pause the
+ * project, so the service starts no PE run or revision past it (review finding 9), and record that it did. The
+ * sample project of a fresh database is not the trial's.
+ */
+async function capGuard(st) {
+  if (capPause || st.project.sample || st.project.hold) return;
+  const exposure = claudeExposureOf(st, spendOpts);
+  if (carriedUsd + exposure.usd < CAP_USD) return;
+  await cmd("pauseProject");
+  capPause = { project: st.project.name, claudeUsd: money(carriedUsd + exposure.usd), cap: money(CAP_USD), runsUnderWay: st.studio.runs.filter((r) => ["queued", "running", "stopping"].includes(r.status)).map((r) => `${r.id} ${r.kind} ${r.status} on ${r.provider}`) };
+  evidence.capPause = capPause;
+  record("paused at the cap: the spend so far and the Claude runs under way, each at its limit, reach the cap", capPause);
 }
 const money = (n) => `$${n.toFixed(2)}`;
 const ended = (r) => !!r && ["completed", "failed", "stopped", "lost"].includes(r.status ?? r.outcome);
@@ -200,9 +219,12 @@ const ended = (r) => !!r && ["completed", "failed", "stopped", "lost"].includes(
  * nothing more happens on its own: the PE's runs ended without a verdict, or the budget stop.
  */
 const settled = (x) => {
+  // Paused at the cap, or held at the budget stop: nothing more happens on its own.
+  if (x.project.hold || Spend.budgetStop(x)) return true;
   const latest = S.latestArtifacts(x).filter((a) => a.madeBy.role === "designer");
   if (!latest.length || S.pendingMedia(x).length) return false;
-  return latest.every((a) => S.readyForOwner(x, a) || !!Spend.budgetStop(x) || (S.peReview(x, a).status === "waiting" && !R.peRunDue(x, a) && R.peRunsOf(x, a.id, a.version).every(ended)));
+  // Each reached the owner: the PE agreed, or its review ended (pass 4 never leaves one waiting).
+  return latest.every((a) => S.readyForOwner(x, a));
 };
 
 async function main() {
@@ -250,6 +272,10 @@ async function main() {
     s = (await state()).state;
     const spent = claudeSpend(s).usd;
     const left = CAP_USD - spent;
+    if (capPause) {
+      record(`not started: ${what}`, { reason: "the trial paused the project at the cap" });
+      continue;
+    }
     if (left < MIN_RUN_USD) {
       record(`not started: ${what}`, { reason: `the estimated Claude spend (${money(spent)}) leaves less than ${money(MIN_RUN_USD)} of the ${money(CAP_USD)} cap` });
       continue;
@@ -317,7 +343,7 @@ async function main() {
   const reviewed = artifacts.map((a) => ({ artifact: a.title, review: S.peReview(st, a).status, verdicts: st.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version).map((v) => `${v.variant ?? "all"}: ${v.verdict}`) }));
   check(
     "the PE's verdicts were recorded on every artifact, by the PE's own runs",
-    artifacts.length > 0 && reviewed.every((r) => r.review === "agreed" || r.review === "objections") && peRuns.some((r) => r.status === "completed"),
+    artifacts.length > 0 && reviewed.every((r) => r.review === "agreed" || r.review === "ended") && peRuns.some((r) => r.status === "completed"),
     { reviewed, peRuns: peRuns.map((r) => `${r.provider} ${r.status}`) },
   );
   check(
@@ -374,6 +400,11 @@ const AS_IS_MESSAGE = "This is my old trip board app. Start from what it does to
  * happened, or null when the cap left too little to start.
  */
 async function leadProject(key, { repoPath, vision, message, carried }) {
+  if (capPause) {
+    record(`not started: ${key}`, { reason: "the trial paused the previous project at the cap" });
+    return null;
+  }
+  carriedUsd = carried;
   await cmd("initProject", { name: `Weekend Trips (studio trial, ${key})`, repoPath, vision, focus: "Studio trial" });
   await cmd("setDevices", { devices: ["desktop", "mobile"] });
   await cmd("setBudgets", { buildingUsd: CAP_USD + CODEX_USD, maintenanceUsdPerMonth: 10 });
@@ -399,6 +430,8 @@ async function leadProject(key, { repoPath, vision, message, carried }) {
   if (asked.length) {
     ({ s: { state: st } } = await until(`${key}: the designer runs, their imports and PE review`, (x) => asked.every((r) => ended(x.state.studio.runs.find((y) => y.id === r.id))) && (settled(x.state) || !S.latestArtifacts(x.state).some((a) => a.madeBy.role === "designer")), FAKE ? minutes(4) : minutes(40), FAKE ? 500 : 5000));
   }
+  // Paused at the cap: the runs it stopped end before anything else (a new project needs none active).
+  if (capPause) ({ s: { state: st } } = await until(`${key}: the runs the pause stopped`, (x) => !x.state.studio.runs.some((r) => r.status === "running" || r.status === "stopping") && !x.state.leadRuns.some((r) => r.outcome === "running" || r.outcome === "stopping"), minutes(2), 1000));
   const artifacts = S.latestArtifacts(st).filter((a) => a.madeBy.role === "designer");
   evidence.projects = [
     ...(evidence.projects ?? []),
