@@ -355,3 +355,19 @@ The prototype's policy (`connect-src 'none'`), the sandbox and `frame-src` do no
 
 - The kit gallery puts a `<details>` in a `<p>` (React warns in a development build only).
 
+## The second real trial (2026-10-02T19-07-28Z, record in `docs/real-runs/`)
+
+The same command as the first, on the merged fixes. **Result: 8 of 9 checks passed.** The estimated Claude spend was $1.23. The trials and checks have now spent about $1.83 of the owner's $5 for Claude.
+
+- **The schema fix works on real models.** The short-idea project failed in the first trial. Now the lead's reply arrived as valid structured output, round 1 opened, and the designer made two variants.
+- **The lead follows the domain rule.** It wrote: "I'd suggest the screen domain, since people use this on a screen. The choice is yours in the app."
+- **"As it is today" passed again,** and the PE agreed that the reproduction matches the code.
+- **The failed check was the trial's own mistake.** It required at least one question in round 0. The lead asked none, which is right: the owner corrects a reproduction with marks and pins. The check now requires the message, and questions only when the lead asks them.
+
+**Finding: the PE loop does not converge.** On the trip home screen, the PE (Codex) said feasible-if on all three passes. Each time it asked for more: joining by link, return codes, organizer access, then code reset and recovery. The designer added each ask, so the screen grew, and the loop ended after three passes without agreement. The three designer passes cost about $1.07.
+
+The cause is in the PE's role. The owner's rule (r6, r7) is that the PE judges feasibility, scale, longevity and budget. The owner's preference is that the owner decides undecided cases, not the designer. **The fix (a unit before pass 5):**
+- a feasible-if change must be needed for feasibility; a missing feature or an edge case becomes a question for the owner, through the lead;
+- on a later pass, the PE first checks whether its earlier asks are met, and adds a new ask only for a risk that the revision created;
+- the verdict keeps the two apart: changes for the designer, and open cases for the owner.
+

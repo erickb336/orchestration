@@ -464,16 +464,17 @@ async function leadTrial() {
   const carried = idea ? idea.spend.usd : 0;
   const asIs = await leadProject("as it is today", { repoPath: existing, vision: AS_IS_VISION, message: AS_IS_MESSAGE, carried });
 
-  const plan = (p, n, focus) => !!p?.round && p.round.n === n && p.round.focus === focus && p.round.leadRunId === p.lead.id && !!p.round.lead?.message.trim() && p.round.lead.questions.length > 0;
+  // Questions are the lead's call: a round may need none (a reproduction is corrected with marks and pins).
+  const plan = (p, n, focus) => !!p?.round && p.round.n === n && p.round.focus === focus && p.round.leadRunId === p.lead.id && !!p.round.lead?.message.trim() && Array.isArray(p.round.lead.questions);
   const fromBlock = (p) => !!p && p.asked.length > 0 && p.asked.every((r) => r?.status === "completed" && r.fromLead?.leadRunId === p.lead.id);
   const roundOf = (p) => (p?.round ? { n: p.round.n, focus: p.round.focus, summary: p.round.summary, questions: p.round.lead?.questions ?? [] } : null);
-  check("a short idea: the lead opened round 1 on the experience, its message and questions stored on the round", plan(idea, 1, "experience"), roundOf(idea));
+  check("a short idea: the lead opened round 1 on the experience, its message and any questions stored on the round", plan(idea, 1, "experience"), roundOf(idea));
   check(
     "a short idea: the designer runs came from the lead's block, and the PE reviewed what they made",
     fromBlock(idea) && reviewed(idea.state, idea.artifacts),
     idea ? { runs: idea.asked.map((r) => `${r?.id} ${r?.status}`), artifacts: idea.artifacts.map((a) => `${a.title} v${a.version}: ${S.peReview(idea.state, a).status}`) } : "not started",
   );
-  check("as it is today: the lead opened round 0 on the existing repository, its message and questions stored on the round", plan(asIs, 0, "material") && /as it is today/i.test(asIs.round.summary), roundOf(asIs));
+  check("as it is today: the lead opened round 0 on the existing repository, its message and any questions stored on the round", plan(asIs, 0, "material") && /as it is today/i.test(asIs.round.summary), roundOf(asIs));
   const reproduced = asIs ? asIs.artifacts.filter((a) => a.round === 0) : [];
   check(
     "as it is today: the designer runs came from the lead's block, and each reproduction is labelled as is with the fixture's files it came from",
