@@ -69,6 +69,10 @@ main.st-wide { max-width: 1600px; }
 .st-toolbar__grp { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; min-width: 0; }
 .st-title { font-size: var(--fs-h3); margin: 0; }
 .st-hint { margin: 0; color: var(--st-you); }
+/* An "as is" artifact: a reproduction of the code as it is today, with the repository files it came from. */
+.st-asis { display: grid; gap: var(--space-1); padding: var(--space-2) var(--space-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); min-width: 0; }
+.st-asis p { margin: 0; }
+.st-asis__files { margin: 0; padding-left: 1.1rem; display: grid; gap: 2px; font-size: var(--fs-small); overflow-wrap: anywhere; }
 
 .st-stage {
   position: relative;

@@ -14,6 +14,17 @@ import { acceptPinMessage, prototypeOrigin, type PinMessage } from "../../runtim
 
 export const FOCUS_LABEL: Record<RoundFocus, string> = { material: "What you brought", experience: "The experience", data: "Inputs and outputs", flows: "Flows" };
 
+/** Round 0 of an existing repository: the designer's reproductions of what the code does now (pass 4, "as is"). */
+export const AS_IS_LABEL = "As it is today";
+
+/** A round's name: its focus, or "As it is today" for a round 0 that holds the designer's "as is" reproductions. */
+export function roundLabel(s: State, r: Round): string {
+  return r.focus === "material" && s.studio.artifacts.some((a) => a.round === r.n && a.provenance?.asIs) ? AS_IS_LABEL : FOCUS_LABEL[r.focus];
+}
+
+/** How many of an "as is" artifact's files show before "Show all". */
+export const AS_IS_FILES_SHOWN = 6;
+
 /** The rounds, newest first. */
 export const roundsNewestFirst = (s: State): Round[] => [...s.studio.rounds].sort((a, b) => b.n - a.n);
 
@@ -99,10 +110,10 @@ export function resolveInVersion(from: string, ref: string): string | undefined 
   return parts.join("/") || undefined;
 }
 
-/** "screen · 2 variants", "terminal demo · v2". */
+/** "screen · 2 variants", "terminal demo · v2", "as is · screen". */
 export function artifactLine(a: StudioArtifact): string {
   const kind = a.kind.replace("-", " ");
-  const parts = [kind, a.variants.length > 1 ? `${a.variants.length} variants` : "", a.version > 1 ? `v${a.version}` : ""].filter(Boolean);
+  const parts = [a.provenance?.asIs ? "as is" : "", kind, a.variants.length > 1 ? `${a.variants.length} variants` : "", a.version > 1 ? `v${a.version}` : ""].filter(Boolean);
   return parts.join(" · ");
 }
 

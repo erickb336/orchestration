@@ -25,6 +25,7 @@ import { MAX_SVG_CHARS, diagramFrameDocument, diagramFramePolicy, readDiagramRep
 import {
   MAX_MESSAGE,
   addPin,
+  artifactLine,
   answerBlocker,
   changedDrafts,
   deviceOptions,
@@ -34,6 +35,7 @@ import {
   draftKey,
   pinFromMessage,
   resolveInVersion,
+  roundLabel,
   roundLead,
   sendAnswer,
   serviceFileUrl,
@@ -416,6 +418,46 @@ describe("where a variant is served from", () => {
     expect(variantEntry({ ...a, variants: [{ id: "x", label: "X" }] }, "x")).toBeUndefined();
     // What the owner brought has no variants: its first page.
     expect(variantEntry({ ...a, variants: [], files: [{ path: "notes.md", sha256: sha("e") }, { path: "sketch.html", sha256: sha("f") }] }, undefined)).toBe("sketch.html");
+  });
+});
+
+describe("as it is today (round 0 of an existing repository)", () => {
+  /** Round 0 with the designer's reproduction of the trip board, labelled as is, from `files`; agreed by the PE. */
+  function withAsIs(files: string[]) {
+    const r = openRound(vision(), "material", at(1));
+    const a = addScreen(r.state, r.n, at(2), { title: "Trip board", variants: [{ id: "a", label: "As is", entry: "board/index.html" }], files: [{ path: "board/index.html", sha256: sha("a") }], provenance: { files } });
+    return { s: peAgrees(a.state, a.id, 1, ["a"], at(3)), id: a.id };
+  }
+
+  it("the round is named As it is today, not What you brought; the artifact says it is a reproduction to correct, with the files it came from", () => {
+    const { s, id } = withAsIs(["src/board/index.html", "src/board/style.css"]);
+    expect(roundLabel(s, s.studio.rounds[0])).toBe("As it is today");
+    expect(artifactLine(S.getArtifact(s, id, 1))).toBe("as is · screen");
+    const html = render(<Studio />, s);
+    expect(html).toContain("0 · As it is today");
+    expect(html).not.toContain("What you brought");
+    expect(html).toContain('aria-label="As it is today"');
+    expect(html).toContain("It is not a proposal. Correct what it gets wrong");
+    expect(html).toContain("Made from 2 files in the repository:");
+    expect(html).toContain("<code>src/board/index.html</code>");
+    expect(html).toContain("<code>src/board/style.css</code>");
+    // You can mark it, as any artifact the PE agreed on.
+    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Keep<\/button>/);
+  });
+
+  it("a long list of files shows the first six; the rest are one click away", () => {
+    const files = Array.from({ length: 9 }, (_, i) => `src/part-${i + 1}.js`);
+    const html = render(<Studio />, withAsIs(files).s);
+    expect(html).toContain("Made from 9 files in the repository:");
+    expect(html.indexOf("src/part-6.js")).toBeLessThan(html.indexOf("The other files"));
+    expect(html.indexOf("src/part-7.js")).toBeGreaterThan(html.indexOf("The other files"));
+  });
+
+  it("what the owner brought, and every later round, keep their names", () => {
+    const { s } = withSample();
+    expect(s.studio.rounds.map((r) => roundLabel(s, r))).toEqual(["The experience"]);
+    const material = openRound(vision(), "material", at(1)).state;
+    expect(roundLabel(material, material.studio.rounds[0])).toBe("What you brought");
   });
 });
 
