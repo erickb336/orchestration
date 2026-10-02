@@ -23,6 +23,7 @@ import { LeadPanel, Studio } from "./Studio";
 import { MarkdownDoc, MermaidDiagram, mermaidConfig } from "./Document";
 import { MAX_SVG_CHARS, diagramFrameDocument, diagramFramePolicy, readDiagramReply } from "./diagrams";
 import {
+  DOMAIN_CHOICES,
   MAX_MESSAGE,
   addPin,
   artifactLine,
@@ -40,6 +41,7 @@ import {
   sendAnswer,
   serviceFileUrl,
   showKind,
+  toggleDomain,
   variantDemo,
   variantEntry,
   versionHistory,
@@ -418,6 +420,40 @@ describe("where a variant is served from", () => {
     expect(variantEntry({ ...a, variants: [{ id: "x", label: "X" }] }, "x")).toBeUndefined();
     // What the owner brought has no variants: its first page.
     expect(variantEntry({ ...a, variants: [], files: [{ path: "notes.md", sha256: sha("e") }, { path: "sketch.html", sha256: sha("f") }] }, undefined)).toBe("sketch.html");
+  });
+});
+
+describe("the product's kinds (domains), while they are not chosen", () => {
+  it("the studio asks once, compactly: three kinds, none pressed, each a click that saves; gone once they are chosen", () => {
+    const s = vision();
+    expect(s.project.domains).toEqual([]);
+    const html = render(<Studio />, s);
+    expect(html).toContain("What kind of product is it?");
+    expect(html).toContain("Screen product: people use it on a screen. Code product: other programs use it. Infrastructure: it runs other software.");
+    const group = /<div class="k-actions" role="group" aria-label="Kind of product">(.*?)<\/div>/.exec(html)?.[1] ?? "";
+    expect([...group.matchAll(/<button[^>]*aria-pressed="(true|false)"[^>]*>([^<]+)<\/button>/g)].map((m) => [m[2], m[1]])).toEqual([
+      ["Screen product", "false"],
+      ["Code product", "false"],
+      ["Infrastructure", "false"],
+    ]);
+    // Even with no round yet: the kind decides what the designer makes in round 1.
+    expect(html).toContain("No rounds yet.");
+
+    // A click sends setDomains with that kind, which the real command table accepts; then the prompt is gone.
+    const chosen = runCommand(s, "setDomains", { domains: toggleDomain(s.project.domains, "code") }, at(5)).state;
+    expect(chosen.project.domains).toEqual(["code"]);
+    expect(render(<Studio />, chosen)).not.toContain("What kind of product is it?");
+  });
+
+  it("a kind toggles in and out, always in the same order", () => {
+    expect(toggleDomain([], "infrastructure")).toEqual(["infrastructure"]);
+    expect(toggleDomain(["infrastructure"], "screen")).toEqual(["screen", "infrastructure"]);
+    expect(toggleDomain(["screen", "infrastructure"], "screen")).toEqual(["infrastructure"]);
+  });
+
+  it("the words: each kind by who uses it and what the designer makes, in short sentences", () => {
+    expect(DOMAIN_CHOICES.map((c) => c.value)).toEqual(["screen", "code", "infrastructure"]);
+    for (const c of DOMAIN_CHOICES) for (const sentence of `${c.use} ${c.makes}`.split(/(?<=\.)\s/)) expect(sentence.split(/\s+/).length).toBeLessThanOrEqual(20);
   });
 });
 

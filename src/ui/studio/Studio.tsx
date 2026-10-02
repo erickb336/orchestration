@@ -15,7 +15,9 @@
 import { useCallback, useState } from "react";
 import * as M from "../../domain/model";
 import * as S from "../../domain/studio/studio";
+import { DOMAIN_WORDS } from "../../domain/studio/domains";
 import type { Mark, Round, StudioArtifact } from "../../domain/studio/types";
+import type { ProjectDomain } from "../../domain/types";
 import type { PinMessage } from "../../runtime/prototype";
 import { relTime, selectionText } from "../common";
 import { Banner, Button, Chip, Disclosure, EmptyState, Field, Input, SegmentedControl, SimulatedChip, StatePill, Textarea } from "../kit";
@@ -28,6 +30,7 @@ import {
   AS_IS_FILES_SHOWN,
   AS_IS_LABEL,
   DEVICE_LABEL,
+  DOMAIN_CHOICES,
   addPin,
   answerBlocker,
   answerParts,
@@ -51,6 +54,7 @@ import {
   serviceFileUrl,
   showKind,
   standing,
+  toggleDomain,
   versionHistory,
   usdRange,
   variantDemo,
@@ -158,6 +162,7 @@ export function Studio() {
       {state.project.stage !== "shaping" && (
         <Banner tone="info">The factory has started. Looking at Vision changes nothing in it. You can mark artifacts and message the lead here; designer and PE runs wait until the project is back in Vision (Back to shaping, in Settings › Project).</Banner>
       )}
+      <DomainPrompt />
       {state.studio.rounds.length === 0 ? (
         <EmptyState
           title="No rounds yet."
@@ -266,6 +271,53 @@ export function Studio() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * While the product's kinds are not chosen: one compact question with the three kinds (r9). Each click saves at once
+ * (setDomains), so one click answers it; after that it stays, to add a second kind, until Done or you leave Vision.
+ * Settings › Project changes them later.
+ */
+function DomainPrompt() {
+  const { state, send, disabled } = useStore();
+  const [answered, setAnswered] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const chosen = state.project.domains;
+  if (chosen.length && !answered) return null;
+  const choose = async (d: ProjectDomain) => {
+    setBusy(true);
+    const r = await send("setDomains", { domains: toggleDomain(chosen, d) });
+    setBusy(false);
+    if (r.ok) setAnswered(true);
+  };
+  return (
+    <Banner
+      tone={chosen.length ? "done" : "you"}
+      title={chosen.length ? `Saved: ${chosen.map((d) => DOMAIN_WORDS[d]).join(" and ")}.` : "What kind of product is it?"}
+      actions={
+        <div className="k-actions" role="group" aria-label="Kind of product">
+          {DOMAIN_CHOICES.map((c) => {
+            const on = chosen.includes(c.value);
+            const last = on && chosen.length === 1;
+            return (
+              <Button key={c.value} size="small" aria-pressed={on} title={c.use} disabled={disabled || busy || last} disabledReason={disabled ? "The service is offline." : last ? "At least one kind stays chosen." : undefined} onClick={() => void choose(c.value)}>
+                {c.label}
+              </Button>
+            );
+          })}
+          {chosen.length > 0 && (
+            <Button size="small" variant="quiet" onClick={() => setAnswered(false)}>
+              Done
+            </Button>
+          )}
+        </div>
+      }
+    >
+      {chosen.length
+        ? "Choose another kind too if it fits. You can change this later in Settings › Project."
+        : "Choose every kind that fits. The designer makes what each kind needs. Screen product: people use it on a screen. Code product: other programs use it. Infrastructure: it runs other software."}
+    </Banner>
   );
 }
 
