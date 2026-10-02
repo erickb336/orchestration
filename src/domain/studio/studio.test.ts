@@ -341,6 +341,58 @@ describe("PE review: the loop rule", () => {
   });
 });
 
+describe("the project's dictionary: no PE review, and the owner marks its terms (the lead's decision, 2026-10-02)", () => {
+  const WORDS = [
+    { term: "trip", meaning: "A weekend away that a group plans together.", avoid: ["journey"] },
+    { term: "member", meaning: "A person who said they are in.", avoid: [] },
+  ];
+  const WHY = "it is a word list, and the PE judges feasibility, scale, longevity and budget";
+  /** The data round with the designer's dictionary and a contract beside it. */
+  function dataRound() {
+    const r = openRound(fresh(), "data", at(1));
+    const words = run<{ artifactId: string }>(r.state, "addStudioArtifact", { round: r.n, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("d") }], devices: [], madeBy: DESIGNER, dictionary: WORDS }, at(2));
+    const contract = addScreen(words.state, r.n, at(3), { kind: "contract", title: "Trip contract", variants: [{ id: "a", label: "As drafted", entry: "doc/index.md" }], files: [{ path: "doc/index.md", sha256: sha("c") }], devices: [] });
+    return { s: contract.state, n: r.n, words: words.result.artifactId, contract: contract.id };
+  }
+
+  it("reaches the owner at once: the service asks no PE run for it, only for the contract beside it", () => {
+    const { s, words, contract } = dataRound();
+    expect(S.peReview(s, art(s, words, 1))).toEqual({ status: "not-reviewed", why: WHY });
+    expect(S.readyForOwner(s, art(s, words, 1))).toBe(true);
+    expect(S.readyForOwner(s, art(s, contract, 1))).toBe(false);
+    const asked = R.askForPeReviews(s, at(4));
+    expect(asked.studio.runs.map((r) => ({ kind: r.kind, artifactId: r.artifactId }))).toEqual([{ kind: "pe", artifactId: contract }]);
+  });
+
+  it("the PE gives it no verdict, and a PE run on it is refused", () => {
+    const { s, n, words } = dataRound();
+    expect(() => pePass(s, words, 1, [{ variant: "a", verdict: "feasible" }], at(4))).toThrow(`The PE does not review Words: ${WHY}.`);
+    expect(() => R.requestStudioRun(s, { kind: "pe", round: n, artifactId: words, brief: "Review it." }, at(4))).toThrow(`The PE does not review Words: ${WHY}.`);
+  });
+
+  it("never starts a revision for the PE, and does not keep its round open", () => {
+    const { s, n, words, contract } = dataRound();
+    const objected = pePass(s, contract, 1, [{ variant: "a", verdict: "not-feasible", reasons: "No source for the prices." }], at(4));
+    expect(S.revisionDue(objected, art(objected, words, 1))).toBe(false);
+    expect(S.revisionDue(objected, art(objected, contract, 1))).toBe(true);
+    expect(S.roundBusy(objected, n)).toBe("the designer revises Trip contract v1 for the PE");
+    // With the contract's review ended, the dictionary alone keeps nothing open.
+    const agreed = peAgrees(s, contract, 1, ["a"], at(4));
+    expect(S.roundBusy(agreed, n)).toBeUndefined();
+  });
+
+  it("the owner marks its terms at once and approves it into the blueprint", () => {
+    const { s, words } = dataRound();
+    const marked = feedback(s, words, 1, { rows: WORDS.map((w) => ({ row: w.term, mark: "keep" })) }, at(4));
+    expect(S.currentFeedback(marked, words, 1)?.rows).toEqual([
+      { row: "trip", mark: "keep" },
+      { row: "member", mark: "keep" },
+    ]);
+    const approved = run(marked, "approveArtifact", { artifactId: words, version: 1 }, at(5)).state;
+    expect(approved.blueprint.revisions.at(-1)?.items).toEqual([{ id: expect.any(String), kind: "dictionary", title: "Words", artifactId: words, version: 1, status: "approved" }]);
+  });
+});
+
 describe("PE review converges: changes for the designer, open cases for the owner (the second real trial)", () => {
   const RAIN = { text: "What happens to the plan on a rain day?", why: "Nobody set the rule." };
   const DROP = { text: "Who pays when a friend drops out after booking?" };

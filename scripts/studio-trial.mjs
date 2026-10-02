@@ -31,8 +31,9 @@
 //    service log or anything shaped like a credential (the same check as the factory scenario).
 //
 // With --fake and without --lead (pass 4d), the trial then opens a data round, where the simulated designer hands in
-// the project's dictionary beside a contract, and a flows round, where its flow carries rules.json; the owner marks
-// every term and approves the dictionary, which makes it the project's words.
+// the project's dictionary beside a contract, and a flows round, where its flow carries rules.json. The dictionary
+// reaches the owner with no PE review (a word list raises no question of feasibility, scale, longevity or budget); the
+// owner marks every term and approves it, which makes it the project's words.
 //
 // With --lead (pass 4), the lead runs the studio instead of the script. Two projects, one after the other:
 // - a short idea in a repository with no code: the owner's message asks the lead to start, and the lead opens round 1
@@ -395,8 +396,8 @@ const FLOWS_BRIEF = [
 /**
  * Pass 4d, in the simulated runtime only (a real designer's dictionary and rules wait for the next real trial): the
  * trial, as the lead, closes the open round and opens a data round, where the designer hands in the project's
- * dictionary beside a contract, then a flows round, where its flow carries rules.json. Then the owner marks every term
- * Keep and approves the dictionary, which makes it the project's words. Three checks.
+ * dictionary beside a contract, then a flows round, where its flow carries rules.json. The dictionary reaches the owner
+ * with no PE run. Then the owner marks every term Keep and approves it, which makes it the project's words. Three checks.
  */
 async function wordsAndRules() {
   const lead = new Store(dbPath);
@@ -423,10 +424,11 @@ async function wordsAndRules() {
   const flow = made.flows.find((a) => a.kind === "flow");
   const st = (await state()).state;
   evidence.words = { dictionary: words ? { id: words.id, version: words.version, title: words.title, terms: words.dictionary } : null, rules: flow?.rules ?? null };
+  const peRuns = words ? st.studio.runs.filter((r) => r.kind === "pe" && r.artifactId === words.id).map((r) => r.id) : [];
   check(
-    "the data round: the designer handed in the project's dictionary with its terms, and the PE reviewed it",
-    !!words && words.dictionary.length > 0 && S.readyForOwner(st, words),
-    words ? { terms: words.dictionary.map((e) => `${e.term} (not: ${e.avoid.join(", ") || "none"})`), peReview: S.peReview(st, words).status } : { artifacts: made.data.map((a) => a.kind) },
+    "the data round: the designer handed in the project's dictionary with its terms, and it reached the owner with no PE run",
+    !!words && words.dictionary.length > 0 && S.readyForOwner(st, words) && S.peReview(st, words).status === "not-reviewed" && !peRuns.length,
+    words ? { terms: words.dictionary.map((e) => `${e.term} (not: ${e.avoid.join(", ") || "none"})`), peReview: S.peReview(st, words).status, peRuns } : { artifacts: made.data.map((a) => a.kind) },
   );
   const rules = flow?.rules?.[0];
   check(
@@ -541,8 +543,14 @@ const verdictRecord = (v) => ({
   by: v.by ?? null,
 });
 
-/** Whether the PE reviewed every one of these artifacts through its own runs, and the owner may now see them. */
-const reviewed = (st, artifacts) => artifacts.length > 0 && artifacts.every((a) => S.readyForOwner(st, a) && st.studio.verdicts.some((v) => v.artifactId === a.id && v.version === a.version && v.by));
+/**
+ * Whether the PE reviewed, through its own runs, every one of these artifacts of a kind it reviews (a dictionary it
+ * does not), and the owner may now see them.
+ */
+const reviewed = (st, artifacts) => {
+  const mine = artifacts.filter((a) => S.peReview(st, a).status !== "not-reviewed");
+  return mine.length > 0 && mine.every((a) => S.readyForOwner(st, a) && st.studio.verdicts.some((v) => v.artifactId === a.id && v.version === a.version && v.by));
+};
 
 async function leadTrial() {
   const fixture = join(ROOT, "scripts", "fixtures", "studio-existing");

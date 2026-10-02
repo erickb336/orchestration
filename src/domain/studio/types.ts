@@ -74,7 +74,11 @@ export type KindMaker = "designer" | "owner" | "probe";
  */
 export type KindRule = { maker: KindMaker; ownerMark: "asked" | "optional" } & ({ peReviews: true } | { peReviews: false; why: string });
 
-/** One row for each kind (the type refuses a kind without one). */
+/**
+ * One row for each kind (the type refuses a kind without one). The dictionary goes to the owner with no PE review
+ * (the lead's decision, 2026-10-02): the PE judges feasibility, scale, longevity and budget, and a word list raises
+ * none of them. The owner still marks its terms.
+ */
 export const KIND_RULES: Record<StudioArtifactKind, KindRule> = {
   screen: { maker: "designer", peReviews: true, ownerMark: "asked" },
   "terminal-demo": { maker: "designer", peReviews: true, ownerMark: "asked" },
@@ -84,7 +88,7 @@ export const KIND_RULES: Record<StudioArtifactKind, KindRule> = {
   interface: { maker: "designer", peReviews: true, ownerMark: "asked" },
   algorithm: { maker: "designer", peReviews: true, ownerMark: "asked" },
   topology: { maker: "designer", peReviews: true, ownerMark: "asked" },
-  dictionary: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  dictionary: { maker: "designer", peReviews: false, why: "it is a word list, and the PE judges feasibility, scale, longevity and budget", ownerMark: "asked" },
   material: { maker: "owner", peReviews: false, why: "it is source material, not a design", ownerMark: "optional" },
   evidence: { maker: "probe", peReviews: false, why: "it is a probe's evidence for the PE, not a design", ownerMark: "optional" },
 };

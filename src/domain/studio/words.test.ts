@@ -177,7 +177,6 @@ describe("the dictionary in the studio", () => {
 
   it("takes the owner's mark on each term, and refuses a term it does not have or a term marked twice", () => {
     let { s, id } = withDictionary();
-    s = peAgrees(s, id, 1, ["a"], at(3));
     s = marks(s, id, 1, [
       { row: "trip", mark: "keep" },
       { row: "trip plan", mark: "change" },
@@ -196,7 +195,6 @@ describe("the dictionary in the studio", () => {
 
   it("cannot be approved while a term is marked Change or Drop; keeping every term, it can", () => {
     let { s, id } = withDictionary();
-    s = peAgrees(s, id, 1, ["a"], at(3));
     s = marks(s, id, 1, [
       { row: "trip", mark: "keep" },
       { row: "member", mark: "drop" },
@@ -208,20 +206,18 @@ describe("the dictionary in the studio", () => {
 
   it("is in force only once approved, at the version approved; with two dictionaries approved, the one approved last", () => {
     let { s, id } = withDictionary();
-    expect(B.dictionaryInForce(s)).toBeUndefined();
-    s = peAgrees(s, id, 1, ["a"], at(3));
-    expect(B.dictionaryInForce(s)).toBeUndefined(); // agreed by the PE, not approved by the owner
+    expect(B.dictionaryInForce(s)).toBeUndefined(); // with the owner, not approved by them
     s = approve(s, id, 1);
     expect(B.dictionaryInForce(s)).toMatchObject({ artifact: { id, version: 1 }, entries: WORDS });
     // A new version is not in force until the owner approves it.
     const v2 = run<{ version: number }>(s, "addStudioArtifact", { artifactId: id, round: 1, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("e") }], devices: [], madeBy: DESIGNER, dictionary: [WORDS[0]] }, at(60));
-    s = peAgrees(v2.state, id, 2, ["a"], at(61));
+    s = v2.state;
     expect(B.dictionaryInForce(s)?.artifact.version).toBe(1);
     s = run(s, "approveArtifact", { artifactId: id, version: 2 }, at(62)).state;
     expect(B.dictionaryInForce(s)).toMatchObject({ artifact: { id, version: 2 }, entries: [WORDS[0]] });
     // A second dictionary, approved later, is the one in force.
     const other = withDictionary(s, [{ term: "outing", meaning: "A day out." }], 70);
-    s = approve(peAgrees(other.s, other.id, 1, ["a"], at(73)), other.id, 1);
+    s = approve(other.s, other.id, 1);
     expect(B.dictionaryInForce(s)?.artifact.id).toBe(other.id);
   });
 });

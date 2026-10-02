@@ -12,8 +12,8 @@
 // closed, runs that failed twice, or no provider to run the next step), with the PE's open objections and asked-for
 // changes shown. Where review stands is one value, `PeReview`, and the words the owner and the lead see are made from
 // it. An objection is never dropped: a later pass on a revision answers it, or the owner overrules it (recorded). A
-// kind the PE does not review (`KIND_RULES` in types.ts: what the owner brought, a probe's evidence) is not held
-// back: its review is "not-reviewed", from which the same words are made.
+// kind the PE does not review (`KIND_RULES` in types.ts: what the owner brought, a probe's evidence, the dictionary) is
+// not held back: its review is "not-reviewed", from which the same words are made.
 //
 // Convergence (the second real trial, 2026-10-02: the PE asked for more on each pass, the designer added it all, and
 // the loop ended without agreement). Only a change sends a variant back; the product questions the PE notices are

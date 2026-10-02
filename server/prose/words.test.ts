@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as M from "../../src/domain/model";
 import { buildSeed } from "../../src/domain/seed";
-import { DESIGNER, openRound, peAgrees, run, sha } from "../../src/domain/testing/studio";
+import { DESIGNER, openRound, run, sha } from "../../src/domain/testing/studio";
 import type { State } from "../../src/domain/types";
 import { Scheduler } from "../scheduler";
 import { Store } from "../store";
@@ -36,8 +36,7 @@ const WORDS = [
 function withWords(approve: boolean, entries: object[] = WORDS, s0: State = fresh(), sec = 1): State {
   const r = openRound(s0, "data", at(sec));
   const a = run<{ artifactId: string }>(r.state, "addStudioArtifact", { round: r.n, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("d") }], devices: [], madeBy: DESIGNER, dictionary: entries }, at(sec + 1));
-  const s = peAgrees(a.state, a.result.artifactId, 1, ["a"], at(sec + 2));
-  return approve ? run(s, "approveArtifact", { artifactId: a.result.artifactId, version: 1 }, at(sec + 3)).state : s;
+  return approve ? run(a.state, "approveArtifact", { artifactId: a.result.artifactId, version: 1 }, at(sec + 3)).state : a.state;
 }
 
 let dataDir: string;
@@ -88,7 +87,6 @@ describe("the lead's text, through the scheduler, with the project's words", () 
     cmd("initProject", { name: "Trips", repoPath: join(dataDir, "repo"), vision: "Weekend trips.", focus: "" });
     const round = (cmd("openRound", { focus: "data" }).result as { n: number }).n;
     const { artifactId } = cmd("addStudioArtifact", { round, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("d") }], devices: [], madeBy: DESIGNER, dictionary: WORDS }).result as { artifactId: string };
-    cmd("addPeVerdicts", { artifactId, version: 1, verdicts: [{ variant: "a", verdict: "feasible", reasons: "Words." }] });
     cmd("approveArtifact", { artifactId, version: 1 });
     cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });
   });
