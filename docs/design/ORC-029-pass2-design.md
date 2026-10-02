@@ -194,6 +194,32 @@ An independent review found no path to the factory except the owner's `startFact
   - applying a change order's updates (pass 5);
   - real providers (pass 4, then the real-run scenario).
 
+## Review of 2c–2e (2026-10-02)
+
+An independent review found no high-severity defect and confirmed the authority rules:
+- only the owner or the service approves the blueprint, records PE verdicts and overrules;
+- pending work never dispatches;
+- calls past a budget reach the owner;
+- both new Needs-you items are present.
+
+All 9 findings were fixed in 11 commits (d41d5cf..09b6fee), each with a regression test that failed first:
+
+1. The lead could drop a standing PE objection, by steering or a breakdown re-run. Now only the owner cancels it.
+2. A run with no recorded cost was counted as $0 in the PE's budget check. Now any cost-adding call goes to the owner.
+3. The building check was not cumulative. It now adds the PE calls that stand until their work runs.
+4. Maintenance the owner accepted dropped out of the estimate. Now a call counts while its outcome stands, whoever took it.
+5. An owner's edit to objected work reopens the review.
+6. The sample project can no longer start with pull-request delivery.
+7. Format-19 databases from this branch are normalized on load.
+8. A blueprint change that touches no task makes no change order.
+9. Wording and dead code: PE attribution, route-aware pull-request wording, the dead `"pe"` route branch, no-op `setChangeOrders` events, and no verdicts on material or evidence.
+
+**Decisions:**
+- While no start estimate exists (pass 6 writes it), a PE call adding maintenance cost goes to the owner: an unknown baseline is not zero.
+- The owner's edit does not reopen an overruled objection, and the lead's edit reopens nothing.
+
+**Known limit, for pass 5:** pruning old decisions past the 2,000 limit would drop their PE calls from the maintenance estimate.
+
 ## Checks for the whole pass
 
 - **Unit tests per unit**, plus the migration test.
