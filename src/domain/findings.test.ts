@@ -6,6 +6,7 @@ import * as F from "./findings";
 import * as M from "./model";
 import { needsYouItems } from "./needsYou";
 import { buildSeed } from "./seed";
+import { buildingSpend, pastBudget } from "./spend";
 import { ControlError, type Artifact, type Finding, type State } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -361,14 +362,21 @@ describe("applyAutopilot and the sample project", () => {
 
 describe("the PE's route (ORC-029 2d)", () => {
   /** Findings that ask for a decision, on Autopilot (the PE's route), with the budgets given; a decision run started. */
+  /** Every finished run so far has a recorded cost ($0): a run with none makes the building spend unknown. */
+  function priced(s0: State): State {
+    const s = structuredClone(s0);
+    for (const r of [...s.attempts, ...s.leadRuns]) if (r.outcome !== "running" && r.outcome !== "stopping") r.usage ??= { costUsd: 0 };
+    return s;
+  }
   function peCase(n: number, budgets: { buildingUsd: number | null; maintenanceUsdPerMonth: number | null }, author: "user" | "lead" = "lead") {
     const fs = Array.from({ length: n }, () => finding({ action: "ask-user" }));
     const { s: s0, id, art } = reviewed(fs, { autopilot: true, author });
     expect(s0.decisions.map((d) => d.routedTo)).toEqual(fs.map(() => "pe"));
-    const r = M.startLeadRun(M.setBudgets(s0, budgets, at(5)), { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(5));
+    const r = M.startLeadRun(M.setBudgets(priced(s0), budgets, at(5)), { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(5));
     return { s: r.state, id, art, runId: r.runId };
   }
-  const complete = (s: State, runId: string, decisions: unknown) => M.completeLeadRun(s, runId, { reply: "ok", proposals: [], decisions }, at(6));
+  /** The decision run completes, with its own cost recorded. */
+  const complete = (s: State, runId: string, decisions: unknown) => M.completeLeadRun(s, runId, { reply: "ok", proposals: [], decisions }, at(6), { usage: { costUsd: 0 } });
   const zero = { buildUsd: [0, 0], maintenanceUsdPerMonth: [0, 0], basis: "Nothing is built or run" };
 
   it("a call within the budgets is the PE's: recorded with its reasons, its cost, and the lead run that made it with the PE's brief", () => {
@@ -432,6 +440,63 @@ describe("the PE's route (ORC-029 2d)", () => {
     ]);
     expect(out.decisions[0]).toMatchObject({ status: "accept", decidedBy: "pe" });
     expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "up to $1.00 more would take the building spend to $8.00, past the $5.00 budget ($7.00 spent)" } });
+  });
+
+  it("a run with no recorded cost makes the building spend unknown, never $0: a call that adds any building cost goes to the owner (review finding 2)", () => {
+    const { s: s0, runId } = peCase(3, { buildingUsd: 50, maintenanceUsdPerMonth: null });
+    const s = structuredClone(s0);
+    delete s.attempts.find((a) => a.outcome === "completed" && a.snapshot.provider !== "service")!.usage;
+    expect(buildingSpend(s).unknown).toHaveLength(1);
+    const [d1, d2, d3] = s.decisions;
+    const out = complete(s, runId, [
+      { id: d1.id, decision: "accept", why: "Nothing to build.", cost: { buildUsd: [0, 0], basis: "Accepting builds nothing" } },
+      { id: d2.id, decision: "fix", why: "A small fix.", cost: { buildUsd: [0, 1], basis: "One repair run" } },
+      { id: d3.id, decision: "accept", why: "Fine.", cost: { maintenanceUsdPerMonth: [0, 0], basis: "Nothing runs" } },
+    ]);
+    expect(out.decisions[0]).toMatchObject({ status: "accept", decidedBy: "pe" });
+    expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "1 run has no recorded cost, so the building spend is unknown, and up to $1.00 more cannot be checked against the $50.00 budget" } });
+    expect(out.decisions[2].pe?.pastBudget).toBe("it states no building cost, and the building budget is $50.00");
+  });
+
+  it("the building check is cumulative: the PE calls that stand count at their high end until their work has run, and then only its recorded cost does (review finding 3)", () => {
+    const { s, runId } = peCase(2, { buildingUsd: 10, maintenanceUsdPerMonth: null });
+    const [d1, d2] = s.decisions;
+    const out = complete(s, runId, [
+      { id: d1.id, decision: "fix", why: "The first fix.", cost: { buildUsd: [4, 8], basis: "Similar repairs" } },
+      { id: d2.id, decision: "fix", why: "The second fix.", cost: { buildUsd: [4, 8], basis: "Similar repairs" } },
+    ]);
+    expect(out.decisions[0]).toMatchObject({ status: "fix", decidedBy: "pe", usedBy: [] });
+    expect(out.decisions[1]).toMatchObject({
+      status: "open",
+      routedTo: "user",
+      pe: { pastBudget: "up to $8.00 more would take the building spend to $16.00, past the $10.00 budget ($0.00 spent, up to $8.00 committed to PE calls whose work has not run)" },
+    });
+    // The repair that carried the first fix has run: its recorded $3 counts, not the $8 the PE stated.
+    const ran = structuredClone(out);
+    const repair = ran.attempts.find((a) => a.outcome === "completed" && a.snapshot.provider !== "service")!;
+    repair.usage = { costUsd: 3 };
+    ran.decisions[0].usedBy = [repair.id];
+    expect(pastBudget(ran, { buildUsd: [0, 7], basis: "x" })).toBeUndefined();
+    expect(pastBudget(ran, { buildUsd: [0, 8], basis: "x" })).toBe("up to $8.00 more would take the building spend to $11.00, past the $10.00 budget ($3.00 spent)");
+  });
+
+  it("a PE follow-up counts as committed until its task starts; the owner's taking of a PE call counts too (review finding 3)", () => {
+    const { s, runId } = peCase(2, { buildingUsd: 10, maintenanceUsdPerMonth: null });
+    const [d1, d2] = s.decisions;
+    const out = complete(s, runId, [
+      { id: d1.id, decision: "follow-up", why: "Its own task.", cost: { buildUsd: [2, 5], basis: "Similar tasks" } },
+      { id: d2.id, decision: "fix", why: "Rebuild it.", cost: { buildUsd: [6, 9], basis: "Similar work" } },
+    ]);
+    expect(out.decisions[0]).toMatchObject({ status: "follow-up", decidedBy: "pe" });
+    expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user" });
+    expect(pastBudget(out, { buildUsd: [0, 6], basis: "x" })).toContain("($0.00 spent, up to $5.00 committed to PE calls whose work has not run)");
+    // The owner takes the PE's call past the budget: it stands, and counts.
+    const taken = F.decideFinding(out, d2.id, "fix", undefined, at(7));
+    expect(pastBudget(taken, { buildUsd: [0, 1], basis: "x" })).toBe("up to $1.00 more would take the building spend to $15.00, past the $10.00 budget ($0.00 spent, up to $14.00 committed to PE calls whose work has not run)");
+    // Once the follow-up's task has started, its runs count when they finish, not the PE's figure.
+    const started = structuredClone(taken);
+    started.attempts.push({ ...structuredClone(started.attempts[0]), id: "run-follow-up", taskId: out.decisions[0].followUpTaskId!, outcome: "running" });
+    expect(pastBudget(started, { buildUsd: [0, 1], basis: "x" })).toBeUndefined();
   });
 
   it("the owner reverses a PE call as they reverse the lead's, and takes a call past a budget; the PE's call stays on the record", () => {

@@ -306,7 +306,10 @@ describe("the lead's decisions section", () => {
     expect(text).not.toContain("## Decisions waiting for you");
     expect(text).toContain("## Decisions you make as the PE (1)");
     expect(text).toContain("The PE does not run its own decisions yet, so you decide them with this brief");
-    expect(text).toContain("- Budgets: building $50.00, of which about $0.00 is spent (9 runs with no recorded cost not counted); maintenance $20.00 a month, of which $0.00 is estimated so far. Spending past a budget is never the PE's call");
+    expect(text).toContain(
+      "- Budgets: building $50.00, of which about $0.00 is spent (9 runs have no recorded cost, which makes the building spend uncertain: a call that adds any building cost goes to the user); maintenance $20.00 a month, of which $0.00 is estimated so far. Spending past a budget is never the PE's call",
+    );
+    expect(text).not.toContain("not counted");
     expect(text).toContain(`- ${d.id} on ${id} "Change" (spec by user)`);
     expect(text).toContain('"cost": { "buildUsd": [0, 0], "maintenanceUsdPerMonth": [0, 0], "basis":');
     expect(text).toContain('Decide the findings listed under "Decisions waiting for you" and "Decisions you make as the PE"');

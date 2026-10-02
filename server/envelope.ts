@@ -9,7 +9,7 @@ import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
-import { buildingSpend, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
+import { buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
 import { clip } from "../src/domain/text";
 import {
   FINDING_ACTIONS,
@@ -990,7 +990,12 @@ function peDecisionsSection(state: State): string {
   if (!open.length) return "";
   const b = state.project.budgets;
   const spent = buildingSpend(state);
-  const building = b.buildingUsd === null ? "not set" : `${fmtUsd(b.buildingUsd)}, of which about ${fmtUsd(spent.usd)} is spent${spent.unknown.length ? ` (${spent.unknown.length} run${spent.unknown.length === 1 ? "" : "s"} with no recorded cost not counted)` : ""}`;
+  const committed = committedBuildUsd(state);
+  const unknown = spent.unknown.length;
+  const building =
+    b.buildingUsd === null
+      ? "not set"
+      : `${fmtUsd(b.buildingUsd)}, of which about ${fmtUsd(spent.usd)} is spent${committed ? ` and up to ${fmtUsd(committed)} is committed to PE calls whose work has not run` : ""}${unknown ? ` (${unknown} run${unknown === 1 ? " has" : "s have"} no recorded cost, which makes the building spend uncertain: a call that adds any building cost goes to the user)` : ""}`;
   const maintenance = b.maintenanceUsdPerMonth === null ? "not set" : `${fmtUsd(b.maintenanceUsdPerMonth)} a month, of which ${fmtUsd(maintenanceEstimate(state))} is estimated so far`;
   return `
 ## Decisions you make as the PE (${open.length})

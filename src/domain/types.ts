@@ -656,7 +656,8 @@ export interface PeReviewState {
  * building spend and to the monthly maintenance, as dollar ranges with their basis). The PE does not run its own
  * decisions yet (ORC-029 pass 4): `by: "lead-run"` says a lead decision run made the call with the PE's brief, and
  * `leadRunId` names it. `pastBudget` says why the call went to the owner instead of applying: it would have taken the
- * building spend or the maintenance estimate past a budget, or it stated no figure for a budget that is set.
+ * building spend (with the calls that stand but have not run) or the maintenance estimate past a budget, it stated no
+ * figure for a budget that is set, or what it adds cannot be checked because the spend so far is unknown.
  */
 export interface PeCall {
   decision: "fix" | "accept" | "follow-up";

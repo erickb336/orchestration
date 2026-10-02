@@ -4,7 +4,7 @@
 
 import pricesJson from "./prices.json";
 import type { BudgetEstimate } from "./studio/types";
-import { type Attempt, type LeadRun, type ProviderId, type Runner, type State, isProvider } from "./types";
+import { type Attempt, type FindingDecision, type LeadRun, type PeCall, type ProviderId, type Runner, type State, isProvider } from "./types";
 
 /** One model's published API price, in dollars per million tokens, with where and when it was read. */
 export interface ModelPrice {
@@ -141,19 +141,54 @@ export function maintenanceEstimate(s: State): number {
 }
 
 /**
+ * The PE calls that stand: decisions whose outcome is the PE's call, whoever took it (the PE within budget, or the
+ * owner, who took a call that went to them). A call the owner reversed or reopened does not stand.
+ */
+function standingPeCalls(s: State): (FindingDecision & { pe: PeCall })[] {
+  return s.decisions.filter((d): d is FindingDecision & { pe: PeCall } => !!d.pe && d.status === d.pe.decision);
+}
+
+/**
+ * What the PE calls that stand commit to the building spend before their work has run: the high end of each stated
+ * build cost, for a fix no run has carried yet (`usedBy` empty), and for a follow-up whose task has not started. Once
+ * the work has run, its runs count in `buildingSpend` instead, so nothing is counted twice.
+ */
+export function committedBuildUsd(s: State): number {
+  let usd = 0;
+  for (const d of standingPeCalls(s)) {
+    const more = d.pe.cost?.buildUsd?.[1] ?? 0;
+    if (more <= 0) continue;
+    if (d.status === "fix" && d.usedBy.length === 0) usd += more;
+    else if (d.status === "follow-up") {
+      const t = s.tasks.find((x) => x.id === d.followUpTaskId);
+      if (t && (t.lifecycle === "proposed" || t.lifecycle === "ready") && !s.attempts.some((a) => a.taskId === t.id)) usd += more;
+    }
+  }
+  return usd;
+}
+
+/**
  * Why a PE call with this stated cost is not the PE's to make, or undefined when it stays within the budgets. Spending
  * past a budget is never the PE's call (ORC-029): the high end of each stated range counts, and while a budget is set
- * the call must state its figure for it (0 is a figure), since a cost not stated is unknown, never zero. A call that
- * adds nothing passes even when the spend is already past the budget (the owner continued past it).
+ * the call must state its figure for it (0 is a figure), since a cost not stated is unknown, never zero.
+ * - Building: what was spent, plus what the PE calls that stand commit before their work has run, plus this call. A run
+ *   with no recorded cost makes the spend unknown, so a call that adds any building cost goes to the owner.
+ * - A call that adds nothing passes even when the spend is already past the budget (the owner continued past it).
  */
 export function pastBudget(s: State, cost: BudgetEstimate | undefined, prices: readonly ModelPrice[] = PRICES): string | undefined {
   const b = s.project.budgets;
   const why: string[] = [];
   if (b.buildingUsd !== null) {
     const more = cost?.buildUsd?.[1];
-    const spent = buildingSpend(s, prices).usd;
+    const spend = buildingSpend(s, prices);
+    const committed = committedBuildUsd(s);
+    const total = spend.usd + committed;
+    const unknown = spend.unknown.length;
     if (more === undefined) why.push(`it states no building cost, and the building budget is ${fmtUsd(b.buildingUsd)}`);
-    else if (more > 0 && spent + more > b.buildingUsd) why.push(`up to ${fmtUsd(more)} more would take the building spend to ${fmtUsd(spent + more)}, past the ${fmtUsd(b.buildingUsd)} budget (${fmtUsd(spent)} spent)`);
+    else if (more > 0 && total + more > b.buildingUsd)
+      why.push(`up to ${fmtUsd(more)} more would take the building spend to ${fmtUsd(total + more)}, past the ${fmtUsd(b.buildingUsd)} budget (${fmtUsd(spend.usd)} spent${committed ? `, up to ${fmtUsd(committed)} committed to PE calls whose work has not run` : ""})`);
+    else if (more > 0 && unknown)
+      why.push(`${unknown} run${unknown === 1 ? " has" : "s have"} no recorded cost, so the building spend is unknown, and up to ${fmtUsd(more)} more cannot be checked against the ${fmtUsd(b.buildingUsd)} budget`);
   }
   if (b.maintenanceUsdPerMonth !== null) {
     const more = cost?.maintenanceUsdPerMonth?.[1];
