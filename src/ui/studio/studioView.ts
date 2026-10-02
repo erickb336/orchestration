@@ -4,7 +4,8 @@
 
 import { budgetStop } from "../../domain/spend";
 import * as S from "../../domain/studio/studio";
-import type { Feedback, Mark, Pin, Round, RoundFocus, StudioArtifact, StudioRun } from "../../domain/studio/types";
+import * as R from "../../domain/studio/runs";
+import { UNGATED_KINDS, type BudgetEstimate, type Feedback, type Mark, type Pin, type Round, type RoundFocus, type StudioArtifact, type StudioRun, type Verdict } from "../../domain/studio/types";
 import type { Device, State } from "../../domain/types";
 import { acceptPinMessage, prototypeOrigin, type PinMessage } from "../../runtime/prototype";
 
@@ -200,35 +201,135 @@ export async function sendDrafts(send: (name: "sendFeedback", args: object) => P
 // ---------- terminal artifacts ----------
 
 /**
- * How a terminal artifact was made, and what to show:
+ * How one variant of a terminal demo or TUI is shown, from what the service recorded on the version (`demo`):
+ * - pending: the service is recording it;
  * - recorded: VHS recorded the designer's tape in the sandbox (a webm or gif, and maybe its text transcript);
- * - hand-written: no recording; a hand-written asciicast (`.cast`, its transcript) or a frame (`.ans`);
+ * - hand-written: not recorded (`reason`, when the tape was not); the designer's asciicast (`.cast`, shown as its
+ *   transcript) or frame (`.ans`);
  * - not recorded: nothing to play, with the reason.
+ * Paths are relative to the version's folder.
  */
-export type Recording =
+export type DemoView =
+  | { status: "pending" }
   | { status: "recorded"; video?: string; gif?: string; transcript?: string }
-  | { status: "hand-written"; cast?: string; frame?: string }
+  | { status: "hand-written"; cast?: string; frame?: string; reason?: string }
   | { status: "not-recorded"; reason: string };
 
-const firstOf = (paths: string[], ext: string) => paths.find((p) => p.toLowerCase().endsWith(`.${ext}`));
+const firstOf = (paths: readonly string[], ext: string) => paths.find((p) => p.toLowerCase().endsWith(`.${ext}`));
+const folderOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
 
 /**
- * The recording status of a terminal artifact version. The service is to record it on the version as `recording`
- * ({ status: "recorded" | "hand-written" | "not-recorded", reason? }); until it does, it is read from the files: a
- * webm or gif means recorded, a .cast or .ans hand-written, anything else not recorded.
+ * What to show of a terminal variant. The service records it on the version after import (`demo`); a version it
+ * records none for (no media service) shows the hand-written .cast or .ans beside the variant's entry, if any.
  */
-export function recordingOf(a: StudioArtifact): Recording {
-  const paths = a.files.map((f) => f.path);
-  const files = { video: firstOf(paths, "webm"), gif: firstOf(paths, "gif"), transcript: firstOf(paths, "txt"), cast: firstOf(paths, "cast"), frame: firstOf(paths, "ans") };
-  const said = (a as { recording?: { status?: unknown; reason?: unknown } }).recording;
-  const status = said && typeof said.status === "string" ? said.status : undefined;
-  if (status === "not-recorded") return { status, reason: typeof said?.reason === "string" && said.reason ? said.reason : "The service did not say why." };
-  if (status === "recorded" || (status === undefined && (files.video || files.gif))) {
-    if (files.video || files.gif) return { status: "recorded", ...(files.video ? { video: files.video } : {}), ...(files.gif ? { gif: files.gif } : {}), ...(files.transcript ? { transcript: files.transcript } : {}) };
-    return { status: "not-recorded", reason: "It is marked recorded, but no webm or gif is among its files." };
+export function variantDemo(a: StudioArtifact, variantId: string | undefined): DemoView {
+  const d = a.demo;
+  if (d?.status === "pending") return { status: "pending" };
+  if (d?.status === "done") {
+    const v = d.variants.find((x) => x.variant === variantId);
+    if (!v) return { status: "not-recorded", reason: "The service recorded nothing for this variant." };
+    if (v.status === "recorded") return { status: "recorded", ...(v.webm ? { video: v.webm } : {}), ...(v.gif ? { gif: v.gif } : {}), ...(v.txt ? { transcript: v.txt } : {}) };
+    if (v.status === "hand-written") {
+      const cast = firstOf(v.files, "cast");
+      const frame = firstOf(v.files, "ans");
+      return { status: "hand-written", ...(cast ? { cast } : {}), ...(frame ? { frame } : {}), ...(v.reason ? { reason: v.reason } : {}) };
+    }
+    return { status: "not-recorded", reason: v.reason };
   }
-  if (files.cast || files.frame) return { status: "hand-written", ...(files.cast ? { cast: files.cast } : {}), ...(files.frame ? { frame: files.frame } : {}) };
-  return { status: "not-recorded", reason: "No recording (webm or gif) and no hand-written .cast or .ans frame is among its files." };
+  const entry = a.variants.find((v) => v.id === variantId)?.entry;
+  const beside = a.files.map((f) => f.path).filter((p) => entry !== undefined && folderOf(p) === folderOf(entry));
+  const cast = firstOf(beside, "cast");
+  const frame = firstOf(beside, "ans");
+  if (cast || frame) return { status: "hand-written", ...(cast ? { cast } : {}), ...(frame ? { frame } : {}) };
+  return { status: "not-recorded", reason: "This service records no terminal demos, and the variant has no hand-written .cast or .ans." };
+}
+
+// ---------- PE review ----------
+
+/** One verdict of the PE's latest pass, as the studio shows it. */
+export interface VerdictLine {
+  id: string;
+  /** The variant's label, or "The whole artifact". */
+  label: string;
+  verdict: Verdict;
+  reasons: string;
+  change?: string;
+  budget?: BudgetEstimate;
+  overruled?: { at: string; why: string };
+}
+
+/** Where PE review of a version stands, for the right column. */
+export interface PeView {
+  tone: "work" | "you" | "done" | "fail" | "neutral";
+  /** The state in a few words: "Agreed", "Objects: waiting for you", "Reviewing"… */
+  state: string;
+  text: string;
+  /** "Codex · gpt-x", the PE that made the latest pass (or is reviewing). */
+  by?: string;
+  simulated: boolean;
+  verdicts: VerdictLine[];
+}
+
+export const VERDICT_LABEL: Record<Verdict, string> = { feasible: "Feasible", "feasible-if": "Feasible if changed", "not-feasible": "Not feasible" };
+export const VERDICT_TONE: Record<Verdict, "done" | "you" | "fail"> = { feasible: "done", "feasible-if": "you", "not-feasible": "fail" };
+
+/** "$40–$90", "$5–$5 a month" as "$5 a month". */
+export function usdRange([lo, hi]: [number, number], perMonth = false): string {
+  const usd = (n: number) => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
+  return `${lo === hi ? usd(lo) : `${usd(lo)}–${usd(hi)}`}${perMonth ? " a month" : ""}`;
+}
+
+/**
+ * PE review of a version, for the owner: its verdicts per variant and what it means for them. Undefined for what the
+ * owner brought and a probe's evidence, which the PE does not review.
+ */
+export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" | "codex") => string): PeView | undefined {
+  if (UNGATED_KINDS.includes(a.kind)) return undefined;
+  const r = S.peReview(s, a);
+  const runs = R.peRunsOf(s, a.id, a.version);
+  const run = runs.at(-1);
+  const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
+  const pass = mine.length ? Math.max(...mine.map((v) => v.pass)) : 0;
+  const latest = mine.filter((v) => v.pass === pass);
+  const label = (id: string | undefined) => (id === undefined ? "The whole artifact" : (a.variants.find((v) => v.id === id)?.label ?? id));
+  const verdicts = latest.map((v) => ({ id: v.id, label: label(v.variant), verdict: v.verdict, reasons: v.reasons, ...(v.change ? { change: v.change } : {}), ...(v.budget ? { budget: v.budget } : {}), ...(v.overruled ? { overruled: v.overruled } : {}) }));
+  const madeBy = latest.find((v) => v.by)?.by;
+  const byRun = madeBy ? s.studio.runs.find((x) => x.id === madeBy.runId) : run;
+  const by = madeBy ? `${providerLabel(madeBy.provider)} · ${madeBy.model}` : run ? `${providerLabel(run.provider)} · ${run.actualModel ?? run.model}` : undefined;
+  const base = { ...(by ? { by } : {}), simulated: !!byRun?.simulated, verdicts };
+  const names = (vs: { label: string }[]) => vs.map((v) => v.label).join(", ");
+  switch (r.status) {
+    case "agreed":
+      return { ...base, tone: "done", state: "Agreed", text: `The PE agreed on pass ${r.pass}: every option is feasible${verdicts.some((v) => v.verdict === "feasible-if") ? ", some only with the change it states" : ""}. It is yours to mark.` };
+    case "objections": {
+      const open = verdicts.filter((v) => v.verdict === "not-feasible" && !v.overruled);
+      if (!open.length) return { ...base, tone: "done", state: "Overruled", text: "You overruled the PE's objections; they stay recorded." };
+      return {
+        ...base,
+        tone: "you",
+        state: "Objects: waiting for you",
+        text:
+          r.pass >= S.MAX_PE_PASSES
+            ? `The PE still objects to ${names(open)} after ${r.pass} passes. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.`
+            : `The PE objects to ${names(open)}. This is waiting for you: the designer cannot revise in answer to the PE yet, so mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.`,
+      };
+    }
+    case "revising":
+      return { ...base, tone: "work", state: "Revising", text: `The PE objected on pass ${r.pass}; the designer revises before it reaches you.` };
+  }
+  // Waiting for the PE: why, from its runs.
+  if (a.shots?.status === "pending" || a.demo?.status === "pending") return { ...base, tone: "neutral", state: "Waiting", text: `The PE reviews it once the ${a.shots?.status === "pending" ? "screenshots are taken" : "recording is made"}.` };
+  if (run && (run.status === "running" || run.status === "stopping")) return { ...base, tone: "work", state: "Reviewing", text: "The PE is reading this version: its files, screenshots and recordings." };
+  if (run?.status === "queued") return { ...base, tone: "neutral", state: "Queued", text: runLine(s, run, providerLabel).text };
+  const blocked = R.peRunBlocker(s, a);
+  if (blocked) return { ...base, tone: "fail", state: "Cannot start", text: `The PE cannot be asked: ${blocked}` };
+  if (run && (run.status === "failed" || run.status === "lost" || run.status === "stopped")) {
+    const why = run.note ?? `its run was ${run.status}`;
+    return R.peRunDue(s, a)
+      ? { ...base, tone: "work", state: "Asking again", text: `The PE's run ended without a verdict (${why}); it is asked again.` }
+      : { ...base, tone: "fail", state: "No verdict", text: `The PE's runs ended without a verdict: ${why} It is not asked again on its own; the studio's next pass adds a way to ask.` };
+  }
+  return { ...base, tone: "neutral", state: "Waiting", text: "Waiting for PE review." };
 }
 
 // ---------- the designer's runs ----------

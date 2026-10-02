@@ -3,9 +3,11 @@
 // Left: the rounds, then the chosen round's artifacts with your mark, and the designer's runs of that round.
 // Centre: the artifact, on Desktop or Mobile (only the project's devices), with its variants, Keep, Change or Drop,
 // and Pin a comment; terminal demos and TUIs in a terminal window. Right: a labelled placeholder for the lead's panel
-// and PE review (pass 4), then your feedback: a summary, a note, and Send feedback (the `sendFeedback` command).
+// (pass 4); PE review of the artifact shown, with the PE's verdict on each variant; then your feedback: a summary, a
+// note, and Send feedback (the `sendFeedback` command).
 //
-// Your marks, picks, pins and notes are kept here until you send them, all together, as one answer.
+// Your marks, picks, pins and notes are kept here until you send them, all together, as one answer. You can mark a
+// version once the PE agreed, or once its objections came to you; until then you can look.
 
 import { useCallback, useState } from "react";
 import * as M from "../../domain/model";
@@ -29,17 +31,22 @@ import {
   draftKey,
   draftSummary,
   madeByLine,
+  peView,
   prototypeUrl,
-  recordingOf,
   roundArtifacts,
   roundRuns,
   roundsNewestFirst,
   runLine,
   sendBlocker,
   sendDrafts,
+  serviceFileUrl,
   showKind,
   standing,
+  usdRange,
+  variantDemo,
   variantEntry,
+  VERDICT_LABEL,
+  VERDICT_TONE,
   type Draft,
   type ScreenDevice,
 } from "./studioView";
@@ -173,9 +180,10 @@ export function Studio() {
 
           <aside className="st-col st-right" aria-label="The lead and your feedback">
             <section className="st-placeholder">
-              <h2 className="st-label">The lead and PE review</h2>
-              <p className="small muted">Not built yet: the lead's message for this round, its questions, and the PE's review of each option come here in pass 4 of the studio.</p>
+              <h2 className="st-label">The lead</h2>
+              <p className="small muted">Not built yet: the lead's message for this round and its questions come here in pass 4 of the studio.</p>
             </section>
+            <PeReviewPanel artifact={artifact && round ? artifact : undefined} />
             <section className="k-stack k-stack--tight">
               <h2 className="st-label">Your feedback</h2>
               {changed.length ? (
@@ -213,11 +221,18 @@ export function Studio() {
 function ArtifactItem({ artifact: a, draft, current, onClick }: { artifact: StudioArtifact; draft: Draft; current: boolean; onClick: () => void }) {
   const { state } = useStore();
   const st = standing(state, a);
+  // An objection waiting for you is flagged in the list too, not only when the artifact is open.
+  const objects = st.kind === "open" && S.openObjections(state, a).length > 0;
   return (
     <button type="button" className="st-item st-item--artifact" aria-current={current ? "true" : undefined} onClick={onClick}>
       <span className="st-item__title">{a.title}</span>
       <span className="st-item__line">{artifactLine(a)}</span>
       <span className="st-item__mark">
+        {objects && (
+          <>
+            <Chip tone="you">PE objects</Chip>{" "}
+          </>
+        )}
         {st.kind === "pe" ? (
           <Chip>with the PE</Chip>
         ) : st.kind === "replaced" ? (
@@ -295,6 +310,8 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
   const shownDevice = device && options.includes(device) ? device : narrow && options.includes("mobile") ? "mobile" : (options[0] ?? "desktop");
   const entry = variantEntry(a, variant);
   const src = port && entry ? prototypeUrl(a, entry, port) : undefined;
+  // The studio's own words on the screenshots: being taken, skipped and why, or some failed.
+  const shots = S.shotsNote(a);
   const variantLabel = a.variants.find((v) => v.id === variant)?.label;
   const frameTitle = `${a.title}${variantLabel ? `, ${variantLabel}` : ""}`;
   const pinVariant = a.variants.length > 1 ? variant : undefined;
@@ -328,16 +345,19 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
       </div>
 
       {locked && st.kind !== "open" && <p className="small muted">{locked}</p>}
+      {kind === "screen" && shots && <p className="small muted">{shots}</p>}
 
       <div className={cx("st-stage", pinMode && "st-stage--pinning", kind === "terminal" && "st-stage--terminal")}>
         {kind === "screen" ? (
-          src ? (
+          !entry ? (
+            <EmptyState title="No entry file">The designer named no entry file for this variant, so there is no page to show.</EmptyState>
+          ) : src ? (
             <DeviceFrame src={src} title={`${frameTitle}, ${DEVICE_LABEL[shownDevice].toLowerCase()}`} device={shownDevice} pins={shownPins} pinMode={pinMode} onPin={onPin} />
           ) : (
             <ScreenshotFallback key={`${variant}-${shownDevice}`} artifact={a} variant={variant} device={shownDevice} />
           )
         ) : kind === "terminal" ? (
-          <TerminalArtifact artifact={a} port={port} />
+          <TerminalArtifact key={variant} artifact={a} variant={variant} />
         ) : src ? (
           <PlainFrame src={src} title={frameTitle} />
         ) : (
@@ -421,30 +441,89 @@ function PinList({ artifact: a, draft, update, locked }: { artifact: StudioArtif
   );
 }
 
-/** A terminal demo or TUI: its recording, its hand-written frames, or why there is nothing to play. */
-function TerminalArtifact({ artifact: a, port }: { artifact: StudioArtifact; port: number | undefined }) {
-  const rec = recordingOf(a);
-  if (rec.status === "recorded") {
+/**
+ * One variant of a terminal demo or TUI: its recording, its hand-written frames, or why there is nothing to play,
+ * in the studio's words (demoNote). Everything is read through the app's own service (GET /api/studio/file), so it
+ * shows while the prototype server is down too.
+ */
+function TerminalArtifact({ artifact: a, variant }: { artifact: StudioArtifact; variant: string | undefined }) {
+  const demo = variantDemo(a, variant);
+  const note = variant === undefined ? undefined : S.demoNote(a, variant);
+  if (demo.status === "pending") return <EmptyState title="Recording…">The service is recording the designer's tape in the sandbox, with no network. It shows here when it is done.</EmptyState>;
+  if (demo.status === "recorded") {
     return (
       <div className="st-stack">
-        {port ? <TerminalRecording title={a.title} video={rec.video && prototypeUrl(a, rec.video, port)} gif={rec.gif && prototypeUrl(a, rec.gif, port)} /> : <NoPrototypeServer />}
+        {demo.video || demo.gif ? (
+          <TerminalRecording title={a.title} video={demo.video && serviceFileUrl(a, demo.video)} gif={demo.gif && serviceFileUrl(a, demo.gif)} />
+        ) : (
+          demo.transcript && <TerminalFile artifact={a} path={demo.transcript} kind="transcript" />
+        )}
         <p className="small muted">Recorded with VHS from the designer's tape, in the sandbox with no network.</p>
-        {!port && rec.transcript && <TerminalFile artifact={a} path={rec.transcript} kind="transcript" />}
       </div>
     );
   }
-  if (rec.status === "hand-written") {
+  if (demo.status === "hand-written") {
     return (
       <div className="st-stack">
-        {rec.frame && <TerminalFile artifact={a} path={rec.frame} kind="frame" />}
-        {rec.cast && <TerminalFile artifact={a} path={rec.cast} kind="cast" />}
+        {note && <p className="small muted">{note}.</p>}
+        {demo.frame && <TerminalFile artifact={a} path={demo.frame} kind="frame" />}
+        {demo.cast && <TerminalFile artifact={a} path={demo.cast} kind="cast" />}
       </div>
     );
   }
+  return <EmptyState title="Not recorded.">{note ? `${note}.` : demo.reason}</EmptyState>;
+}
+
+/** PE review of the artifact shown: where it stands for you, and the PE's latest verdict on each variant. */
+function PeReviewPanel({ artifact: a }: { artifact: StudioArtifact | undefined }) {
+  const { state } = useStore();
+  const view = a && peView(state, a, M.providerLabel);
   return (
-    <EmptyState title="Not recorded.">
-      {rec.reason}
-    </EmptyState>
+    <section className="k-stack k-stack--tight" aria-label="PE review">
+      <h2 className="st-label">PE review</h2>
+      {!a ? (
+        <p className="small muted">The PE reviews each option the designer makes before it reaches you.</p>
+      ) : !view ? (
+        <p className="small muted">{a.kind === "material" ? "What you brought" : "A probe's evidence"} is not reviewed by the PE.</p>
+      ) : (
+        <>
+          <div className="st-toolbar__grp">
+            <StatePill tone={view.tone} pulse={view.tone === "work"}>
+              {view.state}
+            </StatePill>
+            {view.simulated && <SimulatedChip title="Simulated: the fake runtime's PE answered; no agent judged this." />}
+          </div>
+          <p className="small">{view.text}</p>
+          {view.by && <p className="micro muted">PE · {view.by}</p>}
+          {view.verdicts.length > 0 && (
+            <ul className="st-verdicts" aria-label="The PE's verdicts">
+              {view.verdicts.map((v) => (
+                <li key={v.id} className="st-verdict">
+                  <div className="st-toolbar__grp">
+                    <b className="small">{v.label}</b>
+                    <Chip tone={VERDICT_TONE[v.verdict]}>{VERDICT_LABEL[v.verdict]}</Chip>
+                    {v.overruled && <Chip>overruled</Chip>}
+                  </div>
+                  <p className="small muted">{v.reasons}</p>
+                  {v.change && (
+                    <p className="small">
+                      {v.verdict === "not-feasible" ? "What would change the verdict: " : "The change: "}
+                      {v.change}
+                    </p>
+                  )}
+                  {v.budget && (
+                    <p className="small muted">
+                      Budget effect: {[v.budget.buildUsd && `building ${usdRange(v.budget.buildUsd)}`, v.budget.maintenanceUsdPerMonth && `maintenance ${usdRange(v.budget.maintenanceUsdPerMonth, true)}`].filter(Boolean).join(", ") || "no figures"}. Basis: {v.budget.basis}
+                    </p>
+                  )}
+                  {v.overruled && <p className="small muted">You overruled it: {v.overruled.why}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
