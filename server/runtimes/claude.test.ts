@@ -324,6 +324,21 @@ describe("ClaudeAdapter", () => {
     expect(inputs).toHaveLength(1); // nothing but the envelope was streamed
   });
 
+  it("never saves a session or a memory to the user's own Claude history, for every kind of run", async () => {
+    const { adapter, calls } = setup();
+    const kinds: Partial<Assignment>[] = [
+      { attemptId: "coder" },
+      { attemptId: "lead", role: "lead", workspace: { path: ws, access: "read" }, outputSchema: { type: "object" } },
+      { attemptId: "studio", role: "designer", studio: true },
+      { attemptId: "local", environment: "local" },
+    ];
+    for (const k of kinds) adapter.start(assignment(k));
+    await waitFor(() => calls.length === kinds.length);
+    expect(calls.map((c) => c.options.persistSession)).toEqual([false, false, false, false]);
+    expect(calls.map((c) => c.options.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY)).toEqual(["1", "1", "1", "1"]);
+    for (const k of kinds) adapter.kill(k.attemptId!);
+  });
+
   it("falls back to the last assistant text when the result text is empty", async () => {
     const { adapter, events, stream, calls } = setup();
     adapter.start(assignment());

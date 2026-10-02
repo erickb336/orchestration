@@ -147,7 +147,8 @@ describe("CodexAdapter runs", () => {
     expect(recv.map((m) => m.method)).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
     expect(recv.every((m) => !("jsonrpc" in m))).toBe(true);
     expect(recv[0].params.clientInfo).toEqual({ name: "orchestration", title: "Orchestrator", version: "0.1.0" });
-    expect(recv[2].params).toEqual({ model: "stub-model", cwd: dir, approvalPolicy: "never", sandbox: "workspace-write" });
+    // Ephemeral: never written to ~/.codex/sessions, so the run is not in the user's own Codex history.
+    expect(recv[2].params).toEqual({ model: "stub-model", cwd: dir, approvalPolicy: "never", sandbox: "workspace-write", ephemeral: true });
     expect(recv[3].params).toEqual({
       threadId: "thr_stub_1",
       input: [{ type: "text", text: "Do the thing.", text_elements: [] }],
@@ -162,7 +163,7 @@ describe("CodexAdapter runs", () => {
     adapter.start(assignment("att-r", { workspace: { path: dir, access: "read" } }));
     await waitFor(() => terminals(events).length > 0);
     const recv = stubLog().filter((l) => l.recv).map((l) => l.recv);
-    expect(recv.find((m) => m.method === "thread/start").params.sandbox).toBe("read-only");
+    expect(recv.find((m) => m.method === "thread/start").params).toMatchObject({ sandbox: "read-only", ephemeral: true });
     expect(recv.find((m) => m.method === "turn/start").params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: false });
   });
 
@@ -174,6 +175,7 @@ describe("CodexAdapter runs", () => {
     expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: '{"reply":"Stub reply."}' });
     const recv = stubLog().filter((l) => l.recv).map((l) => l.recv);
     expect(recv.find((m) => m.method === "turn/start").params.outputSchema).toEqual(schema);
+    expect(recv.find((m) => m.method === "thread/start").params.ephemeral).toBe(true);
   });
 
   it("starting the same attempt twice is a no-op", async () => {

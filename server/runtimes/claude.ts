@@ -761,6 +761,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       // their hooks would run commands outside the workspace guard.
       ...(local ? { settingSources: ["user"] as "user"[] } : { settingSources: [], strictMcpConfig: true, mcpServers: selected }),
       systemPrompt: { type: "preset", preset: "claude_code" },
+      // Never saved to ~/.claude/projects, so no run shows up in the user's own Claude history. The adapter never
+      // resumes a session; the run's record is the service's.
+      persistSession: false,
       tools: policy.tools,
       disallowedTools: policy.disallowedTools,
       // Non-interactive: edits and out-of-cwd access prompt, and every prompt is answered by canUseTool.
@@ -772,6 +775,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       env: {
         ...claudeWorkerEnv(this.env),
         CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: "1",
+        // No auto-memory: with persistSession off, the CLI still made ~/.claude/projects/<working folder>/memory for a
+        // real run (2026-10-02). A run neither reads nor writes the user's own Claude memory.
+        CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
         CLAUDE_AGENT_SDK_CLIENT_APP: "orchestration/0.1.0",
       },
       stderr: (data: string) => {

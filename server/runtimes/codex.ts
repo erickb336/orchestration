@@ -331,6 +331,9 @@ export class CodexAdapter implements RuntimeAdapter {
         cwd: a.workspace.path,
         approvalPolicy: "never",
         sandbox: a.workspace.access === "write" ? "workspace-write" : "read-only",
+        // Never written to ~/.codex/sessions, so no run shows up in the user's own Codex history. The adapter never
+        // resumes a thread; the run's record is the service's.
+        ephemeral: true,
       };
       const thread = await rpc.request("thread/start", threadParams);
       if (run.done) return;
