@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>A hostile prototype</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <button type="button">Plan a trip</button>
+      <button type="button">Invite a friend</button>
+    </main>
+    <form id="leak" method="post" target="sink"><input name="secret" value="from-the-prototype" /></form>
+    <iframe name="sink" hidden></iframe>
+    <script src="hostile.js"></script>
+  </body>
+</html>

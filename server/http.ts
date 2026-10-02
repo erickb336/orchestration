@@ -32,6 +32,11 @@ interface HttpOptions {
   allowedHosts: string[];
   /** Directory with the built UI to serve, if any. */
   staticDir?: string;
+  /**
+   * The prototype server's port (server/studio/serve.ts). The UI's pages may then frame its origins only: a
+   * prototype's own policy cannot stop it navigating its frame elsewhere, the page's frame-src does.
+   */
+  prototypePort?: number;
   log?: (msg: string) => void;
 }
 
@@ -226,7 +231,8 @@ export function createHttpServer(opts: HttpOptions): Server {
       else res.destroy();
     });
     body.on("open", () => {
-      res.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream", "X-Content-Type-Options": "nosniff" });
+      const frames = opts.prototypePort ? { "Content-Security-Policy": `frame-src http://*.localhost:${opts.prototypePort}` } : {};
+      res.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream", "X-Content-Type-Options": "nosniff", ...frames });
       body.pipe(res);
     });
   };
