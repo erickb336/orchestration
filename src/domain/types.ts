@@ -924,7 +924,8 @@ export interface Attempt {
   actualModel?: string;
   /** Latest meaningful milestone reported by the runtime. */
   activity?: string;
-  usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
+  /** `cachedInputTokens`: of `inputTokens`, those read from the provider's prompt cache (Codex reports them). */
+  usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
   /**
    * The changed-path set of the change a review run was shown, recorded by the service before
    * the run could report anything. `paths` holds at most 500; `total` is the real count.

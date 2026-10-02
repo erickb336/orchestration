@@ -11,7 +11,7 @@ export interface ModelPrice {
   model: string;
   inputPerMTok: number;
   outputPerMTok: number;
-  /** Where the provider publishes one. Not used yet: no runtime reports cached input apart from the rest. */
+  /** The price of input read from the provider's prompt cache, where the provider publishes one: used for a run's `cachedInputTokens`. */
   cachedInputPerMTok?: number;
   /** The provider's pricing page. */
   source: string;
@@ -60,9 +60,11 @@ function neverStarted(r: Run): boolean {
 }
 
 /**
- * A run's cost: the runtime's reported cost when there is one, otherwise its tokens at the model's price.
- * Every input token is priced at the full input price, since the runtimes report cached input inside the
- * input count: for a run that read from a cache, the figure is an upper bound.
+ * A run's cost: the runtime's reported cost when there is one (Claude's), otherwise its tokens at the model's price.
+ * The input read from the provider's prompt cache (`cachedInputTokens`, part of `inputTokens`; Codex reports it)
+ * is priced at the cached-input price where one is published, and the rest of the input at the full price.
+ * Claude reports its cache reads and writes only inside its input count, so were its reported cost missing, its
+ * input would all be priced at the full price: too high for cache reads, too low for cache writes.
  */
 export function estimateUsd(run: Run, prices: readonly ModelPrice[]): RunCost {
   const u = run.usage;
@@ -72,7 +74,9 @@ export function estimateUsd(run: Run, prices: readonly ModelPrice[]): RunCost {
   const { provider, model } = ranOn(run);
   const price = prices.find((p) => p.provider === provider && p.model === model);
   if (!price) return { basis: "unknown", usd: null, estimated: true, reason: "no-price" };
-  return { basis: "priced", usd: (u.inputTokens * price.inputPerMTok + u.outputTokens * price.outputPerMTok) / 1_000_000, estimated: true };
+  const cached = Math.min(Math.max(u.cachedInputTokens ?? 0, 0), u.inputTokens);
+  const input = (u.inputTokens - cached) * price.inputPerMTok + cached * (price.cachedInputPerMTok ?? price.inputPerMTok);
+  return { basis: "priced", usd: (input + u.outputTokens * price.outputPerMTok) / 1_000_000, estimated: true };
 }
 
 /** A finished run with no recorded cost, and why. */

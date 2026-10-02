@@ -97,8 +97,8 @@ function runTurn() {
           threadId: THREAD,
           turnId: TURN,
           tokenUsage: {
-            total: { totalTokens: 150, inputTokens: 120, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 30, reasoningOutputTokens: 0 },
-            last: { totalTokens: 150, inputTokens: 120, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 30, reasoningOutputTokens: 0 },
+            total: { totalTokens: 150, inputTokens: 120, cachedInputTokens: 80, cacheWriteInputTokens: 0, outputTokens: 30, reasoningOutputTokens: 0 },
+            last: { totalTokens: 150, inputTokens: 120, cachedInputTokens: 80, cacheWriteInputTokens: 0, outputTokens: 30, reasoningOutputTokens: 0 },
             modelContextWindow: null,
           },
         });

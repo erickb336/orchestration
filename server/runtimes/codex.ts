@@ -525,8 +525,10 @@ export class CodexAdapter implements RuntimeAdapter {
         return;
       }
       case "thread/tokenUsage/updated": {
+        // The thread's totals. `cachedInputTokens` is part of `inputTokens` (Codex derives its non-cached input as the
+        // difference); kept apart so it is priced at the cached-input price.
         const t = n.params.tokenUsage.total;
-        run.usage = { inputTokens: t.inputTokens, outputTokens: t.outputTokens };
+        run.usage = { inputTokens: t.inputTokens, cachedInputTokens: t.cachedInputTokens, outputTokens: t.outputTokens };
         return;
       }
       case "model/rerouted":

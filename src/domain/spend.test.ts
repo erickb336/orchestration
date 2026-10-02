@@ -68,6 +68,20 @@ describe("one run's cost", () => {
     expect(estimateUsd(attempt({ provider: "claude", model: "claude-test-20260101", usage: { inputTokens: 1_000_000, outputTokens: 100_000 } }), LIST)).toEqual({ basis: "priced", usd: 1.5, estimated: true });
   });
 
+  it("prices input read from the cache at the cached-input price where one is published, and the rest of the input at the full price", () => {
+    const cachedList: ModelPrice[] = [{ ...LIST[0], cachedInputPerMTok: 0.2 }];
+    // 1,000,000 input tokens of which 800,000 cached: 200,000 × $2 + 800,000 × $0.20 + 100,000 × $10, per million.
+    const a = attempt({ provider: "codex", model: "gpt-test", usage: { inputTokens: 1_000_000, cachedInputTokens: 800_000, outputTokens: 100_000 } });
+    expect(estimateUsd(a, cachedList)).toEqual({ basis: "priced", usd: 1.56, estimated: true });
+    // No cached-input price: every input token at the full price.
+    expect(estimateUsd(a, LIST)).toEqual({ basis: "priced", usd: 3, estimated: true });
+    // A cached count above the input count cannot make the input cheaper than all of it cached.
+    const over = attempt({ provider: "codex", model: "gpt-test", usage: { inputTokens: 1_000_000, cachedInputTokens: 5_000_000, outputTokens: 0 } });
+    expect(estimateUsd(over, cachedList).usd).toBeCloseTo(0.2, 10);
+    // The pinned Codex prices publish one.
+    expect(PRICES.filter((p) => p.provider === "codex").every((p) => p.cachedInputPerMTok !== undefined)).toBe(true);
+  });
+
   it("an unknown model, a model of another provider, or a run with no usage has no recorded cost: unknown, never zero, with the reason", () => {
     const tokens = { inputTokens: 1000, outputTokens: 100 };
     expect(estimateUsd(attempt({ provider: "codex", model: "gpt-unknown", usage: tokens }), LIST)).toEqual({ basis: "unknown", usd: null, estimated: true, reason: "no-price" });
