@@ -107,6 +107,29 @@ At most three implementers at once, on disjoint files; the lead integrates. Each
   - If neither works, terminal demos fall back to hand-written asciicast files played by asciinema-player (Apache-2.0), with no recording. The fallback is labelled.
 - **The outputs** are WebM and GIF, and a text transcript the tests can compare.
 
+### 3c as built (83cc453, 914405f; merged in 4fdfff8)
+
+- **Where VHS can run.** The ORC-013 checks sandbox cannot run VHS: it blocks loopback on purpose, and VHS panics opening its port. VHS runs under macOS `sandbox-exec` with **two profiles**:
+  - **the recorder** (VHS, Chrome, ffmpeg): loopback only, with writes only to its output and temp folders;
+  - **the tape's shell** (ttyd and the shell): no network at all (not even loopback, local sockets or DNS), no system services or Apple events, no signals to outside processes, and writes only to a working copy of the tape's folder.
+
+  A small wrapper starts ttyd under the strict profile.
+- **Workarounds the profiles needed:**
+  - a first loopback rule let outbound traffic through, so it was narrowed;
+  - Chrome's singleton socket moved to the run's temp folder;
+  - Chrome runs without its own sandbox (`VHS_NO_SANDBOX=1`), so our profile is its boundary.
+- **Tape refusals beyond the design:** two commands on one line; `Copy`, `Paste`, `Screenshot` and `Env`; a size other than 80×24, 100×30 or 120×40.
+- **The hostile tape** was refused on every attempt: the internet (DNS, direct, Node), loopback, outside writes, and signals. A manual run also refused `open`, `launchctl`, `osascript` and `security`.
+- **The fallback:** `.cast` and `.ans` validators. asciinema-player is 3.17.0, Apache-2.0, not vendored yet.
+- **Tests** skip the real recordings where the sandbox probe fails (as on Linux CI).
+- **Follow-ups for integration and review:**
+  - 3a's manifest allowlist needs `cast`.
+  - The import needs to call the validators and `recordTape`, and to label "unavailable" as not recorded.
+  - 3b needs to serve webm, gif, txt and cast with the right content types.
+  - **Reads are not restricted,** so a tape could show the owner's files in a recording. Tighten the shell profile to deny the home directory outside the tape's folder.
+  - A detached shell process can outlive the run: kill the process group.
+  - **Longevity (PE):** Apple has deprecated `sandbox-exec`, and the wrapper depends on VHS 0.12's ttyd arguments. The probe runs before every recording, and a failure falls back to hand-written recordings, so a macOS or VHS update degrades safely rather than running unsandboxed.
+
 ## 3d. The artifact viewer
 
 - **A new route, `#/vision`,** is a first slice of the studio screen approved in pass 1 (the canvas layout). It shows:
