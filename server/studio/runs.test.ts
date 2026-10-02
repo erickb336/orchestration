@@ -177,6 +177,31 @@ describe("a designer run at the service", () => {
     expect(prompt).toContain("`kind`: one of screen, terminal-demo, tui, contract, flow, interface, algorithm, topology.");
     expect(prompt).toContain("- A document (contract, flow, interface, algorithm, topology) is plain files: Markdown (.md) with code blocks and tables, and Mermaid (.mmd) for diagrams, which the app renders. Its variant's entry is its main .md file; it has no devices.");
     expect(prompt).toContain('Names use only letters, digits, ".", "_", "-" and spaces.');
+    // Only round 0 of an existing repository is "as it is today".
+    expect(prompt).not.toContain("## As it is today");
+  });
+
+  it("in round 0 (as it is today), it is asked to reproduce the code read-only and name each artifact's provenance; a Codex designer is told its reads are not confined", async () => {
+    await service({ workspaces: true });
+    const repo = state().project.repoPath;
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src", "index.html"), "<h1>Trips</h1>");
+    execFileSync("git", ["-C", repo, "add", "-A"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the trip list"]);
+    cmd("initProject", { name: "Trips", repoPath: repo, vision: "Weekend trips for a small group of friends.", focus: "" });
+    cmd("openRound", { focus: "material", summary: "As it is today" });
+    const id = startDesignerRun(store, { round: 0, brief: "Reproduce the trip list as it is today." }, iso());
+    tick();
+    const a = claude.runs.get(id)!;
+    expect(a.prompt).toContain(`# Studio run ${id}: the designer, round 0 (material)`);
+    expect(a.prompt).toContain("## As it is today\n\nThis round reproduces what the product's repository already does, before anything changes");
+    expect(a.prompt).toContain(`- Read the code, read-only, in the checkout at ${a.workspace.readRoots![0]}. The service lets you read only that checkout and your working directory.`);
+    expect(a.prompt).toContain("- Reproduce what the code does now, not what it could become");
+    expect(a.prompt).toContain('give every artifact `"provenance"`: the repository files it came from');
+    expect(a.prompt).toContain("- Code in the repository (1 of 2 tracked files): src/index.html.");
+    const cx = startDesignerRun(store, { round: 0, brief: "Reproduce the trip list as it is today.", selection: { provider: "codex", model: "auto" } }, iso());
+    tick();
+    expect(codex.runs.get(cx)!.prompt).toContain("On Codex the service cannot confine what you read (as for every Codex run), so read only that checkout.");
   });
 
   it("a refused studio.json fails the run with the reason; nothing is recorded, and its staging folder stays to look at", async () => {

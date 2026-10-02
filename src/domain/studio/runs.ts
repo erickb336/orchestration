@@ -111,7 +111,8 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
   const round = state.studio.rounds.find((r) => r.n === req.round);
   if (!round) throw new ControlError(`There is no round ${req.round}.`);
   if (round.closedAt) throw new ControlError(`Round ${req.round} is closed.`);
-  if (round.n === 0) throw new ControlError(`Round 0 holds what the owner brought; the ${req.kind === "pe" ? "PE" : "designer"} works in the lead's rounds.`);
+  // Round 0 is what already exists: the designer works there only to reproduce an existing repository "as is" (its
+  // import refuses anything else there), and the PE reviews those reproductions like any other designer's work.
   const base = req.artifactId === undefined ? undefined : latestVersion(state, req.artifactId);
   if (req.artifactId !== undefined && !base) throw new ControlError(`Unknown studio artifact ${req.artifactId}.`);
   let note: string | undefined;

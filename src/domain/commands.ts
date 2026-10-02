@@ -277,6 +277,7 @@ export const COMMANDS = {
         }),
         madeBy: studioMaker(a.madeBy),
         ...(a.supersedes === undefined ? {} : { supersedes: str(a, "supersedes") }),
+        ...(a.provenance === undefined ? {} : { provenance: { files: strings(obj(a.provenance, "provenance").files, "provenance.files") } }),
       },
       now,
     );

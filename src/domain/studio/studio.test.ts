@@ -33,6 +33,44 @@ function nextRound(s: State, sec: number, focus = "experience") {
   return openRound(runCommand(s, "closeRound", { round: cur.n }, at(sec)).state, focus, at(sec));
 }
 
+describe("as it is today: round 0 of an existing repository (pass 4)", () => {
+  const asIs = (over: Record<string, unknown> = {}) => ({ title: "Trip list (as is)", variants: [{ id: "a", label: "As it is today", entry: "a/index.html" }], files: [{ path: "a/index.html", sha256: sha("a") }], provenance: { files: ["src/TripList.tsx", "src/trips.css"] }, ...over });
+
+  it("holds the designer's reproductions of the code, labelled as is with the repository files they came from, which the PE reviews", () => {
+    const zero = openRound(fresh(), "material", at(1));
+    expect(zero.n).toBe(0);
+    const a = addScreen(zero.state, 0, at(2), asIs({ provenance: { files: ["src/TripList.tsx", "src/trips.css", "src/TripList.tsx"] } }));
+    const v1 = art(a.state, a.id, 1);
+    expect(v1).toMatchObject({ round: 0, kind: "screen", provenance: { asIs: true, files: ["src/TripList.tsx", "src/trips.css"] } });
+    expect(a.state.events.at(-1)!.message).toBe("Trip list (as is) v1 added to round 0, by the designer (claude); as is, from 2 repository files");
+    // Not what the owner brought: the PE reviews it before the owner sees it.
+    expect(S.readyForOwner(a.state, v1)).toBe(false);
+    const agreed = peAgrees(a.state, a.id, 1, ["a"], at(3));
+    expect(S.readyForOwner(agreed, art(agreed, a.id, 1))).toBe(true);
+    // A correction in round 0 is still as is, with its provenance; a later round's revision is a proposal and has none.
+    const v2 = addScreen(agreed, 0, at(4), asIs({ artifactId: a.id, provenance: { files: ["src/TripList.tsx"] } }));
+    expect(art(v2.state, a.id, 2).provenance).toEqual({ asIs: true, files: ["src/TripList.tsx"] });
+    const later = openRound(run(v2.state, "closeRound", { round: 0 }, at(5)).state, "experience", at(6));
+    const v3 = addScreen(later.state, later.n, at(7), { artifactId: a.id });
+    expect(art(v3.state, a.id, 3).provenance).toBeUndefined();
+  });
+
+  it("refuses as-is artifacts anywhere else, from anyone else, and provenance that is not a path in the repository", () => {
+    const zero = openRound(fresh(), "material", at(1));
+    const outside = "Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.";
+    expect(() => addScreen(zero.state, 0, at(2), asIs({ kind: "material", madeBy: { role: "user" } }))).toThrow(outside);
+    expect(() => addScreen(zero.state, 0, at(2), asIs({ madeBy: { ...DESIGNER, role: "probe" } }))).toThrow(/Round 0 holds what already exists/);
+    const one = openRound(fresh(), "experience", at(1));
+    expect(() => addScreen(one.state, 1, at(2), asIs())).toThrow(outside);
+    for (const path of ["../secrets.txt", "/etc/passwd", "src//a.ts", "src\\a.ts", "./a.ts", "a\u0007.ts", ""]) {
+      expect(() => addScreen(zero.state, 0, at(2), asIs({ provenance: { files: [path] } }))).toThrow(/is not a file path inside the repository/);
+    }
+    expect(() => addScreen(zero.state, 0, at(2), asIs({ provenance: { files: [] } }))).toThrow("An as-is artifact names between 1 and 50 repository files it came from.");
+    expect(() => addScreen(zero.state, 0, at(2), asIs({ provenance: { files: Array.from({ length: 51 }, (_, i) => `src/f${i}.ts`) } }))).toThrow(/between 1 and 50/);
+    expect(() => addScreen(zero.state, 0, at(2), asIs({ provenance: ["src/a.ts"] }))).toThrow(InvalidCommandError);
+  });
+});
+
 describe("rounds", () => {
   it("round 0 is what the owner brought; the lead's rounds count from 1; one is open at a time", () => {
     let s = fresh();
@@ -86,9 +124,9 @@ describe("artifacts and their versions", () => {
     expect(() => addScreen(s, 1, at(11), { artifactId: id })).toThrow(/cannot belong to an earlier round/);
   });
 
-  it("checks what is stored: round 0 holds material only, devices within the scope, files inside the workspace with their hashes, one id per variant", () => {
+  it("checks what is stored: round 0 holds what already exists, devices within the scope, files inside the workspace with their hashes, one id per variant", () => {
     let s = openRound(fresh(), "material", at(1)).state;
-    expect(() => addScreen(s, 0, at(2))).toThrow("Round 0 holds what the owner brought (material) only.");
+    expect(() => addScreen(s, 0, at(2))).toThrow("Round 0 holds what already exists: what the owner brought (material), and the designer's reproductions of the existing code, labelled as is with the repository files they came from.");
     const brought = addScreen(s, 0, at(2), { kind: "material", title: "Group page sketch", variants: [], devices: [], madeBy: { role: "user" } });
     expect(brought.state.events.at(-1)).toMatchObject({ actor: "user", message: "Group page sketch v1 added to round 0, you brought" });
     s = openRound(run(brought.state, "closeRound", { round: 0 }, at(3)).state, "experience", at(4)).state;

@@ -9,7 +9,11 @@
 
 import type { Device, PeReviewState, ProviderId } from "../types";
 
-/** What a round is about. Round 0 is what the owner brought (material); then the experience, the data crossing each boundary, and the flows. */
+/**
+ * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
+ * repository the designer's "as is" reproductions of it ("as it is today"). Then the experience, the data crossing
+ * each boundary, and the flows.
+ */
 export type RoundFocus = "material" | "experience" | "data" | "flows";
 export const ROUND_FOCUSES: RoundFocus[] = ["material", "experience", "data", "flows"];
 
@@ -79,10 +83,22 @@ export interface StudioArtifact {
   devices: Device[];
   madeBy: StudioMaker;
   at: string;
+  /**
+   * An "as is" artifact (pass 4): the designer's reproduction of what the existing repository already does, in round
+   * 0 ("as it is today"), with the repository files it came from (paths relative to the repository's root, each a file
+   * the repository tracks, checked at import). Absent on everything else.
+   */
+  provenance?: Provenance;
   /** A screen's screenshots, which the service takes after import (pass 3). Absent when this service takes none. */
   shots?: ArtifactShots;
   /** How a terminal demo or TUI is shown, which the service settles after import (pass 3). Absent when this service records none. */
   demo?: ArtifactDemo;
+}
+
+/** Where an "as is" artifact came from: labelled as is, with the repository files the designer reproduced it from. */
+export interface Provenance {
+  asIs: true;
+  files: string[];
 }
 
 /** One screenshot: a variant on a device, relative to the version's folder (`shots/<variant>-<device>.png`). */

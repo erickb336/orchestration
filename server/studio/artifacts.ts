@@ -3,7 +3,8 @@
 //   <dataDir>/studio/<projectId>/staging/<runId>/              a studio run's staging folder: the one place it writes
 //   <dataDir>/studio/<projectId>/artifacts/<artifactId>/v<n>/  one artifact version, never rewritten once recorded:
 //       its files, at the paths the designer gave them, and manifest.json:
-//       { artifactId, version, kind, title, devices, variants: [{ id, label, entry, showsError? }], files: [{ path, sha256, bytes }] }
+//       { artifactId, version, kind, title, devices, variants: [{ id, label, entry, showsError? }], files: [{ path, sha256, bytes }],
+//         provenance?: { asIs: true, files: [repository paths] } }
 //       and, written by the service after import (media.ts): shots/<variant>-<device>.png for a screen, and
 //       recording/<variant>/ for a terminal demo or TUI that VHS recorded. The files are read-only; the folders are
 //       not, so those can be added.
@@ -72,6 +73,8 @@ export interface StagedArtifact {
   devices: Device[];
   variants: StagedVariant[];
   files: StagedFile[];
+  /** An "as is" reproduction of the existing repository: the repository files it came from, as the designer listed them. */
+  provenance?: string[];
 }
 
 /** studio.json was refused; the message says why, for the run's record. */
@@ -191,8 +194,24 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
       return { path: p, sha256: createHash("sha256").update(data).digest("hex"), bytes: data.length, data };
     });
     checkTerminalFiles(where, a.kind as StudioArtifactKind, variants, files);
-    return { kind: a.kind as StudioArtifactKind, title: a.title, devices: devices as Device[], variants, files };
+    const provenance = a.provenance === undefined ? undefined : provenanceOf(a.provenance, where);
+    return { kind: a.kind as StudioArtifactKind, title: a.title, devices: devices as Device[], variants, files, ...(provenance ? { provenance } : {}) };
   });
+}
+
+const MAX_PROVENANCE = 50;
+
+/**
+ * An "as is" artifact's provenance: 1 to 50 paths in the repository, relative to its root, with no "." or ".." name.
+ * Whether the repository has each file is checked when the run is imported (runs.ts).
+ */
+function provenanceOf(raw: unknown, where: string): string[] {
+  if (!Array.isArray(raw) || !raw.length || raw.length > MAX_PROVENANCE || !raw.every((p) => typeof p === "string")) throw new ManifestError(`${where}: "provenance" lists 1 to ${MAX_PROVENANCE} repository files, as paths from the repository's root.`);
+  for (const p of raw as string[]) {
+    const bad = !p || p.length > 300 || p.startsWith("/") || p.includes("\\") || /[\u0000-\u001f\u007f]/.test(p) || p.split("/").some((x) => x === "" || x === "." || x === "..");
+    if (bad) throw new ManifestError(`${where}: the provenance ${show(p)} is not a path from the repository's root (no absolute paths, no "..").`);
+  }
+  return [...new Set(raw as string[])];
 }
 
 const TERMINAL_KINDS: readonly StudioArtifactKind[] = ["terminal-demo", "tui"];
@@ -251,6 +270,8 @@ export interface VersionManifest {
   devices: Device[];
   variants: StagedVariant[];
   files: { path: string; sha256: string; bytes: number }[];
+  /** An "as is" version's provenance, as recorded: the repository files it came from (so the PE reading the folder sees it). */
+  provenance?: { asIs: true; files: string[] };
 }
 
 /**

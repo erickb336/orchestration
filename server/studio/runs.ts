@@ -16,6 +16,7 @@ import { DESIGNER_KINDS, DOCUMENT_KINDS, type StudioRun } from "../../src/domain
 import type { ModelSelection, State } from "../../src/domain/types";
 import type { Store } from "../store";
 import { FILE_TYPES, MAX_ARTIFACT_BYTES, MAX_FILE_BYTES, ManifestError, NO_MODULES, STUDIO_MANIFEST, type StagedArtifact, versionDir, writeVersion } from "./artifacts";
+import { repoFiles, repoGlance } from "./existing";
 
 /**
  * Ask for a designer run in a round (the service: from pass 4, the lead's studio loop). Without a brief it gets the
@@ -46,6 +47,31 @@ export function prepareStaging(state: State, run: StudioRun, root: string): stri
 }
 
 const SIZES: Record<string, string> = { desktop: "desktop 1280×800", mobile: "mobile 390×844", terminal: "terminal 80×24, 100×30 or 120×40 (columns × rows)" };
+
+/**
+ * Round 0 of an existing repository, "as it is today" (pass 4): the designer reproduces what the code does now, read
+ * only, and names the repository files each artifact came from. Reads are confined for a Claude designer, whose
+ * workspace guard lets it read only the read-only checkout and its staging folder (pass 3). A Codex designer's reads
+ * are not confined, as for every Codex run (Codex has no readable-roots setting), so its brief says to read only the
+ * checkout; that is an instruction, not a guard.
+ */
+function asIsSection(state: State, run: StudioRun, checkout: string | undefined): string[] {
+  const glance = repoGlance(state.project.repoPath);
+  const confined =
+    run.provider === "claude"
+      ? "The service lets you read only that checkout and your working directory."
+      : "On Codex the service cannot confine what you read (as for every Codex run), so read only that checkout.";
+  return [
+    "## As it is today",
+    "",
+    "This round reproduces what the product's repository already does, before anything changes, so the owner can check that the studio understood it; later rounds revise it.",
+    checkout ? `- Read the code, read-only, in the checkout at ${checkout}. ${confined}` : "- No checkout is available to read: reproduce only what the file list below and the brief show, and say so in each artifact.",
+    "- Reproduce what the code does now, not what it could become: the key screens, or the interface and core algorithms, or the topology, following the product's domains. Do not improve or redesign it here.",
+    '- In studio.json, give every artifact `"provenance"`: the repository files it came from, as paths from the repository\'s root, for example `"provenance": ["src/TripList.tsx", "src/trips.css"]`. The studio labels it "as is"; the service checks that the repository has each file, and refuses an artifact without provenance in this round.',
+    glance ? `- Code in the repository (${glance.codeFiles} of ${glance.files} tracked files${glance.codeFiles > glance.code.length ? `; the first ${glance.code.length}` : ""}): ${glance.code.join(", ") || "none"}.` : "- The repository's file list could not be read.",
+    "",
+  ];
+}
 
 /** What a designer run is given: its brief, where it works, and exactly what to hand in. */
 export function designerEnvelope(state: State, run: StudioRun, where: { staging: string; checkout?: string }): string {
@@ -80,6 +106,7 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     ...domainLines(state.project.domains).map((l) => `- ${l}`),
     "- Make the kinds the brief asks for; when it names none, the kinds of the product's domains.",
     "",
+    ...(round.n === 0 ? asIsSection(state, run, where.checkout) : []),
     "## What to hand in",
     "",
     `End by writing \`${STUDIO_MANIFEST}\` in your working directory:`,
@@ -121,12 +148,28 @@ export function importDesignerRun(state: State, runId: string, staged: StagedArt
   if (!run) throw new Error(`Unknown studio run ${runId}.`);
   const revising = run.artifactId === undefined ? undefined : S.latestVersion(state, run.artifactId);
   if (revising && staged.length !== 1) throw new ManifestError(`a revision hands in exactly one artifact, the new version of ${revising.title}; it listed ${staged.length}.`);
+  // Provenance is kept only in round 0, where the designer reproduces the existing code "as is"; a later round's
+  // artifacts are proposals, so a provenance listed there is not recorded. Each file named must be one the repository
+  // tracks, so the owner is never shown a source the code does not have. The repository is read once, when needed.
+  let tracked: Set<string> | undefined;
+  const provenanceOf = (a: StagedArtifact): { files: string[] } | undefined => {
+    if (!a.provenance || run.round !== 0) return undefined;
+    if (!tracked) {
+      const files = repoFiles(state.project.repoPath);
+      if (!files) throw new ManifestError(`the provenance of "${a.title}" cannot be checked: the repository cannot be read.`);
+      tracked = new Set(files);
+    }
+    const missing = a.provenance.filter((p) => !tracked!.has(p));
+    if (missing.length) throw new ManifestError(`the provenance of "${a.title}" names ${missing.slice(0, 3).map((p) => JSON.stringify(p)).join(", ")}${missing.length > 3 ? ` and ${missing.length - 3} more` : ""}, which the repository does not have.`);
+    return { files: a.provenance };
+  };
   let s = state;
   const written: string[] = [];
   const names: string[] = [];
   const imported: { artifactId: string; version: number }[] = [];
   try {
     for (const a of staged) {
+      const provenance = provenanceOf(a);
       const r = S.addArtifact(
         s,
         {
@@ -138,6 +181,7 @@ export function importDesignerRun(state: State, runId: string, staged: StagedArt
           files: a.files.map((f) => ({ path: f.path, sha256: f.sha256 })),
           devices: a.devices,
           madeBy: { role: run.kind, provider: run.provider, model: run.actualModel ?? run.model, attemptId: run.id },
+          ...(provenance ? { provenance } : {}),
         },
         now,
       );
@@ -154,6 +198,7 @@ export function importDesignerRun(state: State, runId: string, staged: StagedArt
             devices: rec.devices,
             variants: rec.variants.map((v) => ({ id: v.id, label: v.label, entry: v.entry!, ...(a.variants.find((x) => x.id === v.id)?.showsError ? { showsError: true as const } : {}) })),
             files: a.files.map((f) => ({ path: f.path, sha256: f.sha256, bytes: f.bytes })),
+            ...(rec.provenance ? { provenance: rec.provenance } : {}),
           },
           a.files,
         ),
