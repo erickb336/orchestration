@@ -16,7 +16,7 @@ import { DESIGNER_KINDS, DOCUMENT_KINDS, type StudioRun } from "../../src/domain
 import type { ModelSelection, State } from "../../src/domain/types";
 import type { Store } from "../store";
 import { FILE_TYPES, MAX_ARTIFACT_BYTES, MAX_FILE_BYTES, ManifestError, NO_MODULES, STUDIO_MANIFEST, type StagedArtifact, versionDir, writeVersion } from "./artifacts";
-import { repoFiles, repoGlance } from "./existing";
+import { repoGlance, trackedAmong } from "./existing";
 
 /**
  * Ask for a designer run in a round (the service: from pass 4, the lead's studio loop). Without a brief it gets the
@@ -139,28 +139,40 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
 }
 
 /**
+ * What a designer run handed in, read outside the store's transaction (review finding 11): its artifacts, and which of
+ * the repository files their provenance names the repository tracks at HEAD (round 0 only; undefined when the
+ * repository cannot be read).
+ */
+export interface HandedIn {
+  artifacts: StagedArtifact[];
+  tracked: ReadonlySet<string> | undefined;
+}
+
+/** Read what a run handed in, with its provenance looked up in git: in the scheduler, before the transaction that imports it. */
+export function handedIn(state: State, runId: string, artifacts: StagedArtifact[]): HandedIn {
+  const named = R.getStudioRun(state, runId)?.round === 0 ? [...new Set(artifacts.flatMap((a) => a.provenance ?? []))] : [];
+  return { artifacts, tracked: named.length ? trackedAmong(state.project.repoPath, named) : new Set() };
+}
+
+/**
  * Record a designer run's artifacts and write their version folders. A run that revises an artifact hands in exactly
  * one artifact: its new version. Throws a ManifestError (or the domain's ControlError) when something cannot be
  * recorded; then nothing is recorded and no folder is left. Returns the state, a summary for the run's record, and
- * the versions it recorded.
+ * the versions it recorded. It reads no repository: `handedIn` did.
  */
-export function importDesignerRun(state: State, runId: string, staged: StagedArtifact[], root: string, now: string): { state: State; summary: string; imported: { artifactId: string; version: number }[] } {
+export function importDesignerRun(state: State, runId: string, given: HandedIn, root: string, now: string): { state: State; summary: string; imported: { artifactId: string; version: number }[] } {
   const run = R.getStudioRun(state, runId);
   if (!run) throw new Error(`Unknown studio run ${runId}.`);
+  const staged = given.artifacts;
   const revising = run.artifactId === undefined ? undefined : S.latestVersion(state, run.artifactId);
   if (revising && staged.length !== 1) throw new ManifestError(`a revision hands in exactly one artifact, the new version of ${revising.title}; it listed ${staged.length}.`);
   // Provenance is kept only in round 0, where the designer reproduces the existing code "as is"; a later round's
   // artifacts are proposals, so a provenance listed there is not recorded. Each file named must be one the repository
-  // tracks, so the owner is never shown a source the code does not have. The repository is read once, when needed.
-  let tracked: Set<string> | undefined;
+  // tracks, so the owner is never shown a source the code does not have.
   const provenanceOf = (a: StagedArtifact): { files: string[] } | undefined => {
     if (!a.provenance || run.round !== 0) return undefined;
-    if (!tracked) {
-      const files = repoFiles(state.project.repoPath);
-      if (!files) throw new ManifestError(`the provenance of "${a.title}" cannot be checked: the repository cannot be read.`);
-      tracked = new Set(files);
-    }
-    const missing = a.provenance.filter((p) => !tracked!.has(p));
+    if (!given.tracked) throw new ManifestError(`the provenance of "${a.title}" cannot be checked: the repository cannot be read.`);
+    const missing = a.provenance.filter((p) => !given.tracked!.has(p));
     if (missing.length) throw new ManifestError(`the provenance of "${a.title}" names ${missing.slice(0, 3).map((p) => JSON.stringify(p)).join(", ")}${missing.length > 3 ? ` and ${missing.length - 3} more` : ""}, which the repository does not have.`);
     return { files: a.provenance };
   };

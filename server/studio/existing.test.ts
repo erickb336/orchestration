@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isCode, repoFiles, repoGlance } from "./existing";
+import { isCode, repoFiles, repoGlance, trackedAmong } from "./existing";
 
 let dir: string;
 beforeEach(() => {
@@ -41,6 +41,23 @@ describe("an existing repository", () => {
     // Uncommitted files are not the repository's yet.
     writeFileSync(join(r, "src", "draft.js"), "2");
     expect(repoGlance(r)?.codeFiles).toBe(3);
+  });
+
+  it("the listing follows HEAD: what a new commit adds is listed (review finding 11 keeps one listing per HEAD)", () => {
+    const r = repo({ "src/index.html": "<h1>Trips</h1>" });
+    expect(repoFiles(r)).toEqual(["src/index.html"]);
+    writeFileSync(join(r, "src", "app.js"), "1");
+    execFileSync("git", ["-C", r, "add", "-A"]);
+    execFileSync("git", ["-C", r, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "more"]);
+    expect(repoFiles(r)).toEqual(["src/app.js", "src/index.html"]);
+  });
+
+  it("the provenance lookup names which of the given files the repository tracks, as literal paths, and nothing else", () => {
+    const r = repo({ "src/index.html": "<h1>Trips</h1>", "src/trips.css": "h1 {}", "src/*.js": "a literal star", "src/app.js": "1" });
+    expect(trackedAmong(r, ["src/index.html", "src/missing.ts", "src/*.js"])).toEqual(new Set(["src/index.html", "src/*.js"]));
+    // A folder is not a file it came from.
+    expect(trackedAmong(r, ["src"])?.has("src")).toBe(false);
+    expect(trackedAmong(join(dir, "missing"), ["src/index.html"])).toBeUndefined();
   });
 
   it("a repository with documents only has no code; one that cannot be read gives nothing", () => {

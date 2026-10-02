@@ -24,12 +24,12 @@ import { PrDriver } from "./prdelivery";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
-import { ManifestError, readStaged, studioRoot, versionDir, type StagedArtifact } from "./studio/artifacts";
+import { ManifestError, readStaged, studioRoot, versionDir } from "./studio/artifacts";
 import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
 import { PeAnswerError, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
 import { repoGlance } from "./studio/existing";
 import { askForRevisions } from "./studio/revise";
-import { designerEnvelope, importDesignerRun, prepareStaging } from "./studio/runs";
+import { designerEnvelope, handedIn, importDesignerRun, prepareStaging, type HandedIn } from "./studio/runs";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
 
@@ -89,7 +89,7 @@ interface Launched {
 /** What the scheduler saw of a studio run outside the store: a lost process, an unconfirmed stop, a launch that failed. */
 type StudioIssue = { id: string; kind: "lost" } | { id: string; kind: "timeout" } | { id: string; kind: "failed"; reason: string };
 /** A designer run's studio.json, read and checked before the transaction that imports it. */
-type StudioOutput = { artifacts: StagedArtifact[] } | { refused: string };
+type StudioOutput = HandedIn | { refused: string };
 
 /**
  * What the service recorded about a run before it started (the changed-path set a reviewer was shown,
@@ -503,7 +503,7 @@ export class Scheduler {
       const studioRun = R.getStudioRun(current, e.attemptId);
       if (studioRun) {
         // A designer hands in files; the PE answers in its final message, read in the transaction.
-        if (studioRun.kind === "designer") studioOutputs.set(e.attemptId, this.readStudioOutput(e.attemptId));
+        if (studioRun.kind === "designer") studioOutputs.set(e.attemptId, this.readStudioOutput(current, e.attemptId));
         continue;
       }
       try {
@@ -964,12 +964,15 @@ export class Scheduler {
     }
   }
 
-  /** Read and check the studio.json a finished designer run left in its staging folder. Never throws. */
-  private readStudioOutput(runId: string): StudioOutput {
+  /**
+   * Read and check the studio.json a finished designer run left in its staging folder, and look up the repository
+   * files its provenance names: here, outside the store's transaction (review finding 11). Never throws.
+   */
+  private readStudioOutput(state: State, runId: string): StudioOutput {
     const staging = this.launched.get(runId)?.staging;
     if (!staging) return { refused: "its staging folder is not known to this service (it was started before a restart)" };
     try {
-      return { artifacts: readStaged(staging, DESIGNER_KINDS) };
+      return handedIn(state, runId, readStaged(staging, DESIGNER_KINDS));
     } catch (e) {
       return { refused: e instanceof ManifestError ? e.message : `it could not be read (${e instanceof Error ? e.message : String(e)})` };
     }
@@ -1010,7 +1013,7 @@ export class Scheduler {
         const out = outputs.get(run.id);
         if (!out || "refused" in out) return fail(`studio.json was refused: ${out && "refused" in out ? out.refused : "it was not read"}`);
         try {
-          const r = importDesignerRun(started, run.id, out.artifacts, studioRoot(this.dataDir!, s.project.id), now);
+          const r = importDesignerRun(started, run.id, out, studioRoot(this.dataDir!, s.project.id), now);
           // Screenshots and recordings are made after this transaction commits; the run completes without them.
           const marked = this.media ? r.imported.reduce((acc, v) => S.startArtifactMedia(acc, v.artifactId, v.version), r.state) : r.state;
           return R.completeStudioRun(marked, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
