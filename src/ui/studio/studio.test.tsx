@@ -781,6 +781,8 @@ describe("document artifacts: interfaces, algorithms, topologies, contracts and 
   it("Mermaid draws in a frame whose own policy allows no request and only its two scripts; its replies are read strictly", () => {
     const scripts = ["http://127.0.0.1:5319/assets/mermaid.min-x.js", "http://127.0.0.1:5319/assets/diagramFrame-y.js"];
     expect(diagramFramePolicy(scripts)).toBe(`default-src 'none'; script-src ${scripts.join(" ")}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`);
+    // A query (the dev server adds one) is not part of a policy's source; the script tag keeps it.
+    expect(diagramFramePolicy(["http://127.0.0.1:5317/src/ui/studio/diagramFrame.js?no-inline"])).toContain("script-src http://127.0.0.1:5317/src/ui/studio/diagramFrame.js;");
     const doc = diagramFrameDocument(scripts);
     // The policy comes first, then Mermaid, then the frame's script; no inline script.
     expect(doc.indexOf("Content-Security-Policy")).toBeLessThan(doc.indexOf(scripts[0]));

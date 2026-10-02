@@ -14,9 +14,12 @@ import type { MermaidConfig } from "mermaid";
 import mermaidScript from "mermaid/dist/mermaid.min.js?url";
 import frameScript from "./diagramFrame.js?url&no-inline";
 
-/** The diagram frame's own policy: nothing loads but its two scripts, and Mermaid's SVG may carry inline styles. */
+/**
+ * The diagram frame's own policy: nothing loads but its two scripts, and Mermaid's SVG may carry inline styles. A
+ * policy matches a script by its path; a query (the dev server's) is left out, as a policy may not hold one.
+ */
 export function diagramFramePolicy(scripts: readonly string[]): string {
-  return `default-src 'none'; script-src ${scripts.join(" ")}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`;
+  return `default-src 'none'; script-src ${scripts.map((s) => s.split(/[?#]/)[0]).join(" ")}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`;
 }
 
 const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
