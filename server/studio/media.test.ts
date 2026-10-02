@@ -1,16 +1,18 @@
 // ORC-029 pass 3: what the service makes of a version after import (media.ts), with stand-ins for Chrome and VHS: a
 // screen's screenshots, and per variant of a terminal demo the tape it records, the folder it records from, where the
 // recording goes, and what it falls back to (the designer's .cast or .ans) when it is not recorded, with the reason.
-// Real Chrome and VHS run in runs.test.ts, through the scheduler.
+// Where Docker runs and the recorder's image is built, the service's own media record for real, in the container; real
+// Chrome and VHS also run in runs.test.ts, through the scheduler.
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MediaResult } from "../../src/domain/studio/studio";
-import { TERMINAL_RECORDING_PAUSED, makeDemo, makeShots, notRecordedReason, systemMedia, type StudioMedia } from "./media";
+import { dockerReady } from "./container";
+import { makeDemo, makeShots, notRecordedReason, systemMedia, type StudioMedia } from "./media";
 import type { ShotsOutcome } from "./shots";
-import { probeTerminalSandbox, recordTape, type RecordResult } from "./terminal";
+import { recordTape, type RecordResult } from "./terminal";
 import { writeVersion } from "./testFixtures";
 
 const NOW = "2026-10-02T12:00:00.000Z";
@@ -36,7 +38,7 @@ function stand(o: { shots?: ShotsOutcome; record?: (tapeDir: string, outDir: str
       if (o.record) return o.record(tapeDir, outDir, tape);
       mkdirSync(outDir, { recursive: true });
       for (const ext of ["gif", "txt"]) writeFileSync(join(outDir, `demo.${ext}`), ext);
-      return { sandbox: "sandbox-exec", gif: join(outDir, "demo.gif"), txt: join(outDir, "demo.txt") };
+      return { sandbox: "container", gif: join(outDir, "demo.gif"), txt: join(outDir, "demo.txt") };
     },
   };
   return { media, recorded };
@@ -87,24 +89,27 @@ describe("a terminal demo's variants", () => {
   it("when a tape is not recorded, shows the variant's hand-written file with the reason, or says why there is nothing; a failed recording leaves nothing", async () => {
     version();
     const lone = writeVersion(studio, "sa-3", 1, { "demo.tape": TAPE, "trips.js": "1" }, { kind: "terminal-demo", devices: [], variants: [{ id: "a", label: "A", entry: "demo.tape" }] });
-    const notSandboxed = stand({ record: () => ({ sandbox: null, reason: "unavailable", error: "Not recorded: no working sandbox (shellWriteOutside allowed). Nothing runs unsandboxed; use a hand-written .cast or .ans instead." }) });
+    const notSandboxed = stand({ record: () => ({ sandbox: null, reason: "unavailable", error: 'Not recorded: the recorder\'s container failed the check "has no network but its own loopback" (saw: interfaces lo, eth0). Nothing runs unsandboxed; use a hand-written .cast or .ans instead.' }) });
     const a = await makeDemo(notSandboxed.media, studio, "sa-2", 1, ["a", "b", "c"], now);
-    expect(variantsOf(a)[0]).toEqual({ variant: "a", status: "hand-written", files: ["a/demo.cast"], reason: "recording is not available here: no working sandbox (shellWriteOutside allowed)" });
+    expect(variantsOf(a)[0]).toEqual({ variant: "a", status: "hand-written", files: ["a/demo.cast"], reason: 'recording is not available here: the recorder\'s container failed the check "has no network but its own loopback" (saw: interfaces lo, eth0)' });
     const failing = stand({
       record: (_t, out) => {
         mkdirSync(out, { recursive: true });
         writeFileSync(join(out, "half.gif"), "GIF8");
-        return { sandbox: "sandbox-exec", reason: "timeout", error: "VHS did not finish within 120 s; it was stopped" };
+        return { sandbox: "container", reason: "timeout", error: "VHS did not finish within 120 s; it was stopped" };
       },
     });
     const b = await makeDemo(failing.media, studio, "sa-3", 1, ["a"], now);
     expect(variantsOf(b)).toEqual([{ variant: "a", status: "not-recorded", reason: "the recording took too long: VHS did not finish within 120 s; it was stopped" }]);
     expect(existsSync(join(lone, "recording", "a"))).toBe(false);
-    // The reason of a real refusal (here sandbox-exec is missing), without its advice to the designer.
-    const missing = await recordTape(lone, join(root, "out"), { tape: "demo.tape", sandboxExec: join(root, "no-sandbox-exec"), tmpRoot: root });
+    // The reason of a real refusal (here Docker is missing), without its advice to the designer.
+    const missing = await recordTape(lone, join(root, "out"), { tape: "demo.tape", docker: join(root, "no-docker"), tmpRoot: root });
     expect(missing).toMatchObject({ sandbox: null, reason: "unavailable" });
-    const why = process.platform === "darwin" ? `${join(root, "no-sandbox-exec")} is missing` : "terminal recording needs macOS sandbox-exec; this is not macOS";
-    expect(notRecordedReason(missing)).toBe(`recording is not available here: ${why}`);
+    expect(notRecordedReason(missing)).toBe(`recording is not available here: Docker is not installed (${join(root, "no-docker")} was not found)`);
+    // Docker not running, and the image not built, read the same way.
+    const unavailable = (why: string): RecordResult => ({ sandbox: null, reason: "unavailable", error: `Not recorded: ${why}. Nothing runs unsandboxed; use a hand-written .cast or .ans instead.` });
+    expect(notRecordedReason(unavailable("Docker is not running (start it, for example with colima start)"))).toBe("recording is not available here: Docker is not running (start it, for example with colima start)");
+    expect(notRecordedReason(unavailable("the recorder image orchestrator-recorder:1 is missing: run npm run recorder:build"))).toBe("recording is not available here: the recorder image orchestrator-recorder:1 is missing: run npm run recorder:build");
   });
 
   it("a recording whose transcript shows a failure is recorded with errors, with its first failing line; a variant made to show an error is recorded", async () => {
@@ -114,7 +119,7 @@ describe("a terminal demo's variants", () => {
       record: (_root, out) => {
         mkdirSync(out, { recursive: true });
         writeFileSync(join(out, "demo.gif"), "GIF8");
-        return { sandbox: "sandbox-exec", gif: join(out, "demo.gif"), errorLine: line };
+        return { sandbox: "container", gif: join(out, "demo.gif"), errorLine: line };
       },
     });
     expect(variantsOf(await makeDemo(media, studio, "sa-4", 1, ["a", "b"], now))).toEqual([
@@ -147,10 +152,10 @@ describe("a terminal demo's variants", () => {
   });
 });
 
-const sandbox = await probeTerminalSandbox();
+const docker = await dockerReady();
 
-describe(`a terminal demo recorded for real, as the trial's designer wrote it${sandbox.ok ? "" : ` (skipped: ${sandbox.detail})`}`, () => {
-  it.skipIf(!sandbox.ok)(
+describe(`a terminal demo recorded for real by the service's media, as the trial's designer wrote it${docker.ok ? "" : ` (skipped: ${docker.reason})`}`, () => {
+  it.skipIf(!docker.ok)(
     "the shell starts at the version's root with all its files, so a script called by its root path prints its real output; a demo that fails on screen is recorded with errors",
     async () => {
       const fixture = (p: string) => readFileSync(join(SUBFOLDER, p), "utf8");
@@ -158,7 +163,7 @@ describe(`a terminal demo recorded for real, as the trial's designer wrote it${s
       const BROKEN = 'Output demo.gif\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "node trips.js"\nEnter\nSleep 1.5s\n';
       const files = { "demo/demo.tape": fixture("demo/demo.tape"), "demo/setup.tape": fixture("demo/setup.tape"), "demo/trips.js": fixture("demo/trips.js"), "b/demo.tape": BROKEN, "b/trips.js": "console.log('not reached')\n" };
       const dir = writeVersion(studio, "sa-5", 1, files, { kind: "terminal-demo", devices: ["terminal"], variants: [{ id: "a", label: "A", entry: "demo/demo.tape" }, { id: "b", label: "B", entry: "b/demo.tape" }] });
-      const [a, b] = variantsOf(await makeDemo(systemMedia(undefined, { recording: true }), studio, "sa-5", 1, ["a", "b"], now));
+      const [a, b] = variantsOf(await makeDemo(systemMedia(), studio, "sa-5", 1, ["a", "b"], now));
       expect(a).toEqual({ variant: "a", status: "recorded", tape: "demo/demo.tape", gif: "recording/a/demo.gif", txt: "recording/a/demo.txt" });
       const txt = readFileSync(join(dir, "recording", "a", "demo.txt"), "utf8");
       expect(txt.split("\n")).toContain(" 1  Lake Tahoe cabin      3h 40m   $148");
@@ -169,11 +174,4 @@ describe(`a terminal demo recorded for real, as the trial's designer wrote it${s
     },
     120_000,
   );
-});
-
-describe("terminal recording is paused in the service (ORC-029 pass 3 review, finding 1)", () => {
-  it("the service's media never records a tape: it falls back with the reason, until recordings run in a container", async () => {
-    const r = await systemMedia().record("/nonexistent", "/nonexistent-out", "demo.tape");
-    expect(r).toEqual({ sandbox: null, reason: "unavailable", error: TERMINAL_RECORDING_PAUSED });
-  });
 });

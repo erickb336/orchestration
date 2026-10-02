@@ -24,7 +24,8 @@ import { startDesignerRun } from "./runs";
 import { SAMPLE_FILES, SAMPLE_MANIFEST, TERMINAL_SAMPLE_FILES } from "./sample";
 import { createPrototypeServer } from "./serve";
 import { launchChrome, type ShotsOutcome } from "./shots";
-import { probeTerminalSandbox, validateAnsFrame, type RecordResult } from "./terminal";
+import { validateAnsFrame, type RecordResult } from "./terminal";
+import { probeRecorder } from "./container";
 import { close, get, listen } from "./testFixtures";
 
 let dir: string;
@@ -746,7 +747,7 @@ describe("after an import, the service's screenshots and recordings", () => {
       record: async (_root, out) => {
         mkdirSync(out, { recursive: true });
         writeFileSync(join(out, "demo.gif"), "GIF89a");
-        return { sandbox: "sandbox-exec", gif: join(out, "demo.gif"), errorLine: line };
+        return { sandbox: "container", gif: join(out, "demo.gif"), errorLine: line };
       },
     };
     await service({ media });
@@ -845,14 +846,14 @@ describe("after an import, the service's screenshots and recordings", () => {
 
 const chrome = await launchChrome();
 if ("browser" in chrome) await chrome.browser.close();
-const sandbox = await probeTerminalSandbox();
-const realSkip = "missing" in chrome ? `no Chrome (${chrome.missing})` : !sandbox.ok ? `no terminal sandbox (${sandbox.detail})` : "";
+const recorder = await probeRecorder();
+const realSkip = "missing" in chrome ? `no Chrome (${chrome.missing})` : !recorder.ok ? `no recorder container (${recorder.detail})` : "";
 
-describe(`with the system Chrome and VHS${realSkip ? ` (skipped: ${realSkip})` : ""}`, () => {
+describe(`with the system Chrome and VHS in the recorder's container${realSkip ? ` (skipped: ${realSkip})` : ""}`, () => {
   it.skipIf(!!realSkip)(
-    "a designer's screen gets its screenshots and its terminal demo its sandboxed recording, served from the version",
+    "a designer's screen gets its screenshots and its terminal demo its recording in the container, served from the version",
     async () => {
-      await service({ media: systemMedia(undefined, { recording: true }) });
+      await service({ media: systemMedia() });
       const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan and the trips demo." }, iso());
       tick();
       handIn(claude.runs.get(id)!, { artifacts: [TRIP_PLAN, TRIPS_DEMO] }, { ...PAGES, ...DEMO_FILES });
