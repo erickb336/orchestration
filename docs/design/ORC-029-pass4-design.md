@@ -117,3 +117,29 @@ The estimated Claude spend stays within what is left of the owner's $5 cap for p
 
 **Load-sensitive test (for ORC-030's stabilization):** `server/runtimes/codex.test.ts`, "a note before the turn exists is held, then steered…". It failed once in a full run while three implementers loaded the machine, then passed 3 times in 3 alone.
 
+## 4b as built (merged in 80dce53)
+
+**Stored shapes:**
+- `round.lead?: { message, questions: { text, reason?, options? }[] }`: the lead's newest reply about the round.
+- A designer run that the lead asked for records `fromLead: { leadRunId, kinds, variants, devices }`.
+- `project.domains: ("screen" | "code" | "infrastructure")[]`. It is empty until the owner chooses, for new and migrated projects. Only the owner's `setDomains` command sets it, in either stage.
+- `StudioArtifact.provenance?: { asIs: true; files: string[] }`, also written into the version's `manifest.json`, so the PE sees it.
+
+**Decisions:**
+- **"As it is today" is round 0** (focus `material`). Designer and PE runs may now run in round 0. A designer artifact in round 0 must carry provenance, and provenance is refused in any other round, because later rounds are proposals.
+- **Provenance is checked at import:** each file must exist in the repository at HEAD. An artifact that names a missing file is refused.
+- **The lead's `studio` block** applies only to replies to the owner's messages, in Vision. Fields that it does not know (approve, overrule, lock in, start, feedback, domains) are named in a note and ignored. An optional `revises` field asks for an artifact's next version, which carries the owner's open pins.
+- **The trial's cap** counts each Claude run with no recorded cost at its run limit (review finding 8). Simulated runs count as $0.
+- Review finding 9 is fixed: manifest path segments allow only `[A-Za-z0-9._ -]`. The file route serves `md` and `mmd` as UTF-8 plain text with `nosniff`.
+
+**At the merge:** a feasible-if verdict now starts a revision (4c). So the lead's brief says "the designer revises for the PE", with the objections and the asked-for changes. The trial waits for the PE's loop in both modes.
+
+**Checks after the merge (2026-10-02):**
+- `npm test`: 105 files, 1,590 passed, 1 skipped. One earlier run had one failure under load, while other implementers ran tests; the next two runs were clean.
+- The typecheck passes.
+- `npm run test:integration`: 16 of 16.
+- `npm run trial:studio -- --fake`: 9 of 9.
+- `npm run trial:studio -- --fake --lead`: 9 of 9. The simulated PE asked for one change, and the designer revised the screen to version 2.
+
+**Not done:** the lead's brief shows the PE's status per artifact, not the full history of verdicts.
+
