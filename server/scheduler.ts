@@ -894,10 +894,11 @@ export class Scheduler {
    * Make the screenshots or recording of every studio version still pending, one at a time and outside any
    * transaction; each result is queued and recorded in a later drain, under the lease. Each is started once per
    * process: one whose result could not be recorded is not retried in a loop, and one an earlier service left
-   * pending (it stopped meanwhile) is made again here.
+   * pending (it stopped meanwhile) is made again here. Nothing starts while the project is paused: what waits is
+   * made once it resumes, like the studio's runs (review finding 5).
    */
   private startMedia(state: State) {
-    if (!this.media || !this.dataDir) return;
+    if (!this.media || !this.dataDir || state.project.hold) return;
     const media = this.media;
     const projectId = state.project.id;
     let studioDir: string;
@@ -914,6 +915,8 @@ export class Scheduler {
       const now = () => new Date().toISOString();
       this.mediaChain = this.mediaChain
         .then(async () => {
+          // Paused since it was queued behind another: it is asked for again once the project resumes.
+          if (this.store.read().state.project.hold) return void this.mediaStarted.delete(key);
           const result = p.kind === "shots" ? await makeShots(media, studioDir, p.artifactId, p.version, now) : await makeDemo(media, studioDir, p.artifactId, p.version, variants, now);
           this.queue.push({ type: "studio-media", attemptId: "", projectId, artifactId: p.artifactId, version: p.version, result });
         })

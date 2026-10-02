@@ -675,6 +675,44 @@ describe("after an import, the service's screenshots and recordings", () => {
     expect(g.calls).toHaveLength(1);
   });
 
+  it("none starts while the project is paused; they are made once it resumes (review finding 5)", async () => {
+    const g = gated({ shots: { skipped: "no Chrome found" } });
+    await service({ media: g.media });
+    const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan and the trips demo." }, iso());
+    tick();
+    handIn(claude.runs.get(id)!, { artifacts: [TRIP_PLAN, TRIPS_DEMO] }, { ...PAGES, ...DEMO_FILES });
+    finish(id);
+    // Paused with the run's result on its way: the result is imported, but nothing is made of it.
+    cmd("pauseProject");
+    tick();
+    const [screen, demo] = S.latestArtifacts(state());
+    expect(runOf(id).status).toBe("completed");
+    expect(S.pendingMedia(state()).map((p) => p.kind)).toEqual(["shots", "demo"]);
+    await flush();
+    tick();
+    await flush();
+    expect(g.calls).toEqual([]);
+    // Resumed: they are made, one at a time.
+    cmd("resumeProject");
+    tick();
+    await flush();
+    expect(g.calls).toEqual([`shots ${screen.id} v1`]);
+    // Paused while the screenshots are being taken: they finish, and the recording waits for the next resume.
+    cmd("pauseProject");
+    g.release();
+    await settleMedia();
+    expect(S.getArtifact(state(), screen.id, 1).shots).toMatchObject({ status: "skipped" });
+    tick();
+    await flush();
+    expect(g.calls).toEqual([`shots ${screen.id} v1`]);
+    expect(S.getArtifact(state(), demo.id, 1).demo).toEqual({ status: "pending" });
+    cmd("resumeProject");
+    tick();
+    await settleMedia();
+    expect(g.calls).toEqual([`shots ${screen.id} v1`, "record a/demo.tape"]);
+    expect(S.getArtifact(state(), demo.id, 1).demo).toMatchObject({ status: "done" });
+  });
+
   it("a version an earlier service left pending is made by the next one", async () => {
     await service();
     const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan." }, iso());
