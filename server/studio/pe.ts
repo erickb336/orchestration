@@ -31,6 +31,7 @@ const KIND_WORDS: Record<StudioArtifact["kind"], string> = {
   interface: "an interface",
   algorithm: "an algorithm",
   topology: "a topology",
+  dictionary: "the project's dictionary",
   material: "what the owner brought",
   evidence: "a probe's evidence",
 };

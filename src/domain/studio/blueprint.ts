@@ -10,7 +10,7 @@ import { currentSpec, currentVision, draft, event, nextId } from "../model/core"
 import { newWorkReview } from "../peReview";
 import { ControlError, StaleWriteError, type State } from "../types";
 import { artifactName, currentFeedback, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
-import type { BlueprintItem, BlueprintRevision, ChangeOrder, StudioArtifact } from "./types";
+import type { BlueprintItem, BlueprintRevision, ChangeOrder, DictionaryEntry, StudioArtifact } from "./types";
 
 /** The current blueprint revision; undefined until the owner first approves something. */
 export function currentBlueprint(s: State): BlueprintRevision | undefined {
@@ -38,6 +38,9 @@ function approvalBlocker(s: State, a: StudioArtifact, variant: string | undefine
   if (currentFeedback(s, a.id, a.version)?.mark === "drop") return "you marked it Drop";
   const v = chosenVariant(a, variant);
   if (a.variants.length > 1 && v === undefined) return "your pick between its variants is open";
+  // A term or a rule marked Change or Drop waits for the next version, which makes the change (pass 4d).
+  const rows = (currentFeedback(s, a.id, a.version)?.rows ?? []).filter((r) => r.mark !== "keep" && (r.variant === undefined || r.variant === v));
+  if (rows.length) return `you marked ${rows.length} ${a.dictionary ? "term" : "rule"}${rows.length === 1 ? "" : "s"} Change or Drop (${rows.slice(0, 3).map((r) => `"${r.row}"`).join(", ")}${rows.length > 3 ? ", …" : ""}); the next version makes the change, or clear those marks to approve this one`;
   const objection = openObjections(s, a).find((o) => o.variant === undefined || o.variant === v);
   if (objection) return `the PE objects${objection.variant ? ` to ${a.variants.find((x) => x.id === objection.variant)?.label ?? objection.variant}` : ""} (${objection.reasons.split("\n")[0]}); overrule the objection to approve it`;
   return undefined;
@@ -136,6 +139,28 @@ export function approveRound(state: State, n: number, now: string): State {
   if (!approved && !open) throw new ControlError(`Round ${n} is already in the blueprint as it stands.`);
   pushRevision(s, items, `approved round ${n}: ${approved} approved${open ? `, ${open} still open` : ""}`, now);
   return s;
+}
+
+/** The project's dictionary: the approved blueprint item, its version, and its terms. */
+export interface DictionaryInForce {
+  item: BlueprintItem;
+  artifact: StudioArtifact;
+  entries: DictionaryEntry[];
+}
+
+/**
+ * The project's dictionary (pass 4d, decision 6): the dictionary version the owner approved into the blueprint, and
+ * only that one; a version still in review, unapproved or open is not in force. With two dictionaries approved, the
+ * one approved last is in force. Undefined until the owner approves one.
+ */
+export function dictionaryInForce(s: State): DictionaryInForce | undefined {
+  const approved = blueprintItems(s).filter((i) => i.kind === "dictionary" && i.status === "approved");
+  if (!approved.length) return undefined;
+  // When this item's current version was approved: the first revision that holds it as it is now.
+  const approvedIn = (i: BlueprintItem) => s.blueprint.revisions.findIndex((r) => r.items.some((x) => same(x, i)));
+  const item = approved.reduce((a, b) => (approvedIn(b) >= approvedIn(a) ? b : a));
+  const artifact = versionsOf(s, item.artifactId).find((a) => a.version === item.version);
+  return artifact?.dictionary ? { item, artifact, entries: artifact.dictionary } : undefined;
 }
 
 /** An open item of the blueprint and what keeps it open now. */

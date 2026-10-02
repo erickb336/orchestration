@@ -13,7 +13,8 @@ import * as B from "./studio/blueprint";
 import { setDomains } from "./studio/domains";
 import * as R from "./studio/runs";
 import * as S from "./studio/studio";
-import { type Mark, type StudioMaker, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
+import { type Mark, type StudioMaker, type VariantRules, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
+import { parseDictionary, parseRules } from "./studio/words";
 import {
   ControlError,
   DEVICES,
@@ -145,7 +146,21 @@ function feedbackEntry(v: unknown): S.FeedbackInput {
     const p = obj(x, "pin");
     return { x: num(p, "x"), y: num(p, "y"), ...(p.variant === undefined ? {} : { variant: str(p, "variant") }), text: str(p, "text"), ...(p.selector === undefined ? {} : { selector: str(p, "selector") }) };
   });
-  return { artifactId: str(e, "artifactId"), version: int(e, "version"), mark: e.mark as Mark | null, ...(e.pickedVariant === undefined ? {} : { pickedVariant: str(e, "pickedVariant") }), pins, note: str(e, "note") };
+  const rows = e.rows === undefined ? [] : array<unknown>(e.rows, "rows").map((x) => {
+    const r = obj(x, "row");
+    return { row: str(r, "row"), ...(r.variant === undefined ? {} : { variant: str(r, "variant") }), mark: oneOf(r, "mark", MARKS) };
+  });
+  return { artifactId: str(e, "artifactId"), version: int(e, "version"), mark: e.mark as Mark | null, ...(e.pickedVariant === undefined ? {} : { pickedVariant: str(e, "pickedVariant") }), pins, ...(rows.length ? { rows } : {}), note: str(e, "note") };
+}
+const MARKS: readonly Mark[] = ["keep", "change", "drop"];
+/** A dictionary's terms or a flow's rules given to addStudioArtifact: the same checks as at import (words.ts). */
+function checked<T>(r: { ok: true; value: T } | { ok: false; errors: string[] }, what: string): T {
+  if (!r.ok) throw new InvalidCommandError(`${what}: ${r.errors.join("; ")}`);
+  return r.value;
+}
+function variantRules(v: unknown): VariantRules {
+  const o = obj(v, "rules");
+  return { variant: str(o, "variant"), path: str(o, "path"), ...checked(parseRules({ rules: o.rules, examples: o.examples }), "rules") };
 }
 function askCheck(v: unknown): { ask: string; met: boolean } {
   const o = obj(v, "earlier ask");
@@ -289,6 +304,8 @@ export const COMMANDS = {
         madeBy: studioMaker(a.madeBy),
         ...(a.supersedes === undefined ? {} : { supersedes: str(a, "supersedes") }),
         ...(a.provenance === undefined ? {} : { provenance: { files: strings(obj(a.provenance, "provenance").files, "provenance.files") } }),
+        ...(a.dictionary === undefined ? {} : { dictionary: checked(parseDictionary(a.dictionary), "dictionary") }),
+        ...(a.rules === undefined ? {} : { rules: array<unknown>(a.rules, "rules").map(variantRules) }),
       },
       now,
     );

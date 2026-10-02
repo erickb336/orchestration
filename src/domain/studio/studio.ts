@@ -28,6 +28,7 @@ import {
   type ArtifactShots,
   type AskCheck,
   type BudgetEstimate,
+  type DictionaryEntry,
   type Feedback,
   type LoopEnd,
   type Mark,
@@ -38,12 +39,14 @@ import {
   type ProbeStatus,
   type Round,
   type RoundFocus,
+  type RowMark,
   type StudioArtifact,
   type StudioArtifactKind,
   type StudioMaker,
   type StudioRun,
   type Verdict,
   type VariantDemo,
+  type VariantRules,
   UNGATED_KINDS,
   VERDICT_WORDS,
   isUnderWay,
@@ -187,6 +190,10 @@ export interface ArtifactInput {
   supersedes?: string;
   /** An "as is" artifact's provenance: the repository files the designer reproduced it from (round 0 only). */
   provenance?: { files: string[] };
+  /** A dictionary's terms, checked at the boundary (words.ts `parseDictionary`). A dictionary has them; nothing else does. */
+  dictionary?: DictionaryEntry[];
+  /** A flow's rules, by variant, checked at the boundary (words.ts `parseRules`). Only a flow has them. */
+  rules?: VariantRules[];
 }
 
 /** The most repository files an "as is" artifact names as its provenance. */
@@ -255,6 +262,13 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
   if (outside.length) throw new ControlError(`${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the project's device scope (${state.project.devices.join(", ")}).`);
   const devices = DEVICES.filter((d) => input.devices.includes(d));
   const madeBy = maker(input.madeBy);
+  // The project's words and a flow's rules (pass 4d): their shapes were checked at the boundary; here, who has them.
+  if ((input.kind === "dictionary") !== !!input.dictionary?.length) throw new ControlError(input.kind === "dictionary" ? "A dictionary lists its terms." : "Only a dictionary lists terms.");
+  if (input.rules?.length) {
+    if (input.kind !== "flow") throw new ControlError("Only a flow carries rules.");
+    for (const r of input.rules) if (!variants.some((v) => v.id === r.variant)) throw new ControlError(`The rules in "${agentLine(r.path).slice(0, 80)}" are for variant ${agentLine(r.variant).slice(0, 30)}, which ${title} does not have.`);
+    if (new Set(input.rules.map((r) => r.variant)).size !== input.rules.length) throw new ControlError("Each variant has at most one set of rules.");
+  }
 
   const prev = input.artifactId === undefined ? undefined : latestVersion(state, input.artifactId);
   if (input.artifactId !== undefined && !prev) throw new ControlError(`Unknown studio artifact ${input.artifactId}.`);
@@ -271,7 +285,22 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
   const s = draft(state);
   const id = prev ? prev.id : nextId(s, "sa");
   const version = prev ? prev.version + 1 : 1;
-  const art: StudioArtifact = { id, round: round.n, version, ...(input.supersedes ? { supersedes: input.supersedes } : {}), kind: input.kind, title, variants, files, devices, madeBy, at: now, ...(provenance ? { provenance } : {}) };
+  const art: StudioArtifact = {
+    id,
+    round: round.n,
+    version,
+    ...(input.supersedes ? { supersedes: input.supersedes } : {}),
+    kind: input.kind,
+    title,
+    variants,
+    files,
+    devices,
+    madeBy,
+    at: now,
+    ...(provenance ? { provenance } : {}),
+    ...(input.dictionary?.length ? { dictionary: input.dictionary } : {}),
+    ...(input.rules?.length ? { rules: input.rules } : {}),
+  };
   s.studio.artifacts.push(art);
   // A pin on a variant the revision no longer has stays, pinned to the artifact as a whole.
   const carried = (prev ? openPins(s, prev.id, prev.version) : []).map(({ variant, ...pin }) => (variant !== undefined && variants.some((v) => v.id === variant) ? { ...pin, variant } : pin));
@@ -767,7 +796,35 @@ export interface FeedbackInput {
   mark: Mark | null;
   pickedVariant?: string;
   pins: Pin[];
+  /** Marks on the rows of a dictionary or of a flow's rules. */
+  rows?: RowMark[];
   note: string;
+}
+
+/** The rows of a version the owner can mark (pass 4d): a dictionary's terms, or the ids of a flow variant's rules. None for other artifacts. */
+export function markableRows(a: StudioArtifact, variant?: string): string[] {
+  if (a.dictionary) return a.dictionary.map((e) => e.term);
+  const v = variant ?? (a.variants.length === 1 ? a.variants[0].id : undefined);
+  return a.rules?.find((r) => r.variant === v)?.rules.map((r) => r.id) ?? [];
+}
+
+/**
+ * The owner's row marks on a version, checked: each names a term of a dictionary, or a rule of a flow's variant (the
+ * variant named when the flow has several), each once. A one-variant artifact's marks name no variant.
+ */
+function rowMarks(a: StudioArtifact, given: RowMark[]): RowMark[] {
+  if (!given.length) return [];
+  if (!a.dictionary && !a.rules) throw new ControlError(`${artifactName(a)} has no rows to mark: only a dictionary's terms and a flow's rules have marks of their own.`);
+  const seen = new Set<string>();
+  return given.map((r) => {
+    const variant = a.variants.length > 1 && !a.dictionary ? r.variant : undefined;
+    if (a.rules && a.variants.length > 1 && (variant === undefined || !a.variants.some((v) => v.id === variant))) throw new ControlError(`A mark on a rule of ${a.title} names the variant the rule is on.`);
+    if (!markableRows(a, variant).includes(r.row)) throw new ControlError(`${artifactName(a)} has no ${a.dictionary ? "term" : "rule"} "${agentLine(r.row).slice(0, 40)}"${variant ? ` on ${variantLabel(a, variant)}` : ""}.`);
+    const key = `${variant ?? ""}\u0000${r.row}`;
+    if (seen.has(key)) throw new ControlError(`"${agentLine(r.row).slice(0, 40)}" is marked twice; send one mark per row.`);
+    seen.add(key);
+    return { row: r.row, ...(variant !== undefined ? { variant } : {}), mark: r.mark };
+  });
 }
 
 /**
@@ -801,13 +858,15 @@ export function sendFeedback(state: State, entries: FeedbackInput[], now: string
       return { x: p.x, y: p.y, ...(pv !== undefined ? { variant: pv } : {}), text: required(ownerText(p.text), 1000, "A pinned comment"), ...(selector ? { selector } : {}) };
     });
     const note = capped(ownerText(e.note), 4000, "The note");
-    return { artifactId: a.id, version: a.version, mark: e.mark, ...(picked !== undefined ? { pickedVariant: picked } : {}), pins, note, at: now };
+    const rows = rowMarks(a, e.rows ?? []);
+    return { artifactId: a.id, version: a.version, mark: e.mark, ...(picked !== undefined ? { pickedVariant: picked } : {}), pins, ...(rows.length ? { rows } : {}), note, at: now };
   });
   const s = draft(state);
   s.studio.feedback.push(...records);
   const line = (f: Feedback) => {
     const a = getArtifact(s, f.artifactId, f.version);
-    const parts = [f.mark ?? "", f.pickedVariant ? `picked ${variantLabel(a, f.pickedVariant)}` : "", f.pins.length ? `${f.pins.length} pin${f.pins.length === 1 ? "" : "s"}` : "", f.note ? "a note" : ""].filter(Boolean);
+    const rows = f.rows?.length ? `${f.rows.length} ${a.dictionary ? "term" : "rule"}${f.rows.length === 1 ? "" : "s"} marked` : "";
+    const parts = [f.mark ?? "", f.pickedVariant ? `picked ${variantLabel(a, f.pickedVariant)}` : "", f.pins.length ? `${f.pins.length} pin${f.pins.length === 1 ? "" : "s"}` : "", rows, f.note ? "a note" : ""].filter(Boolean);
     return `${artifactName(a)}${parts.length ? ` (${parts.join(", ")})` : " (cleared)"}`;
   };
   event(s, now, "user", "vision", `Your feedback: ${records.map(line).join("; ")}`);
