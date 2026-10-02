@@ -1,0 +1,35 @@
+#!/bin/bash
+# The planned output of `trips`, the Weekend Trips CLI, which does not exist yet. A designer's stand-in:
+# it only prints what the real command will show, so a VHS tape can record the experience.
+b=$'\e[1m'; d=$'\e[2m'; g=$'\e[32m'; c=$'\e[36m'; y=$'\e[33m'; r=$'\e[0m'
+
+case "$1" in
+  plan)
+    echo "${b}Weekend trips from Lisbon${r}  ${d}Sat 10 - Sun 11 Oct${r}"
+    echo
+    echo "  ${c}1${r}  Sintra     45 min by train   hiking, palaces      ${g}EUR 38${r}"
+    echo "  ${c}2${r}  Comporta   1 h 10 by car     beach, rice fields   ${g}EUR 64${r}"
+    echo "  ${c}3${r}  Evora      1 h 30 by train   Roman temple, wine   ${g}EUR 52${r}"
+    echo
+    echo "${d}Next: trips pick <n>${r}"
+    ;;
+  pick)
+    if [ "$2" != "1" ]; then
+      echo "${y}trips pick:${r} only trip 1 is planned in this mockup" >&2
+      exit 2
+    fi
+    echo "${b}Sintra${r}, Saturday"
+    echo "  09:10  train from Rossio (40 min)"
+    echo "  10:00  Pena Palace, then the trail to the Moorish Castle"
+    echo "  13:30  lunch in the old town"
+    echo "  16:00  Quinta da Regaleira"
+    echo
+    echo "${g}Saved.${r} ${d}trips share 1 makes a link for your group${r}"
+    ;;
+  *)
+    echo "usage: trips <command>"
+    echo
+    echo "  plan        the weekend's trip ideas"
+    echo "  pick <n>    a day plan for idea n"
+    ;;
+esac
