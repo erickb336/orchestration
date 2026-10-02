@@ -182,6 +182,55 @@ export function readManifest(studioDir: string, artifactId: string, version: num
   return m as PrototypeManifest;
 }
 
+/** A served file of one version: its bytes and its extension (lowercase, with the dot). */
+export interface ServedFile {
+  body: Buffer;
+  ext: string;
+}
+
+/**
+ * One file of a version, as a server may serve it, or undefined: a file its manifest lists (its bytes matching the
+ * recorded hash), one of its screenshots (shots/<variant>-<device>.png for a variant and device of the version, a
+ * PNG), or one of its terminal recordings (recording/<variant>/…, a GIF, WebM or text, each checked for its kind).
+ * Read through the version folder's guard: no symlink, nothing outside it. Shared by the prototype server and the
+ * app's own file route (files.ts), which serves fewer types.
+ */
+export function readServedFile(studioDir: string, artifactId: string, version: number, rel: string, log: (msg: string) => void = () => {}): ServedFile | undefined {
+  if (!ARTIFACT_ID.test(artifactId) || !Number.isInteger(version) || version < 1 || !safePath(rel)) return undefined;
+  const manifest = readManifest(studioDir, artifactId, version);
+  if (!manifest) return undefined;
+
+  // A screenshot the service took: shots/<variant>-<device>.png, for a variant and a device of this version.
+  if (rel.startsWith("shots/")) {
+    const name = rel.slice("shots/".length);
+    const known = manifest.variants.some((v) => SHOT_DEVICES.some((d) => manifest.devices.includes(d) && name === `${v.id}-${d}.png`));
+    const png = known ? readVersionFile(studioDir, artifactId, version, rel) : undefined;
+    return png && png.subarray(0, 8).equals(PNG_SIGNATURE) ? { body: png, ext: ".png" } : undefined;
+  }
+
+  // A terminal recording the service made: recording/<variant>/<the tape's Output path>, GIF, WebM or text.
+  if (rel.startsWith("recording/")) {
+    const [variant, ...rest] = rel.slice("recording/".length).split("/");
+    const ext = extname(rel).toLowerCase();
+    const signature = RECORDING_SIGNATURES[ext];
+    const known = manifest.variants.some((v) => v.id === variant) && rest.length > 0 && signature !== undefined;
+    const body = known ? readVersionFile(studioDir, artifactId, version, rel) : undefined;
+    return body && (!signature || body.subarray(0, signature.length).equals(signature)) ? { body, ext } : undefined;
+  }
+
+  const entry = manifest.files.find((f) => f.path === rel);
+  if (!entry) return undefined;
+  const body = readVersionFile(studioDir, artifactId, version, entry.path, entry.bytes);
+  if (!body || createHash("sha256").update(body).digest("hex") !== entry.sha256) {
+    log(`Prototype ${artifactId} v${version}: ${entry.path} is missing or does not match its recorded hash; not served.`);
+    return undefined;
+  }
+  return { body, ext: extname(entry.path).toLowerCase() };
+}
+
+/** The first bytes a served PNG, GIF or WebM starts with. */
+export const MAGIC: Readonly<Record<".png" | ".gif" | ".webm", Buffer>> = { ".png": PNG_SIGNATURE, ".gif": RECORDING_SIGNATURES[".gif"]!, ".webm": RECORDING_SIGNATURES[".webm"]! };
+
 /** The page with the pin script added: before the last </body>, or at the end. */
 function withPinScript(html: Buffer): Buffer {
   const at = html.toString("latin1").toLowerCase().lastIndexOf("</body");
@@ -224,39 +273,10 @@ export function createPrototypeServer(opts: PrototypeServerOptions): Server {
       if (`/${rel}` === PIN_PATH) return reply(res, 200, TYPES[".js"], Buffer.from(PIN_SCRIPT), head);
 
       const studioDir = opts.studioDir();
-      if (!studioDir) return refuse(res, 404, "Not found", head);
-      const manifest = readManifest(studioDir, artifactId, version);
-      if (!manifest) return refuse(res, 404, "Not found", head);
-
-      // A screenshot the service took: shots/<variant>-<device>.png, for a variant and a device of this version.
-      if (rel.startsWith("shots/")) {
-        const name = rel.slice("shots/".length);
-        const known = manifest.variants.some((v) => SHOT_DEVICES.some((d) => manifest.devices.includes(d) && name === `${v.id}-${d}.png`));
-        const png = known ? readVersionFile(studioDir, artifactId, version, rel) : undefined;
-        if (!png || !png.subarray(0, 8).equals(PNG_SIGNATURE)) return refuse(res, 404, "Not found", head);
-        return reply(res, 200, TYPES[".png"], png, head);
-      }
-
-      // A terminal recording the service made: recording/<variant>/<the tape's Output path>, GIF, WebM or text.
-      if (rel.startsWith("recording/")) {
-        const [variant, ...rest] = rel.slice("recording/".length).split("/");
-        const ext = extname(rel).toLowerCase();
-        const signature = RECORDING_SIGNATURES[ext];
-        const known = manifest.variants.some((v) => v.id === variant) && rest.length > 0 && safePath(rest.join("/")) && signature !== undefined;
-        const body = known ? readVersionFile(studioDir, artifactId, version, rel) : undefined;
-        if (!body || (signature && !body.subarray(0, signature.length).equals(signature))) return refuse(res, 404, "Not found", head);
-        return reply(res, 200, TYPES[ext], body, head);
-      }
-
-      const entry = manifest.files.find((f) => f.path === rel);
-      const type = entry && TYPES[extname(entry.path).toLowerCase()];
-      if (!entry || !type) return refuse(res, 404, "Not found", head);
-      const body = readVersionFile(studioDir, artifactId, version, entry.path, entry.bytes);
-      if (!body || createHash("sha256").update(body).digest("hex") !== entry.sha256) {
-        log(`Prototype ${artifactId} v${version}: ${entry.path} is missing or does not match its recorded hash; not served.`);
-        return refuse(res, 404, "Not found", head);
-      }
-      return reply(res, 200, type, type.startsWith("text/html") ? withPinScript(body) : body, head);
+      const file = studioDir ? readServedFile(studioDir, artifactId, version, rel, log) : undefined;
+      const type = file && TYPES[file.ext];
+      if (!file || !type) return refuse(res, 404, "Not found", head);
+      return reply(res, 200, type, type.startsWith("text/html") ? withPinScript(file.body) : file.body, head);
     } catch (e) {
       log(`Prototype request failed: ${e instanceof Error ? e.message : String(e)}`);
       if (!res.headersSent) return refuse(res, 500, "Internal error");
