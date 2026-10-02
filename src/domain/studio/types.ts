@@ -28,6 +28,23 @@ export interface Round {
   leadRunId?: string;
   /** What the round explores, then what came of it, in the lead's words. */
   summary: string;
+  /**
+   * The lead's latest message about this round and its questions to the owner, from the studio block of its newest
+   * reply that addressed the round (pass 4). The owner answers in the conversation, with their feedback.
+   */
+  lead?: RoundLead;
+}
+
+/** The lead's message for a round, and its questions (ORC-012's: the question, why it matters, options to pick). */
+export interface RoundLead {
+  message: string;
+  questions: RoundQuestion[];
+}
+
+export interface RoundQuestion {
+  text: string;
+  reason?: string;
+  options?: string[];
 }
 
 /**
@@ -287,8 +304,10 @@ export interface StudioRun {
   provider: ProviderId;
   model: string;
   status: StudioRunStatus;
-  /** What the run is asked to do. Until the lead writes studio briefs (pass 4), a labelled placeholder. */
+  /** What the run is asked to do: the lead's brief and what it asked for, or (asked by the service alone) a labelled placeholder. */
   brief: string;
+  /** A designer run the lead asked for in its studio block (pass 4): the lead run, and the kinds, variants and devices it asked for. */
+  fromLead?: { leadRunId: string; kinds: StudioArtifactKind[]; variants: number; devices: Device[] };
   askedAt: string;
   /** When it was dispatched; absent while queued. */
   startedAt?: string;

@@ -68,6 +68,8 @@ export interface StudioRunRequest {
   /** The provider and model; absent: the role's default (see peSelection for the PE), else the project's default. */
   selection?: ModelSelection;
   brief: string;
+  /** A designer run the lead asked for in its studio block: recorded on the run (lead.ts). */
+  fromLead?: StudioRun["fromLead"];
 }
 
 /**
@@ -137,6 +139,7 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
     model,
     status: "queued",
     brief,
+    ...(req.kind === "designer" && req.fromLead ? { fromLead: structuredClone(req.fromLead) } : {}),
     askedAt: now,
     workspace: `staging/${id}`,
   };
@@ -339,6 +342,7 @@ export function reportStudioRunStopped(state: State, id: string, now: string, op
       model: r.model,
       status: "queued",
       brief: r.brief,
+      ...(r.fromLead ? { fromLead: structuredClone(r.fromLead) } : {}),
       askedAt: now,
       workspace: "",
       retryOf: r.id,

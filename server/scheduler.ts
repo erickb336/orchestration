@@ -1308,8 +1308,8 @@ export class Scheduler {
         // A reply from the fake runtime is recorded as simulated on what it changed (the focus, the change set, a draft).
         const run = s.leadRuns.find((r) => r.id === e.attemptId);
         const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
-        // The steering block, the vision draft, the decisions and any parse problem go through as found; the domain validates them.
-        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, problem: out.problem }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
+        // The steering block, the vision draft, the decisions, the studio block and any parse problem go through as found; the domain validates them.
+        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
       }
     }
   }

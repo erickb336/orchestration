@@ -1265,16 +1265,16 @@ ${last.length ? `The user's latest notes on landed work:\n${last.map((x) => x.li
 
 /**
  * Parse the lead's final message. A reply without a JSON block is still a reply (with no proposals).
- * The steering block and the vision draft are passed through as found (a missing value or null becomes
- * undefined); type checks happen in the domain, which treats them as untrusted data.
+ * The steering block, the vision draft, the studio block and the rest are passed through as found (a missing value
+ * or null becomes undefined); type checks happen in the domain, which treats them as untrusted data.
  */
-export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; problem?: string } {
+export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; studio?: unknown; problem?: string } {
   const obj = lastJsonObject(finalText);
   if (!obj) return { reply: clip(finalText.trim(), 4000), proposals: [], problem: "no JSON block; treated the message as a reply without proposals" };
   const reply = typeof obj.reply === "string" ? clip(obj.reply, 8000) : "";
   const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
-  const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
-  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions") };
+  const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions" | "studio") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
+  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions"), ...given("studio") };
 }
 
 /** A step that waits for child tasks sees how each of them ended. */

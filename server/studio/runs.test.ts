@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as M from "../../src/domain/model";
 import * as R from "../../src/domain/studio/runs";
 import * as S from "../../src/domain/studio/studio";
 import { startFactoryArgs } from "../../src/domain/testing/factory";
@@ -202,6 +203,22 @@ describe("a designer run at the service", () => {
     const cx = startDesignerRun(store, { round: 0, brief: "Reproduce the trip list as it is today.", selection: { provider: "codex", model: "auto" } }, iso());
     tick();
     expect(codex.runs.get(cx)!.prompt).toContain("On Codex the service cannot confine what you read (as for every Codex run), so read only that checkout.");
+  });
+
+  it("is asked for by the lead's reply: its studio block's designer runs are queued, and the scheduler starts them with the lead's brief", async () => {
+    await service();
+    cmd("postMessage", { text: "Show me the trip plan." });
+    tick();
+    const lead = M.activeLeadRun(state())!;
+    const block = { reply: "Two takes on the trip plan.", proposals: [], studio: { designerRuns: [{ brief: "Make the trip plan screen.", kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] }], questions: [{ question: "Map or days first?", why: "It sets the layout.", options: ["Map", "Days"] }] } };
+    claude.emit({ type: "completed", attemptId: lead.id, finalText: `Here it is.\n\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`\n`, usage: { costUsd: 0.05 } });
+    tick();
+    const run = state().studio.runs.find((r) => r.fromLead?.leadRunId === lead.id)!;
+    expect(run).toMatchObject({ kind: "designer", round: 1, fromLead: { kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] } });
+    expect(S.currentRound(state())!.lead).toEqual({ message: "Two takes on the trip plan.", questions: [{ text: "Map or days first?", reason: "It sets the layout.", options: ["Map", "Days"] }] });
+    tick();
+    expect(runOf(run.id).status).toBe("running");
+    expect(claude.runs.get(run.id)!.prompt).toContain("## The brief\n\nMake the trip plan screen.\n\nThe lead asks for: screen; 2 variants side by side, differing in a real choice; for desktop, mobile.\n\n## Where you work");
   });
 
   it("a refused studio.json fails the run with the reason; nothing is recorded, and its staging folder stays to look at", async () => {
