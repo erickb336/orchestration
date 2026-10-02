@@ -421,6 +421,11 @@ export function sendFeedback(state: State, entries: FeedbackInput[], now: string
 
 // ---------- probes ----------
 
+/** Probes whose evidence is not in yet (queued or running): open items of the pre-flight, by id. */
+export function unfinishedProbes(s: State): Probe[] {
+  return s.studio.probes.filter((p) => p.status === "queued" || p.status === "running");
+}
+
 /** The PE asks for evidence before it agrees (the service, from the PE's run): a small Vision task, queued. */
 export function addProbe(state: State, question: string, now: string): { state: State; probeId: string } {
   const q = required(agentLine(question), 500, "The probe's question");

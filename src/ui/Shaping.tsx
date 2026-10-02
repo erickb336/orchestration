@@ -7,6 +7,7 @@ import { useState, type ReactNode } from "react";
 import { diffLines } from "../domain/diff";
 import * as M from "../domain/model";
 import { openBlueprintItems } from "../domain/studio/blueprint";
+import { unfinishedProbes } from "../domain/studio/studio";
 import { SHAPING_AREAS, SHAPING_AREA_LABEL, type LeadQuestion, type State, type VisionDraft } from "../domain/types";
 import { fmtTime, relTime } from "./common";
 import { Banner, Button, ButtonLink, Card, Chip, Field, Input, Row, Rows, SimulatedChip, Textarea, useConfirm, type ButtonVariant } from "./kit";
@@ -310,10 +311,12 @@ export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonV
   const held = plan.userHeld.length;
   const open = M.openAreas(state);
   const openItems = openBlueprintItems(state);
+  const probes = unfinishedProbes(state);
   // With no coverage reported, every area is still open, and the confirmation says so.
   const stillOpen = [
     !M.coverageOf(state) ? "The lead has not reported which areas are clear yet, so all nine count as open." : open.length ? `Still open: ${open.map((x) => SHAPING_AREA_LABEL[x].toLowerCase()).join(", ")}.` : "",
     openItems.length ? `Open in the blueprint: ${openItems.map((o) => `${o.item.title} (${o.why})`).join("; ")}.` : "",
+    probes.length ? `Probes without their evidence yet: ${probes.map((p) => `${p.question} (${p.status})`).join("; ")}.` : "",
   ]
     .filter(Boolean)
     .join(" ");

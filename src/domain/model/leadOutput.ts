@@ -3,6 +3,7 @@
 
 import * as F from "../findings";
 import { childDefault, effectiveDefault, eligibleIds, findFlow, flowRef } from "../flows";
+import { newWorkReview, PE_REVIEW_HOLD } from "../peReview";
 import { instantiate, toDef } from "../pipeline";
 import { type SpecOption, type SteeringChangeSet, type LeadQuestion, type SpecContent, type State, type VisionDraft } from "../types";
 import { currentSpec, draft, event, nextId } from "./core";
@@ -269,6 +270,9 @@ export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolea
     effort: "small",
   };
   const defs = structuredClone(flow.steps).map(toDef);
+  // New work the lead plans while building waits for PE review when the project has it on (ORC-029 2e). The state is
+  // the service's: nothing the lead sends (a proposal's or an item's own fields) reaches it.
+  const peReview = fromShaping ? undefined : newWorkReview(s);
   s.tasks.push({
     id,
     priority: Number.isFinite(p.priority) ? Math.min(99, Math.max(1, Math.round(p.priority))) : 5,
@@ -284,11 +288,12 @@ export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolea
     updatedAt: now,
     decisionAt: now,
     ...(fromShaping ? { fromShaping: true } : {}),
+    ...(peReview ? { peReview } : {}),
     pipelineRev: 1,
     pipelineHistory: [{ rev: 1, at: now, author: "lead", reason: `Created from the ${flow.name} flow`, steps: defs, flow: ref }],
     flow: ref,
     flowSince: 1,
   });
-  event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})${fromShaping ? "; planned while shaping, waits for Start building" : ""}`, id);
+  event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})${fromShaping ? "; planned while shaping, waits for Start building" : ""}${peReview ? `; ${PE_REVIEW_HOLD}` : ""}`, id);
   return id;
 }

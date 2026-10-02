@@ -147,7 +147,7 @@ export interface FactoryStart {
   /** The vision revision agreed to: the blueprint stands on the vision, which changes on its own. */
   visionRev: number;
   settings: FactorySettings;
-  /** What was still open, named to the owner and confirmed: the vision's open areas, then the blueprint's open items (by id). */
+  /** What was still open, named to the owner and confirmed: the vision's open areas, then the blueprint's open items and the unfinished probes (by id). */
   openItems: string[];
   /** The pre-flight's budget estimates, once the PE makes them. */
   estimate?: { buildUsd?: [number, number]; maintenanceUsdPerMonth?: [number, number]; basis: string };
@@ -353,6 +353,12 @@ export interface Project {
    * `setChangeOrders`, and read when a change order is made. The other pause points live in their own settings.
    */
   changeOrders: "lead" | "user";
+  /**
+   * PE review of new work in the factory (ORC-029 2e): while true, the lead's proposals and breakdown items made while
+   * building, and the lead's updates for a change order, wait for the PE's agreement before they start. Absent (off)
+   * until the PE's review runs exist (pass 5), so nothing waits for a review nobody runs.
+   */
+  peReviewsNewWork?: boolean;
   /** When the current shaping session began; coverage reported before it is not reused. */
   shapingSince?: string;
   /** The project's own check commands, run by the service. Desired state; only the user's `setChecks` writes it. */
@@ -626,6 +632,23 @@ export interface FindingDecision {
   /** Repair attempts whose envelope carried this decision; a later change applies to later repairs only. */
   usedBy: string[];
   createdAt: string;
+}
+
+/**
+ * Where PE review of one piece of new work stands (ORC-029 2e): a lead proposal, a breakdown item, or the lead's
+ * updates for a change order.
+ * - pending: held from starting, "waiting for PE review"; an objection before the last round keeps it pending while
+ *   the lead revises it;
+ * - agreed: released under the usual involvement rules;
+ * - objected: the PE still objected after three rounds, so it waits for the owner (Needs you) with the objection,
+ *   until the owner overrules it (recorded). It is never dropped.
+ * Only the service records the PE's verdicts (`recordPeReview`), and only the owner overrules.
+ */
+export interface PeReviewState {
+  status: "pending" | "agreed" | "objected";
+  /** The PE's verdicts, oldest first: one per round, at most three. `specRev` is the task spec revision it read. */
+  rounds: { at: string; verdict: "agree" | "object"; reasons: string; specRev?: number }[];
+  overruled?: { at: string; why: string };
 }
 
 /**
@@ -1045,6 +1068,12 @@ export interface Task {
    * setting) and by any hold change the user makes on the task.
    */
   heldForShaping?: boolean;
+  /**
+   * PE review of new work in the factory (ORC-029 2e): a lead proposal or a breakdown item waits for the PE's
+   * agreement before it starts. Set when it is created, while the project has PE review of new work on; never on a
+   * task you create, a delivery task or anything else that changes code (those keep the code and security reviews).
+   */
+  peReview?: PeReviewState;
   /** A dedicated check run of that task's pull-request change at exactly this commit. */
   checkTarget?: { taskId: string; n: number; sha: string };
   /** Repair rounds added after failing final checks (at most 2). */

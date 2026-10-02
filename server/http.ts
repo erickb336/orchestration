@@ -276,8 +276,8 @@ export function createHttpServer(opts: HttpOptions): Server {
         if (real && body.name === "resetSampleData") return fail(res, 400, "control", "Sample data is only available with the fake runtime.");
         // A document is recorded together with its copy: the upload endpoint does both.
         if (body.name === "stageVisionDoc" || body.name === "addVisionDoc") return fail(res, 400, "invalid", "Attach documents through POST /api/vision-docs, which stores the file first.");
-        // The studio's rounds, artifacts, PE verdicts and probes come from its runs, recorded by the service.
-        if (SERVICE_COMMANDS.has(body.name)) return fail(res, 400, "invalid", `${body.name} is recorded by the service from the studio's runs; a client cannot send it.`);
+        // The studio's rounds, artifacts, PE verdicts and probes, and PE review of new work, come from agents' runs, recorded by the service.
+        if (SERVICE_COMMANDS.has(body.name)) return fail(res, 400, "invalid", `${body.name} is recorded by the service from its agents' runs; a client cannot send it.`);
         // A sample project never contacts GitHub.
         if (real && body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr" && store.read().state.project.sample)
           return fail(res, 400, "control", "This is the sample project; pull-request delivery needs a project of your own. Start a new project in Settings.");

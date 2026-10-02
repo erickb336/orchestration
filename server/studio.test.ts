@@ -53,7 +53,7 @@ describe("the studio's service commands at the HTTP boundary", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("a client cannot open a round, add an artifact, record a verdict or report a probe; the service can, and the owner's commands go through", async () => {
+  it("a client cannot open a round, add an artifact, record a verdict, report a probe or record a PE review; the service can, and the owner's commands go through", async () => {
     // The service records a round and an agreed screen, as the studio's runs will.
     const n = (cmd("openRound", { focus: "experience" }).result as { n: number }).n;
     const added = cmd("addStudioArtifact", { round: n, kind: "screen", title: "Trip plan", variants: ABC, files: [{ path: "trip-plan/index.html", sha256: sha("a") }], devices: ["desktop"], madeBy: DESIGNER }).result as { artifactId: string };
@@ -67,12 +67,13 @@ describe("the studio's service commands at the HTTP boundary", () => {
       addPeVerdicts: { artifactId: added.artifactId, version: 1, verdicts: [{ verdict: "feasible", reasons: "Fine." }] },
       addProbe: { question: "Anything?" },
       setProbeStatus: { probeId, status: "failed", failure: "client says so" },
+      recordPeReview: { taskId: "T-001", verdict: "agree", reasons: "client says so", specRev: 1 },
     };
     expect(Object.keys(tries).sort()).toEqual([...SERVICE_COMMANDS].sort());
     for (const [name, args] of Object.entries(tries)) {
       const r = await post({ name, args, idempotencyKey: `client-${name}` });
       expect(r.status, name).toBe(400);
-      expect(((await r.json()) as { error: string }).error).toBe(`${name} is recorded by the service from the studio's runs; a client cannot send it.`);
+      expect(((await r.json()) as { error: string }).error).toBe(`${name} is recorded by the service from its agents' runs; a client cannot send it.`);
     }
     expect(JSON.stringify(state())).toBe(before);
     // The owner's studio commands are ordinary commands.

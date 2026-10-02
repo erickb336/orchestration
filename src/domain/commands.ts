@@ -7,6 +7,8 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import { buildDemo } from "./demo";
 import * as M from "./model";
+import * as P from "./peReview";
+import type { PeReviewTarget } from "./peReview";
 import * as B from "./studio/blueprint";
 import * as S from "./studio/studio";
 import { type Mark, type StudioMaker, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, VERDICTS } from "./studio/types";
@@ -153,12 +155,19 @@ function verdictInput(v: unknown): S.VerdictInput {
   };
 }
 
+/** The work a PE review verdict or an overrule is about: `taskId` (a lead proposal or a breakdown item), or `changeOrder` (a blueprint revision). */
+function peReviewTarget(a: Args): PeReviewTarget {
+  if ((a.taskId === undefined) === (a.changeOrder === undefined)) throw new InvalidCommandError("name the work: taskId, or changeOrder");
+  return a.taskId !== undefined ? { taskId: str(a, "taskId") } : { changeOrder: int(a, "changeOrder") };
+}
+
 /**
- * Commands the service records from the studio's runs (passes 3 and 4): rounds, artifacts, the PE's verdicts and
- * probes. They are in the table so the service applies them like any command, but a client never sends them: the
- * HTTP endpoint refuses them, as it refuses `stageVisionDoc`.
+ * Commands the service records from its agents' runs: the studio's rounds, artifacts, the PE's verdicts and probes
+ * (passes 3 and 4), and PE review of new work in the factory (pass 5). They are in the table so the service applies
+ * them like any command, but a client never sends them: the HTTP endpoint refuses them, as it refuses
+ * `stageVisionDoc`.
  */
-export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus"]);
+export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus", "recordPeReview"]);
 
 // ---- registry ----
 
@@ -271,6 +280,14 @@ export const COMMANDS = {
   setProbeStatus: same((s, now, a) =>
     S.setProbeStatus(s, str(a, "probeId"), { status: oneOf(a, "status", ["running", "done", "failed"] as const), attemptId: optStr(a, "attemptId"), result: optStr(a, "result"), failure: optStr(a, "failure") }, now),
   ),
+
+  // PE review of new work in the factory (ORC-029 2e)
+  /** The service's (SERVICE_COMMANDS), from the PE's review run: one verdict on pending work; on a task, with the spec revision the PE read. */
+  recordPeReview: same((s, now, a) =>
+    P.recordPeReview(s, { target: peReviewTarget(a), verdict: oneOf(a, "verdict", ["agree", "object"] as const), reasons: str(a, "reasons"), ...(a.specRev === undefined ? {} : { specRev: int(a, "specRev") }) }, now),
+  ),
+  /** The owner's: overrule the PE's objection after three rounds, with your reason (recorded). */
+  overrulePeReview: same((s, now, a) => P.overrulePeReview(s, peReviewTarget(a), str(a, "why"), now)),
 
   // vision documents
   /** Record one uploaded file without a revision (sent by POST /api/vision-docs, never by the UI directly). Returns { docId, status, replaces? }. */

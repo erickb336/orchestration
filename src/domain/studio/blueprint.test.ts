@@ -236,6 +236,33 @@ describe("change orders", () => {
     ]);
     expect(() => runCommand(s, "setChangeOrders", { who: "pe" }, at(40))).toThrow(InvalidCommandError);
   });
+
+  it("with PE review of new work on, the lead's updates wait for the PE; an objection after three rounds waits under Needs you, and your overrule is recorded (2e)", () => {
+    const { s: shaping, search } = planned();
+    let s = startFactoryAsOwner(shaping, at(9), MANUAL);
+    s = reviseSearch(s, search, 10);
+    expect(s.blueprint.changeOrders[0].peReview).toBeUndefined(); // off until the PE's review runs exist (pass 5)
+    s.project.peReviewsNewWork = true;
+    s = reviseSearch(s, search, 20);
+    const rev = B.blueprintRev(s);
+    const order = () => s.blueprint.changeOrders.find((c) => c.rev === rev)!;
+    expect(order().peReview).toEqual({ status: "pending", rounds: [] });
+    expect(s.events.at(-1)!.message).toMatch(/the lead updates the affected tasks, once the PE agrees with the updates$/);
+    const object = (st: State, sec: number) => runCommand(st, "recordPeReview", { changeOrder: rev, verdict: "object", reasons: "The new search breaks saved trails." }, at(sec)).state;
+    for (const sec of [31, 32]) s = object(s, sec);
+    expect(order().peReview!.status).toBe("pending");
+    expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order-pe"))).toEqual([]);
+    s = object(s, 33);
+    expect(order().peReview!.status).toBe("objected");
+    expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order-pe"))).toEqual([
+      { kind: "open", key: `change-order-pe-${rev}`, what: `The PE objects to the updates for change order r${rev}`, detail: "The new search breaks saved trails.", action: "Open", href: "#/tasks" },
+    ]);
+    s = runCommand(s, "overrulePeReview", { changeOrder: rev, why: "Saved trails are migrated by hand." }, at(40)).state;
+    expect(order().peReview!.overruled).toEqual({ at: at(40), why: "Saved trails are migrated by hand." });
+    expect(s.events.at(-1)!.message).toBe(`You overruled the PE's objection to the updates for change order r${rev}: Saved trails are migrated by hand.`);
+    expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order-pe"))).toEqual([]);
+    expect(() => runCommand(s, "recordPeReview", { changeOrder: 99, verdict: "agree", reasons: "x" }, at(41))).toThrow("There is no change order for blueprint r99.");
+  });
 });
 
 describe("only the owner approves", () => {

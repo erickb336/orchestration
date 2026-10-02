@@ -7,7 +7,7 @@
 // blueprint.ts (approval, open items, change orders, task specs' references). The containers exist from state
 // format 19.
 
-import type { Device, ProviderId } from "../types";
+import type { Device, PeReviewState, ProviderId } from "../types";
 
 /** What a round is about. Round 0 is what the owner brought (material); then the experience, the data crossing each boundary, and the flows. */
 export type RoundFocus = "material" | "experience" | "data" | "flows";
@@ -171,6 +171,8 @@ export interface ChangeOrder {
   status: "open" | "done";
   /** Who acts first: the project's `changeOrders` setting when the revision was made. */
   handler: "lead" | "user";
+  /** PE review of the lead's updates for this change order (2e): the lead applies them once the PE agrees (pass 5). Set while the project has PE review of new work on. */
+  peReview?: PeReviewState;
 }
 
 export interface Studio {

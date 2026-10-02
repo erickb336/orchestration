@@ -7,6 +7,7 @@
 // building is a change order listing the tasks whose current spec cites a changed item.
 
 import { currentSpec, currentVision, draft, event, nextId } from "../model/core";
+import { newWorkReview } from "../peReview";
 import { ControlError, StaleWriteError, type State } from "../types";
 import { artifactName, currentFeedback, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
 import type { BlueprintItem, BlueprintRevision, ChangeOrder, StudioArtifact } from "./types";
@@ -70,13 +71,15 @@ function pushRevision(s: State, items: BlueprintItem[], reason: string, now: str
   const changedItems = items.filter((i) => was.get(i.id) !== JSON.stringify(i)).map((i) => i.id);
   const affectedTasks = s.tasks.filter((t) => t.lifecycle !== "cancelled" && (currentSpec(t).content.blueprintRefs ?? []).some((r) => changedItems.includes(r))).map((t) => t.id);
   const handler = s.project.changeOrders;
-  s.blueprint.changeOrders.push({ rev, at: now, changedItems, affectedTasks, status: "open", handler });
+  // The lead's updates for it wait for PE review when the project has it on (2e).
+  const peReview = newWorkReview(s);
+  s.blueprint.changeOrders.push({ rev, at: now, changedItems, affectedTasks, status: "open", handler, ...(peReview ? { peReview } : {}) });
   event(
     s,
     now,
     "system",
     "vision",
-    `Change order for blueprint r${rev}: ${affectedTasks.length ? `it touches ${affectedTasks.join(", ")}` : "no task cites the changed items"}; ${handler === "user" ? "it waits for you before the lead updates tasks" : "the lead updates the affected tasks"}`,
+    `Change order for blueprint r${rev}: ${affectedTasks.length ? `it touches ${affectedTasks.join(", ")}` : "no task cites the changed items"}; ${handler === "user" ? "it waits for you before the lead updates tasks" : "the lead updates the affected tasks"}${peReview ? ", once the PE agrees with the updates" : ""}`,
   );
 }
 

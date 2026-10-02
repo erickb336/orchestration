@@ -3,6 +3,7 @@
 
 import * as C from "../checks";
 import * as F from "../findings";
+import { peReviewHold } from "../peReview";
 import { budgetStop } from "../spend";
 import { type Attempt, type CheckRunRecord, type ProviderId, type State, type Task, DEFAULT_CHECKS } from "../types";
 import { acceptedOutput, consumedInputs } from "./artifacts";
@@ -91,6 +92,8 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
     if (activeAgentAttempts(s).length >= s.project.workerLimit) break;
     if (t.lifecycle !== "ready" && t.lifecycle !== "active") continue;
     if (t.hold || t.holdBeforeStart || t.heldForShaping || t.controlFailure || t.legacySpecUnavailable) continue;
+    // New work the lead planned starts once PE review agreed or the owner overruled its objection (ORC-029 2e).
+    if (peReviewHold(t.peReview)) continue;
     if (waitingOn(s, t) || blockedReason(s, t)) continue;
     // Reconcile before redispatch: nothing new while any run on this task is still stopping.
     if (activeAttempts(s, t.id).some((a) => a.outcome === "stopping")) continue;

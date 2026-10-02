@@ -9,6 +9,7 @@
 import { deliveryMode, setDeliveryMode, setPrDelivery } from "../delivery";
 import * as F from "../findings";
 import { blueprintRev, openBlueprintItems } from "../studio/blueprint";
+import { unfinishedProbes } from "../studio/studio";
 import {
   type Device,
   type FactoryDelivery,
@@ -105,13 +106,19 @@ export interface FactoryRequest {
    */
   visionRev: number;
   settings: FactorySettings;
-  /** The open items the owner was shown and accepts: open areas by name, open blueprint items by id. */
+  /** The open items the owner was shown and accepts: open areas by name, open blueprint items and unfinished probes by id. */
   acceptOpen: string[];
 }
 
-/** What is still open for the pre-flight: the vision's open areas, then the blueprint's open items (by id). Never a block: the owner confirms them. */
+/** What is still open for the pre-flight: the vision's open areas, the blueprint's open items, and the probes whose evidence is not in yet. */
+function openForPreflight(s: State) {
+  return { areas: openAreas(s), items: openBlueprintItems(s).map((o) => o.item), probes: unfinishedProbes(s) };
+}
+
+/** The pre-flight's open items as the owner confirms them: areas by name, then blueprint items and probes by id. Never a block: the owner confirms them. */
 export function preflightOpenItems(s: State): string[] {
-  return [...openAreas(s), ...openBlueprintItems(s).map((o) => o.item.id)];
+  const o = openForPreflight(s);
+  return [...o.areas, ...o.items.map((i) => i.id), ...o.probes.map((p) => p.id)];
 }
 
 /**
@@ -178,9 +185,8 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
   if (req.blueprintRev !== bp) throw new StaleWriteError(req.blueprintRev, bp);
   const rev = currentVision(state).rev;
   if (req.visionRev !== rev) throw new StaleWriteError(req.visionRev, rev);
-  const areas = openAreas(state);
-  const items = openBlueprintItems(state).map((o) => o.item);
-  const open = [...areas, ...items.map((i) => i.id)];
+  const { areas, items, probes } = openForPreflight(state);
+  const open = preflightOpenItems(state);
   const unconfirmed = open.filter((x) => !req.acceptOpen.includes(x));
   if (unconfirmed.length) throw new ControlError(`Still open and not confirmed: ${unconfirmed.join(", ")}. Confirm them to start, or close them first.`);
   const problem = settingsProblem(req.settings);
@@ -207,6 +213,7 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
   const confirmed = [
     areas.length ? `${areas.length} open area${areas.length === 1 ? "" : "s"} confirmed (${areas.join(", ")})` : "",
     items.length ? `${items.length} open blueprint item${items.length === 1 ? "" : "s"} confirmed (${items.map((i) => i.title).join(", ")})` : "",
+    probes.length ? `${probes.length} unfinished probe${probes.length === 1 ? "" : "s"} confirmed (${probes.map((p) => p.question).join("; ")})` : "",
   ].filter(Boolean);
   const agreed = `you agreed to vision r${rev}${bp ? ` and blueprint r${bp}` : ""}${confirmed.length ? ` with ${confirmed.join(" and ")}` : ""}`;
   event(s, now, "user", "config", `Building started: ${agreed}${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
