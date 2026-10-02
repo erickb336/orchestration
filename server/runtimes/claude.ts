@@ -116,9 +116,9 @@ const CLAUDE_MODEL_ALIASES: CatalogModel[] = [
 const CLAUDE_CAPABILITIES: CapabilityMap = {
   start: "supported",
   streamEvents: "supported",
-  // Notes go onto the input stream and count as delivered only on the CLI's uuid acknowledgment;
-  // wired and tested against a scripted SDK, unverified against a real model run.
-  steer: "unverified",
+  // Notes go onto the input stream and count as delivered only on the CLI's uuid acknowledgment; verified against a
+  // real model run (ORC-027, docs/real-runs/2026-10-02T02-22-16-079Z.json: acknowledged live in 7.7 s, report followed it).
+  steer: "supported",
   // Confirmed by the message stream ending after interrupt(); falls back to aborting the process.
   interrupt: "supported",
   resume: "unverified",

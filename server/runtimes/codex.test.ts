@@ -351,15 +351,38 @@ describe("notes", () => {
     expect(noteEvents(events)[0]).toMatchObject({ outcome: "not-delivered", reason: "Codex steered turn turn_other, not this run's turn" });
   });
 
-  it("no turn yet → not-delivered without calling the app-server", async () => {
+  it("a note before the turn exists is held, then steered once the turn starts (ORC-027 review)", async () => {
+    const { adapter, events, stubLog } = make("steer", {}, { CODEX_STUB_THREAD_DELAY_MS: "300" });
+    adapter.start(assignment());
+    await waitFor(() => stubLog().some((l) => l.recv?.method === "thread/start"));
+    adapter.note("att-1", { id: "early", text: NOTE });
+    await settle(50);
+    // Held: neither settled nor sent while Codex is still starting the thread.
+    expect(noteEvents(events)).toEqual([]);
+    expect(steers(stubLog)).toHaveLength(0);
+    await waitFor(() => noteEvents(events).length === 1);
+    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "delivered" }]);
+    expect(steers(stubLog)).toHaveLength(1);
+    expect(steers(stubLog)[0].params).toMatchObject({ threadId: "thr_stub_1", expectedTurnId: "turn_stub_1" });
+    await waitFor(() => terminals(events).length === 1);
+    expect(noteEvents(events)).toHaveLength(1);
+  });
+
+  it("a held note whose run is stopped before its turn starts → not-delivered, before the terminal event", async () => {
     const { adapter, events, stubLog } = make("slow-thread");
     adapter.start(assignment());
     await waitFor(() => stubLog().some((l) => l.recv?.method === "thread/start"));
     adapter.note("att-1", { id: "early", text: NOTE });
-    await waitFor(() => noteEvents(events).length === 1);
-    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "not-delivered", reason: "the run has no active turn yet" }]);
+    await settle(50);
+    expect(noteEvents(events)).toEqual([]);
+    adapter.interrupt("att-1");
+    await waitFor(() => terminals(events).length === 1);
+    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "not-delivered", reason: "the run was stopped first" }]);
+    const types = events.map((e) => e.type);
+    expect(types.indexOf("note")).toBeLessThan(types.findIndex((t) => t === "stopped" || t === "failed"));
+    await settle(2200);
     expect(steers(stubLog)).toHaveLength(0);
-    expect(terminals(events)).toHaveLength(0);
+    expect(noteEvents(events)).toHaveLength(1);
   });
 
   it("after completion, and for an unknown attempt → not-delivered with the reason, without calling the app-server", async () => {
@@ -497,7 +520,7 @@ describe("CodexAdapter health and models", () => {
     expect(adapter.capabilities).toEqual({
       start: "supported",
       streamEvents: "supported",
-      steer: "unverified",
+      steer: "supported",
       interrupt: "supported",
       resume: "unverified",
       usageReporting: "supported",
