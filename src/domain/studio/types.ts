@@ -171,11 +171,6 @@ export interface PeVerdict {
   overruled?: { at: string; why: string };
   /** The PE's run that made it, with its provider and model (the service's record; absent on verdicts recorded otherwise). */
   by?: { provider: ProviderId; model: string; runId: string };
-  /**
-   * Set on each verdict of a pass the service made the last of its round before the three passes are used: the
-   * designer cannot revise in answer to the PE yet (ORC-029 pass 4), so the pass's objections go to the owner now.
-   */
-  lastPass?: true;
 }
 
 export type ProbeStatus = "queued" | "running" | "done" | "failed";

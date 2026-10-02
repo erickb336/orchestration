@@ -27,6 +27,7 @@ import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, versionDir, type StagedArtifact } from "./studio/artifacts";
 import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
 import { PeAnswerError, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
+import { askForRevisions } from "./studio/revise";
 import { designerEnvelope, importDesignerRun, prepareStaging } from "./studio/runs";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
@@ -538,7 +539,8 @@ export class Scheduler {
           }
           // The PE reviews each designer version before the owner sees it: asked for once the version is imported
           // and its screenshots or recording are made (applied above), and again after a review ended without a verdict.
-          return R.askForPeReviews(next, now);
+          // When its pass asks for changes, the designer revises the version, and the PE reviews the new one (the loop).
+          return askForRevisions(R.askForPeReviews(next, now), now);
         },
         now,
         lease,

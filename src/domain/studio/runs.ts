@@ -19,7 +19,7 @@ import { providerLabel } from "../model/resolution";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
 import { budgetStop } from "../spend";
 import { ControlError, PROVIDERS, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
-import { artifactName, latestArtifacts, latestVersion, peReview } from "./studio";
+import { artifactName, endedWithoutResult, latestArtifacts, latestVersion, peReview } from "./studio";
 import { UNGATED_KINDS, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
 
 /** The longest brief a run takes, in characters. */
@@ -174,9 +174,6 @@ export function peRunDue(s: State, a: StudioArtifact): boolean {
   if (runs.some((r) => r.status === "queued" || r.status === "running" || r.status === "stopping" || r.status === "completed")) return false;
   return endedWithoutResult(runs) < MAX_PE_RUNS;
 }
-
-/** How many of these runs ended without a result: failed, lost, or stopped. A run a pause stopped is not one: it was asked for again. */
-export const endedWithoutResult = (runs: StudioRun[]) => runs.filter((r) => r.status === "failed" || r.status === "lost" || (r.status === "stopped" && !r.requeue)).length;
 
 /** The PE's brief for a version: what the run record says it was asked to do (the envelope has the rest). */
 export const peBrief = (a: StudioArtifact) => `PE review of ${artifactName(a)}: feasibility, scale, longevity and budget, a verdict for each variant.`;

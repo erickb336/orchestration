@@ -8,21 +8,15 @@
 // answers with one JSON block, a verdict per variant, which is an agent's output: it is checked here, at the
 // boundary, and then by the studio's addPeVerdicts, which records it.
 //
-// The designer cannot revise in answer to the PE until pass 4, so each pass is the last of its round for now: an
-// objection goes to the owner at once, never dropped (PE_PASS_IS_LAST).
+// The loop (pass 4): when a pass asks for a change or objects, the designer revises the version (server/studio/
+// revise.ts) and the PE reviews the new one, told what it asked for last time, up to three passes in a round.
 
 import { currentVision } from "../../src/domain/model/core";
 import { buildingSpend, fmtUsd } from "../../src/domain/spend";
 import * as S from "../../src/domain/studio/studio";
-import { VERDICTS, type StudioRun, type Verdict } from "../../src/domain/studio/types";
+import { VERDICTS, type StudioArtifact, type StudioRun, type Verdict } from "../../src/domain/studio/types";
 import { ControlError, type State } from "../../src/domain/types";
 import { lastJsonObject } from "../envelope";
-
-/**
- * Until the designer revises in answer to the PE (pass 4), the service makes each PE pass the last of its round, so
- * the owner sees an objection at once instead of waiting for a revision that cannot come.
- */
-export const PE_PASS_IS_LAST = true;
 
 const KIND_WORDS: Record<string, string> = { screen: "a screen", "terminal-demo": "a terminal demo", tui: "a TUI", contract: "a contract", flow: "a flow map" };
 const VISION_CAP = 6000;
@@ -81,6 +75,7 @@ export function peEnvelope(state: State, run: StudioRun, where: { folder: string
     "",
     `Its files: ${a.files.map((f) => f.path).join(", ")}.`,
     "",
+    ...previousPassLines(state, a),
     "## Where you read",
     "",
     `- Your working directory (${where.folder}) is this version's folder: the designer's files, the screenshots in shots/, and the recordings in recording/. Read what you need; you cannot change anything.`,
@@ -112,9 +107,37 @@ export function peEnvelope(state: State, run: StudioRun, where: { folder: string
     "",
     `- One verdict for each variant: ${ids.map((id) => `\`${id}\``).join(", ")}.`,
     `- \`verdict\`: ${VERDICTS.join(", ")}. Feasible-if states in \`change\` the change that makes it feasible; not-feasible states in \`change\` the evidence that would change your verdict.`,
-    "- An objection (not-feasible) goes to the owner with your reasons; it is never dropped, and only the owner can overrule it.",
+    `- Feasible-if and not-feasible send the variant back to the designer with your reasons and change, up to ${S.MAX_PE_PASSES} passes in a round. After that, an objection (not-feasible) goes to the owner with your reasons, never dropped, and only the owner can overrule it; a change you still ask for goes to them too.`,
     "",
   ].join("\n");
+}
+
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+
+/**
+ * What the PE said on the version before this one in the round, which the designer revised in answer: so it checks
+ * each change was made. Nothing for a version that is not a revision for the PE.
+ */
+function previousPassLines(state: State, a: StudioArtifact): string[] {
+  const prev = S.versionsOf(state, a.id)
+    .filter((v) => v.round === a.round && v.version < a.version)
+    .at(-1);
+  const said = prev ? state.studio.verdicts.filter((v) => v.artifactId === prev.id && v.version === prev.version) : [];
+  if (!prev || !said.length) return [];
+  const pass = Math.max(...said.map((v) => v.pass));
+  const label = (id: string | undefined) => (id === undefined ? "The whole artifact" : `\`${id}\` (${prev.variants.find((v) => v.id === id)?.label ?? id})`);
+  const last = pass + 1 >= S.MAX_PE_PASSES;
+  return [
+    "## Your previous pass",
+    "",
+    `This is pass ${pass + 1} of ${S.MAX_PE_PASSES} in round ${a.round}. On ${S.artifactName(prev)} your pass ${pass} said:`,
+    ...said
+      .filter((v) => v.pass === pass)
+      .map((v) => `- ${label(v.variant)}: ${VERDICT_WORDS[v.verdict]}. ${clip(v.reasons.replace(/\s+/g, " "), 600)}${v.change ? ` ${v.verdict === "not-feasible" ? "What would change the verdict" : "The change"}: ${clip(v.change.replace(/\s+/g, " "), 400)}` : ""}`),
+    "",
+    `The designer revised it in answer: this version is the result. Check that each change was made, and judge every variant again; the designer was told to leave the variants you found feasible as they were.${last ? " This is the round's last pass: what you still find not feasible goes to the owner as an objection, and a change you still ask for goes to them with your verdict." : ""}`,
+    "",
+  ];
 }
 
 /** The PE's answer was refused; the message says why, for the run's record. */
@@ -164,14 +187,14 @@ export function readPeAnswer(finalText: string): S.VerdictInput[] {
 const VERDICT_WORDS: Record<Verdict, string> = { feasible: "feasible", "feasible-if": "feasible if changed", "not-feasible": "not feasible" };
 
 /**
- * Record a PE run's verdicts on the version it reviewed, as the last pass of its round for now (PE_PASS_IS_LAST).
+ * Record a PE run's verdicts on the version it reviewed, as the next pass of its round (the loop rule is the studio's).
  * Throws the studio's ControlError when they cannot be recorded (a variant left out, a feasible-if without its
  * change, the version revised meanwhile). Returns the state and a summary for the run's record.
  */
 export function recordPeRun(state: State, run: StudioRun, verdicts: S.VerdictInput[], now: string): { state: State; summary: string } {
   const r = S.addPeVerdicts(
     state,
-    { artifactId: run.artifactId!, version: run.baseVersion!, verdicts, by: { provider: run.provider, model: run.actualModel ?? run.model, runId: run.id }, lastPass: PE_PASS_IS_LAST },
+    { artifactId: run.artifactId!, version: run.baseVersion!, verdicts, by: { provider: run.provider, model: run.actualModel ?? run.model, runId: run.id } },
     now,
   );
   const a = S.getArtifact(r.state, run.artifactId!, run.baseVersion!);
