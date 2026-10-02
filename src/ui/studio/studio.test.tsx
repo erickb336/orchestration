@@ -482,6 +482,33 @@ describe("PE review in the right column", () => {
     expect(skipped).toContain("No screenshots: no Chrome found");
   });
 
+  it("a PE that ran on the designer's own provider is labelled not independent; on the other provider it is not", () => {
+    const { s: designed, id } = withSample({ pe: false });
+    const pass = (provider: "claude" | "codex") =>
+      S.addPeVerdicts(
+        designed,
+        {
+          artifactId: id,
+          version: 1,
+          verdicts: [
+            { variant: "a", verdict: "feasible", reasons: "A static page." },
+            { variant: "b", verdict: "feasible", reasons: "A list." },
+          ],
+          by: { provider, model: `${provider}-sample-large`, runId: "run-pe" },
+        },
+        at(8),
+      ).state;
+    // The designer ran on Claude (the sample's run), and so did the PE.
+    expect(S.getArtifact(designed, id, 1).madeBy).toMatchObject({ role: "designer", provider: "claude" });
+    const same = render(<Studio />, pass("claude"));
+    expect(same).toContain('<span class="k-chip k-chip--you">not independent</span>');
+    expect(same).toContain("Not independent: the PE ran on the designer&#x27;s own provider (Claude).");
+    expect(same).toContain(">Agreed<");
+    const other = render(<Studio />, pass("codex"));
+    expect(other).not.toContain("ot independent");
+    expect(other).toContain("PE · Codex · codex-sample-large");
+  });
+
   it("a PE run that ended without a verdict says so, and says when it is asked again", () => {
     const { s: designed } = withSample({ pe: false });
     let s = R.dispatchStudioRuns(R.askForPeReviews(designed, at(6)), at(7)).state;

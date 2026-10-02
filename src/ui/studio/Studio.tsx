@@ -607,9 +607,11 @@ function PeReviewPanel({ artifact: a }: { artifact: StudioArtifact | undefined }
               {view.state}
             </StatePill>
             {view.simulated && <SimulatedChip title="Simulated: the fake runtime's PE answered; no agent judged this." />}
+            {view.notIndependent && <Chip tone="you">not independent</Chip>}
           </div>
           <p className="small">{view.text}</p>
           {view.by && <p className="micro muted">PE · {view.by}</p>}
+          {view.notIndependent && <p className="small">{view.notIndependent}</p>}
           {view.verdicts.length > 0 && (
             <ul className="st-verdicts" aria-label="The PE's verdicts">
               {view.verdicts.map((v) => (

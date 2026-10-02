@@ -401,6 +401,11 @@ export interface PeView {
   text: string;
   /** "Codex · gpt-x", the PE that made the latest pass (or is reviewing). */
   by?: string;
+  /**
+   * Set when the PE ran on the designer's own provider, so its review is not independent (ORC-029 r5: the PE runs on
+   * the other provider by default): "Not independent: the PE ran on the designer's own provider (Claude)."
+   */
+  notIndependent?: string;
   simulated: boolean;
   verdicts: VerdictLine[];
 }
@@ -431,7 +436,11 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
   const madeBy = latest.find((v) => v.by)?.by;
   const byRun = madeBy ? s.studio.runs.find((x) => x.id === madeBy.runId) : run;
   const by = madeBy ? `${providerLabel(madeBy.provider)} · ${madeBy.model}` : run ? `${providerLabel(run.provider)} · ${run.actualModel ?? run.model}` : undefined;
-  const base = { ...(by ? { by } : {}), simulated: !!byRun?.simulated, verdicts };
+  // The PE's provider: its latest pass's run, or the run reviewing now; compared with the provider of the designer's run that made the version.
+  const peProvider = madeBy?.provider ?? run?.provider;
+  const designer = a.madeBy.role === "user" ? undefined : a.madeBy.provider;
+  const notIndependent = peProvider && peProvider === designer ? `Not independent: the PE ran on the designer's own provider (${providerLabel(peProvider)}).` : undefined;
+  const base = { ...(by ? { by } : {}), ...(notIndependent ? { notIndependent } : {}), simulated: !!byRun?.simulated, verdicts };
   const names = (vs: { label: string }[]) => vs.map((v) => v.label).join(", ");
   switch (r.status) {
     case "agreed":
