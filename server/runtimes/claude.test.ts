@@ -243,6 +243,17 @@ describe("ClaudeAdapter", () => {
     }
   });
 
+  it("turns the agent-kit hooks off in the worker, in either worker environment", async () => {
+    // The envelope already gives each step its principles; the user's agent-kit plugin must not add them again.
+    for (const environment of ["isolated", "local"] as const) {
+      const { adapter, calls } = setup({ env: { ANTHROPIC_API_KEY: "sk-ant-test", PATH: "/usr/bin", AGENT_KIT_HOOKS: "on" } });
+      adapter.start(assignment({ environment }));
+      await waitFor(() => calls.length === 1);
+      expect(calls[0].options.env?.AGENT_KIT_HOOKS, environment).toBe("off");
+      await adapter.shutdown();
+    }
+  });
+
   it("passes exactly one way of signing in: the subscription token only when opted in (ORC-010)", async () => {
     const base = { ANTHROPIC_API_KEY: "sk-ant-key", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-token", CLAUDE_CODE_USE_BEDROCK: "1", PATH: "/usr/bin" };
     const sub = claudeWorkerEnv({ ...base, ORCHESTRATION_CLAUDE_AUTH: "subscription", ANTHROPIC_AUTH_TOKEN: "x" });

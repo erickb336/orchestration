@@ -774,8 +774,9 @@ export class CodexAdapter implements RuntimeAdapter {
 
   private spawnProcess(args: string[], probe = false, extraEnv: NodeJS.ProcessEnv = {}): ChildProcess {
     const child = this.spawnFn(this.command, [...this.prefixArgs, ...args], {
-      // Codex processes never receive GitHub tokens: only the service talks to GitHub.
-      env: { ...withoutGitHubTokens(this.env), ...extraEnv },
+      // Codex processes never receive GitHub tokens: only the service talks to GitHub. The agent-kit plugin's hooks
+      // stay off: the envelope already gives each step its principles.
+      env: { ...withoutGitHubTokens(this.env), ...extraEnv, AGENT_KIT_HOOKS: "off" },
       stdio: ["pipe", "pipe", "pipe"],
       // Own process group, so a kill reaches the native binary behind the npm wrapper.
       detached: process.platform !== "win32",

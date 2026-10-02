@@ -759,6 +759,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
         ...claudeWorkerEnv(this.env),
         CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: "1",
         CLAUDE_AGENT_SDK_CLIENT_APP: "orchestration/0.1.0",
+        // The agent-kit plugin's hooks stay off: the envelope already gives each step its principles. Only a local
+        // run loads the user's plugins, but every run gets it, so the rule is simple.
+        AGENT_KIT_HOOKS: "off",
       },
       stderr: (data: string) => {
         run.stderrTail = (run.stderrTail + data).slice(-2000);
