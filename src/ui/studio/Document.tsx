@@ -73,6 +73,9 @@ function svgImage(svg: string): { src: string; width?: number; height?: number }
   return { src: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(root))}`, width, height };
 }
 
+/** The smallest a diagram is drawn, as a share of its size; below it, the diagram scrolls in its box. */
+const MIN_DIAGRAM_SCALE = 0.6;
+
 type Drawn = { status: "drawing" } | { status: "ok"; src: string; width?: number; height?: number } | { status: "error"; message: string };
 
 /** A Mermaid diagram, drawn in the app, with its source under it. `label` says what it is, for the image's text alternative. */
@@ -100,7 +103,9 @@ export function MermaidDiagram({ source, label }: { source: string; label: strin
   return (
     <figure className="st-doc__diagram">
       {value.status === "ok" ? (
-        <img src={value.src} width={value.width} height={value.height} alt={label} />
+        <div className="st-doc__drawing">
+          <img src={value.src} width={value.width} height={value.height} alt={label} style={value.width ? { minWidth: Math.round(value.width * MIN_DIAGRAM_SCALE) } : undefined} />
+        </div>
       ) : value.status === "error" ? (
         <p className="small muted">The diagram cannot be drawn: {value.message}</p>
       ) : (

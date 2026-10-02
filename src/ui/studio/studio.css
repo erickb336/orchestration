@@ -173,7 +173,9 @@ main.st-wide { max-width: 1600px; }
 /* The lead's message for the round, its paragraphs as written; then its questions, each with suggested answers. */
 .st-leadmsg { font-size: var(--fs-meta); white-space: pre-line; overflow-wrap: anywhere; }
 .st-questions { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-3); }
-.st-question { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; }
+/* A list item keeps its number, so its parts are spaced by margins rather than laid out as a grid. */
+.st-question { min-width: 0; overflow-wrap: anywhere; }
+.st-question > * + * { margin-top: var(--space-1); }
 .st-chips { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .st-chips .k-btn[aria-pressed="true"] { border-color: var(--text); background: var(--surface-2); }
 .st-sum { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); font-size: var(--fs-small); overflow-wrap: anywhere; }
@@ -224,10 +226,14 @@ h6.st-doc__h { font-size: var(--fs-meta); color: var(--muted); }
 .st-doc__table { margin: 0 0 var(--space-3); overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-control); }
 .st-doc__table table { width: auto; min-width: 100%; }
 .st-doc__table th { background: var(--surface-2); }
+/* Words in a cell wrap only between words; a table wider than the screen scrolls in its box. */
+.st-doc__table th, .st-doc__table td { overflow-wrap: normal; }
 .st-doc__table tr:last-child td { border-bottom: none; }
 /* A Mermaid diagram: the drawing as an image, its source folded under it. */
-.st-doc__diagram { margin: 0 0 var(--space-3); padding: var(--space-3); display: grid; gap: var(--space-2); justify-items: center; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-control); }
-.st-doc__diagram img { max-width: 100%; height: auto; }
+.st-doc__diagram { margin: 0 0 var(--space-3); padding: var(--space-3); display: grid; gap: var(--space-2); min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-control); }
+/* A diagram shrinks to fit, down to 60% of its size (MermaidDiagram sets that floor); a wider one scrolls sideways in its box instead of becoming unreadable. */
+.st-doc__drawing { overflow-x: auto; min-width: 0; }
+.st-doc__drawing img { display: block; margin: 0 auto; max-width: 100%; height: auto; }
 .st-doc__source { justify-self: stretch; min-width: 0; }
 .st-doc__source summary { cursor: pointer; }
 .st-doc__source .st-doc__code { margin: var(--space-2) 0 0; }
