@@ -1,10 +1,13 @@
 // Real-run test of the runtime adapters. Runs a Codex worker and a Claude worker CONCURRENTLY against a
-// throwaway git repository, pauses and resumes each and then the whole project, lets both finish, and
-// writes an evidence file. It uses your own credentials from the environment and costs a small amount
-// of usage.
+// throwaway git repository, pauses and resumes each and then the whole project, sends a note to each
+// running worker, lets both finish, and writes an evidence file. It uses your own credentials from the
+// environment and costs a small amount of usage.
 //
-//   node scripts/real-run-test.mjs           real Claude + Codex (needs credentials, see below)
-//   node scripts/real-run-test.mjs --fake    the same scenario against the fake runtime (no cost)
+//   npm run test:real            real Claude + Codex (needs credentials, see below)
+//   npm run test:integration     the same scenario against the fake runtime (no cost; CI runs it)
+//
+// A real run also writes docs/real-runs/<time>.json: the evidence without local paths or the service log,
+// meant to be committed so the repository shows what real models did (ORC-027).
 //
 // Credentials: Claude needs ANTHROPIC_API_KEY (or Bedrock/Vertex/Foundry settings), or your own subscription
 // token with ORCHESTRATION_CLAUDE_AUTH=subscription (see docs/real-agents.md). Codex uses your
@@ -21,14 +24,18 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 const FAKE = process.argv.includes("--fake");
+/** PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the test. */
+const EXPECTED_CHECKS = 13;
+const ROOT = resolve(import.meta.dirname, "..");
 const PORT = Number(process.env.ORCHESTRATION_TEST_PORT ?? 5399);
 const BASE = `http://127.0.0.1:${PORT}`;
 const HEADERS = { "Content-Type": "application/json", "X-Orchestration-Client": "1" };
 const t0 = Date.now();
-const evidence = { mode: FAKE ? "fake" : "real", startedAt: new Date().toISOString(), steps: [], checks: {}, ok: false };
+const evidence = { mode: FAKE ? "fake" : "real", startedAt: new Date().toISOString(), orchestrator: orchestratorVersion(), steps: [], checks: {}, ok: false };
 /** Every exit criterion of the runtime-integrations milestone (docs/PROJECT_SPEC.md) is an explicit check; PASSED requires all of them. */
 const check = (name, ok, detail = null) => {
   evidence.checks[name] = { ok: !!ok, detail };
@@ -40,6 +47,16 @@ const record = (name, data = {}) => {
   log(`${name}${Object.keys(data).length ? ` ${JSON.stringify(data)}` : ""}`);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Which Orchestrator code ran: the commit, and whether the checkout had uncommitted changes. */
+function orchestratorVersion() {
+  const at = (...args) => execFileSync("git", ["-C", ROOT, ...args], { encoding: "utf8" }).trim();
+  try {
+    return { commit: at("rev-parse", "--short=12", "HEAD"), uncommittedChanges: at("status", "--porcelain", "--untracked-files=no") !== "" };
+  } catch {
+    return null;
+  }
+}
 
 // ---------- throwaway repository and service ----------
 
@@ -208,7 +225,38 @@ async function main() {
   await cmd("resumeProject");
   record("project resumed");
 
-  // 4. Let both finish: the reviewer and the lead run with the project's role defaults.
+  // 4. A note to each running worker (ORC-022). After the project resumes, each task's first step starts a fresh
+  // run; a note to it counts only once that runtime acknowledges it (Claude: the SDK replays the message; Codex:
+  // turn/steer answers). Whether the report then answers the note is recorded, not checked: following a note is
+  // the model's choice, and greeting.js has three lines whether or not the report says so.
+  const NOTE = "Also say in your report how many lines greeting.js has.";
+  const sent = [];
+  for (const [label, id] of [
+    ["codex", codexTask],
+    ["claude", claudeTask],
+  ]) {
+    const { s: live } = await until(`${label} first step running again`, (x) => active(x, id).find((a) => a.stepId === "S1") || task(x, id).steps.find((st) => st.id === "S1").state === "done", 60000);
+    const run = active(live, id).find((a) => a.stepId === "S1");
+    if (!run) {
+      check(`${label}: a note reached the running worker and its runtime acknowledged it`, false, "the first step finished before a note could be sent");
+      continue;
+    }
+    const { result } = await cmd("sendNote", { taskId: id, stepId: "S1", text: NOTE });
+    sent.push({ label, id, noteId: result.noteId, run: run.id });
+    record(`${label}: note sent`, { note: result.noteId, run: run.id });
+  }
+  for (const n of sent) {
+    const { v: note } = await until(`${n.label} note settled`, (x) => {
+      const found = x.state.notes.find((y) => y.id === n.noteId);
+      return found && (found.status === "delivered" || found.status === "not-delivered") ? found : null;
+    }, 120000);
+    // From the service's own timestamps: sent (handed to the runtime) to settled (acknowledged or refused).
+    const settledAfterMs = note.sentAt && note.settledAt ? Date.parse(note.settledAt) - Date.parse(note.sentAt) : null;
+    record(`${n.label}: note settled`, { note: note.id, status: note.status, via: note.via ?? null, run: note.attemptId ?? null, reason: note.reason ?? null, settledAfterMs });
+    check(`${n.label}: a note reached the running worker and its runtime acknowledged it`, note.status === "delivered" && note.via === "live" && note.attemptId === n.run, { status: note.status, via: note.via ?? null, settledAfterMs, reason: note.reason ?? null });
+  }
+
+  // 5. Let both finish: the reviewer and the lead run with the project's role defaults.
   const { s: final } = await until("both tasks done or blocked", (x) => [codexTask, claudeTask].every((id) => ["done"].includes(task(x, id).lifecycle) || task(x, id).steps.some((st) => st.state === "blocked")), 600000);
   for (const [label, id] of [
     ["codex", codexTask],
@@ -218,7 +266,9 @@ async function main() {
     const runs = final.state.attempts.filter((a) => a.taskId === id).map((a) => ({ id: a.id, step: a.stepId, provider: a.snapshot.provider, model: a.snapshot.model, actualModel: a.actualModel ?? null, outcome: a.outcome, usage: a.usage ?? null, note: a.note ?? null }));
     const report = final.state.artifacts.find((a) => a.taskId === id && a.name === "report");
     const brief = final.state.artifacts.find((a) => a.taskId === id && a.name === "brief");
-    record(`${label}: result`, { lifecycle: t.lifecycle, blocked: t.steps.find((st) => st.state === "blocked")?.blockedReason ?? null, runs, report: report ? { summary: report.summary } : null, brief: brief ? { summary: brief.summary } : null });
+    // A hint only, not a check: does the report give greeting.js's line count, as the note asked?
+    const answersNote = report ? /\b(3|three)\b[^.\n]{0,20}\blines?\b/i.test(report.summary) : null;
+    record(`${label}: result`, { lifecycle: t.lifecycle, blocked: t.steps.find((st) => st.state === "blocked")?.blockedReason ?? null, runs, report: report ? { summary: report.summary, answersNote } : null, brief: brief ? { summary: brief.summary } : null });
   }
   for (const [label, id] of [
     ["codex", codexTask],
@@ -229,7 +279,15 @@ async function main() {
     check(`${label}: task completed with a recorded report and brief`, task(final, id).lifecycle === "done" && !!report && !!brief);
   }
   check("managed repository main branch untouched, and nothing committed by the investigation", git("rev-list", "--count", "main") === "1" && git("status", "--porcelain") === "");
-  evidence.ok = Object.values(evidence.checks).length >= 9 && Object.values(evidence.checks).every((c) => c.ok);
+  evidence.ok = Object.values(evidence.checks).length === EXPECTED_CHECKS && Object.values(evidence.checks).every((c) => c.ok);
+  if (Object.values(evidence.checks).length !== EXPECTED_CHECKS) log(`✗ ${Object.values(evidence.checks).length} checks ran; PASSED needs exactly ${EXPECTED_CHECKS}`);
+}
+
+/** The evidence as committed to docs/real-runs: the service log is left out (it can hold anything a process printed),
+ *  and every local path becomes <work> (this run's throwaway folder) or ~ (the home directory). */
+function publicRecord(e) {
+  const { serviceLog: _omitted, ...rest } = e;
+  return JSON.stringify(rest, null, 2).replaceAll(work, "<work>").replaceAll(ROOT, "<orchestrator>").replaceAll(homedir(), "~");
 }
 
 function taskLabel(s, id) {
@@ -256,5 +314,13 @@ try {
   writeFileSync(file, JSON.stringify(evidence, null, 2));
   console.log(`\n${evidence.ok ? "PASSED" : "NOT PASSED"}: evidence written to ${file}`);
   console.log(`Throwaway repository and worktrees kept for inspection in ${work}`);
+  // A real run that reached its agents leaves a record for the repository, passed or not.
+  if (!FAKE && evidence.steps.some((st) => st.name === "tasks created")) {
+    const records = join(ROOT, "docs", "real-runs");
+    mkdirSync(records, { recursive: true });
+    const rec = join(records, `${evidence.startedAt.replace(/[:.]/g, "-")}.json`);
+    writeFileSync(rec, publicRecord(evidence) + "\n");
+    console.log(`Record for the repository (no local paths, no service log): ${rec}`);
+  }
   process.exit(exitCode || (evidence.ok ? 0 : 1));
 }

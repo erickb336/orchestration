@@ -89,8 +89,9 @@ export const LOGIN_GUIDANCE =
 const CAPABILITIES: CapabilityMap = {
   start: "supported",
   streamEvents: "supported",
-  // turn/steer is wired for notes and tested against the stub app-server; unverified against a real model run.
-  steer: "unverified",
+  // turn/steer delivers notes; verified against a real model run (ORC-027, docs/real-runs/2026-10-02T02-22-16-079Z.json:
+  // acknowledged live in 1.7 s, and the report did what the note asked).
+  steer: "supported",
   interrupt: "supported",
   // thread/resume exists; threads are persisted by Codex, but resume is not wired or tested.
   resume: "unverified",

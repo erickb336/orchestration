@@ -25,3 +25,7 @@ jobs:
       - name: The compiled principles match principles/*.md
         run: git diff --exit-code -- src/domain/builtInPrinciples.json
       - run: npm run build
+      # ORC-027: the runtime-integration scenario (two concurrent workers, pause, resume, project pause, notes)
+      # end to end through the real service, on the simulated runtime. `npm run test:real` runs it with real models.
+      - name: Integration scenario (simulated runtime)
+        run: npm run test:integration

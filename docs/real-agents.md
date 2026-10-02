@@ -50,6 +50,24 @@ Without setup, the same choices are environment variables:
 
 In subscription mode no API key or cloud setting is passed to agents.
 
+## Checking that real agents work
+
+`npm run test:real` runs one short scenario with real agents, against a throwaway repository inside this checkout's ignored `evidence/` folder:
+
+- a Codex agent and a Claude agent work at the same time;
+- each is paused and resumed, then the whole project is;
+- each gets a note while it runs;
+- both tasks then finish.
+
+It takes under a minute and about $0.15 of Claude usage. It reads the same environment variables as above, and prints only whether each provider is ready, never a credential.
+
+**What it leaves:**
+
+- The full evidence goes to `evidence/`, which is never committed.
+- A record goes to `docs/real-runs/`, without local paths or the service log, so it can be committed.
+
+A unit test fails if a record holds a home-directory path or anything shaped like a key. `npm run test:integration` runs the same scenario on simulated agents, at no cost, and CI runs it on every pull request.
+
 ## What real runs do on your machine
 
 What real runs do on your machine:

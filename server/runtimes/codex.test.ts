@@ -497,7 +497,7 @@ describe("CodexAdapter health and models", () => {
     expect(adapter.capabilities).toEqual({
       start: "supported",
       streamEvents: "supported",
-      steer: "unverified",
+      steer: "supported",
       interrupt: "supported",
       resume: "unverified",
       usageReporting: "supported",

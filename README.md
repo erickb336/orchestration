@@ -116,6 +116,8 @@ npm run typecheck
 npm test
 npm run build
 npm run capture    # retake the README images from the demo (needs Chrome and ffmpeg)
+npm run test:integration   # the end-to-end scenario on simulated agents (about 70 s; CI runs it)
+npm run test:real          # the same scenario with real Claude and Codex agents (your credentials, about $0.15)
 ```
 
 **Where things are:**
@@ -129,7 +131,7 @@ npm run capture    # retake the README images from the demo (needs Chrome and ff
 
 ## Status
 
-A personal tool under active development. It was built in milestones ORC-001 to ORC-026, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-one are done, four were dropped, and one is planned. Later milestones sometimes replaced earlier ones; the last column says what survives.
+A personal tool under active development. It was built in milestones ORC-001 to ORC-027, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-two are done, four were dropped, and one is planned. Later milestones sometimes replaced earlier ones; the last column says what survives.
 
 **The foundation** (the five milestones in the [project spec](docs/PROJECT_SPEC.md), plus pipelines):
 
@@ -164,21 +166,23 @@ A personal tool under active development. It was built in milestones ORC-001 to 
 | Milestone | What it added | Today |
 | --- | --- | --- |
 | [ORC-021](docs/tasks/ORC-021.md) Flows | Six plain flows in place of the pattern catalog, and a security review beside every code review | Done |
-| [ORC-022](docs/tasks/ORC-022.md) Notes to a running agent | Through the lead or directly; a note shows Delivered once the runtime acknowledges it | Done |
+| [ORC-022](docs/tasks/ORC-022.md) Notes to a running agent | Through the lead or directly; a note shows Delivered once the runtime acknowledges it | Done; **verified with real models** (below) |
 | [ORC-023](docs/tasks/ORC-023.md) Orchestrator inside Claude Code | A Claude Code plugin to talk to the lead of the repository you are in, also from your phone through Remote Control | **Planned, next** |
 | [ORC-024](docs/tasks/ORC-024.md) Working principles | Fifteen principles adapted from pstack, given to each step's agent where they fit | Done |
 | [ORC-025](docs/tasks/ORC-025.md) UI audit and rebuild | One dark theme, a component kit, every screen rebuilt, a new demo | Done |
 | [ORC-026](docs/tasks/ORC-026.md) Write for the reader | A sixteenth principle, our own, given to every agent and the lead | Done |
+| [ORC-027](docs/tasks/ORC-027.md) The real-run test, committed | The end-to-end scenario runs in CI on simulated agents; `npm run test:real` runs it with real ones and leaves a record in [`docs/real-runs/`](docs/real-runs/) | Done |
 
-**Verified with real models: the core run, not every feature.** On 2026-10-01, `node scripts/real-run-test.mjs` passed with real agents:
+**Verified with real models: the core run and notes, not every feature.** The scenario behind `npm run test:real` has passed twice with real agents, on 2026-10-01 and 2026-10-02. Each run's record is in [`docs/real-runs/`](docs/real-runs/). The second run checked:
 
 - a Codex agent (gpt-6.1-sol) and a Claude agent (Haiku 4.5) worked at the same time, each in its own worktree;
-- Pause showed "Pausing" until each runtime confirmed the stop (about 2 seconds), and Resume started a fresh attempt;
+- Pause showed "Pausing" until each runtime confirmed the stop (1.5 to 2 seconds), and Resume started a fresh attempt;
 - a project-wide pause reached both;
-- both tasks then finished, with a review and the lead's brief on Claude Sonnet 5.5;
+- **a note sent to each running agent was acknowledged by its runtime** (Codex in 1.7 seconds, Claude in 7.7). Both reports then did what the note asked, which neither did in the first run without a note;
+- both tasks finished, with a review and the lead's brief on Claude Sonnet 5.5;
 - the managed repository's `main` was untouched.
 
-Ten runs took 54 seconds and an estimated $0.14 of Claude usage. **Not yet run with real models:** notes to a running agent, pull-request delivery, conversations with the lead, and whether the principles change what agents do. Every feature is also tested against simulated and scripted Claude and Codex runtimes.
+Each run takes under a minute and about $0.14 of Claude usage. **Not yet run with real models:** pull-request delivery, conversations with the lead, and whether the principles change what agents do. Every feature is also tested against simulated and scripted Claude and Codex runtimes, and CI runs the same scenario on simulated agents.
 
 ## License
 
