@@ -93,7 +93,8 @@ describe("the simulated lead's studio block, from its envelope alone", () => {
     let s = open(fresh(), "experience");
     expect(studioOf(s)).toBeUndefined();
     s = close(s, 1);
-    expect(studioOf(s)).toMatchObject({ openRound: { focus: "data" }, designerRuns: [{ kinds: ["contract"], devices: [] }] });
+    // The data round asks for the project's dictionary too (pass 4d).
+    expect(studioOf(s)).toMatchObject({ openRound: { focus: "data" }, designerRuns: [{ kinds: ["contract", "dictionary"], devices: [] }] });
     s = close(open(s, "data"), 2);
     const flows = studioOf(s)!;
     expect(flows).toMatchObject({ openRound: { focus: "flows" }, designerRuns: [{ kinds: ["flow"] }] });

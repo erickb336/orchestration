@@ -14,7 +14,7 @@ import { DOCUMENT_KINDS, type StudioArtifactKind } from "../../src/domain/studio
 import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, scriptedFinding, scriptedSummary } from "../../src/domain/demoScript";
 import type { CatalogModel, OutputDef, ProviderId, State } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
-import { TERMINAL_BRIEF, designerAsk, fakePeAnswer, reviseSample, variantsToRevise, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
+import { TERMINAL_BRIEF, addDictionarySample, addFlowRules, askedKinds, asksForRules, designerAsk, fakePeAnswer, reviseSample, variantsToRevise, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
 import { statusAnswer, statusQuestion } from "./fakeStatus";
 import type { AdapterEvent, Assignment, ProviderHealth, RuntimeAdapter } from "./types";
 
@@ -238,7 +238,7 @@ export function fakeStudio(prompt: string): Record<string, unknown> | undefined 
           ? { brief: "Simulated lead: make the main screen of the vision in two takes that differ in a real choice.", kinds: ["screen"], variants: 2, devices: screens }
           : { brief: "Simulated lead: make a terminal demo of the main command.", kinds: ["terminal-demo"], variants: 1, devices: ["terminal"] }
         : focus === "data"
-          ? { brief: "Simulated lead: describe the product's things and how they relate, with a worked example.", kinds: ["contract"], variants: 1, devices: [] }
+          ? { brief: "Simulated lead: describe the product's things and how they relate, with a worked example, and propose the project's dictionary.", kinds: ["contract", "dictionary"], variants: 1, devices: [] }
           : { brief: "Simulated lead: decide every case of the main flow, as a table of cases and outcomes.", kinds: ["flow"], variants: 1, devices: [] };
   const summary = {
     material: "As it is today (simulated): what the code in the repository does now.",
@@ -367,8 +367,9 @@ export function fakeLeadAnswer(reply: Record<string, unknown>, schema: Record<st
 
 /** The document kind a designer's brief asks for, when every kind it names is a document ("The lead asks for: contract; …"). */
 export function documentAsk(brief: string): StudioArtifactKind | undefined {
-  const kinds = /The lead asks for: ([a-z, -]+);/.exec(brief)?.[1]?.split(", ") as StudioArtifactKind[] | undefined;
-  return kinds?.length && kinds.every((k) => DOCUMENT_KINDS.includes(k)) ? kinds[0] : undefined;
+  // The project's dictionary is handed in beside a document, not instead of one (pass 4d).
+  const kinds = (askedKinds(brief) as StudioArtifactKind[]).filter((k) => k !== "dictionary");
+  return kinds.length && kinds.every((k) => DOCUMENT_KINDS.includes(k)) ? kinds[0] : undefined;
 }
 
 /**
@@ -650,11 +651,19 @@ export class FakeAdapter implements RuntimeAdapter {
           const doc = documentAsk(ask.brief);
           const terminal = !doc && TERMINAL_BRIEF.test(ask.brief);
           const asIs = asIsFiles(p.prompt ?? "");
+          // Pass 4d: the project's dictionary when the brief asks for one (alone, or with a document), and a flow's rules in a flows round.
+          const kinds = askedKinds(ask.brief);
+          const words = kinds.includes("dictionary");
           try {
-            if (doc) writeDocumentSample(p.studio, doc);
-            else if (terminal) writeTerminalSample(p.studio, ask.terminal);
-            else writeSamplePrototype(p.studio);
-            if (asIs) markAsIs(p.studio, asIs);
+            if (words && kinds.length === 1) addDictionarySample(p.studio);
+            else {
+              if (doc) writeDocumentSample(p.studio, doc);
+              else if (terminal) writeTerminalSample(p.studio, ask.terminal);
+              else writeSamplePrototype(p.studio);
+              if (asIs) markAsIs(p.studio, asIs);
+              if (words) addDictionarySample(p.studio);
+              if (doc === "flow" && asksForRules(p.prompt ?? "")) addFlowRules(p.studio);
+            }
           } catch (e) {
             this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not write its sample: ${e instanceof Error ? e.message : String(e)}` });
             continue;
@@ -662,8 +671,10 @@ export class FakeAdapter implements RuntimeAdapter {
           this.emit({
             type: "completed",
             attemptId: id,
-            finalText: doc
-              ? `Made a ${doc} document in Markdown and Mermaid (simulated sample).`
+            finalText: words && kinds.length === 1
+              ? "Made the project's dictionary (simulated sample)."
+              : doc
+              ? `Made a ${doc} document in Markdown and Mermaid${doc === "flow" && asksForRules(p.prompt ?? "") ? ", with its rules" : ""}${words ? ", and the project's dictionary" : ""} (simulated sample).`
               : asIs
                 ? `Reproduced the ${terminal ? "trips CLI" : "trip plan"} as it is today, as is, from ${asIs.join(", ") || "no file"} (simulated sample).`
                 : terminal

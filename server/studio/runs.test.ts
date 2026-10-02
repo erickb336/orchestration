@@ -180,7 +180,7 @@ describe("a designer run at the service", () => {
     const prompt = claude.runs.get(second)!.prompt;
     expect(prompt).toMatch(/\n- A code product \(interface, algorithm\): the interface \(names, signatures, the error model, usage examples as a caller writes them\) and the core algorithms/);
     expect(prompt).toMatch(/\n- An infrastructure system \(topology\): the topology \(the components and what talks to what, as a Mermaid diagram\), a failure and recovery table, a scaling and cost model/);
-    expect(prompt).toContain("`kind`: one of screen, terminal-demo, tui, contract, flow, interface, algorithm, topology.");
+    expect(prompt).toContain("`kind`: one of screen, terminal-demo, tui, contract, flow, interface, algorithm, topology, dictionary.");
     expect(prompt).toContain("- A document (contract, flow, interface, algorithm, topology) is plain files: Markdown (.md) with code blocks and tables, and Mermaid (.mmd) for diagrams, which the app renders. Its variant's entry is its main .md file; it has no devices.");
     expect(prompt).toContain('Names use only letters, digits, ".", "_", "-" and spaces.');
     // Only round 0 of an existing repository is "as it is today".

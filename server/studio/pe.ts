@@ -20,7 +20,7 @@ import { buildingSpend, fmtUsd } from "../../src/domain/spend";
 import * as S from "../../src/domain/studio/studio";
 import { VERDICTS, VERDICT_WORDS, type PeVerdict, type RoundFocus, type StudioArtifact, type StudioRun, type Verdict } from "../../src/domain/studio/types";
 import { ControlError, type ProseCheck, type State } from "../../src/domain/types";
-import { lastJsonObject } from "../envelope";
+import { lastJsonObject, projectWordsLines } from "../envelope";
 import { checkDoc, proseDoc, type ProseDoc } from "../prose/record";
 import type { ProseChecker } from "../prose/vale";
 import { studioFeedbackLines, studioPrinciplesLines } from "./writing";
@@ -34,6 +34,7 @@ const KIND_WORDS: Record<StudioArtifact["kind"], string> = {
   interface: "an interface",
   algorithm: "an algorithm",
   topology: "a topology",
+  dictionary: "the project's dictionary",
   material: "what the owner brought",
   evidence: "a probe's evidence",
 };
@@ -167,6 +168,7 @@ export function peEnvelope(state: State, run: StudioRun, where: { folder: string
     "",
     `Round ${round.n} is about ${FOCUS_WORDS[round.focus]}.${round.summary ? ` ${round.summary}` : ""}`,
     "",
+    ...projectWordsLines(state),
     ...budgets,
     ...studioPrinciplesLines(run),
     ...refusedLines(state, run, a),

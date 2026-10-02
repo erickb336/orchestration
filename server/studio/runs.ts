@@ -18,6 +18,8 @@ import { checkDoc, proseDoc, type ProseDoc } from "../prose/record";
 import type { ProseChecker } from "../prose/vale";
 import type { Store } from "../store";
 import { FILE_TYPES, MAX_ARTIFACT_BYTES, MAX_FILE_BYTES, ManifestError, NO_MODULES, STUDIO_MANIFEST, type StagedArtifact, versionDir, writeVersion } from "./artifacts";
+import { DICTIONARY_FILE, EXAMPLE_FORM, MAX_EXAMPLES, MAX_RULES, MAX_TERM, PATTERNS, RULES_FILE } from "../../src/domain/studio/words";
+import { projectWordsLines } from "../envelope";
 import { repoGlance, trackedAmong } from "./existing";
 import { studioFeedbackLines, studioPrinciplesLines } from "./writing";
 
@@ -76,6 +78,25 @@ function asIsSection(state: State, run: StudioRun, checkout: string | undefined)
   ];
 }
 
+/**
+ * The flows round's rules (pass 4d, decision 7): a flow carries rules.json beside each variant's entry, with each rule
+ * in one of EARS's five patterns and every edge case as an "If …, then …" rule, so an undecided case shows as a
+ * missing rule. The import refuses a line that fits no pattern (words.ts).
+ */
+function flowRulesLines(): string[] {
+  return [
+    "## The flows round's rules",
+    "",
+    `- Give each flow a \`${RULES_FILE}\` in the folder of each variant's entry, and list it in \`files\`: \`{ "rules": [{ "id": "R1", "text": "…" }], "examples": [{ "id": "E1", "text": "…" }] }\`. Give each rule and example its own id.`,
+    "- Write each rule in one of these five patterns:",
+    ...PATTERNS.map((p) => `  - ${p.form}`),
+    '- Write every edge case as an "If <unwanted condition>, then the <system> shall <response>." rule: empty, loading, error, offline, first run, full, late, and each case the vision leaves open. A case with no rule is a case nobody decided.',
+    `- Write each acceptance example as "${EXAMPLE_FORM}"`,
+    `- The service checks each line when it imports your work. A line that fits no pattern refuses the whole hand-in, with its id. At most ${MAX_RULES} rules and ${MAX_EXAMPLES} examples a file.`,
+    "- The owner marks each rule. Keep the table of cases and outcomes in the Markdown too.",
+  ];
+}
+
 /** What a designer run is given: its brief, where it works, and exactly what to hand in. */
 export function designerEnvelope(state: State, run: StudioRun, where: { staging: string; checkout?: string }): string {
   const round = state.studio.rounds.find((r) => r.n === run.round)!;
@@ -112,6 +133,8 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     ...(round.n === 0 ? asIsSection(state, run, where.checkout) : []),
     ...studioPrinciplesLines(run),
     ...studioFeedbackLines(state, run),
+    ...projectWordsLines(state),
+    ...(round.focus === "flows" ? [...flowRulesLines(), ""] : []),
     "## What to hand in",
     "",
     `End by writing \`${STUDIO_MANIFEST}\` in your working directory:`,
@@ -127,6 +150,7 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     "- `files`: every file of the artifact, as paths relative to your working directory, each listed once; every entry is one of them.",
     `- File types: ${FILE_TYPES.join(", ")}. At most ${MAX_FILE_BYTES / 1024 / 1024} MB a file and ${MAX_ARTIFACT_BYTES / 1024 / 1024} MB an artifact. Names use only letters, digits, ".", "_", "-" and spaces. No links. The folders shots/, recording/ and __orchestrator/ are the service's.`,
     `- A document (${DOCUMENT_KINDS.join(", ")}) is plain files: Markdown (.md) with code blocks and tables, and Mermaid (.mmd) for diagrams, which the app renders. Its variant's entry is its main .md file; it has no devices. Write rules and edge cases as tables of cases and outcomes.`,
+    `- A dictionary (kind \`dictionary\`) is one file, \`${DICTIONARY_FILE}\`, its one variant's entry, with no devices: a list of \`{ "term": "trip", "meaning": "<one line>", "avoid": ["journey"] }\`. Each term is a word the product uses (at most ${MAX_TERM} characters), with one meaning and the words it replaces. List a term once. An avoided word is not a term, and only one term avoids it. The owner marks each term.`,
     "- A terminal demo or TUI variant's entry is a VHS `.tape`, which the service records in a container: `Set Columns` and `Set Rows` to 80×24, 100×30 or 120×40, `Set Shell bash`, `Output` .webm, .gif and .txt (one each), no Copy, Paste, Screenshot or Env.",
     "  - Use bash: the recorder has no zsh. A tape that sets zsh is not recorded; the variant then shows its hand-written frames, with the reason.",
     "  - The tape's shell starts at the artifact's root, with a copy of every file the artifact lists, so paths in the tape's commands are relative to the artifact's root, as in studio.json: a tape at `demo/demo.tape` runs `node demo/trips.js`, not `node trips.js`.",
@@ -226,6 +250,8 @@ export function importDesignerRun(state: State, runId: string, given: HandedIn, 
           devices: a.devices,
           madeBy: { role: run.kind, provider: run.provider, model: run.actualModel ?? run.model, attemptId: run.id },
           ...(provenance ? { provenance } : {}),
+          ...(a.dictionary ? { dictionary: a.dictionary } : {}),
+          ...(a.rules ? { rules: a.rules } : {}),
         },
         now,
       );

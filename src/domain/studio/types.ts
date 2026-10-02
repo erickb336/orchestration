@@ -52,10 +52,12 @@ export interface RoundQuestion {
  * (names, signatures, the error model, usage examples as a caller writes them) and its core `algorithm`s and
  * primitives (pseudo-code, a worked trace, invariants, cost). An infrastructure system's: its `topology` (what talks to
  * what, failure and recovery, scale and cost). Any domain's `contract`s (what crosses a boundary, with examples) and
- * `flow`s (journeys, sequences, and tables of cases and outcomes). The owner's `material`, and a probe's `evidence`.
+ * `flow`s (journeys, sequences, and tables of cases and outcomes; a flow may carry its rules, `rules.json`). The
+ * project's `dictionary` (pass 4d): its words, each with one meaning and the words it replaces. The owner's
+ * `material`, and a probe's `evidence`.
  */
-export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "interface" | "algorithm" | "topology" | "material" | "evidence";
-export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology", "material", "evidence"];
+export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "interface" | "algorithm" | "topology" | "dictionary" | "material" | "evidence";
+export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology", "dictionary", "material", "evidence"];
 /** Kinds that are documents: plain files (Markdown with code blocks and tables, `.mmd` Mermaid), shown without a device frame. */
 export const DOCUMENT_KINDS: StudioArtifactKind[] = ["contract", "flow", "interface", "algorithm", "topology"];
 /** Kinds the PE does not review: what the owner brought, and a probe's evidence. They reach the owner at once, and a verdict on one is refused. */
@@ -110,6 +112,10 @@ export interface StudioArtifact {
   shots?: ArtifactShots;
   /** How a terminal demo or TUI is shown, which the service settles after import (pass 3). Absent when this service records none. */
   demo?: ArtifactDemo;
+  /** A dictionary's terms, as its `dictionary.json` gave them, checked at import (pass 4d). Only on a dictionary. */
+  dictionary?: DictionaryEntry[];
+  /** A flow's rules and examples, from the `rules.json` beside a variant's entry, checked at import (pass 4d). Only on a flow, and only for the variants that have one. */
+  rules?: VariantRules[];
   /**
    * The end of PE review of this version, when the service recorded it because no other record shows it: no enabled
    * provider could run the next step, or the version was reviewed under pass 3's rule (recorded at the upgrade).
@@ -132,6 +138,47 @@ export interface StudioArtifact {
 export type LoopEnd = "passes" | "as-is" | "round-closed" | "no-revision" | "no-review" | "no-provider" | "earlier-rule";
 /** The ends the service records on the version (`reviewEnd`), because no other record shows them. */
 export type RecordedEnd = Extract<LoopEnd, "no-provider" | "earlier-rule">;
+
+/**
+ * One word of the project's dictionary (pass 4d, decision 6): the term the product and its agents use, its one
+ * meaning, and the words it replaces. The dictionary the owner approved into the blueprint is the project's: every
+ * agent gets its words, and the prose check reports an avoided word (words.ts).
+ */
+export interface DictionaryEntry {
+  term: string;
+  meaning: string;
+  avoid: string[];
+}
+
+/**
+ * The five sentence patterns of EARS (Easy Approach to Requirements Syntax; Mavin et al., 2009) a flow's rule fits:
+ * always "The <system> shall <response>."; event "When <trigger>, …"; state "While <state>, …"; unwanted
+ * "If <unwanted condition>, then …"; optional "Where <feature is included>, …".
+ */
+export type RulePattern = "always" | "event" | "state" | "unwanted" | "optional";
+export const RULE_PATTERNS: RulePattern[] = ["always", "event", "state", "unwanted", "optional"];
+
+/** A flow's rule (pass 4d, decision 7): its id, its text in one of EARS's patterns, and the pattern it fits. */
+export interface FlowRule {
+  id: string;
+  text: string;
+  pattern: RulePattern;
+}
+
+/** An acceptance example of a flow: "Given <context>, when <action>, then <result>." */
+export interface FlowExample {
+  id: string;
+  text: string;
+}
+
+/** The rules of one variant of a flow: its `rules.json`, beside the variant's entry. */
+export interface VariantRules {
+  variant: string;
+  /** The file, relative to the version's folder. */
+  path: string;
+  rules: FlowRule[];
+  examples: FlowExample[];
+}
 
 /** Where an "as is" artifact came from: labelled as is, with the repository files the designer reproduced it from. */
 export interface Provenance {
@@ -188,6 +235,16 @@ export interface Pin {
 }
 
 /**
+ * The owner's mark on one row of a table (pass 4d): a term of a dictionary (`row` is the term), or a rule of a flow
+ * (`row` is the rule's id, on `variant` when the flow has several). The same three marks as a whole artifact's.
+ */
+export interface RowMark {
+  row: string;
+  variant?: string;
+  mark: Mark;
+}
+
+/**
  * The owner's marks, pins and picks on one artifact version. The owner's only. Records are kept in order; the last
  * one for a version is its current feedback, and its pins are the version's open pins.
  */
@@ -197,6 +254,8 @@ export interface Feedback {
   mark: Mark | null;
   pickedVariant?: string;
   pins: Pin[];
+  /** Marks on the rows of a dictionary or of a flow's rules. Absent when there are none. Never carried to a revision. */
+  rows?: RowMark[];
   note: string;
   at: string;
   /** Set on the record a revision starts with: the open pins of this earlier version, carried forward. Not an answer of the owner's. */
@@ -331,7 +390,7 @@ export interface ChangeOrder {
 export type StudioRunKind = "designer" | "pe" | "probe";
 export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
 /** What a designer's manifest may hold: the owner brings material, and a probe's run makes evidence. */
-export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology"];
+export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology", "dictionary"];
 
 /** queued → running → (stopping →) stopped, completed, failed or lost. A queued run waits for dispatch, which happens in Vision only. */
 export type StudioRunStatus = "queued" | "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";
