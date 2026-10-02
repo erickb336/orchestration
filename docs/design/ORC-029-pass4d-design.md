@@ -125,3 +125,15 @@ The fix for the second real trial's finding. **The verdict now keeps three thing
 
 These are the undecided cases that the owner decides; in the second trial, the designer invented answers to them. "As it is today" passed again: the PE found the reproduction faithful on the first pass.
 
+## 4d-2b as built (merged 2026-10-02)
+
+- **Principles for studio runs.** Every designer and PE run gets "Contextualize and write for the reader" and "Write controlled English", plus a small set for its role (`STUDIO_PRINCIPLE_IDS`):
+  - the designer: experience-first, because every feature must justify itself (the second trial's loop grew features);
+  - the PE: foundational-thinking (it judges structure, scale and longevity) and prove-it-works (it judges claims and says what it could not check).
+  
+  The sections are 615 words (designer) and 801 words (PE), under the 1,400-word cap. Each run records the principles it was given, with their hashes.
+- **The writing check** reads the PE's reasons, changes and open cases, and the Markdown of the designer's documents. The result is recorded on the studio run, as on lead runs. The next run of the same role gets the feedback block when rules broke.
+- **The lead's decision: no notes field for designers.** A screen or a terminal demo has no text to check. Options: add a summary or notes field to `studio.json` for the designer to write, or check only the documents. Chosen: only the documents. The owner reviews artifacts, not prose, and the lead's message already explains the round. A notes field would add text for the owner to read.
+- **The measure** on `docs/real-runs` (Vale 3.24.0): the PE's verdicts pass at 78% (83 of 107 sentences), the lead's messages at 79% and its briefs at 57%.
+- **Checks after the merge:** `npm test` 1,720 passed and 1 skipped; the typecheck passes; `trial:studio -- --fake --lead` passes.
+
