@@ -4,7 +4,8 @@
 // from the app.
 //
 // The app's origin is where the owner's state and commands live, so it serves far less than the prototype server:
-// never HTML, script or SVG, nothing a browser could run there. Only plain text (served as text/plain) and PNG, GIF
+// never HTML, script or SVG, nothing a browser could run there. Only plain text (.txt, .ans, .cast, and a document's
+// Markdown and Mermaid, .md and .mmd, all served as text/plain in UTF-8) and PNG, GIF
 // and WebM (each checked by its first bytes), and only files the prototype server would serve (serve.ts,
 // readServedFile): those the version's manifest lists, its screenshots and its recordings. Every answer carries
 // nosniff, no-store and a policy that runs nothing.
@@ -16,6 +17,9 @@ const APP_TYPES: Record<string, { type: string; magic?: Buffer }> = {
   ".txt": { type: "text/plain; charset=utf-8" },
   ".ans": { type: "text/plain; charset=utf-8" },
   ".cast": { type: "text/plain; charset=utf-8" },
+  // A document artifact's Markdown and Mermaid (interface, algorithm, topology, contract, flow): the app renders them itself.
+  ".md": { type: "text/plain; charset=utf-8" },
+  ".mmd": { type: "text/plain; charset=utf-8" },
   ".png": { type: "image/png", magic: MAGIC[".png"] },
   ".gif": { type: "image/gif", magic: MAGIC[".gif"] },
   ".webm": { type: "video/webm", magic: MAGIC[".webm"] },

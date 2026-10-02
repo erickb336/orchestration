@@ -91,6 +91,8 @@ export class ManifestError extends Error {
 const MODULE_SCRIPT = /<script\b[^>]*\btype\s*=\s*["']?\s*module\b/i;
 export const NO_MODULES = "plain scripts only (no ES modules): a module needs a CORS header that would let other websites read local prototypes";
 
+/** One name in a path: ASCII letters, digits, ".", "_", "-" and space. */
+const SEGMENT = /^[A-Za-z0-9._ -]+$/;
 const show = (x: string) => JSON.stringify(x.length > 80 ? `${x.slice(0, 80)}…` : x);
 const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
 
@@ -99,6 +101,8 @@ function filePath(p: unknown, where: string): string {
   if (typeof p !== "string") throw new ManifestError(`${where}: a file is not a path.`);
   const outside = !p || p.length > 300 || p.startsWith("/") || p.includes("\\") || /[\u0000-\u001f\u007f]/.test(p) || p.split("/").some((x) => x === "" || x === "." || x === "..");
   if (outside) throw new ManifestError(`${where}: ${show(p)} is not a relative path inside the run's folder (no absolute paths, no "..").`);
+  // Plain ASCII names only (review finding 9): no lookalike letters, and no name that two disks normalize differently.
+  if (!p.split("/").every((x) => SEGMENT.test(x))) throw new ManifestError(`${where}: ${show(p)} has a name with a character other than A–Z, a–z, 0–9, ".", "_", "-" or a space.`);
   // Compared without case: the Mac's disk does not tell "Shots/" from "shots/".
   const lower = p.toLowerCase();
   if (lower === VERSION_MANIFEST || lower === STUDIO_MANIFEST) throw new ManifestError(`${where}: ${show(p)} is reserved for the service.`);

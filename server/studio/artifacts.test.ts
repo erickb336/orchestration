@@ -188,6 +188,27 @@ describe("reading studio.json", () => {
     expect(refusal(read)).toBe('artifact 1: the entry "a/home.html" of variant "a" is not one of its files.');
   });
 
+  it("allows only ASCII letters, digits, '.', '_', '-' and spaces in each name of a path (review finding 9)", () => {
+    const tryFile = (file: string) => {
+      stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, file] }] }, { ...PAGES, [file]: "notes" });
+      return () => read();
+    };
+    const why = 'has a name with a character other than A–Z, a–z, 0–9, ".", "_", "-" or a space.';
+    // A lookalike Cyrillic "а", an accent, the same accent decomposed, a full-width letter, an emoji, a colon, a quote.
+    for (const file of ["а/notes.txt", "a/café.txt", "a/café.txt", "a/ｎotes.txt", "a/🗺.txt", "a/x:y.txt", 'a/"q".txt', "a/semi;colon.txt"]) {
+      expect(refusal(tryFile(file))).toBe(`artifact 1: ${JSON.stringify(file)} ${why}`);
+    }
+    for (const file of ["a/Day plan 2.txt", "a/day_plan-v2.final.txt", "notes.txt"]) {
+      expect(tryFile(file)()[0].files.map((f) => f.path)).toContain(file);
+    }
+  });
+
+  it("takes a document artifact's Markdown and Mermaid files (md and mmd are on the allowlist)", () => {
+    const files = { "api/interface.md": "# Interface\n\n```ts\nplan(trip: Trip): Plan\n```\n", "api/topology.mmd": "graph LR\n  app --> api\n" };
+    stage({ artifacts: [{ kind: "contract", title: "Trip API", variants: [{ id: "a", label: "A", entry: "api/interface.md" }], files: Object.keys(files) }] }, files);
+    expect(read()[0].files.map((f) => f.path)).toEqual(["api/interface.md", "api/topology.mmd"]);
+  });
+
   it("refuses symbolic links, to a file or through a folder, and hard links: nothing outside the folder is read", () => {
     const withLink = (make: () => void, file: string) => {
       rmSync(staging, { recursive: true, force: true });

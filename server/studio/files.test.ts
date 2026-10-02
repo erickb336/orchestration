@@ -42,6 +42,8 @@ beforeEach(async () => {
     "a/demo.cast": CAST,
     "a/plan.ans": "Weekend trips\n",
     "a/notes.txt": "Hand-written notes.\n",
+    "a/interface.md": "# Interface\n\n`plan(trip)`\n",
+    "a/topology.mmd": "graph LR\n  app --> api\n",
     "a/demo.tape": "Output demo.gif\n",
     "a/index.html": "<script>fetch('/api/state')</script>",
     "a/app.js": "fetch('/api/state')",
@@ -94,11 +96,14 @@ const GUARD = { "x-content-type-options": "nosniff", "cache-control": "no-store"
 const headersOf = (r: Response) => ({ "x-content-type-options": r.headers.get("x-content-type-options"), "cache-control": r.headers.get("cache-control"), "content-security-policy": r.headers.get("content-security-policy") });
 
 describe("GET /api/studio/file", () => {
-  it("serves a version's text as plain text, and its screenshots and recordings by their first bytes, with nosniff and no-store", async () => {
+  it("serves a version's text (.txt, .ans, .cast, .md, .mmd) as plain text, and its screenshots and recordings by their first bytes, with nosniff and no-store", async () => {
     for (const [path, type, body] of [
       ["a/demo.cast", "text/plain; charset=utf-8", CAST],
       ["a/plan.ans", "text/plain; charset=utf-8", "Weekend trips\n"],
       ["a/notes.txt", "text/plain; charset=utf-8", "Hand-written notes.\n"],
+      // A document artifact's Markdown and Mermaid, as plain UTF-8 text: the app renders them, nothing runs here.
+      ["a/interface.md", "text/plain; charset=utf-8", "# Interface\n\n`plan(trip)`\n"],
+      ["a/topology.mmd", "text/plain; charset=utf-8", "graph LR\n  app --> api\n"],
       ["recording/a/demo.txt", "text/plain; charset=utf-8", "trips plan\nWeekend trips from Lisbon\n"],
     ] as const) {
       const r = await file(path);
