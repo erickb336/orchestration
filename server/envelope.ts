@@ -996,7 +996,13 @@ function peDecisionsSection(state: State): string {
     b.buildingUsd === null
       ? "not set"
       : `${fmtUsd(b.buildingUsd)}, of which about ${fmtUsd(spent.usd)} is spent${committed ? ` and up to ${fmtUsd(committed)} is committed to PE calls whose work has not run` : ""}${unknown ? ` (${unknown} run${unknown === 1 ? " has" : "s have"} no recorded cost, which makes the building spend uncertain: a call that adds any building cost goes to the user)` : ""}`;
-  const maintenance = b.maintenanceUsdPerMonth === null ? "not set" : `${fmtUsd(b.maintenanceUsdPerMonth)} a month, of which ${fmtUsd(maintenanceEstimate(state))} is estimated so far`;
+  const m = maintenanceEstimate(state);
+  const maintenance =
+    b.maintenanceUsdPerMonth === null
+      ? "not set"
+      : m.startUsd === null
+        ? `${fmtUsd(b.maintenanceUsdPerMonth)} a month, not yet estimated (the pre-flight makes the estimate${m.callsUsd ? `; the PE calls that stand add ${fmtUsd(m.callsUsd)} a month` : ""}), so a call that adds any maintenance cost goes to the user`
+        : `${fmtUsd(b.maintenanceUsdPerMonth)} a month, of which ${fmtUsd(m.startUsd + m.callsUsd)} is estimated so far`;
   return `
 ## Decisions you make as the PE (${open.length})
 The user sends these to the PE: a rigid principal engineer who weighs each option's feasibility, its scale, whether it will still work and be maintainable in years, and its cost. The PE does not run its own decisions yet, so you decide them with this brief, and the record says a lead run decided as the PE.

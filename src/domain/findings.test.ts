@@ -6,7 +6,7 @@ import * as F from "./findings";
 import * as M from "./model";
 import { needsYouItems } from "./needsYou";
 import { buildSeed } from "./seed";
-import { buildingSpend, pastBudget } from "./spend";
+import { buildingSpend, maintenanceEstimate, pastBudget } from "./spend";
 import { ControlError, type Artifact, type Finding, type State } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -375,12 +375,19 @@ describe("the PE's route (ORC-029 2d)", () => {
     const r = M.startLeadRun(M.setBudgets(priced(s0), budgets, at(5)), { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(5));
     return { s: r.state, id, art, runId: r.runId };
   }
+  /** The pre-flight estimated the maintenance at `usd` a month (the PE's pre-flight, pass 6, makes this estimate). */
+  function estimated(s0: State, usd: number): State {
+    const s = structuredClone(s0);
+    s.project.factoryStarts.push({ at: at(1), by: "user", blueprintRev: 0, visionRev: 1, settings: M.startFactoryRequest(s).settings, openItems: [], estimate: { maintenanceUsdPerMonth: [0, usd], basis: "The pre-flight" } });
+    return s;
+  }
   /** The decision run completes, with its own cost recorded. */
   const complete = (s: State, runId: string, decisions: unknown) => M.completeLeadRun(s, runId, { reply: "ok", proposals: [], decisions }, at(6), { usage: { costUsd: 0 } });
   const zero = { buildUsd: [0, 0], maintenanceUsdPerMonth: [0, 0], basis: "Nothing is built or run" };
 
   it("a call within the budgets is the PE's: recorded with its reasons, its cost, and the lead run that made it with the PE's brief", () => {
-    const { s, runId, art } = peCase(2, { buildingUsd: 20, maintenanceUsdPerMonth: 10 });
+    const { s: s0, runId, art } = peCase(2, { buildingUsd: 20, maintenanceUsdPerMonth: 10 });
+    const s = estimated(s0, 0);
     const [d1, d2] = s.decisions;
     const out = complete(s, runId, [
       { id: d1.id, decision: "accept", why: "It holds at the stated scale.", cost: zero },
@@ -400,7 +407,8 @@ describe("the PE's route (ORC-029 2d)", () => {
   });
 
   it("never past a budget: a call that would take the building spend or the maintenance estimate past a budget goes to the owner, even on Autopilot", () => {
-    const { s, runId, art } = peCase(5, { buildingUsd: 5, maintenanceUsdPerMonth: 10 });
+    const { s: s0, runId, art } = peCase(5, { buildingUsd: 5, maintenanceUsdPerMonth: 10 });
+    const s = estimated(s0, 0);
     const [d1, d2, d3, d4, d5] = s.decisions;
     expect(M.autonomyMode(s.project.autonomy)).toBe("autopilot");
     const out = complete(s, runId, [
@@ -501,9 +509,7 @@ describe("the PE's route (ORC-029 2d)", () => {
 
   it("the maintenance estimate keeps a PE call the owner took: $80 stands, the owner takes $50, and $15 more goes to the owner (review finding 4)", () => {
     const { s: s0, runId } = peCase(3, { buildingUsd: null, maintenanceUsdPerMonth: 100 });
-    // The pre-flight estimated the maintenance at $0 a month (pass 6 makes this estimate).
-    const s = structuredClone(s0);
-    s.project.factoryStarts.push({ at: at(1), by: "user", blueprintRev: 0, visionRev: 1, settings: M.startFactoryRequest(s).settings, openItems: [], estimate: { maintenanceUsdPerMonth: [0, 0], basis: "Nothing runs yet" } });
+    const s = estimated(s0, 0);
     const [d1, d2, d3] = s.decisions;
     const cost = (lo: number, hi: number) => ({ maintenanceUsdPerMonth: [lo, hi], basis: "The provider's price list" });
     const out = complete(s, runId, [
@@ -519,6 +525,22 @@ describe("the PE's route (ORC-029 2d)", () => {
     // A call the owner reversed no longer counts.
     const reversed = F.decideFinding(taken, d2.id, "fix", "Drop the second index instead.", at(10));
     expect(pastBudget(reversed, { buildUsd: [0, 0], maintenanceUsdPerMonth: [0, 20], basis: "x" })).toBeUndefined();
+  });
+
+  it("while the pre-flight has not estimated the maintenance, it is unknown, never $0: a call that adds any maintenance cost goes to the owner", () => {
+    const { s, runId } = peCase(2, { buildingUsd: null, maintenanceUsdPerMonth: 100 });
+    expect(s.project.factoryStarts.at(-1)?.estimate).toBeUndefined();
+    expect(maintenanceEstimate(s)).toEqual({ startUsd: null, callsUsd: 0 });
+    const [d1, d2] = s.decisions;
+    const out = complete(s, runId, [
+      { id: d1.id, decision: "accept", why: "Nothing runs.", cost: { maintenanceUsdPerMonth: [0, 0], basis: "Nothing runs" } },
+      { id: d2.id, decision: "accept", why: "A small index.", cost: { maintenanceUsdPerMonth: [1, 2], basis: "The provider's price list" } },
+    ]);
+    expect(out.decisions[0]).toMatchObject({ status: "accept", decidedBy: "pe" });
+    expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "the project's maintenance is not yet estimated, so up to $2.00 more a month cannot be checked against the $100.00 budget" } });
+    // Once estimated, the same call is within the budget.
+    expect(pastBudget(estimated(out, 10), { maintenanceUsdPerMonth: [1, 2], basis: "x" })).toBeUndefined();
+    expect(maintenanceEstimate(estimated(F.decideFinding(out, d2.id, "accept", undefined, at(7)), 10))).toEqual({ startUsd: 10, callsUsd: 2 });
   });
 
   it("the owner reverses a PE call as they reverse the lead's, and takes a call past a budget; the PE's call stays on the record", () => {

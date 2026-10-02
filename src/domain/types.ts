@@ -149,7 +149,10 @@ export interface FactoryStart {
   settings: FactorySettings;
   /** What was still open, named to the owner and confirmed: the vision's open areas, then the blueprint's open items and the unfinished probes (by id). */
   openItems: string[];
-  /** The pre-flight's budget estimates, once the PE makes them. */
+  /**
+   * The pre-flight's budget estimates. Nothing writes it yet: the PE's pre-flight (ORC-029 pass 6) fills it. While it is
+   * absent the project's maintenance is not yet estimated (unknown, never $0; see `maintenanceEstimate`).
+   */
   estimate?: { buildUsd?: [number, number]; maintenanceUsdPerMonth?: [number, number]; basis: string };
 }
 
@@ -657,7 +660,8 @@ export interface PeReviewState {
  * decisions yet (ORC-029 pass 4): `by: "lead-run"` says a lead decision run made the call with the PE's brief, and
  * `leadRunId` names it. `pastBudget` says why the call went to the owner instead of applying: it would have taken the
  * building spend (with the calls that stand but have not run) or the maintenance estimate past a budget, it stated no
- * figure for a budget that is set, or what it adds cannot be checked because the spend so far is unknown.
+ * figure for a budget that is set, or what it adds cannot be checked: a run has no recorded cost, or the maintenance is
+ * not yet estimated.
  */
 export interface PeCall {
   decision: "fix" | "accept" | "follow-up";

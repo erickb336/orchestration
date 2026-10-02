@@ -307,9 +307,13 @@ describe("the lead's decisions section", () => {
     expect(text).toContain("## Decisions you make as the PE (1)");
     expect(text).toContain("The PE does not run its own decisions yet, so you decide them with this brief");
     expect(text).toContain(
-      "- Budgets: building $50.00, of which about $0.00 is spent (9 runs have no recorded cost, which makes the building spend uncertain: a call that adds any building cost goes to the user); maintenance $20.00 a month, of which $0.00 is estimated so far. Spending past a budget is never the PE's call",
+      "- Budgets: building $50.00, of which about $0.00 is spent (9 runs have no recorded cost, which makes the building spend uncertain: a call that adds any building cost goes to the user); maintenance $20.00 a month, not yet estimated (the pre-flight makes the estimate), so a call that adds any maintenance cost goes to the user. Spending past a budget is never the PE's call",
     );
     expect(text).not.toContain("not counted");
+    // Once a start records the pre-flight's estimate, the brief gives it with the calls that stand.
+    const est = structuredClone(r.state);
+    est.project.factoryStarts.push({ at: at(1), by: "user", blueprintRev: 0, visionRev: 1, settings: M.startFactoryRequest(est).settings, openItems: [], estimate: { maintenanceUsdPerMonth: [2, 4], basis: "The pre-flight" } });
+    expect(buildLeadEnvelope(est, est.leadRuns.at(-1)!, "read")).toContain("maintenance $20.00 a month, of which $4.00 is estimated so far.");
     expect(text).toContain(`- ${d.id} on ${id} "Change" (spec by user)`);
     expect(text).toContain('"cost": { "buildUsd": [0, 0], "maintenanceUsdPerMonth": [0, 0], "basis":');
     expect(text).toContain('Decide the findings listed under "Decisions waiting for you" and "Decisions you make as the PE"');

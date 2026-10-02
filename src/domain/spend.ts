@@ -138,14 +138,19 @@ function standingPeCalls(s: State): (FindingDecision & { pe: PeCall })[] {
   return s.decisions.filter((d): d is FindingDecision & { pe: PeCall } => !!d.pe && d.status === d.pe.decision);
 }
 
-/**
- * The project's estimated maintenance, in dollars a month (the high end): the newest factory start's estimate, plus
- * what each PE call that stands adds. 0 while nothing was estimated.
- */
-export function maintenanceEstimate(s: State): number {
-  let usd = s.project.factoryStarts.at(-1)?.estimate?.maintenanceUsdPerMonth?.[1] ?? 0;
-  for (const d of standingPeCalls(s)) usd += d.pe.cost?.maintenanceUsdPerMonth?.[1] ?? 0;
-  return usd;
+/** The project's estimated maintenance, in dollars a month (the high ends). */
+export interface MaintenanceEstimate {
+  /** The newest factory start's estimate (the PE's pre-flight, pass 6); null while none was made: not yet estimated, never $0. */
+  startUsd: number | null;
+  /** What the PE calls that stand add. */
+  callsUsd: number;
+}
+
+/** The newest factory start's maintenance estimate, and what each PE call that stands adds to it. */
+export function maintenanceEstimate(s: State): MaintenanceEstimate {
+  let callsUsd = 0;
+  for (const d of standingPeCalls(s)) callsUsd += d.pe.cost?.maintenanceUsdPerMonth?.[1] ?? 0;
+  return { startUsd: s.project.factoryStarts.at(-1)?.estimate?.maintenanceUsdPerMonth?.[1] ?? null, callsUsd };
 }
 
 /**
@@ -173,6 +178,8 @@ export function committedBuildUsd(s: State): number {
  * the call must state its figure for it (0 is a figure), since a cost not stated is unknown, never zero.
  * - Building: what was spent, plus what the PE calls that stand commit before their work has run, plus this call. A run
  *   with no recorded cost makes the spend unknown, so a call that adds any building cost goes to the owner.
+ * - Maintenance: the pre-flight's estimate, plus the PE calls that stand, plus this call. While the pre-flight has made no
+ *   estimate, the maintenance is unknown, so a call that adds any maintenance cost goes to the owner.
  * - A call that adds nothing passes even when the spend is already past the budget (the owner continued past it).
  */
 export function pastBudget(s: State, cost: BudgetEstimate | undefined, prices: readonly ModelPrice[] = PRICES): string | undefined {
@@ -192,9 +199,11 @@ export function pastBudget(s: State, cost: BudgetEstimate | undefined, prices: r
   }
   if (b.maintenanceUsdPerMonth !== null) {
     const more = cost?.maintenanceUsdPerMonth?.[1];
-    const now = maintenanceEstimate(s);
+    const m = maintenanceEstimate(s);
     if (more === undefined) why.push(`it states no maintenance cost, and the maintenance budget is ${fmtUsd(b.maintenanceUsdPerMonth)} a month`);
-    else if (more > 0 && now + more > b.maintenanceUsdPerMonth) why.push(`up to ${fmtUsd(more)} more a month would take the maintenance estimate to ${fmtUsd(now + more)}, past the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
+    else if (more > 0 && m.startUsd === null) why.push(`the project's maintenance is not yet estimated, so up to ${fmtUsd(more)} more a month cannot be checked against the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
+    else if (more > 0 && m.startUsd! + m.callsUsd + more > b.maintenanceUsdPerMonth)
+      why.push(`up to ${fmtUsd(more)} more a month would take the maintenance estimate to ${fmtUsd(m.startUsd! + m.callsUsd + more)}, past the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
   }
   return why.length ? why.join("; ") : undefined;
 }

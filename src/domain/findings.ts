@@ -5,7 +5,8 @@
 // keep their `openFindings` semantics everywhere.
 //
 // The PE's route (ORC-029 2d). On it the PE decides, within the budgets: a call whose stated cost would take the
-// building spend or the maintenance estimate past a budget goes to the owner, even on Autopilot. The PE does not run
+// building spend or the maintenance estimate past a budget, or that cannot be checked (`pastBudget`), goes to the
+// owner, even on Autopilot. The PE does not run
 // its own decisions yet (pass 4): the lead's decision runs decide its decisions with the PE's brief, and the record
 // says so (`decidedBy: "pe"`, with the call, its cost and the lead run in `pe`). The owner reverses a PE call as they
 // reverse the lead's.
