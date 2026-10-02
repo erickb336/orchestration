@@ -15,8 +15,8 @@ import type { SectionId } from "./sections";
 
 type QualityDraft = ChecksDraft & { defaultFlow: string };
 
-/** Orchestrator's own principle; the others are adapted from pstack. */
-const OWN_PRINCIPLE = "contextualize-and-write-for-the-reader";
+/** Orchestrator's own principles; the others are adapted from pstack. */
+const OWN_PRINCIPLES = ["contextualize-and-write-for-the-reader", "write-controlled-english"] as const;
 const isIn = (ids: readonly string[], id: string) => ids.includes(id);
 
 export function QualitySection({ current, onDirty }: { current: boolean; onDirty: (id: SectionId, dirty: boolean) => void }) {
@@ -92,7 +92,7 @@ export function QualitySection({ current, onDirty }: { current: boolean; onDirty
           </ul>
         </Disclosure>
         <p className="s-note">
-          Apart from &quot;{principleName(OWN_PRINCIPLE)}&quot;, Orchestrator&apos;s own, they are adapted from pstack by Lauren Tan (MIT), commit <code>{PSTACK_COMMIT.slice(0, 7)}</code> of github.com/cursor/plugins; the license is in <code>principles/LICENSE-pstack</code>.
+          Apart from {OWN_PRINCIPLES.map((id) => `"${principleName(id)}"`).join(" and ")}, Orchestrator&apos;s own, they are adapted from pstack by Lauren Tan (MIT), commit <code>{PSTACK_COMMIT.slice(0, 7)}</code> of github.com/cursor/plugins; the license is in <code>principles/LICENSE-pstack</code>.
         </p>
       </SettingsCard>
     </SettingsSection>
