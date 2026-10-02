@@ -171,6 +171,65 @@ describe("breakdown items wait for PE review too", () => {
   });
 });
 
+describe("the lead never cancels work under PE review: a PE objection is never dropped (review finding 1)", () => {
+  /** The lead answers a message by dropping these tasks. Returns the state and each drop's steering row. */
+  function leadDrops(s0: State, ids: string[], sec: number) {
+    const msg = M.postMessage(s0, "trim the plan", at(sec));
+    const r = M.startLeadRun(msg, { provider: "claude", model: "m", trigger: "message" }, at(sec + 1));
+    const steer = { reason: "you asked to trim it", tasks: ids.map((id) => ({ id, drop: true, why: "not needed" })) };
+    const s = M.completeLeadRun(r.state, r.runId, { reply: "Trimmed.", proposals: [], steer } as never, at(sec + 2));
+    return { s, rows: Object.fromEntries(s.steering.at(-1)!.changes.map((c) => [c.taskId!, c])) };
+  }
+  const objected = (s0: State, id: string, sec: number) => [0, 1, 2].reduce((s, i) => verdict(s, id, "object", "The cache grows without bound.", sec + i), s0);
+
+  it("steering only suggests the drop of a proposal the PE is reviewing or objects to; you apply it; once you overrule, or the PE agrees, the lead drops as before", () => {
+    const { s: planned, created } = leadPlans(factory(), { proposals: [proposal("Offline maps"), proposal("Trip export"), proposal("Shared lists"), proposal("Map themes")] });
+    const [pending, objects, overruled, agreed] = created;
+    let s = objected(planned, objects, 10);
+    s = runCommand(objected(s, overruled, 20), "overrulePeReview", { taskId: overruled, why: "Ship it." }, at(30)).state;
+    s = verdict(s, agreed, "agree", "Fine.", 31);
+    const { s: after, rows } = leadDrops(s, created, 40);
+    expect([pending, objects].map((id) => [rows[id].status, rows[id].note, task(after, id).lifecycle])).toEqual([
+      ["suggested", "the PE is reviewing it; only you cancel it", "proposed"],
+      ["suggested", "the PE objects to it; only you overrule the objection or cancel it", "proposed"],
+    ]);
+    expect([overruled, agreed].map((id) => [rows[id].status, task(after, id).lifecycle])).toEqual([
+      ["applied", "cancelled"],
+      ["applied", "cancelled"],
+    ]);
+    // The objection still reaches you, and applying the suggestion is your cancel.
+    expect(needsYouOf(after, task(after, objects))?.what).toBe("answer the PE's objection");
+    const yours = M.applySteering(after, after.steering.at(-1)!.id, rows[objects].id, at(50)).state;
+    expect(task(yours, objects)).toMatchObject({ lifecycle: "cancelled", cancelledBy: "user" });
+  });
+
+  it("a re-run breakdown keeps an unlisted child the PE is reviewing or objects to, and reports it; a near-duplicate title does not replace it", () => {
+    const s0 = factory();
+    const goal = M.createTask(s0, { title: "Trips offline", area: "A", outcome: "o", benefit: "b", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "goal" }, at(1));
+    let s = go(goal.state, 2);
+    const [plan] = M.activeAttempts(s, goal.newId);
+    const item = (title: string) => ({ title, outcome: `${title} works`, approach: "small", acceptance: ["ok"] });
+    s = M.reportCompletion(s, plan.id, [], at(3), [{ name: "plan", summary: "the plan", items: [item("Tile cache"), item("Cache limit"), item("Trip export"), item("Map themes")] }]);
+    const [cache, limit, exportTrips, themes] = M.childTasks(s, task(s, goal.newId)).map((c) => c.id);
+    s = objected(s, limit, 10);
+    // An agreed child that waits for your go-ahead: its PE review is settled, so the lead's re-plan cancels it as before.
+    s = M.setHoldBeforeStart(verdict(s, themes, "agree", "Fine.", 13), themes, true, at(14));
+    // The lead re-plans: "Cache limits" stands in for "Cache limit", and neither "Trip export" nor "Map themes" is listed.
+    s = go(runCommand(s, "rerunStep", { taskId: goal.newId, stepId: plan.stepId }, at(20)).state, 21);
+    const [again] = M.activeAttempts(s, goal.newId);
+    s = M.reportCompletion(s, again.id, [], at(22), [{ name: "plan", summary: "the plan, again", items: [item("Tile cache"), item("Cache limits")] }]);
+    const kids = M.childTasks(s, task(s, goal.newId));
+    expect(Object.fromEntries(kids.map((k) => [M.currentSpec(k).content.title, k.lifecycle === "cancelled"]))).toEqual({ "Tile cache": false, "Cache limit": false, "Trip export": false, "Map themes": true, "Cache limits": false });
+    expect(task(s, limit).peReview!.status).toBe("objected");
+    expect(needsYouOf(s, task(s, limit))?.what).toBe("answer the PE's objection");
+    expect(M.stateLabel(s, task(s, exportTrips))).toBe("Waiting for PE review");
+    expect(task(s, cache).lifecycle).not.toBe("cancelled");
+    const report = s.events.filter((e) => e.taskId === goal.newId).at(-1)!.message;
+    expect(report).toContain(`cancelled ${themes} (no longer listed)`);
+    expect(report).toContain(`${limit}, ${exportTrips} no longer listed but kept: PE review of them is not settled, so only you cancel them`);
+  });
+});
+
 describe("only the service records a verdict: nothing in the lead's output can set PE review to agreed", () => {
   it("a proposal's or an item's own peReview, a top-level field, a steering change or a decision leave the review pending", () => {
     const { s: planned, created } = leadPlans(factory(), {

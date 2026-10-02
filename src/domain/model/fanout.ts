@@ -1,6 +1,7 @@
 // Fan-out: loop steps add iterations, and breakdown outputs create child tasks. Also the task tree
 // (childTasks, descendants, rootOf) that the controls and steering walk.
 
+import { peReviewStands } from "../peReview";
 import { toDef, validatePipeline } from "../pipeline";
 import { type InputRef, type State, type Step, type StepDef, type Task } from "../types";
 import { acceptedOutput, fromEarlierFlow } from "./artifacts";
@@ -169,8 +170,8 @@ export function applyBreakdown(s: State, t: Task, stepId: string, output: string
  *
  * A newer version of the same step's breakdown (a re-run or an edit) reconciles instead of adding a
  * second batch: children whose title is still listed are kept, unstarted ones that are no longer
- * listed are cancelled, and started ones are kept and reported. Returns how many children the
- * breakdown now has.
+ * listed are cancelled, and started ones, and ones whose PE review is not settled, are kept and
+ * reported. Returns how many children the breakdown now has.
  */
 function createChildren(s: State, t: Task, st: Step, items: unknown[], now: string, artifactId: string): number {
   if (depth(s, t) >= 2) {
@@ -247,9 +248,15 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
   const dropped = earlier.filter((c) => !linked.some((l) => l.id === c.id));
   const cancelled: string[] = [];
   const keptStarted: string[] = [];
+  // A PE objection is never dropped, nor a review the PE has not finished: only the owner cancels such a child.
+  const keptReviewed: string[] = [];
   for (const c of dropped) {
     if (started(c)) {
       keptStarted.push(c.id);
+      continue;
+    }
+    if (peReviewStands(c.peReview)) {
+      keptReviewed.push(c.id);
       continue;
     }
     c.lifecycle = "cancelled";
@@ -264,6 +271,7 @@ function createChildren(s: State, t: Task, st: Step, items: unknown[], now: stri
     kept.length && `kept ${kept.join(", ")}`,
     cancelled.length && `cancelled ${cancelled.join(", ")} (no longer listed)`,
     keptStarted.length && `${keptStarted.join(", ")} already started and no longer listed; cancel them if they are not needed`,
+    keptReviewed.length && `${keptReviewed.join(", ")} no longer listed but kept: PE review of ${keptReviewed.length === 1 ? "it is not settled, so only you cancel it" : "them is not settled, so only you cancel them"}`,
     holdBeforeStart && fresh.length && "new ones wait for you to start them (autonomy settings)",
     rejected.length && `rejected ${rejected.join("; ")}`,
   ].filter(Boolean);

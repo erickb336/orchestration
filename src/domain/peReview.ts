@@ -6,7 +6,9 @@
 // is held from dispatch, "waiting for PE review". An agreement releases it under the usual involvement rules (on
 // Check-in it still waits for your go-ahead). An objection keeps it pending while the lead revises it; after three
 // rounds it goes to the owner (Needs you) with the objection, and the owner may overrule it, recorded. Nothing is
-// dropped. Code changes are never PE-reviewed: a task you create, a delivery task and a repair never carry a review.
+// dropped: while its review is not settled, the lead never cancels the work (steering only suggests it, and a
+// re-planned breakdown keeps it). Code changes are never PE-reviewed: a task you create, a delivery task and a repair
+// never carry a review.
 //
 // Who writes it. Only the service records a verdict (`recordPeReview`, a service command a client cannot send); only
 // the owner overrules (`overrulePeReview`). Nothing in the lead's output reaches either.
@@ -32,6 +34,19 @@ export function peReviewHold(r: PeReviewState | undefined): string | undefined {
   if (r?.status === "pending") return PE_REVIEW_HOLD;
   if (r?.status === "objected" && !r.overruled) return "the PE objects; waiting for you";
   return undefined;
+}
+
+/**
+ * PE review of this work is not settled: the PE is reviewing it, or objects and the owner has not overruled. Only the
+ * owner cancels such work; the lead may only suggest it (steering), and a re-planned breakdown keeps it. A PE objection
+ * is never dropped.
+ */
+export const peReviewStands = (r: PeReviewState | undefined): boolean => peReviewHold(r) !== undefined;
+
+/** Why the lead may not cancel this work, or undefined (see `peReviewStands`). */
+export function peReviewKeeps(r: PeReviewState | undefined): string | undefined {
+  if (!peReviewStands(r)) return undefined;
+  return r!.status === "pending" ? "the PE is reviewing it; only you cancel it" : "the PE objects to it; only you overrule the objection or cancel it";
 }
 
 /** The work a verdict or an overrule is about: a task (a lead proposal or a breakdown item), or a change order's updates. */
