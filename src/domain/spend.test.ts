@@ -189,6 +189,24 @@ describe("the budget stop", () => {
     expect(budgetStop(back)?.budgetUsd).toBe(spend);
   });
 
+  it("changing the building budget ends continuing past it: set, continue, raise, then set it back, and the stop applies again", () => {
+    const s = spentProject();
+    const spend = buildingSpend(s).usd;
+    const past = M.continuePastBudget(M.setBudgets(s, { buildingUsd: spend, maintenanceUsdPerMonth: null }, at(2)), at(3));
+    const raised = M.setBudgets(past, { buildingUsd: spend * 2, maintenanceUsdPerMonth: null }, at(4));
+    expect(raised.project.budgetContinued).toBeUndefined();
+    expect(raised.events.at(-1)?.message).toBe(`Budgets: building ${`$${(spend * 2).toFixed(2)}`}, maintenance not set; continuing past the building budget ends`);
+    // Back at the amount once continued past: the stop applies again, and the owner is asked again.
+    const back = M.setBudgets(raised, { buildingUsd: spend, maintenanceUsdPerMonth: null }, at(5));
+    expect(budgetStop(back)?.budgetUsd).toBe(spend);
+    expect(running(M.dispatchEligible(back, at(6)), "EX-004")).toHaveLength(0);
+    expect(needsYouItems(back, T0).some((i) => i.key === "budget")).toBe(true);
+    // Changing only the maintenance budget leaves the building budget, and the choice to continue past it, as they were.
+    const maintenance = M.setBudgets(past, { buildingUsd: spend, maintenanceUsdPerMonth: 5 }, at(4));
+    expect(maintenance.project.budgetContinued).toEqual(past.project.budgetContinued);
+    expect(budgetStop(maintenance)).toBeUndefined();
+  });
+
   it("continuing past is refused while the budget is not reached, or not set", () => {
     const s = spentProject();
     expect(() => M.continuePastBudget(s, at(2))).toThrow(/not reached/);
