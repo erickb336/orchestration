@@ -196,8 +196,9 @@ describe("Home", () => {
 });
 
 describe("The shell", () => {
-  it("has no Activity tab; the Activity page stays at #/activity", () => {
-    expect(TABS.map((t) => t.label)).toEqual(["Home", "Tasks", "Results", "Settings"]);
+  it("has no Activity tab; the Activity page stays at #/activity; Vision is in the main navigation, at #/vision", () => {
+    expect(TABS.map((t) => t.label)).toEqual(["Home", "Vision", "Tasks", "Results", "Settings"]);
+    expect(TABS.find((t) => t.label === "Vision")?.href).toBe("#/vision");
   });
 
   it("the demo bar is one line and its Simulation menu holds the clock, the tour and the reset; the stop-acknowledgment switch is gone", () => {

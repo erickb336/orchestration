@@ -30,8 +30,11 @@
     "ajv": "8.20.0",
     "canonicalize": "5.1.0",
     "driver.js": "1.8.0",
+    "mermaid": "11.17.2",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",

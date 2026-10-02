@@ -256,6 +256,12 @@ header.top .right { margin-left: auto; display: flex; align-items: center; gap: 
   nav.tabs { order: 3; flex: 1 1 100%; min-width: 0; }
   header.top .right { margin-left: 0; gap: 0.5rem; }
 }
+/* Five tabs on a phone: tighter, so Settings is not cut off at 375 px wide. */
+@media (max-width: 420px) {
+  nav.tabs { gap: 0; }
+  nav.tabs a { padding: 0.3rem 0.45rem; }
+  .tab-badge { margin-left: 0.25rem; }
+}
 
 main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
 .card {

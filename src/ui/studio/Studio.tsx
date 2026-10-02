@@ -1,28 +1,35 @@
-// The studio (ORC-029 pass 3d): the first slice of the studio screen approved in pass 1 (the canvas). `#/vision`.
+// Vision, the studio (ORC-029 passes 3d and 4a): the studio screen approved in pass 1 (the canvas). `#/vision`, in
+// the main navigation.
 //
 // Left: the rounds, then the chosen round's artifacts with your mark, and the designer's runs of that round.
 // Centre: the artifact, on Desktop or Mobile (only the project's devices), with its variants, Keep, Change or Drop,
-// and Pin a comment; terminal demos and TUIs in a terminal window. Right: a labelled placeholder for the lead's panel
-// (pass 4); PE review of the artifact shown, with the PE's verdict on each variant; then your feedback: a summary, a
-// note, and Send feedback (the `sendFeedback` command).
+// and Pin a comment; terminal demos and TUIs in a terminal window; interfaces, algorithms, topologies, contracts and
+// flows as documents. Right: the lead's panel (its message for the round, its questions with suggested answers, and
+// a box to message it); PE review of the artifact shown, with the PE's verdict on each variant and the artifact's
+// versions; then your feedback: a summary, a note, and Send to the lead.
 //
-// Your marks, picks, pins and notes are kept here until you send them, all together, as one answer. You can mark a
-// version once the PE agreed, or once its objections came to you; until then you can look.
+// Your marks, picks, pins, notes, answers and message are kept here until you send them, all together, as one
+// message to the lead (the marks are also recorded on each version). You can mark a version once the PE agreed, or
+// once its objections came to you; until then you can look.
 
 import { useCallback, useState } from "react";
 import * as M from "../../domain/model";
 import * as S from "../../domain/studio/studio";
-import type { Mark, StudioArtifact } from "../../domain/studio/types";
+import type { Mark, Round, StudioArtifact } from "../../domain/studio/types";
 import type { PinMessage } from "../../runtime/prototype";
-import { relTime } from "../common";
-import { Banner, Button, ButtonLink, Card, Chip, EmptyState, Field, SegmentedControl, SimulatedChip, StatePill, Textarea } from "../kit";
+import { relTime, selectionText } from "../common";
+import { Banner, Button, Chip, EmptyState, Field, Input, SegmentedControl, SimulatedChip, StatePill, Textarea } from "../kit";
 import { cx } from "../kit/cx";
+import { useLeadContext } from "../LeadDrawer";
 import { useStore } from "../store";
+import { DocumentArtifact } from "./Document";
 import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback, TerminalFile, TerminalRecording } from "./Frames";
 import {
   DEVICE_LABEL,
   FOCUS_LABEL,
   addPin,
+  answerBlocker,
+  answerParts,
   artifactLine,
   changedDrafts,
   defaultRound,
@@ -34,14 +41,15 @@ import {
   peView,
   prototypeUrl,
   roundArtifacts,
+  roundLead,
   roundRuns,
   roundsNewestFirst,
   runLine,
-  sendBlocker,
-  sendDrafts,
+  sendAnswer,
   serviceFileUrl,
   showKind,
   standing,
+  versionHistory,
   usdRange,
   variantDemo,
   variantEntry,
@@ -65,45 +73,71 @@ const simulatedRun = (s: ReturnType<typeof useStore>["state"], a: StudioArtifact
 
 export function Studio() {
   const { state, service, send, disabled } = useStore();
+  const leadDrawer = useLeadContext();
   const [roundChoice, setRoundChoice] = useState<number | undefined>(undefined);
   const [artifactChoice, setArtifactChoice] = useState<string | undefined>(undefined);
+  /** The version of an artifact you chose from its history, by artifact. */
+  const [versionChoice, setVersionChoice] = useState<Record<string, number>>({});
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [shownVariant, setShownVariant] = useState<Record<string, string>>({});
   const [deviceChoice, setDeviceChoice] = useState<ScreenDevice | undefined>(undefined);
   const [pinMode, setPinMode] = useState(false);
+  /** Your answers to each round's questions, by round. */
+  const [answers, setAnswers] = useState<Record<number, string[]>>({});
+  const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
+  /** What the last Send did, in words, until you change something. */
+  const [sent, setSent] = useState<string | null>(null);
 
   // Until you choose one, the open round (or the newest) is shown, so a round that opens meanwhile comes into view.
   const n = roundChoice !== undefined && state.studio.rounds.some((r) => r.n === roundChoice) ? roundChoice : defaultRound(state);
   const round = state.studio.rounds.find((r) => r.n === n);
   const artifacts = n === undefined ? [] : roundArtifacts(state, n);
-  const artifact = artifacts.find((a) => a.id === artifactChoice) ?? artifacts[0];
+  const listed = artifacts.find((a) => a.id === artifactChoice) ?? artifacts[0];
+  // An earlier or later version, when you chose one from its history; the round's newest otherwise.
+  const artifact = listed && versionChoice[listed.id] !== undefined ? (S.versionsOf(state, listed.id).find((v) => v.version === versionChoice[listed.id]) ?? listed) : listed;
 
   const draftOf = (a: StudioArtifact): Draft => drafts[draftKey(a)] ?? draftFrom(S.currentFeedback(state, a.id, a.version));
   const update = useCallback(
     (a: StudioArtifact, change: (d: Draft) => Draft) => {
-      setSent(false);
+      setSent(null);
       setDrafts((all) => ({ ...all, [draftKey(a)]: change(all[draftKey(a)] ?? draftFrom(S.currentFeedback(state, a.id, a.version))) }));
     },
     [state],
   );
 
+  const lead = roundLead(round);
+  const questions = lead?.questions ?? [];
+  const roundAnswers = (n !== undefined ? answers[n] : undefined) ?? [];
+  const setAnswer = (i: number, text: string) => {
+    if (n === undefined) return;
+    setSent(null);
+    setAnswers((all) => ({ ...all, [n]: questions.map((_, j) => (j === i ? text : (all[n]?.[j] ?? ""))) }));
+  };
+  const answer = { round: n, questions, answers: roundAnswers, message };
   const changed = changedDrafts(state, drafts);
-  const blocker = disabled ? "The service is offline. Your marks stay here until it reconnects." : sendBlocker(changed);
+  const parts = answerParts({ ...answer, changed });
+  const blocker = disabled ? "The service is offline. What you marked and wrote stays here until it reconnects." : answerBlocker({ ...answer, changed });
   const sendAll = async () => {
     if (blocker || sending) return;
     setSending(true);
-    const sentKeys = await sendDrafts(send, state, drafts);
+    const r = await sendAnswer(send, state, drafts, answer);
     setSending(false);
-    if (!sentKeys) return;
+    if (!r) return;
     setDrafts((all) => {
       const next = { ...all };
-      for (const k of sentKeys) delete next[k];
+      for (const k of r.recorded) delete next[k];
       return next;
     });
     setPinMode(false);
-    setSent(true);
+    if (!r.posted) {
+      // The marks are recorded; your answers and message stay here to send again.
+      setSent(r.recorded.length ? "Your marks are recorded on each version, but the message did not reach the lead. Send again." : null);
+      return;
+    }
+    if (n !== undefined) setAnswers((all) => ({ ...all, [n]: [] }));
+    setMessage("");
+    setSent(`Sent to the lead as one message.${r.recorded.length ? " Your marks, picks, pins and notes are recorded on each version." : ""} The lead answers in the conversation.`);
   };
 
   const choose = (change: () => void) => {
@@ -114,14 +148,25 @@ export function Studio() {
   return (
     <div className="k-stack st-page">
       <header className="st-head">
-        <h1 className="no-margin">Studio</h1>
+        <h1 className="no-margin">Vision</h1>
         <p className="small muted">
-          {round ? `Vision · round ${round.n}${round.closedAt ? " (closed)" : ""}` : "Vision"}. The factory builds exactly what the blueprint shows, with many agents at once. Changing the blueprint now takes minutes; changing built work takes runs.
+          {round ? `The studio · round ${round.n}${round.closedAt ? " (closed)" : ""}. ` : "The studio. "}The factory builds exactly what the blueprint shows, with many agents at once. Changing the blueprint now takes minutes; changing built work takes runs.
         </p>
       </header>
-      {state.project.stage !== "shaping" && <Banner tone="info">The factory has started. The studio keeps Vision's rounds as they were.</Banner>}
+      {state.project.stage !== "shaping" && (
+        <Banner tone="info">The factory has started. Looking at Vision changes nothing in it. You can mark artifacts and message the lead here; designer and PE runs wait until the project is back in Vision (Back to shaping, in Settings › Project).</Banner>
+      )}
       {state.studio.rounds.length === 0 ? (
-        <EmptyState title="No rounds yet.">When the lead opens a round, the designer makes screens or terminal demos for it, and they appear here for you to mark, pin and pick.</EmptyState>
+        <EmptyState
+          title="No rounds yet."
+          action={
+            <Button size="small" onClick={() => leadDrawer.openLead()}>
+              Message the lead
+            </Button>
+          }
+        >
+          When the lead opens a round, the designer makes screens, terminal demos or documents for it, and they appear here for you to mark, pin and pick.
+        </EmptyState>
       ) : (
         <div className="st-canvas">
           <aside className="st-col st-left" aria-label="Rounds and artifacts">
@@ -148,7 +193,7 @@ export function Studio() {
                   <ul className="st-list" aria-label={`Artifacts of round ${round.n}`}>
                     {artifacts.map((a) => (
                       <li key={a.id}>
-                        <ArtifactItem artifact={a} draft={draftOf(a)} current={a.id === artifact?.id} onClick={() => choose(() => setArtifactChoice(a.id))} />
+                        <ArtifactItem artifact={a} draft={draftOf(a)} current={a.id === artifact?.id} onClick={() => choose(() => (setArtifactChoice(a.id), setVersionChoice(({ [a.id]: _, ...rest }) => rest)))} />
                       </li>
                     ))}
                   </ul>
@@ -179,14 +224,11 @@ export function Studio() {
           </section>
 
           <aside className="st-col st-right" aria-label="The lead and your feedback">
-            <section className="st-placeholder">
-              <h2 className="st-label">The lead</h2>
-              <p className="small muted">Not built yet: the lead's message for this round and its questions come here in pass 4 of the studio.</p>
-            </section>
-            <PeReviewPanel artifact={artifact && round ? artifact : undefined} />
-            <section className="k-stack k-stack--tight">
+            <LeadPanel round={round} answers={roundAnswers} onAnswer={setAnswer} message={message} onMessage={(text) => (setSent(null), setMessage(text))} />
+            <PeReviewPanel artifact={artifact && round ? artifact : undefined} onVersion={(id, version) => choose(() => setVersionChoice((all) => ({ ...all, [id]: version })))} />
+            <section className="k-stack k-stack--tight" aria-label="Your feedback">
               <h2 className="st-label">Your feedback</h2>
-              {changed.length ? (
+              {changed.length || parts.length ? (
                 <ul className="st-sum" aria-label="Not sent yet">
                   {changed.map(({ artifact: a, draft }) => (
                     <li key={draftKey(a)}>
@@ -194,9 +236,17 @@ export function Studio() {
                       {a.version > 1 ? ` v${a.version}` : ""}: {draftSummary(a, draft) || "cleared"}
                     </li>
                   ))}
+                  {parts.map((p) => (
+                    <li key={p}>{`${p[0].toUpperCase()}${p.slice(1)}`}</li>
+                  ))}
                 </ul>
               ) : (
-                <p className="small muted">{sent ? "Sent. Your marks, picks, pins and notes are recorded on each version." : "Nothing marked yet."}</p>
+                !sent && <p className="small muted">Nothing marked or written yet.</p>
+              )}
+              {sent && (
+                <p className="small muted" role="status">
+                  {sent}
+                </p>
               )}
               {artifact && standing(state, artifact).kind === "open" && (
                 <Field label={`Note on ${artifact.title}`} hint="Anything the marks and pins do not say.">
@@ -204,11 +254,11 @@ export function Studio() {
                 </Field>
               )}
               <div className="k-actions">
-                <Button variant="primary" disabled={!!blocker} disabledReason={blocker} showReason={changed.length > 0 || disabled} loading={sending} onClick={() => void sendAll()}>
-                  {sending ? "Sending…" : "Send feedback"}
+                <Button variant="primary" disabled={!!blocker} disabledReason={blocker} showReason={changed.length > 0 || parts.length > 0 || disabled} loading={sending} onClick={() => void sendAll()}>
+                  {sending ? "Sending…" : "Send to the lead"}
                 </Button>
               </div>
-              <p className="micro muted">Sent together, as one answer to the round.</p>
+              <p className="micro muted">Your marks, answers and message go together, as one message to the lead.</p>
             </section>
           </aside>
         </div>
@@ -347,7 +397,7 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
       {locked && st.kind !== "open" && <p className="small muted">{locked}</p>}
       {kind === "screen" && shots && <p className="small muted">{shots}</p>}
 
-      <div className={cx("st-stage", pinMode && "st-stage--pinning", kind === "terminal" && "st-stage--terminal")}>
+      <div className={cx("st-stage", pinMode && "st-stage--pinning", kind === "terminal" && "st-stage--terminal", kind === "document" && "st-stage--doc")}>
         {kind === "screen" ? (
           !entry ? (
             <EmptyState title="No entry file">The designer named no entry file for this variant, so there is no page to show.</EmptyState>
@@ -358,6 +408,8 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
           )
         ) : kind === "terminal" ? (
           <TerminalArtifact key={variant} artifact={a} variant={variant} />
+        ) : kind === "document" ? (
+          <DocumentArtifact key={variant} artifact={a} variant={variant} />
         ) : src ? (
           <PlainFrame src={src} title={frameTitle} />
         ) : (
@@ -475,10 +527,78 @@ function TerminalArtifact({ artifact: a, variant }: { artifact: StudioArtifact; 
   return <EmptyState title="Not recorded.">{note ? `${note}.` : demo.reason}</EmptyState>;
 }
 
-/** PE review of the artifact shown: where it stands for you, and the PE's latest verdict on each variant. */
-function PeReviewPanel({ artifact: a }: { artifact: StudioArtifact | undefined }) {
+/**
+ * The lead's panel: its message for the round, its questions with the answers it suggests (a suggestion fills the
+ * answer box, as on ORC-012's shaping panel), and a box to message it. What you write here is sent with your marks,
+ * by Send to the lead, as one message in the conversation the header's Message the lead opens.
+ */
+export function LeadPanel({ round, answers, onAnswer, message, onMessage }: { round: Round | undefined; answers: string[]; onAnswer: (i: number, text: string) => void; message: string; onMessage: (text: string) => void }) {
+  const { state, service, disabled } = useStore();
+  const leadDrawer = useLeadContext();
+  const lead = roundLead(round);
+  const run = M.activeLeadRun(state);
+  return (
+    <section className="k-stack k-stack--tight" aria-label="The lead">
+      <h2 className="st-label">The lead</h2>
+      <div className="st-toolbar__grp">
+        <span className="small muted">
+          {selectionText(state.project.leadSelection)}
+          {round ? ` · round ${round.n}` : ""}
+        </span>
+        {lead && service.runtime === "fake" && <SimulatedChip title="Simulated: the demo's lead wrote this round's message and questions; no model ran." />}
+      </div>
+      {lead?.message ? (
+        <p className="st-leadmsg">{lead.message}</p>
+      ) : (
+        <p className="small muted">{round ? `The lead has written nothing for round ${round.n}.` : "No round is open."} Write to it below; it answers in the conversation.</p>
+      )}
+      {run && (
+        <p className="small muted st-toolbar__grp" role="status">
+          <StatePill tone="work" pulse>
+            working
+          </StatePill>
+          {run.activity ?? "The lead is working."}
+        </p>
+      )}
+      {lead && lead.questions.length > 0 && (
+        <ol className="st-questions" aria-label="The lead asks">
+          {lead.questions.map((q, i) => (
+            <li key={i} className="st-question">
+              <p className="small">{q.text}</p>
+              {q.reason && <p className="micro muted">Why: {q.reason}</p>}
+              {q.options && (
+                <div className="st-chips" role="group" aria-label={`Suggested answers to question ${i + 1}`}>
+                  {q.options.map((o) => (
+                    <Button key={o} size="small" disabled={disabled} aria-pressed={answers[i] === o} onClick={() => onAnswer(i, o)}>
+                      {o}
+                    </Button>
+                  ))}
+                </div>
+              )}
+              <Field label={`Your answer to question ${i + 1}`} labelHidden>
+                <Input type="text" value={answers[i] ?? ""} onChange={(e) => onAnswer(i, e.target.value)} placeholder="Your answer (leave empty to skip)" />
+              </Field>
+            </li>
+          ))}
+        </ol>
+      )}
+      <Field label="Message the lead" hint="Sent with your answers and marks, into the same conversation as Message the lead at the top.">
+        <Textarea rows={3} value={message} onChange={(e) => onMessage(e.target.value)} placeholder="Anything else for the lead…" />
+      </Field>
+      <div>
+        <Button size="small" variant="quiet" onClick={() => leadDrawer.openLead()}>
+          Open the conversation
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+/** PE review of the artifact shown: where it stands for you, the PE's latest verdict on each variant, and the artifact's versions. */
+function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | undefined; onVersion: (artifactId: string, version: number) => void }) {
   const { state } = useStore();
   const view = a && peView(state, a, M.providerLabel);
+  const history = a ? versionHistory(state, a) : [];
   return (
     <section className="k-stack k-stack--tight" aria-label="PE review">
       <h2 className="st-label">PE review</h2>
@@ -493,9 +613,11 @@ function PeReviewPanel({ artifact: a }: { artifact: StudioArtifact | undefined }
               {view.state}
             </StatePill>
             {view.simulated && <SimulatedChip title="Simulated: the fake runtime's PE answered; no agent judged this." />}
+            {view.notIndependent && <Chip tone="you">not independent</Chip>}
           </div>
           <p className="small">{view.text}</p>
           {view.by && <p className="micro muted">PE · {view.by}</p>}
+          {view.notIndependent && <p className="small">{view.notIndependent}</p>}
           {view.verdicts.length > 0 && (
             <ul className="st-verdicts" aria-label="The PE's verdicts">
               {view.verdicts.map((v) => (
@@ -524,29 +646,26 @@ function PeReviewPanel({ artifact: a }: { artifact: StudioArtifact | undefined }
           )}
         </>
       )}
+      {a && history.length > 1 && (
+        <div className="k-stack k-stack--tight">
+          <h3 className="st-label">Versions</h3>
+          <ol className="st-list st-versions" aria-label={`Versions of ${a.title}`}>
+            {history.map((h) => (
+              <li key={h.version}>
+                <button type="button" className="st-item st-version" aria-current={h.version === a.version ? "true" : undefined} onClick={() => onVersion(a.id, h.version)}>
+                  <span className="st-version__head">
+                    <b>v{h.version}</b>
+                    {h.round !== a.round ? <span className="muted">round {h.round}</span> : null}
+                    <Chip tone={h.tone}>{h.state}</Chip>
+                    {h.current && <Chip strong>current</Chip>}
+                  </span>
+                  <span className="st-version__text">{h.text}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </section>
-  );
-}
-
-/** Home's way into the studio while the project is in Vision: where the rounds stand, and Open the studio. */
-export function StudioCard() {
-  const { state } = useStore();
-  const round = S.currentRound(state) ?? state.studio.rounds.at(-1);
-  const working = state.studio.runs.some((r) => r.status === "running" || r.status === "stopping");
-  const count = round ? roundArtifacts(state, round.n).length : 0;
-  const text = !round
-    ? "No rounds yet. When the lead opens a round, the designer's screens and terminal demos appear in the studio for you to mark."
-    : [`Round ${round.n}${round.closedAt ? " (closed)" : " open"}: ${FOCUS_LABEL[round.focus].toLowerCase()}`, plural(count, "artifact"), working ? "the designer is working" : ""].filter(Boolean).join(" · ");
-  return (
-    <Card
-      title="Studio"
-      actions={
-        <ButtonLink size="small" href="#/vision">
-          Open the studio
-        </ButtonLink>
-      }
-    >
-      <p className="no-margin">{text}</p>
-    </Card>
   );
 }

@@ -1,5 +1,6 @@
 // The hash routes, as pure functions so they can be tested without React. `#/results` is the Results page
-// (the tab used to be called Review); `#/review` still opens it. `#/vision` is the studio, reached from Home. A
+// (the tab used to be called Review); `#/review` still opens it. `#/vision` is Vision, the studio, in the main
+// navigation (ORC-029 r12). A
 // query after the page name (`#/overview?history=1`, `#/tasks?area=Maps`) never changes which page opens; the page
 // reads it.
 
@@ -12,7 +13,7 @@ export function parseRoute(hash: string): Route {
   if (page === "results" || page === "review") return { page: "review" };
   // The component kit's gallery, #/kit. Not in the navigation.
   if (page === "kit") return { page: "kit" };
-  // The studio (ORC-029), reached from Home while the project is in Vision.
+  // Vision, the studio (ORC-029): a main navigation item, in Vision and in Factory.
   if (page === "vision") return { page: "vision" };
   if (page === "overview" || page === "activity" || page === "settings") return { page };
   return { page: "tasks" };

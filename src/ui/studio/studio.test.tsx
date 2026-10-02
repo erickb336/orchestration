@@ -10,16 +10,39 @@ import * as M from "../../domain/model";
 import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
-import { DESIGNER, addScreen, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
+import { DESIGNER, addScreen, feedback, openRound, peAgrees, pePass, run, sha } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
+import { TABS, VisionBadge } from "../App";
 import { ConfirmProvider } from "../kit";
 import { Overview } from "../Overview";
 import { parseRoute } from "../route";
 import { StoreContext, type ServiceStore } from "../store";
 import { frameSize, readCast, renderAnsi } from "./ansi";
 import { TerminalText } from "./Frames";
-import { Studio } from "./Studio";
-import { addPin, changedDrafts, deviceOptions, draftFrom, draftKey, pinFromMessage, sendBlocker, sendDrafts, serviceFileUrl, variantDemo, variantEntry, type Draft } from "./studioView";
+import { LeadPanel, Studio } from "./Studio";
+import { MarkdownDoc, MermaidDiagram, mermaidConfig } from "./Document";
+import {
+  MAX_MESSAGE,
+  addPin,
+  answerBlocker,
+  changedDrafts,
+  deviceOptions,
+  documentFiles,
+  documentType,
+  draftFrom,
+  draftKey,
+  pinFromMessage,
+  resolveInVersion,
+  roundLead,
+  sendAnswer,
+  serviceFileUrl,
+  showKind,
+  variantDemo,
+  variantEntry,
+  versionHistory,
+  type Draft,
+  type RoundLead,
+} from "./studioView";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -74,10 +97,48 @@ function withSample(opts: { pe?: boolean } = {}) {
 
 const PIN = { type: "orchestrator-pin", x: 0.25, y: 0.5, selector: "main > div.map" };
 
-describe("the route", () => {
+/** The round with the lead's message and questions on it, as the lead's run records them (pass 4b's `round.lead`). */
+function withLead(s: State, n: number, lead: RoundLead): State {
+  const next = structuredClone(s);
+  Object.assign(next.studio.rounds.find((r) => r.n === n)!, { lead });
+  return next;
+}
+
+describe("Vision in the main navigation", () => {
   it("#/vision opens the studio", () => {
     expect(parseRoute("#/vision")).toEqual({ page: "vision" });
     expect(parseRoute("#/vision?round=2")).toEqual({ page: "vision" });
+  });
+
+  it("is a link in the navigation, and opening it sends no command, in Vision or in Factory", () => {
+    const vTab = TABS.find((t) => t.page === "vision");
+    expect(vTab).toEqual({ page: "vision", label: "Vision", href: "#/vision" });
+    const { s } = withSample();
+    const factory = M.startFactory(s, M.startFactoryRequest(s), at(9));
+    expect(factory.project.stage).toBe("building");
+    for (const state of [s, factory]) {
+      const sent: string[] = [];
+      const html = renderToStaticMarkup(
+        <ConfirmProvider>
+          <StoreContext.Provider value={{ ...store(state), send: async (name: string) => (sent.push(name), { ok: true }) } as unknown as ServiceStore}>
+            <Studio />
+          </StoreContext.Provider>
+        </ConfirmProvider>,
+      );
+      expect(html).toContain("<h1 class=\"no-margin\">Vision</h1>");
+      expect(sent).toEqual([]);
+    }
+    // In Factory it says what Vision can and cannot do there.
+    expect(render(<Studio />, factory)).toContain("Looking at Vision changes nothing in it.");
+  });
+
+  it("its badge counts the agents' artifacts the PE passed to you that you have not marked", () => {
+    const { s: waiting } = withSample({ pe: false });
+    expect(renderToStaticMarkup(<StoreContext.Provider value={store(waiting)}>{<VisionBadge />}</StoreContext.Provider>)).toBe("");
+    const { s, id } = withSample();
+    expect(renderToStaticMarkup(<StoreContext.Provider value={store(s)}>{<VisionBadge />}</StoreContext.Provider>)).toContain('aria-label="1 artifact waiting for your mark"');
+    const marked = feedback(s, id, 1, { mark: "keep" }, at(9));
+    expect(renderToStaticMarkup(<StoreContext.Provider value={store(marked)}>{<VisionBadge />}</StoreContext.Provider>)).toBe("");
   });
 });
 
@@ -112,7 +173,7 @@ describe("the viewer's states, in plain words", () => {
 });
 
 describe("the fake designer's sample in the viewer", () => {
-  it("shows the variant's entry sandboxed on its own origin, in a desktop frame, with the variants, the marks, Pin a comment and Send feedback", () => {
+  it("shows the variant's entry sandboxed on its own origin, in a desktop frame, with the variants, the marks, Pin a comment and Send to the lead", () => {
     const { s, id } = withSample();
     const html = render(<Studio />, s);
     // The frame: its own origin on the prototype port, scripts only, never same-origin.
@@ -124,12 +185,10 @@ describe("the fake designer's sample in the viewer", () => {
     expect(html).toContain(">Mobile<");
     expect(html).toContain("A · Map first");
     expect(html).toContain("B · Day by day");
-    for (const label of [">Keep<", ">Change<", ">Drop<", "Pin a comment", "Send feedback"]) expect(html).toContain(label);
+    for (const label of [">Keep<", ">Change<", ">Drop<", "Pin a comment", "Send to the lead"]) expect(html).toContain(label);
     // The fake runtime made it: labelled so.
     expect(html).toContain("simulated");
-    // The lead's panel and PE review are pass 4: a labelled placeholder, not made-up content.
-    expect(html).toContain("Not built yet: the lead&#x27;s message for this round");
-    expect(html).toContain("Nothing marked yet.");
+    expect(html).toContain("Nothing marked or written yet.");
   });
 
   it("the device switch offers only the project's devices", () => {
@@ -162,12 +221,11 @@ describe("the fake designer's sample in the viewer", () => {
     expect(html).toContain(`src="/api/studio/file?artifact=${id}&amp;version=1&amp;path=shots%2Fa-desktop.png"`);
   });
 
-  it("Home leads to the studio while the project is in Vision", () => {
+  it("Vision is reached from the main navigation, so Home has no studio card of its own", () => {
     const { s } = withSample();
     const html = render(<Overview />, s);
-    expect(html).toContain('href="#/vision"');
-    expect(html).toContain("Open the studio");
-    expect(html).toContain("Round 1 open: the experience · 1 artifact");
+    expect(html).not.toContain("Open the studio");
+    expect(html).not.toContain('href="#/vision"');
   });
 });
 
@@ -191,47 +249,156 @@ describe("pins", () => {
     const pinned = addPin(draftFrom(undefined), PIN as never, "b");
     expect(pinned.pins).toEqual([{ x: 0.25, y: 0.5, variant: "b", text: "", selector: "main > div.map" }]);
     const changed = changedDrafts(s, { [draftKey(a)]: pinned });
-    expect(sendBlocker(changed)).toBe("Write a comment for pin 1 on Trip plan (simulated sample), or remove it.");
+    expect(answerBlocker({ round: 1, questions: [], answers: [], message: "", changed })).toBe("Write a comment for pin 1 on Trip plan (simulated sample), or remove it.");
   });
 });
 
-describe("Send feedback", () => {
-  it("sends every changed draft as one sendFeedback, which the domain records on each version", async () => {
-    const { s, id } = withSample();
+describe("the lead's panel", () => {
+  const LEAD = {
+    message: "You kept the day list from round 1.\nHere are two takes on the trip plan: A puts the map first, B is a day by day list.",
+    questions: [
+      { text: "Should the plan work offline on the trail?", reason: "Phones lose signal on trails.", options: ["Yes, cache the plan", "Map tiles too", "Not now"] },
+      { text: "Distances in miles or kilometres?" },
+    ],
+  };
+
+  it("shows the round's message, its questions with suggested answers and an answer box, and Message the lead, above PE review and your feedback", () => {
+    const { s, n } = withSample();
+    const html = render(<Studio />, withLead(s, n, LEAD));
+    expect(html).not.toContain("Not built yet");
+    expect(html).toContain('<section class="k-stack k-stack--tight" aria-label="The lead">');
+    expect(html).toContain('<p class="st-leadmsg">You kept the day list from round 1.\nHere are two takes on the trip plan');
+    expect(html).toContain("Should the plan work offline on the trail?");
+    expect(html).toContain("Why: Phones lose signal on trails.");
+    expect(html).toContain('aria-label="Suggested answers to question 1"');
+    for (const o of ["Yes, cache the plan", "Map tiles too", "Not now"]) expect(html).toMatch(new RegExp(`<button[^>]*aria-pressed="false"[^>]*>${o}</button>`));
+    // The second question has no suggestions: only its answer box.
+    expect(html).not.toContain("Suggested answers to question 2");
+    expect(html).toContain("Your answer to question 2");
+    expect(html).toContain(">Message the lead<");
+    expect(html).toContain(">Open the conversation<");
+    // Simulated: the fake runtime's lead wrote it.
+    expect(html).toContain("Simulated: the demo&#x27;s lead wrote this round&#x27;s message and questions; no model ran.");
+    // The lead first, then PE review, then your feedback and the one Send.
+    const lead = html.indexOf('aria-label="The lead"');
+    const pe = html.indexOf('aria-label="PE review"');
+    const yours = html.indexOf('aria-label="Your feedback"');
+    expect(lead).toBeGreaterThan(0);
+    expect(pe).toBeGreaterThan(lead);
+    expect(yours).toBeGreaterThan(pe);
+    expect(html).toContain(">Send to the lead<");
+    expect(html).not.toContain("Send feedback");
+  });
+
+  it("a suggested answer fills the answer box, pressed", () => {
+    const { s, n } = withSample();
+    const round = withLead(s, n, LEAD).studio.rounds.find((r) => r.n === n)!;
+    const html = render(<LeadPanel round={round} answers={["Map tiles too", ""]} onAnswer={() => {}} message="" onMessage={() => {}} />, s);
+    expect(html).toMatch(/<button[^>]*aria-pressed="true"[^>]*>Map tiles too<\/button>/);
+    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Yes, cache the plan<\/button>/);
+    expect(html).toMatch(/<input[^>]*value="Map tiles too"/);
+  });
+
+  it("without the lead's words for the round (a round from before pass 4), it says so, and you can still write to the lead", () => {
+    const { s, n } = withSample();
+    const html = render(<Studio />, s);
+    expect(html).toContain(`The lead has written nothing for round ${n}. Write to it below; it answers in the conversation.`);
+    expect(html).not.toContain("The lead asks");
+    expect(html).toContain(">Message the lead<");
+    expect(html).toContain("Nothing marked or written yet.");
+  });
+
+  it("reads the lead's record defensively: ORC-012's question shape too, and nothing made up from a malformed one", () => {
+    const round = (lead: unknown) => ({ n: 1, focus: "experience", openedAt: at(1), summary: "", lead }) as never;
+    expect(roundLead(round(undefined))).toBeUndefined();
+    expect(roundLead(round({ message: "  ", questions: "no" }))).toBeUndefined();
+    expect(roundLead(round({ message: "Two takes.", questions: [{ question: "Offline?", why: "Trails.", options: ["Yes", 3, " "] }, { text: "" }, null] }))).toEqual({
+      message: "Two takes.",
+      questions: [{ text: "Offline?", reason: "Trails.", options: ["Yes"] }],
+    });
+  });
+});
+
+describe("Send to the lead: your marks, answers and message as one message", () => {
+  const questions = [{ text: "Should the plan work offline on the trail?", options: ["Yes, cache the plan", "Not now"] }, { text: "Distances in miles or kilometres?" }];
+
+  /** A send that runs each command against the state, as the service would, and records the calls. */
+  function service2(start: State) {
+    const calls: { name: string; args: object }[] = [];
+    let state = start;
+    const send = async (name: "sendFeedback" | "postMessage", args: object) => {
+      calls.push({ name, args });
+      state = runCommand(state, name, args, at(20 + calls.length)).state;
+      return { ok: true };
+    };
+    return { calls, send, after: () => state };
+  }
+
+  it("records the marks on each version, then posts one message with your message, your answers and a line per marked artifact", async () => {
+    const { s, id, n } = withSample();
     const a = S.getArtifact(s, id, 1);
     const draft: Draft = { ...addPin(draftFrom(undefined), PIN as never, "a"), mark: "change", pickedVariant: "b" };
     draft.pins[0].text = "Make the map smaller on phones.";
     draft.note = "Prefer B on phones.";
-    const calls: { name: string; args: object }[] = [];
-    let after = s;
-    const send = async (name: "sendFeedback", args: object) => {
-      calls.push({ name, args });
-      after = runCommand(s, name, args, at(20)).state;
-      return { ok: true };
-    };
-    const sent = await sendDrafts(send, s, { [draftKey(a)]: draft });
-    expect(sent).toEqual([draftKey(a)]);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].name).toBe("sendFeedback");
-    const f = S.currentFeedback(after, id, 1)!;
-    expect(f).toMatchObject({ mark: "change", pickedVariant: "b", note: "Prefer B on phones.", pins: [{ x: 0.25, y: 0.5, variant: "a", text: "Make the map smaller on phones.", selector: "main > div.map" }] });
+    const svc = service2(s);
+    const before = s.conversation.length;
+    const r = await sendAnswer(svc.send, s, { [draftKey(a)]: draft }, { round: n, questions, answers: ["Yes, cache the plan", ""], message: "Keep A's map header on desktop." });
+    expect(r).toEqual({ recorded: [draftKey(a)], posted: true });
+    expect(svc.calls.map((c) => c.name)).toEqual(["sendFeedback", "postMessage"]);
+    // The marks are recorded on the version, pins with their element.
+    const after = svc.after();
+    expect(S.currentFeedback(after, id, 1)).toMatchObject({ mark: "change", pickedVariant: "b", note: "Prefer B on phones.", pins: [{ x: 0.25, y: 0.5, variant: "a", text: "Make the map smaller on phones.", selector: "main > div.map" }] });
+    // One message in the conversation, the one the header's Message the lead opens.
+    const added = after.conversation.slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({ author: "user" });
+    expect(added[0].text).toBe(
+      [
+        "Keep A's map header on desktop.",
+        `My answers to round ${n}:\n\nQ: Should the plan work offline on the trail?\nA: Yes, cache the plan`,
+        "My feedback, recorded on each version:\n- Trip plan (simulated sample) v1: Change, picked B · Day by day, 1 pin, a note",
+      ].join("\n\n"),
+    );
     // Once recorded, the same draft is no longer a change: nothing is sent twice.
     expect(changedDrafts(after, { [draftKey(a)]: draft })).toEqual([]);
-    // The recorded pin names its element, so the list shows it instead of saying it is not recorded.
     const html = render(<Studio />, after);
     expect(html).toContain('<code class="st-selector">main &gt; div.map</code>');
     expect(html).not.toContain("The element is not recorded");
   });
 
-  it("sends nothing while nothing changed or a version is still with the PE, and keeps the drafts when the service refuses", async () => {
-    const { s, id } = withSample({ pe: false });
+  it("answers or a message alone are one postMessage, and a message alone is exactly what you wrote", async () => {
+    const { s, n } = withSample();
+    const answersOnly = service2(s);
+    expect(await sendAnswer(answersOnly.send, s, {}, { round: n, questions, answers: ["", "Kilometres"], message: "" })).toEqual({ recorded: [], posted: true });
+    expect(answersOnly.calls.map((c) => c.name)).toEqual(["postMessage"]);
+    expect(answersOnly.calls[0].args).toEqual({ text: `My answers to round ${n}:\n\nQ: Distances in miles or kilometres?\nA: Kilometres` });
+    const messageOnly = service2(s);
+    await sendAnswer(messageOnly.send, s, {}, { round: n, questions, answers: [], message: "  Can we see a calmer palette?  " });
+    expect(messageOnly.calls).toEqual([{ name: "postMessage", args: { text: "Can we see a calmer palette?" } }]);
+  });
+
+  it("sends nothing until there is something, a pin has its comment and it fits; refused marks stop the message", async () => {
+    const { s, id, n } = withSample({ pe: false });
     const a = S.getArtifact(s, id, 1);
-    const send = async () => ({ ok: true });
-    expect(await sendDrafts(send, s, {})).toBeNull();
-    expect(await sendDrafts(send, s, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } })).toBeNull();
+    const empty = { round: n, questions, answers: [], message: "" };
+    const svc = service2(s);
+    expect(answerBlocker({ ...empty, changed: [] })).toBe("Mark, pick or pin something, answer a question, or write to the lead first.");
+    expect(await sendAnswer(svc.send, s, {}, empty)).toBeNull();
+    // A version still with the PE is not yours to mark: its draft is not sent.
+    expect(await sendAnswer(svc.send, s, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, empty)).toBeNull();
+    expect(svc.calls).toEqual([]);
     const agreed = peAgrees(s, id, 1, ["a", "b"], at(7));
-    expect(await sendDrafts(async () => ({ ok: false }), agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } })).toBeNull();
-    expect(sendBlocker(changedDrafts(agreed, {}))).toBe("Mark, pick or pin something first.");
+    const pinned = addPin(draftFrom(undefined), PIN as never, "b");
+    expect(answerBlocker({ ...empty, message: "Hi", changed: changedDrafts(agreed, { [draftKey(a)]: pinned }) })).toBe("Write a comment for pin 1 on Trip plan (simulated sample), or remove it.");
+    expect(answerBlocker({ ...empty, message: "x".repeat(MAX_MESSAGE + 1), changed: [] })).toBe(`Together this is over ${MAX_MESSAGE} characters; shorten your message or your answers.`);
+    // The service refuses the marks (the version moved, say): the message is not posted, so it never speaks of marks that were not recorded.
+    const names: string[] = [];
+    const refuse = async (name: "sendFeedback" | "postMessage") => (names.push(name), { ok: false });
+    expect(await sendAnswer(refuse, agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, { ...empty, message: "Hi" })).toBeNull();
+    expect(names).toEqual(["sendFeedback"]);
+    // The marks recorded but the message refused: the drafts can clear, and the message stays to send again.
+    const half = async (name: "sendFeedback" | "postMessage") => ({ ok: name === "sendFeedback" });
+    expect(await sendAnswer(half, agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, { ...empty, message: "Hi" })).toEqual({ recorded: [draftKey(a)], posted: false });
   });
 });
 
@@ -253,13 +420,28 @@ describe("where a variant is served from", () => {
 
 describe("PE review in the right column", () => {
   /** The sample, with a PE run on Codex (simulated) that made one pass with these verdicts. */
-  function reviewed(verdicts: object[], opts: { lastPass?: boolean } = {}) {
+  function reviewed(verdicts: object[]) {
     const { s: designed, id } = withSample({ pe: false });
     let s = R.askForPeReviews(designed, at(6));
     s = R.dispatchStudioRuns(s, at(7), { simulated: ["codex"] }).state;
     const pe = s.studio.runs.find((r) => r.kind === "pe")!;
-    s = S.addPeVerdicts(s, { artifactId: id, version: 1, verdicts: verdicts as S.VerdictInput[], by: { provider: "codex", model: pe.model, runId: pe.id }, lastPass: opts.lastPass ?? true }, at(8)).state;
+    s = S.addPeVerdicts(s, { artifactId: id, version: 1, verdicts: verdicts as S.VerdictInput[], by: { provider: "codex", model: pe.model, runId: pe.id } }, at(8)).state;
     return { s: R.completeStudioRun(s, pe.id, at(8), { summary: "pass 1" }), id };
+  }
+
+  /**
+   * The PE loop (pass 4c): the PE objects to B on each pass, and the designer revises after the first two, so v1 and
+   * v2 are revised and v3 holds the objection that stands after the third pass.
+   */
+  function threePasses() {
+    const { s: designed, id, n } = withSample({ pe: false });
+    const objects = (s: State, version: number, t: number) => pePass(s, id, version, [{ variant: "a", verdict: "feasible" }, { variant: "b", verdict: "not-feasible", reasons: "Live prices need a paid API.", change: "A free source of prices." }], at(t));
+    const revise = (s: State, t: number) => addScreen(s, n, at(t), { artifactId: id, title: "Trip plan (simulated sample)", variants: [{ id: "a", label: "A · Map first", entry: "a/index.html" }, { id: "b", label: "B · Day by day", entry: "b/index.html" }], files: SAMPLE_FILES }).state;
+    let s = objects(designed, 1, 10);
+    const afterOne = s;
+    s = objects(revise(s, 11), 2, 12);
+    s = objects(revise(s, 13), 3, 14);
+    return { afterOne, s, id };
   }
   const BUDGET = { buildUsd: [40, 90] as [number, number], maintenanceUsdPerMonth: [0, 5] as [number, number], basis: "Recorded designer runs of this size." };
 
@@ -281,23 +463,44 @@ describe("PE review in the right column", () => {
     expect(html).not.toContain("Waiting for PE review. You can look at it now");
     expect(html).not.toContain("with the PE");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
-    // The lead's panel stays a placeholder until pass 4.
-    expect(html).toContain("Not built yet: the lead&#x27;s message for this round and its questions come here in pass 4 of the studio.");
   });
 
-  it("an objection says plainly that it is waiting for you, and you can answer", () => {
-    const { s } = reviewed([
-      { variant: "a", verdict: "feasible", reasons: "Fine." },
-      { variant: "b", verdict: "not-feasible", reasons: "Live prices need a paid API.", change: "A free source of prices." },
-    ]);
+  it("an objection while passes remain: the designer revises, and you can look but not mark", () => {
+    const { afterOne } = threePasses();
+    const html = render(<Studio />, afterOne);
+    expect(html).toContain(">Revising<");
+    expect(html).toContain("The PE objected on pass 1; the designer revises before it reaches you.");
+    expect(html).toMatch(/aria-disabled="true"[^>]*>Keep</);
+  });
+
+  it("an objection that stands after the third pass says plainly that it is waiting for you, and you can answer", () => {
+    const { s } = threePasses();
     const html = render(<Studio />, s);
     expect(html).toContain(">Objects: waiting for you<");
-    expect(html).toContain("The PE objects to B · Day by day. This is waiting for you: the designer cannot revise in answer to the PE yet, so mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.");
+    expect(html).toContain("The PE still objects to B · Day by day after 3 passes, and the designer revises no more. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.");
     expect(html).toMatch(/<span class="k-chip k-chip--fail">Not feasible</);
     expect(html).toContain("What would change the verdict: A free source of prices.");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
     // Flagged in the round's list too.
     expect(html).toContain('<span class="k-chip k-chip--you">PE objects</span>');
+  });
+
+  it("the versions: v1 → v2 → v3, the PE's pass on each, which is current, and the objection that stands waiting for you", () => {
+    const { s, id } = threePasses();
+    expect(versionHistory(s, S.getArtifact(s, id, 3))).toEqual([
+      { version: 1, round: 1, current: false, tone: "neutral", state: "objected", text: "PE pass 1: objected to B · Day by day; the designer revised it as v2." },
+      { version: 2, round: 1, current: false, tone: "neutral", state: "objected", text: "PE pass 2: objected to B · Day by day; the designer revised it as v3." },
+      { version: 3, round: 1, current: true, tone: "you", state: "waiting for you", text: "PE pass 3, the last: still objects to B · Day by day. This is waiting for you." },
+    ]);
+    const html = render(<Studio />, s);
+    expect(html).toContain('aria-label="Versions of Trip plan (simulated sample)"');
+    expect(html).toMatch(/<button type="button" class="st-item st-version" aria-current="true"><span class="st-version__head"><b>v3<\/b><span class="k-chip k-chip--you">waiting for you<\/span><span class="k-chip k-chip--strong">current<\/span>/);
+    expect(html).toContain("PE pass 1: objected to B · Day by day; the designer revised it as v2.");
+    // A version that the PE agreed on, and your mark on it, once you answered.
+    const { s: agreed, id: one } = withSample();
+    expect(versionHistory(feedback(agreed, one, 1, { mark: "keep" }, at(9)), S.getArtifact(agreed, one, 1))).toEqual([{ version: 1, round: 1, current: true, tone: "done", state: "agreed", text: "PE pass 1: agreed. You marked it keep." }]);
+    // One version has no history to show.
+    expect(render(<Studio />, agreed)).not.toContain("Versions of");
   });
 
   it("while the PE has not answered: why, from its run, and the marks stay locked", () => {
@@ -318,6 +521,33 @@ describe("PE review in the right column", () => {
     expect(skipped).toContain("No screenshots: no Chrome found");
   });
 
+  it("a PE that ran on the designer's own provider is labelled not independent; on the other provider it is not", () => {
+    const { s: designed, id } = withSample({ pe: false });
+    const pass = (provider: "claude" | "codex") =>
+      S.addPeVerdicts(
+        designed,
+        {
+          artifactId: id,
+          version: 1,
+          verdicts: [
+            { variant: "a", verdict: "feasible", reasons: "A static page." },
+            { variant: "b", verdict: "feasible", reasons: "A list." },
+          ],
+          by: { provider, model: `${provider}-sample-large`, runId: "run-pe" },
+        },
+        at(8),
+      ).state;
+    // The designer ran on Claude (the sample's run), and so did the PE.
+    expect(S.getArtifact(designed, id, 1).madeBy).toMatchObject({ role: "designer", provider: "claude" });
+    const same = render(<Studio />, pass("claude"));
+    expect(same).toContain('<span class="k-chip k-chip--you">not independent</span>');
+    expect(same).toContain("Not independent: the PE ran on the designer&#x27;s own provider (Claude).");
+    expect(same).toContain(">Agreed<");
+    const other = render(<Studio />, pass("codex"));
+    expect(other).not.toContain("ot independent");
+    expect(other).toContain("PE · Codex · codex-sample-large");
+  });
+
   it("a PE run that ended without a verdict says so, and says when it is asked again", () => {
     const { s: designed } = withSample({ pe: false });
     let s = R.dispatchStudioRuns(R.askForPeReviews(designed, at(6)), at(7)).state;
@@ -327,6 +557,146 @@ describe("PE review in the right column", () => {
     s = R.dispatchStudioRuns(R.askForPeReviews(s, at(9)), at(10)).state;
     s = R.reportStudioRunStopped(s, s.studio.runs.filter((r) => r.kind === "pe")[1].id, at(11), { lost: true });
     expect(render(<Studio />, s)).toContain(">No verdict<");
+  });
+});
+
+describe("document artifacts: interfaces, algorithms, topologies, contracts and flows", () => {
+  /** A contract the designer handed in as Markdown with a Mermaid file beside it, agreed by the PE. */
+  function withContract() {
+    const r = openRound(vision(), "data", at(1));
+    const a = addScreen(r.state, r.n, at(2), {
+      kind: "contract",
+      title: "Trips API",
+      variants: [],
+      devices: [],
+      files: [
+        { path: "api/contract.md", sha256: sha("a") },
+        { path: "api/flow.mmd", sha256: sha("b") },
+        { path: "api/notes.html", sha256: sha("c") },
+      ],
+    });
+    return { s: peAgrees(a.state, a.id, 1, [], at(3)), id: a.id };
+  }
+
+  it("each document kind is shown as a document; screens and terminal demos are not", () => {
+    const { s, id } = withContract();
+    const a = S.getArtifact(s, id, 1);
+    for (const kind of ["interface", "algorithm", "topology", "contract", "flow"]) expect(showKind({ ...a, kind: kind as never })).toBe("document");
+    expect(showKind({ ...a, kind: "screen" })).toBe("screen");
+    expect(showKind({ ...a, kind: "tui" })).toBe("terminal");
+    expect(showKind({ ...a, kind: "material" })).toBe("file");
+  });
+
+  it("in the viewer: no device frame and no prototype frame; its Markdown and Mermaid files, read through the app's own service", () => {
+    const { s, id } = withContract();
+    const html = render(<Studio />, s);
+    expect(html).toContain('aria-label="Trips API, a document"');
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("in a browser window");
+    expect(html).not.toContain("in a phone frame");
+    expect(html).not.toContain('aria-label="Device"');
+    expect(html).not.toContain("Pin a comment");
+    // Both document files, named; the HTML file is not a document and is never read from the app's origin.
+    expect(html).toContain("Reading api/contract.md…");
+    expect(html).toContain("Reading api/flow.mmd…");
+    expect(html).not.toContain("notes.html");
+    expect(serviceFileUrl(S.getArtifact(s, id, 1), "api/flow.mmd")).toBe(`/api/studio/file?artifact=${id}&version=1&path=api%2Fflow.mmd`);
+  });
+
+  it("which files a variant shows: its entry first, then the documents beside it; one take shows them all", () => {
+    const { s, id } = withContract();
+    const a = S.getArtifact(s, id, 1);
+    expect(documentFiles(a, undefined)).toEqual(["api/contract.md", "api/flow.mmd"]);
+    const two = {
+      ...a,
+      variants: [
+        { id: "a", label: "A · REST", entry: "a/flow.mmd" },
+        { id: "b", label: "B · Events", entry: "b/api.md" },
+      ],
+      files: ["a/api.md", "a/flow.mmd", "b/api.md", "b/index.html"].map((path, i) => ({ path, sha256: sha("abcd"[i]) })),
+    };
+    expect(documentFiles(two, "a")).toEqual(["a/flow.mmd", "a/api.md"]);
+    expect(documentFiles(two, "b")).toEqual(["b/api.md"]);
+    expect(documentFiles({ ...two, variants: [{ id: "x", label: "X" }, { id: "y", label: "Y" }] }, "x")).toEqual([]);
+    expect(documentType("a/API.MD")).toBe("markdown");
+    expect(documentType("a/flow.mermaid")).toBe("mermaid");
+    expect(documentType("a/index.html")).toBeUndefined();
+  });
+
+  it("Markdown is rendered safely: headings under the page's, code blocks monospaced, tables as tables, raw HTML as text, links out only when http(s), images only the version's own", () => {
+    const { s, id } = withContract();
+    const a = { ...S.getArtifact(s, id, 1), files: [...S.getArtifact(s, id, 1).files, { path: "api/shot.png", sha256: sha("d") }] };
+    const md = [
+      "# Trips API",
+      "",
+      "Every call returns `JSON`.",
+      "",
+      "```ts",
+      "export function plan(trip: Trip): DayPlan[];",
+      "```",
+      "",
+      "| Status | Meaning |",
+      "| --- | --- |",
+      "| 404 | No such trip |",
+      "",
+      '<script>alert("x")</script><img src=x onerror="alert(1)">',
+      "",
+      "[docs](https://example.com/docs) [steal](javascript:alert(1)) [settings](#/settings)",
+      "",
+      "![the plan](shot.png) ![tracker](https://example.com/pixel.png)",
+    ].join("\n");
+    const html = renderToStaticMarkup(<MarkdownDoc text={md} artifact={a} path="api/contract.md" />);
+    expect(html).toContain('<h3 class="st-doc__h">Trips API</h3>');
+    expect(html).not.toContain("<h1");
+    expect(html).toContain("<code>JSON</code>");
+    expect(html).toContain('<pre class="st-doc__code"><code class="language-ts">export function plan(trip: Trip): DayPlan[];\n</code></pre>');
+    expect(html).toMatch(/<div class="st-doc__table"><table><thead><tr><th>Status<\/th><th>Meaning<\/th><\/tr><\/thead><tbody><tr><td>404<\/td><td>No such trip<\/td><\/tr><\/tbody><\/table><\/div>/);
+    // Raw HTML is shown as text, never as markup.
+    expect(html).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
+    expect(html).not.toMatch(/<script|<img src="x"|onerror="/);
+    // Links: out of the app in a new tab when http(s); anything else is text.
+    expect(html).toContain('<a href="https://example.com/docs" target="_blank" rel="noopener noreferrer">docs</a>');
+    expect(html).toContain('<span class="st-doc__link">steal</span>');
+    expect(html).toContain('<span class="st-doc__link">settings</span>');
+    expect(html).not.toContain("javascript:");
+    // Images: the version's own PNG through the app's service; nothing from elsewhere is loaded.
+    expect(html).toContain(`<img src="/api/studio/file?artifact=${id}&amp;version=1&amp;path=api%2Fshot.png" alt="the plan" class="st-doc__img"/>`);
+    expect(html).toContain("[Image: tracker, not shown: only the artifact&#x27;s own PNG and GIF files are.]");
+    expect(html).not.toContain("pixel.png");
+  });
+
+  it("a mermaid block, or a .mmd file, is a diagram the app draws, with its source under it", () => {
+    const { s, id } = withContract();
+    const a = S.getArtifact(s, id, 1);
+    const html = renderToStaticMarkup(<MarkdownDoc text={"Before.\n\n```mermaid\nflowchart LR\n  A[Pick a trail] --> B{Date ok?}\n```\n"} artifact={a} path="api/contract.md" />);
+    expect(html).toContain('<figure class="st-doc__diagram">');
+    expect(html).toContain("Drawing the diagram…");
+    expect(html).toContain("<summary class=\"small muted\">Diagram source</summary>");
+    expect(html).toContain("flowchart LR\n  A[Pick a trail] --&gt; B{Date ok?}</code>");
+    expect(html).not.toContain("language-mermaid");
+    const file = renderToStaticMarkup(<MermaidDiagram source={"sequenceDiagram\n  App->>API: plan"} label="The diagram in api/flow.mmd" />);
+    expect(file).toContain("Drawing the diagram…");
+    expect(file).toContain("sequenceDiagram\n  App-&gt;&gt;API: plan");
+  });
+
+  it("Mermaid runs at strict security, and a diagram's own directives cannot relax it, its labels or its sanitiser", () => {
+    const tokens: Record<string, string> = { "--surface": "#1a1b1e", "--text": "#ececea", "--muted": " #a3a6ad " };
+    const c = mermaidConfig((name) => tokens[name] ?? "");
+    expect(c).toMatchObject({ securityLevel: "strict", startOnLoad: false, htmlLabels: false, suppressErrorRendering: true, theme: "base" });
+    for (const key of ["securityLevel", "startOnLoad", "secure", "htmlLabels", "dompurifyConfig", "maxTextSize"]) expect(c.secure).toContain(key);
+    // The look comes from the design tokens; unset ones are left to Mermaid.
+    expect(c.themeVariables).toMatchObject({ background: "#1a1b1e", primaryTextColor: "#ececea", lineColor: "#a3a6ad", darkMode: true });
+    expect(c.themeVariables).not.toHaveProperty("primaryColor");
+  });
+
+  it("a path a document refers to stays inside its version's folder", () => {
+    expect(resolveInVersion("api/contract.md", "shot.png")).toBe("api/shot.png");
+    expect(resolveInVersion("api/contract.md", "./img/a.png")).toBe("api/img/a.png");
+    expect(resolveInVersion("api/contract.md", "../top.png")).toBe("top.png");
+    expect(resolveInVersion("api/contract.md", "../../etc/passwd")).toBeUndefined();
+    expect(resolveInVersion("api/contract.md", "/abs.png")).toBeUndefined();
+    expect(resolveInVersion("api/contract.md", "https://example.com/a.png")).toBeUndefined();
+    expect(resolveInVersion("api/contract.md", "data:image/png;base64,AAAA")).toBeUndefined();
   });
 });
 
