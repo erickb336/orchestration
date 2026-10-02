@@ -5,6 +5,7 @@
 //   npm run trial:studio                     a real Claude designer and the PE on Codex (costs money; the lead runs it)
 //   npm run trial:studio -- --cap-usd 3      the estimated Claude spend it may reach (default 5)
 //   npm run trial:studio -- --designer-model claude-sonnet-4-5    the designer's model (default: the catalog's first)
+//   npm run trial:studio -- --fake --lead    the lead runs the round from the owner's message (pass 4), simulated
 //
 // A sibling of scripts/real-run-test.mjs rather than a mode of it: that scenario is the factory (tasks, flows, notes,
 // pause and resume, with exactly its own checks), and this one is Vision (rounds, artifacts, the PE, the prototype
@@ -27,13 +28,25 @@
 //    the cap.
 // 6. Writes the evidence to evidence/ and, for a real run, a record to docs/real-runs/ without local paths, the
 //    service log or anything shaped like a credential (the same check as the factory scenario).
+//
+// With --lead (pass 4), the lead runs the studio instead of the script. Two projects, one after the other:
+// - a short idea in a repository with no code: the owner's message asks the lead to start, and the lead opens round 1
+//   on the experience and asks for designer runs through its studio block;
+// - "as it is today" on a tiny repository with one existing screen (scripts/fixtures/studio-existing): the lead
+//   opens round 0 and the designer reproduces the screen, labelled "as is" with the files it came from.
+// Each checks that the round's lead message and questions are stored, that the designer runs came from the lead's
+// block, and that the PE reviewed what they made; then the sandbox, the owner's feedback, the stage and the cap.
+//
+// The cap (review finding 8): Claude's spend counts each run with no recorded cost at its run limit, never as $0
+// (scripts/trialSpend.mjs). In the fake runtime nothing is spent.
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { leaksIn, scrubHomePaths } from "./recordLeaks.mjs";
+import { claudeSpend as claudeSpendOf } from "./trialSpend.mjs";
 
 // The service's and the domain's own code, through tsx (the npm script starts node with it).
 const loaded = await Promise.all([
@@ -50,6 +63,7 @@ const [{ Store }, { startDesignerRun }, S, R, Spend] = loaded;
 
 const args = process.argv.slice(2);
 const FAKE = args.includes("--fake");
+const LEAD = args.includes("--lead");
 const option = (name, fallback) => {
   const i = args.indexOf(name);
   return i >= 0 && i + 1 < args.length ? args[i + 1] : fallback;
@@ -62,7 +76,7 @@ if (!(CAP_USD > 0) || !(CODEX_USD >= 0)) {
   process.exit(2);
 }
 /** PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the trial. */
-const EXPECTED_CHECKS = 9;
+const EXPECTED_CHECKS = 9; // The same count with --lead: two per project, then the reproduction, the sandbox, feedback, the stage and the cap.
 /** A run is not started with less than this left of the cap: it could do nothing useful. */
 const MIN_RUN_USD = 0.5;
 
@@ -72,7 +86,7 @@ const PROTOTYPE_PORT = Number(process.env.ORCHESTRATION_PROTOTYPE_PORT ?? PORT +
 const BASE = `http://127.0.0.1:${PORT}`;
 const HEADERS = { "Content-Type": "application/json", "X-Orchestration-Client": "1" };
 const t0 = Date.now();
-const evidence = { scenario: "studio-trial", mode: FAKE ? "fake" : "real", startedAt: new Date().toISOString(), orchestrator: orchestratorVersion(), capUsd: CAP_USD, steps: [], checks: {}, ok: false };
+const evidence = { scenario: "studio-trial", mode: FAKE ? "fake" : "real", lead: LEAD, startedAt: new Date().toISOString(), orchestrator: orchestratorVersion(), capUsd: CAP_USD, steps: [], checks: {}, ok: false };
 const log = (msg) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1).padStart(6)}s] ${msg}`);
 const check = (name, ok, detail = null) => {
   evidence.checks[name] = { ok: !!ok, detail };
@@ -103,7 +117,7 @@ if (!existsSync(join(ROOT, "dist", "index.html"))) {
 }
 
 // Inside this checkout's gitignored evidence/ folder, out of the agents' reach (they write only their staging folders).
-const work = join(ROOT, "evidence", `studio-${evidence.mode}-${evidence.startedAt.replace(/[:.]/g, "-")}`);
+const work = join(ROOT, "evidence", `studio-${evidence.mode}${LEAD ? "-lead" : ""}-${evidence.startedAt.replace(/[:.]/g, "-")}`);
 mkdirSync(work, { recursive: true });
 const repo = join(work, "repo");
 mkdirSync(repo);
@@ -163,22 +177,28 @@ const TERMINAL_BRIEF = [
   "Hand in a terminal-demo artifact and a tui artifact, both for the terminal.",
 ].join("\n");
 
-/** Claude's estimated spend so far, every run of the project included, and the runs with no recorded cost. */
+/**
+ * The run limits the trial set (Claude's maxBudgetUsd): each run it started with its own, and the largest set so far
+ * for the runs the service started (the lead's, the PE's). A run with no recorded cost counts at its limit.
+ */
+const runLimits = new Map();
+const limitsSet = [];
+function setLimit(usd) {
+  limitsSet.push(usd);
+  return cmd("setRunLimits", { maxTurns: 80, timeoutMinutes: 20, maxBudgetUsd: usd });
+}
+/** Claude's estimated spend so far, every run of the project included; each with no recorded cost counted at its run limit (review finding 8). */
 function claudeSpend(s) {
-  const runs = [...s.attempts.filter((a) => a.snapshot.provider === "claude"), ...s.leadRuns.filter((r) => r.provider === "claude"), ...s.studio.runs.filter((r) => r.provider === "claude")];
-  let usd = 0;
-  const unknown = [];
-  for (const r of runs) {
-    const status = "status" in r ? r.status : r.outcome;
-    if (status === "queued") continue;
-    const c = Spend.estimateUsd(r, Spend.PRICES);
-    if (c.basis === "unknown") unknown.push(r.id);
-    else usd += c.usd;
-  }
-  return { usd, unknown };
+  return claudeSpendOf(s, { estimate: (r) => Spend.estimateUsd(r, Spend.PRICES), limitOf: (r) => runLimits.get(r.id) ?? (limitsSet.length ? Math.max(...limitsSet) : 2), simulated: FAKE });
 }
 const money = (n) => `$${n.toFixed(2)}`;
-const ended = (r) => ["completed", "failed", "stopped", "lost"].includes(r.status);
+const ended = (r) => !!r && ["completed", "failed", "stopped", "lost"].includes(r.status ?? r.outcome);
+/** The designer's artifacts are imported, their screenshots and recordings made, and the PE has reviewed each (or its runs ended without a verdict). */
+const settled = (x) => {
+  const latest = S.latestArtifacts(x).filter((a) => a.madeBy.role === "designer");
+  if (!latest.length || S.pendingMedia(x).length) return false;
+  return latest.every((a) => S.peReview(x, a).status !== "waiting" || (!R.peRunDue(x, a) && R.peRunsOf(x, a.id, a.version).every(ended)));
+};
 
 async function main() {
   for (let i = 0; ; i++) {
@@ -201,6 +221,7 @@ async function main() {
     await cmd("pauseProject");
     await until("sample runs stopped", (x) => x.state.attempts.every((a) => a.outcome !== "running" && a.outcome !== "stopping"), 60_000);
   }
+  if (LEAD) return leadTrial();
 
   // The project, as the owner sets it up: in Vision, its devices, its budgets.
   await cmd("initProject", { name: "Weekend Trips (studio trial)", repoPath: repo, vision: VISION, focus: "Studio trial" });
@@ -228,8 +249,9 @@ async function main() {
       continue;
     }
     const runBudget = Math.min(2, Math.floor(left * 100) / 100);
-    await cmd("setRunLimits", { maxTurns: 80, timeoutMinutes: 20, maxBudgetUsd: runBudget });
+    await setLimit(runBudget);
     const runId = startDesignerRun(lead, { round, brief, selection: { provider: "claude", model: DESIGNER_MODEL } }, new Date().toISOString(), `studio-trial-${randomUUID()}`);
+    runLimits.set(runId, runBudget);
     designerRuns.push(runId);
     record(`designer run asked for: ${what}`, { run: runId, spentSoFar: money(spent), runLimit: money(runBudget) });
     const { s: done, waitedMs } = await until(`the designer run for ${what}`, (x) => ended(x.state.studio.runs.find((r) => r.id === runId)), FAKE ? minutes(2) : minutes(25), FAKE ? 500 : 5000);
@@ -239,11 +261,6 @@ async function main() {
   lead.close();
 
   // The service makes the screenshots and recordings, then asks the PE; wait for all of it.
-  const settled = (x) => {
-    const latest = S.latestArtifacts(x).filter((a) => a.madeBy.role === "designer");
-    if (!latest.length || S.pendingMedia(x).length) return false;
-    return latest.every((a) => S.peReview(x, a).status !== "waiting" || (!R.peRunDue(x, a) && R.peRunsOf(x, a.id, a.version).every(ended)));
-  };
   ({ s } = await until("screenshots, recordings and PE review", (x) => settled(x.state), FAKE ? minutes(4) : minutes(30), FAKE ? 500 : 5000));
   const st = s.state;
   const artifacts = S.latestArtifacts(st).filter((a) => a.madeBy.role === "designer");
@@ -318,16 +335,132 @@ async function main() {
   const after = (await state()).state;
   check("the project is still in Vision, with no factory start", after.project.stage === "shaping" && after.project.factoryStarts.length === 0, { stage: after.project.stage });
 
-  const spend = claudeSpend(after);
-  evidence.spend = { claudeUsd: Number(spend.usd.toFixed(4)), claudeRunsWithoutCost: spend.unknown.length, buildingUsd: Number(Spend.buildingSpend(after).usd.toFixed(4)) };
-  check(
-    `the estimated Claude spend stayed under the ${money(CAP_USD)} cap`,
-    spend.usd <= CAP_USD && (FAKE || spend.unknown.length === 0),
-    { claude: money(spend.usd), withoutCost: spend.unknown.length, ...(FAKE ? { note: "simulated runs record no usage" } : {}) },
-  );
+  capCheck(claudeSpend(after), 0, Spend.buildingSpend(after).usd);
+  verdict();
+}
 
+/** The cap's check: Claude's spend, `carried` from earlier projects of this trial, with each run of no recorded cost at its run limit. */
+function capCheck(spend, carried, buildingUsd) {
+  const usd = carried + spend.usd;
+  evidence.spend = { claudeUsd: Number(usd.toFixed(4)), claudeRunsWithoutCost: spend.unknown.length, buildingUsd: Number(buildingUsd.toFixed(4)) };
+  check(`the estimated Claude spend stayed under the ${money(CAP_USD)} cap, each run with no recorded cost counted at its run limit`, usd <= CAP_USD, {
+    claude: money(usd),
+    withoutCost: spend.unknown.map((u) => `${u.id} at ${money(u.countedUsd)}`),
+    ...(FAKE ? { note: "simulated runs record no usage and spend nothing" } : {}),
+  });
+}
+
+function verdict() {
   evidence.ok = Object.keys(evidence.checks).length === EXPECTED_CHECKS && Object.values(evidence.checks).every((c) => c.ok);
   if (Object.keys(evidence.checks).length !== EXPECTED_CHECKS) log(`✗ ${Object.keys(evidence.checks).length} checks ran; PASSED needs exactly ${EXPECTED_CHECKS}`);
+}
+
+// ---------- --lead: the lead runs the studio from the owner's message (pass 4) ----------
+
+const IDEA = "Weekend Trips: a small group of friends plans a weekend away: who is in, the day plan, and what it costs each. It runs in the browser on desktop and phones.";
+const IDEA_MESSAGE = "Here is my idea: a small app for friends to plan a weekend away together. Please start the first round of the studio.";
+const AS_IS_VISION = "Trip board: friends see the weekends they are planning, who is in, and what each costs. It exists today as one small web page; the next version should make planning a weekend together easy.";
+const AS_IS_MESSAGE = "This is my old trip board app. Start from what it does today, then we will change it.";
+
+/**
+ * One project of the lead's trial: the owner sets it up and sends one message; the lead replies with its studio block;
+ * the trial waits for the designer runs the block asked for, their imports, screenshots and the PE. Returns what
+ * happened, or null when the cap left too little to start.
+ */
+async function leadProject(key, { repoPath, vision, message, carried }) {
+  await cmd("initProject", { name: `Weekend Trips (studio trial, ${key})`, repoPath, vision, focus: "Studio trial" });
+  await cmd("setDevices", { devices: ["desktop", "mobile"] });
+  await cmd("setBudgets", { buildingUsd: CAP_USD + CODEX_USD, maintenanceUsdPerMonth: 10 });
+  const left = CAP_USD - carried;
+  if (left < MIN_RUN_USD) {
+    record(`not started: ${key}`, { reason: `the estimated Claude spend (${money(carried)}) leaves less than ${money(MIN_RUN_USD)} of the ${money(CAP_USD)} cap` });
+    return null;
+  }
+  // Every run the service starts here (the lead's, the designer's) has at most a quarter of what is left.
+  await setLimit(Math.max(MIN_RUN_USD, Math.min(2, Math.floor((left / 4) * 100) / 100)));
+  const s0 = (await state()).state;
+  record("project created", { phase: key, stage: s0.project.stage, devices: s0.project.devices, domains: s0.project.domains, runLimit: money(s0.project.runLimits.maxBudgetUsd) });
+  await cmd("postMessage", { text: message });
+  const { s: replied, waitedMs } = await until(`${key}: the lead's reply`, (x) => ended(x.state.leadRuns.at(-1)), FAKE ? minutes(2) : minutes(25), FAKE ? 500 : 5000);
+  const lead = replied.state.leadRuns.at(-1);
+  const round = replied.state.studio.rounds.at(-1);
+  const asked = replied.state.studio.runs.filter((r) => r.fromLead?.leadRunId === lead.id);
+  const reply = replied.state.conversation.filter((m) => m.author === "lead").at(-1);
+  record(`lead replied: ${key}`, { run: lead.id, outcome: lead.outcome, provider: lead.provider, model: lead.actualModel ?? lead.model, usage: lead.usage ?? null, tookMs: waitedMs, notes: reply?.rejected ?? [] });
+  if (round) record("round opened", { phase: key, round: round.n, focus: round.focus, summary: round.summary, by: round.leadRunId ?? null, lead: round.lead ?? null });
+  record(`designer runs asked for by the lead: ${key}`, { runs: asked.map((r) => ({ id: r.id, round: r.round, provider: r.provider, fromLead: r.fromLead, brief: r.brief })) });
+  let st = replied.state;
+  if (asked.length) {
+    ({ s: { state: st } } = await until(`${key}: the designer runs, their imports and PE review`, (x) => asked.every((r) => ended(x.state.studio.runs.find((y) => y.id === r.id))) && (settled(x.state) || !S.latestArtifacts(x.state).some((a) => a.madeBy.role === "designer")), FAKE ? minutes(4) : minutes(40), FAKE ? 500 : 5000));
+  }
+  const artifacts = S.latestArtifacts(st).filter((a) => a.madeBy.role === "designer");
+  evidence.projects = [
+    ...(evidence.projects ?? []),
+    {
+      phase: key,
+      round: round ? { n: round.n, focus: round.focus, summary: round.summary, lead: round.lead ?? null } : null,
+      runs: st.studio.runs.map((r) => ({ id: r.id, kind: r.kind, provider: r.provider, model: r.actualModel ?? r.model, status: r.status, usage: r.usage ?? null, simulated: !!r.simulated, note: r.note ?? null, fromLead: r.fromLead ?? null })),
+      artifacts: artifacts.map((a) => ({ id: a.id, version: a.version, round: a.round, kind: a.kind, title: a.title, variants: a.variants.length, devices: a.devices, provenance: a.provenance ?? null, peReview: S.peReview(st, a).status })),
+      verdicts: st.studio.verdicts.map((v) => ({ artifact: `${v.artifactId} v${v.version}`, variant: v.variant ?? null, verdict: v.verdict, reasons: v.reasons, by: v.by ?? null })),
+    },
+  ];
+  return { key, lead, round, asked: asked.map((r) => st.studio.runs.find((y) => y.id === r.id)), artifacts, state: st, spend: claudeSpend(st) };
+}
+
+/** Whether the PE reviewed every one of these artifacts through its own runs, and the owner may now see them. */
+const reviewed = (st, artifacts) => artifacts.length > 0 && artifacts.every((a) => S.readyForOwner(st, a) && st.studio.verdicts.some((v) => v.artifactId === a.id && v.version === a.version && v.by));
+
+async function leadTrial() {
+  const fixture = join(ROOT, "scripts", "fixtures", "studio-existing");
+  const fixtureFiles = readdirSync(fixture).sort();
+  const existing = join(work, "existing");
+  mkdirSync(existing);
+  for (const f of fixtureFiles) copyFileSync(join(fixture, f), join(existing, f));
+  const g = (...a) => execFileSync("git", ["-C", existing, ...a], { encoding: "utf8" }).trim();
+  g("init", "-q", "-b", "main");
+  g("add", "-A");
+  g("-c", "user.name=Orchestration test", "-c", "user.email=test@localhost", "commit", "-q", "-m", "The trip board as it is");
+
+  const idea = await leadProject("a short idea", { repoPath: repo, vision: IDEA, message: IDEA_MESSAGE, carried: 0 });
+  const carried = idea ? idea.spend.usd : 0;
+  const asIs = await leadProject("as it is today", { repoPath: existing, vision: AS_IS_VISION, message: AS_IS_MESSAGE, carried });
+
+  const plan = (p, n, focus) => !!p?.round && p.round.n === n && p.round.focus === focus && p.round.leadRunId === p.lead.id && !!p.round.lead?.message.trim() && p.round.lead.questions.length > 0;
+  const fromBlock = (p) => !!p && p.asked.length > 0 && p.asked.every((r) => r?.status === "completed" && r.fromLead?.leadRunId === p.lead.id);
+  const roundOf = (p) => (p?.round ? { n: p.round.n, focus: p.round.focus, summary: p.round.summary, questions: p.round.lead?.questions ?? [] } : null);
+  check("a short idea: the lead opened round 1 on the experience, its message and questions stored on the round", plan(idea, 1, "experience"), roundOf(idea));
+  check(
+    "a short idea: the designer runs came from the lead's block, and the PE reviewed what they made",
+    fromBlock(idea) && reviewed(idea.state, idea.artifacts),
+    idea ? { runs: idea.asked.map((r) => `${r?.id} ${r?.status}`), artifacts: idea.artifacts.map((a) => `${a.title} v${a.version}: ${S.peReview(idea.state, a).status}`) } : "not started",
+  );
+  check("as it is today: the lead opened round 0 on the existing repository, its message and questions stored on the round", plan(asIs, 0, "material") && /as it is today/i.test(asIs.round.summary), roundOf(asIs));
+  const reproduced = asIs ? asIs.artifacts.filter((a) => a.round === 0) : [];
+  check(
+    "as it is today: the designer runs came from the lead's block, and each reproduction is labelled as is with the fixture's files it came from",
+    fromBlock(asIs) && reproduced.length > 0 && reproduced.every((a) => a.provenance?.asIs && a.provenance.files.length > 0 && a.provenance.files.every((f) => fixtureFiles.includes(f))) && reproduced.some((a) => a.provenance.files.includes("index.html")),
+    reproduced.map((a) => ({ artifact: `${a.title} v${a.version}`, kind: a.kind, provenance: a.provenance ?? null })),
+  );
+  check("as it is today: the PE reviewed the reproduction", !!asIs && reviewed(asIs.state, reproduced), reproduced.map((a) => `${a.title}: ${asIs ? S.peReview(asIs.state, a).status : "none"}`));
+  check("the reproduced screen is served sandboxed: a fetch from inside it to the app's API fails, in Chrome", ...(await sandboxCheck(reproduced.find((a) => a.kind === "screen"))));
+
+  // The owner answers the reproduction, as they would in the studio.
+  const answers = [];
+  for (const a of reproduced) {
+    try {
+      await cmd("sendFeedback", { entries: [{ artifactId: a.id, version: a.version, mark: "keep", pins: [], note: "Studio trial: that is how it works today." }] });
+      answers.push({ artifact: a.title, sent: true });
+    } catch (e) {
+      answers.push({ artifact: a.title, sent: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  check("the owner can send feedback on every reproduction the PE reviewed", answers.length > 0 && answers.every((x) => x.sent), answers);
+
+  const after = (await state()).state;
+  const stages = [idea?.state, after].filter(Boolean).map((x) => ({ project: x.project.name, stage: x.project.stage, starts: x.project.factoryStarts.length }));
+  check("both projects stayed in Vision, with no factory start", stages.length === 2 && stages.every((x) => x.stage === "shaping" && x.starts === 0), stages);
+  capCheck(claudeSpend(after), carried, Spend.buildingSpend(after).usd);
+  verdict();
 }
 
 /** The type a version's file is served as through the app's own route, or null when it is not served. */
