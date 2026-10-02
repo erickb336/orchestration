@@ -34,9 +34,18 @@ export interface StudioMedia {
   record(artifactDir: string, outDir: string, tape: string): Promise<RecordResult>;
 }
 
-export const systemMedia = (log?: (msg: string) => void): StudioMedia => ({
+/**
+ * Real terminal recording is paused in the service until recordings run in a container (ORC-029 pass 3 review,
+ * finding 1: under sandbox-exec a tape's shell can write to the owner's other terminal sessions). Until then every
+ * tape falls back to its hand-written .cast or .ans, labelled with this reason. Tests opt in with `recording: true`.
+ */
+export const TERMINAL_RECORDING_PAUSED =
+  "Not recorded: terminal recording is paused until it runs in a container (the macOS sandbox lets a tape reach your other terminal sessions). Use a hand-written .cast or .ans instead.";
+
+export const systemMedia = (log?: (msg: string) => void, opts: { recording?: boolean } = {}): StudioMedia => ({
   shots: (studioDir, artifactId, version) => captureShots({ studioDir, artifactId, version, log }),
-  record: (artifactDir, outDir, tape) => recordTape(artifactDir, outDir, { tape, log }),
+  record: (artifactDir, outDir, tape) =>
+    opts.recording ? recordTape(artifactDir, outDir, { tape, log }) : Promise.resolve({ sandbox: null, reason: "unavailable" as const, error: TERMINAL_RECORDING_PAUSED }),
 });
 
 /** The screenshots of a screen version, as the version records them. */

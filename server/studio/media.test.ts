@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MediaResult } from "../../src/domain/studio/studio";
-import { makeDemo, makeShots, notRecordedReason, systemMedia, type StudioMedia } from "./media";
+import { TERMINAL_RECORDING_PAUSED, makeDemo, makeShots, notRecordedReason, systemMedia, type StudioMedia } from "./media";
 import type { ShotsOutcome } from "./shots";
 import { probeTerminalSandbox, recordTape, type RecordResult } from "./terminal";
 import { writeVersion } from "./testFixtures";
@@ -158,7 +158,7 @@ describe(`a terminal demo recorded for real, as the trial's designer wrote it${s
       const BROKEN = 'Output demo.gif\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "node trips.js"\nEnter\nSleep 1.5s\n';
       const files = { "demo/demo.tape": fixture("demo/demo.tape"), "demo/setup.tape": fixture("demo/setup.tape"), "demo/trips.js": fixture("demo/trips.js"), "b/demo.tape": BROKEN, "b/trips.js": "console.log('not reached')\n" };
       const dir = writeVersion(studio, "sa-5", 1, files, { kind: "terminal-demo", devices: ["terminal"], variants: [{ id: "a", label: "A", entry: "demo/demo.tape" }, { id: "b", label: "B", entry: "b/demo.tape" }] });
-      const [a, b] = variantsOf(await makeDemo(systemMedia(), studio, "sa-5", 1, ["a", "b"], now));
+      const [a, b] = variantsOf(await makeDemo(systemMedia(undefined, { recording: true }), studio, "sa-5", 1, ["a", "b"], now));
       expect(a).toEqual({ variant: "a", status: "recorded", tape: "demo/demo.tape", gif: "recording/a/demo.gif", txt: "recording/a/demo.txt" });
       const txt = readFileSync(join(dir, "recording", "a", "demo.txt"), "utf8");
       expect(txt.split("\n")).toContain(" 1  Lake Tahoe cabin      3h 40m   $148");
@@ -169,4 +169,11 @@ describe(`a terminal demo recorded for real, as the trial's designer wrote it${s
     },
     120_000,
   );
+});
+
+describe("terminal recording is paused in the service (ORC-029 pass 3 review, finding 1)", () => {
+  it("the service's media never records a tape: it falls back with the reason, until recordings run in a container", async () => {
+    const r = await systemMedia().record("/nonexistent", "/nonexistent-out", "demo.tape");
+    expect(r).toEqual({ sandbox: null, reason: "unavailable", error: TERMINAL_RECORDING_PAUSED });
+  });
 });

@@ -706,7 +706,7 @@ describe(`with the system Chrome and VHS${realSkip ? ` (skipped: ${realSkip})` :
   it.skipIf(!!realSkip)(
     "a designer's screen gets its screenshots and its terminal demo its sandboxed recording, served from the version",
     async () => {
-      await service({ media: systemMedia() });
+      await service({ media: systemMedia(undefined, { recording: true }) });
       const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan and the trips demo." }, iso());
       tick();
       handIn(claude.runs.get(id)!, { artifacts: [TRIP_PLAN, TRIPS_DEMO] }, { ...PAGES, ...DEMO_FILES });
