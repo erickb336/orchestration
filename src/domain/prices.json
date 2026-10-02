@@ -1,0 +1,69 @@
+[
+  {
+    "provider": "claude",
+    "model": "claude-opus-5-5",
+    "inputPerMTok": 4,
+    "cachedInputPerMTok": 0.2,
+    "outputPerMTok": 20,
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "checked": "2026-10-01"
+  },
+  {
+    "provider": "claude",
+    "model": "claude-sonnet-5-5",
+    "inputPerMTok": 2,
+    "cachedInputPerMTok": 0.2,
+    "outputPerMTok": 10,
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "checked": "2026-10-01"
+  },
+  {
+    "provider": "claude",
+    "model": "claude-haiku-4-5-20251001",
+    "inputPerMTok": 1,
+    "cachedInputPerMTok": 0.1,
+    "outputPerMTok": 5,
+    "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "checked": "2026-10-01"
+  },
+  {
+    "provider": "codex",
+    "model": "gpt-6.1-sol",
+    "inputPerMTok": 2,
+    "cachedInputPerMTok": 0.1,
+    "outputPerMTok": 10,
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "checked": "2026-10-01",
+    "note": "Short context (up to 272K input tokens per request). Long context: $4 input, $0.20 cached input, $15 output."
+  },
+  {
+    "provider": "codex",
+    "model": "gpt-6-sol",
+    "inputPerMTok": 2,
+    "cachedInputPerMTok": 0.2,
+    "outputPerMTok": 10,
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "checked": "2026-10-01",
+    "note": "Short context (up to 272K input tokens per request). Long context: $4 input, $0.40 cached input, $15 output."
+  },
+  {
+    "provider": "codex",
+    "model": "gpt-6-astra",
+    "inputPerMTok": 10,
+    "cachedInputPerMTok": 1,
+    "outputPerMTok": 50,
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "checked": "2026-10-01",
+    "note": "Short context (up to 272K input tokens per request). Long context: $20 input, $2 cached input, $75 output."
+  },
+  {
+    "provider": "codex",
+    "model": "gpt-6-luna",
+    "inputPerMTok": 0.1,
+    "cachedInputPerMTok": 0.01,
+    "outputPerMTok": 0.5,
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "checked": "2026-10-01",
+    "note": "Short context (up to 272K input tokens per request). Long context: $0.20 input, $0.02 cached input, $0.75 output."
+  }
+]

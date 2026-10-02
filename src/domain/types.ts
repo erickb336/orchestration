@@ -296,6 +296,13 @@ export interface Project {
   checksHealth?: ChecksHealth;
   /** Who decides `ask-user` findings: the lead (Autopilot's default) or the user. */
   triage: { askUserBy: "lead" | "user" };
+  /** The owner's budgets, in dollars; null until set. Only `setBudgets` writes them. */
+  budgets: Budgets;
+  /**
+   * The owner chose to continue past the building budget they had set (`continuePastBudget`). It lasts while
+   * the building budget stays at that amount and the project stays building.
+   */
+  budgetContinued?: { at: string; buildingUsd: number; spentUsd: number };
   /** Give every run the repository's AGENTS.md and CLAUDE.md from the trusted base as labelled project conventions. */
   conventions: { include: boolean };
   /** Last planning run start (for the planning interval). */
@@ -326,6 +333,17 @@ export interface Project {
    */
   defaultFlowId: string;
 }
+
+/**
+ * The owner's budgets. Building: the estimated agent spend to build the project, at the providers'
+ * published prices; at it, nothing new starts. Maintenance: the estimated monthly cost of running it.
+ */
+export interface Budgets {
+  buildingUsd: number | null;
+  maintenanceUsdPerMonth: number | null;
+}
+
+export const NO_BUDGETS: Budgets = { buildingUsd: null, maintenanceUsdPerMonth: null };
 
 /**
  * What a worker process sees of the user's own tool setup.
@@ -981,7 +999,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 18;
+  version: 19;
   seq: number;
   project: Project;
   tasks: Task[];

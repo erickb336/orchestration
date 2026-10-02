@@ -95,6 +95,8 @@ export function startShaping(state: State, now: string): State {
   s.project.stage = "shaping";
   // A new shaping session; coverage the lead reported in an earlier one is not reused.
   s.project.shapingSince = now;
+  // Continuing past the building budget lasted while building; the next start meets the budget stop again.
+  delete s.project.budgetContinued;
   const running = activeAttempts(s).length;
   event(s, now, "user", "config", `Shaping the vision; new work waits until you start building${running ? ` (${running} running step${running === 1 ? " finishes" : "s finish"} normally)` : ""}`);
   return s;

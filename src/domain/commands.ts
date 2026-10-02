@@ -47,6 +47,9 @@ function num(a: Args, k: string): number {
   if (typeof a[k] !== "number" || !Number.isFinite(a[k])) throw new InvalidCommandError(`${k} must be a number`);
   return a[k] as number;
 }
+function numOrNull(a: Args, k: string): number | null {
+  return a[k] === null ? null : num(a, k);
+}
 function bool(a: Args, k: string): boolean {
   if (typeof a[k] !== "boolean") throw new InvalidCommandError(`${k} must be a boolean`);
   return a[k] as boolean;
@@ -378,6 +381,12 @@ export const COMMANDS = {
     return M.setWorkerEnvironment(s, provider(a.provider), env, now);
   }),
   setRunLimits: same((s, now, a) => M.setRunLimits(s, { maxTurns: num(a, "maxTurns"), timeoutMinutes: num(a, "timeoutMinutes"), maxBudgetUsd: num(a, "maxBudgetUsd") }, now)),
+
+  // the owner's budgets
+  /** Both budgets in dollars, each a positive number or null (not set). */
+  setBudgets: same((s, now, a) => M.setBudgets(s, { buildingUsd: numOrNull(a, "buildingUsd"), maintenanceUsdPerMonth: numOrNull(a, "maintenanceUsdPerMonth") }, now)),
+  /** At the building budget: new work starts again without raising it, until the budget changes or the project goes back to vision. */
+  continuePastBudget: same((s, now) => M.continuePastBudget(s, now)),
   /** `stage` chooses shaping (the vision may be empty) or building (the default; the vision is required). */
   initProject: same((s, now, a) => {
     let stage: ProjectStage | undefined;

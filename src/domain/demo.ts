@@ -29,6 +29,7 @@ import {
   DEFAULT_CHECKS,
   DEFAULT_PR_DELIVERY,
   DEFAULT_RUN_LIMITS,
+  NO_BUDGETS,
   type Actor,
   type Attempt,
   type CheckObs,
@@ -231,7 +232,7 @@ class DemoBuilder {
       "Weekend Trips helps a small group of friends plan a weekend hike together: pick a trail, share the plan, pack the right things, and keep the map working with no signal. It should feel calm and dependable on a phone at a trailhead. Fewer, clearer screens beat more features.";
     const draftReason = "Drafted from the shaping conversation and the trail research note";
     return {
-      version: 18,
+      version: 19,
       seq: 1001,
       project: {
         id: DEMO_PROJECT_ID,
@@ -267,6 +268,7 @@ class DemoBuilder {
         shapingSince: at(4340),
         checks: structuredClone(DEFAULT_CHECKS),
         triage: { askUserBy: "user" },
+        budgets: { ...NO_BUDGETS },
         conventions: { include: true },
         prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
         workerEnvironment: { claude: "isolated", codex: "isolated" },

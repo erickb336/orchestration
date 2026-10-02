@@ -4,7 +4,7 @@
 import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
 import { runSummary } from "./checks";
-import { DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, autoModelDefaults, type Artifact, type Attempt, type CheckResult, type CheckRunRecord, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
+import { DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, NO_BUDGETS, autoModelDefaults, type Artifact, type Attempt, type CheckResult, type CheckRunRecord, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
 
 type SampleOutput = { name: string; summary: string; openFindings?: number };
 
@@ -386,7 +386,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
   run(ex6, "S4", "claude", "claude-sample-large", 1550, "completed", 100, [{ name: "verification", summary: "Round-trip test passes on the repaired change; finding resolved (sample)" }]);
 
   return {
-    version: 18,
+    version: 19,
     seq: 1000,
     project: {
       id: "sample",
@@ -436,6 +436,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       checks: checksOn ? { ...structuredClone(DEFAULT_CHECKS), enabled: true, rev: 1, commands: SAMPLE_COMMANDS.map((c) => ({ ...c, argv: [...c.argv] })) } : structuredClone(DEFAULT_CHECKS),
       ...(checksOn ? { checksHealth: { sandbox: "codex" as const, status: "ready" as const, detail: "Simulated: no command runs and nothing is spawned.", checkedAt: at(60) } } : {}),
       triage: { askUserBy: "user" },
+      budgets: { ...NO_BUDGETS },
       conventions: { include: true },
       workerEnvironment: { claude: "isolated", codex: "isolated" },
       workerConnections: { claude: [], codex: [] },

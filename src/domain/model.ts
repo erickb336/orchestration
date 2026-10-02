@@ -66,3 +66,4 @@ export {
 export { exportMarkdown, importMarkdown } from "./model/markdown";
 export { childFromEarlierFlow, childrenSettled, childTasks, currentChildren, descendants, MAX_CHILD_TASKS } from "./model/fanout";
 export { premiseReason, runPrinciples } from "./model/runPrinciples";
+export { continuePastBudget, setBudgets } from "./model/budget";

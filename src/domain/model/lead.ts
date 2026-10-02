@@ -3,6 +3,7 @@
 
 import { undeliveredTasks } from "../delivery";
 import * as F from "../findings";
+import { budgetStop } from "../spend";
 import {
   type Attempt,
   type Autonomy,
@@ -125,8 +126,9 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
   // decisions no lead run has been shown yet start one: a run that left a decision open does not
   // start another by itself (every later run still lists it, and the user can take it over).
   if (F.decisionsDueForLead(s).length) return "decisions";
-  // While shaping the lead only answers messages; planning is off until the user starts building.
-  if (s.project.stage === "shaping") return null;
+  // While shaping the lead only answers messages; planning is off until the user starts building. At the
+  // building budget planning stops too: a plan is a run that spends, for work that could not start.
+  if (s.project.stage === "shaping" || budgetStop(s)) return null;
   const a = s.project.autonomy;
   if (!a.enabled || !inHours(a.operatingHours, localMinutes)) return null;
   // Deferred lead work does not count toward the open cap, but it cannot pile up without limit either.

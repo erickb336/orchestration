@@ -383,14 +383,14 @@ describe("the format 16 → 17 migration", () => {
     const upgraded = new Store(path);
     opened.push(upgraded);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(18);
-    expect(s.version).toBe(18);
+    expect(STATE_FORMAT).toBe(19);
+    expect(s.version).toBe(19);
     expect(s.notes).toEqual([]);
     expect(s.tasks.map((t) => t.id)).toEqual((doc.tasks as { id: string }[]).map((t) => t.id));
     expect(s.steering).toEqual(doc.steering);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(19);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_16_%'").get()).toBeDefined();
     check.close();
   });

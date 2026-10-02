@@ -26,7 +26,7 @@ const task = (s: State, id: string): Task => {
 
 /** Structural checks any state the service writes must pass. */
 function validate(s: State) {
-  expect(s.version).toBe(18);
+  expect(s.version).toBe(19);
   const catalog = builtInCatalog();
   const ids = new Set<string>();
   for (const t of s.tasks) {

@@ -17,6 +17,7 @@ import {
   autoModelDefaults,
   DEFAULT_CHECKS,
   DEFAULT_PR_DELIVERY,
+  NO_BUDGETS,
 } from "../types";
 import { activeAttempts, draft, event } from "./core";
 import { activeLeadRun } from "./lead";
@@ -106,6 +107,9 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // Checks are off until the user turns them on for this repository, and nothing has been probed for it.
   s.project.checks = structuredClone(DEFAULT_CHECKS);
   delete s.project.checksHealth;
+  // Budgets belong to the project they were set for.
+  s.project.budgets = { ...NO_BUDGETS };
+  delete s.project.budgetContinued;
   // The catalog is machine-level and stays; the default flow is a project choice.
   s.project.defaultFlowId = "change";
   s.decisions = [];

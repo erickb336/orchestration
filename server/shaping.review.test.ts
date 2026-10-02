@@ -143,7 +143,7 @@ describe("migration 12 → 13", () => {
       doc.project.visions[doc.project.visions.length - 1].text = "  ";
     });
     expect(empty.project.stage).toBe("shaping");
-    expect(empty.version).toBe(18);
+    expect(empty.version).toBe(19);
     const sample = reopen((d) => {
       (d as unknown as Doc).project.visions[0].text = "";
     });

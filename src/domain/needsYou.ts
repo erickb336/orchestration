@@ -5,6 +5,7 @@
 import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
+import { budgetStop, fmtUsd, type Spend } from "./spend";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task } from "./types";
 
 export interface NeedsYou {
@@ -90,6 +91,8 @@ const mergeAsked = (pr: PrDelivery) => pr.mergeRequested?.headSha === pr.headSha
 /** Everything that waits for you, in the order the Needs-you card shows it: project-wide problems first, then tasks by priority. */
 export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[] {
   const items: NeedsYouEntry[] = [];
+  const stop = budgetStop(state);
+  if (stop) items.push({ kind: "open", key: "budget", what: `The building budget is reached: ${fmtUsd(stop.spend.usd)} of ${fmtUsd(stop.budgetUsd)}`, detail: budgetDetail(stop.spend), action: "Settings", href: "#/settings/project" });
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
     items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings/project/delivery" });
@@ -119,6 +122,14 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
     } else items.push(open());
   }
   return items;
+}
+
+/** What the budget stop means, and the runs whose cost is unknown (they are not in the total; the first five are named). */
+function budgetDetail(spend: Spend): string {
+  const n = spend.unpriced.length;
+  const named = spend.unpriced.slice(0, 5).map((u) => `${u.runId} (${u.provider} · ${u.model})`).join(", ");
+  const unknown = n ? ` ${n} run${n === 1 ? " has" : "s have"} no price, so ${n === 1 ? "its" : "their"} cost is unknown and not in the total: ${named}${n > 5 ? ` and ${n - 5} more` : ""}.` : "";
+  return `Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.${unknown}`;
 }
 
 /** The two options as one line: "A, Guest link · B, One-time code". */

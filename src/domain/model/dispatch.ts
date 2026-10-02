@@ -3,6 +3,7 @@
 
 import * as C from "../checks";
 import * as F from "../findings";
+import { budgetStop } from "../spend";
 import { type Attempt, type CheckRunRecord, type ProviderId, type State, type Task, DEFAULT_CHECKS } from "../types";
 import { acceptedOutput, consumedInputs } from "./artifacts";
 import {
@@ -79,9 +80,9 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
   settleStrandedNotes(s, now);
   if (s.project.hold) return s;
   const vision = currentVision(s);
-  // While shaping no worker step starts, on any task. Like a deferral (and unlike a hold),
-  // running work finishes and its result is accepted, settled tasks become Done, and nothing is paused.
-  const shaping = s.project.stage === "shaping";
+  // While shaping, and at the building budget, no worker step starts, on any task. Like a deferral (and
+  // unlike a hold), running work finishes and its result is accepted, settled tasks become Done, and nothing is paused.
+  const noNewWork = s.project.stage === "shaping" || budgetStop(s) !== undefined;
   // Final checks steps that repeat an earlier run of the same commit and settings complete in this same transaction.
   const reused: { attemptId: string; outputs: OutputReport[] }[] = [];
   // A stable sort: tasks the lead did not name keep their relative (creation) order.
@@ -104,7 +105,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
     // complete (including steps settled by skipping) still becomes Done and is queued for integration.
     // It is not a hold: the running step's result is accepted by reportCompletion as usual. Below, a
     // conditional step with nothing to do still settles by skipping; only starting work is withheld.
-    const deferred = shaping || !!deferredBy(s, t);
+    const deferred = noNewWork || !!deferredBy(s, t);
     for (const st of [...t.steps]) {
       if (activeAgentAttempts(s).length >= s.project.workerLimit) break;
       if (st.state !== "pending") continue;
@@ -122,7 +123,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       }
       // A Checks step is run by the service, never by a provider. While checks are off for the
       // project it settles by skipping, so the pipeline continues (a settle-by-skip is allowed even
-      // while deferred or shaping, as for a condition with nothing to do).
+      // while deferred, shaping or at the budget, as for a condition with nothing to do).
       if (st.role === "checks") {
         const cfg = s.project.checks ?? DEFAULT_CHECKS;
         if (!C.checksOn(cfg)) {
@@ -150,7 +151,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           event(s, now, "system", "blocked", `${st.id} blocked: ${reason}`, t.id);
           continue;
         }
-        if (deferred) continue; // settling by skipping is allowed while deferred or shaping; starting is not
+        if (deferred) continue; // settling by skipping is allowed while deferred, shaping or at the budget; starting is not
         // The sandbox is not ready: the step waits, labelled; nothing ever falls back to running unsandboxed (Q3).
         if (opts.checksHeld ?? C.checksHeld(s)) continue;
         if (activeServiceAttempts(s).length >= cfg.maxConcurrent) continue;
@@ -211,7 +212,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           continue;
         }
       }
-      if (deferred) continue; // nothing new starts on a deferred task, nor on any task while shaping
+      if (deferred) continue; // nothing new starts on a deferred task, nor on any task while shaping or at the budget
       const r = resolveStep(s, t, st);
       if (r.ok && opts.deferred?.includes(r.selection.provider)) continue;
       if (r.ok && activeAgentAttempts(s).filter((x) => x.snapshot.provider === r.selection.provider).length >= (s.project.providerLimits?.[r.selection.provider] ?? s.project.workerLimit)) continue;

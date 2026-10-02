@@ -613,8 +613,8 @@ describe("R/S. restart and migration", () => {
     const s = upgraded.read().state;
     // Later features raised the format further (shaping to 12, vision documents to 13, …); a format-10 document
     // upgrades through each.
-    expect(STATE_FORMAT).toBe(18);
-    expect(s.version).toBe(18);
+    expect(STATE_FORMAT).toBe(19);
+    expect(s.version).toBe(19);
     expect(s.steering).toEqual([]);
     expect(s.project.steeringMode).toBe("apply");
     expect(s.tasks.find((t) => t.id === "EX-002")!.userSet).toEqual({ priority: "2026-09-01T00:00:00.000Z" });

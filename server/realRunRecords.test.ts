@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { leaksIn, scrubHomePaths } from "../scripts/recordLeaks.mjs";
+import { PRICES } from "../src/domain/spend";
 
 const DIR = resolve(import.meta.dirname, "..", "docs", "real-runs");
 
@@ -55,5 +56,34 @@ describe("real-run records (docs/real-runs)", () => {
 
   it("the fallback scrub turns a home path that an exact replacement missed into ~", () => {
     expect(scrubHomePaths(`{"reason": "cannot read /Users/someo…", "w": "/home/runner/x"}`)).toBe(`{"reason": "cannot read ~", "w": "~/x"}`);
+  });
+});
+
+describe("the pinned prices (src/domain/prices.json) and the real runs", () => {
+  it("every price names the provider's pricing page and the date it was read; a model has one price", () => {
+    const pages = { claude: "https://platform.claude.com/docs/en/about-claude/pricing", codex: "https://developers.openai.com/api/docs/pricing" };
+    for (const p of PRICES) {
+      expect(p.source, p.model).toBe(pages[p.provider]);
+      expect(p.checked, p.model).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(new Date(`${p.checked}T00:00:00Z`).toISOString().slice(0, 10), p.model).toBe(p.checked);
+      expect(p.inputPerMTok > 0 && p.outputPerMTok > 0, p.model).toBe(true);
+    }
+    const keys = PRICES.map((p) => `${p.provider} ${p.model}`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("every model a real run reported has a price, so its tokens are priced, not unknown", () => {
+    const ran = new Set<string>();
+    const walk = (v: unknown): void => {
+      if (Array.isArray(v)) return v.forEach(walk);
+      if (!v || typeof v !== "object") return;
+      const o = v as Record<string, unknown>;
+      if ((o.provider === "claude" || o.provider === "codex") && typeof o.actualModel === "string") ran.add(`${o.provider} ${o.actualModel}`);
+      Object.values(o).forEach(walk);
+    };
+    for (const name of records) walk(JSON.parse(readFileSync(join(DIR, name), "utf8")));
+    expect(ran.size).toBeGreaterThan(0);
+    const priced = new Set(PRICES.map((p) => `${p.provider} ${p.model}`));
+    expect([...ran].filter((m) => !priced.has(m))).toEqual([]);
   });
 });

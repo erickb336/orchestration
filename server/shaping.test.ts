@@ -289,8 +289,8 @@ describe("D. migration and the simulated lead", () => {
     raw.close();
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(18);
-    expect(s.version).toBe(18);
+    expect(STATE_FORMAT).toBe(19);
+    expect(s.version).toBe(19);
     expect(s.project.stage).toBe("building");
     expect(s.visionDrafts).toEqual([]);
     expect(s.tasks.every((t) => t.fromShaping === undefined)).toBe(true);
@@ -298,7 +298,7 @@ describe("D. migration and the simulated lead", () => {
     expect(upgraded.read().state.project.stage).toBe("shaping");
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(19);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_11_%'").get()).toBeDefined();
     check.close();
   });
