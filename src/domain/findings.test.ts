@@ -499,6 +499,28 @@ describe("the PE's route (ORC-029 2d)", () => {
     expect(pastBudget(started, { buildUsd: [0, 1], basis: "x" })).toBeUndefined();
   });
 
+  it("the maintenance estimate keeps a PE call the owner took: $80 stands, the owner takes $50, and $15 more goes to the owner (review finding 4)", () => {
+    const { s: s0, runId } = peCase(3, { buildingUsd: null, maintenanceUsdPerMonth: 100 });
+    // The pre-flight estimated the maintenance at $0 a month (pass 6 makes this estimate).
+    const s = structuredClone(s0);
+    s.project.factoryStarts.push({ at: at(1), by: "user", blueprintRev: 0, visionRev: 1, settings: M.startFactoryRequest(s).settings, openItems: [], estimate: { maintenanceUsdPerMonth: [0, 0], basis: "Nothing runs yet" } });
+    const [d1, d2, d3] = s.decisions;
+    const cost = (lo: number, hi: number) => ({ maintenanceUsdPerMonth: [lo, hi], basis: "The provider's price list" });
+    const out = complete(s, runId, [
+      { id: d1.id, decision: "accept", why: "Keep the hosted index.", cost: cost(60, 80) },
+      { id: d2.id, decision: "accept", why: "Keep the second index.", cost: cost(40, 50) },
+    ]);
+    expect(out.decisions[0]).toMatchObject({ status: "accept", decidedBy: "pe" });
+    expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "up to $50.00 more a month would take the maintenance estimate to $130.00, past the $100.00 budget" } });
+    const taken = F.decideFinding(out, d2.id, "accept", "Worth it.", at(7));
+    const r = M.startLeadRun(taken, { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(8));
+    const next = M.completeLeadRun(r.state, r.runId, { reply: "ok", proposals: [], decisions: [{ id: d3.id, decision: "accept", why: "Small.", cost: cost(10, 15) }] }, at(9), { usage: { costUsd: 0 } });
+    expect(next.decisions[2]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "up to $15.00 more a month would take the maintenance estimate to $145.00, past the $100.00 budget" } });
+    // A call the owner reversed no longer counts.
+    const reversed = F.decideFinding(taken, d2.id, "fix", "Drop the second index instead.", at(10));
+    expect(pastBudget(reversed, { buildUsd: [0, 0], maintenanceUsdPerMonth: [0, 20], basis: "x" })).toBeUndefined();
+  });
+
   it("the owner reverses a PE call as they reverse the lead's, and takes a call past a budget; the PE's call stays on the record", () => {
     const { s, runId, art } = peCase(2, { buildingUsd: 5, maintenanceUsdPerMonth: null });
     const [d1, d2] = s.decisions;

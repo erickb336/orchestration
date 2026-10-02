@@ -131,21 +131,21 @@ export function budgetStop(s: State, prices: readonly ModelPrice[] = PRICES): { 
 export const fmtUsd = (usd: number) => `$${usd.toFixed(2)}`;
 
 /**
- * The project's estimated maintenance, in dollars a month (the high end): the newest factory start's estimate, plus
- * what each PE call that stands adds. 0 while nothing was estimated.
- */
-export function maintenanceEstimate(s: State): number {
-  let usd = s.project.factoryStarts.at(-1)?.estimate?.maintenanceUsdPerMonth?.[1] ?? 0;
-  for (const d of s.decisions) if (d.decidedBy === "pe" && (d.status === "fix" || d.status === "accept" || d.status === "follow-up")) usd += d.pe?.cost?.maintenanceUsdPerMonth?.[1] ?? 0;
-  return usd;
-}
-
-/**
  * The PE calls that stand: decisions whose outcome is the PE's call, whoever took it (the PE within budget, or the
  * owner, who took a call that went to them). A call the owner reversed or reopened does not stand.
  */
 function standingPeCalls(s: State): (FindingDecision & { pe: PeCall })[] {
   return s.decisions.filter((d): d is FindingDecision & { pe: PeCall } => !!d.pe && d.status === d.pe.decision);
+}
+
+/**
+ * The project's estimated maintenance, in dollars a month (the high end): the newest factory start's estimate, plus
+ * what each PE call that stands adds. 0 while nothing was estimated.
+ */
+export function maintenanceEstimate(s: State): number {
+  let usd = s.project.factoryStarts.at(-1)?.estimate?.maintenanceUsdPerMonth?.[1] ?? 0;
+  for (const d of standingPeCalls(s)) usd += d.pe.cost?.maintenanceUsdPerMonth?.[1] ?? 0;
+  return usd;
 }
 
 /**
