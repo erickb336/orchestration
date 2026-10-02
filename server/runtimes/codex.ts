@@ -90,7 +90,7 @@ const CAPABILITIES: CapabilityMap = {
   start: "supported",
   streamEvents: "supported",
   // turn/steer delivers notes; verified against a real model run (ORC-027, docs/real-runs/2026-10-02T02-22-16-079Z.json:
-  // acknowledged live in 1.7 s, and the report did what the note asked).
+  // acknowledged live in 1.7 s, and the report did what the note asked). A note sent before the turn exists is held.
   steer: "supported",
   interrupt: "supported",
   // thread/resume exists; threads are persisted by Codex, but resume is not wired or tested.
@@ -140,8 +140,11 @@ interface Run {
   stderrTail: string;
   done: boolean;
   timers: Set<ReturnType<typeof setTimeout>>;
-  /** Ids of notes whose turn/steer is still unanswered. */
+  /** Ids of notes not yet settled: held until the turn exists, or steered and awaiting the app-server's answer. */
   notes: Set<string>;
+  /** Notes that arrived before the run's turn existed (the scheduler counts a run as running from dispatch,
+   *  while Codex is still starting its thread). Steered as soon as the turn id is known. */
+  heldNotes: { id: string; text: string }[];
 }
 
 /** The Codex CLI this project installs, or `codex` from the PATH. Shared with the check runner. */
@@ -252,7 +255,7 @@ export class CodexAdapter implements RuntimeAdapter {
       child = this.spawnProcess(this.appServerArgs(a), false, { TMPDIR: runTmpDir(a), TMP: runTmpDir(a), TEMP: runTmpDir(a) });
     } catch (e) {
       // Keep the contract asynchronous: register, then fail on the next tick.
-      const placeholder = { a, done: false, timers: new Set(), notes: new Set() } as unknown as Run;
+      const placeholder = { a, done: false, timers: new Set(), notes: new Set(), heldNotes: [] } as unknown as Run;
       this.runs.set(a.attemptId, placeholder);
       setImmediate(() => this.finish(placeholder, { type: "failed", attemptId: a.attemptId, message: this.spawnFailure(e) }));
       return;
@@ -266,6 +269,7 @@ export class CodexAdapter implements RuntimeAdapter {
       done: false,
       timers: new Set(),
       notes: new Set(),
+      heldNotes: [],
     };
     run.rpc = new JsonRpcConnection(child.stdout!, child.stdin!, {
       onNotification: (n) => this.onNotification(run, n),
@@ -338,6 +342,7 @@ export class CodexAdapter implements RuntimeAdapter {
       const turn = await rpc.request("turn/start", turnParams);
       if (run.done) return;
       run.turnId ??= turn.turn.id;
+      this.releaseHeldNotes(run);
     } catch (e) {
       if (run.done) return;
       // A closed connection means the process went away; the exit handler reports it with stderr.
@@ -350,7 +355,9 @@ export class CodexAdapter implements RuntimeAdapter {
    * Steer the run's live turn with the note (`turn/steer`, pinned to this run's thread and turn by
    * `expectedTurnId`, so it can never land in another turn). The app-server's answer is the outcome: a
    * response is delivered, an error (no active turn, turn mismatch, a non-steerable review or compact turn)
-   * is not-delivered with its message. Exactly one "note" event follows, also when the run is not live.
+   * is not-delivered with its message. A note that arrives while Codex is still starting the thread is held
+   * and steered once the turn exists (ORC-027 review); if the run ends first it settles as not-delivered with
+   * the others. Exactly one "note" event follows, also when the run is not live.
    */
   note(attemptId: string, note: { id: string; text: string }): void {
     const settle = (outcome: "delivered" | "not-delivered", reason?: string) =>
@@ -358,13 +365,39 @@ export class CodexAdapter implements RuntimeAdapter {
     const run = this.runs.get(attemptId);
     if (!run || run.done) return void queueMicrotask(() => settle("not-delivered", this.ended.has(attemptId) ? "the run had finished" : "no such run"));
     if (run.interruptRequested) return void queueMicrotask(() => settle("not-delivered", "the run is stopping"));
-    if (!run.threadId || !run.turnId || !run.rpc || run.rpc.isClosed) return void queueMicrotask(() => settle("not-delivered", "the run has no active turn yet"));
+    // A run that failed to spawn has no connection yet; its failure, a tick away, settles the note with the others.
+    if (run.rpc?.isClosed) return void queueMicrotask(() => settle("not-delivered", "the run had finished"));
+    run.notes.add(note.id);
+    if (!run.threadId || !run.turnId) {
+      run.heldNotes.push(note);
+      return;
+    }
+    this.steer(run, note);
+  }
+
+  /** Steer every note held while the turn did not exist yet, now that it does. */
+  private releaseHeldNotes(run: Run) {
+    if (!run.turnId || run.done) return;
+    for (const note of run.heldNotes.splice(0)) {
+      if (!run.notes.has(note.id)) continue; // settled already
+      if (run.interruptRequested) {
+        run.notes.delete(note.id);
+        this.emit({ type: "note", attemptId: run.a.attemptId, noteId: note.id, outcome: "not-delivered", reason: "the run is stopping" });
+        continue;
+      }
+      this.steer(run, note);
+    }
+  }
+
+  private steer(run: Run, note: { id: string; text: string }) {
+    const attemptId = run.a.attemptId;
+    const settle = (outcome: "delivered" | "not-delivered", reason?: string) =>
+      this.emit({ type: "note", attemptId, noteId: note.id, outcome, ...(reason !== undefined && { reason }) });
     const params: TurnSteerParams = {
-      threadId: run.threadId,
-      expectedTurnId: run.turnId,
+      threadId: run.threadId!,
+      expectedTurnId: run.turnId!,
       input: [{ type: "text", text: note.text, text_elements: [] }],
     };
-    run.notes.add(note.id);
     run.rpc.request("turn/steer", params).then(
       (res) => {
         if (!run.notes.delete(note.id)) return; // settled already (the run ended first)
@@ -475,6 +508,7 @@ export class CodexAdapter implements RuntimeAdapter {
     switch (n.method) {
       case "turn/started":
         if (!run.threadId || n.params.threadId === run.threadId) run.turnId ??= n.params.turn.id;
+        this.releaseHeldNotes(run);
         return;
       case "item/completed": {
         if (run.turnId && n.params.turnId !== run.turnId) return;

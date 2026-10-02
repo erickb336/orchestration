@@ -59,7 +59,7 @@ In subscription mode no API key or cloud setting is passed to agents.
 - each gets a note while it runs;
 - both tasks then finish.
 
-It takes under a minute and about $0.15 of Claude usage. It reads the same environment variables as above, and prints only whether each provider is ready, never a credential.
+It takes under a minute and about $0.14 of Claude usage. It reads the same environment variables as above, and prints only whether each provider is ready, never a credential.
 
 **What it leaves:**
 

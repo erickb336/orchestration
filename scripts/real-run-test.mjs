@@ -24,8 +24,9 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, hostname, userInfo } from "node:os";
 import { join, resolve } from "node:path";
+import { leaksIn, scrubHomePaths } from "./recordLeaks.mjs";
 
 const FAKE = process.argv.includes("--fake");
 /** PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the test. */
@@ -50,7 +51,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** Which Orchestrator code ran: the commit, and whether the checkout had uncommitted changes. */
 function orchestratorVersion() {
-  const at = (...args) => execFileSync("git", ["-C", ROOT, ...args], { encoding: "utf8" }).trim();
+  const at = (...args) => execFileSync("git", ["-C", ROOT, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   try {
     return { commit: at("rev-parse", "--short=12", "HEAD"), uncommittedChanges: at("status", "--porcelain", "--untracked-files=no") !== "" };
   } catch {
@@ -241,7 +242,15 @@ async function main() {
       check(`${label}: a note reached the running worker and its runtime acknowledged it`, false, "the first step finished before a note could be sent");
       continue;
     }
-    const { result } = await cmd("sendNote", { taskId: id, stepId: "S1", text: NOTE });
+    // The step can finish between the poll above and this command, which then refuses the note: a failed check,
+    // not an aborted scenario.
+    let result;
+    try {
+      ({ result } = await cmd("sendNote", { taskId: id, stepId: "S1", text: NOTE }));
+    } catch (e) {
+      check(`${label}: a note reached the running worker and its runtime acknowledged it`, false, `the note was refused: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
     sent.push({ label, id, noteId: result.noteId, run: run.id });
     record(`${label}: note sent`, { note: result.noteId, run: run.id });
   }
@@ -249,7 +258,9 @@ async function main() {
     const { v: note } = await until(`${n.label} note settled`, (x) => {
       const found = x.state.notes.find((y) => y.id === n.noteId);
       return found && (found.status === "delivered" || found.status === "not-delivered") ? found : null;
-    }, 120000);
+      // A note settles by the end of its run at the latest: the 5-minute run limit, plus Claude's 90 s wait for an
+      // acknowledgment after the turn, plus a margin.
+    }, 7 * 60000);
     // From the service's own timestamps: sent (handed to the runtime) to settled (acknowledged or refused).
     const settledAfterMs = note.sentAt && note.settledAt ? Date.parse(note.settledAt) - Date.parse(note.sentAt) : null;
     record(`${n.label}: note settled`, { note: note.id, status: note.status, via: note.via ?? null, run: note.attemptId ?? null, reason: note.reason ?? null, settledAfterMs });
@@ -287,7 +298,15 @@ async function main() {
  *  and every local path becomes <work> (this run's throwaway folder) or ~ (the home directory). */
 function publicRecord(e) {
   const { serviceLog: _omitted, ...rest } = e;
-  return JSON.stringify(rest, null, 2).replaceAll(work, "<work>").replaceAll(ROOT, "<orchestrator>").replaceAll(homedir(), "~");
+  return scrubHomePaths(JSON.stringify(rest, null, 2).replaceAll(work, "<work>").replaceAll(ROOT, "<orchestrator>").replaceAll(homedir(), "~"));
+}
+
+function gitEmail() {
+  try {
+    return execFileSync("git", ["config", "user.email"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
 }
 
 function taskLabel(s, id) {
@@ -314,13 +333,26 @@ try {
   writeFileSync(file, JSON.stringify(evidence, null, 2));
   console.log(`\n${evidence.ok ? "PASSED" : "NOT PASSED"}: evidence written to ${file}`);
   console.log(`Throwaway repository and worktrees kept for inspection in ${work}`);
-  // A real run that reached its agents leaves a record for the repository, passed or not.
+  // A real run that reached its agents leaves a record for the repository, passed or not. It is checked before it
+  // is written: one that still holds a path, a name or a key-like string stays in evidence/ for a person to fix.
   if (!FAKE && evidence.steps.some((st) => st.name === "tasks created")) {
-    const records = join(ROOT, "docs", "real-runs");
-    mkdirSync(records, { recursive: true });
-    const rec = join(records, `${evidence.startedAt.replace(/[:.]/g, "-")}.json`);
-    writeFileSync(rec, publicRecord(evidence) + "\n");
-    console.log(`Record for the repository (no local paths, no service log): ${rec}`);
+    const text = publicRecord(evidence) + "\n";
+    const name = `${evidence.startedAt.replace(/[:.]/g, "-")}.json`;
+    const leaks = leaksIn(text, [
+      { what: "your user name", value: userInfo().username },
+      { what: "this computer's name", value: hostname() },
+      { what: "your git email", value: gitEmail() },
+    ]);
+    if (leaks.length) {
+      const held = join(dir, `record-NOT-COMMITTED-${name}`);
+      writeFileSync(held, text);
+      console.log(`The record was NOT written to docs/real-runs: it contains ${leaks.join(", ")}. Fix it by hand: ${held}`);
+    } else {
+      const records = join(ROOT, "docs", "real-runs");
+      mkdirSync(records, { recursive: true });
+      writeFileSync(join(records, name), text);
+      console.log(`Record for the repository (no local paths, no service log): ${join(records, name)}`);
+    }
   }
   process.exit(exitCode || (evidence.ok ? 0 : 1));
 }
