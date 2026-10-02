@@ -78,7 +78,7 @@ At most three implementers at once, on disjoint files; the lead integrates. Each
   - `Content-Security-Policy: default-src 'self'; connect-src 'none'; form-action 'none'; frame-ancestors http://127.0.0.1:<appPort>`;
   - `X-Content-Type-Options: nosniff`;
   - no cookies.
-- **The app frames prototypes with `sandbox="allow-scripts"`,** never `allow-same-origin`. Pins come from a small script the service injects. It posts only `{type: "pin", x, y, selector}` to the parent, and the app accepts only those messages, only from that frame.
+- **The app frames prototypes with `sandbox="allow-scripts"`,** never `allow-same-origin`. Pins come from a small script the service injects. It posts only `{type: "orchestrator-pin", x, y, selector}` to the parent, and the app accepts only those messages, only from that frame.
 - **Escape tests** use a hostile prototype. It tries:
   - `fetch` to the app's API and to the internet;
   - top navigation;
@@ -94,6 +94,18 @@ At most three implementers at once, on disjoint files; the lead integrates. Each
   - mobile 390×844 at 3×.
 
   The PNGs are stored with the artifact version, for history and for the PE in pass 4. If no Chrome is found, there are no screenshots, and the UI says so.
+
+### 3b as built (67bf54e..5c38b09; merged in 5cea4db)
+
+- **The listener** runs on the app port + 1 (`ORCHESTRATION_PROTOTYPE_PORT` overrides it). It is wired in `server/app.ts`. A busy port is logged, and the service keeps running.
+- **The pin script** is served at `/__orchestrator/pin.js`. `acceptPinMessage` is in `src/runtime/prototype.ts`.
+- **Screenshots:** `captureShots` never throws, and is skipped without Chrome.
+- **`*.localhost`** resolves in Chrome 154, and in Safari's engine (checked through WKWebView on Safari 27). No fallback is needed.
+- **An escape beyond the list:** a sandboxed frame can still navigate itself anywhere, carrying data in the query string. The app's pages now send `frame-src http://*.localhost:<prototype port>`. Kept by the lead.
+- **The lead's decision on the policy:**
+  - Agents write inline styles and scripts by default, and the strict policy blocked them. The policy now **allows inline styles and inline scripts** (`'unsafe-inline'`).
+  - The guards that matter are unchanged: `connect-src 'none'`, `form-action 'none'`, `default-src 'self'`, the sandbox without same-origin, and the app's `frame-src`.
+  - **ES modules stay unsupported:** in an opaque origin they need a CORS header, which would let any website read local prototypes. The designer's brief says plain scripts, not modules. A built app must emit classic scripts (e.g. Vite with `format: 'iife'`). The import refuses `type="module"` with that reason.
 
 ## 3c. Terminal demos and TUIs
 
