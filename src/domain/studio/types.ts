@@ -3,7 +3,7 @@
 // In Vision the lead runs rounds: a designer makes artifacts (screens, terminal demos, contracts, flow maps), the PE
 // judges each option's feasibility before the owner sees it, and the owner marks, pins and picks. What the owner
 // approves becomes the blueprint, versioned, which the factory builds from; a blueprint revision after the factory
-// started is a change order. The rules live in studio.ts (rounds, artifacts, feedback, PE review, probes) and
+// started that touches a task is a change order. The rules live in studio.ts (rounds, artifacts, feedback, PE review, probes) and
 // blueprint.ts (approval, open items, change orders, task specs' references). The containers exist from state
 // format 19.
 
@@ -160,7 +160,7 @@ export interface BlueprintRevision {
 /**
  * A blueprint revision made while building, with the tasks whose current spec cites a changed item. Who acts on it
  * first follows the project's `changeOrders` setting: the lead updates the tasks, or it waits for the owner (Needs
- * you). One change order per revision, so `rev` identifies it.
+ * you). At most one change order per revision, so `rev` identifies it; a revision that touches no task makes none.
  */
 export interface ChangeOrder {
   rev: number;

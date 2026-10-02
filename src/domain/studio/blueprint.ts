@@ -60,7 +60,7 @@ function upsert(items: BlueprintItem[], item: BlueprintItem): BlueprintItem[] {
   return items.some((i) => i.id === item.id) ? items.map((i) => (i.id === item.id ? item : i)) : [...items, item];
 }
 
-/** Append a revision on a draft state; while building, it is also a change order. */
+/** Append a revision on a draft state; while building, one that touches a task is also a change order. */
 function pushRevision(s: State, items: BlueprintItem[], reason: string, now: string) {
   const before = blueprintItems(s);
   const rev = blueprintRev(s) + 1;
@@ -70,6 +70,8 @@ function pushRevision(s: State, items: BlueprintItem[], reason: string, now: str
   const was = new Map(before.map((i) => [i.id, JSON.stringify(i)]));
   const changedItems = items.filter((i) => was.get(i.id) !== JSON.stringify(i)).map((i) => i.id);
   const affectedTasks = s.tasks.filter((t) => t.lifecycle !== "cancelled" && (currentSpec(t).content.blueprintRefs ?? []).some((r) => changedItems.includes(r))).map((t) => t.id);
+  // Nothing to update: a change order would wait for an update that never comes, so the revision is only recorded.
+  if (!affectedTasks.length) return void event(s, now, "system", "vision", `No change order for blueprint r${rev}: no task cites the changed items`);
   const handler = s.project.changeOrders;
   // The lead's updates for it wait for PE review when the project has it on (2e).
   const peReview = newWorkReview(s);
@@ -79,7 +81,7 @@ function pushRevision(s: State, items: BlueprintItem[], reason: string, now: str
     now,
     "system",
     "vision",
-    `Change order for blueprint r${rev}: ${affectedTasks.length ? `it touches ${affectedTasks.join(", ")}` : "no task cites the changed items"}; ${handler === "user" ? "it waits for you before the lead updates tasks" : "the lead updates the affected tasks"}${peReview ? ", once the PE agrees with the updates" : ""}`,
+    `Change order for blueprint r${rev}: it touches ${affectedTasks.join(", ")}; ${handler === "user" ? "it waits for you before the lead updates tasks" : "the lead updates the affected tasks"}${peReview ? ", once the PE agrees with the updates" : ""}`,
   );
 }
 

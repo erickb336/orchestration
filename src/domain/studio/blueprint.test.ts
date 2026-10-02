@@ -216,6 +216,17 @@ describe("change orders", () => {
     expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order"))).toEqual([]);
   });
 
+  it("a revision while building that touches no task is no change order: only an event, and nothing waits under Needs you (review finding 8)", () => {
+    const { s: shaping, search, tasks } = planned();
+    let s = startFactoryAsOwner(shaping, at(9), MANUAL);
+    s = runCommand(runCommand(s, "setChangeOrders", { who: "user" }, at(9)).state, "cancelTask", { taskId: tasks[0] }, at(9)).state;
+    s = reviseSearch(s, search, 10);
+    const rev = B.blueprintRev(s);
+    expect(s.blueprint.changeOrders).toEqual([]);
+    expect(s.events.at(-1)).toMatchObject({ actor: "system", kind: "vision", message: `No change order for blueprint r${rev}: no task cites the changed items` });
+    expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order"))).toEqual([]);
+  });
+
   it("with change orders set to you, it waits under Needs you; an open one keeps the handler it was made with", () => {
     const { s: shaping, search, tasks } = planned();
     let s = startFactoryAsOwner(shaping, at(9), MANUAL);
