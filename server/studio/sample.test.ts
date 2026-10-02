@@ -1,6 +1,6 @@
 // The fake runtime's PE and designer in the studio loop (ORC-029 pass 4): the simulated PE asks for one change on an
-// artifact's first version, and the simulated designer revises the variants its brief names, so the demo and the
-// tests show the loop without an agent. Everything they write says it is simulated.
+// artifact's first version and raises one open case, and the simulated designer revises the variants its brief names,
+// so the demo and the tests show the loop without an agent. Everything they write says it is simulated.
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,24 +21,32 @@ function write(files: Readonly<Record<string, string>>) {
     writeFileSync(join(dir, p), text);
   }
 }
-/** The verdicts the simulated PE gives a version with these variants. */
-function verdicts(version: number, variants: string[]) {
+/** The verdicts the simulated PE gives a version with these variants, given its envelope. */
+function verdicts(version: number, variants: string[], prompt = "") {
   writeFileSync(join(dir, "manifest.json"), JSON.stringify({ artifactId: "sa-1", version, variants: variants.map((id) => ({ id, label: id, entry: `${id}/index.html` })) }));
-  const answer = fakePeAnswer(dir);
+  const answer = fakePeAnswer(dir, prompt);
   if (!answer.ok) throw new Error(answer.error);
   const block = /```json\n([\s\S]*?)\n```/.exec(answer.text)![1];
-  return (JSON.parse(block) as { verdicts: { variant?: string; verdict: string; reasons: string; change?: string }[] }).verdicts;
+  return (JSON.parse(block) as { verdicts: { variant?: string; verdict: string; reasons: string; change?: string; earlier?: unknown; openCases?: unknown }[] }).verdicts;
 }
 
 describe("the simulated PE", () => {
-  it("asks for a change to the second variant of an artifact's first version, and agrees with every later version; every reason says it is simulated", () => {
+  it("asks for a change to the second variant of an artifact's first version, with one open case, and agrees with every later version, each earlier ask met; every reason says it is simulated", () => {
     const first = verdicts(1, ["a", "b"]);
     expect(first.map((v) => [v.variant, v.verdict])).toEqual([
       ["a", "feasible"],
       ["b", "feasible-if"],
     ]);
     expect(first[1].change).toBe("Simulated: a stand-in change, which the fake designer marks on this variant in a revision.");
+    expect(first[1].openCases).toEqual([{ text: "Simulated: when a friend drops out after the cabin is booked, who pays their share?", why: "Simulated: a stand-in question, so the demo shows an open case going to the owner through the lead." }]);
+    expect(first[0].openCases).toBeUndefined();
     expect(verdicts(2, ["a", "b"]).map((v) => v.verdict)).toEqual(["feasible", "feasible"]);
+    // On a later pass it reads its earlier asks from the envelope, as pe.ts lists them, and finds each met.
+    const envelope = "## Your earlier asks\n\n- `pev-7` on `b` (B · Day by day), pass 1, feasible if changed. The change: Simulated.\n- `pev-9` on the whole artifact, pass 1, not feasible. Your reasons: Simulated.\n";
+    expect(verdicts(2, ["a", "b"], envelope).map((v) => [v.variant, v.earlier])).toEqual([
+      ["a", [{ ask: "pev-9", met: true }]],
+      ["b", [{ ask: "pev-7", met: true }, { ask: "pev-9", met: true }]],
+    ]);
     // A single take has nothing to choose between: it agrees.
     expect(verdicts(1, ["a"]).map((v) => v.verdict)).toEqual(["feasible"]);
     for (const v of [...first, ...verdicts(2, ["a", "b"])]) expect(v.reasons).toMatch(/^Simulated: the fake runtime's PE, not an agent\./);

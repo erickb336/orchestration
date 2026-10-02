@@ -1031,6 +1031,7 @@ ${open.slice(0, 40).map((d) => decisionLines(state, d)).join("\n")}${open.length
 const STUDIO_ARTIFACT_ROWS = 12;
 const STUDIO_FEEDBACK_ROWS = 10;
 const STUDIO_PINS = 3;
+const STUDIO_OPEN_CASES = 10;
 const EARLIER_ROUNDS = 3;
 const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what exists", experience: "the experience", data: "the data", flows: "the flows" };
 
@@ -1053,6 +1054,20 @@ function peLine(state: State, a: StudioArtifact): string {
     case "ended":
       return `PE review ended ${r.pass ? `after pass ${r.pass}` : "with no pass"} (${S.LOOP_END_WORDS[r.ended]}${r.note ? `: ${truncate(r.note, 200)}` : ""}), shown to the user${said(r)}`;
   }
+}
+
+/**
+ * The PE's open cases in the open round, with the artifact and variant each is on: product questions for the user,
+ * which the lead asks about (the second real trial: a designer that answered them grew the design on each pass).
+ */
+function openCaseLines(state: State, artifacts: StudioArtifact[]): string[] {
+  const all = artifacts.flatMap((a) => S.openCasesOf(state, a).map((c) => ({ a, c })));
+  if (!all.length) return [];
+  return [
+    `  Open cases the PE raised in this round (${all.length}): product questions for the user, never changes for the designer.`,
+    ...all.slice(0, STUDIO_OPEN_CASES).map(({ a, c }) => `  - ${a.id} "${truncate(a.title, 40)}"${c.variant ? ` ${c.variant}` : ""}, PE pass ${c.pass}: ${truncate(c.text, 200)}${c.why ? ` Why: ${truncate(c.why, 150)}` : ""}`),
+    ...(all.length > STUDIO_OPEN_CASES ? [`  - and ${all.length - STUDIO_OPEN_CASES} more, in the studio`] : []),
+  ];
 }
 
 /** One artifact of the open round: id, title, version, kind, variants, devices, "as is" provenance, and PE review. */
@@ -1117,6 +1132,7 @@ export function studioBriefSection(state: State, repo?: RepoGlance): string {
         ...(busy ? [`  It cannot close yet: ${busy}.`] : []),
         ...(openRows.length ? openRows.slice(0, STUDIO_ARTIFACT_ROWS).map((a) => studioArtifactLine(state, a)) : ["  - No artifacts yet."]),
         ...(openRows.length > STUDIO_ARTIFACT_ROWS ? [`  - and ${openRows.length - STUDIO_ARTIFACT_ROWS} more, in the studio`] : []),
+        ...openCaseLines(state, openRows),
         ...(open.lead?.questions.length ? [`  Your questions in this round: ${open.lead.questions.map((q, i) => `${i + 1}. ${truncate(q.text, 160)}`).join(" ")}`] : []),
       ].join("\n") + runLine
     : `- No round is open.${runLine}`;
@@ -1153,6 +1169,7 @@ Rules for "studio":
 - One round is open at a time: "closeRound" the open one before "openRound" opens the next. A round closes only once its studio runs have ended and the PE's review of each of its versions has ended; until then the service refuses "closeRound" and says why.
 - "designerRuns": at most ${MAX_DESIGNER_RUNS} per reply. Brief the designer on what to make and why, from the vision, the documents and the user's marks. Ask for 2–${MAX_RUN_VARIANTS} variants only where a real choice is open, otherwise 1. Devices come from the scope; documents (${DOCUMENT_KINDS.join(", ")}) have none. "revises" makes an artifact's next version, carrying the user's open pins.
 - "questions": at most 5, about this round's choices (a variant, an undecided case), each with why and up to 4 options; they show beside the round. Keep "questions" outside "studio" for the vision's areas, and never ask one question in both.
+- The PE's open cases are product questions: a missing feature, an undecided edge case, a rule nobody set. The user decides them. Ask the user about them in "questions" (group related ones), or settle them with the user in the flows round. Never pass them to the designer as changes.
 `;
 }
 
