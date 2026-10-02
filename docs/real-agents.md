@@ -60,7 +60,7 @@ In subscription mode no API key or cloud setting is passed to agents.
 - each task's review findings are revised before the lead writes its spec (if a review asks for a decision, the test answers "fix" and records it);
 - both tasks then finish.
 
-The latest run took about 100 seconds and $0.17 of Claude usage; each extra review round adds about $0.03. It reads the same environment variables as above, and prints only whether each provider is ready, never a credential.
+The latest run took 88 seconds and about $0.19 of Claude usage; each extra review round adds about $0.03. It reads the same environment variables as above, and prints only whether each provider is ready, never a credential.
 
 **What it leaves:**
 

@@ -117,7 +117,7 @@ npm test
 npm run build
 npm run capture    # retake the README images from the demo (needs Chrome and ffmpeg)
 npm run test:integration   # the end-to-end scenario on simulated agents (about 90 s; CI runs it)
-npm run test:real          # the same scenario with real Claude and Codex agents (your credentials; about $0.17 last time)
+npm run test:real          # the same scenario with real Claude and Codex agents (your credentials; about $0.19 last time)
 ```
 
 **Where things are:**
@@ -174,16 +174,16 @@ A personal tool under active development. It was built in milestones ORC-001 to 
 | [ORC-027](docs/tasks/ORC-027.md) The real-run test, committed | The end-to-end scenario runs in CI on simulated agents; `npm run test:real` runs it with real ones and leaves a record in [`docs/real-runs/`](docs/real-runs/) | Done |
 | [ORC-028](docs/tasks/ORC-028.md) Fixes from the real run | Investigation revises its report while its review finds something, and a rule keeps every flow from dropping review findings | Done; **verified with real models** |
 
-**Verified with real models: the core run, notes and review repair, not every feature.** The scenario behind `npm run test:real` has run three times with real agents, all on 2026-10-01, and grew with each fix; every run's record is in [`docs/real-runs/`](docs/real-runs/). The latest (15 of 15 checks) showed:
+**Verified with real models: the core run, notes and review repair, not every feature.** The scenario behind `npm run test:real` has run four times with real agents, all on 2026-10-01, and grew with each fix; every run's record is in [`docs/real-runs/`](docs/real-runs/). The latest (15 of 15 checks, from a clean commit) showed:
 
 - a Codex agent (gpt-6.1-sol) and a Claude agent (Haiku 4.5) worked at the same time, each in its own worktree;
 - Pause showed "Pausing" until each runtime confirmed the stop (1.5 to 2 seconds), and Resume started a fresh attempt;
 - a project-wide pause reached both;
-- **a note sent the moment each agent was dispatched**, before either had started, was held and then acknowledged by both runtimes (Codex in 1.8 seconds, Claude in 8.8);
-- **the Claude task's review found two problems in its report; the revise step fixed them** (on Codex), and the second review was clean. In the run before ([ORC-028](docs/tasks/ORC-028.md)), the same kind of finding was left open and the task still read Done;
+- **a note sent as soon as each agent was dispatched was acknowledged by both runtimes** (Codex in 1.8 seconds, Claude in 5.8);
+- **the Claude task's review found an error in its report** (a wrong line count, given in answer to the note) and a gap. The revise step fixed both, on Codex, and the second review was clean. Before [ORC-028](docs/tasks/ORC-028.md), such findings were left open and the task still read Done;
 - both tasks finished with the lead's spec, and the managed repository's `main` was untouched.
 
-Each run takes under two minutes and under $0.20 of Claude usage. **Not yet run with real models:** pull-request delivery, conversations with the lead (and notes the lead sends), and whether the principles change what agents do. Every feature is also tested against simulated and scripted Claude and Codex runtimes, and CI runs the same scenario on simulated agents.
+It took 88 seconds and about $0.19 of Claude usage. **Not yet run with real models:** pull-request delivery, conversations with the lead (and notes the lead sends), whether the principles change what agents do, and a Codex note that arrives before its turn starts (held by the adapter; covered by tests, but no real run has hit that moment yet). Every feature is also tested against simulated and scripted Claude and Codex runtimes, and CI runs the same scenario on simulated agents.
 
 ## License
 
