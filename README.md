@@ -129,11 +129,46 @@ npm run capture    # retake the README images from the demo (needs Chrome and ff
 
 ## Status
 
-A personal tool under active development, built in milestones ORC-001 to ORC-026, each with a spec. ORC-015 and ORC-018 to ORC-020 were dropped; ORC-023 is planned.
+A personal tool under active development. It was built in milestones ORC-001 to ORC-026, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-one are done, four were dropped, and one is planned. Later milestones sometimes replaced earlier ones; the last column says what survives.
 
-**Recent:** notes to a running agent ([ORC-022](docs/tasks/ORC-022.md)), the working principles ([ORC-024](docs/tasks/ORC-024.md), [ORC-026](docs/tasks/ORC-026.md)), and the UI audit and rebuild ([ORC-025](docs/tasks/ORC-025.md)).
+**The foundation** (the five milestones in the [project spec](docs/PROJECT_SPEC.md), plus pipelines):
 
-**Next:** [ORC-023](docs/tasks/ORC-023.md), Orchestrator inside Claude Code, is planned.
+| Milestone | What it added | Today |
+| --- | --- | --- |
+| [ORC-001](docs/tasks/ORC-001.md) Interface prototype | A board of tasks, a task page, and a spec editor where each edit is a new revision | Done; rebuilt in ORC-025 |
+| [ORC-002](docs/tasks/ORC-002.md) Step pipelines | Tasks as steps that pass named outputs to later steps, from templates | Done; editing pipelines in the UI was replaced by files (ORC-016, then ORC-021) |
+| [ORC-003](docs/tasks/ORC-003.md) Durable service | A local service that owns state in SQLite: every change a checked command, one scheduler, recovery after a restart | Done |
+| [ORC-004](docs/tasks/ORC-004.md) Claude and Codex adapters | Real agents in isolated git worktrees, with pause and resume that wait for the agent to confirm | Done; **verified with real models** (below) |
+| [ORC-005](docs/tasks/ORC-005.md) The team loop | A lead agent on either provider that plans tasks from the vision; an integration queue; limits on what it does alone | Done |
+| [ORC-006](docs/tasks/ORC-006.md) Ready to publish | Install steps, a first-run guide, notifications, worktree cleanup, import and export, CI | Done |
+
+**Scale and steering:**
+
+| Milestone | What it added | Today |
+| --- | --- | --- |
+| [ORC-007](docs/tasks/ORC-007.md) Fan-out | A step can break work into child tasks that run in parallel; a step can run several agents | Done; child tasks live on in the Goal flow. Several agents per step and best-of were removed in ORC-025 |
+| [ORC-008](docs/tasks/ORC-008.md) Pull-request delivery | Delivery as pull requests that you merge or that merge after review, and a queue of results to look at later | Done; run against a real GitHub repository with scripted agents |
+| [ORC-009](docs/tasks/ORC-009.md) Steering by conversation | Message the lead to change the focus, priorities or plans, with Undo | Done |
+| [ORC-010](docs/tasks/ORC-010.md) Your own Claude subscription | Opt-in: Claude agents run on your own subscription token instead of an API key | Done; used in the real run |
+| [ORC-011](docs/tasks/ORC-011.md) Guided setup | `npm run setup` once, then `npm start` | Done |
+| [ORC-012](docs/tasks/ORC-012.md) Shape the vision first | The lead asks questions and drafts the vision with you before anything runs | Done |
+| [ORC-013](docs/tasks/ORC-013.md) Quality gates | The service runs your checks in a sandbox; each review finding is triaged; review coverage is recorded | Done |
+| [ORC-014](docs/tasks/ORC-014.md) Vision documents | Attach files or a folder to the vision | Done |
+| ORC-015 Phone access | Reaching the app from a phone | Dropped |
+| [ORC-016](docs/tasks/ORC-016.md) Patterns | Pipelines as JSON pattern files instead of a UI editor | Done; simplified into six flows by ORC-021 |
+| [ORC-017](docs/tasks/ORC-017.md) A demo worth showing | The sample story, the first-run tour and the README media | Done; story and tour redone in ORC-025 |
+| ORC-018 to ORC-020 | Comparing patterns, benchmark runs, rotating patterns automatically | Dropped to keep the tool simple (ORC-018 was built, then closed unmerged) |
+
+**Simpler and sharper:**
+
+| Milestone | What it added | Today |
+| --- | --- | --- |
+| [ORC-021](docs/tasks/ORC-021.md) Flows | Six plain flows in place of the pattern catalog, and a security review beside every code review | Done |
+| [ORC-022](docs/tasks/ORC-022.md) Notes to a running agent | Through the lead or directly; a note shows Delivered once the runtime acknowledges it | Done |
+| [ORC-023](docs/tasks/ORC-023.md) Orchestrator inside Claude Code | A Claude Code plugin to talk to the lead of the repository you are in, also from your phone through Remote Control | **Planned, next** |
+| [ORC-024](docs/tasks/ORC-024.md) Working principles | Fifteen principles adapted from pstack, given to each step's agent where they fit | Done |
+| [ORC-025](docs/tasks/ORC-025.md) UI audit and rebuild | One dark theme, a component kit, every screen rebuilt, a new demo | Done |
+| [ORC-026](docs/tasks/ORC-026.md) Write for the reader | A sixteenth principle, our own, given to every agent and the lead | Done |
 
 **Verified with real models: the core run, not every feature.** On 2026-10-01, `node scripts/real-run-test.mjs` passed with real agents:
 
