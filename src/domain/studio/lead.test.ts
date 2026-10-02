@@ -116,6 +116,14 @@ describe("the lead's studio block", () => {
     expect(s.studio.runs.at(-1)!.brief).toMatch(/The lead asks for: contract; one take; documents, with no devices\.$/);
   });
 
+  it("never revises what the owner brought: the designer makes a new artifact from it", () => {
+    const zero = openRound(fresh(), "material", at(1));
+    const sketch = addScreen(zero.state, 0, at(2), { kind: "material", title: "Group page sketch", variants: [], devices: [], madeBy: { role: "user" } });
+    const s = reply(run(sketch.state, "closeRound", { round: 0 }, at(3)).state, { studio: { openRound: { focus: "experience", summary: "From the sketch." }, designerRuns: [{ brief: "Redo the sketch.", variants: 1, revises: sketch.id }] } });
+    expect(s.studio.runs).toEqual([]);
+    expect(notes(s)).toEqual(["Studio: designer run #1 not asked for: Group page sketch is what the user brought; the designer makes a new artifact from it instead"]);
+  });
+
   it("runs only from a reply to the owner, in Vision; with no round open it asks for nothing", () => {
     const block = { studio: { openRound: { focus: "experience", summary: "x" }, designerRuns: [SCREEN_RUN] } };
     const building = reply(startFactoryAsOwner(fresh(), at(1)), block);
