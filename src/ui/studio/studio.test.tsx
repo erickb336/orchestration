@@ -1,0 +1,294 @@
+// The studio's artifact viewer (ORC-029 pass 3d), `#/vision`. Rendered through react-dom/server over a fake store,
+// as home.test.tsx does (there is no DOM test environment here); what the screen does on a click or a message is
+// checked through the functions it calls (studioView.ts), against the real command table.
+
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import type { ServiceInfo } from "../../api";
+import { runCommand } from "../../domain/commands";
+import * as M from "../../domain/model";
+import { buildSeed } from "../../domain/seed";
+import * as R from "../../domain/studio/runs";
+import * as S from "../../domain/studio/studio";
+import { DESIGNER, addScreen, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
+import type { State } from "../../domain/types";
+import { ConfirmProvider } from "../kit";
+import { Overview } from "../Overview";
+import { parseRoute } from "../route";
+import { StoreContext, type ServiceStore } from "../store";
+import { frameSize, readCast, renderAnsi } from "./ansi";
+import { TerminalText } from "./Frames";
+import { Studio } from "./Studio";
+import { addPin, changedDrafts, deviceOptions, draftFrom, draftKey, pinFromMessage, recordingOf, sendBlocker, sendDrafts, variantEntry, type Draft } from "./studioView";
+
+const T0 = Date.parse("2026-10-02T12:00:00Z");
+const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
+const PORT = 5320;
+
+const service = (over: Partial<ServiceInfo> = {}): ServiceInfo => ({
+  startedAt: at(0),
+  scheduler: "active",
+  runtime: "fake",
+  sim: { auto: false, ackMode: "normal" },
+  dbPath: "/tmp/orchestration-test.db",
+  providers: { claude: { label: "Claude", capabilities: {} as never }, codex: { label: "Codex", capabilities: {} as never } },
+  prototypePort: PORT,
+  ...over,
+});
+
+function store(state: State, svc: ServiceInfo = service()): ServiceStore {
+  const noop = async () => ({ ok: true as const });
+  return { state, version: 1, service: svc, status: "online", disabled: false, send: noop, notice: null, setNotice: () => {} } as unknown as ServiceStore;
+}
+
+const render = (node: React.ReactElement, state: State, svc?: ServiceInfo) =>
+  renderToStaticMarkup(
+    <ConfirmProvider>
+      <StoreContext.Provider value={store(state, svc)}>{node}</StoreContext.Provider>
+    </ConfirmProvider>,
+  );
+
+/** A project in Vision (desktop and mobile), as one starts. */
+const vision = () => M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Weekend Trips", repoPath: "/tmp/trips", vision: "Plan weekend trips with friends.", focus: "" }, at(0));
+
+/** The fake designer's sample as the service imports it: Trip plan in two variants, desktop and mobile, made by a simulated run. */
+const SAMPLE_FILES = ["a/index.html", "a/style.css", "b/index.html", "b/style.css"].map((path, i) => ({ path, sha256: sha("abcd"[i]) }));
+function withSample(opts: { pe?: boolean } = {}) {
+  const r = openRound(vision(), "experience", at(1));
+  let s = run<{ runId: string }>(r.state, "startStudioRun", { kind: "designer", round: r.n, brief: "Make the trip plan." }, at(2)).state;
+  s = R.dispatchStudioRuns(s, at(3), { simulated: ["claude"] }).state;
+  const runId = s.studio.runs[0].id;
+  const a = addScreen(s, r.n, at(4), {
+    title: "Trip plan (simulated sample)",
+    variants: [
+      { id: "a", label: "A · Map first" },
+      { id: "b", label: "B · Day by day" },
+    ],
+    files: SAMPLE_FILES,
+    madeBy: { ...DESIGNER, attemptId: runId },
+  });
+  s = R.completeStudioRun(a.state, runId, at(5), { summary: "Trip plan (simulated sample) v1 (2 variants)" });
+  if (opts.pe !== false) s = peAgrees(s, a.id, 1, ["a", "b"], at(6));
+  return { s, id: a.id, n: r.n };
+}
+
+const PIN = { type: "orchestrator-pin", x: 0.25, y: 0.5, selector: "main > div.map" };
+
+describe("the route", () => {
+  it("#/vision opens the studio", () => {
+    expect(parseRoute("#/vision")).toEqual({ page: "vision" });
+    expect(parseRoute("#/vision?round=2")).toEqual({ page: "vision" });
+  });
+});
+
+describe("the viewer's states, in plain words", () => {
+  it("no rounds yet", () => {
+    const html = render(<Studio />, vision());
+    expect(html).toContain("No rounds yet.");
+    expect(html).not.toContain("<iframe");
+  });
+
+  it("a designer run in progress, and one that is queued with the reason it waits", () => {
+    const r = openRound(vision(), "experience", at(1));
+    const asked = run(r.state, "startStudioRun", { kind: "designer", round: r.n, brief: "Make the trip plan." }, at(2)).state;
+    const paused = M.pauseProject(asked, at(3));
+    expect(render(<Studio />, paused)).toContain("It waits until you resume the project.");
+    const running = R.dispatchStudioRuns(asked, at(3), { simulated: ["claude"] }).state;
+    const html = render(<Studio />, running);
+    expect(html).toContain("The designer is working on round 1.");
+    expect(html).toContain("working");
+    expect(html).toContain("(simulated)");
+  });
+
+  it("a failed run, with its reason", () => {
+    const r = openRound(vision(), "experience", at(1));
+    let s = run(r.state, "startStudioRun", { kind: "designer", round: r.n, brief: "Make the trip plan." }, at(2)).state;
+    s = R.dispatchStudioRuns(s, at(3)).state;
+    s = R.reportStudioRunFailed(s, s.studio.runs[0].id, "studio.json was refused: artifact 1 lists a file twice.", at(4));
+    const html = render(<Studio />, s);
+    expect(html).toContain("The designer&#x27;s run failed.");
+    expect(html).toContain("studio.json was refused: artifact 1 lists a file twice.");
+  });
+});
+
+describe("the fake designer's sample in the viewer", () => {
+  it("shows the variant's entry sandboxed on its own origin, in a desktop frame, with the variants, the marks, Pin a comment and Send feedback", () => {
+    const { s, id } = withSample();
+    const html = render(<Studio />, s);
+    // The frame: its own origin on the prototype port, scripts only, never same-origin.
+    expect(html).toContain(`src="http://p-${id}-v1.localhost:${PORT}/a/index.html"`);
+    expect(html).toContain('sandbox="allow-scripts"');
+    expect(html).not.toContain("allow-same-origin");
+    expect(html).toContain("in a browser window");
+    expect(html).toContain(">Desktop<");
+    expect(html).toContain(">Mobile<");
+    expect(html).toContain("A · Map first");
+    expect(html).toContain("B · Day by day");
+    for (const label of [">Keep<", ">Change<", ">Drop<", "Pin a comment", "Send feedback"]) expect(html).toContain(label);
+    // The fake runtime made it: labelled so.
+    expect(html).toContain("simulated");
+    // The lead's panel and PE review are pass 4: a labelled placeholder, not made-up content.
+    expect(html).toContain("Not built yet: the lead&#x27;s message for this round");
+    expect(html).toContain("Nothing marked yet.");
+  });
+
+  it("the device switch offers only the project's devices", () => {
+    const { s, id } = withSample();
+    expect(deviceOptions(s.project.devices, S.getArtifact(s, id, 1))).toEqual(["desktop", "mobile"]);
+    const desktopOnly = runCommand(s, "setDevices", { devices: ["desktop"] }, at(10)).state;
+    expect(deviceOptions(desktopOnly.project.devices, S.getArtifact(desktopOnly, id, 1))).toEqual(["desktop"]);
+    const html = render(<Studio />, desktopOnly);
+    expect(html).not.toContain(">Mobile<");
+    expect(html).not.toContain('role="radiogroup" aria-label="Device"');
+    expect(html).toContain(">Desktop<");
+    // And a screen made for desktop only is not offered on mobile, whatever the scope.
+    expect(deviceOptions(["desktop", "mobile"], { ...S.getArtifact(s, id, 1), devices: ["desktop"] })).toEqual(["desktop"]);
+  });
+
+  it("while the PE has not agreed, you can look but not mark, pin or send, and it says why", () => {
+    const { s } = withSample({ pe: false });
+    const html = render(<Studio />, s);
+    expect(html).toContain("<iframe");
+    expect(html).toContain("Waiting for PE review. You can look at it now, and mark it once the PE agrees.");
+    expect(html).toContain("with the PE");
+    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*aria-disabled="true"[^>]*>Keep</);
+  });
+
+  it("without the prototype server it says why, and shows the screenshot the service has, through the app's own service", () => {
+    const { s, id } = withSample();
+    const html = render(<Studio />, s, service({ prototypePort: undefined }));
+    expect(html).not.toContain("<iframe");
+    expect(html).toContain("The prototype server is not running");
+    expect(html).toContain(`src="/api/studio/file?artifact=${id}&amp;version=1&amp;path=shots%2Fa-desktop.png"`);
+  });
+
+  it("Home leads to the studio while the project is in Vision", () => {
+    const { s } = withSample();
+    const html = render(<Overview />, s);
+    expect(html).toContain('href="#/vision"');
+    expect(html).toContain("Open the studio");
+    expect(html).toContain("Round 1 open: the experience · 1 artifact");
+  });
+});
+
+describe("pins", () => {
+  const frame = { name: "the prototype's window" };
+  const other = { name: "another window" };
+
+  it("are taken only in Pin mode, only from the artifact's own frame, and only as a well-formed pin", () => {
+    expect(pinFromMessage(false, { source: frame, data: PIN }, frame)).toBeNull();
+    expect(pinFromMessage(true, { source: frame, data: PIN }, frame)).toEqual(PIN);
+    expect(pinFromMessage(true, { source: other, data: PIN }, frame)).toBeNull();
+    expect(pinFromMessage(true, { source: frame, data: { ...PIN, type: "navigate" } }, frame)).toBeNull();
+    expect(pinFromMessage(true, { source: frame, data: { ...PIN, x: 2 } }, frame)).toBeNull();
+    expect(pinFromMessage(true, { source: frame, data: { ...PIN, extra: 1 } }, frame)).toBeNull();
+    expect(pinFromMessage(true, { source: null, data: PIN }, null)).toBeNull();
+  });
+
+  it("a pin keeps its place, its element and the variant shown, and waits for a comment before it can be sent", () => {
+    const { s, id } = withSample();
+    const a = S.getArtifact(s, id, 1);
+    const pinned = addPin(draftFrom(undefined), PIN as never, "b");
+    expect(pinned.pins).toEqual([{ x: 0.25, y: 0.5, variant: "b", text: "", selector: "main > div.map" }]);
+    const changed = changedDrafts(s, { [draftKey(a)]: pinned });
+    expect(sendBlocker(changed)).toBe("Write a comment for pin 1 on Trip plan (simulated sample), or remove it.");
+  });
+});
+
+describe("Send feedback", () => {
+  it("sends every changed draft as one sendFeedback, which the domain records on each version", async () => {
+    const { s, id } = withSample();
+    const a = S.getArtifact(s, id, 1);
+    const draft: Draft = { ...addPin(draftFrom(undefined), PIN as never, "a"), mark: "change", pickedVariant: "b" };
+    draft.pins[0].text = "Make the map smaller on phones.";
+    draft.note = "Prefer B on phones.";
+    const calls: { name: string; args: object }[] = [];
+    let after = s;
+    const send = async (name: "sendFeedback", args: object) => {
+      calls.push({ name, args });
+      after = runCommand(s, name, args, at(20)).state;
+      return { ok: true };
+    };
+    const sent = await sendDrafts(send, s, { [draftKey(a)]: draft });
+    expect(sent).toEqual([draftKey(a)]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].name).toBe("sendFeedback");
+    const f = S.currentFeedback(after, id, 1)!;
+    expect(f).toMatchObject({ mark: "change", pickedVariant: "b", note: "Prefer B on phones.", pins: [{ x: 0.25, y: 0.5, variant: "a", text: "Make the map smaller on phones." }] });
+    // Once recorded, the same draft is no longer a change: nothing is sent twice.
+    expect(changedDrafts(after, { [draftKey(a)]: draft })).toEqual([]);
+  });
+
+  it("sends nothing while nothing changed or a version is still with the PE, and keeps the drafts when the service refuses", async () => {
+    const { s, id } = withSample({ pe: false });
+    const a = S.getArtifact(s, id, 1);
+    const send = async () => ({ ok: true });
+    expect(await sendDrafts(send, s, {})).toBeNull();
+    expect(await sendDrafts(send, s, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } })).toBeNull();
+    const agreed = peAgrees(s, id, 1, ["a", "b"], at(7));
+    expect(await sendDrafts(async () => ({ ok: false }), agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } })).toBeNull();
+    expect(sendBlocker(changedDrafts(agreed, {}))).toBe("Mark, pick or pin something first.");
+  });
+});
+
+describe("where a variant is served from", () => {
+  it("its entry: the one the record names, else assumed from the files", () => {
+    const { s, id } = withSample();
+    const a = S.getArtifact(s, id, 1);
+    expect(variantEntry(a, "a")).toBe("a/index.html");
+    expect(variantEntry(a, "b")).toBe("b/index.html");
+    // Once the state's variant record carries the entry the designer named (see the report of pass 3d).
+    const withEntry: { id: string; label: string; entry: string }[] = [{ id: "a", label: "A", entry: "b/index.html" }];
+    const named = { ...a, variants: withEntry };
+    expect(variantEntry(named, "a")).toBe("b/index.html");
+    const flat = { ...a, variants: [{ id: "x", label: "X" }, { id: "y", label: "Y" }], files: [{ path: "map.html", sha256: sha("e") }, { path: "days.html", sha256: sha("f") }] };
+    expect(variantEntry(flat, "y")).toBe("days.html");
+  });
+});
+
+describe("terminal artifacts", () => {
+  const sample = withSample();
+  const term = (files: string[], extra: object = {}) => ({ ...S.getArtifact(sample.s, sample.id, 1), ...extra, kind: "terminal-demo" as const, devices: [], files: files.map((path) => ({ path, sha256: sha("1") })) });
+
+  it("a recording, a hand-written recording or frame, or not recorded with the reason: from the service's status when it gives one, else from the files", () => {
+    expect(recordingOf(term(["trips.tape", "out/trips.webm", "out/trips.gif", "out/trips.txt"]))).toEqual({ status: "recorded", video: "out/trips.webm", gif: "out/trips.gif", transcript: "out/trips.txt" });
+    expect(recordingOf(term(["trips.cast"]))).toEqual({ status: "hand-written", cast: "trips.cast" });
+    expect(recordingOf(term(["ui.ans"]))).toEqual({ status: "hand-written", frame: "ui.ans" });
+    expect(recordingOf(term(["trips.tape"]))).toMatchObject({ status: "not-recorded" });
+    expect(recordingOf(term(["trips.tape", "trips.cast"], { recording: { status: "not-recorded", reason: "No working sandbox on this Mac." } }))).toEqual({ status: "not-recorded", reason: "No working sandbox on this Mac." });
+  });
+
+  it("a .ans frame is drawn with colours as token classes, never as inline colours, at the smallest studio size it fits", () => {
+    const ans = "\x1b[1;32mtrips\x1b[0m ui\n\x1b[7m> Lake weekend \x1b[0m\n  \x1b[38;5;196mTwo spots left\x1b[39m";
+    const lines = renderAnsi(ans, frameSize(ans));
+    expect(lines[0]).toEqual([
+      { text: "trips", cls: "st-a-fg-green st-a-bold" },
+      { text: " ui", cls: "" },
+    ]);
+    expect(lines[1][0]).toEqual({ text: "> Lake weekend ", cls: "st-a-fg-bg st-a-bg-fg" });
+    expect(lines[2]).toEqual([
+      { text: "  ", cls: "" },
+      { text: "Two spots left", cls: "st-a-fg-red" },
+    ]);
+    expect(frameSize(ans)).toEqual({ cols: 80, rows: 24 });
+    expect(frameSize(`${"x".repeat(90)}\n`)).toEqual({ cols: 100, rows: 30 });
+    const html = renderToStaticMarkup(<TerminalText lines={lines} cols={80} rows={24} label="Frame ui.ans" />);
+    expect(html).toContain('<span class="st-a-fg-green st-a-bold">trips</span>');
+    expect(html).not.toMatch(/color:/);
+  });
+
+  it("cursor moves and erases are drawn, and nothing else gets through as markup", () => {
+    const text = (s: string) => renderAnsi(s, { cols: 80, rows: 24 }).map((l) => l.map((r) => r.text).join(""));
+    // A progress line rewritten in place; the cursor back up a line and along; the screen cleared and redrawn.
+    expect(text("loading…\r\x1b[Kdone\nnext\x1b[1A\x1b[2Cxx")).toEqual(["done  xx", "next"]);
+    expect(text("old screen\n\x1b[2J\x1b[Hnew")).toEqual(["new"]);
+    expect(renderAnsi("<b>not markup</b>\x1b]0;title\x07", { cols: 80, rows: 24 })[0].map((r) => r.text).join("")).toBe("<b>not markup</b>]0;title");
+  });
+
+  it("a .cast file's transcript: its output, its size and its chapters", () => {
+    const cast = ['{"version": 3, "term": {"cols": 80, "rows": 24}, "title": "trips plan"}', '[0.5, "o", "$ trips plan\\r\\n"]', '[0.1, "m", "Plan"]', '[0.4, "o", "\\u001b[32m✓\\u001b[0m Lake weekend\\r\\n"]'].join("\n");
+    const t = readCast(cast);
+    expect(t).toEqual({ ok: true, cols: 80, rows: 24, title: "trips plan", output: "$ trips plan\r\n\x1b[32m✓\x1b[0m Lake weekend\r\n", markers: ["Plan"] });
+    expect(readCast("not json")).toEqual({ ok: false, error: "its first line is not an asciicast header" });
+  });
+});

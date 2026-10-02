@@ -1,4 +1,5 @@
-// Home: the three things you look at daily, then the focus. Needs you first, with the simple decisions taken in
+// Home: the three things you look at daily, then the focus. While in Vision, the way into the studio and the
+// shaping panel lead. Needs you first, with the simple decisions taken in
 // place; Progress by area beside New results and the lead's latest reply; the Focus card last, with the vision
 // text, its revisions and its documents behind "Vision and history". Usage and the service's details live in
 // Settings (Diagnostics.tsx); the lead conversation opens from the header.
@@ -16,6 +17,7 @@ import { foldSummary, messageStatusText } from "./notes";
 import { landedVerdict, latestLeadReply, liveText, needsYouItems, optionsLine, progressByArea, replyExcerpt, type AreaProgress, type NeedsYouEntry } from "./progress";
 import { historyRequested } from "./route";
 import { OpenDraft, ShapingPanel } from "./Shaping";
+import { StudioCard } from "./studio/Studio";
 import { RevisionDocs, VisionDocsList } from "./VisionDocs";
 import { Banner, Button, ButtonLink, Card, Chip, Disclosure, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, Textarea, useConfirm } from "./kit";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task, VisionRevision } from "../domain/types";
@@ -51,6 +53,7 @@ export function Overview() {
     <div className="k-stack home">
       <h1 className="no-margin">Home</h1>
       <Onboarding />
+      {shaping && <StudioCard />}
       {shaping && <ShapingPanel />}
       <div data-tour="needs-you">
         <NeedsYouCard state={state} />
