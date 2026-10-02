@@ -11,7 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Browser } from "playwright-core";
+import type { Browser, BrowserContext } from "playwright-core";
 import { prototypeOrigin } from "../../src/runtime/prototype";
 import { SHOT_DEVICES, createPrototypeServer, readManifest, versionDir, type ShotDevice } from "./serve";
 
@@ -93,8 +93,10 @@ export async function captureShots(opts: { studioDir: string; artifactId: string
     const shots = shotsFolder(studioDir, artifactId, version);
     for (const variant of manifest.variants) {
       for (const device of devices) {
-        const context = await browser.newContext({ ...SIZES[device], serviceWorkers: "block", acceptDownloads: false });
+        let context: BrowserContext | undefined;
         try {
+          context = await browser.newContext({ ...SIZES[device], serviceWorkers: "block", acceptDownloads: false });
+          // Anything else is refused here. (A page that navigates away then shows the browser's error page: its own loss.)
           await context.route("**/*", (route) => (route.request().url().startsWith(`${origin}/`) ? route.continue() : route.abort("blockedbyclient")));
           const page = await context.newPage();
           await page.goto(`${origin}/${variant.entry}`, { waitUntil: "load", timeout });
@@ -112,14 +114,15 @@ export async function captureShots(opts: { studioDir: string; artifactId: string
           log(`Screenshot of ${artifactId} v${version} ${variant.id} on ${device} failed: ${error}`);
           out.failed.push({ variant: variant.id, device, error });
         } finally {
-          await within(timeout, "Closing the page", context.close()).catch(() => {});
+          if (context) await within(timeout, "Closing the page", context.close()).catch(() => {});
         }
       }
     }
   } catch (e) {
     const error = (e instanceof Error ? e.message : String(e)).split("\n")[0];
     log(`Screenshots of ${artifactId} v${version} failed: ${error}`);
-    for (const variant of manifest.variants) for (const device of devices) if (!out.shots.some((s) => s.variant === variant.id && s.device === device)) out.failed.push({ variant: variant.id, device, error });
+    // Before any page: the private server or the shots/ folder.
+    for (const variant of manifest.variants) for (const device of devices) out.failed.push({ variant: variant.id, device, error });
   } finally {
     await within(timeout, "Closing Chrome", browser.close()).catch(() => {});
     server.closeAllConnections();
