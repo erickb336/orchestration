@@ -119,7 +119,7 @@ describe("the lead's studio block", () => {
     expect(s.studio.runs).toHaveLength(3);
     expect(notes(s)).toEqual([
       "Studio: designer run #1 not asked for: variants is a whole number from 1 to 3",
-      'Studio: designer run #2 not asked for: "blueprint" is not a kind the designer makes (screen, terminal-demo, tui, contract, flow, interface, algorithm, topology)',
+      'Studio: designer run #2 not asked for: "blueprint" is not a kind the designer makes (screen, terminal-demo, tui, contract, flow, interface, algorithm, topology, dictionary)',
       "Studio: designer run #3 not asked for: terminal is outside the project's device scope (desktop, mobile)",
       "Studio: questions: 1 more ignored: at most 5 questions in one reply",
       ...Array.from({ length: 5 }, (_, i) => `Studio: questions: #${i + 1}: 1 more option(s) ignored: at most 4`),
@@ -136,7 +136,7 @@ describe("the lead's studio block", () => {
     expect(notes(s)).toEqual([
       "Studio: designer run #1 not asked for: the brief must be text",
       "Studio: designer run #2 not asked for: there is no studio artifact sa-99 to revise",
-      "Studio: designer run #3 not asked for: kinds lists 1 to 4 of screen, terminal-demo, tui, contract, flow, interface, algorithm, topology",
+      "Studio: designer run #3 not asked for: kinds lists 1 to 4 of screen, terminal-demo, tui, contract, flow, interface, algorithm, topology, dictionary",
     ]);
     expect(s.studio.runs).toHaveLength(3);
     // A document asks for no devices; a second round cannot open while one is open, and its runs then wait for it.
@@ -151,7 +151,7 @@ describe("the lead's studio block", () => {
     const sketch = addScreen(zero.state, 0, at(2), { kind: "material", title: "Group page sketch", variants: [], devices: [], madeBy: { role: "user" } });
     const s = reply(run(sketch.state, "closeRound", { round: 0 }, at(3)).state, { studio: { openRound: { focus: "experience", summary: "From the sketch." }, designerRuns: [{ brief: "Redo the sketch.", variants: 1, revises: sketch.id }] } });
     expect(s.studio.runs).toEqual([]);
-    expect(notes(s)).toEqual(["Studio: designer run #1 not asked for: Group page sketch is what the user brought; the designer makes a new artifact from it instead"]);
+    expect(notes(s)).toEqual(["Studio: designer run #1 not asked for: Group page sketch (material) is not the designer's work; the designer makes a new artifact from it instead"]);
   });
 
   it("runs only from a reply to the owner, in Vision; with no round open it asks for nothing", () => {

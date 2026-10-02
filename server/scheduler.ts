@@ -17,20 +17,24 @@ import { LEAD_REPLY_SCHEMA } from "../src/domain/model/leadReplySchema";
 import * as R from "../src/domain/studio/runs";
 import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
-import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
+import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner } from "./checks";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
 import { SimulatedGitHub, type GitHubHost } from "./github";
 import { PrDriver } from "./prdelivery";
+import { checkLeadText, withLeadProse } from "./prose/record";
+import type { ProseChecker } from "./prose/vale";
+import { projectValeConfig } from "./prose/words";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, versionDir } from "./studio/artifacts";
 import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
-import { PeAnswerError, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
+import { PeAnswerError, checkPeAnswer, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
 import { repoGlance } from "./studio/existing";
 import { askForRevisions } from "./studio/revise";
-import { designerEnvelope, handedIn, importDesignerRun, prepareStaging, type HandedIn } from "./studio/runs";
+import { checkHandedIn, designerEnvelope, handedIn, importDesignerRun, prepareStaging, type HandedIn } from "./studio/runs";
+import { withStudioPrinciples, withStudioProse } from "./studio/writing";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
 
@@ -64,6 +68,11 @@ interface SchedulerOptions {
    * it none are made, and the versions record none.
    */
   studioMedia?: StudioMedia;
+  /**
+   * What checks the lead's replies and questions, the PE's verdicts and the designer's documents against the
+   * controlled-English style (server/prose/): Vale in the service. Without it nothing is checked and the runs record nothing.
+   */
+  prose?: ProseChecker;
 }
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
@@ -148,6 +157,11 @@ export class Scheduler {
   private readonly workspaces?: WorkspaceManager;
   private readonly visionDocs?: VisionDocStore;
   private readonly media?: StudioMedia;
+  private readonly prose?: ProseChecker;
+  /** The checks of lead replies drained this cycle, made before the transaction and recorded in it. */
+  private leadProse = new Map<string, ProseCheck>();
+  /** The same for studio runs: a PE's answer, a designer's documents. */
+  private studioProse = new Map<string, ProseCheck>();
   /** Studio versions' screenshots and recordings, made one at a time, after the run that handed them in completed. */
   private mediaChain: Promise<void> = Promise.resolve();
   /** The pending ones this instance started (project, version and kind), so each is made once per process. */
@@ -173,6 +187,7 @@ export class Scheduler {
     this.visionDocs = opts.visionDocs;
     this.dataDir = opts.dataDir;
     this.media = opts.studioMedia;
+    this.prose = opts.prose;
     this.checks = opts.checks ?? (this.workspaces ? undefined : new SimulatedChecks());
     this.checks?.onEvent((e) => this.queue.push(e));
     this.leaseMs = opts.leaseMs ?? 15000;
@@ -499,12 +514,27 @@ export class Scheduler {
     const completions = new Map<string, { outputs: M.OutputReport[]; problems: string[] }>();
     const studioOutputs = new Map<string, StudioOutput>();
     const current = this.store.read().state;
+    this.leadProse.clear();
+    this.studioProse.clear();
     for (const e of events) {
       if (e.type !== "completed") continue;
+      // A lead reply's text is checked here, outside the transaction (Vale is a process); never blocking the reply.
+      if (this.prose && current.leadRuns.some((r) => r.id === e.attemptId)) {
+        const prose = this.prose;
+        const words = this.projectWords(current);
+        const check = checkLeadText(parseLeadOutput(e.finalText), (text) => prose(text, words), now);
+        if (check) this.leadProse.set(e.attemptId, check);
+      }
       const studioRun = R.getStudioRun(current, e.attemptId);
       if (studioRun) {
         // A designer hands in files; the PE answers in its final message, read in the transaction.
         if (studioRun.kind === "designer") studioOutputs.set(e.attemptId, this.readStudioOutput(current, e.attemptId));
+        // What it wrote for the owner is checked here too (the PE's verdicts, the designer's documents), and recorded with its result.
+        // With the project's words (the dictionary in force), as for the lead.
+        const words = this.prose ? this.projectWords(current) : undefined;
+        const prose = this.prose && ((text: string) => this.prose!(text, words));
+        const check = !prose ? undefined : studioRun.kind === "pe" ? checkPeAnswer(e.finalText, prose, now) : studioRun.kind === "designer" ? checkHandedIn(studioOutputs.get(e.attemptId), prose, now) : undefined;
+        if (check) this.studioProse.set(e.attemptId, check);
         continue;
       }
       try {
@@ -821,7 +851,8 @@ export class Scheduler {
       (s) => {
         const d = R.dispatchStudioRuns(s, now, { ...avail, simulated });
         started = d.started;
-        return d.state;
+        // Each records the principles its envelope gives it, with their hashes, as a task run's snapshot does.
+        return withStudioPrinciples(d.state, d.started);
       },
       now,
       lease,
@@ -968,6 +999,20 @@ export class Scheduler {
   }
 
   /**
+   * The Vale configuration with the project's words (pass 4d), generated into the data folder from the dictionary in
+   * force; undefined without one, or when it cannot be written (then the repository's style alone checks). Never throws.
+   */
+  private projectWords(state: State): string | undefined {
+    if (!this.dataDir) return undefined;
+    try {
+      return projectValeConfig(this.dataDir, state);
+    } catch (e) {
+      this.log(`The project's words could not be written for the prose check: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
+    }
+  }
+
+  /**
    * Read and check the studio.json a finished designer run left in its staging folder, and look up the repository
    * files its provenance names: here, outside the store's transaction (review finding 11). Never throws.
    */
@@ -1008,7 +1053,8 @@ export class Scheduler {
           // The PE's verdicts, from its final message: checked, then recorded on the version it reviewed.
           try {
             const r = recordPeRun(started, R.getStudioRun(started, run.id)!, readPeAnswer(e.finalText), now);
-            return R.completeStudioRun(r.state, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
+            // The check of its text goes on the run (never on the verdicts: the owner sees no score); the PE's next run is told what it broke.
+            return withStudioProse(R.completeStudioRun(r.state, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary }), run.id, this.studioProse.get(run.id));
           } catch (err) {
             return fail(`Its verdicts were refused: ${err instanceof PeAnswerError || err instanceof Error ? err.message : String(err)}`);
           }
@@ -1019,7 +1065,7 @@ export class Scheduler {
           const r = importDesignerRun(started, run.id, out, studioRoot(this.dataDir!, s.project.id), now);
           // Screenshots and recordings are made after this transaction commits; the run completes without them.
           const marked = this.media ? r.imported.reduce((acc, v) => S.startArtifactMedia(acc, v.artifactId, v.version), r.state) : r.state;
-          return R.completeStudioRun(marked, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
+          return withStudioProse(R.completeStudioRun(marked, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary }), run.id, this.studioProse.get(run.id));
         } catch (err) {
           return fail(`studio.json was refused: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1337,7 +1383,10 @@ export class Scheduler {
         const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
         // The steering block, the vision draft, the decisions, the studio block and any parse problem go through as found; the domain validates them.
         // The final text goes too: the run keeps it when the answer could not be used as sent.
-        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
+        const next = M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
+        // The check of its text goes on the run (not on the message: the owner sees no score); the lead's next run is told what it broke.
+        const prose = this.leadProse.get(e.attemptId);
+        return prose ? withLeadProse(next, e.attemptId, prose) : next;
       }
     }
   }

@@ -165,6 +165,8 @@ describe("the Settings page", () => {
     expect(t).not.toMatch(/Arguments, the program first|\+ argument|Codex sandbox \(recommended\)|Protected check inputs/);
     expect(t).toContain("Default flow");
     expect(t).toContain("Principles");
+    // The credit names both principles that are not from pstack.
+    expect(t).toContain('Apart from "Contextualize and write for the reader" and "Write controlled English", Orchestrator\'s own, they are adapted from pstack');
   });
 
   it("Advanced has every developer form and the diagnostics", () => {

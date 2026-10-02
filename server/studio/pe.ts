@@ -9,14 +9,21 @@
 // boundary, and then by the studio's addPeVerdicts, which records it.
 //
 // The loop (pass 4): when a pass asks for a change or objects, the designer revises the version (server/studio/
-// revise.ts) and the PE reviews the new one, told what it asked for last time, up to three passes in a round.
+// revise.ts) and the PE reviews the new one, up to three passes in a round. So that the loop converges (the second
+// real trial), the envelope keeps two things apart: a change, only what feasibility, scale, longevity or budget needs,
+// which goes to the designer; and open cases, the product questions the PE notices, which go to the owner through the
+// lead. On a later pass it lists the PE's earlier asks, which it checks first, and allows a new change only for a
+// risk the revision created (the studio's addPeVerdicts holds it to that).
 
 import { currentVision } from "../../src/domain/model/core";
 import { buildingSpend, fmtUsd } from "../../src/domain/spend";
 import * as S from "../../src/domain/studio/studio";
-import { VERDICTS, VERDICT_WORDS, type RoundFocus, type StudioArtifact, type StudioRun, type Verdict } from "../../src/domain/studio/types";
-import { ControlError, type State } from "../../src/domain/types";
-import { lastJsonObject } from "../envelope";
+import { VERDICTS, VERDICT_WORDS, type PeVerdict, type RoundFocus, type StudioArtifact, type StudioRun, type Verdict } from "../../src/domain/studio/types";
+import { ControlError, type ProseCheck, type State } from "../../src/domain/types";
+import { lastJsonObject, projectWordsLines } from "../envelope";
+import { checkDoc, proseDoc, type ProseDoc } from "../prose/record";
+import type { ProseChecker } from "../prose/vale";
+import { studioFeedbackLines, studioPrinciplesLines } from "./writing";
 
 const KIND_WORDS: Record<StudioArtifact["kind"], string> = {
   screen: "a screen",
@@ -27,6 +34,7 @@ const KIND_WORDS: Record<StudioArtifact["kind"], string> = {
   interface: "an interface",
   algorithm: "an algorithm",
   topology: "a topology",
+  dictionary: "the project's dictionary",
   material: "what the owner brought",
   evidence: "a probe's evidence",
 };
@@ -89,16 +97,32 @@ export function peEnvelope(state: State, run: StudioRun, where: { folder: string
         "- The designer does not revise a reproduction for you: your verdict goes to the owner with the artifact, and the owner corrects it.",
       ]
     : [
-        `- \`verdict\`: ${VERDICTS.join(", ")}. Feasible-if states in \`change\` the change that makes it feasible; not-feasible states in \`change\` the evidence that would change your verdict.`,
-        `- Feasible-if and not-feasible send the variant back to the designer with your reasons and change, up to ${S.MAX_PE_PASSES} passes in a round. After that, an objection (not-feasible) goes to the owner with your reasons, never dropped, and only the owner can overrule it; a change you still ask for goes to them too.`,
+        `- \`verdict\`: ${VERDICTS.join(", ")}, on the four questions above and nothing else.`,
+        "- `change`: with feasible-if, the change the designer must make because feasibility, scale, longevity or budget needs it. Say what to change and why, in one or two sentences: the designer sees your change, not your reasons. With not-feasible, the evidence that would change your verdict.",
+        "- A change is only what feasibility, scale, longevity or budget needs. A missing feature, an undecided edge case or a rule nobody set is not a change: it is an open case. Do not ask the designer to invent a product rule. The owner decides those.",
+        `- \`openCases\` (optional, at most ${S.MAX_OPEN_CASES} for each verdict): the product questions you noticed. Each has \`text\` (the question for the owner) and \`why\` (why it matters). They go to the owner through the lead, and they never send the variant back to the designer. Put each one once in the pass, on the first variant it is about.`,
+        "- When all you found are open cases, the verdict is feasible.",
+        `- Feasible-if and not-feasible send the variant back to the designer with your change, up to ${S.MAX_PE_PASSES} passes in a round. After that, an objection (not-feasible) goes to the owner with your reasons, never dropped, and only the owner can overrule it; a change you still ask for goes to them too.`,
       ];
+  const asks = asIs ? [] : S.earlierAsks(state, a);
+  const checks = (id: string | undefined) => {
+    const due = S.asksOn(asks, id);
+    return due.length ? `"earlier": [${due.map((x) => `{ "ask": "${x.id}", "met": true }`).join(", ")}], ` : "";
+  };
   const example = asIs
     ? [`  { "variant": "${ids[0] ?? "a"}", "verdict": "feasible", "reasons": "<what you compared, and that it matches the code>" },`, `  { "variant": "${ids[1] ?? "b"}", "verdict": "feasible-if", "reasons": "…", "change": "<what differs from the code>" }`]
-    : [
-        `  { "variant": "${ids[0] ?? "a"}", "verdict": "feasible", "reasons": "<feasibility, scale, longevity and budget in a few sentences>" },`,
-        `  { "variant": "${ids[1] ?? "b"}", "verdict": "feasible-if", "reasons": "…", "change": "<the change that makes it feasible>",`,
-        '    "budget": { "buildUsd": [0, 0], "maintenanceUsdPerMonth": [0, 0], "basis": "<what the figures rest on>" } }',
-      ];
+    : laterPass(state, a)
+      ? // A later pass: each variant checks its earlier asks first; the rules after the block say what "met": false asks for.
+        (ids.length ? ids : [undefined]).map(
+          (id, i, all) =>
+            `  { ${id === undefined ? "" : `"variant": "${id}", `}${checks(id)}"verdict": "feasible", "reasons": "<feasibility, scale, longevity and budget in a few sentences>"${i === 0 ? ',\n    "openCases": [{ "text": "<a new question for the owner>", "why": "<why it matters>" }]' : ""} }${i < all.length - 1 ? "," : ""}`,
+        )
+      : [
+          `  { "variant": "${ids[0] ?? "a"}", "verdict": "feasible", "reasons": "<feasibility, scale, longevity and budget in a few sentences>",`,
+          '    "openCases": [{ "text": "<a question for the owner>", "why": "<why it matters>" }] },',
+          `  { "variant": "${ids[1] ?? "b"}", "verdict": "feasible-if", "reasons": "…", "change": "<the change that makes it feasible, and why>",`,
+          '    "budget": { "buildUsd": [0, 0], "maintenanceUsdPerMonth": [0, 0], "basis": "<what the figures rest on>" } }',
+        ];
   const budgets = asIs
     ? []
     : [
@@ -130,7 +154,7 @@ export function peEnvelope(state: State, run: StudioRun, where: { folder: string
     "",
     `Its files: ${a.files.map((f) => f.path).join(", ")}.`,
     "",
-    ...previousPassLines(state, a),
+    ...earlierPassLines(state, a, asks),
     "## Where you read",
     "",
     `- Your working directory (${where.folder}) is this version's folder: the designer's files, the screenshots in shots/, and the recordings in recording/. Read what you need; you cannot change anything.`,
@@ -144,7 +168,11 @@ export function peEnvelope(state: State, run: StudioRun, where: { folder: string
     "",
     `Round ${round.n} is about ${FOCUS_WORDS[round.focus]}.${round.summary ? ` ${round.summary}` : ""}`,
     "",
+    ...projectWordsLines(state),
     ...budgets,
+    ...studioPrinciplesLines(run),
+    ...refusedLines(state, run, a),
+    ...studioFeedbackLines(state, run),
     "## Your answer",
     "",
     "End your reply with one JSON block:",
@@ -165,30 +193,57 @@ const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what exists: the pr
 
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
+/** Agent text on one line, clipped. */
+const one = (text: string, max: number) => clip(text.replace(/\s+/g, " "), max);
+
+/** How many passes the PE made on this artifact in the version's round: 0 before its first, and on a kind it does not review. */
+function passesDone(state: State, a: StudioArtifact): number {
+  const r = S.peReview(state, a);
+  if (r.status === "not-reviewed") return 0;
+  return r.status === "waiting" ? r.passes : r.pass;
+}
+const laterPass = (state: State, a: StudioArtifact) => passesDone(state, a) > 0;
+
 /**
- * What the PE said on the version before this one in the round, which the designer revised in answer: so it checks
- * each change was made. Nothing for a version that is not a revision for the PE.
+ * On a later pass in the round (convergence, the second real trial): the changes the PE asked for so far, which it
+ * checks first; the rule that a new change is only for a risk the revision created; the variants it found feasible;
+ * and the open cases it already raised, which are with the owner and not to be repeated. Nothing on a first pass.
  */
-function previousPassLines(state: State, a: StudioArtifact): string[] {
-  const prev = S.versionsOf(state, a.id)
-    .filter((v) => v.round === a.round && v.version < a.version)
-    .at(-1);
-  const said = prev ? state.studio.verdicts.filter((v) => v.artifactId === prev.id && v.version === prev.version) : [];
-  if (!prev || !said.length) return [];
-  const pass = Math.max(...said.map((v) => v.pass));
-  const label = (id: string | undefined) => (id === undefined ? "The whole artifact" : `\`${id}\` (${prev.variants.find((v) => v.id === id)?.label ?? id})`);
-  const last = pass + 1 >= S.MAX_PE_PASSES;
+function earlierPassLines(state: State, a: StudioArtifact, asks: PeVerdict[]): string[] {
+  const done = passesDone(state, a);
+  if (!done) return [];
+  const versions = new Set(S.versionsOf(state, a.id).filter((v) => v.round === a.round && v.version <= a.version).map((v) => v.version));
+  const on = (id: string | undefined) => (id === undefined ? "the whole artifact" : `\`${id}\` (${a.variants.find((v) => v.id === id)?.label ?? id})`);
+  const askLine = (v: PeVerdict) =>
+    v.verdict === "not-feasible"
+      ? `- \`${v.id}\` on ${on(v.variant)}, pass ${v.pass}, not feasible. Your reasons: ${one(v.reasons, 600)}${v.change ? ` What would change your verdict: ${one(v.change, 400)}` : ""}`
+      : `- \`${v.id}\` on ${on(v.variant)}, pass ${v.pass}, feasible if changed. The change: ${one(v.change ?? v.reasons, 400)}`;
+  const feasible = state.studio.verdicts.filter((v) => v.artifactId === a.id && versions.has(v.version) && v.pass === done && v.verdict === "feasible" && v.variant !== undefined && a.variants.some((x) => x.id === v.variant));
+  const cases = S.openCasesOf(state, a);
   return [
-    "## Your previous pass",
+    "## Your earlier asks",
     "",
-    `This is pass ${pass + 1} of ${S.MAX_PE_PASSES} in round ${a.round}. On ${S.artifactName(prev)} your pass ${pass} said:`,
-    ...said
-      .filter((v) => v.pass === pass)
-      .map((v) => `- ${label(v.variant)}: ${VERDICT_WORDS[v.verdict]}. ${clip(v.reasons.replace(/\s+/g, " "), 600)}${v.change ? ` ${v.verdict === "not-feasible" ? "What would change the verdict" : "The change"}: ${clip(v.change.replace(/\s+/g, " "), 400)}` : ""}`),
+    `This is pass ${done + 1} of ${S.MAX_PE_PASSES} in round ${a.round}. The designer revised the artifact since your pass ${done}. ${asks.length ? "Check these asks first. For each one, say whether this version meets it:" : "You asked for no change on it earlier in this round."}`,
+    ...asks.map(askLine),
     "",
-    `The designer revised it in answer: this version is the result. Check that each change was made, and judge every variant again; the designer was told to leave the variants you found feasible as they were.${last ? " This is the round's last pass: what you still find not feasible goes to the owner as an objection, and a change you still ask for goes to them with your verdict." : ""}`,
+    ...(asks.length ? ['- In each verdict, "earlier" lists every ask above on its variant, each once, with "met": true or false. An ask on the whole artifact is on every variant.', "- An ask the revision met is done. Do not ask for more of it."] : []),
+    '- A change on this pass is for an ask that is not met, or for a risk that this revision itself created. For the second, set "fromRevision": true, and say in the change what the revision added that causes the risk.',
+    "- Anything else you notice now (a feature, an edge case, a rule nobody set) is an open case, not a change.",
+    "- When every ask is met and the revision created no new risk, the verdict is feasible.",
+    ...(feasible.length ? ["", `On your pass ${done} you found ${feasible.map((v) => on(v.variant)).join(", ")} feasible. Judge ${feasible.length === 1 ? "it" : "them"} again too.`] : []),
+    ...(cases.length ? ["", "You raised these open cases earlier in this round. They are with the owner, through the lead. Do not repeat them, and do not make them changes:", ...cases.map((c) => `- ${one(c.text, 300)}`)] : []),
+    ...(done + 1 >= S.MAX_PE_PASSES ? ["", "This is the round's last pass: what you still find not feasible goes to the owner as an objection, and a change you still ask for goes to them with your verdict."] : []),
     "",
   ];
+}
+
+/** When the PE's last run on this version ended without a recorded verdict: why, so this run can answer again (after a refused answer, say). */
+function refusedLines(state: State, run: StudioRun, a: StudioArtifact): string[] {
+  const last = S.peRunsOf(state, a.id, a.version)
+    .filter((r) => r.id !== run.id && (r.status === "failed" || r.status === "lost") && r.note)
+    .at(-1);
+  if (!last) return [];
+  return ["## Your last run on this version", "", `It ended without a recorded verdict: ${one(last.note!, 500)} Answer again, in the format below.`, ""];
 }
 
 /** The PE's answer was refused; the message says why, for the run's record. */
@@ -217,6 +272,12 @@ export function readPeAnswer(finalText: string): S.VerdictInput[] {
     if (typeof v.verdict !== "string" || !VERDICTS.includes(v.verdict as Verdict)) throw new PeAnswerError(`${where}: "verdict" is not one of ${VERDICTS.join(", ")}`);
     if (typeof v.reasons !== "string") throw new PeAnswerError(`${where} gives no reasons`);
     if (v.change !== undefined && v.change !== null && typeof v.change !== "string") throw new PeAnswerError(`${where}: "change" is not text`);
+    const list = (k: string) => (v[k] === undefined || v[k] === null ? [] : Array.isArray(v[k]) ? (v[k] as unknown[]) : undefined);
+    const earlier = list("earlier");
+    if (!earlier || !earlier.every((c) => isObj(c) && typeof c.ask === "string" && typeof c.met === "boolean")) throw new PeAnswerError(`${where}: "earlier" is not a list of { "ask": "<id>", "met": true or false }`);
+    const openCases = list("openCases");
+    if (!openCases || !openCases.every((c) => isObj(c) && typeof c.text === "string" && (c.why === undefined || c.why === null || typeof c.why === "string"))) throw new PeAnswerError(`${where}: "openCases" is not a list of { "text": "…", "why": "…" }`);
+    if (v.fromRevision !== undefined && v.fromRevision !== null && typeof v.fromRevision !== "boolean") throw new PeAnswerError(`${where}: "fromRevision" is not true or false`);
     let budget: S.VerdictInput["budget"];
     if (v.budget !== undefined && v.budget !== null) {
       try {
@@ -230,11 +291,46 @@ export function readPeAnswer(finalText: string): S.VerdictInput[] {
       verdict: v.verdict as Verdict,
       reasons: v.reasons,
       ...(typeof v.change === "string" && v.change.trim() ? { change: v.change } : {}),
+      ...(earlier.length ? { earlier: (earlier as { ask: string; met: boolean }[]).map((c) => ({ ask: c.ask, met: c.met })) } : {}),
+      ...(v.fromRevision === true ? { fromRevision: true } : {}),
+      ...(openCases.length ? { openCases: (openCases as { text: string; why?: string | null }[]).map((c) => ({ text: c.text, ...(typeof c.why === "string" && c.why.trim() ? { why: c.why } : {}) })) } : {}),
       ...(budget ? { budget } : {}),
     };
   });
 }
 
+/**
+ * The text the owner reads from a PE answer (pass 4d-2b): for each verdict, its reasons, its change, and each open
+ * case with why it matters, one part each ("variant b, change"). The verdict words and the budget figures are not
+ * sentences, and are not checked.
+ */
+export function peDoc(verdicts: readonly S.VerdictInput[]): ProseDoc | undefined {
+  return proseDoc(
+    verdicts.flatMap((v) => {
+      const on = v.variant === undefined ? "the whole artifact" : `variant ${clip(v.variant, 40)}`;
+      return [
+        { name: `${on}, reasons`, text: v.reasons },
+        { name: `${on}, change`, text: v.change ?? "" },
+        ...(v.openCases ?? []).map((c, i) => ({ name: `${on}, open case ${i + 1}`, text: [c.text.trim(), c.why?.trim() ?? ""].filter(Boolean).join("\n") })),
+      ];
+    }),
+  );
+}
+
+/**
+ * Check the text of a PE run's final message against the controlled-English style: in the scheduler, outside the
+ * store's transaction (Vale is a process). Undefined when the answer cannot be read (the run then fails with the
+ * reason, when its verdicts are recorded) or has no text.
+ */
+export function checkPeAnswer(finalText: string, check: ProseChecker, at: string): ProseCheck | undefined {
+  let verdicts: S.VerdictInput[];
+  try {
+    verdicts = readPeAnswer(finalText);
+  } catch {
+    return undefined;
+  }
+  return checkDoc(peDoc(verdicts), check, at);
+}
 
 /**
  * Record a PE run's verdicts on the version it reviewed, as the next pass of its round (the loop rule is the studio's).
@@ -249,5 +345,6 @@ export function recordPeRun(state: State, run: StudioRun, verdicts: S.VerdictInp
   );
   const a = S.getArtifact(r.state, run.artifactId!, run.baseVersion!);
   const label = (id: string | undefined) => (id === undefined ? "" : `${a.variants.find((v) => v.id === id)?.label ?? id} `);
-  return { state: r.state, summary: `${S.artifactName(a)}, pass ${r.pass}: ${verdicts.map((v) => `${label(v.variant)}${VERDICT_WORDS[v.verdict]}`).join(", ")}` };
+  const cases = verdicts.reduce((n, v) => n + (v.openCases?.length ?? 0), 0);
+  return { state: r.state, summary: `${S.artifactName(a)}, pass ${r.pass}: ${verdicts.map((v) => `${label(v.variant)}${VERDICT_WORDS[v.verdict]}`).join(", ")}${cases ? `; ${cases} open case${cases === 1 ? "" : "s"} for the owner` : ""}` };
 }

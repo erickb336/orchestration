@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
+import * as S from "../src/domain/studio/studio";
 import { startFactoryAsOwner } from "../src/domain/testing/factory";
 import { addScreen, feedback, openRound, peAgrees, pePass, run } from "../src/domain/testing/studio";
 import type { State } from "../src/domain/types";
@@ -29,8 +30,13 @@ describe("the lead's studio brief", () => {
     const text = envelope(fresh(), DOCS);
     const brief = section(text);
     expect(brief).toContain("You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.");
+    // Which artifacts the PE reviews follows the kind's rules: a dictionary goes to the user directly.
+    expect(brief).toContain("The PE reviews each design before the user sees it (not dictionaries, material or evidence);");
     expect(brief).toContain("1. experience: the key screens or commands, or the interface, or the topology, and how they behave;");
-    expect(brief).toContain("2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary;");
+    // The data round asks for the project's dictionary (pass 4d): from the vision, and from the code's names.
+    expect(brief).toContain(
+      '2. data: the product\'s things and how they relate, in plain words with worked examples, and what crosses each boundary. Also ask the designer for the project\'s dictionary (kind "dictionary"): each word the product uses, with one meaning and the words it replaces. Base it on the vision and, for an existing repository, on the names in the code. When the user approves it, every agent gets its words;',
+    );
     expect(brief).toContain("3. flows: every rule and edge case decided, as tables of cases and outcomes (empty, loading, error, offline, first run), because a case the design leaves open becomes special-casing in code.");
     // The three product domains in plain words (real trial finding 3: the lead asked about the subject, "Travel and group planning").
     expect(brief).toContain(
@@ -108,6 +114,36 @@ describe("the lead's studio brief", () => {
     expect(brief).toContain(`  It cannot close yet: Packing list v1 waits for PE review.\n`);
   });
 
+  it("lists the PE's open cases of the open round, with the rule that the user decides them, never the designer; at most 10, the rest counted", () => {
+    const r = openRound(fresh(), "experience", at(1));
+    const plan = addScreen(r.state, r.n, at(2), { variants: [{ id: "A", label: "Map first" }, { id: "B", label: "Timeline" }] });
+    let s = pePass(plan.state, plan.id, 1, [{ variant: "A", verdict: "feasible", openCases: [{ text: "Who pays when a friend drops out?", why: "Nobody set the rule." }] }, { variant: "B", verdict: "feasible-if", change: "Daily forecasts.", openCases: [{ text: "What happens on a rain day?" }] }], at(3));
+    s = addScreen(s, r.n, at(4), { artifactId: plan.id, variants: [{ id: "A", label: "Map first" }, { id: "B", label: "Timeline" }] }).state;
+    s = pePass(s, plan.id, 2, [{ variant: "A", verdict: "feasible" }, { variant: "B", verdict: "feasible", openCases: [{ text: "Can the organizer clear a balance?" }] }], at(5));
+    const brief = section(envelope(s, DOCS));
+    expect(brief).toContain(
+      [
+        `  - ${plan.id} "Trip plan" v2 · screen · 2 variants: A Map first, B Timeline · desktop, mobile · PE agreed (pass 2)`,
+        "  Open cases the PE raised in this round (3): product questions for the user, never changes for the designer.",
+        `  - ${plan.id} "Trip plan" A, PE pass 1: Who pays when a friend drops out? Why: Nobody set the rule.`,
+        `  - ${plan.id} "Trip plan" B, PE pass 1: What happens on a rain day?`,
+        `  - ${plan.id} "Trip plan" B, PE pass 2: Can the organizer clear a balance?`,
+      ].join("\n"),
+    );
+    expect(brief).toContain('- The PE\'s open cases are product questions: a missing feature, an undecided edge case, a rule nobody set. The user decides them. Ask the user about them in "questions" (group related ones), or settle them with the user in the flows round. Never pass them to the designer as changes.');
+    // Once the round closes they leave the brief with it; with none raised there is no list.
+    expect(section(envelope(run(s, "closeRound", { round: r.n }, at(6)).state, DOCS))).not.toContain("Open cases the PE raised");
+    expect(section(envelope(peAgrees(plan.state, plan.id, 1, ["A", "B"], at(3)), DOCS))).not.toContain("Open cases the PE raised");
+    // Many: ten shown, the rest counted.
+    const many = pePass(plan.state, plan.id, 1, ["A", "B"].map((variant) => ({ variant, verdict: "feasible", openCases: Array.from({ length: 5 }, (_, i) => ({ text: `${variant} question ${i} ${"long ".repeat(55)}` })) })), at(3));
+    s = addScreen(many, r.n, at(4), { title: "Packing list", variants: [{ id: "a", label: "One list" }] }).state;
+    s = pePass(s, S.latestArtifacts(s).at(-1)!.id, 1, [{ variant: "a", verdict: "feasible", openCases: [{ text: "Who brings the stove?" }] }], at(5));
+    const crowded = section(envelope(s, DOCS));
+    expect(crowded).toContain("  Open cases the PE raised in this round (11): product questions for the user, never changes for the designer.");
+    expect(crowded).toContain("  - and 1 more, in the studio");
+    expect(crowded).not.toContain("Who brings the stove?");
+  });
+
   it("lists the user's marks, picks, pins and notes since the lead's last reply, not before it, and never the pins a revision carried", () => {
     const r = openRound(fresh(), "experience", at(1));
     const plan = addScreen(r.state, r.n, at(2), { variants: [{ id: "A", label: "Map first" }, { id: "B", label: "Timeline" }] });
@@ -134,15 +170,18 @@ describe("the lead's studio brief", () => {
     const ids: string[] = [];
     for (let i = 0; i < 40; i++) {
       const a = addScreen(s, r.n, at(2 + i), { title: `Screen ${i} ${"long title ".repeat(17)}`, variants: Array.from({ length: 6 }, (_, k) => ({ id: `v${k}`, label: "a long variant label ".repeat(5) })) });
-      s = peAgrees(a.state, a.id, 1, Array.from({ length: 6 }, (_, k) => `v${k}`), at(50 + i));
+      // The PE agrees, with the most open cases it may raise: 5 long ones on each variant.
+      const openCases = Array.from({ length: 5 }, () => ({ text: "an open case ".repeat(23), why: "why it matters ".repeat(20) }));
+      s = pePass(a.state, a.id, 1, Array.from({ length: 6 }, (_, k) => ({ variant: `v${k}`, verdict: "feasible", openCases })), at(50 + i));
       ids.push(a.id);
     }
     for (const id of ids) s = feedback(s, id, 1, { mark: "change", pins: Array.from({ length: 50 }, () => ({ x: 0.1, y: 0.1, text: "pin text ".repeat(100) })), note: "a long note ".repeat(300) }, at(200));
     const brief = studioBriefSection(s, CODE);
     expect(brief).toContain("  - and 28 more, in the studio");
     expect(brief).toContain("- and 30 earlier answers, in the studio");
-    // About 3,500 tokens at worst: 12 artifacts with 6 long variants each, 10 answers with long pins and notes.
-    expect(brief.length).toBeLessThan(14_000);
+    expect(brief).toContain("  - and 1190 more, in the studio");
+    // About 4,600 tokens at worst: 12 artifacts with 6 long variants each, 10 long open cases (about 4,200 characters), 10 answers with long pins and notes.
+    expect(brief.length).toBeLessThan(18_500);
   });
 
   it("parseLeadOutput passes the studio block through as found, for the domain to check", () => {

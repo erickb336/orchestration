@@ -197,6 +197,38 @@ main.st-wide { max-width: 1600px; }
 .st-version__head { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
 .st-version__text { color: var(--muted); font-size: var(--fs-micro); overflow-wrap: anywhere; }
 
+/* ---------- tables: the project's dictionary and a flow's rules (pass 4d) ---------- */
+/* One row per term or rule, your mark at the end of it. A row you marked Change or Drop keeps a bar in its colour. */
+.st-table-wrap { display: grid; gap: var(--space-3); min-width: 0; width: 100%; max-width: 60rem; justify-self: center; }
+.st-table-wrap > p, .st-table-wrap > h3 { margin: 0; }
+.st-table { font-size: var(--fs-small); }
+/* A long word wraps only when it cannot fit its column, so a term is never split mid-word. */
+.st-table th, .st-table td { overflow-wrap: break-word; }
+.st-table thead th { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; }
+.st-table tbody th { color: var(--text); font-size: var(--fs-small); font-weight: 650; }
+.st-table tbody th.st-rule { font-weight: 450; }
+.st-table__marks { width: 1%; white-space: nowrap; }
+.st-rowmarks { display: flex; gap: var(--space-1); }
+.st-table tr.st-row--change > :first-child { box-shadow: inset 3px 0 0 var(--st-you); }
+.st-table tr.st-row--drop > :first-child { box-shadow: inset 3px 0 0 var(--st-fail); }
+.st-table tr.st-row--drop th, .st-table tr.st-row--drop td:not(.st-table__marks) { color: var(--muted); }
+.st-rule__id { margin-right: var(--space-1); font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--fs-micro); color: var(--muted); font-weight: 600; }
+.st-tablefoot { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; }
+.st-examples { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-2); font-size: var(--fs-small); overflow-wrap: anywhere; }
+.st-rules { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+/* On a phone each row is a card: the term or rule first, then each cell under it with its name, then the marks. */
+@media (max-width: 640px) {
+  .st-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .st-table, .st-table tbody, .st-table tr, .st-table th, .st-table td { display: block; width: auto; }
+  .st-table tr { padding: var(--space-2) 0 var(--space-2) var(--space-2); border-bottom: 1px solid var(--border); }
+  .st-table th, .st-table td { padding: 2px 0; border: 0; white-space: normal; }
+  .st-table td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); }
+  .st-table td.st-table__marks { padding-top: var(--space-2); }
+  .st-table tr.st-row--change, .st-table tr.st-row--drop { box-shadow: inset 3px 0 0 var(--st-you); }
+  .st-table tr.st-row--drop { box-shadow: inset 3px 0 0 var(--st-fail); }
+  .st-table tr.st-row--change > :first-child, .st-table tr.st-row--drop > :first-child { box-shadow: none; }
+}
+
 /* ---------- documents: interfaces, algorithms, topologies, contracts and flows (pass 4a) ---------- */
 .st-stage--doc { justify-items: stretch; }
 .st-doc { display: grid; gap: var(--space-5); min-width: 0; width: 100%; max-width: 48rem; justify-self: center; }

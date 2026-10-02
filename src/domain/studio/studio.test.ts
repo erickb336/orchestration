@@ -333,11 +333,175 @@ describe("PE review: the loop rule", () => {
   it("the PE gives no verdict on what the owner brought or on a probe's evidence (review finding 9)", () => {
     const s = openRound(fresh(), "material", at(1)).state;
     const brought = addScreen(s, 0, at(2), { kind: "material", title: "Group page sketch", variants: [], devices: [], madeBy: { role: "user" } });
-    expect(() => pePass(brought.state, brought.id, 1, [{ verdict: "not-feasible", reasons: "Too costly." }], at(3))).toThrow("Group page sketch is what you brought: the PE does not review it.");
+    expect(() => pePass(brought.state, brought.id, 1, [{ verdict: "not-feasible", reasons: "Too costly." }], at(3))).toThrow("The PE does not review Group page sketch: it is source material, not a design.");
     const r = nextRound(brought.state, 4);
     const evidence = addScreen(r.state, r.n, at(5), { kind: "evidence", title: "Forecast sources", variants: [], devices: [], files: [{ path: "probes/forecasts.md", sha256: sha("b") }], madeBy: { role: "probe", provider: "codex", model: "codex-sample-large", attemptId: "run-probe-1" } });
-    expect(() => pePass(evidence.state, evidence.id, 1, [{ verdict: "feasible", reasons: "Fine." }], at(6))).toThrow("Forecast sources is a probe's evidence: the PE does not review it.");
+    expect(() => pePass(evidence.state, evidence.id, 1, [{ verdict: "feasible", reasons: "Fine." }], at(6))).toThrow("The PE does not review Forecast sources: it is a probe's evidence for the PE, not a design.");
     expect(evidence.state.studio.verdicts).toEqual([]);
+  });
+});
+
+describe("the project's dictionary: no PE review, and the owner marks its terms (the lead's decision, 2026-10-02)", () => {
+  const WORDS = [
+    { term: "trip", meaning: "A weekend away that a group plans together.", avoid: ["journey"] },
+    { term: "member", meaning: "A person who said they are in.", avoid: [] },
+  ];
+  const WHY = "it is a word list, and the PE judges feasibility, scale, longevity and budget";
+  /** The data round with the designer's dictionary and a contract beside it. */
+  function dataRound() {
+    const r = openRound(fresh(), "data", at(1));
+    const words = run<{ artifactId: string }>(r.state, "addStudioArtifact", { round: r.n, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("d") }], devices: [], madeBy: DESIGNER, dictionary: WORDS }, at(2));
+    const contract = addScreen(words.state, r.n, at(3), { kind: "contract", title: "Trip contract", variants: [{ id: "a", label: "As drafted", entry: "doc/index.md" }], files: [{ path: "doc/index.md", sha256: sha("c") }], devices: [] });
+    return { s: contract.state, n: r.n, words: words.result.artifactId, contract: contract.id };
+  }
+
+  it("reaches the owner at once: the service asks no PE run for it, only for the contract beside it", () => {
+    const { s, words, contract } = dataRound();
+    expect(S.peReview(s, art(s, words, 1))).toEqual({ status: "not-reviewed", why: WHY });
+    expect(S.readyForOwner(s, art(s, words, 1))).toBe(true);
+    expect(S.readyForOwner(s, art(s, contract, 1))).toBe(false);
+    const asked = R.askForPeReviews(s, at(4));
+    expect(asked.studio.runs.map((r) => ({ kind: r.kind, artifactId: r.artifactId }))).toEqual([{ kind: "pe", artifactId: contract }]);
+  });
+
+  it("the PE gives it no verdict, and a PE run on it is refused", () => {
+    const { s, n, words } = dataRound();
+    expect(() => pePass(s, words, 1, [{ variant: "a", verdict: "feasible" }], at(4))).toThrow(`The PE does not review Words: ${WHY}.`);
+    expect(() => R.requestStudioRun(s, { kind: "pe", round: n, artifactId: words, brief: "Review it." }, at(4))).toThrow(`The PE does not review Words: ${WHY}.`);
+  });
+
+  it("never starts a revision for the PE, and does not keep its round open", () => {
+    const { s, n, words, contract } = dataRound();
+    const objected = pePass(s, contract, 1, [{ variant: "a", verdict: "not-feasible", reasons: "No source for the prices." }], at(4));
+    expect(S.revisionDue(objected, art(objected, words, 1))).toBe(false);
+    expect(S.revisionDue(objected, art(objected, contract, 1))).toBe(true);
+    expect(S.roundBusy(objected, n)).toBe("the designer revises Trip contract v1 for the PE");
+    // With the contract's review ended, the dictionary alone keeps nothing open.
+    const agreed = peAgrees(s, contract, 1, ["a"], at(4));
+    expect(S.roundBusy(agreed, n)).toBeUndefined();
+  });
+
+  it("the owner marks its terms at once and approves it into the blueprint", () => {
+    const { s, words } = dataRound();
+    const marked = feedback(s, words, 1, { rows: WORDS.map((w) => ({ row: w.term, mark: "keep" })) }, at(4));
+    expect(S.currentFeedback(marked, words, 1)?.rows).toEqual([
+      { row: "trip", mark: "keep" },
+      { row: "member", mark: "keep" },
+    ]);
+    const approved = run(marked, "approveArtifact", { artifactId: words, version: 1 }, at(5)).state;
+    expect(approved.blueprint.revisions.at(-1)?.items).toEqual([{ id: expect.any(String), kind: "dictionary", title: "Words", artifactId: words, version: 1, status: "approved" }]);
+  });
+});
+
+describe("PE review converges: changes for the designer, open cases for the owner (the second real trial)", () => {
+  const RAIN = { text: "What happens to the plan on a rain day?", why: "Nobody set the rule." };
+  const DROP = { text: "Who pays when a friend drops out after booking?" };
+
+  it("an open case never starts a revision; a change does", () => {
+    let { s, id } = tripPlan();
+    // Every variant feasible, with open cases: the PE agrees, the owner sees it, and nothing goes back to the designer.
+    s = pePass(s, id, 1, [{ variant: "A", verdict: "feasible", openCases: [RAIN, DROP] }, { variant: "B", verdict: "feasible" }, { variant: "C", verdict: "feasible", openCases: [{ text: "  Does a  kayak\nneed a deposit?  ", why: "" }] }], at(3));
+    expect(S.peReview(s, art(s, id, 1))).toEqual({ status: "agreed", pass: 1 });
+    expect(S.revisionDue(s, art(s, id, 1))).toBe(false);
+    expect(S.readyForOwner(s, art(s, id, 1))).toBe(true);
+    expect(S.openCasesOf(s, art(s, id, 1))).toEqual([
+      { text: "What happens to the plan on a rain day?", why: "Nobody set the rule.", variant: "A", pass: 1, version: 1 },
+      { text: "Who pays when a friend drops out after booking?", variant: "A", pass: 1, version: 1 },
+      { text: "Does a kayak need a deposit?", variant: "C", pass: 1, version: 1 },
+    ]);
+    // The same open cases beside a change: the change sends B back.
+    const asked = tripPlan();
+    const sent = pePass(asked.s, asked.id, 1, [{ variant: "A", verdict: "feasible", openCases: [RAIN] }, { variant: "B", verdict: "feasible-if", change: "Daily forecasts: hourly ones cost too much." }, { variant: "C", verdict: "feasible" }], at(3));
+    expect(S.peReview(sent, art(sent, asked.id, 1))).toMatchObject({ status: "revising", pass: 1, asks: [{ variant: "B" }], objections: [] });
+    expect(S.revisionDue(sent, art(sent, asked.id, 1))).toBe(true);
+  });
+
+  it("on a later pass the PE checks each earlier ask first; a pass that meets every ask and adds nothing agrees, and the earlier open cases stay with the version", () => {
+    let { s, id } = tripPlan();
+    s = pePass(s, id, 1, [{ variant: "A", verdict: "feasible", openCases: [RAIN] }, { variant: "B", verdict: "feasible-if", change: "Daily forecasts." }, { variant: "C", verdict: "not-feasible", reasons: "Live kayak prices need a paid API." }], at(3));
+    const [askB, askC] = s.studio.verdicts.filter((v) => v.verdict !== "feasible").map((v) => v.id);
+    s = addScreen(s, 1, at(4), { artifactId: id }).state;
+    expect(S.earlierAsks(s, art(s, id, 2)).map((v) => v.id)).toEqual([askB, askC]);
+    s = run(
+      s,
+      "addPeVerdicts",
+      {
+        artifactId: id,
+        version: 2,
+        verdicts: [
+          { variant: "A", verdict: "feasible", reasons: "Still a drawn map." },
+          { variant: "B", verdict: "feasible", reasons: "Daily forecasts now.", earlier: [{ ask: askB, met: true }] },
+          { variant: "C", verdict: "feasible", reasons: "Prices entered by hand.", earlier: [{ ask: askC, met: true }] },
+        ],
+      },
+      at(5),
+    ).state;
+    expect(S.peReview(s, art(s, id, 2))).toEqual({ status: "agreed", pass: 2 });
+    expect(s.studio.verdicts.filter((v) => v.version === 2).map((v) => [v.variant, v.earlier])).toEqual([
+      ["A", undefined],
+      ["B", [{ ask: askB, met: true }]],
+      ["C", [{ ask: askC, met: true }]],
+    ]);
+    // The open case of pass 1 is not repeated on pass 2, and the owner still sees it with v2.
+    expect(S.openCasesOf(s, art(s, id, 2))).toEqual([{ ...RAIN, variant: "A", pass: 1, version: 1 }]);
+  });
+
+  it("a later pass cannot grow the asks: a change needs an earlier ask that is not met, or a risk the revision created, said so", () => {
+    let { s, id } = tripPlan();
+    s = pePass(s, id, 1, [{ variant: "A", verdict: "feasible" }, { variant: "B", verdict: "feasible-if", change: "Daily forecasts." }, { variant: "C", verdict: "feasible" }], at(3));
+    const askB = s.studio.verdicts.find((v) => v.variant === "B")!.id;
+    s = addScreen(s, 1, at(4), { artifactId: id }).state;
+    const pass = (verdicts: object[]) => run(s, "addPeVerdicts", { artifactId: id, version: 2, verdicts }, at(5)).state;
+    const ok = (variant: string, more: object = {}) => ({ variant, verdict: "feasible", reasons: "Fine.", ...more });
+    const metB = ok("B", { earlier: [{ ask: askB, met: true }] });
+    // A new feature on A, which the PE did not ask about before: refused, and nothing is recorded.
+    expect(() => pass([{ ...ok("A"), verdict: "feasible-if", change: "Add a code reset for returning friends." }, metB, ok("C")])).toThrow(
+      'The verdict on variant A sends it back, but the PE asked for no change on it earlier in the round. On a later pass, a change is for an earlier ask that is not met, or for a risk this revision created ("fromRevision"); a missing feature or an undecided case is an open case for the owner.',
+    );
+    // A new ask on B once its earlier ask is met: refused too.
+    expect(() => pass([ok("A"), { ...metB, verdict: "feasible-if", change: "Also add organizer access." }, ok("C")])).toThrow(/^The verdict on variant B sends it back, but it finds every earlier ask met\./);
+    // The first check comes first: each earlier ask once, and nothing else.
+    expect(() => pass([ok("A"), ok("B"), ok("C")])).toThrow(`The verdict on variant B leaves out earlier ask ${askB}: on a later pass, the PE first says whether each change it asked for is met.`);
+    expect(() => pass([ok("A", { earlier: [{ ask: askB, met: true }] }), metB, ok("C")])).toThrow(`The verdict on variant A checks "${askB}", which is not one of the PE's earlier asks on it in this round.`);
+    expect(() => pass([ok("A"), ok("B", { earlier: [{ ask: askB, met: true }, { ask: askB, met: false }] }), ok("C")])).toThrow("The verdict on variant B checks an earlier ask twice.");
+    expect(s.studio.verdicts.filter((v) => v.version === 2)).toEqual([]);
+    // What may send it back: the ask not met, or a risk this revision created, said so.
+    const unmet = pass([ok("A"), { ...metB, earlier: [{ ask: askB, met: false }], verdict: "feasible-if", change: "Daily forecasts, still hourly on the map." }, ok("C")]);
+    expect(S.peReview(unmet, art(unmet, id, 2))).toMatchObject({ status: "revising", pass: 2, asks: [{ variant: "B", earlier: [{ ask: askB, met: false }] }] });
+    const created = pass([{ ...ok("A"), verdict: "feasible-if", fromRevision: true, change: "The revision added live weather tiles; cache them." }, metB, ok("C")]);
+    expect(S.peReview(created, art(created, id, 2))).toMatchObject({ status: "revising", asks: [{ variant: "A", fromRevision: true }] });
+    // "fromRevision" means a change on a later pass: not on a feasible verdict, nor on the round's first pass.
+    expect(() => pass([ok("A", { fromRevision: true }), metB, ok("C")])).toThrow("The verdict on variant A says its change answers a risk the revision created, but it asks for no change.");
+    const first = tripPlan();
+    expect(() => pePass(first.s, first.id, 1, [{ variant: "A", verdict: "feasible-if", fromRevision: true }, { variant: "B", verdict: "feasible" }, { variant: "C", verdict: "feasible" }], at(3))).toThrow(/but it is on the round's first take\.$/);
+  });
+
+  it("a verdict holds at most 5 open cases, each a question with an optional why", () => {
+    const { s, id } = tripPlan();
+    const pass = (openCases: object[]) => pePass(s, id, 1, [{ variant: "A", verdict: "feasible", openCases }, { variant: "B", verdict: "feasible" }, { variant: "C", verdict: "feasible" }], at(3));
+    expect(() => pass(Array.from({ length: 6 }, (_, i) => ({ text: `Question ${i}?` })))).toThrow("At most 5 open cases on one verdict; group related questions.");
+    expect(() => pass([{ text: "   " }])).toThrow("An open case is empty.");
+    expect(() => pass([{ text: "x".repeat(301) }])).toThrow("An open case is over 300 characters.");
+    expect(() => pass([{ why: "No text." }])).toThrow(InvalidCommandError);
+  });
+
+  it("verdicts stored before open cases and ask checks read the same, and a later pass checks them by id", () => {
+    let { s, id } = tripPlan();
+    // As the studio stored a pass before this change: no openCases, earlier or fromRevision on any verdict.
+    s = structuredClone(s);
+    s.studio.verdicts.push(
+      { id: "pev-9001", artifactId: id, version: 1, variant: "A", pass: 1, verdict: "feasible", reasons: "Fine.", at: at(3) },
+      { id: "pev-9002", artifactId: id, version: 1, variant: "B", pass: 1, verdict: "feasible-if", reasons: "Hourly costs too much.", change: "Daily forecasts.", at: at(3) },
+      { id: "pev-9003", artifactId: id, version: 1, variant: "C", pass: 1, verdict: "feasible", reasons: "Fine.", at: at(3) },
+    );
+    const v1 = art(s, id, 1);
+    expect(S.peReview(s, v1)).toMatchObject({ status: "revising", pass: 1, asks: [{ id: "pev-9002", change: "Daily forecasts." }], objections: [] });
+    expect(S.revisionDue(s, v1)).toBe(true);
+    expect(S.openCasesOf(s, v1)).toEqual([]);
+    s = addScreen(s, 1, at(4), { artifactId: id }).state;
+    expect(S.earlierAsks(s, art(s, id, 2)).map((v) => v.id)).toEqual(["pev-9002"]);
+    s = run(s, "addPeVerdicts", { artifactId: id, version: 2, verdicts: [{ variant: "A", verdict: "feasible", reasons: "Fine." }, { variant: "B", verdict: "feasible", reasons: "Daily now.", earlier: [{ ask: "pev-9002", met: true }] }, { variant: "C", verdict: "feasible", reasons: "Fine." }] }, at(5)).state;
+    expect(S.peReview(s, art(s, id, 2))).toEqual({ status: "agreed", pass: 2 });
   });
 });
 

@@ -336,13 +336,89 @@ export function reviseSample(staging: string, opts: { terminal: boolean; variant
   return `Revised ${asked.map((v) => v.label).join(" and ") || "nothing"} of ${manifest.title} in answer to the PE; the other variants are as they were (simulated revision).`;
 }
 
+// ---------- the project's dictionary and a flow's rules (pass 4d) ----------
+//
+// In a data round the fake designer hands in the project's dictionary when the brief asks for one, and in a flows
+// round its flow carries rules.json, as a designer agent's would: through the same checks at import. The dictionary's
+// title says it is a simulated sample.
+
+/** The Weekend Trips dictionary the fake designer hands in. */
+export const DICTIONARY_SAMPLE = [
+  { term: "trip", meaning: "A weekend away that a group of friends plans together.", avoid: ["journey", "getaway", "outing"] },
+  { term: "trip plan", meaning: "The days and stops of one trip, in order.", avoid: ["itinerary", "agenda"] },
+  { term: "member", meaning: "A person who said they are in for a trip.", avoid: ["participant", "attendee"] },
+  { term: "organiser", meaning: "The member who proposed the trip; only they change its trip plan.", avoid: ["admin", "creator"] },
+  { term: "cost each", meaning: "What the trip costs, divided by its members.", avoid: ["price per person", "per-head cost"] },
+  { term: "waiting list", meaning: "The people who said they are in after the trip was full, in the order they asked.", avoid: ["waitlist", "queue"] },
+];
+
+/** The rules of the fake designer's flow, "Saying you are in": each EARS pattern once, and every edge case as an If-then rule. */
+export const FLOW_RULES_SAMPLE = {
+  rules: [
+    { id: "R1", text: "When a member says they are in, the app shall show the cost each again." },
+    { id: "R2", text: "While the trip has room, the app shall add each new member to the trip." },
+    { id: "R3", text: "If the trip is full, then the app shall add the person to the waiting list." },
+    { id: "R4", text: "If the trip has started, then the app shall refuse the answer and tell the organiser." },
+    { id: "R5", text: "If the phone is offline, then the app shall keep the answer and send it when the phone is online again." },
+    { id: "R6", text: "Where payments are included, the app shall ask each member to pay the cost each." },
+    { id: "R7", text: "The app shall show each member's answer to the whole group." },
+  ],
+  examples: [
+    { id: "E1", text: "Given a trip with one bed left, when Kim says she is in, then Kim is a member and the trip is full." },
+    { id: "E2", text: "Given a full trip, when Sam says he is in, then Sam is first on the waiting list." },
+  ],
+};
+
+/** The kinds a designer's brief asks for: the line the lead's block adds ("The lead asks for: contract, dictionary; …"). */
+export function askedKinds(brief: string): string[] {
+  return /The lead asks for: ([a-z, -]+);/.exec(brief)?.[1]?.split(", ") ?? [];
+}
+
+/** Whether the designer's envelope asks for a flow's rules: it does in a flows round (runs.ts). */
+export const asksForRules = (prompt: string) => /^## The flows round's rules$/m.test(prompt);
+
+type Manifest = { artifacts: { kind: string; title: string; devices: string[]; variants: { id: string; label: string; entry: string }[]; files: string[] }[] };
+const readManifest = (staging: string): Manifest => (existsSync(join(staging, "studio.json")) ? (JSON.parse(readFileSync(join(staging, "studio.json"), "utf8")) as Manifest) : { artifacts: [] });
+const writeManifest = (staging: string, m: Manifest) => writeFileSync(join(staging, "studio.json"), `${JSON.stringify(m, null, 2)}\n`);
+
+/** Add the project's dictionary to what the run hands in (its studio.json, written or not yet), as a designer agent would. */
+export function addDictionarySample(staging: string) {
+  mkdirSync(staging, { recursive: true });
+  writeFileSync(join(staging, "dictionary.json"), `${JSON.stringify(DICTIONARY_SAMPLE, null, 2)}\n`);
+  const m = readManifest(staging);
+  m.artifacts.push({ kind: "dictionary", title: "Weekend Trips words (simulated sample)", devices: [], variants: [{ id: "a", label: "A · As drafted", entry: "dictionary.json" }], files: ["dictionary.json"] });
+  writeManifest(staging, m);
+}
+
+/** Give each flow the run hands in its rules.json, beside its variant's entry, and list it. */
+export function addFlowRules(staging: string) {
+  const m = readManifest(staging);
+  for (const a of m.artifacts.filter((x) => x.kind === "flow")) {
+    for (const folder of new Set(a.variants.map((v) => dirname(v.entry)))) {
+      const path = folder === "." ? "rules.json" : `${folder}/rules.json`;
+      writeFileSync(join(staging, path), `${JSON.stringify(FLOW_RULES_SAMPLE, null, 2)}\n`);
+      if (!a.files.includes(path)) a.files.push(path);
+    }
+  }
+  writeManifest(staging, m);
+}
+
+/**
+ * The earlier asks a PE envelope lists on a later pass ("- `pev-3` on `b` (…), pass 1, …"; server/studio/pe.ts), by
+ * the variant each is on (none: the whole artifact).
+ */
+export function earlierAsksIn(prompt: string): { ask: string; variant?: string }[] {
+  return [...prompt.matchAll(/^- `([^`]+)` on (?:`([^`]+)`|the whole artifact)[^\n]*, pass \d+, /gm)].map((m) => ({ ask: m[1], ...(m[2] !== undefined ? { variant: m[2] } : {}) }));
+}
+
 /**
  * What the fake runtime's PE answers (ORC-029 passes 3 and 4): it reads the version's manifest.json, as a PE agent
- * reads the folder. On an artifact's first version with two or more variants it asks for a stand-in change to the
- * second (feasible-if), so the demo shows the designer revising in answer; it agrees with every variant of every
- * other version. Every reason says it is simulated: nothing was judged.
+ * reads the folder, and its envelope. On an artifact's first version with two or more variants it asks for a stand-in
+ * change to the second (feasible-if), and raises one stand-in open case on it, so the demo shows the designer
+ * revising in answer and a question going to the owner through the lead. On every other version it checks each
+ * earlier ask its envelope lists, finds each met, and agrees. Every reason says it is simulated: nothing was judged.
  */
-export function fakePeAnswer(folder: string): { ok: true; text: string } | { ok: false; error: string } {
+export function fakePeAnswer(folder: string, prompt = ""): { ok: true; text: string } | { ok: false; error: string } {
   let variants: { id: string }[];
   let version: unknown;
   try {
@@ -354,12 +430,24 @@ export function fakePeAnswer(folder: string): { ok: true; text: string } | { ok:
   }
   const reasons = "Simulated: the fake runtime's PE, not an agent. It judged nothing about feasibility, scale, longevity or budget;";
   const objects = version === 1 && variants.length >= 2;
+  const asks = earlierAsksIn(prompt);
+  const earlier = (variant?: string) => {
+    const mine = asks.filter((x) => variant === undefined || x.variant === undefined || x.variant === variant);
+    return mine.length ? { earlier: mine.map((x) => ({ ask: x.ask, met: true })) } : {};
+  };
+  const agrees = (variant?: string) => ({ ...(variant !== undefined ? { variant } : {}), ...earlier(variant), verdict: "feasible", reasons: `${reasons} it agrees so the demo can go on${asks.length ? ", and finds each earlier ask met" : ""}.` });
   const verdicts = variants.length
     ? variants.map((v, i) =>
         objects && i === 1
-          ? { variant: v.id, verdict: "feasible-if", reasons: `${reasons} it asks for a change on the first version, so the demo shows the designer revising.`, change: "Simulated: a stand-in change, which the fake designer marks on this variant in a revision." }
-          : { variant: v.id, verdict: "feasible", reasons: `${reasons} it agrees so the demo can go on.` },
+          ? {
+              variant: v.id,
+              verdict: "feasible-if",
+              reasons: `${reasons} it asks for a change on the first version, so the demo shows the designer revising.`,
+              change: "Simulated: a stand-in change, which the fake designer marks on this variant in a revision.",
+              openCases: [{ text: "Simulated: when a friend drops out after the cabin is booked, who pays their share?", why: "Simulated: a stand-in question, so the demo shows an open case going to the owner through the lead." }],
+            }
+          : agrees(v.id),
       )
-    : [{ verdict: "feasible", reasons: `${reasons} it agrees so the demo can go on.` }];
+    : [agrees()];
   return { ok: true, text: `Simulated PE review: no agent read this version.\n\n\`\`\`json\n${JSON.stringify({ verdicts }, null, 2)}\n\`\`\`\n` };
 }

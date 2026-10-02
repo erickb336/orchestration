@@ -2,6 +2,7 @@
 // owner's. Not used by the application.
 
 import { runCommand } from "../commands";
+import * as S from "../studio/studio";
 import type { State } from "../types";
 
 /** A SHA-256 written as one repeated hex character. */
@@ -32,10 +33,16 @@ export function addScreen(s: State, round: number, now: string, over: Record<str
   return { state: r.state, id: r.result.artifactId, version: r.result.version };
 }
 
-type V = { variant?: string; verdict: string; reasons?: string; change?: string; budget?: object };
-/** One PE pass; each verdict's reasons and (for feasible-if) change are filled in when left out. */
+type V = { variant?: string; verdict: string; reasons?: string; change?: string; earlier?: object[]; fromRevision?: boolean; openCases?: object[]; budget?: object };
+/**
+ * One PE pass; each verdict's reasons and (for feasible-if) change are filled in when left out. So are its checks of
+ * the earlier asks on its variant (a later pass): met when it finds the variant feasible, not met when it asks again.
+ */
 export function pePass(s: State, artifactId: string, version: number, verdicts: V[], now: string): State {
-  const full = verdicts.map((v) => ({ reasons: `${v.verdict} for a reason`, ...(v.verdict === "feasible-if" ? { change: "cache the tiles" } : {}), ...v }));
+  const a = s.studio.artifacts.find((x) => x.id === artifactId && x.version === version);
+  const asks = a ? S.earlierAsks(s, a) : [];
+  const checks = (v: V) => S.asksOn(asks, v.variant).map((x) => ({ ask: x.id, met: v.verdict === "feasible" }));
+  const full = verdicts.map((v) => ({ reasons: `${v.verdict} for a reason`, ...(v.verdict === "feasible-if" ? { change: "cache the tiles" } : {}), ...(asks.length ? { earlier: checks(v) } : {}), ...v }));
   return run(s, "addPeVerdicts", { artifactId, version, verdicts: full }, now).state;
 }
 

@@ -30,6 +30,11 @@
 // 6. Writes the evidence to evidence/ and, for a real run, a record to docs/real-runs/ without local paths, the
 //    service log or anything shaped like a credential (the same check as the factory scenario).
 //
+// With --fake and without --lead (pass 4d), the trial then opens a data round, where the simulated designer hands in
+// the project's dictionary beside a contract, and a flows round, where its flow carries rules.json. The dictionary
+// reaches the owner with no PE review (a word list raises no question of feasibility, scale, longevity or budget); the
+// owner marks every term and approves it, which makes it the project's words.
+//
 // With --lead (pass 4), the lead runs the studio instead of the script. Two projects, one after the other:
 // - a short idea in a repository with no code: the owner's message asks the lead to start, and the lead opens round 1
 //   on the experience and asks for designer runs through its studio block;
@@ -57,11 +62,12 @@ const loaded = await Promise.all([
   import("../server/studio/runs.ts"),
   import("../src/domain/studio/studio.ts"),
   import("../src/domain/spend.ts"),
+  import("../src/domain/studio/blueprint.ts"),
 ]).catch((e) => {
   console.error(`Run this with \`npm run trial:studio\` (node --import tsx): ${e instanceof Error ? e.message : e}`);
   process.exit(2);
 });
-const [{ Store }, { startDesignerRun }, S, Spend] = loaded;
+const [{ Store }, { startDesignerRun }, S, Spend, B] = loaded;
 
 const args = process.argv.slice(2);
 const FAKE = args.includes("--fake");
@@ -78,7 +84,9 @@ if (!(CAP_USD > 0) || !(CODEX_USD >= 0)) {
   process.exit(2);
 }
 /** PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the trial. */
-const EXPECTED_CHECKS = 9; // The same count with --lead: two per project, then the reproduction, the sandbox, feedback, the stage and the cap.
+// 9 with --lead too: two per project, then the reproduction, the sandbox, feedback, the stage and the cap. The simulated
+// trial without --lead adds three for the data and flows rounds (pass 4d): the dictionary, the rules, and approval.
+const EXPECTED_CHECKS = 9 + (FAKE && !LEAD ? 3 : 0);
 /** A run is not started with less than this left of the cap: it could do nothing useful. */
 const MIN_RUN_USD = 0.5;
 
@@ -298,7 +306,7 @@ async function main() {
   const artifacts = S.latestArtifacts(st).filter((a) => a.madeBy.role === "designer");
   evidence.runs = st.studio.runs.map((r) => ({ id: r.id, kind: r.kind, provider: r.provider, model: r.actualModel ?? r.model, status: r.status, usage: r.usage ?? null, estimatedUsd: Spend.estimateUsd(r, Spend.PRICES).usd, simulated: !!r.simulated, note: r.note ?? null, artifact: r.artifactId ? `${r.artifactId} v${r.baseVersion}` : null }));
   evidence.artifacts = artifacts.map((a) => ({ id: a.id, version: a.version, kind: a.kind, title: a.title, devices: a.devices, variants: a.variants, files: a.files.length, shots: a.shots ?? null, demo: a.demo ?? null, peReview: S.peReview(st, a).status }));
-  evidence.verdicts = st.studio.verdicts.map((v) => ({ artifact: `${v.artifactId} v${v.version}`, variant: v.variant ?? null, verdict: v.verdict, reasons: v.reasons, change: v.change ?? null, budget: v.budget ?? null, by: v.by ?? null }));
+  evidence.verdicts = st.studio.verdicts.map(verdictRecord);
   record("studio settled", { artifacts: artifacts.map((a) => `${a.title} v${a.version} (${a.kind}, ${a.variants.length} variant${a.variants.length === 1 ? "" : "s"})`) });
 
   const screens = artifacts.filter((a) => a.kind === "screen");
@@ -364,11 +372,82 @@ async function main() {
   }
   check("the owner can send feedback on every artifact the PE reviewed", answers.length > 0 && answers.every((x) => x.sent), answers);
 
+  if (FAKE) await wordsAndRules();
+
   const after = (await state()).state;
   check("the project is still in Vision, with no factory start", after.project.stage === "shaping" && after.project.factoryStarts.length === 0, { stage: after.project.stage });
 
   capCheck(claudeSpend(after), 0, Spend.buildingSpend(after).usd);
   verdict();
+}
+
+const DATA_BRIEF = [
+  "Round 2 is about the data. Describe the things of Weekend Trips and how they relate, with a worked example, as a contract.",
+  "Also propose the project's dictionary: each word the product uses, with one meaning and the words it replaces.",
+  "",
+  "The lead asks for: contract, dictionary; one take; documents, with no devices.",
+].join("\n");
+const FLOWS_BRIEF = [
+  "Round 3 is about the flows. Decide every case of saying you are in for a trip, as a flow with its rules.",
+  "",
+  "The lead asks for: flow; one take; documents, with no devices.",
+].join("\n");
+
+/**
+ * Pass 4d, in the simulated runtime only (a real designer's dictionary and rules wait for the next real trial): the
+ * trial, as the lead, closes the open round and opens a data round, where the designer hands in the project's
+ * dictionary beside a contract, then a flows round, where its flow carries rules.json. The dictionary reaches the owner
+ * with no PE run. Then the owner marks every term Keep and approves it, which makes it the project's words. Three checks.
+ */
+async function wordsAndRules() {
+  const lead = new Store(dbPath);
+  const leadCmd = (name, a) => lead.command(name, a, `studio-trial-${randomUUID()}`, new Date().toISOString()).result;
+  const made = {};
+  for (const [focus, brief] of [
+    ["data", DATA_BRIEF],
+    ["flows", FLOWS_BRIEF],
+  ]) {
+    const open = S.currentRound((await state()).state);
+    if (open) leadCmd("closeRound", { round: open.n, summary: `Round ${open.n} closed by the studio trial.` });
+    const n = leadCmd("openRound", { focus, summary: `The ${focus} (studio trial, simulated).` }).n;
+    const runId = startDesignerRun(lead, { round: n, brief, selection: { provider: "claude", model: DESIGNER_MODEL } }, new Date().toISOString(), `studio-trial-${randomUUID()}`);
+    record(`designer run asked for: the ${focus} round`, { round: n, run: runId });
+    await until(`the designer run for the ${focus} round`, (x) => ended(x.state.studio.runs.find((r) => r.id === runId)), minutes(2), 500);
+    const { s } = await until(`PE review in the ${focus} round`, (x) => settled(x.state), minutes(4), 500);
+    made[focus] = S.latestArtifacts(s.state).filter((a) => a.round === n);
+    const r = s.state.studio.runs.find((x) => x.id === runId);
+    record(`designer run ended: the ${focus} round`, { run: runId, status: r.status, note: r.note ?? null, artifacts: made[focus].map((a) => `${a.title} v${a.version} (${a.kind})`) });
+  }
+  lead.close();
+
+  const words = made.data.find((a) => a.kind === "dictionary");
+  const flow = made.flows.find((a) => a.kind === "flow");
+  const st = (await state()).state;
+  evidence.words = { dictionary: words ? { id: words.id, version: words.version, title: words.title, terms: words.dictionary } : null, rules: flow?.rules ?? null };
+  const peRuns = words ? st.studio.runs.filter((r) => r.kind === "pe" && r.artifactId === words.id).map((r) => r.id) : [];
+  check(
+    "the data round: the designer handed in the project's dictionary with its terms, and it reached the owner with no PE run",
+    !!words && words.dictionary.length > 0 && S.readyForOwner(st, words) && S.peReview(st, words).status === "not-reviewed" && !peRuns.length,
+    words ? { terms: words.dictionary.map((e) => `${e.term} (not: ${e.avoid.join(", ") || "none"})`), peReview: S.peReview(st, words).status, peRuns } : { artifacts: made.data.map((a) => a.kind) },
+  );
+  const rules = flow?.rules?.[0];
+  check(
+    "the flows round: the flow carries its rules, each in an EARS pattern, and its examples, checked at import",
+    !!rules && rules.rules.length > 0 && rules.rules.every((r) => !!r.pattern) && rules.examples.length > 0,
+    rules ? { rules: rules.rules.map((r) => `${r.id} ${r.pattern}`), examples: rules.examples.length } : { artifacts: made.flows.map((a) => a.kind) },
+  );
+  // The owner marks each term and approves the dictionary: then it is the project's words.
+  let inForce = null;
+  try {
+    if (!words) throw new Error("no dictionary to approve");
+    await cmd("sendFeedback", { entries: [{ artifactId: words.id, version: words.version, mark: "keep", pins: [], rows: words.dictionary.map((e) => ({ row: e.term, mark: "keep" })), note: "Studio trial: these are our words." }] });
+    await cmd("approveArtifact", { artifactId: words.id, version: words.version });
+    const found = B.dictionaryInForce((await state()).state);
+    inForce = found ? { artifact: `${found.artifact.title} v${found.artifact.version}`, terms: found.entries.length } : null;
+  } catch (e) {
+    inForce = { error: e instanceof Error ? e.message : String(e) };
+  }
+  check("the owner marks every term Keep and approves the dictionary: it is the project's words", !!inForce?.terms && inForce.terms === words?.dictionary.length, inForce);
 }
 
 /** The cap's check: Claude's spend, `carried` from earlier projects of this trial, with each run of no recorded cost at its run limit. */
@@ -440,14 +519,38 @@ async function leadProject(key, { repoPath, vision, message, carried }) {
       round: round ? { n: round.n, focus: round.focus, summary: round.summary, lead: round.lead ?? null } : null,
       runs: st.studio.runs.map((r) => ({ id: r.id, kind: r.kind, provider: r.provider, model: r.actualModel ?? r.model, status: r.status, usage: r.usage ?? null, simulated: !!r.simulated, note: r.note ?? null, fromLead: r.fromLead ?? null })),
       artifacts: artifacts.map((a) => ({ id: a.id, version: a.version, round: a.round, kind: a.kind, title: a.title, variants: a.variants.length, devices: a.devices, provenance: a.provenance ?? null, peReview: S.peReview(st, a).status })),
-      verdicts: st.studio.verdicts.map((v) => ({ artifact: `${v.artifactId} v${v.version}`, variant: v.variant ?? null, verdict: v.verdict, reasons: v.reasons, by: v.by ?? null })),
+      verdicts: st.studio.verdicts.map(verdictRecord),
     },
   ];
   return { key, lead, round, asked: asked.map((r) => st.studio.runs.find((y) => y.id === r.id)), artifacts, state: st, spend: claudeSpend(st) };
 }
 
-/** Whether the PE reviewed every one of these artifacts through its own runs, and the owner may now see them. */
-const reviewed = (st, artifacts) => artifacts.length > 0 && artifacts.every((a) => S.readyForOwner(st, a) && st.studio.verdicts.some((v) => v.artifactId === a.id && v.version === a.version && v.by));
+/**
+ * A PE verdict as the record keeps it: with its pass, the change it asks for, its checks of the earlier asks and its
+ * open cases, so a record shows whether the loop converged (the second real trial recorded the reasons only).
+ */
+const verdictRecord = (v) => ({
+  artifact: `${v.artifactId} v${v.version}`,
+  pass: v.pass,
+  variant: v.variant ?? null,
+  verdict: v.verdict,
+  reasons: v.reasons,
+  change: v.change ?? null,
+  earlier: v.earlier ?? null,
+  fromRevision: !!v.fromRevision,
+  openCases: v.openCases ?? null,
+  budget: v.budget ?? null,
+  by: v.by ?? null,
+});
+
+/**
+ * Whether the PE reviewed, through its own runs, every one of these artifacts of a kind it reviews (a dictionary it
+ * does not), and the owner may now see them.
+ */
+const reviewed = (st, artifacts) => {
+  const mine = artifacts.filter((a) => S.peReview(st, a).status !== "not-reviewed");
+  return mine.length > 0 && mine.every((a) => S.readyForOwner(st, a) && st.studio.verdicts.some((v) => v.artifactId === a.id && v.version === a.version && v.by));
+};
 
 async function leadTrial() {
   const fixture = join(ROOT, "scripts", "fixtures", "studio-existing");

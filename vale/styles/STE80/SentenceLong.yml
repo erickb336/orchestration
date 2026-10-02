@@ -1,0 +1,28 @@
+# Warning: a sentence of 26 to 35 words. Over 35 is SentenceLength's error, so one sentence gets one alert.
+# A script, because `occurrence` cannot say "between": it counts words as SentenceLength.yml does.
+extends: script
+message: "This sentence is over 25 words. Keep a descriptive sentence to 25 words or fewer, a procedure to 20."
+description: "A sentence of 26 to 35 words."
+level: warning
+scope: sentence
+script: |
+  text := import("text")
+  matches := []
+  words := text.re_find(`\S*[\p{L}\p{N}*]\S*`, scope, -1)
+  n := words == undefined ? 0 : len(words)
+  if n > 25 && n <= 35 {
+    matches = append(matches, {begin: 0, end: len(scope)})
+  }
+tests:
+  - name: 26 words is a warning
+    input: "One two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five six."
+    want: "1:1:STE80.SentenceLong:This sentence is over 25 words. Keep a descriptive sentence to 25 words or fewer, a procedure to 20."
+  - name: 25 words is not
+    input: "One two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five."
+    want: ""
+  - name: over 35 is the other rule's
+    input: "One two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five six."
+    absent: "STE80.SentenceLong"
+  - name: each sentence on its own
+    input: "One two three four five six seven eight nine ten one two three. Four five six seven eight nine ten one two three four five six seven eight nine."
+    want: ""

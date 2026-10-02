@@ -7,7 +7,7 @@
 // blueprint.ts (approval, open items, change orders, task specs' references). The containers exist from state
 // format 19.
 
-import type { Device, PeReviewState, ProviderId } from "../types";
+import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId } from "../types";
 
 /**
  * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
@@ -52,14 +52,53 @@ export interface RoundQuestion {
  * (names, signatures, the error model, usage examples as a caller writes them) and its core `algorithm`s and
  * primitives (pseudo-code, a worked trace, invariants, cost). An infrastructure system's: its `topology` (what talks to
  * what, failure and recovery, scale and cost). Any domain's `contract`s (what crosses a boundary, with examples) and
- * `flow`s (journeys, sequences, and tables of cases and outcomes). The owner's `material`, and a probe's `evidence`.
+ * `flow`s (journeys, sequences, and tables of cases and outcomes; a flow may carry its rules, `rules.json`). The
+ * project's `dictionary` (pass 4d): its words, each with one meaning and the words it replaces. The owner's
+ * `material`, and a probe's `evidence`.
  */
-export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "interface" | "algorithm" | "topology" | "material" | "evidence";
-export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology", "material", "evidence"];
+export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "interface" | "algorithm" | "topology" | "dictionary" | "material" | "evidence";
+
+/** Who makes an artifact of a kind: the designer, the owner (what they bring into round 0), or a probe's run (its evidence). */
+export type KindMaker = "designer" | "owner" | "probe";
+
+/**
+ * The rules of one artifact kind: who makes it, whether the PE reviews it, and whether it waits for the owner's mark.
+ * The studio reads these here, from no list of its own. How a kind is shown (`DOCUMENT_KINDS`, the viewer) is apart.
+ * - `maker`: who makes it. The lead asks the designer only for the designer's kinds.
+ * - `peReviews`: whether the PE reviews each version before the owner sees it. When it does not, its review is
+ *   "not-reviewed" (`peReview`, studio.ts): the version reaches the owner at once, the PE gives it no verdict, and the
+ *   designer never revises it for the PE. `why` says why, in words that follow "The PE does not review it: ", for the
+ *   owner and the lead alike.
+ * - `ownerMark`: "asked": the version waits for the owner's mark (on a table: a mark on each row), and it counts as
+ *   waiting for them until then. "optional": the owner may mark it, and nothing waits for the mark.
+ */
+export type KindRule = { maker: KindMaker; ownerMark: "asked" | "optional" } & ({ peReviews: true } | { peReviews: false; why: string });
+
+/**
+ * One row for each kind (the type refuses a kind without one). The dictionary goes to the owner with no PE review
+ * (the lead's decision, 2026-10-02): the PE judges feasibility, scale, longevity and budget, and a word list raises
+ * none of them. The owner still marks its terms.
+ */
+export const KIND_RULES: Record<StudioArtifactKind, KindRule> = {
+  screen: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  "terminal-demo": { maker: "designer", peReviews: true, ownerMark: "asked" },
+  tui: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  contract: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  flow: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  interface: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  algorithm: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  topology: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  dictionary: { maker: "designer", peReviews: false, why: "it is a word list, and the PE judges feasibility, scale, longevity and budget", ownerMark: "asked" },
+  material: { maker: "owner", peReviews: false, why: "it is source material, not a design", ownerMark: "optional" },
+  evidence: { maker: "probe", peReviews: false, why: "it is a probe's evidence for the PE, not a design", ownerMark: "optional" },
+};
+
+/** Every kind, in the table's order. */
+export const STUDIO_ARTIFACT_KINDS = Object.keys(KIND_RULES) as StudioArtifactKind[];
+/** What a designer's manifest may hold: the owner brings material, and a probe's run makes evidence. */
+export const DESIGNER_KINDS = STUDIO_ARTIFACT_KINDS.filter((k) => KIND_RULES[k].maker === "designer");
 /** Kinds that are documents: plain files (Markdown with code blocks and tables, `.mmd` Mermaid), shown without a device frame. */
 export const DOCUMENT_KINDS: StudioArtifactKind[] = ["contract", "flow", "interface", "algorithm", "topology"];
-/** Kinds the PE does not review: what the owner brought, and a probe's evidence. They reach the owner at once, and a verdict on one is refused. */
-export const UNGATED_KINDS: StudioArtifactKind[] = ["material", "evidence"];
 
 /** One option of an artifact: its id, its label, and its entry file when it has one. */
 export interface StudioVariant {
@@ -110,6 +149,10 @@ export interface StudioArtifact {
   shots?: ArtifactShots;
   /** How a terminal demo or TUI is shown, which the service settles after import (pass 3). Absent when this service records none. */
   demo?: ArtifactDemo;
+  /** A dictionary's terms, as its `dictionary.json` gave them, checked at import (pass 4d). Only on a dictionary. */
+  dictionary?: DictionaryEntry[];
+  /** A flow's rules and examples, from the `rules.json` beside a variant's entry, checked at import (pass 4d). Only on a flow, and only for the variants that have one. */
+  rules?: VariantRules[];
   /**
    * The end of PE review of this version, when the service recorded it because no other record shows it: no enabled
    * provider could run the next step, or the version was reviewed under pass 3's rule (recorded at the upgrade).
@@ -132,6 +175,47 @@ export interface StudioArtifact {
 export type LoopEnd = "passes" | "as-is" | "round-closed" | "no-revision" | "no-review" | "no-provider" | "earlier-rule";
 /** The ends the service records on the version (`reviewEnd`), because no other record shows them. */
 export type RecordedEnd = Extract<LoopEnd, "no-provider" | "earlier-rule">;
+
+/**
+ * One word of the project's dictionary (pass 4d, decision 6): the term the product and its agents use, its one
+ * meaning, and the words it replaces. The dictionary the owner approved into the blueprint is the project's: every
+ * agent gets its words, and the prose check reports an avoided word (words.ts).
+ */
+export interface DictionaryEntry {
+  term: string;
+  meaning: string;
+  avoid: string[];
+}
+
+/**
+ * The five sentence patterns of EARS (Easy Approach to Requirements Syntax; Mavin et al., 2009) a flow's rule fits:
+ * always "The <system> shall <response>."; event "When <trigger>, …"; state "While <state>, …"; unwanted
+ * "If <unwanted condition>, then …"; optional "Where <feature is included>, …".
+ */
+export type RulePattern = "always" | "event" | "state" | "unwanted" | "optional";
+export const RULE_PATTERNS: RulePattern[] = ["always", "event", "state", "unwanted", "optional"];
+
+/** A flow's rule (pass 4d, decision 7): its id, its text in one of EARS's patterns, and the pattern it fits. */
+export interface FlowRule {
+  id: string;
+  text: string;
+  pattern: RulePattern;
+}
+
+/** An acceptance example of a flow: "Given <context>, when <action>, then <result>." */
+export interface FlowExample {
+  id: string;
+  text: string;
+}
+
+/** The rules of one variant of a flow: its `rules.json`, beside the variant's entry. */
+export interface VariantRules {
+  variant: string;
+  /** The file, relative to the version's folder. */
+  path: string;
+  rules: FlowRule[];
+  examples: FlowExample[];
+}
 
 /** Where an "as is" artifact came from: labelled as is, with the repository files the designer reproduced it from. */
 export interface Provenance {
@@ -188,6 +272,16 @@ export interface Pin {
 }
 
 /**
+ * The owner's mark on one row of a table (pass 4d): a term of a dictionary (`row` is the term), or a rule of a flow
+ * (`row` is the rule's id, on `variant` when the flow has several). The same three marks as a whole artifact's.
+ */
+export interface RowMark {
+  row: string;
+  variant?: string;
+  mark: Mark;
+}
+
+/**
  * The owner's marks, pins and picks on one artifact version. The owner's only. Records are kept in order; the last
  * one for a version is its current feedback, and its pins are the version's open pins.
  */
@@ -197,6 +291,8 @@ export interface Feedback {
   mark: Mark | null;
   pickedVariant?: string;
   pins: Pin[];
+  /** Marks on the rows of a dictionary or of a flow's rules. Absent when there are none. Never carried to a revision. */
+  rows?: RowMark[];
   note: string;
   at: string;
   /** Set on the record a revision starts with: the open pins of this earlier version, carried forward. Not an answer of the owner's. */
@@ -216,9 +312,34 @@ export interface BudgetEstimate {
 }
 
 /**
+ * A product question the PE noticed while it judged a variant: a missing feature, an undecided edge case, a rule
+ * nobody set. It is the owner's to decide, through the lead (its studio brief lists the open round's), and it never
+ * sends the variant back to the designer. `why`: why it matters, in the PE's words.
+ */
+export interface OpenCase {
+  text: string;
+  why?: string;
+}
+
+/**
+ * The PE's check, on a later pass in a round, of one change it asked for earlier in the round on this variant: `ask`
+ * is the id of the earlier verdict that asked for it, and `met` whether this version meets it. A check that is not
+ * met on a feasible verdict means the PE no longer asks for it.
+ */
+export interface AskCheck {
+  ask: string;
+  met: boolean;
+}
+
+/**
  * The PE's verdict on one artifact version: on one variant, or on the whole artifact when `variant` is absent. The
  * verdicts of one review make one pass; passes count from 1 within the round the version was made in, up to 3.
  * A not-feasible verdict is an objection; it is never dropped, and only the owner overrules it.
+ *
+ * Only `change` sends the variant back to the designer (with the verdict: feasible-if or not-feasible). On a later
+ * pass the PE first checks each earlier ask (`earlier`), and a change then answers an ask that is not met, or a risk
+ * the revision created (`fromRevision`), so the loop converges. Product questions are `openCases`, for the owner.
+ * Verdicts stored before these three fields existed have none of them and read the same.
  */
 export interface PeVerdict {
   id: string;
@@ -230,6 +351,12 @@ export interface PeVerdict {
   reasons: string;
   /** The change that makes it feasible (feasible-if), or the evidence that would change the verdict (not-feasible). */
   change?: string;
+  /** On a later pass in the round: the PE's check of each change it asked for earlier on this variant. Absent on a first pass. */
+  earlier?: AskCheck[];
+  /** On a later pass: the change answers a risk that the revision itself created, not an earlier ask. */
+  fromRevision?: true;
+  /** Product questions for the owner. Absent when the PE raised none. */
+  openCases?: OpenCase[];
   budget?: BudgetEstimate;
   at: string;
   /** The owner overruled this objection, and why. */
@@ -299,8 +426,6 @@ export interface ChangeOrder {
 
 export type StudioRunKind = "designer" | "pe" | "probe";
 export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
-/** What a designer's manifest may hold: the owner brings material, and a probe's run makes evidence. */
-export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology"];
 
 /** queued → running → (stopping →) stopped, completed, failed or lost. A queued run waits for dispatch, which happens in Vision only. */
 export type StudioRunStatus = "queued" | "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";
@@ -347,6 +472,18 @@ export interface StudioRun {
   note?: string;
   /** Run by the fake runtime: no agent made what it hands in. */
   simulated?: true;
+  /**
+   * The principles its envelope gave it, in table order, each with the hash of its body: its role's fixed set
+   * (STUDIO_PRINCIPLE_IDS), recorded at dispatch as a task run's snapshot records its own. Absent on runs from before.
+   */
+  principles?: GivenPrinciple[];
+  /**
+   * The check of what it wrote for the owner against the controlled-English style, as `LeadRun.prose`: the PE's
+   * reasons, changes and open cases; the designer's documents. On the run, never on the verdict or the artifact: it
+   * feeds the next run of the same role, and the owner sees no score. Absent on runs from before the check, on runs
+   * with no such text, and on runs that did not complete.
+   */
+  prose?: ProseCheck;
 }
 
 export interface Studio {

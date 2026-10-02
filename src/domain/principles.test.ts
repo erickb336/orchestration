@@ -66,15 +66,16 @@ const run = (ids: string[]) => orderPrinciples([...EVERY_RUN_PRINCIPLE_IDS, ...i
 const SOURCE_RE = /^pstack principle-[a-z-]+, MIT, Copyright \(c\) 2026 Lauren Tan, github\.com\/cursor\/plugins at 12d587d, adapted$/;
 
 describe("the compiled principles", () => {
-  it("16, in table order, each with a name, a one-line apply-when, a body of at most 200 words, a hash and a source: pstack and the commit, or Orchestrator's own", () => {
+  it("17, in table order, each with a name, a one-line apply-when, a body of at most 200 words, a hash and a source: pstack and the commit, Orchestrator's own, or ASD-STE100 through the owner's agent kit", () => {
     expect(PRINCIPLES.map((p) => p.id)).toEqual([...PRINCIPLE_IDS]);
-    expect(PRINCIPLES).toHaveLength(16);
+    expect(PRINCIPLES).toHaveLength(17);
     for (const p of PRINCIPLES) {
       expect(p.name.length, p.id).toBeGreaterThan(3);
       expect(p.applyWhen, p.id).not.toMatch(/\n/);
       expect(wordCount(p.applyWhen), p.id).toBeLessThanOrEqual(25);
       expect(wordCount(p.body), p.id).toBeLessThanOrEqual(PRINCIPLE_BODY_WORDS);
       if (p.id === "contextualize-and-write-for-the-reader") expect(p.source).toMatch(/^Orchestrator's own, from the owner's direction \(2026-10-01\)/);
+      else if (p.id === "write-controlled-english") expect(p.source).toMatch(/^the writing rules of ASD-STE100 .*github\.com\/erickb336\/agent-kit, MIT.*Andrej Karpathy/);
       else {
         expect(p.source, p.id).toMatch(SOURCE_RE);
         expect(p.source, p.id).toContain(`principle-${p.id}`);
@@ -97,8 +98,8 @@ describe("the compiled principles", () => {
     expect(premise.body).toContain("list what each failed fix assumed and what still failed");
     expect(premise.body).toContain("the factor present every time");
     expect(premise.body).not.toMatch(/census|\bactors?\b/i);
-    expect(LEAD_PRINCIPLE_IDS).toEqual(["contextualize-and-write-for-the-reader", "experience-first", "sequence-verifiable-units", "never-block-on-the-human", "encode-lessons-in-structure"]);
-    expect(EVERY_RUN_PRINCIPLE_IDS).toEqual(["contextualize-and-write-for-the-reader"]);
+    expect(LEAD_PRINCIPLE_IDS).toEqual(["contextualize-and-write-for-the-reader", "write-controlled-english", "experience-first", "sequence-verifiable-units", "never-block-on-the-human", "encode-lessons-in-structure"]);
+    expect(EVERY_RUN_PRINCIPLE_IDS).toEqual(["contextualize-and-write-for-the-reader", "write-controlled-english"]);
   });
 
   it("the parser refuses a missing frontmatter, a wrong id, an unknown or repeated field, a missing field, a multi-line applyWhen and a long body, naming the file", () => {
@@ -142,7 +143,7 @@ describe("the mapping", () => {
     for (const [flow, steps] of Object.entries(TABLE)) for (const id of Object.keys(steps)) expect(seen, `${flow} ${id}`).toContain(`${flow} ${id}`);
     // The raw files carry the field as written, in table order and without a duplicate.
     for (const f of BUILT_IN_FILES) for (const st of f.raw.steps) expect(st.principles, `${f.file} ${st.id}`).toEqual(TABLE[f.raw.id][st.id]);
-    // Every named id is one of the 15.
+    // Every named id is one of the 17.
     for (const ids of Object.values(TABLE).flatMap((x) => Object.values(x))) for (const id of ids) expect(PRINCIPLE_IDS).toContain(id);
     // "Attack the premise" is given to no step directly.
     expect(Object.values(TABLE).flatMap((x) => Object.values(x).flat())).not.toContain(PREMISE_ID);
@@ -288,7 +289,7 @@ describe("the automatic 'attack the premise'", () => {
     expect(second.stepId).toBe("S3-i2");
     // Table order: laziness, migrate, fix-root-causes, then attack-the-premise, which the table lists after fix-root-causes.
     expect(second.snapshot.principles).toEqual(run([...TABLE.change.S3, PREMISE_ID]).map((pid) => ({ id: pid, hash: principle(pid)!.hash, ...(pid === PREMISE_ID ? { added: "added: check `test` failed again after S3" } : {}) })));
-    expect(second.snapshot.principles!.map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes", PREMISE_ID]);
+    expect(second.snapshot.principles!.map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "write-controlled-english", "laziness-protocol", "migrate-callers-then-delete-legacy-apis", "fix-root-causes", PREMISE_ID]);
     s = repair(s, id, 9, SHA3);
     s = round(s, id, 10, ["test", "lint"], [], SHA3);
     const third = running(s, id)[0];
@@ -354,7 +355,7 @@ describe("the automatic 'attack the premise'", () => {
       s = M.dispatchEligible(s, at(5));
       const revise = running(s, id)[0];
       expect(revise.stepId).toBe("S3");
-      expect(revise.snapshot.principles!.map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "experience-first"]);
+      expect(revise.snapshot.principles!.map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "write-controlled-english", "experience-first"]);
       s = M.reportCompletion(s, revise.id, [], at(6), [{ name: "design", summary: "revised" }]);
       s = M.dispatchEligible(s, at(7));
       expect(running(s, id)[0].stepId).toBe("S2-i2");
@@ -366,10 +367,11 @@ describe("the automatic 'attack the premise'", () => {
     };
     expect(design("The empty state has no next step")).toEqual([
       { id: "contextualize-and-write-for-the-reader", hash: principle("contextualize-and-write-for-the-reader")!.hash },
+      { id: "write-controlled-english", hash: principle("write-controlled-english")!.hash },
       { id: "experience-first", hash: principle("experience-first")!.hash },
       { id: PREMISE_ID, hash: principle(PREMISE_ID)!.hash, added: 'added: the finding "The empty state has no next step" came back after S3' },
     ]);
-    expect(design("The error copy blames the user").map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "experience-first"]);
+    expect(design("The error copy blames the user").map((p) => p.id)).toEqual(["contextualize-and-write-for-the-reader", "write-controlled-english", "experience-first"]);
   });
 
   it("a check-round fix after a round that failed the same check gets it; the first round's fix gets it when the loop's last repair failed the same check", () => {

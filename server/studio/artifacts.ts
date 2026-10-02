@@ -18,7 +18,8 @@ import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFi
 import { dirname, join, posix } from "node:path";
 import { DEVICES, type Device } from "../../src/domain/types";
 import { MAX_PROVENANCE, isInsidePath } from "../../src/domain/studio/studio";
-import type { StudioArtifactKind } from "../../src/domain/studio/types";
+import type { DictionaryEntry, StudioArtifactKind, VariantRules } from "../../src/domain/studio/types";
+import { DICTIONARY_FILE, RULES_FILE, parseDictionary, parseRules } from "../../src/domain/studio/words";
 import { validateAnsFrame, validateCast, validateTape } from "./terminal";
 
 /** What a designer run hands in, in its staging folder. */
@@ -76,6 +77,10 @@ export interface StagedArtifact {
   files: StagedFile[];
   /** An "as is" reproduction of the existing repository: the repository files it came from, as the designer listed them. */
   provenance?: string[];
+  /** A dictionary's terms, from its dictionary.json, checked (pass 4d). */
+  dictionary?: DictionaryEntry[];
+  /** A flow's rules, from the rules.json beside each variant's entry that has one, checked (pass 4d). */
+  rules?: VariantRules[];
 }
 
 /** studio.json was refused; the message says why, for the run's record. */
@@ -195,7 +200,9 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
     });
     checkTerminalFiles(where, a.kind as StudioArtifactKind, variants, files);
     const provenance = a.provenance === undefined ? undefined : provenanceOf(a.provenance, where);
-    return { kind: a.kind as StudioArtifactKind, title: a.title, devices: devices as Device[], variants, files, ...(provenance ? { provenance } : {}) };
+    const dictionary = a.kind === "dictionary" ? dictionaryOf(where, devices, variants, files) : undefined;
+    const rules = a.kind === "flow" ? rulesOf(where, variants, files) : [];
+    return { kind: a.kind as StudioArtifactKind, title: a.title, devices: devices as Device[], variants, files, ...(provenance ? { provenance } : {}), ...(dictionary ? { dictionary } : {}), ...(rules.length ? { rules } : {}) };
   });
 }
 
@@ -209,6 +216,55 @@ function provenanceOf(raw: unknown, where: string): string[] {
     if (!isInsidePath(p)) throw new ManifestError(`${where}: the provenance ${show(p)} is not a path from the repository's root (no absolute paths, no "..").`);
   }
   return [...new Set(raw as string[])];
+}
+
+/** A file's text, or a refusal when it is not UTF-8. */
+function utf8(where: string, f: StagedFile): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(f.data);
+  } catch {
+    throw new ManifestError(`${where}: ${show(f.path)} is not UTF-8 text.`);
+  }
+}
+
+/** A JSON file's value, or a refusal when it is not JSON. */
+function json(where: string, f: StagedFile): unknown {
+  try {
+    return JSON.parse(utf8(where, f));
+  } catch (e) {
+    if (e instanceof ManifestError) throw e;
+    throw new ManifestError(`${where}: ${show(f.path)} is not valid JSON.`);
+  }
+}
+
+/**
+ * A dictionary (pass 4d, decision 6): one file, dictionary.json, which is its one variant's entry, and no devices.
+ * Its terms are checked as words.ts says; a refusal lists each problem, so the designer's next run fixes them all.
+ */
+function dictionaryOf(where: string, devices: unknown[], variants: StagedVariant[], files: StagedFile[]): DictionaryEntry[] {
+  if (files.length !== 1 || files[0].path !== DICTIONARY_FILE || variants.length !== 1) throw new ManifestError(`${where}: a dictionary is one file, ${DICTIONARY_FILE}, and one variant whose entry is ${DICTIONARY_FILE}.`);
+  if (devices.length) throw new ManifestError(`${where}: a dictionary has no devices.`);
+  const r = parseDictionary(json(where, files[0]));
+  if (!r.ok) throw new ManifestError(`${where}: ${show(DICTIONARY_FILE)}: ${r.errors.join("; ")}.`);
+  return r.value;
+}
+
+/**
+ * A flow's rules (pass 4d, decision 7): each rules.json of the flow is beside a variant's entry, and holds the rules
+ * of the variants whose entry it is beside. Each rule must fit one of EARS's patterns and each example "Given …, when
+ * …, then …"; a line that fits none refuses the import, with its id and the patterns, as a tape that would not record
+ * does.
+ */
+function rulesOf(where: string, variants: StagedVariant[], files: StagedFile[]): VariantRules[] {
+  const out: VariantRules[] = [];
+  for (const f of files.filter((x) => posix.basename(x.path) === RULES_FILE)) {
+    const mine = variants.filter((v) => sameFolder(v.entry, f.path));
+    if (!mine.length) throw new ManifestError(`${where}: ${show(f.path)} is beside no variant's entry; put each variant's ${RULES_FILE} in the folder of its entry.`);
+    const r = parseRules(json(where, f));
+    if (!r.ok) throw new ManifestError(`${where}: ${show(f.path)}: ${r.errors.join("; ")}.`);
+    for (const v of mine) out.push({ variant: v.id, path: f.path, ...r.value });
+  }
+  return out;
 }
 
 const TERMINAL_KINDS: readonly StudioArtifactKind[] = ["terminal-demo", "tui"];

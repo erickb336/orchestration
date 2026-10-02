@@ -1,0 +1,33 @@
+# Warning: a paragraph of more than 6 sentences. Vale has no sentence count per paragraph, so the script counts
+# sentence ends: ".", "!" or "?", then a space and a capital letter, a digit or inline code. The periods of common
+# abbreviations ("e.g.", "i.e.", "etc.", "vs.") are not ends. Lists, headings and quotes are not paragraphs here.
+extends: script
+message: "This paragraph has more than 6 sentences. Split it by topic, or make a list."
+description: "A paragraph of more than 6 sentences."
+level: warning
+scope: paragraph
+script: |
+  text := import("text")
+  matches := []
+  plain := text.re_replace(`(?i)\b(?:e\.g|i\.e|etc|vs|cf|incl|approx|fig|mr|mrs|ms|dr)\.`, scope, "x")
+  ends := text.re_find(`[.!?]["'’”)\]]*\s+["'‘“(]?[\p{Lu}\p{N}*]`, plain, -1)
+  n := ends == undefined ? 1 : len(ends) + 1
+  if n > 6 {
+    matches = append(matches, {begin: 0, end: len(scope)})
+  }
+tests:
+  - name: 7 sentences is a warning
+    input: "One. Two. Three. Four. Five. Six. Seven."
+    want: "1:1:STE80.ParagraphLength:This paragraph has more than 6 sentences. Split it by topic, or make a list."
+  - name: 6 sentences is not
+    input: "One. Two. Three. Four. Five. Six."
+    want: ""
+  - name: abbreviations are not sentence ends
+    input: "One, e.g. Two. Three, i.e. Four. Five, etc. Six. Seven. Eight. Nine."
+    want: ""
+  - name: a list is not a paragraph
+    input: "Intro.\n\n- One.\n- Two.\n- Three.\n- Four.\n- Five.\n- Six.\n- Seven."
+    want: ""
+  - name: two short paragraphs are counted apart
+    input: "One. Two. Three. Four.\n\nFive. Six. Seven. Eight."
+    want: ""

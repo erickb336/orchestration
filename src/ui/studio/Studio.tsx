@@ -18,6 +18,7 @@ import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DOMAIN_WORDS } from "../../domain/studio/domains";
 import type { Mark, Round, StudioArtifact } from "../../domain/studio/types";
+import { PATTERNS, PATTERN_NAME } from "../../domain/studio/words";
 import type { ProjectDomain } from "../../domain/types";
 import type { PinMessage } from "../../runtime/prototype";
 import { relTime, selectionText } from "../common";
@@ -27,6 +28,7 @@ import { useLeadContext } from "../LeadDrawer";
 import { useStore } from "../store";
 import { DocumentArtifact } from "./Document";
 import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback, TerminalFile, TerminalRecording } from "./Frames";
+import { PeQuestions } from "./PeQuestions";
 import {
   AS_IS_FILES_SHOWN,
   AS_IS_LABEL,
@@ -39,9 +41,11 @@ import {
   changedDrafts,
   defaultRound,
   deviceOptions,
+  dictionaryStanding,
   draftFrom,
   draftKey,
   draftSummary,
+  keepUnmarked,
   madeByLine,
   peView,
   prototypeUrl,
@@ -50,18 +54,23 @@ import {
   roundLabel,
   roundRuns,
   roundsNewestFirst,
+  rowMark,
   runLine,
   sendAnswer,
   serviceFileUrl,
   showKind,
   standing,
+  tableRows,
   toggleDomain,
+  toggleRow,
   versionHistory,
   usdRange,
   variantDemo,
   variantEntry,
+  variantRules,
   type Draft,
   type ScreenDevice,
+  type TableRow,
 } from "./studioView";
 import "./studio.css";
 
@@ -342,12 +351,19 @@ function ArtifactItem({ artifact: a, draft, current, onClick }: { artifact: Stud
           <Chip>replaced by v{st.by.version}</Chip>
         ) : draft.mark ? (
           <Chip tone={draft.mark === "keep" ? "done" : draft.mark === "change" ? "you" : "fail"}>{draft.mark}</Chip>
+        ) : draft.rows.length ? (
+          <Chip>{rowsMarkedText(a, draft)}</Chip>
         ) : (
           <Chip>unmarked</Chip>
         )}
       </span>
     </button>
   );
+}
+
+/** "4 of 6 terms marked": the owner's row marks on a dictionary or a flow's rules, when the artifact itself has no mark. */
+function rowsMarkedText(a: StudioArtifact, draft: Draft): string {
+  return `${draft.rows.length} of ${plural(tableRows(a).length, a.kind === "dictionary" ? "term" : "rule")} marked`;
 }
 
 /** The designer's runs of a round that are under way, or the last one when it did not complete. */
@@ -464,6 +480,8 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
           <TerminalArtifact key={variant} artifact={a} variant={variant} />
         ) : kind === "document" ? (
           <DocumentArtifact key={variant} artifact={a} variant={variant} />
+        ) : kind === "dictionary" ? (
+          <DictionaryTable artifact={a} draft={draft} update={update} locked={locked} />
         ) : src ? (
           <PlainFrame src={src} title={frameTitle} />
         ) : (
@@ -474,6 +492,7 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
       <p className={cx("small", pinMode ? "st-hint" : "sr-only")} role="status">
         {pinMode ? "Pin mode: click a spot in the prototype to pin a comment there. Clicks still work inside the prototype." : ""}
       </p>
+      {a.kind === "flow" && <RulesTable key={variant} artifact={a} variant={variant} draft={draft} update={update} locked={locked} />}
 
       <div className="st-markbar">
         {a.variants.length > 1 && (
@@ -510,6 +529,155 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
       {draft.pins.length > 0 && <PinList artifact={a} draft={draft} update={update} locked={locked} />}
       <p className="micro muted">Artifacts stay on this computer: the studio shows the files the designer wrote, whichever provider wrote them.</p>
     </div>
+  );
+}
+
+// ---------- tables: the project's dictionary and a flow's rules (pass 4d) ----------
+
+interface TableProps {
+  artifact: StudioArtifact;
+  draft: Draft;
+  update: ArtifactViewProps["update"];
+  locked: string | undefined;
+}
+
+/** A row's mark: Keep, Change or Drop, one click each; a second click on the same mark clears it. */
+function RowMarks({ label, mark, onMark, locked }: { label: string; mark: Mark | null; onMark: (m: Mark) => void; locked: string | undefined }) {
+  return (
+    <div className="st-rowmarks" role="group" aria-label={`Your mark on ${label}`}>
+      {MARKS.map((m) => (
+        <Button key={m.value} size="small" className={cx("st-mark", `st-mark--${m.value}`)} aria-pressed={mark === m.value} disabled={!!locked} disabledReason={locked} onClick={() => onMark(m.value)}>
+          {m.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+/** Under a table: how many rows are marked, and Keep the rest in one click. */
+function TableFoot({ artifact: a, draft, update, locked, rows, what }: TableProps & { rows: TableRow[]; what: string }) {
+  const open = rows.filter((r) => rowMark(draft, r.row, r.variant) === null).length;
+  return (
+    <div className="st-tablefoot">
+      <span className="small muted">
+        {rows.length - open} of {plural(rows.length, what)} marked.{" "}
+        {open ? `Mark each one, or keep the rest. A ${what} marked Change or Drop waits for the next version before you can approve.` : `Every ${what} has your mark.`}
+      </span>
+      {open > 0 && (
+        <Button size="small" variant="quiet" disabled={!!locked} disabledReason={locked} onClick={() => update(a, (d) => keepUnmarked(d, rows))}>
+          Keep the other {plural(open, what)}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The project's dictionary as a table: each term, its one meaning and the words it replaces, with your mark on each.
+ * It says whether this version is the project's words: only the version you approved into the blueprint is.
+ */
+function DictionaryTable({ artifact: a, draft, update, locked }: TableProps) {
+  const { state } = useStore();
+  const standing = dictionaryStanding(state, a);
+  const terms = a.dictionary ?? [];
+  return (
+    <section className="st-table-wrap" aria-label="The project's dictionary">
+      <p className="small">
+        <Chip tone={standing.inForce ? "done" : "neutral"} strong={standing.inForce}>
+          {standing.inForce ? "In force" : "Not in force"}
+        </Chip>{" "}
+        {standing.text}
+      </p>
+      <table className="st-table">
+        <thead>
+          <tr>
+            <th scope="col">Term</th>
+            <th scope="col">Meaning</th>
+            <th scope="col">Words to avoid</th>
+            <th scope="col" className="st-table__marks">
+              Your mark
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {terms.map((e) => {
+            const mark = rowMark(draft, e.term);
+            return (
+              <tr key={e.term} className={cx(mark && `st-row--${mark}`)}>
+                <th scope="row">{e.term}</th>
+                <td data-label="Meaning">{e.meaning}</td>
+                <td data-label="Avoid">{e.avoid.length ? e.avoid.join(", ") : <span className="muted">none</span>}</td>
+                <td className="st-table__marks">
+                  <RowMarks label={`"${e.term}"`} mark={mark} locked={locked} onMark={(m) => update(a, (d) => toggleRow(d, e.term, undefined, m))} />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <TableFoot artifact={a} draft={draft} update={update} locked={locked} rows={tableRows(a)} what="term" />
+    </section>
+  );
+}
+
+/**
+ * A flow variant's rules (its rules.json), each with the pattern it fits and your mark, then its examples. An edge
+ * case is an "If …, then …" rule, so a case nobody decided shows as a missing rule. Nothing for a flow without rules.
+ */
+function RulesTable({ artifact: a, variant, draft, update, locked }: TableProps & { variant: string | undefined }) {
+  const set = variantRules(a, variant);
+  if (!set) return null;
+  const v = a.variants.length > 1 ? set.variant : undefined;
+  const rows = set.rules.map((r) => ({ row: r.id, ...(v !== undefined ? { variant: v } : {}) }));
+  return (
+    <section className="st-table-wrap st-rules" aria-label="Rules">
+      <h3 className="st-label">Rules ({set.rules.length})</h3>
+      <p className="small muted">Each rule is one sentence in a fixed pattern. An edge case is an "If …, then …" rule, so a case with no rule is a case nobody decided.</p>
+      <table className="st-table">
+        <thead>
+          <tr>
+            <th scope="col">Rule</th>
+            <th scope="col">Pattern</th>
+            <th scope="col" className="st-table__marks">
+              Your mark
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {set.rules.map((r) => {
+            const mark = rowMark(draft, r.id, v);
+            return (
+              <tr key={r.id} className={cx(mark && `st-row--${mark}`)}>
+                <th scope="row" className="st-rule">
+                  <span className="st-rule__id">{r.id}</span> {r.text}
+                </th>
+                <td data-label="Pattern">
+                  <Chip title={PATTERNS.find((p) => p.pattern === r.pattern)?.form}>
+                    {PATTERN_NAME[r.pattern]}
+                  </Chip>
+                </td>
+                <td className="st-table__marks">
+                  <RowMarks label={`rule ${r.id}`} mark={mark} locked={locked} onMark={(m) => update(a, (d) => toggleRow(d, r.id, v, m))} />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <TableFoot artifact={a} draft={draft} update={update} locked={locked} rows={rows} what="rule" />
+      {set.examples.length > 0 && (
+        <>
+          <h3 className="st-label">Examples ({set.examples.length})</h3>
+          <ul className="st-examples">
+            {set.examples.map((x) => (
+              <li key={x.id}>
+                <span className="st-rule__id">{x.id}</span> {x.text}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -729,10 +897,8 @@ function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | 
   return (
     <section className="k-stack k-stack--tight" aria-label="PE review">
       <h2 className="st-label">PE review</h2>
-      {!a ? (
+      {!a || !view ? (
         <p className="small muted">The PE reviews each option the designer makes before it reaches you.</p>
-      ) : !view ? (
-        <p className="small muted">The PE does not review {a.kind === "material" ? "what you brought" : "a probe's evidence"}.</p>
       ) : (
         <>
           <div className="st-toolbar__grp">
@@ -768,6 +934,7 @@ function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | 
           {view.next && <p className="small">{view.next}</p>}
           {view.by && <p className="micro muted">PE · {view.by}</p>}
           {view.notIndependent && <p className="small">{view.notIndependent}</p>}
+          <PeQuestions artifact={a} />
         </>
       )}
       {a && history.length > 1 && (
