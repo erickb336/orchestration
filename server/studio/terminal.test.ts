@@ -7,10 +7,10 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ANS_CAP, CAST_CAP, TAPE_CAP, probeTerminalSandbox, readTerminalFile, recordTape, refusedEscape, shellProfile, validateAnsFrame, validateCast, validateTape } from "./terminal";
+import { ANS_CAP, CAST_CAP, TAPE_CAP, probeTerminalSandbox, readTerminalFile, recordTape, refusedEscape, shellProfile, shellReads, validateAnsFrame, validateCast, validateTape } from "./terminal";
 
 const FIXTURE = resolve(__dirname, "fixtures/trips");
 const FALLBACK = resolve(__dirname, "fixtures/trips-fallback");
@@ -198,6 +198,27 @@ describe("the fallback: hand-written asciicast v3 and .ans frames", () => {
     expect(() => shellProfile(70000)).toThrow(/not a port/);
     expect(shellProfile(4321)).toContain('(local ip "localhost:4321")');
   });
+
+  it("denies the shell the home folders, apart from its own folders and the tools inside them", () => {
+    const home = join(dir, "home");
+    mkdirSync(join(home, ".nvm", "bin"), { recursive: true });
+    const real = realpathSync(home);
+    const reads = shellReads({ HOME: home }, [join(real, ".nvm", "bin"), "/opt/homebrew/bin"]);
+    if (typeof reads === "string") throw new Error(reads);
+    // The user's own home folder from the system, and HOME (here another folder); only the tool inside a home is kept.
+    expect(reads.deny).toEqual([realpathSync(userInfo().homedir), real]);
+    expect(reads.allow).toEqual([join(real, ".nvm", "bin")]);
+    const profile = shellProfile(4321, reads);
+    expect(profile).toContain(`(deny file-read* (subpath "${realpathSync(userInfo().homedir)}") (subpath "${real}"))`);
+    expect(profile).toContain(`(allow file-read* (subpath (param "WORK")) (subpath (param "SHELL_TMP")) (subpath "${join(real, ".nvm", "bin")}"))`);
+    // The allow rule comes after the deny rule: in a profile, the later rule wins.
+    expect(profile.indexOf("(allow file-read*")).toBeGreaterThan(profile.indexOf("(deny file-read*"));
+    // A home folder a profile cannot name means no profile, rather than one that misses it.
+    const quoted = join(dir, 'a"b');
+    mkdirSync(quoted);
+    expect(shellReads({ HOME: quoted }, [])).toMatch(/cannot be named in a sandbox profile/);
+    expect(() => shellProfile(4321, { deny: [quoted], allow: [] })).toThrow(/cannot name/);
+  });
 });
 
 // ---------- real recordings, where the sandbox and the tools are present ----------
@@ -211,8 +232,8 @@ describe(`recording with VHS in the sandbox${skipReason}`, () => {
     for (const l of listeners) l.close();
   });
 
-  it.skipIf(!health.ok)("the probe proved both profiles: the shell gets no network, loopback or outside writes; the recorder gets loopback only", () => {
-    expect(health.probes).toEqual({ shellWriteOutside: "denied", shellLoopback: "denied", shellNetwork: "denied", recorderWriteOutside: "denied", recorderLoopback: "allowed", recorderNetwork: "denied" });
+  it.skipIf(!health.ok)("the probe proved both profiles: the shell gets no network, loopback, outside writes, home folder or signals out; the recorder gets loopback only", () => {
+    expect(health.probes).toEqual({ shellWriteOutside: "denied", shellSignal: "denied", shellReadHome: "denied", shellLoopback: "denied", shellNetwork: "denied", recorderWriteOutside: "denied", recorderLoopback: "allowed", recorderNetwork: "denied" });
   });
 
   it.skipIf(!health.ok)(
@@ -294,6 +315,77 @@ echo x > ./inside.txt; echo "write-inside=$?"
       expect(result("signal")).toBe("1");
       expect(result("write-inside")).toBe("0");
       expect(txt).toContain("Operation not permitted");
+    },
+    90_000,
+  );
+
+  it.skipIf(!health.ok)(
+    "a hostile tape cannot read the home folder: not a file in it, not ~/.zshrc, not a listing; its own folder it reads",
+    async () => {
+      // A home of the test's own, outside the tape's folder, with a secret and a shell startup file.
+      const home = join(dir, "home");
+      mkdirSync(home);
+      writeFileSync(join(home, "secret.txt"), "the owner's secret\n");
+      writeFileSync(join(home, ".zshrc"), "export TOKEN=the-owners-token\n");
+      const src = join(dir, "reader");
+      mkdirSync(src);
+      writeFileSync(join(src, "inside.txt"), "readable inside\n");
+      writeFileSync(
+        join(src, "read.sh"),
+        `cat ${JSON.stringify(join(home, "secret.txt"))}; echo "secret=$?"
+cat ~/.zshrc; echo "zshrc=$?"
+cat "$HOME/.zshrc"; echo "home-zshrc=$?"
+ls ${JSON.stringify(home)}; echo "list-home=$?"
+ls ${JSON.stringify(userInfo().homedir)} >/dev/null; echo "list-user-home=$?"
+cat ./inside.txt; echo "inside=$?"
+`,
+      );
+      writeFileSync(join(src, "read.tape"), `Output read.txt\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "bash read.sh"\nEnter\nSleep 4s\n`);
+      const r = await recordTape(src, join(dir, "out"), { tmpRoot: dir, env: { ...process.env, HOME: home } });
+      expect(r.error).toBeUndefined();
+      const txt = readFileSync(r.txt!, "utf8");
+      const result = (k: string) => new RegExp(`^${k}=(\\S+)$`, "m").exec(txt)?.[1];
+      for (const k of ["secret", "zshrc", "home-zshrc", "list-home", "list-user-home"]) expect(result(k), k).toBe("1");
+      expect(txt).not.toContain("the owner's secret");
+      expect(txt).not.toContain("the-owners-token");
+      expect(txt).toContain("Operation not permitted");
+      expect(result("inside")).toBe("0");
+      expect(txt).toContain("readable inside");
+    },
+    90_000,
+  );
+
+  it.skipIf(!health.ok)(
+    "nothing a tape starts outlives the recording, however it detaches; a process outside the sandbox is left alone",
+    async () => {
+      // Distinct durations name each way out: a background job, nohup, a subshell, and a double fork into a
+      // session of its own (with and without its environment).
+      const ways: Record<string, string> = {
+        "3271": "sleep 3271 &",
+        "3272": "nohup sleep 3272 >/dev/null 2>&1 &",
+        "3273": "(sleep 3273 &)",
+        "3274": "perl -MPOSIX -e 'exit if fork; setsid; exit if fork; exec qw(sleep 3274)'",
+        "3275": "env -i /usr/bin/perl -MPOSIX -e 'exit if fork; setsid; exit if fork; exec qw(sleep 3275)'",
+      };
+      const sleeping = () =>
+        execFileSync("/bin/ps", ["-axo", "command="], { encoding: "utf8" })
+          .split("\n")
+          .map((l) => /^(?:\/bin\/)?sleep (32\d\d)$/.exec(l.trim())?.[1])
+          .filter(Boolean)
+          .sort();
+      const outside = execFileSync("/bin/sh", ["-c", "sleep 3279 >/dev/null 2>&1 & echo $!"], { encoding: "utf8" }).trim();
+      try {
+        const src = join(dir, "detach");
+        mkdirSync(src);
+        writeFileSync(join(src, "detach.sh"), `${Object.values(ways).join("\n")}\necho started\n`);
+        writeFileSync(join(src, "detach.tape"), `Output detach.txt\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "bash detach.sh"\nEnter\nSleep 2s\n`);
+        const r = await recordTape(src, join(dir, "out"), { tmpRoot: dir });
+        expect(r.error).toBeUndefined();
+        expect(readFileSync(r.txt!, "utf8")).toContain("started");
+        expect(sleeping()).toEqual(["3279"]);
+      } finally {
+        execFileSync("/bin/kill", ["-9", outside]);
+      }
     },
     90_000,
   );
