@@ -170,6 +170,30 @@ An independent review found no path to the factory except the owner's `startFact
   - The lead also proposes that the "no recorded cost" item can be acknowledged. The owner cannot add a price from the app, so an item that never clears would become noise. Acknowledging it keeps a warning chip on the budget, and the item returns only when a new model without a price appears.
 - **Fixed in 4170add** (findings 1, 4, 5, 7, 8): each has a test that failed before its fix. 1,283 tests pass.
 
+## 2d and 2e as built (1b8ef22..2444bc0)
+
+- **Review finding 2:** the start settings carry the decision route exactly (`"lead"`, `"pe"` or `"user"`). Autopilot's planning numbers apply, but not its route.
+- **Review finding 3:** the factory settings hold `delivery: { mode: "off" | "local" | "pr", branch?, merge }`, and the start applies exactly that. Contradictions are refused with a clear message: local delivery that the owner merges, automatic merging with delivery off, a branch with delivery off, and a mode without a branch.
+- **2d:**
+  - A PE call is recorded as `decidedBy: "pe"`, with a `pe` record: the reasons, the stated cost, `by: "lead-run"` and the lead run's id.
+  - Until pass 4, the lead's decision runs carry the PE's brief and the budgets, and the UI says so.
+  - **Budget:** the high end of a stated range counts. A call with no figure for a set budget goes to the owner, since an unknown cost is never zero.
+  - The maintenance estimate is the newest start's estimate plus the standing PE calls.
+  - The owner reverses a PE call like a lead call.
+  - The Autopilot preset routes to the PE. Check-in and Manual route to the owner. Failing final checks stay with the lead: they are not a trade-off.
+- **2e:**
+  - `peReview` on tasks and change orders.
+  - Pending work is held with "Waiting for PE review". An agreement releases it. The third objection goes to Needs you, and the owner may overrule it (recorded).
+  - `recordPeReview` is service-only; `overrulePeReview` is the owner's.
+  - A verdict names the spec revision the PE read, and a stale one is refused.
+  - **Scope:** lead proposals and the follow-ups that come from findings are reviewed. The roadmap planned in Vision, the owner's own tasks, delivery tasks and code changes are not.
+  - Queued and running probes count as pre-flight open items.
+  - **Off until pass 5:** `Project.peReviewsNewWork` is off and no command sets it. Nothing runs PE reviews before pass 5, so turning it on would hold every lead proposal.
+- **Not yet:**
+  - a UI to overrule a PE objection (the command exists);
+  - applying a change order's updates (pass 5);
+  - real providers (pass 4, then the real-run scenario).
+
 ## Checks for the whole pass
 
 - **Unit tests per unit**, plus the migration test.
