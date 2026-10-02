@@ -87,6 +87,32 @@ describe("the user's settings", () => {
     return c;
   };
 
+  it("the test report (ORC-029 pass 5): optional; a relative .xml path inside the repository; set, changed and cleared only by setChecks; a change restarts check runs", () => {
+    for (const p of ["reports/junit.xml", "junit.xml", "test-results/unit/junit-report.xml", "build/test_results.xml"]) ok(cfg({ testReport: p }));
+    for (const p of ["/etc/junit.xml", "../junit.xml", "reports/../../x.xml", "./junit.xml", ".git/junit.xml", "reports/junit.json", "reports\\junit.xml", "~/junit.xml", "a b.xml", "", "x".repeat(200) + ".xml"]) bad(cfg({ testReport: p }), /test report/);
+    // A project from before pass 5 has no setting, and its settings stay valid and unchanged.
+    const before = runCommand(s0, "setChecks", { config: input() }, at(1)).state;
+    expect(before.project.checks).not.toHaveProperty("testReport");
+    expect(C.validateChecks(before.project.checks, { acknowledged: true })).toBeUndefined();
+    expect(runCommand(before, "setChecks", { config: input() }, at(2)).state.project.checks.rev).toBe(1);
+    const set = runCommand(before, "setChecks", { config: input({ testReport: "reports/junit.xml" }) }, at(3)).state;
+    expect(set.project.checks).toMatchObject({ rev: 2, testReport: "reports/junit.xml" });
+    expect(() => runCommand(before, "setChecks", { config: input({ testReport: "../../etc/passwd.xml" }) }, at(3))).toThrow(/is not a path inside the repository/);
+    expect(() => runCommand(before, "setChecks", { config: { ...input(), testReport: 7 } }, at(3))).toThrow(/testReport must be a string/);
+    // Absent, null or "" clears it.
+    for (const cleared of [undefined, null, ""]) {
+      const c = runCommand(set, "setChecks", { config: { ...input(), testReport: cleared } }, at(4)).state.project.checks;
+      expect(c).not.toHaveProperty("testReport");
+      expect(c.rev).toBe(3);
+    }
+    // A running check run is stopped to run again with the new report path, as for any setting that changes a run.
+    const t = set.tasks.find((x) => x.id === "EX-002")!;
+    const running = structuredClone(set);
+    running.attempts.push({ id: "run-ck", taskId: t.id, stepId: "C1", snapshot: { provider: "service", model: "checks", source: "service", routingReason: "x", specRev: 1, stepRev: 1, visionRev: 1, workspace: "", pipelineRev: 1, purpose: "", inputs: [] }, startedAt: at(5), outcome: "running", progress: 0, artifacts: [] });
+    const moved = runCommand(running, "setChecks", { config: input({ testReport: "out/junit.xml" }) }, at(6)).state;
+    expect(moved.events.at(-1)!.message).toContain("1 check run stopped to run again with the new settings");
+  });
+
   it("only setChecks writes the commands: no lead decision, worker output or other command touches them (mutation check: the command registry has one entry for them)", () => {
     const on = runCommand(s0, "setChecks", { config: input() }, at(1)).state;
     expect(on.project.checks).toMatchObject({ enabled: true, rev: 1, commands: [cmd("test", ["npm", "test"])] });

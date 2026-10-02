@@ -464,6 +464,8 @@ export const COMMANDS = {
         maxConcurrent: num(c, "maxConcurrent"),
         protectedInputs: array<unknown>(c.protectedInputs, "config.protectedInputs").map((x) => String(x)),
         passEnv: array<unknown>(c.passEnv, "config.passEnv").map((x) => String(x)),
+        // Optional: absent, null or "" reads no test report.
+        ...(c.testReport === undefined || c.testReport === null || c.testReport === "" ? {} : { testReport: str(c, "testReport") }),
       },
       a.acknowledgeUnsandboxed === undefined ? false : bool(a, "acknowledgeUnsandboxed"),
       now,
