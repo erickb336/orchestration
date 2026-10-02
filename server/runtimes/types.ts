@@ -2,7 +2,7 @@
 // owns dispatch and state, adapters own processes. Adapters never touch the store: they emit events,
 // which the scheduler applies inside lease-checked transactions.
 
-import type { CatalogModel, CheckResult, OutputDef, ProviderId, RoleId } from "../../src/domain/types";
+import type { CatalogModel, CheckResult, OutputDef, ProviderId, RoleId, TestReport } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 
 /** What a service check run (server/checks.ts) reports when it completes. */
@@ -13,6 +13,8 @@ export interface CheckRunReport {
   durationMs: number;
   sandbox: "codex" | "none";
   simulated?: true;
+  /** What the run read from its JUnit report, when the settings name one (server/testReport.ts). */
+  tests?: TestReport;
 }
 
 interface AssignmentLimits {

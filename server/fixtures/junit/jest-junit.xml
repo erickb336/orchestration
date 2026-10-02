@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Hand-written in jest-junit 16's default shape (classname and name are "{classname} {title}"); no jest was run. A tag on a describe block reaches every test in it. -->
+<testsuites name="jest tests" tests="5" failures="1" errors="0" time="0.583">
+  <testsuite name="join flow" errors="0" failures="1" skipped="1" timestamp="2026-10-02T12:00:00" time="0.412" tests="5">
+    <testcase classname="join flow [bi-12 R1] shows the trip and a Join button" name="join flow [bi-12 R1] shows the trip and a Join button" time="0.003">
+    </testcase>
+    <testcase classname="join flow [bi-12 R2] joining adds the friend to Who's in" name="join flow [bi-12 R2] joining adds the friend to Who's in" time="0.002">
+    </testcase>
+    <testcase classname="join flow [bi-12 R2] joining keeps the friend after a reload" name="join flow [bi-12 R2] joining keeps the friend after a reload" time="0.002">
+    </testcase>
+    <testcase classname="join flow [bi-12 R4] an expired link asks for a new one" name="join flow [bi-12 R4] an expired link asks for a new one" time="0.004">
+      <failure>Error: expect(received).toBe(expected) // Object.is equality
+
+Expected: "Ask the organizer for a new link"
+Received: "an empty page"
+    at Object.toBe (/Users/someone/trips/src/join.test.js:12:24)
+    at Promise.then.completed (/Users/someone/trips/node_modules/jest-circus/build/utils.js:298:28)</failure>
+    </testcase>
+    <testcase classname="join flow [bi-12 R5] never shows other trips" name="join flow [bi-12 R5] never shows other trips" time="0">
+      <skipped/>
+    </testcase>
+  </testsuite>
+</testsuites>

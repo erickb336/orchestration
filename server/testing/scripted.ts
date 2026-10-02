@@ -193,7 +193,7 @@ export function proposal(over: Record<string, unknown> = {}) {
 // ---------- a controllable check runner for scheduler tests ----------
 
 import type { CheckAssignment, CheckRunner } from "../checks";
-import type { CheckResult, ChecksHealth } from "../../src/domain/types";
+import type { CheckResult, ChecksHealth, TestReport } from "../../src/domain/types";
 
 /** Tests decide when a check run completes, fails or confirms a stop, and what its results are. Nothing is spawned. */
 export class ScriptedChecks implements CheckRunner {
@@ -244,15 +244,15 @@ export class ScriptedChecks implements CheckRunner {
     if (e.type === "completed" || e.type === "failed" || e.type === "stopped") this.runs.delete(e.attemptId);
     for (const l of this.listeners) l(e);
   }
-  /** Complete a run: every planned command passes unless `fail` names it (exit 1) or `timeout` names it. */
-  finish(id: string, o: { fail?: string[]; timeout?: string[]; excerpt?: string } = {}) {
+  /** Complete a run: every planned command passes unless `fail` names it (exit 1) or `timeout` names it. `tests`: what its report read. */
+  finish(id: string, o: { fail?: string[]; timeout?: string[]; excerpt?: string; tests?: TestReport } = {}) {
     const a = this.runs.get(id)!;
     const results: CheckResult[] = a.commands.map((c) => {
       const failed = o.fail?.includes(c.id);
       const timedOut = o.timeout?.includes(c.id);
       return { id: c.id, label: c.label, kind: c.kind, status: timedOut ? "timed-out" : failed ? "failed" : "passed", ...(timedOut ? {} : { exitCode: failed ? 1 : 0 }), durationMs: 1500, excerpt: failed || timedOut ? (o.excerpt ?? `${c.label}: 1 failing`) : "", bytes: 0, truncated: false };
     });
-    this.emit({ type: "completed", attemptId: id, finalText: "", checks: { sha: a.target, results, durationMs: 1500 * results.length, sandbox: a.sandbox } });
+    this.emit({ type: "completed", attemptId: id, finalText: "", checks: { sha: a.target, results, durationMs: 1500 * results.length, sandbox: a.sandbox, ...(o.tests ? { tests: o.tests } : {}) } });
   }
   /** Confirm a stop request. */
   stopped(id: string) {

@@ -22,6 +22,7 @@ import { blockedEnvName, hardenedInstall, isRebuild, networkRefusal, yarnrcRefus
 import type { CheckResult, ChecksConfig, ChecksHealth } from "../src/domain/types";
 import { killGroup, trackLive } from "./processes";
 import { SECRET_NAME, redact } from "./redact";
+import { clearReport, readTestReport } from "./testReport";
 import type { CommandExecParams } from "./runtimes/codex-protocol/v2/CommandExecParams";
 import type { CommandExecResponse } from "./runtimes/codex-protocol/v2/CommandExecResponse";
 import type { SandboxPolicy } from "./runtimes/codex-protocol/v2/SandboxPolicy";
@@ -109,6 +110,8 @@ export interface CheckAssignment {
   cacheDir: string;
   /** Where the full logs of this run go (one file per command). */
   logDir: string;
+  /** The JUnit report the commands write, relative to the copy (ChecksConfig.testReport): read after they ran. */
+  testReport?: string;
 }
 
 /** The RuntimeAdapter contract, minus models and health. */
@@ -379,6 +382,8 @@ abstract class BaseChecks implements CheckRunner {
     } catch {
       /* the command reports it */
     }
+    // A test report the change itself carries never counts: it goes before anything runs, and this run's is read after.
+    const reportRefused = a.testReport ? clearReport(a.workspace, a.testReport) : undefined;
     for (const planned of a.commands) {
       // What runs is the hardened command; the record keeps the id and label the settings gave it.
       // Yarn's own configuration is read from the copy just before the install runs there.
@@ -405,7 +410,9 @@ abstract class BaseChecks implements CheckRunner {
       this.finish(run, { type: "stopped", attemptId: a.attemptId, how: "interrupted" });
       return;
     }
-    const report: CheckRunReport = { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(this.simulated ? { simulated: true as const } : {}) };
+    const tests = a.testReport ? (reportRefused ? { status: "refused" as const, path: a.testReport, reason: reportRefused } : readTestReport(a.testReport, { workspace: a.workspace, scratch: [a.tmpDir, a.cacheDir], env: this.baseEnv })) : undefined;
+    if (tests) this.emit({ type: "activity", attemptId: a.attemptId, note: `Test report ${tests.path}: ${tests.status === "read" ? `${tests.counts.passed} passed, ${tests.counts.failed + tests.counts.error} failed, ${tests.counts.skipped} skipped` : tests.reason}`.slice(0, 200) });
+    const report: CheckRunReport = { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(this.simulated ? { simulated: true as const } : {}), ...(tests ? { tests } : {}) };
     this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: report });
   }
 

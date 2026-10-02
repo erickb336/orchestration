@@ -314,3 +314,51 @@ describe("the exit status comes from the reaper alone, never from anything the c
     expect(k.excerpt).not.toMatch(/check process was killed/);
   });
 });
+
+describe("the run's test report (ORC-029 pass 5)", () => {
+  const REPORT = "reports/junit.xml";
+  const STALE = '<testsuite><testcase name="[bi-1 R1] always green"/></testsuite>';
+  /** A command that says whether the change's own report was still there, then writes this run's report and fails (or writes none). */
+  const tester = (xml: string | undefined) =>
+    script(
+      "tester.js",
+      `const fs = require("node:fs");
+       console.log(fs.existsSync(${JSON.stringify(REPORT)}) ? "stale report present" : "no stale report");
+       ${xml === undefined ? "" : `fs.mkdirSync("reports", { recursive: true }); fs.writeFileSync(${JSON.stringify(REPORT)}, ${JSON.stringify(xml)}); process.exit(1);`}`,
+    );
+
+  it("a report the change carries is removed before the commands run; the one they write is read after, even when the command fails", async () => {
+    const a = assignment([cmd("test", [node, tester('<testsuite name="join"><testcase name="[bi-1 R1] shows the trip"/><testcase name="[bi-1 R2] joins"><failure message="expected Who&apos;s in to list Ana"/></testcase></testsuite>')])], { testReport: REPORT });
+    mkdirSync(join(a.workspace, "reports"));
+    writeFileSync(join(a.workspace, REPORT), STALE);
+    const events = await runToEnd(new DirectChecks(), a);
+    const c = completed(events);
+    expect(c.checks!.results[0]).toMatchObject({ status: "failed", exitCode: 1, excerpt: "no stale report\n" });
+    expect(c.checks!.tests).toEqual({
+      status: "read",
+      path: REPORT,
+      cases: [
+        { name: "[bi-1 R1] shows the trip", suite: "join", status: "passed" },
+        { name: "[bi-1 R2] joins", suite: "join", status: "failed", message: "expected Who's in to list Ana" },
+      ],
+      counts: { passed: 1, failed: 1, skipped: 0, error: 0 },
+      truncated: false,
+    });
+    expect(events.filter((e) => e.type === "activity").map((e) => (e as { note: string }).note).at(-1)).toBe("Test report reports/junit.xml: 1 passed, 1 failed, 0 skipped");
+  });
+
+  it("commands that write no report leave it missing: the change's own report never counts", async () => {
+    const a = assignment([cmd("test", [node, tester(undefined)])], { testReport: REPORT });
+    mkdirSync(join(a.workspace, "reports"));
+    writeFileSync(join(a.workspace, REPORT), STALE);
+    const c = completed(await runToEnd(new DirectChecks(), a));
+    expect(c.checks!.results[0].excerpt).toBe("no stale report\n");
+    expect(c.checks!.tests).toEqual({ status: "missing", path: REPORT, reason: "The checks wrote no report at reports/junit.xml." });
+  });
+
+  it("without the setting no report is read, as before pass 5, even when the commands write one", async () => {
+    const c = completed(await runToEnd(new DirectChecks(), assignment([cmd("test", [node, tester(STALE)])])));
+    expect(c.checks!.results[0].status).toBe("failed");
+    expect(c.checks).not.toHaveProperty("tests");
+  });
+});

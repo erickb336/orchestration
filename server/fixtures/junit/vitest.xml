@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Written by vitest 5.0.2 (`vitest run --reporter=junit`) from a small test file with tagged tests; only the hostname was changed. -->
+<testsuites name="vitest tests" tests="6" failures="1" errors="0" time="0.00382775">
+    <testsuite name="tests/join.test.ts" timestamp="2026-10-02T23:34:04.938Z" hostname="host.local" tests="6" failures="1" errors="0" skipped="1" time="0.00382775">
+        <testcase classname="tests/join.test.ts" name="join flow &gt; [bi-12 R1] shows the trip and a Join button when a friend opens the link" time="0.000487">
+        </testcase>
+        <testcase classname="tests/join.test.ts" name="join flow &gt; [bi-12 R2] adds the friend to Who&apos;s in when they join" time="0.00023975">
+        </testcase>
+        <testcase classname="tests/join.test.ts" name="join flow &gt; [bi-12 R4] shows &apos;Ask the organizer for a new link&apos; when the link has expired" time="0.002008792">
+            <failure message="expected &apos;an empty page&apos; to be &apos;Ask the organizer for a new link&apos; // Object.is equality" type="AssertionError">
+AssertionError: expected &apos;an empty page&apos; to be &apos;Ask the organizer for a new link&apos; // Object.is equality
+
+Expected: &quot;Ask the organizer for a new link&quot;
+Received: &quot;an empty page&quot;
+
+ ❯ tests/join.test.ts:11:29
+            </failure>
+        </testcase>
+        <testcase classname="tests/join.test.ts" name="join flow &gt; [bi-12 R5] never shows other trips to a friend who joins by link" time="0">
+            <skipped/>
+        </testcase>
+        <testcase classname="tests/join.test.ts" name="join flow &gt; [bi-12 E1] given a full trip, when a friend opens the link, then the page says the trip is full" time="0.000087583">
+        </testcase>
+        <testcase classname="tests/join.test.ts" name="join flow &gt; formats a date with no tag" time="0.000505166">
+        </testcase>
+    </testsuite>
+</testsuites>
