@@ -13,6 +13,8 @@ import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
+import { APP_FILE_HEADERS, appStudioFile } from "./studio/files";
+import { projectStudioDir } from "./studio/serve";
 import type { VisionDocStore } from "./visiondocs";
 import type { WorkspaceManager } from "./workspaces";
 import { CommandFailure, type CommandResult, type Store } from "./store";
@@ -171,6 +173,22 @@ export function createHttpServer(opts: HttpOptions): Server {
     return res.end(readFileSync(file));
   };
 
+  /**
+   * A file of a studio artifact version of the current project, for the studio's terminal text, screenshots and
+   * recordings (server/studio/files.ts): plain text, PNG, GIF and WebM only, never anything that runs.
+   */
+  const studioFile = (res: ServerResponse, query: URLSearchParams) => {
+    const { state } = store.read();
+    const studioDir = opts.dataDir ? projectStudioDir(opts.dataDir, state.project.id) : undefined;
+    const r = appStudioFile(studioDir, query, (id, version) => state.studio.artifacts.some((a) => a.id === id && a.version === version));
+    if (!r.ok) {
+      res.writeHead(r.status, { "Content-Type": "application/json; charset=utf-8", ...APP_FILE_HEADERS });
+      return res.end(JSON.stringify({ error: r.error, kind: r.status === 403 ? "forbidden" : "invalid" } satisfies CommandError));
+    }
+    res.writeHead(200, { "Content-Type": r.type, "Content-Length": r.body.length, ...APP_FILE_HEADERS });
+    return res.end(r.body);
+  };
+
   const readJson = (req: IncomingMessage): Promise<unknown> =>
     new Promise((resolveBody, reject) => {
       let size = 0;
@@ -272,6 +290,7 @@ export function createHttpServer(opts: HttpOptions): Server {
         if (path === "/api/change") return change(res, url.searchParams.get("task") ?? "");
         if (path === "/api/checks/suggest") return suggest(res);
         if (path === "/api/checks/log") return checkLog(res, url.searchParams.get("run") ?? "", url.searchParams.get("check") ?? "");
+        if (path === "/api/studio/file") return studioFile(res, url.searchParams);
         return fail(res, 404, "invalid", "Not found");
       }
 

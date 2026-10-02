@@ -19,7 +19,7 @@ import { StoreContext, type ServiceStore } from "../store";
 import { frameSize, readCast, renderAnsi } from "./ansi";
 import { TerminalText } from "./Frames";
 import { Studio } from "./Studio";
-import { addPin, changedDrafts, deviceOptions, draftFrom, draftKey, pinFromMessage, recordingOf, sendBlocker, sendDrafts, variantEntry, type Draft } from "./studioView";
+import { addPin, changedDrafts, deviceOptions, draftFrom, draftKey, pinFromMessage, sendBlocker, sendDrafts, serviceFileUrl, variantDemo, variantEntry, type Draft } from "./studioView";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -61,8 +61,8 @@ function withSample(opts: { pe?: boolean } = {}) {
   const a = addScreen(s, r.n, at(4), {
     title: "Trip plan (simulated sample)",
     variants: [
-      { id: "a", label: "A · Map first" },
-      { id: "b", label: "B · Day by day" },
+      { id: "a", label: "A · Map first", entry: "a/index.html" },
+      { id: "b", label: "B · Day by day", entry: "b/index.html" },
     ],
     files: SAMPLE_FILES,
     madeBy: { ...DESIGNER, attemptId: runId },
@@ -214,9 +214,13 @@ describe("Send feedback", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].name).toBe("sendFeedback");
     const f = S.currentFeedback(after, id, 1)!;
-    expect(f).toMatchObject({ mark: "change", pickedVariant: "b", note: "Prefer B on phones.", pins: [{ x: 0.25, y: 0.5, variant: "a", text: "Make the map smaller on phones." }] });
+    expect(f).toMatchObject({ mark: "change", pickedVariant: "b", note: "Prefer B on phones.", pins: [{ x: 0.25, y: 0.5, variant: "a", text: "Make the map smaller on phones.", selector: "main > div.map" }] });
     // Once recorded, the same draft is no longer a change: nothing is sent twice.
     expect(changedDrafts(after, { [draftKey(a)]: draft })).toEqual([]);
+    // The recorded pin names its element, so the list shows it instead of saying it is not recorded.
+    const html = render(<Studio />, after);
+    expect(html).toContain('<code class="st-selector">main &gt; div.map</code>');
+    expect(html).not.toContain("The element is not recorded");
   });
 
   it("sends nothing while nothing changed or a version is still with the PE, and keeps the drafts when the service refuses", async () => {
@@ -232,30 +236,160 @@ describe("Send feedback", () => {
 });
 
 describe("where a variant is served from", () => {
-  it("its entry: the one the record names, else assumed from the files", () => {
+  it("its entry: the one the designer named, as the version records it; never guessed", () => {
     const { s, id } = withSample();
     const a = S.getArtifact(s, id, 1);
     expect(variantEntry(a, "a")).toBe("a/index.html");
     expect(variantEntry(a, "b")).toBe("b/index.html");
-    // Once the state's variant record carries the entry the designer named (see the report of pass 3d).
-    const withEntry: { id: string; label: string; entry: string }[] = [{ id: "a", label: "A", entry: "b/index.html" }];
-    const named = { ...a, variants: withEntry };
+    // An entry that is not where the files suggest is still the one shown.
+    const named = { ...a, variants: [{ id: "a", label: "A", entry: "b/index.html" }] };
     expect(variantEntry(named, "a")).toBe("b/index.html");
-    const flat = { ...a, variants: [{ id: "x", label: "X" }, { id: "y", label: "Y" }], files: [{ path: "map.html", sha256: sha("e") }, { path: "days.html", sha256: sha("f") }] };
-    expect(variantEntry(flat, "y")).toBe("days.html");
+    // A variant that names none shows nothing rather than a guess.
+    expect(variantEntry({ ...a, variants: [{ id: "x", label: "X" }] }, "x")).toBeUndefined();
+    // What the owner brought has no variants: its first page.
+    expect(variantEntry({ ...a, variants: [], files: [{ path: "notes.md", sha256: sha("e") }, { path: "sketch.html", sha256: sha("f") }] }, undefined)).toBe("sketch.html");
+  });
+});
+
+describe("PE review in the right column", () => {
+  /** The sample, with a PE run on Codex (simulated) that made one pass with these verdicts. */
+  function reviewed(verdicts: object[], opts: { lastPass?: boolean } = {}) {
+    const { s: designed, id } = withSample({ pe: false });
+    let s = R.askForPeReviews(designed, at(6));
+    s = R.dispatchStudioRuns(s, at(7), { simulated: ["codex"] }).state;
+    const pe = s.studio.runs.find((r) => r.kind === "pe")!;
+    s = S.addPeVerdicts(s, { artifactId: id, version: 1, verdicts: verdicts as S.VerdictInput[], by: { provider: "codex", model: pe.model, runId: pe.id }, lastPass: opts.lastPass ?? true }, at(8)).state;
+    return { s: R.completeStudioRun(s, pe.id, at(8), { summary: "pass 1" }), id };
+  }
+  const BUDGET = { buildUsd: [40, 90] as [number, number], maintenanceUsdPerMonth: [0, 5] as [number, number], basis: "Recorded designer runs of this size." };
+
+  it("once the PE agrees: its verdict on each variant with the change and the budget effect, labelled simulated, and the marks unlocked", () => {
+    const { s } = reviewed([
+      { variant: "a", verdict: "feasible", reasons: "A static page with a drawn map." },
+      { variant: "b", verdict: "feasible-if", reasons: "Long trips need paging.", change: "Page the days after a week.", budget: BUDGET },
+    ]);
+    const html = render(<Studio />, s);
+    expect(html).toContain(">Agreed<");
+    expect(html).toContain("The PE agreed on pass 1: every option is feasible, some only with the change it states. It is yours to mark.");
+    expect(html).toContain("PE · Codex · codex-sample-large");
+    expect(html).toContain("Simulated: the fake runtime&#x27;s PE answered; no agent judged this.");
+    expect(html).toMatch(/A · Map first<\/b><span class="k-chip k-chip--done">Feasible</);
+    expect(html).toMatch(/B · Day by day<\/b><span class="k-chip k-chip--you">Feasible if changed</);
+    expect(html).toContain("The change: Page the days after a week.");
+    expect(html).toContain("Budget effect: building $40–$90, maintenance $0–$5 a month. Basis: Recorded designer runs of this size.");
+    // The lock is gone: nothing says the PE is still reviewing, and the marks can be pressed.
+    expect(html).not.toContain("Waiting for PE review. You can look at it now");
+    expect(html).not.toContain("with the PE");
+    expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
+    // The lead's panel stays a placeholder until pass 4.
+    expect(html).toContain("Not built yet: the lead&#x27;s message for this round and its questions come here in pass 4 of the studio.");
+  });
+
+  it("an objection says plainly that it is waiting for you, and you can answer", () => {
+    const { s } = reviewed([
+      { variant: "a", verdict: "feasible", reasons: "Fine." },
+      { variant: "b", verdict: "not-feasible", reasons: "Live prices need a paid API.", change: "A free source of prices." },
+    ]);
+    const html = render(<Studio />, s);
+    expect(html).toContain(">Objects: waiting for you<");
+    expect(html).toContain("The PE objects to B · Day by day. This is waiting for you: the designer cannot revise in answer to the PE yet, so mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.");
+    expect(html).toMatch(/<span class="k-chip k-chip--fail">Not feasible</);
+    expect(html).toContain("What would change the verdict: A free source of prices.");
+    expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
+    // Flagged in the round's list too.
+    expect(html).toContain('<span class="k-chip k-chip--you">PE objects</span>');
+  });
+
+  it("while the PE has not answered: why, from its run, and the marks stay locked", () => {
+    const { s: designed, id } = withSample({ pe: false });
+    const queued = R.askForPeReviews(designed, at(6));
+    expect(render(<Studio />, queued)).toMatch(/>Queued<.*Waiting to start\./s);
+    const reviewing = R.dispatchStudioRuns(queued, at(7)).state;
+    const html = render(<Studio />, reviewing);
+    expect(html).toContain(">Reviewing<");
+    expect(html).toContain("The PE is reading this version: its files, screenshots and recordings.");
+    expect(html).toMatch(/aria-disabled="true"[^>]*>Keep</);
+    // While the screenshots are taken, the PE waits for them, and the studio says what the service is doing.
+    const shooting = S.startArtifactMedia(designed, id, 1);
+    const waiting = render(<Studio />, shooting);
+    expect(waiting).toContain("The PE reviews it once the screenshots are taken.");
+    expect(waiting).toContain("Taking screenshots…");
+    const skipped = render(<Studio />, S.recordArtifactMedia(shooting, id, 1, { shots: { status: "skipped", at: at(7), reason: "no Chrome found" } }, at(7)));
+    expect(skipped).toContain("No screenshots: no Chrome found");
+  });
+
+  it("a PE run that ended without a verdict says so, and says when it is asked again", () => {
+    const { s: designed } = withSample({ pe: false });
+    let s = R.dispatchStudioRuns(R.askForPeReviews(designed, at(6)), at(7)).state;
+    const first = s.studio.runs.find((r) => r.kind === "pe")!;
+    s = R.reportStudioRunFailed(s, first.id, "Its verdicts were refused: its answer has no JSON block with the verdicts", at(8));
+    expect(render(<Studio />, s)).toContain("The PE&#x27;s run ended without a verdict (Its verdicts were refused: its answer has no JSON block with the verdicts); it is asked again.");
+    s = R.dispatchStudioRuns(R.askForPeReviews(s, at(9)), at(10)).state;
+    s = R.reportStudioRunStopped(s, s.studio.runs.filter((r) => r.kind === "pe")[1].id, at(11), { lost: true });
+    expect(render(<Studio />, s)).toContain(">No verdict<");
   });
 });
 
 describe("terminal artifacts", () => {
-  const sample = withSample();
-  const term = (files: string[], extra: object = {}) => ({ ...S.getArtifact(sample.s, sample.id, 1), ...extra, kind: "terminal-demo" as const, devices: [], files: files.map((path) => ({ path, sha256: sha("1") })) });
+  /** A terminal demo in two variants, as the service records it: the tape not recorded (its hand-written .cast shown), and .ans frames. */
+  function withTerminal(demo?: S.MediaResult) {
+    const scoped = runCommand(vision(), "setDevices", { devices: ["desktop", "mobile", "terminal"] }, at(1)).state;
+    const r = openRound(scoped, "experience", at(1));
+    let s = run(r.state, "startStudioRun", { kind: "designer", round: r.n, brief: "Make the trips demo." }, at(2)).state;
+    s = R.dispatchStudioRuns(s, at(3), { simulated: ["claude"] }).state;
+    const a = addScreen(s, r.n, at(4), {
+      kind: "terminal-demo",
+      title: "trips",
+      devices: ["terminal"],
+      variants: [
+        { id: "a", label: "A · Recorded", entry: "a/demo.tape" },
+        { id: "b", label: "B · Frames", entry: "b/plan.ans" },
+      ],
+      files: ["a/demo.tape", "a/trips.js", "a/demo.cast", "b/plan.ans"].map((path, i) => ({ path, sha256: sha("abcd"[i]) })),
+      madeBy: { ...DESIGNER, attemptId: s.studio.runs[0].id },
+    });
+    s = S.startArtifactMedia(a.state, a.id, 1);
+    if (demo) s = S.recordArtifactMedia(s, a.id, 1, demo, at(5));
+    return { s: peAgrees(s, a.id, 1, ["a", "b"], at(6)), id: a.id };
+  }
+  const REASON = "recording is not available here: no working sandbox";
+  const HAND_WRITTEN: S.MediaResult = {
+    demo: {
+      status: "done",
+      at: at(5),
+      variants: [
+        { variant: "a", status: "hand-written", files: ["a/demo.cast"], reason: REASON },
+        { variant: "b", status: "hand-written", files: ["b/plan.ans"] },
+      ],
+    },
+  };
 
-  it("a recording, a hand-written recording or frame, or not recorded with the reason: from the service's status when it gives one, else from the files", () => {
-    expect(recordingOf(term(["trips.tape", "out/trips.webm", "out/trips.gif", "out/trips.txt"]))).toEqual({ status: "recorded", video: "out/trips.webm", gif: "out/trips.gif", transcript: "out/trips.txt" });
-    expect(recordingOf(term(["trips.cast"]))).toEqual({ status: "hand-written", cast: "trips.cast" });
-    expect(recordingOf(term(["ui.ans"]))).toEqual({ status: "hand-written", frame: "ui.ans" });
-    expect(recordingOf(term(["trips.tape"]))).toMatchObject({ status: "not-recorded" });
-    expect(recordingOf(term(["trips.tape", "trips.cast"], { recording: { status: "not-recorded", reason: "No working sandbox on this Mac." } }))).toEqual({ status: "not-recorded", reason: "No working sandbox on this Mac." });
+  it("each variant as the service recorded it: being recorded, recorded, hand-written with the reason, or not recorded", () => {
+    const pending = S.getArtifact(withTerminal().s, withTerminal().id, 1);
+    expect(variantDemo(pending, "a")).toEqual({ status: "pending" });
+    const { s, id } = withTerminal(HAND_WRITTEN);
+    const a = S.getArtifact(s, id, 1);
+    expect(variantDemo(a, "a")).toEqual({ status: "hand-written", cast: "a/demo.cast", reason: REASON });
+    expect(variantDemo(a, "b")).toEqual({ status: "hand-written", frame: "b/plan.ans" });
+    const recorded = withTerminal({ demo: { status: "done", at: at(5), variants: [{ variant: "a", status: "recorded", tape: "a/demo.tape", webm: "recording/a/demo.webm", txt: "recording/a/demo.txt" }, { variant: "b", status: "not-recorded", reason: "its entry is not a .tape" }] } });
+    const ra = S.getArtifact(recorded.s, recorded.id, 1);
+    expect(variantDemo(ra, "a")).toEqual({ status: "recorded", video: "recording/a/demo.webm", transcript: "recording/a/demo.txt" });
+    expect(variantDemo(ra, "b")).toEqual({ status: "not-recorded", reason: "its entry is not a .tape" });
+    // A version the service recorded nothing for shows the hand-written files beside the entry.
+    expect(variantDemo({ ...a, demo: undefined }, "a")).toEqual({ status: "hand-written", cast: "a/demo.cast" });
+  });
+
+  it("in the viewer: the studio's words on the recording, the hand-written .cast read through the app's own service, and a recording played from it with or without the prototype server", () => {
+    const { s, id } = withTerminal(HAND_WRITTEN);
+    const html = render(<Studio />, s);
+    expect(html).toContain(`Hand-written, not recorded: ${REASON}.`);
+    expect(html).toContain("Reading a/demo.cast…");
+    expect(serviceFileUrl(S.getArtifact(s, id, 1), "a/demo.cast")).toBe(`/api/studio/file?artifact=${id}&version=1&path=a%2Fdemo.cast`);
+    expect(render(<Studio />, withTerminal().s)).toContain("Recording…");
+    const recorded = withTerminal({ demo: { status: "done", at: at(5), variants: [{ variant: "a", status: "recorded", tape: "a/demo.tape", webm: "recording/a/demo.webm" }, { variant: "b", status: "hand-written", files: ["b/plan.ans"] }] } });
+    const played = render(<Studio />, recorded.s, service({ prototypePort: undefined }));
+    expect(played).toContain(`src="/api/studio/file?artifact=${recorded.id}&amp;version=1&amp;path=recording%2Fa%2Fdemo.webm"`);
+    expect(played).toContain("Recorded with VHS from the designer&#x27;s tape");
   });
 
   it("a .ans frame is drawn with colours as token classes, never as inline colours, at the smallest studio size it fits", () => {

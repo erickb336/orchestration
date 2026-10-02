@@ -31,6 +31,13 @@ export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-
 /** Kinds the PE does not review: what the owner brought, and a probe's evidence. They reach the owner at once, and a verdict on one is refused. */
 export const UNGATED_KINDS: StudioArtifactKind[] = ["material", "evidence"];
 
+/** One option of an artifact: its id, its label, and its entry file when it has one. */
+export interface StudioVariant {
+  id: string;
+  label: string;
+  entry?: string;
+}
+
 /** Who made an artifact version: the owner (what they brought), or an agent's run. */
 export type StudioMaker = { role: "user" } | { role: "lead" | "designer" | "pe" | "probe"; provider: ProviderId; model: string; attemptId: string };
 export const STUDIO_AGENT_ROLES = ["lead", "designer", "pe", "probe"] as const;
@@ -49,8 +56,11 @@ export interface StudioArtifact {
   supersedes?: string;
   kind: StudioArtifactKind;
   title: string;
-  /** Options side by side for an open choice; none or one is a single take. */
-  variants: { id: string; label: string }[];
+  /**
+   * Options side by side for an open choice; none or one is a single take. `entry` is the variant's entry file (a
+   * page, a tape, a .cast or .ans), one of `files`, as the designer named it in studio.json; what the owner brought has none.
+   */
+  variants: StudioVariant[];
   /**
    * Relative to the version's folder, `artifacts/<id>/v<version>/` in the project's studio workspace (pass 3). Provider-neutral
    * files: the canvas shows them the same whoever made them.
@@ -99,12 +109,17 @@ export type ArtifactDemo = { status: "pending" } | { status: "done"; at: string;
 
 export type Mark = "keep" | "change" | "drop";
 
-/** A comment pinned to a point: `x` and `y` are fractions (0 to 1) of the shown artifact's width and height. */
+/**
+ * A comment pinned to a point: `x` and `y` are fractions (0 to 1) of the shown artifact's width and height.
+ * `selector` describes the element clicked, as the prototype's pin script reported it: the prototype's own text, a
+ * description only, shown as text and never as markup.
+ */
 export interface Pin {
   x: number;
   y: number;
   variant?: string;
   text: string;
+  selector?: string;
 }
 
 /**
@@ -152,6 +167,13 @@ export interface PeVerdict {
   at: string;
   /** The owner overruled this objection, and why. */
   overruled?: { at: string; why: string };
+  /** The PE's run that made it, with its provider and model (the service's record; absent on verdicts recorded otherwise). */
+  by?: { provider: ProviderId; model: string; runId: string };
+  /**
+   * Set on each verdict of a pass the service made the last of its round before the three passes are used: the
+   * designer cannot revise in answer to the PE yet (ORC-029 pass 4), so the pass's objections go to the owner now.
+   */
+  lastPass?: true;
 }
 
 export type ProbeStatus = "queued" | "running" | "done" | "failed";

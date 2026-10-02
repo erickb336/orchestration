@@ -120,7 +120,7 @@ export function importDesignerRun(state: State, runId: string, staged: StagedArt
           round: run.round,
           kind: a.kind,
           title: a.title,
-          variants: a.variants.map((v) => ({ id: v.id, label: v.label })),
+          variants: a.variants.map((v) => ({ id: v.id, label: v.label, entry: v.entry })),
           files: a.files.map((f) => ({ path: f.path, sha256: f.sha256 })),
           devices: a.devices,
           madeBy: { role: run.kind, provider: run.provider, model: run.actualModel ?? run.model, attemptId: run.id },
@@ -129,7 +129,6 @@ export function importDesignerRun(state: State, runId: string, staged: StagedArt
       );
       s = r.state;
       const rec = S.getArtifact(s, r.artifactId, r.version);
-      const entry = new Map(a.variants.map((v) => [v.id, v.entry]));
       written.push(
         writeVersion(
           root,
@@ -139,7 +138,7 @@ export function importDesignerRun(state: State, runId: string, staged: StagedArt
             kind: rec.kind,
             title: rec.title,
             devices: rec.devices,
-            variants: rec.variants.map((v) => ({ id: v.id, label: v.label, entry: entry.get(v.id)! })),
+            variants: rec.variants.map((v) => ({ id: v.id, label: v.label, entry: v.entry! })),
             files: a.files.map((f) => ({ path: f.path, sha256: f.sha256, bytes: f.bytes })),
           },
           a.files,

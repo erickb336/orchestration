@@ -12,7 +12,7 @@
 
 import { draft, event, nextId } from "../model/core";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "../model/textSafety";
-import { ControlError, DEVICES, StaleWriteError, type Device, type State } from "../types";
+import { ControlError, DEVICES, StaleWriteError, type Device, type ProviderId, type State } from "../types";
 import {
   type ArtifactDemo,
   type ArtifactShots,
@@ -38,6 +38,8 @@ export const MAX_PE_PASSES = 3;
 const MAX_VARIANTS = 6;
 const MAX_FILES = 100;
 const MAX_PINS = 50;
+/** The longest element description a pin keeps; the prototype's pin script cuts its own at this length (src/runtime/prototype.ts). */
+const MAX_PIN_SELECTOR = 300;
 
 // ---------- text ----------
 
@@ -156,7 +158,8 @@ export interface ArtifactInput {
   round: number;
   kind: StudioArtifactKind;
   title: string;
-  variants: { id: string; label: string }[];
+  /** `entry`: the variant's entry file, one of `files`. */
+  variants: { id: string; label: string; entry?: string }[];
   files: { path: string; sha256: string }[];
   devices: Device[];
   madeBy: StudioMaker;
@@ -186,17 +189,19 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
   if (round.n === 0 && input.kind !== "material") throw new ControlError("Round 0 holds what the owner brought (material) only.");
   const title = required(agentLine(input.title), 200, "The title");
   if (input.variants.length > MAX_VARIANTS) throw new ControlError(`At most ${MAX_VARIANTS} variants side by side.`);
-  const variants = input.variants.map((v) => {
-    if (!/^[A-Za-z0-9_-]{1,20}$/.test(v.id)) throw new ControlError(`"${agentLine(v.id).slice(0, 30)}" is not a variant id (letters, digits, - and _, at most 20).`);
-    return { id: v.id, label: required(agentLine(v.label), 120, `Variant ${v.id}'s label`) };
-  });
-  if (new Set(variants.map((v) => v.id)).size !== variants.length) throw new ControlError("Each variant has its own id.");
   if (!input.files.length || input.files.length > MAX_FILES) throw new ControlError(`An artifact has between 1 and ${MAX_FILES} files.`);
   const files = input.files.map((f) => {
     if (!/^[0-9a-f]{64}$/.test(f.sha256)) throw new ControlError(`${agentLine(f.path).slice(0, 80)}: the SHA-256 is 64 lowercase hex characters.`);
     return { path: studioPath(f.path), sha256: f.sha256 };
   });
   if (new Set(files.map((f) => f.path)).size !== files.length) throw new ControlError("Each file is listed once.");
+  const variants = input.variants.map((v) => {
+    if (!/^[A-Za-z0-9_-]{1,20}$/.test(v.id)) throw new ControlError(`"${agentLine(v.id).slice(0, 30)}" is not a variant id (letters, digits, - and _, at most 20).`);
+    const label = required(agentLine(v.label), 120, `Variant ${v.id}'s label`);
+    if (v.entry !== undefined && !files.some((f) => f.path === v.entry)) throw new ControlError(`Variant ${v.id}'s entry "${agentLine(v.entry).slice(0, 80)}" is not one of the artifact's files.`);
+    return { id: v.id, label, ...(v.entry !== undefined ? { entry: v.entry } : {}) };
+  });
+  if (new Set(variants.map((v) => v.id)).size !== variants.length) throw new ControlError("Each variant has its own id.");
   const outside = input.devices.filter((d) => !state.project.devices.includes(d));
   if (outside.length) throw new ControlError(`${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the project's device scope (${state.project.devices.join(", ")}).`);
   const devices = DEVICES.filter((d) => input.devices.includes(d));
@@ -369,7 +374,8 @@ export const covers = (v: PeVerdict, variant: string | undefined) => v.variant =
  * - waiting: no pass on this version yet (`passes` were made on earlier versions of its round);
  * - revising: the latest pass objected and passes remain: the designer revises, or the PE asks for evidence;
  * - agreed: the latest pass found every variant feasible or feasible-if;
- * - objections: the third pass still objected; the version goes to the owner with them.
+ * - objections: the third pass still objected, or the service made the objecting pass the last one (`lastPass`,
+ *   while the designer cannot revise in answer to the PE); the version goes to the owner with them.
  * `objections` lists the latest pass's not-feasible verdicts, overruled ones included (they carry `overruled`).
  */
 export type PeReview =
@@ -382,9 +388,10 @@ export function peReview(s: State, a: StudioArtifact): PeReview {
   const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
   if (!mine.length) return { status: "waiting", passes: passesInRound(s, a.id, a.round) };
   const pass = Math.max(...mine.map((v) => v.pass));
-  const objections = mine.filter((v) => v.pass === pass && v.verdict === "not-feasible");
+  const latest = mine.filter((v) => v.pass === pass);
+  const objections = latest.filter((v) => v.verdict === "not-feasible");
   if (!objections.length) return { status: "agreed", pass };
-  return pass >= MAX_PE_PASSES ? { status: "objections", pass, objections } : { status: "revising", pass, objections };
+  return pass >= MAX_PE_PASSES || latest.some((v) => v.lastPass) ? { status: "objections", pass, objections } : { status: "revising", pass, objections };
 }
 
 /** Whether the owner sees this version: PE review agreed or ran its three passes; what the owner brought and evidence are never held back. */
@@ -436,12 +443,23 @@ export function readEstimate(raw: unknown): BudgetEstimate {
   return estimate({ buildUsd: range(o.buildUsd, "building"), maintenanceUsdPerMonth: range(o.maintenanceUsdPerMonth, "maintenance"), basis: o.basis });
 }
 
+export interface PeVerdictsInput {
+  artifactId: string;
+  version: number;
+  verdicts: VerdictInput[];
+  /** The PE's run that made them (the service's record). */
+  by?: { provider: ProviderId; model: string; runId: string };
+  /** Make this pass the last of its round: its objections go to the owner now (while the designer cannot revise in answer to the PE). */
+  lastPass?: boolean;
+}
+
 /**
  * Record one PE pass on an artifact's newest version (the service, from the PE's run): one verdict per variant, or
- * one verdict on the whole artifact. Passes count within the version's round, up to three. Feasible-if states the
- * change; an estimate states its basis. What the owner brought and a probe's evidence are not reviewed.
+ * one verdict on the whole artifact. Passes count within the version's round, up to three, or fewer when the
+ * service makes one the last (`lastPass`). Feasible-if states the change; an estimate states its basis. What the
+ * owner brought and a probe's evidence are not reviewed.
  */
-export function addPeVerdicts(state: State, input: { artifactId: string; version: number; verdicts: VerdictInput[] }, now: string): { state: State; pass: number } {
+export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string): { state: State; pass: number } {
   const a = getArtifact(state, input.artifactId, input.version);
   if (UNGATED_KINDS.includes(a.kind)) throw new ControlError(`${a.title} is ${a.kind === "material" ? "what you brought" : "a probe's evidence"}: the PE does not review it.`);
   const latest = latestVersion(state, a.id)!;
@@ -464,14 +482,34 @@ export function addPeVerdicts(state: State, input: { artifactId: string; version
     const reasons = required(agentText(v.reasons), 2000, "The verdict's reasons");
     const change = v.change === undefined ? "" : capped(agentText(v.change), 1000, "The stated change");
     if (v.verdict === "feasible-if" && !change) throw new ControlError("Feasible-if states the change that makes it feasible.");
-    return { id: "", artifactId: a.id, version: a.version, ...(v.variant !== undefined ? { variant: v.variant } : {}), pass, verdict: v.verdict, reasons, ...(change ? { change } : {}), ...(v.budget ? { budget: estimate(v.budget) } : {}), at: now };
+    return {
+      id: "",
+      artifactId: a.id,
+      version: a.version,
+      ...(v.variant !== undefined ? { variant: v.variant } : {}),
+      pass,
+      verdict: v.verdict,
+      reasons,
+      ...(change ? { change } : {}),
+      ...(v.budget ? { budget: estimate(v.budget) } : {}),
+      at: now,
+      ...(input.by ? { by: { provider: input.by.provider, model: input.by.model, runId: input.by.runId } } : {}),
+      ...(input.lastPass ? { lastPass: true as const } : {}),
+    };
   });
   const s = draft(state);
   for (const r of records) s.studio.verdicts.push({ ...r, id: nextId(s, "pev") });
   const art = getArtifact(s, a.id, a.version);
   const words: Record<Verdict, string> = { feasible: "feasible", "feasible-if": "feasible if changed", "not-feasible": "not feasible" };
   const r = peReview(s, art);
-  const outcome = r.status === "agreed" ? "agreed; it goes to the owner" : r.status === "objections" ? `still objects after ${MAX_PE_PASSES} passes; it goes to the owner with the objections` : "the designer revises";
+  const outcome =
+    r.status === "agreed"
+      ? "agreed; it goes to the owner"
+      : r.status === "objections"
+        ? pass >= MAX_PE_PASSES
+          ? `still objects after ${MAX_PE_PASSES} passes; it goes to the owner with the objections`
+          : "objects, and the designer cannot revise in answer yet; it goes to the owner with the objections"
+        : "the designer revises";
   event(s, now, "runtime", "vision", `PE review of ${artifactName(a)}, pass ${pass}: ${records.map((x) => `${x.variant ? `${variantLabel(a, x.variant)} ` : ""}${words[x.verdict]}`).join(", ")}; ${outcome}`);
   return { state: s, pass };
 }
@@ -533,7 +571,9 @@ export function sendFeedback(state: State, entries: FeedbackInput[], now: string
       const inside = (n: number) => Number.isFinite(n) && n >= 0 && n <= 1;
       if (!inside(p.x) || !inside(p.y)) throw new ControlError("A pin's position is a fraction (0 to 1) of the artifact's width and height.");
       const pv = variant(p.variant);
-      return { x: p.x, y: p.y, ...(pv !== undefined ? { variant: pv } : {}), text: required(ownerText(p.text), 1000, "A pinned comment") };
+      // The clicked element as the prototype described it: untrusted text, kept as one line.
+      const selector = p.selector === undefined ? "" : capped(agentLine(p.selector), MAX_PIN_SELECTOR, "A pin's element");
+      return { x: p.x, y: p.y, ...(pv !== undefined ? { variant: pv } : {}), text: required(ownerText(p.text), 1000, "A pinned comment"), ...(selector ? { selector } : {}) };
     });
     const note = capped(ownerText(e.note), 4000, "The note");
     return { artifactId: a.id, version: a.version, mark: e.mark, ...(picked !== undefined ? { pickedVariant: picked } : {}), pins, note, at: now };

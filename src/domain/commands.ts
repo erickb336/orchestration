@@ -140,7 +140,7 @@ function feedbackEntry(v: unknown): S.FeedbackInput {
   if (e.mark !== null && !["keep", "change", "drop"].includes(e.mark as string)) throw new InvalidCommandError("mark must be keep, change, drop or null");
   const pins = array<unknown>(e.pins, "pins").map((x) => {
     const p = obj(x, "pin");
-    return { x: num(p, "x"), y: num(p, "y"), ...(p.variant === undefined ? {} : { variant: str(p, "variant") }), text: str(p, "text") };
+    return { x: num(p, "x"), y: num(p, "y"), ...(p.variant === undefined ? {} : { variant: str(p, "variant") }), text: str(p, "text"), ...(p.selector === undefined ? {} : { selector: str(p, "selector") }) };
   });
   return { artifactId: str(e, "artifactId"), version: int(e, "version"), mark: e.mark as Mark | null, ...(e.pickedVariant === undefined ? {} : { pickedVariant: str(e, "pickedVariant") }), pins, note: str(e, "note") };
 }
@@ -251,7 +251,7 @@ export const COMMANDS = {
         title: str(a, "title"),
         variants: array<unknown>(a.variants, "variants").map((x) => {
           const v = obj(x, "variant");
-          return { id: str(v, "id"), label: str(v, "label") };
+          return { id: str(v, "id"), label: str(v, "label"), ...(v.entry === undefined ? {} : { entry: str(v, "entry") }) };
         }),
         files: array<unknown>(a.files, "files").map((x) => {
           const f = obj(x, "file");
@@ -270,7 +270,7 @@ export const COMMANDS = {
   },
   /** One PE pass on an artifact's newest version. Returns { pass }. */
   addPeVerdicts: (s, now, a) => {
-    const r = S.addPeVerdicts(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), verdicts: array<unknown>(a.verdicts, "verdicts").map(verdictInput) }, now);
+    const r = S.addPeVerdicts(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), verdicts: array<unknown>(a.verdicts, "verdicts").map(verdictInput), ...(a.lastPass === true ? { lastPass: true } : {}) }, now);
     return { state: r.state, result: { pass: r.pass } };
   },
   /** Returns { probeId }. */

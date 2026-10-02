@@ -24,8 +24,9 @@ import { PrDriver } from "./prdelivery";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
-import { ManifestError, readStaged, studioRoot, type StagedArtifact } from "./studio/artifacts";
+import { ManifestError, readStaged, studioRoot, versionDir, type StagedArtifact } from "./studio/artifacts";
 import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
+import { PeAnswerError, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
 import { designerEnvelope, importDesignerRun, prepareStaging } from "./studio/runs";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
@@ -495,8 +496,10 @@ export class Scheduler {
     const current = this.store.read().state;
     for (const e of events) {
       if (e.type !== "completed") continue;
-      if (R.getStudioRun(current, e.attemptId)) {
-        studioOutputs.set(e.attemptId, this.readStudioOutput(e.attemptId));
+      const studioRun = R.getStudioRun(current, e.attemptId);
+      if (studioRun) {
+        // A designer hands in files; the PE answers in its final message, read in the transaction.
+        if (studioRun.kind === "designer") studioOutputs.set(e.attemptId, this.readStudioOutput(e.attemptId));
         continue;
       }
       try {
@@ -531,7 +534,9 @@ export class Scheduler {
             else if (l.kind === "timeout") next = R.reportStudioStopTimeout(next, l.id, now);
             else next = R.reportStudioRunFailed(next, l.id, l.reason, now);
           }
-          return next;
+          // The PE reviews each designer version before the owner sees it: asked for once the version is imported
+          // and its screenshots or recording are made (applied above), and again after a review ended without a verdict.
+          return R.askForPeReviews(next, now);
         },
         now,
         lease,
@@ -821,16 +826,42 @@ export class Scheduler {
   }
 
   /**
-   * Start a studio run: a fresh staging folder under the data directory (the one place it writes), a read-only
-   * checkout of the product (real mode), and its envelope. Isolated, with no connections and no shell, whatever the
-   * project's environment setting: the adapters enforce it for `studio` runs too.
+   * Start a studio run. A designer's: a fresh staging folder under the data directory (the one place it writes), a
+   * read-only checkout of the product (real mode), and its envelope. The PE's: read-only, in the folder of the version
+   * it reviews (the files, screenshots and recordings), with nothing to write. Isolated, with no connections and no
+   * shell, whatever the project's environment setting: the adapters enforce it for `studio` runs too.
    */
   private launchStudio(state: State, runId: string): string | undefined {
     const run = R.getStudioRun(state, runId)!;
-    if (run.kind !== "designer") return "Only designer runs can start yet; the PE's and probes' runs come in ORC-029 pass 4";
+    if (run.kind === "probe") return "Probe runs cannot start yet; they come in ORC-029 pass 4";
     if (!this.dataDir) return "This service has no data directory for the studio";
     const adapter = this.adapterFor(run.provider);
     const limits = state.project.runLimits;
+    if (run.kind === "pe") {
+      try {
+        const folder = versionDir(studioRoot(this.dataDir, state.project.id), run.artifactId!, run.baseVersion!);
+        this.launched.set(runId, { provider: run.provider, access: "read", stepId: run.kind, taskId: "STUDIO" });
+        adapter.start({
+          attemptId: runId,
+          taskId: "STUDIO",
+          stepId: run.kind,
+          role: "pe",
+          provider: run.provider,
+          model: run.model,
+          workspace: { path: folder, access: "read" },
+          studio: true,
+          environment: "isolated",
+          connections: [],
+          prompt: peEnvelope(state, run, { folder }),
+          outputs: [],
+          limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
+        });
+        return undefined;
+      } catch (e) {
+        this.launched.delete(runId);
+        return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
     let checkout: PreparedWorkspace | undefined;
     try {
       const staging = prepareStaging(state, run, studioRoot(this.dataDir, state.project.id));
@@ -945,7 +976,16 @@ export class Scheduler {
         const started = e.model ? R.reportStudioRunStarted(s, run.id, { actualModel: e.model }) : s;
         const fail = (why: string) => R.reportStudioRunFailed(started, run.id, why, now, e.usage);
         const stale = R.staleReason(started, run);
-        if (stale) return fail(`Its result is stale: ${stale}. Nothing was imported.`);
+        if (stale) return fail(`Its result is stale: ${stale}. Nothing was ${run.kind === "pe" ? "recorded" : "imported"}.`);
+        if (run.kind === "pe") {
+          // The PE's verdicts, from its final message: checked, then recorded on the version it reviewed.
+          try {
+            const r = recordPeRun(started, R.getStudioRun(started, run.id)!, readPeAnswer(e.finalText), now);
+            return R.completeStudioRun(r.state, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
+          } catch (err) {
+            return fail(`Its verdicts were refused: ${err instanceof PeAnswerError || err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         const out = outputs.get(run.id);
         if (!out || "refused" in out) return fail(`studio.json was refused: ${out && "refused" in out ? out.refused : "it was not read"}`);
         try {

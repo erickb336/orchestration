@@ -172,4 +172,7 @@ main.st-wide { max-width: 1600px; }
 /* ---------- the right column ---------- */
 .st-placeholder { padding: var(--space-3); border: 1px dashed var(--border-strong); border-radius: var(--radius-control); }
 .st-sum { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); font-size: var(--fs-small); overflow-wrap: anywhere; }
+/* PE review: one verdict per variant, each with its reasons, its change and its budget effect. */
+.st-verdicts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.st-verdict { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; padding-top: var(--space-2); border-top: 1px solid var(--border); }
 .st-right .k-field { margin: 0; }

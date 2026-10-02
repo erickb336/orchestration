@@ -7,9 +7,11 @@ import { runCommand } from "../commands";
 import * as M from "../model";
 import { buildSeed } from "../seed";
 import { startFactoryAsOwner } from "../testing/factory";
-import { addScreen, openRound, run } from "../testing/studio";
+import { buildingSpend } from "../spend";
+import { addScreen, openRound, peAgrees, run } from "../testing/studio";
 import type { State } from "../types";
 import * as R from "./runs";
+import * as S from "./studio";
 
 const T0 = Date.parse("2026-10-02T09:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -50,7 +52,7 @@ describe("asking for a studio run", () => {
     expect(runOf(r.state, r.result.runId)).toMatchObject({ artifactId: a.id, baseVersion: 1 });
   });
 
-  it("is refused outside Vision, outside an open lead round, for an unknown artifact, without a brief, and for the PE and probes until pass 4", () => {
+  it("is refused outside Vision, outside an open lead round, for an unknown artifact, without a brief, and for probes until pass 4", () => {
     const { s, n } = inRound();
     expect(() => ask(startFactoryAsOwner(s, at(2)), { round: n })).toThrow("Studio runs happen in Vision. Go back to vision first.");
     expect(() => ask(s, { round: 2 })).toThrow("There is no round 2.");
@@ -59,7 +61,8 @@ describe("asking for a studio run", () => {
     expect(() => ask(zero.state, { round: 0 })).toThrow(/Round 0 holds what the owner brought/);
     expect(() => ask(s, { round: n, artifactId: "sa-99" })).toThrow("Unknown studio artifact sa-99.");
     expect(() => ask(s, { round: n, brief: " \u0007 " })).toThrow("The brief is empty.");
-    expect(() => ask(s, { round: n, kind: "pe" })).toThrow(/the PE's and probes' runs come in ORC-029 pass 4/);
+    expect(() => ask(s, { round: n, kind: "probe" })).toThrow("Probe runs cannot be asked for yet; they come in ORC-029 pass 4.");
+    expect(() => ask(s, { round: n, kind: "pe" })).toThrow("A PE run names the artifact it reviews.");
     expect(() => ask(s, { round: n, selection: { provider: "codex", model: "gpt-nope" } })).toThrow("Model gpt-nope is not in the Codex catalog.");
   });
 });
@@ -212,6 +215,113 @@ describe("pause, stop and stale results", () => {
   it("a new project is refused while a studio run is active", () => {
     const { s } = running();
     expect(() => M.initProject(s, { name: "Other", repoPath: "/tmp/other", vision: "", focus: "" }, at(5))).toThrow("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
+  });
+});
+
+describe("the PE's runs (pass 3)", () => {
+  /** Round 1 with the designer's Trip plan (three variants, made on Claude) just imported. */
+  function imported() {
+    const { s, n } = inRound();
+    const a = addScreen(s, n, at(2));
+    return { s: a.state, id: a.id, n };
+  }
+  const peRuns = (s: State) => s.studio.runs.filter((r) => r.kind === "pe");
+
+  it("once a version is imported the service asks the PE, on the other provider than the designer's, to review it in its round", () => {
+    const { s, id } = imported();
+    const asked = R.askForPeReviews(s, at(3));
+    expect(peRuns(asked)).toEqual([
+      {
+        id: expect.any(String),
+        kind: "pe",
+        round: 1,
+        artifactId: id,
+        baseVersion: 1,
+        provider: "codex",
+        model: "codex-sample-large",
+        status: "queued",
+        brief: "PE review of Trip plan v1: feasibility, scale, longevity and budget, a verdict for each variant.",
+        askedAt: at(3),
+        workspace: expect.stringMatching(/^staging\//),
+      },
+    ]);
+    expect(asked.events.at(-1)).toMatchObject({ actor: "system", kind: "vision", message: `PE run ${peRuns(asked)[0].id} asked for in round 1, reviewing Trip plan v1, on Codex · codex-sample-large` });
+    // Asked once: the next cycle changes nothing.
+    expect(R.askForPeReviews(asked, at(4))).toBe(asked);
+  });
+
+  it("the project's PE role default chooses it; with the other provider off, the designer's own reviews, and the record says it is not independent", () => {
+    const { s } = imported();
+    const chosen = runCommand(s, "setRoleDefault", { role: "pe", selection: { provider: "claude", model: "auto" } }, at(3)).state;
+    expect(peRuns(R.askForPeReviews(chosen, at(4)))[0]).toMatchObject({ provider: "claude", model: "claude-sample-large" });
+    const codexOff = runCommand(s, "setProviderEnabled", { provider: "codex", enabled: false }, at(3)).state;
+    const asked = R.askForPeReviews(codexOff, at(4));
+    expect(peRuns(asked)[0]).toMatchObject({ provider: "claude" });
+    expect(asked.events.at(-1)!.message).toMatch(/on Claude · claude-sample-large \(on the designer's own provider: Codex is not enabled, so this review is not independent\)$/);
+  });
+
+  it("waits for the screenshots and the recording; never for what the owner brought, a closed round, an older version, outside Vision, or a version already reviewed", () => {
+    const { s, id, n } = imported();
+    const pending = S.startArtifactMedia(s, id, 1);
+    expect(peRuns(R.askForPeReviews(pending, at(3)))).toEqual([]);
+    const shot = S.recordArtifactMedia(pending, id, 1, { shots: { status: "skipped", at: at(3), reason: "no Chrome found" } }, at(3));
+    expect(peRuns(R.askForPeReviews(shot, at(4)))).toHaveLength(1);
+    expect(peRuns(R.askForPeReviews(run(s, "closeRound", { round: n }, at(3)).state, at(4)))).toEqual([]);
+    expect(peRuns(R.askForPeReviews(startFactoryAsOwner(s, at(3)), at(4)))).toEqual([]);
+    expect(peRuns(R.askForPeReviews(peAgrees(s, id, 1, ["A", "B", "C"], at(3)), at(4)))).toEqual([]);
+    // Only the newest version is reviewed.
+    const v2 = addScreen(s, n, at(3), { artifactId: id });
+    expect(peRuns(R.askForPeReviews(v2.state, at(4))).map((r) => r.baseVersion)).toEqual([2]);
+    const brought = openRound(fresh(), "material", at(1));
+    const material = addScreen(brought.state, 0, at(2), { kind: "material", title: "Sketch", variants: [], devices: [], madeBy: { role: "user" } });
+    expect(peRuns(R.askForPeReviews(material.state, at(3)))).toEqual([]);
+  });
+
+  it("a run under way or finished needs no other; one that failed or was lost is asked again once, then no more", () => {
+    const { s, id } = imported();
+    const first = R.askForPeReviews(s, at(3));
+    const runId = peRuns(first)[0].id;
+    const going = dispatch(first, 4).state;
+    expect(R.askForPeReviews(going, at(5))).toBe(going);
+    const failed = R.reportStudioRunFailed(going, runId, "The PE's answer had no verdicts.", at(6));
+    const again = R.askForPeReviews(failed, at(7));
+    expect(peRuns(again).map((r) => r.status)).toEqual(["failed", "queued"]);
+    const lost = R.reportStudioRunStopped(dispatch(again, 8).state, peRuns(again)[1].id, at(9), { lost: true });
+    expect(R.askForPeReviews(lost, at(10))).toBe(lost);
+    expect(R.peRunDue(lost, S.latestVersion(lost, id)!)).toBe(false);
+  });
+
+  it("a pause stops it and asks for it again, like any studio run", () => {
+    const { s } = imported();
+    const asked = R.askForPeReviews(s, at(3));
+    const runId = peRuns(asked)[0].id;
+    const stopped = R.reportStudioRunStopped(M.pauseProject(dispatch(asked, 4).state, at(5)), runId, at(6));
+    expect(peRuns(stopped).map((r) => [r.status, r.retryOf])).toEqual([
+      ["stopped", undefined],
+      ["queued", runId],
+    ]);
+    expect(R.askForPeReviews(stopped, at(7))).toBe(stopped);
+  });
+
+  it("counts in the building budget and waits at it, like every studio run", () => {
+    const { s } = imported();
+    const asked = R.askForPeReviews(s, at(3));
+    const first = peRuns(asked)[0];
+    const done = R.completeStudioRun(dispatch(asked, 4).state, first.id, at(5), { summary: "3 verdicts", usage: { costUsd: 0.7 } });
+    expect(buildingSpend(done)).toMatchObject({ usd: 0.7, runs: 1 });
+    // A second version's review waits, queued, while the budget is reached.
+    const v2 = addScreen(done, 1, at(6), { artifactId: first.artifactId });
+    const atBudget = runCommand(R.askForPeReviews(v2.state, at(7)), "setBudgets", { buildingUsd: 0.5, maintenanceUsdPerMonth: null }, at(7)).state;
+    expect(peRuns(atBudget).at(-1)).toMatchObject({ baseVersion: 2, status: "queued" });
+    expect(dispatch(atBudget, 8).started).toEqual([]);
+  });
+
+  it("says why the PE cannot be asked when no provider can run it", () => {
+    const { s, id } = imported();
+    const chosen = runCommand(s, "setRoleDefault", { role: "pe", selection: { provider: "codex", model: "auto" } }, at(3)).state;
+    const off = runCommand(chosen, "setProviderEnabled", { provider: "codex", enabled: false }, at(3)).state;
+    expect(R.askForPeReviews(off, at(4))).toBe(off);
+    expect(R.peRunBlocker(off, S.latestVersion(off, id)!)).toBe("Codex is not enabled. Enable it in Settings or choose another provider for the PE.");
   });
 });
 

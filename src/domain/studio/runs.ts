@@ -1,5 +1,11 @@
-// Studio runs (ORC-029 pass 3a): the agent runs of Vision, a designer's for now (the PE's and probes' come in pass 4).
+// Studio runs (ORC-029 pass 3): the agent runs of Vision, the designer's and the PE's (probes' come in pass 4).
 // Pure: each operation returns a new State; the service's scheduler dispatches, launches and reports them.
+//
+// The PE's runs. The owner sees a designer's work only after PE review (the loop rule, studio.ts), so once a version
+// is imported, and its screenshots or recording are made, the service asks for a PE run on it (askForPeReviews). The
+// PE reads the version and returns a verdict per variant, which the service records with addPeVerdicts. By default
+// the PE runs on the other provider than the designer's, so the check is independent; the project's `pe` role
+// default overrides that.
 //
 // They follow lead runs. A run is asked for (queued) by the service, and the scheduler dispatches it only while the
 // project is in Vision, not paused, and below the building budget; product task steps never start in Vision. Pausing
@@ -12,9 +18,9 @@ import { busyAgents, currentVision, draft, event, nextId } from "../model/core";
 import { providerLabel } from "../model/resolution";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
 import { budgetStop } from "../spend";
-import { ControlError, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
-import { latestVersion } from "./studio";
-import type { StudioRun, StudioRunKind } from "./types";
+import { ControlError, PROVIDERS, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
+import { artifactName, latestArtifacts, latestVersion, peReview } from "./studio";
+import { UNGATED_KINDS, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
 
 /** The longest brief a run takes, in characters. */
 const MAX_BRIEF = 20_000;
@@ -47,7 +53,7 @@ export function staleReason(s: State, r: StudioRun): string | undefined {
   if (!round || round.closedAt) return `round ${r.round} was closed`;
   if (r.artifactId !== undefined) {
     const latest = latestVersion(s, r.artifactId);
-    if (!latest || latest.version !== r.baseVersion) return `${latest?.title ?? r.artifactId} has a newer version (v${latest?.version}) than the one it revises (v${r.baseVersion})`;
+    if (!latest || latest.version !== r.baseVersion) return `${latest?.title ?? r.artifactId} has a newer version (v${latest?.version}) than the one it ${r.kind === "pe" ? "reviews" : "revises"} (v${r.baseVersion})`;
   }
   return undefined;
 }
@@ -57,18 +63,34 @@ export function staleReason(s: State, r: StudioRun): string | undefined {
 export interface StudioRunRequest {
   kind: StudioRunKind;
   round: number;
-  /** A new version of this artifact (a designer's revision). */
+  /** A designer's run: a new version of this artifact (a revision). The PE's: the artifact it reviews, at its newest version. */
   artifactId?: string;
-  /** The provider and model; absent: the designer's role default, else the project's default. */
+  /** The provider and model; absent: the role's default (see peSelection for the PE), else the project's default. */
   selection?: ModelSelection;
   brief: string;
+}
+
+/**
+ * Who reviews a version as the PE, and why: the project's `pe` role default when it has one; else the other
+ * provider than the one that made it, so the check is independent; else, when that provider is not enabled, the
+ * maker's own (the review is then not independent, and `note` says so).
+ */
+export function peSelection(s: State, a: StudioArtifact): { selection: ModelSelection; note?: string } {
+  const p = s.project;
+  const set = roleDefaultFor(p, "pe");
+  if (set) return { selection: set };
+  const maker = a.madeBy.role === "user" ? undefined : a.madeBy.provider;
+  if (!maker) return { selection: p.defaultSelection };
+  const other = PROVIDERS.find((x) => x !== maker)!;
+  if (p.enabledProviders.includes(other)) return { selection: { provider: other, model: "auto" } };
+  return { selection: { provider: maker, model: "auto" }, note: `on the designer's own provider: ${providerLabel(other)} is not enabled, so this review is not independent` };
 }
 
 /** The selection resolved against the enabled providers and the catalog: "auto" is the catalog's first model. */
 function resolveSelection(s: State, kind: StudioRunKind, given: ModelSelection | undefined): { provider: ProviderId; model: string } {
   const p = s.project;
   const sel = given ?? (kind === "designer" ? roleDefaultFor(p, "designer") : undefined) ?? p.defaultSelection;
-  if (!p.enabledProviders.includes(sel.provider)) throw new ControlError(`${providerLabel(sel.provider)} is not enabled. Enable it in Settings or choose another provider for the designer.`);
+  if (!p.enabledProviders.includes(sel.provider)) throw new ControlError(`${providerLabel(sel.provider)} is not enabled. Enable it in Settings or choose another provider for the ${kind === "pe" ? "PE" : kind}.`);
   const catalog = p.catalog[sel.provider];
   if (sel.model === "auto") {
     if (!catalog.length) throw new ControlError(`No models available for ${providerLabel(sel.provider)}.`);
@@ -79,22 +101,30 @@ function resolveSelection(s: State, kind: StudioRunKind, given: ModelSelection |
 }
 
 /**
- * Ask for a studio run (the service, for the lead: pass 4). Queued: the scheduler dispatches it in Vision. Only a
- * designer's for now; the PE's and probes' runs come in pass 4. Its provider and model are resolved now and recorded.
+ * Ask for a studio run (the service: the designer's for the lead, pass 4; the PE's after an import). Queued: the
+ * scheduler dispatches it in Vision. A PE run reviews an artifact's newest version, in that version's round. Probes'
+ * runs come in pass 4. Its provider and model are resolved now and recorded.
  */
 export function requestStudioRun(state: State, req: StudioRunRequest, now: string): { state: State; runId: string } {
-  if (req.kind !== "designer") throw new ControlError("Only designer runs can be asked for yet; the PE's and probes' runs come in ORC-029 pass 4.");
+  if (req.kind === "probe") throw new ControlError("Probe runs cannot be asked for yet; they come in ORC-029 pass 4.");
   if (state.project.stage !== "shaping") throw new ControlError("Studio runs happen in Vision. Go back to vision first.");
   const round = state.studio.rounds.find((r) => r.n === req.round);
   if (!round) throw new ControlError(`There is no round ${req.round}.`);
   if (round.closedAt) throw new ControlError(`Round ${req.round} is closed.`);
-  if (round.n === 0) throw new ControlError("Round 0 holds what the owner brought; the designer works in the lead's rounds.");
+  if (round.n === 0) throw new ControlError(`Round 0 holds what the owner brought; the ${req.kind === "pe" ? "PE" : "designer"} works in the lead's rounds.`);
   const base = req.artifactId === undefined ? undefined : latestVersion(state, req.artifactId);
   if (req.artifactId !== undefined && !base) throw new ControlError(`Unknown studio artifact ${req.artifactId}.`);
+  let note: string | undefined;
+  if (req.kind === "pe") {
+    if (!base) throw new ControlError("A PE run names the artifact it reviews.");
+    if (UNGATED_KINDS.includes(base.kind)) throw new ControlError(`${base.title} is ${base.kind === "material" ? "what you brought" : "a probe's evidence"}: the PE does not review it.`);
+    if (base.round !== round.n) throw new ControlError(`${artifactName(base)} is from round ${base.round}; the PE reviews it in that round.`);
+    if (!req.selection) note = peSelection(state, base).note;
+  }
   const brief = visibleOrEmpty(stripInvisible(req.brief.replace(CONTROL_G, "")).replace(/\r\n?/g, "\n").trim());
   if (!brief) throw new ControlError("The brief is empty.");
   if (brief.length > MAX_BRIEF) throw new ControlError(`The brief is over ${MAX_BRIEF} characters.`);
-  const { provider, model } = resolveSelection(state, req.kind, req.selection);
+  const { provider, model } = resolveSelection(state, req.kind, req.selection ?? (req.kind === "pe" ? peSelection(state, base!).selection : undefined));
   const s = draft(state);
   const id = nextId(s, "studio");
   const run: StudioRun = {
@@ -110,8 +140,71 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
     workspace: `staging/${id}`,
   };
   s.studio.runs.push(run);
-  event(s, now, "lead", "vision", `${studioRunName(run)} asked for in round ${round.n}${base ? `, revising ${base.title} v${base.version}` : ""}, on ${providerLabel(provider)} · ${model}`);
+  const what = !base ? "" : req.kind === "pe" ? `, reviewing ${artifactName(base)}` : `, revising ${artifactName(base)}`;
+  event(s, now, req.kind === "pe" ? "system" : "lead", "vision", `${studioRunName(run)} asked for in round ${round.n}${what}, on ${providerLabel(provider)} · ${model}${note ? ` (${note})` : ""}`);
   return { state: s, runId: id };
+}
+
+// ---------- the PE's runs, asked for by the service ----------
+
+/** How many PE runs a version gets that end without a verdict (failed or lost) before the service stops asking: one retry. */
+export const MAX_PE_RUNS = 2;
+
+/** The PE's runs on one version, oldest first. */
+export function peRunsOf(s: State, artifactId: string, version: number): StudioRun[] {
+  return s.studio.runs.filter((r) => r.kind === "pe" && r.artifactId === artifactId && r.baseVersion === version);
+}
+
+/**
+ * Whether a version needs the PE now, and if not, why not. It does when it is the newest version of a reviewed kind,
+ * in an open round, in Vision, with its screenshots or recording done, no PE pass yet, and no PE run under way or
+ * finished; a version whose PE runs ended without a verdict is asked again up to MAX_PE_RUNS runs in all.
+ */
+export function peRunDue(s: State, a: StudioArtifact): boolean {
+  if (s.project.stage !== "shaping" || UNGATED_KINDS.includes(a.kind)) return false;
+  if (latestVersion(s, a.id)?.version !== a.version) return false;
+  const round = s.studio.rounds.find((r) => r.n === a.round);
+  if (!round || round.closedAt) return false;
+  // The PE reads the screenshots and the recording: it waits until the service has made them.
+  if (a.shots?.status === "pending" || a.demo?.status === "pending") return false;
+  if (peReview(s, a).status !== "waiting") return false;
+  const runs = peRunsOf(s, a.id, a.version);
+  // A run pausing stopped is asked for again by itself (retryOf); one under way, or finished, needs no other.
+  if (runs.some((r) => r.status === "queued" || r.status === "running" || r.status === "stopping" || r.status === "completed" || (r.status === "stopped" && r.requeue))) return false;
+  return runs.filter((r) => r.status === "failed" || r.status === "lost" || r.status === "stopped").length < MAX_PE_RUNS;
+}
+
+/** The PE's brief for a version: what the run record says it was asked to do (the envelope has the rest). */
+export const peBrief = (a: StudioArtifact) => `PE review of ${artifactName(a)}: feasibility, scale, longevity and budget, a verdict for each variant.`;
+
+/**
+ * Ask for a PE run on every version that needs one (the service, on each cycle: after an import, after the
+ * screenshots or recording, and when the project returns to Vision). A version whose PE cannot be resolved (no
+ * provider enabled) is skipped and asked again on a later cycle; peRunBlocker says why.
+ */
+export function askForPeReviews(state: State, now: string): State {
+  if (state.project.stage !== "shaping") return state;
+  let s = state;
+  for (const a of latestArtifacts(state)) {
+    if (!peRunDue(s, a)) continue;
+    try {
+      s = requestStudioRun(s, { kind: "pe", round: a.round, artifactId: a.id, brief: peBrief(a) }, now).state;
+    } catch (e) {
+      if (!(e instanceof ControlError)) throw e;
+    }
+  }
+  return s;
+}
+
+/** Why the PE cannot be asked to review a version that needs it, or undefined (for the studio to say). */
+export function peRunBlocker(s: State, a: StudioArtifact): string | undefined {
+  if (!peRunDue(s, a)) return undefined;
+  try {
+    requestStudioRun(s, { kind: "pe", round: a.round, artifactId: a.id, brief: peBrief(a) }, new Date(0).toISOString());
+    return undefined;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
 }
 
 /** The labelled stand-in for the lead's studio brief (pass 4): the vision and the round's focus, nothing else. */

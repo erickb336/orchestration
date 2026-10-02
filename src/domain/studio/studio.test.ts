@@ -102,6 +102,21 @@ describe("artifacts and their versions", () => {
     expect(() => addScreen(s, 1, at(5), { madeBy: { role: "designer", provider: "gemini", model: "m", attemptId: "r" } })).toThrow(InvalidCommandError);
     expect(() => addScreen(s, 2, at(5))).toThrow("There is no round 2.");
   });
+
+  it("each variant records the entry file the designer named, which must be one of its files", () => {
+    const s = openRound(fresh(), "experience", at(1)).state;
+    const files = [
+      { path: "a/index.html", sha256: sha("a") },
+      { path: "b/plan.html", sha256: sha("b") },
+    ];
+    const variants = [
+      { id: "a", label: "Map first", entry: "a/index.html" },
+      { id: "b", label: "Day by day", entry: "b/plan.html" },
+    ];
+    const r = addScreen(s, 1, at(2), { variants, files });
+    expect(art(r.state, r.id, 1).variants).toEqual(variants);
+    expect(() => addScreen(s, 1, at(2), { variants: [{ id: "a", label: "Map first", entry: "a/missing.html" }], files })).toThrow('Variant a\'s entry "a/missing.html" is not one of the artifact\'s files.');
+  });
 });
 
 describe("PE review: the loop rule", () => {
@@ -146,6 +161,43 @@ describe("PE review: the loop rule", () => {
     s = addScreen(nextRound(s, 9).state, 2, at(10), { artifactId: id }).state;
     expect(S.peReview(s, art(s, id, 4))).toEqual({ status: "waiting", passes: 0 });
     expect(run(s, "addPeVerdicts", { artifactId: id, version: 4, verdicts: [{ verdict: "feasible", reasons: "One hourly source now." }] }, at(11)).result).toEqual({ pass: 1 });
+  });
+
+  it("a pass the service makes the last (while the designer cannot revise in answer) sends its objections to the owner now; never dropped, and the verdicts name the PE's run", () => {
+    let { s, id } = tripPlan();
+    const by = { provider: "codex" as const, model: "codex-sample-large", runId: "studio-7" };
+    s = S.addPeVerdicts(
+      s,
+      {
+        artifactId: id,
+        version: 1,
+        by,
+        lastPass: true,
+        verdicts: [
+          { variant: "A", verdict: "feasible", reasons: "Fine." },
+          { variant: "B", verdict: "not-feasible", reasons: "Hourly forecasts for every trailhead cost too much.", change: "A forecast source with a free hourly tier." },
+          { variant: "C", verdict: "feasible", reasons: "Fine." },
+        ],
+      },
+      at(3),
+    ).state;
+    const v = art(s, id, 1);
+    expect(S.peReview(s, v)).toMatchObject({ status: "objections", pass: 1 });
+    expect(S.readyForOwner(s, v)).toBe(true);
+    expect(s.studio.verdicts.map((x) => [x.variant, x.by, x.lastPass])).toEqual([
+      ["A", by, true],
+      ["B", by, true],
+      ["C", by, true],
+    ]);
+    expect(s.events.at(-1)?.message).toBe("PE review of Trip plan v1, pass 1: Map first feasible, Timeline not feasible, Day cards feasible; objects, and the designer cannot revise in answer yet; it goes to the owner with the objections");
+    // The owner answers: marks it, and overrules the objection with a reason, which is recorded.
+    s = feedback(s, id, 1, { mark: "change", pickedVariant: "A" }, at(4));
+    const objection = S.openObjections(s, v)[0];
+    s = run(s, "overruleObjection", { verdictId: objection.id, why: "The group pays for the forecasts." }, at(5)).state;
+    expect(S.openObjections(s, v)).toEqual([]);
+    // A pass that agrees is the same whether or not it was the last.
+    const agreed = S.addPeVerdicts(tripPlan().s, { artifactId: id, version: 1, lastPass: true, verdicts: [{ verdict: "feasible", reasons: "Fine." }] }, at(3)).state;
+    expect(S.peReview(agreed, art(agreed, id, 1))).toEqual({ status: "agreed", pass: 1 });
   });
 
   it("a pass judges every option the owner will see: one verdict per variant, or one on the whole; feasible-if states its change; an estimate states its basis", () => {
@@ -229,6 +281,21 @@ describe("the owner's feedback", () => {
     // A revision arrived since: an answer on v1 is stale.
     s = addScreen(nextRound(s, 5).state, 2, at(6), { artifactId: id }).state;
     expect(failure(() => run(s, "sendFeedback", { entries: [entry({ mark: "keep" })] }, at(7)))).toBeInstanceOf(StaleWriteError);
+  });
+
+  it("a pin keeps the element it is on, as the prototype described it: one line of text, capped, and carried to the next version", () => {
+    let { s, id } = tripPlan();
+    s = peAgrees(s, id, 1, ["A", "B", "C"], at(3));
+    const pin = (selector: string) => ({ artifactId: id, version: 1, mark: null, pins: [{ x: 0.2, y: 0.3, text: "Bigger icons", selector }], note: "" });
+    s = run(s, "sendFeedback", { entries: [pin("main > div.map:nth-of-type(2)")] }, at(4)).state;
+    expect(S.openPins(s, id, 1)).toEqual([{ x: 0.2, y: 0.3, text: "Bigger icons", selector: "main > div.map:nth-of-type(2)" }]);
+    // Untrusted text from the prototype: control characters go, and a long one is refused, not cut silently.
+    const cleaned = run(s, "sendFeedback", { entries: [pin("main\u0007 > \nh1")] }, at(5)).state;
+    expect(S.openPins(cleaned, id, 1)[0].selector).toBe("main > h1");
+    expect(() => run(s, "sendFeedback", { entries: [pin("x".repeat(301))] }, at(5))).toThrow("A pin's element is over 300 characters.");
+    // A revision starts with the open pins, elements included.
+    s = addScreen(nextRound(s, 6).state, 2, at(7), { artifactId: id }).state;
+    expect(S.openPins(s, id, 2)[0].selector).toBe("main > div.map:nth-of-type(2)");
   });
 });
 

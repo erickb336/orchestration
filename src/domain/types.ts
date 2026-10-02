@@ -5,14 +5,19 @@ import type { Blueprint, BudgetEstimate, Studio } from "./studio/types";
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
-/** `security_reviewer` reviews a change for security beside the code review; its findings count like the code review's. */
-export type RoleId = "lead" | "designer" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks";
+/**
+ * `security_reviewer` reviews a change for security beside the code review; its findings count like the code review's.
+ * `pe` is the principal engineer of the vision studio (ORC-029): it reviews the designer's options before the owner sees them.
+ */
+export type RoleId = "lead" | "designer" | "pe" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks";
 /** Agent roles: they have role defaults, task role overrides and a resolved provider. */
-export const ROLES: RoleId[] = ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
+export const ROLES: RoleId[] = ["lead", "designer", "pe", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
 /** Roles the service runs itself; never resolved to a provider. */
 const SERVICE_ROLES: RoleId[] = ["checks"];
+/** Roles that run only in the vision studio: no flow step uses the PE until it reviews new work in the factory (ORC-029 pass 5). */
+const STUDIO_ROLES: RoleId[] = ["pe"];
 /** What a step definition may use. */
-export const STEP_ROLES: RoleId[] = [...ROLES, ...SERVICE_ROLES];
+export const STEP_ROLES: RoleId[] = [...ROLES.filter((r) => !STUDIO_ROLES.includes(r)), ...SERVICE_ROLES];
 /** Roles whose findings gate repairs and merges. */
 export const REVIEW_ROLES: RoleId[] = ["code_reviewer", "security_reviewer", "ux_reviewer"];
 

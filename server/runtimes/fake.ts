@@ -2,13 +2,14 @@
 // adapters, so the scheduler exercises one path for both. Its "processes" live only in this
 // service's memory; they vanish when the service stops, which lets restart reconciliation be tested
 // honestly. It advances only when the scheduler calls tick(). No agent executes. A studio designer run writes a
-// sample prototype into its staging folder (server/studio/sample.ts), which the service imports like a real one.
+// sample prototype into its staging folder (server/studio/sample.ts), which the service imports like a real one; a
+// studio PE run answers with simulated verdicts on the version it was given.
 
 import type { AckMode } from "../../src/api";
 import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, scriptedFinding, scriptedSummary } from "../../src/domain/demoScript";
 import type { CatalogModel, OutputDef, ProviderId, State } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
-import { writeSamplePrototype } from "../studio/sample";
+import { TERMINAL_BRIEF, designerAsk, fakePeAnswer, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
 import { statusAnswer, statusQuestion } from "./fakeStatus";
 import type { AdapterEvent, Assignment, ProviderHealth, RuntimeAdapter } from "./types";
 
@@ -32,8 +33,13 @@ interface Proc {
   prompt?: string;
   /** ORC-022: notes handed to this run, each acknowledged after `ticks` more ticks (a simulated delay). */
   notes?: { id: string; ticks: number }[];
-  /** ORC-029: a studio designer run's staging folder, where it writes the sample prototype when it completes. */
+  /**
+   * ORC-029: a studio run's working directory: a designer's staging folder, where it writes the sample prototype when
+   * it completes, or the folder of the version a PE run reviews (read only).
+   */
   studio?: string;
+  /** ORC-029: a studio run's role: the designer hands in a sample, the PE answers with verdicts. */
+  studioRole?: "designer" | "pe";
 }
 
 /** ORC-022: how many ticks a simulated run takes to acknowledge a note (about two seconds in the service). */
@@ -376,7 +382,7 @@ export class FakeAdapter implements RuntimeAdapter {
     }
     if (a.studio) {
       if (this.procs.has(a.attemptId)) return;
-      this.procs.set(a.attemptId, { progress: 0, outputs: [], studio: a.workspace.path });
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], studio: a.workspace.path, studioRole: a.role === "pe" ? "pe" : "designer", prompt: a.prompt });
       this.emit({ type: "started", attemptId: a.attemptId });
       return;
     }
@@ -476,15 +482,29 @@ export class FakeAdapter implements RuntimeAdapter {
       if (p.progress >= 100) {
         this.dropNotes(id, p, "the run ended first");
         this.procs.delete(id);
+        if (p.studio !== undefined && p.studioRole === "pe") {
+          // A simulated PE reads the version's manifest and answers as a real one would: a verdict per variant.
+          const answer = fakePeAnswer(p.studio);
+          this.emit(answer.ok ? { type: "completed", attemptId: id, finalText: answer.text } : { type: "failed", attemptId: id, message: `The simulated PE could not read the version: ${answer.error}` });
+          continue;
+        }
         if (p.studio !== undefined) {
-          // A simulated designer writes the sample prototype and its studio.json, which the service imports as a real one's.
+          // A simulated designer writes a sample and its studio.json, which the service imports as a real one's: the
+          // trips CLI's terminal demo and TUI when its brief asks for one, else the trip plan's screens.
+          const ask = designerAsk(p.prompt ?? "");
+          const terminal = TERMINAL_BRIEF.test(ask.brief);
           try {
-            writeSamplePrototype(p.studio);
+            if (terminal) writeTerminalSample(p.studio, ask.terminal);
+            else writeSamplePrototype(p.studio);
           } catch (e) {
             this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not write its sample: ${e instanceof Error ? e.message : String(e)}` });
             continue;
           }
-          this.emit({ type: "completed", attemptId: id, finalText: "Made the trip plan in two variants, for desktop and mobile (simulated sample)." });
+          this.emit({
+            type: "completed",
+            attemptId: id,
+            finalText: terminal ? "Made a terminal demo of the trips CLI, and its TUI in two layouts (simulated sample)." : "Made the trip plan in two variants, for desktop and mobile (simulated sample).",
+          });
           continue;
         }
         this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt, p.lead === "message" ? this.board?.() : undefined, nowMs) : fakeFinalText(id, p.outputs, p.stepId, p.taskId, p.title) });
