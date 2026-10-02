@@ -1,12 +1,16 @@
-// ORC-029 pass 3, unit 3c: terminal demos. The tape rules (every refusal) and the hand-written
-// fallback (asciicast v3 and .ans frames).
+// ORC-029 pass 3, unit 3c: terminal demos. The tape rules (every refusal), the hand-written fallback
+// (asciicast v3 and .ans frames), and, where macOS sandbox-exec, VHS, ttyd, ffmpeg and Chrome are all
+// present, real recordings: the trips fixture at 80×24 with its transcript, a hostile tape whose
+// commands try the internet, loopback, writes outside and signals and are refused by the sandbox, a
+// timeout that leaves nothing running, and a fake "sandbox" that the probe catches.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ANS_CAP, CAST_CAP, TAPE_CAP, readTerminalFile, refusedEscape, validateAnsFrame, validateCast, validateTape } from "./terminal";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ANS_CAP, CAST_CAP, TAPE_CAP, probeTerminalSandbox, readTerminalFile, recordTape, refusedEscape, shellProfile, validateAnsFrame, validateCast, validateTape } from "./terminal";
 
 const FIXTURE = resolve(__dirname, "fixtures/trips");
 const FALLBACK = resolve(__dirname, "fixtures/trips-fallback");
@@ -188,4 +192,160 @@ describe("the fallback: hand-written asciicast v3 and .ans frames", () => {
     execFileSync("/bin/ln", ["-s", join(FALLBACK, "trips.cast"), join(dir, "link.cast")]);
     expect(readTerminalFile(join(dir, "link.cast"), CAST_CAP)).toEqual({ error: "not a regular file" });
   });
+
+  it("builds the shell profile only for a real port", () => {
+    expect(() => shellProfile(0)).toThrow(/not a port/);
+    expect(() => shellProfile(70000)).toThrow(/not a port/);
+    expect(shellProfile(4321)).toContain('(local ip "localhost:4321")');
+  });
+});
+
+// ---------- real recordings, where the sandbox and the tools are present ----------
+
+const health = await probeTerminalSandbox();
+const skipReason = health.ok ? "" : ` (skipped: ${health.detail})`;
+
+describe(`recording with VHS in the sandbox${skipReason}`, () => {
+  const listeners: Server[] = [];
+  afterAll(() => {
+    for (const l of listeners) l.close();
+  });
+
+  it.skipIf(!health.ok)("the probe proved both profiles: the shell gets no network, loopback or outside writes; the recorder gets loopback only", () => {
+    expect(health.probes).toEqual({ shellWriteOutside: "denied", shellLoopback: "denied", shellNetwork: "denied", recorderWriteOutside: "denied", recorderLoopback: "allowed", recorderNetwork: "denied" });
+  });
+
+  it.skipIf(!health.ok)(
+    "records the trips fixture at 80×24 into gif, webm and a transcript with the planned output, and leaves only the outputs",
+    async () => {
+      const out = join(dir, "out");
+      const tmpRoot = join(dir, "tmp");
+      mkdirSync(tmpRoot);
+      const r = await recordTape(FIXTURE, out, { tmpRoot });
+      expect(r.error).toBeUndefined();
+      expect(r.sandbox).toBe("sandbox-exec");
+      const real = realpathSync(out);
+      expect(r).toMatchObject({ gif: join(real, "trips.gif"), webm: join(real, "trips.webm"), txt: join(real, "trips.txt") });
+      expect(readdirSync(out).sort()).toEqual(["trips.gif", "trips.txt", "trips.webm"]);
+      expect(readFileSync(r.gif!).subarray(0, 6).toString("latin1")).toBe("GIF89a");
+      expect(readFileSync(r.webm!).subarray(0, 4)).toEqual(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])); // EBML
+      const txt = readFileSync(r.txt!, "utf8");
+      for (const line of ["> trips plan", "Weekend trips from Lisbon  Sat 10 - Sun 11 Oct", "  1  Sintra     45 min by train   hiking, palaces      EUR 38", "  3  Evora      1 h 30 by train   Roman temple, wine   EUR 52", "> trips pick 1", "  10:00  Pena Palace, then the trail to the Moorish Castle", "Saved. trips share 1 makes a link for your group"]) {
+        expect(txt.split("\n")).toContain(line);
+      }
+      // The hidden setup line never shows, and the frame is 80 columns wide.
+      expect(txt).not.toContain("alias trips");
+      expect(txt.split("\n").find((l) => l.startsWith("─"))).toHaveLength(80);
+      // The run's temporary folders are gone, and nothing it started is still running.
+      expect(readdirSync(tmpRoot)).toEqual([]);
+      expect(execFileSync("/bin/ps", ["-axo", "command="], { encoding: "utf8" })).not.toContain(tmpRoot);
+    },
+    90_000,
+  );
+
+  it.skipIf(!health.ok)(
+    "a hostile tape's commands cannot reach the internet or loopback, write outside its folder, or signal this process",
+    async () => {
+      const loop = await new Promise<Server>((res) => {
+        const s = createServer((c) => {
+          connections++;
+          c.destroy();
+        });
+        s.listen(0, "127.0.0.1", () => res(s));
+      });
+      listeners.push(loop);
+      let connections = 0;
+      const port = (loop.address() as { port: number }).port;
+      const src = join(dir, "hostile");
+      const out = join(dir, "out");
+      const outsideFile = join(dir, "outside.txt");
+      mkdirSync(src);
+      writeFileSync(
+        join(src, "hostile.sh"),
+        `#!/bin/bash
+curl -sS -m 5 -o /dev/null https://example.com 2>/dev/null; echo "curl-dns=$?"
+curl -sS -m 5 -o /dev/null http://1.1.1.1/ 2>/dev/null; echo "curl-ip=$?"
+node -e 'require("net").connect(443,"1.1.1.1").on("connect",()=>{console.log("node-net=CONNECTED");process.exit()}).on("error",e=>console.log("node-net="+e.code))'
+curl -sS -m 3 -o /dev/null http://127.0.0.1:${port}/ 2>/dev/null; echo "loopback=$?"
+echo x > ${JSON.stringify(outsideFile)} 2>/dev/null; echo "write-outside=$?"
+echo x > ../escaped.txt 2>/dev/null; echo "write-parent=$?"
+echo x > ${JSON.stringify(join(out, "planted.gif"))} 2>/dev/null; echo "write-out=$?"
+kill -0 ${process.pid} 2>/dev/null; echo "signal=$?"
+echo x > ./inside.txt; echo "write-inside=$?"
+`,
+      );
+      chmodSync(join(src, "hostile.sh"), 0o755);
+      writeFileSync(join(src, "hostile.tape"), `Output hostile.txt\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "bash hostile.sh"\nEnter\nSleep 8s\n`);
+      const r = await recordTape(src, out, { tmpRoot: dir });
+      expect(r.error).toBeUndefined();
+      expect(r.sandbox).toBe("sandbox-exec");
+      const txt = readFileSync(r.txt!, "utf8");
+      const result = (k: string) => new RegExp(`^${k}=(\\S+)$`, "m").exec(txt)?.[1];
+      expect(result("curl-dns")).toBe("6"); // the DNS socket is refused, so nothing resolves
+      expect(result("curl-ip")).toBe("7"); // the connection is refused
+      expect(result("node-net")).toBe("EPERM"); // by the sandbox, not by an unreachable network
+      expect(result("loopback")).toBe("7");
+      expect(connections).toBe(0);
+      expect(result("write-outside")).toBe("1");
+      expect(existsSync(outsideFile)).toBe(false);
+      expect(result("write-parent")).toBe("1");
+      expect(result("write-out")).toBe("1");
+      expect(readdirSync(out)).toEqual(["hostile.txt"]);
+      expect(result("signal")).toBe("1");
+      expect(result("write-inside")).toBe("0");
+      expect(txt).toContain("Operation not permitted");
+    },
+    90_000,
+  );
+
+  it.skipIf(!health.ok)(
+    "a tape that runs too long is stopped, and nothing it started keeps running",
+    async () => {
+      const src = join(dir, "slow");
+      mkdirSync(src);
+      writeFileSync(join(src, "slow.tape"), `Output slow.txt\nSet Columns 80\nSet Rows 24\nType "sleep 317"\nEnter\nSleep 60s\n`);
+      const tmpRoot = join(dir, "tmp");
+      mkdirSync(tmpRoot);
+      const t0 = Date.now();
+      const r = await recordTape(src, join(dir, "out"), { tmpRoot, timeoutMs: 6_000 });
+      expect(r).toMatchObject({ sandbox: "sandbox-exec", reason: "timeout" });
+      expect(Date.now() - t0).toBeLessThan(20_000);
+      expect(readdirSync(tmpRoot)).toEqual([]);
+      await new Promise((res) => setTimeout(res, 500));
+      const ps = execFileSync("/bin/ps", ["-axo", "command="], { encoding: "utf8" });
+      expect(ps).not.toContain(tmpRoot); // VHS, Chrome, ffmpeg, ttyd
+      expect(ps).not.toMatch(/^sleep 317$/m); // the shell's own command
+      expect(readdirSync(join(dir, "out"))).toEqual([]);
+    },
+    60_000,
+  );
+
+  it.skipIf(!health.ok)("refuses an invalid tape before anything runs", async () => {
+    const src = join(dir, "bad");
+    mkdirSync(src);
+    writeFileSync(join(src, "bad.tape"), `Output ../../escape.gif\nSet Columns 80\nSet Rows 24\n`);
+    const r = await recordTape(src, join(dir, "out"), { tmpRoot: dir });
+    expect(r).toMatchObject({ sandbox: null, reason: "invalid-tape" });
+    expect(r.error).toMatch(/bad\.tape:1: Output must be one path inside/);
+    expect(readdirSync(join(dir, "out"))).toEqual([]);
+  });
+});
+
+describe("never unsandboxed", () => {
+  it("refuses to record when sandbox-exec is missing, and when a stand-in does not actually sandbox anything", async () => {
+    const missing = await recordTape(FIXTURE, join(dir, "out1"), { sandboxExec: join(dir, "no-such-sandbox-exec"), tmpRoot: dir });
+    expect(missing).toMatchObject({ sandbox: null, reason: "unavailable" });
+    expect(missing.error).toMatch(/Not recorded/);
+    expect(existsSync(join(dir, "out1", "trips.gif"))).toBe(false);
+    if (process.platform !== "darwin") return;
+    // A "sandbox-exec" that drops its profile and runs the command as is: the probe must catch it.
+    const fake = join(dir, "fake-sandbox-exec");
+    writeFileSync(fake, `#!/bin/bash\nwhile [ "$1" = "-f" ] || [ "$1" = "-D" ]; do shift 2; done\nexec "$@"\n`);
+    chmodSync(fake, 0o755);
+    const fooled = await recordTape(FIXTURE, join(dir, "out2"), { sandboxExec: fake, tmpRoot: dir });
+    expect(fooled).toMatchObject({ sandbox: null, reason: "unavailable" });
+    expect(fooled.error).toMatch(/no working sandbox.*shellWriteOutside allowed/);
+    expect(existsSync(join(dir, "out2", "trips.gif"))).toBe(false);
+    expect(statSync(dir).isDirectory()).toBe(true);
+  }, 60_000);
 });
