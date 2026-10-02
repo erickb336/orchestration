@@ -8,7 +8,7 @@ import * as M from "../model";
 import { buildSeed } from "../seed";
 import { startFactoryAsOwner } from "../testing/factory";
 import { buildingSpend } from "../spend";
-import { addScreen, openRound, peAgrees, run } from "../testing/studio";
+import { addScreen, openRound, peAgrees, pePass, run } from "../testing/studio";
 import type { State } from "../types";
 import * as R from "./runs";
 import * as S from "./studio";
@@ -299,6 +299,21 @@ describe("the PE's runs (pass 3)", () => {
     // Review ended there: the version is the owner's, never left waiting for a PE that is not asked again (review finding 6).
     expect(S.peReview(lost, S.latestVersion(lost, id)!)).toEqual({ status: "ended", ended: "no-review", pass: 0, asks: [], objections: [] });
     expect(S.readyForOwner(lost, S.latestVersion(lost, id)!)).toBe(true);
+  });
+
+  it("a revision the PE fails to review twice is not hidden behind the version it replaced: it goes to the owner (review finding 6)", () => {
+    const { s, id, n } = imported();
+    let x = pePass(s, id, 1, [{ variant: "A", verdict: "feasible-if" }, { variant: "B", verdict: "feasible" }, { variant: "C", verdict: "feasible" }], at(3));
+    x = addScreen(x, n, at(4), { artifactId: id }).state;
+    for (const sec of [5, 8]) {
+      x = R.askForPeReviews(x, at(sec));
+      x = R.reportStudioRunFailed(dispatch(x, sec + 1).state, peRuns(x).at(-1)!.id, "The PE's answer had no verdicts.", at(sec + 2));
+    }
+    const v2 = S.latestVersion(x, id)!;
+    expect(v2.version).toBe(2);
+    expect(S.peReview(x, v2)).toEqual({ status: "ended", ended: "no-review", pass: 0, asks: [], objections: [] });
+    expect(S.readyForOwner(x, v2)).toBe(true);
+    expect(R.askForPeReviews(x, at(11))).toBe(x);
   });
 
   it("a pause stops it and asks for it again, like any studio run", () => {
