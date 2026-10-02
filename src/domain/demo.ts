@@ -640,7 +640,7 @@ class DemoBuilder {
     this.offlineMapsTileCache(); // WT-001: failed check → finding → repair → merged, in Review
     this.largerTapTargets(); // WT-008: merged, reviewed
     this.laterSpecs(); // WT-012 and WT-013: an investigation and a design, published once the first changes had landed
-    this.batteryInvestigation(); // WT-012: the evidence, a review of it, the lead's follow-up spec; nothing to integrate
+    this.batteryInvestigation(); // WT-012: the evidence, a review of it (nothing to revise), the lead's follow-up spec; nothing to integrate
     this.inviteScreenDesign(); // WT-013: the design, a UX finding revised away, the lead's brief; nothing to integrate
     this.tripSharingGoal(); // WT-004 and its children; WT-004.1's security finding repaired, merged and reviewed
     this.fasterTrailSearch(); // WT-011: your own Change task, merged, in Review

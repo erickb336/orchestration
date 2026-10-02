@@ -2,7 +2,7 @@
   "$schema": "./flow.schema.json",
   "id": "investigation",
   "name": "Investigation",
-  "description": "Gather evidence, review it, revise the report until the review is clean, and propose a follow-up implementation spec.",
+  "description": "Gather evidence, review it, revise the report while the review finds something (up to three rounds), and propose a follow-up implementation spec.",
   "whenToUse": "The cause or the right change is unknown; the result is a spec, not code.",
   "steps": [
     {

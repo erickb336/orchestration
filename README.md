@@ -57,7 +57,7 @@ It opens a sample project (Weekend Trips, a hiking app) on a simulated runtime, 
 | **Bug fix** | A defect you can reproduce | reproduce → then as Change; the lead confirms the bug is gone |
 | **Feature** | New screens, flows or copy | design → implement → checks with a UX review beside them → code and security review → repair → final checks → verify |
 | **Design** | Settling a design first | design → UX review → revise → the lead writes the implementation brief |
-| **Investigation** | The cause is unknown | gather evidence → review it → revise the report until the review is clean → the lead proposes a spec (no code) |
+| **Investigation** | The cause is unknown | gather evidence → review it → revise the report while the review finds something (up to three rounds) → the lead proposes a spec (no code) |
 | **Goal** | Work too big for one task | the lead breaks it into child tasks that run in parallel, then evaluates and re-plans |
 
 Each flow is a short JSON file in [`flows/`](flows/). To change one, edit its file and run `npm test`. The security review adds one review run per round.
@@ -117,7 +117,7 @@ npm test
 npm run build
 npm run capture    # retake the README images from the demo (needs Chrome and ffmpeg)
 npm run test:integration   # the end-to-end scenario on simulated agents (about 90 s; CI runs it)
-npm run test:real          # the same scenario with real Claude and Codex agents (your credentials, under $0.20)
+npm run test:real          # the same scenario with real Claude and Codex agents (your credentials; about $0.17 last time)
 ```
 
 **Where things are:**
@@ -172,7 +172,7 @@ A personal tool under active development. It was built in milestones ORC-001 to 
 | [ORC-025](docs/tasks/ORC-025.md) UI audit and rebuild | One dark theme, a component kit, every screen rebuilt, a new demo | Done |
 | [ORC-026](docs/tasks/ORC-026.md) Write for the reader | A sixteenth principle, our own, given to every agent and the lead | Done |
 | [ORC-027](docs/tasks/ORC-027.md) The real-run test, committed | The end-to-end scenario runs in CI on simulated agents; `npm run test:real` runs it with real ones and leaves a record in [`docs/real-runs/`](docs/real-runs/) | Done |
-| [ORC-028](docs/tasks/ORC-028.md) Fixes from the real run | Investigation revises its report until its review is clean, and a rule keeps every flow from dropping review findings | Done; **verified with real models** |
+| [ORC-028](docs/tasks/ORC-028.md) Fixes from the real run | Investigation revises its report while its review finds something, and a rule keeps every flow from dropping review findings | Done; **verified with real models** |
 
 **Verified with real models: the core run, notes and review repair, not every feature.** The scenario behind `npm run test:real` has run three times with real agents, all on 2026-10-01, and grew with each fix; every run's record is in [`docs/real-runs/`](docs/real-runs/). The latest (15 of 15 checks) showed:
 

@@ -109,9 +109,30 @@ describe("the six flows", () => {
 });
 
 describe("no review finding is dropped (ORC-028)", () => {
-  /** Review steps whose findings no later step is conditioned on: nothing would ever repair what they find. */
+  /**
+   * Review steps nothing repairs. A repair is a writer (coder or designer) that runs on the review's findings output,
+   * produces the kind of work the review read, and loops back to the review or before it, so its work is reviewed again.
+   * Only the six flows: the internal delivery review is a merge gate whose repairs are fix tasks (delivery/repair.ts),
+   * and a revert is gated by that review.
+   */
   const unrepaired = (steps: StepDef[]) =>
-    steps.filter((r) => r.outputs.some((o) => o.kind === "review-findings") && !steps.some((s) => s.runIf?.some((x) => x.step === r.id))).map((r) => r.id);
+    steps
+      .filter((r) => r.outputs.some((o) => o.kind === "review-findings"))
+      .filter((r) => {
+        const findings = r.outputs.filter((o) => o.kind === "review-findings").map((o) => o.name);
+        const kindOf = (ref: { step: string; output: string }) => steps.find((x) => x.id === ref.step)?.outputs.find((o) => o.name === ref.output)?.kind;
+        const reviewed = new Set(r.inputs.map(kindOf).filter((k) => k && k !== "review-findings" && k !== "check-results"));
+        const at = (id: string) => steps.findIndex((x) => x.id === id);
+        return !steps.some(
+          (s) =>
+            (s.role === "coder" || s.role === "designer") &&
+            !!s.runIf?.some((x) => x.step === r.id && findings.includes(x.output)) &&
+            s.outputs.some((o) => reviewed.has(o.kind)) &&
+            !!s.iterate &&
+            at(s.iterate.from) <= at(r.id),
+        );
+      })
+      .map((r) => r.id);
 
   it("every review in every built-in flow is the condition of a step that repairs what it finds", () => {
     // The real run of 2026-10-01 (docs/real-runs/2026-10-02T02-22-16-079Z.json) ended an Investigation as Done with an
@@ -125,6 +146,15 @@ describe("no review finding is dropped (ORC-028)", () => {
     expect(ids(before)).toEqual(["S1", "S2", "S3"]);
     expect(validatePipeline(before)).toEqual([]);
     expect(unrepaired(before)).toEqual(["S2"]);
+  });
+
+  it("and the shapes that only look like a repair: a non-writer, no loop back, or another kind of work", () => {
+    const steps = builtIn("investigation").steps;
+    const withS3 = (over: Partial<StepDef>) => steps.map((s) => (s.id === "S3" ? { ...s, ...over } : s));
+    expect(unrepaired(steps)).toEqual([]);
+    expect(unrepaired(withS3({ role: "lead" }))).toEqual(["S2"]);
+    expect(unrepaired(withS3({ iterate: undefined }))).toEqual(["S2"]);
+    expect(unrepaired(withS3({ outputs: [{ name: "brief", kind: "brief" }] }))).toEqual(["S2"]);
   });
 });
 

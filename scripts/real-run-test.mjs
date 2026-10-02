@@ -6,6 +6,9 @@
 //   npm run test:real            real Claude + Codex (needs credentials, see below)
 //   npm run test:integration     the same scenario against the fake runtime (no cost; CI runs it)
 //
+// Both run it under tsx (`node --import tsx`), so its checks use the domain's own rules (which findings still need a
+// fix, which wait for a decision) rather than a copy of them.
+//
 // A real run also writes docs/real-runs/<time>.json: the evidence without local paths or the service log,
 // meant to be committed so the repository shows what real models did (ORC-027).
 //
@@ -17,9 +20,10 @@
 // Limits: 12 turns, 5 minutes, $0.50 (Claude) per attempt; Claude uses the "haiku" alias.
 //
 // Flow: the built-in Investigation flow, the smallest of the six that still runs a worker on each
-// provider at once (one task's first step pinned to Codex, the other's to Claude), then a reviewer and the
-// lead: three agent runs per task, no code change, no checks. Nothing is written into the data directory
-// before the service starts; the script says which flow it uses.
+// provider at once (one task's first step pinned to Codex, the other's to Claude), then a reviewer, a revise
+// round while the review finds something (up to three), and the lead: no code change, no checks. If a review asks
+// for a decision, the test answers "fix" as the owner would, and records it. Nothing is written into the data
+// directory before the service starts; the script says which flow it uses.
 
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -27,6 +31,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { leaksIn, scrubHomePaths } from "./recordLeaks.mjs";
+
+// The domain's rules, loaded through tsx (the npm scripts start node with it).
+const domain = await Promise.all([import("../src/domain/findings.ts"), import("../src/domain/model.ts")]).catch((e) => {
+  console.error(`Run this with \`npm run test:real\` or \`npm run test:integration\` (node --import tsx): ${e instanceof Error ? e.message : e}`);
+  process.exit(2);
+});
+const [F, M] = domain;
 
 const FAKE = process.argv.includes("--fake");
 /** PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the test. */
@@ -76,8 +87,9 @@ git("-c", "user.name=Orchestration test", "-c", "user.email=test@localhost", "co
 evidence.repo = repo;
 
 // The flow every task in this test runs. Investigation: S1 investigate and gather evidence (coder) → S2 review the
-// evidence for gaps (code reviewer) → S3 propose a follow-up spec (lead). One task's S1 is pinned to Codex and the
-// other's to Claude, so both providers run at once; the reviewer and the lead follow the project's role defaults.
+// evidence for gaps (code reviewer) → S3 revise the report while S2 finds something (coder, up to three rounds) →
+// S4 propose a follow-up spec (lead). One task's S1 is pinned to Codex and the other's to Claude, so both providers
+// run at once; the reviewer, the revise step and the lead follow the project's role defaults.
 const FLOW_ID = "investigation";
 
 const service = spawn(process.execPath, ["--import", "tsx", "server/main.ts"], {
@@ -104,7 +116,7 @@ async function until(what, pred, timeoutMs, pollMs = 500) {
   const start = Date.now();
   for (;;) {
     const s = await state();
-    const v = pred(s);
+    const v = await pred(s);
     if (v) return { s, v, waitedMs: Date.now() - start };
     if (Date.now() - start > timeoutMs) throw new Error(`Timed out after ${timeoutMs / 1000}s waiting for: ${what}`);
     await sleep(pollMs);
@@ -232,8 +244,9 @@ async function main() {
   // turn/steer answers). Whether the report then answers the note is recorded, not checked: following a note is
   // the model's choice, and greeting.js has three lines whether or not the report says so.
   // The note goes as soon as the run is dispatched (polled every 100 ms), as early as a person could send one: Codex
-  // may not have started its thread yet, which the adapter must hold the note through (ORC-027's review).
-  // `sentBeforeThreadStarted` records whether that path was taken.
+  // may not have started its turn yet, and then holds the note until it has. The note's outcome says whether it was
+  // held (`heldForTurn`), as the runtime reported it; whether that happens depends on timing, so it is recorded, not
+  // checked.
   const NOTE = "Also say in your report how many lines greeting.js has.";
   const sent = [];
   for (const [label, id] of [
@@ -256,7 +269,7 @@ async function main() {
       continue;
     }
     sent.push({ label, id, noteId: result.noteId, run: run.id });
-    record(`${label}: note sent`, { note: result.noteId, run: run.id, sentBeforeThreadStarted: !run.sessionId });
+    record(`${label}: note sent`, { note: result.noteId, run: run.id });
   }
   for (const n of sent) {
     const { v: note } = await until(`${n.label} note settled`, (x) => {
@@ -267,12 +280,25 @@ async function main() {
     }, 7 * 60000);
     // From the service's own timestamps: sent (handed to the runtime) to settled (acknowledged or refused).
     const settledAfterMs = note.sentAt && note.settledAt ? Date.parse(note.settledAt) - Date.parse(note.sentAt) : null;
-    record(`${n.label}: note settled`, { note: note.id, status: note.status, via: note.via ?? null, run: note.attemptId ?? null, reason: note.reason ?? null, settledAfterMs });
-    check(`${n.label}: a note reached the running worker and its runtime acknowledged it`, note.status === "delivered" && note.via === "live" && note.attemptId === n.run, { status: note.status, via: note.via ?? null, settledAfterMs, reason: note.reason ?? null });
+    record(`${n.label}: note settled`, { note: note.id, status: note.status, via: note.via ?? null, run: note.attemptId ?? null, heldForTurn: note.heldForTurn ?? false, reason: note.reason ?? null, settledAfterMs });
+    check(`${n.label}: a note reached the running worker and its runtime acknowledged it`, note.status === "delivered" && note.via === "live" && note.attemptId === n.run, { status: note.status, via: note.via ?? null, heldForTurn: note.heldForTurn ?? false, settledAfterMs, reason: note.reason ?? null });
   }
 
-  // 5. Let both finish: the reviewer and the lead run with the project's role defaults.
-  const { s: final } = await until("both tasks done or blocked", (x) => [codexTask, claudeTask].every((id) => ["done"].includes(task(x, id).lifecycle) || task(x, id).steps.some((st) => st.state === "blocked")), 600000);
+  // 5. Let both finish: the reviewer, the revise step and the lead run with the project's role defaults. A review
+  // finding that asks for a decision stops a task at Needs you (by default); the test answers "fix", as an owner who
+  // wants the report right would, and records each answer, so a question never hangs the run.
+  const answered = [];
+  const { s: final } = await until("both tasks done or blocked", async (x) => {
+    for (const id of [codexTask, claudeTask]) {
+      if (!F.awaitingDecision(x.state, task(x, id))) continue;
+      for (const d of x.state.decisions.filter((y) => y.taskId === id && y.status === "open" && y.routedTo === "user")) {
+        await cmd("decideFinding", { decisionId: d.id, decision: "fix", note: "Answered by the integration test: fix it." });
+        answered.push({ task: id, decision: d.id });
+        record("decision answered: fix", { task: id, decision: d.id });
+      }
+    }
+    return [codexTask, claudeTask].every((id) => task(x, id).lifecycle === "done" || task(x, id).steps.some((st) => st.state === "blocked"));
+  }, 900000);
   for (const [label, id] of [
     ["codex", codexTask],
     ["claude", claudeTask],
@@ -281,10 +307,23 @@ async function main() {
     const runs = final.state.attempts.filter((a) => a.taskId === id).map((a) => ({ id: a.id, step: a.stepId, provider: a.snapshot.provider, model: a.snapshot.model, actualModel: a.actualModel ?? null, outcome: a.outcome, usage: a.usage ?? null, note: a.note ?? null }));
     const report = newest(final, id, "report");
     const brief = newest(final, id, "brief");
-    // A hint only, not a check: does the final report give greeting.js's line count, as the note asked?
-    const answersNote = report ? /\b(3|three)\b[^.\n]{0,20}\blines?\b/i.test(report.summary) : null;
-    const reviews = final.state.artifacts.filter((a) => a.taskId === id && a.kind === "review-findings").map((a) => ({ step: a.stepId, open: a.openFindings ?? 0, findings: (a.findings ?? []).map((f) => `${f.severity}/${f.action}: ${f.title}`) }));
-    record(`${label}: result`, { lifecycle: t.lifecycle, blocked: t.steps.find((st) => st.state === "blocked")?.blockedReason ?? null, steps: t.steps.map((st) => `${st.id}:${st.state}`), runs, reviews, report: report ? { step: report.stepId, summary: report.summary, answersNote } : null, brief: brief ? { summary: brief.summary } : null });
+    // A hint only, not a check: does the report of the run that received the note give greeting.js's line count, as
+    // the note asked? (The final report may be a revision, made after a review pointed the gap out.)
+    const noted = sent.find((n) => n.id === id);
+    const notedReport = noted && final.state.artifacts.find((a) => a.attemptId === noted.run && a.name === "report");
+    const answersNote = (r) => (r ? /\b(3|three)\b[^.\n]{0,20}\blines?\b/i.test(r.summary) : null);
+    const reviews = final.state.artifacts.filter((a) => a.taskId === id && a.kind === "review-findings").map((a) => ({ step: a.stepId, toFix: F.fixable(final.state, a), findings: (a.findings ?? []).map((f) => `${f.severity}/${f.action}: ${f.title}`) }));
+    record(`${label}: result`, {
+      lifecycle: t.lifecycle,
+      blocked: t.steps.find((st) => st.state === "blocked")?.blockedReason ?? null,
+      steps: t.steps.map((st) => `${st.id}:${st.state}`),
+      runs,
+      reviews,
+      decisionsAnswered: answered.filter((a) => a.task === id).length,
+      notedReport: notedReport ? { step: notedReport.stepId, summary: notedReport.summary, answersNote: answersNote(notedReport) } : null,
+      finalReport: report && report !== notedReport ? { step: report.stepId, summary: report.summary, answersNote: answersNote(report) } : null,
+      brief: brief ? { summary: brief.summary } : null,
+    });
   }
   // 6. No review finding dropped (ORC-028). The lead's run of 2026-10-01 ended an Investigation as Done with an open
   // auto-fix warning, because that flow's review fed no repair. Every conditional (repair) step whose review found
@@ -294,16 +333,21 @@ async function main() {
     ["claude", claudeTask],
   ]) {
     const t = task(final, id);
-    const open = (ref) => {
-      const art = final.state.artifacts.filter((a) => a.taskId === id && a.stepId === ref.step && a.name === ref.output).at(-1);
-      return art?.openFindings ?? 0;
+    // What dispatch itself uses: blocking findings to fix (auto-fix, or decided "fix"), not accepted or followed up.
+    const toFix = (ref) => {
+      const art = M.acceptedOutput(final.state, t, ref.step, ref.output);
+      return art ? F.fixable(final.state, art) : 0;
     };
     const repairs = t.steps.filter((st) => st.runIf?.length);
-    const dropped = repairs.filter((st) => st.state === "skipped" && st.runIf.some((r) => open(r) > 0)).map((st) => st.id);
+    const dropped = repairs.filter((st) => st.state === "skipped" && st.runIf.some((r) => toFix(r) > 0)).map((st) => st.id);
+    // The loop's limit: after its last round the last revision is not reviewed again; the lead's step reads it.
+    const last = repairs.find((st) => st.iterate);
+    const limitReached = !!last && last.state === "done" && (last.iteration ?? 1) >= last.iterate.max;
     check(`${label}: review findings that needed a fix were revised, not dropped`, repairs.length > 0 && dropped.length === 0, {
       revised: repairs.filter((st) => st.state === "done").map((st) => st.id),
       skippedClean: repairs.filter((st) => st.state === "skipped").map((st) => st.id),
       dropped,
+      limitReached,
     });
   }
   for (const [label, id] of [

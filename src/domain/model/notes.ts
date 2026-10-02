@@ -248,7 +248,7 @@ export function rerunWithNote(state: State, taskId: string, stepId: string, note
  * for another run, or for a note no longer waiting, changes nothing: stale-result protection. `simulated`:
  * the answer came from the fake runtime.
  */
-export function reportNoteOutcome(state: State, e: { attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string }, now: string, simulated?: true): State {
+export function reportNoteOutcome(state: State, e: { attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string; heldForTurn?: true }, now: string, simulated?: true): State {
   const n0 = state.notes.find((x) => x.id === e.noteId);
   if (!n0 || n0.attemptId !== e.attemptId || n0.status !== "sending") return state;
   const s = draft(state);
@@ -258,12 +258,15 @@ export function reportNoteOutcome(state: State, e: { attemptId: string; noteId: 
   if (e.outcome === "not-delivered") n.reason = (e.reason?.replace(/\s+/g, " ").trim() || "the runtime did not take it").slice(0, 300);
   else delete n.reason;
   if (simulated) n.simulated = true;
+  if (e.heldForTurn) n.heldForTurn = true;
   event(
     s,
     now,
     "runtime",
     "runtime",
-    e.outcome === "delivered" ? `Note ${n.id} delivered to ${n.stepId}'s run ${n.attemptId}${n.via === "start" ? " at start" : ""}` : `Note ${n.id} to ${n.stepId}'s run ${n.attemptId} not delivered: ${n.reason}`,
+    e.outcome === "delivered"
+      ? `Note ${n.id} delivered to ${n.stepId}'s run ${n.attemptId}${n.via === "start" ? " at start" : ""}${n.heldForTurn ? ", held until the agent's turn began" : ""}`
+      : `Note ${n.id} to ${n.stepId}'s run ${n.attemptId} not delivered: ${n.reason}`,
     n.taskId,
   );
   return s;

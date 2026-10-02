@@ -213,6 +213,11 @@ describe("the note's life", () => {
     expect(note(d, n.id)).toMatchObject({ status: "delivered", via: "live", settledAt: at(6) });
     expect(note(d, n.id).reason).toBeUndefined();
     expect(d.events[d.events.length - 1].message).toBe(`Note ${n.id} delivered to S2's run ${run.id}`);
+    expect(note(d, n.id).heldForTurn).toBeUndefined();
+    // Held by the runtime until the agent's turn began (Codex, ORC-028 review): recorded on the note and in the feed.
+    const held = M.reportNoteOutcome(s, { attemptId: run.id, noteId: n.id, outcome: "delivered", heldForTurn: true }, at(6));
+    expect(note(held, n.id)).toMatchObject({ status: "delivered", heldForTurn: true });
+    expect(held.events[held.events.length - 1].message).toBe(`Note ${n.id} delivered to S2's run ${run.id}, held until the agent's turn began`);
     // Or refused, with the runtime's reason.
     const nd = M.reportNoteOutcome(s, { attemptId: run.id, noteId: n.id, outcome: "not-delivered", reason: " no active turn " }, at(6));
     expect(note(nd, n.id)).toMatchObject({ status: "not-delivered", reason: "no active turn", settledAt: at(6) });
