@@ -16,7 +16,7 @@ import { createPrototypeServer, projectStudioDir } from "./serve";
 import { TINY_PNG, close, get, listen, sha256, writeVersion } from "./testFixtures";
 
 const APP = ["http://127.0.0.1:5319", "http://localhost:5319"];
-const CSP = "default-src 'self'; connect-src 'none'; form-action 'none'; frame-ancestors http://127.0.0.1:5319 http://localhost:5319";
+const CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-ancestors http://127.0.0.1:5319 http://localhost:5319";
 const PAGE = "<!doctype html><html><head><link rel=stylesheet href=style.css></head><body><h1>Trip plan</h1></body></html>";
 
 let root: string;

@@ -62,6 +62,15 @@ export class ManifestError extends Error {
   }
 }
 
+/**
+ * A `<script type="module">` in a page. The prototype server allows plain scripts only: the app frames a prototype
+ * in an opaque origin, where a module script loads only with a CORS header, and that header would let any website
+ * read local prototypes (design 3b as built). Every HTML file is checked, not only the entries, since a page can
+ * link to another.
+ */
+const MODULE_SCRIPT = /<script\b[^>]*\btype\s*=\s*["']?\s*module\b/i;
+export const NO_MODULES = "plain scripts only (no ES modules): a module needs a CORS header that would let other websites read local prototypes";
+
 const show = (x: string) => JSON.stringify(x.length > 80 ? `${x.slice(0, 80)}…` : x);
 const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
 
@@ -150,6 +159,7 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
       const data = readInside(staging, p, MAX_FILE_BYTES);
       total += data.length;
       if (total > MAX_ARTIFACT_BYTES) throw new ManifestError(`${where} is over the ${mb(MAX_ARTIFACT_BYTES)} limit for an artifact.`);
+      if (p.endsWith(".html") && MODULE_SCRIPT.test(data.toString("utf8"))) throw new ManifestError(`${where}: ${show(p)} has a <script type="module">: ${NO_MODULES}.`);
       return { path: p, sha256: createHash("sha256").update(data).digest("hex"), bytes: data.length, data };
     });
     return { kind: a.kind as StudioArtifactKind, title: a.title, devices: devices as Device[], variants, files };

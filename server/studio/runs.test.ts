@@ -125,6 +125,10 @@ describe("a designer run at the service", () => {
     expect(a.prompt).toContain("Weekend trips for a small group of friends.");
     expect(a.prompt).toContain("End by writing `studio.json` in your working directory");
     expect(a.prompt).toContain("No checkout of the product's repository is available to read.");
+    // The prototype policy as decided: inline is fine, plain scripts only, and a built app emits classic scripts.
+    expect(a.prompt).toContain("- Inline styles and scripts are fine (`<style>`, `style=\"…\"`, `<script>`)");
+    expect(a.prompt).toContain('- Use plain scripts, never `<script type="module">`: plain scripts only (no ES modules): a module needs a CORS header that would let other websites read local prototypes, so a page with one is refused. A built app must emit classic scripts');
+    expect(a.prompt).not.toContain("the sandbox blocks inline");
     expect(readdirSync(staging)).toEqual([]);
     expect(runOf(id)).toMatchObject({ status: "running", sessionId: `claude-session-${id}`, actualModel: "claude-sample-large-actual" });
 
@@ -289,8 +293,8 @@ describe("a designer run at the service", () => {
       const page = readFileSync(join(folder, v, "index.html"), "utf8");
       expect(page).toContain("Simulated sample: the fake runtime made this, not a designer agent.");
       expect(page).toContain("Lake weekend");
-      // Nothing to fetch and nothing inline: the prototype server's policy blocks both.
-      expect(page).not.toMatch(/https?:\/\/|style="|<script|<style/);
+      // Nothing to fetch: the prototype server's policy blocks the network.
+      expect(page).not.toMatch(/https?:\/\//);
     }
     expect(JSON.parse(readFileSync(join(folder, "manifest.json"), "utf8")).variants).toEqual(SAMPLE_MANIFEST.artifacts[0].variants);
   });

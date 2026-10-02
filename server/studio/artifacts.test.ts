@@ -130,6 +130,21 @@ describe("reading studio.json", () => {
     expect(withLink(() => linkSync(join(outside, "secret.txt"), join(staging, "a", "copy.txt")), "a/copy.txt")).toBe('"a/copy.txt" is a hard link; links are not imported.');
   });
 
+  it("refuses a page with an ES module script, in any HTML file, and takes plain and inline scripts", () => {
+    const why = "plain scripts only (no ES modules): a module needs a CORS header that would let other websites read local prototypes.";
+    for (const tag of ['<script type="module" src="app.js"></script>', "<SCRIPT defer type = 'module'>import './x.js'</SCRIPT>", "<script type=module>1</script>"]) {
+      stage({ artifacts: [TRIP_PLAN] }, { ...PAGES, "b/index.html": `<!doctype html><h1>B</h1>${tag}` });
+      expect(refusal(read)).toBe(`artifact 1: "b/index.html" has a <script type="module">: ${why}`);
+    }
+    // A page that is not an entry is checked too: an entry can link to it.
+    stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, "a/more.html"] }] }, { ...PAGES, "a/more.html": '<script type="module" src="m.js"></script>' });
+    expect(refusal(read)).toBe(`artifact 1: "a/more.html" has a <script type="module">: ${why}`);
+    // Plain scripts, inline or from a file, and inline styles are fine.
+    const plain = '<!doctype html><style>h1 { color: teal; }</style><h1 style="margin: 0">A</h1><script>document.title = "A";</script><script src="app.js"></script><script type="text/javascript">1</script>';
+    stage({ artifacts: [TRIP_PLAN] }, { ...PAGES, "a/index.html": plain });
+    expect(read()[0].files.find((f) => f.path === "a/index.html")!.data.toString()).toBe(plain);
+  });
+
   it("refuses a file over 2 MB and an artifact over 20 MB", () => {
     const big = "x".repeat(2 * 1024 * 1024 + 1);
     stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, "a/big.txt"] }] }, { ...PAGES, "a/big.txt": big });

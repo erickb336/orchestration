@@ -14,7 +14,7 @@ import * as S from "../../src/domain/studio/studio";
 import { DESIGNER_KINDS, type StudioRun } from "../../src/domain/studio/types";
 import type { ModelSelection, State } from "../../src/domain/types";
 import type { Store } from "../store";
-import { FILE_TYPES, MAX_ARTIFACT_BYTES, MAX_FILE_BYTES, ManifestError, STUDIO_MANIFEST, type StagedArtifact, versionDir, writeVersion } from "./artifacts";
+import { FILE_TYPES, MAX_ARTIFACT_BYTES, MAX_FILE_BYTES, ManifestError, NO_MODULES, STUDIO_MANIFEST, type StagedArtifact, versionDir, writeVersion } from "./artifacts";
 
 /**
  * Ask for a designer run in a round (the service: from pass 4, the lead's studio loop). Without a brief it gets the
@@ -66,7 +66,8 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     where.checkout ? `- The product's repository, as committed, is readable at ${where.checkout}. Read it to match an existing app; you cannot write there.` : "- No checkout of the product's repository is available to read.",
     ...(prev ? [`- Your working directory starts with the files of ${S.artifactName(prev)}, the version you revise: ${prev.files.map((f) => f.path).join(", ")}.`] : []),
     "- There is no network, and prototypes are shown offline in a sandbox that blocks every request: no CDN, web font, remote image or script. Everything a prototype needs is in its files.",
-    '- Styles and scripts go in their own .css and .js files: the sandbox blocks inline `<style>` and `<script>` blocks and `style="…"` attributes.',
+    '- Inline styles and scripts are fine (`<style>`, `style="…"`, `<script>`), as are .css and .js files beside the page.',
+    `- Use plain scripts, never \`<script type="module">\`: ${NO_MODULES}, so a page with one is refused. A built app must emit classic scripts (for example Vite with \`build.rollupOptions.output.format: "iife"\`).`,
     "",
     `## The project's devices: ${devices.join(", ")}`,
     "",

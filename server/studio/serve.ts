@@ -8,6 +8,10 @@
 //   directory listing, no path the manifest does not name, no symlink, no type outside the allowlist;
 // - every response carries a policy that allows no network (connect-src and form-action 'none', every other load
 //   from the version's own origin only), may be framed by the app only, and is never cached or given cookies.
+//   Inline styles and scripts are allowed (the lead's decision, design 3b as built): agents write them by default,
+//   and they give a prototype nothing a script file from its own origin could not. ES modules are not supported:
+//   in the frame's opaque origin a module needs a CORS header, which would let any website read local prototypes,
+//   so the studio's import refuses `<script type="module">` (artifacts.ts).
 //
 // The version folders are written by the studio service (3a): <studioDir>/artifacts/<artifactId>/v<n>/ with the
 // files and a manifest.json. Screenshots the service takes (shots.ts) sit beside them in shots/, outside the
@@ -67,7 +71,7 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
  * The pin script, served at PIN_PATH and added to every HTML page. On a click it posts the position (fractions of
  * the document) and a short selector of the clicked element to the frame's parent, and nothing else; it reads
  * nothing but the click and the element's place in the page. The app takes it through acceptPinMessage.
- * It is served as a file, not inline, because the policy allows no inline script.
+ * It is served as a file from the service's own path, so every page gets the same script and no page can stand in for it.
  */
 const PIN_PATH = "/__orchestrator/pin.js";
 const PIN_SCRIPT = `(function () {
@@ -99,7 +103,7 @@ const PIN_TAG = Buffer.from(`<script src="${PIN_PATH}"></script>`);
 /** The headers every response carries, errors included. */
 function prototypeHeaders(appOrigins: string[]): Record<string, string> {
   return {
-    "Content-Security-Policy": `default-src 'self'; connect-src 'none'; form-action 'none'; frame-ancestors ${appOrigins.join(" ")}`,
+    "Content-Security-Policy": `default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-ancestors ${appOrigins.join(" ")}`,
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "no-store",
   };
