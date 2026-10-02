@@ -30,6 +30,8 @@ describe("the lead's studio brief", () => {
     const text = envelope(fresh(), DOCS);
     const brief = section(text);
     expect(brief).toContain("You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.");
+    // Which artifacts the PE reviews follows the kind's rules: a dictionary goes to the user directly.
+    expect(brief).toContain("The PE reviews each design before the user sees it (not dictionaries, material or evidence);");
     expect(brief).toContain("1. experience: the key screens or commands, or the interface, or the topology, and how they behave;");
     // The data round asks for the project's dictionary (pass 4d): from the vision, and from the code's names.
     expect(brief).toContain(
