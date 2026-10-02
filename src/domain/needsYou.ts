@@ -6,6 +6,8 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
 import { budgetStop, buildingSpend, fmtUsd, type Spend, type UnknownCost } from "./spend";
+import { blueprintItems, openChangeOrders } from "./studio/blueprint";
+import type { ChangeOrder } from "./studio/types";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task } from "./types";
 
 export interface NeedsYou {
@@ -96,6 +98,8 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   // Apart from the stop: while a building budget is set, a run it cannot count is the owner's to know about.
   const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
   if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project" });
+  // You asked to see change orders before the lead updates tasks. The Tasks page lists the affected tasks until the blueprint has its own page (ORC-029 pass 6).
+  for (const co of openChangeOrders(state, "user")) items.push({ kind: "open", key: `change-order-${co.rev}`, what: `Change order: blueprint r${co.rev}`, detail: changeOrderDetail(state, co), action: "Open", href: "#/tasks" });
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
     items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings/project/delivery" });
@@ -125,6 +129,13 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
     } else items.push(open());
   }
   return items;
+}
+
+/** What changed and what it touches: "You changed Invite sheet. It touches WT-6 and WT-7; the lead updates them after you look." */
+function changeOrderDetail(state: State, co: ChangeOrder): string {
+  const titles = blueprintItems(state).filter((i) => co.changedItems.includes(i.id)).map((i) => `${i.title} (v${i.version}${i.status === "open" ? ", open" : ""})`);
+  const touches = co.affectedTasks.length ? `It touches ${co.affectedTasks.join(", ")}.` : "No task cites what changed.";
+  return `You changed the blueprint: ${titles.join(", ")}. ${touches} You asked to look before the lead updates tasks.`;
 }
 
 /** What the budget stop means, and how many runs are not in the total (their own item names them). */

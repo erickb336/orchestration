@@ -96,6 +96,7 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.project.shapingSince = now;
   s.project.devices = ["desktop", "mobile"];
   s.project.factoryStarts = [];
+  s.project.changeOrders = "lead";
   s.project.hold = false;
   s.project.lastVisitAt = now;
   // Delivery to GitHub is a choice made per project and repository: a new project starts with it off

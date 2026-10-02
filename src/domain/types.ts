@@ -124,10 +124,12 @@ export interface FactorySettings {
 export interface FactoryStart {
   at: string;
   by: "user";
-  /** The blueprint revision agreed to. Until the blueprint exists (ORC-029 2c), the vision revision. */
+  /** The blueprint revision agreed to; 0 when nothing was approved yet. */
   blueprintRev: number;
+  /** The vision revision agreed to: the blueprint stands on the vision, which changes on its own. */
+  visionRev: number;
   settings: FactorySettings;
-  /** What was still open, named to the owner and confirmed. */
+  /** What was still open, named to the owner and confirmed: the vision's open areas, then the blueprint's open items (by id). */
   openItems: string[];
   /** The pre-flight's budget estimates, once the PE makes them. */
   estimate?: { buildUsd?: [number, number]; maintenanceUsdPerMonth?: [number, number]; basis: string };
@@ -327,6 +329,12 @@ export interface Project {
   devices: Device[];
   /** Every Start the factory, oldest first: the owner's recorded agreements. Projects building before ORC-029 have none. */
   factoryStarts: FactoryStart[];
+  /**
+   * Who acts first on a change order (a blueprint revision while building): the lead updates the affected tasks, or
+   * it waits for you (Needs you). A pause point of the factory's settings; set by Start the factory and by
+   * `setChangeOrders`, and read when a change order is made. The other pause points live in their own settings.
+   */
+  changeOrders: "lead" | "user";
   /** When the current shaping session began; coverage reported before it is not reused. */
   shapingSince?: string;
   /** The project's own check commands, run by the service. Desired state; only the user's `setChecks` writes it. */
@@ -458,6 +466,8 @@ export interface SpecContent {
   validationPlan: string;
   rollback: string;
   effort: "small" | "medium" | "large";
+  /** The blueprint items this task builds (ORC-029), by id; each must be in the blueprint. A change order lists the tasks citing a changed item. */
+  blueprintRefs?: string[];
 }
 
 interface SpecRevision {

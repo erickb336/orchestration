@@ -6,6 +6,7 @@
 import { useState, type ReactNode } from "react";
 import { diffLines } from "../domain/diff";
 import * as M from "../domain/model";
+import { openBlueprintItems } from "../domain/studio/blueprint";
 import { SHAPING_AREAS, SHAPING_AREA_LABEL, type LeadQuestion, type State, type VisionDraft } from "../domain/types";
 import { fmtTime, relTime } from "./common";
 import { Banner, Button, ButtonLink, Card, Chip, Field, Input, Row, Rows, SimulatedChip, Textarea, useConfirm, type ButtonVariant } from "./kit";
@@ -307,8 +308,14 @@ export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonV
   const roadmap = plan.roadmap.length;
   const held = plan.userHeld.length;
   const open = M.openAreas(state);
+  const openItems = openBlueprintItems(state);
   // With no coverage reported, every area is still open, and the confirmation says so.
-  const stillOpen = !M.coverageOf(state) ? "The lead has not reported which areas are clear yet, so all nine count as open." : open.length ? `Still open: ${open.map((x) => SHAPING_AREA_LABEL[x].toLowerCase()).join(", ")}.` : "";
+  const stillOpen = [
+    !M.coverageOf(state) ? "The lead has not reported which areas are clear yet, so all nine count as open." : open.length ? `Still open: ${open.map((x) => SHAPING_AREA_LABEL[x].toLowerCase()).join(", ")}.` : "",
+    openItems.length ? `Open in the blueprint: ${openItems.map((o) => `${o.item.title} (${o.why})`).join("; ")}.` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const outcome = [
     roadmap ? (plan.release ? `With your involvement set to Autopilot now, the ${roadmap} planned ${plural(roadmap, "task starts", "tasks start")} right away.` : `With your involvement setting as it is now, the ${roadmap} planned ${plural(roadmap, "task waits", "tasks wait")} for your go-ahead.`) : "",
     held ? `${held} planned ${plural(held, "task")} you set to wait ${plural(held, "keeps", "keep")} waiting for your go-ahead.` : "",
@@ -325,10 +332,10 @@ export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonV
         showReason
         loading={busy}
         onClick={async () => {
-          // Your agreement on what you see now: this vision revision, the settings as they stand, and the open
-          // areas the confirmation lists. A stand-in for the pre-flight screen (ORC-029 pass 6).
+          // Your agreement on what you see now: these vision and blueprint revisions, the settings as they stand, and
+          // the open items the confirmation lists. A stand-in for the pre-flight screen (ORC-029 pass 6).
           const request = M.startFactoryRequest(state);
-          if (open.length) {
+          if (request.acceptOpen.length) {
             const ok = await confirm({
               title: "Start building with areas still open?",
               text: `${stillOpen}${outcome ? `\n\n${outcome}` : ""}\n\nThe lead keeps answering you, and you can come back to shaping at any time.`,

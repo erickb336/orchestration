@@ -268,6 +268,7 @@ class DemoBuilder {
         stage: "building",
         devices: ["desktop", "mobile"],
         factoryStarts: [],
+        changeOrders: "lead",
         shapingSince: at(4340),
         checks: structuredClone(DEFAULT_CHECKS),
         triage: { askUserBy: "user" },

@@ -50,14 +50,15 @@ describe("one way in: every project begins in Vision", () => {
 });
 
 describe("Start the factory: the owner's command", () => {
-  it("records the owner's agreement (when, the revision, the settings, the open areas they confirmed) and moves to building", () => {
+  it("records the owner's agreement (when, the revisions, the settings, the open areas they confirmed) and moves to building", () => {
     const s = fresh();
     const open = M.openAreas(s);
     expect(open).toHaveLength(9); // no coverage reported yet: every area is open
-    const args = { agreed: true, blueprintRev: 1, settings: MANUAL, acceptOpen: open };
+    // Nothing approved yet: blueprint r0, on vision r1.
+    const args = { agreed: true, blueprintRev: 0, visionRev: 1, settings: MANUAL, acceptOpen: open };
     const started = runCommand(s, "startFactory", args, at(5)).state;
     expect(started.project.stage).toBe("building");
-    expect(started.project.factoryStarts).toEqual([{ at: at(5), by: "user", blueprintRev: 1, settings: MANUAL, openItems: open }]);
+    expect(started.project.factoryStarts).toEqual([{ at: at(5), by: "user", blueprintRev: 0, visionRev: 1, settings: MANUAL, openItems: open }]);
     expect(started.events.at(-1)?.message).toBe(`Building started: you agreed to vision r1 with 9 open areas confirmed (${open.join(", ")})`);
   });
 
@@ -68,10 +69,11 @@ describe("Start the factory: the owner's command", () => {
     const { agreed: _agreed, ...unagreed } = args;
     expect(() => runCommand(s, "startFactory", unagreed, at(1))).toThrow(/agreed must be true/);
     expect(() => M.startFactory(s, { ...args, agreed: false as true }, at(1))).toThrow(/needs your agreement/);
-    // The vision moved since the owner looked (compare-and-set on the revision).
+    // The vision moved since the owner looked (compare-and-set on the vision revision, beside the blueprint's).
     const edited = M.editVision(s, 1, "Weekend trips, and day hikes too.", "", "by hand", at(1));
     expect(failure(() => runCommand(edited, "startFactory", args, at(2)))).toBeInstanceOf(StaleWriteError);
-    expect(runCommand(edited, "startFactory", { ...args, blueprintRev: 2 }, at(2)).state.project.factoryStarts[0].blueprintRev).toBe(2);
+    expect(runCommand(edited, "startFactory", { ...args, visionRev: 2 }, at(2)).state.project.factoryStarts[0].visionRev).toBe(2);
+    expect(failure(() => runCommand(s, "startFactory", { ...args, blueprintRev: 1 }, at(2)))).toBeInstanceOf(StaleWriteError);
     // No vision to build from.
     const empty = M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(0));
     expect(() => runCommand(empty, "startFactory", startFactoryArgs(empty, MANUAL), at(1))).toThrow(/Write or accept a vision first/);
@@ -136,9 +138,11 @@ describe("Start the factory: the owner's command", () => {
   it("the settings as they stand: what the Start building button sends today", () => {
     const s = M.setAutonomy(fresh(), { ...fresh().project.autonomy, enabled: true, holdLeadProposals: true }, at(0));
     expect(M.currentFactorySettings(s)).toEqual({ autonomy: "checkin", merge: "user", pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: true } });
-    expect(M.startFactoryRequest(s)).toEqual({ agreed: true, blueprintRev: 1, settings: M.currentFactorySettings(s), acceptOpen: M.openAreas(s) });
-    // A later start keeps the change-order choice of the one before.
+    expect(M.startFactoryRequest(s)).toEqual({ agreed: true, blueprintRev: 0, visionRev: 1, settings: M.currentFactorySettings(s), acceptOpen: M.openAreas(s) });
+    // The change-order choice is the project's setting: the start sets it, and a later start keeps it.
     const started = startFactoryAsOwner(s, at(1), { pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } });
+    expect(started.project.changeOrders).toBe("user");
+    expect(started.events.map((e) => e.message)).toContain("Change orders: the lead asks you before it updates tasks");
     expect(M.currentFactorySettings(M.startVision(started, at(2))).pausePoints.changeOrders).toBe("user");
   });
 

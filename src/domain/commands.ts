@@ -7,6 +7,9 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import { buildDemo } from "./demo";
 import * as M from "./model";
+import * as B from "./studio/blueprint";
+import * as S from "./studio/studio";
+import { type Mark, type StudioMaker, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, VERDICTS } from "./studio/types";
 import {
   ControlError,
   DEVICES,
@@ -104,8 +107,56 @@ function specContent(v: unknown): SpecContent {
   const c = obj(v, "content");
   for (const k of ["title", "area", "outcome", "benefit", "selectedOptionId", "recommendedOptionId", "overrideReason"]) str(c, k);
   array(c.options, "content.options");
+  if (c.blueprintRefs !== undefined) strings(c.blueprintRefs, "content.blueprintRefs");
   return c as unknown as SpecContent;
 }
+
+// ---- the studio (ORC-029): shapes here, the rules in src/domain/studio ----
+
+const optStr = (a: Args, k: string): string | undefined => (a[k] === undefined ? undefined : str(a, k));
+function int(a: Args, k: string): number {
+  const n = num(a, k);
+  if (!Number.isInteger(n) || n < 0) throw new InvalidCommandError(`${k} must be a whole number`);
+  return n;
+}
+function range(v: unknown, what: string): [number, number] | undefined {
+  if (v === undefined) return undefined;
+  const r = array<unknown>(v, what);
+  if (r.length !== 2 || !r.every((x) => typeof x === "number")) throw new InvalidCommandError(`${what} must be [low, high] in dollars`);
+  return r as [number, number];
+}
+function studioMaker(v: unknown): StudioMaker {
+  const o = obj(v, "madeBy");
+  if (o.role === "user") return { role: "user" };
+  return { role: oneOf(o, "role", STUDIO_AGENT_ROLES), provider: provider(o.provider), model: str(o, "model"), attemptId: str(o, "attemptId") };
+}
+function feedbackEntry(v: unknown): S.FeedbackInput {
+  const e = obj(v, "entry");
+  if (e.mark !== null && !["keep", "change", "drop"].includes(e.mark as string)) throw new InvalidCommandError("mark must be keep, change, drop or null");
+  const pins = array<unknown>(e.pins, "pins").map((x) => {
+    const p = obj(x, "pin");
+    return { x: num(p, "x"), y: num(p, "y"), ...(p.variant === undefined ? {} : { variant: str(p, "variant") }), text: str(p, "text") };
+  });
+  return { artifactId: str(e, "artifactId"), version: int(e, "version"), mark: e.mark as Mark | null, ...(e.pickedVariant === undefined ? {} : { pickedVariant: str(e, "pickedVariant") }), pins, note: str(e, "note") };
+}
+function verdictInput(v: unknown): S.VerdictInput {
+  const o = obj(v, "verdict");
+  const b = o.budget === undefined ? undefined : obj(o.budget, "budget");
+  return {
+    ...(o.variant === undefined ? {} : { variant: str(o, "variant") }),
+    verdict: oneOf(o, "verdict", VERDICTS),
+    reasons: str(o, "reasons"),
+    ...(o.change === undefined ? {} : { change: str(o, "change") }),
+    ...(b ? { budget: { buildUsd: range(b.buildUsd, "budget.buildUsd"), maintenanceUsdPerMonth: range(b.maintenanceUsdPerMonth, "budget.maintenanceUsdPerMonth"), basis: str(b, "basis") } } : {}),
+  };
+}
+
+/**
+ * Commands the service records from the studio's runs (passes 3 and 4): rounds, artifacts, the PE's verdicts and
+ * probes. They are in the table so the service applies them like any command, but a client never sends them: the
+ * HTTP endpoint refuses them, as it refuses `stageVisionDoc`.
+ */
+export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus"]);
 
 // ---- registry ----
 
@@ -131,12 +182,13 @@ export const COMMANDS = {
   // shaping the vision with the lead first (Vision), and the factory
   /**
    * Start the factory: the owner's agreement, and the only way from shaping to building. `agreed` must be true;
-   * `blueprintRev` is the revision the owner saw (compare-and-set); `acceptOpen` names the open items they confirm.
+   * `blueprintRev` and `visionRev` are the revisions the owner saw (compare-and-set); `acceptOpen` names the open
+   * items they confirm.
    * Needs a vision; applies the settings and records the start; releases the roadmap on Autopilot.
    */
   startFactory: same((s, now, a) => {
     if (a.agreed !== true) throw new InvalidCommandError("agreed must be true: the factory starts only on your agreement");
-    return M.startFactory(s, { agreed: true, blueprintRev: num(a, "blueprintRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
+    return M.startFactory(s, { agreed: true, blueprintRev: num(a, "blueprintRev"), visionRev: num(a, "visionRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
   }),
   /** Back to vision: nothing running is stopped; nothing new starts. */
   startVision: same((s, now) => M.startVision(s, now)),
@@ -156,6 +208,67 @@ export const COMMANDS = {
     M.acceptVisionDraft(s, str(a, "draftId"), num(a, "expectedRev"), { text: a.text === undefined ? undefined : str(a, "text"), focus: a.focus === undefined ? undefined : str(a, "focus") }, now),
   ),
   dismissVisionDraft: same((s, now, a) => M.dismissVisionDraft(s, str(a, "draftId"), now)),
+  /** Who acts first on a change order from now on: the lead, or you. */
+  setChangeOrders: same((s, now, a) => M.setChangeOrders(s, oneOf(a, "who", ["lead", "user"] as const), now)),
+
+  // the studio and the blueprint: the owner's
+  /** Your answer to a round: one entry per artifact version (mark, pick, pins, note), sent together. */
+  sendFeedback: same((s, now, a) => S.sendFeedback(s, array<unknown>(a.entries, "entries").map(feedbackEntry), now)),
+  /** Overrule one of the PE's objections, with your reason (recorded). */
+  overruleObjection: same((s, now, a) => S.overruleObjection(s, str(a, "verdictId"), str(a, "why"), now)),
+  /** Approve one artifact version (the one you saw) into the blueprint, with a variant when it has several. Never the lead's. */
+  approveArtifact: same((s, now, a) => B.approveArtifact(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), ...(a.variant === undefined ? {} : { variant: str(a, "variant") }) }, now)),
+  /** Approve a whole round into the blueprint; what cannot be approved as it stands is listed as open. Never the lead's. */
+  approveRound: same((s, now, a) => B.approveRound(s, int(a, "round"), now)),
+
+  // the studio: the service's (SERVICE_COMMANDS), from the lead's, the designer's, the PE's and the probes' runs
+  /** Returns { n }. */
+  openRound: (s, now, a) => {
+    const r = S.openRound(s, { focus: oneOf(a, "focus", ROUND_FOCUSES), summary: optStr(a, "summary"), leadRunId: optStr(a, "leadRunId") }, now);
+    return { state: r.state, result: { n: r.n } };
+  },
+  closeRound: same((s, now, a) => S.closeRound(s, int(a, "round"), optStr(a, "summary"), now)),
+  /** A new artifact, or with `artifactId` a new version of one. Returns { artifactId, version }. */
+  addStudioArtifact: (s, now, a) => {
+    const r = S.addArtifact(
+      s,
+      {
+        ...(a.artifactId === undefined ? {} : { artifactId: str(a, "artifactId") }),
+        round: int(a, "round"),
+        kind: oneOf(a, "kind", STUDIO_ARTIFACT_KINDS),
+        title: str(a, "title"),
+        variants: array<unknown>(a.variants, "variants").map((x) => {
+          const v = obj(x, "variant");
+          return { id: str(v, "id"), label: str(v, "label") };
+        }),
+        files: array<unknown>(a.files, "files").map((x) => {
+          const f = obj(x, "file");
+          return { path: str(f, "path"), sha256: str(f, "sha256") };
+        }),
+        devices: strings(a.devices, "devices").map((d) => {
+          if (!DEVICES.includes(d as Device)) throw new InvalidCommandError(`unknown device ${d}`);
+          return d as Device;
+        }),
+        madeBy: studioMaker(a.madeBy),
+        ...(a.supersedes === undefined ? {} : { supersedes: str(a, "supersedes") }),
+      },
+      now,
+    );
+    return { state: r.state, result: { artifactId: r.artifactId, version: r.version } };
+  },
+  /** One PE pass on an artifact's newest version. Returns { pass }. */
+  addPeVerdicts: (s, now, a) => {
+    const r = S.addPeVerdicts(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), verdicts: array<unknown>(a.verdicts, "verdicts").map(verdictInput) }, now);
+    return { state: r.state, result: { pass: r.pass } };
+  },
+  /** Returns { probeId }. */
+  addProbe: (s, now, a) => {
+    const r = S.addProbe(s, str(a, "question"), now);
+    return { state: r.state, result: { probeId: r.probeId } };
+  },
+  setProbeStatus: same((s, now, a) =>
+    S.setProbeStatus(s, str(a, "probeId"), { status: oneOf(a, "status", ["running", "done", "failed"] as const), attemptId: optStr(a, "attemptId"), result: optStr(a, "result"), failure: optStr(a, "failure") }, now),
+  ),
 
   // vision documents
   /** Record one uploaded file without a revision (sent by POST /api/vision-docs, never by the UI directly). Returns { docId, status, replaces? }. */

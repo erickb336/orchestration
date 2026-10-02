@@ -327,12 +327,13 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
   },
   // Format 19 (ORC-029): Vision and the factory. Every project keeps its stage; one already building needs no
   // start record (it started before the owner's Start the factory existed). Existing projects were designed for
-  // the desktop. The owner's budgets are added, not set: nothing stops until the owner sets one. The studio and
-  // the blueprint start empty.
+  // the desktop. The owner's budgets are added, not set: nothing stops until the owner sets one. Change orders go
+  // to the lead, the default of a new project. The studio and the blueprint start empty.
   18: (doc) => {
     const project = doc.project as Record<string, unknown>;
     project.devices ??= ["desktop"];
     project.factoryStarts ??= [];
+    project.changeOrders ??= "lead";
     project.budgets ??= { ...NO_BUDGETS };
     doc.studio ??= emptyStudio();
     doc.blueprint ??= emptyBlueprint();
