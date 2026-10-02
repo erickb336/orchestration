@@ -380,7 +380,8 @@ pre.mermaid { margin: 0; }
               <div class="verdict"><span class="vb yes">yes</span><span><b>B · Timeline:</b> renders from the plan data alone; the cheapest to keep working for years.</span></div>
               <div class="verdict"><span class="vb yes">yes</span><span><b>C · Day cards:</b> feasible; the elevation line needs the trail's profile, which the trail data already has.</span></div>
             </div>
-            <div class="probe"><span class="label">Probe the PE asked for</span><span>Hourly forecasts for trailheads, cached for offline: which sources allow it, at what cost?</span><span class="muted">2 of 3 sources checked · result goes into the blueprint as evidence</span></div>
+            <div class="probe"><span class="label">Budget</span><span>A adds about $40 a month in tile hosting at 1,000 users; B and C add nothing. Within your running budget of $50 a month either way.</span><span class="muted">Estimate from the tile provider's price list; sample figures</span></div>
+            <div class="probe"><span class="label">Probe the PE asked for</span><span>Hourly forecasts for trailheads, cached for offline: which sources allow it, at what cost?</span><span class="muted">2 of 3 sources checked · $0.40 of $5 probe budget used · result goes into the blueprint as evidence</span></div>
           </div>
           <div class="qs" id="qs">
             <div class="q"><span>1. Should the plan work offline on the trail?</span><span class="chips"><button class="chip" type="button">Yes, cache the plan</button><button class="chip" type="button">Map tiles too</button><button class="chip" type="button">Not now</button></span></div>
@@ -537,6 +538,10 @@ flowchart LR
           <div class="bpitem"><span>Trip plan A: map from cached vector tiles</span><span class="pill done">agreed</span><span class="v">after 1 revision</span></div>
           <div class="bpitem"><span>Probe: hourly forecasts cached offline</span><span class="pill work">running</span><span class="v">evidence for the offline flow</span></div>
           <div class="bpitem"><span>TUI dashboard: needs 100 columns, falls back to the list</span><span class="pill done">agreed</span><span class="v">after 1 revision</span></div></div>
+        <div class="card"><span class="label">Budget · set by you, estimated by the PE</span>
+          <div class="bpitem"><span>Building (the factory's agent usage)</span><span class="pill done">$40</span><span class="v">PE estimate $18–30 for 7 tasks, from past runs' recorded costs</span></div>
+          <div class="bpitem"><span>Running, per month (hosting, forecast API)</span><span class="pill done">$50</span><span class="v">PE estimate $25–35 at 1,000 users; $65 with map A's tiles at 2,000</span></div>
+          <div class="bpitem"><span>Probes in Vision</span><span class="pill done">$5</span><span class="v">$0.40 used</span></div></div>
         <div class="card"><span class="label">The vision · r3, accepted by you</span>
           <p class="small">A hiking trip planner for groups of 2–12: pick a trail, plan the days around the weather, share the plan. Web first, phones next, and a small CLI for organisers. Not in scope: navigation on the trail, payments.</p>
           <p class="small muted">Who it is for ✓ · Problem ✓ · Outcome ✓ · Scope ✓ · Constraints ✓ · Risks ◐ · First milestone ✓ · Material ✓ · Why now ✓</p></div>
@@ -573,6 +578,8 @@ flowchart LR
               <li>• Autopilot: tasks start on their own; findings are repaired</li>
               <li>• Delivery: pull requests to <span class="mono">main</span>; you merge</li>
               <li>• Up to 3 agents at once · 12 turns, 30 minutes per run</li>
+              <li>• Budget: PE estimate $18–30 to build (your limit $40); the factory pauses and asks you if it reaches $40</li>
+              <li>• Running: PE estimate $25–35 a month (your limit $50)</li>
             </ul></div>
         </div>
         <div class="card">
@@ -596,8 +603,9 @@ flowchart LR
       <div class="pad">
         <div class="co"><b>Change order · blueprint r5</b><span>You changed the Invite sheet (v3: the link can be renewed by the group). It touches 2 tasks: WT-6 "Invite sheet" (running) and WT-7 "Join from an invite" (waiting).</span><span class="muted">The lead proposes the updates through steering, with Undo.</span><div class="grp" style="display:flex;gap:8px"><button class="btn" type="button">See the proposed updates</button></div></div>
         <div class="card"><span class="label">Decided by the PE on Autopilot</span>
-          <div class="verdicts"><div class="verdict"><span class="vb yes">PE</span><span><b>WT-3 Weather:</b> cache each forecast for 6 hours rather than fetch it on every view. Cheaper and works offline; a forecast can be up to 6 hours old, and the screen says so. <span class="muted">The review finding asked for a decision; you were not asked because the factory is on Autopilot.</span></span></div></div>
+          <div class="verdicts"><div class="verdict"><span class="vb yes">PE</span><span><b>WT-3 Weather:</b> cache each forecast for 6 hours rather than fetch it on every view. Saves about $12 a month and works offline; a forecast can be up to 6 hours old, and the screen says so. Within your budget, so it was the PE's call; anything over budget comes to you. <span class="muted">The review finding asked for a decision; you were not asked because the factory is on Autopilot.</span></span></div></div>
           <div style="display:flex;gap:8px"><button class="btn" type="button">Reverse</button><button class="btn quiet" type="button">See the reasons</button></div></div>
+        <p class="small muted">Spent so far: $11.20 of your $40 building budget · PE estimate for the rest: $9–16</p>
         <div class="lines">
           <div class="line"><span class="small"><b>Trip planning</b><br><span class="muted">3 tasks</span></span><div class="belt"><span class="job done">WT-1 Trail search ✓</span><span class="job run"><span class="pill work">building</span>WT-2 Trip plan</span><span class="job">WT-3 Weather</span></div></div>
           <div class="line"><span class="small"><b>Trip sharing</b><br><span class="muted">2 tasks</span></span><div class="belt"><span class="job run"><span class="pill work">review</span>WT-6 Invite sheet</span><span class="job"><span class="pill you">change order</span>WT-7 Join</span></div></div>
@@ -611,7 +619,7 @@ flowchart LR
   <!-- ===== cross-cutting questions (review only) ===== -->
   <section class="rv" data-uncommentable aria-labelledby="t-q">
     <span class="rv-tag" id="t-q">Three questions across the screens</span>
-    <div class="rv-bar" data-review="q-critic"><div class="ask"><b class="small">PE review (your idea).</b><p>The PE is a rigid principal engineer who judges every option on feasibility, scale and longevity, on the other provider than the designer. The designer revises until the PE agrees (up to three rounds); if they still disagree, you see the objection and can overrule it, recorded. The PE can ask the lead for <b>probes</b>: small Vision tasks that bring evidence, such as surveying how many city councils publish transcripts and video for Council Record, or extracting one council's minutes. Probes run within a Vision budget you set, never in the factory. <b>On Autopilot, the PE makes the factory's trade-off calls</b> (findings that ask for a decision, choices between options), each recorded with its reasons and reversible by you.</p></div></div>
+    <div class="rv-bar" data-review="q-critic"><div class="ask"><b class="small">PE review (your idea).</b><p>The PE is a rigid principal engineer who judges every option on feasibility, scale, longevity and budget (what it costs to build and to run, against the budgets you set), on the other provider than the designer. The designer revises until the PE agrees (up to three rounds); if they still disagree, you see the objection and can overrule it, recorded. The PE can ask the lead for <b>probes</b>: small Vision tasks that bring evidence, such as surveying how many city councils publish transcripts and video for Council Record, or extracting one council's minutes. Probes run within a Vision budget you set, never in the factory. <b>On Autopilot, the PE makes the factory's trade-off calls</b> (findings that ask for a decision, choices between options), within your budget, each recorded with its reasons and reversible by you. Anything that would go over budget comes to you.</p></div></div>
     <div class="rv-bar" data-review="q-share"><div class="ask"><b class="small">Sharing artifacts (researched).</b><p>Neither Claude's nor Codex's published pages can be shown inside our canvas: both refuse to be framed. Both can publish privately in one step, and their own tools do it without asking. So: the studio's local copy stays the source of truth; <b>Share</b> publishes a copy only when you approve that publish (first target: a Claude artifact page; later Codex Sites or a preview deploy); and agents in the studio (designer, PE) have native publishing turned off.</p></div></div>
     <div class="rv-bar" data-review="q-lead"><div class="ask"><b class="small">One provider leads Vision.</b><p>The research shows the artifact tools don't decide it, since neither embeds. Proposal: Claude leads and designs in Vision (you said you would mostly use Claude at first); PE review runs on Codex, so the check is independent. The factory keeps either provider as lead, as AGENTS.md requires.</p></div></div>
   </section>
