@@ -13,7 +13,7 @@ import { principle, wordCount } from "../../src/domain/principles";
 import { buildSeed } from "../../src/domain/seed";
 import * as R from "../../src/domain/studio/runs";
 import * as S from "../../src/domain/studio/studio";
-import { openRound } from "../../src/domain/testing/studio";
+import { DESIGNER, openRound, sha } from "../../src/domain/testing/studio";
 import type { ProseCheck, State } from "../../src/domain/types";
 import { LEAD_PRINCIPLES_HEADER, PRINCIPLES_WORD_CAP } from "../envelope";
 import { SENTENCE_MARK } from "../prose/record";
@@ -273,6 +273,32 @@ Examples from your last review:
     const d2 = runs("designer").at(-1)!;
     expect(d2).toMatchObject({ baseVersion: 1, status: "running" });
     expect(claude.runs.get(d2.id)!.prompt).not.toContain(DESIGNER_FEEDBACK);
+  });
+
+  it("checks the designer's documents and the PE's verdicts with the project's words once a dictionary is in force", async () => {
+    const configs: (string | undefined)[] = [];
+    await service((_text, config) => {
+      configs.push(config);
+      return { checked: true, vale: "3.24.0", alerts: [] };
+    });
+    const words = [{ term: "trip", meaning: "A weekend away that a group plans together.", avoid: ["journey"] }];
+    const { artifactId } = cmd("addStudioArtifact", { round: 1, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("d") }], devices: [], madeBy: DESIGNER, dictionary: words }).result as { artifactId: string };
+    if (!S.readyForOwner(state(), S.latestArtifacts(state()).find((a) => a.id === artifactId)!)) cmd("addPeVerdicts", { artifactId, version: 1, verdicts: [{ variant: "a", verdict: "feasible", reasons: "Words." }] });
+    cmd("approveArtifact", { artifactId, version: 1 });
+    const d1 = startDesignerRun(store, { round: 1, brief: "Make the trip data contract." }, iso());
+    tick();
+    handIn(claude.runs.get(d1)!, CONTRACT, { "doc/index.md": CLEAN_DOC });
+    designerFinish(d1);
+    tick();
+    tick();
+    const p1 = runs("pe").find((r) => r.baseVersion === 1 && r.artifactId !== artifactId)!;
+    peFinish(p1.id, [{ variant: "a", verdict: "feasible", reasons: "Fine for a small group." }]);
+    tick();
+    const config = join(dataDir, "vale", state().project.id, ".vale.ini");
+    expect(runOf(d1).prose).toMatchObject({ status: "checked" });
+    expect(runOf(p1.id).prose).toMatchObject({ status: "checked" });
+    expect(configs.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(configs)).toEqual(new Set([config]));
   });
 
   it("a scheduler with no checker records nothing", async () => {

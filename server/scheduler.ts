@@ -530,7 +530,10 @@ export class Scheduler {
         // A designer hands in files; the PE answers in its final message, read in the transaction.
         if (studioRun.kind === "designer") studioOutputs.set(e.attemptId, this.readStudioOutput(current, e.attemptId));
         // What it wrote for the owner is checked here too (the PE's verdicts, the designer's documents), and recorded with its result.
-        const check = !this.prose ? undefined : studioRun.kind === "pe" ? checkPeAnswer(e.finalText, this.prose, now) : studioRun.kind === "designer" ? checkHandedIn(studioOutputs.get(e.attemptId), this.prose, now) : undefined;
+        // With the project's words (the dictionary in force), as for the lead.
+        const words = this.prose ? this.projectWords(current) : undefined;
+        const prose = this.prose && ((text: string) => this.prose!(text, words));
+        const check = !prose ? undefined : studioRun.kind === "pe" ? checkPeAnswer(e.finalText, prose, now) : studioRun.kind === "designer" ? checkHandedIn(studioOutputs.get(e.attemptId), prose, now) : undefined;
         if (check) this.studioProse.set(e.attemptId, check);
         continue;
       }
