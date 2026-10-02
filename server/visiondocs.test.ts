@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import { CLIENT_HEADER } from "../src/api";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
@@ -75,7 +76,8 @@ const stored = () => (existsSync(docsDir()) ? readdirSync(docsDir()).sort() : []
 const paths = () => M.currentVisionDocs(state()).map((d) => d.path);
 
 function init(stage: "shaping" | "building" = "shaping", vision = "Ship the apps.") {
-  cmd("initProject", { name: "Apps", repoPath: repo, vision, focus: "", stage });
+  cmd("initProject", { name: "Apps", repoPath: repo, vision, focus: "" });
+  if (stage === "building") cmd("startFactory", startFactoryArgs(state()));
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setRoleDefault", { role: "designer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
@@ -190,7 +192,7 @@ describe("A. attaching and removing through the endpoint", () => {
     // A planning-style envelope (building) carries the same section.
     claude.reply(M.activeLeadRun(state())!.id, "ok", []);
     tick();
-    cmd("startBuilding");
+    cmd("startFactory", startFactoryArgs(state()));
     const prompt2 = ask("and now?");
     expect(prompt2).toContain('=== "brief.md" (91 B, complete) ===');
     // Workers: designers read the text under their cap; coders and reviewers see names and sizes only.
@@ -505,8 +507,8 @@ describe("E. migration", () => {
     raw.close();
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(18);
-    expect(s.version).toBe(18);
+    expect(STATE_FORMAT).toBe(19);
+    expect(s.version).toBe(19);
     expect(s.project.visionDocs).toEqual([]);
     expect(s.project.visions.every((v) => v.docIds === undefined)).toBe(true);
     expect(M.currentVisionDocs(s)).toEqual([]);
@@ -520,7 +522,7 @@ describe("E. migration", () => {
     expect(M.currentVisionDocs(upgraded.read().state)).toEqual([]);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(19);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_12_%'").get()).toBeDefined();
     check.close();
   });

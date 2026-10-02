@@ -977,7 +977,7 @@ export class Scheduler {
           const reason = a.activity === "Time limit reached" ? `It reached the ${s.project.runLimits.timeoutMinutes}-minute time limit` : "The runtime stopped it without a stop request";
           return M.reportRunFailed(s, e.attemptId, `${reason}; partial work was left in its workspace.`, now, { usage: e.usage });
         }
-        return M.acknowledgeStop(s, e.attemptId, now);
+        return M.acknowledgeStop(s, e.attemptId, now, { usage: e.usage });
       }
       case "failed":
         return M.reportRunFailed(s, e.attemptId, e.message, now, { usage: e.usage });
@@ -1011,7 +1011,7 @@ export class Scheduler {
       case "note": // lead runs never receive notes
         return s;
       case "stopped":
-        return M.reportLeadStopped(s, e.attemptId, now);
+        return M.reportLeadStopped(s, e.attemptId, now, false, e.usage);
       case "failed":
         return M.reportLeadFailed(s, e.attemptId, e.message, now, e.usage);
       case "completed": {

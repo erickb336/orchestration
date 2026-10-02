@@ -63,7 +63,7 @@ describe("editing a structured review's summary keeps its decisions", () => {
     expect(M.stateLabel(edited, task(edited, id))).toBe("Needs you: decide 1 finding");
     // Never "the lead" for a finding without a record.
     const stripped = { ...edited, decisions: [] };
-    expect(F.awaitingDecision(stripped, task(stripped, id))).toEqual({ count: 2, lead: 0, user: 2 });
+    expect(F.awaitingDecision(stripped, task(stripped, id))).toEqual({ count: 2, lead: 0, pe: 0, user: 2 });
     // Deciding the open one lets the repair run, and the repair's envelope decisions include both.
     const decided = F.decideFinding(edited, d2.id, "fix", undefined, at(7));
     const next = M.dispatchEligible(decided, at(8));

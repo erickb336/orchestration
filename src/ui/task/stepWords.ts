@@ -4,7 +4,7 @@
 import * as C from "../../domain/checks";
 import * as F from "../../domain/findings";
 import * as M from "../../domain/model";
-import type { Attempt, State, Step, Task } from "../../domain/types";
+import type { Attempt, FindingDecision, State, Step, Task } from "../../domain/types";
 import { selectionText } from "../common";
 import { unsettledChildren } from "../fanout";
 import type { StepMark } from "../kit/StepList";
@@ -57,7 +57,7 @@ function doneWords(state: State, task: Task, st: Step): { state: string; mark: S
   if (REVIEW_ROLES.has(st.role)) {
     let found = 0;
     let mine = 0;
-    let lead = 0;
+    const agents: FindingDecision[] = [];
     for (const o of st.outputs) {
       if (o.kind !== "review-findings") continue;
       const art = M.acceptedOutput(state, task, st.id, o.name);
@@ -67,11 +67,11 @@ function doneWords(state: State, task: Task, st: Step): { state: string; mark: S
         const d = F.decisionFor(state, art, f);
         if (d?.status !== "open") continue;
         if (d.routedTo === "user") mine++;
-        else lead++;
+        else agents.push(d);
       }
     }
     if (mine) return { state: `Needs you: ${plural(mine, "finding")}`, mark: "you" };
-    if (lead) return { state: `Done: the lead is deciding ${plural(lead, "finding")}`, mark: "done" };
+    if (agents.length) return { state: `Done: ${F.agentsDecidingLabel(agents).replace(/^T/, "t")}`, mark: "done" };
     return { state: found ? `Done: ${plural(found, "finding")}` : "Done: no findings", mark: "done" };
   }
   return { state: "Done", mark: "done" };
@@ -84,6 +84,7 @@ function pendingWords(state: State, task: Task, st: Step): string {
   if (st.runIf?.length) {
     let mine = 0;
     let lead = 0;
+    let pe = 0;
     for (const r of st.runIf) {
       const art = M.acceptedOutput(state, task, r.step, r.output);
       for (const f of art?.findings ?? []) {
@@ -91,11 +92,13 @@ function pendingWords(state: State, task: Task, st: Step): string {
         const d = F.decisionFor(state, art!, f);
         if (d && d.status !== "open") continue;
         if (d?.routedTo === "lead") lead++;
+        else if (d?.routedTo === "pe") pe++;
         else mine++;
       }
     }
     if (mine) return "Waits for your decision";
     if (lead) return "Waits for the lead's decision";
+    if (pe) return "Waits for the PE's decision";
   }
   if (st.waitForChildren) {
     const n = unsettledChildren(state, task).length;

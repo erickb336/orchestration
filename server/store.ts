@@ -12,10 +12,11 @@ import { internalFlow } from "../src/domain/internalFlows";
 import { builtInCatalog, flowRef } from "../src/domain/flows";
 import { toDef } from "../src/domain/pipeline";
 import { buildSeed } from "../src/domain/seed";
-import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type FlowRef, type State, type StepDef } from "../src/domain/types";
+import { emptyBlueprint, emptyStudio } from "../src/domain/studio/types";
+import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, NO_BUDGETS, StaleWriteError, type FlowRef, type State, type StepDef } from "../src/domain/types";
 import { V13_TEMPLATE_STEPS, V14_TEMPLATES, v14TemplateSteps } from "./legacyTemplates";
 
-export const STATE_FORMAT = 18;
+export const STATE_FORMAT = 19;
 
 export { V13_TEMPLATE_STEPS };
 
@@ -324,7 +325,35 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
     doc.version = 18;
     return doc;
   },
+  // Format 19 (ORC-029): Vision and the factory. Every project keeps its stage; one already building needs no
+  // start record (it started before the owner's Start the factory existed). Existing projects were designed for
+  // the desktop. The owner's budgets are added, not set: nothing stops until the owner sets one. Change orders go
+  // to the lead, the default of a new project. The studio and the blueprint start empty.
+  18: (doc) => {
+    normalize19(doc);
+    doc.version = 19;
+    return doc;
+  },
 };
+
+/**
+ * Format 19's fields, added where a document lacks them. Format 19 is unreleased, and early builds of ORC-029 pass 2
+ * wrote it before all of its fields existed, so this runs on every load of a format-19 database as well as in the
+ * 18 → 19 upgrade. Idempotent. A change order without a handler takes the project's setting. Start records are
+ * history and are never rewritten: an early start's settings carry `merge` where later ones carry `delivery`.
+ */
+function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
+  const project = doc.project as Record<string, unknown>;
+  project.devices ??= ["desktop"];
+  project.factoryStarts ??= [];
+  project.changeOrders ??= "lead";
+  project.budgets ??= { ...NO_BUDGETS };
+  doc.studio ??= emptyStudio();
+  doc.blueprint ??= emptyBlueprint();
+  const blueprint = doc.blueprint as { changeOrders?: Record<string, unknown>[] };
+  for (const co of (blueprint.changeOrders ??= [])) co.handler ??= project.changeOrders;
+  return doc;
+}
 const SCHEMA_VERSION = 1;
 
 type FailureKind = "stale" | "control" | "invalid" | "internal";
@@ -345,6 +374,23 @@ function classify(e: unknown): CommandFailure {
   if (e instanceof ControlError) return new CommandFailure("control", message);
   if (e instanceof InvalidCommandError) return new CommandFailure("invalid", message);
   return new CommandFailure("internal", message);
+}
+
+/**
+ * The owner-only start, enforced where state is written (ORC-029): the project moves from shaping to building
+ * only through the owner's `startFactory` command, and only when it recorded exactly one more start. Any other
+ * write that would move it (another command, the scheduler, a runtime report) is refused before anything is
+ * stored, whatever domain code produced it. Replacing everything with the sample project (`resetSampleData`,
+ * fake runtime only; the sample never reaches a real agent) is a new project, not a start.
+ * Returns why a write is refused, or undefined.
+ */
+function stageRefusal(prev: State, next: State, command: string | undefined): string | undefined {
+  if (prev.project.stage !== "shaping" || next.project.stage !== "building") return undefined;
+  const recorded = next.project.factoryStarts.length - prev.project.factoryStarts.length;
+  if (command === "startFactory" && recorded === 1) return undefined;
+  if (command === "resetSampleData" && next.project.sample) return undefined;
+  const by = command === "startFactory" ? `the startFactory command recorded ${recorded} starts, not 1` : `${command ? `the ${command} command` : "an internal update"} tried to`;
+  return `Refused: only the owner's Start the factory moves the project from Vision to the factory; ${by}. Nothing was written.`;
 }
 
 export class LeaseLostError extends Error {
@@ -414,7 +460,12 @@ export class Store {
     this.tx(() => {
       // Read inside the transaction so two instances starting together cannot both seed.
       const row = this.db.prepare("SELECT format, version, json FROM state WHERE id = 1").get() as { format: number; version: number; json: string } | undefined;
-      if (row && row.format === STATE_FORMAT) return;
+      if (row && row.format === STATE_FORMAT) {
+        // A document an early build of format 19 wrote gains the fields it lacks; nothing is written when none is missing.
+        const json = JSON.stringify(normalize19(JSON.parse(row.json) as Record<string, unknown>));
+        if (json !== row.json) this.db.prepare("UPDATE state SET version = ?, json = ?, updated_at = ? WHERE id = 1").run(row.version + 1, json, new Date().toISOString());
+        return;
+      }
       if (row && MIGRATIONS[row.format]) {
         // Upgrade in place, one format at a time, keeping a copy of the original.
         this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(`backup_format_${row.format}_v${row.version}`, row.json);
@@ -466,6 +517,14 @@ export class Store {
     return { version: row.version, state: JSON.parse(row.json) as State, json: row.json };
   }
 
+  /** Refuse, and log, a write that would start the factory other than by the owner's command (`stageRefusal`). */
+  private guardStage(prev: State, next: State, command: string | undefined) {
+    const refusal = stageRefusal(prev, next, command);
+    if (!refusal) return;
+    console.error(`[orchestrator] ${refusal}`);
+    throw new ControlError(refusal);
+  }
+
   private persist(prevVersion: number, prev: State, next: State, now: string): number {
     const version = prevVersion + 1;
     const r = this.db.prepare("UPDATE state SET version = ?, json = ?, updated_at = ? WHERE id = 1 AND version = ?").run(version, JSON.stringify(next), now, prevVersion);
@@ -515,6 +574,7 @@ export class Store {
       let outcome: ReturnType<typeof runCommand>;
       try {
         outcome = runCommand(cur.state, name, args, now);
+        this.guardStage(cur.state, outcome.state, name);
       } catch (e) {
         failure = classify(e);
         // Record the rejection so a retry with the same key reports the same outcome.
@@ -544,6 +604,7 @@ export class Store {
       }
       const cur = this.load();
       const next = fn(cur.state);
+      this.guardStage(cur.state, next, undefined);
       const json = JSON.stringify(next);
       if (json === cur.json) return { version: cur.version, changed: false };
       return { version: this.persist(cur.version, cur.state, next, now), changed: true };

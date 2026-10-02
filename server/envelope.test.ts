@@ -16,6 +16,7 @@ import { BUILT_IN_FILES } from "../src/domain/builtInFlows";
 import { INTERNAL_FLOWS } from "../src/domain/internalFlows";
 import { CONVENTIONS_FILE_CAP, CONVENTIONS_TOTAL_CAP, VERIFY_CHECKS_NOTE, buildEnvelope, buildLeadEnvelope, capConventions, findingKey, parseFindings, parseLeadOutput, parseOutputs } from "./envelope";
 import { redact } from "./redact";
+import { fakeLeadText } from "./runtimes/fake";
 import { WorkspaceManager } from "./workspaces";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -266,7 +267,7 @@ describe("the lead's decisions section", () => {
   it("lists open decisions routed to the lead with the task, the finding and the rules; the output contract carries decisions; parseLeadOutput passes them through", () => {
     const { s: s0, id } = changeTask();
     const review = M.activeAttempts(s0, id)[0];
-    let s = M.applyAutopilot(s0, "main", at(3));
+    let s = F.setTriageRouting(M.applyAutopilot(s0, "main", at(3)), "lead", at(3));
     s = M.reportCompletion(s, review.id, [], at(4), [{ name: "findings", summary: "one", findings: [finding({ action: "ask-user", title: "Needs a new table", file: "src/db.ts", line: 3, why: "the remedy adds state" })], reviewedPaths: [] }]);
     expect(s.decisions[0].routedTo).toBe("lead");
     const r = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(5));
@@ -288,6 +289,39 @@ describe("the lead's decisions section", () => {
     const plain = buildLeadEnvelope(s0, M.startLeadRun(s0, { provider: "claude", model: "claude-sample-large", trigger: "planning" }, at(5)).state.leadRuns[0], "read");
     expect(plain).not.toContain("## Decisions waiting for you");
     expect(plain).not.toContain('"decisions": [');
+    expect(text).not.toContain("Decisions you make as the PE");
+  });
+
+  it("on the PE's route, the lead's decision run decides as the PE with its brief, the budgets and a cost; the record says so (ORC-029 2d)", () => {
+    const { s: s0, id } = changeTask();
+    const review = M.activeAttempts(s0, id)[0];
+    let s = M.applyAutopilot(s0, "main", at(3)); // Autopilot sends findings to the PE
+    s = M.setBudgets(s, { buildingUsd: 50, maintenanceUsdPerMonth: 20 }, at(3));
+    s = M.reportCompletion(s, review.id, [], at(4), [{ name: "findings", summary: "one", findings: [finding({ action: "ask-user", title: "Needs a new table", file: "src/db.ts", line: 3, why: "the remedy adds state" })], reviewedPaths: [] }]);
+    const d = s.decisions[0];
+    expect(d.routedTo).toBe("pe");
+    expect(F.decisionsDueForLead(s).map((x) => x.id)).toEqual([d.id]);
+    const r = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(5));
+    const text = buildLeadEnvelope(r.state, r.state.leadRuns[0], "read");
+    expect(text).not.toContain("## Decisions waiting for you");
+    expect(text).toContain("## Decisions you make as the PE (1)");
+    expect(text).toContain("The PE does not run its own decisions yet, so you decide them with this brief");
+    expect(text).toContain(
+      "- Budgets: building $50.00, of which about $0.00 is spent (9 runs have no recorded cost, which makes the building spend uncertain: a call that adds any building cost goes to the user); maintenance $20.00 a month, not yet estimated (the pre-flight makes the estimate), so a call that adds any maintenance cost goes to the user. Spending past a budget is never the PE's call",
+    );
+    expect(text).not.toContain("not counted");
+    // Once a start records the pre-flight's estimate, the brief gives it with the calls that stand.
+    const est = structuredClone(r.state);
+    est.project.factoryStarts.push({ at: at(1), by: "user", blueprintRev: 0, visionRev: 1, settings: M.startFactoryRequest(est).settings, openItems: [], estimate: { maintenanceUsdPerMonth: [2, 4], basis: "The pre-flight" } });
+    expect(buildLeadEnvelope(est, est.leadRuns.at(-1)!, "read")).toContain("maintenance $20.00 a month, of which $4.00 is estimated so far.");
+    expect(text).toContain(`- ${d.id} on ${id} "Change" (spec by user)`);
+    expect(text).toContain('"cost": { "buildUsd": [0, 0], "maintenanceUsdPerMonth": [0, 0], "basis":');
+    expect(text).toContain('Decide the findings listed under "Decisions waiting for you" and "Decisions you make as the PE"');
+    // The simulated lead answers as the PE, with a cost; the record names the PE, the lead run and the cost.
+    const out = parseLeadOutput(fakeLeadText("x", "decisions", text));
+    const done = M.completeLeadRun(r.state, r.runId, out, at(6));
+    expect(done.decisions[0]).toMatchObject({ status: "accept", decidedBy: "pe", leadRunId: r.runId, pe: { decision: "accept", by: "lead-run", leadRunId: r.runId, cost: { buildUsd: [0, 0], maintenanceUsdPerMonth: [0, 0] } } });
+    expect(done.decisions[0].pe?.pastBudget).toBeUndefined();
   });
 });
 

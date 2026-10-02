@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, resolve, sep } from "node:path";
 import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
 import { suggestChecks, type RepoFile } from "../src/domain/checks";
+import { SERVICE_COMMANDS } from "../src/domain/commands";
 import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
@@ -275,8 +276,13 @@ export function createHttpServer(opts: HttpOptions): Server {
         if (real && body.name === "resetSampleData") return fail(res, 400, "control", "Sample data is only available with the fake runtime.");
         // A document is recorded together with its copy: the upload endpoint does both.
         if (body.name === "stageVisionDoc" || body.name === "addVisionDoc") return fail(res, 400, "invalid", "Attach documents through POST /api/vision-docs, which stores the file first.");
-        // A sample project never contacts GitHub.
-        if (real && body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr" && store.read().state.project.sample)
+        // The studio's rounds, artifacts, PE verdicts and probes, and PE review of new work, come from agents' runs, recorded by the service.
+        if (SERVICE_COMMANDS.has(body.name)) return fail(res, 400, "invalid", `${body.name} is recorded by the service from its agents' runs; a client cannot send it.`);
+        // A sample project never contacts GitHub: neither the delivery setting nor Start the factory turns pull requests on for it.
+        const asksForPrs =
+          (body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr") ||
+          (body.name === "startFactory" && (body.args as { settings?: { delivery?: { mode?: unknown } } } | undefined)?.settings?.delivery?.mode === "pr");
+        if (real && asksForPrs && store.read().state.project.sample)
           return fail(res, 400, "control", "This is the sample project; pull-request delivery needs a project of your own. Start a new project in Settings.");
         // The sample project has no repository to run checks on; nothing of it ever runs on this computer.
         if (real && body.name === "setChecks" && ((body.args as { config?: { enabled?: unknown } } | undefined)?.config?.enabled === true) && store.read().state.project.sample)

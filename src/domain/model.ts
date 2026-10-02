@@ -37,7 +37,7 @@ export {
 export { changeFlow, flowChangeBlocker, flowChangePreview, serviceOwned, setDefaultFlow, setFlows } from "./model/taskFlow";
 export { createTask, initProject, type NewTask, setCatalog, setRepoPath, setRunLimits, setWorkerConnections, setWorkerEnvironment } from "./model/project";
 export {
-  activeLeadRun, applyAutopilot, deferredLeadRoots, deliveryNews, leadDue, messageStatus, openLeadProposals, pendingMessages, postMessage,
+  activeLeadRun, applyAutopilot, autonomyMode, deferredLeadRoots, deliveryNews, leadDue, messageStatus, openLeadProposals, pendingMessages, postMessage,
   reportLeadActivity, reportLeadFailed, reportLeadStarted, reportLeadStopped, reportLeadStopTimeout, setAutonomy, setLeadSelection, startLeadRun,
   stopLeadReply,
 } from "./model/lead";
@@ -53,7 +53,9 @@ export {
 } from "./model/notes";
 export {
   acceptVisionDraft, answersMessage, coverageOf, dismissVisionDraft, latestQuestions, openAreas, openVisionDraft, roadmapTasks, SHAPING_LABEL,
-  startBuilding, startBuildingBlocker, startBuildingPlan, startShaping, validateCoverage, validateQuestions, validateVisionDraft,
+  currentFactorySettings, type FactoryRequest, preflightOpenItems, setChangeOrders, setDevices, startFactory, startFactoryBlocker, startFactoryPlan,
+  startFactoryRequest, startVision,
+  validateCoverage, validateQuestions, validateVisionDraft,
 } from "./model/shaping";
 export {
   addVisionDoc, type AttachResult, attachVisionDocs, currentVisionDocs, fmtBytes, isOfficeDoc, MAX_VISION_DOC_BYTES, MAX_VISION_DOCS,
@@ -66,3 +68,4 @@ export {
 export { exportMarkdown, importMarkdown } from "./model/markdown";
 export { childFromEarlierFlow, childrenSettled, childTasks, currentChildren, descendants, MAX_CHILD_TASKS } from "./model/fanout";
 export { premiseReason, runPrinciples } from "./model/runPrinciples";
+export { continuePastBudget, setBudgets } from "./model/budget";

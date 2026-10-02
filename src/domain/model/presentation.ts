@@ -3,10 +3,11 @@
 
 import * as C from "../checks";
 import * as F from "../findings";
+import { PE_REVIEW_HOLD, peReviewHold } from "../peReview";
 import { type Deferral, type State, type Step, type Task, REVIEW_ROLES } from "../types";
 import { activeAttempts, findStep, getStep, isOpen, isSettled } from "./core";
 import { childrenSettled, currentChildren } from "./fanout";
-import { startBuildingPlan } from "./shaping";
+import { startFactoryPlan } from "./shaping";
 
 export type Column = "proposed" | "ready" | "running" | "reviewing" | "paused" | "deferred" | "blocked" | "done" | "cancelled";
 export const BOARD_COLUMNS: Column[] = ["proposed", "ready", "running", "reviewing", "paused", "deferred", "blocked", "done"];
@@ -145,8 +146,11 @@ export function stateLabel(s: State, t: Task): string {
   // dependency wait is shown under the shaping hold too.
   if (col === "ready" && t.heldForShaping) {
     const dep = waitingOn(s, t);
-    return `Planned; waits until you start building${dep ? ` and on ${dep}` : ""}, then ${startBuildingPlan(s).release ? "starts on Autopilot" : "waits for your go-ahead (your involvement setting)"}`;
+    return `Planned; waits until you start building${dep ? ` and on ${dep}` : ""}, then ${startFactoryPlan(s).release ? "starts on Autopilot" : "waits for your go-ahead (your involvement setting)"}`;
   }
+  // PE review comes first: the involvement setting applies once the PE agreed (ORC-029 2e).
+  const review = peReviewHold(t.peReview);
+  if ((col === "ready" || col === "proposed") && review) return review === PE_REVIEW_HOLD ? "Waiting for PE review" : "The PE objects: needs you";
   // "Wait for my go-ahead" is the setting; the state names what it waits for. A project pause shows in the header, not here.
   if (col === "ready" && t.holdBeforeStart) return "Waiting for your go-ahead";
   // A dependency wait is shown before the stage, with shaping noted.

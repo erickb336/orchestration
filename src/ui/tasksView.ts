@@ -189,6 +189,7 @@ export function cardLine(state: State, task: Task, nowMs = Date.now()): CardLine
     }
     const awaiting = F.awaitingDecision(state, task);
     if (awaiting?.lead) return { text: `The lead is deciding ${plural(awaiting.lead, "finding")}`, tone: "neutral" };
+    if (awaiting?.pe) return { text: `The PE is deciding ${plural(awaiting.pe, "finding")}`, tone: "neutral" };
     if (M.stateLabel(state, task) === C.HELD_LABEL) return { text: "Waiting for the checks sandbox (Settings → Checks)", tone: "neutral" };
     if (state.project.stage === "shaping") return { text: "Waits until you start building", tone: "neutral" };
     return { text: where ? `Up next: ${where}` : "Up next", tone: "neutral" };

@@ -7,6 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
+import { startFactoryAsOwner } from "./testing/factory";
 import { buildEmptyProject, buildSeed } from "./seed";
 import { SHAPING_AREAS, StaleWriteError, type LeadRun, type State } from "./types";
 
@@ -15,7 +16,7 @@ const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
 const seed = () => buildSeed(T0, { inFlightRuns: false });
 const task = (s: State, id: string) => s.tasks.find((t) => t.id === id)!;
 const running = (s: State, id?: string) => M.activeAttempts(s, id);
-const shaping = (s: State) => M.startShaping(s, at(0));
+const shaping = (s: State) => M.startVision(s, at(0));
 const roomy = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, maxOpenProposals: 50 }, at(0));
 const autopilot = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, enabled: true, holdLeadProposals: false, maxOpenProposals: 50 }, at(0));
 const checkin = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, enabled: true, holdLeadProposals: true, maxOpenProposals: 50 }, at(0));
@@ -68,7 +69,7 @@ describe("the roadmap hold is its own flag", () => {
     const p = promote(held);
     expect(M.stateLabel(p, task(p, a.id))).toBe("Waiting for your go-ahead");
     expect(M.stateLabel(p, task(p, b.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
-    const built = M.startBuilding(p, at(5));
+    const built = startFactoryAsOwner(p, at(5));
     expect(task(built, a.id).holdBeforeStart).toBe(true); // never overridden
     expect(task(built, b.id)).toMatchObject({ holdBeforeStart: false });
     expect(task(built, b.id).heldForShaping).toBeUndefined();
@@ -89,14 +90,14 @@ describe("the roadmap hold is its own flag", () => {
     expect(task(started, t.id).heldForShaping).toBeUndefined();
     expect(started.events.at(-1)!.message).toMatch(/once you start building/);
     expect(running(promote(started, 6), t.id)).toHaveLength(0); // the stage still holds it
-    const built = M.startBuilding(started, at(7));
+    const built = startFactoryAsOwner(started, at(7));
     expect(task(built, t.id).holdBeforeStart).toBe(false); // the user's release stands, whatever the involvement setting
     expect(running(promote(built, 8), t.id)).toHaveLength(1);
     // Untouched roadmap tasks under check-in or manual wait for the user after Start building, as before.
     const { state: m } = leadReply(shaping(roomy(seed())), { proposals: [proposal()] });
     const [mt] = M.roadmapTasks(m);
     expect(mt).toMatchObject({ heldForShaping: true, holdBeforeStart: true });
-    const mb = M.startBuilding(m, at(5));
+    const mb = startFactoryAsOwner(m, at(5));
     expect(task(mb, mt.id)).toMatchObject({ holdBeforeStart: true });
     expect(task(mb, mt.id).heldForShaping).toBeUndefined();
     expect(mb.events.some((e) => e.taskId === mt.id && /waits for your go-ahead/.test(e.message))).toBe(true);
@@ -188,13 +189,13 @@ describe("no empty vision while building", () => {
     expect(empty.project.stage).toBe("shaping");
     expect(empty.project.shapingSince).toBe(at(0));
     expect(M.currentVision(empty).text).toBe("");
-    expect(M.startBuildingBlocker(empty)).toBe("Write or accept a vision first.");
+    expect(M.startFactoryBlocker(empty)).toBe("Write or accept a vision first.");
     expect(seed().project.stage).toBe("building"); // the sample keeps working as before
     expect(() => M.editVision(seed(), 1, "   ", "f", "clear", at(1))).toThrow("The vision cannot be empty while building. Go back to shaping to clear it.");
     expect(M.currentVision(seed()).rev).toBe(1);
     const cleared = M.editVision(shaping(seed()), 1, "", "", "clear", at(1));
     expect(M.currentVision(cleared)).toMatchObject({ rev: 2, text: "" });
-    expect(() => M.startBuilding(cleared, at(2))).toThrow(/Write or accept a vision first/);
+    expect(() => startFactoryAsOwner(cleared, at(2))).toThrow(/Write or accept a vision first/);
     // A real edit while building is unaffected.
     expect(M.currentVision(M.editVision(seed(), 1, "New", "f", "why", at(1))).text).toBe("New");
   });
@@ -213,8 +214,8 @@ describe("coverage", () => {
     expect(M.coverageOf(empty.state)).toEqual(M.coverageOf(first.state));
     expect(M.openAreas(empty.state)).toEqual(M.openAreas(first.state));
     // An earlier session's coverage is not reused once the user starts building and comes back to shaping.
-    const built = M.startBuilding(M.editVision(empty.state, 1, "Vision", "f", "w", at(9)), at(10));
-    const again = M.startShaping(built, at(11));
+    const built = startFactoryAsOwner(M.editVision(empty.state, 1, "Vision", "f", "w", at(9)), at(10));
+    const again = M.startVision(built, at(11));
     expect(again.project.shapingSince).toBe(at(11));
     expect(M.coverageOf(again)).toBeUndefined();
     expect(M.openAreas(again)).toEqual(SHAPING_AREAS);

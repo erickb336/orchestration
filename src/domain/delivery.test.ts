@@ -55,7 +55,7 @@ function securityClean(s: State, id: string, t: number): State {
 describe("data model", () => {
   it("a new project is format 14 with pull-request delivery off and nothing observed", () => {
     for (const s of [seed(), buildEmptyProject(T0)]) {
-      expect(s.version).toBe(18);
+      expect(s.version).toBe(19);
       expect(s.project.prDelivery).toEqual(DEFAULT_PR_DELIVERY);
       expect(s.project.prDelivery).toMatchObject({ enabled: false, merge: "hold" });
       expect(s.project.github).toBeUndefined();

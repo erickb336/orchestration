@@ -6,7 +6,7 @@ import { useState } from "react";
 import * as D from "../../domain/delivery";
 import * as F from "../../domain/findings";
 import * as M from "../../domain/model";
-import { STEERING_MODES, type Autonomy, type SteeringMode } from "../../domain/types";
+import { STEERING_MODES, type Autonomy, type Project, type SteeringMode } from "../../domain/types";
 import { Banner, Checkbox, Chip, Disclosure, Field, Input, Select } from "../kit";
 import { PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, fmtTime, involvementOf, relTime, usePref, type Involvement } from "../common";
 import { disableNotifications, enableNotifications, notificationsSupported } from "../notifications";
@@ -30,7 +30,7 @@ type WorkingStyleDraft = {
   /** The branch Autopilot delivers to when delivery is off (it turns local delivery on). */
   branch: string;
   steering: SteeringMode;
-  triage: "lead" | "user";
+  triage: Project["triage"]["askUserBy"];
   notify: boolean;
 };
 
@@ -75,7 +75,8 @@ export function WorkingStyleSection({ current, onDirty }: { current: boolean; on
 
   /** The numbers each mode would set: Autopilot its own (unless it is already on), the others today's. */
   const numbersFor = (m: Mode) => (m === "autopilot" && liveMode !== "autopilot" ? presetNumbers : liveNumbers);
-  const choose = (m: Exclude<Mode, "custom">) => draft.set({ mode: m, ...numbersFor(m), triage: m === "autopilot" && liveMode !== "autopilot" ? "lead" : liveTriage });
+  // Autopilot sends findings to the PE (within budget); moving to Check-in or Manual brings them back to you.
+  const choose = (m: Exclude<Mode, "custom">) => draft.set({ mode: m, ...numbersFor(m), triage: m === liveMode ? liveTriage : m === "autopilot" ? "pe" : "user" });
 
   // What each mode's description says: the chosen one with the fields' numbers, the others with what choosing them sets.
   const hours = v.hoursOn ? { start: v.start, end: v.end } : null;
@@ -121,11 +122,11 @@ export function WorkingStyleSection({ current, onDirty }: { current: boolean; on
     };
     const toAutopilot = v.mode === "autopilot" && liveMode !== "autopilot";
     const autonomyChanged = ["mode", "interval", "perCycle", "maxOpen", "retries", "hoursOn", "start", "end"].some((k) => draft.changed.has(k as keyof WorkingStyleDraft));
-    // Autopilot is its own command (it also sends findings to the lead and may turn on local delivery); Fine-tune changes after it.
+    // Autopilot is its own command (it also sends findings to the PE and may turn on local delivery); Fine-tune changes after it.
     const tunedAfterAutopilot =
       toAutopilot &&
       (Number(v.interval) !== AUTOPILOT_NUMBERS.interval || Number(v.perCycle) !== AUTOPILOT_NUMBERS.perCycle || Number(v.maxOpen) !== AUTOPILOT_NUMBERS.maxOpen || Number(v.retries) !== AUTOPILOT_NUMBERS.retries || JSON.stringify(planning.operatingHours) !== JSON.stringify(a.operatingHours));
-    const triageAfter = toAutopilot ? "lead" : liveTriage;
+    const triageAfter = toAutopilot ? "pe" : liveTriage;
     // setAutonomy keeps the delivery mode when autoDeliver is left out.
     const ok = await sendInOrder([
       () => (toAutopilot ? send("applyAutopilot", { branch: needsBranch ? v.branch.trim() : a.autoDeliver.branch }) : null),
@@ -140,7 +141,7 @@ export function WorkingStyleSection({ current, onDirty }: { current: boolean; on
   const openProposals = M.openLeadProposals(state).length;
   const deferredProposals = M.deferredLeadRoots(state).length;
   const lastPlanning = state.project.lastPlanningAt;
-  const openDecisions = F.openDecisions(state, "lead").length + F.openDecisions(state, "user").length;
+  const openDecisions = F.openDecisions(state).length;
 
   return (
     <SettingsSection id="working-style" title="Working style" help="How involved you are and what the lead may do on its own. Changes here wait for Save." current={current} draft={draft} invalid={invalid} onSave={save} onDirty={onDirty}>
@@ -226,13 +227,14 @@ export function WorkingStyleSection({ current, onDirty }: { current: boolean; on
           className="s-gap"
           label="Findings that need a decision go to"
           width="medium"
-          hint={`A reviewer asks for a decision when the smallest fix would widen the task. Autopilot sends them to the lead.${openDecisions === 1 ? " The one open now stays where it is." : openDecisions ? ` The ${openDecisions} open now stay where they are.` : ""}`}
+          hint={`A reviewer asks for a decision when the smallest fix would widen the task. Autopilot sends them to the PE, which decides within your budgets; a call that would pass a budget comes to you. Check-in and Manual send them to you.${openDecisions === 1 ? " The one open now stays where it is." : openDecisions ? ` The ${openDecisions} open now stay where they are.` : ""}`}
         >
           <Select
             value={v.triage}
-            onChange={(e) => draft.set({ triage: e.target.value as "lead" | "user" })}
+            onChange={(e) => draft.set({ triage: e.target.value as WorkingStyleDraft["triage"] })}
             options={[
               { value: "lead", label: "The lead" },
+              { value: "pe", label: "The PE (for now, the lead decides for it)" },
               { value: "user", label: "Me" },
             ]}
           />

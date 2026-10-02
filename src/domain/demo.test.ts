@@ -26,7 +26,7 @@ const task = (s: State, id: string): Task => {
 
 /** Structural checks any state the service writes must pass. */
 function validate(s: State) {
-  expect(s.version).toBe(18);
+  expect(s.version).toBe(19);
   const catalog = builtInCatalog();
   const ids = new Set<string>();
   for (const t of s.tasks) {
@@ -333,7 +333,7 @@ describe("the demo state", () => {
     expect(s.decisions).toHaveLength(1);
     expect(decision).toMatchObject({ status: "open", routedTo: "user", finding: { title: "Read distances in miles or kilometres?" } });
     expect(decision!.finding.why).toMatch(/Recommendation: follow the phone's region setting/);
-    expect(F.awaitingDecision(s, vo)).toEqual({ count: 1, lead: 0, user: 1 });
+    expect(F.awaitingDecision(s, vo)).toEqual({ count: 1, lead: 0, pe: 0, user: 1 });
 
     // WT-008: merged and reviewed.
     expect(task(s, "WT-008").integration?.landed).toMatchObject({ status: "reviewed", simulated: true });

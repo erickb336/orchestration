@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import * as M from "../src/domain/model";
 import type { State, SteeringChangeSet } from "../src/domain/types";
 import { buildLeadEnvelope } from "./envelope";
@@ -77,6 +78,7 @@ beforeEach(async () => {
   scheduler = new Scheduler(store, { claude, codex }, { workspaces: new WorkspaceManager(join(dir, "worktrees")), leaseMs: 60_000, ackTimeoutMs: 10_000 });
   await scheduler.refreshHealth();
   cmd("initProject", { name: "Apps", repoPath: repo, vision: "Ship the apps.", focus: "Automate deployment" });
+  cmd("startFactory", startFactoryArgs(store.read().state));
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });
@@ -613,8 +615,8 @@ describe("R/S. restart and migration", () => {
     const s = upgraded.read().state;
     // Later features raised the format further (shaping to 12, vision documents to 13, …); a format-10 document
     // upgrades through each.
-    expect(STATE_FORMAT).toBe(18);
-    expect(s.version).toBe(18);
+    expect(STATE_FORMAT).toBe(19);
+    expect(s.version).toBe(19);
     expect(s.steering).toEqual([]);
     expect(s.project.steeringMode).toBe("apply");
     expect(s.tasks.find((t) => t.id === "EX-002")!.userSet).toEqual({ priority: "2026-09-01T00:00:00.000Z" });

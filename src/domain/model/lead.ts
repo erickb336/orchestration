@@ -3,9 +3,11 @@
 
 import { undeliveredTasks } from "../delivery";
 import * as F from "../findings";
+import { budgetStop } from "../spend";
 import {
   type Attempt,
   type Autonomy,
+  type FactorySettings,
   type LeadRun,
   type LeadTrigger,
   type Message,
@@ -125,8 +127,9 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
   // decisions no lead run has been shown yet start one: a run that left a decision open does not
   // start another by itself (every later run still lists it, and the user can take it over).
   if (F.decisionsDueForLead(s).length) return "decisions";
-  // While shaping the lead only answers messages; planning is off until the user starts building.
-  if (s.project.stage === "shaping") return null;
+  // While shaping the lead only answers messages; planning is off until the user starts building. At the
+  // building budget planning stops too: a plan is a run that spends, for work that could not start.
+  if (s.project.stage === "shaping" || budgetStop(s)) return null;
   const a = s.project.autonomy;
   if (!a.enabled || !inHours(a.operatingHours, localMinutes)) return null;
   // Deferred lead work does not count toward the open cap, but it cannot pile up without limit either.
@@ -187,13 +190,17 @@ export function reportLeadActivity(state: State, runId: string, note: string): S
   return s;
 }
 
-/** The lead run is confirmed stopped (pause, lead switch) or its process is gone. Its messages stay pending. */
-export function reportLeadStopped(state: State, runId: string, now: string, lost = false): State {
+/**
+ * The lead run is confirmed stopped (pause, lead switch) or its process is gone. Its messages stay pending. The
+ * usage the runtime reports with the stop is recorded, so the building budget counts it.
+ */
+export function reportLeadStopped(state: State, runId: string, now: string, lost = false, usage?: Attempt["usage"]): State {
   const s = draft(state);
   const r = getLeadRun(s, runId);
   if (!r || (r.outcome !== "running" && r.outcome !== "stopping")) return s;
   r.outcome = lost ? "lost" : r.outcome === "stopping" ? "stopped" : "failed";
   r.endedAt = now;
+  if (usage) r.usage = usage;
   if (r.outcome === "failed") r.note = "The lead run stopped without a stop request (for example its time limit).";
   event(s, now, "runtime", "runtime", `Lead run ${r.id} ${r.outcome}`);
   if (r.outcome === "failed" || r.outcome === "lost") {
@@ -322,6 +329,11 @@ export function setLeadSelection(state: State, selection: ModelSelection, now: s
   return s;
 }
 
+/** Who decides when work starts: Manual (the lead does not plan), Check-in (its tasks wait for your go-ahead), or Autopilot. */
+export function autonomyMode(a: Autonomy): FactorySettings["autonomy"] {
+  return !a.enabled ? "manual" : a.holdLeadProposals ? "checkin" : "autopilot";
+}
+
 /**
  * The autopilot preset: planning on, no holds, one automatic retry, automatic delivery to the given
  * branch. It never turns on publishing or automatic merging: while pull-request delivery is on, the
@@ -329,21 +341,22 @@ export function setLeadSelection(state: State, selection: ModelSelection, now: s
  */
 export function applyAutopilot(state: State, branch: string, now: string): State {
   const a = state.project.autonomy;
-  const next = setAutonomy(
-    state,
-    {
-      enabled: true,
-      planningIntervalMinutes: AUTOPILOT.planningIntervalMinutes,
-      maxProposalsPerCycle: AUTOPILOT.maxProposalsPerCycle,
-      maxOpenProposals: AUTOPILOT.maxOpenProposals,
-      holdLeadProposals: false,
-      operatingHours: a.operatingHours,
-      autoRetry: AUTOPILOT.autoRetry,
-      autoDeliver: state.project.prDelivery.enabled ? { ...a.autoDeliver, enabled: false } : { enabled: true, branch },
-    },
-    now,
-  );
-  // On Autopilot the lead decides ask-user findings, so work does not wait for a person. It
-  // never turns checks on or changes the sandbox.
-  return F.setTriageRouting(next, "lead", now);
+  const next = setAutonomy(state, autopilotAutonomy(a, state.project.prDelivery.enabled ? { ...a.autoDeliver, enabled: false } : { enabled: true, branch }), now);
+  // On Autopilot the PE decides ask-user findings within the budgets (ORC-029 2d; the lead's decision runs decide
+  // for it until it runs its own), so work does not wait for a person. It never turns checks on or changes the sandbox.
+  return F.setTriageRouting(next, "pe", now);
+}
+
+/** Autopilot's planning numbers and no holds, with the operating hours kept and the delivery given. */
+export function autopilotAutonomy(a: Autonomy, autoDeliver: Autonomy["autoDeliver"]): Autonomy {
+  return {
+    enabled: true,
+    planningIntervalMinutes: AUTOPILOT.planningIntervalMinutes,
+    maxProposalsPerCycle: AUTOPILOT.maxProposalsPerCycle,
+    maxOpenProposals: AUTOPILOT.maxOpenProposals,
+    holdLeadProposals: false,
+    operatingHours: a.operatingHours,
+    autoRetry: AUTOPILOT.autoRetry,
+    autoDeliver,
+  };
 }

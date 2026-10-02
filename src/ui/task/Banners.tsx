@@ -6,6 +6,7 @@
 import type { ReactNode } from "react";
 import * as C from "../../domain/checks";
 import * as D from "../../domain/delivery";
+import * as F from "../../domain/findings";
 import * as M from "../../domain/model";
 import type { State, Task } from "../../domain/types";
 import { relTime } from "../common";
@@ -96,7 +97,7 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
   if (lead.length)
     out.push(
       <Banner key="lead-decisions">
-        The lead is deciding {lead.length === 1 ? "a finding" : `${lead.length} findings`} on this task. You can take any of them over under Details › Outputs (Send to me).
+        {F.agentsDecidingLabel(lead)} on this task. You can take any of them over under Details › Outputs (Send to me).
       </Banner>,
     );
   const heldWriters = open ? D.writersHeld(state) : undefined;
@@ -134,7 +135,7 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
   if (task.heldForShaping && task.lifecycle !== "active")
     out.push(
       <Banner key="hfs">
-        Planned while shaping: it waits until you start building{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startBuildingPlan(state).release ? "starts on Autopilot" : "waits for your go-ahead"} (your involvement setting at the moment you start building decides). Changing "Wait for my go-ahead" under More takes it out of the roadmap's wait.{" "}
+        Planned while shaping: it waits until you start building{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startFactoryPlan(state).release ? "starts on Autopilot" : "waits for your go-ahead"} (your involvement setting at the moment you start building decides). Changing "Wait for my go-ahead" under More takes it out of the roadmap's wait.{" "}
         <a href="#/overview">Shape the vision</a>
       </Banner>,
     );

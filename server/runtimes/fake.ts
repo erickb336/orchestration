@@ -243,7 +243,16 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message" 
   const vision = trigger === "message" ? fakeVision(prompt) : undefined;
   const shaping = trigger === "message" ? fakeShaping(prompt) : undefined;
   // ORC-013: the simulated lead accepts every finding routed to it; a real lead weighs each one.
-  const decisions = decisionIds(prompt).map((id) => ({ id, decision: "accept", why: "Accepted as it is: the demo's lead accepts every finding it is asked to decide, without weighing it." }));
+  // ORC-029 2d: the decisions it takes as the PE state their cost; accepting adds none.
+  const decisions = [
+    ...decisionIds(prompt).map((id) => ({ id, decision: "accept", why: "Accepted as it is: the demo's lead accepts every finding it is asked to decide, without weighing it." })),
+    ...decisionIds(prompt, "Decisions you make as the PE").map((id) => ({
+      id,
+      decision: "accept",
+      why: "Accepted as it is: the demo's lead, deciding as the PE, accepts every finding without weighing it.",
+      cost: { buildUsd: [0, 0], maintenanceUsdPerMonth: [0, 0], basis: "Accepting changes nothing, so nothing is built or run (simulated)" },
+    })),
+  ];
   const newest = newestMessageLine(prompt);
   const question = trigger === "message" && !vision && !steer && board && newest ? statusQuestion(board, newest.text, newest.fromTaskId) : undefined;
   const notes = (steer?.notes ?? []) as { task: string }[];
@@ -272,9 +281,9 @@ function jitter(id: string) {
   return Math.abs(h % 7);
 }
 
-/** ORC-013: the decisions the envelope lists as waiting for the lead ("- fd-12 on T-003 …"). */
-function decisionIds(prompt: string): string[] {
-  const section = /## Decisions waiting for you[^\n]*\n([\s\S]*?)\n## /.exec(prompt)?.[1] ?? "";
+/** ORC-013: the decisions the envelope lists under a heading ("- fd-12 on T-003 …"): the lead's, or those it takes as the PE. */
+function decisionIds(prompt: string, heading = "Decisions waiting for you"): string[] {
+  const section = new RegExp(`## ${heading}[^\\n]*\\n([\\s\\S]*?)\\n## `).exec(prompt)?.[1] ?? "";
   return [...section.matchAll(/^- (fd-\d+) on /gm)].map((m) => m[1]);
 }
 

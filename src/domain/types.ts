@@ -1,5 +1,7 @@
 // Core domain types. Pure data: no UI, storage, or runtime dependencies.
 
+import type { Blueprint, BudgetEstimate, Studio } from "./studio/types";
+
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
@@ -92,11 +94,67 @@ export interface VisionDoc {
 // ---------- shaping the vision with the lead first ----------
 
 /**
- * "shaping": the user and the lead shape the vision; no worker step runs and no planning run starts.
- * "building": everything runs as usual.
+ * "shaping" (Vision): the user and the lead shape the vision; no worker step runs and no planning run starts.
+ * Every project begins here. "building" (Factory): everything runs as usual; only the owner's `startFactory`
+ * gets here.
  */
 export type ProjectStage = "shaping" | "building";
-export const PROJECT_STAGES: ProjectStage[] = ["shaping", "building"];
+
+/** What the product is designed and shown for: the device scope, chosen in Vision. */
+export type Device = "desktop" | "mobile" | "terminal";
+export const DEVICES: Device[] = ["desktop", "mobile", "terminal"];
+
+/** How the factory runs, set by the owner when they start it (and changeable later through the usual settings). */
+export interface FactorySettings {
+  /** Autopilot: nothing waits for a person. Check-in: the lead plans, and its tasks wait for your go-ahead. Manual: the lead does not plan. */
+  autonomy: "autopilot" | "checkin" | "manual";
+  /** How finished work is delivered, and who merges it. The start applies it as given; nothing else changes it. */
+  delivery: FactoryDelivery;
+  pausePoints: {
+    /**
+     * Findings that ask for a decision: the PE decides (within budget), or you do. "lead" is the lead's route a project
+     * may already have (ORC-013): the start keeps whichever route the owner leaves in place.
+     */
+    tradeoffs: "lead" | "pe" | "user";
+    /** A blueprint change after the start: the lead updates the affected tasks, or asks you first. */
+    changeOrders: "lead" | "user";
+    /** New tasks wait for your go-ahead before they start. */
+    startEachTask: boolean;
+  };
+}
+
+/**
+ * Delivery as the factory runs it, and who merges.
+ * - off: finished work stays on the integration branch, and you merge it;
+ * - local: each finished task is fast-forwarded onto `branch` automatically;
+ * - pr: GitHub pull requests against `branch` (their base), merged by you or automatically.
+ * A combination that contradicts itself (local delivery that you merge, or automatic merging with delivery off) is
+ * refused, never adjusted.
+ */
+export interface FactoryDelivery {
+  mode: "off" | "local" | "pr";
+  /** The branch it delivers to: local delivery's branch, or the pull requests' base. None while delivery is off. */
+  branch?: string;
+  merge: "user" | "auto";
+}
+
+/** The owner's agreement that started the factory: who, when, what they agreed to, and how it runs. */
+export interface FactoryStart {
+  at: string;
+  by: "user";
+  /** The blueprint revision agreed to; 0 when nothing was approved yet. */
+  blueprintRev: number;
+  /** The vision revision agreed to: the blueprint stands on the vision, which changes on its own. */
+  visionRev: number;
+  settings: FactorySettings;
+  /** What was still open, named to the owner and confirmed: the vision's open areas, then the blueprint's open items and the unfinished probes (by id). */
+  openItems: string[];
+  /**
+   * The pre-flight's budget estimates. Nothing writes it yet: the PE's pre-flight (ORC-029 pass 6) fills it. While it is
+   * absent the project's maintenance is not yet estimated (unknown, never $0; see `maintenanceEstimate`).
+   */
+  estimate?: { buildUsd?: [number, number]; maintenanceUsdPerMonth?: [number, number]; basis: string };
+}
 
 /** The areas a vision needs to cover; the lead reports how clear each is and asks about the open ones. */
 export type ShapingArea = "intent" | "audience" | "problem" | "outcome" | "scope" | "constraints" | "risks" | "priorities" | "material";
@@ -288,14 +346,40 @@ export interface Project {
   steeringMode: SteeringMode;
   /** Shaping (talk it through with the lead; nothing runs) or building (everything runs). */
   stage: ProjectStage;
+  /** The device scope: what is designed and shown. Set in Vision; at least one. */
+  devices: Device[];
+  /** Every Start the factory, oldest first: the owner's recorded agreements. Projects building before ORC-029 have none. */
+  factoryStarts: FactoryStart[];
+  /**
+   * Who acts first on a change order (a blueprint revision while building): the lead updates the affected tasks, or
+   * it waits for you (Needs you). A pause point of the factory's settings; set by Start the factory and by
+   * `setChangeOrders`, and read when a change order is made. The other pause points live in their own settings.
+   */
+  changeOrders: "lead" | "user";
+  /**
+   * PE review of new work in the factory (ORC-029 2e): while true, the lead's proposals and breakdown items made while
+   * building, and the lead's updates for a change order, wait for the PE's agreement before they start. Absent (off)
+   * until the PE's review runs exist (pass 5), so nothing waits for a review nobody runs.
+   */
+  peReviewsNewWork?: boolean;
   /** When the current shaping session began; coverage reported before it is not reused. */
   shapingSince?: string;
   /** The project's own check commands, run by the service. Desired state; only the user's `setChecks` writes it. */
   checks: ChecksConfig;
   /** The checks sandbox as last probed. Observed; written only by the service. */
   checksHealth?: ChecksHealth;
-  /** Who decides `ask-user` findings: the lead (Autopilot's default) or the user. */
-  triage: { askUserBy: "lead" | "user" };
+  /**
+   * Who decides `ask-user` findings: the lead (Autopilot's default), the PE, or the user. Until the PE runs its
+   * own decisions (ORC-029), a decision routed to the PE goes to the lead's decision runs.
+   */
+  triage: { askUserBy: "lead" | "pe" | "user" };
+  /** The owner's budgets, in dollars; null until set. Only `setBudgets` writes them. */
+  budgets: Budgets;
+  /**
+   * The owner chose to continue past the building budget they had set (`continuePastBudget`). It lasts while
+   * the building budget stays at that amount and the project stays building.
+   */
+  budgetContinued?: { at: string; buildingUsd: number; spentUsd: number };
   /** Give every run the repository's AGENTS.md and CLAUDE.md from the trusted base as labelled project conventions. */
   conventions: { include: boolean };
   /** Last planning run start (for the planning interval). */
@@ -326,6 +410,17 @@ export interface Project {
    */
   defaultFlowId: string;
 }
+
+/**
+ * The owner's budgets. Building: the estimated agent spend to build the project, at the providers'
+ * published prices; at it, nothing new starts. Maintenance: the estimated monthly cost of running it.
+ */
+export interface Budgets {
+  buildingUsd: number | null;
+  maintenanceUsdPerMonth: number | null;
+}
+
+export const NO_BUDGETS: Budgets = { buildingUsd: null, maintenanceUsdPerMonth: null };
 
 /**
  * What a worker process sees of the user's own tool setup.
@@ -398,6 +493,8 @@ export interface SpecContent {
   validationPlan: string;
   rollback: string;
   effort: "small" | "medium" | "large";
+  /** The blueprint items this task builds (ORC-029), by id; each must be in the blueprint. A change order lists the tasks citing a changed item. */
+  blueprintRefs?: string[];
 }
 
 interface SpecRevision {
@@ -505,7 +602,7 @@ export interface CheckRunRecord {
 
 /**
  * A decision someone has to take on an `ask-user` finding (or on failing final checks). Routed to the
- * lead or the user by the project's triage setting; recorded, shown on the task, and given to later
+ * lead, the PE or the user by the project's triage setting; recorded, shown on the task, and given to later
  * repairs and reviews.
  */
 export interface FindingDecision {
@@ -517,24 +614,72 @@ export interface FindingDecision {
   key: string;
   kind: "finding" | "final-checks";
   finding: Pick<Finding, "source" | "severity" | "title" | "detail" | "file" | "line" | "why" | "checkId">;
-  routedTo: "lead" | "user";
+  /** "pe": the PE decides, within budget. Until the PE runs its own decisions (ORC-029 pass 4), the lead's decision runs decide for it with the PE's brief. */
+  routedTo: "lead" | "pe" | "user";
   /** When it was last routed to its current decider. A lead run for decisions starts only for decisions routed after the lead's last run. */
   routedAt?: string;
   /** "superseded": its task was cancelled, or a later run replaced the artifact while it was still open. */
   status: "open" | "fix" | "accept" | "follow-up" | "superseded";
   /** A lead "fix" on a spec the user wrote: recorded, not applied; the decision stays open for the user. */
   suggestion?: { decision: "fix"; why: string; leadRunId: string; at: string };
-  decidedBy?: "lead" | "user" | "carried";
+  decidedBy?: "lead" | "pe" | "user" | "carried";
   decidedAt?: string;
   /** ≤300 characters */
   why?: string;
   leadRunId?: string;
+  /** The PE's call on a decision routed to it (ORC-029 2d), kept when the owner reverses or takes it. */
+  pe?: PeCall;
   followUpTaskId?: string;
   /** The decision this one repeats (the same finding decided earlier on this task or its origin task). */
   carriedFrom?: string;
   /** Repair attempts whose envelope carried this decision; a later change applies to later repairs only. */
   usedBy: string[];
   createdAt: string;
+}
+
+/**
+ * Where PE review of one piece of new work stands (ORC-029 2e): a lead proposal, a breakdown item, or the lead's
+ * updates for a change order.
+ * - pending: held from starting, "waiting for PE review"; an objection before the last round keeps it pending while
+ *   the lead revises it;
+ * - agreed: released under the usual involvement rules;
+ * - objected: the PE still objected after three rounds, so it waits for the owner (Needs you) with the objection,
+ *   until the owner overrules it (recorded), edits the work (a new review starts), or cancels it. It is never dropped.
+ * Only the service records the PE's verdicts (`recordPeReview`), and only the owner overrules.
+ */
+export interface PeReviewState {
+  status: "pending" | "agreed" | "objected";
+  /** The PE's verdicts in the current review, oldest first: one per round, at most three. `specRev` is the task spec revision it read. */
+  rounds: PeReviewRound[];
+  overruled?: { at: string; why: string };
+  /** Earlier reviews, oldest first: each closed when the owner edited the work the PE objected to (`specRev`, the edit), which started this one. */
+  earlier?: { rounds: PeReviewRound[]; closedAt: string; specRev: number }[];
+}
+
+export interface PeReviewRound {
+  at: string;
+  verdict: "agree" | "object";
+  reasons: string;
+  specRev?: number;
+}
+
+/**
+ * The PE's call on one decision: what it chose, why, and its budget effect as it stated it (what the call adds to the
+ * building spend and to the monthly maintenance, as dollar ranges with their basis). The PE does not run its own
+ * decisions yet (ORC-029 pass 4): `by: "lead-run"` says a lead decision run made the call with the PE's brief, and
+ * `leadRunId` names it. `pastBudget` says why the call went to the owner instead of applying: it would have taken the
+ * building spend (with the calls that stand but have not run) or the maintenance estimate past a budget, it stated no
+ * figure for a budget that is set, or what it adds cannot be checked: a run has no recorded cost, or the maintenance is
+ * not yet estimated.
+ */
+export interface PeCall {
+  decision: "fix" | "accept" | "follow-up";
+  why: string;
+  cost?: BudgetEstimate;
+  by: "lead-run";
+  leadRunId: string;
+  at: string;
+  pastBudget?: string;
 }
 
 /** One command the service runs as a check. Never a shell string: argv only. */
@@ -864,7 +1009,8 @@ export interface Attempt {
   actualModel?: string;
   /** Latest meaningful milestone reported by the runtime. */
   activity?: string;
-  usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number };
+  /** `cachedInputTokens`: of `inputTokens`, those read from the provider's prompt cache (Codex reports them). */
+  usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
   /**
    * The changed-path set of the change a review run was shown, recorded by the service before
    * the run could report anything. `paths` holds at most 500; `total` is the real count.
@@ -936,6 +1082,12 @@ export interface Task {
    * setting) and by any hold change the user makes on the task.
    */
   heldForShaping?: boolean;
+  /**
+   * PE review of new work in the factory (ORC-029 2e): a lead proposal or a breakdown item waits for the PE's
+   * agreement before it starts. Set when it is created, while the project has PE review of new work on; never on a
+   * task you create, a delivery task or anything else that changes code (those keep the code and security reviews).
+   */
+  peReview?: PeReviewState;
   /** A dedicated check run of that task's pull-request change at exactly this commit. */
   checkTarget?: { taskId: string; n: number; sha: string };
   /** Repair rounds added after failing final checks (at most 2). */
@@ -981,7 +1133,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 18;
+  version: 19;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -1000,6 +1152,10 @@ export interface State {
   flows: Flow[];
   /** Notes sent to running stages (at most 2000; settled notes of finished tasks are pruned first). */
   notes: Note[];
+  /** The vision studio (ORC-029): rounds, artifacts, the owner's feedback, the PE's verdicts and probes. */
+  studio: Studio;
+  /** What the factory builds from, versioned, and the change orders after the start (ORC-029). */
+  blueprint: Blueprint;
 }
 
 /** One entry in the lead conversation. */

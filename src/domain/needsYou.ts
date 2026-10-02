@@ -5,6 +5,10 @@
 import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
+import { lastObjection, PE_REVIEW_HOLD, peReviewHold } from "./peReview";
+import { budgetStop, buildingSpend, fmtUsd, type Spend, type UnknownCost } from "./spend";
+import { blueprintItems, openChangeOrders } from "./studio/blueprint";
+import type { ChangeOrder } from "./studio/types";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task } from "./types";
 
 export interface NeedsYou {
@@ -35,6 +39,10 @@ export function needsYouOf(state: State, task: Task, nowMs = Date.now()): NeedsY
   if (task.steps.some((st) => st.role === "checks" && st.state === "blocked" && st.blockedReason?.startsWith("Checks failed"))) return { what: "decide on failing checks", action: "Decide", href };
   if (F.openDecisions(state, "user").some((d) => d.taskId === task.id)) return { what: "decide a finding", action: "Decide", href };
   if (open && task.hold && task.holdReason) return { what: "review the step", action: "Open", href };
+  // PE review comes before your go-ahead: an objection after three rounds is yours; pending work is the PE's.
+  const review = open ? peReviewHold(task.peReview) : undefined;
+  if (review && review !== PE_REVIEW_HOLD) return { what: PE_OBJECTION, action: "Open", href };
+  if (review) return undefined;
   if (open && task.holdBeforeStart && task.lifecycle !== "active" && !task.heldForShaping && !task.hold && !M.deferredBy(state, task)) {
     return { what: M.currentSpec(task).content.options.length > 1 ? "choose an option" : "give the go-ahead", action: "Open", href };
   }
@@ -43,6 +51,9 @@ export function needsYouOf(state: State, task: Task, nowMs = Date.now()): NeedsY
 
 /** The "what" of a pull request that stopped on a problem; Home shows the problem's message under it. */
 export const PR_PROBLEM = "decide on the pull request";
+
+/** The "what" of new work the PE still objects to after three rounds; Home shows the objection under it. */
+export const PE_OBJECTION = "answer the PE's objection";
 
 /** One mark of the verdict line: "Code ✓", "Security ✓", "Checks ✓". */
 export interface VerdictMark {
@@ -90,6 +101,19 @@ const mergeAsked = (pr: PrDelivery) => pr.mergeRequested?.headSha === pr.headSha
 /** Everything that waits for you, in the order the Needs-you card shows it: project-wide problems first, then tasks by priority. */
 export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[] {
   const items: NeedsYouEntry[] = [];
+  const stop = budgetStop(state);
+  if (stop) items.push({ kind: "open", key: "budget", what: `The building budget is reached: ${fmtUsd(stop.spend.usd)} of ${fmtUsd(stop.budgetUsd)}`, detail: budgetDetail(stop.spend), action: "Settings", href: "#/settings/project" });
+  // Apart from the stop: while a building budget is set, a run it cannot count is the owner's to know about.
+  const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
+  if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project" });
+  // You asked to see change orders before the lead updates tasks. The Tasks page lists the affected tasks until the blueprint has its own page (ORC-029 pass 6).
+  for (const co of openChangeOrders(state, "user")) items.push({ kind: "open", key: `change-order-${co.rev}`, what: `Change order: blueprint r${co.rev}`, detail: changeOrderDetail(state, co), action: "Open", href: "#/tasks" });
+  // The PE still objects to the lead's updates for a change order after three rounds (2e).
+  for (const co of openChangeOrders(state)) {
+    const hold = peReviewHold(co.peReview);
+    if (!co.peReview || !hold || hold === PE_REVIEW_HOLD) continue;
+    items.push({ kind: "open", key: `change-order-pe-${co.rev}`, what: `The PE objects to the updates for change order r${co.rev}`, detail: lastObjection(co.peReview), action: "Open", href: "#/tasks" });
+  }
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
     items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings/project/delivery" });
@@ -101,7 +125,7 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
     const n = needsYouOf(state, task, nowMs);
     if (!n) continue;
     const pr = task.integration?.pr;
-    const open = (): NeedsYouEntry => ({ kind: "open", key: task.id, task, what: n.what, detail: n.what === PR_PROBLEM ? pr?.attention?.message : undefined, action: n.action, href: n.href });
+    const open = (): NeedsYouEntry => ({ kind: "open", key: task.id, task, what: n.what, detail: n.what === PR_PROBLEM ? pr?.attention?.message : n.what === PE_OBJECTION && task.peReview ? lastObjection(task.peReview) : undefined, action: n.action, href: n.href });
     if (n.what === "merge PR" && pr && mergeAsked(pr)) continue;
     if (n.what === "merge PR" && pr && mergeInPlace(state, task, pr, nowMs)) {
       items.push({ kind: "merge", key: task.id, task, pr, verdict: mergeVerdict(state, task, nowMs), simulated: !!pr.simulated });
@@ -119,6 +143,41 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
     } else items.push(open());
   }
   return items;
+}
+
+/** What changed and what it touches: "You changed Invite sheet. It touches WT-6 and WT-7; the lead updates them after you look." */
+function changeOrderDetail(state: State, co: ChangeOrder): string {
+  const titles = blueprintItems(state).filter((i) => co.changedItems.includes(i.id)).map((i) => `${i.title} (v${i.version}${i.status === "open" ? ", open" : ""})`);
+  const touches = co.affectedTasks.length ? `It touches ${co.affectedTasks.join(", ")}.` : "No task cites what changed.";
+  return `You changed the blueprint: ${titles.join(", ")}. ${touches} You asked to look before the lead updates tasks.`;
+}
+
+/** What the budget stop means, and how many runs are not in the total (their own item names them). */
+function budgetDetail(spend: Spend): string {
+  const n = spend.unknown.length;
+  const unknown = n ? ` ${n} run${n === 1 ? "" : "s"} with no recorded cost ${n === 1 ? "is" : "are"} not in the total.` : "";
+  return `Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.${unknown}`;
+}
+
+/** "a", "a and b", "a, b and c". */
+const listed = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
+
+/** "3 runs have no recorded cost (model gpt-x has no price; no usage was recorded for 1), so the building budget cannot count them". */
+function unknownCostLine(unknown: UnknownCost[]): string {
+  const n = unknown.length;
+  const models = [...new Set(unknown.filter((u) => u.reason === "no-price").map((u) => u.model))];
+  const noUsage = unknown.filter((u) => u.reason === "no-usage").length;
+  const why = [
+    ...(models.length ? [`${models.length === 1 ? "model" : "models"} ${listed(models)} ${models.length === 1 ? "has" : "have"} no price`] : []),
+    ...(noUsage ? [noUsage === n ? "no usage was recorded" : `no usage was recorded for ${noUsage}`] : []),
+  ].join("; ");
+  return `${n} run${n === 1 ? " has" : "s have"} no recorded cost (${why}), so the building budget cannot count ${n === 1 ? "it" : "them"}`;
+}
+
+/** What it means for the stop, and the runs (the first five are named). */
+function unknownCostDetail(unknown: UnknownCost[]): string {
+  const named = unknown.slice(0, 5).map((u) => `${u.runId} (${u.provider} · ${u.model}, ${u.reason === "no-price" ? "no price" : "no usage recorded"})`);
+  return `The budget's stop counts only runs with a recorded cost, so it can come late. Not counted: ${named.join(", ")}${unknown.length > 5 ? ` and ${unknown.length - 5} more` : ""}.`;
 }
 
 /** The two options as one line: "A, Guest link · B, One-time code". */

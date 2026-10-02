@@ -7,15 +7,21 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import { buildDemo } from "./demo";
 import * as M from "./model";
+import * as P from "./peReview";
+import type { PeReviewTarget } from "./peReview";
+import * as B from "./studio/blueprint";
+import * as S from "./studio/studio";
+import { type Mark, type StudioMaker, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, VERDICTS } from "./studio/types";
 import {
   ControlError,
-  PROJECT_STAGES,
+  DEVICES,
   PROVIDERS,
   ROLES,
   STEERING_MODES,
+  type Device,
+  type FactorySettings,
   type ModelSelection,
   type PrDeliveryConfig,
-  type ProjectStage,
   type ProviderId,
   type RoleId,
   type SpecContent,
@@ -47,6 +53,9 @@ function num(a: Args, k: string): number {
   if (typeof a[k] !== "number" || !Number.isFinite(a[k])) throw new InvalidCommandError(`${k} must be a number`);
   return a[k] as number;
 }
+function numOrNull(a: Args, k: string): number | null {
+  return a[k] === null ? null : num(a, k);
+}
 function bool(a: Args, k: string): boolean {
   if (typeof a[k] !== "boolean") throw new InvalidCommandError(`${k} must be a boolean`);
   return a[k] as boolean;
@@ -72,6 +81,29 @@ function array<T>(v: unknown, what: string): T[] {
   return v as T[];
 }
 
+function strings(v: unknown, what: string): string[] {
+  const xs = array<unknown>(v, what);
+  if (!xs.every((x) => typeof x === "string")) throw new InvalidCommandError(`${what} must be a list of strings`);
+  return xs as string[];
+}
+function oneOf<T extends string>(o: Args, k: string, options: readonly T[]): T {
+  const v = str(o, k);
+  if (!options.includes(v as T)) throw new InvalidCommandError(`${k} must be ${options.join(", ")}`);
+  return v as T;
+}
+/** The factory's settings as the owner chose them. */
+function factorySettings(v: unknown): FactorySettings {
+  const o = obj(v, "settings");
+  const p = obj(o.pausePoints, "settings.pausePoints");
+  const d = obj(o.delivery, "settings.delivery");
+  return {
+    autonomy: oneOf(o, "autonomy", ["autopilot", "checkin", "manual"] as const),
+    // Whether the combination holds together is the domain's to say (startFactory refuses one that contradicts itself).
+    delivery: { mode: oneOf(d, "mode", ["off", "local", "pr"] as const), ...(d.branch === undefined ? {} : { branch: str(d, "branch") }), merge: oneOf(d, "merge", ["user", "auto"] as const) },
+    pausePoints: { tradeoffs: oneOf(p, "tradeoffs", ["lead", "pe", "user"] as const), changeOrders: oneOf(p, "changeOrders", ["lead", "user"] as const), startEachTask: bool(p, "startEachTask") },
+  };
+}
+
 // Structured payloads (spec content) are shape-checked here and semantically validated by the domain
 // operation that receives them. A client never sends the structure of a pipeline: a task's steps come
 // from the flow it names, and the server alone writes the flows, from the built-in files, at start.
@@ -79,8 +111,63 @@ function specContent(v: unknown): SpecContent {
   const c = obj(v, "content");
   for (const k of ["title", "area", "outcome", "benefit", "selectedOptionId", "recommendedOptionId", "overrideReason"]) str(c, k);
   array(c.options, "content.options");
+  if (c.blueprintRefs !== undefined) strings(c.blueprintRefs, "content.blueprintRefs");
   return c as unknown as SpecContent;
 }
+
+// ---- the studio (ORC-029): shapes here, the rules in src/domain/studio ----
+
+const optStr = (a: Args, k: string): string | undefined => (a[k] === undefined ? undefined : str(a, k));
+function int(a: Args, k: string): number {
+  const n = num(a, k);
+  if (!Number.isInteger(n) || n < 0) throw new InvalidCommandError(`${k} must be a whole number`);
+  return n;
+}
+function range(v: unknown, what: string): [number, number] | undefined {
+  if (v === undefined) return undefined;
+  const r = array<unknown>(v, what);
+  if (r.length !== 2 || !r.every((x) => typeof x === "number")) throw new InvalidCommandError(`${what} must be [low, high] in dollars`);
+  return r as [number, number];
+}
+function studioMaker(v: unknown): StudioMaker {
+  const o = obj(v, "madeBy");
+  if (o.role === "user") return { role: "user" };
+  return { role: oneOf(o, "role", STUDIO_AGENT_ROLES), provider: provider(o.provider), model: str(o, "model"), attemptId: str(o, "attemptId") };
+}
+function feedbackEntry(v: unknown): S.FeedbackInput {
+  const e = obj(v, "entry");
+  if (e.mark !== null && !["keep", "change", "drop"].includes(e.mark as string)) throw new InvalidCommandError("mark must be keep, change, drop or null");
+  const pins = array<unknown>(e.pins, "pins").map((x) => {
+    const p = obj(x, "pin");
+    return { x: num(p, "x"), y: num(p, "y"), ...(p.variant === undefined ? {} : { variant: str(p, "variant") }), text: str(p, "text") };
+  });
+  return { artifactId: str(e, "artifactId"), version: int(e, "version"), mark: e.mark as Mark | null, ...(e.pickedVariant === undefined ? {} : { pickedVariant: str(e, "pickedVariant") }), pins, note: str(e, "note") };
+}
+function verdictInput(v: unknown): S.VerdictInput {
+  const o = obj(v, "verdict");
+  const b = o.budget === undefined ? undefined : obj(o.budget, "budget");
+  return {
+    ...(o.variant === undefined ? {} : { variant: str(o, "variant") }),
+    verdict: oneOf(o, "verdict", VERDICTS),
+    reasons: str(o, "reasons"),
+    ...(o.change === undefined ? {} : { change: str(o, "change") }),
+    ...(b ? { budget: { buildUsd: range(b.buildUsd, "budget.buildUsd"), maintenanceUsdPerMonth: range(b.maintenanceUsdPerMonth, "budget.maintenanceUsdPerMonth"), basis: str(b, "basis") } } : {}),
+  };
+}
+
+/** The work a PE review verdict or an overrule is about: `taskId` (a lead proposal or a breakdown item), or `changeOrder` (a blueprint revision). */
+function peReviewTarget(a: Args): PeReviewTarget {
+  if ((a.taskId === undefined) === (a.changeOrder === undefined)) throw new InvalidCommandError("name the work: taskId, or changeOrder");
+  return a.taskId !== undefined ? { taskId: str(a, "taskId") } : { changeOrder: int(a, "changeOrder") };
+}
+
+/**
+ * Commands the service records from its agents' runs: the studio's rounds, artifacts, the PE's verdicts and probes
+ * (passes 3 and 4), and PE review of new work in the factory (pass 5). They are in the table so the service applies
+ * them like any command, but a client never sends them: the HTTP endpoint refuses them, as it refuses
+ * `stageVisionDoc`.
+ */
+export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus", "recordPeReview"]);
 
 // ---- registry ----
 
@@ -103,16 +190,104 @@ export const COMMANDS = {
   markVisited: same((s, now) => M.markVisited(s, now)),
   editVision: same((s, now, a) => M.editVision(s, num(a, "expectedRev"), str(a, "text"), str(a, "focus"), str(a, "reason"), now)),
 
-  // shaping the vision with the lead first
-  /** Needs a vision; releases the roadmap on Autopilot, otherwise it keeps waiting for you. */
-  startBuilding: same((s, now) => M.startBuilding(s, now)),
-  /** Back to shaping: nothing running is stopped; nothing new starts. */
-  startShaping: same((s, now) => M.startShaping(s, now)),
+  // shaping the vision with the lead first (Vision), and the factory
+  /**
+   * Start the factory: the owner's agreement, and the only way from shaping to building. `agreed` must be true;
+   * `blueprintRev` and `visionRev` are the revisions the owner saw (compare-and-set); `acceptOpen` names the open
+   * items they confirm.
+   * Needs a vision; applies the settings and records the start; releases the roadmap on Autopilot.
+   */
+  startFactory: same((s, now, a) => {
+    if (a.agreed !== true) throw new InvalidCommandError("agreed must be true: the factory starts only on your agreement");
+    return M.startFactory(s, { agreed: true, blueprintRev: num(a, "blueprintRev"), visionRev: num(a, "visionRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
+  }),
+  /** Back to vision: nothing running is stopped; nothing new starts. */
+  startVision: same((s, now) => M.startVision(s, now)),
+  /** The device scope: at least one of desktop, mobile and terminal. Chosen in Vision. */
+  setDevices: same((s, now, a) =>
+    M.setDevices(
+      s,
+      strings(a.devices, "devices").map((d) => {
+        if (!DEVICES.includes(d as Device)) throw new InvalidCommandError(`unknown device ${d}: choose desktop, mobile or terminal`);
+        return d as Device;
+      }),
+      now,
+    ),
+  ),
   /** Accept the lead's draft as drafted or with edits: a user-authored revision, compare-and-set on the vision. */
   acceptVisionDraft: same((s, now, a) =>
     M.acceptVisionDraft(s, str(a, "draftId"), num(a, "expectedRev"), { text: a.text === undefined ? undefined : str(a, "text"), focus: a.focus === undefined ? undefined : str(a, "focus") }, now),
   ),
   dismissVisionDraft: same((s, now, a) => M.dismissVisionDraft(s, str(a, "draftId"), now)),
+  /** Who acts first on a change order from now on: the lead, or you. */
+  setChangeOrders: same((s, now, a) => M.setChangeOrders(s, oneOf(a, "who", ["lead", "user"] as const), now)),
+
+  // the studio and the blueprint: the owner's
+  /** Your answer to a round: one entry per artifact version (mark, pick, pins, note), sent together. */
+  sendFeedback: same((s, now, a) => S.sendFeedback(s, array<unknown>(a.entries, "entries").map(feedbackEntry), now)),
+  /** Overrule one of the PE's objections, with your reason (recorded). */
+  overruleObjection: same((s, now, a) => S.overruleObjection(s, str(a, "verdictId"), str(a, "why"), now)),
+  /** Approve one artifact version (the one you saw) into the blueprint, with a variant when it has several. Never the lead's. */
+  approveArtifact: same((s, now, a) => B.approveArtifact(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), ...(a.variant === undefined ? {} : { variant: str(a, "variant") }) }, now)),
+  /** Approve a whole round into the blueprint; what cannot be approved as it stands is listed as open. Never the lead's. */
+  approveRound: same((s, now, a) => B.approveRound(s, int(a, "round"), now)),
+
+  // the studio: the service's (SERVICE_COMMANDS), from the lead's, the designer's, the PE's and the probes' runs
+  /** Returns { n }. */
+  openRound: (s, now, a) => {
+    const r = S.openRound(s, { focus: oneOf(a, "focus", ROUND_FOCUSES), summary: optStr(a, "summary"), leadRunId: optStr(a, "leadRunId") }, now);
+    return { state: r.state, result: { n: r.n } };
+  },
+  closeRound: same((s, now, a) => S.closeRound(s, int(a, "round"), optStr(a, "summary"), now)),
+  /** A new artifact, or with `artifactId` a new version of one. Returns { artifactId, version }. */
+  addStudioArtifact: (s, now, a) => {
+    const r = S.addArtifact(
+      s,
+      {
+        ...(a.artifactId === undefined ? {} : { artifactId: str(a, "artifactId") }),
+        round: int(a, "round"),
+        kind: oneOf(a, "kind", STUDIO_ARTIFACT_KINDS),
+        title: str(a, "title"),
+        variants: array<unknown>(a.variants, "variants").map((x) => {
+          const v = obj(x, "variant");
+          return { id: str(v, "id"), label: str(v, "label") };
+        }),
+        files: array<unknown>(a.files, "files").map((x) => {
+          const f = obj(x, "file");
+          return { path: str(f, "path"), sha256: str(f, "sha256") };
+        }),
+        devices: strings(a.devices, "devices").map((d) => {
+          if (!DEVICES.includes(d as Device)) throw new InvalidCommandError(`unknown device ${d}`);
+          return d as Device;
+        }),
+        madeBy: studioMaker(a.madeBy),
+        ...(a.supersedes === undefined ? {} : { supersedes: str(a, "supersedes") }),
+      },
+      now,
+    );
+    return { state: r.state, result: { artifactId: r.artifactId, version: r.version } };
+  },
+  /** One PE pass on an artifact's newest version. Returns { pass }. */
+  addPeVerdicts: (s, now, a) => {
+    const r = S.addPeVerdicts(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), verdicts: array<unknown>(a.verdicts, "verdicts").map(verdictInput) }, now);
+    return { state: r.state, result: { pass: r.pass } };
+  },
+  /** Returns { probeId }. */
+  addProbe: (s, now, a) => {
+    const r = S.addProbe(s, str(a, "question"), now);
+    return { state: r.state, result: { probeId: r.probeId } };
+  },
+  setProbeStatus: same((s, now, a) =>
+    S.setProbeStatus(s, str(a, "probeId"), { status: oneOf(a, "status", ["running", "done", "failed"] as const), attemptId: optStr(a, "attemptId"), result: optStr(a, "result"), failure: optStr(a, "failure") }, now),
+  ),
+
+  // PE review of new work in the factory (ORC-029 2e)
+  /** The service's (SERVICE_COMMANDS), from the PE's review run: one verdict on pending work; on a task, with the spec revision the PE read. */
+  recordPeReview: same((s, now, a) =>
+    P.recordPeReview(s, { target: peReviewTarget(a), verdict: oneOf(a, "verdict", ["agree", "object"] as const), reasons: str(a, "reasons"), ...(a.specRev === undefined ? {} : { specRev: int(a, "specRev") }) }, now),
+  ),
+  /** The owner's: overrule the PE's objection after three rounds, with your reason (recorded). */
+  overrulePeReview: same((s, now, a) => P.overrulePeReview(s, peReviewTarget(a), str(a, "why"), now)),
 
   // vision documents
   /** Record one uploaded file without a revision (sent by POST /api/vision-docs, never by the UI directly). Returns { docId, status, replaces? }. */
@@ -187,10 +362,10 @@ export const COMMANDS = {
     if (!F.DECISION_OPTIONS.includes(decision as F.UserDecision)) throw new InvalidCommandError("decision must be fix, accept, follow-up, or reopen");
     return F.decideFinding(s, str(a, "decisionId"), decision as F.UserDecision, a.note === undefined ? undefined : str(a, "note"), now);
   }),
-  /** Who decides ask-user findings from now on: the lead or you. Open decisions stay where they are. */
+  /** Who decides ask-user findings from now on: the lead, the PE or you. Open decisions stay where they are. */
   setTriageRouting: same((s, now, a) => {
     const to = str(a, "askUserBy");
-    if (to !== "lead" && to !== "user") throw new InvalidCommandError("askUserBy must be lead or user");
+    if (to !== "lead" && to !== "pe" && to !== "user") throw new InvalidCommandError("askUserBy must be lead, pe or user");
     return F.setTriageRouting(s, to, now);
   }),
   /** Move one open decision to the lead or to you. */
@@ -378,16 +553,14 @@ export const COMMANDS = {
     return M.setWorkerEnvironment(s, provider(a.provider), env, now);
   }),
   setRunLimits: same((s, now, a) => M.setRunLimits(s, { maxTurns: num(a, "maxTurns"), timeoutMinutes: num(a, "timeoutMinutes"), maxBudgetUsd: num(a, "maxBudgetUsd") }, now)),
-  /** `stage` chooses shaping (the vision may be empty) or building (the default; the vision is required). */
-  initProject: same((s, now, a) => {
-    let stage: ProjectStage | undefined;
-    if (a.stage !== undefined) {
-      const v = str(a, "stage");
-      if (!PROJECT_STAGES.includes(v as ProjectStage)) throw new InvalidCommandError("stage must be shaping or building");
-      stage = v as ProjectStage;
-    }
-    return M.initProject(s, { name: str(a, "name"), repoPath: str(a, "repoPath"), vision: str(a, "vision"), focus: str(a, "focus"), ...(stage ? { stage } : {}) }, now);
-  }),
+
+  // the owner's budgets
+  /** Both budgets in dollars, each a positive number or null (not set). */
+  setBudgets: same((s, now, a) => M.setBudgets(s, { buildingUsd: numOrNull(a, "buildingUsd"), maintenanceUsdPerMonth: numOrNull(a, "maintenanceUsdPerMonth") }, now)),
+  /** At the building budget: new work starts again without raising it, until the budget changes or the project goes back to vision. */
+  continuePastBudget: same((s, now) => M.continuePastBudget(s, now)),
+  /** A new project, shaping its vision (which may be empty) until you start the factory. */
+  initProject: same((s, now, a) => M.initProject(s, { name: str(a, "name"), repoPath: str(a, "repoPath"), vision: str(a, "vision"), focus: str(a, "focus") }, now)),
   /** Create a user-authored task from one of the six flows (`flowId`). Any `steps` sent are ignored. Returns { newId }. */
   createTask: (s, now, a) => {
     const r = M.createTask(

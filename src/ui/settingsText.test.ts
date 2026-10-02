@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { AUTOPILOT } from "../domain/types";
-import { AUTOPILOT_NUMBERS, CONFIRM_CHECKS_ON, CONFIRM_NO_SANDBOX, checksSummary, confirmAutoMerge, confirmNewProject, confirmResumeAutoMerge, involvementText, proposalsLine } from "./settingsText";
+import { AUTOPILOT_NUMBERS, CONFIRM_CHECKS_ON, CONFIRM_NO_SANDBOX, checksSummary, confirmAutoMerge, confirmNewProject, confirmResumeAutoMerge, factorySettingsText, involvementText, proposalsLine } from "./settingsText";
 import { resumeAutoMergeText } from "./common";
 import { initProjectConfirm } from "./stageChoice";
 
@@ -52,6 +52,22 @@ describe("involvementText (each mode with the numbers it sets)", () => {
 
   it("Manual plans nothing, so it carries no numbers", () => {
     expect(involvementText("manual", nums(60, 3, 5, 0), pr)).toBe("The lead works only when you message it. Tasks you create still run; nothing new is planned.");
+  });
+});
+
+describe("factorySettingsText (what Start building records with your agreement)", () => {
+  const points = { changeOrders: "lead", startEachTask: false } as const;
+  it("names the mode, the delivery with who merges, and who decides findings", () => {
+    expect(factorySettingsText({ autonomy: "manual", delivery: { mode: "off", merge: "user" }, pausePoints: { ...points, tradeoffs: "user" } })).toBe(
+      "The factory starts on Manual; delivery off: finished work stays on the integration branch for you to merge; findings that need a decision come to you.",
+    );
+    expect(factorySettingsText({ autonomy: "autopilot", delivery: { mode: "pr", branch: "main", merge: "auto" }, pausePoints: { ...points, tradeoffs: "pe" } })).toBe(
+      "The factory starts on Autopilot; pull requests against main, merged automatically after an independent review and passing checks; the PE decides findings that need a decision, within budget (the lead's runs decide for it until the PE runs its own).",
+    );
+    expect(factorySettingsText({ autonomy: "checkin", delivery: { mode: "pr", branch: "develop", merge: "user" }, pausePoints: { ...points, tradeoffs: "lead", startEachTask: true } })).toBe(
+      "The factory starts on Check-in; pull requests against develop, which you merge; the lead decides findings that need a decision.",
+    );
+    expect(factorySettingsText({ autonomy: "autopilot", delivery: { mode: "local", branch: "release", merge: "auto" }, pausePoints: { ...points, tradeoffs: "user" } })).toMatch(/; finished work goes to release by itself, fast-forward only;/);
   });
 });
 

@@ -34,8 +34,11 @@ export function reportProgress(state: State, attemptId: string, progress: number
   return s;
 }
 
-/** The runtime acknowledges that a run it was asked to stop has stopped. */
-export function acknowledgeStop(state: State, attemptId: string, now: string): State {
+/**
+ * The runtime acknowledges that a run it was asked to stop has stopped. The usage it reports with the stop is
+ * recorded: a paused, revised or cancelled run spent it, and the building budget counts it.
+ */
+export function acknowledgeStop(state: State, attemptId: string, now: string, run: RunReport = {}): State {
   const s = draft(state);
   const a = s.attempts.find((x) => x.id === attemptId);
   if (!a || a.outcome !== "stopping") return s;
@@ -43,6 +46,7 @@ export function acknowledgeStop(state: State, attemptId: string, now: string): S
   const st = findStep(t, a.stepId);
   a.outcome = "stopped";
   a.endedAt = now;
+  if (run.usage) a.usage = run.usage;
   a.artifacts.push(`checkpoint: partial work left in ${a.snapshot.workspace}`);
   // A run from before the flow changed settles alone; its step belongs to the new flow.
   const earlier = beforeFlow(t, a);

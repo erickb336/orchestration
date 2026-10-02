@@ -161,7 +161,9 @@ function overview(state: State, nowMs: number): string {
 function needsYou(state: State, nowMs: number): string {
   const items = needsYouItems(state, nowMs);
   const lead = F.openDecisions(state, "lead").length;
-  const leadLine = lead ? `\nI am deciding ${plural(lead, "finding")} myself; you can take any of them over from the task page.` : "";
+  const pe = F.openDecisions(state, "pe").length;
+  const leadLine =
+    lead || pe ? `\nI am deciding ${[lead ? `${plural(lead, "finding")} myself` : "", pe ? `${plural(pe, "finding")} for the PE, with its brief` : ""].filter(Boolean).join(" and ")}; you can take any of them over from the task page.` : "";
   if (!items.length) return `Nothing needs you right now. Agents keep working within your settings.${leadLine}`;
   const lines = items.map((e) => `- ${cap(needLine(e))}${e.task ? ` (${e.task.id})` : ""}`);
   return `${items.length === 1 ? "One thing needs" : `${items.length} things need`} you:\n${lines.join("\n")}\nEach is on Home under Needs you.${leadLine}`;

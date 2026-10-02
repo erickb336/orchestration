@@ -4,11 +4,11 @@
 import * as C from "../checks";
 import { flowRef } from "../flows";
 import { instantiate, toDef, validatePipeline } from "../pipeline";
+import { emptyBlueprint, emptyStudio } from "../studio/types";
 import {
   type CatalogModel,
   type RunLimits,
   type WorkerEnvironment,
-  type ProjectStage,
   type ProviderId,
   type SpecContent,
   type State,
@@ -17,6 +17,7 @@ import {
   autoModelDefaults,
   DEFAULT_CHECKS,
   DEFAULT_PR_DELIVERY,
+  NO_BUDGETS,
 } from "../types";
 import { activeAttempts, draft, event } from "./core";
 import { activeLeadRun } from "./lead";
@@ -74,16 +75,13 @@ export function setCatalog(state: State, provider: ProviderId, models: CatalogMo
 }
 
 /**
- * Start a real project: empty board, the given repository and vision. Refused while any run is
- * active, so no live work is orphaned by the replacement. `stage` defaults to building (the
- * vision is then required); a project that starts by shaping may leave the vision empty.
+ * Start a real project: empty board, the given repository and vision (which may be empty). Refused while any
+ * run is active, so no live work is orphaned by the replacement. Every project begins shaping (Vision); only
+ * the owner's Start the factory moves it to building.
  */
-export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string; stage?: ProjectStage }, now: string): State {
+export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string }, now: string): State {
   if (activeAttempts(state).length || activeLeadRun(state)) throw new ControlError("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
-  const stage: ProjectStage = init.stage ?? "building";
-  if (stage !== "shaping" && stage !== "building") throw new ControlError("Unknown project stage.");
   if (!init.name.trim() || !init.repoPath.trim()) throw new ControlError("Name and repository path are required.");
-  if (stage === "building" && !init.vision.trim()) throw new ControlError("A vision is required to start building. Choose to shape it with the lead first, or write it now.");
   const s = draft(state);
   s.project.id = `p-${Date.parse(now).toString(36)}-${s.seq.toString(36)}`;
   s.project.sample = false;
@@ -91,12 +89,14 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.project.repoPath = init.repoPath.trim();
   // A new project starts from provider-neutral defaults, never another project's model choices.
   Object.assign(s.project, autoModelDefaults());
-  s.project.visions = [{ rev: 1, at: now, author: "user", text: init.vision.trim(), focus: init.focus.trim(), reason: stage === "shaping" ? "Project created; the vision is shaped with the lead first" : "Project created" }];
+  s.project.visions = [{ rev: 1, at: now, author: "user", text: init.vision.trim(), focus: init.focus.trim(), reason: "Project created; the vision is shaped with the lead first" }];
   // Documents belong to the project they were attached to; a new project starts with none.
   s.project.visionDocs = [];
-  s.project.stage = stage;
-  if (stage === "shaping") s.project.shapingSince = now;
-  else delete s.project.shapingSince;
+  s.project.stage = "shaping";
+  s.project.shapingSince = now;
+  s.project.devices = ["desktop", "mobile"];
+  s.project.factoryStarts = [];
+  s.project.changeOrders = "lead";
   s.project.hold = false;
   s.project.lastVisitAt = now;
   // Delivery to GitHub is a choice made per project and repository: a new project starts with it off
@@ -106,6 +106,9 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // Checks are off until the user turns them on for this repository, and nothing has been probed for it.
   s.project.checks = structuredClone(DEFAULT_CHECKS);
   delete s.project.checksHealth;
+  // Budgets belong to the project they were set for.
+  s.project.budgets = { ...NO_BUDGETS };
+  delete s.project.budgetContinued;
   // The catalog is machine-level and stays; the default flow is a project choice.
   s.project.defaultFlowId = "change";
   s.decisions = [];
@@ -118,8 +121,11 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // An old project's change sets must not rewrite a new project's task with the same id.
   s.steering = [];
   s.visionDrafts = [];
+  // The studio and the blueprint belong to the project too.
+  s.studio = emptyStudio();
+  s.blueprint = emptyBlueprint();
   s.project.lastPlanningAt = undefined;
-  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}${stage === "shaping" ? "; shaping the vision first" : ""}`);
+  event(s, now, "user", "vision", `Project "${s.project.name}" created for ${s.project.repoPath}; shaping the vision first`);
   return s;
 }
 

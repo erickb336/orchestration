@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
 import type { State } from "../src/domain/types";
@@ -45,7 +46,8 @@ const createTask = (title: string, priority: number, over: Record<string, unknow
 
 /** Start a project in the given stage; role defaults and the lead are set afterwards (initProject resets them). */
 function init(stage: "shaping" | "building", vision = "") {
-  cmd("initProject", { name: "Apps", repoPath: repo, vision, focus: "", stage });
+  cmd("initProject", { name: "Apps", repoPath: repo, vision, focus: "" });
+  if (stage === "building") cmd("startFactory", startFactoryArgs(state()));
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });
@@ -122,7 +124,7 @@ describe("A. shaping end to end", () => {
     expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
     expect(state().leadRuns.filter((x) => x.trigger === "planning")).toHaveLength(0);
 
-    const refused = failure(() => cmd("startBuilding"));
+    const refused = failure(() => cmd("startFactory", startFactoryArgs(state())));
     expect(refused.kind).toBe("control");
     expect(refused.message).toMatch(/Write or accept a vision first/);
     expect(state().project.stage).toBe("shaping");
@@ -133,7 +135,7 @@ describe("A. shaping end to end", () => {
     expect(M.currentVision(state())).toMatchObject({ rev: 2, author: "user", text: d.text, focus: d.focus, source: { draftId: d.id, leadRunId: r.id } });
     expect(state().visionDrafts[0]).toMatchObject({ status: "accepted", visionRev: 2 });
 
-    cmd("startBuilding");
+    cmd("startFactory", startFactoryArgs(state()));
     expect(state().project.stage).toBe("building");
     expect(task(planned.id).holdBeforeStart).toBe(false); // released: Autopilot
     tick();
@@ -153,7 +155,7 @@ describe("A. shaping end to end", () => {
     claude.reply(r.id, "Two steps.", [proposal({ title: "Step one", priority: 1 }), proposal({ title: "Step two", priority: 2 })]);
     tick();
     expect(M.roadmapTasks(state())).toHaveLength(2);
-    cmd("startBuilding");
+    cmd("startFactory", startFactoryArgs(state()));
     tick();
     for (const t of M.roadmapTasks(state())) expect(t.holdBeforeStart).toBe(true);
     expect(M.activeAttempts(state())).toHaveLength(0);
@@ -224,7 +226,7 @@ describe("C. back to shaping stops nothing", () => {
     tick();
     const [a] = M.activeAttempts(state());
     expect(a.taskId).toBe(id);
-    cmd("startShaping");
+    cmd("startVision");
     expect(state().project.stage).toBe("shaping");
     tick();
     expect(codex.interrupts).toEqual([]);
@@ -238,7 +240,7 @@ describe("C. back to shaping stops nothing", () => {
     expect(M.activeAttempts(state())).toHaveLength(0);
     expect(M.stateLabel(state(), task(id))).toBe("Next step waits (shaping)");
     expect(M.stateLabel(state(), task(id))).not.toMatch(/Paused/);
-    cmd("startBuilding");
+    cmd("startFactory", startFactoryArgs(state()));
     tick();
     expect(M.activeAttempts(state()).map((x) => x.taskId)).toEqual([id, id]); // the code review and the security review beside it
     expect(M.activeAttempts(state()).map((x) => x.stepId)).not.toContain(a.stepId);
@@ -249,7 +251,7 @@ describe("C. back to shaping stops nothing", () => {
     const id = createTask("Survives", 1);
     tick();
     const [a] = M.activeAttempts(state());
-    cmd("startShaping");
+    cmd("startVision");
     const claude2 = new ScriptedAdapter("claude");
     const codex2 = new ScriptedAdapter("codex");
     const s2 = new Scheduler(store, { claude: claude2, codex: codex2 }, { workspaces: new WorkspaceManager(join(dir, "worktrees")), leaseMs: 60_000 });
@@ -267,7 +269,7 @@ describe("C. back to shaping stops nothing", () => {
     expect(M.activeAttempts(state())).toHaveLength(0);
     expect(task(id).steps.find((x) => x.id === a.stepId)!.state).toBe("pending");
     expect(task(id).lifecycle).toBe("active");
-    store.command("startBuilding", {}, "restart-build", iso());
+    store.command("startFactory", startFactoryArgs(store.read().state), "restart-build", iso());
     now += 1000;
     s2.tick(now);
     expect(M.activeAttempts(state()).map((x) => [x.taskId, x.stepId])).toEqual([[id, a.stepId]]);
@@ -289,23 +291,23 @@ describe("D. migration and the simulated lead", () => {
     raw.close();
     const upgraded = new Store(path);
     const s = upgraded.read().state;
-    expect(STATE_FORMAT).toBe(18);
-    expect(s.version).toBe(18);
+    expect(STATE_FORMAT).toBe(19);
+    expect(s.version).toBe(19);
     expect(s.project.stage).toBe("building");
     expect(s.visionDrafts).toEqual([]);
     expect(s.tasks.every((t) => t.fromShaping === undefined)).toBe(true);
-    upgraded.command("startShaping", {}, "m1", iso());
+    upgraded.command("startVision", {}, "m1", iso());
     expect(upgraded.read().state.project.stage).toBe("shaping");
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(19);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_11_%'").get()).toBeDefined();
     check.close();
   });
 
   it("the simulated lead drafts a vision from the user's message only while shaping, labelled simulated; planning never drafts", () => {
     const base = buildSeed(now, { inFlightRuns: false });
-    const shaping = M.postMessage(M.startShaping(base, iso()), "Build a notes app that syncs offline", iso());
+    const shaping = M.postMessage(M.startVision(base, iso()), "Build a notes app that syncs offline", iso());
     const run = M.startLeadRun(shaping, { provider: "claude", model: "m", trigger: "message" }, iso());
     const prompt = buildLeadEnvelope(run.state, M.activeLeadRun(run.state)!, "read");
     const v = fakeVision(prompt)!;
@@ -368,7 +370,7 @@ describe("F. coverage and questions", () => {
     tick();
     cmd("acceptVisionDraft", { draftId: M.openVisionDraft(state())!.id, expectedRev: 1 });
     expect(M.openAreas(state())).toHaveLength(5);
-    cmd("startBuilding");
+    cmd("startFactory", startFactoryArgs(state()));
     expect(state().project.stage).toBe("building");
   });
 
@@ -388,7 +390,7 @@ describe("F. coverage and questions", () => {
 
   it("the simulated lead in shaping sends a living draft with marked assumptions, three questions with options and a coverage, all labelled simulated, from the first exchange", () => {
     const base = buildSeed(now, { inFlightRuns: false });
-    const shaping = M.postMessage(M.startShaping(base, iso()), "Build a notes app that syncs offline", iso());
+    const shaping = M.postMessage(M.startVision(base, iso()), "Build a notes app that syncs offline", iso());
     const run = M.startLeadRun(shaping, { provider: "claude", model: "m", trigger: "message" }, iso());
     const prompt = buildLeadEnvelope(run.state, M.activeLeadRun(run.state)!, "read");
     const out = parseLeadOutput(fakeLeadText(run.runId, "message", prompt));
@@ -432,9 +434,10 @@ describe("F. coverage and questions", () => {
 });
 
 describe("E. command validation", () => {
-  it("initProject rejects an unknown stage; acceptVisionDraft needs string edits; dismiss needs a known draft", () => {
-    expect(failure(() => cmd("initProject", { name: "X", repoPath: repo, vision: "", focus: "", stage: "later" })).kind).toBe("invalid");
-    expect(failure(() => cmd("initProject", { name: "X", repoPath: repo, vision: "", focus: "" })).message).toMatch(/vision is required/);
+  it("initProject has no stage to choose (a stage sent is not read); acceptVisionDraft needs string edits; dismiss needs a known draft", () => {
+    cmd("initProject", { name: "X", repoPath: repo, vision: "A written vision.", focus: "", stage: "building" });
+    expect(state().project.stage).toBe("shaping");
+    expect(state().project.factoryStarts).toEqual([]);
     init("shaping");
     const r = ask("notes should be fast");
     claude.reply(r.id, "Draft.", [], undefined, visionDraft());
@@ -446,6 +449,6 @@ describe("E. command validation", () => {
     cmd("acceptVisionDraft", { draftId: d.id, expectedRev: 1, text: "My words.", focus: "Mine" });
     expect(M.currentVision(state())).toMatchObject({ rev: 2, text: "My words.", focus: "Mine", author: "user" });
     expect(M.currentVision(state()).reason).toMatch(/with edits/);
-    expect(failure(() => cmd("startShaping")).message).toMatch(/Already shaping/);
+    expect(failure(() => cmd("startVision")).message).toMatch(/Already shaping/);
   });
 });

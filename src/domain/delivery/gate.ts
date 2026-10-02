@@ -353,8 +353,7 @@ export function refreshAttention(s: State, t: Task, now: string) {
     // Open findings that all wait for a decision are a decision, not a fix.
     const undecided = blocking?.code === "review-findings" ? onlyUndecided(s, t) : undefined;
     if (undecided) {
-      const who = undecided.to === "both" ? "you and the lead" : undecided.to === "lead" ? "the lead" : "you";
-      next = { code: "findings-decision", message: `${undecided.count} finding${undecided.count === 1 ? "" : "s"} of the review of ${sha12(pr.changeSha)} need${undecided.count === 1 ? "s" : ""} a decision (${who}). Nothing is fixed until it is taken.` };
+      next = { code: "findings-decision", message: `${undecided.count} finding${undecided.count === 1 ? "" : "s"} of the review of ${sha12(pr.changeSha)} need${undecided.count === 1 ? "s" : ""} a decision (${undecided.who}). Nothing is fixed until it is taken.` };
     }
   }
   if (next && pr.policy === "auto" && REPAIRABLE.includes(next.code)) {

@@ -56,6 +56,8 @@ export interface Assignment {
 
 export interface Usage {
   inputTokens?: number;
+  /** Of `inputTokens`, those read from the provider's prompt cache (Codex reports them). */
+  cachedInputTokens?: number;
   outputTokens?: number;
   costUsd?: number;
 }

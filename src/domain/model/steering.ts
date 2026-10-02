@@ -15,6 +15,7 @@ import {
   MAX_NOTES_PER_REPLY,
   MAX_NOTE_LENGTH,
 } from "../types";
+import { peReviewKeeps } from "../peReview";
 import { clearDeferral, deferInto, dropInto, openDependent, started, userHold, userTouched, writePriority } from "./controls";
 import { currentVision, event } from "./core";
 import { rootOf } from "./fanout";
@@ -73,6 +74,8 @@ export function steerPermission(s: State, t: Task | undefined, action: SteerActi
       break;
     case "drop":
       if (!own) verdict = { v: "suggest", why: "your task: only you cancel it" };
+      // A PE objection is never dropped, nor a review the PE has not finished: the lead may only suggest it.
+      else if (peReviewKeeps(t.peReview)) verdict = { v: "suggest", why: peReviewKeeps(t.peReview)! };
       else if (started(s, t)) verdict = { v: "suggest", why: "it has started; cancelling stops its work" };
       else if (userTouched(t)) verdict = { v: "suggest", why: "you changed this task" };
       else verdict = { v: "apply" };

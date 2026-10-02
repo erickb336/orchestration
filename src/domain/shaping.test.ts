@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
+import { startFactoryAsOwner } from "./testing/factory";
 import { setPipeline } from "./testing/pipelines";
 import { buildSeed } from "./seed";
 import { ControlError, StaleWriteError, type LeadQuestion, type LeadRun, type State } from "./types";
@@ -16,7 +17,7 @@ const seed = () => buildSeed(T0);
 const quiet = () => buildSeed(T0, { inFlightRuns: false });
 const task = (s: State, id: string) => s.tasks.find((t) => t.id === id)!;
 const running = (s: State, id?: string) => M.activeAttempts(s, id);
-const shaping = (s: State) => M.startShaping(s, at(0));
+const shaping = (s: State) => M.startVision(s, at(0));
 const vision = (s: State) => M.currentVision(s);
 const oneStep = [{ id: "S1", purpose: "Implement", role: "coder" as const, dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" as const }] }];
 
@@ -72,23 +73,22 @@ const autopilot = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, enable
 const checkin = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, enabled: true, holdLeadProposals: true, maxOpenProposals: 50 }, at(0));
 
 describe("S1 stage and initProject", () => {
-  it("the sample project builds; initProject defaults to building and then needs a vision; shaping allows an empty one", () => {
+  it("the sample project builds (a fixture); every new project begins shaping, with a vision written or empty", () => {
     expect(seed().project.stage).toBe("building");
-    expect(() => M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "  ", focus: "" }, at(1))).toThrow(/vision is required to start building/);
-    const built = M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "v", focus: "f" }, at(1));
-    expect(built.project.stage).toBe("building");
-    const shaped = M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "", stage: "shaping" }, at(1));
+    const written = M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "v", focus: "f" }, at(1));
+    expect(written.project.stage).toBe("shaping");
+    expect(written.project.factoryStarts).toEqual([]);
+    const shaped = M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(1));
     expect(shaped.project.stage).toBe("shaping");
     expect(vision(shaped)).toMatchObject({ rev: 1, author: "user", text: "", focus: "" });
     expect(shaped.visionDrafts).toEqual([]);
     expect(shaped.tasks).toEqual([]);
-    expect(() => M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "", stage: "later" as never }, at(1))).toThrow(/Unknown project stage/);
   });
 
   it("an old project's drafts do not survive a new project", () => {
     const { state: s } = leadReply(shaping(quiet()), { vision: draft() });
     expect(s.visionDrafts).toHaveLength(1);
-    expect(M.initProject(s, { name: "N", repoPath: "/tmp/n", vision: "", focus: "", stage: "shaping" }, at(9)).visionDrafts).toEqual([]);
+    expect(M.initProject(s, { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(9)).visionDrafts).toEqual([]);
   });
 });
 
@@ -99,7 +99,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     let s = M.dispatchEligible(shaping(ready), at(1));
     expect(running(s, "EX-004")).toHaveLength(0);
     expect(M.stateLabel(s, task(s, "EX-004"))).toBe("Ready (shaping)");
-    s = M.dispatchEligible(M.startBuilding(s, at(2)), at(3));
+    s = M.dispatchEligible(startFactoryAsOwner(s, at(2)), at(3));
     expect(running(s, "EX-004")).toHaveLength(1);
   });
 
@@ -117,7 +117,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     s = M.dispatchEligible(s, at(3));
     expect(running(s, "EX-001")).toHaveLength(0);
     expect(M.stateLabel(s, task(s, "EX-001"))).toBe("Next step waits (shaping)");
-    s = M.dispatchEligible(M.startBuilding(s, at(4)), at(5));
+    s = M.dispatchEligible(startFactoryAsOwner(s, at(4)), at(5));
     expect(running(s, "EX-001").length).toBeGreaterThan(0);
   });
 
@@ -140,9 +140,9 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     expect(s.project.hold).toBe(false);
   });
 
-  it("startShaping is refused while already shaping; startBuilding while already building", () => {
+  it("startVision is refused while already shaping; startFactory while already building", () => {
     expect(() => shaping(shaping(seed()))).toThrow(/Already shaping/);
-    expect(() => M.startBuilding(seed(), at(0))).toThrow(/Already building/);
+    expect(() => startFactoryAsOwner(seed(), at(0))).toThrow(/Already building/);
   });
 });
 
@@ -284,20 +284,20 @@ describe("S6 the roadmap and Start building", () => {
   });
 
   it("Start building is refused with an empty vision, and says why", () => {
-    const s = M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "", stage: "shaping" }, at(0));
-    expect(M.startBuildingBlocker(s)).toBe("Write or accept a vision first.");
-    expect(() => M.startBuilding(s, at(1))).toThrow(/Write or accept a vision first/);
+    const s = M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(0));
+    expect(M.startFactoryBlocker(s)).toBe("Write or accept a vision first.");
+    expect(() => startFactoryAsOwner(s, at(1))).toThrow(/Write or accept a vision first/);
     expect(s.project.stage).toBe("shaping");
     const { state: drafted, draft: d } = leadReply(s, { vision: draft() });
-    expect(() => M.startBuilding(drafted, at(2))).toThrow(/vision first/); // a draft is not a vision
+    expect(() => startFactoryAsOwner(drafted, at(2))).toThrow(/vision first/); // a draft is not a vision
     const accepted = M.acceptVisionDraft(drafted, d!.id, 1, undefined, at(3));
-    expect(M.startBuildingBlocker(accepted)).toBeUndefined();
-    expect(M.startBuilding(accepted, at(4)).project.stage).toBe("building");
+    expect(M.startFactoryBlocker(accepted)).toBeUndefined();
+    expect(startFactoryAsOwner(accepted, at(4)).project.stage).toBe("building");
   });
 
   it("Start building releases the roadmap on Autopilot only; with check-in or manual it keeps waiting", () => {
     const plan = (s: State) => leadReply(s, { proposals: [proposal({ title: "Roadmap A", priority: 1 }), proposal({ title: "Roadmap B", priority: 2 })] }).state;
-    const onAuto = M.startBuilding(plan(shaping(autopilot(seed()))), at(5));
+    const onAuto = startFactoryAsOwner(plan(shaping(autopilot(seed()))), at(5));
     for (const t of onAuto.tasks.filter((x) => x.fromShaping)) expect(t.holdBeforeStart).toBe(false);
     expect(M.roadmapTasks(onAuto).map((t) => M.currentSpec(t).content.title)).toEqual(["Roadmap A", "Roadmap B"]);
     // The roadmap tasks themselves are among what runs, not merely more runs than before
@@ -306,10 +306,10 @@ describe("S6 the roadmap and Start building", () => {
     const runningIds = running(M.dispatchEligible(M.leadPromoteProposals(M.setWorkerLimit(onAuto, 5, at(6)), at(6)), at(6))).map((a) => a.taskId);
     expect(runningIds).toEqual(expect.arrayContaining(roadmapIds));
     // Check-in: planning is on, but lead proposals wait for the user.
-    const onCheckin = M.startBuilding(plan(shaping(checkin(seed()))), at(5));
+    const onCheckin = startFactoryAsOwner(plan(shaping(checkin(seed()))), at(5));
     for (const t of onCheckin.tasks.filter((x) => x.fromShaping)) expect(t.holdBeforeStart).toBe(true);
     // Manual: autonomy off.
-    const manual = M.startBuilding(plan(shaping(roomy(seed()))), at(5));
+    const manual = startFactoryAsOwner(plan(shaping(roomy(seed()))), at(5));
     for (const t of manual.tasks.filter((x) => x.fromShaping)) expect(t.holdBeforeStart).toBe(true);
     expect(manual.project.stage).toBe("building");
     // Choosing Autopilot afterwards does not release what already waits; the user releases it (as today).
@@ -418,11 +418,11 @@ describe("S8 coverage and questions", () => {
   it("open areas are named but never block Start building; only the empty vision blocks", () => {
     const { state: s } = leadReply(shaping(seed()), { coverage: cov() });
     expect(M.openAreas(s)).toHaveLength(5);
-    expect(M.startBuildingBlocker(s)).toBeUndefined();
-    expect(M.startBuilding(s, at(5)).project.stage).toBe("building");
-    const empty = leadReply(M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "", stage: "shaping" }, at(0)), { coverage: cov({ outcome: "clear", constraints: "clear", risks: "clear", priorities: "clear", material: "clear" }) });
+    expect(M.startFactoryBlocker(s)).toBeUndefined();
+    expect(startFactoryAsOwner(s, at(5)).project.stage).toBe("building");
+    const empty = leadReply(M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(0)), { coverage: cov({ outcome: "clear", constraints: "clear", risks: "clear", priorities: "clear", material: "clear" }) });
     expect(M.openAreas(empty.state)).toEqual([]);
-    expect(M.startBuildingBlocker(empty.state)).toBe("Write or accept a vision first.");
+    expect(M.startFactoryBlocker(empty.state)).toBe("Write or accept a vision first.");
   });
 });
 
