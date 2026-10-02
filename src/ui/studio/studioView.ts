@@ -9,10 +9,12 @@ import * as R from "../../domain/studio/runs";
 import {
   DOCUMENT_KINDS,
   UNGATED_KINDS,
+  VERDICT_WORDS,
   isUnderWay,
   type BudgetEstimate,
   type Feedback,
   type Mark,
+  type PeVerdict,
   type Pin,
   type Round,
   type RoundFocus,
@@ -88,7 +90,7 @@ export function standing(s: State, a: StudioArtifact): Standing {
   if (latest.version !== a.version) return { kind: "replaced", by: latest };
   if (S.readyForOwner(s, a)) return { kind: "open" };
   const r = S.peReview(s, a);
-  return { kind: "pe", text: r.status === "revising" ? `The PE objected on pass ${r.pass}; the designer revises before it reaches you.` : "Waiting for PE review. You can look at it now, and mark it once the PE agrees." };
+  return { kind: "pe", text: r.status === "revising" ? revisingText(a, r) : "Waiting for PE review. You can look at it now. You can mark it after PE review." };
 }
 
 /** How an artifact is shown: a screen in a device frame, a terminal window, a document (the domain's `DOCUMENT_KINDS`), or the entry file in a plain frame. */
@@ -389,25 +391,83 @@ export function variantDemo(a: StudioArtifact, variantId: string | undefined): D
 }
 
 // ---------- PE review ----------
+//
+// Every word about PE review comes from the domain's `PeReview` (studio.ts): where review stands, the latest pass's
+// objections (not feasible) and asks (feasible if changed), and why review ended (`LOOP_END_WORDS`). A reproduction
+// ("as it is today") is judged only on whether it matches the code, so it is never called feasible.
+
+/** "A", "A and B", "A, B and C". */
+const joinAnd = (xs: readonly string[]) => (xs.length < 2 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
+
+/** The variants some verdicts are on, in a sentence: "B · Day by day", or "the whole artifact". */
+function variantsOf(a: StudioArtifact, vs: readonly PeVerdict[]): string {
+  return joinAnd(vs.map((v) => (v.variant === undefined ? "the whole artifact" : (a.variants.find((x) => x.id === v.variant)?.label ?? v.variant))));
+}
+
+/** What a pass says, in the present ("objects to A and asks for changes to B") or the past ("objected to A…"). */
+function passSays(a: StudioArtifact, objections: readonly PeVerdict[], asks: readonly PeVerdict[], past = false): string {
+  return joinAnd([objections.length ? `${past ? "objected" : "objects"} to ${variantsOf(a, objections)}` : "", asks.length ? `${past ? "asked" : "asks"} for changes to ${variantsOf(a, asks)}` : ""].filter(Boolean));
+}
+
+/** The version the designer made after this one, if any. */
+const versionAfter = (s: State, a: StudioArtifact) => S.versionsOf(s, a.id).find((x) => x.version > a.version);
+
+/** A version the designer revises for the PE, in words: what the PE's pass says, and that it reaches you after the revision. */
+function revisingText(a: StudioArtifact, r: Extract<S.PeReview, { status: "revising" }>): string {
+  return `On pass ${r.pass} of ${S.MAX_PE_PASSES}, the PE ${passSays(a, r.objections, r.asks)}. The designer revises it before it reaches you.`;
+}
+
+/**
+ * Why a queued studio run does not start yet, as a sentence about `who`, or undefined when nothing holds it: a pause,
+ * the factory stage, or the budget stop with its reason (the order dispatchStudioRuns checks them in).
+ */
+export function heldBecause(s: State, who = "It"): string | undefined {
+  if (s.project.hold) return `${who} waits until you resume the project.`;
+  if (s.project.stage !== "shaping") return `${who} waits until the project is back in Vision.`;
+  const stop = budgetStop(s);
+  return stop ? `${who} waits at the budget stop. ${stop.why}.` : undefined;
+}
 
 /** One verdict of the PE's latest pass, as the studio shows it. */
 export interface VerdictLine {
   id: string;
   /** The variant's label, or "The whole artifact". */
   label: string;
-  verdict: Verdict;
+  /** The verdict in words: "Feasible if changed"; on a reproduction, how it compares with the code: "Some differences". */
+  word: string;
+  tone: "done" | "you" | "fail";
   reasons: string;
+  /** The verdict's `change`, with what it is: "The change: …", "What would change the verdict: …", "The differences: …". */
   change?: string;
   budget?: BudgetEstimate;
   overruled?: { at: string; why: string };
+  /** You can overrule it now: an objection on the newest version, not overruled, once PE review ended. */
+  canOverrule: boolean;
 }
 
-/** Where PE review of a version stands, for the right column. */
+const VERDICT_TONE: Record<Verdict, VerdictLine["tone"]> = { feasible: "done", "feasible-if": "you", "not-feasible": "fail" };
+/** What a verdict's `change` is: the change that makes it feasible, or what would change an objection (server/studio/pe.ts). */
+const CHANGE_WORDS: Record<Verdict, string> = { feasible: "The change", "feasible-if": "The change", "not-feasible": "What would change the verdict" };
+/**
+ * A verdict on a reproduction, in words. The PE judges only whether it matches the code (server/studio/pe.ts):
+ * feasible when it does, feasible-if apart from the differences it states, not-feasible when it does not, with what is
+ * wrong. The domain has words for feasibility only (`VERDICT_WORDS`).
+ */
+const REPRODUCTION_WORDS: Record<Verdict, { word: string; change: string }> = {
+  feasible: { word: "Matches the code", change: "The differences" },
+  "feasible-if": { word: "Some differences", change: "The differences" },
+  "not-feasible": { word: "Does not match the code", change: "What is wrong" },
+};
+
+/** Where PE review of a version stands, for the right column: the state, what the PE found, its verdicts, then why review ended and what you can do now. */
 export interface PeView {
   tone: "work" | "you" | "done" | "fail" | "neutral";
-  /** The state in a few words: "Agreed", "Objects: waiting for you", "Reviewing"… */
+  /** The state in a few words: "Agreed", "Revising", "Objects: waiting for you"… */
   state: string;
+  /** What the PE found, or what happens now. Ends with ":" when the verdicts below are its list. */
   text: string;
+  /** After the verdicts: why PE review ended, and what you can do now (mark, overrule an objection, or nothing). */
+  next?: string;
   /** "Codex · gpt-x", the PE that made the latest pass (or is reviewing). */
   by?: string;
   /**
@@ -419,30 +479,52 @@ export interface PeView {
   verdicts: VerdictLine[];
 }
 
-export const VERDICT_LABEL: Record<Verdict, string> = { feasible: "Feasible", "feasible-if": "Feasible if changed", "not-feasible": "Not feasible" };
-export const VERDICT_TONE: Record<Verdict, "done" | "you" | "fail"> = { feasible: "done", "feasible-if": "you", "not-feasible": "fail" };
-
 /** "$40–$90", "$5–$5 a month" as "$5 a month". */
 export function usdRange([lo, hi]: [number, number], perMonth = false): string {
   const usd = (n: number) => `$${Number.isInteger(n) ? n : n.toFixed(2)}`;
   return `${lo === hi ? usd(lo) : `${usd(lo)}–${usd(hi)}`}${perMonth ? " a month" : ""}`;
 }
 
+/** What you can do now with a version the PE agreed on or whose review ended; undefined for one a newer version replaced. */
+function yourMove(s: State, a: StudioArtifact, r: S.PeReview): string | undefined {
+  if (S.latestVersion(s, a.id)?.version !== a.version || (r.status !== "agreed" && r.status !== "ended")) return undefined;
+  const objections = r.status === "ended" ? S.openObjections(s, a).length : 0;
+  const mark = S.currentFeedback(s, a.id, a.version)?.mark;
+  const overrule = objections ? `You can overrule ${objections === 1 ? "the objection" : "an objection"}, with your reason. ` : "";
+  if (mark) return `${overrule}You marked it ${mark}.${objections ? "" : " Nothing else is needed from you."}`;
+  return `${overrule}Mark it Keep, Change or Drop${a.variants.length > 1 ? ", and pick a variant" : ""}.`;
+}
+
 /**
- * PE review of a version, for the owner: its verdicts per variant and what it means for them. Undefined for what the
- * owner brought and a probe's evidence, which the PE does not review.
+ * PE review of a version, for the owner: where it stands, the latest pass's verdict on each variant, and what you can
+ * do now. Undefined for what the owner brought and a probe's evidence, which the PE does not review.
  */
 export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" | "codex") => string): PeView | undefined {
   if (UNGATED_KINDS.includes(a.kind)) return undefined;
   const r = S.peReview(s, a);
-  const runs = S.peRunsOf(s, a.id, a.version);
-  const run = runs.at(-1);
+  const run = S.peRunsOf(s, a.id, a.version).at(-1);
+  const asIs = !!a.provenance?.asIs;
+  const after = versionAfter(s, a);
   const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
   const pass = mine.length ? Math.max(...mine.map((v) => v.pass)) : 0;
-  const latest = mine.filter((v) => v.pass === pass);
-  const label = (id: string | undefined) => (id === undefined ? "The whole artifact" : (a.variants.find((v) => v.id === id)?.label ?? id));
-  const verdicts = latest.map((v) => ({ id: v.id, label: label(v.variant), verdict: v.verdict, reasons: v.reasons, ...(v.change ? { change: v.change } : {}), ...(v.budget ? { budget: v.budget } : {}), ...(v.overruled ? { overruled: v.overruled } : {}) }));
-  const madeBy = latest.find((v) => v.by)?.by;
+  const overrulable = new Set(r.status === "ended" && !after ? S.openObjections(s, a).map((v) => v.id) : []);
+  const verdicts = mine
+    .filter((v) => v.pass === pass)
+    .map((v): VerdictLine => {
+      const words = asIs ? REPRODUCTION_WORDS[v.verdict] : { word: `${VERDICT_WORDS[v.verdict][0].toUpperCase()}${VERDICT_WORDS[v.verdict].slice(1)}`, change: CHANGE_WORDS[v.verdict] };
+      return {
+        id: v.id,
+        label: v.variant === undefined ? "The whole artifact" : (a.variants.find((x) => x.id === v.variant)?.label ?? v.variant),
+        word: words.word,
+        tone: VERDICT_TONE[v.verdict],
+        reasons: v.reasons,
+        ...(v.change ? { change: `${words.change}: ${v.change}` } : {}),
+        ...(v.budget ? { budget: v.budget } : {}),
+        ...(v.overruled ? { overruled: v.overruled } : {}),
+        canOverrule: overrulable.has(v.id),
+      };
+    });
+  const madeBy = mine.find((v) => v.pass === pass && v.by)?.by;
   const byRun = madeBy ? s.studio.runs.find((x) => x.id === madeBy.runId) : run;
   const by = madeBy ? `${providerLabel(madeBy.provider)} · ${madeBy.model}` : run ? `${providerLabel(run.provider)} · ${run.actualModel ?? run.model}` : undefined;
   // The PE's provider: its latest pass's run, or the run reviewing now; compared with the provider of the designer's run that made the version.
@@ -450,36 +532,37 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
   const designer = a.madeBy.role === "user" ? undefined : a.madeBy.provider;
   const notIndependent = peProvider && peProvider === designer ? `Not independent: the PE ran on the designer's own provider (${providerLabel(peProvider)}).` : undefined;
   const base = { ...(by ? { by } : {}), ...(notIndependent ? { notIndependent } : {}), simulated: !!byRun?.simulated, verdicts };
-  const names = (vs: { label: string }[]) => vs.map((v) => v.label).join(", ");
-  switch (r.status) {
-    case "agreed":
-      return { ...base, tone: "done", state: "Agreed", text: `The PE agreed on pass ${r.pass}: every option is feasible${verdicts.some((v) => v.verdict === "feasible-if") ? ", some only with the change it states" : ""}. It is yours to mark.` };
-    case "ended": {
-      const open = verdicts.filter((v) => v.verdict === "not-feasible" && !v.overruled);
-      const asks = verdicts.filter((v) => v.verdict === "feasible-if");
-      if (r.objections.length && !open.length && !asks.length) return { ...base, tone: "done", state: "Overruled", text: "You overruled the PE's objections; they stay recorded." };
-      const said = open.length ? `The PE still objects to ${names(open)}` : asks.length ? `The PE still asks for changes to ${names(asks)}` : "The PE did not review it";
-      return {
-        ...base,
-        tone: "you",
-        state: open.length ? "Objects: waiting for you" : "Waiting for you",
-        text: `${said}. PE review ended: ${S.LOOP_END_WORDS[r.ended]}${r.note ? ` (${r.note})` : ""}. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.`,
-      };
-    }
-    case "revising":
-      return { ...base, tone: "work", state: "Revising", text: `The PE objected on pass ${r.pass}; the designer revises before it reaches you.` };
+  const move = yourMove(s, a, r);
+  const view = (tone: PeView["tone"], state: string, text: string, next?: string): PeView => ({ ...base, tone, state, text, ...(next ? { next } : {}) });
+
+  if (r.status === "agreed") return view("done", asIs ? "Matches the code" : "Agreed", asIs ? "The PE checked it against the code: it matches." : `The PE agreed on pass ${r.pass}: every option is feasible.`, move);
+  if (r.status === "ended") {
+    const ended = [`PE review ended: ${S.LOOP_END_WORDS[r.ended]}${r.note ? ` (${r.note.replace(/\.$/, "")})` : ""}.`, move].filter(Boolean).join(" ");
+    const open = r.objections.filter((o) => !o.overruled);
+    if (r.objections.length && !open.length && !r.asks.length) return view("done", "Overruled", "You overruled the PE's objections. They stay recorded.", ended);
+    const text = !r.pass ? "The PE did not review it." : asIs ? "The PE found differences from the code:" : `The PE still ${passSays(a, open, r.asks)}.`;
+    if (after || S.currentFeedback(s, a.id, a.version)?.mark) return view("neutral", "Review ended", text, ended);
+    return view("you", open.length ? "Objects: waiting for you" : "Waiting for you", text, ended);
+  }
+  if (r.status === "revising") {
+    if (after) return view("neutral", "Revised", `On pass ${r.pass} of ${S.MAX_PE_PASSES}, the PE ${passSays(a, r.objections, r.asks, true)}. The designer revised it as v${after.version}.`);
+    const revision = S.revisionRunsOf(s, a).filter(isUnderWay).at(-1);
+    const held = !revision || revision.status === "queued" ? heldBecause(s, "The designer's revision") : undefined;
+    return view("work", "Revising", `${revisingText(a, r)}${held ? ` ${held}` : ""}`);
   }
   // Waiting for the PE: why, from its runs.
-  if (a.shots?.status === "pending" || a.demo?.status === "pending") return { ...base, tone: "neutral", state: "Waiting", text: `The PE reviews it once the ${a.shots?.status === "pending" ? "screenshots are taken" : "recording is made"}.` };
-  if (run && R.isActiveStudioRun(run)) return { ...base, tone: "work", state: "Reviewing", text: "The PE is reading this version: its files, screenshots and recordings." };
-  if (run?.status === "queued") return { ...base, tone: "neutral", state: "Queued", text: runLine(s, run, providerLabel).text };
-  if (run &&(run.status === "failed" || run.status === "lost" || run.status === "stopped")) {
+  if (after) return view("neutral", "Not reviewed", `Replaced by v${after.version} before the PE reviewed it.`);
+  if (a.shots?.status === "pending" || a.demo?.status === "pending") return view("neutral", "Waiting", `The PE reviews it once the ${a.shots?.status === "pending" ? "screenshots are taken" : "recording is made"}.`);
+  if (run && R.isActiveStudioRun(run)) return view("work", "Reviewing", asIs ? "The PE is checking it against the code." : "The PE is reading this version: its files, screenshots and recordings.");
+  if (run?.status === "queued") return view("neutral", "Queued", heldBecause(s, "The PE's run") ?? "Waiting to start.");
+  const later = s.project.stage === "shaping" ? "" : " The PE reviews it when the project is back in Vision.";
+  if (run && S.endedWithoutResult([run])) {
     const why = run.note ?? `its run was ${run.status}`;
     return R.peRunDue(s, a)
-      ? { ...base, tone: "work", state: "Asking again", text: `The PE's run ended without a verdict (${why}); it is asked again.` }
-      : { ...base, tone: "fail", state: "No verdict", text: `The PE's runs ended without a verdict: ${why} It is not asked again on its own; the studio's next pass adds a way to ask.` };
+      ? view("work", "Asking again", `The PE's run ended without a verdict (${why}). The service asks the PE again.`)
+      : view("neutral", "No verdict", `The PE's run ended without a verdict (${why}).${later}`);
   }
-  return { ...base, tone: "neutral", state: "Waiting", text: "Waiting for PE review." };
+  return view("neutral", "Waiting", r.passes ? `The designer revised it. The PE reviews it next, on pass ${r.passes + 1} of ${S.MAX_PE_PASSES}.${later}` : `Waiting for PE review.${later}`);
 }
 
 // ---------- an artifact's versions (the PE loop, pass 4c) ----------
@@ -491,45 +574,42 @@ export interface VersionLine {
   /** The newest version: the one the PE and you answer. */
   current: boolean;
   tone: "work" | "you" | "done" | "fail" | "neutral";
-  /** Where PE review of it ended, in a word or two: "agreed", "objected", "waiting for you"… */
+  /** Where PE review of it stands, in a word or two: "agreed", "objected", "asked for changes", "waiting for you"… */
   state: string;
   text: string;
 }
 
 /**
  * An artifact's versions, oldest first (v1 → v2 → v3): the PE's pass on each and what came of it, your mark, and
- * which is current. The designer revises after an objection while passes remain; an objection that stands after the
- * last pass waits for you, and is never dropped.
+ * which is current. The designer revises after an objection or an ask while passes remain; what the PE still objects
+ * to or asks for when review ends waits for you, and is never dropped.
  */
 export function versionHistory(s: State, a: StudioArtifact): VersionLine[] {
   const all = S.versionsOf(s, a.id);
   const newest = all.at(-1)?.version;
   return all.map((v) => {
     const next = all.find((x) => x.version > v.version);
-    const label = (id: string | undefined) => (id === undefined ? "the whole artifact" : (v.variants.find((x) => x.id === id)?.label ?? id));
-    const names = (vs: { variant?: string }[]) => vs.map((x) => label(x.variant)).join(", ");
-    const line = (tone: VersionLine["tone"], state: string, text: string): VersionLine => {
-      const mark = S.currentFeedback(s, v.id, v.version)?.mark;
-      return { version: v.version, round: v.round, current: v.version === newest, tone, state, text: mark ? `${text} You marked it ${mark}.` : text };
-    };
+    const mark = S.currentFeedback(s, v.id, v.version)?.mark;
+    const line = (tone: VersionLine["tone"], state: string, text: string): VersionLine => ({ version: v.version, round: v.round, current: v.version === newest, tone, state, text: mark ? `${text} You marked it ${mark}.` : text });
     if (UNGATED_KINDS.includes(v.kind)) return line("neutral", v.kind === "material" ? "you brought it" : "evidence", "The PE does not review it.");
     const r = S.peReview(s, v);
     switch (r.status) {
       case "waiting":
         return next ? line("neutral", "not reviewed", `Replaced by v${next.version} before the PE reviewed it.`) : line("neutral", "with the PE", "Waiting for PE review.");
       case "agreed":
-        return line("done", "agreed", `PE pass ${r.pass}: agreed.`);
+        return v.provenance?.asIs ? line("done", "matches", `PE pass ${r.pass}: it matches the code.`) : line("done", "agreed", `PE pass ${r.pass}: agreed.`);
       case "revising":
         return next
-          ? line("neutral", "objected", `PE pass ${r.pass}: objected to ${names(r.objections)}; the designer revised it as v${next.version}.`)
-          : line("work", "revising", `PE pass ${r.pass}: objects to ${names(r.objections)}; the designer is revising it.`);
+          ? line("neutral", r.objections.length ? "objected" : "asked for changes", `PE pass ${r.pass}: ${passSays(v, r.objections, r.asks, true)}; the designer revised it as v${next.version}.`)
+          : line("work", "revising", `PE pass ${r.pass}: ${passSays(v, r.objections, r.asks)}; the designer is revising it.`);
       case "ended": {
         const open = r.objections.filter((o) => !o.overruled);
         if (r.objections.length && !open.length && !r.asks.length) return line("done", "overruled", `PE pass ${r.pass}: you overruled its objections.`);
-        const said = [open.length ? `still objects to ${names(open)}` : "", r.asks.length ? `still asks for changes to ${names(r.asks)}` : ""].filter(Boolean).join("; ");
+        const said = v.provenance?.asIs ? "found differences from the code" : `still ${passSays(v, open, r.asks)}`;
         const why = `review ended: ${S.LOOP_END_WORDS[r.ended]}`;
-        const head = r.pass ? `PE pass ${r.pass}: ${said ? `${said}; ` : ""}${why}` : `PE ${why}`;
-        return next ? line("neutral", "ended", `${head}. It went to you, and v${next.version} followed.`) : line("you", "waiting for you", `${head}. This is waiting for you.`);
+        const head = r.pass ? `PE pass ${r.pass}: ${said}; ${why}` : `PE ${why}`;
+        if (next) return line("neutral", "ended", `${head}. It went to you, and v${next.version} followed.`);
+        return mark ? line("neutral", "ended", `${head}.`) : line("you", "waiting for you", `${head}. This is waiting for you.`);
       }
     }
   });
@@ -560,16 +640,8 @@ export function roundRuns(s: State, n: number): StudioRun[] {
 export function runLine(s: State, r: StudioRun, providerLabel: (p: "claude" | "codex") => string): RunLine {
   const who = `${r.kind === "pe" ? "PE" : r.kind === "probe" ? "Probe" : "Designer"} · ${providerLabel(r.provider)} · ${r.model}${r.simulated ? " (simulated)" : ""}`;
   switch (r.status) {
-    case "queued": {
-      const why = s.project.hold
-        ? "It waits until you resume the project."
-        : s.project.stage !== "shaping"
-          ? "It waits until the project is back in Vision."
-          : budgetStop(s)
-            ? "It waits: the building budget is reached."
-            : "Waiting to start.";
-      return { id: r.id, tone: "neutral", title: `${who}: queued`, text: why };
-    }
+    case "queued":
+      return { id: r.id, tone: "neutral", title: `${who}: queued`, text: heldBecause(s) ?? "Waiting to start." };
     case "running":
       return { id: r.id, tone: "work", title: `${who}: working`, text: r.activity ?? "The designer is making this round's artifacts." };
     case "stopping":
