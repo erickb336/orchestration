@@ -10,8 +10,9 @@ import * as M from "../../domain/model";
 import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
-import { DESIGNER, addScreen, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
+import { DESIGNER, addScreen, feedback, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
+import { TABS, VisionBadge } from "../App";
 import { ConfirmProvider } from "../kit";
 import { Overview } from "../Overview";
 import { parseRoute } from "../route";
@@ -74,10 +75,41 @@ function withSample(opts: { pe?: boolean } = {}) {
 
 const PIN = { type: "orchestrator-pin", x: 0.25, y: 0.5, selector: "main > div.map" };
 
-describe("the route", () => {
+describe("Vision in the main navigation", () => {
   it("#/vision opens the studio", () => {
     expect(parseRoute("#/vision")).toEqual({ page: "vision" });
     expect(parseRoute("#/vision?round=2")).toEqual({ page: "vision" });
+  });
+
+  it("is a link in the navigation, and opening it sends no command, in Vision or in Factory", () => {
+    const vTab = TABS.find((t) => t.page === "vision");
+    expect(vTab).toEqual({ page: "vision", label: "Vision", href: "#/vision" });
+    const { s } = withSample();
+    const factory = M.startFactory(s, M.startFactoryRequest(s), at(9));
+    expect(factory.project.stage).toBe("building");
+    for (const state of [s, factory]) {
+      const sent: string[] = [];
+      const html = renderToStaticMarkup(
+        <ConfirmProvider>
+          <StoreContext.Provider value={{ ...store(state), send: async (name: string) => (sent.push(name), { ok: true }) } as unknown as ServiceStore}>
+            <Studio />
+          </StoreContext.Provider>
+        </ConfirmProvider>,
+      );
+      expect(html).toContain("<h1 class=\"no-margin\">Vision</h1>");
+      expect(sent).toEqual([]);
+    }
+    // In Factory it says what Vision can and cannot do there.
+    expect(render(<Studio />, factory)).toContain("Looking at Vision changes nothing in it.");
+  });
+
+  it("its badge counts the agents' artifacts the PE passed to you that you have not marked", () => {
+    const { s: waiting } = withSample({ pe: false });
+    expect(renderToStaticMarkup(<StoreContext.Provider value={store(waiting)}>{<VisionBadge />}</StoreContext.Provider>)).toBe("");
+    const { s, id } = withSample();
+    expect(renderToStaticMarkup(<StoreContext.Provider value={store(s)}>{<VisionBadge />}</StoreContext.Provider>)).toContain('aria-label="1 artifact waiting for your mark"');
+    const marked = feedback(s, id, 1, { mark: "keep" }, at(9));
+    expect(renderToStaticMarkup(<StoreContext.Provider value={store(marked)}>{<VisionBadge />}</StoreContext.Provider>)).toBe("");
   });
 });
 
@@ -162,12 +194,11 @@ describe("the fake designer's sample in the viewer", () => {
     expect(html).toContain(`src="/api/studio/file?artifact=${id}&amp;version=1&amp;path=shots%2Fa-desktop.png"`);
   });
 
-  it("Home leads to the studio while the project is in Vision", () => {
+  it("Vision is reached from the main navigation, so Home has no studio card of its own", () => {
     const { s } = withSample();
     const html = render(<Overview />, s);
-    expect(html).toContain('href="#/vision"');
-    expect(html).toContain("Open the studio");
-    expect(html).toContain("Round 1 open: the experience · 1 artifact");
+    expect(html).not.toContain("Open the studio");
+    expect(html).not.toContain('href="#/vision"');
   });
 });
 

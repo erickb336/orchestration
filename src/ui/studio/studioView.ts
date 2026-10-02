@@ -27,6 +27,14 @@ export function roundArtifacts(s: State, n: number): StudioArtifact[] {
   return ids.map((id) => S.versionsOf(s, id).filter((a) => a.round === n).at(-1)!);
 }
 
+/**
+ * The agents' artifacts waiting for your mark: the newest version of each, passed to you by the PE (or with its
+ * objections after the last pass), with no mark from you yet. What you brought and a probe's evidence are not counted.
+ */
+export function waitingForYourMark(s: State): StudioArtifact[] {
+  return S.latestArtifacts(s).filter((a) => !UNGATED_KINDS.includes(a.kind) && S.readyForOwner(s, a) && !S.currentFeedback(s, a.id, a.version)?.mark);
+}
+
 /** Where a version stands for the owner: theirs to mark, still with the PE, or replaced by a newer version. */
 export type Standing = { kind: "open" } | { kind: "pe"; text: string } | { kind: "replaced"; by: StudioArtifact };
 

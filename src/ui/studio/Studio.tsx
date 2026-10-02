@@ -15,7 +15,7 @@ import * as S from "../../domain/studio/studio";
 import type { Mark, StudioArtifact } from "../../domain/studio/types";
 import type { PinMessage } from "../../runtime/prototype";
 import { relTime } from "../common";
-import { Banner, Button, ButtonLink, Card, Chip, EmptyState, Field, SegmentedControl, SimulatedChip, StatePill, Textarea } from "../kit";
+import { Banner, Button, Chip, EmptyState, Field, SegmentedControl, SimulatedChip, StatePill, Textarea } from "../kit";
 import { cx } from "../kit/cx";
 import { useStore } from "../store";
 import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback, TerminalFile, TerminalRecording } from "./Frames";
@@ -114,12 +114,14 @@ export function Studio() {
   return (
     <div className="k-stack st-page">
       <header className="st-head">
-        <h1 className="no-margin">Studio</h1>
+        <h1 className="no-margin">Vision</h1>
         <p className="small muted">
-          {round ? `Vision · round ${round.n}${round.closedAt ? " (closed)" : ""}` : "Vision"}. The factory builds exactly what the blueprint shows, with many agents at once. Changing the blueprint now takes minutes; changing built work takes runs.
+          {round ? `The studio · round ${round.n}${round.closedAt ? " (closed)" : ""}. ` : "The studio. "}The factory builds exactly what the blueprint shows, with many agents at once. Changing the blueprint now takes minutes; changing built work takes runs.
         </p>
       </header>
-      {state.project.stage !== "shaping" && <Banner tone="info">The factory has started. The studio keeps Vision's rounds as they were.</Banner>}
+      {state.project.stage !== "shaping" && (
+        <Banner tone="info">The factory has started. Looking at Vision changes nothing in it. You can mark artifacts and message the lead here; designer and PE runs wait until the project is back in Vision (Back to shaping, in Settings › Project).</Banner>
+      )}
       {state.studio.rounds.length === 0 ? (
         <EmptyState title="No rounds yet.">When the lead opens a round, the designer makes screens or terminal demos for it, and they appear here for you to mark, pin and pick.</EmptyState>
       ) : (
@@ -525,28 +527,5 @@ function PeReviewPanel({ artifact: a }: { artifact: StudioArtifact | undefined }
         </>
       )}
     </section>
-  );
-}
-
-/** Home's way into the studio while the project is in Vision: where the rounds stand, and Open the studio. */
-export function StudioCard() {
-  const { state } = useStore();
-  const round = S.currentRound(state) ?? state.studio.rounds.at(-1);
-  const working = state.studio.runs.some((r) => r.status === "running" || r.status === "stopping");
-  const count = round ? roundArtifacts(state, round.n).length : 0;
-  const text = !round
-    ? "No rounds yet. When the lead opens a round, the designer's screens and terminal demos appear in the studio for you to mark."
-    : [`Round ${round.n}${round.closedAt ? " (closed)" : " open"}: ${FOCUS_LABEL[round.focus].toLowerCase()}`, plural(count, "artifact"), working ? "the designer is working" : ""].filter(Boolean).join(" · ");
-  return (
-    <Card
-      title="Studio"
-      actions={
-        <ButtonLink size="small" href="#/vision">
-          Open the studio
-        </ButtonLink>
-      }
-    >
-      <p className="no-margin">{text}</p>
-    </Card>
   );
 }
