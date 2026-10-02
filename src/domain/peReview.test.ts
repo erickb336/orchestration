@@ -142,6 +142,31 @@ describe("a lead proposal waits for PE review", () => {
     expect(() => overrule(s, "Again.", 15)).toThrow("You already overruled this objection.");
   });
 
+  it("your edit of work the PE objects to starts a new review with a fresh count of rounds; the objection stays on the record (review finding 5)", () => {
+    const { s: planned, created } = leadPlans(factory(), { proposals: [proposal("Offline maps"), proposal("Trip export")] });
+    const [id, other] = created;
+    const objectThrice = (s0: State, taskId: string, sec: number) => [0, 1, 2].reduce((s, i) => verdict(s, taskId, "object", "The cache grows without bound.", sec + i), s0);
+    let s = objectThrice(planned, id, 10);
+    const rounds = task(s, id).peReview!.rounds;
+    const edit = (s0: State, taskId: string, actor: "user" | "lead", sec: number) => M.editSpec(s0, taskId, M.currentSpec(task(s0, taskId)).rev, { ...M.currentSpec(task(s0, taskId)).content, outcome: "Offline maps, with a 200 MB cache" }, "cap the cache", actor, at(sec));
+    // The lead's edit does not reopen it: an objection after three rounds is yours to answer.
+    expect(task(edit(s, id, "lead", 19), id).peReview!.status).toBe("objected");
+    s = edit(s, id, "user", 20);
+    expect(task(s, id).peReview).toEqual({ status: "pending", rounds: [], earlier: [{ rounds, closedAt: at(20), specRev: 2 }] });
+    expect(s.events.at(-1)).toMatchObject({ actor: "user", kind: "decision", taskId: id, message: "Your edit (spec r2) starts a new PE review of the work the PE objected to; the objection stays on the record" });
+    expect(M.stateLabel(s, task(s, id))).toBe("Waiting for PE review");
+    expect(needsYouOf(s, task(s, id))).toBeUndefined();
+    // A fresh count: an objection is round 1 of 3 again, and an agreement releases the work.
+    s = verdict(s, id, "object", "Still too big.", 21);
+    expect(s.events.at(-1)!.message).toContain("round 1 of 3; the lead revises it");
+    s = verdict(s, id, "agree", "200 MB is fine.", 22);
+    expect(running(go(s, 23), id)).toBe(1);
+    // An objection you overruled is settled: your edit does not reopen it.
+    let o = runCommand(objectThrice(planned, other, 30), "overrulePeReview", { taskId: other, why: "Ship it." }, at(33)).state;
+    o = edit(o, other, "user", 34);
+    expect(task(o, other).peReview).toMatchObject({ status: "objected", overruled: { why: "Ship it." } });
+  });
+
   it("a verdict reads the current spec: one on a revision the lead replaced is stale, and one that names none is refused", () => {
     const { s: planned, created } = leadPlans(factory(), { proposals: [proposal("Offline maps")] });
     const id = created[0];

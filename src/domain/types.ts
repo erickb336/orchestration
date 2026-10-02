@@ -644,14 +644,23 @@ export interface FindingDecision {
  *   the lead revises it;
  * - agreed: released under the usual involvement rules;
  * - objected: the PE still objected after three rounds, so it waits for the owner (Needs you) with the objection,
- *   until the owner overrules it (recorded). It is never dropped.
+ *   until the owner overrules it (recorded), edits the work (a new review starts), or cancels it. It is never dropped.
  * Only the service records the PE's verdicts (`recordPeReview`), and only the owner overrules.
  */
 export interface PeReviewState {
   status: "pending" | "agreed" | "objected";
-  /** The PE's verdicts, oldest first: one per round, at most three. `specRev` is the task spec revision it read. */
-  rounds: { at: string; verdict: "agree" | "object"; reasons: string; specRev?: number }[];
+  /** The PE's verdicts in the current review, oldest first: one per round, at most three. `specRev` is the task spec revision it read. */
+  rounds: PeReviewRound[];
   overruled?: { at: string; why: string };
+  /** Earlier reviews, oldest first: each closed when the owner edited the work the PE objected to (`specRev`, the edit), which started this one. */
+  earlier?: { rounds: PeReviewRound[]; closedAt: string; specRev: number }[];
+}
+
+export interface PeReviewRound {
+  at: string;
+  verdict: "agree" | "object";
+  reasons: string;
+  specRev?: number;
 }
 
 /**

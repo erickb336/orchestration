@@ -5,7 +5,8 @@
 // breakdown item made while building starts "pending", and so do the lead's updates for a change order. Pending work
 // is held from dispatch, "waiting for PE review". An agreement releases it under the usual involvement rules (on
 // Check-in it still waits for your go-ahead). An objection keeps it pending while the lead revises it; after three
-// rounds it goes to the owner (Needs you) with the objection, and the owner may overrule it, recorded. Nothing is
+// rounds it goes to the owner (Needs you) with the objection, and the owner may overrule it, recorded, or edit the
+// work, which starts a new review with a fresh count of rounds (the earlier one stays on the record). Nothing is
 // dropped: while its review is not settled, the lead never cancels the work (steering only suggests it, and a
 // re-planned breakdown keeps it). Code changes are never PE-reviewed: a task you create, a delivery task and a repair
 // never carry a review.
@@ -99,11 +100,26 @@ export function recordPeReview(state: State, input: { target: PeReviewTarget; ve
     outcome = mine.task ? (mine.task.holdBeforeStart ? "it waits for your go-ahead (your involvement setting)" : "it starts under your involvement setting") : "the lead may apply them";
   } else if (round >= MAX_PE_REVIEW_ROUNDS) {
     review.status = "objected";
-    outcome = `it still objects after ${MAX_PE_REVIEW_ROUNDS} rounds, so it needs you: overrule the objection, or change or cancel the work`;
+    outcome = mine.task
+      ? `it still objects after ${MAX_PE_REVIEW_ROUNDS} rounds, so it needs you: overrule the objection, edit the work (the PE reviews it again), or cancel it`
+      : `it still objects after ${MAX_PE_REVIEW_ROUNDS} rounds, so it needs you: until you overrule the objection, the updates are not applied`;
   } else outcome = `round ${round} of ${MAX_PE_REVIEW_ROUNDS}; the lead revises it`;
   if (mine.task) mine.task.updatedAt = now;
   event(s, now, "runtime", "decision", `PE review of ${mine.name}: ${input.verdict === "agree" ? "agreed" : "objects"} (${reasons.split("\n")[0].slice(0, 200)}); ${outcome}`, mine.task?.id);
   return s;
+}
+
+/**
+ * The owner edited a task's spec (revision `specRev`). On work the PE objected to after three rounds, and the owner has
+ * not overruled, the edit starts a new review of the changed work, with a fresh count of rounds: the work waits for
+ * the PE again, and the earlier review stays on the record. Mutates the draft `s`. Only the owner's edit does this:
+ * the lead's edit leaves the objection for the owner.
+ */
+export function reopenPeReviewInto(s: State, t: Task, specRev: number, now: string) {
+  const r = t.peReview;
+  if (r?.status !== "objected" || r.overruled) return;
+  t.peReview = { status: "pending", rounds: [], earlier: [...(r.earlier ?? []), { rounds: r.rounds, closedAt: now, specRev }] };
+  event(s, now, "user", "decision", `Your edit (spec r${specRev}) starts a new PE review of the work the PE objected to; the objection stays on the record`, t.id);
 }
 
 /** The owner overrules the PE's standing objection, with the reason (recorded): the work is released under the usual rules. */

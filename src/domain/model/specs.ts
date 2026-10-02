@@ -2,6 +2,7 @@
 
 import * as C from "../checks";
 import { customRef, findFlow, flowRef } from "../flows";
+import { reopenPeReviewInto } from "../peReview";
 import { instantiate, toDef, validatePipeline } from "../pipeline";
 import { validateBlueprintRefs } from "../studio/blueprint";
 import { type Actor, type SpecContent, type State, type StepDef, type Task, type FlowRef, ControlError, StaleWriteError } from "../types";
@@ -53,6 +54,8 @@ export function editSpec(
     event(s, now, actor, "decision", `Selected option ${opt.id} (${opt.name}) in r${rev}${actor === "user" ? `; override: ${next.overrideReason}` : ""}`, t.id);
   }
   event(s, now, actor, "spec", `Spec r${rev}: ${reason}`, t.id);
+  // The owner's change to work the PE objected to is reviewed again (a new review); the lead's edit is not.
+  if (actor === "user") reopenPeReviewInto(s, t, rev, now);
 
   if (t.lifecycle === "active") {
     const active = activeAttempts(s, t.id);
