@@ -91,12 +91,13 @@ export function repairCause(s: State, t: Task, o: { byUser?: boolean } = {}): Re
 }
 
 /** The review's open findings are all ask-user findings nobody has decided yet. */
-export function onlyUndecided(s: State, t: Task): { count: number; to: "lead" | "user" | "both" } | undefined {
+export function onlyUndecided(s: State, t: Task): { count: number; to: "lead" | "pe" | "user" | "both" } | undefined {
   const v = reviewView(s, t);
   if (v.state !== "findings") return undefined;
   const arts = s.artifacts.filter((a) => v.evidence.artifactIds.includes(a.id));
   let undecided = 0;
   let lead = 0;
+  let pe = 0;
   let user = 0;
   for (const a of arts) {
     if (F.fixable(s, a) > 0) return undefined;
@@ -107,10 +108,11 @@ export function onlyUndecided(s: State, t: Task): { count: number; to: "lead" | 
       const d = F.decisionFor(s, a, f);
       if (d && d.status !== "open") continue;
       if (!d || d.routedTo === "lead") lead++;
+      else if (d.routedTo === "pe") pe++;
       else user++;
     }
   }
-  return undecided ? { count: undecided, to: lead && user ? "both" : lead ? "lead" : "user" } : undefined;
+  return undecided ? { count: undecided, to: (lead || pe) && user ? "both" : pe && !lead ? "pe" : lead || pe ? "lead" : "user" } : undefined;
 }
 
 /** Create the fix task and link it. Returns the new state (a fresh object) and the task's id. */

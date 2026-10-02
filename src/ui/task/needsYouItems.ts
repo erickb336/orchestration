@@ -31,9 +31,9 @@ export function failedFinalChecks(state: State, task: Task): { stepId: string; r
     }));
 }
 
-/** Findings of this task the lead is deciding (shown as a note; the controls to take one over sit on the output). */
+/** Findings of this task the lead or the PE is deciding (shown as a note; the controls to take one over sit on the output). */
 export function leadDecisions(state: State, task: Task): FindingDecision[] {
-  return F.openDecisions(state, "lead").filter((d) => d.taskId === task.id && d.kind === "finding");
+  return F.agentDecisions(state).filter((d) => d.taskId === task.id && d.kind === "finding");
 }
 
 /** The task waits for your go-ahead: held before start and not started (shaping, a deferral or a pause do not change that). */

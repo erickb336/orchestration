@@ -1,7 +1,9 @@
 // What the project's agent runs cost, estimated in dollars at the providers' published API prices
-// (src/domain/prices.json, pinned and dated), and the factory's budget stop. Pure: derived from state only.
+// (src/domain/prices.json, pinned and dated), the factory's budget stop, and whether a PE call stays within the
+// budgets. Pure: derived from state only.
 
 import pricesJson from "./prices.json";
+import type { BudgetEstimate } from "./studio/types";
 import { type Attempt, type LeadRun, type ProviderId, type Runner, type State, isProvider } from "./types";
 
 /** One model's published API price, in dollars per million tokens, with where and when it was read. */
@@ -127,3 +129,37 @@ export function budgetStop(s: State, prices: readonly ModelPrice[] = PRICES): { 
 
 /** "$12.34". */
 export const fmtUsd = (usd: number) => `$${usd.toFixed(2)}`;
+
+/**
+ * The project's estimated maintenance, in dollars a month (the high end): the newest factory start's estimate, plus
+ * what each PE call that stands adds. 0 while nothing was estimated.
+ */
+export function maintenanceEstimate(s: State): number {
+  let usd = s.project.factoryStarts.at(-1)?.estimate?.maintenanceUsdPerMonth?.[1] ?? 0;
+  for (const d of s.decisions) if (d.decidedBy === "pe" && (d.status === "fix" || d.status === "accept" || d.status === "follow-up")) usd += d.pe?.cost?.maintenanceUsdPerMonth?.[1] ?? 0;
+  return usd;
+}
+
+/**
+ * Why a PE call with this stated cost is not the PE's to make, or undefined when it stays within the budgets. Spending
+ * past a budget is never the PE's call (ORC-029): the high end of each stated range counts, and while a budget is set
+ * the call must state its figure for it (0 is a figure), since a cost not stated is unknown, never zero. A call that
+ * adds nothing passes even when the spend is already past the budget (the owner continued past it).
+ */
+export function pastBudget(s: State, cost: BudgetEstimate | undefined, prices: readonly ModelPrice[] = PRICES): string | undefined {
+  const b = s.project.budgets;
+  const why: string[] = [];
+  if (b.buildingUsd !== null) {
+    const more = cost?.buildUsd?.[1];
+    const spent = buildingSpend(s, prices).usd;
+    if (more === undefined) why.push(`it states no building cost, and the building budget is ${fmtUsd(b.buildingUsd)}`);
+    else if (more > 0 && spent + more > b.buildingUsd) why.push(`up to ${fmtUsd(more)} more would take the building spend to ${fmtUsd(spent + more)}, past the ${fmtUsd(b.buildingUsd)} budget (${fmtUsd(spent)} spent)`);
+  }
+  if (b.maintenanceUsdPerMonth !== null) {
+    const more = cost?.maintenanceUsdPerMonth?.[1];
+    const now = maintenanceEstimate(s);
+    if (more === undefined) why.push(`it states no maintenance cost, and the maintenance budget is ${fmtUsd(b.maintenanceUsdPerMonth)} a month`);
+    else if (more > 0 && now + more > b.maintenanceUsdPerMonth) why.push(`up to ${fmtUsd(more)} more a month would take the maintenance estimate to ${fmtUsd(now + more)}, past the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
+  }
+  return why.length ? why.join("; ") : undefined;
+}

@@ -294,6 +294,19 @@ function estimate(b: BudgetEstimate): BudgetEstimate {
   return { ...(buildUsd ? { buildUsd } : {}), ...(maintenanceUsdPerMonth ? { maintenanceUsdPerMonth } : {}), basis };
 }
 
+/** A cost estimate from an agent's output (untrusted): dollar ranges, low to high, and its basis. Throws a ControlError saying what is wrong. */
+export function readEstimate(raw: unknown): BudgetEstimate {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new ControlError("The estimate is an object with dollar ranges and a basis.");
+  const o = raw as Record<string, unknown>;
+  const range = (v: unknown, what: string): [number, number] | undefined => {
+    if (v === undefined || v === null) return undefined;
+    if (!Array.isArray(v) || v.length !== 2 || !v.every((x) => typeof x === "number")) throw new ControlError(`The ${what} estimate is [low, high] in dollars.`);
+    return [v[0], v[1]];
+  };
+  if (typeof o.basis !== "string") throw new ControlError("The estimate's basis is empty.");
+  return estimate({ buildUsd: range(o.buildUsd, "building"), maintenanceUsdPerMonth: range(o.maintenanceUsdPerMonth, "maintenance"), basis: o.basis });
+}
+
 /**
  * Record one PE pass on an artifact's newest version (the service, from the PE's run): one verdict per variant, or
  * one verdict on the whole artifact. Passes count within the version's round, up to three. Feasible-if states the

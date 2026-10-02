@@ -9,6 +9,7 @@ import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
+import { buildingSpend, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
 import { clip } from "../src/domain/text";
 import {
   FINDING_ACTIONS,
@@ -20,6 +21,7 @@ import {
   type Artifact,
   type Finding,
   type FindingAction,
+  type FindingDecision,
   type GivenPrinciple,
   type LeadRun,
   type Note,
@@ -245,10 +247,10 @@ function repairSections(state: State, task: Task, step: Step, inputs: { artifact
       const where = f.file ? ` ${f.file}${f.line ? `:${f.line}` : ""}` : "";
       const head = `${f.id} [${f.severity}]${where} — ${f.title}`;
       // A finding someone accepted or followed up stays settled, whatever action this report gives it.
-      if (d?.status === "accept") not.push(`${f.id} — accepted ${d.decidedBy === "lead" ? "by the lead" : d.decidedBy === "carried" ? "in an earlier round" : "by the user"}${d.why ? `: "${d.why}"` : ""}. Leave it as it is.`);
+      if (d?.status === "accept") not.push(`${f.id} — accepted ${d.decidedBy === "lead" ? "by the lead" : d.decidedBy === "pe" ? "by the PE" : d.decidedBy === "carried" ? "in an earlier round" : "by the user"}${d.why ? `: "${d.why}"` : ""}. Leave it as it is.`);
       else if (d?.status === "follow-up") not.push(`${f.id} — followed up as ${d.followUpTaskId ?? "a separate task"}; out of scope here.`);
       else if (f.action === "auto-fix") fix.push(`${head} (auto-fix)`);
-      else if (d?.status === "fix") fix.push(`${head} (decided fix ${d.decidedBy === "lead" ? "by the lead" : d.decidedBy === "carried" ? "in an earlier round" : "by the user"}${d.why ? `: "${d.why}"` : ""})`);
+      else if (d?.status === "fix") fix.push(`${head} (decided fix ${d.decidedBy === "lead" ? "by the lead" : d.decidedBy === "pe" ? "by the PE" : d.decidedBy === "carried" ? "in an earlier round" : "by the user"}${d.why ? `: "${d.why}"` : ""})`);
       else not.push(`${f.id} — waiting for a decision; do not implement it.`);
     }
   }
@@ -942,27 +944,29 @@ function draftHistory(state: State): string {
   return `\nYour vision drafts (newest first):\n${lines.join("\n")}`;
 }
 
-/** The findings routed to the lead that wait for its decision, with what it may decide. */
+/** One open decision as the lead's decision run reads it. */
+function decisionLines(state: State, d: FindingDecision): string {
+  const t = state.tasks.find((x) => x.id === d.taskId);
+  const c = t ? M.currentSpec(t).content : undefined;
+  const f = d.finding;
+  const where = f.file ? ` ${f.file}${f.line ? `:${f.line}` : ""}` : "";
+  return [
+    `- ${d.id} on ${d.taskId}${t ? ` "${clip(c!.title, 80)}" (spec by ${M.currentSpec(t).author})` : ""}${d.kind === "final-checks" ? " [failing final checks]" : ""}`,
+    c ? `  outcome: ${clip(c.outcome.replace(/\n/g, " "), 300)}` : "",
+    c?.scopeIncluded.length ? `  in scope: ${clip(c.scopeIncluded.join("; "), 300)}` : "",
+    `  finding: [${f.severity}]${where} ${f.title}${f.detail ? ` — ${clip(f.detail.replace(/\n/g, " "), 600)}` : ""}`,
+    f.why ? `  why a person decides: ${clip(f.why, 300)}` : "",
+    d.suggestion ? `  (you suggested fix earlier; it is the user's to decide)` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/** The findings routed to the lead that wait for its decision, with what it may decide; then the PE's, with its brief. */
 function decisionsSection(state: State): string {
   const open = F.openDecisions(state, "lead");
-  if (!open.length) return "";
-  const lines = open.slice(0, 40).map((d) => {
-    const t = state.tasks.find((x) => x.id === d.taskId);
-    const c = t ? M.currentSpec(t).content : undefined;
-    const f = d.finding;
-    const where = f.file ? ` ${f.file}${f.line ? `:${f.line}` : ""}` : "";
-    return [
-      `- ${d.id} on ${d.taskId}${t ? ` "${clip(c!.title, 80)}" (spec by ${M.currentSpec(t).author})` : ""}${d.kind === "final-checks" ? " [failing final checks]" : ""}`,
-      c ? `  outcome: ${clip(c.outcome.replace(/\n/g, " "), 300)}` : "",
-      c?.scopeIncluded.length ? `  in scope: ${clip(c.scopeIncluded.join("; "), 300)}` : "",
-      `  finding: [${f.severity}]${where} ${f.title}${f.detail ? ` — ${clip(f.detail.replace(/\n/g, " "), 600)}` : ""}`,
-      f.why ? `  why a person decides: ${clip(f.why, 300)}` : "",
-      d.suggestion ? `  (you suggested fix earlier; it is the user's to decide)` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-  });
-  return `
+  const lead = open.length
+    ? `
 ## Decisions waiting for you (${open.length})
 Each is a review finding whose fix would widen the task or questions what was asked. Decide each in "decisions":
 - "fix" only when the fix stays within the task's outcome and the vision; on a spec the user wrote, your "fix" becomes a suggestion for the user.
@@ -970,7 +974,30 @@ Each is a review finding whose fix would widen the task or questions what was as
 - "follow-up" proposes a separate task (under the usual proposal limits; give it a "title").
 - "ask-user" when it changes what the user asked for.
 - You cannot accept failing checks.
-${lines.join("\n")}${open.length > 40 ? `\n- and ${open.length - 40} more, listed on the tasks` : ""}
+${open.slice(0, 40).map((d) => decisionLines(state, d)).join("\n")}${open.length > 40 ? `\n- and ${open.length - 40} more, listed on the tasks` : ""}
+`
+    : "";
+  return `${lead}${peDecisionsSection(state)}`;
+}
+
+/**
+ * The decisions on the PE's route, with the PE's brief. The PE does not run its own decisions yet (ORC-029 pass 4), so
+ * the lead's decision run takes them as the PE, and the record says so. A call states its cost; the service sends a
+ * call that would pass a budget to the user.
+ */
+function peDecisionsSection(state: State): string {
+  const open = F.openDecisions(state, "pe");
+  if (!open.length) return "";
+  const b = state.project.budgets;
+  const spent = buildingSpend(state);
+  const building = b.buildingUsd === null ? "not set" : `${fmtUsd(b.buildingUsd)}, of which about ${fmtUsd(spent.usd)} is spent${spent.unknown.length ? ` (${spent.unknown.length} run${spent.unknown.length === 1 ? "" : "s"} with no recorded cost not counted)` : ""}`;
+  const maintenance = b.maintenanceUsdPerMonth === null ? "not set" : `${fmtUsd(b.maintenanceUsdPerMonth)} a month, of which ${fmtUsd(maintenanceEstimate(state))} is estimated so far`;
+  return `
+## Decisions you make as the PE (${open.length})
+The user sends these to the PE: a rigid principal engineer who weighs each option's feasibility, its scale, whether it will still work and be maintainable in years, and its cost. The PE does not run its own decisions yet, so you decide them with this brief, and the record says a lead run decided as the PE.
+- Decide each in "decisions" with the same choices as above, and state the budget effect of your call in "cost": what it adds to the agent spend to build ("buildUsd") and to the monthly running cost ("maintenanceUsdPerMonth"), each a [low, high] range in dollars, with its "basis" (the recorded cost of past runs, the providers' price lists, or "no basis" when you have none). 0 is a figure; do not guess beyond your basis.
+- Budgets: building ${building}; maintenance ${maintenance}. Spending past a budget is never the PE's call: a call whose cost could pass a budget, or that states no figure for a budget that is set, goes to the user.
+${open.slice(0, 40).map((d) => decisionLines(state, d)).join("\n")}${open.length > 40 ? `\n- and ${open.length - 40} more, listed on the tasks` : ""}
 `;
 }
 
@@ -979,7 +1006,8 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
   const p = state.project;
   const vision = M.currentVision(state);
   const maxProposals = p.autonomy.maxProposalsPerCycle;
-  const decisionsOpen = F.openDecisions(state, "lead").length > 0;
+  const decisionsOpen = F.agentDecisions(state).length > 0;
+  const peDecisionsOpen = F.openDecisions(state, "pe").length > 0;
   // Steering is available only to runs that answer user messages, never decided by the trigger.
   const canSteer = run.messageIds.length > 0;
   const mode = p.steeringMode;
@@ -1096,7 +1124,7 @@ ${coverageLines(state)}${draftHistory(state)}`
   const decisionsContract = decisionsOpen
     ? `,
   "decisions": [
-    { "id": "fd-12", "decision": "fix | accept | follow-up | ask-user", "why": "<one or two sentences>", "title": "<follow-up only>" }
+    { "id": "fd-12", "decision": "fix | accept | follow-up | ask-user", "why": "<one or two sentences>", "title": "<follow-up only>"${peDecisionsOpen ? ', "cost": { "buildUsd": [0, 0], "maintenanceUsdPerMonth": [0, 0], "basis": "<what the figures rest on; for decisions you make as the PE>" }' : ""} }
   ]`
     : "";
 
@@ -1135,7 +1163,7 @@ ${notesSection(state, Date.parse(run.startedAt))}
 ${convo || "(no messages yet)"}
 
 ## ${pending.length ? "Messages to answer now" : "This run"}
-${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).join("\n") : run.trigger === "planning" ? "Planning check: propose the most useful next work, or nothing if nothing is clearly worth doing." : run.trigger === "decisions" ? "Decide the findings listed under \"Decisions waiting for you\"; work on those tasks waits for you. Propose nothing unless a decision needs a follow-up task." : "No new messages."}
+${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).join("\n") : run.trigger === "planning" ? "Planning check: propose the most useful next work, or nothing if nothing is clearly worth doing." : run.trigger === "decisions" ? `Decide the findings listed under "Decisions waiting for you"${peDecisionsOpen ? ' and "Decisions you make as the PE"' : ""}; work on those tasks waits for you. Propose nothing unless a decision needs a follow-up task.` : "No new messages."}
 
 ## Rules for proposals
 - Propose at most ${maxProposals} task(s). Proposing nothing is fine when nothing is clearly worth doing; say why in your reply.

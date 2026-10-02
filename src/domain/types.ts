@@ -1,6 +1,6 @@
 // Core domain types. Pure data: no UI, storage, or runtime dependencies.
 
-import type { Blueprint, Studio } from "./studio/types";
+import type { Blueprint, BudgetEstimate, Studio } from "./studio/types";
 
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
@@ -593,7 +593,7 @@ export interface CheckRunRecord {
 
 /**
  * A decision someone has to take on an `ask-user` finding (or on failing final checks). Routed to the
- * lead or the user by the project's triage setting; recorded, shown on the task, and given to later
+ * lead, the PE or the user by the project's triage setting; recorded, shown on the task, and given to later
  * repairs and reviews.
  */
 export interface FindingDecision {
@@ -605,24 +605,44 @@ export interface FindingDecision {
   key: string;
   kind: "finding" | "final-checks";
   finding: Pick<Finding, "source" | "severity" | "title" | "detail" | "file" | "line" | "why" | "checkId">;
-  routedTo: "lead" | "user";
+  /** "pe": the PE decides, within budget. Until the PE runs its own decisions (ORC-029 pass 4), the lead's decision runs decide for it with the PE's brief. */
+  routedTo: "lead" | "pe" | "user";
   /** When it was last routed to its current decider. A lead run for decisions starts only for decisions routed after the lead's last run. */
   routedAt?: string;
   /** "superseded": its task was cancelled, or a later run replaced the artifact while it was still open. */
   status: "open" | "fix" | "accept" | "follow-up" | "superseded";
   /** A lead "fix" on a spec the user wrote: recorded, not applied; the decision stays open for the user. */
   suggestion?: { decision: "fix"; why: string; leadRunId: string; at: string };
-  decidedBy?: "lead" | "user" | "carried";
+  decidedBy?: "lead" | "pe" | "user" | "carried";
   decidedAt?: string;
   /** ≤300 characters */
   why?: string;
   leadRunId?: string;
+  /** The PE's call on a decision routed to it (ORC-029 2d), kept when the owner reverses or takes it. */
+  pe?: PeCall;
   followUpTaskId?: string;
   /** The decision this one repeats (the same finding decided earlier on this task or its origin task). */
   carriedFrom?: string;
   /** Repair attempts whose envelope carried this decision; a later change applies to later repairs only. */
   usedBy: string[];
   createdAt: string;
+}
+
+/**
+ * The PE's call on one decision: what it chose, why, and its budget effect as it stated it (what the call adds to the
+ * building spend and to the monthly maintenance, as dollar ranges with their basis). The PE does not run its own
+ * decisions yet (ORC-029 pass 4): `by: "lead-run"` says a lead decision run made the call with the PE's brief, and
+ * `leadRunId` names it. `pastBudget` says why the call went to the owner instead of applying: it would have taken the
+ * building spend or the maintenance estimate past a budget, or it stated no figure for a budget that is set.
+ */
+export interface PeCall {
+  decision: "fix" | "accept" | "follow-up";
+  why: string;
+  cost?: BudgetEstimate;
+  by: "lead-run";
+  leadRunId: string;
+  at: string;
+  pastBudget?: string;
 }
 
 /** One command the service runs as a check. Never a shell string: argv only. */

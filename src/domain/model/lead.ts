@@ -342,9 +342,9 @@ export function autonomyMode(a: Autonomy): FactorySettings["autonomy"] {
 export function applyAutopilot(state: State, branch: string, now: string): State {
   const a = state.project.autonomy;
   const next = setAutonomy(state, autopilotAutonomy(a, state.project.prDelivery.enabled ? { ...a.autoDeliver, enabled: false } : { enabled: true, branch }), now);
-  // On Autopilot the lead decides ask-user findings, so work does not wait for a person. It
-  // never turns checks on or changes the sandbox.
-  return F.setTriageRouting(next, "lead", now);
+  // On Autopilot the PE decides ask-user findings within the budgets (ORC-029 2d; the lead's decision runs decide
+  // for it until it runs its own), so work does not wait for a person. It never turns checks on or changes the sandbox.
+  return F.setTriageRouting(next, "pe", now);
 }
 
 /** Autopilot's planning numbers and no holds, with the operating hours kept and the delivery given. */

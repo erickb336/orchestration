@@ -33,9 +33,11 @@ export function FindingChips({ finding }: { finding: Finding }) {
 
 /** Where a decision stands, in one line. */
 export function decisionState(d: FindingDecision): string {
-  if (d.suggestion && d.status === "open") return `The lead suggests: fix — ${d.suggestion.why}`;
-  if (d.status === "open") return d.routedTo === "lead" ? "The lead decides" : "Needs you: decide";
-  const by = d.decidedBy === "carried" ? `same as ${d.carriedFrom ?? "an earlier round"}` : d.decidedBy === "lead" ? "by the lead" : "by you";
+  if (d.suggestion && d.status === "open") return `${d.pe ? "The PE" : "The lead"} suggests: fix — ${d.suggestion.why}`;
+  // A PE call past a budget is yours: what the PE would do, and why it did not.
+  if (d.status === "open" && d.routedTo === "user" && d.pe?.pastBudget) return `Needs you: decide. The PE would ${d.pe.decision === "follow-up" ? "follow up" : d.pe.decision}, but ${d.pe.pastBudget}`;
+  if (d.status === "open") return d.routedTo === "lead" ? "The lead decides" : d.routedTo === "pe" ? "The PE decides, within budget (the lead's decision runs decide for it, with the PE's brief)" : "Needs you: decide";
+  const by = d.decidedBy === "carried" ? `same as ${d.carriedFrom ?? "an earlier round"}` : d.decidedBy === "lead" ? "by the lead" : d.decidedBy === "pe" ? `by the PE, through the lead's run ${d.pe?.leadRunId ?? d.leadRunId ?? ""} with the PE's brief; ${F.costLine(d.pe?.cost)}` : "by you";
   if (d.status === "superseded") return `No longer open${d.why ? `: ${d.why}` : ""}`;
   const what = d.status === "fix" ? (d.kind === "final-checks" ? "Fix round added" : "Fix") : d.status === "accept" ? (d.kind === "final-checks" ? "Failing checks accepted" : "Accepted as is") : `Followed up as ${d.followUpTaskId ?? "a separate task"}`;
   return `${what} (${by}${d.decidedAt ? `, ${relTime(d.decidedAt)}` : ""})${d.why ? `: ${d.why}` : ""}`;
@@ -78,8 +80,8 @@ export function DecisionControls({ decision: d }: { decision: FindingDecision })
               Follow up
             </Button>
           )}
-          <Button size="small" variant="quiet" disabled={off} onClick={() => void send("routeDecision", { decisionId: d.id, to: d.routedTo === "lead" ? "user" : "lead" })}>
-            {d.routedTo === "lead" ? "Send to me" : "Send to the lead"}
+          <Button size="small" variant="quiet" disabled={off} onClick={() => void send("routeDecision", { decisionId: d.id, to: d.routedTo === "user" ? "lead" : "user" })}>
+            {d.routedTo === "user" ? "Send to the lead" : "Send to me"}
           </Button>
         </>
       ) : (
@@ -231,7 +233,7 @@ export function CoverageChip({ coverage }: { coverage: PathCoverage }) {
 /** Decisions routed to the user, across tasks or for one task, with their controls; and what the lead is deciding. */
 export function DecisionQueue({ state, taskId, showLead = true }: { state: State; taskId?: string; showLead?: boolean }) {
   const mine = F.openDecisions(state, "user").filter((d) => !taskId || d.taskId === taskId);
-  const lead = F.openDecisions(state, "lead").filter((d) => !taskId || d.taskId === taskId);
+  const lead = F.agentDecisions(state).filter((d) => !taskId || d.taskId === taskId);
   if (!mine.length && !(showLead && lead.length)) return null;
   return (
     <div className="decision-queue">
@@ -256,7 +258,7 @@ export function DecisionQueue({ state, taskId, showLead = true }: { state: State
       })}
       {showLead && lead.length > 0 && (
         <p className="muted small">
-          The lead is deciding {lead.length} finding{lead.length === 1 ? "" : "s"}
+          {F.agentsDecidingLabel(lead)}
           {taskId ? "" : ` on ${[...new Set(lead.map((d) => d.taskId))].join(", ")}`}. You can take any of them over from the task page.
         </p>
       )}

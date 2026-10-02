@@ -6,6 +6,7 @@
 import type { ReactNode } from "react";
 import * as C from "../../domain/checks";
 import * as D from "../../domain/delivery";
+import * as F from "../../domain/findings";
 import * as M from "../../domain/model";
 import type { State, Task } from "../../domain/types";
 import { relTime } from "../common";
@@ -96,7 +97,7 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
   if (lead.length)
     out.push(
       <Banner key="lead-decisions">
-        The lead is deciding {lead.length === 1 ? "a finding" : `${lead.length} findings`} on this task. You can take any of them over under Details › Outputs (Send to me).
+        {F.agentsDecidingLabel(lead)} on this task. You can take any of them over under Details › Outputs (Send to me).
       </Banner>,
     );
   const heldWriters = open ? D.writersHeld(state) : undefined;

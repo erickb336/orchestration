@@ -77,7 +77,7 @@ const titleOf = (t: Task) => M.currentSpec(t).content.title;
 /** Everything that waits for you, one row each; the simple decisions are settled here with the task page's own commands. */
 function NeedsYouCard({ state }: { state: State }) {
   const items = needsYouItems(state, Date.now());
-  const leadDecisions = F.openDecisions(state, "lead").length;
+  const leadDecisions = F.agentDecisions(state);
   return (
     <Card title="Needs you" count={items.length} countTone="you">
       {items.length === 0 ? (
@@ -89,9 +89,9 @@ function NeedsYouCard({ state }: { state: State }) {
           ))}
         </Rows>
       )}
-      {leadDecisions > 0 && (
+      {leadDecisions.length > 0 && (
         <p className="muted small needs-foot">
-          The lead is deciding {leadDecisions} finding{leadDecisions === 1 ? "" : "s"}. You can take any of them over from the task page.
+          {F.agentsDecidingLabel(leadDecisions)}. You can take any of them over from the task page.
         </p>
       )}
     </Card>

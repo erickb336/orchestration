@@ -112,7 +112,7 @@ describe("Start the factory: the owner's command", () => {
     expect(p.autonomy).toMatchObject({ planningIntervalMinutes: 30, maxProposalsPerCycle: 5, maxOpenProposals: 15, autoRetry: 1, autoDeliver: { enabled: false } });
     expect(p.prDelivery).toMatchObject({ enabled: true, base: "main", merge: "auto" });
     expect(p.triage.askUserBy).toBe("pe");
-    expect(F.routeOf(started)).toBe("lead");
+    expect([F.routeOf(started), F.routeOf(started, "final-checks")]).toEqual(["pe", "lead"]);
     expect(p.factoryStarts[0].settings.pausePoints.changeOrders).toBe("user");
     // Each setter recorded its own change, before the start.
     const config = started.events.filter((e) => e.kind === "config").map((e) => e.message);

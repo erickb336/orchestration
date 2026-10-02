@@ -82,7 +82,23 @@ describe("the task page", () => {
     const theirs = render(moved, <OutputsSection state={moved} task={task(moved, "WT-007")} decideAbove={() => {}} />);
     expect(theirs).toContain(">Send to me<");
     expect(theirs).not.toContain("Decide above");
-    expect(text(page(moved, "WT-007"))).toContain("The lead is deciding a finding on this task");
+    expect(text(page(moved, "WT-007"))).toContain("The lead is deciding 1 finding on this task");
+  });
+
+  it("a finding on the PE's route says the PE decides, through the lead's runs for now; a PE call past a budget says why it is yours (ORC-029 2d)", () => {
+    const s = buildDemo(T0);
+    const pe = structuredClone(s);
+    const d = pe.decisions.find((x) => x.taskId === "WT-007" && x.status === "open")!;
+    d.routedTo = "pe";
+    const outputs = text(render(pe, <OutputsSection state={pe} task={task(pe, "WT-007")} decideAbove={() => {}} />));
+    expect(outputs).toContain("The PE decides, within budget (the lead's decision runs decide for it, with the PE's brief)");
+    expect(outputs).toContain("Send to me");
+    expect(text(page(pe, "WT-007"))).toContain("The PE is deciding 1 finding (through the lead's decision runs, with the PE's brief) on this task");
+    const past = structuredClone(s);
+    const p = past.decisions.find((x) => x.taskId === "WT-007" && x.status === "open")!;
+    p.pe = { decision: "fix", why: "Store both units.", cost: { buildUsd: [6, 9], basis: "Similar work" }, by: "lead-run", leadRunId: "lead-9", at: new Date(T0).toISOString(), pastBudget: "up to $9.00 more would take the building spend to $9.00, past the $5.00 budget ($0.00 spent)" };
+    const mine = text(render(past, <OutputsSection state={past} task={task(past, "WT-007")} decideAbove={() => {}} />));
+    expect(mine).toContain("Needs you: decide. The PE would fix, but up to $9.00 more would take the building spend to $9.00, past the $5.00 budget ($0.00 spent)");
   });
 
   it("a task waiting for the go-ahead with two options asks for the choice, then Start, once; the spec's table says so", () => {
