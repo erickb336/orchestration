@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import { CLIENT_HEADER } from "../src/api";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
@@ -68,7 +69,8 @@ const stored = () => (existsSync(docsDir()) ? readdirSync(docsDir()).sort() : []
 const h = (s: string) => sha256(Buffer.from(s));
 
 function init(stage: "shaping" | "building" = "shaping", vision = "Ship the apps.") {
-  cmd("initProject", { name: "Apps", repoPath: repo, vision, focus: "", stage });
+  cmd("initProject", { name: "Apps", repoPath: repo, vision, focus: "" });
+  if (stage === "building") cmd("startFactory", startFactoryArgs(state()));
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });
 }
 function ask(text: string) {
@@ -189,7 +191,7 @@ describe("orphan copies are swept; history keeps its copies", () => {
     expect(stored()).toEqual([h("new"), "not-a-copy.txt"].sort());
     // A new project: its predecessor's directory is deleted once the new project is set up.
     const oldDir = docsDir();
-    const r = await post("/api/commands", { name: "initProject", args: { name: "Next", repoPath: repo, vision: "v", focus: "", stage: "building" }, idempotencyKey: k() });
+    const r = await post("/api/commands", { name: "initProject", args: { name: "Next", repoPath: repo, vision: "v", focus: "" }, idempotencyKey: k() });
     expect(r.status).toBe(200);
     expect(existsSync(oldDir)).toBe(false);
     expect(state().project.visionDocs).toEqual([]);

@@ -14,6 +14,7 @@ import { basename, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import { CLIENT_HEADER } from "../src/api";
 import { BUILT_IN_FILES } from "../src/domain/builtInFlows";
 import { COMMANDS } from "../src/domain/commands";
@@ -660,6 +661,7 @@ describe("a running custom pipeline across the upgrade", () => {
     let key = 0;
     const cmd1 = (name: string, args: object) => store1.command(name, args, `k${++key}`, iso(now));
     cmd1("initProject", { name: "Up", repoPath: repo, vision: "v", focus: "f" });
+    cmd1("startFactory", startFactoryArgs(store1.read().state));
     cmd1("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
     const id = (cmd1("createTask", { title: "Custom", area: "", outcome: "o", benefit: "", whyNow: "", approach: "a", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }).result as { newId: string }).newId;
     setTestPipeline(store1, id, oneStep, iso(now), "one step");

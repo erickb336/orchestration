@@ -10,6 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as D from "../src/domain/delivery";
 import * as M from "../src/domain/model";
+import { startFactoryArgs, startFactoryAsOwner } from "../src/domain/testing/factory";
 import type { State, StepDef } from "../src/domain/types";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
@@ -63,7 +64,7 @@ describe("no delivery work while shaping (simulated GitHub)", () => {
     for (let i = 0; i < 20 && !M.activeAttempts(st(), second).length; i++) await tick();
     expect(M.activeAttempts(st(), second)).toHaveLength(1);
 
-    cmd("startShaping");
+    cmd("startVision");
     const pr = task(first).integration!.pr!;
     cmd("requestPrReview", { taskId: first });
     cmd("requestPrMerge", { taskId: first, headSha: pr.headSha });
@@ -100,7 +101,7 @@ describe("no delivery work while shaping (simulated GitHub)", () => {
     expect(M.stateLabel(st(), task(second))).toBe("Done");
 
     // Start building: the review runs, the requested merge goes through, and the second task is delivered.
-    cmd("startBuilding");
+    cmd("startFactory", startFactoryArgs(st()));
     for (let i = 0; i < 400 && task(first).integration!.pr!.phase !== "merged"; i++) await tick(3000);
     expect(task(first).integration!.pr!.phase).toBe("merged");
     for (let i = 0; i < 200 && task(second).integration?.pr?.phase !== "open"; i++) await tick();
@@ -112,8 +113,8 @@ describe("no delivery work while shaping (simulated GitHub)", () => {
     let s = M.setAutonomy(st(), { ...st().project.autonomy, autoDeliver: { enabled: true, branch: "main" } }, iso());
     s = { ...s, project: { ...s.project, delivery: { pending: true } } };
     expect(M.deliveryDue(s, now)).toBe(true);
-    expect(M.deliveryDue(M.startShaping(s, iso()), now)).toBe(false);
-    expect(M.deliveryDue(M.startBuilding(M.startShaping(s, iso()), iso()), now)).toBe(true);
+    expect(M.deliveryDue(M.startVision(s, iso()), now)).toBe(false);
+    expect(M.deliveryDue(startFactoryAsOwner(M.startVision(s, iso()), iso()), now)).toBe(true);
   });
 });
 

@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import { CLIENT_HEADER } from "../src/api";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
@@ -75,7 +76,8 @@ const stored = () => (existsSync(docsDir()) ? readdirSync(docsDir()).sort() : []
 const paths = () => M.currentVisionDocs(state()).map((d) => d.path);
 
 function init(stage: "shaping" | "building" = "shaping", vision = "Ship the apps.") {
-  cmd("initProject", { name: "Apps", repoPath: repo, vision, focus: "", stage });
+  cmd("initProject", { name: "Apps", repoPath: repo, vision, focus: "" });
+  if (stage === "building") cmd("startFactory", startFactoryArgs(state()));
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setRoleDefault", { role: "designer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
@@ -190,7 +192,7 @@ describe("A. attaching and removing through the endpoint", () => {
     // A planning-style envelope (building) carries the same section.
     claude.reply(M.activeLeadRun(state())!.id, "ok", []);
     tick();
-    cmd("startBuilding");
+    cmd("startFactory", startFactoryArgs(state()));
     const prompt2 = ask("and now?");
     expect(prompt2).toContain('=== "brief.md" (91 B, complete) ===');
     // Workers: designers read the text under their cap; coders and reviewers see names and sizes only.

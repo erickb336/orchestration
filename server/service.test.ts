@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import { CLIENT_HEADER } from "../src/api";
 import * as M from "../src/domain/model";
 import type { State } from "../src/domain/types";
@@ -230,6 +231,7 @@ describe("scheduler with fake runtime", () => {
     const store = open();
     const { scheduler } = make(store, { progressPerTick: 60 });
     store.command("initProject", { name: "P", repoPath: "/tmp/x", vision: "v", focus: "Deployment first" }, k(), iso(T0));
+    store.command("startFactory", startFactoryArgs(store.read().state), k(), iso(T0));
     store.command("createTask", { title: "Automate deploy", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 5, holdBeforeStart: true, flowId: "change" }, k(), iso(T0));
     const text = "focus more on building out the apps working locally vs automating the deployment process";
     store.command("postMessage", { text }, k(), iso(T0 + 10));

@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import * as M from "../src/domain/model";
 import type { State, SteeringChangeSet } from "../src/domain/types";
 import { buildLeadEnvelope } from "./envelope";
@@ -77,6 +78,7 @@ beforeEach(async () => {
   scheduler = new Scheduler(store, { claude, codex }, { workspaces: new WorkspaceManager(join(dir, "worktrees")), leaseMs: 60_000, ackTimeoutMs: 10_000 });
   await scheduler.refreshHealth();
   cmd("initProject", { name: "Apps", repoPath: repo, vision: "Ship the apps.", focus: "Automate deployment" });
+  cmd("startFactory", startFactoryArgs(store.read().state));
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });

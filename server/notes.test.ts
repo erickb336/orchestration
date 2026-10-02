@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import { buildSeed } from "../src/domain/seed";
 import * as M from "../src/domain/model";
 import type { Note, State } from "../src/domain/types";
@@ -191,6 +192,7 @@ function scriptedService() {
 async function setUp(f: ReturnType<typeof scriptedService>) {
   await f.scheduler.refreshHealth();
   f.cmd("initProject", { name: "Apps", repoPath: f.repo, vision: "Ship the apps.", focus: "Local builds" });
+  f.cmd("startFactory", startFactoryArgs(f.store.read().state));
   f.cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   f.cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   f.cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });

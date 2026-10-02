@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
+import { startFactoryAsOwner } from "./testing/factory";
 import { setPipeline } from "./testing/pipelines";
 import { buildSeed } from "./seed";
 import type { LeadRun, State, VisionDoc } from "./types";
@@ -109,7 +110,7 @@ describe("invisible characters", () => {
   });
 
   it("the user's own text is never altered: edit-and-accept, hand edits and messages keep every joiner, mark and tag sequence", () => {
-    let s = M.startShaping(seed(), at(0));
+    let s = M.startVision(seed(), at(0));
     s = M.postMessage(s, `Mine: ${LEGIT.join(" ")}`, at(1));
     expect(s.conversation.at(-1)!.text).toBe(`Mine: ${LEGIT.join(" ")}`);
     const r = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "message" }, at(2));
@@ -227,7 +228,7 @@ describe("Start building's labels tell the truth", () => {
   const oneStep = [{ id: "S1", purpose: "Implement", role: "coder" as const, dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" as const }] }];
   /** A ready roadmap task under the shaping hold, and a proposed task it depends on. */
   function roadmap(): { state: State; id: string; dep: string } {
-    let s = M.startShaping(seed(), at(0));
+    let s = M.startVision(seed(), at(0));
     // Tasks come from a flow; the one-step pipeline is applied through the internal setPipeline.
     const dep0 = M.createTask(s, { title: "Dep", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(1));
     const dep = { ...dep0, state: setPipeline(dep0.state, dep0.newId, 1, oneStep, "one step", "user", at(1)) };
@@ -247,16 +248,16 @@ describe("Start building's labels tell the truth", () => {
   it("the label and the plan read the involvement setting as it is now, and a dependency wait shows under the shaping hold", () => {
     const { state, id, dep } = roadmap();
     const a = autopilot(state);
-    expect(M.startBuildingPlan(a)).toMatchObject({ release: true, roadmap: [expect.objectContaining({ id })], userHeld: [] });
+    expect(M.startFactoryPlan(a)).toMatchObject({ release: true, roadmap: [expect.objectContaining({ id })], userHeld: [] });
     expect(M.stateLabel(a, a.tasks.find((t) => t.id === id)!)).toBe(`Planned; waits until you start building and on ${dep}, then starts on Autopilot`);
     const c = checkin(a);
-    expect(M.startBuildingPlan(c).release).toBe(false);
+    expect(M.startFactoryPlan(c).release).toBe(false);
     expect(M.stateLabel(c, c.tasks.find((t) => t.id === id)!)).toBe(`Planned; waits until you start building and on ${dep}, then waits for your go-ahead (your involvement setting)`);
     // The setting changed after the proposal: what Start building does follows the setting now, as the label said.
-    const started = M.startBuilding(c, at(4)).tasks.find((t) => t.id === id)!;
+    const started = startFactoryAsOwner(c, at(4)).tasks.find((t) => t.id === id)!;
     expect(started.holdBeforeStart).toBe(true);
     expect(started.heldForShaping).toBeUndefined();
-    const startedA = M.startBuilding(autopilot(c), at(4)).tasks.find((t) => t.id === id)!;
+    const startedA = startFactoryAsOwner(autopilot(c), at(4)).tasks.find((t) => t.id === id)!;
     expect(startedA.holdBeforeStart).toBe(false);
     expect(startedA.heldForShaping).toBeUndefined();
   });
@@ -264,9 +265,9 @@ describe("Start building's labels tell the truth", () => {
   it("the plan counts only tasks under the roadmap's own hold; a task the user held is listed apart and stays held", () => {
     const { state, id } = roadmap();
     const held = M.setHoldBeforeStart(autopilot(state), id, true, at(3));
-    expect(M.startBuildingPlan(held)).toMatchObject({ release: true, roadmap: [], userHeld: [expect.objectContaining({ id })] });
+    expect(M.startFactoryPlan(held)).toMatchObject({ release: true, roadmap: [], userHeld: [expect.objectContaining({ id })] });
     expect(M.stateLabel(held, held.tasks.find((t) => t.id === id)!)).toBe("Waiting for your go-ahead");
-    const started = M.startBuilding(held, at(4));
+    const started = startFactoryAsOwner(held, at(4));
     expect(started.tasks.find((t) => t.id === id)).toMatchObject({ holdBeforeStart: true });
   });
 });

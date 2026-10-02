@@ -1,9 +1,15 @@
-// A project is shaping or building. While shaping, the lead answers messages and may draft the vision
-// and propose a first roadmap, but no worker step is dispatched and no planning run starts. A draft is
-// a suggestion: the vision changes only when the user accepts it. Start building needs a vision and
-// releases the roadmap on Autopilot; going back to shaping stops nothing that is running.
+// A project is shaping (Vision) or building (Factory). Every project begins shaping. While shaping, the lead
+// answers messages and may draft the vision and propose a first roadmap, but no worker step is dispatched and no
+// planning run starts. A draft is a suggestion: the vision changes only when the user accepts it. Only the owner's
+// Start the factory (`startFactory`, called from the command table alone) moves a project to building: it needs a
+// vision, records the owner's agreement and the settings the factory runs with, and releases the roadmap on
+// Autopilot. Going back to vision stops nothing that is running.
 
+import { setPrDelivery } from "../delivery";
+import * as F from "../findings";
 import {
+  type Device,
+  type FactorySettings,
   type LeadRun,
   type Message,
   type Coverage,
@@ -15,10 +21,12 @@ import {
   type VisionDraft,
   ControlError,
   COVERAGE_STATES,
+  DEVICES,
   SHAPING_AREAS,
   StaleWriteError,
 } from "../types";
 import { activeAttempts, currentVision, draft, event, touch } from "./core";
+import { applyAutopilot, autonomyMode, setAutonomy } from "./lead";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "./textSafety";
 import { pushVision } from "./vision";
 
@@ -29,8 +37,8 @@ const MAX_VISION_DRAFTS = 50;
 /** The one line shown wherever new work would otherwise be expected to start. Never "Paused". */
 export const SHAPING_LABEL = "Shaping: new work waits until you start building";
 
-/** Why Start building is refused, or undefined when it is allowed. */
-export function startBuildingBlocker(s: State): string | undefined {
+/** Why Start the factory is refused, or undefined when it is allowed. */
+export function startFactoryBlocker(s: State): string | undefined {
   if (s.project.stage === "building") return "Already building.";
   if (!currentVision(s).text.trim()) return "Write or accept a vision first.";
   return undefined;
@@ -48,27 +56,95 @@ export function openVisionDraft(s: State): VisionDraft | undefined {
 }
 
 /**
- * What Start building would do now. It uses the involvement setting at the moment it
+ * What Start the factory would do with the roadmap now. It uses the involvement setting at the moment it
  * runs, never one recorded earlier, and lifts only the roadmap's own hold: `roadmap` are the planned
  * tasks it releases or hands to the user's release; `userHeld` are planned tasks whose hold the user
  * took over, which keep waiting for the user either way.
  */
-export function startBuildingPlan(s: State): { release: boolean; roadmap: Task[]; userHeld: Task[] } {
+export function startFactoryPlan(s: State): { release: boolean; roadmap: Task[]; userHeld: Task[] } {
   const a = s.project.autonomy;
   const open = roadmapTasks(s);
   return { release: a.enabled && !a.holdLeadProposals, roadmap: open.filter((t) => t.heldForShaping), userHeld: open.filter((t) => !t.heldForShaping && t.holdBeforeStart) };
 }
 
+/** The factory's settings as the project has them now: what a start keeps when the owner changes nothing. */
+export function currentFactorySettings(s: State): FactorySettings {
+  const p = s.project;
+  return {
+    autonomy: autonomyMode(p.autonomy),
+    merge: p.prDelivery.merge === "auto" ? "auto" : "user",
+    pausePoints: {
+      // Decisions routed to the lead go to the PE once it decides (the lead decides for it until then).
+      tradeoffs: p.triage.askUserBy === "user" ? "user" : "pe",
+      changeOrders: p.factoryStarts.at(-1)?.settings.pausePoints.changeOrders ?? "lead",
+      startEachTask: p.autonomy.holdLeadProposals,
+    },
+  };
+}
+
+/** What the owner sends to start the factory. */
+export interface FactoryRequest {
+  agreed: true;
+  /** The blueprint revision the owner saw (compare-and-set). Until the blueprint exists, the vision revision. */
+  blueprintRev: number;
+  settings: FactorySettings;
+  /** The open items the owner was shown and accepts. */
+  acceptOpen: string[];
+}
+
 /**
- * Start building. Refused without a vision. On Autopilot (autonomy on and lead proposals not held) the
- * roadmap starts; with Check-in or Manual it keeps waiting for the user, as lead proposals do.
+ * The request as the project stands: agreement on the current revision, the current settings, and every open
+ * item confirmed. Only data: the owner's own action sends it (today the Start building button, after its
+ * confirmation lists the open areas; the pre-flight screen later).
  */
-export function startBuilding(state: State, now: string): State {
-  const why = startBuildingBlocker(state);
+export function startFactoryRequest(s: State): FactoryRequest {
+  return { agreed: true, blueprintRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: openAreas(s) };
+}
+
+/** Autopilot never waits before a task, and Check-in always does: the two settings must agree. */
+function settingsProblem(x: FactorySettings): string | undefined {
+  if (x.autonomy === "autopilot" && x.pausePoints.startEachTask) return "Autopilot starts each task without waiting; choose Check-in to give the go-ahead for each task.";
+  if (x.autonomy === "checkin" && !x.pausePoints.startEachTask) return "Check-in waits for your go-ahead before each task the lead plans.";
+  return undefined;
+}
+
+/** Apply the factory's settings through the usual setters, each only where it differs, so each change is recorded as usual. */
+function applyFactorySettings(state: State, x: FactorySettings, now: string): State {
+  let s = state;
+  if (autonomyMode(s.project.autonomy) !== x.autonomy) {
+    const a = s.project.autonomy;
+    if (x.autonomy === "autopilot") s = applyAutopilot(s, a.autoDeliver.branch, now);
+    else s = setAutonomy(s, { ...a, enabled: x.autonomy === "checkin", holdLeadProposals: x.autonomy === "checkin" ? true : a.holdLeadProposals }, now);
+  }
+  if (s.project.autonomy.holdLeadProposals !== x.pausePoints.startEachTask) s = setAutonomy(s, { ...s.project.autonomy, holdLeadProposals: x.pausePoints.startEachTask }, now);
+  s = F.setTriageRouting(s, x.pausePoints.tradeoffs, now);
+  const merge = x.merge === "auto" ? "auto" : "hold";
+  if (s.project.prDelivery.merge !== merge) s = setPrDelivery(s, { merge }, now);
+  return s;
+}
+
+/**
+ * Start the factory: the owner's command, and the only way from shaping to building. Refused without the owner's
+ * agreement, without a vision, when the revision changed since they looked (compare-and-set), or while an open
+ * item was not confirmed. It applies the settings, records the agreement (`factoryStarts`), and moves to building;
+ * on Autopilot the roadmap starts, otherwise it waits for the owner as lead proposals do. Called only from the
+ * command table: no steering change, lead output, scheduler path or timer reaches it.
+ */
+export function startFactory(state: State, req: FactoryRequest, now: string): State {
+  if (req.agreed !== true) throw new ControlError("Starting the factory needs your agreement.");
+  const why = startFactoryBlocker(state);
   if (why) throw new ControlError(why);
-  const s = draft(state);
+  const rev = currentVision(state).rev;
+  if (req.blueprintRev !== rev) throw new StaleWriteError(req.blueprintRev, rev);
+  const open = openAreas(state);
+  const unconfirmed = open.filter((x) => !req.acceptOpen.includes(x));
+  if (unconfirmed.length) throw new ControlError(`Still open and not confirmed: ${unconfirmed.join(", ")}. Confirm them to start, or close them first.`);
+  const problem = settingsProblem(req.settings);
+  if (problem) throw new ControlError(problem);
+  const s = draft(applyFactorySettings(state, req.settings, now));
   s.project.stage = "building";
-  const { release } = startBuildingPlan(s);
+  s.project.factoryStarts.push({ at: now, by: "user", blueprintRev: rev, settings: structuredClone(req.settings), openItems: open });
+  const { release } = startFactoryPlan(s);
   const released: string[] = [];
   // Only the roadmap's own hold is lifted. A task the user held before start (which took it
   // out of the roadmap hold) keeps that hold; the involvement setting decides the rest.
@@ -84,12 +160,13 @@ export function startBuilding(state: State, now: string): State {
     } else event(s, now, "user", "control", "Building started; this planned task waits for your go-ahead (your involvement setting)", t.id);
   }
   const waiting = roadmapTasks(s).filter((t) => t.holdBeforeStart).length;
-  event(s, now, "user", "config", `Building started${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
+  const agreed = `you agreed to vision r${rev}${open.length ? ` with ${open.length} open area${open.length === 1 ? "" : "s"} confirmed (${open.join(", ")})` : ""}`;
+  event(s, now, "user", "config", `Building started: ${agreed}${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
   return s;
 }
 
-/** Back to shaping: nothing running is stopped and nothing new starts. Available at any time. */
-export function startShaping(state: State, now: string): State {
+/** Back to vision: nothing running is stopped and nothing new starts. Available at any time. */
+export function startVision(state: State, now: string): State {
   if (state.project.stage === "shaping") throw new ControlError("Already shaping.");
   const s = draft(state);
   s.project.stage = "shaping";
@@ -99,6 +176,17 @@ export function startShaping(state: State, now: string): State {
   delete s.project.budgetContinued;
   const running = activeAttempts(s).length;
   event(s, now, "user", "config", `Shaping the vision; new work waits until you start building${running ? ` (${running} running step${running === 1 ? " finishes" : "s finish"} normally)` : ""}`);
+  return s;
+}
+
+/** The device scope, chosen in Vision: at least one of desktop, mobile and terminal, each once. */
+export function setDevices(state: State, devices: Device[], now: string): State {
+  if (state.project.stage === "building") throw new ControlError("The device scope is chosen in Vision; go back to vision to change it.");
+  const chosen = DEVICES.filter((d) => devices.includes(d));
+  if (!chosen.length) throw new ControlError("Choose at least one device: desktop, mobile or terminal.");
+  const s = draft(state);
+  s.project.devices = chosen;
+  event(s, now, "user", "vision", `Device scope: ${chosen.join(", ")}`);
   return s;
 }
 

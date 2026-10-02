@@ -134,7 +134,7 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
   if (task.heldForShaping && task.lifecycle !== "active")
     out.push(
       <Banner key="hfs">
-        Planned while shaping: it waits until you start building{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startBuildingPlan(state).release ? "starts on Autopilot" : "waits for your go-ahead"} (your involvement setting at the moment you start building decides). Changing "Wait for my go-ahead" under More takes it out of the roadmap's wait.{" "}
+        Planned while shaping: it waits until you start building{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startFactoryPlan(state).release ? "starts on Autopilot" : "waits for your go-ahead"} (your involvement setting at the moment you start building decides). Changing "Wait for my go-ahead" under More takes it out of the roadmap's wait.{" "}
         <a href="#/overview">Shape the vision</a>
       </Banner>,
     );

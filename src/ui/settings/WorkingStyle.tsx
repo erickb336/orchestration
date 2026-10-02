@@ -6,7 +6,7 @@ import { useState } from "react";
 import * as D from "../../domain/delivery";
 import * as F from "../../domain/findings";
 import * as M from "../../domain/model";
-import { STEERING_MODES, type Autonomy, type SteeringMode } from "../../domain/types";
+import { STEERING_MODES, type Autonomy, type Project, type SteeringMode } from "../../domain/types";
 import { Banner, Checkbox, Chip, Disclosure, Field, Input, Select } from "../kit";
 import { PREF_INVOLVEMENT_CHOSEN, PREF_NOTIFY, fmtTime, involvementOf, relTime, usePref, type Involvement } from "../common";
 import { disableNotifications, enableNotifications, notificationsSupported } from "../notifications";
@@ -30,7 +30,7 @@ type WorkingStyleDraft = {
   /** The branch Autopilot delivers to when delivery is off (it turns local delivery on). */
   branch: string;
   steering: SteeringMode;
-  triage: "lead" | "user";
+  triage: Project["triage"]["askUserBy"];
   notify: boolean;
 };
 
@@ -230,9 +230,10 @@ export function WorkingStyleSection({ current, onDirty }: { current: boolean; on
         >
           <Select
             value={v.triage}
-            onChange={(e) => draft.set({ triage: e.target.value as "lead" | "user" })}
+            onChange={(e) => draft.set({ triage: e.target.value as WorkingStyleDraft["triage"] })}
             options={[
               { value: "lead", label: "The lead" },
+              { value: "pe", label: "The PE (for now, the lead decides for it)" },
               { value: "user", label: "Me" },
             ]}
           />

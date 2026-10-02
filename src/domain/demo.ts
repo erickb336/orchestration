@@ -24,6 +24,7 @@ import * as M from "./model";
 import { DEMO_SCRIPT, type ScriptFinding } from "./demoScript";
 import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
+import { emptyBlueprint, emptyStudio } from "./studio/types";
 import {
   DEFAULT_AUTONOMY,
   DEFAULT_CHECKS,
@@ -265,6 +266,8 @@ class DemoBuilder {
         autonomy: { ...DEFAULT_AUTONOMY, autoDeliver: { ...DEFAULT_AUTONOMY.autoDeliver } },
         steeringMode: "apply",
         stage: "building",
+        devices: ["desktop", "mobile"],
+        factoryStarts: [],
         shapingSince: at(4340),
         checks: structuredClone(DEFAULT_CHECKS),
         triage: { askUserBy: "user" },
@@ -301,6 +304,8 @@ class DemoBuilder {
       // The built-in catalog until the server loads the files (it replaces this at start).
       flows: builtInCatalog(),
       notes: [],
+      studio: emptyStudio(),
+      blueprint: emptyBlueprint(),
       events: [
         { id: "ev-1", at: at(4340), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; shaping the vision with the lead` },
         { id: "ev-2", at: at(4332), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the shaping conversation: ${draftReason}. It waits for you to accept, edit or dismiss it.` },

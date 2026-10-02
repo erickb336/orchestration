@@ -302,8 +302,8 @@ export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonV
   const { state, send, disabled } = useStore();
   const confirm = useConfirm();
   const [busy, setBusy] = useState(false);
-  const why = M.startBuildingBlocker(state);
-  const plan = M.startBuildingPlan(state);
+  const why = M.startFactoryBlocker(state);
+  const plan = M.startFactoryPlan(state);
   const roadmap = plan.roadmap.length;
   const held = plan.userHeld.length;
   const open = M.openAreas(state);
@@ -325,6 +325,9 @@ export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonV
         showReason
         loading={busy}
         onClick={async () => {
+          // Your agreement on what you see now: this vision revision, the settings as they stand, and the open
+          // areas the confirmation lists. A stand-in for the pre-flight screen (ORC-029 pass 6).
+          const request = M.startFactoryRequest(state);
           if (open.length) {
             const ok = await confirm({
               title: "Start building with areas still open?",
@@ -334,7 +337,7 @@ export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonV
             if (!ok) return;
           }
           setBusy(true);
-          await send("startBuilding");
+          await send("startFactory", request);
           setBusy(false);
         }}
       >
@@ -431,7 +434,7 @@ export function ShapingPanel() {
   const lead = useLeadContext();
   const vision = M.currentVision(state);
   const roadmap = M.roadmapTasks(state);
-  const plan = M.startBuildingPlan(state);
+  const plan = M.startFactoryPlan(state);
   const running = M.activeAttempts(state).length;
   const last = state.visionDrafts.length ? state.visionDrafts[state.visionDrafts.length - 1] : undefined;
   const asked = M.latestQuestions(state);

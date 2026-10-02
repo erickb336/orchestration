@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
 import * as M from "./model";
+import { startFactoryAsOwner } from "./testing/factory";
 import { needsYouItems } from "./needsYou";
 import { buildSeed } from "./seed";
 import { budgetStop, buildingSpend, estimateUsd, PRICES, type ModelPrice } from "./spend";
@@ -183,7 +184,7 @@ describe("the budget stop", () => {
     const lowered = M.setBudgets(past, { buildingUsd: spend / 2, maintenanceUsdPerMonth: null }, at(5));
     expect(running(M.dispatchEligible(lowered, at(6)), "EX-004")).toHaveLength(0);
     // Going back to shaping ends it: the next start meets the stop again.
-    const back = M.startBuilding(M.startShaping(past, at(5)), at(6));
+    const back = startFactoryAsOwner(M.startVision(past, at(5)), at(6));
     expect(back.project.budgetContinued).toBeUndefined();
     expect(budgetStop(back)?.budgetUsd).toBe(spend);
   });

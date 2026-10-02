@@ -184,7 +184,7 @@ export function autonomyArgs(a: Autonomy, patch: Partial<Autonomy>): Autonomy {
 
 export const PREF_ONBOARDING_DISMISSED = "orchestration.onboarding.dismissed";
 export const PREF_INVOLVEMENT_CHOSEN = "orchestration.involvement.chosen";
-/** The user chose "Start building now" on the Get started list (shaping is recorded in the project itself). */
+/** On the sample project, the offer to try the shaping stage was taken once; it is not shown again. */
 export const PREF_STAGE_CHOSEN = "orchestration.stage.chosen";
 export const PREF_NOTIFY = "orchestration.notify";
 /** The `at` of the newest lead reply this browser has shown (the Lead button counts newer ones). */

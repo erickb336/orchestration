@@ -4,6 +4,7 @@
 import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
 import { runSummary } from "./checks";
+import { emptyBlueprint, emptyStudio } from "./studio/types";
 import { DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_RUN_LIMITS, NO_BUDGETS, autoModelDefaults, type Artifact, type Attempt, type CheckResult, type CheckRunRecord, type ConsumedInput, type SpecContent, type SpecOption, type State, type Task } from "./types";
 
 type SampleOutput = { name: string; summary: string; openFindings?: number };
@@ -430,6 +431,8 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       autonomy: { ...DEFAULT_AUTONOMY },
       steeringMode: "apply",
       stage: "building",
+      devices: ["desktop", "mobile"],
+      factoryStarts: [],
       prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
       // With the `checks` option the sample has checks on with two simulated commands, so the demo shows the
       // loop; a real project starts with them off. Findings that need a decision go to the user.
@@ -455,6 +458,8 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
     // The built-in catalog until the server loads the files (it replaces this at start).
     flows: builtInCatalog(),
     notes: [],
+    studio: emptyStudio(),
+    blueprint: emptyBlueprint(),
     events: [
       { id: "ev-1", at: at(600), actor: "lead", kind: "spec", message: "Published specs for EX-001…EX-007 from vision r1", taskId: undefined },
       { id: "ev-2", at: at(2200), actor: "user", kind: "decision", taskId: "EX-006", message: "Selected option B (Per-note export); override: I mostly export single notes to share them." },

@@ -7,6 +7,7 @@ import { budgetStop } from "../spend";
 import {
   type Attempt,
   type Autonomy,
+  type FactorySettings,
   type LeadRun,
   type LeadTrigger,
   type Message,
@@ -322,6 +323,11 @@ export function setLeadSelection(state: State, selection: ModelSelection, now: s
   if (r) requestLeadStop(s, r, "lead changed", now);
   event(s, now, "user", "config", `Lead set to ${providerLabel(selection.provider)} · ${selection.model}${r ? `; stopping ${r.id} first` : ""}`);
   return s;
+}
+
+/** Who decides when work starts: Manual (the lead does not plan), Check-in (its tasks wait for your go-ahead), or Autopilot. */
+export function autonomyMode(a: Autonomy): FactorySettings["autonomy"] {
+  return !a.enabled ? "manual" : a.holdLeadProposals ? "checkin" : "autopilot";
 }
 
 /**

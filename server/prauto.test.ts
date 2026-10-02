@@ -9,6 +9,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import * as D from "../src/domain/delivery";
 import * as M from "../src/domain/model";
 import { DEFAULT_CHECKS, type PrDelivery, type State, type Task } from "../src/domain/types";
@@ -119,6 +120,7 @@ beforeEach(async () => {
   scheduler = new Scheduler(store, { claude, codex }, { workspaces, github: fake, leaseMs: 120_000, ackTimeoutMs: 10_000 });
   await scheduler.refreshHealth();
   cmd("initProject", { name: "Auto", repoPath: repo, vision: "v", focus: "f" });
+  cmd("startFactory", startFactoryArgs(store.read().state));
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });

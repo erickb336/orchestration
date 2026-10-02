@@ -41,7 +41,7 @@ const [F, M] = domain;
 
 const FAKE = process.argv.includes("--fake");
 /** PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the test. */
-const EXPECTED_CHECKS = 15;
+const EXPECTED_CHECKS = 16;
 const ROOT = resolve(import.meta.dirname, "..");
 const PORT = Number(process.env.ORCHESTRATION_TEST_PORT ?? 5399);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -153,8 +153,22 @@ async function main() {
     await until("sample runs stopped", (x) => x.state.attempts.every((a) => a.outcome !== "running" && a.outcome !== "stopping"), 60000);
   }
 
-  // Project and limits.
+  // Project and limits. The project begins in Vision; the scenario starts the factory the way the owner does, with
+  // their agreement recorded (ORC-029): Manual (the lead plans nothing), each task waits for a go-ahead (the
+  // scenario starts both itself), decisions on findings come to the owner (the scenario answers them), you merge.
   await cmd("initProject", { name: "Real-run test", repoPath: repo, vision: "Keep the greeting module small and correct.", focus: "Real-run test" });
+  s = await state();
+  const createdInVision = s.state.project.stage === "shaping" && s.state.project.factoryStarts.length === 0;
+  const settings = { autonomy: "manual", merge: "user", pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } };
+  const agreement = { agreed: true, blueprintRev: M.currentVision(s.state).rev, settings, acceptOpen: M.openAreas(s.state) };
+  await cmd("startFactory", agreement);
+  s = await state();
+  const starts = s.state.project.factoryStarts;
+  check(
+    "the factory started only from the owner's startFactory, with its record",
+    createdInVision && s.state.project.stage === "building" && starts.length === 1 && starts[0].by === "user" && starts[0].blueprintRev === agreement.blueprintRev && JSON.stringify(starts[0].settings) === JSON.stringify(settings) && JSON.stringify(starts[0].openItems) === JSON.stringify(agreement.acceptOpen),
+    { createdIn: createdInVision ? "shaping" : s.state.project.stage, start: starts[0] ?? null },
+  );
   await cmd("setRunLimits", { maxTurns: 12, timeoutMinutes: 5, maxBudgetUsd: 0.5 });
   s = await state();
   const flow = s.state.flows.find((p) => p.id === FLOW_ID);

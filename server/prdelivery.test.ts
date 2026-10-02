@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import { CLIENT_HEADER } from "../src/api";
 import { createHttpServer } from "./http";
 import * as D from "../src/domain/delivery";
@@ -146,6 +147,7 @@ beforeEach(async () => {
   scheduler = newScheduler();
   await scheduler.refreshHealth();
   cmd("initProject", { name: "PRs", repoPath: repo, vision: "v", focus: "f" });
+  cmd("startFactory", startFactoryArgs(store.read().state));
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });
