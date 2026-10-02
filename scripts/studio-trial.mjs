@@ -218,7 +218,8 @@ async function main() {
   let { s } = await until("provider health checks", (x) => Object.values(x.service.providers).every((p) => p.health), 30_000);
   const health = Object.fromEntries(Object.entries(s.service.providers).map(([p, i]) => [p, i.health.status]));
   record("service started", { runtime: s.service.runtime, health, prototypePort: s.service.prototypePort ?? null });
-  if (Object.values(health).some((h) => h !== "ready")) throw new Error(`A provider is not ready: ${JSON.stringify(health)}. Configure it, then run the trial again.`);
+  const notReady = Object.entries(s.service.providers).filter(([, i]) => i.health.status !== "ready");
+  if (notReady.length) throw new Error(`A provider is not ready: ${notReady.map(([p, i]) => `${p} is ${i.health.status}: ${i.health.detail}`).join(" ")} Configure it, then run the trial again.`);
   if (s.service.prototypePort !== PROTOTYPE_PORT) throw new Error(`The prototype server is not listening on ${PROTOTYPE_PORT}; free the port or set ORCHESTRATION_PROTOTYPE_PORT.`);
 
   // A fresh fake database seeds the sample project, whose runs start at once: stop them first.
