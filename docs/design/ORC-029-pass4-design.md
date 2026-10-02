@@ -226,3 +226,24 @@ A passed probe is cached per docker command, image and stage root. When Docker i
 **Follow-ups:**
 - A crash can leave a stage folder in `~/.cache/orchestrator/recorder`. Nothing sweeps it yet.
 - The designer's brief (`runs.ts`) still says the service records "in a sandbox". It is still true, but it could name zsh's fallback.
+
+## The independent review of pass 4 (2026-10-02)
+
+The diff `0391420..80dce53`, read by a reviewer that did not write it. **No agent output can call an owner command:** the lead's block, the designer manifests and the PE answers cannot approve, overrule, lock in, start the factory, set domains or send feedback. All five 4c follow-ups are real defects. Findings:
+
+1. **Medium: the lead's `closeRound` ends PE review early.** A version that waits for the PE then waits forever, and a feasible-if version shows "agreed".
+2. **Medium: designer Mermaid loads remote URLs in the owner's app** (`themeCSS` with `url(…)`, image shapes). The app's pages have only a `frame-src` policy.
+3. **Medium: stored verdicts with `lastPass` re-enter the loop** after the upgrade (follow-up 5). The loop can then start a paid designer run.
+4. **Medium: the budget stop counts unknown costs as $0.**
+5. **Medium: "as it is today" is not shown as such,** the PE is not told that the artifact is a reproduction, and the loop asks the designer to redesign it.
+6. **Medium: the `PeReview` shape misstates the loop** (follow-ups 1 and 2): "objected" for a change request, "agreed" after two failed revisions, nothing when no provider can revise, and one test that passes for the wrong reason.
+7. **Medium: the owner has no way to set domains.** With the real trial's finding 3, the lead also asks about the wrong kind of domain.
+8. **Low: revisions started by the service are logged as the lead's** (follow-up 3).
+9. **Low: the trial's cap does not bound the runs that the service starts** (follow-up 4).
+10. **Low: duplicated rules:** the path check (four copies), `MAX_PROVENANCE`, `DOCUMENT_KINDS`, the round's question types, the verdict words and the "under way" statuses.
+11. **Low: `git ls-tree` runs synchronously,** also inside the store transaction of a round-0 import.
+
+**The fix round.** Two units, beside the schema unit for the lead's reply (real trial finding 1):
+- **F1, the domain and the server:** findings 1, 3, 4, 5 (server part), 6 (the shape), 8, 9, 10 and 11. The lead's brief explains the product domains and does not ask about them in free text.
+- **F2, the app and its security:** findings 2, 5 (the "As is" label), 7 (the owner's domain control), and pass 3 finding 3 (WebRTC and DNS prefetch). The recorder's stage folders are swept at start. Finding 6's wording follows F1's shape, after F1 merges.
+
