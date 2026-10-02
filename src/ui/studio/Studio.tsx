@@ -10,10 +10,11 @@
 //
 // Your marks, picks, pins, notes, answers and message are kept here until you send them, all together, as one
 // message to the lead (the marks are also recorded on each version). You can mark a version once the PE agreed, or
-// once its objections came to you; until then you can look.
+// once its review ended, and then overrule an objection that stands, with your reason; until then you can look.
 
 import { useCallback, useState } from "react";
 import * as M from "../../domain/model";
+import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DOMAIN_WORDS } from "../../domain/studio/domains";
 import type { Mark, Round, StudioArtifact } from "../../domain/studio/types";
@@ -59,8 +60,6 @@ import {
   usdRange,
   variantDemo,
   variantEntry,
-  VERDICT_LABEL,
-  VERDICT_TONE,
   type Draft,
   type ScreenDevice,
 } from "./studioView";
@@ -380,7 +379,7 @@ function RunLines({ n }: { n: number }) {
 function NoArtifacts({ n }: { n: number }) {
   const { state } = useStore();
   const runs = roundRuns(state, n);
-  const working = runs.find((r) => r.status === "running" || r.status === "stopping");
+  const working = runs.find(R.isActiveStudioRun);
   const queued = runs.find((r) => r.status === "queued");
   const ended = runs.find((r) => r.status === "failed" || r.status === "lost" || r.status === "stopped");
   if (working) return <EmptyState title={`The designer is working on round ${n}.`}>Its artifacts appear here when it finishes.</EmptyState>;
@@ -679,6 +678,49 @@ export function LeadPanel({ round, answers, onAnswer, message, onMessage }: { ro
   );
 }
 
+/**
+ * Overrule one of the PE's objections, with your reason (`overruleObjection`): once its review ended, on the newest
+ * version. The objection stays recorded, with your reason.
+ */
+function OverruleObjection({ verdictId }: { verdictId: string }) {
+  const { send, disabled } = useStore();
+  const [open, setOpen] = useState(false);
+  const [why, setWhy] = useState("");
+  const [busy, setBusy] = useState(false);
+  if (!open) {
+    return (
+      <div>
+        <Button size="small" disabled={disabled} disabledReason="The service is offline." onClick={() => setOpen(true)}>
+          Overrule the objection
+        </Button>
+      </div>
+    );
+  }
+  const blocker = disabled ? "The service is offline." : !why.trim() ? "Write your reason first." : undefined;
+  const submit = async () => {
+    if (blocker || busy) return;
+    setBusy(true);
+    const r = await send("overruleObjection", { verdictId, why: why.trim() });
+    setBusy(false);
+    if (r.ok) setOpen(false);
+  };
+  return (
+    <div className="k-stack k-stack--tight">
+      <Field label="Your reason" hint="The objection stays recorded, with your reason.">
+        <Textarea rows={2} value={why} onChange={(e) => setWhy(e.target.value)} />
+      </Field>
+      <div className="k-actions">
+        <Button size="small" disabled={!!blocker} disabledReason={blocker} loading={busy} onClick={() => void submit()}>
+          {busy ? "Overruling…" : "Overrule"}
+        </Button>
+        <Button size="small" variant="quiet" onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /** PE review of the artifact shown: where it stands for you, the PE's latest verdict on each variant, and the artifact's versions. */
 function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | undefined; onVersion: (artifactId: string, version: number) => void }) {
   const { state } = useStore();
@@ -690,7 +732,7 @@ function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | 
       {!a ? (
         <p className="small muted">The PE reviews each option the designer makes before it reaches you.</p>
       ) : !view ? (
-        <p className="small muted">{a.kind === "material" ? "What you brought" : "A probe's evidence"} is not reviewed by the PE.</p>
+        <p className="small muted">The PE does not review {a.kind === "material" ? "what you brought" : "a probe's evidence"}.</p>
       ) : (
         <>
           <div className="st-toolbar__grp">
@@ -701,34 +743,31 @@ function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | 
             {view.notIndependent && <Chip tone="you">not independent</Chip>}
           </div>
           <p className="small">{view.text}</p>
-          {view.by && <p className="micro muted">PE · {view.by}</p>}
-          {view.notIndependent && <p className="small">{view.notIndependent}</p>}
           {view.verdicts.length > 0 && (
             <ul className="st-verdicts" aria-label="The PE's verdicts">
               {view.verdicts.map((v) => (
                 <li key={v.id} className="st-verdict">
                   <div className="st-toolbar__grp">
                     <b className="small">{v.label}</b>
-                    <Chip tone={VERDICT_TONE[v.verdict]}>{VERDICT_LABEL[v.verdict]}</Chip>
+                    <Chip tone={v.tone}>{v.word}</Chip>
                     {v.overruled && <Chip>overruled</Chip>}
                   </div>
                   <p className="small muted">{v.reasons}</p>
-                  {v.change && (
-                    <p className="small">
-                      {v.verdict === "not-feasible" ? "What would change the verdict: " : "The change: "}
-                      {v.change}
-                    </p>
-                  )}
+                  {v.change && <p className="small">{v.change}</p>}
                   {v.budget && (
                     <p className="small muted">
                       Budget effect: {[v.budget.buildUsd && `building ${usdRange(v.budget.buildUsd)}`, v.budget.maintenanceUsdPerMonth && `maintenance ${usdRange(v.budget.maintenanceUsdPerMonth, true)}`].filter(Boolean).join(", ") || "no figures"}. Basis: {v.budget.basis}
                     </p>
                   )}
                   {v.overruled && <p className="small muted">You overruled it: {v.overruled.why}</p>}
+                  {v.canOverrule && <OverruleObjection verdictId={v.id} />}
                 </li>
               ))}
             </ul>
           )}
+          {view.next && <p className="small">{view.next}</p>}
+          {view.by && <p className="micro muted">PE · {view.by}</p>}
+          {view.notIndependent && <p className="small">{view.notIndependent}</p>}
         </>
       )}
       {a && history.length > 1 && (

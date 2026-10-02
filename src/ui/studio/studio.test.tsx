@@ -11,6 +11,7 @@ import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DESIGNER, addScreen, feedback, openRound, peAgrees, pePass, run, sha } from "../../domain/testing/studio";
+import type { RoundLead } from "../../domain/studio/types";
 import type { State } from "../../domain/types";
 import { TABS, VisionBadge } from "../App";
 import { ConfirmProvider } from "../kit";
@@ -34,6 +35,7 @@ import {
   documentType,
   draftFrom,
   draftKey,
+  peView,
   pinFromMessage,
   resolveInVersion,
   roundLabel,
@@ -46,7 +48,6 @@ import {
   variantEntry,
   versionHistory,
   type Draft,
-  type RoundLead,
 } from "./studioView";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
@@ -76,12 +77,29 @@ const render = (node: React.ReactElement, state: State, svc?: ServiceInfo) =>
     </ConfirmProvider>,
   );
 
+/** The text a reader sees in rendered markup: tags dropped, entities read. */
+const visible = (html: string) =>
+  html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ");
+
+/** The visible text of the studio's PE review panel. */
+const peText = (state: State) => {
+  const html = render(<Studio />, state);
+  return visible(html.slice(html.indexOf('aria-label="PE review"'), html.indexOf('aria-label="Your feedback"')));
+};
+
 /** A project in Vision (desktop and mobile), as one starts. */
 const vision = () => M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Weekend Trips", repoPath: "/tmp/trips", vision: "Plan weekend trips with friends.", focus: "" }, at(0));
 
 /** The fake designer's sample as the service imports it: Trip plan in two variants, desktop and mobile, made by a simulated run. */
 const SAMPLE_FILES = ["a/index.html", "a/style.css", "b/index.html", "b/style.css"].map((path, i) => ({ path, sha256: sha("abcd"[i]) }));
-function withSample(opts: { pe?: boolean } = {}) {
+function withSample(opts: { pe?: boolean; spentUsd?: number } = {}) {
   const r = openRound(vision(), "experience", at(1));
   let s = run<{ runId: string }>(r.state, "startStudioRun", { kind: "designer", round: r.n, brief: "Make the trip plan." }, at(2)).state;
   s = R.dispatchStudioRuns(s, at(3), { simulated: ["claude"] }).state;
@@ -95,7 +113,7 @@ function withSample(opts: { pe?: boolean } = {}) {
     files: SAMPLE_FILES,
     madeBy: { ...DESIGNER, attemptId: runId },
   });
-  s = R.completeStudioRun(a.state, runId, at(5), { summary: "Trip plan (simulated sample) v1 (2 variants)" });
+  s = R.completeStudioRun(a.state, runId, at(5), { summary: "Trip plan (simulated sample) v1 (2 variants)", ...(opts.spentUsd ? { usage: { costUsd: opts.spentUsd } } : {}) });
   if (opts.pe !== false) s = peAgrees(s, a.id, 1, ["a", "b"], at(6));
   return { s, id: a.id, n: r.n };
 }
@@ -213,7 +231,7 @@ describe("the fake designer's sample in the viewer", () => {
     const { s } = withSample({ pe: false });
     const html = render(<Studio />, s);
     expect(html).toContain("<iframe");
-    expect(html).toContain("Waiting for PE review. You can look at it now, and mark it once the PE agrees.");
+    expect(html).toContain("Waiting for PE review. You can look at it now. You can mark it after PE review.");
     expect(html).toContain("with the PE");
     expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*aria-disabled="true"[^>]*>Keep</);
   });
@@ -313,14 +331,12 @@ describe("the lead's panel", () => {
     expect(html).toContain("Nothing marked or written yet.");
   });
 
-  it("reads the lead's record defensively: ORC-012's question shape too, and nothing made up from a malformed one", () => {
-    const round = (lead: unknown) => ({ n: 1, focus: "experience", openedAt: at(1), summary: "", lead }) as never;
-    expect(roundLead(round(undefined))).toBeUndefined();
-    expect(roundLead(round({ message: "  ", questions: "no" }))).toBeUndefined();
-    expect(roundLead(round({ message: "Two takes.", questions: [{ question: "Offline?", why: "Trails.", options: ["Yes", 3, " "] }, { text: "" }, null] }))).toEqual({
-      message: "Two takes.",
-      questions: [{ text: "Offline?", reason: "Trails.", options: ["Yes"] }],
-    });
+  it("shows the lead's record as its run stored it, and nothing when the lead wrote neither a message nor a question", () => {
+    const round = (lead?: RoundLead) => ({ n: 1, focus: "experience" as const, openedAt: at(1), summary: "", ...(lead ? { lead } : {}) });
+    expect(roundLead(round())).toBeUndefined();
+    expect(roundLead(round({ message: "  ", questions: [] }))).toBeUndefined();
+    const lead = { message: "", questions: [{ text: "Offline?", reason: "Trails.", options: ["Yes"] }] };
+    expect(roundLead(round(lead))).toEqual(lead);
   });
 });
 
@@ -462,7 +478,7 @@ describe("as it is today (round 0 of an existing repository)", () => {
   function withAsIs(files: string[]) {
     const r = openRound(vision(), "material", at(1));
     const a = addScreen(r.state, r.n, at(2), { title: "Trip board", variants: [{ id: "a", label: "As is", entry: "board/index.html" }], files: [{ path: "board/index.html", sha256: sha("a") }], provenance: { files } });
-    return { s: peAgrees(a.state, a.id, 1, ["a"], at(3)), id: a.id };
+    return { s: pePass(a.state, a.id, 1, [{ variant: "a", verdict: "feasible", reasons: "It shows the same trip cards as the code." }], at(3)), id: a.id };
   }
 
   it("the round is named As it is today, not What you brought; the artifact says it is a reproduction to correct, with the files it came from", () => {
@@ -487,6 +503,53 @@ describe("as it is today (round 0 of an existing repository)", () => {
     expect(html).toContain("Made from 9 files in the repository:");
     expect(html.indexOf("src/part-6.js")).toBeLessThan(html.indexOf("The other files"));
     expect(html.indexOf("src/part-7.js")).toBeGreaterThan(html.indexOf("The other files"));
+  });
+
+  it("a reproduction that matches: the PE checked it against the code, and it is never called feasible", () => {
+    const { s, id } = withAsIs(["src/board/index.html"]);
+    const text = peText(s);
+    expect(text).toContain("Matches the code The PE checked it against the code: it matches.");
+    expect(text).toContain("As is Matches the code");
+    expect(text).toContain("Mark it Keep, Change or Drop.");
+    expect(text).not.toMatch(/feasible/i);
+    expect(versionHistory(s, S.getArtifact(s, id, 1))).toEqual([{ version: 1, round: 0, current: true, tone: "done", state: "matches", text: "PE pass 1: it matches the code." }]);
+  });
+
+  it("a reproduction with differences: the PE lists them, the designer does not revise it, and you correct it", () => {
+    const r = openRound(vision(), "material", at(1));
+    const a = addScreen(r.state, r.n, at(2), {
+      title: "Trip board",
+      variants: [
+        { id: "a", label: "Board", entry: "board/index.html" },
+        { id: "b", label: "Trip page", entry: "trip/index.html" },
+      ],
+      files: [
+        { path: "board/index.html", sha256: sha("a") },
+        { path: "trip/index.html", sha256: sha("b") },
+      ],
+      provenance: { files: ["src/board/index.html", "src/trip.html"] },
+    });
+    const s = pePass(
+      a.state,
+      a.id,
+      1,
+      [
+        { variant: "a", verdict: "feasible-if", reasons: "The cards match, apart from the dates.", change: "The code shows each trip's dates; the reproduction leaves them out." },
+        { variant: "b", verdict: "not-feasible", reasons: "This page is not in the code.", change: "The code has no trip page; the board links nowhere." },
+      ],
+      at(3),
+    );
+    expect(S.peReview(s, S.getArtifact(s, a.id, 1))).toMatchObject({ status: "ended", ended: "as-is", pass: 1 });
+    const text = peText(s);
+    expect(text).toContain("The PE found differences from the code: Board Some differences The cards match, apart from the dates. The differences: The code shows each trip's dates; the reproduction leaves them out.");
+    expect(text).toContain("Trip page Does not match the code This page is not in the code. What is wrong: The code has no trip page; the board links nowhere.");
+    expect(text).toContain("PE review ended: it reproduces the code as it is today, and the designer does not revise a reproduction for the PE. You can overrule the objection, with your reason. Mark it Keep, Change or Drop, and pick a variant.");
+    expect(text).not.toMatch(/feasible/i);
+    expect(text).not.toContain("every option");
+    expect(versionHistory(s, S.getArtifact(s, a.id, 1))[0]).toMatchObject({
+      state: "waiting for you",
+      text: "PE pass 1: found differences from the code; review ended: it reproduces the code as it is today, and the designer does not revise a reproduction for the PE. This is waiting for you.",
+    });
   });
 
   it("what the owner brought, and every later round, keep their names", () => {
@@ -544,7 +607,8 @@ describe("PE review in the right column", () => {
     expect(s.studio.runs.filter((r) => r.kind === "designer" && r.artifactId)).toEqual([]);
     const html = render(<Studio />, s);
     expect(html).toContain(">Agreed<");
-    expect(html).toContain("The PE agreed on pass 1: every option is feasible. It is yours to mark.");
+    expect(peText(s)).toContain("The PE agreed on pass 1: every option is feasible.");
+    expect(peText(s)).toContain("Mark it Keep, Change or Drop, and pick a variant.");
     expect(html).toContain("PE · Codex · codex-sample-large");
     expect(html).toContain("Simulated: the fake runtime&#x27;s PE answered; no agent judged this.");
     expect(html).toMatch(/A · Map first<\/b><span class="k-chip k-chip--done">Feasible</);
@@ -567,7 +631,11 @@ describe("PE review in the right column", () => {
     expect(S.peReview(s, S.getArtifact(s, x.id, 1))).toMatchObject({ status: "ended", ended: "no-revision", pass: 1, objections: [], asks: [{ variant: "b" }] });
     const html = render(<Studio />, s);
     expect(html).not.toContain(">Agreed<");
-    expect(html).toContain("The PE still asks for changes to B · Day by day. PE review ended: the designer&#x27;s runs revising it ended 2 times without a new version.");
+    expect(html).toContain(">Waiting for you<");
+    const text = peText(s);
+    expect(text).toContain("The PE still asks for changes to B · Day by day.");
+    expect(text).toContain("PE review ended: the designer's runs revising it ended 2 times without a new version. Mark it Keep, Change or Drop, and pick a variant.");
+    expect(text).not.toContain("overrule");
     expect(html).toMatch(/B · Day by day<\/b><span class="k-chip k-chip--you">Feasible if changed</);
     expect(html).toContain("The change: Page the days after a week.");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
@@ -577,15 +645,49 @@ describe("PE review in the right column", () => {
     const { afterOne } = threePasses();
     const html = render(<Studio />, afterOne);
     expect(html).toContain(">Revising<");
-    expect(html).toContain("The PE objected on pass 1; the designer revises before it reaches you.");
+    expect(peText(afterOne)).toContain("On pass 1 of 3, the PE objects to B · Day by day. The designer revises it before it reaches you.");
     expect(html).toMatch(/aria-disabled="true"[^>]*>Keep</);
+  });
+
+  it("a change the PE asks for is not an objection: it says the PE asks for changes, and the designer revises", () => {
+    const { s: designed, id } = withSample({ pe: false });
+    const s = pePass(designed, id, 1, [{ variant: "a", verdict: "feasible" }, { variant: "b", verdict: "feasible-if", change: "Page the days after a week." }], at(10));
+    const text = peText(s);
+    expect(text).toContain("Revising");
+    expect(text).toContain("On pass 1 of 3, the PE asks for changes to B · Day by day. The designer revises it before it reaches you.");
+    expect(text).not.toMatch(/object/i);
+    // Above the stage, where the marks are locked, it says the same.
+    expect(visible(render(<Studio />, s))).toContain("On pass 1 of 3, the PE asks for changes to B · Day by day. The designer revises it before it reaches you.");
+    expect(render(<Studio />, s)).not.toContain(">PE objects<");
+    expect(versionHistory(s, S.getArtifact(s, id, 1))).toEqual([{ version: 1, round: 1, current: true, tone: "work", state: "revising", text: "PE pass 1: asks for changes to B · Day by day; the designer is revising it." }]);
+  });
+
+  it("a pass that objects to one option and asks for changes to another says both; once revised, the version says what came of it", () => {
+    const { s: designed, id, n } = withSample({ pe: false });
+    const s = pePass(designed, id, 1, [{ variant: "a", verdict: "not-feasible", change: "A drawn map, not live tiles." }, { variant: "b", verdict: "feasible-if", change: "Page the days after a week." }], at(10));
+    expect(peText(s)).toContain("On pass 1 of 3, the PE objects to A · Map first and asks for changes to B · Day by day. The designer revises it before it reaches you.");
+    expect(versionHistory(s, S.getArtifact(s, id, 1))[0].text).toBe("PE pass 1: objects to A · Map first and asks for changes to B · Day by day; the designer is revising it.");
+    const revised = addScreen(s, n, at(11), { artifactId: id, title: "Trip plan (simulated sample)", variants: [{ id: "a", label: "A · Map first", entry: "a/index.html" }, { id: "b", label: "B · Day by day", entry: "b/index.html" }], files: SAMPLE_FILES }).state;
+    expect(versionHistory(revised, S.getArtifact(revised, id, 2))).toEqual([
+      { version: 1, round: 1, current: false, tone: "neutral", state: "objected", text: "PE pass 1: objected to A · Map first and asked for changes to B · Day by day; the designer revised it as v2." },
+      { version: 2, round: 1, current: true, tone: "neutral", state: "with the PE", text: "Waiting for PE review." },
+    ]);
+    // The new version waits for the PE's next pass; the old one, chosen from the history, says what came of it.
+    expect(peView(revised, S.getArtifact(revised, id, 2), M.providerLabel)).toMatchObject({ state: "Waiting", text: "The designer revised it. The PE reviews it next, on pass 2 of 3." });
+    expect(peView(revised, S.getArtifact(revised, id, 1), M.providerLabel)).toMatchObject({ state: "Revised", text: "On pass 1 of 3, the PE objected to A · Map first and asked for changes to B · Day by day. The designer revised it as v2." });
+    // A pass that only asked for changes is not called an objection in the history.
+    const asked = pePass(designed, id, 1, [{ variant: "a", verdict: "feasible" }, { variant: "b", verdict: "feasible-if" }], at(10));
+    const askedRevised = addScreen(asked, n, at(11), { artifactId: id, title: "Trip plan (simulated sample)", variants: [{ id: "a", label: "A · Map first", entry: "a/index.html" }, { id: "b", label: "B · Day by day", entry: "b/index.html" }], files: SAMPLE_FILES }).state;
+    expect(versionHistory(askedRevised, S.getArtifact(askedRevised, id, 2))[0]).toMatchObject({ state: "asked for changes", text: "PE pass 1: asked for changes to B · Day by day; the designer revised it as v2." });
   });
 
   it("an objection that stands after the third pass says plainly that it is waiting for you, and you can answer", () => {
     const { s } = threePasses();
     const html = render(<Studio />, s);
     expect(html).toContain(">Objects: waiting for you<");
-    expect(html).toContain("The PE still objects to B · Day by day. PE review ended: the PE made its 3 passes in the round. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.");
+    const text = peText(s);
+    expect(text).toContain("The PE still objects to B · Day by day.");
+    expect(text).toContain("PE review ended: the PE made its 3 passes in the round. You can overrule the objection, with your reason. Mark it Keep, Change or Drop, and pick a variant.");
     expect(html).toMatch(/<span class="k-chip k-chip--fail">Not feasible</);
     expect(html).toContain("What would change the verdict: A free source of prices.");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
@@ -661,12 +763,130 @@ describe("PE review in the right column", () => {
     let s = R.dispatchStudioRuns(R.askForPeReviews(designed, at(6)), at(7)).state;
     const first = s.studio.runs.find((r) => r.kind === "pe")!;
     s = R.reportStudioRunFailed(s, first.id, "Its verdicts were refused: its answer has no JSON block with the verdicts", at(8));
-    expect(render(<Studio />, s)).toContain("The PE&#x27;s run ended without a verdict (Its verdicts were refused: its answer has no JSON block with the verdicts); it is asked again.");
+    expect(peText(s)).toContain("The PE's run ended without a verdict (Its verdicts were refused: its answer has no JSON block with the verdicts). The service asks the PE again.");
     s = R.dispatchStudioRuns(R.askForPeReviews(s, at(9)), at(10)).state;
     s = R.reportStudioRunStopped(s, s.studio.runs.filter((r) => r.kind === "pe")[1].id, at(11), { lost: true });
     const html = render(<Studio />, s);
-    expect(html).toContain("The PE did not review it. PE review ended: the PE&#x27;s runs on it ended 2 times without a verdict.");
+    expect(peText(s)).toContain("The PE did not review it. PE review ended: the PE's runs on it ended 2 times without a verdict. Mark it Keep, Change or Drop, and pick a variant.");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
+  });
+
+  it("every way PE review ends says why, and what you can do now", () => {
+    const objectsToB = (s: State, id: string) => pePass(s, id, 1, [{ variant: "a", verdict: "feasible" }, { variant: "b", verdict: "not-feasible", change: "A free source of prices." }], at(10));
+    const fresh = () => withSample({ pe: false });
+    const cases: [string, () => State, string, string][] = [
+      ["the third pass", () => threePasses().s, "The PE still objects to B · Day by day.", "PE review ended: the PE made its 3 passes in the round. You can overrule the objection, with your reason. Mark it Keep, Change or Drop, and pick a variant."],
+      [
+        "a closed round",
+        () => {
+          const { s, n } = fresh();
+          return run(s, "closeRound", { round: n }, at(9)).state;
+        },
+        "The PE did not review it.",
+        "PE review ended: its round closed before the PE agreed. Mark it Keep, Change or Drop, and pick a variant.",
+      ],
+      [
+        "no revision",
+        () => revisionsFailed(reviewed([{ variant: "a", verdict: "feasible", reasons: "A static page." }, { variant: "b", verdict: "feasible-if", reasons: "Long trips.", change: "Page the days." }])),
+        "The PE still asks for changes to B · Day by day.",
+        "PE review ended: the designer's runs revising it ended 2 times without a new version. Mark it Keep, Change or Drop, and pick a variant.",
+      ],
+      [
+        "no review",
+        () => {
+          let s = fresh().s;
+          for (const t of [6, 9]) {
+            s = R.dispatchStudioRuns(R.askForPeReviews(s, at(t)), at(t + 1)).state;
+            s = R.reportStudioRunFailed(s, s.studio.runs.filter((r) => r.kind === "pe").at(-1)!.id, "no verdicts", at(t + 2));
+          }
+          return s;
+        },
+        "The PE did not review it.",
+        "PE review ended: the PE's runs on it ended 2 times without a verdict. Mark it Keep, Change or Drop, and pick a variant.",
+      ],
+      [
+        "no provider",
+        () => {
+          const { s, id } = fresh();
+          return S.endReview(s, id, 1, "the PE cannot run: Codex is not enabled.", at(7));
+        },
+        "The PE did not review it.",
+        "PE review ended: no enabled provider could run the next step (the PE cannot run: Codex is not enabled). Mark it Keep, Change or Drop, and pick a variant.",
+      ],
+      [
+        "the earlier rule",
+        () => {
+          // A version the PE reviewed before the loop (pass 3's rule), as the upgrade records it.
+          const { s: designed, id } = fresh();
+          const s = structuredClone(objectsToB(designed, id));
+          S.getArtifact(s, id, 1).reviewEnd = { reason: "earlier-rule", at: at(11) };
+          return s;
+        },
+        "The PE still objects to B · Day by day.",
+        "PE review ended: the PE reviewed it under the studio's earlier rule: one pass, and no revision. You can overrule the objection, with your reason. Mark it Keep, Change or Drop, and pick a variant.",
+      ],
+    ];
+    for (const [name, make, found, next] of cases) {
+      const s = make();
+      const text = peText(s);
+      expect(text, name).toContain(found);
+      expect(text, name).toContain(next);
+      expect(text, name).toMatch(/waiting for you/i);
+      // Yours to mark now.
+      expect(render(<Studio />, s), name).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
+    }
+    // Once you marked it, nothing else is needed from you, unless an objection stands.
+    const { s: agreed, id } = withSample();
+    expect(peText(feedback(agreed, id, 1, { mark: "keep" }, at(9)))).toContain("feasible for a reason You marked it keep. Nothing else is needed from you.");
+    const marked = feedback(threePasses().s, threePasses().id, 3, { mark: "change" }, at(20));
+    expect(peText(marked)).toContain("Review ended");
+    expect(peText(marked)).toContain("PE review ended: the PE made its 3 passes in the round. You can overrule the objection, with your reason. You marked it change.");
+  });
+
+  it("you can overrule an objection once review ended, with your reason; then it says so, and the objection stays recorded", () => {
+    const { afterOne, s, id } = threePasses();
+    // While the designer revises, there is nothing to overrule.
+    expect(render(<Studio />, afterOne)).not.toContain(">Overrule the objection<");
+    const html = render(<Studio />, s);
+    expect(html.match(/>Overrule the objection</g)).toHaveLength(1);
+    const objection = peView(s, S.getArtifact(s, id, 3), M.providerLabel)!.verdicts.find((v) => v.canOverrule)!;
+    expect(objection).toMatchObject({ label: "B · Day by day", word: "Not feasible" });
+    // What the control sends, against the real command table.
+    const overruled = run(s, "overruleObjection", { verdictId: objection.id, why: "We pay for the prices API." }, at(20)).state;
+    const text = peText(overruled);
+    expect(text).toContain("Overruled You overruled the PE's objections. They stay recorded.");
+    expect(text).toContain("B · Day by day Not feasible overruled");
+    expect(text).toContain("You overruled it: We pay for the prices API.");
+    expect(text).toContain("PE review ended: the PE made its 3 passes in the round. Mark it Keep, Change or Drop, and pick a variant.");
+    expect(render(<Studio />, overruled)).not.toContain(">Overrule the objection<");
+    // An older version, chosen from the history, offers nothing to overrule.
+    expect(peView(s, S.getArtifact(s, id, 2), M.providerLabel)!.verdicts.some((v) => v.canOverrule)).toBe(false);
+  });
+
+  it("a run held at the budget stop says why, with the stop's reason", () => {
+    const atStop = (s: State) => run(s, "setBudgets", { buildingUsd: 5, maintenanceUsdPerMonth: null }, at(6)).state;
+    // The PE's run, queued while the building spend ($6) is past the budget ($5).
+    const { s: designed } = withSample({ pe: false, spentUsd: 6 });
+    const queued = R.askForPeReviews(atStop(designed), at(7));
+    expect(R.dispatchStudioRuns(queued, at(8)).started).toEqual([]);
+    expect(peText(queued)).toContain("Queued The PE's run waits at the budget stop. The building budget is reached: $6.00 of $5.00.");
+    expect(visible(render(<Studio />, queued))).toContain("PE · Codex · codex-sample-large: queued It waits at the budget stop. The building budget is reached: $6.00 of $5.00.");
+    // The designer's revision for the PE, queued at the stop.
+    const { s: sample, id, n } = withSample({ pe: false, spentUsd: 6 });
+    const asked = pePass(atStop(sample), id, 1, [{ variant: "a", verdict: "feasible" }, { variant: "b", verdict: "feasible-if" }], at(10));
+    const revision = run(asked, "startStudioRun", { kind: "designer", round: n, artifactId: id, brief: "Revise it for the PE." }, at(11)).state;
+    expect(peText(revision)).toContain("On pass 1 of 3, the PE asks for changes to B · Day by day. The designer revises it before it reaches you. The designer's revision waits at the budget stop. The building budget is reached: $6.00 of $5.00.");
+  });
+
+  it("a PE run with no verdict while the factory runs says when the PE is asked again, and promises nothing else", () => {
+    const { s: designed } = withSample({ pe: false });
+    let s = R.dispatchStudioRuns(R.askForPeReviews(designed, at(6)), at(7)).state;
+    s = R.reportStudioRunFailed(s, s.studio.runs.find((r) => r.kind === "pe")!.id, "no verdicts", at(8));
+    s = M.startFactory(s, M.startFactoryRequest(s), at(9));
+    expect(s.project.stage).toBe("building");
+    const text = peText(s);
+    expect(text).toContain("The PE's run ended without a verdict (no verdicts). The PE reviews it when the project is back in Vision.");
+    expect(text).not.toContain("next pass");
   });
 });
 

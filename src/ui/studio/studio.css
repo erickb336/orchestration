@@ -60,8 +60,10 @@ main.st-wide { max-width: 1600px; }
 .st-item--artifact .st-item__title { flex: 1 0 100%; }
 .st-item__line { color: var(--muted); font-size: var(--fs-micro); }
 
-.st-runs { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: grid; gap: var(--space-2); }
-.st-runs li { display: grid; gap: var(--space-1); justify-items: start; min-width: 0; overflow-wrap: anywhere; }
+.st-runs { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+.st-runs li { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); justify-items: start; min-width: 0; overflow-wrap: anywhere; }
+/* A run's name ("Designer · Claude · claude-…: queued") wraps in the narrow column rather than running under the centre. */
+.st-runs .k-pill { white-space: normal; max-width: 100%; border-radius: var(--radius); }
 
 /* ---------- the centre: toolbar, stage, marks, pins ---------- */
 .st-stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0; }
