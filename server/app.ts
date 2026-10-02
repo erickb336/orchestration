@@ -115,6 +115,7 @@ pruneLogs();
 setInterval(pruneLogs, 24 * 60 * 60_000).unref();
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
+const prototypePort = Number(process.env.ORCHESTRATION_PROTOTYPE_PORT ?? port + 1);
 
 const server = createHttpServer({
   store,
@@ -126,6 +127,7 @@ const server = createHttpServer({
   startedAt: new Date().toISOString(),
   allowedHosts,
   staticDir,
+  prototypePort,
   log,
 });
 
@@ -140,7 +142,6 @@ server.on("error", (e: NodeJS.ErrnoException) => {
 
 // The studio's prototypes: agent-written code, served on a second listener (server/studio/serve.ts). Without it the
 // service still runs; prototypes just cannot be shown.
-const prototypePort = Number(process.env.ORCHESTRATION_PROTOTYPE_PORT ?? port + 1);
 const prototypes = createPrototypeServer({
   studioDir: () => projectStudioDir(dataDir, store.read().state.project.id),
   appOrigins: allowedHosts.map((h) => `http://${h}`),
