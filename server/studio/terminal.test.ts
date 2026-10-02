@@ -1,16 +1,18 @@
-// ORC-029 pass 3, unit 3c: terminal demos. The tape rules (every refusal), the hand-written fallback
-// (asciicast v3 and .ans frames), and, where macOS sandbox-exec, VHS, ttyd, ffmpeg and Chrome are all
-// present, real recordings: the trips fixture at 80×24 with its transcript, a hostile tape whose
-// commands try the internet, loopback, writes outside and signals and are refused by the sandbox, a
-// timeout that leaves nothing running, and a fake "sandbox" that the probe catches.
+// ORC-029 terminal demos. The tape rules (every refusal), the hand-written fallback (asciicast v3 and .ans frames), and,
+// where Docker runs and the recorder's image is built, real recordings in the container: the trips fixture and the
+// studio's terminal sample with their transcripts, a hostile tape whose commands try the network, the host, the owner's
+// terminals and files, and writes outside the copy, a timeout that kills the container, and a docker that drops the
+// isolation, which the probe catches.
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
-import { tmpdir, userInfo } from "node:os";
-import { join, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ANS_CAP, CAST_CAP, FAILURE_SIGNATURES, TAPE_CAP, probeTerminalSandbox, readTerminalFile, recordTape, refusedEscape, shellProfile, shellReads, transcriptError, validateAnsFrame, validateCast, validateTape } from "./terminal";
+import { defaultRecorderRoot, dockerReady } from "./container";
+import { TERMINAL_SAMPLE_FILES } from "./sample";
+import { ANS_CAP, CAST_CAP, FAILURE_SIGNATURES, TAPE_CAP, readTerminalFile, recordTape, refusedEscape, transcriptError, validateAnsFrame, validateCast, validateTape } from "./terminal";
 
 const FIXTURE = resolve(__dirname, "fixtures/trips");
 const FALLBACK = resolve(__dirname, "fixtures/trips-fallback");
@@ -194,33 +196,6 @@ describe("the fallback: hand-written asciicast v3 and .ans frames", () => {
     execFileSync("/bin/ln", ["-s", join(FALLBACK, "trips.cast"), join(dir, "link.cast")]);
     expect(readTerminalFile(join(dir, "link.cast"), CAST_CAP)).toEqual({ error: "not a regular file" });
   });
-
-  it("builds the shell profile only for a real port", () => {
-    expect(() => shellProfile(0)).toThrow(/not a port/);
-    expect(() => shellProfile(70000)).toThrow(/not a port/);
-    expect(shellProfile(4321)).toContain('(local ip "localhost:4321")');
-  });
-
-  it("denies the shell the home folders, apart from its own folders and the tools inside them", () => {
-    const home = join(dir, "home");
-    mkdirSync(join(home, ".nvm", "bin"), { recursive: true });
-    const real = realpathSync(home);
-    const reads = shellReads({ HOME: home }, [join(real, ".nvm", "bin"), "/opt/homebrew/bin"]);
-    if (typeof reads === "string") throw new Error(reads);
-    // The user's own home folder from the system, and HOME (here another folder); only the tool inside a home is kept.
-    expect(reads.deny).toEqual([realpathSync(userInfo().homedir), real]);
-    expect(reads.allow).toEqual([join(real, ".nvm", "bin")]);
-    const profile = shellProfile(4321, reads);
-    expect(profile).toContain(`(deny file-read* (subpath "${realpathSync(userInfo().homedir)}") (subpath "${real}"))`);
-    expect(profile).toContain(`(allow file-read* (subpath (param "WORK")) (subpath (param "SHELL_TMP")) (subpath "${join(real, ".nvm", "bin")}"))`);
-    // The allow rule comes after the deny rule: in a profile, the later rule wins.
-    expect(profile.indexOf("(allow file-read*")).toBeGreaterThan(profile.indexOf("(deny file-read*"));
-    // A home folder a profile cannot name means no profile, rather than one that misses it.
-    const quoted = join(dir, 'a"b');
-    mkdirSync(quoted);
-    expect(shellReads({ HOME: quoted }, [])).toMatch(/cannot be named in a sandbox profile/);
-    expect(() => shellProfile(4321, { deny: [quoted], allow: [] })).toThrow(/cannot name/);
-  });
 });
 
 describe("a recording's transcript, scanned for failures", () => {
@@ -277,30 +252,51 @@ describe("a recording's transcript, scanned for failures", () => {
   });
 });
 
-// ---------- real recordings, where the sandbox and the tools are present ----------
+// ---------- real recordings, in the recorder's container where Docker and the image are present ----------
 
-const health = await probeTerminalSandbox();
-const skipReason = health.ok ? "" : ` (skipped: ${health.detail})`;
+describe("never outside the container", () => {
+  it("refuses to record without Docker, and a tape whose shell the recorder does not have, before anything runs", async () => {
+    const missing = await recordTape(FIXTURE, join(dir, "out1"), { docker: join(dir, "no-docker"), tmpRoot: dir });
+    expect(missing).toMatchObject({ sandbox: null, reason: "unavailable" });
+    expect(missing.error).toBe(`Not recorded: Docker is not installed (${join(dir, "no-docker")} was not found). Nothing runs unsandboxed; use a hand-written .cast or .ans instead.`);
+    expect(readdirSync(join(dir, "out1"))).toEqual([]);
+    // The stage folder is removed.
+    expect(readdirSync(dir).filter((f) => f.startsWith("orc-rec-"))).toEqual([]);
+    const src = join(dir, "zsh");
+    mkdirSync(src);
+    writeFileSync(join(src, "demo.tape"), `Output demo.gif\nSet Shell zsh\n${SIZE}Type "echo hi"\nEnter\n`);
+    const zsh = await recordTape(src, join(dir, "out2"), { docker: join(dir, "no-docker"), tmpRoot: dir });
+    expect(zsh).toMatchObject({ sandbox: null, reason: "unavailable", error: "Not recorded: the recorder has bash only, and this tape sets zsh (Set Shell bash records). Use a hand-written .cast or .ans instead." });
+  });
+});
 
-describe(`recording with VHS in the sandbox${skipReason}`, () => {
+const ready = await dockerReady();
+const skipReason = ready.ok ? "" : ` (skipped: ${ready.reason})`;
+mkdirSync(defaultRecorderRoot(), { recursive: true });
+/** Where these recordings stage their folders: one Docker can see. Each recording's stage must be gone afterwards. */
+const ROOT = mkdtempSync(join(defaultRecorderRoot(), "test-terminal-"));
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+/** This process's containers that still exist (running or not). */
+const containersLeft = () => (ready.ok ? execFileSync(ready.docker, ["ps", "--all", "--filter", `name=orc-rec-${process.pid}-`, "--format", "{{.Names}}"], { encoding: "utf8" }).trim() : "");
+
+describe(`recording with VHS in the container${skipReason}`, () => {
   const listeners: Server[] = [];
   afterAll(() => {
     for (const l of listeners) l.close();
   });
-
-  it.skipIf(!health.ok)("the probe proved both profiles: the shell gets no network, loopback, outside writes, home folder or signals out; the recorder gets loopback only", () => {
-    expect(health.probes).toEqual({ shellWriteOutside: "denied", shellSignal: "denied", shellReadHome: "denied", shellLoopback: "denied", shellNetwork: "denied", recorderWriteOutside: "denied", recorderLoopback: "allowed", recorderNetwork: "denied" });
+  afterEach(() => {
+    // Nothing a recording made stays behind: its stage folder and its container are gone.
+    expect(readdirSync(ROOT)).toEqual([]);
+    expect(containersLeft()).toBe("");
   });
 
-  it.skipIf(!health.ok)(
-    "records the trips fixture at 80×24 into gif, webm and a transcript with the planned output, and leaves only the outputs",
+  it.skipIf(!ready.ok)(
+    "records the trips fixture at 80×24 into gif, webm and a transcript with the planned output",
     async () => {
       const out = join(dir, "out");
-      const tmpRoot = join(dir, "tmp");
-      mkdirSync(tmpRoot);
-      const r = await recordTape(FIXTURE, out, { tmpRoot });
+      const r = await recordTape(FIXTURE, out, { tmpRoot: ROOT });
       expect(r.error).toBeUndefined();
-      expect(r.sandbox).toBe("sandbox-exec");
+      expect(r.sandbox).toBe("container");
       const real = realpathSync(out);
       expect(r).toMatchObject({ gif: join(real, "trips.gif"), webm: join(real, "trips.webm"), txt: join(real, "trips.txt") });
       expect(readdirSync(out).sort()).toEqual(["trips.gif", "trips.txt", "trips.webm"]);
@@ -315,21 +311,41 @@ describe(`recording with VHS in the sandbox${skipReason}`, () => {
       // The hidden setup line never shows, and the frame is 80 columns wide.
       expect(txt).not.toContain("alias trips");
       expect(txt.split("\n").find((l) => l.startsWith("─"))).toHaveLength(80);
-      // The run's temporary folders are gone, and nothing it started is still running.
-      expect(readdirSync(tmpRoot)).toEqual([]);
-      expect(execFileSync("/bin/ps", ["-axo", "command="], { encoding: "utf8" })).not.toContain(tmpRoot);
     },
     90_000,
   );
 
-  it.skipIf(!health.ok)(
+  it.skipIf(!ready.ok)(
+    "records the studio's terminal sample (the fake designer's) into WebM, GIF and a transcript: its script runs by its path from the artifact's root",
+    async () => {
+      const src = join(dir, "sample");
+      for (const [p, text] of Object.entries(TERMINAL_SAMPLE_FILES)) {
+        mkdirSync(dirname(join(src, p)), { recursive: true });
+        writeFileSync(join(src, p), text);
+      }
+      const out = join(dir, "out");
+      const r = await recordTape(src, out, { tape: "cli/trips.tape", tmpRoot: ROOT });
+      expect(r.error).toBeUndefined();
+      const real = realpathSync(out);
+      expect(r).toMatchObject({ sandbox: "container", gif: join(real, "trips.gif"), webm: join(real, "trips.webm"), txt: join(real, "trips.txt") });
+      expect(readFileSync(r.gif!).subarray(0, 6).toString("latin1")).toBe("GIF89a");
+      expect(readFileSync(r.webm!).subarray(0, 4)).toEqual(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+      const txt = readFileSync(r.txt!, "utf8").split("\n");
+      for (const line of ["> trips plan", "Lake weekend  Sat 17 - Sun 18 Oct · Pine Lake · 4 friends", "  1  Cabin at Pine Lake   check in Sat 15:00   $140 each", "> trips pick 1", "  15:00  check in, booked by Jo", "Saved. trips share 1 makes a link for your group"]) expect(txt).toContain(line);
+      expect(r.errorLine).toBeUndefined();
+      expect(r.durationMs).toBeLessThan(90_000);
+    },
+    90_000,
+  );
+
+  it.skipIf(!ready.ok)(
     "records a tape in a subfolder, as the real trial's designer wrote it: the shell starts at the artifact's root, so its script called by its root path prints its real output; Output and Source stay relative to the tape",
     async () => {
       const out = join(dir, "out");
-      const r = await recordTape(SUBFOLDER, out, { tape: "demo/demo.tape", tmpRoot: dir });
+      const r = await recordTape(SUBFOLDER, out, { tape: "demo/demo.tape", tmpRoot: ROOT });
       expect(r.error).toBeUndefined();
       const real = realpathSync(out);
-      expect(r).toMatchObject({ sandbox: "sandbox-exec", gif: join(real, "demo.gif"), txt: join(real, "demo.txt") });
+      expect(r).toMatchObject({ sandbox: "container", gif: join(real, "demo.gif"), txt: join(real, "demo.txt") });
       expect(readdirSync(out).sort()).toEqual(["demo.gif", "demo.txt"]);
       const txt = readFileSync(r.txt!, "utf8");
       expect(txt.split("\n")).toContain(" 1  Lake Tahoe cabin      3h 40m   $148");
@@ -339,7 +355,7 @@ describe(`recording with VHS in the sandbox${skipReason}`, () => {
     90_000,
   );
 
-  it.skipIf(!health.ok)(
+  it.skipIf(!ready.ok)(
     "a recording whose transcript shows a failure names its first failing line, from the service's own transcript when the tape asks for none",
     async () => {
       const src = join(dir, "broken");
@@ -348,10 +364,10 @@ describe(`recording with VHS in the sandbox${skipReason}`, () => {
       writeFileSync(join(src, "demo", "demo.tape"), `Output demo.gif\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "node trips.js"\nEnter\nSleep 1.5s\n`);
       writeFileSync(join(src, "demo", "trips.js"), "console.log('not reached')\n");
       const out = join(dir, "out");
-      const r = await recordTape(src, out, { tape: "demo/demo.tape", tmpRoot: dir });
+      const r = await recordTape(src, out, { tape: "demo/demo.tape", tmpRoot: ROOT });
       expect(r.error).toBeUndefined();
-      expect(r.sandbox).toBe("sandbox-exec");
-      expect(r.errorLine).toMatch(/^Error: Cannot find module '/);
+      expect(r.sandbox).toBe("container");
+      expect(r.errorLine).toMatch(/^Error: Cannot find module '\/work\/trips\.js'/);
       // The service's transcript is not an output: only what the tape asked for is kept.
       expect(readdirSync(out)).toEqual(["demo.gif"]);
       expect(r.txt).toBeUndefined();
@@ -359,180 +375,149 @@ describe(`recording with VHS in the sandbox${skipReason}`, () => {
     90_000,
   );
 
-  it.skipIf(!health.ok)(
-    "a hostile tape's commands cannot reach the internet or loopback, write outside its folder, or signal this process",
+  it.skipIf(!ready.ok)(
+    "a hostile tape's commands cannot reach the network or the host, write to the owner's terminals, read the owner's files or write outside the copy; the recording still finishes",
     async () => {
-      const loop = await new Promise<Server>((res) => {
+      // The service's stand-in on this machine's loopback: nothing may connect to it.
+      let connections = 0;
+      const service = await new Promise<Server>((res) => {
         const s = createServer((c) => {
           connections++;
           c.destroy();
         });
         s.listen(0, "127.0.0.1", () => res(s));
       });
-      listeners.push(loop);
-      let connections = 0;
-      const port = (loop.address() as { port: number }).port;
+      listeners.push(service);
+      const port = (service.address() as { port: number }).port;
+      // A secret beside the artifact, on the host, and the owner's home folder.
+      const secret = join(dir, "secret.txt");
+      writeFileSync(secret, "the owner's secret\n");
+      const outsideFile = join(dir, "outside.txt");
+      const home = homedir();
       const src = join(dir, "hostile");
       const out = join(dir, "out");
-      const outsideFile = join(dir, "outside.txt");
       mkdirSync(src);
       writeFileSync(
         join(src, "hostile.sh"),
-        `#!/bin/bash
-curl -sS -m 5 -o /dev/null https://example.com 2>/dev/null; echo "curl-dns=$?"
-curl -sS -m 5 -o /dev/null http://1.1.1.1/ 2>/dev/null; echo "curl-ip=$?"
-node -e 'require("net").connect(443,"1.1.1.1").on("connect",()=>{console.log("node-net=CONNECTED");process.exit()}).on("error",e=>console.log("node-net="+e.code))'
-curl -sS -m 3 -o /dev/null http://127.0.0.1:${port}/ 2>/dev/null; echo "loopback=$?"
+        `node -e 'require("net").connect(443,"1.1.1.1").on("connect",()=>{console.log("node-net=CONNECTED");process.exit()}).on("error",e=>console.log("node-net="+e.code))'
+node -e 'require("dns").lookup("example.com",(e)=>console.log("dns="+(e?e.code:"RESOLVED")))'
+(exec 3<>/dev/tcp/1.1.1.1/443) 2>/dev/null; echo "bash-tcp=$?"
+(exec 3<>/dev/tcp/127.0.0.1/${port}) 2>/dev/null; echo "loopback=$?"
+echo pwned > /dev/ttys000 2>/dev/null; echo "ttys000=$?"
+echo "ttys-devices=$(ls /dev | grep -c '^ttys')"
+cat ${JSON.stringify(secret)} 2>/dev/null; echo "secret=$?"
+ls ${JSON.stringify(home)} >/dev/null 2>&1; echo "list-home=$?"
+cat ${JSON.stringify(join(home, ".zshrc"))} >/dev/null 2>&1; echo "zshrc=$?"
 echo x > ${JSON.stringify(outsideFile)} 2>/dev/null; echo "write-outside=$?"
 echo x > ../escaped.txt 2>/dev/null; echo "write-parent=$?"
-echo x > ${JSON.stringify(join(out, "planted.gif"))} 2>/dev/null; echo "write-out=$?"
+echo x > /etc/planted 2>/dev/null; echo "write-etc=$?"
+echo x > /usr/local/bin/ttyd 2>/dev/null; echo "write-tools=$?"
+echo GIF89a > /out/planted.gif; echo "write-out=$?"
 kill -0 ${process.pid} 2>/dev/null; echo "signal=$?"
 echo x > ./inside.txt; echo "write-inside=$?"
 `,
       );
-      chmodSync(join(src, "hostile.sh"), 0o755);
-      writeFileSync(join(src, "hostile.tape"), `Output hostile.txt\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "bash hostile.sh"\nEnter\nSleep 8s\n`);
-      const r = await recordTape(src, out, { tmpRoot: dir });
+      writeFileSync(join(src, "hostile.tape"), `Output hostile.txt\nSet Columns 120\nSet Rows 40\nSet TypingSpeed 10ms\nType "bash hostile.sh"\nEnter\nSleep 6s\n`);
+      const r = await recordTape(src, out, { tmpRoot: ROOT });
       expect(r.error).toBeUndefined();
-      expect(r.sandbox).toBe("sandbox-exec");
+      expect(r.sandbox).toBe("container");
       const txt = readFileSync(r.txt!, "utf8");
       const result = (k: string) => new RegExp(`^${k}=(\\S+)$`, "m").exec(txt)?.[1];
-      expect(result("curl-dns")).toBe("6"); // the DNS socket is refused, so nothing resolves
-      expect(result("curl-ip")).toBe("7"); // the connection is refused
-      expect(result("node-net")).toBe("EPERM"); // by the sandbox, not by an unreachable network
-      expect(result("loopback")).toBe("7");
+      expect(result("node-net")).toBe("ENETUNREACH"); // no network at all
+      expect(result("dns")).not.toBe("RESOLVED");
+      expect(result("bash-tcp")).toBe("1");
+      expect(result("loopback")).toBe("1"); // the container's own loopback: the service is not there
       expect(connections).toBe(0);
+      expect(result("ttys000")).toBe("1"); // the owner's terminals do not exist in the container
+      expect(result("ttys-devices")).toBe("0");
+      expect(result("secret")).toBe("1");
+      expect(txt).not.toContain("the owner's secret");
+      expect(result("list-home")).toBe("2"); // the owner's home folder does not exist in the container
+      expect(result("zshrc")).toBe("1");
       expect(result("write-outside")).toBe("1");
       expect(existsSync(outsideFile)).toBe(false);
-      expect(result("write-parent")).toBe("1");
-      expect(result("write-out")).toBe("1");
+      expect(result("write-parent")).toBe("1"); // the root is read-only
+      expect(result("write-etc")).toBe("1");
+      expect(result("write-tools")).toBe("1");
+      expect(txt).toContain("Read-only file system");
+      // The shell can write to the output folder, but only the declared output leaves it.
+      expect(result("write-out")).toBe("0");
       expect(readdirSync(out)).toEqual(["hostile.txt"]);
-      expect(result("signal")).toBe("1");
+      expect(result("signal")).toBe("1"); // no process of the host exists in the container
       expect(result("write-inside")).toBe("0");
-      expect(txt).toContain("Operation not permitted");
     },
     90_000,
   );
 
-  it.skipIf(!health.ok)(
-    "a hostile tape cannot read the home folder: not a file in it, not ~/.zshrc, not a listing; its own folder it reads",
+  it.skipIf(!ready.ok)(
+    "a tape that swaps an output folder for a link to its copy gets nothing copied out",
     async () => {
-      // A home of the test's own, outside the tape's folder, with a secret and a shell startup file.
-      const home = join(dir, "home");
-      mkdirSync(home);
-      writeFileSync(join(home, "secret.txt"), "the owner's secret\n");
-      writeFileSync(join(home, ".zshrc"), "export TOKEN=the-owners-token\n");
-      const src = join(dir, "reader");
+      const src = join(dir, "swap");
       mkdirSync(src);
-      writeFileSync(join(src, "inside.txt"), "readable inside\n");
-      writeFileSync(
-        join(src, "read.sh"),
-        `cat ${JSON.stringify(join(home, "secret.txt"))}; echo "secret=$?"
-cat ~/.zshrc; echo "zshrc=$?"
-cat "$HOME/.zshrc"; echo "home-zshrc=$?"
-ls ${JSON.stringify(home)}; echo "list-home=$?"
-ls ${JSON.stringify(userInfo().homedir)} >/dev/null; echo "list-user-home=$?"
-cat ./inside.txt; echo "inside=$?"
-`,
-      );
-      writeFileSync(join(src, "read.tape"), `Output read.txt\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "bash read.sh"\nEnter\nSleep 4s\n`);
-      const r = await recordTape(src, join(dir, "out"), { tmpRoot: dir, env: { ...process.env, HOME: home } });
-      expect(r.error).toBeUndefined();
-      const txt = readFileSync(r.txt!, "utf8");
-      const result = (k: string) => new RegExp(`^${k}=(\\S+)$`, "m").exec(txt)?.[1];
-      for (const k of ["secret", "zshrc", "home-zshrc", "list-home", "list-user-home"]) expect(result(k), k).toBe("1");
-      expect(txt).not.toContain("the owner's secret");
-      expect(txt).not.toContain("the-owners-token");
-      expect(txt).toContain("Operation not permitted");
-      expect(result("inside")).toBe("0");
-      expect(txt).toContain("readable inside");
+      // VHS writes its outputs at the end, through the link, into the copy: the service refuses to follow it.
+      writeFileSync(join(src, "swap.tape"), `Output media/swap.txt\n${SIZE}Set TypingSpeed 10ms\nType "rm -rf /out/media && ln -s /work /out/media && echo swapped"\nEnter\nSleep 1s\n`);
+      const out = join(dir, "out");
+      const r = await recordTape(src, out, { tmpRoot: ROOT });
+      expect(r).toMatchObject({ sandbox: "container", reason: "failed" });
+      expect(r.error).toMatch(/^media\/swap\.txt: a folder on its way is a link/);
+      expect(readdirSync(out)).toEqual([]);
     },
     90_000,
   );
 
-  it.skipIf(!health.ok)(
-    "nothing a tape starts outlives the recording, however it detaches; a process outside the sandbox is left alone",
+  it.skipIf(!ready.ok)(
+    "nothing a tape starts outlives the recording, however it detaches: the container is gone",
     async () => {
-      // Distinct durations name each way out: a background job, nohup, a subshell, and a double fork into a
-      // session of its own (with and without its environment).
-      const ways: Record<string, string> = {
-        "3271": "sleep 3271 &",
-        "3272": "nohup sleep 3272 >/dev/null 2>&1 &",
-        "3273": "(sleep 3273 &)",
-        "3274": "perl -MPOSIX -e 'exit if fork; setsid; exit if fork; exec qw(sleep 3274)'",
-        "3275": "env -i /usr/bin/perl -MPOSIX -e 'exit if fork; setsid; exit if fork; exec qw(sleep 3275)'",
-      };
-      const sleeping = () =>
-        execFileSync("/bin/ps", ["-axo", "command="], { encoding: "utf8" })
-          .split("\n")
-          .map((l) => /^(?:\/bin\/)?sleep (32\d\d)$/.exec(l.trim())?.[1])
-          .filter(Boolean)
-          .sort();
-      const outside = execFileSync("/bin/sh", ["-c", "sleep 3279 >/dev/null 2>&1 & echo $!"], { encoding: "utf8" }).trim();
-      try {
-        const src = join(dir, "detach");
-        mkdirSync(src);
-        writeFileSync(join(src, "detach.sh"), `${Object.values(ways).join("\n")}\necho started\n`);
-        writeFileSync(join(src, "detach.tape"), `Output detach.txt\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "bash detach.sh"\nEnter\nSleep 2s\n`);
-        const r = await recordTape(src, join(dir, "out"), { tmpRoot: dir });
-        expect(r.error).toBeUndefined();
-        expect(readFileSync(r.txt!, "utf8")).toContain("started");
-        expect(sleeping()).toEqual(["3279"]);
-      } finally {
-        execFileSync("/bin/kill", ["-9", outside]);
-      }
+      const src = join(dir, "detach");
+      mkdirSync(src);
+      writeFileSync(join(src, "detach.sh"), "sleep 3271 &\nnohup sleep 3272 >/dev/null 2>&1 &\n(sleep 3273 &)\nperl -MPOSIX -e 'exit if fork; setsid; exit if fork; exec qw(sleep 3274)'\necho started\n");
+      writeFileSync(join(src, "detach.tape"), `Output detach.txt\n${SIZE}Set TypingSpeed 10ms\nType "bash detach.sh"\nEnter\nSleep 2s\n`);
+      const r = await recordTape(src, join(dir, "out"), { tmpRoot: ROOT });
+      expect(r.error).toBeUndefined();
+      expect(readFileSync(r.txt!, "utf8")).toContain("started");
+      // afterEach: the container (and with it every process in it) is gone.
     },
     90_000,
   );
 
-  it.skipIf(!health.ok)(
-    "a tape that runs too long is stopped, and nothing it started keeps running",
+  it.skipIf(!ready.ok)(
+    "a tape that runs too long is stopped: the container is killed by its name, and nothing is left",
     async () => {
       const src = join(dir, "slow");
       mkdirSync(src);
-      writeFileSync(join(src, "slow.tape"), `Output slow.txt\nSet Columns 80\nSet Rows 24\nType "sleep 317"\nEnter\nSleep 60s\n`);
-      const tmpRoot = join(dir, "tmp");
-      mkdirSync(tmpRoot);
+      writeFileSync(join(src, "slow.tape"), `Output slow.txt\n${SIZE}Type "sleep 317"\nEnter\nSleep 60s\n`);
       const t0 = Date.now();
-      const r = await recordTape(src, join(dir, "out"), { tmpRoot, timeoutMs: 6_000 });
-      expect(r).toMatchObject({ sandbox: "sandbox-exec", reason: "timeout" });
-      expect(Date.now() - t0).toBeLessThan(20_000);
-      expect(readdirSync(tmpRoot)).toEqual([]);
-      await new Promise((res) => setTimeout(res, 500));
-      const ps = execFileSync("/bin/ps", ["-axo", "command="], { encoding: "utf8" });
-      expect(ps).not.toContain(tmpRoot); // VHS, Chrome, ffmpeg, ttyd
-      expect(ps).not.toMatch(/^sleep 317$/m); // the shell's own command
+      const r = await recordTape(src, join(dir, "out"), { tmpRoot: ROOT, timeoutMs: 6_000 });
+      expect(r).toMatchObject({ sandbox: "container", reason: "timeout", error: "VHS did not finish within 6 s; it was stopped" });
+      expect(Date.now() - t0).toBeLessThan(25_000);
       expect(readdirSync(join(dir, "out"))).toEqual([]);
     },
     60_000,
   );
 
-  it.skipIf(!health.ok)("refuses an invalid tape before anything runs", async () => {
+  it.skipIf(!ready.ok)("refuses an invalid tape before anything runs", async () => {
     const src = join(dir, "bad");
     mkdirSync(src);
-    writeFileSync(join(src, "bad.tape"), `Output ../../escape.gif\nSet Columns 80\nSet Rows 24\n`);
-    const r = await recordTape(src, join(dir, "out"), { tmpRoot: dir });
+    writeFileSync(join(src, "bad.tape"), `Output ../../escape.gif\n${SIZE}`);
+    const r = await recordTape(src, join(dir, "out"), { tmpRoot: ROOT });
     expect(r).toMatchObject({ sandbox: null, reason: "invalid-tape" });
     expect(r.error).toMatch(/bad\.tape:1: Output must be one path inside/);
     expect(readdirSync(join(dir, "out"))).toEqual([]);
   });
-});
 
-describe("never unsandboxed", () => {
-  it("refuses to record when sandbox-exec is missing, and when a stand-in does not actually sandbox anything", async () => {
-    const missing = await recordTape(FIXTURE, join(dir, "out1"), { sandboxExec: join(dir, "no-such-sandbox-exec"), tmpRoot: dir });
-    expect(missing).toMatchObject({ sandbox: null, reason: "unavailable" });
-    expect(missing.error).toMatch(/Not recorded/);
-    expect(existsSync(join(dir, "out1", "trips.gif"))).toBe(false);
-    if (process.platform !== "darwin") return;
-    // A "sandbox-exec" that drops its profile and runs the command as is: the probe must catch it.
-    const fake = join(dir, "fake-sandbox-exec");
-    writeFileSync(fake, `#!/bin/bash\nwhile [ "$1" = "-f" ] || [ "$1" = "-D" ]; do shift 2; done\nexec "$@"\n`);
-    chmodSync(fake, 0o755);
-    const fooled = await recordTape(FIXTURE, join(dir, "out2"), { sandboxExec: fake, tmpRoot: dir });
-    expect(fooled).toMatchObject({ sandbox: null, reason: "unavailable" });
-    expect(fooled.error).toMatch(/no working sandbox.*shellWriteOutside allowed/);
-    expect(existsSync(join(dir, "out2", "trips.gif"))).toBe(false);
-    expect(statSync(dir).isDirectory()).toBe(true);
-  }, 60_000);
+  it.skipIf(!ready.ok)(
+    "a docker that drops the isolation fails the probe, so nothing records",
+    async () => {
+      if (!ready.ok) return;
+      const loose = join(dir, "loose-docker");
+      writeFileSync(loose, `#!/bin/bash\nargs=()\nfor a in "$@"; do [ "$a" = "--read-only" ] || args+=("$a"); done\nexec ${JSON.stringify(ready.docker)} "\${args[@]}"\n`);
+      chmodSync(loose, 0o755);
+      const out = join(dir, "out");
+      const r = await recordTape(FIXTURE, out, { docker: loose, tmpRoot: ROOT });
+      expect(r).toMatchObject({ sandbox: null, reason: "unavailable" });
+      expect(r.error).toMatch(/^Not recorded: the recorder's container failed the check "writes only to its copy, its output folder and its temporary folders" \(saw: \/probe-x EACCES/);
+      expect(readdirSync(out)).toEqual([]);
+    },
+    60_000,
+  );
 });

@@ -160,3 +160,69 @@ The estimated Claude spend stays within what is left of the owner's $5 cap for p
 
 The trial also caught a setup mistake (mine): without `ORCHESTRATION_CLAUDE_AUTH=subscription`, Claude reported "not-configured". The trial now prints each provider's reason.
 
+
+## The container recorder (pass 3 findings 1 and 2)
+
+**What this is.** Terminal demos now record in a Docker container, not under macOS `sandbox-exec`. This closes pass 3 review findings 1 (the tape's shell could write to every `/dev/ttys*`) and 2 (shell reads were denied only in the home folder). The service records again: `TERMINAL_RECORDING_PAUSED` is removed.
+
+**What runs where.**
+- **The service** (on the Mac) checks the tape, copies the artifact version into a new stage folder, and starts one `docker run` per tape. It writes the tape to the container's stdin.
+- **The container** (in the Colima VM) runs VHS, ttyd, Chromium, ffmpeg, bash and Node. It sees two folders of the stage and nothing else from the host: the copy at `/work` and an empty output folder at `/out`.
+- **After VHS**, the service copies only the outputs the tape declared into `recording/<variant>/`. Each must be a regular file within the cap, with no link on its way.
+
+**The image.** `docker/recorder/Dockerfile`, tagged `orchestrator-recorder:1` by `npm run recorder:build`:
+- VHS 0.12.1 (Debian 13) and Node 22.23.3 (one binary from `node:22-trixie-slim`), both pinned by digest;
+- a `ttyd` wrapper first on PATH, which starts the tape's shell at `/work` (VHS itself runs in the tape's folder);
+- the user `recorder` (10001).
+
+The service never builds or pulls an image (`--pull never`). The image is 1.01 GB (3.35 GB on disk, with the VHS layers).
+
+**The flags** (`containerArgs` in `server/studio/container.ts`, an argument list, never a shell string):
+- `--network none`;
+- `--read-only`, with tmpfs for `/tmp` (512 MB) and HOME (64 MB), and an empty read-only tmpfs over the VHS image's `/vhs` volume;
+- `--cap-drop ALL` and `--security-opt no-new-privileges`;
+- `--user 10001:10001`;
+- `--pids-limit 512`, `--memory 1g` with no swap, and `--cpus 1.5` (one recording of the terminal sample peaked at 517 MB and 116 processes);
+- `--rm` and a unique `--name`;
+- two `--mount type=bind`: the copy and the output folder. No Docker socket.
+
+**Stops.** The service's limits stay (`RECORD_DEFAULTS`: 120 s, 25 MB per output, 512 MB on disk). On a timeout or a stop, the service runs `docker kill <name>`, then `docker rm --force <name>`. Inside, VHS runs under `timeout` (the service's limit plus 15 s), so a container also ends when the service is gone.
+
+**The stage folder.** Colima shares only the home folder with its VM: a bind mount of the system temp folder mounts an empty folder. So stages go in `~/.cache/orchestrator/recorder`, one per recording, removed afterwards. The probe proves that Docker sees them.
+
+**The probe** (`probeRecorder`) runs before anything records. First it asks whether Docker runs and whether the image is there. Then it runs a container with the same flags (plus a hosts entry for the host gateway) and service-owned commands. All of these must hold:
+1. a user other than root, no capabilities, no new privileges, a seccomp filter;
+2. its own processes;
+3. only the loopback interface, and 1.1.1.1:443 refused;
+4. the host gateway refused, and no connection to a port the service opens on the Mac;
+5. no host path (the home folder, `/Users`, the stage folder, the Docker socket), and no disk mounts but the two;
+6. it reads the service's file in the copy, and the service sees the files it writes;
+7. writes to `/`, `/etc` and `/usr/local/bin` refused;
+8. only Docker's own devices in `/dev`, no open terminal in `/dev/pts`, and no terminal at `/dev/tty`;
+9. the limits in place: processes, memory, swap and CPU.
+
+A passed probe is cached per docker command, image and stage root. When Docker is not running, the image is missing, or a check fails, the variant falls back to its hand-written files, with the reason.
+
+**Decisions.**
+- **Bind mounts, not a tar stream on stdin and stdout.** The mounts are what the brief asked for, and the probe proves them. A tar stream needs no shared folder, but it needs a tar reader for untrusted output.
+- **The image's user, not the host's user ID.** Docker Desktop and Colima map file owners on shared folders, so 10001 can write the mounts. On a Linux host the probe would fail this check (not verified).
+- **The stage in the home folder, not in the data directory.** `systemMedia` does not know the data directory, and tests must not write under `~/.orchestration`.
+- **The tape's shell and VHS run as one user,** so the shell can write to `/out`. That gives it nothing it does not have already: only declared outputs leave, as regular files.
+- **`Set Shell zsh` does not record:** the image has bash only, and adding zsh needs a package download at build time. The variant falls back, with the reason. The tape rules still allow zsh.
+
+**What was removed.** The two `sandbox-exec` profiles, the ttyd broker and wrapper, the reaper, the shell's read rules, and their tests; `TERMINAL_RECORDING_PAUSED` and the `recording` opt-in.
+
+**Verified (2026-10-02; Colima 0.10.3, Docker 29.8.2 client, 29.5.2 engine):**
+- the probe passes its 10 checks in under 0.5 s;
+- a docker that drops `--network none`, `--read-only` and `--cap-drop ALL` fails the probe, and nothing records;
+- the terminal sample (`TERMINAL_SAMPLE_FILES`) records into WebM, GIF and a transcript in about 11 s;
+- a hostile tape: no network, no DNS, no connection to the service's port, no `/dev/ttys000`, no host file or home folder, writes outside the copy refused, and a file planted in `/out` not copied out; the recording still finished;
+- a tape that swaps an output folder for a link gets nothing copied out;
+- a timeout kills the container by its name; no container and no stage folder stays;
+- through the scheduler (`runs.test.ts`) and the studio trial, the service records the demo in the container.
+
+**Not verified:** Docker Desktop, a Linux host, and a recording at 120×40 near the memory limit.
+
+**Follow-ups:**
+- A crash can leave a stage folder in `~/.cache/orchestrator/recorder`. Nothing sweeps it yet.
+- The designer's brief (`runs.ts`) still says the service records "in a sandbox". It is still true, but it could name zsh's fallback.

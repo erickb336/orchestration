@@ -6,11 +6,12 @@
 // - A screen designed for desktop or mobile: captureShots (shots.ts) on each of its devices, into shots/. Without
 //   Chrome there are none, and the version says why.
 // - A terminal demo or TUI, per variant: the tape it records (its entry, or the one .tape beside it) is recorded with
-//   recordTape (terminal.ts) inside the sandbox, never outside it, into recording/<variant>/ (WebM, GIF and a text
-//   transcript, as the tape asks). A recording whose transcript shows a failure is "recorded-with-errors", with its
-//   first failing line, unless the variant says it shows an error on purpose (`showsError`). A variant that is not
-//   recorded (no working sandbox, a missing tool, a failure) is shown with its hand-written .cast or .ans files when it
-//   has them, and otherwise says why it has nothing.
+//   recordTape (terminal.ts) in the recorder's Docker container (container.ts), never outside it, into
+//   recording/<variant>/ (WebM, GIF and a text transcript, as the tape asks). A recording whose transcript shows a
+//   failure is "recorded-with-errors", with its first failing line, unless the variant says it shows an error on
+//   purpose (`showsError`). A variant that is not recorded (Docker is not running, the image is missing, the probe
+//   failed, the recording failed) is shown with its hand-written .cast or .ans files when it has them, and otherwise
+//   says why it has nothing.
 //
 // Both kinds of file were checked at import (artifacts.ts); a tape is recorded from a copy of the whole version made
 // from its files, each checked against its recorded hash, with the shell at the copy's root: paths in a tape's
@@ -30,22 +31,17 @@ import { recordTape, type RecordResult } from "./terminal";
 /** The tools behind the screenshots and recordings; the service uses systemMedia, tests stand in for it. Neither throws. */
 export interface StudioMedia {
   shots(studioDir: string, artifactId: string, version: number): Promise<ShotsOutcome>;
-  /** Record `tape` (its path in the artifact, under `artifactDir`) into `outDir`, sandboxed or not at all. */
+  /** Record `tape` (its path in the artifact, under `artifactDir`) into `outDir`, in the container or not at all. */
   record(artifactDir: string, outDir: string, tape: string): Promise<RecordResult>;
 }
 
 /**
- * Real terminal recording is paused in the service until recordings run in a container (ORC-029 pass 3 review,
- * finding 1: under sandbox-exec a tape's shell can write to the owner's other terminal sessions). Until then every
- * tape falls back to its hand-written .cast or .ans, labelled with this reason. Tests opt in with `recording: true`.
+ * The service's tools: the system Chrome, and the recorder's container. Recordings stage the folders Docker mounts in
+ * the recorder's default root (~/.cache/orchestrator/recorder), which Docker Desktop and Colima both share.
  */
-export const TERMINAL_RECORDING_PAUSED =
-  "Not recorded: terminal recording is paused until it runs in a container (the macOS sandbox lets a tape reach your other terminal sessions). Use a hand-written .cast or .ans instead.";
-
-export const systemMedia = (log?: (msg: string) => void, opts: { recording?: boolean } = {}): StudioMedia => ({
+export const systemMedia = (log?: (msg: string) => void): StudioMedia => ({
   shots: (studioDir, artifactId, version) => captureShots({ studioDir, artifactId, version, log }),
-  record: (artifactDir, outDir, tape) =>
-    opts.recording ? recordTape(artifactDir, outDir, { tape, log }) : Promise.resolve({ sandbox: null, reason: "unavailable" as const, error: TERMINAL_RECORDING_PAUSED }),
+  record: (artifactDir, outDir, tape) => recordTape(artifactDir, outDir, { tape, log }),
 });
 
 /** The screenshots of a screen version, as the version records them. */
@@ -149,9 +145,9 @@ export async function makeDemo(media: StudioMedia, studioDir: string, artifactId
       }
     };
     const outputs = { webm: rel(r.webm), gif: rel(r.gif), txt: rel(r.txt) };
-    // Recorded means recorded in the sandbox: anything else is not shown as a recording. One that shows a failure says
-    // so, unless the designer made it to show one.
-    if (!r.error && r.sandbox === "sandbox-exec" && (outputs.webm || outputs.gif || outputs.txt)) {
+    // Recorded means recorded in the container: anything else is not shown as a recording. One that shows a failure
+    // says so, unless the designer made it to show one.
+    if (!r.error && r.sandbox === "container" && (outputs.webm || outputs.gif || outputs.txt)) {
       const files = { ...(outputs.webm ? { webm: outputs.webm } : {}), ...(outputs.gif ? { gif: outputs.gif } : {}), ...(outputs.txt ? { txt: outputs.txt } : {}) };
       shownVariants.push(r.errorLine && v.showsError !== true ? { variant: v.id, status: "recorded-with-errors", tape, ...files, reason: r.errorLine } : { variant: v.id, status: "recorded", tape, ...files });
     } else {
