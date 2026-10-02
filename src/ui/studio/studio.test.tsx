@@ -419,14 +419,22 @@ describe("where a variant is served from", () => {
 });
 
 describe("PE review in the right column", () => {
-  /** The sample, with a PE run on Codex (simulated) that made one pass with these verdicts. */
+  /**
+   * The sample, with a PE run on Codex (simulated) that made one pass with these verdicts. The loop ended there: the
+   * designer's two runs revising it failed (ORC-029 pass 4), so the version is the owner's at pass 1.
+   */
   function reviewed(verdicts: object[]) {
-    const { s: designed, id } = withSample({ pe: false });
+    const { s: designed, id, n } = withSample({ pe: false });
     let s = R.askForPeReviews(designed, at(6));
     s = R.dispatchStudioRuns(s, at(7), { simulated: ["codex"] }).state;
     const pe = s.studio.runs.find((r) => r.kind === "pe")!;
     s = S.addPeVerdicts(s, { artifactId: id, version: 1, verdicts: verdicts as S.VerdictInput[], by: { provider: "codex", model: pe.model, runId: pe.id } }, at(8)).state;
-    return { s: R.completeStudioRun(s, pe.id, at(8), { summary: "pass 1" }), id };
+    s = R.completeStudioRun(s, pe.id, at(8), { summary: "pass 1" });
+    for (const sec of [9, 10]) {
+      const r = run<{ runId: string }>(s, "startStudioRun", { kind: "designer", round: n, artifactId: id, brief: "Revise it for the PE." }, at(sec));
+      s = R.reportStudioRunFailed(R.dispatchStudioRuns(r.state, at(sec), { simulated: ["claude"] }).state, r.result.runId, "The simulated designer could not revise.", at(sec));
+    }
+    return { s, id };
   }
 
   /**

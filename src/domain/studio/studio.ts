@@ -5,10 +5,13 @@
 // recording the PE's verdicts and a probe's progress are the service's, from the studio's runs (passes 3 and 4);
 // clients cannot send them (SERVICE_COMMANDS in commands.ts). The lead never approves: approval is blueprint.ts's.
 //
-// The loop rule. The PE judges every option before the owner sees it. An artifact version reaches the owner when the
-// PE's latest pass on it finds every variant feasible or feasible-if, or after three passes in its round, with the
-// open objections attached. An objection is never dropped: a later pass on a revision answers it, or the owner
-// overrules it (recorded). What the owner brought and a probe's evidence are not held back.
+// The loop rule (ORC-029 pass 4). The PE judges every option before the owner sees it. When its pass asks for a change
+// (feasible-if) or objects (not-feasible) to a variant, the designer revises the version in the same round and the PE
+// reviews the new one, up to three passes in a round. A version reaches the owner when the PE's latest pass finds
+// every variant feasible, or once the loop ends (the third pass, the round closed, or the designer's revision runs
+// failed), with the PE's open objections and asked-for changes shown. An objection is never dropped: a later pass on a
+// revision answers it, or the owner overrules it (recorded). What the owner brought and a probe's evidence are not
+// held back.
 
 import { draft, event, nextId } from "../model/core";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "../model/textSafety";
@@ -28,6 +31,7 @@ import {
   type StudioArtifact,
   type StudioArtifactKind,
   type StudioMaker,
+  type StudioRun,
   type Verdict,
   type VariantDemo,
   UNGATED_KINDS,
@@ -370,20 +374,50 @@ function passesInRound(s: State, artifactId: string, round: number): number {
 /** Whether a verdict covers a variant: a verdict without a variant covers the whole artifact. */
 export const covers = (v: PeVerdict, variant: string | undefined) => v.variant === undefined || v.variant === variant;
 
+/** How many of the designer's runs revising one version for the PE may end without a new version before the loop ends: one retry. */
+export const MAX_REVISION_RUNS = 2;
+
+/** How many of these runs ended without a result: failed, lost, or stopped. A run a pause stopped is not one: it was asked for again. */
+export const endedWithoutResult = (runs: StudioRun[]) => runs.filter((r) => r.status === "failed" || r.status === "lost" || (r.status === "stopped" && !r.requeue)).length;
+
+/** The designer's runs revising a version within its round, in answer to the PE (the loop's revisions), oldest first. */
+export function revisionRunsOf(s: State, a: StudioArtifact): StudioRun[] {
+  return s.studio.runs.filter((r) => r.kind === "designer" && r.artifactId === a.id && r.baseVersion === a.version && r.round === a.round);
+}
+
 /**
- * Where PE review of an artifact version stands.
+ * Why the loop on a version is over although the PE still asks for changes, or undefined while it goes on: the round's
+ * third pass was made ("passes"); the round closed first ("round-closed"); or the designer's runs revising it ended
+ * without a new version MAX_REVISION_RUNS times ("no-revision").
+ */
+export type LoopEnd = "passes" | "round-closed" | "no-revision";
+
+const LOOP_END_WORDS: Record<LoopEnd, string> = { passes: `after ${MAX_PE_PASSES} passes`, "round-closed": "and its round is closed", "no-revision": "and the designer's revisions ended without a new version" };
+
+function loopEnd(s: State, a: StudioArtifact, pass: number): LoopEnd | undefined {
+  if (pass >= MAX_PE_PASSES) return "passes";
+  const round = s.studio.rounds.find((r) => r.n === a.round);
+  if (!round || round.closedAt) return "round-closed";
+  if (endedWithoutResult(revisionRunsOf(s, a)) >= MAX_REVISION_RUNS) return "no-revision";
+  return undefined;
+}
+
+/**
+ * Where PE review of an artifact version stands (the loop rule, ORC-029 pass 4).
  * - waiting: no pass on this version yet (`passes` were made on earlier versions of its round);
- * - revising: the latest pass objected and passes remain: the designer revises, or the PE asks for evidence;
- * - agreed: the latest pass found every variant feasible or feasible-if;
- * - objections: the third pass still objected, or the service made the objecting pass the last one (`lastPass`,
- *   while the designer cannot revise in answer to the PE); the version goes to the owner with them.
- * `objections` lists the latest pass's not-feasible verdicts, overruled ones included (they carry `overruled`).
+ * - revising: the latest pass asked for a change (feasible-if) or objected (not-feasible) on some variant, and the loop
+ *   goes on: the designer revises this version, and the PE reviews the new one;
+ * - agreed: the latest pass found every variant feasible; or the loop ended (`LoopEnd`) with changes asked for but no
+ *   objection, and the owner sees the changes beside the verdicts;
+ * - objections: the loop ended with objections; the version goes to the owner with them, and `ended` says why.
+ * `objections` lists the latest pass's not-feasible verdicts, overruled ones included (they carry `overruled`), and
+ * `changes` its feasible-if ones.
  */
 export type PeReview =
   | { status: "waiting"; passes: number }
-  | { status: "revising"; pass: number; objections: PeVerdict[] }
+  | { status: "revising"; pass: number; objections: PeVerdict[]; changes: PeVerdict[] }
   | { status: "agreed"; pass: number }
-  | { status: "objections"; pass: number; objections: PeVerdict[] };
+  | { status: "objections"; pass: number; objections: PeVerdict[]; ended: LoopEnd };
 
 export function peReview(s: State, a: StudioArtifact): PeReview {
   const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
@@ -391,11 +425,25 @@ export function peReview(s: State, a: StudioArtifact): PeReview {
   const pass = Math.max(...mine.map((v) => v.pass));
   const latest = mine.filter((v) => v.pass === pass);
   const objections = latest.filter((v) => v.verdict === "not-feasible");
-  if (!objections.length) return { status: "agreed", pass };
-  return pass >= MAX_PE_PASSES || latest.some((v) => v.lastPass) ? { status: "objections", pass, objections } : { status: "revising", pass, objections };
+  const changes = latest.filter((v) => v.verdict === "feasible-if");
+  if (!objections.length && !changes.length) return { status: "agreed", pass };
+  const ended = loopEnd(s, a, pass);
+  if (!ended) return { status: "revising", pass, objections, changes };
+  return objections.length ? { status: "objections", pass, objections, ended } : { status: "agreed", pass };
 }
 
-/** Whether the owner sees this version: PE review agreed or ran its three passes; what the owner brought and evidence are never held back. */
+/**
+ * Whether the designer should revise this version for the PE now: it is the newest version of a reviewed kind, in
+ * Vision, its review is revising (the loop goes on), and no revision of it is under way or finished.
+ */
+export function revisionDue(s: State, a: StudioArtifact): boolean {
+  if (s.project.stage !== "shaping" || UNGATED_KINDS.includes(a.kind)) return false;
+  if (latestVersion(s, a.id)?.version !== a.version) return false;
+  if (peReview(s, a).status !== "revising") return false;
+  return !revisionRunsOf(s, a).some((r) => r.status === "queued" || r.status === "running" || r.status === "stopping" || r.status === "completed");
+}
+
+/** Whether the owner sees this version: PE review agreed, or its loop ended with objections; what the owner brought and evidence are never held back. */
 export function readyForOwner(s: State, a: StudioArtifact): boolean {
   if (UNGATED_KINDS.includes(a.kind)) return true;
   const r = peReview(s, a);
@@ -450,15 +498,12 @@ export interface PeVerdictsInput {
   verdicts: VerdictInput[];
   /** The PE's run that made them (the service's record). */
   by?: { provider: ProviderId; model: string; runId: string };
-  /** Make this pass the last of its round: its objections go to the owner now (while the designer cannot revise in answer to the PE). */
-  lastPass?: boolean;
 }
 
 /**
  * Record one PE pass on an artifact's newest version (the service, from the PE's run): one verdict per variant, or
- * one verdict on the whole artifact. Passes count within the version's round, up to three, or fewer when the
- * service makes one the last (`lastPass`). Feasible-if states the change; an estimate states its basis. What the
- * owner brought and a probe's evidence are not reviewed.
+ * one verdict on the whole artifact. Passes count within the version's round, up to three. Feasible-if states the
+ * change; an estimate states its basis. What the owner brought and a probe's evidence are not reviewed.
  */
 export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string): { state: State; pass: number } {
   const a = getArtifact(state, input.artifactId, input.version);
@@ -495,7 +540,6 @@ export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string)
       ...(v.budget ? { budget: estimate(v.budget) } : {}),
       at: now,
       ...(input.by ? { by: { provider: input.by.provider, model: input.by.model, runId: input.by.runId } } : {}),
-      ...(input.lastPass ? { lastPass: true as const } : {}),
     };
   });
   const s = draft(state);
@@ -503,14 +547,15 @@ export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string)
   const art = getArtifact(s, a.id, a.version);
   const words: Record<Verdict, string> = { feasible: "feasible", "feasible-if": "feasible if changed", "not-feasible": "not feasible" };
   const r = peReview(s, art);
+  const ended = loopEnd(s, art, pass);
   const outcome =
-    r.status === "agreed"
-      ? "agreed; it goes to the owner"
+    r.status === "revising"
+      ? "the designer revises"
       : r.status === "objections"
-        ? pass >= MAX_PE_PASSES
-          ? `still objects after ${MAX_PE_PASSES} passes; it goes to the owner with the objections`
-          : "objects, and the designer cannot revise in answer yet; it goes to the owner with the objections"
-        : "the designer revises";
+        ? `still objects ${LOOP_END_WORDS[r.ended]}; it goes to the owner with the objections`
+        : records.some((x) => x.verdict === "feasible-if") && ended
+          ? `still asks for changes ${LOOP_END_WORDS[ended]}; it goes to the owner with them`
+          : "agreed; it goes to the owner";
   event(s, now, "runtime", "vision", `PE review of ${artifactName(a)}, pass ${pass}: ${records.map((x) => `${x.variant ? `${variantLabel(a, x.variant)} ` : ""}${words[x.verdict]}`).join(", ")}; ${outcome}`);
   return { state: s, pass };
 }

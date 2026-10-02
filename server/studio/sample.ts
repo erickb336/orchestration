@@ -4,7 +4,7 @@
 // studio.json check and import as a real designer's work, so the demo and the tests need no agent. Every page says
 // it is a simulated sample.
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const BASE_CSS = `*, *::before, *::after { box-sizing: border-box; }
@@ -301,21 +301,65 @@ export function designerAsk(prompt: string): { brief: string; terminal: boolean 
 }
 
 /**
- * What the fake runtime's PE answers (ORC-029 pass 3): it reads the version's manifest.json, as a PE agent reads the
- * folder, and agrees with every variant, feasible, except the second, feasible if a stand-in change is made, so the
- * demo shows both and the owner can send feedback. Every reason says it is simulated: nothing was judged.
+ * The variants a revision brief asks the designer to change: its lines "- Revise `<id>` …", which the revision brief
+ * writes (server/studio/revise.ts). None named: every variant.
+ */
+export function variantsToRevise(brief: string): string[] {
+  return [...brief.matchAll(/^- Revise `([^`]+)`/gm)].map((m) => m[1]);
+}
+
+const REVISION_NOTE = "Simulated revision: the fake runtime's designer marked this variant revised in answer to the PE; nothing was redesigned.";
+
+/** A sample file of a revised variant, marked so the owner and the PE can see the simulated revision. */
+function revisedText(path: string, text: string): string {
+  if (path.endsWith(".html")) return text.includes("<body>\n") ? text.replace("<body>\n", `<body>\n<p class="sim">${REVISION_NOTE}</p>\n`) : `${text}<p class="sim">${REVISION_NOTE}</p>\n`;
+  if (path.endsWith(".ans")) return text.replace("(simulated sample)", "(simulated revision)");
+  if (path.endsWith(".tape")) return `${text}# ${REVISION_NOTE}\n`;
+  if (path.endsWith(".js")) return `${text}// ${REVISION_NOTE}\n`;
+  return text;
+}
+
+/**
+ * The fake designer's revision (ORC-029 pass 4). Its staging folder starts with the files of the version it revises,
+ * one of its own samples: it marks the files of each variant the brief asks it to revise (those in the variant's
+ * entry folder), leaves the others as they are, and writes a studio.json with that one artifact, as a designer agent
+ * would. Returns its final message. Throws when the files are not one of its samples: it revises only what it made.
+ */
+export function reviseSample(staging: string, opts: { terminal: boolean; variants: string[] }): string {
+  const samples = [SAMPLE_MANIFEST.artifacts[0], ...terminalSampleManifest(opts.terminal).artifacts];
+  const manifest = samples.find((m) => m.files.every((f) => existsSync(join(staging, f))));
+  if (!manifest) throw new Error("its working directory does not hold one of its own samples, and it revises only what it made");
+  const asked = opts.variants.length ? manifest.variants.filter((v) => opts.variants.includes(v.id)) : manifest.variants;
+  const folder = (p: string) => p.slice(0, p.lastIndexOf("/") + 1);
+  for (const f of manifest.files.filter((f) => asked.some((v) => folder(f) === folder(v.entry)))) writeFileSync(join(staging, f), revisedText(f, readFileSync(join(staging, f), "utf8")));
+  writeFileSync(join(staging, "studio.json"), `${JSON.stringify({ artifacts: [manifest] }, null, 2)}\n`);
+  return `Revised ${asked.map((v) => v.label).join(" and ") || "nothing"} of ${manifest.title} in answer to the PE; the other variants are as they were (simulated revision).`;
+}
+
+/**
+ * What the fake runtime's PE answers (ORC-029 passes 3 and 4): it reads the version's manifest.json, as a PE agent
+ * reads the folder. On an artifact's first version with two or more variants it asks for a stand-in change to the
+ * second (feasible-if), so the demo shows the designer revising in answer; it agrees with every variant of every
+ * other version. Every reason says it is simulated: nothing was judged.
  */
 export function fakePeAnswer(folder: string): { ok: true; text: string } | { ok: false; error: string } {
   let variants: { id: string }[];
+  let version: unknown;
   try {
-    const m = JSON.parse(readFileSync(join(folder, "manifest.json"), "utf8")) as { variants?: unknown };
+    const m = JSON.parse(readFileSync(join(folder, "manifest.json"), "utf8")) as { variants?: unknown; version?: unknown };
     variants = Array.isArray(m.variants) ? m.variants.filter((v): v is { id: string } => !!v && typeof (v as { id?: unknown }).id === "string") : [];
+    version = m.version;
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
-  const reasons = "Simulated: the fake runtime's PE, not an agent. It judged nothing about feasibility, scale, longevity or budget; it agrees so the demo can go on.";
+  const reasons = "Simulated: the fake runtime's PE, not an agent. It judged nothing about feasibility, scale, longevity or budget;";
+  const objects = version === 1 && variants.length >= 2;
   const verdicts = variants.length
-    ? variants.map((v, i) => (i === 1 ? { variant: v.id, verdict: "feasible-if", reasons, change: "Simulated: a stand-in change, to show how a feasible-if verdict reads." } : { variant: v.id, verdict: "feasible", reasons }))
-    : [{ verdict: "feasible", reasons }];
+    ? variants.map((v, i) =>
+        objects && i === 1
+          ? { variant: v.id, verdict: "feasible-if", reasons: `${reasons} it asks for a change on the first version, so the demo shows the designer revising.`, change: "Simulated: a stand-in change, which the fake designer marks on this variant in a revision." }
+          : { variant: v.id, verdict: "feasible", reasons: `${reasons} it agrees so the demo can go on.` },
+      )
+    : [{ verdict: "feasible", reasons: `${reasons} it agrees so the demo can go on.` }];
   return { ok: true, text: `Simulated PE review: no agent read this version.\n\n\`\`\`json\n${JSON.stringify({ verdicts }, null, 2)}\n\`\`\`\n` };
 }

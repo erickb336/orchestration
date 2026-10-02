@@ -303,6 +303,26 @@ describe("the PE's runs (pass 3)", () => {
     expect(R.askForPeReviews(stopped, at(7))).toBe(stopped);
   });
 
+  it("runs a pause stopped do not count toward the retry limit: after two pauses and one failure the PE is still asked once more (review finding 7)", () => {
+    const { s, id } = imported();
+    let x = R.askForPeReviews(s, at(3));
+    // Paused twice while the PE reads: each stop asks for the run again, and the project resumes.
+    for (const sec of [4, 10]) {
+      const runId = peRuns(x).at(-1)!.id;
+      x = R.reportStudioRunStopped(M.pauseProject(dispatch(x, sec).state, at(sec + 1)), runId, at(sec + 2));
+      x = M.resumeProject(x, at(sec + 3));
+    }
+    expect(peRuns(x).map((r) => r.status)).toEqual(["stopped", "stopped", "queued"]);
+    // The third run fails: one failure, so the PE is asked once more.
+    x = R.reportStudioRunFailed(dispatch(x, 20).state, peRuns(x).at(-1)!.id, "The PE's answer had no verdicts.", at(21));
+    expect(R.peRunDue(x, S.latestVersion(x, id)!)).toBe(true);
+    x = R.askForPeReviews(x, at(22));
+    expect(peRuns(x).map((r) => r.status)).toEqual(["stopped", "stopped", "failed", "queued"]);
+    // A second failure is the limit.
+    x = R.reportStudioRunFailed(dispatch(x, 23).state, peRuns(x).at(-1)!.id, "Again no verdicts.", at(24));
+    expect(R.peRunDue(x, S.latestVersion(x, id)!)).toBe(false);
+  });
+
   it("counts in the building budget and waits at it, like every studio run", () => {
     const { s } = imported();
     const asked = R.askForPeReviews(s, at(3));

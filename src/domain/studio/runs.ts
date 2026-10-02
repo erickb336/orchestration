@@ -19,7 +19,7 @@ import { providerLabel } from "../model/resolution";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
 import { budgetStop } from "../spend";
 import { ControlError, PROVIDERS, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
-import { artifactName, latestArtifacts, latestVersion, peReview } from "./studio";
+import { artifactName, endedWithoutResult, latestArtifacts, latestVersion, peReview } from "./studio";
 import { UNGATED_KINDS, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
 
 /** The longest brief a run takes, in characters. */
@@ -169,9 +169,10 @@ export function peRunDue(s: State, a: StudioArtifact): boolean {
   if (a.shots?.status === "pending" || a.demo?.status === "pending") return false;
   if (peReview(s, a).status !== "waiting") return false;
   const runs = peRunsOf(s, a.id, a.version);
-  // A run pausing stopped is asked for again by itself (retryOf); one under way, or finished, needs no other.
-  if (runs.some((r) => r.status === "queued" || r.status === "running" || r.status === "stopping" || r.status === "completed" || (r.status === "stopped" && r.requeue))) return false;
-  return runs.filter((r) => r.status === "failed" || r.status === "lost" || r.status === "stopped").length < MAX_PE_RUNS;
+  // One under way, or finished, needs no other. A run a pause stopped was asked for again in the same write
+  // (retryOf), and that run is among these: it neither blocks a later retry nor counts toward the limit.
+  if (runs.some((r) => r.status === "queued" || r.status === "running" || r.status === "stopping" || r.status === "completed")) return false;
+  return endedWithoutResult(runs) < MAX_PE_RUNS;
 }
 
 /** The PE's brief for a version: what the run record says it was asked to do (the envelope has the rest). */

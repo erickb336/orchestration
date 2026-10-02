@@ -7,7 +7,7 @@
 // everything in one lease-checked transaction, so state changes stay serialized.
 
 import { createHash, randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import * as C from "../src/domain/checks";
 import * as D from "../src/domain/delivery";
@@ -27,6 +27,7 @@ import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, versionDir, type StagedArtifact } from "./studio/artifacts";
 import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
 import { PeAnswerError, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
+import { askForRevisions } from "./studio/revise";
 import { designerEnvelope, importDesignerRun, prepareStaging } from "./studio/runs";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
@@ -80,6 +81,8 @@ interface Launched {
   touchedInputs?: string[];
   /** A studio run: its staging folder, removed once what it handed in was imported. */
   staging?: string;
+  /** A read-only studio run (the PE): its temp folder, outside the version it reads, removed when the run ends. */
+  tmp?: string;
 }
 
 /** What the scheduler saw of a studio run outside the store: a lost process, an unconfirmed stop, a launch that failed. */
@@ -536,7 +539,8 @@ export class Scheduler {
           }
           // The PE reviews each designer version before the owner sees it: asked for once the version is imported
           // and its screenshots or recording are made (applied above), and again after a review ended without a verdict.
-          return R.askForPeReviews(next, now);
+          // When its pass asks for changes, the designer revises the version, and the PE reviews the new one (the loop).
+          return askForRevisions(R.askForPeReviews(next, now), now);
         },
         now,
         lease,
@@ -555,6 +559,7 @@ export class Scheduler {
       if ((info?.taskId === "LEAD" || info?.taskId === "STUDIO" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
       // A studio run's staging folder goes once what it handed in is imported; a failed or stopped run's stays, to look at.
       if (info?.staging && R.getStudioRun(after, e.attemptId)?.status === "completed") rmSync(info.staging, { recursive: true, force: true });
+      if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
       this.launched.delete(e.attemptId);
     }
     this.conventionsCache = undefined;
@@ -839,8 +844,13 @@ export class Scheduler {
     const limits = state.project.runLimits;
     if (run.kind === "pe") {
       try {
-        const folder = versionDir(studioRoot(this.dataDir, state.project.id), run.artifactId!, run.baseVersion!);
-        this.launched.set(runId, { provider: run.provider, access: "read", stepId: run.kind, taskId: "STUDIO" });
+        const root = studioRoot(this.dataDir, state.project.id);
+        const folder = versionDir(root, run.artifactId!, run.baseVersion!);
+        // Its temp files go in its own staging folder: the version it reads is immutable (review finding 6).
+        const tmp = join(root, run.workspace);
+        rmSync(tmp, { recursive: true, force: true });
+        mkdirSync(tmp, { recursive: true });
+        this.launched.set(runId, { provider: run.provider, access: "read", stepId: run.kind, taskId: "STUDIO", tmp });
         adapter.start({
           attemptId: runId,
           taskId: "STUDIO",
@@ -848,7 +858,7 @@ export class Scheduler {
           role: "pe",
           provider: run.provider,
           model: run.model,
-          workspace: { path: folder, access: "read" },
+          workspace: { path: folder, access: "read", tmp },
           studio: true,
           environment: "isolated",
           connections: [],
@@ -858,6 +868,8 @@ export class Scheduler {
         });
         return undefined;
       } catch (e) {
+        const tmp = this.launched.get(runId)?.tmp;
+        if (tmp) rmSync(tmp, { recursive: true, force: true });
         this.launched.delete(runId);
         return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
       }
@@ -894,10 +906,11 @@ export class Scheduler {
    * Make the screenshots or recording of every studio version still pending, one at a time and outside any
    * transaction; each result is queued and recorded in a later drain, under the lease. Each is started once per
    * process: one whose result could not be recorded is not retried in a loop, and one an earlier service left
-   * pending (it stopped meanwhile) is made again here.
+   * pending (it stopped meanwhile) is made again here. Nothing starts while the project is paused: what waits is
+   * made once it resumes, like the studio's runs (review finding 5).
    */
   private startMedia(state: State) {
-    if (!this.media || !this.dataDir) return;
+    if (!this.media || !this.dataDir || state.project.hold) return;
     const media = this.media;
     const projectId = state.project.id;
     let studioDir: string;
@@ -914,6 +927,8 @@ export class Scheduler {
       const now = () => new Date().toISOString();
       this.mediaChain = this.mediaChain
         .then(async () => {
+          // Paused since it was queued behind another: it is asked for again once the project resumes.
+          if (this.store.read().state.project.hold) return void this.mediaStarted.delete(key);
           const result = p.kind === "shots" ? await makeShots(media, studioDir, p.artifactId, p.version, now) : await makeDemo(media, studioDir, p.artifactId, p.version, variants, now);
           this.queue.push({ type: "studio-media", attemptId: "", projectId, artifactId: p.artifactId, version: p.version, result });
         })

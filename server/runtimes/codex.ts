@@ -41,11 +41,14 @@ const PINNED_CODEX_VERSION = "0.159.2";
  * false with `--disable multi_agent`). Together they keep native subagents off.
  */
 /**
- * A run's private temp directory: a sibling of its worktree (never inside it, so nothing is committed). A studio
- * run's is inside its staging folder, the one place it writes; only the files its manifest lists are imported.
+ * A run's private temp directory: a sibling of its worktree (never inside it, so nothing is committed). A designer's
+ * studio run's is inside its staging folder, the one place it writes; only the files its manifest lists are
+ * imported. A read-only studio run (the PE) reads an immutable artifact version, so its temp directory is the one the
+ * service gives it, outside that version; without one it does not start.
  */
 function runTmpDir(a: Assignment): string {
-  const dir = a.studio ? join(a.workspace.path, ".tmp") : `${a.workspace.path}.tmp`;
+  if (a.studio && a.workspace.access === "read" && !a.workspace.tmp) throw new Error("A read-only studio run needs a temp folder outside the version it reads; the service gives none.");
+  const dir = a.workspace.tmp ?? (a.studio ? join(a.workspace.path, ".tmp") : `${a.workspace.path}.tmp`);
   mkdirSync(dir, { recursive: true });
   return dir;
 }

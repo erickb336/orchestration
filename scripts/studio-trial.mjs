@@ -20,7 +20,8 @@
 //    the Weekend Trips trip plan in 2-3 variants for desktop and mobile, then a terminal demo of the `trips` CLI and
 //    its TUI. Before each it estimates the Claude spend so far and stops starting runs at the cap; each run's own
 //    limit (Claude's maxBudgetUsd) is what is left of the cap, at most $2.
-// 4. Waits for the imports, the screenshots and recordings, and the PE's runs, which the service starts itself.
+// 4. Waits for the imports, the screenshots and recordings, the PE's runs and the designer's revisions the PE asks for,
+//    which the service starts itself.
 // 5. Checks: the prototype is served sandboxed (in Chrome, a fetch from inside the framed prototype to the app's API
 //    fails), the screenshots exist, each terminal variant was recorded or says why not, the PE's verdicts were
 //    recorded, the owner can then send feedback, the project is still in Vision, and the Claude spend stayed under
@@ -242,9 +243,11 @@ async function main() {
   const settled = (x) => {
     const latest = S.latestArtifacts(x).filter((a) => a.madeBy.role === "designer");
     if (!latest.length || S.pendingMedia(x).length) return false;
-    return latest.every((a) => S.peReview(x, a).status !== "waiting" || (!R.peRunDue(x, a) && R.peRunsOf(x, a.id, a.version).every(ended)));
+    // The PE's loop (pass 4): a version it asks changes on is revised and reviewed again until it reaches the owner. It
+    // is settled there, or when nothing more happens on its own: the PE's runs ended without a verdict, or the budget stop.
+    return latest.every((a) => S.readyForOwner(x, a) || !!Spend.budgetStop(x) || (S.peReview(x, a).status === "waiting" && !R.peRunDue(x, a) && R.peRunsOf(x, a.id, a.version).every(ended)));
   };
-  ({ s } = await until("screenshots, recordings and PE review", (x) => settled(x.state), FAKE ? minutes(4) : minutes(30), FAKE ? 500 : 5000));
+  ({ s } = await until("screenshots, recordings, PE review and the designer's revisions", (x) => settled(x.state), FAKE ? minutes(4) : minutes(30), FAKE ? 500 : 5000));
   const st = s.state;
   const artifacts = S.latestArtifacts(st).filter((a) => a.madeBy.role === "designer");
   evidence.runs = st.studio.runs.map((r) => ({ id: r.id, kind: r.kind, provider: r.provider, model: r.actualModel ?? r.model, status: r.status, usage: r.usage ?? null, estimatedUsd: Spend.estimateUsd(r, Spend.PRICES).usd, simulated: !!r.simulated, note: r.note ?? null, artifact: r.artifactId ? `${r.artifactId} v${r.baseVersion}` : null }));
