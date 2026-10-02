@@ -247,3 +247,96 @@ The diff `0391420..80dce53`, read by a reviewer that did not write it. **No agen
 - **F1, the domain and the server:** findings 1, 3, 4, 5 (server part), 6 (the shape), 8, 9, 10 and 11. The lead's brief explains the product domains and does not ask about them in free text.
 - **F2, the app and its security:** findings 2, 5 (the "As is" label), 7 (the owner's domain control), and pass 3 finding 3 (WebRTC and DNS prefetch). The recorder's stage folders are swept at start. Finding 6's wording follows F1's shape, after F1 merges.
 
+## F2 as built (2026-10-02)
+
+**What this is.** The record of fix unit F2: the app's own security (review finding 2, pass 3 finding 3), the "as is" label (finding 5, UI part), the owner's domain control (finding 7, real trial finding 3), the recorder's stage sweep, and one recording at a time (the lead's added item). Finding 6's wording waits for F1's `PeReview` shape. Every test named here runs in `npm test`.
+
+### 1. Mermaid and the app's pages (review finding 2)
+
+**What was wrong.** Mermaid drew a designer's `.mmd` in the owner's live page, and some of its syntax loads URLs while it lays the diagram out. A browser check reproduced it: `themeCSS` in an init directive or in front matter (`fill: url(…)`, `background-image: url(…)`) and an image shape (`a@{ img: "…" }`) each made a request. The old header comment said nothing could load; that was false during the drawing.
+
+**Layer 1: Mermaid runs in a frame that can reach nothing** (`src/ui/studio/diagrams.ts`, `diagramFrame.js`).
+- One hidden `<iframe sandbox="allow-scripts" srcdoc>`, never `allow-same-origin`: an opaque origin, with no way into the app's page, cookies, storage or API.
+- Its own `<meta>` policy: `default-src 'none'`, scripts only `mermaid.min.js` and `diagramFrame.js` (by path), inline styles for the SVG. As a srcdoc document, it also inherits the app page's policy.
+- The frame posts back the SVG text. The app checks the sender and the shape, and shows the SVG as an `<img>` from a `data:` URL, where nothing runs or loads.
+- Defence in depth: `secure` now also locks `themeCSS`, `fontFamily`, `altFontFamily`, `arrowMarkerAbsolute`, `legacyMathML` and `forceLegacyMathML`, so a directive or front matter cannot add CSS or a URL.
+
+**Layer 2: a policy on every app page** (`appPagePolicy` in `server/http.ts`): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-src` the prototype origins (else `'none'`)`; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`. The live updates (`/api/stream`) are on the app's origin, so `connect-src 'self'` covers them.
+
+**Decisions.**
+
+| Choice | Chosen | Rejected, and why |
+| --- | --- | --- |
+| Where Mermaid runs | A sandboxed frame with no network | Lock keys and strip `url(` and image shapes in the page: a list of syntax is never complete (CSS escapes such as `u\72l(`, `image-set`, C4 sprites, the next diagram type), and a Mermaid bug would run with the app's API. The frame is the smallest attack surface: whatever Mermaid does, it has no network and no app. |
+| Mermaid's build in the frame | `mermaid.min.js`, a classic script | Mermaid's ES modules: a module in an opaque origin needs CORS, and `Access-Control-Allow-Origin: null` would let any sandboxed page on the web read the app's files. |
+| The frame's document | `srcdoc` | A page of its own: it needs a route in both servers, and `frame-src` would have to allow the app's own origin. A srcdoc frame inherits the app's policy, and `frame-src` does not apply to it. |
+
+**Tests (real Chrome, the real built app; `server/http.browser.test.ts`).**
+- Hostile `.mmd` (themeCSS, front matter, an image shape, a C4 sprite and link, a click link) and hostile `.md` (remote and reference images, raw `<img>`, `<link>`, `<iframe>`, `<style>`, links, a Mermaid block) in a studio document: no request reaches an outside server, and the browser refused every request to another origin before it left. This holds with the app's policy, and also without it (the frame alone).
+- The control: Mermaid in a plain page reaches the outside server (`/theme-fill`, `/theme-bg`, `/image-shape.png`); under the app's policy alone it does not.
+- Unlocking `themeCSS` makes the test fail (checked once by hand).
+- Every screen of the demo (12 routes) and Vision loads under the policy with no console error.
+- `studio.test.tsx`: the frame's policy and document, and the strict reading of its replies.
+- `escape.test.ts`: its stand-in app page now keeps its script in a file, as the app does; all its cases pass under the new policy.
+
+### 2. WebRTC, DNS prefetch and preconnect (pass 3 finding 3)
+
+**The screenshot Chrome is closed** (`noNetworkArgs` in `server/studio/shots.ts`): `--webrtc-ip-handling-policy=disable_non_proxied_udp`, a dead proxy of the service's own (a loopback port that closes every connection), and `--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE *.localhost`. Chrome never sends `*.localhost` or loopback through a proxy, so the version's own origin still loads.
+
+**Tests** (listeners on this machine's network address stand in for servers on the internet; Chrome's own network log shows what it looked up):
+- `shots.test.ts`: `captureShots` on a hostile page that holds its load for 5 s: no STUN packet, no connection, no DNS query. Without the flags, the same capture sent STUN packets and looked up the STUN server's name (checked once by hand).
+- `escape.test.ts`, in a Chrome profile of its own (an incognito context never prefetches): with the flags, nothing; without them, everything below.
+
+**What the owner's own browser still allows.** In the owner's Chrome (154.0.8037.95, a normal profile), a prototype in the studio's sandboxed frame can still:
+
+| Way out | What leaves | Stopped by the app? |
+| --- | --- | --- |
+| WebRTC to a STUN server | UDP packets | No |
+| WebRTC to a TURN server over TCP | a connection, and later the TURN user name the page chose | No |
+| `<link rel="dns-prefetch">`, in the page or added by a script | a DNS query for any name the page chose | No |
+| `<link rel="preconnect">` | a TCP connection to an address, or a DNS query for a name | No |
+
+The prototype's policy (`connect-src 'none'`), the sandbox and `frame-src` do not cover these, and Chrome 154 ignores a `webrtc 'block'` directive. `X-DNS-Prefetch-Control: off` does not stop `<link rel="dns-prefetch">`, so the app does not send it. (Both checked once by hand.) What these carry out: a few bytes chosen by the page (a host name, a TURN user name) and the owner's address. The page can read only its own files, which the designer wrote. Chrome settings reduce it: with "Preload pages" off and the WebRTC IP policy `disable_non_proxied_udp` (Chrome's `WebRtcIPHandling` policy), no DNS prefetch, preconnect or STUN left, but TURN over TCP still connected (checked once by hand, with both set in a test profile). Only a proxy or a firewall closes TURN over TCP. The app changes nothing in the owner's browser.
+
+### 3. "As it is today" (finding 5, the UI part)
+
+- A round 0 that holds the designer's "as is" artifacts is named **As it is today**, not "What you brought". A round 0 with only the owner's material keeps its name.
+- The artifact's line starts with "as is". Above the stage: "The designer made this from the code, to show what the product does now. It is not a proposal. Correct what it gets wrong: mark it, pin comments or write a note.", and the repository files it came from (six shown, the rest behind a Disclosure).
+- **Decision:** the label comes from the round's content (`provenance.asIs`), not from a new round focus, because the domain keeps round 0 as `material` (F1 owns the domain).
+- **Tests:** `studio.test.tsx`, "as it is today".
+
+### 4. The kind of product (finding 7, real trial finding 3)
+
+- **Settings › Project › Kind of product** (`#/settings/project/domains`): three checkboxes, any combination. Each says who uses it and what the designer makes. It saves with the section. Once some are chosen, none is refused ("Choose at least one kind.").
+- **In the studio**, while none is chosen: one compact prompt with the same three kinds. Each click saves at once, so one click answers it. Then it shows "Saved: a code product." and stays, so the owner can add a second kind, until Done. The only chosen kind keeps its chosen look and refuses a click (it cannot be cleared there).
+- **Decision:** each click saves, not toggles plus a Save button: the owner answers in one click, and most products have one kind.
+- **The words** (`DOMAIN_CHOICES`): "Screen product: people use it on a screen: in a browser, on a desktop or a phone, or in a terminal." "Code product: other programs use it: a library, an engine or a compiler." "Infrastructure: it runs other software: servers, queues or deployment." A test keeps each sentence at 20 words or fewer.
+- **Tests:** `studio.test.tsx` (the prompt, its command against the real command table, the order), `settings.test.tsx` (the card, `domainsError`, the card's address). The browser pass clicked "Code product": it saved, Settings showed it checked, and after a reload the prompt was gone.
+
+### 5. The recorder
+
+- **The stage sweep** (`sweepStages` in `container.ts`, called in `server/app.ts` at start): removes `orc-rec-` and `orc-probe-` folders with mkdtemp's six characters, older than an hour, never through a link (a link root and a link entry are left alone; links inside a folder are unlinked, not followed). `makeStage` takes only those two prefixes, so a new prefix cannot slip past the pattern. It closes the container recorder's first follow-up. **Tests:** `container.test.ts`, with a temporary root.
+- **One recording at a time** (`startRecording` in `container.ts`; `terminal.ts` starts its container through it): a process-wide queue; the time limit starts when the container starts, not when it is queued; a failed or stopped recording frees the turn; one stopped while it waits never starts. The probe stays outside the queue. **Tests:** `container.test.ts`, "one recording at a time", with a stand-in docker: two recordings started together run one after the other and neither times out. Without the queue, all three tests fail (checked once by hand).
+
+### Checks (2026-10-02)
+
+- `npm test`: 107 files, 1,622 passed, 2 skipped (the Codex CLI smoke test and the real-sandbox test, which need their environment).
+- The typecheck and the build pass.
+- `npm run test:integration`: 16 of 16. `npm run trial:studio -- --fake`: 9 of 9.
+- **Browser pass** (the built app on the real service, a seeded project): Vision (the domain prompt, a document with two diagrams, the "as is" screen) and Settings › Project, at 1280 and 375 wide: no horizontal scroll, no console error, no policy violation. Vite's dev server also draws the diagrams. Its only console error is a missing favicon, which is not new.
+
+### Not verified
+
+- Browsers other than Chrome 154 on macOS. Safari's and Firefox's handling of the srcdoc frame and of the ways out above is not tested.
+- The flags of the screenshot Chrome on Linux.
+- A recording queue across two services on one machine: the queue is per process.
+
+### Changes outside F2's files
+
+- `server/app.ts`: the stage sweep at start (6 lines). No unit owns this file.
+- `server/studio/terminal.ts`: its container starts through `startRecording` (the lead's added item). No unit owns this file.
+
+### Follow-ups
+
+- The kit gallery puts a `<details>` in a `<p>` (React warns in a development build only).
+
