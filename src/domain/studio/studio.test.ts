@@ -333,10 +333,10 @@ describe("PE review: the loop rule", () => {
   it("the PE gives no verdict on what the owner brought or on a probe's evidence (review finding 9)", () => {
     const s = openRound(fresh(), "material", at(1)).state;
     const brought = addScreen(s, 0, at(2), { kind: "material", title: "Group page sketch", variants: [], devices: [], madeBy: { role: "user" } });
-    expect(() => pePass(brought.state, brought.id, 1, [{ verdict: "not-feasible", reasons: "Too costly." }], at(3))).toThrow("Group page sketch is what you brought: the PE does not review it.");
+    expect(() => pePass(brought.state, brought.id, 1, [{ verdict: "not-feasible", reasons: "Too costly." }], at(3))).toThrow("The PE does not review Group page sketch: it is source material, not a design.");
     const r = nextRound(brought.state, 4);
     const evidence = addScreen(r.state, r.n, at(5), { kind: "evidence", title: "Forecast sources", variants: [], devices: [], files: [{ path: "probes/forecasts.md", sha256: sha("b") }], madeBy: { role: "probe", provider: "codex", model: "codex-sample-large", attemptId: "run-probe-1" } });
-    expect(() => pePass(evidence.state, evidence.id, 1, [{ verdict: "feasible", reasons: "Fine." }], at(6))).toThrow("Forecast sources is a probe's evidence: the PE does not review it.");
+    expect(() => pePass(evidence.state, evidence.id, 1, [{ verdict: "feasible", reasons: "Fine." }], at(6))).toThrow("The PE does not review Forecast sources: it is a probe's evidence for the PE, not a design.");
     expect(evidence.state.studio.verdicts).toEqual([]);
   });
 });

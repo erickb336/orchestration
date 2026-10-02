@@ -65,7 +65,7 @@ function designerAsk(s: State, r: LeadRun, raw: unknown): DesignerAsk | string {
   if (revises !== undefined && typeof revises !== "string") return "revises must be an artifact id";
   const base = revises === undefined ? undefined : latestVersion(s, revises);
   if (revises !== undefined && !base) return `there is no studio artifact ${String(revises).slice(0, 40)} to revise`;
-  if (base && !DESIGNER_KINDS.includes(base.kind)) return `${base.title} is ${base.kind === "material" ? "what the user brought" : "a probe's evidence"}; the designer makes a new artifact from it instead`;
+  if (base && !DESIGNER_KINDS.includes(base.kind)) return `${base.title} (${base.kind}) is not the designer's work; the designer makes a new artifact from it instead`;
   let kinds: StudioArtifactKind[];
   if (raw.kinds === undefined && base) kinds = [base.kind];
   else {

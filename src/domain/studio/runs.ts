@@ -20,7 +20,7 @@ import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety"
 import { budgetStop } from "../spend";
 import { ControlError, PROVIDERS, roleDefaultFor, type ModelSelection, type ProviderId, type State } from "../types";
 import { artifactName, endReview, latestArtifacts, latestVersion, peReview, peRunsOf } from "./studio";
-import { UNGATED_KINDS, isUnderWay, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
+import { isUnderWay, type StudioArtifact, type StudioRun, type StudioRunKind } from "./types";
 
 /** The longest brief a run takes, in characters. */
 const MAX_BRIEF = 20_000;
@@ -120,7 +120,8 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
   let note: string | undefined;
   if (req.kind === "pe") {
     if (!base) throw new ControlError("A PE run names the artifact it reviews.");
-    if (UNGATED_KINDS.includes(base.kind)) throw new ControlError(`${base.title} is ${base.kind === "material" ? "what you brought" : "a probe's evidence"}: the PE does not review it.`);
+    const review = peReview(state, base);
+    if (review.status === "not-reviewed") throw new ControlError(`The PE does not review ${base.title}: ${review.why}.`);
     if (base.round !== round.n) throw new ControlError(`${artifactName(base)} is from round ${base.round}; the PE reviews it in that round.`);
     if (!req.selection) note = peSelection(state, base).note;
   }
@@ -153,13 +154,13 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
 // ---------- the PE's runs, asked for by the service ----------
 
 /**
- * Whether a version needs the PE now: it is the newest version of a reviewed kind, in Vision, with its screenshots or
- * recording done, its review waiting (no pass yet, and not ended), and no PE run on it under way. A PE run that
- * ended without a verdict is asked for again until review ends (`no-review`, studio.ts); a run a pause stopped was
- * asked for again in the same write (retryOf), and that run is among these.
+ * Whether a version needs the PE now: it is the newest version, in Vision, with its screenshots or recording done, its
+ * review waiting (no pass yet, and not ended; never so for a kind the PE does not review), and no PE run on it under
+ * way. A PE run that ended without a verdict is asked for again until review ends (`no-review`, studio.ts); a run a
+ * pause stopped was asked for again in the same write (retryOf), and that run is among these.
  */
 export function peRunDue(s: State, a: StudioArtifact): boolean {
-  if (s.project.stage !== "shaping" || UNGATED_KINDS.includes(a.kind)) return false;
+  if (s.project.stage !== "shaping") return false;
   if (latestVersion(s, a.id)?.version !== a.version) return false;
   // The PE reads the screenshots and the recording: it waits until the service has made them.
   if (a.shots?.status === "pending" || a.demo?.status === "pending") return false;

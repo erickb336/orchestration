@@ -9,7 +9,7 @@ import * as S from "../../domain/studio/studio";
 import * as R from "../../domain/studio/runs";
 import {
   DOCUMENT_KINDS,
-  UNGATED_KINDS,
+  KIND_RULES,
   VERDICT_WORDS,
   isUnderWay,
   type BudgetEstimate,
@@ -78,11 +78,12 @@ export function roundArtifacts(s: State, n: number): StudioArtifact[] {
 }
 
 /**
- * The agents' artifacts waiting for your mark: the newest version of each, passed to you by the PE (or with its
- * objections after the last pass), with no mark from you yet. What you brought and a probe's evidence are not counted.
+ * The artifacts waiting for your mark: the newest version of each artifact whose kind asks for your mark
+ * (`KIND_RULES`), once it reaches you (the PE agreed, its review ended, or the PE does not review the kind), with no
+ * mark from you yet. What you brought and a probe's evidence are not counted.
  */
 export function waitingForYourMark(s: State): StudioArtifact[] {
-  return S.latestArtifacts(s).filter((a) => !UNGATED_KINDS.includes(a.kind) && S.readyForOwner(s, a) && !answered(a, S.currentFeedback(s, a.id, a.version)));
+  return S.latestArtifacts(s).filter((a) => KIND_RULES[a.kind].ownerMark === "asked" && S.readyForOwner(s, a) && !answered(a, S.currentFeedback(s, a.id, a.version)));
 }
 
 /** Whether the owner answered a version: a mark on it, or (a dictionary, a flow with rules) a mark on every row. */
@@ -565,11 +566,11 @@ function yourMove(s: State, a: StudioArtifact, r: S.PeReview): string | undefine
 
 /**
  * PE review of a version, for the owner: where it stands, the latest pass's verdict on each variant, and what you can
- * do now. Undefined for what the owner brought and a probe's evidence, which the PE does not review.
+ * do now. For a kind the PE does not review, why not.
  */
-export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" | "codex") => string): PeView | undefined {
-  if (UNGATED_KINDS.includes(a.kind)) return undefined;
+export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" | "codex") => string): PeView {
   const r = S.peReview(s, a);
+  if (r.status === "not-reviewed") return { tone: "neutral", state: "Not reviewed", text: `The PE does not review it: ${r.why}.`, simulated: false, verdicts: [] };
   const run = S.peRunsOf(s, a.id, a.version).at(-1);
   const asIs = !!a.provenance?.asIs;
   const after = versionAfter(s, a);
@@ -659,9 +660,10 @@ export function versionHistory(s: State, a: StudioArtifact): VersionLine[] {
     const next = all.find((x) => x.version > v.version);
     const mark = S.currentFeedback(s, v.id, v.version)?.mark;
     const line = (tone: VersionLine["tone"], state: string, text: string): VersionLine => ({ version: v.version, round: v.round, current: v.version === newest, tone, state, text: mark ? `${text} You marked it ${mark}.` : text });
-    if (UNGATED_KINDS.includes(v.kind)) return line("neutral", v.kind === "material" ? "you brought it" : "evidence", "The PE does not review it.");
     const r = S.peReview(s, v);
     switch (r.status) {
+      case "not-reviewed":
+        return line("neutral", "not reviewed", `The PE does not review it: ${r.why}.`);
       case "waiting":
         return next ? line("neutral", "not reviewed", `Replaced by v${next.version} before the PE reviewed it.`) : line("neutral", "with the PE", "Waiting for PE review.");
       case "agreed":

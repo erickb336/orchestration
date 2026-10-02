@@ -196,9 +196,10 @@ const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0
 /** Agent text on one line, clipped. */
 const one = (text: string, max: number) => clip(text.replace(/\s+/g, " "), max);
 
-/** How many passes the PE made on this artifact in the version's round: 0 before its first. */
+/** How many passes the PE made on this artifact in the version's round: 0 before its first, and on a kind it does not review. */
 function passesDone(state: State, a: StudioArtifact): number {
   const r = S.peReview(state, a);
+  if (r.status === "not-reviewed") return 0;
   return r.status === "waiting" ? r.passes : r.pass;
 }
 const laterPass = (state: State, a: StudioArtifact) => passesDone(state, a) > 0;

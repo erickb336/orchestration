@@ -15,7 +15,7 @@ import * as B from "../src/domain/studio/blueprint";
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import * as S from "../src/domain/studio/studio";
-import { DOCUMENT_KINDS, UNGATED_KINDS, isUnderWay, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
+import { DOCUMENT_KINDS, isUnderWay, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
 import { clip, truncate } from "../src/domain/text";
 import { lastLeadProse } from "./prose/record";
 import type { RepoGlance } from "./studio/existing";
@@ -1041,7 +1041,6 @@ const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what exists", exper
 
 /** Where PE review of a version stands, in a few words for the lead, made from the studio's one value (`S.peReview`). */
 function peLine(state: State, a: StudioArtifact): string {
-  if (UNGATED_KINDS.includes(a.kind)) return `not reviewed (${a.kind === "material" ? "what the user brought" : "a probe's evidence"})`;
   const r = S.peReview(state, a);
   const said = (x: { asks: PeVerdict[]; objections: PeVerdict[] }) => {
     const objects = x.objections.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.reasons, 140)}${v.overruled ? " (the user overruled it)" : ""}`);
@@ -1049,6 +1048,8 @@ function peLine(state: State, a: StudioArtifact): string {
     return [objects.length ? `; objects: ${objects.join("; ")}` : "", asks.length ? `; asks for changes: ${asks.join("; ")}` : ""].join("");
   };
   switch (r.status) {
+    case "not-reviewed":
+      return `PE: not reviewed (${r.why})`;
     case "waiting":
       return "PE: reviewing";
     case "agreed":
