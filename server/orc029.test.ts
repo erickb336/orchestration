@@ -11,10 +11,15 @@ import { join, relative, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as M from "../src/domain/model";
+import { buildSeed } from "../src/domain/seed";
+import * as R from "../src/domain/studio/runs";
+import * as S from "../src/domain/studio/studio";
+import { addScreen, openRound } from "../src/domain/testing/studio";
 import { startFactoryArgs } from "../src/domain/testing/factory";
 import type { State } from "../src/domain/types";
 import { Scheduler } from "./scheduler";
 import { CommandFailure, STATE_FORMAT, Store } from "./store";
+import { askForRevisions } from "./studio/revise";
 import { ScriptedAdapter, proposal, steer } from "./testing/scripted";
 import { WorkspaceManager } from "./workspaces";
 
@@ -156,6 +161,48 @@ describe("format-19 databases written before all of format 19's fields existed (
     expect(s.blueprint.changeOrders.map((c) => c.handler)).toEqual(["user", "lead"]);
     expect(s.project).toMatchObject({ changeOrders: "user", devices: ["desktop"], domains: [], factoryStarts: [], budgets: { buildingUsd: null, maintenanceUsdPerMonth: null } });
     expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
+  });
+
+  it("a PE review that pass 3 ended stays ended: the owner still sees it, an overrule stands, and no paid revision is asked for (review finding 3)", () => {
+    const path = join(dir, "pass3.db");
+    // Pass 3's studio, as it stored it: round 1 open, two versions the PE reviewed once, each pass the last (`lastPass`).
+    const T = Date.parse("2026-10-02T09:00:00Z");
+    const at = (sec: number) => new Date(T + sec * 1000).toISOString();
+    let s = openRound(M.initProject(buildSeed(T, { inFlightRuns: false }), { name: "Trips", repoPath: "/tmp/trips", vision: "Weekend trips.", focus: "" }, at(0)), "experience", at(1)).state;
+    const plan = addScreen(s, 1, at(2));
+    const list = addScreen(plan.state, 1, at(3), { title: "Packing list", variants: [{ id: "a", label: "One list" }] });
+    s = structuredClone(list.state);
+    const verdict = (id: string, artifactId: string, variant: string, v: string, more: object = {}) => ({ id, artifactId, version: 1, variant, pass: 1, verdict: v, reasons: "As pass 3 judged it.", at: at(4), lastPass: true, ...more });
+    (s.studio.verdicts as unknown[]).push(
+      verdict("pev-1", plan.id, "A", "feasible"),
+      verdict("pev-2", plan.id, "B", "feasible-if", { change: "Page the days." }),
+      verdict("pev-3", plan.id, "C", "feasible"),
+      verdict("pev-4", list.id, "a", "not-feasible", { overruled: { at: at(5), why: "The group writes the list." } }),
+    );
+    early19(path, (doc) => {
+      for (const k of Object.keys(doc)) delete doc[k];
+      Object.assign(doc, structuredClone(s));
+    });
+    const store = new Store(path);
+    opened.push(store);
+    const after = store.read().state;
+    const v = (id: string) => S.getArtifact(after, id, 1);
+    expect(S.peReview(after, v(plan.id))).toMatchObject({ status: "ended", ended: "earlier-rule", pass: 1, asks: [{ id: "pev-2" }], objections: [] });
+    expect(S.peReview(after, v(list.id))).toMatchObject({ status: "ended", ended: "earlier-rule", objections: [{ id: "pev-4", overruled: { why: "The group writes the list." } }] });
+    expect(S.openObjections(after, v(list.id))).toEqual([]);
+    expect(after.studio.verdicts.some((x) => "lastPass" in x)).toBe(false);
+    // The scheduler's next cycle asks for nothing: no PE run, no designer revision.
+    const cycle = askForRevisions(R.askForPeReviews(after, at(10)), at(10));
+    expect(cycle.studio.runs).toEqual([]);
+    // The owner still answers what they saw.
+    store.command("sendFeedback", { entries: [{ artifactId: plan.id, version: 1, mark: "keep", pickedVariant: "A", pins: [], note: "" }] }, "fb", at(11));
+    expect(S.currentFeedback(store.read().state, plan.id, 1)?.mark).toBe("keep");
+    // A second load changes nothing.
+    store.close();
+    opened.splice(opened.indexOf(store), 1);
+    const once = stored(path);
+    opened.push(new Store(path));
+    expect(stored(path)).toEqual(once);
   });
 
   it("a studio from before studio runs (pass 3a) gains an empty list of runs and keeps what it holds", () => {
