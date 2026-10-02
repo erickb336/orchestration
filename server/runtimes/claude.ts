@@ -194,22 +194,28 @@ function realpathNearest(p: string): string {
 /**
  * The containment guard shared by the PreToolUse hook and canUseTool. `workspace` is the worktree
  * path as given; it is resolved with realpath so symlinked parents (e.g. /tmp on macOS) compare correctly.
+ * `readRoots` are directories the run may read but never write (a studio run's checkout of the product).
  */
-export function createWorkspaceGuard(workspace: string, allowedTools: readonly string[], mcp: "any" | readonly string[] = []) {
+export function createWorkspaceGuard(workspace: string, allowedTools: readonly string[], mcp: "any" | readonly string[] = [], readRoots: readonly string[] = []) {
   const mcpAllowed = mcp === "any" ? "any" : new Set(mcp.map(normalizeServer));
-  const root = path.resolve(workspace);
-  let realRoot: string;
-  try {
-    realRoot = realpathSync.native(root);
-  } catch {
-    realRoot = root;
-  }
+  const resolved = (dir: string) => {
+    const lexical = path.resolve(dir);
+    try {
+      return { lexical, real: realpathSync.native(lexical) };
+    } catch {
+      return { lexical, real: lexical };
+    }
+  };
+  const { lexical: root, real: realRoot } = resolved(workspace);
+  const reads = readRoots.map(resolved);
   const allowed = new Set(allowedTools);
 
   const checkPath = (raw: unknown, mutating: boolean): GuardVerdict => {
     if (typeof raw !== "string" || raw.length === 0) return { ok: false, reason: "Missing path argument." };
     if (raw.includes("\0")) return { ok: false, reason: "Invalid path." };
     const lexical = path.resolve(root, raw);
+    // A read inside a read-only root, there both lexically and in its real location, is allowed; a write never is.
+    if (!mutating && reads.some((r) => (isInside(lexical, r.lexical) || isInside(lexical, r.real)) && isInside(realpathNearest(lexical), r.real))) return { ok: true };
     // Lexical check first (catches ../ escapes even when the target does not exist) ...
     if (!isInside(lexical, root) && !isInside(lexical, realRoot)) {
       return { ok: false, reason: `Path is outside this assignment's worktree: ${raw}` };
@@ -707,11 +713,14 @@ export class ClaudeAdapter implements RuntimeAdapter {
 
   private buildOptions(run: Run): Options {
     const a = run.a;
-    const local = a.environment === "local";
-    const policy = toolPolicy(a.workspace.access, this.allowShell);
+    // A studio run is isolated with no connections and no shell, whatever the assignment's environment says: the
+    // user's own setup could publish, and a shell could write outside its staging folder.
+    const studio = a.studio === true;
+    const local = a.environment === "local" && !studio;
+    const policy = toolPolicy(a.workspace.access, this.allowShell && !studio);
     // Isolated: only the allowed connections, configured from the user's own MCP definitions.
-    const selected = local ? {} : this.mcpConfigsFor(a.connections);
-    const guard = createWorkspaceGuard(a.workspace.path, policy.tools, local ? "any" : Object.keys(selected));
+    const selected = local ? {} : this.mcpConfigsFor(studio ? [] : a.connections);
+    const guard = createWorkspaceGuard(a.workspace.path, policy.tools, local ? "any" : Object.keys(selected), a.workspace.readRoots);
 
     const preToolUse: HookCallback = async (input) => {
       const i = input as unknown as Rec;

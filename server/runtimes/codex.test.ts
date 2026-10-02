@@ -572,6 +572,32 @@ describe("worker isolation", () => {
     expect(argv.join(" ")).not.toContain("mcp_servers.off"); // already disabled by the user
   });
 
+  it("a studio run (ORC-029) is isolated even when its assignment says local: plugins and apps off, no connections, and its staging folder is its one writable root", async () => {
+    const { adapter, events, stubLog } = make("complete");
+    await adapter.health();
+    adapter.start(assignment("studio-7", { studio: true, role: "designer", environment: "local", connections: ["user_repl"] }));
+    await waitFor(() => terminals(events).length > 0);
+    const argv = lastAppServerArgv(stubLog);
+    expect(argv.join(" ")).toContain("--disable plugins --disable apps");
+    expect(argv).toEqual(expect.arrayContaining([...ISOLATION_FEATURE_ARGS, ...ISOLATION_CONFIG_ARGS]));
+    // Its allowed connections are ignored: every enabled MCP server is off.
+    expect(argv).toEqual(expect.arrayContaining(["-c", "mcp_servers.user_repl.enabled=false", "-c", 'mcp_servers."weird name".enabled=false']));
+    const turn = stubLog()
+      .filter((l: { recv?: { method?: string } }) => l.recv?.method === "turn/start")
+      .pop().recv;
+    expect(turn.params.sandboxPolicy).toEqual({ type: "workspaceWrite", writableRoots: [dir], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true });
+    expect(existsSync(join(dir, ".tmp"))).toBe(true);
+    expect(existsSync(`${dir}.tmp`)).toBe(false);
+  });
+
+  it("a studio run fails closed, like any isolated run, when the MCP servers cannot be listed", async () => {
+    const { adapter, events } = make("complete", {}, { CODEX_STUB_MCP_FAIL: "1" });
+    await adapter.health();
+    adapter.start(assignment("studio-8", { studio: true, role: "designer", environment: "local" }));
+    await waitFor(() => terminals(events).length > 0);
+    expect((terminals(events)[0] as { message: string }).message).toMatch(/worker isolation/);
+  });
+
   it("lists the user's configured MCP servers as connections", async () => {
     const { adapter } = make("complete");
     expect(await adapter.listConnections()).toEqual([
