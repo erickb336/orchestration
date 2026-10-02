@@ -278,8 +278,11 @@ export function createHttpServer(opts: HttpOptions): Server {
         if (body.name === "stageVisionDoc" || body.name === "addVisionDoc") return fail(res, 400, "invalid", "Attach documents through POST /api/vision-docs, which stores the file first.");
         // The studio's rounds, artifacts, PE verdicts and probes, and PE review of new work, come from agents' runs, recorded by the service.
         if (SERVICE_COMMANDS.has(body.name)) return fail(res, 400, "invalid", `${body.name} is recorded by the service from its agents' runs; a client cannot send it.`);
-        // A sample project never contacts GitHub.
-        if (real && body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr" && store.read().state.project.sample)
+        // A sample project never contacts GitHub: neither the delivery setting nor Start the factory turns pull requests on for it.
+        const asksForPrs =
+          (body.name === "setDeliveryMode" && (body.args as { mode?: unknown } | undefined)?.mode === "pr") ||
+          (body.name === "startFactory" && (body.args as { settings?: { delivery?: { mode?: unknown } } } | undefined)?.settings?.delivery?.mode === "pr");
+        if (real && asksForPrs && store.read().state.project.sample)
           return fail(res, 400, "control", "This is the sample project; pull-request delivery needs a project of your own. Start a new project in Settings.");
         // The sample project has no repository to run checks on; nothing of it ever runs on this computer.
         if (real && body.name === "setChecks" && ((body.args as { config?: { enabled?: unknown } } | undefined)?.config?.enabled === true) && store.read().state.project.sample)

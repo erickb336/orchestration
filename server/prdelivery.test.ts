@@ -813,6 +813,43 @@ describe("sample projects never contact GitHub", () => {
     await s2.stop();
     sample.close();
   }, 20_000); // real git and many scheduler cycles: more than vitest's default under a full-suite load
+
+  it("the real service refuses to start the sample project's factory with pull-request delivery (review finding 6)", async () => {
+    const sample = new Store(join(dir, "sample-start.sqlite")); // seeded with the sample project
+    const s2 = new Scheduler(sample, { claude, codex }, { workspaces, github: fake, leaseMs: 120_000 });
+    extra.push(s2);
+    sample.command("startVision", {}, "vision", iso());
+    expect(sample.read().state.project).toMatchObject({ sample: true, stage: "shaping" });
+    const probe = createHttpServer({ store: sample, scheduler: s2, workspaces, startedAt: iso(), allowedHosts: [] });
+    await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+    const port = (probe.address() as AddressInfo).port;
+    probe.close();
+    const real = createHttpServer({ store: sample, scheduler: s2, workspaces, startedAt: iso(), allowedHosts: [`127.0.0.1:${port}`] });
+    await new Promise<void>((r) => real.listen(port, "127.0.0.1", r));
+    try {
+      const start = (delivery: object) =>
+        fetch(`http://127.0.0.1:${port}/api/commands`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", [CLIENT_HEADER]: "1" },
+          body: JSON.stringify({ name: "startFactory", args: startFactoryArgs(sample.read().state, { delivery } as never), idempotencyKey: `start-${JSON.stringify(delivery)}` }),
+        });
+      const refused = await start({ mode: "pr", branch: "main", merge: "user" });
+      expect(refused.status).toBe(400);
+      expect(((await refused.json()) as { error: string }).error).toBe("This is the sample project; pull-request delivery needs a project of your own. Start a new project in Settings.");
+      expect(sample.read().state.project).toMatchObject({ stage: "shaping", factoryStarts: [] });
+      expect(D.deliveryMode(sample.read().state)).toBe("off");
+      const started = await start({ mode: "local", branch: "main", merge: "auto" });
+      expect(started.status).toBe(200);
+      expect(sample.read().state.project.stage).toBe("building");
+      expect(D.deliveryMode(sample.read().state)).toBe("local");
+    } finally {
+      real.closeAllConnections();
+      real.close();
+    }
+    expect(fake.calls).toEqual([]);
+    await s2.stop();
+    sample.close();
+  }, 20_000);
 });
 
 describe("dependent tasks (scenario 20)", () => {

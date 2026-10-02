@@ -223,9 +223,12 @@ describe("in the code, only the owner's command starts the factory", () => {
   });
 
   it("the command is sent only by the owner's button and by the test harnesses acting as the owner", () => {
-    expect(where(/["']startFactory["']/)).toEqual([join("scripts", "real-run-test.mjs"), join("server", "store.ts"), join("server", "testing", "prSandbox.ts"), join("src", "ui", "Shaping.tsx")].sort());
+    expect(where(/["']startFactory["']/)).toEqual([join("scripts", "real-run-test.mjs"), join("server", "http.ts"), join("server", "store.ts"), join("server", "testing", "prSandbox.ts"), join("src", "ui", "Shaping.tsx")].sort());
     // The store names it only to check a write against it (its stage guard); it never sends it.
     const store = readFileSync(join(ROOT, "server", "store.ts"), "utf8");
     expect(store.match(/["']startFactory["']/g)?.length).toBe(store.match(/command === "startFactory"/g)?.length);
+    // The HTTP boundary names it only to refuse pull-request delivery for the sample project; it never sends it.
+    const http = readFileSync(join(ROOT, "server", "http.ts"), "utf8");
+    expect(http.match(/["']startFactory["']/g)?.length).toBe(http.match(/body\.name === "startFactory"/g)?.length);
   });
 });
