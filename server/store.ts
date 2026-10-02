@@ -330,17 +330,30 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
   // the desktop. The owner's budgets are added, not set: nothing stops until the owner sets one. Change orders go
   // to the lead, the default of a new project. The studio and the blueprint start empty.
   18: (doc) => {
-    const project = doc.project as Record<string, unknown>;
-    project.devices ??= ["desktop"];
-    project.factoryStarts ??= [];
-    project.changeOrders ??= "lead";
-    project.budgets ??= { ...NO_BUDGETS };
-    doc.studio ??= emptyStudio();
-    doc.blueprint ??= emptyBlueprint();
+    normalize19(doc);
     doc.version = 19;
     return doc;
   },
 };
+
+/**
+ * Format 19's fields, added where a document lacks them. Format 19 is unreleased, and early builds of ORC-029 pass 2
+ * wrote it before all of its fields existed, so this runs on every load of a format-19 database as well as in the
+ * 18 → 19 upgrade. Idempotent. A change order without a handler takes the project's setting. Start records are
+ * history and are never rewritten: an early start's settings carry `merge` where later ones carry `delivery`.
+ */
+function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
+  const project = doc.project as Record<string, unknown>;
+  project.devices ??= ["desktop"];
+  project.factoryStarts ??= [];
+  project.changeOrders ??= "lead";
+  project.budgets ??= { ...NO_BUDGETS };
+  doc.studio ??= emptyStudio();
+  doc.blueprint ??= emptyBlueprint();
+  const blueprint = doc.blueprint as { changeOrders?: Record<string, unknown>[] };
+  for (const co of (blueprint.changeOrders ??= [])) co.handler ??= project.changeOrders;
+  return doc;
+}
 const SCHEMA_VERSION = 1;
 
 type FailureKind = "stale" | "control" | "invalid" | "internal";
@@ -447,7 +460,12 @@ export class Store {
     this.tx(() => {
       // Read inside the transaction so two instances starting together cannot both seed.
       const row = this.db.prepare("SELECT format, version, json FROM state WHERE id = 1").get() as { format: number; version: number; json: string } | undefined;
-      if (row && row.format === STATE_FORMAT) return;
+      if (row && row.format === STATE_FORMAT) {
+        // A document an early build of format 19 wrote gains the fields it lacks; nothing is written when none is missing.
+        const json = JSON.stringify(normalize19(JSON.parse(row.json) as Record<string, unknown>));
+        if (json !== row.json) this.db.prepare("UPDATE state SET version = ?, json = ?, updated_at = ? WHERE id = 1").run(row.version + 1, json, new Date().toISOString());
+        return;
+      }
       if (row && MIGRATIONS[row.format]) {
         // Upgrade in place, one format at a time, keeping a copy of the original.
         this.db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(`backup_format_${row.format}_v${row.version}`, row.json);

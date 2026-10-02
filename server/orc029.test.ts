@@ -90,6 +90,73 @@ describe("the format 18 → 19 migration", () => {
   });
 });
 
+describe("format-19 databases written before all of format 19's fields existed (review finding 7)", () => {
+  /** A format-19 database as an early build of this pass wrote it, edited by `edit`. Returns the stored document. */
+  function early19(path: string, edit: (doc: Record<string, unknown>) => void): Record<string, unknown> {
+    const first = new Store(path);
+    first.close();
+    const raw = new DatabaseSync(path);
+    const doc = JSON.parse((raw.prepare("SELECT json FROM state WHERE id = 1").get() as { json: string }).json) as Record<string, unknown>;
+    edit(doc);
+    raw.prepare("UPDATE state SET json = ? WHERE id = 1").run(JSON.stringify(doc));
+    raw.close();
+    return doc;
+  }
+  const stored = (path: string) => {
+    const raw = new DatabaseSync(path);
+    const row = raw.prepare("SELECT version, format, json FROM state WHERE id = 1").get() as { version: number; format: number; json: string };
+    raw.close();
+    return row;
+  };
+  // An early start record: its settings carry `merge` where later ones carry `delivery`.
+  const earlyStart = { at: "2026-10-01T10:00:00.000Z", by: "user", blueprintRev: 0, visionRev: 1, settings: { autonomy: "checkin", merge: "user", pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } }, openItems: [] };
+  const order = (rev: number) => ({ rev, at: "2026-10-01T11:00:00.000Z", changedItems: ["bi-1"], affectedTasks: ["EX-004"], status: "open" });
+
+  it("gain the change-order setting (to the lead) and a handler on each change order, on load; start records stay as they were written; a second load changes nothing", () => {
+    const path = join(dir, "early.db");
+    const before = early19(path, (doc) => {
+      const project = doc.project as Record<string, unknown>;
+      delete project.changeOrders;
+      project.factoryStarts = [earlyStart];
+      (doc.blueprint as Record<string, unknown>).changeOrders = [order(2)];
+    });
+    expect(stored(path).format).toBe(19);
+    const store = new Store(path);
+    opened.push(store);
+    const s = store.read().state;
+    expect(s.project.changeOrders).toBe("lead");
+    expect(s.blueprint.changeOrders).toEqual([{ ...order(2), handler: "lead" }]);
+    expect(s.project.factoryStarts).toEqual([earlyStart]);
+    expect(s.tasks).toEqual(before.tasks);
+    // The project works: a change order can be set, and a new one gets its handler from it.
+    store.command("setChangeOrders", { who: "user" }, "co", new Date().toISOString());
+    expect(store.read().state.project.changeOrders).toBe("user");
+    store.close();
+    opened.splice(opened.indexOf(store), 1);
+    const once = stored(path);
+    const again = new Store(path);
+    opened.push(again);
+    expect(stored(path)).toEqual(once);
+  });
+
+  it("a change order without a handler takes the project's setting; a document from before the studio gains its containers", () => {
+    const path = join(dir, "early-user.db");
+    early19(path, (doc) => {
+      const project = doc.project as Record<string, unknown>;
+      project.changeOrders = "user";
+      for (const k of ["devices", "factoryStarts", "budgets"]) delete project[k];
+      delete doc.studio;
+      (doc as { blueprint: unknown }).blueprint = { revisions: [], changeOrders: [order(3), { ...order(4), handler: "lead" }] };
+    });
+    const store = new Store(path);
+    opened.push(store);
+    const s = store.read().state;
+    expect(s.blueprint.changeOrders.map((c) => c.handler)).toEqual(["user", "lead"]);
+    expect(s.project).toMatchObject({ changeOrders: "user", devices: ["desktop"], factoryStarts: [], budgets: { buildingUsd: null, maintenanceUsdPerMonth: null } });
+    expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [] });
+  });
+});
+
 describe("the owner-only start, through the scheduler", () => {
   let store: Store;
   let claude: ScriptedAdapter;
