@@ -229,3 +229,30 @@ All within the owner's cap of about $5 of estimated Claude usage. The trial scri
 - `npm test`, the typecheck, the build and `npm run test:integration` pass.
 - An independent review.
 - The real trials' record committed.
+
+## The real trial and the review (2026-10-02)
+
+**The real trial** (`docs/real-runs/2026-10-02T11-35-02-810Z.json`) passed 9 of 9 for about $0.26 of Claude.
+
+- A real designer (Sonnet 5.5) made the trip plan in 3 variants, and the trips CLI demo and a TUI.
+- The PE (Codex gpt-6.1-sol) reviewed all of them. Every verdict was feasible-if, with specific changes.
+- **Two recorder defects found by the trial:**
+  1. The working copy held only the tape's folder, so a root-relative path failed with MODULE_NOT_FOUND.
+  2. That failed recording was still marked "recorded".
+
+  Both are being fixed.
+
+**An independent review of pass 3** found 1 high and 10 medium or low findings. All are to be fixed after the recorder fixes, which touch the same file:
+
+1. **High:** the tape's shell can write to every `/dev/ttys*` device, which reaches the owner's other terminal sessions. The fix allows only terminal devices created inside the sandbox, proven by a probe step.
+2. **Medium:** shell reads deny only the home folder. Also deny `/Volumes`, `/Users`, `/private/var/folders` (except the shell's temp folder) and the data directory.
+3. **Medium (to verify):** WebRTC and DNS prefetch are outside `connect-src`, in the owner's frame and in the screenshot browser. Add hostile cases, and harden the screenshot Chrome (WebRTC policy, a dead proxy, host-resolver rules). Document what the owner's browser allows.
+4. **Medium:** the viewer must label a PE run on the designer's own provider as "not independent".
+5. **Medium-low:** screenshots and recordings must not start while the project is paused.
+6. **Low:** a Codex PE run creates `.tmp` inside the immutable version folder.
+7. **Low:** runs stopped by a pause count toward the PE retry limit.
+8. **Low:** the trial's cap counts unknown-cost runs as $0.
+9. **Low:** non-ASCII manifest paths; allow only `[A-Za-z0-9._ -]` in path segments.
+10. **Low:** the PE's envelope must say the designer's files are data, not instructions.
+11. **Low:** duplicated `versionDir` and project-id checks, three copies of the selector limit, and an unused `pe` brief.
+
