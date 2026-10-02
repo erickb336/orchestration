@@ -153,6 +153,31 @@ At most three implementers at once, on disjoint files; the lead integrates. Each
 - **Terminal artifacts** play in a window frame, at their recorded size.
 - **Built from the component kit** (ORC-025): no inline font sizes or colours, and no `confirm()`.
 
+## Finishing pass 3 as built (68973e1..40ec7db)
+
+The owner's rule is that the designer's work reaches the owner only after PE review, so without PE runs the owner could never answer. A minimal PE run is pulled forward from pass 4.
+
+- **The PE's run.** Once a version is imported and its screenshots or recording are made, the scheduler asks for a PE run on it (`askForPeReviews`, in the drain's write).
+  - It runs read-only in the version's folder (the files, `shots/`, `recording/`), isolated, with the vision, the budgets and the answer format in its envelope (`server/studio/pe.ts`).
+  - Its JSON answer is checked at the boundary, then recorded with `addPeVerdicts`. A refused answer fails the run with the reason. A version whose run ends without a verdict is asked once more, then the studio says the PE gave no verdict.
+  - PE runs are studio runs: they count in the building spend, wait at the budget stop, and a pause requeues them.
+- **Provider.** A `pe` role was easy to add: the project's PE role default (Settings, Agents) chooses it. Without one, the PE runs on the other provider than the designer's; with that provider off, on the designer's own, and the event says the review is not independent. No flow step can use `pe` until pass 5.
+- **One pass is the last, for now.** The designer cannot revise in answer to the PE until pass 4, so the service records each pass with `lastPass`. An objection then goes to the owner at once (status `objections`), never dropped, and the owner can mark, pick and overrule. Pass 4 stops setting it when the designer revises.
+- **Verdicts name their run:** `by: { provider, model, runId }`.
+- **The fake PE** reads the version's manifest and answers feasible, and feasible-if on the second variant, every reason labelled simulated.
+- **State:** each variant records its `entry`, and each pin its `selector`.
+- **GET `/api/studio/file`** serves the app a version's `.txt`, `.ans` and `.cast` as plain text, and PNG, GIF and WebM by their first bytes. It serves only what the prototype server would serve of a version the project records. Pages, scripts and SVG get a 403. Every answer carries nosniff, no-store and `default-src 'none'; sandbox`.
+- **The viewer:**
+  - PE review in the right column, per variant, with the reasons, the change and the budget effect. The lead's panel stays a placeholder.
+  - An objection says it is waiting for the owner, and is flagged in the round's list.
+  - The domain's `shotsNote` and `demoNote`, and each terminal variant as the service recorded it.
+  - Terminal text, recordings and screenshots are read through the new route.
+- **The trial script** is `scripts/studio-trial.mjs` (`npm run trial:studio`, `-- --fake`), a sibling of the factory scenario. Until pass 4, it stands in for the lead by writing the service's own commands to the database.
+- **Not done here:**
+  - the designer revising after an objection, and the three-pass loop (pass 4);
+  - an owner action to ask the PE again after two runs without a verdict;
+  - a UI to overrule an objection (the command exists).
+
 ## 3e. Real trials
 
 All within the owner's cap of about $5 of estimated Claude usage. The trial script stops at the cap.
