@@ -14,6 +14,7 @@ Each unit is one commit with its tests, verified before the next starts (`sequen
 | 2b | The stage boundary: one way in, the owner-only start with its record, factory settings set at the start, device scope, migration 18 → 19 | — |
 | 2c | The studio: rounds, artifacts, feedback, PE verdicts, probes, the blueprint and change orders | 2b (migration) |
 | 2d | The PE as a decision route on Autopilot, within budget | 2a, 2c |
+| 2e | PE review of new work in the factory: the domain hooks (owner, r6) | 2d |
 
 ## 2a. Prices, spend and budgets
 
@@ -123,6 +124,19 @@ New module `src/domain/studio/` with its own types file, so it rarely conflicts 
 - **A PE decision** records `decidedBy: "pe"` with its reasons and its budget effect. The owner can reverse it, as with the lead's decisions today.
 - **Never past a budget.** A PE decision whose stated cost would take the building spend past the budget, or the maintenance estimate past its budget, is turned into a user decision and listed under Needs you, even on Autopilot.
 - **Who runs it:** the PE's decision runs come in pass 4. Until then, a `"pe"` route decides through the lead's decision runs with the PE's brief, which is labelled.
+
+## 2e. PE review of new work in the factory (owner, r6)
+
+The domain hooks only; the runs and flow changes come in pass 5.
+
+- **A PE review state:** lead proposals and breakdown items carry `peReview: "pending" | "agreed" | "objected"`, with the verdict's reasons.
+  - Pending holds them from dispatch with the hold reason "waiting for PE review".
+  - Agreed releases them under the usual involvement rules.
+  - Objected after three rounds goes to Needs you with the objection. The owner can overrule it, recorded.
+- **Change-order updates** carry the same state before the lead applies them.
+- **The Feature design step** gets a PE review step beside its UX review: a flow-file change in pass 5, tested by the no-finding-dropped rule (ORC-028), which the PE's findings must also satisfy.
+- **Code changes are not PE-reviewed.**
+- **Tests:** a pending proposal never dispatches; an agreement releases it; an objection goes to Needs you; an overrule is recorded.
 
 ## Checks for the whole pass
 
