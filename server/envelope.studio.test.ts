@@ -31,7 +31,10 @@ describe("the lead's studio brief", () => {
     const brief = section(text);
     expect(brief).toContain("You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.");
     expect(brief).toContain("1. experience: the key screens or commands, or the interface, or the topology, and how they behave;");
-    expect(brief).toContain("2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary;");
+    // The data round asks for the project's dictionary (pass 4d): from the vision, and from the code's names.
+    expect(brief).toContain(
+      '2. data: the product\'s things and how they relate, in plain words with worked examples, and what crosses each boundary. Also ask the designer for the project\'s dictionary (kind "dictionary"): each word the product uses, with one meaning and the words it replaces. Base it on the vision and, for an existing repository, on the names in the code. When the user approves it, every agent gets its words;',
+    );
     expect(brief).toContain("3. flows: every rule and edge case decided, as tables of cases and outcomes (empty, loading, error, offline, first run), because a case the design leaves open becomes special-casing in code.");
     // The three product domains in plain words (real trial finding 3: the lead asked about the subject, "Travel and group planning").
     expect(brief).toContain(

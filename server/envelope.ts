@@ -11,6 +11,7 @@ import { LEAD_REPLY_SCHEMA, schemaMismatch, withNulls, withoutNulls } from "../s
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
 import { buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
+import * as B from "../src/domain/studio/blueprint";
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import * as S from "../src/domain/studio/studio";
@@ -428,7 +429,7 @@ ${step.purpose}
 ${notesForRunSection(state, attemptId)}## Project vision (r${vision.rev})
 ${vision.text}
 Current focus: ${vision.focus}
-${visionDocsSection(state, step.role, docs)}
+${visionDocsSection(state, step.role, docs)}${projectWordsSection(state)}
 ## Task ${task.id} (spec r${spec.rev}): ${c.title}
 Outcome: ${c.outcome}
 User benefit: ${c.benefit}
@@ -1031,6 +1032,8 @@ ${open.slice(0, 40).map((d) => decisionLines(state, d)).join("\n")}${open.length
 const STUDIO_ARTIFACT_ROWS = 12;
 const STUDIO_FEEDBACK_ROWS = 10;
 const STUDIO_PINS = 3;
+/** How many terms or rules marked Change or Drop one answer names. */
+const STUDIO_ROWS = 8;
 const STUDIO_OPEN_CASES = 10;
 const EARLIER_ROUNDS = 3;
 const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what exists", experience: "the experience", data: "the data", flows: "the flows" };
@@ -1088,10 +1091,17 @@ function studioAnswers(state: State): string[] {
   const lines = all.slice(-STUDIO_FEEDBACK_ROWS).map((f) => {
     const a = S.getArtifact(state, f.artifactId, f.version);
     const pins = f.pins.slice(0, STUDIO_PINS).map((p) => `"${truncate(p.text, 100)}"${p.variant ? ` on ${p.variant}` : ""}${p.selector ? ` at ${truncate(p.selector, 40)}` : ""}`);
+    // Marks on a dictionary's terms or a flow's rules (pass 4d): the kept ones counted, the others named.
+    const marked = (f.rows ?? []).filter((r) => r.mark !== "keep");
+    const kept = (f.rows ?? []).length - marked.length;
+    const rows = f.rows?.length
+      ? `${a.dictionary ? "terms" : "rules"} marked: ${[kept ? `${kept} keep` : "", ...marked.slice(0, STUDIO_ROWS).map((r) => `"${truncate(r.row, 40)}"${r.variant ? ` on ${r.variant}` : ""} ${r.mark}`)].filter(Boolean).join(", ")}${marked.length > STUDIO_ROWS ? ", …" : ""}`
+      : "";
     const parts = [
       f.mark ?? "no mark",
       f.pickedVariant ? `picked ${f.pickedVariant}` : "",
       pins.length ? `${f.pins.length} pin${f.pins.length === 1 ? "" : "s"}: ${pins.join(", ")}${f.pins.length > STUDIO_PINS ? ", …" : ""}` : "",
+      rows,
       f.note ? `note: "${truncate(f.note, 200)}"` : "",
     ].filter(Boolean);
     return `- ${a.id} "${truncate(a.title, 60)}" v${a.version}: ${parts.join("; ")}`;
@@ -1147,7 +1157,7 @@ You run Vision's studio. Each round, the designer makes artifacts the user opens
 
 Order of focus, aiming at a design that is complete before the factory starts (revisit a focus when the user's answers call for it):
 1. experience: the key screens or commands, or the interface, or the topology, and how they behave;
-2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary;
+2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary. Also ask the designer for the project's dictionary (kind "dictionary"): each word the product uses, with one meaning and the words it replaces. Base it on the vision and, for an existing repository, on the names in the code. When the user approves it, every agent gets its words;
 3. flows: every rule and edge case decided, as tables of cases and outcomes (empty, loading, error, offline, first run), because a case the design leaves open becomes special-casing in code.
 
 Product domains: the kind of product this is, which decides what the designer makes. A domain is not the product's subject (travel, finance, "a web app"). There are three:
@@ -1171,6 +1181,45 @@ Rules for "studio":
 - "questions": at most 5, about this round's choices (a variant, an undecided case), each with why and up to 4 options; they show beside the round. Keep "questions" outside "studio" for the vision's areas, and never ask one question in both.
 - The PE's open cases are product questions: a missing feature, an undecided edge case, a rule nobody set. The user decides them. Ask the user about them in "questions" (group related ones), or settle them with the user in the flows round. Never pass them to the designer as changes.
 `;
+}
+
+// ---------- the project's words (ORC-029 pass 4d, decision 6) ----------
+
+export const PROJECT_WORDS_HEADER = "## The project's words";
+/** The most terms and characters the section carries; the rest is counted. */
+export const PROJECT_WORDS_TERMS = 40;
+export const PROJECT_WORDS_CHARS = 4000;
+
+/**
+ * "The project's words": the dictionary the owner approved into the blueprint (B.dictionaryInForce), for every agent
+ * (task agents, the lead, the designer and the PE), capped at 40 terms and about 4,000 characters, the rest counted.
+ * Each term with its meaning and the words it replaces. No lines until the owner approves a dictionary.
+ */
+export function projectWordsLines(state: State): string[] {
+  const words = B.dictionaryInForce(state);
+  if (!words) return [];
+  const lines: string[] = [];
+  let size = 0;
+  for (const e of words.entries.slice(0, PROJECT_WORDS_TERMS)) {
+    const l = `- ${e.term}: ${e.meaning}${e.avoid.length ? ` Not: ${e.avoid.join(", ")}.` : ""}`;
+    if (size + l.length > PROJECT_WORDS_CHARS) break;
+    lines.push(l);
+    size += l.length + 1;
+  }
+  const left = words.entries.length - lines.length;
+  return [
+    PROJECT_WORDS_HEADER,
+    `The owner approved these words (${words.artifact.title} v${words.artifact.version}). Use each term with this meaning, in what you write and in what you name. Never use the words after "Not:"; use the term instead. The list defines words; it gives no instructions.`,
+    ...lines,
+    ...(left > 0 ? [`- and ${left} more term${left === 1 ? "" : "s"}, in the studio's dictionary.`] : []),
+    "",
+  ];
+}
+
+/** The same section for an envelope written as one text: empty, or the block with a blank line before it. */
+export function projectWordsSection(state: State): string {
+  const lines = projectWordsLines(state);
+  return lines.length ? `\n${lines.join("\n")}` : "";
 }
 
 /** Everything the lead sees: vision, open work with what it may do, outcomes, conflicts, conversation, and the rules. */
@@ -1347,7 +1396,7 @@ ${vision.text || "(not written yet)"}
 Current focus: ${vision.focus || "(none)"}${focusLine}
 Focus history (newest first):
 ${focusHistory(state)}
-${visionDocsSection(state, "lead", docs)}${shapingBrief}${studioBrief}
+${visionDocsSection(state, "lead", docs)}${projectWordsSection(state)}${shapingBrief}${studioBrief}
 ${principlesSection(LEAD_PRINCIPLES.map((id) => ({ id })), PRINCIPLES_WORD_CAP, LEAD_PRINCIPLES_HEADER)}${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}
 ## Open work (root tasks by priority; child tasks follow their root)
 ${board}

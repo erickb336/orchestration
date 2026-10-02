@@ -159,7 +159,7 @@ describe("reading studio.json", () => {
     stage({ screens: [] });
     expect(refusal(read)).toBe('studio.json has no "artifacts" list.');
     stage({ artifacts: [{ ...TRIP_PLAN, kind: "material" }] });
-    expect(refusal(read)).toBe('artifact 1: the kind "material" is not one this run makes (screen, terminal-demo, tui, contract, flow, interface, algorithm, topology).');
+    expect(refusal(read)).toBe('artifact 1: the kind "material" is not one this run makes (screen, terminal-demo, tui, contract, flow, interface, algorithm, topology, dictionary).');
   });
 
   it("refuses file types outside the allowlist, paths outside the folder, the service's own manifest, and entries that are not files", () => {
@@ -409,5 +409,81 @@ describe("importing a designer run", () => {
     expect(readdirSync(versionDir(root, "sa-9", 1)).sort()).toEqual(["a", "b", "manifest.json"]);
     expect(existsSync(join(versionDir(root, "sa-9", 1), "stale"))).toBe(false);
     expect(() => studioRoot(dir, "../escape")).toThrow('"../escape" cannot name a studio folder.');
+  });
+});
+
+describe("the project's dictionary and a flow's rules at import (pass 4d)", () => {
+  const WORDS = [
+    { term: "trip", meaning: "A weekend away that a group plans together.", avoid: ["journey", "outing"] },
+    { term: "member", meaning: "A person who said they are in." },
+  ];
+  const fresh = () => {
+    rmSync(staging, { recursive: true, force: true });
+    mkdirSync(staging, { recursive: true });
+  };
+  const dictionary = (words: unknown, over: Record<string, unknown> = {}) => {
+    fresh();
+    stage({ artifacts: [{ kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: ["dictionary.json"], ...over }] }, { "dictionary.json": typeof words === "string" ? words : JSON.stringify(words) });
+  };
+  const RULES = {
+    rules: [
+      { id: "R1", text: "When a member says they are in, the app shall show the cost each." },
+      { id: "R2", text: "If the trip is full, then the app shall add the member to the waiting list." },
+    ],
+    examples: [{ id: "E1", text: "Given a full trip, when Sam says he is in, then Sam is on the waiting list." }],
+  };
+  const flow = (rules: unknown, files: Record<string, string> = { "doc/index.md": "# Saying you are in\n", "doc/rules.json": JSON.stringify(rules) }) => {
+    fresh();
+    stage({ artifacts: [{ kind: "flow", title: "Saying you are in", variants: [{ id: "a", label: "As drafted", entry: "doc/index.md" }], files: Object.keys(files) }] }, files);
+  };
+
+  it("reads a dictionary's terms, and the import records them on the version", () => {
+    dictionary(WORDS);
+    expect(read()[0].dictionary).toEqual([WORDS[0], { ...WORDS[1], avoid: [] }]);
+    const { s, runId } = withRun();
+    const out = importDesignerRun(s, runId, handedIn(s, runId, read()), studioRoot(dir, "p-1"), at(4));
+    expect(S.latestArtifacts(out.state)[0]).toMatchObject({ kind: "dictionary", title: "Words", devices: [], dictionary: [WORDS[0], { ...WORDS[1], avoid: [] }] });
+  });
+
+  it("refuses a dictionary that breaks its rules, listing each problem with its term", () => {
+    dictionary([...WORDS, { term: "Trip", meaning: "Again.", avoid: ["member"] }]);
+    expect(refusal(read)).toBe('artifact 1: "dictionary.json": term 3 ("Trip") is also term 1: list each term once; term 3 ("Trip"): the avoided word "member" is also a term (term 2); a word is either used or avoided.');
+    dictionary("{ not json");
+    expect(refusal(read)).toBe('artifact 1: "dictionary.json" is not valid JSON.');
+    dictionary(WORDS, { devices: ["desktop"] });
+    expect(refusal(read)).toBe("artifact 1: a dictionary has no devices.");
+    fresh();
+    stage({ artifacts: [{ kind: "dictionary", title: "Words", variants: [{ id: "a", label: "A", entry: "words.md" }], files: ["words.md"] }] }, { "words.md": "# Words\n" });
+    expect(refusal(read)).toBe("artifact 1: a dictionary is one file, dictionary.json, and one variant whose entry is dictionary.json.");
+  });
+
+  it("reads a flow's rules.json beside its variant's entry, with each rule's pattern", () => {
+    flow(RULES);
+    expect(read()[0].rules).toEqual([
+      {
+        variant: "a",
+        path: "doc/rules.json",
+        rules: [
+          { ...RULES.rules[0], pattern: "event" },
+          { ...RULES.rules[1], pattern: "unwanted" },
+        ],
+        examples: RULES.examples,
+      },
+    ]);
+    const { s, runId } = withRun();
+    const out = importDesignerRun(s, runId, handedIn(s, runId, read()), studioRoot(dir, "p-1"), at(4));
+    expect(S.latestArtifacts(out.state)[0].rules?.[0].rules.map((r) => r.pattern)).toEqual(["event", "unwanted"]);
+    // A flow without rules.json is a flow as before.
+    flow(undefined, { "doc/index.md": "# Saying you are in\n" });
+    expect(read()[0].rules).toBeUndefined();
+  });
+
+  it("refuses a rule outside the patterns with its id and the patterns, so the designer's next run fixes it", () => {
+    flow({ rules: [RULES.rules[0], { id: "R2", text: "If the trip is full, the app shall add the member to the waiting list." }], examples: [{ id: "E1", text: "Sam waits." }] });
+    expect(refusal(read)).toBe(
+      'artifact 1: "doc/rules.json": rule R2 fits no pattern: "If the trip is full, the app shall add the member to the waiting list."; example E1 fits no pattern: "Sam waits."; A rule fits one of: "The <system> shall <response>."; "When <trigger>, the <system> shall <response>."; "While <state>, the <system> shall <response>."; "If <unwanted condition>, then the <system> shall <response>."; "Where <feature is included>, the <system> shall <response>.". An example fits "Given <context>, when <action>, then <result>.".',
+    );
+    flow(RULES, { "doc/index.md": "# Saying you are in\n", "rules/rules.json": JSON.stringify(RULES) });
+    expect(refusal(read)).toBe('artifact 1: "rules/rules.json" is beside no variant\'s entry; put each variant\'s rules.json in the folder of its entry.');
   });
 });

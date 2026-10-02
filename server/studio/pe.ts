@@ -20,7 +20,7 @@ import { buildingSpend, fmtUsd } from "../../src/domain/spend";
 import * as S from "../../src/domain/studio/studio";
 import { VERDICTS, VERDICT_WORDS, type PeVerdict, type RoundFocus, type StudioArtifact, type StudioRun, type Verdict } from "../../src/domain/studio/types";
 import { ControlError, type State } from "../../src/domain/types";
-import { lastJsonObject } from "../envelope";
+import { lastJsonObject, projectWordsLines } from "../envelope";
 
 const KIND_WORDS: Record<StudioArtifact["kind"], string> = {
   screen: "a screen",
@@ -165,6 +165,7 @@ export function peEnvelope(state: State, run: StudioRun, where: { folder: string
     "",
     `Round ${round.n} is about ${FOCUS_WORDS[round.focus]}.${round.summary ? ` ${round.summary}` : ""}`,
     "",
+    ...projectWordsLines(state),
     ...budgets,
     ...refusedLines(state, run, a),
     "## Your answer",
