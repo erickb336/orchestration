@@ -11,13 +11,13 @@
 
 import { randomBytes } from "node:crypto";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type OutgoingHttpHeaders, type Server, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { acceptPinMessage, prototypeOrigin } from "../../src/runtime/prototype";
-import { createHttpServer } from "../http";
+import { appPagePolicy, createHttpServer } from "../http";
 import { FakeAdapter, defaultFakeConfig } from "../runtimes/fake";
 import { Scheduler } from "../scheduler";
 import { Store } from "../store";
@@ -88,12 +88,19 @@ const appRequests: string[] = [];
 const outsideRequests: string[] = [];
 const protoRequests: { host: string; url: string; status: number }[] = [];
 
-/** An app page (served by the app's own server) that frames `src` like the studio will, and takes pins through acceptPinMessage. */
+/**
+ * An app page (served by the app's own server) that frames `src` like the studio will, and takes pins through
+ * acceptPinMessage. Its script is a file (APP_PAGE_SCRIPT), as the app's are: the app's policy runs no inline script.
+ * A second frame, a srcdoc as the studio's diagram frame is, forges a pin.
+ */
 function appPage(src: string, sandbox: boolean): string {
   const attr = sandbox ? ' sandbox="allow-scripts"' : "";
-  return `<!doctype html><html><head><meta charset="utf-8"><title>App page</title></head><body>
-<script>
-const acceptPinMessage = ${acceptPinMessage.toString()};
+  return `<!doctype html><html><head><meta charset="utf-8"><title>App page</title><script src="/app-page.js"></script></head><body>
+<iframe id="prototype"${attr} src="${src}" style="width: 900px; height: 600px"></iframe>
+<iframe id="forger" sandbox="allow-scripts" srcdoc="<script src='/forger.js'></script>"></iframe>
+</body></html>`;
+}
+const APP_PAGE_SCRIPT = `const acceptPinMessage = ${acceptPinMessage.toString()};
 window.__messages = [];
 window.__pins = [];
 addEventListener("message", (e) => {
@@ -102,11 +109,10 @@ addEventListener("message", (e) => {
   window.__messages.push({ fromPrototype: e.source === frame, accepted: pin !== null, data: e.data });
   if (pin) window.__pins.push(pin);
 });
-</script>
-<iframe id="prototype"${attr} src="${src}" style="width: 900px; height: 600px"></iframe>
-<iframe id="forger" sandbox="allow-scripts" srcdoc="<script>parent.postMessage({ type: 'orchestrator-pin', x: 0.5, y: 0.5, selector: 'forged' }, '*')</script>"></iframe>
-</body></html>`;
-}
+`;
+const FORGER_SCRIPT = "parent.postMessage({ type: 'orchestrator-pin', x: 0.5, y: 0.5, selector: 'forged' }, '*');";
+/** What the app's server serves for an app page besides the page: its script, and the forger's. */
+const PAGE_FILES = ["/app-page.js", "/forger.js"];
 
 beforeAll(async () => {
   if (!browser) return;
@@ -118,7 +124,7 @@ beforeAll(async () => {
   writeVersion(studio, "sa-4", 1, INLINE);
 
   // The app: the real service's HTTP server, serving a stand-in for the studio page from its static folder. The
-  // controls use a second one without the prototype port, so its pages carry no frame policy.
+  // controls use a second one whose pages go out without the app's policy (as a page with no guard would).
   const staticDir = join(root, "static");
   // The ports first: the allowed Host and the prototypes' frame-ancestors name them.
   const free = async () => {
@@ -149,13 +155,21 @@ beforeAll(async () => {
   const query = (appOrigin: string) => `?app=${encodeURIComponent(appOrigin)}&ext=${encodeURIComponent(`http://127.0.0.1:${extPort}`)}&sibling=${encodeURIComponent(prototypeOrigin("sa-2", 1, protoPort))}`;
   const guarded = query(`http://127.0.0.1:${appPort}`);
   cpSync(join(FIXTURES, "hostile"), join(staticDir, "unguarded"), { recursive: true });
+  writeFileSync(join(staticDir, "app-page.js"), APP_PAGE_SCRIPT);
+  writeFileSync(join(staticDir, "forger.js"), FORGER_SCRIPT);
   writeFileSync(join(staticDir, "index.html"), appPage(`${prototypeOrigin("sa-1", 1, protoPort)}/a/index.html${guarded}`, true));
   writeFileSync(join(staticDir, "control.html"), appPage(`/unguarded/index.html${query(`http://127.0.0.1:${controlPort}`)}`, false));
   writeFileSync(join(staticDir, "navigate.html"), appPage(`${prototypeOrigin("sa-3", 1, protoPort)}/a/index.html${guarded}`, true));
   writeFileSync(join(staticDir, "inline.html"), appPage(`${prototypeOrigin("sa-4", 1, protoPort)}/a/index.html${guarded}`, true));
   const startedAt = new Date().toISOString();
   app = createHttpServer({ store, scheduler, startedAt, allowedHosts: [`127.0.0.1:${appPort}`], staticDir, prototypePort: protoPort });
-  control = createHttpServer({ store, scheduler, startedAt, allowedHosts: [`127.0.0.1:${controlPort}`], staticDir });
+  const unguarded = createHttpServer({ store, scheduler, startedAt, allowedHosts: [`127.0.0.1:${controlPort}`], staticDir });
+  const handle = unguarded.listeners("request")[0] as (req: IncomingMessage, res: ServerResponse) => void;
+  control = createServer((req, res) => {
+    const writeHead = res.writeHead.bind(res) as (status: number, headers?: OutgoingHttpHeaders) => ServerResponse;
+    res.writeHead = ((status: number, headers?: OutgoingHttpHeaders) => writeHead(status, Object.fromEntries(Object.entries(headers ?? {}).filter(([k]) => k.toLowerCase() !== "content-security-policy")))) as ServerResponse["writeHead"];
+    handle(req, res);
+  });
   for (const [s, p] of [[app, appPort], [control, controlPort]] as const) {
     s.on("request", (req) => appRequests.push(req.url ?? ""));
     await new Promise<void>((r) => s.listen(p, "127.0.0.1", r));
@@ -246,7 +260,7 @@ describe.skipIf(!browser)("a hostile prototype in the app's sandboxed frame", ()
 
     // What reached anything: the app's server served its page only; the outside server and the internet got nothing;
     // the prototype server got nothing for the sibling, and the path tricks on its own origin found nothing.
-    expect(appRequests.slice(start.app)).toEqual(["/"]);
+    expect(appRequests.slice(start.app).sort()).toEqual(["/", ...PAGE_FILES]);
     expect(outsideRequests.slice(start.outside)).toEqual([]);
     expect(seen.filter((u) => !u.startsWith(appUrl) && !u.startsWith(`${origin}/`))).toEqual([]);
     const proto = protoRequests.slice(start.proto).map((r) => `${r.host} ${r.url.split("?")[0]} ${r.status}`);
@@ -263,7 +277,7 @@ describe.skipIf(!browser)("a hostile prototype in the app's sandboxed frame", ()
       const { context, page } = await newContext();
       const start = { outside: outsideRequests.length, proto: protoRequests.length };
       const response = await page.goto(`http://127.0.0.1:${guarded ? appPort : controlPort}/navigate.html`);
-      expect(response?.headers()["content-security-policy"]).toBe(guarded ? `frame-src http://*.localhost:${protoPort}` : undefined);
+      expect(response?.headers()["content-security-policy"]).toBe(guarded ? appPagePolicy(protoPort) : undefined);
       // The prototype loaded and its script ran, in both.
       await expect.poll(() => protoRequests.slice(start.proto).some((r) => r.host === `p-sa-3-v1.localhost:${protoPort}` && r.url === "/a/nav.js" && r.status === 200), { timeout: 5_000 }).toBe(true);
       await page.waitForTimeout(1000);
@@ -288,9 +302,9 @@ describe.skipIf(!browser)("a hostile prototype in the app's sandboxed frame", ()
     const attempts = await attemptsIn(frame);
     expect(attempts).toMatchObject({ fetchAppApi: "blocked: TypeError", fetchExternal: "blocked: TypeError", imageExternal: "blocked: error", scriptExternal: "blocked: error", styleExternal: "blocked: error" });
     await page.waitForTimeout(500);
-    expect(appRequests.slice(start.app)).toEqual(["/inline.html"]);
+    expect(appRequests.slice(start.app).sort()).toEqual([...PAGE_FILES, "/inline.html"]);
     expect(outsideRequests.slice(start.outside)).toEqual([]);
-    expect(seen.filter((u) => u !== appUrl && !u.startsWith(`${origin}/`))).toEqual([]);
+    expect(seen.filter((u) => u !== appUrl && !PAGE_FILES.some((f) => u === `http://127.0.0.1:${appPort}${f}`) && !u.startsWith(`${origin}/`))).toEqual([]);
     expect([...new Set(protoRequests.slice(start.proto).map((r) => `${r.url.split("?")[0]} ${r.status}`))].sort()).toEqual(["/__orchestrator/pin.js 200", "/a/index.html 200"]);
     await context.close();
   }, 30_000);

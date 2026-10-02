@@ -11,6 +11,10 @@ import { createServer as createNetServer, type AddressInfo, type Server as NetSe
 import { networkInterfaces } from "node:os";
 import { dirname, join } from "node:path";
 import { crc32, deflateSync } from "node:zlib";
+import { initProject } from "../../src/domain/model";
+import { buildSeed } from "../../src/domain/seed";
+import { addScreen, openRound, peAgrees, run } from "../../src/domain/testing/studio";
+import type { State } from "../../src/domain/types";
 import { versionDir, type PrototypeManifest } from "./serve";
 
 export const sha256 = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
@@ -91,6 +95,103 @@ export const TINY_PNG = (() => {
 
 /** A PNG's pixel size, from its header. */
 export const pngSize = (png: Buffer) => ({ width: png.readUInt32BE(16), height: png.readUInt32BE(20) });
+
+// ---------- a project in Vision, for checks of the real app in a browser ----------
+
+const BOARD_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="stylesheet" href="style.css"></head>
+<body><header><h1>Trip board</h1><button type="button">New trip</button></header>
+<main><section><h2>Coast weekend</h2><p>Fri 12 to Sun 14 · 4 people</p></section><section><h2>Lake cabin</h2><p>Not dated yet · 2 people</p></section></main></body></html>`;
+const BOARD_CSS = `body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: #f6f4ef; color: #222; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; background: #fff; border-bottom: 1px solid #ddd; }
+main { display: grid; gap: 16px; padding: 24px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+section { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
+h1, h2 { margin: 0; font-size: 1.1rem; }`;
+const API_MD = `# Trip planner API
+
+Every call answers with \`JSON\`. A trip has days, and a day has stops.
+
+| Call | What it does | Errors |
+| --- | --- | --- |
+| \`plan(trip)\` | Orders the stops of each day | \`NoDates\` when the trip has no dates |
+| \`share(trip, people)\` | Sends the plan to the people | \`TooMany\` above 12 people |
+
+\`\`\`ts
+export function plan(trip: Trip): DayPlan[];
+\`\`\`
+
+\`\`\`mermaid
+sequenceDiagram
+  App->>Planner: plan(trip)
+  Planner-->>App: DayPlan[]
+\`\`\`
+`;
+const FLOW_MMD = `flowchart LR
+  A[Pick a trip] --> B{Dates set?}
+  B -- yes --> C[Order the stops]
+  B -- no --> D[Ask for dates]
+  C --> E[Share the plan]`;
+
+/**
+ * Hostile documents (pass 4 review, finding 2): Mermaid and Markdown that try to load `ext`, the address of a server
+ * the test watches. Each must load nothing, wherever the app draws it.
+ */
+export function hostileDocuments(ext: string): Record<string, string> {
+  return {
+    "bad/theme-css.mmd": `%%{init: {"themeCSS": ".node rect { fill: url(${ext}/theme-fill) } @import url(${ext}/theme-import); @font-face { font-family: x; src: url(${ext}/theme-font) } text { font-family: x; background-image: url(${ext}/theme-bg) }"}}%%\nflowchart LR\n  A[Theme CSS] --> B`,
+    "bad/front-matter.mmd": `---\nconfig:\n  themeCSS: "rect { fill: url(${ext}/front-matter-fill) }"\n  fontFamily: "x; background: url(${ext}/front-matter-font)"\n---\nflowchart LR\n  A[Front matter] --> B`,
+    "bad/image-shape.mmd": `flowchart LR\n  A@{ img: "${ext}/image-shape.png", label: "An image shape", pos: "t", w: 60, h: 60 }\n  A --> B`,
+    "bad/c4-sprite.mmd": `C4Context\n  Person(a, "A person", "with a sprite", "${ext}/c4-sprite.png")\n  System(b, "A system", "with a link", $link="${ext}/c4-link")`,
+    "bad/click.mmd": `flowchart LR\n  A[A link] --> B\n  click A href "${ext}/click" "a link"`,
+    "bad/hostile.md": [
+      "# Hostile Markdown",
+      `![remote image](${ext}/md-image.png) ![ref image][r]`,
+      "",
+      `[r]: ${ext}/md-ref-image.png`,
+      "",
+      `<img src="${ext}/md-raw-img.png"><link rel="dns-prefetch" href="${ext}"><iframe src="${ext}/md-frame"></iframe><style>body { background: url(${ext}/md-style) }</style>`,
+      "",
+      `[a link](${ext}/md-link) and <${ext}/md-autolink>`,
+      "",
+      "```mermaid",
+      `%%{init: {"themeCSS": "rect { fill: url(${ext}/md-mermaid-fill) }"}}%%`,
+      "flowchart LR",
+      "  A[In Markdown] --> B",
+      "```",
+    ].join("\n"),
+  };
+}
+
+/** A version for the studio to show: its artifact, and the files to write in its folder (writeVersion). */
+export interface SampleVersion {
+  id: string;
+  version: number;
+  files: Record<string, string>;
+  meta: Partial<Pick<PrototypeManifest, "devices" | "variants" | "kind" | "title">>;
+}
+
+/**
+ * A project in Vision with what the owner reviews: round 0, "as it is today", with a screen the designer reproduced
+ * from the repository (labelled as is, with its files); round 1 with a document, Markdown and Mermaid. Both agreed by
+ * the PE (simulated). Domains are not chosen yet. With `hostile`, round 1 also holds hostileDocuments.
+ */
+export function studioSample(t0: number, hostile?: { ext: string }): { state: State; versions: SampleVersion[] } {
+  const at = (sec: number) => new Date(t0 + sec * 1000).toISOString();
+  let s = initProject(buildSeed(t0, { inFlightRuns: false }), { name: "Weekend Trips", repoPath: "/tmp/trips", vision: "Plan weekend trips with friends.", focus: "" }, at(0));
+  const versions: SampleVersion[] = [];
+  const add = (round: number, kind: string, title: string, files: Record<string, string>, variants: { id: string; label: string; entry?: string }[], devices: string[], extra: object = {}) => {
+    const listed = Object.entries(files).map(([path, text]) => ({ path, sha256: sha256(text) }));
+    const a = addScreen(s, round, at(versions.length + 3), { kind, title, variants, files: listed, devices, ...extra });
+    s = peAgrees(a.state, a.id, a.version, variants.map((v) => v.id), at(versions.length + 20));
+    versions.push({ id: a.id, version: a.version, files, meta: { kind, title, variants: variants.map((v) => ({ entry: "", ...v })), devices } });
+  };
+  s = openRound(s, "material", at(1)).state;
+  add(0, "screen", "Trip board", { "board/index.html": BOARD_HTML, "board/style.css": BOARD_CSS }, [{ id: "a", label: "As is", entry: "board/index.html" }], ["desktop", "mobile"], { provenance: { files: ["src/board/index.html", "src/board/style.css", "src/trips.js"] } });
+  s = run(s, "closeRound", { round: 0, summary: "The trip board as the repository has it today." }, at(40)).state;
+  s = openRound(s, "data", at(41)).state;
+  add(1, "interface", "Trip planner API", { "api/README.md": API_MD, "api/flow.mmd": FLOW_MMD }, [], []);
+  if (hostile) add(1, "contract", "Hostile samples", hostileDocuments(hostile.ext), [], []);
+  return { state: s, versions };
+}
 
 // ---------- ways out that no page policy covers (pass 3 review, finding 3) ----------
 

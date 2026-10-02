@@ -237,3 +237,5 @@ h6.st-doc__h { font-size: var(--fs-meta); color: var(--muted); }
 .st-doc__source { justify-self: stretch; min-width: 0; }
 .st-doc__source summary { cursor: pointer; }
 .st-doc__source .st-doc__code { margin: var(--space-2) 0 0; }
+/* The frame Mermaid draws in (diagrams.ts): laid out, so Mermaid can measure text, but off the screen and never shown. */
+.st-diagram-frame { position: fixed; left: -10000px; top: 0; width: 1200px; height: 900px; border: 0; visibility: hidden; pointer-events: none; }

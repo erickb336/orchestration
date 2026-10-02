@@ -21,6 +21,7 @@ import { frameSize, readCast, renderAnsi } from "./ansi";
 import { TerminalText } from "./Frames";
 import { LeadPanel, Studio } from "./Studio";
 import { MarkdownDoc, MermaidDiagram, mermaidConfig } from "./Document";
+import { MAX_SVG_CHARS, diagramFrameDocument, diagramFramePolicy, readDiagramReply } from "./diagrams";
 import {
   MAX_MESSAGE,
   addPin,
@@ -692,9 +693,30 @@ describe("document artifacts: interfaces, algorithms, topologies, contracts and 
     const c = mermaidConfig((name) => tokens[name] ?? "");
     expect(c).toMatchObject({ securityLevel: "strict", startOnLoad: false, htmlLabels: false, suppressErrorRendering: true, theme: "base" });
     for (const key of ["securityLevel", "startOnLoad", "secure", "htmlLabels", "dompurifyConfig", "maxTextSize"]) expect(c.secure).toContain(key);
+    // Nor add CSS or a URL (pass 4 review, finding 2): themeCSS, the fonts, absolute marker URLs, KaTeX's stylesheet mode.
+    for (const key of ["themeCSS", "fontFamily", "altFontFamily", "themeVariables", "arrowMarkerAbsolute", "legacyMathML", "forceLegacyMathML"]) expect(c.secure).toContain(key);
     // The look comes from the design tokens; unset ones are left to Mermaid.
     expect(c.themeVariables).toMatchObject({ background: "#1a1b1e", primaryTextColor: "#ececea", lineColor: "#a3a6ad", darkMode: true });
     expect(c.themeVariables).not.toHaveProperty("primaryColor");
+  });
+
+  it("Mermaid draws in a frame whose own policy allows no request and only its two scripts; its replies are read strictly", () => {
+    const scripts = ["http://127.0.0.1:5319/assets/mermaid.min-x.js", "http://127.0.0.1:5319/assets/diagramFrame-y.js"];
+    expect(diagramFramePolicy(scripts)).toBe(`default-src 'none'; script-src ${scripts.join(" ")}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`);
+    const doc = diagramFrameDocument(scripts);
+    // The policy comes first, then Mermaid, then the frame's script; no inline script.
+    expect(doc.indexOf("Content-Security-Policy")).toBeLessThan(doc.indexOf(scripts[0]));
+    expect(doc.indexOf(`<script src="${scripts[0]}">`)).toBeLessThan(doc.indexOf(`<script src="${scripts[1]}">`));
+    expect(doc.match(/<script/g)).toHaveLength(2);
+    expect(diagramFrameDocument(['http://x/a.js"><script>alert(1)</script>'])).not.toContain("<script>alert");
+
+    expect(readDiagramReply({ type: "orc-diagram-ready", mermaid: true })).toEqual({ kind: "ready", mermaid: true });
+    expect(readDiagramReply({ type: "orc-diagram-drawn", id: 3, svg: "<svg/>" })).toEqual({ kind: "drawn", id: 3, svg: "<svg/>" });
+    expect(readDiagramReply({ type: "orc-diagram-failed", id: 3, message: "Parse error" })).toEqual({ kind: "failed", id: 3, message: "Parse error" });
+    expect(readDiagramReply({ type: "orc-diagram-drawn", id: 3, svg: "x".repeat(MAX_SVG_CHARS + 1) })).toEqual({ kind: "failed", id: 3, message: "The drawing is too large to show." });
+    for (const bad of [null, "orc-diagram-drawn", { type: "orc-diagram-drawn", id: "3", svg: "<svg/>" }, { type: "orc-diagram-drawn", id: 1.5, svg: "<svg/>" }, { type: "orc-diagram-drawn", id: 3, svg: 7 }, { type: "orchestrator-pin", id: 3 }]) {
+      expect(readDiagramReply(bad)).toBeNull();
+    }
   });
 
   it("a path a document refers to stays inside its version's folder", () => {
