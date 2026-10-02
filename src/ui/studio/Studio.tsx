@@ -49,6 +49,7 @@ import {
   serviceFileUrl,
   showKind,
   standing,
+  versionHistory,
   usdRange,
   variantDemo,
   variantEntry,
@@ -75,6 +76,8 @@ export function Studio() {
   const leadDrawer = useLeadContext();
   const [roundChoice, setRoundChoice] = useState<number | undefined>(undefined);
   const [artifactChoice, setArtifactChoice] = useState<string | undefined>(undefined);
+  /** The version of an artifact you chose from its history, by artifact. */
+  const [versionChoice, setVersionChoice] = useState<Record<string, number>>({});
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [shownVariant, setShownVariant] = useState<Record<string, string>>({});
   const [deviceChoice, setDeviceChoice] = useState<ScreenDevice | undefined>(undefined);
@@ -90,7 +93,9 @@ export function Studio() {
   const n = roundChoice !== undefined && state.studio.rounds.some((r) => r.n === roundChoice) ? roundChoice : defaultRound(state);
   const round = state.studio.rounds.find((r) => r.n === n);
   const artifacts = n === undefined ? [] : roundArtifacts(state, n);
-  const artifact = artifacts.find((a) => a.id === artifactChoice) ?? artifacts[0];
+  const listed = artifacts.find((a) => a.id === artifactChoice) ?? artifacts[0];
+  // An earlier or later version, when you chose one from its history; the round's newest otherwise.
+  const artifact = listed && versionChoice[listed.id] !== undefined ? (S.versionsOf(state, listed.id).find((v) => v.version === versionChoice[listed.id]) ?? listed) : listed;
 
   const draftOf = (a: StudioArtifact): Draft => drafts[draftKey(a)] ?? draftFrom(S.currentFeedback(state, a.id, a.version));
   const update = useCallback(
@@ -188,7 +193,7 @@ export function Studio() {
                   <ul className="st-list" aria-label={`Artifacts of round ${round.n}`}>
                     {artifacts.map((a) => (
                       <li key={a.id}>
-                        <ArtifactItem artifact={a} draft={draftOf(a)} current={a.id === artifact?.id} onClick={() => choose(() => setArtifactChoice(a.id))} />
+                        <ArtifactItem artifact={a} draft={draftOf(a)} current={a.id === artifact?.id} onClick={() => choose(() => (setArtifactChoice(a.id), setVersionChoice(({ [a.id]: _, ...rest }) => rest)))} />
                       </li>
                     ))}
                   </ul>
@@ -220,7 +225,7 @@ export function Studio() {
 
           <aside className="st-col st-right" aria-label="The lead and your feedback">
             <LeadPanel round={round} answers={roundAnswers} onAnswer={setAnswer} message={message} onMessage={(text) => (setSent(null), setMessage(text))} />
-            <PeReviewPanel artifact={artifact && round ? artifact : undefined} />
+            <PeReviewPanel artifact={artifact && round ? artifact : undefined} onVersion={(id, version) => choose(() => setVersionChoice((all) => ({ ...all, [id]: version })))} />
             <section className="k-stack k-stack--tight" aria-label="Your feedback">
               <h2 className="st-label">Your feedback</h2>
               {changed.length || parts.length ? (
@@ -589,10 +594,11 @@ export function LeadPanel({ round, answers, onAnswer, message, onMessage }: { ro
   );
 }
 
-/** PE review of the artifact shown: where it stands for you, and the PE's latest verdict on each variant. */
-function PeReviewPanel({ artifact: a }: { artifact: StudioArtifact | undefined }) {
+/** PE review of the artifact shown: where it stands for you, the PE's latest verdict on each variant, and the artifact's versions. */
+function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | undefined; onVersion: (artifactId: string, version: number) => void }) {
   const { state } = useStore();
   const view = a && peView(state, a, M.providerLabel);
+  const history = a ? versionHistory(state, a) : [];
   return (
     <section className="k-stack k-stack--tight" aria-label="PE review">
       <h2 className="st-label">PE review</h2>
@@ -639,6 +645,26 @@ function PeReviewPanel({ artifact: a }: { artifact: StudioArtifact | undefined }
             </ul>
           )}
         </>
+      )}
+      {a && history.length > 1 && (
+        <div className="k-stack k-stack--tight">
+          <h3 className="st-label">Versions</h3>
+          <ol className="st-list st-versions" aria-label={`Versions of ${a.title}`}>
+            {history.map((h) => (
+              <li key={h.version}>
+                <button type="button" className="st-item st-version" aria-current={h.version === a.version ? "true" : undefined} onClick={() => onVersion(a.id, h.version)}>
+                  <span className="st-version__head">
+                    <b>v{h.version}</b>
+                    {h.round !== a.round ? <span className="muted">round {h.round}</span> : null}
+                    <Chip tone={h.tone}>{h.state}</Chip>
+                    {h.current && <Chip strong>current</Chip>}
+                  </span>
+                  <span className="st-version__text">{h.text}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </div>
       )}
     </section>
   );

@@ -10,7 +10,7 @@ import * as M from "../../domain/model";
 import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
-import { DESIGNER, addScreen, feedback, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
+import { DESIGNER, addScreen, feedback, openRound, peAgrees, pePass, run, sha } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
 import { TABS, VisionBadge } from "../App";
 import { ConfirmProvider } from "../kit";
@@ -39,6 +39,7 @@ import {
   showKind,
   variantDemo,
   variantEntry,
+  versionHistory,
   type Draft,
   type RoundLead,
 } from "./studioView";
@@ -419,13 +420,28 @@ describe("where a variant is served from", () => {
 
 describe("PE review in the right column", () => {
   /** The sample, with a PE run on Codex (simulated) that made one pass with these verdicts. */
-  function reviewed(verdicts: object[], opts: { lastPass?: boolean } = {}) {
+  function reviewed(verdicts: object[]) {
     const { s: designed, id } = withSample({ pe: false });
     let s = R.askForPeReviews(designed, at(6));
     s = R.dispatchStudioRuns(s, at(7), { simulated: ["codex"] }).state;
     const pe = s.studio.runs.find((r) => r.kind === "pe")!;
-    s = S.addPeVerdicts(s, { artifactId: id, version: 1, verdicts: verdicts as S.VerdictInput[], by: { provider: "codex", model: pe.model, runId: pe.id }, lastPass: opts.lastPass ?? true }, at(8)).state;
+    s = S.addPeVerdicts(s, { artifactId: id, version: 1, verdicts: verdicts as S.VerdictInput[], by: { provider: "codex", model: pe.model, runId: pe.id } }, at(8)).state;
     return { s: R.completeStudioRun(s, pe.id, at(8), { summary: "pass 1" }), id };
+  }
+
+  /**
+   * The PE loop (pass 4c): the PE objects to B on each pass, and the designer revises after the first two, so v1 and
+   * v2 are revised and v3 holds the objection that stands after the third pass.
+   */
+  function threePasses() {
+    const { s: designed, id, n } = withSample({ pe: false });
+    const objects = (s: State, version: number, t: number) => pePass(s, id, version, [{ variant: "a", verdict: "feasible" }, { variant: "b", verdict: "not-feasible", reasons: "Live prices need a paid API.", change: "A free source of prices." }], at(t));
+    const revise = (s: State, t: number) => addScreen(s, n, at(t), { artifactId: id, title: "Trip plan (simulated sample)", variants: [{ id: "a", label: "A · Map first", entry: "a/index.html" }, { id: "b", label: "B · Day by day", entry: "b/index.html" }], files: SAMPLE_FILES }).state;
+    let s = objects(designed, 1, 10);
+    const afterOne = s;
+    s = objects(revise(s, 11), 2, 12);
+    s = objects(revise(s, 13), 3, 14);
+    return { afterOne, s, id };
   }
   const BUDGET = { buildUsd: [40, 90] as [number, number], maintenanceUsdPerMonth: [0, 5] as [number, number], basis: "Recorded designer runs of this size." };
 
@@ -449,19 +465,42 @@ describe("PE review in the right column", () => {
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
   });
 
-  it("an objection says plainly that it is waiting for you, and you can answer", () => {
-    const { s } = reviewed([
-      { variant: "a", verdict: "feasible", reasons: "Fine." },
-      { variant: "b", verdict: "not-feasible", reasons: "Live prices need a paid API.", change: "A free source of prices." },
-    ]);
+  it("an objection while passes remain: the designer revises, and you can look but not mark", () => {
+    const { afterOne } = threePasses();
+    const html = render(<Studio />, afterOne);
+    expect(html).toContain(">Revising<");
+    expect(html).toContain("The PE objected on pass 1; the designer revises before it reaches you.");
+    expect(html).toMatch(/aria-disabled="true"[^>]*>Keep</);
+  });
+
+  it("an objection that stands after the third pass says plainly that it is waiting for you, and you can answer", () => {
+    const { s } = threePasses();
     const html = render(<Studio />, s);
     expect(html).toContain(">Objects: waiting for you<");
-    expect(html).toContain("The PE objects to B · Day by day. This is waiting for you: the designer cannot revise in answer to the PE yet, so mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.");
+    expect(html).toContain("The PE still objects to B · Day by day after 3 passes, and the designer revises no more. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.");
     expect(html).toMatch(/<span class="k-chip k-chip--fail">Not feasible</);
     expect(html).toContain("What would change the verdict: A free source of prices.");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
     // Flagged in the round's list too.
     expect(html).toContain('<span class="k-chip k-chip--you">PE objects</span>');
+  });
+
+  it("the versions: v1 → v2 → v3, the PE's pass on each, which is current, and the objection that stands waiting for you", () => {
+    const { s, id } = threePasses();
+    expect(versionHistory(s, S.getArtifact(s, id, 3))).toEqual([
+      { version: 1, round: 1, current: false, tone: "neutral", state: "objected", text: "PE pass 1: objected to B · Day by day; the designer revised it as v2." },
+      { version: 2, round: 1, current: false, tone: "neutral", state: "objected", text: "PE pass 2: objected to B · Day by day; the designer revised it as v3." },
+      { version: 3, round: 1, current: true, tone: "you", state: "waiting for you", text: "PE pass 3, the last: still objects to B · Day by day. This is waiting for you." },
+    ]);
+    const html = render(<Studio />, s);
+    expect(html).toContain('aria-label="Versions of Trip plan (simulated sample)"');
+    expect(html).toMatch(/<button type="button" class="st-item st-version" aria-current="true"><span class="st-version__head"><b>v3<\/b><span class="k-chip k-chip--you">waiting for you<\/span><span class="k-chip k-chip--strong">current<\/span>/);
+    expect(html).toContain("PE pass 1: objected to B · Day by day; the designer revised it as v2.");
+    // A version that the PE agreed on, and your mark on it, once you answered.
+    const { s: agreed, id: one } = withSample();
+    expect(versionHistory(feedback(agreed, one, 1, { mark: "keep" }, at(9)), S.getArtifact(agreed, one, 1))).toEqual([{ version: 1, round: 1, current: true, tone: "done", state: "agreed", text: "PE pass 1: agreed. You marked it keep." }]);
+    // One version has no history to show.
+    expect(render(<Studio />, agreed)).not.toContain("Versions of");
   });
 
   it("while the PE has not answered: why, from its run, and the marks stay locked", () => {

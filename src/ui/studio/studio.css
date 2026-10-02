@@ -181,6 +181,10 @@ main.st-wide { max-width: 1600px; }
 .st-verdicts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
 .st-verdict { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; padding-top: var(--space-2); border-top: 1px solid var(--border); }
 .st-right .k-field { margin: 0; }
+/* An artifact's versions, oldest first: each with the PE's pass on it; the one shown is marked, as in the left column. */
+.st-version { flex-direction: column; align-items: stretch; gap: var(--space-1); color: var(--text); }
+.st-version__head { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
+.st-version__text { color: var(--muted); font-size: var(--fs-micro); overflow-wrap: anywhere; }
 
 /* ---------- documents: interfaces, algorithms, topologies, contracts and flows (pass 4a) ---------- */
 .st-stage--doc { justify-items: stretch; }

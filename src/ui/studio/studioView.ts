@@ -452,10 +452,7 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
         ...base,
         tone: "you",
         state: "Objects: waiting for you",
-        text:
-          r.pass >= S.MAX_PE_PASSES
-            ? `The PE still objects to ${names(open)} after ${r.pass} passes. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.`
-            : `The PE objects to ${names(open)}. This is waiting for you: the designer cannot revise in answer to the PE yet, so mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.`,
+        text: `The PE still objects to ${names(open)} after ${r.pass} pass${r.pass === 1 ? "" : "es"}, and the designer revises no more. This is waiting for you: mark it Keep, Change or Drop, pick a variant, and say what you decide in your note.`,
       };
     }
     case "revising":
@@ -474,6 +471,58 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
       : { ...base, tone: "fail", state: "No verdict", text: `The PE's runs ended without a verdict: ${why} It is not asked again on its own; the studio's next pass adds a way to ask.` };
   }
   return { ...base, tone: "neutral", state: "Waiting", text: "Waiting for PE review." };
+}
+
+// ---------- an artifact's versions (the PE loop, pass 4c) ----------
+
+/** One version of an artifact, as its history shows it: the PE's pass on it, your mark, and whether it is the current one. */
+export interface VersionLine {
+  version: number;
+  round: number;
+  /** The newest version: the one the PE and you answer. */
+  current: boolean;
+  tone: "work" | "you" | "done" | "fail" | "neutral";
+  /** Where PE review of it ended, in a word or two: "agreed", "objected", "waiting for you"… */
+  state: string;
+  text: string;
+}
+
+/**
+ * An artifact's versions, oldest first (v1 → v2 → v3): the PE's pass on each and what came of it, your mark, and
+ * which is current. The designer revises after an objection while passes remain; an objection that stands after the
+ * last pass waits for you, and is never dropped.
+ */
+export function versionHistory(s: State, a: StudioArtifact): VersionLine[] {
+  const all = S.versionsOf(s, a.id);
+  const newest = all.at(-1)?.version;
+  return all.map((v) => {
+    const next = all.find((x) => x.version > v.version);
+    const label = (id: string | undefined) => (id === undefined ? "the whole artifact" : (v.variants.find((x) => x.id === id)?.label ?? id));
+    const names = (vs: { variant?: string }[]) => vs.map((x) => label(x.variant)).join(", ");
+    const line = (tone: VersionLine["tone"], state: string, text: string): VersionLine => {
+      const mark = S.currentFeedback(s, v.id, v.version)?.mark;
+      return { version: v.version, round: v.round, current: v.version === newest, tone, state, text: mark ? `${text} You marked it ${mark}.` : text };
+    };
+    if (UNGATED_KINDS.includes(v.kind)) return line("neutral", v.kind === "material" ? "you brought it" : "evidence", "The PE does not review it.");
+    const r = S.peReview(s, v);
+    switch (r.status) {
+      case "waiting":
+        return next ? line("neutral", "not reviewed", `Replaced by v${next.version} before the PE reviewed it.`) : line("neutral", "with the PE", "Waiting for PE review.");
+      case "agreed":
+        return line("done", "agreed", `PE pass ${r.pass}: agreed.`);
+      case "revising":
+        return next
+          ? line("neutral", "objected", `PE pass ${r.pass}: objected to ${names(r.objections)}; the designer revised it as v${next.version}.`)
+          : line("work", "revising", `PE pass ${r.pass}: objects to ${names(r.objections)}; the designer is revising it.`);
+      case "objections": {
+        const open = r.objections.filter((o) => !o.overruled);
+        if (!open.length) return line("done", "overruled", `PE pass ${r.pass}: you overruled its objections.`);
+        return next
+          ? line("neutral", "objected", `PE pass ${r.pass}: still objected to ${names(open)}; it went to you, and v${next.version} followed.`)
+          : line("you", "waiting for you", `PE pass ${r.pass}, the last: still objects to ${names(open)}. This is waiting for you.`);
+      }
+    }
+  });
 }
 
 // ---------- the designer's runs ----------
