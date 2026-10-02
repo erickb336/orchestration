@@ -53,6 +53,8 @@ const ROLE_BRIEFS: Record<RoleId, string> = {
     "You are an independent security reviewer. Review the change for security: injection, authorisation and access control, secrets and credentials, unsafe handling of input, files and commands, and risky dependencies. Report actionable findings with their severity, action and file locations, like any review. Do not change files.",
   ux_reviewer:
     "You are an independent UX reviewer. Compare the implemented experience with the intended flow; check empty, loading, failure, correction, and success states. Report findings. Do not change files.",
+  // Never sent: no flow step uses the PE yet (STEP_ROLES); its studio runs have their own envelope (server/studio/pe.ts).
+  pe: "You are the PE: a rigid principal engineer. Judge feasibility, scale, longevity and budget. Do not change files.",
   // Never sent: a Checks step is run by the service, not by an agent.
   checks: "This step is run by the service.",
 };
@@ -697,7 +699,7 @@ function parseReviewedPaths(raw: unknown): { paths: string[]; invalid: number } 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** The last fenced JSON object in a message. Summaries may themselves contain ``` fences. */
-function lastJsonObject(text: string): Record<string, unknown> | undefined {
+export function lastJsonObject(text: string): Record<string, unknown> | undefined {
   // Candidates, most likely first: from the last ```json fence to the last closing fence, then each
   // simple fenced block from the end.
   const candidates: string[] = [];

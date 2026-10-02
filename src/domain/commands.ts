@@ -270,7 +270,7 @@ export const COMMANDS = {
   },
   /** One PE pass on an artifact's newest version. Returns { pass }. */
   addPeVerdicts: (s, now, a) => {
-    const r = S.addPeVerdicts(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), verdicts: array<unknown>(a.verdicts, "verdicts").map(verdictInput) }, now);
+    const r = S.addPeVerdicts(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), verdicts: array<unknown>(a.verdicts, "verdicts").map(verdictInput), ...(a.lastPass === true ? { lastPass: true } : {}) }, now);
     return { state: r.state, result: { pass: r.pass } };
   },
   /** Returns { probeId }. */

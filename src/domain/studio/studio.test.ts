@@ -163,6 +163,43 @@ describe("PE review: the loop rule", () => {
     expect(run(s, "addPeVerdicts", { artifactId: id, version: 4, verdicts: [{ verdict: "feasible", reasons: "One hourly source now." }] }, at(11)).result).toEqual({ pass: 1 });
   });
 
+  it("a pass the service makes the last (while the designer cannot revise in answer) sends its objections to the owner now; never dropped, and the verdicts name the PE's run", () => {
+    let { s, id } = tripPlan();
+    const by = { provider: "codex" as const, model: "codex-sample-large", runId: "studio-7" };
+    s = S.addPeVerdicts(
+      s,
+      {
+        artifactId: id,
+        version: 1,
+        by,
+        lastPass: true,
+        verdicts: [
+          { variant: "A", verdict: "feasible", reasons: "Fine." },
+          { variant: "B", verdict: "not-feasible", reasons: "Hourly forecasts for every trailhead cost too much.", change: "A forecast source with a free hourly tier." },
+          { variant: "C", verdict: "feasible", reasons: "Fine." },
+        ],
+      },
+      at(3),
+    ).state;
+    const v = art(s, id, 1);
+    expect(S.peReview(s, v)).toMatchObject({ status: "objections", pass: 1 });
+    expect(S.readyForOwner(s, v)).toBe(true);
+    expect(s.studio.verdicts.map((x) => [x.variant, x.by, x.lastPass])).toEqual([
+      ["A", by, true],
+      ["B", by, true],
+      ["C", by, true],
+    ]);
+    expect(s.events.at(-1)?.message).toBe("PE review of Trip plan v1, pass 1: Map first feasible, Timeline not feasible, Day cards feasible; objects, and the designer cannot revise in answer yet; it goes to the owner with the objections");
+    // The owner answers: marks it, and overrules the objection with a reason, which is recorded.
+    s = feedback(s, id, 1, { mark: "change", pickedVariant: "A" }, at(4));
+    const objection = S.openObjections(s, v)[0];
+    s = run(s, "overruleObjection", { verdictId: objection.id, why: "The group pays for the forecasts." }, at(5)).state;
+    expect(S.openObjections(s, v)).toEqual([]);
+    // A pass that agrees is the same whether or not it was the last.
+    const agreed = S.addPeVerdicts(tripPlan().s, { artifactId: id, version: 1, lastPass: true, verdicts: [{ verdict: "feasible", reasons: "Fine." }] }, at(3)).state;
+    expect(S.peReview(agreed, art(agreed, id, 1))).toEqual({ status: "agreed", pass: 1 });
+  });
+
   it("a pass judges every option the owner will see: one verdict per variant, or one on the whole; feasible-if states its change; an estimate states its basis", () => {
     const { s, id } = tripPlan();
     const pass = (verdicts: object[]) => run(s, "addPeVerdicts", { artifactId: id, version: 1, verdicts }, at(3));

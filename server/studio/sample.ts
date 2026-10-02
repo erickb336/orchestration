@@ -4,7 +4,7 @@
 // studio.json check and import as a real designer's work, so the demo and the tests need no agent. Every page says
 // it is a simulated sample.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const BASE_CSS = `*, *::before, *::after { box-sizing: border-box; }
@@ -142,4 +142,24 @@ export function writeSamplePrototype(staging: string) {
     writeFileSync(join(staging, p), text);
   }
   writeFileSync(join(staging, "studio.json"), `${JSON.stringify(SAMPLE_MANIFEST, null, 2)}\n`);
+}
+
+/**
+ * What the fake runtime's PE answers (ORC-029 pass 3): it reads the version's manifest.json, as a PE agent reads the
+ * folder, and agrees with every variant, feasible, except the second, feasible if a stand-in change is made, so the
+ * demo shows both and the owner can send feedback. Every reason says it is simulated: nothing was judged.
+ */
+export function fakePeAnswer(folder: string): { ok: true; text: string } | { ok: false; error: string } {
+  let variants: { id: string }[];
+  try {
+    const m = JSON.parse(readFileSync(join(folder, "manifest.json"), "utf8")) as { variants?: unknown };
+    variants = Array.isArray(m.variants) ? m.variants.filter((v): v is { id: string } => !!v && typeof (v as { id?: unknown }).id === "string") : [];
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  const reasons = "Simulated: the fake runtime's PE, not an agent. It judged nothing about feasibility, scale, longevity or budget; it agrees so the demo can go on.";
+  const verdicts = variants.length
+    ? variants.map((v, i) => (i === 1 ? { variant: v.id, verdict: "feasible-if", reasons, change: "Simulated: a stand-in change, to show how a feasible-if verdict reads." } : { variant: v.id, verdict: "feasible", reasons }))
+    : [{ verdict: "feasible", reasons }];
+  return { ok: true, text: `Simulated PE review: no agent read this version.\n\n\`\`\`json\n${JSON.stringify({ verdicts }, null, 2)}\n\`\`\`\n` };
 }

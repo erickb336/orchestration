@@ -12,7 +12,7 @@
 
 import { draft, event, nextId } from "../model/core";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "../model/textSafety";
-import { ControlError, DEVICES, StaleWriteError, type Device, type State } from "../types";
+import { ControlError, DEVICES, StaleWriteError, type Device, type ProviderId, type State } from "../types";
 import {
   type ArtifactDemo,
   type ArtifactShots,
@@ -374,7 +374,8 @@ export const covers = (v: PeVerdict, variant: string | undefined) => v.variant =
  * - waiting: no pass on this version yet (`passes` were made on earlier versions of its round);
  * - revising: the latest pass objected and passes remain: the designer revises, or the PE asks for evidence;
  * - agreed: the latest pass found every variant feasible or feasible-if;
- * - objections: the third pass still objected; the version goes to the owner with them.
+ * - objections: the third pass still objected, or the service made the objecting pass the last one (`lastPass`,
+ *   while the designer cannot revise in answer to the PE); the version goes to the owner with them.
  * `objections` lists the latest pass's not-feasible verdicts, overruled ones included (they carry `overruled`).
  */
 export type PeReview =
@@ -387,9 +388,10 @@ export function peReview(s: State, a: StudioArtifact): PeReview {
   const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
   if (!mine.length) return { status: "waiting", passes: passesInRound(s, a.id, a.round) };
   const pass = Math.max(...mine.map((v) => v.pass));
-  const objections = mine.filter((v) => v.pass === pass && v.verdict === "not-feasible");
+  const latest = mine.filter((v) => v.pass === pass);
+  const objections = latest.filter((v) => v.verdict === "not-feasible");
   if (!objections.length) return { status: "agreed", pass };
-  return pass >= MAX_PE_PASSES ? { status: "objections", pass, objections } : { status: "revising", pass, objections };
+  return pass >= MAX_PE_PASSES || latest.some((v) => v.lastPass) ? { status: "objections", pass, objections } : { status: "revising", pass, objections };
 }
 
 /** Whether the owner sees this version: PE review agreed or ran its three passes; what the owner brought and evidence are never held back. */
@@ -441,12 +443,23 @@ export function readEstimate(raw: unknown): BudgetEstimate {
   return estimate({ buildUsd: range(o.buildUsd, "building"), maintenanceUsdPerMonth: range(o.maintenanceUsdPerMonth, "maintenance"), basis: o.basis });
 }
 
+export interface PeVerdictsInput {
+  artifactId: string;
+  version: number;
+  verdicts: VerdictInput[];
+  /** The PE's run that made them (the service's record). */
+  by?: { provider: ProviderId; model: string; runId: string };
+  /** Make this pass the last of its round: its objections go to the owner now (while the designer cannot revise in answer to the PE). */
+  lastPass?: boolean;
+}
+
 /**
  * Record one PE pass on an artifact's newest version (the service, from the PE's run): one verdict per variant, or
- * one verdict on the whole artifact. Passes count within the version's round, up to three. Feasible-if states the
- * change; an estimate states its basis. What the owner brought and a probe's evidence are not reviewed.
+ * one verdict on the whole artifact. Passes count within the version's round, up to three, or fewer when the
+ * service makes one the last (`lastPass`). Feasible-if states the change; an estimate states its basis. What the
+ * owner brought and a probe's evidence are not reviewed.
  */
-export function addPeVerdicts(state: State, input: { artifactId: string; version: number; verdicts: VerdictInput[] }, now: string): { state: State; pass: number } {
+export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string): { state: State; pass: number } {
   const a = getArtifact(state, input.artifactId, input.version);
   if (UNGATED_KINDS.includes(a.kind)) throw new ControlError(`${a.title} is ${a.kind === "material" ? "what you brought" : "a probe's evidence"}: the PE does not review it.`);
   const latest = latestVersion(state, a.id)!;
@@ -469,14 +482,34 @@ export function addPeVerdicts(state: State, input: { artifactId: string; version
     const reasons = required(agentText(v.reasons), 2000, "The verdict's reasons");
     const change = v.change === undefined ? "" : capped(agentText(v.change), 1000, "The stated change");
     if (v.verdict === "feasible-if" && !change) throw new ControlError("Feasible-if states the change that makes it feasible.");
-    return { id: "", artifactId: a.id, version: a.version, ...(v.variant !== undefined ? { variant: v.variant } : {}), pass, verdict: v.verdict, reasons, ...(change ? { change } : {}), ...(v.budget ? { budget: estimate(v.budget) } : {}), at: now };
+    return {
+      id: "",
+      artifactId: a.id,
+      version: a.version,
+      ...(v.variant !== undefined ? { variant: v.variant } : {}),
+      pass,
+      verdict: v.verdict,
+      reasons,
+      ...(change ? { change } : {}),
+      ...(v.budget ? { budget: estimate(v.budget) } : {}),
+      at: now,
+      ...(input.by ? { by: { provider: input.by.provider, model: input.by.model, runId: input.by.runId } } : {}),
+      ...(input.lastPass ? { lastPass: true as const } : {}),
+    };
   });
   const s = draft(state);
   for (const r of records) s.studio.verdicts.push({ ...r, id: nextId(s, "pev") });
   const art = getArtifact(s, a.id, a.version);
   const words: Record<Verdict, string> = { feasible: "feasible", "feasible-if": "feasible if changed", "not-feasible": "not feasible" };
   const r = peReview(s, art);
-  const outcome = r.status === "agreed" ? "agreed; it goes to the owner" : r.status === "objections" ? `still objects after ${MAX_PE_PASSES} passes; it goes to the owner with the objections` : "the designer revises";
+  const outcome =
+    r.status === "agreed"
+      ? "agreed; it goes to the owner"
+      : r.status === "objections"
+        ? pass >= MAX_PE_PASSES
+          ? `still objects after ${MAX_PE_PASSES} passes; it goes to the owner with the objections`
+          : "objects, and the designer cannot revise in answer yet; it goes to the owner with the objections"
+        : "the designer revises";
   event(s, now, "runtime", "vision", `PE review of ${artifactName(a)}, pass ${pass}: ${records.map((x) => `${x.variant ? `${variantLabel(a, x.variant)} ` : ""}${words[x.verdict]}`).join(", ")}; ${outcome}`);
   return { state: s, pass };
 }

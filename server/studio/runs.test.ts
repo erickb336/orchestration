@@ -150,7 +150,8 @@ describe("a designer run at the service", () => {
     expect(readFileSync(join(folder, "b", "index.html"), "utf8")).toBe(PAGES["b/index.html"]);
     // What was imported is kept in the version folder; the staging folder is gone.
     expect(existsSync(staging)).toBe(false);
-    expect(state().events.at(-1)!.message).toBe(`Designer run ${id} completed: Trip plan v1 (2 variants)`);
+    // Completed; the PE is asked to review it next (below).
+    expect(state().events.slice(-2).map((e) => e.message)).toEqual([`Designer run ${id} completed: Trip plan v1 (2 variants)`, expect.stringMatching(/^PE run studio-\d+ asked for in round 1, reviewing Trip plan v1, on Codex/)]);
     // The studio never moves the project: it is still in Vision, with no start recorded.
     expect(state().project).toMatchObject({ stage: "shaping", factoryStarts: [] });
   });
@@ -338,6 +339,148 @@ describe("a designer run at the service", () => {
   });
 });
 
+// ---------- the PE's runs ----------
+
+/** A designer run's Trip plan imported; returns the version's id and folder. */
+function designed(): { artifactId: string; folder: string } {
+  const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan." }, iso());
+  tick();
+  handIn(claude.runs.get(id)!);
+  finish(id);
+  tick();
+  const art = S.latestArtifacts(state())[0];
+  return { artifactId: art.id, folder: join(dataDir, "studio", state().project.id, "artifacts", art.id, "v1") };
+}
+const peRuns = () => state().studio.runs.filter((r) => r.kind === "pe");
+const answer = (verdicts: object[]) => `I read both variants and their pages.\n\n\`\`\`json\n${JSON.stringify({ verdicts })}\n\`\`\`\n`;
+const peFinish = (id: string, finalText: string) => codex.emit({ type: "completed", attemptId: id, finalText, usage: { inputTokens: 12_000, outputTokens: 900 }, model: "codex-sample-large-actual" });
+/** Every file under a folder, with its bytes: to show a read-only run changed nothing. */
+const snapshot = (folder: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  const walk = (rel: string) => {
+    for (const name of readdirSync(join(folder, rel), { withFileTypes: true })) {
+      const p = rel ? `${rel}/${name.name}` : name.name;
+      if (name.isDirectory()) walk(p);
+      else out[p] = readFileSync(join(folder, p), "utf8");
+    }
+  };
+  walk("");
+  return out;
+};
+
+describe("the PE's runs at the service", () => {
+  it("after the import, the PE reviews the version read-only, on the other provider, and its verdicts let the owner answer", async () => {
+    await service();
+    const { artifactId, folder } = designed();
+    const before = snapshot(folder);
+    // Asked for in the import's own write; dispatched on the next cycle.
+    expect(peRuns()).toMatchObject([{ status: "queued", provider: "codex", artifactId, baseVersion: 1 }]);
+    tick();
+    const pe = peRuns()[0];
+    const a = codex.runs.get(pe.id)!;
+    expect({ ...a, prompt: undefined }).toEqual({
+      attemptId: pe.id,
+      taskId: "STUDIO",
+      stepId: "pe",
+      role: "pe",
+      provider: "codex",
+      model: "codex-sample-large",
+      workspace: { path: folder, access: "read" },
+      studio: true,
+      environment: "isolated",
+      connections: [],
+      prompt: undefined,
+      outputs: [],
+      limits: { maxTurns: 40, timeoutMs: 20 * 60_000, maxBudgetUsd: 2 },
+    });
+    expect(a.prompt).toContain(`# Studio run ${pe.id}: PE review of Trip plan v1, round 1 (experience)`);
+    expect(a.prompt).toContain('- `a`, "A · Map first": its entry is a/index.html.');
+    expect(a.prompt).toContain(`- Your working directory (${folder}) is this version's folder`);
+    expect(a.prompt).toContain("Weekend trips for a small group of friends.");
+    expect(a.prompt).toContain("- Building budget (agent usage to build the product, Vision's runs included): not set yet.");
+    expect(a.prompt).toContain("- One verdict for each variant: `a`, `b`.");
+    // The owner cannot answer yet: the PE has not agreed.
+    expect(() => cmd("sendFeedback", { entries: [{ artifactId, version: 1, mark: "keep", pins: [], note: "" }] })).toThrow(/is still in PE review/);
+
+    const budget = { buildUsd: [40, 90], maintenanceUsdPerMonth: [0, 5], basis: "Recorded designer runs of this size; a static page needs no paid API." };
+    peFinish(pe.id, answer([
+      { variant: "a", verdict: "feasible", reasons: "A static page with a drawn map: no tiles, no API." },
+      { variant: "b", verdict: "feasible-if", reasons: "Fine at four friends; long trips need paging.", change: "Page the days after a week.", budget },
+    ]));
+    tick();
+    expect(runOf(pe.id)).toMatchObject({ status: "completed", usage: { inputTokens: 12_000, outputTokens: 900 } });
+    expect(state().studio.verdicts.map((v) => ({ variant: v.variant, verdict: v.verdict, by: v.by, lastPass: v.lastPass, budget: v.budget }))).toEqual([
+      { variant: "a", verdict: "feasible", by: { provider: "codex", model: "codex-sample-large-actual", runId: pe.id }, lastPass: true, budget: undefined },
+      { variant: "b", verdict: "feasible-if", by: { provider: "codex", model: "codex-sample-large-actual", runId: pe.id }, lastPass: true, budget },
+    ]);
+    expect(state().events.map((e) => e.message)).toContain(`PE run ${pe.id} completed: Trip plan v1, pass 1: A · Map first feasible, B · Day by day feasible if changed`);
+    expect(S.readyForOwner(state(), S.getArtifact(state(), artifactId, 1))).toBe(true);
+    cmd("sendFeedback", { entries: [{ artifactId, version: 1, mark: "keep", pickedVariant: "b", pins: [], note: "" }] });
+    // Read-only: the version's folder is as the import wrote it. The PE is asked once.
+    expect(snapshot(folder)).toEqual(before);
+    tick();
+    expect(peRuns()).toHaveLength(1);
+  });
+
+  it("an objection goes to the owner at once, as the last pass for now: the designer cannot revise in answer yet", async () => {
+    await service();
+    const { artifactId } = designed();
+    tick();
+    const pe = peRuns()[0];
+    peFinish(pe.id, answer([
+      { variant: "a", verdict: "feasible", reasons: "Fine." },
+      { variant: "b", verdict: "not-feasible", reasons: "Live prices for every stop need a paid API the budget does not cover.", change: "A free source of prices, or a budget for one." },
+    ]));
+    tick();
+    const v = S.getArtifact(state(), artifactId, 1);
+    expect(S.peReview(state(), v)).toMatchObject({ status: "objections", pass: 1 });
+    expect(S.openObjections(state(), v).map((o) => o.reasons)).toEqual(["Live prices for every stop need a paid API the budget does not cover."]);
+    expect(state().events.map((e) => e.message)).toContain("PE review of Trip plan v1, pass 1: A · Map first feasible, B · Day by day not feasible; objects, and the designer cannot revise in answer yet; it goes to the owner with the objections");
+    cmd("sendFeedback", { entries: [{ artifactId, version: 1, mark: "change", pins: [], note: "Drop the live prices." }] });
+  });
+
+  it("an answer that cannot be recorded fails the run with the reason; the service asks once more, then stops", async () => {
+    await service();
+    const { artifactId } = designed();
+    tick();
+    const first = peRuns()[0];
+    peFinish(first.id, "Both variants look fine to me.");
+    tick();
+    expect(runOf(first.id)).toMatchObject({ status: "failed", note: "Its verdicts were refused: its answer has no JSON block with the verdicts" });
+    expect(peRuns().map((r) => r.status)).toEqual(["failed", "queued"]);
+    tick();
+    const second = peRuns()[1];
+    peFinish(second.id, answer([{ variant: "a", verdict: "feasible", reasons: "Fine." }]));
+    tick();
+    expect(runOf(second.id)).toMatchObject({ status: "failed", note: "Its verdicts were refused: The pass leaves out variant b: the PE judges every option the owner will see." });
+    tick();
+    expect(peRuns()).toHaveLength(2);
+    expect(S.peReview(state(), S.getArtifact(state(), artifactId, 1))).toEqual({ status: "waiting", passes: 0 });
+  });
+
+  it("with the fake runtime, a simulated PE agrees, feasible-if on the second variant, labelled simulated, so the owner can answer", async () => {
+    store = new Store(join(dataDir, "db.sqlite"));
+    const catalog = store.read().state.project.catalog;
+    const fake = { claude: new FakeAdapter("claude", defaultFakeConfig(), catalog.claude), codex: new FakeAdapter("codex", defaultFakeConfig(), catalog.codex) };
+    scheduler = new Scheduler(store, fake, { dataDir, leaseMs: 60_000 });
+    cmd("initProject", { name: "Weekend Trips", repoPath: join(dir, "repo"), vision: "Weekend trips for a small group of friends.", focus: "" });
+    cmd("openRound", { focus: "experience" });
+    startDesignerRun(store, { round: 1 }, iso());
+    for (let i = 0; i < 120 && !peRuns().some((r) => r.status === "completed"); i++) tick();
+    const pe = peRuns()[0];
+    expect(pe).toMatchObject({ status: "completed", provider: "codex", simulated: true });
+    const art = S.latestArtifacts(state())[0];
+    const verdicts = state().studio.verdicts;
+    expect(verdicts.map((v) => [v.variant, v.verdict])).toEqual([
+      ["a", "feasible"],
+      ["b", "feasible-if"],
+    ]);
+    expect(verdicts.every((v) => v.reasons.startsWith("Simulated: the fake runtime's PE, not an agent."))).toBe(true);
+    expect(S.peReview(state(), art)).toEqual({ status: "agreed", pass: 1 });
+    cmd("sendFeedback", { entries: [{ artifactId: art.id, version: 1, mark: "keep", pins: [], note: "" }] });
+  });
+});
+
 // ---------- after an import: screenshots and recordings ----------
 
 /** Gates still closed when a test ends: opened then, so the scheduler's stop does not wait on them. */
@@ -407,10 +550,13 @@ describe("after an import, the service's screenshots and recordings", () => {
     await flush();
     expect(g.calls).toHaveLength(1);
     expect(S.getArtifact(state(), art.id, 1).shots).toEqual({ status: "pending" });
+    // The PE reads the screenshots, so it is not asked for while they are being taken.
+    expect(state().studio.runs.filter((r) => r.kind === "pe")).toEqual([]);
     g.release();
     await settleMedia();
     expect(S.getArtifact(state(), art.id, 1).shots).toEqual({ status: "taken", at: iso(), ...shots });
-    expect(state().events.at(-1)!.message).toBe("Screenshots of Trip plan v1: 2 taken");
+    // The PE was waiting for them: it is asked for in the same write.
+    expect(state().events.slice(-2).map((e) => e.message)).toEqual(["Screenshots of Trip plan v1: 2 taken", expect.stringMatching(/^PE run studio-\d+ asked for in round 1, reviewing Trip plan v1/)]);
   });
 
   it("says why there are no screenshots when they were skipped", async () => {
