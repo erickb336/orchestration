@@ -27,15 +27,16 @@ Each unit is one commit with its tests, verified before the next starts (`sequen
 - **`estimateUsd(attempt, prices)`**, a pure function:
   - It uses the runtime's reported `costUsd` when there is one (Claude). That is still labelled an estimate on a subscription, since it is not billed.
   - Otherwise it prices the tokens.
-  - It returns `{ usd, basis: "reported" | "priced" | "unpriced", estimated: boolean }`.
-  - An unknown model is `unpriced`: it counts as unknown, never as zero.
+  - It returns `{ usd, basis: "reported" | "priced" | "unknown", estimated: boolean }`, where `unknown` carries a reason: `no-price` (the model is not in the price list) or `no-usage` (the run recorded none).
+  - An unknown cost counts as unknown, never as zero. The one exception is a run that never started (no session, no model, no tokens), which is a known $0.
 - **`Project.budgets`**: `{ buildingUsd: number | null; maintenanceUsdPerMonth: number | null }`. Null means not set yet; the lead asks for it in Vision.
-- **`buildingSpend(state)`**: the sum over the project's attempts since its first Vision round, probes included, with a count of unpriced runs.
+- **`buildingSpend(state)`**: the sum over the project's attempts since its first Vision round, probes and stopped runs included, with the runs whose cost is unknown.
 - **The budget stop:**
   - When `buildingUsd` is set and the spend reaches it, dispatch starts nothing new. Running work finishes.
-  - A Needs-you item says "The building budget is reached: $X of $Y", listing the unpriced runs if there are any.
+  - A Needs-you item says "The building budget is reached: $X of $Y", listing the runs with no recorded cost, if there are any.
   - The owner raises the budget (`setBudgets`) or chooses to continue once (`continuePastBudget`, recorded).
-  - Tests: dispatch stops at the budget, unpriced runs are reported, and raising the budget resumes.
+  - Tests: dispatch stops at the budget, runs with an unknown cost are reported, and raising the budget resumes.
+- **While a budget is set and any run has an unknown cost,** a Needs-you item says the budget cannot count those runs and names the models (review finding 1).
 
 ## 2b. The stage boundary
 
@@ -152,6 +153,8 @@ An independent review found no path to the factory except the owner's `startFact
   - (2) `startFactory` rewrites an explicit "the lead" decision route to "the PE". It must keep the owner's choice, or change it only when the owner chooses it in the pre-flight.
   - (3) starting on Autopilot from Manual or Check-in turns on local automatic delivery to `main` while the record says "you merge". Delivery (mode and branch) must be part of the factory settings, and must never change implicitly.
 - **Carried to the UI work:** (6) the budget stop has no UI action yet. Settings needs a budget field, and the Needs-you item needs "Raise the budget" and "Continue once", in the pass that builds the pre-flight and the factory screens.
+  - The lead also proposes that the "no recorded cost" item can be acknowledged. The owner cannot add a price from the app, so an item that never clears would become noise. Acknowledging it keeps a warning chip on the budget, and the item returns only when a new model without a price appears.
+- **Fixed in 4170add** (findings 1, 4, 5, 7, 8): each has a test that failed before its fix. 1,283 tests pass.
 
 ## Checks for the whole pass
 
