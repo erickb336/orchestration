@@ -129,8 +129,12 @@ export function capConventions(files: { file: string; blob: string; text: string
 
 /** The lead's own runs (conversation, planning, decisions) get these: the table in docs/tasks/ORC-024.md, kept with the table order so Settings can show it. */
 export const LEAD_PRINCIPLES = LEAD_PRINCIPLE_IDS;
-/** The section is at most this many words; principles that do not fit are named with their "apply when" only. */
-export const PRINCIPLES_WORD_CAP = 1200;
+/**
+ * The section is at most this many words; principles that do not fit are named with their "apply when" only. 1,200
+ * when every run got "Contextualize and write for the reader" (ORC-026); 1,400 since every run also gets "Write
+ * controlled English" (ORC-029 pass 4d), so the largest step stays at least 50 words under it.
+ */
+export const PRINCIPLES_WORD_CAP = 1400;
 export const PRINCIPLES_HEADER = "## Principles for this step";
 /** For the lead's runs, which are not steps. */
 export const LEAD_PRINCIPLES_HEADER = "## Principles for this run";

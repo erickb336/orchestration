@@ -26,12 +26,13 @@ export const PRINCIPLE_BODY_WORDS = 200;
 
 /**
  * Every principle, in table order: the table in docs/tasks/ORC-024.md, with contextualize-and-write-for-the-reader
- * first so it is always given in full (docs/tasks/ORC-026.md). Envelopes and records list a step's principles in
- * this order. "attack-the-premise" is given to no step directly: dispatch adds it to a
+ * (docs/tasks/ORC-026.md) and write-controlled-english (ORC-029 pass 4d) first so they are always given in full.
+ * Envelopes and records list a step's principles in this order. "attack-the-premise" is given to no step directly: dispatch adds it to a
  * repair round that follows a round which failed the same way.
  */
 export const PRINCIPLE_IDS = [
   "contextualize-and-write-for-the-reader",
+  "write-controlled-english",
   "exhaust-the-design-space",
   "experience-first",
   "foundational-thinking",
@@ -51,12 +52,13 @@ export const PRINCIPLE_IDS = [
 export type PrincipleId = (typeof PRINCIPLE_IDS)[number];
 export const PREMISE_ID: PrincipleId = "attack-the-premise";
 /** The lead's own runs (conversation, planning, decisions) get these; the envelope builder adds them. */
-export const LEAD_PRINCIPLE_IDS: readonly PrincipleId[] = ["contextualize-and-write-for-the-reader", "experience-first", "sequence-verifiable-units", "never-block-on-the-human", "encode-lessons-in-structure"];
+export const LEAD_PRINCIPLE_IDS: readonly PrincipleId[] = ["contextualize-and-write-for-the-reader", "write-controlled-english", "experience-first", "sequence-verifiable-units", "never-block-on-the-human", "encode-lessons-in-structure"];
 /**
  * Given to every agent run on top of its step's own set (and to the lead), so whatever an agent writes
- * can be understood cold: the problem, the decisions and what is left. Not named in flow files.
+ * can be understood cold (the problem, the decisions and what is left) and on the first read (controlled
+ * English, about 80% of ASD-STE100). Not named in flow files.
  */
-export const EVERY_RUN_PRINCIPLE_IDS: readonly PrincipleId[] = ["contextualize-and-write-for-the-reader"];
+export const EVERY_RUN_PRINCIPLE_IDS: readonly PrincipleId[] = ["contextualize-and-write-for-the-reader", "write-controlled-english"];
 
 export const isPrincipleId = (id: string): id is PrincipleId => (PRINCIPLE_IDS as readonly string[]).includes(id);
 
