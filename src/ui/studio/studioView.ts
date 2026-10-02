@@ -4,6 +4,7 @@
 
 import * as M from "../../domain/model";
 import { budgetStop } from "../../domain/spend";
+import * as B from "../../domain/studio/blueprint";
 import * as S from "../../domain/studio/studio";
 import * as R from "../../domain/studio/runs";
 import {
@@ -20,8 +21,10 @@ import {
   type RoundFocus,
   type RoundLead,
   type RoundQuestion,
+  type RowMark,
   type StudioArtifact,
   type StudioRun,
+  type VariantRules,
   type Verdict,
 } from "../../domain/studio/types";
 import { PROJECT_DOMAINS, type Device, type ProjectDomain, type State } from "../../domain/types";
@@ -79,7 +82,14 @@ export function roundArtifacts(s: State, n: number): StudioArtifact[] {
  * objections after the last pass), with no mark from you yet. What you brought and a probe's evidence are not counted.
  */
 export function waitingForYourMark(s: State): StudioArtifact[] {
-  return S.latestArtifacts(s).filter((a) => !UNGATED_KINDS.includes(a.kind) && S.readyForOwner(s, a) && !S.currentFeedback(s, a.id, a.version)?.mark);
+  return S.latestArtifacts(s).filter((a) => !UNGATED_KINDS.includes(a.kind) && S.readyForOwner(s, a) && !answered(a, S.currentFeedback(s, a.id, a.version)));
+}
+
+/** Whether the owner answered a version: a mark on it, or (a dictionary, a flow with rules) a mark on every row. */
+function answered(a: StudioArtifact, f: Feedback | undefined): boolean {
+  if (f?.mark) return true;
+  const rows = tableRows(a);
+  return rows.length > 0 && rows.every((r) => f?.rows?.some((m) => m.row === r.row && m.variant === r.variant));
 }
 
 /** Where a version stands for the owner: theirs to mark, still with the PE, or replaced by a newer version. */
@@ -94,9 +104,10 @@ export function standing(s: State, a: StudioArtifact): Standing {
 }
 
 /** How an artifact is shown: a screen in a device frame, a terminal window, a document (the domain's `DOCUMENT_KINDS`), or the entry file in a plain frame. */
-export type ShowKind = "screen" | "terminal" | "document" | "file";
+export type ShowKind = "screen" | "terminal" | "document" | "dictionary" | "file";
 export function showKind(a: StudioArtifact): ShowKind {
   if (a.kind === "screen") return "screen";
+  if (a.kind === "dictionary") return "dictionary";
   if (a.kind === "terminal-demo" || a.kind === "tui") return "terminal";
   if (DOCUMENT_KINDS.includes(a.kind)) return "document";
   return "file";
@@ -215,6 +226,8 @@ export interface Draft {
   mark: Mark | null;
   pickedVariant?: string;
   pins: DraftPin[];
+  /** Marks on a dictionary's terms or a flow's rules (pass 4d). */
+  rows: RowMark[];
   note: string;
 }
 
@@ -222,7 +235,12 @@ export const draftKey = (a: { id: string; version: number }) => `${a.id}@${a.ver
 
 /** The draft a version starts from: the owner's current feedback on it (with any pins carried from the version before). */
 export function draftFrom(f: Feedback | undefined): Draft {
-  return { mark: f?.mark ?? null, ...(f?.pickedVariant ? { pickedVariant: f.pickedVariant } : {}), pins: (f?.pins ?? []).map((p) => ({ ...p })), note: f?.note ?? "" };
+  return { mark: f?.mark ?? null, ...(f?.pickedVariant ? { pickedVariant: f.pickedVariant } : {}), pins: (f?.pins ?? []).map((p) => ({ ...p })), rows: (f?.rows ?? []).map((r) => ({ ...r })), note: f?.note ?? "" };
+}
+
+/** Row marks are the same when each row has the same mark, whatever order they were made in. */
+function sameRows(a: RowMark[], b: RowMark[]) {
+  return a.length === b.length && a.every((x) => b.some((y) => y.row === x.row && y.variant === x.variant && y.mark === x.mark));
 }
 
 /** Pins are the same by place, variant, comment and element. */
@@ -231,7 +249,7 @@ function samePins(a: DraftPin[], b: DraftPin[]) {
 }
 
 export function sameDraft(a: Draft, b: Draft): boolean {
-  return a.mark === b.mark && a.pickedVariant === b.pickedVariant && a.note.trim() === b.note.trim() && samePins(a.pins, b.pins);
+  return a.mark === b.mark && a.pickedVariant === b.pickedVariant && a.note.trim() === b.note.trim() && samePins(a.pins, b.pins) && sameRows(a.rows, b.rows);
 }
 
 /** A pin from the frame, added to a draft with an empty comment for the owner to write. Variant: the one shown, for an artifact with several. */
@@ -239,11 +257,60 @@ export function addPin(d: Draft, pin: PinMessage, variant: string | undefined): 
   return { ...d, pins: [...d.pins, { x: pin.x, y: pin.y, ...(variant !== undefined ? { variant } : {}), text: "", ...(pin.selector ? { selector: pin.selector } : {}) }] };
 }
 
-/** "Keep, picked B · Day by day, 2 pins, a note"; "" for an empty draft. */
+/** "Keep, picked B · Day by day, 2 pins, 3 terms marked, a note"; "" for an empty draft. */
 export function draftSummary(a: StudioArtifact, d: Draft): string {
   const label = (id: string) => a.variants.find((v) => v.id === id)?.label ?? id;
   const mark = d.mark ? `${d.mark[0].toUpperCase()}${d.mark.slice(1)}` : "";
-  return [mark, d.pickedVariant ? `picked ${label(d.pickedVariant)}` : "", d.pins.length ? `${d.pins.length} pin${d.pins.length === 1 ? "" : "s"}` : "", d.note.trim() ? "a note" : ""].filter(Boolean).join(", ");
+  const rows = d.rows.length ? `${d.rows.length} ${a.kind === "dictionary" ? "term" : "rule"}${d.rows.length === 1 ? "" : "s"} marked` : "";
+  return [mark, d.pickedVariant ? `picked ${label(d.pickedVariant)}` : "", d.pins.length ? `${d.pins.length} pin${d.pins.length === 1 ? "" : "s"}` : "", rows, d.note.trim() ? "a note" : ""].filter(Boolean).join(", ");
+}
+
+// ---------- tables: a dictionary's terms and a flow's rules (pass 4d) ----------
+
+/** A row the owner can mark: a term of a dictionary, or a rule of a flow's variant (`variant` set when the flow has several). */
+export interface TableRow {
+  row: string;
+  variant?: string;
+}
+
+/** Every row of a version the owner can mark: each term of a dictionary, or each rule of each variant of a flow. */
+export function tableRows(a: StudioArtifact): TableRow[] {
+  if (a.dictionary) return a.dictionary.map((e) => ({ row: e.term }));
+  return (a.rules ?? []).flatMap((r) => r.rules.map((x) => ({ row: x.id, ...(a.variants.length > 1 ? { variant: r.variant } : {}) })));
+}
+
+/** The owner's mark on one row in a draft, or null. */
+export function rowMark(d: Draft, row: string, variant?: string): Mark | null {
+  return d.rows.find((r) => r.row === row && r.variant === variant)?.mark ?? null;
+}
+
+/** One click on a row's mark: the mark is set, or cleared when the row already has it. */
+export function toggleRow(d: Draft, row: string, variant: string | undefined, mark: Mark): Draft {
+  const rest = d.rows.filter((r) => !(r.row === row && r.variant === variant));
+  return { ...d, rows: rowMark(d, row, variant) === mark ? rest : [...rest, { row, ...(variant !== undefined ? { variant } : {}), mark }] };
+}
+
+/** Keep every row the owner has not marked yet, in one click: the cheapest answer to a long table. */
+export function keepUnmarked(d: Draft, rows: TableRow[]): Draft {
+  const open = rows.filter((r) => rowMark(d, r.row, r.variant) === null);
+  return { ...d, rows: [...d.rows, ...open.map((r) => ({ ...r, mark: "keep" as const }))] };
+}
+
+/** The rules of the variant shown: its rules.json, or none. */
+export function variantRules(a: StudioArtifact, variantId: string | undefined): VariantRules | undefined {
+  const v = variantId ?? (a.variants.length === 1 ? a.variants[0].id : undefined);
+  return a.rules?.find((r) => r.variant === v);
+}
+
+/**
+ * Where a dictionary version stands: the project's words (approved, in force), or not yet, and why. The dictionary
+ * in force is the version the owner approved into the blueprint (domain/studio/blueprint.ts).
+ */
+export function dictionaryStanding(s: State, a: StudioArtifact): { inForce: boolean; text: string } {
+  const force = B.dictionaryInForce(s);
+  if (force && force.artifact.id === a.id && force.artifact.version === a.version) return { inForce: true, text: "These are the project's words. Every agent gets them, and the writing check reports a word to avoid." };
+  if (force) return { inForce: false, text: `Not in force. ${force.artifact.title} v${force.artifact.version} is the project's dictionary until you approve this version.` };
+  return { inForce: false, text: "Not in force yet. Approve it into the blueprint to make these the project's words." };
 }
 
 /** The versions whose draft differs from the owner's current feedback: the marks Send sends. Only versions the owner can answer (theirs, newest). */
@@ -265,6 +332,7 @@ export function feedbackEntries(changed: { artifact: StudioArtifact; draft: Draf
     mark: draft.mark,
     ...(draft.pickedVariant ? { pickedVariant: draft.pickedVariant } : {}),
     pins: draft.pins.map((p) => ({ x: p.x, y: p.y, ...(p.variant !== undefined ? { variant: p.variant } : {}), text: p.text.trim(), ...(p.selector ? { selector: p.selector } : {}) })),
+    ...(draft.rows.length ? { rows: draft.rows.map((r) => ({ row: r.row, ...(r.variant !== undefined ? { variant: r.variant } : {}), mark: r.mark })) } : {}),
     note: draft.note.trim(),
   }));
 }
