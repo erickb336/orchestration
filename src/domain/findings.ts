@@ -607,10 +607,21 @@ export function decisionsForStep(s: State, t: Task, st: Step): FindingDecision[]
   return s.decisions.filter((d) => d.taskId === t.id && read.some((a) => sameOutput(s, a, d.artifactId)));
 }
 
+/**
+ * The PE's call behind where the decision stands now, or undefined: the call that decided it, suggested the fix waiting
+ * for the user, or went to the user past a budget, as made by the same lead run. A call the user reopened or reversed,
+ * or one a later run superseded, stays on the record (`pe`) but is not current.
+ */
+export function currentPeCall(d: FindingDecision): PeCall | undefined {
+  if (!d.pe) return undefined;
+  const run = d.suggestion ? d.suggestion.leadRunId : d.leadRunId;
+  return run === d.pe.leadRunId ? d.pe : undefined;
+}
+
 /** A decision, in the words later prompts and the UI use. */
 export function decisionLabel(d: FindingDecision): string {
   const by = d.decidedBy === "carried" ? "carried from an earlier round" : d.decidedBy === "lead" ? "by the lead" : d.decidedBy === "pe" ? "by the PE (a lead run with the PE's brief)" : "by the user";
-  if (d.suggestion) return `suggested fix by ${d.pe ? "the PE" : "the lead"}, waiting for the user${d.suggestion.why ? `: ${d.suggestion.why}` : ""}`;
+  if (d.suggestion) return `suggested fix by ${currentPeCall(d) ? "the PE" : "the lead"}, waiting for the user${d.suggestion.why ? `: ${d.suggestion.why}` : ""}`;
   if (d.status === "open") return `waiting for a decision (${d.routedTo === "user" ? "the user" : DECIDER[d.routedTo]})`;
   if (d.status === "superseded") return `no longer open${d.why ? `: ${d.why}` : ""}`;
   if (d.status === "follow-up") return `followed up as ${d.followUpTaskId ?? "a separate task"} (${by})${d.why ? `: ${d.why}` : ""}`;

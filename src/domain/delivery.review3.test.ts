@@ -201,6 +201,33 @@ describe("independence is judged against every author of the pull request", () =
   });
 });
 
+describe("a pull request waiting on decisions names who takes them (review finding 9)", () => {
+  /** The pull request's review reported two findings that ask for a decision, open and routed to `routes`. */
+  function waitingOn(routes: ("lead" | "pe" | "user")[]): State {
+    const s = built(prMode("hold"), { findings: routes.length }, (s) => {
+      const art = s.artifacts.find((a) => a.id === `fx-findings-${ID}`)!;
+      const finding = (k: number) => ({ id: `F${k}`, key: `key${k}`.padEnd(12, "0"), source: "review" as const, severity: "error" as const, action: "ask-user" as const, title: `Finding ${k}`, detail: "what is wrong" });
+      art.findings = routes.map((_, i) => finding(i + 1));
+      s.artifacts.find((a) => a.id === `fx-secfindings-${ID}`)!.findings = [];
+      routes.forEach((routedTo, i) => {
+        const f = finding(i + 1);
+        s.decisions.push({ id: `fd-${i + 1}`, taskId: ID, artifactId: art.id, findingId: f.id, key: f.key, kind: "finding", finding: { source: f.source, severity: f.severity, title: f.title, detail: f.detail }, routedTo, status: "open", usedBy: [], createdAt: at(2) });
+      });
+    });
+    return opened(D.advanceDelivery(s, at(4)));
+  }
+  const who = (s: State) => /a decision \(([^)]*)\)/.exec(prOf(s).attention?.message ?? "")?.[1];
+
+  it("you and the PE, the lead and the PE, or all three: never 'you and the lead' for the PE's decisions", () => {
+    expect(prOf(waitingOn(["user", "pe"])).attention).toMatchObject({ code: "findings-decision" });
+    expect(who(waitingOn(["user", "pe"]))).toBe("you and the PE");
+    expect(who(waitingOn(["lead", "pe"]))).toBe("the lead and the PE");
+    expect(who(waitingOn(["user", "lead", "pe"]))).toBe("you, the lead and the PE");
+    expect(who(waitingOn(["user", "lead"]))).toBe("you and the lead");
+    expect(who(waitingOn(["pe", "pe"]))).toBe("the PE");
+  });
+});
+
 describe("who the author is", () => {
   const edit = (x: State, ref: string | undefined) =>
     x.artifacts.push({ ...x.artifacts.find((a) => a.id === `fx-change-${ID}`)!, id: "edited", attemptId: "edit", version: 2, summary: "a better summary", author: "user", editReason: "clearer", ...(ref ? { ref } : {}), createdAt: at(2) });

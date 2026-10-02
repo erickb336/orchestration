@@ -543,6 +543,21 @@ describe("the PE's route (ORC-029 2d)", () => {
     expect(maintenanceEstimate(estimated(F.decideFinding(out, d2.id, "accept", undefined, at(7)), 10))).toEqual({ startUsd: 10, callsUsd: 2 });
   });
 
+  it("a fix suggestion names the PE only when the PE made it, not when an earlier PE call stays on the record (review finding 9)", () => {
+    const { s, runId } = peCase(1, { buildingUsd: null, maintenanceUsdPerMonth: null }, "user");
+    const [d1] = s.decisions;
+    const out = complete(s, runId, [{ id: d1.id, decision: "fix", why: "Small.", cost: zero }]);
+    expect(F.decisionLabel(out.decisions[0])).toBe("suggested fix by the PE, waiting for the user: Small.");
+    // You reopen it and send it to the lead, whose run suggests the fix: the suggestion is the lead's.
+    const sent = F.routeDecision(F.decideFinding(out, d1.id, "reopen", undefined, at(7)), d1.id, "lead", at(8));
+    const r = M.startLeadRun(sent, { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(9));
+    const next = M.completeLeadRun(r.state, r.runId, { reply: "ok", proposals: [], decisions: [{ id: d1.id, decision: "fix", why: "The lead would fix it." }] }, at(10), { usage: { costUsd: 0 } });
+    expect(next.decisions[0]).toMatchObject({ suggestion: { leadRunId: r.runId }, pe: { leadRunId: runId } });
+    expect(F.decisionLabel(next.decisions[0])).toBe("suggested fix by the lead, waiting for the user: The lead would fix it.");
+    expect(F.currentPeCall(next.decisions[0])).toBeUndefined();
+    expect(F.currentPeCall(out.decisions[0])).toBe(out.decisions[0].pe);
+  });
+
   it("the owner reverses a PE call as they reverse the lead's, and takes a call past a budget; the PE's call stays on the record", () => {
     const { s, runId, art } = peCase(2, { buildingUsd: 5, maintenanceUsdPerMonth: null });
     const [d1, d2] = s.decisions;
