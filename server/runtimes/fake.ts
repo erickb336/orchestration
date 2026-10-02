@@ -246,9 +246,9 @@ export function fakeStudio(prompt: string): Record<string, unknown> | undefined 
     data: "The data (simulated): the product's things and how they relate.",
     flows: "The flows (simulated): every case of the main flow, decided.",
   }[focus];
-  const question = /^- Not chosen yet by the owner\.$/m.test(prompt)
-    ? { question: "Which domains is this product in? (simulated)", why: "They decide what the designer makes. The demo lead asks this of every project.", options: ["Screens: browser and phone (recommended)", "Code: a library or an engine", "Infrastructure: a backend or a pipeline"] }
-    : focus === "material"
+  // The owner chooses the domains in the app; the brief tells the lead not to ask about them.
+  const question =
+    focus === "material"
       ? { question: "Is this how the product works today? (simulated)", why: "Later rounds change what the code does now, so it must be right first.", options: ["Yes", "Mostly: see my pins", "No"] }
       : { question: "Is anything missing from this round? (simulated)", why: "A case the design leaves open becomes special-casing in code.", options: ["Nothing is missing", "Yes: see my note"] };
   return { openRound: { focus, summary }, designerRuns: [run], questions: [question] };

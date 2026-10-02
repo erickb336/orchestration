@@ -119,7 +119,8 @@ describe("the simulated lead in Vision", () => {
     const lead = s0.leadRuns.at(-1)!;
     expect(s0.studio.rounds[0]).toMatchObject({ n: 0, focus: "material", summary: "As it is today (simulated): what the code in the repository does now.", leadRunId: lead.id });
     expect(s0.studio.rounds[0].lead!.message).toMatch(/I opened a round on the product as it is today and asked the designer for one run, with one question beside it \(simulated\)\.$/);
-    expect(s0.studio.rounds[0].lead!.questions).toEqual([{ text: "Which domains is this product in? (simulated)", reason: "They decide what the designer makes. The demo lead asks this of every project.", options: ["Screens: browser and phone (recommended)", "Code: a library or an engine", "Infrastructure: a backend or a pipeline"] }]);
+    // The owner chooses the domains in the app, so the lead never asks about them.
+    expect(s0.studio.rounds[0].lead!.questions).toEqual([{ text: "Is this how the product works today? (simulated)", reason: "Later rounds change what the code does now, so it must be right first.", options: ["Yes", "Mostly: see my pins", "No"] }]);
     const [designer] = s0.studio.runs;
     expect(designer).toMatchObject({ kind: "designer", round: 0, fromLead: { leadRunId: lead.id, kinds: ["screen"], variants: 1, devices: ["desktop", "mobile"] } });
     until(settled, "the reproduction imported and reviewed");
