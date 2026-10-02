@@ -21,10 +21,10 @@ import { ScriptedAdapter } from "../testing/scripted";
 import { WorkspaceManager } from "../workspaces";
 import { systemMedia, type StudioMedia } from "./media";
 import { startDesignerRun } from "./runs";
-import { SAMPLE_FILES, SAMPLE_MANIFEST } from "./sample";
+import { SAMPLE_FILES, SAMPLE_MANIFEST, TERMINAL_SAMPLE_FILES } from "./sample";
 import { createPrototypeServer } from "./serve";
 import { launchChrome, type ShotsOutcome } from "./shots";
-import { probeTerminalSandbox, type RecordResult } from "./terminal";
+import { probeTerminalSandbox, validateAnsFrame, type RecordResult } from "./terminal";
 import { close, get, listen } from "./testFixtures";
 
 let dir: string;
@@ -478,6 +478,28 @@ describe("the PE's runs at the service", () => {
     expect(verdicts.every((v) => v.reasons.startsWith("Simulated: the fake runtime's PE, not an agent."))).toBe(true);
     expect(S.peReview(state(), art)).toEqual({ status: "agreed", pass: 1 });
     cmd("sendFeedback", { entries: [{ artifactId: art.id, version: 1, mark: "keep", pins: [], note: "" }] });
+  });
+});
+
+describe("the fake designer's terminal sample", () => {
+  it("for a brief that asks for a terminal demo, it hands in the trips CLI's tape (with a hand-written .cast) and a TUI in two layouts, which pass the same checks and get the PE's review", async () => {
+    store = new Store(join(dataDir, "db.sqlite"));
+    const catalog = store.read().state.project.catalog;
+    const fake = { claude: new FakeAdapter("claude", defaultFakeConfig(), catalog.claude), codex: new FakeAdapter("codex", defaultFakeConfig(), catalog.codex) };
+    scheduler = new Scheduler(store, fake, { dataDir, leaseMs: 60_000 });
+    cmd("initProject", { name: "Weekend Trips", repoPath: join(dir, "repo"), vision: "Weekend trips for a small group of friends.", focus: "" });
+    cmd("setDevices", { devices: ["desktop", "mobile", "terminal"] });
+    cmd("openRound", { focus: "experience" });
+    const id = startDesignerRun(store, { round: 1, brief: "Make a terminal demo of the trips CLI, and its TUI." }, iso());
+    for (let i = 0; i < 120 && peRuns().filter((r) => r.status === "completed").length < 2; i++) tick();
+    expect(runOf(id)).toMatchObject({ status: "completed", simulated: true });
+    const [cli, tui] = S.latestArtifacts(state());
+    expect(cli).toMatchObject({ kind: "terminal-demo", title: "trips CLI (simulated sample)", devices: ["terminal"], variants: [{ id: "a", label: "A · Plan, then pick", entry: "cli/trips.tape" }] });
+    expect(tui).toMatchObject({ kind: "tui", devices: ["terminal"], variants: [{ id: "a", entry: "tui/a/tui.ans" }, { id: "b", entry: "tui/b/tui.ans" }] });
+    // Every hand-written frame fits the terminal size it is drawn at.
+    for (const p of ["tui/a/tui.ans", "tui/b/tui.ans"]) expect(validateAnsFrame(TERMINAL_SAMPLE_FILES[p], { cols: 80, rows: 24 })).toMatchObject({ ok: true });
+    // The PE reviewed both; the owner can answer.
+    for (const a of [cli, tui]) expect(S.peReview(state(), a).status).toBe("agreed");
   });
 });
 

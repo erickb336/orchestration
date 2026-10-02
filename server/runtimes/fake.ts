@@ -9,7 +9,7 @@ import type { AckMode } from "../../src/api";
 import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, scriptedFinding, scriptedSummary } from "../../src/domain/demoScript";
 import type { CatalogModel, OutputDef, ProviderId, State } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
-import { fakePeAnswer, writeSamplePrototype } from "../studio/sample";
+import { TERMINAL_BRIEF, designerAsk, fakePeAnswer, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
 import { statusAnswer, statusQuestion } from "./fakeStatus";
 import type { AdapterEvent, Assignment, ProviderHealth, RuntimeAdapter } from "./types";
 
@@ -382,7 +382,7 @@ export class FakeAdapter implements RuntimeAdapter {
     }
     if (a.studio) {
       if (this.procs.has(a.attemptId)) return;
-      this.procs.set(a.attemptId, { progress: 0, outputs: [], studio: a.workspace.path, studioRole: a.role === "pe" ? "pe" : "designer" });
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], studio: a.workspace.path, studioRole: a.role === "pe" ? "pe" : "designer", prompt: a.prompt });
       this.emit({ type: "started", attemptId: a.attemptId });
       return;
     }
@@ -489,14 +489,22 @@ export class FakeAdapter implements RuntimeAdapter {
           continue;
         }
         if (p.studio !== undefined) {
-          // A simulated designer writes the sample prototype and its studio.json, which the service imports as a real one's.
+          // A simulated designer writes a sample and its studio.json, which the service imports as a real one's: the
+          // trips CLI's terminal demo and TUI when its brief asks for one, else the trip plan's screens.
+          const ask = designerAsk(p.prompt ?? "");
+          const terminal = TERMINAL_BRIEF.test(ask.brief);
           try {
-            writeSamplePrototype(p.studio);
+            if (terminal) writeTerminalSample(p.studio, ask.terminal);
+            else writeSamplePrototype(p.studio);
           } catch (e) {
             this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not write its sample: ${e instanceof Error ? e.message : String(e)}` });
             continue;
           }
-          this.emit({ type: "completed", attemptId: id, finalText: "Made the trip plan in two variants, for desktop and mobile (simulated sample)." });
+          this.emit({
+            type: "completed",
+            attemptId: id,
+            finalText: terminal ? "Made a terminal demo of the trips CLI, and its TUI in two layouts (simulated sample)." : "Made the trip plan in two variants, for desktop and mobile (simulated sample).",
+          });
           continue;
         }
         this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt, p.lead === "message" ? this.board?.() : undefined, nowMs) : fakeFinalText(id, p.outputs, p.stepId, p.taskId, p.title) });

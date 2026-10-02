@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:integration": "node --import tsx scripts/real-run-test.mjs --fake",
     "test:real": "node --import tsx scripts/real-run-test.mjs",
+    "trial:studio": "node --import tsx scripts/studio-trial.mjs",
     "preview": "vite preview",
     "setup": "node scripts/orchestrator.mjs setup",
     "status": "node scripts/orchestrator.mjs status",
