@@ -27,6 +27,7 @@ import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, versionDir, type StagedArtifact } from "./studio/artifacts";
 import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
 import { PeAnswerError, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
+import { repoGlance } from "./studio/existing";
 import { designerEnvelope, importDesignerRun, prepareStaging } from "./studio/runs";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
@@ -765,7 +766,8 @@ export class Scheduler {
         workspace: { path: workspace?.path ?? "", access: "read" },
         environment: state.project.workerEnvironment[run.provider],
         connections: state.project.workerConnections[run.provider],
-        prompt: buildLeadEnvelope(state, run, "read", this.visionDocs?.reader(state.project.id), conventions),
+        // In Vision the lead's studio brief says whether the repository has code (an "as it is today" first round).
+        prompt: buildLeadEnvelope(state, run, "read", this.visionDocs?.reader(state.project.id), conventions, state.project.stage === "shaping" && !state.project.sample ? repoGlance(state.project.repoPath) : undefined),
         outputs: [],
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });

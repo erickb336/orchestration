@@ -205,6 +205,23 @@ describe("a designer run at the service", () => {
     expect(codex.runs.get(cx)!.prompt).toContain("On Codex the service cannot confine what you read (as for every Codex run), so read only that checkout.");
   });
 
+  it("the lead's envelope in Vision says whether the repository has code, read from git at HEAD", async () => {
+    await service({ workspaces: true });
+    const repo = state().project.repoPath;
+    cmd("postMessage", { text: "What do we have?" });
+    tick();
+    expect(claude.runs.get(M.activeLeadRun(state())!.id)!.prompt).toContain("Repository: no code yet (1 tracked file, documents only).");
+    claude.emit({ type: "completed", attemptId: M.activeLeadRun(state())!.id, finalText: "Nothing yet." });
+    tick();
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src", "index.html"), "<h1>Trips</h1>");
+    execFileSync("git", ["-C", repo, "add", "-A"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the trip list"]);
+    cmd("postMessage", { text: "And now?" });
+    tick();
+    expect(claude.runs.get(M.activeLeadRun(state())!.id)!.prompt).toContain("Repository: has code, 1 code file of 2 tracked (src/index.html).");
+  });
+
   it("is asked for by the lead's reply: its studio block's designer runs are queued, and the scheduler starts them with the lead's brief", async () => {
     await service();
     cmd("postMessage", { text: "Show me the trip plan." });
