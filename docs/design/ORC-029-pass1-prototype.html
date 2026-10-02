@@ -1,0 +1,935 @@
+<title>Vision Studio Prototype</title>
+<style>
+/* Layout: light review strips (Orchestrator's inverted demo-bar style) wrap a dark product frame; inside it, the
+   studio is a three-column canvas: rounds and artifacts | the artifact | the lead. Single dark look on purpose:
+   Orchestrator is dark-only (ORC-025). The sample products keep their own palettes inside their frames. */
+:root {
+  color-scheme: dark;
+  /* Orchestrator */
+  --bg: #121315; --surface: #1a1b1e; --surface-2: #222327; --border: #2b2d31; --border-strong: #3a3c42;
+  --text: #ececea; --muted: #a3a6ad; --focus: #7fa4f5;
+  --work: #7fa4f5; --you: #e3a14a; --fail: #ef8a83; --done: #6cc28b;
+  --work-bg: #1f2633; --you-bg: #2a2219; --fail-bg: #2b1f1f; --done-bg: #1c2a22;
+  /* review strips: the inverted, "not the product" look */
+  --rv-bg: #ececea; --rv-fg: #121315; --rv-muted: #55585e; --rv-line: #c9cac6; --rv-chip: #dcdcd8;
+  /* Weekend Trips, the sample app: its own outdoor palette */
+  --wt-bg: #f5f3ec; --wt-ink: #1f2a24; --wt-muted: #5d6a61; --wt-green: #2f6b4f; --wt-sky: #cfe3ef; --wt-sand: #e9e0cc; --wt-line: #d9d3c5; --wt-sun: #d98c2b;
+  /* terminal */
+  --t-bg: #0b0c0d; --t-fg: #d7dad3; --t-dim: #7d837c; --t-green: #8fd19e; --t-yellow: #e7c46b; --t-red: #f08a7e; --t-blue: #8ab4f8; --t-sel: #26303a;
+  --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --fs-micro: 0.75rem; --fs-small: 0.8125rem; --fs-meta: 0.875rem; --fs-body: 0.9375rem; --fs-h3: 1.0625rem; --fs-h2: 1.25rem; --fs-h1: 1.5rem;
+  --r-chip: 6px; --r-ctl: 8px; --r: 12px;
+}
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--text); }
+body { font-family: var(--font); font-size: var(--fs-body); line-height: 1.5; padding-inline: 16px; padding-block: 16px 48px; -webkit-font-smoothing: antialiased; }
+h1, h2, h3, h4 { margin: 0; line-height: 1.25; font-weight: 650; text-wrap: balance; }
+p { margin: 0; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 14px; }
+.muted { color: var(--muted); }
+.small { font-size: var(--fs-small); }
+.micro { font-size: var(--fs-micro); }
+.mono { font-family: var(--mono); }
+.num { font-variant-numeric: tabular-nums; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* ---------- review (light) ---------- */
+.rv { background: var(--rv-bg); color: var(--rv-fg); border-radius: var(--r); padding: 14px 16px; display: grid; gap: 10px; }
+.rv .rv-muted { color: var(--rv-muted); }
+.rv h1 { font-size: var(--fs-h2); }
+.rv-intro { display: grid; gap: 8px; max-width: 78ch; }
+.rv-intro p { font-size: var(--fs-meta); }
+.rv-row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.rv-tag { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--rv-muted); font-weight: 600; }
+.rv-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px 16px; align-items: start; }
+.rv-bar .ask { display: grid; gap: 4px; min-width: 0; }
+.rv-bar .ask p { font-size: var(--fs-meta); }
+.rv-marks { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.rv-btn { border: 1px solid var(--rv-line); background: transparent; color: var(--rv-fg); padding: 5px 11px; border-radius: 999px; font-size: var(--fs-small); cursor: pointer; font-weight: 550; }
+.rv-btn:hover { background: var(--rv-chip); }
+.rv-btn[aria-pressed="true"][data-v="agree"] { background: #1c5b3c; border-color: #1c5b3c; color: #fff; }
+.rv-btn[aria-pressed="true"][data-v="change"] { background: #8a5410; border-color: #8a5410; color: #fff; }
+.rv-btn[aria-pressed="true"][data-v="skip"] { background: #55585e; border-color: #55585e; color: #fff; }
+.rv-note { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; }
+.rv-note textarea { flex: 1; min-width: 0; font: inherit; font-size: var(--fs-small); background: #fff; color: var(--rv-fg); border: 1px solid var(--rv-line); border-radius: var(--r-ctl); padding: 6px 8px; min-height: 34px; resize: vertical; }
+.rv-saved { font-size: var(--fs-micro); color: var(--rv-muted); min-width: 9ch; }
+.rv-progress { display: flex; gap: 10px; align-items: center; font-size: var(--fs-small); }
+.rv-meter { width: 140px; height: 6px; background: var(--rv-chip); border-radius: 99px; overflow: hidden; }
+.rv-meter span { display: block; height: 100%; width: 0; background: var(--rv-fg); transition: width 200ms ease-out; }
+.rv-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.rv-link { background: none; border: none; padding: 0; color: var(--rv-fg); text-decoration: underline; cursor: pointer; font-size: var(--fs-small); }
+
+/* ---------- screen tabs ---------- */
+.tabs { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+.tab { flex: none; border: 1px solid var(--border); background: var(--surface); color: var(--muted); padding: 7px 12px; border-radius: var(--r-ctl); font-size: var(--fs-small); cursor: pointer; display: flex; gap: 6px; align-items: center; }
+.tab[aria-selected="true"] { color: var(--text); border-color: var(--border-strong); background: var(--surface-2); }
+.tab .dot { width: 7px; height: 7px; border-radius: 99px; background: var(--border-strong); }
+.tab .dot[data-v="agree"] { background: var(--done); } .tab .dot[data-v="change"] { background: var(--you); } .tab .dot[data-v="skip"] { background: var(--muted); }
+
+/* ---------- the product frame ---------- */
+.app { border: 1px solid var(--border); border-radius: var(--r); background: var(--bg); overflow: hidden; }
+.hdr { display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.brand { font-weight: 700; letter-spacing: -0.01em; }
+.stepper { display: flex; align-items: center; gap: 6px; font-size: var(--fs-small); }
+.step { display: flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+.step b { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 99px; background: var(--surface-2); font-size: var(--fs-micro); color: var(--muted); }
+.step.on { color: var(--text); border-color: var(--border-strong); background: var(--surface); }
+.step.on b { background: var(--text); color: var(--bg); }
+.step.vision.on { border-color: #4b5a78; } .step.vision.on b { background: var(--work); }
+.step.factory.on b { background: var(--done); }
+.arrow { color: var(--muted); }
+.hdr .meta { margin-left: auto; display: flex; gap: 10px; align-items: center; font-size: var(--fs-small); color: var(--muted); flex-wrap: wrap; }
+.sim { background: var(--text); color: var(--bg); font-size: var(--fs-micro); font-weight: 650; padding: 1px 7px; border-radius: var(--r-chip); }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-micro); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+.pill.work { color: var(--work); background: var(--work-bg); border-color: transparent; }
+.pill.you { color: var(--you); background: var(--you-bg); border-color: transparent; }
+.pill.done { color: var(--done); background: var(--done-bg); border-color: transparent; }
+.pill.fail { color: var(--fail); background: var(--fail-bg); border-color: transparent; }
+.btn { border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text); padding: 6px 12px; border-radius: var(--r-ctl); font-size: var(--fs-small); cursor: pointer; font-weight: 550; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+.btn.quiet { background: transparent; border-color: transparent; color: var(--muted); }
+.btn.quiet:hover { color: var(--text); }
+.btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-ctl); overflow: hidden; }
+.seg button { border: none; background: transparent; color: var(--muted); padding: 5px 10px; font-size: var(--fs-small); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--surface-2); color: var(--text); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.card h3 { font-size: var(--fs-h3); }
+.label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+
+/* ---------- studio canvas: three columns ---------- */
+.studio { display: grid; grid-template-columns: 220px minmax(0, 1fr) 300px; min-height: 620px; }
+.col { min-width: 0; }
+.left { border-right: 1px solid var(--border); padding: 12px; display: grid; gap: 14px; align-content: start; }
+.right { border-left: 1px solid var(--border); padding: 12px; display: grid; gap: 12px; align-content: start; background: var(--surface); }
+.center { padding: 12px; display: grid; gap: 10px; align-content: start; }
+.rounds { display: grid; gap: 4px; }
+.round { display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; border-radius: var(--r-ctl); font-size: var(--fs-small); color: var(--muted); border: 1px solid transparent; }
+.round.on { background: var(--surface-2); color: var(--text); border-color: var(--border); }
+.alist { display: grid; gap: 4px; }
+.aitem { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; text-align: left; padding: 7px 8px; border-radius: var(--r-ctl); border: 1px solid transparent; background: none; color: var(--text); cursor: pointer; font-size: var(--fs-small); }
+.aitem:hover { background: var(--surface); }
+.aitem[aria-current="true"] { background: var(--surface-2); border-color: var(--border); }
+.aitem .k { color: var(--muted); font-size: var(--fs-micro); grid-column: 1; }
+.aitem .m { grid-row: 1 / span 2; grid-column: 2; align-self: center; }
+.mk { font-size: var(--fs-micro); padding: 1px 6px; border-radius: 99px; border: 1px solid var(--border); color: var(--muted); }
+.mk[data-v="keep"] { color: var(--done); border-color: transparent; background: var(--done-bg); }
+.mk[data-v="change"] { color: var(--you); border-color: transparent; background: var(--you-bg); }
+.mk[data-v="drop"] { color: var(--fail); border-color: transparent; background: var(--fail-bg); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.toolbar .grp { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.stage { position: relative; background: #0e0f11; border: 1px solid var(--border); border-radius: var(--r); min-height: 470px; display: grid; place-items: center; padding: 18px; overflow: auto; }
+.stage.pinning { cursor: crosshair; }
+.stage.pinning * { cursor: crosshair !important; }
+.markbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.markbtn { border: 1px solid var(--border-strong); background: transparent; color: var(--text); padding: 5px 12px; border-radius: 999px; font-size: var(--fs-small); cursor: pointer; }
+.markbtn[aria-pressed="true"][data-v="keep"] { background: var(--done-bg); color: var(--done); border-color: var(--done); }
+.markbtn[aria-pressed="true"][data-v="change"] { background: var(--you-bg); color: var(--you); border-color: var(--you); }
+.markbtn[aria-pressed="true"][data-v="drop"] { background: var(--fail-bg); color: var(--fail); border-color: var(--fail); }
+.variants { display: flex; gap: 6px; align-items: center; }
+.varbtn { border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: var(--r-ctl); padding: 4px 10px; font-size: var(--fs-small); cursor: pointer; }
+.varbtn[aria-pressed="true"] { color: var(--text); border-color: var(--work); }
+.varbtn .pick { color: var(--done); }
+.leadmsg { display: grid; gap: 6px; font-size: var(--fs-meta); }
+.leadmsg .who { display: flex; gap: 6px; align-items: center; font-size: var(--fs-small); color: var(--muted); }
+.qs { display: grid; gap: 10px; }
+.q { display: grid; gap: 6px; font-size: var(--fs-small); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--border-strong); background: transparent; color: var(--text); padding: 3px 9px; border-radius: 999px; font-size: var(--fs-micro); cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--text); color: var(--bg); }
+.composer { display: grid; gap: 6px; }
+.composer textarea, .field textarea, .field input { font: inherit; font-size: var(--fs-small); background: var(--bg); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r-ctl); padding: 7px 9px; width: 100%; }
+.composer textarea { min-height: 64px; resize: vertical; }
+.feedback-sum { font-size: var(--fs-small); color: var(--muted); }
+.framing { border-left: 3px solid var(--work); padding: 4px 10px; font-size: var(--fs-small); color: var(--muted); }
+.critic { border: 1px solid var(--border-strong); border-radius: var(--r); padding: 10px; display: grid; gap: 8px; background: var(--bg); }
+.critic .who { display: flex; gap: 6px; align-items: center; font-size: var(--fs-small); color: var(--muted); flex-wrap: wrap; }
+.verdicts { display: grid; gap: 6px; font-size: var(--fs-small); }
+.verdict { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; }
+.verdict .vb { font-size: var(--fs-micro); font-weight: 650; padding: 1px 6px; border-radius: 99px; align-self: start; white-space: nowrap; }
+.vb.yes { color: var(--done); background: var(--done-bg); } .vb.if { color: var(--you); background: var(--you-bg); } .vb.no { color: var(--fail); background: var(--fail-bg); }
+.probe { border-top: 1px solid var(--border); padding-top: 8px; display: grid; gap: 4px; font-size: var(--fs-small); }
+.cb { font-size: var(--fs-micro); margin-left: 4px; }
+.cb.yes { color: var(--done); } .cb.if { color: var(--you); } .cb.no { color: var(--fail); }
+
+/* ---------- device frames ---------- */
+.device { background: var(--wt-bg); color: var(--wt-ink); container-type: inline-size; overflow: hidden; position: relative; font-family: var(--font); }
+.device.desktop { width: min(100%, 860px); border-radius: 10px; box-shadow: 0 0 0 1px #3a3c42; }
+.device.tablet { width: min(100%, 560px); border-radius: 22px; box-shadow: 0 0 0 10px #26272b, 0 0 0 11px #3a3c42; }
+.device.phone { width: min(100%, 300px); border-radius: 36px; box-shadow: 0 0 0 9px #26272b, 0 0 0 10px #3a3c42; }
+.chrome { display: flex; gap: 6px; align-items: center; padding: 8px 10px; background: #e7e3d8; border-bottom: 1px solid var(--wt-line); font-size: 11px; color: var(--wt-muted); }
+.chrome i { width: 9px; height: 9px; border-radius: 99px; background: #cfc9bb; display: block; }
+.chrome .url { margin-left: 8px; background: #f7f5ef; border-radius: 6px; padding: 2px 10px; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.notch { height: 26px; display: grid; place-items: center; }
+.notch span { width: 84px; height: 20px; background: #111; border-radius: 0 0 14px 14px; display: block; }
+.device.phone .chrome, .device.tablet .chrome { display: none; }
+.device:not(.phone) .notch { display: none; }
+.wt { padding: 14px; display: grid; gap: 12px; }
+.wt-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.wt h4 { font-size: 1.15rem; font-weight: 700; letter-spacing: -0.01em; }
+.wt .sub { font-size: 12px; color: var(--wt-muted); }
+.wt .btnwt { background: var(--wt-green); color: #fff; border: none; border-radius: 999px; padding: 6px 12px; font-size: 12px; font-weight: 650; }
+.wt .ghost { background: transparent; color: var(--wt-green); border: 1px solid var(--wt-green); }
+.map { position: relative; height: 170px; border-radius: 10px; overflow: hidden; background:
+  repeating-radial-gradient(circle at 30% 60%, transparent 0 14px, rgba(47,107,79,0.16) 14px 15px),
+  repeating-radial-gradient(circle at 72% 30%, transparent 0 11px, rgba(47,107,79,0.12) 11px 12px),
+  linear-gradient(160deg, #dfe9dc, #eef0e4); }
+.map svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.map .lbl { position: absolute; font-size: 10px; background: #fff; padding: 1px 6px; border-radius: 99px; color: var(--wt-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+.days { display: grid; gap: 8px; }
+.day { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; background: #fff; border: 1px solid var(--wt-line); border-radius: 10px; padding: 9px 11px; }
+.day .d { font-weight: 700; font-size: 12px; color: var(--wt-green); width: 34px; }
+.day .t { font-size: 13px; font-weight: 600; } .day .s { font-size: 11px; color: var(--wt-muted); }
+.wx { font-size: 11px; padding: 2px 7px; border-radius: 99px; background: var(--wt-sky); white-space: nowrap; }
+.wx.warn { background: #f6dfbd; }
+.tl { display: grid; gap: 0; border-left: 2px solid var(--wt-line); margin-left: 6px; }
+.tl .ev { position: relative; padding: 4px 0 12px 14px; display: grid; gap: 2px; }
+.tl .ev::before { content: ""; position: absolute; left: -6px; top: 8px; width: 10px; height: 10px; border-radius: 99px; background: var(--wt-green); }
+.tl .ev .time { font-size: 11px; color: var(--wt-muted); font-variant-numeric: tabular-nums; }
+.tl .ev .what { font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.dcard { background: #fff; border: 1px solid var(--wt-line); border-radius: 12px; padding: 10px; display: grid; gap: 6px; }
+.dcard svg { width: 100%; height: 34px; }
+.split { display: grid; gap: 12px; }
+@container (min-width: 600px) { .split { grid-template-columns: 1.3fr 1fr; } .map { height: 240px; } }
+.sheet { background: #fff; border-radius: 16px 16px 0 0; border: 1px solid var(--wt-line); padding: 14px; display: grid; gap: 10px; }
+.sheet .linkbox { display: flex; gap: 8px; align-items: center; background: var(--wt-bg); border: 1px dashed var(--wt-line); border-radius: 10px; padding: 8px 10px; font-family: var(--mono); font-size: 11.5px; }
+.sheet .exp { font-size: 13px; } .sheet .exp b { color: var(--wt-ink); }
+
+/* ---------- pins ---------- */
+.pin { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 99px 99px 99px 0; transform: rotate(-45deg); background: var(--you); border: 2px solid #121315; display: grid; place-items: center; pointer-events: auto; z-index: 3; }
+.pin span { transform: rotate(45deg); font-size: 10px; font-weight: 800; color: #121315; }
+
+/* ---------- terminal ---------- */
+.term { background: var(--t-bg); color: var(--t-fg); font-family: var(--mono); font-size: 12.5px; line-height: 1.45; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px #2b2d31; max-width: 100%; }
+.term .bar { display: flex; gap: 6px; align-items: center; padding: 7px 10px; background: #1b1c1f; color: #8b8f96; font-size: 11px; font-family: var(--font); }
+.term .bar i { width: 10px; height: 10px; border-radius: 99px; background: #3a3c42; display: block; }
+.term.tmux .bar { display: none; }
+.term.bare .bar { display: none; }
+.term.bare { box-shadow: none; border-radius: 0; }
+.term .scr { padding: 10px 12px; white-space: pre; overflow-x: auto; min-height: 120px; }
+.term .status { background: #1f6f43; color: #e9f5ec; padding: 1px 10px; font-size: 11.5px; white-space: pre; overflow: hidden; }
+.term:not(.tmux) .status { display: none; }
+.g { color: var(--t-green); } .y { color: var(--t-yellow); } .r { color: var(--t-red); } .b { color: var(--t-blue); } .d { color: var(--t-dim); } .sel { background: var(--t-sel); }
+.cursor { display: inline-block; width: 0.6em; background: var(--t-fg); animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.chapters { display: flex; gap: 6px; flex-wrap: wrap; }
+.player { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.scrub { flex: 1; min-width: 120px; accent-color: var(--text); }
+
+/* ---------- tables, flows, blueprint ---------- */
+.tblwrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: var(--fs-small); }
+th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.05em; }
+td code, .code { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.bpitem { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-small); }
+.bpitem:last-child { border-bottom: none; }
+.bpitem .v { color: var(--muted); font-size: var(--fs-micro); }
+.mermaid { background: var(--surface); border-radius: var(--r); padding: 10px; overflow-x: auto; }
+pre.mermaid { margin: 0; }
+.states { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.state { border: 1px dashed var(--border-strong); border-radius: var(--r-ctl); padding: 8px; font-size: var(--fs-small); display: grid; gap: 3px; }
+
+/* ---------- start, pre-flight, factory ---------- */
+.choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.drop { border: 1px dashed var(--border-strong); border-radius: var(--r); padding: 16px; display: grid; gap: 8px; text-align: center; color: var(--muted); font-size: var(--fs-small); }
+.files { display: grid; gap: 6px; }
+.file { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 7px 9px; background: var(--surface-2); border-radius: var(--r-ctl); font-size: var(--fs-small); }
+.checklist { display: grid; gap: 6px; font-size: var(--fs-small); padding: 0; margin: 0; list-style: none; }
+.checklist li { display: flex; gap: 8px; align-items: baseline; }
+.ok { color: var(--done); } .open { color: var(--you); }
+.agree { display: flex; gap: 10px; align-items: flex-start; font-size: var(--fs-meta); }
+.agree input { margin-top: 4px; width: 16px; height: 16px; }
+.started { border: 1px solid var(--done); background: var(--done-bg); border-radius: var(--r); padding: 12px; font-size: var(--fs-small); display: grid; gap: 4px; }
+.lines { display: grid; gap: 10px; }
+.line { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; align-items: center; }
+.belt { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-ctl); position: relative; overflow: hidden; }
+.belt::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: repeating-linear-gradient(90deg, var(--border-strong) 0 8px, transparent 8px 16px); animation: belt 1.6s linear infinite; }
+@keyframes belt { to { background-position: 16px 0; } }
+.job { font-size: var(--fs-micro); padding: 3px 8px; border-radius: var(--r-chip); background: var(--surface-2); border: 1px solid var(--border); display: flex; gap: 6px; align-items: center; }
+.job.run { border-color: #3c4b66; } .job.done { opacity: 0.6; }
+.co { border: 1px solid var(--you); background: var(--you-bg); border-radius: var(--r); padding: 12px; display: grid; gap: 6px; font-size: var(--fs-small); }
+
+.screen { display: grid; gap: 12px; }
+.pad { padding: 14px; display: grid; gap: 14px; }
+
+@media (max-width: 980px) {
+  .studio { grid-template-columns: minmax(0, 1fr); }
+  .left, .right { border: none; border-bottom: 1px solid var(--border); }
+  .left { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+  .line { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .rv-bar { grid-template-columns: minmax(0, 1fr); }
+  .rv-marks { justify-content: flex-start; }
+  .stage { padding: 10px; min-height: 360px; }
+}
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <!-- ===== what this page is (review) ===== -->
+  <section class="rv" aria-labelledby="t-intro" data-uncommentable>
+    <div class="rv-intro">
+      <span class="rv-tag">Orchestrator · ORC-029 · pass 1 of 6 · prototype with sample data</span>
+      <h1 id="t-intro">The vision studio, before the factory</h1>
+      <p>This is a clickable prototype of the screens ORC-029 adds. Nothing here runs agents; every artifact, reply and number is a sample. It comes before any backend work, so the experience is settled first.</p>
+      <p><b>Where it fits.</b> Today, Shaping is text only. ORC-029 makes Vision an interactive studio with prototypes, inputs and outputs, and flows. The factory only starts when you choose Start the factory. Your decisions so far: keep the name Orchestrator; Vision is a separate, always interactive step; the canvas layout; marks, pins and variants; the hiking app plus a CLI with TUI layouts.</p>
+      <p><b>What I need from you.</b> Open each screen below. In its light bar, choose <b>Agree</b>, <b>Change</b> or <b>Skip</b>, and add a note if you have one. To comment on one spot, use <b>Pin a comment</b> in the studio, or claude.ai's own comment mode. The dark controls are part of the prototype; try them, but they are not your review.</p>
+    </div>
+    <div class="rv-row">
+      <div class="rv-progress"><span><b id="rv-count" class="num">0</b> of <span id="rv-total" class="num">11</span> marked</span><span class="rv-meter" aria-hidden="true"><span id="rv-meter"></span></span></div>
+      <span class="rv-muted small" id="rv-status" role="status">Connecting…</span>
+      <span class="rv-actions"><button class="rv-link" id="rv-copy" type="button">Copy my marks</button></span>
+    </div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="Screens to review" data-uncommentable>
+    <button class="tab" role="tab" data-tab="start" id="tab-start"><span class="dot" data-for="s-start"></span>1 · New project</button>
+    <button class="tab" role="tab" data-tab="studio" id="tab-studio"><span class="dot" data-for="s-studio"></span>2 · Studio: screens</button>
+    <button class="tab" role="tab" data-tab="cli" id="tab-cli"><span class="dot" data-for="s-cli"></span>3 · Studio: CLI and TUI</button>
+    <button class="tab" role="tab" data-tab="io" id="tab-io"><span class="dot" data-for="s-io"></span>4 · Inputs and outputs</button>
+    <button class="tab" role="tab" data-tab="flows" id="tab-flows"><span class="dot" data-for="s-flows"></span>5 · Flows</button>
+    <button class="tab" role="tab" data-tab="blueprint" id="tab-blueprint"><span class="dot" data-for="s-blueprint"></span>6 · Blueprint</button>
+    <button class="tab" role="tab" data-tab="preflight" id="tab-preflight"><span class="dot" data-for="s-preflight"></span>7 · Pre-flight and start</button>
+    <button class="tab" role="tab" data-tab="factory" id="tab-factory"><span class="dot" data-for="s-factory"></span>8 · The factory</button>
+  </nav>
+
+  <!-- ===== 1. new project ===== -->
+  <section class="screen" data-screen="start" role="tabpanel" aria-labelledby="tab-start">
+    <div class="rv rv-bar" data-review="s-start" data-uncommentable>
+      <div class="ask"><span class="rv-tag">Screen 1 · New project</span><p>Every project starts in Vision. There are two ways in: start from an idea, or from what you already have (designs, documents, a prototype, a CLI's output), which become round 0. There is no way to skip to the factory.</p></div>
+    </div>
+    <div class="app">
+      <header class="hdr"><span class="brand">Orchestrator</span>
+        <span class="stepper" aria-label="Stage"><span class="step vision on"><b>1</b>Vision</span><span class="arrow">→</span><span class="step factory"><b>2</b>Factory</span></span>
+        <span class="meta"><span class="sim">simulated</span></span></header>
+      <div class="pad">
+        <div><h2>New project: Weekend Trips</h2><p class="muted small">Repository <span class="mono">~/code/weekend-trips</span> · nothing runs until you start the factory</p></div>
+        <p class="framing">The factory builds exactly what the blueprint shows, with many agents at once. Changing the blueprint now takes minutes; changing built work takes runs.</p>
+        <div class="choices">
+          <div class="card"><span class="label">Start from an idea</span><h3>Tell the lead what you want to build</h3>
+            <div class="field"><textarea id="idea" rows="4">A hiking trip planner for small groups: pick a trail, plan the days around the weather, and share the plan with the group. Web first, then phones. A small CLI for organisers who live in the terminal.</textarea></div>
+            <div><button class="btn primary" type="button" data-go="studio">Start the vision</button></div>
+            <p class="small muted">The lead asks a few questions, then a designer makes the first screens for you to react to.</p></div>
+          <div class="card"><span class="label">Start from what you have</span><h3>Bring designs, documents, prototypes</h3>
+            <div class="drop" id="dropzone">Drop files or a folder here, or <button class="btn" type="button" id="addfiles">Add samples</button><span class="micro">Images, Penpot or Figma exports, HTML prototypes, screenshots of a running app, a CLI's help and output, specs</span></div>
+            <div class="files" id="files"></div>
+            <div><button class="btn primary" type="button" id="round0" disabled data-go="studio">Review them as round 0</button></div>
+            <p class="small muted">They load into the studio as round 0. The lead says what they cover and what is missing; you mark them like any other artifact.</p></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 2. studio: screens ===== -->
+  <section class="screen" data-screen="studio" role="tabpanel" aria-labelledby="tab-studio" hidden>
+    <div class="rv rv-bar" data-review="s-studio" data-uncommentable>
+      <div class="ask"><span class="rv-tag">Screen 2 · The studio canvas, a screens round</span><p>The layout you picked. Left: rounds and this round's artifacts. Middle: the artifact at desktop, tablet or phone size, with three variants, Keep/Change/Drop, and pins. Right: the lead's message and questions. Try a variant, a device size, a mark and a pin, then Send feedback.</p></div>
+    </div>
+    <div class="app">
+      <header class="hdr"><span class="brand">Orchestrator</span>
+        <span class="stepper" aria-label="Stage"><span class="step vision on"><b>1</b>Vision · round 3</span><span class="arrow">→</span><span class="step factory"><b>2</b>Factory</span></span>
+        <span class="meta"><span>Blueprint <b class="num" id="bp-count">4</b> approved</span><button class="btn" type="button" data-go="preflight">Start the factory…</button><span class="sim">simulated</span></span></header>
+      <div class="studio">
+        <aside class="col left">
+          <div><span class="label">Rounds</span>
+            <div class="rounds"><div class="round on"><span>3 · Trip plan</span><span class="pill work">open</span></div><div class="round"><span>2 · Inputs and outputs</span><span class="pill done">done</span></div><div class="round"><span>1 · First screens</span><span class="pill done">done</span></div><div class="round"><span>0 · What you had</span><span class="pill done">done</span></div></div></div>
+          <div><span class="label">This round</span>
+            <div class="alist" id="alist">
+              <button class="aitem" type="button" data-art="plan" aria-current="true"><span>Trip plan</span><span class="k">screen · 3 variants</span><span class="m"><span class="mk" data-mk="plan">unmarked</span></span></button>
+              <button class="aitem" type="button" data-art="invite"><span>Invite sheet</span><span class="k">screen · v2</span><span class="m"><span class="mk" data-mk="invite">unmarked</span></span></button>
+              <button class="aitem" type="button" data-art="cli" data-go="cli"><span>trips CLI</span><span class="k">terminal demo · TUI</span><span class="m"><span class="mk" data-mk="cli">unmarked</span></span></button>
+            </div></div>
+        </aside>
+        <div class="col center">
+          <div class="toolbar">
+            <div class="grp"><b id="art-title">Trip plan</b><span class="small muted" id="art-sub">Designer · Claude · v1, 3 variants</span></div>
+            <div class="grp">
+              <span class="seg" role="group" aria-label="Device size"><button type="button" data-dev="desktop" aria-pressed="true">Desktop</button><button type="button" data-dev="tablet" aria-pressed="false">Tablet</button><button type="button" data-dev="phone" aria-pressed="false">Phone</button></span>
+              <button class="btn" type="button" id="pinbtn" aria-pressed="false">Pin a comment</button>
+              <button class="btn quiet" type="button" id="sharebtn">Share…</button>
+            </div>
+          </div>
+          <div class="stage" id="stage" aria-label="The artifact"></div>
+          <div class="markbar">
+            <div class="variants" id="variants" role="group" aria-label="Variants"></div>
+            <div class="grp" role="group" aria-label="Your mark"><button class="markbtn" type="button" data-mark="keep">Keep</button><button class="markbtn" type="button" data-mark="change">Change</button><button class="markbtn" type="button" data-mark="drop">Drop</button></div>
+          </div>
+          <div class="card" id="sharepanel" hidden><span class="label">Share this artifact (open question)</span>
+            <p class="small">The studio's copy stays local and is the blueprint's source. Share publishes a copy, private by default, and only after you approve that publish. Provider pages open in a new tab; they cannot be shown in this canvas.</p>
+            <ul class="checklist small"><li>• A Claude artifact page (first; needs one real test)</li><li>• Codex Sites, or a preview deploy on your own Vercel, Cloudflare or Netlify account (later)</li><li>• Export as one HTML file or a folder</li></ul></div>
+        </div>
+        <aside class="col right">
+          <div class="leadmsg"><span class="who"><span class="pill work">The lead</span>Claude · round 3</span>
+            <p>You kept the day list from round 1 and asked for the weather to be easier to see. Here are three takes on the trip plan: A puts the map first, B is a timeline by hour, C is a card per day. Phone size is where they differ most.</p>
+            <p class="small muted">Covered so far: 4 of 7 screens, 2 of 3 contracts, 1 of 3 flows.</p></div>
+          <div class="critic" aria-label="PE review">
+            <span class="who"><span class="pill fail">PE review</span>Codex · principal engineer · agreed after 1 revision</span>
+            <div class="verdicts">
+              <div class="verdict"><span class="vb if">if</span><span><b>A · Map first:</b> feasible if the map draws from cached vector tiles. Raster tiles for a whole region will not fit offline on a phone. <span class="muted">Designer revised A to vector tiles; agreed.</span></span></div>
+              <div class="verdict"><span class="vb yes">yes</span><span><b>B · Timeline:</b> renders from the plan data alone; the cheapest to keep working for years.</span></div>
+              <div class="verdict"><span class="vb yes">yes</span><span><b>C · Day cards:</b> feasible; the elevation line needs the trail's profile, which the trail data already has.</span></div>
+            </div>
+            <div class="probe"><span class="label">Probe the PE asked for</span><span>Hourly forecasts for trailheads, cached for offline: which sources allow it, at what cost?</span><span class="muted">2 of 3 sources checked · result goes into the blueprint as evidence</span></div>
+          </div>
+          <div class="qs" id="qs">
+            <div class="q"><span>1. Should the plan work offline on the trail?</span><span class="chips"><button class="chip" type="button">Yes, cache the plan</button><button class="chip" type="button">Map tiles too</button><button class="chip" type="button">Not now</button></span></div>
+            <div class="q"><span>2. Distances in miles or kilometres?</span><span class="chips"><button class="chip" type="button">From the phone's region</button><button class="chip" type="button">Miles</button><button class="chip" type="button">Kilometres</button></span></div>
+          </div>
+          <div class="composer"><label class="label" for="msg">Your feedback</label><textarea id="msg" placeholder="Anything else for the lead…">Prefer B on phones, but keep A's map header on desktop.</textarea>
+            <p class="feedback-sum" id="fbsum">Nothing marked yet.</p>
+            <button class="btn primary" type="button" id="sendfb">Send feedback</button></div>
+          <p class="small muted" id="sent" hidden>Sent. The lead is making round 4 from your marks, pins and answers.</p>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 3. studio: CLI and TUI ===== -->
+  <section class="screen" data-screen="cli" role="tabpanel" aria-labelledby="tab-cli" hidden>
+    <div class="rv rv-bar" data-review="s-cli" data-uncommentable>
+      <div class="ask"><span class="rv-tag">Screen 3 · The studio canvas, a CLI round</span><p>For a CLI, the artifacts are terminal demos and TUI mockups, not only a command list. Play the demo (recorded in a sandbox; for a CLI that does not exist yet, the script prints the planned output). Then switch the TUI's layout (three variants), its terminal size and its window frame.</p></div>
+    </div>
+    <div class="app">
+      <header class="hdr"><span class="brand">Orchestrator</span>
+        <span class="stepper" aria-label="Stage"><span class="step vision on"><b>1</b>Vision · round 3</span><span class="arrow">→</span><span class="step factory"><b>2</b>Factory</span></span>
+        <span class="meta"><span class="sim">simulated</span></span></header>
+      <div class="pad">
+        <div class="grid2">
+          <div class="card"><div class="toolbar"><div class="grp"><h3>trips · terminal demo</h3><span class="small muted">v1 · 4 chapters</span></div></div>
+            <div class="term" id="demo-term"><div class="bar"><i></i><i></i><i></i><span style="margin-left:6px">trips — zsh — 80×24</span></div><div class="scr" id="demo-scr"></div></div>
+            <div class="player"><button class="btn" type="button" id="play">Play</button><input class="scrub" id="scrub" type="range" min="0" max="100" value="0" aria-label="Position"><span class="small muted num" id="clock">0.0s</span></div>
+            <div class="chapters" id="chapters"></div>
+            <div class="markbar"><span class="small muted">Made with VHS from a tape the designer wrote</span><div class="grp" role="group" aria-label="Your mark"><button class="markbtn" type="button" data-mark2="keep">Keep</button><button class="markbtn" type="button" data-mark2="change">Change</button><button class="markbtn" type="button" data-mark2="drop">Drop</button></div></div>
+          </div>
+          <div class="card"><div class="toolbar"><div class="grp"><h3>trips ui · TUI mockup</h3></div></div>
+            <div class="toolbar">
+              <span class="seg" role="group" aria-label="Layout"><button type="button" data-tui="list" aria-pressed="true">A · List + detail</button><button type="button" data-tui="dash" aria-pressed="false">B · Dashboard</button><button type="button" data-tui="pick" aria-pressed="false">C · Picker</button></span>
+            </div>
+            <div class="toolbar">
+              <span class="seg" role="group" aria-label="Terminal size"><button type="button" data-size="80" aria-pressed="true">80×24</button><button type="button" data-size="100" aria-pressed="false">100×30</button><button type="button" data-size="120" aria-pressed="false">120×40</button></span>
+              <span class="seg" role="group" aria-label="Window frame"><button type="button" data-frame="window" aria-pressed="true">Window</button><button type="button" data-frame="tmux" aria-pressed="false">tmux pane</button><button type="button" data-frame="bare" aria-pressed="false">Bare</button></span>
+            </div>
+            <div class="term" id="tui-term"><div class="bar"><i></i><i></i><i></i><span style="margin-left:6px" id="tui-title">trips ui — 80×24</span></div><div class="scr" id="tui-scr"></div><div class="status" id="tui-status"></div></div>
+            <p class="small muted">Keys shown in the mockup are part of the design to review: j/k to move, enter to open, / to search, q to quit.</p>
+            <div class="critic"><span class="who"><span class="pill fail">PE review</span>Codex · agreed after 1 revision</span><div class="verdicts"><div class="verdict"><span class="vb if">if</span><span><b>B · Dashboard</b> needs 100 columns; below that it must fall back to A. Many terminals open at 80×24. <span class="muted">Designer added the fallback; agreed.</span></span></div><div class="verdict"><span class="vb yes">yes</span><span><b>A</b> and <b>C</b> work at 80×24 and in a tmux pane.</span></div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 4. inputs and outputs ===== -->
+  <section class="screen" data-screen="io" role="tabpanel" aria-labelledby="tab-io" hidden>
+    <div class="rv rv-bar" data-review="s-io" data-uncommentable>
+      <div class="ask"><span class="rv-tag">Screen 4 · Inputs and outputs</span><p>Round 2 settles what crosses each boundary, with examples, before any task builds it: the form, the API, the CLI's arguments, output and exit codes, and the files. The examples become the factory's acceptance tests.</p></div>
+    </div>
+    <div class="app">
+      <header class="hdr"><span class="brand">Orchestrator</span>
+        <span class="stepper" aria-label="Stage"><span class="step vision on"><b>1</b>Vision · round 2</span><span class="arrow">→</span><span class="step factory"><b>2</b>Factory</span></span>
+        <span class="meta"><span class="sim">simulated</span></span></header>
+      <div class="pad">
+        <div class="grid2">
+          <div class="card"><span class="label">Plan a trip · the form</span>
+            <div class="tblwrap"><table><thead><tr><th>Field</th><th>Rule</th><th>Example</th></tr></thead><tbody>
+              <tr><td>Trail</td><td>From the trail list; required</td><td>Lost Lake Loop</td></tr>
+              <tr><td>Start date</td><td>Today or later; required</td><td>Sat 18 Oct 2026</td></tr>
+              <tr><td>Days</td><td>1–5</td><td>2</td></tr>
+              <tr><td>Party size</td><td>1–12</td><td>4</td></tr>
+            </tbody></table></div>
+            <p class="small muted">Errors: "Pick a trail", "The date has passed", "Up to 12 people per trip".</p></div>
+          <div class="card"><span class="label">The API</span>
+            <div class="tblwrap"><table><thead><tr><th>Request</th><th>Response</th></tr></thead><tbody>
+              <tr><td><code>POST /trips</code><br><code>{ "trailId": "lost-lake", "start": "2026-10-18", "days": 2, "party": 4 }</code></td><td><code>201 { "id": "t_8k2", "plan": [ … ] }</code><br><code>422 { "field": "start", "error": "past" }</code></td></tr>
+              <tr><td><code>POST /trips/t_8k2/invites</code></td><td><code>201 { "url": "https://wt.app/i/…", "expiresIn": "6d" }</code></td></tr>
+            </tbody></table></div></div>
+          <div class="card"><span class="label">The CLI</span>
+            <div class="tblwrap"><table><thead><tr><th>Command</th><th>Output</th><th>Exit</th></tr></thead><tbody>
+              <tr><td><code>trips plan "Lost Lake Loop" --start 2026-10-18 --days 2 --party 4</code></td><td>A day table; <code>--json</code> for the plan as JSON</td><td><code>0</code></td></tr>
+              <tr><td><code>trips weather t_8k2</code></td><td>Forecast per day; cached when offline, marked "cached 3h ago"</td><td><code>0</code> · <code>4</code> offline, no cache</td></tr>
+              <tr><td><code>trips share t_8k2 --expires 6d</code></td><td>The invite link on stdout, nothing else</td><td><code>0</code></td></tr>
+              <tr><td>a bad flag or value</td><td>One line on stderr naming the flag, then usage</td><td><code>2</code></td></tr>
+              <tr><td>an unknown trip</td><td><code>trips: no trip t_9zz (see trips list)</code></td><td><code>3</code></td></tr>
+            </tbody></table></div></div>
+          <div class="card"><span class="label">Files and notifications</span>
+            <ul class="checklist"><li>• <code class="code">trips export t_8k2 --gpx</code> writes <code class="code">lost-lake-2026-10-18.gpx</code></li><li>• Config: <code class="code">~/.config/trips/config.toml</code> (units, default party)</li><li>• Notification the evening before: "Rain likely Sunday after 2 pm. Start early?"</li></ul>
+            <div class="markbar"><span class="small muted">Contract v2 · approved by you in round 2</span><span class="pill done">Approved</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 5. flows ===== -->
+  <section class="screen" data-screen="flows" role="tabpanel" aria-labelledby="tab-flows" hidden>
+    <div class="rv rv-bar" data-review="s-flows" data-uncommentable>
+      <div class="ask"><span class="rv-tag">Screen 5 · Flows</span><p>Journeys and the states each screen must handle, written as diagrams the lead keeps in text, so versions can be compared. Each flow becomes acceptance scenarios for the factory.</p></div>
+    </div>
+    <div class="app">
+      <header class="hdr"><span class="brand">Orchestrator</span>
+        <span class="stepper" aria-label="Stage"><span class="step vision on"><b>1</b>Vision · round 3</span><span class="arrow">→</span><span class="step factory"><b>2</b>Factory</span></span>
+        <span class="meta"><span class="sim">simulated</span></span></header>
+      <div class="pad">
+        <div class="card"><span class="label">Flow · Plan a trip and invite the group (v1, open)</span>
+<pre class="mermaid">
+flowchart LR
+  A[Pick a trail] --> B{Date ok?}
+  B -- past --> B1[Say the date has passed] --> A
+  B -- ok --> C[Plan the days]
+  C --> D{Forecast}
+  D -- fresh --> E[Show the plan]
+  D -- offline --> E2[Show the cached forecast, marked] --> E
+  E --> F[Share an invite link]
+  F --> G[Group opens the link]
+  G --> H{Link expired?}
+  H -- yes --> H1[Offer to ask for a new link]
+  H -- no --> I[Join the trip]
+</pre>
+        </div>
+        <div class="card"><span class="label">States the trip plan must show</span>
+          <div class="states">
+            <div class="state"><b>Empty</b><span class="muted">No trips yet: "Plan your first trip" and three nearby trails</span></div>
+            <div class="state"><b>Loading</b><span class="muted">The day list in outline; the map last</span></div>
+            <div class="state"><b>Offline</b><span class="muted">Cached forecast, marked with its age</span></div>
+            <div class="state"><b>Error</b><span class="muted">"The trail is closed this weekend" with two alternatives</span></div>
+            <div class="state"><b>First run</b><span class="muted">Units from the phone's region; one hint, once</span></div>
+          </div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 6. blueprint ===== -->
+  <section class="screen" data-screen="blueprint" role="tabpanel" aria-labelledby="tab-blueprint" hidden>
+    <div class="rv rv-bar" data-review="s-blueprint" data-uncommentable>
+      <div class="ask"><span class="rv-tag">Screen 6 · The blueprint</span><p>Everything you approved, versioned, in one place: what the factory builds from. It replaces today's nine-area checklist; those areas are folded into the vision card. Subtract before you add: the separate coverage panel goes.</p></div>
+    </div>
+    <div class="app">
+      <header class="hdr"><span class="brand">Orchestrator</span>
+        <span class="stepper" aria-label="Stage"><span class="step vision on"><b>1</b>Vision · round 3</span><span class="arrow">→</span><span class="step factory"><b>2</b>Factory</span></span>
+        <span class="meta"><span>Blueprint r4</span><span class="sim">simulated</span></span></header>
+      <div class="pad">
+        <div class="grid3">
+          <div class="card"><span class="label">Experience · 4 of 5</span>
+            <div class="bpitem"><span>Trip plan</span><span class="pill you">round 3</span><span class="v">3 variants, waiting for your pick</span></div>
+            <div class="bpitem"><span>Invite sheet</span><span class="pill done">v2</span><span class="v">"Expires in 6 days"</span></div>
+            <div class="bpitem"><span>Trail search</span><span class="pill done">v1</span><span class="v">desktop and phone</span></div>
+            <div class="bpitem"><span>trips CLI and TUI</span><span class="pill done">v1</span><span class="v">4 commands, layout A</span></div>
+            <div class="bpitem"><span>Group page</span><span class="pill done">v1</span><span class="v">from round 0 (your sketch)</span></div></div>
+          <div class="card"><span class="label">Inputs and outputs · 3 of 3</span>
+            <div class="bpitem"><span>Plan a trip: form and API</span><span class="pill done">v2</span><span class="v">4 fields, 2 endpoints</span></div>
+            <div class="bpitem"><span>trips CLI</span><span class="pill done">v2</span><span class="v">5 cases, exit codes 0, 2, 3, 4</span></div>
+            <div class="bpitem"><span>Files and notifications</span><span class="pill done">v1</span><span class="v">GPX export, config, one notification</span></div></div>
+          <div class="card"><span class="label">Flows · 1 of 3</span>
+            <div class="bpitem"><span>Plan a trip and invite</span><span class="pill you">open</span><span class="v">v1, round 3</span></div>
+            <div class="bpitem"><span>Offline on the trail</span><span class="pill fail">not started</span><span class="v">waits on question 1</span></div>
+            <div class="bpitem"><span>Join from an invite</span><span class="pill done">v1</span><span class="v">including an expired link</span></div></div>
+        </div>
+        <div class="card"><span class="label">Feasibility · PE review agreed on every approved item</span>
+          <div class="bpitem"><span>Trip plan A: map from cached vector tiles</span><span class="pill done">agreed</span><span class="v">after 1 revision</span></div>
+          <div class="bpitem"><span>Probe: hourly forecasts cached offline</span><span class="pill work">running</span><span class="v">evidence for the offline flow</span></div>
+          <div class="bpitem"><span>TUI dashboard: needs 100 columns, falls back to the list</span><span class="pill done">agreed</span><span class="v">after 1 revision</span></div></div>
+        <div class="card"><span class="label">The vision · r3, accepted by you</span>
+          <p class="small">A hiking trip planner for groups of 2–12: pick a trail, plan the days around the weather, share the plan. Web first, phones next, and a small CLI for organisers. Not in scope: navigation on the trail, payments.</p>
+          <p class="small muted">Who it is for ✓ · Problem ✓ · Outcome ✓ · Scope ✓ · Constraints ✓ · Risks ◐ · First milestone ✓ · Material ✓ · Why now ✓</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 7. pre-flight ===== -->
+  <section class="screen" data-screen="preflight" role="tabpanel" aria-labelledby="tab-preflight" hidden>
+    <div class="rv rv-bar" data-review="s-preflight" data-uncommentable>
+      <div class="ask"><span class="rv-tag">Screen 7 · Pre-flight and Start the factory</span><p>The one way the factory starts: your explicit agreement, from here. It shows what the blueprint covers, what is still open, and what the factory will do. Open items are named, not blocked on. Tick the agreement and press Start to see the recorded start.</p></div>
+    </div>
+    <div class="app">
+      <header class="hdr"><span class="brand">Orchestrator</span>
+        <span class="stepper" aria-label="Stage"><span class="step vision on" id="pf-step1"><b>1</b>Vision · pre-flight</span><span class="arrow">→</span><span class="step factory" id="pf-step2"><b>2</b>Factory</span></span>
+        <span class="meta"><span class="sim">simulated</span></span></header>
+      <div class="pad">
+        <div><h2>Start the factory?</h2><p class="muted small">From blueprint r4. After this, many agents build at once; changing the blueprint becomes a change order.</p></div>
+        <div class="grid2">
+          <div class="card"><span class="label">The blueprint</span>
+            <ul class="checklist">
+              <li><span class="ok">✓</span>Experience: 4 screens and the CLI approved</li>
+              <li><span class="ok">✓</span>Inputs and outputs: 3 contracts approved</li>
+              <li><span class="ok">✓</span>Flows: 1 approved</li>
+              <li><span class="ok">✓</span>Feasibility: PE review agreed on every approved item</li>
+              <li><span class="open">◐</span>A PE probe is still running: hourly forecasts cached offline</li>
+              <li><span class="open">◐</span>Trip plan: your variant pick is still open</li>
+              <li><span class="open">◐</span>Flows: "Plan a trip" (v1, open) and "Offline on the trail" (not started)</li>
+            </ul></div>
+          <div class="card"><span class="label">What the factory will do</span>
+            <ul class="checklist">
+              <li>• 7 tasks, from the blueprint: 4 Feature, 2 Change, 1 Design (the offline flow)</li>
+              <li>• Lead Claude · coders Codex · reviewers Claude, security review beside each code review</li>
+              <li>• Autopilot: tasks start on their own; findings are repaired</li>
+              <li>• Delivery: pull requests to <span class="mono">main</span>; you merge</li>
+              <li>• Up to 3 agents at once · 12 turns, 30 minutes per run</li>
+            </ul></div>
+        </div>
+        <div class="card">
+          <label class="agree"><input type="checkbox" id="agree"><span>I have reviewed blueprint r4 and want the factory to build it, with the open items above as they are.</span></label>
+          <div class="toolbar"><div class="grp"><button class="btn quiet" type="button" data-go="studio">Back to the studio</button></div><div class="grp"><button class="btn primary" type="button" id="start" disabled>Start the factory</button></div></div>
+          <div class="started" id="started" hidden><b>The factory started.</b><span>Started by you, 1 Oct 2026, 21:40, from blueprint r4. Recorded with this pre-flight summary and the open items you accepted.</span><span class="muted">The lead cannot start or restart the factory; only this button can.</span><div><button class="btn" type="button" data-go="factory">Go to the factory</button></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 8. factory ===== -->
+  <section class="screen" data-screen="factory" role="tabpanel" aria-labelledby="tab-factory" hidden>
+    <div class="rv rv-bar" data-review="s-factory" data-uncommentable>
+      <div class="ask"><span class="rv-tag">Screen 8 · The factory</span><p>After the start, Home is the factory floor: one production line per area, work moving along it, Needs you first. Here a blueprint change after the start shows as a change order, listing the tasks it touches.</p></div>
+    </div>
+    <div class="app">
+      <header class="hdr"><span class="brand">Orchestrator</span>
+        <span class="stepper" aria-label="Stage"><span class="step vision"><b>1</b>Vision</span><span class="arrow">→</span><span class="step factory on"><b>2</b>Factory running · 3 agents</span></span>
+        <span class="meta"><button class="btn" type="button">Pause the factory</button><button class="btn quiet" type="button" data-go="studio">Back to vision</button><span class="sim">simulated</span></span></header>
+      <div class="pad">
+        <div class="co"><b>Change order · blueprint r5</b><span>You changed the Invite sheet (v3: the link can be renewed by the group). It touches 2 tasks: WT-6 "Invite sheet" (running) and WT-7 "Join from an invite" (waiting).</span><span class="muted">The lead proposes the updates through steering, with Undo.</span><div class="grp" style="display:flex;gap:8px"><button class="btn" type="button">See the proposed updates</button></div></div>
+        <div class="card"><span class="label">Decided by the PE on Autopilot</span>
+          <div class="verdicts"><div class="verdict"><span class="vb yes">PE</span><span><b>WT-3 Weather:</b> cache each forecast for 6 hours rather than fetch it on every view. Cheaper and works offline; a forecast can be up to 6 hours old, and the screen says so. <span class="muted">The review finding asked for a decision; you were not asked because the factory is on Autopilot.</span></span></div></div>
+          <div style="display:flex;gap:8px"><button class="btn" type="button">Reverse</button><button class="btn quiet" type="button">See the reasons</button></div></div>
+        <div class="lines">
+          <div class="line"><span class="small"><b>Trip planning</b><br><span class="muted">3 tasks</span></span><div class="belt"><span class="job done">WT-1 Trail search ✓</span><span class="job run"><span class="pill work">building</span>WT-2 Trip plan</span><span class="job">WT-3 Weather</span></div></div>
+          <div class="line"><span class="small"><b>Trip sharing</b><br><span class="muted">2 tasks</span></span><div class="belt"><span class="job run"><span class="pill work">review</span>WT-6 Invite sheet</span><span class="job"><span class="pill you">change order</span>WT-7 Join</span></div></div>
+          <div class="line"><span class="small"><b>CLI</b><br><span class="muted">1 task</span></span><div class="belt"><span class="job run"><span class="pill work">checks</span>WT-5 trips plan and share</span></div></div>
+          <div class="line"><span class="small"><b>Offline</b><br><span class="muted">1 task</span></span><div class="belt"><span class="job"><span class="pill you">needs you</span>WT-4 Design the offline flow</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== cross-cutting questions (review only) ===== -->
+  <section class="rv" data-uncommentable aria-labelledby="t-q">
+    <span class="rv-tag" id="t-q">Three questions across the screens</span>
+    <div class="rv-bar" data-review="q-critic"><div class="ask"><b class="small">PE review (your idea).</b><p>The PE is a rigid principal engineer who judges every option on feasibility, scale and longevity, on the other provider than the designer. The designer revises until the PE agrees (up to three rounds); if they still disagree, you see the objection and can overrule it, recorded. The PE can ask the lead for <b>probes</b>: small Vision tasks that bring evidence, such as surveying how many city councils publish transcripts and video for Council Record, or extracting one council's minutes. Probes run within a Vision budget you set, never in the factory. <b>On Autopilot, the PE makes the factory's trade-off calls</b> (findings that ask for a decision, choices between options), each recorded with its reasons and reversible by you.</p></div></div>
+    <div class="rv-bar" data-review="q-share"><div class="ask"><b class="small">Sharing artifacts (researched).</b><p>Neither Claude's nor Codex's published pages can be shown inside our canvas: both refuse to be framed. Both can publish privately in one step, and their own tools do it without asking. So: the studio's local copy stays the source of truth; <b>Share</b> publishes a copy only when you approve that publish (first target: a Claude artifact page; later Codex Sites or a preview deploy); and agents in the studio (designer, PE) have native publishing turned off.</p></div></div>
+    <div class="rv-bar" data-review="q-lead"><div class="ask"><b class="small">One provider leads Vision.</b><p>The research shows the artifact tools don't decide it, since neither embeds. Proposal: Claude leads and designs in Vision (you said you would mostly use Claude at first); PE review runs on Codex, so the check is independent. The factory keeps either provider as lead, as AGENTS.md requires.</p></div></div>
+  </section>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+  // ---------- screens ----------
+  function show(id) {
+    for (const s of $$("[data-screen]")) s.hidden = s.dataset.screen !== id;
+    for (const t of $$("[data-tab]")) t.setAttribute("aria-selected", String(t.dataset.tab === id));
+    try { localStorage.setItem("vs-tab", id); } catch {}
+    if (id === "cli") renderTui();
+  }
+  $$("[data-tab]").forEach((t) => t.addEventListener("click", () => show(t.dataset.tab)));
+  document.addEventListener("click", (e) => {
+    const go = e.target.closest("[data-go]");
+    if (go && !go.disabled) { show(go.dataset.go); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  });
+
+  // ---------- 1. round 0 ----------
+  const SAMPLES = [
+    ["group-page-sketch.png", "image → screen"],
+    ["trips-cli-help.txt", "CLI output → terminal demo"],
+    ["requirements.md", "document → vision"],
+    ["old-prototype/index.html", "prototype → screen"],
+  ];
+  $("#addfiles").addEventListener("click", () => {
+    $("#files").innerHTML = SAMPLES.map(([n, k]) => `<div class="file"><span class="mono">${esc(n)}</span><span class="muted">${esc(k)}</span></div>`).join("");
+    $("#round0").disabled = false;
+  });
+
+  // ---------- 2. studio canvas ----------
+  const ART = {
+    plan: { title: "Trip plan", sub: "Designer · Claude · v2, 3 variants · PE review agreed", variants: ["A · Map first", "B · Timeline", "C · Day cards"], critic: ["if", "yes", "yes"] },
+    invite: { title: "Invite sheet", sub: "Designer · Claude · v2, from your round-1 marks · PE review agreed", variants: [], critic: [] },
+  };
+  const proto = { art: "plan", dev: "desktop", variant: 0, picked: {}, marks: {}, pins: 0, pinning: false };
+
+  const route = `<svg viewBox="0 0 400 170" preserveAspectRatio="none" aria-hidden="true"><path d="M30 140 C 90 110, 120 150, 170 100 S 260 40, 300 70 S 360 120, 375 40" fill="none" stroke="#2f6b4f" stroke-width="3" stroke-dasharray="6 5"/><circle cx="30" cy="140" r="6" fill="#2f6b4f"/><circle cx="375" cy="40" r="6" fill="#d98c2b"/></svg>`;
+  const days = `<div class="days"><div class="day"><span class="d">SAT</span><span><span class="t" id="wt-day1">Trailhead to Lost Lake · 7.2 mi</span><br><span class="s">Start 8:00 · 1,450 ft up · camp at the north shore</span></span><span class="wx">☀ 64°</span></div><div class="day"><span class="d">SUN</span><span><span class="t">Ridge return · 6.1 mi</span><br><span class="s">Start 7:30 · leave the ridge by 1 pm</span></span><span class="wx warn">☂ 60% after 2 pm</span></div></div>`;
+  function planVariant(v) {
+    if (v === 0) return `<div class="split"><div class="map">${route}<span class="lbl" style="left:6%;top:72%">Trailhead</span><span class="lbl" style="right:4%;top:14%">Lost Lake</span></div>${days}</div>`;
+    if (v === 1) return `<div class="tl"><div class="ev"><span class="time">SAT 8:00</span><span class="what">Leave the trailhead <span class="wx">☀ 58°</span></span></div><div class="ev"><span class="time">SAT 12:30</span><span class="what">Lunch at Pine Saddle · 4.1 mi</span></div><div class="ev"><span class="time">SAT 15:00</span><span class="what">Camp at Lost Lake · 7.2 mi <span class="wx">☀ 64°</span></span></div><div class="ev"><span class="time">SUN 7:30</span><span class="what">Up to the ridge</span></div><div class="ev"><span class="time">SUN 13:00</span><span class="what">Off the ridge <span class="wx warn">☂ rain after 2 pm</span></span></div></div>`;
+    return `<div class="cards"><div class="dcard"><b>Saturday</b><span class="sub">7.2 mi · 1,450 ft up</span><svg viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,30 20,26 40,18 60,12 80,8 100,10" fill="none" stroke="#2f6b4f" stroke-width="2"/></svg><span class="wx">☀ 64° all day</span></div><div class="dcard"><b>Sunday</b><span class="sub">6.1 mi · 900 ft down</span><svg viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,10 20,8 40,14 60,20 80,26 100,30" fill="none" stroke="#2f6b4f" stroke-width="2"/></svg><span class="wx warn">☂ 60% after 2 pm</span></div></div>`;
+  }
+  function inviteScreen() {
+    return `<div class="map" style="height:120px">${route}</div><div class="sheet" id="wt-sheet"><b>Invite your group</b><div class="linkbox"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">wt.app/i/lost-lake-8k2</span><button class="btnwt" type="button">Copy</button></div><p class="exp"><b>Expires in 6 days.</b> After that, make a new link.</p><button class="btnwt ghost" type="button">Share…</button></div>`;
+  }
+  function renderStage() {
+    const a = ART[proto.art];
+    $("#art-title").textContent = a.title;
+    $("#art-sub").textContent = a.sub;
+    const body = proto.art === "plan" ? `<div class="wt-top"><div><h4 id="wt-title">Lost Lake Loop</h4><span class="sub">Sat 18 – Sun 19 Oct · 4 people · 13.3 mi</span></div><button class="btnwt" type="button">Invite the group</button></div>${planVariant(proto.variant)}` : inviteScreen();
+    $("#stage").innerHTML = `<div class="device ${proto.dev}" id="device"><div class="chrome"><i></i><i></i><i></i><span class="url">weekendtrips.app/trips/lost-lake</span></div><div class="notch"><span></span></div><div class="wt">${body}</div></div>`;
+    $("#variants").innerHTML = a.variants.length
+      ? `<span class="small muted">Variant</span>` + a.variants.map((v, i) => `<button class="varbtn" type="button" data-var="${i}" aria-pressed="${i === proto.variant}">${esc(v)}<span class="cb ${a.critic[i]}" title="PE review: ${a.critic[i] === "yes" ? "feasible" : "feasible with a change"}">${a.critic[i] === "yes" ? "●" : "◐"}</span>${proto.picked[proto.art] === i ? ' <span class="pick">✓ picked</span>' : ""}</button>`).join("") + `<button class="btn quiet" type="button" id="pickvar">Pick this one</button>`
+      : `<span class="small muted">No variants: a revision of your round-1 pick</span>`;
+    $$("[data-mark]").forEach((b) => b.setAttribute("aria-pressed", String(proto.marks[proto.art] === b.dataset.mark)));
+    $$("#alist .aitem").forEach((b) => b.setAttribute("aria-current", String(b.dataset.art === proto.art)));
+    updateFeedbackSummary();
+  }
+  $("#variants").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-var]");
+    if (b) { proto.variant = Number(b.dataset.var); renderStage(); }
+    if (e.target.id === "pickvar") { proto.picked[proto.art] = proto.variant; renderStage(); }
+  });
+  $$("[data-dev]").forEach((b) => b.addEventListener("click", () => {
+    proto.dev = b.dataset.dev;
+    $$("[data-dev]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    renderStage();
+  }));
+  $("#alist").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-art]");
+    if (!b || b.dataset.art === "cli") return;
+    proto.art = b.dataset.art; proto.variant = proto.picked[proto.art] ?? 0; renderStage();
+  });
+  $$("[data-mark]").forEach((b) => b.addEventListener("click", () => {
+    proto.marks[proto.art] = proto.marks[proto.art] === b.dataset.mark ? undefined : b.dataset.mark;
+    const chip = $(`[data-mk="${proto.art}"]`);
+    chip.dataset.v = proto.marks[proto.art] || ""; chip.textContent = proto.marks[proto.art] || "unmarked";
+    renderStage();
+  }));
+  $$("[data-mark2]").forEach((b) => b.addEventListener("click", () => {
+    proto.marks.cli = proto.marks.cli === b.dataset.mark2 ? undefined : b.dataset.mark2;
+    $$("[data-mark2]").forEach((x) => x.setAttribute("aria-pressed", String(proto.marks.cli === x.dataset.mark2)));
+    const chip = $('[data-mk="cli"]'); chip.dataset.v = proto.marks.cli || ""; chip.textContent = proto.marks.cli || "unmarked";
+    updateFeedbackSummary();
+  }));
+  $("#qs").addEventListener("click", (e) => {
+    const c = e.target.closest(".chip"); if (!c) return;
+    $$(".chip", c.parentElement).forEach((x) => x.setAttribute("aria-pressed", String(x === c)));
+    updateFeedbackSummary();
+  });
+  function updateFeedbackSummary() {
+    const m = Object.values(proto.marks).filter(Boolean).length;
+    const answered = $$("#qs .q").filter((q) => $('.chip[aria-pressed="true"]', q)).length;
+    const picks = Object.keys(proto.picked).length;
+    const parts = [];
+    if (m) parts.push(`${m} mark${m > 1 ? "s" : ""}`);
+    if (picks) parts.push(`${picks} variant pick${picks > 1 ? "s" : ""}`);
+    if (proto.pins) parts.push(`${proto.pins} pin${proto.pins > 1 ? "s" : ""}`);
+    if (answered) parts.push(`${answered} of 2 answers`);
+    $("#fbsum").textContent = parts.length ? `Will send: ${parts.join(", ")}, and your note.` : "Nothing marked yet.";
+  }
+  $("#sendfb").addEventListener("click", () => { $("#sent").hidden = false; });
+  $("#sharebtn").addEventListener("click", () => { $("#sharepanel").hidden = !$("#sharepanel").hidden; });
+
+  // Pins: in Orchestrator a pin goes to the lead; here it opens claude.ai's comment box on that spot, so Claude reads it.
+  let comments = null;
+  $("#pinbtn").addEventListener("click", () => {
+    proto.pinning = !proto.pinning;
+    $("#pinbtn").setAttribute("aria-pressed", String(proto.pinning));
+    $("#pinbtn").textContent = proto.pinning ? "Click a spot…" : "Pin a comment";
+    $("#stage").classList.toggle("pinning", proto.pinning);
+  });
+  $("#stage").addEventListener("click", async (e) => {
+    if (!proto.pinning) return;
+    e.preventDefault();
+    const dev = $("#device"); if (!dev || !dev.contains(e.target)) return;
+    const r = dev.getBoundingClientRect();
+    const pin = document.createElement("div");
+    proto.pins += 1;
+    pin.className = "pin"; pin.id = `pin-${proto.art}-${proto.pins}`;
+    pin.style.left = `${((e.clientX - r.left) / r.width) * 100}%`; pin.style.top = `${((e.clientY - r.top) / r.height) * 100}%`;
+    pin.innerHTML = `<span>${proto.pins}</span>`;
+    pin.setAttribute("aria-label", `Pin ${proto.pins} on ${ART[proto.art].title}`);
+    dev.appendChild(pin);
+    proto.pinning = false; $("#pinbtn").setAttribute("aria-pressed", "false"); $("#pinbtn").textContent = "Pin a comment"; $("#stage").classList.remove("pinning");
+    updateFeedbackSummary();
+    try { if (comments) await comments.openComposer({ element: e.target.closest("[id]") && dev.contains(e.target.closest("[id]")) ? e.target.closest("[id]") : dev }); } catch {}
+  });
+
+  // ---------- 3. terminal demo ----------
+  const P = '<span class="g">❯</span> ';
+  const CH = [
+    { name: "Plan", lines: [[P + "trips plan \"Lost Lake Loop\" --start 2026-10-18 --days 2 --party 4", 1.6], ['<span class="d">Planning… trail data, forecast</span>', 0.6], ["", 0.1], ['<span class="b">DAY  ROUTE                      DIST   UP      WEATHER</span>', 0.2], ["Sat  Trailhead → Lost Lake       7.2mi  1450ft  <span class=\"y\">☀ 64°</span>", 0.2], ["Sun  Lost Lake → ridge → car     6.1mi   380ft  <span class=\"r\">☂ 60% after 2pm</span>", 0.2], ["", 0.1], ['<span class="g">✓</span> Trip t_8k2 saved · <span class="d">trips share t_8k2 to invite</span>', 0.6]] },
+    { name: "Weather", lines: [[P + "trips weather t_8k2", 1.0], ['<span class="y">!</span> Offline: forecast cached 3h ago', 0.3], ["Sun  rain likely 14:00–18:00 · start by 07:30", 0.6]] },
+    { name: "Share", lines: [[P + "trips share t_8k2 --expires 6d", 1.0], ["https://wt.app/i/lost-lake-8k2", 0.6]] },
+    { name: "Error", lines: [[P + "trips plan \"Lost Lake Loop\" --party 14", 1.2], ['<span class="r">trips: --party must be 1–12 (got 14)</span>', 0.3], ['<span class="d">usage: trips plan TRAIL --start DATE [--days N] [--party N]</span>', 0.3], [P + 'echo $?', 0.6], ["2", 0.6]] },
+  ];
+  const TL = []; let t = 0;
+  CH.forEach((c, ci) => { c.at = t; for (const [txt, dur] of c.lines) { TL.push({ t, txt, ci }); t += dur; } t += 0.8; });
+  const TOTAL = t;
+  let playing = false, pos = 0, last = 0, raf = 0;
+  function drawDemo() {
+    const shown = TL.filter((x) => x.t <= pos);
+    const cur = shown.length ? shown[shown.length - 1] : null;
+    let html = shown.map((x) => x.txt).join("\n");
+    // type the current command line character by character
+    if (cur && cur.txt.startsWith(P)) {
+      const next = TL[TL.indexOf(cur) + 1];
+      const span = (next ? next.t : TOTAL) - cur.t;
+      const cmd = cur.txt.slice(P.length);
+      const n = Math.min(cmd.length, Math.floor(((pos - cur.t) / Math.max(0.3, span * 0.8)) * cmd.length));
+      const lines = html.split("\n"); lines[lines.length - 1] = P + esc(cmd.slice(0, n)).replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+      html = lines.join("\n");
+    }
+    $("#demo-scr").innerHTML = html + '<span class="cursor">&nbsp;</span>';
+    $("#scrub").value = String(Math.round((pos / TOTAL) * 100));
+    $("#clock").textContent = `${pos.toFixed(1)}s`;
+    $$("#chapters .chip").forEach((b, i) => b.setAttribute("aria-pressed", String(cur ? cur.ci === i : i === 0)));
+  }
+  function tick(ts) {
+    if (!playing) return;
+    if (last) pos = Math.min(TOTAL, pos + (ts - last) / 1000);
+    last = ts; drawDemo();
+    if (pos >= TOTAL) { playing = false; $("#play").textContent = "Replay"; return; }
+    raf = requestAnimationFrame(tick);
+  }
+  $("#play").addEventListener("click", () => {
+    if (playing) { playing = false; $("#play").textContent = "Play"; return; }
+    if (pos >= TOTAL) pos = 0;
+    playing = true; last = 0; $("#play").textContent = "Pause"; raf = requestAnimationFrame(tick);
+  });
+  $("#scrub").addEventListener("input", () => { pos = (Number($("#scrub").value) / 100) * TOTAL; drawDemo(); });
+  $("#chapters").innerHTML = CH.map((c, i) => `<button class="chip" type="button" data-ch="${i}">${esc(c.name)}</button>`).join("");
+  $("#chapters").addEventListener("click", (e) => { const b = e.target.closest("[data-ch]"); if (b) { pos = CH[Number(b.dataset.ch)].at + 0.01; drawDemo(); } });
+  pos = CH[0].at + 3.2; drawDemo(); // a resting frame with the first table visible
+
+  // ---------- 3. TUI mockup ----------
+  const tui = { layout: "list", cols: 80, frame: "window" };
+  const pad = (s, n) => { const plain = s.replace(/<[^>]+>/g, ""); return s + " ".repeat(Math.max(0, n - [...plain].length)); };
+  const cut = (s, n) => ([...s].length > n ? [...s].slice(0, n - 1).join("") + "…" : s);
+  function boxRow(l, w) { return "│" + pad(l, w - 2) + "│"; }
+  function renderTui() {
+    const W = tui.cols, H = W === 80 ? 22 : W === 100 ? 26 : 30;
+    const TR = [["Lost Lake Loop", "13.3 mi", "2 days", "☀ ☂"], ["Pine Saddle Out-and-back", "8.4 mi", "1 day", "☀"], ["Ridge Traverse", "16.0 mi", "2 days", "☂"], ["Cedar Falls", "4.9 mi", "1 day", "☀"]];
+    let rows = [];
+    if (tui.layout === "list") {
+      const lw = Math.floor(W * 0.42), rw = W - lw;
+      const left = ["<span class=\"b\"> Trips</span>", ""].concat(TR.map((r, i) => (i === 0 ? '<span class="sel"> ▸ ' + pad(cut(r[0], lw - 14), lw - 14) + " " + r[1] + " </span>" : "   " + pad(cut(r[0], lw - 14), lw - 14) + " " + r[1])));
+      const right = ['<span class="b"> Lost Lake Loop</span>', " Sat 18 – Sun 19 Oct · 4 people", "", " SAT  Trailhead → Lost Lake   7.2mi", "      <span class=\"y\">☀ 64°</span> start 8:00", " SUN  Lake → ridge → car     6.1mi", "      <span class=\"r\">☂ 60% after 2pm</span>", "", " <span class=\"d\">[s] share  [w] weather  [e] export</span>"];
+      rows.push("┌" + "─".repeat(lw - 2) + "┬" + "─".repeat(rw - 1) + "┐");
+      for (let i = 0; i < H - 4; i++) rows.push("│" + pad(left[i] || "", lw - 2) + "│" + pad(right[i] || "", rw - 1) + "│");
+      rows.push("└" + "─".repeat(lw - 2) + "┴" + "─".repeat(rw - 1) + "┘");
+      rows.push('<span class="d"> j/k move · enter open · / search · q quit</span>');
+    } else if (tui.layout === "dash") {
+      const half = Math.floor(W / 2);
+      const top = '<span class="b"> trips</span> · Lost Lake Loop · <span class="g">2 days</span> · <span class="y">rain Sun pm</span>';
+      rows.push("┌" + "─".repeat(W - 2) + "┐"); rows.push(boxRow(top, W)); rows.push("├" + "─".repeat(half - 2) + "┬" + "─".repeat(W - half - 1) + "┤");
+      const map = ["<span class=\"d\"> Route</span>", "   ╭──╮      <span class=\"y\">◆</span> Lost Lake", "  ╭╯  ╰─╮  ╭─╯", " ─╯     ╰──╯", " <span class=\"g\">●</span> Trailhead", "", " <span class=\"d\">1,450 ft up · 13.3 mi</span>"];
+      const wx = ["<span class=\"d\"> Weather</span>", " Sat  <span class=\"y\">☀ 64°</span>  wind 6 mph", " Sun  <span class=\"r\">☂ 60%</span>  after 14:00", "", "<span class=\"d\"> Group</span>", " 4 of 4 joined · link 6 days", ""];
+      for (let i = 0; i < H - 7; i++) rows.push("│" + pad(map[i] || "", half - 2) + "│" + pad(wx[i] || "", W - half - 1) + "│");
+      rows.push("└" + "─".repeat(half - 2) + "┴" + "─".repeat(W - half - 1) + "┘");
+      rows.push('<span class="d"> tab next pane · r refresh · q quit</span>');
+    } else {
+      rows.push('<span class="g">❯</span> lost<span class="cursor">&nbsp;</span>');
+      rows.push('<span class="d">  4/38 trails</span>');
+      TR.forEach((r, i) => rows.push((i === 0 ? '<span class="sel">' : "") + (i === 0 ? "▸ " : "  ") + pad(cut(r[0], W - 30), W - 30) + pad(r[1], 10) + pad(r[2], 9) + r[3] + (i === 0 ? "</span>" : "")));
+      for (let i = rows.length; i < H - 4; i++) rows.push("");
+      rows.push("─".repeat(W));
+      rows.push(" Lost Lake Loop · 13.3 mi · 2 days · <span class=\"y\">☀</span> Sat <span class=\"r\">☂</span> Sun pm");
+      rows.push('<span class="d"> type to filter · enter plan · esc back</span>');
+    }
+    $("#tui-scr").innerHTML = rows.join("\n");
+    const term = $("#tui-term");
+    term.className = "term" + (tui.frame === "tmux" ? " tmux" : tui.frame === "bare" ? " bare" : "");
+    $("#tui-title").textContent = `trips ui — ${W}×${H + 2}`;
+    $("#tui-status").textContent = pad(`[trips] 0:ui*  1:zsh`, Math.max(20, W - 22)) + "\"Lost Lake\" 21:40";
+  }
+  function segBind(attr, key, map = (v) => v) {
+    $$(`[data-${attr}]`).forEach((b) => b.addEventListener("click", () => {
+      tui[key] = map(b.dataset[attr]);
+      $$(`[data-${attr}]`).forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+      renderTui();
+    }));
+  }
+  segBind("tui", "layout"); segBind("size", "cols", Number); segBind("frame", "frame");
+
+  // ---------- 7. pre-flight ----------
+  $("#agree").addEventListener("change", () => { $("#start").disabled = !$("#agree").checked; });
+  $("#start").addEventListener("click", () => {
+    $("#started").hidden = false; $("#start").disabled = true; $("#agree").disabled = true;
+    $("#pf-step1").classList.remove("on"); $("#pf-step2").classList.add("on"); $("#pf-step2").innerHTML = "<b>2</b>Factory running";
+  });
+
+  // ---------- review marks (the light bars): the artifact's db, read by Claude; else this browser ----------
+  const rvBars = $$("[data-review]");
+  const marks = {};
+  const STORE = "vs-review";
+  for (const bar of rvBars) {
+    const id = bar.dataset.review;
+    const box = document.createElement("div"); box.className = "rv-marks"; box.setAttribute("role", "group"); box.setAttribute("aria-label", "Your review");
+    box.innerHTML = ["agree", "change", "skip"].map((v) => `<button class="rv-btn" type="button" data-v="${v}" aria-pressed="false">${v[0].toUpperCase() + v.slice(1)}</button>`).join("");
+    const note = document.createElement("div"); note.className = "rv-note";
+    note.innerHTML = `<label class="sr" for="note-${id}">Note</label><textarea id="note-${id}" rows="1" placeholder="Note (optional)"></textarea><span class="rv-saved" aria-live="polite"></span>`;
+    bar.append(box, note);
+    box.addEventListener("click", (e) => { const b = e.target.closest("[data-v]"); if (b) setChoice(id, marks[id]?.choice === b.dataset.v ? null : b.dataset.v); });
+    let timer; $("textarea", note).addEventListener("input", (e) => { clearTimeout(timer); const v = e.target.value; timer = setTimeout(() => setNote(id, v), 500); });
+  }
+  $("#rv-total").textContent = String(rvBars.length);
+  function render(id) {
+    const bar = $(`[data-review="${id}"]`); if (!bar) return;
+    const m = marks[id] || {};
+    $$(".rv-btn", bar).forEach((b) => b.setAttribute("aria-pressed", String(m.choice === b.dataset.v)));
+    const ta = $(`#note-${id}`); if (ta && document.activeElement !== ta) ta.value = m.note || "";
+    const dot = $(`.dot[data-for="${id}"]`); if (dot) dot.dataset.v = m.choice || "";
+  }
+  function renderCounts() {
+    const n = rvBars.filter((b) => marks[b.dataset.review]?.choice).length;
+    $("#rv-count").textContent = String(n);
+    $("#rv-meter").style.width = `${(100 * n) / rvBars.length}%`;
+  }
+  function flash(id, text) { const s = $(`[data-review="${id}"] .rv-saved`); if (s) { s.textContent = text; setTimeout(() => { if (s.textContent === text) s.textContent = ""; }, 1800); } }
+  function localSave() { try { localStorage.setItem(STORE, JSON.stringify(marks)); } catch {} }
+  function localLoad() { try { return JSON.parse(localStorage.getItem(STORE) || "{}"); } catch { return {}; } }
+  let db = null;
+  const pending = {};
+  function write(id) {
+    const m = marks[id] || {};
+    localSave();
+    if (!db) { flash(id, "Saved here"); return; }
+    const body = { choice: m.choice || null, note: m.note || "", at: new Date().toISOString() };
+    pending[id] = (pending[id] || Promise.resolve()).then(() => db.doc(`review/${id}`).set(body)).then(
+      () => flash(id, "Saved"),
+      () => { flash(id, "Not saved"); $("#rv-status").textContent = "Saving failed; your marks are kept in this browser. Use Copy my marks."; },
+    );
+  }
+  function setChoice(id, choice) { marks[id] = { ...(marks[id] || {}), choice }; render(id); renderCounts(); write(id); }
+  function setNote(id, note) { marks[id] = { ...(marks[id] || {}), note }; render(id); write(id); }
+  $("#rv-copy").addEventListener("click", async () => {
+    const text = rvBars.map((b) => { const m = marks[b.dataset.review] || {}; return `${b.dataset.review}: ${m.choice || "unmarked"}${m.note ? ` — ${m.note}` : ""}`; }).join("\n");
+    try { await navigator.clipboard.writeText(text); $("#rv-status").textContent = "Copied. Paste it in the chat."; }
+    catch { $("#rv-status").textContent = "Copy was refused here; your marks are saved on this page."; }
+  });
+  Object.assign(marks, localLoad());
+  rvBars.forEach((b) => render(b.dataset.review));
+  renderCounts();
+
+  async function connect() {
+    try { db = window.claude && window.claude.use ? await window.claude.use("db") : null; } catch { db = null; }
+    try { comments = window.claude && window.claude.use ? await window.claude.use("comments") : null; } catch { comments = null; }
+    if (!comments) $("#pinbtn").title = "Pins here are local; comment mode is not available in this view";
+    if (!db) { $("#rv-status").textContent = "Saved in this browser only. Use Copy my marks and paste them in the chat."; return; }
+    $("#rv-status").textContent = "Your marks save as you go; Claude reads them.";
+    db.collection("review").onSnapshot((snap) => {
+      for (const d of snap.docs) {
+        const v = d.data() || {};
+        const typing = document.activeElement && document.activeElement.id === `note-${d.id}`;
+        marks[d.id] = { choice: v.choice || null, note: typing ? (marks[d.id]?.note ?? "") : (v.note || "") };
+        render(d.id);
+      }
+      renderCounts(); localSave();
+    }, () => { $("#rv-status").textContent = "Live saving stopped; marks are kept in this browser."; db = null; });
+  }
+
+  // ---------- first paint ----------
+  renderStage(); renderTui();
+  let first = "start";
+  try { first = localStorage.getItem("vs-tab") || "start"; } catch {}
+  if (location.hash && $(`[data-screen="${location.hash.slice(1)}"]`)) first = location.hash.slice(1);
+  show(first);
+  connect();
+})();
+</script>
