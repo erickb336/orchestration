@@ -138,6 +138,21 @@ The domain hooks only; the runs and flow changes come in pass 5.
 - **Code changes are not PE-reviewed.**
 - **Tests:** a pending proposal never dispatches; an agreement releases it; an objection goes to Needs you; an overrule is recorded.
 
+## Review of 2a and 2b (2026-10-02)
+
+An independent review found no path to the factory except the owner's `startFactory`. It reported 8 findings:
+
+- **Being fixed in parallel with 2c** (files 2c does not touch):
+  - (1) unpriced runs silently disable the budget;
+  - (4) stopped runs lose their usage;
+  - (5) a continuation past the budget comes back after the amount round-trips;
+  - (7) a structural guard on the stage transition where state is written;
+  - (8) Codex cached input priced at the full rate.
+- **Carried into 2d**, which owns the start code after 2c:
+  - (2) `startFactory` rewrites an explicit "the lead" decision route to "the PE". It must keep the owner's choice, or change it only when the owner chooses it in the pre-flight.
+  - (3) starting on Autopilot from Manual or Check-in turns on local automatic delivery to `main` while the record says "you merge". Delivery (mode and branch) must be part of the factory settings, and must never change implicitly.
+- **Carried to the UI work:** (6) the budget stop has no UI action yet. Settings needs a budget field, and the Needs-you item needs "Raise the budget" and "Continue once", in the pass that builds the pre-flight and the factory screens.
+
 ## Checks for the whole pass
 
 - **Unit tests per unit**, plus the migration test.
