@@ -1,0 +1,133 @@
+# ORC-029 pass 2: the domain behind the vision studio
+
+**What this is.** The design for pass 2 of ORC-029: the state, commands and rules behind the screens the owner approved in pass 1. It is pure domain (`src/domain`) plus the store migration, with no runtime or UI work; passes 3 to 6 build on it.
+
+**Where it fits.** The spec is `docs/tasks/ORC-029.md` (r5). The approved screens are `docs/design/ORC-029-pass1-prototype.html`. The owner decided on 2026-10-01 that the building budget is **estimated in dollars** at each provider's published API prices, pinned and dated, and labelled as an estimate for subscription runs.
+
+## Units, in order
+
+Each unit is one commit with its tests, verified before the next starts (`sequence-verifiable-units`).
+
+| Unit | Contents | Depends on |
+| --- | --- | --- |
+| 2a | Prices, estimated spend, budgets and the factory's budget stop | — |
+| 2b | The stage boundary: one way in, the owner-only start with its record, factory settings set at the start, device scope, migration 18 → 19 | — |
+| 2c | The studio: rounds, artifacts, feedback, PE verdicts, probes, the blueprint and change orders | 2b (migration) |
+| 2d | The PE as a decision route on Autopilot, within budget | 2a, 2c |
+
+## 2a. Prices, spend and budgets
+
+- **`src/domain/prices.json`**, pinned. One entry per model id pattern:
+  - `provider` and `model`;
+  - `inputPerMTok` and `outputPerMTok`, plus a cached-input price where the provider publishes one;
+  - `source` (the URL of the provider's pricing page) and `checked` (a date).
+
+  The prices are taken from the providers' published pages, never guessed. A test checks every entry has a source and a date.
+- **`estimateUsd(attempt, prices)`**, a pure function:
+  - It uses the runtime's reported `costUsd` when there is one (Claude). That is still labelled an estimate on a subscription, since it is not billed.
+  - Otherwise it prices the tokens.
+  - It returns `{ usd, basis: "reported" | "priced" | "unpriced", estimated: boolean }`.
+  - An unknown model is `unpriced`: it counts as unknown, never as zero.
+- **`Project.budgets`**: `{ buildingUsd: number | null; maintenanceUsdPerMonth: number | null }`. Null means not set yet; the lead asks for it in Vision.
+- **`buildingSpend(state)`**: the sum over the project's attempts since its first Vision round, probes included, with a count of unpriced runs.
+- **The budget stop:**
+  - When `buildingUsd` is set and the spend reaches it, dispatch starts nothing new. Running work finishes.
+  - A Needs-you item says "The building budget is reached: $X of $Y", listing the unpriced runs if there are any.
+  - The owner raises the budget (`setBudgets`) or chooses to continue once (`continuePastBudget`, recorded).
+  - Tests: dispatch stops at the budget, unpriced runs are reported, and raising the budget resumes.
+
+## 2b. The stage boundary
+
+- **Identifiers keep their names:** `stage: "shaping" | "building"`. The UI words are Vision and Factory (pass 6).
+- **One way in.**
+  - `initProject` always starts in shaping. Its `stage` argument is removed (subtract).
+  - Seeds and test fixtures may still construct building projects directly; they are not a way in.
+- **`Project.devices`**: `("desktop" | "mobile" | "terminal")[]`, set at the start of the project (`setDevices`) and changeable during Vision. It defaults to desktop and mobile.
+- **`startFactory`**, the owner's command and the only transition from shaping to building. It replaces `startBuilding`. Its arguments:
+  - `agreed: true`;
+  - `blueprintRev` (compare-and-set: refused if the blueprint changed since the pre-flight was shown);
+  - `settings`: autonomy mode, who merges, the pause points;
+  - `acceptOpen`: the open items the owner accepts.
+
+  It writes a **`FactoryStart` record** to `Project.factoryStarts[]`:
+  - `at`, `by: "user"`, `blueprintRev`, `settings`, `openItems`;
+  - the pre-flight's budget estimates.
+
+  It applies the settings through the existing setters: the autonomy preset, `triage.askUserBy`, the pull-request delivery mode, the hold before start.
+- **Pause points (settings):**
+  - `tradeoffs: "pe" | "user"` (maps to `triage.askUserBy`, which gains `"pe"`);
+  - `changeOrders: "lead" | "user"`;
+  - `startEachTask: boolean` (new tasks wait for a go-ahead);
+  - `merge: "user" | "auto"`.
+
+  The budget stop is always on.
+- **Nothing else starts the factory.** Tests prove each of these cannot:
+  - no steering change kind, lead output field or scheduler path reaches `startFactory`;
+  - the lead's envelope never offers it;
+  - Autopilot, a timeout and a probe cannot.
+
+  `startFactory` lives in one domain function, called only from the command table.
+- **`startVision`** replaces `startShaping` (Back to vision): nothing running stops, and nothing new starts.
+- **Migration 18 → 19:**
+  - existing projects keep their stage, and building ones need no start record (they started before ORC-029);
+  - `devices` defaults from nothing to `["desktop"]`;
+  - `budgets` defaults to nulls;
+  - empty studio state and an empty blueprint;
+  - with a migration test.
+
+## 2c. The studio
+
+New module `src/domain/studio/` with its own types file, so it rarely conflicts with other work.
+
+- **`Round`**:
+  - `n` (0 is what the owner brought);
+  - `focus: "material" | "experience" | "data" | "flows"`;
+  - `openedAt`, `closedAt?`, `leadRunId?`, `summary`.
+- **`StudioArtifact`**:
+  - `id`, `round`, `version`, `supersedes?`;
+  - `kind: "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "material" | "evidence"`;
+  - `title`, `variants: { id, label }[]`;
+  - `files: { path, sha256 }[]`, relative to the project's studio workspace (pass 3);
+  - `devices`;
+  - `madeBy: { role, provider, model, attemptId }`.
+
+  Files are provider-neutral. A revision is a new artifact version that carries the owner's open pins.
+- **`Feedback`**, the owner's only:
+  - `artifactId`, `version`, `mark: "keep" | "change" | "drop" | null`, `pickedVariant?`;
+  - `pins: { x, y, variant?, text }[]`, `note`, `at`.
+- **`PeVerdict`**:
+  - `artifactId`, `version`, `variant?`, `pass` (1–3);
+  - `verdict: "feasible" | "feasible-if" | "not-feasible"`, `reasons`, `change?`;
+  - `budget?: { buildUsd?: [lo, hi]; maintenanceUsdPerMonth?: [lo, hi]; basis }`;
+  - `overruled?: { at, why }` (the owner only).
+
+  **The loop rule:** an artifact reaches the owner only when every variant is feasible or feasible-if, or after three passes with the open objections shown. An objection is never dropped.
+- **`Probe`**:
+  - `id`, `askedBy: "pe"`, `question`;
+  - `status: "queued" | "running" | "done" | "failed"`;
+  - `attemptId?`, `result?` (an evidence artifact id).
+
+  Its spend counts in the building budget.
+- **The blueprint:**
+  - `Blueprint.revisions: { rev, at, visionRev, items: BlueprintItem[] }[]`;
+  - `BlueprintItem`: `{ id, kind, title, artifactId, version, status: "approved" | "open" }`.
+  - `approveArtifact` and `approveRound` are owner commands that each make a new revision. An open item stays listed for the pre-flight.
+- **Change orders:**
+  - A new blueprint revision while building creates a `ChangeOrder`: `{ rev, changedItems, affectedTasks, status }`.
+  - Affected tasks are those whose spec cites a changed item, through a new optional spec field `blueprintRefs`.
+  - With `changeOrders: "user"`, it waits under Needs you. Otherwise the lead proposes the updates through steering.
+
+## 2d. The PE as a decision route
+
+- **The route:** `triage.askUserBy` gains `"pe"`. The Autopilot preset sets it; Check-in and Manual set `"user"`.
+- **A PE decision** records `decidedBy: "pe"` with its reasons and its budget effect. The owner can reverse it, as with the lead's decisions today.
+- **Never past a budget.** A PE decision whose stated cost would take the building spend past the budget, or the maintenance estimate past its budget, is turned into a user decision and listed under Needs you, even on Autopilot.
+- **Who runs it:** the PE's decision runs come in pass 4. Until then, a `"pe"` route decides through the lead's decision runs with the PE's brief, which is labelled.
+
+## Checks for the whole pass
+
+- **Unit tests per unit**, plus the migration test.
+- **The owner-only start**, proven by tests as listed in 2b.
+- `npm test`, the typecheck and the build pass.
+- `npm run test:integration` passes. The scenario's project is created in Vision and started with `startFactory`, recording an agreement.
+- **An independent review of the pass.**
