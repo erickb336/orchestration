@@ -6,7 +6,7 @@ import * as F from "../findings";
 import { childDefault, effectiveDefault, eligibleIds, findFlow, flowRef } from "../flows";
 import { newWorkReview, PE_REVIEW_HOLD } from "../peReview";
 import { instantiate, toDef } from "../pipeline";
-import { type SpecOption, type SteeringChangeSet, type LeadQuestion, type SpecContent, type State, type VisionDraft } from "../types";
+import { type SpecOption, type SteeringChangeSet, type LeadQuestion, type LeadRun, type SpecContent, type State, type VisionDraft } from "../types";
 import { currentSpec, draft, event, nextId } from "./core";
 import { deferredLeadRoots, getLeadRun, openLeadProposals } from "./lead";
 import { type RunReport } from "./runs";
@@ -52,6 +52,20 @@ interface LeadOutput {
   studio?: unknown;
   /** Why the answer could not be used as sent: recorded on the run and shown under the reply. */
   problem?: LeadReplyProblem;
+  /** The final text as the runtime returned it: kept on the run only with a problem (keepRawAnswer). */
+  answerText?: string;
+}
+
+/** The most of a lead's final text a run keeps, in characters (about 64 KB). */
+export const MAX_RAW_ANSWER = 65_536;
+/** How many lead runs keep their final text: the newest ones, so the state (rewritten on every change) stays small. */
+export const MAX_RAW_ANSWERS = 5;
+
+/** Keep the run's final text for diagnosis, capped, and drop it from the older runs past the limit. Mutates a draft. */
+function keepRawAnswer(s: State, r: LeadRun, text: string) {
+  r.rawAnswer = text.length > MAX_RAW_ANSWER ? { text: text.slice(0, MAX_RAW_ANSWER), truncated: true } : { text };
+  const keeping = s.leadRuns.filter((x) => x.rawAnswer);
+  for (const old of keeping.slice(0, Math.max(0, keeping.length - MAX_RAW_ANSWERS))) delete old.rawAnswer;
 }
 
 /** Why the lead's answer could not be used as sent (parseLeadOutput, server/envelope.ts). */
@@ -136,6 +150,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   if (out.problem) {
     r.note = leadReplyNote(out.problem);
     rejected.push(r.note);
+    if (out.answerText !== undefined) keepRawAnswer(s, r, out.answerText);
   }
   // Steering, before the proposals so they are created under the new focus and after the
   // deferrals and drops that make room. Two guards make it apply once: the run-outcome guard above and

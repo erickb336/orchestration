@@ -1329,7 +1329,8 @@ export class Scheduler {
         const run = s.leadRuns.find((r) => r.id === e.attemptId);
         const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
         // The steering block, the vision draft, the decisions, the studio block and any parse problem go through as found; the domain validates them.
-        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
+        // The final text goes too: the run keeps it when the answer could not be used as sent.
+        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
       }
     }
   }

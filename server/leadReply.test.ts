@@ -146,6 +146,52 @@ describe("the lead run asks its runtime for the reply schema", () => {
     expect(msg.proposedTaskIds).toHaveLength(1);
     const t = st().tasks.find((x) => x.id === msg.proposedTaskIds![0])!;
     expect(M.currentSpec(t).content).toMatchObject({ title: "Say hello", area: "General" });
-    expect(st().leadRuns.find((x) => x.id === r.id)!.note).toBeUndefined();
+    const run = st().leadRuns.find((x) => x.id === r.id)!;
+    expect([run.note, run.rawAnswer]).toEqual([undefined, undefined]);
+  });
+
+  it("the trial's reply as sent: nothing applies, the note says where, and the run keeps the text for diagnosis", () => {
+    cmd("postMessage", { text: "A small app for friends to plan a weekend away." });
+    tick();
+    const r = M.activeLeadRun(st())!;
+    claude.emit({ type: "completed", attemptId: r.id, finalText: TRIAL });
+    tick();
+    const run = st().leadRuns.find((x) => x.id === r.id)!;
+    const note = "The reply's JSON did not parse (expected ',' or '}' after property value at line 59, column 2), so nothing was changed.";
+    expect(run).toMatchObject({ outcome: "completed", note, rawAnswer: { text: TRIAL } });
+    const msg = st().conversation.find((m) => m.author === "lead")!;
+    expect(msg.text).toMatch(/^Here is my first draft of the vision/);
+    expect(msg.rejected).toEqual([note]);
+    expect(st().visionDrafts).toEqual([]);
+  });
+});
+
+describe("the final text a lead run keeps", () => {
+  const T0 = Date.parse("2026-10-02T12:00:00Z");
+  const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
+  /** Ask, start a lead run and complete it with this output; returns the state and the run's id. */
+  function answer(s: State, sec: number, out: { problem?: M.LeadReplyProblem; answerText: string }) {
+    const r = M.startLeadRun(M.postMessage(s, `Message ${sec}`, at(sec)), { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(sec + 1));
+    return { state: M.completeLeadRun(r.state, r.runId, { reply: "", proposals: [], ...out }, at(sec + 2)), id: r.runId };
+  }
+  const fresh = () => M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: "/tmp/trips", vision: "Weekend trips.", focus: "" }, at(0));
+
+  it("is kept only with a problem, capped at 65,536 characters, and only on the newest five runs", () => {
+    let s = fresh();
+    const ok = answer(s, 10, { answerText: '{"reply":"fine","proposals":[]}' });
+    s = ok.state;
+    expect(s.leadRuns.find((x) => x.id === ok.id)!.rawAnswer).toBeUndefined();
+    const long = answer(s, 20, { problem: { kind: "no-json" }, answerText: "x".repeat(70_000) });
+    s = long.state;
+    expect(s.leadRuns.find((x) => x.id === long.id)!.rawAnswer).toEqual({ text: "x".repeat(65_536), truncated: true });
+    const ids: string[] = [long.id];
+    for (let i = 0; i < 5; i++) {
+      const next = answer(s, 30 + i * 10, { problem: { kind: "unparsed", where: "unexpected end of JSON input" }, answerText: `{"reply": "cut off ${i}` });
+      s = next.state;
+      ids.push(next.id);
+    }
+    // Six runs had a problem; the oldest one's text was dropped.
+    expect(ids.map((id) => s.leadRuns.find((x) => x.id === id)!.rawAnswer?.text.slice(0, 20))).toEqual([undefined, '{"reply": "cut off 0', '{"reply": "cut off 1', '{"reply": "cut off 2', '{"reply": "cut off 3', '{"reply": "cut off 4']);
+    expect(s.leadRuns.find((x) => x.id === long.id)!.note).toBe("The reply had no JSON block, so nothing was changed.");
   });
 });
