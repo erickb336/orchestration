@@ -29,10 +29,11 @@ import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from ".
 import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, versionDir } from "./studio/artifacts";
 import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
-import { PeAnswerError, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
+import { PeAnswerError, checkPeAnswer, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
 import { repoGlance } from "./studio/existing";
 import { askForRevisions } from "./studio/revise";
-import { designerEnvelope, handedIn, importDesignerRun, prepareStaging, type HandedIn } from "./studio/runs";
+import { checkHandedIn, designerEnvelope, handedIn, importDesignerRun, prepareStaging, type HandedIn } from "./studio/runs";
+import { withStudioPrinciples, withStudioProse } from "./studio/writing";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
 
@@ -67,8 +68,8 @@ interface SchedulerOptions {
    */
   studioMedia?: StudioMedia;
   /**
-   * What checks the lead's replies and questions against the controlled-English style (server/prose/): Vale in the
-   * service. Without it nothing is checked and the lead runs record nothing.
+   * What checks the lead's replies and questions, the PE's verdicts and the designer's documents against the
+   * controlled-English style (server/prose/): Vale in the service. Without it nothing is checked and the runs record nothing.
    */
   prose?: ProseChecker;
 }
@@ -158,6 +159,8 @@ export class Scheduler {
   private readonly prose?: ProseChecker;
   /** The checks of lead replies drained this cycle, made before the transaction and recorded in it. */
   private leadProse = new Map<string, ProseCheck>();
+  /** The same for studio runs: a PE's answer, a designer's documents. */
+  private studioProse = new Map<string, ProseCheck>();
   /** Studio versions' screenshots and recordings, made one at a time, after the run that handed them in completed. */
   private mediaChain: Promise<void> = Promise.resolve();
   /** The pending ones this instance started (project, version and kind), so each is made once per process. */
@@ -511,6 +514,7 @@ export class Scheduler {
     const studioOutputs = new Map<string, StudioOutput>();
     const current = this.store.read().state;
     this.leadProse.clear();
+    this.studioProse.clear();
     for (const e of events) {
       if (e.type !== "completed") continue;
       // A lead reply's text is checked here, outside the transaction (Vale is a process); never blocking the reply.
@@ -522,6 +526,9 @@ export class Scheduler {
       if (studioRun) {
         // A designer hands in files; the PE answers in its final message, read in the transaction.
         if (studioRun.kind === "designer") studioOutputs.set(e.attemptId, this.readStudioOutput(current, e.attemptId));
+        // What it wrote for the owner is checked here too (the PE's verdicts, the designer's documents), and recorded with its result.
+        const check = !this.prose ? undefined : studioRun.kind === "pe" ? checkPeAnswer(e.finalText, this.prose, now) : studioRun.kind === "designer" ? checkHandedIn(studioOutputs.get(e.attemptId), this.prose, now) : undefined;
+        if (check) this.studioProse.set(e.attemptId, check);
         continue;
       }
       try {
@@ -838,7 +845,8 @@ export class Scheduler {
       (s) => {
         const d = R.dispatchStudioRuns(s, now, { ...avail, simulated });
         started = d.started;
-        return d.state;
+        // Each records the principles its envelope gives it, with their hashes, as a task run's snapshot does.
+        return withStudioPrinciples(d.state, d.started);
       },
       now,
       lease,
@@ -1025,7 +1033,8 @@ export class Scheduler {
           // The PE's verdicts, from its final message: checked, then recorded on the version it reviewed.
           try {
             const r = recordPeRun(started, R.getStudioRun(started, run.id)!, readPeAnswer(e.finalText), now);
-            return R.completeStudioRun(r.state, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
+            // The check of its text goes on the run (never on the verdicts: the owner sees no score); the PE's next run is told what it broke.
+            return withStudioProse(R.completeStudioRun(r.state, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary }), run.id, this.studioProse.get(run.id));
           } catch (err) {
             return fail(`Its verdicts were refused: ${err instanceof PeAnswerError || err instanceof Error ? err.message : String(err)}`);
           }
@@ -1036,7 +1045,7 @@ export class Scheduler {
           const r = importDesignerRun(started, run.id, out, studioRoot(this.dataDir!, s.project.id), now);
           // Screenshots and recordings are made after this transaction commits; the run completes without them.
           const marked = this.media ? r.imported.reduce((acc, v) => S.startArtifactMedia(acc, v.artifactId, v.version), r.state) : r.state;
-          return R.completeStudioRun(marked, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
+          return withStudioProse(R.completeStudioRun(marked, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary }), run.id, this.studioProse.get(run.id));
         } catch (err) {
           return fail(`studio.json was refused: ${err instanceof Error ? err.message : String(err)}`);
         }

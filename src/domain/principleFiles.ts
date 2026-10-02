@@ -59,6 +59,18 @@ export const LEAD_PRINCIPLE_IDS: readonly PrincipleId[] = ["contextualize-and-wr
  * English, about 80% of ASD-STE100). Not named in flow files.
  */
 export const EVERY_RUN_PRINCIPLE_IDS: readonly PrincipleId[] = ["contextualize-and-write-for-the-reader", "write-controlled-english"];
+/**
+ * The studio's runs (ORC-029 pass 4d-2b) get a fixed set by role: the every-run principles and a small one of the
+ * role's own, kept short because their envelopes carry large briefs. Not steps, so no flow names them.
+ * - designer, experience first: it makes what the owner sees and marks, and every feature must justify itself (the
+ *   PE loop grew features on each pass in the second real trial).
+ * - pe, foundational thinking: it judges structure, scale and longevity before anything is built.
+ * - pe, prove it works: it judges a design's claims, and must say what it could not check.
+ */
+export const STUDIO_PRINCIPLE_IDS: Readonly<Record<"designer" | "pe", readonly PrincipleId[]>> = {
+  designer: ["contextualize-and-write-for-the-reader", "write-controlled-english", "experience-first"],
+  pe: ["contextualize-and-write-for-the-reader", "write-controlled-english", "foundational-thinking", "prove-it-works"],
+};
 
 export const isPrincipleId = (id: string): id is PrincipleId => (PRINCIPLE_IDS as readonly string[]).includes(id);
 

@@ -1,12 +1,12 @@
 # Principles
 
-Short working principles for the agents Orchestrator runs. Each flow step names the ones that fit its job (`"principles"` on the steps in `flows/*.json`, in the internal flows and in the check rounds), and the service adds them to the agent's instructions under "Principles for this step", in the order of the table in [docs/tasks/ORC-024.md](../docs/tasks/ORC-024.md). The lead's own runs get a fixed set. Every run records which principles it was given, with a hash of each text. The agents that build Orchestrator follow the same files (AGENTS.md).
+Short working principles for the agents Orchestrator runs. Each flow step names the ones that fit its job (`"principles"` on the steps in `flows/*.json`, in the internal flows and in the check rounds), and the service adds them to the agent's instructions under "Principles for this step", in the order of the table in [docs/tasks/ORC-024.md](../docs/tasks/ORC-024.md). The lead's own runs get a fixed set, and so do the studio's designer and PE runs, by role ("Principles for this run"). Every run records which principles it was given, with a hash of each text. The agents that build Orchestrator follow the same files (AGENTS.md).
 
 ## The files
 
 One file per principle, `<id>.md`. The frontmatter carries `id` (the file name), `name`, `applyWhen` (one line) and `source` (the credit). The body is at most 200 words: the rule, when it applies and does not, and when to stop. The voice is plain and literal (PRODUCT.md).
 
-"Contextualize and write for the reader" is Orchestrator's own (ORC-026). "Write controlled English" holds the owner's writing standard: about 80% of ASD-STE100 (Simplified Technical English), from the owner's agent kit (ORC-029 pass 4d). The service gives both to every agent run and to the lead, on top of the step's set, so whatever an agent writes can be read cold and on the first read. A check (`vale/`, `server/prose/`) measures the lead's replies against the second, and the lead's next run is told which rules its last reply broke.
+"Contextualize and write for the reader" is Orchestrator's own (ORC-026). "Write controlled English" holds the owner's writing standard: about 80% of ASD-STE100 (Simplified Technical English), from the owner's agent kit (ORC-029 pass 4d). The service gives both to every agent run and to the lead, on top of the step's set, so whatever an agent writes can be read cold and on the first read. A check (`vale/`, `server/prose/`) measures the lead's replies, the PE's verdicts and the designer's documents against the second, and the writer's next run (the lead's, or the same studio role's) is told which rules its last text broke.
 
 "Attack the premise" is given to no step directly. The service adds it to a repair round that follows a round which failed the same way: the same check failed again, or a finding came back. The run records why.
 
