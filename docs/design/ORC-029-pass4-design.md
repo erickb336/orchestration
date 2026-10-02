@@ -371,3 +371,10 @@ The cause is in the PE's role. The owner's rule (r6, r7) is that the PE judges f
 - on a later pass, the PE first checks whether its earlier asks are met, and adds a new ask only for a risk that the revision created;
 - the verdict keeps the two apart: changes for the designer, and open cases for the owner.
 
+## For ORC-030's UI audit (from the wording unit's screenshots)
+
+- A reproduction that differs from the code still shows "PE objects" in the left column and "Objects: waiting for you" on its badge. Use "Differs from the code".
+- The ended explanation for a reproduction is long. Say it in one short sentence, and put the action on its own line.
+- The reproduction words ("matches the code", "differs from the code") live in the UI (`REPRODUCTION_WORDS`). Move them to the domain with the other verdict words.
+- The budget stop gives its reason, but the app has no control to raise the budget or continue (pass 5 or 6).
+
