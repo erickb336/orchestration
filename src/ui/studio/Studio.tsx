@@ -26,6 +26,7 @@ import { useLeadContext } from "../LeadDrawer";
 import { useStore } from "../store";
 import { DocumentArtifact } from "./Document";
 import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback, TerminalFile, TerminalRecording } from "./Frames";
+import { PeQuestions } from "./PeQuestions";
 import {
   AS_IS_FILES_SHOWN,
   AS_IS_LABEL,
@@ -729,6 +730,7 @@ function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | 
               ))}
             </ul>
           )}
+          <PeQuestions artifact={a} />
         </>
       )}
       {a && history.length > 1 && (
