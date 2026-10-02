@@ -112,6 +112,19 @@ describe("CodexAdapter runs", () => {
     }
   });
 
+  it("turns the agent-kit hooks off in every Codex process, in either worker environment", async () => {
+    // The envelope already gives each step its principles; the user's agent-kit plugin must not add them again.
+    const { adapter, events, stubLog } = make("complete", {}, { AGENT_KIT_HOOKS: "on" });
+    await adapter.health(); // probe processes; they also tell the adapter the MCP servers an isolated run disables
+    adapter.start(assignment("att-local", { environment: "local" }));
+    adapter.start(assignment("att-iso", { environment: "isolated" }));
+    await waitFor(() => terminals(events).length === 2);
+    expect(terminals(events).map((e) => e.type)).toEqual(["completed", "completed"]);
+    const processes = stubLog().filter((l: { argv?: string[] }) => l.argv);
+    expect(processes.filter((l: { argv: string[] }) => l.argv[0] === "app-server").length).toBeGreaterThanOrEqual(3); // a probe and two workers
+    for (const p of processes) expect(p.agentKitHooks, p.argv.join(" ")).toBe("off");
+  });
+
   it("starts, reports activity, and completes with the final agent message and usage", async () => {
     const { adapter, events, stubLog } = make("complete");
     adapter.start(assignment());

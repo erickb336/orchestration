@@ -90,4 +90,5 @@ What real runs do on your machine:
 - **Agent environment** is set per provider:
   - **Isolated** (default): agents see none of your settings, plugins, or web tools, and use only the MCP connections you tick.
   - **Use my local setup:** agents get your user-level Claude or Codex configuration, including all its MCP servers and plugins.
+    - The exception is the agent-kit plugin's hooks. Every agent runs with `AGENT_KIT_HOOKS=off`, because Orchestrator already gives each step its principles.
 - **Limits:** Settings → Run limits caps turns, time, and Claude spend per run. Codex runs are bounded by time.

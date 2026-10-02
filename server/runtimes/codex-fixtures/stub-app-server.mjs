@@ -19,7 +19,8 @@
 //   thread-error        thread/start answers with a JSON-RPC error
 //   account-none        account/read reports no account
 //   hang                never answers initialize
-// CODEX_STUB_LOG: file to append every received message and argv to (JSON lines).
+// CODEX_STUB_LOG: file to append every received message and argv to (JSON lines). The argv entry also records
+//   the AGENT_KIT_HOOKS value the process received.
 // CODEX_STUB_VERSION_EXIT: exit code for --version (default 0).
 // CODEX_STUB_STEER_SILENT=1: turn/steer is never answered (any mode).
 
@@ -31,7 +32,7 @@ const logFile = process.env.CODEX_STUB_LOG;
 const log = (entry) => logFile && appendFileSync(logFile, JSON.stringify(entry) + "\n");
 
 const args = process.argv.slice(2);
-log({ argv: args });
+log({ argv: args, agentKitHooks: process.env.AGENT_KIT_HOOKS ?? null });
 
 if (args.includes("--version")) {
   const code = Number(process.env.CODEX_STUB_VERSION_EXIT || 0);
