@@ -51,6 +51,23 @@ At most three implementers at once, on disjoint files; the lead integrates. Each
   It then copies each artifact version into an immutable folder, `artifacts/<artifactId>/v<n>/`, with sha256 hashes, and records it with `addStudioArtifact`.
 - **The simulated runtime** writes a small sample prototype, so the demo and tests work without real agents.
 
+### 3a as built (136b0b3..f26af2a, merged in 6bc6e34)
+
+- **Run lifecycle.** Studio runs are queued (with `askedAt`) and dispatched only by the scheduler, only in Vision, and never while paused or at the budget.
+  - A paused run is asked again on resume, as a new queued run with `retryOf`.
+  - A run whose round closed, or whose artifact moved on, is stale (`baseVersion`). That is checked at dispatch and at completion.
+  - When the factory starts, running studio work finishes and is imported, and queued runs wait for Back to vision.
+- **Tools.** Studio runs never get a shell or connections.
+- **The manifest.** Beyond the design: 1–6 variants, lowercase extensions only, no hard links, reserved names (`manifest.json`, `studio.json`), at most 10 artifacts.
+- **Revisions and staging.** A revision hands in one artifact, and its staging folder starts from the version it revises. Staging is removed after a successful import and kept after a failure, for inspection.
+- **The read-only product.**
+  - **Claude:** a read-only checkout beside the run, readable through the workspace guard and removed afterwards. Whether the real CLI allows those reads is verified in the 3e trials.
+  - **Codex 0.159.2:** it has no readable-roots setting, so the checkout is only named in the brief. Reads are not confined, as for every Codex run.
+- **Follow-ups:**
+  - Studio runs are not counted in the task dispatch limits, so for a short time after Start the factory, finishing studio work can exceed "Agents at once". To fix in the pass 3 review.
+  - The PE and probe runs are refused until pass 4.
+  - An old project's studio folders are not cleaned up.
+
 ## 3b. Serving and screenshots
 
 - **A second listener** for prototypes runs on 127.0.0.1 on its own port.
