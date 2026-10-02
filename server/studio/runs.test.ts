@@ -134,6 +134,13 @@ describe("a designer run at the service", () => {
     expect(a.prompt).toContain("- Inline styles and scripts are fine (`<style>`, `style=\"…\"`, `<script>`)");
     expect(a.prompt).toContain('- Use plain scripts, never `<script type="module">`: plain scripts only (no ES modules): a module needs a CORS header that would let other websites read local prototypes, so a page with one is refused. A built app must emit classic scripts');
     expect(a.prompt).not.toContain("the sandbox blocks inline");
+    // Tapes, as the recorder runs them (the real trial's designer wrote root paths while the shell started elsewhere).
+    expect(a.prompt).toContain("paths in the tape's commands are relative to the artifact's root, as in studio.json: a tape at `demo/demo.tape` runs `node demo/trips.js`");
+    expect(a.prompt).toContain("VHS's own `Output` and `Source` paths are relative to the tape's folder");
+    expect(a.prompt).toContain("The demo runs with no network (not even localhost) and no access to the home folder (`~`)");
+    expect(a.prompt).toContain("A CLI that does not exist yet is a `.js` script the tape runs with `node`");
+    expect(a.prompt).toContain('It must run cleanly in the sandbox, from the artifact\'s root.');
+    expect(a.prompt).toContain('sets `"showsError": true` on its variant');
     expect(readdirSync(staging)).toEqual([]);
     expect(runOf(id)).toMatchObject({ status: "running", sessionId: `claude-session-${id}`, actualModel: "claude-sample-large-actual" });
 
@@ -538,7 +545,8 @@ async function settleMedia() {
   tick();
 }
 
-const TAPE = 'Output demo.gif\nOutput demo.webm\nOutput demo.txt\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 20ms\nType "node trips.js plan"\nEnter\nSleep 1500ms\n';
+// As the real trial's designer wrote it: the tape in a subfolder runs its script by its path from the artifact's root.
+const TAPE = 'Output demo.gif\nOutput demo.webm\nOutput demo.txt\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 20ms\nType "node a/trips.js plan"\nEnter\nSleep 1500ms\n';
 const TRIPS_JS = 'console.log("Weekend trips from Lisbon");\nconsole.log("  1  Sintra     45 min by train");\n';
 const DEMO_FILES: Record<string, string> = { "a/demo.tape": TAPE, "a/trips.js": TRIPS_JS, "a/demo.cast": '{"version": 3, "term": {"cols": 80, "rows": 24}}\n[0.5, "o", "trips plan\\r\\n"]\n', "b/plan.ans": "Weekend trips\n" };
 const TRIPS_DEMO = {
@@ -608,7 +616,7 @@ describe("after an import, the service's screenshots and recordings", () => {
     expect([runOf(id).status, art.demo, art.shots]).toEqual(["completed", { status: "pending" }, undefined]);
     expect(S.demoNote(art, "a")).toBe("Recording…");
     await flush();
-    expect(g.calls).toEqual(["record demo.tape"]);
+    expect(g.calls).toEqual(["record a/demo.tape"]);
     g.release();
     await settleMedia();
     const reason = "recording is not available here: no working sandbox (shellWriteOutside allowed)";
@@ -621,6 +629,34 @@ describe("after an import, the service's screenshots and recordings", () => {
       ],
     });
     expect(S.demoNote(S.getArtifact(state(), art.id, 1), "a")).toBe(`Hand-written, not recorded: ${reason}`);
+  });
+
+  it("a recording that shows a failure is recorded with errors, and the PE is told so, with the failing line", async () => {
+    const line = "Error: Cannot find module '/private/var/folders/wk/T/orc-vhs-1/work/trips.js'";
+    const media: StudioMedia = {
+      shots: async () => ({ skipped: "no Chrome found" }),
+      record: async (_root, out) => {
+        mkdirSync(out, { recursive: true });
+        writeFileSync(join(out, "demo.gif"), "GIF89a");
+        return { sandbox: "sandbox-exec", gif: join(out, "demo.gif"), errorLine: line };
+      },
+    };
+    await service({ media });
+    const id = startDesignerRun(store, { round: 1, brief: "Make the trips demo." }, iso());
+    tick();
+    handIn(claude.runs.get(id)!, { artifacts: [TRIPS_DEMO] }, DEMO_FILES);
+    finish(id);
+    tick();
+    await settleMedia();
+    const art = S.getArtifact(state(), S.latestArtifacts(state())[0].id, 1);
+    expect(art.demo).toEqual({ status: "done", at: iso(), variants: [{ variant: "a", status: "recorded-with-errors", tape: "a/demo.tape", gif: "recording/a/demo.gif", reason: line }, { variant: "b", status: "hand-written", files: ["b/plan.ans"] }] });
+    expect(S.demoNote(art, "a")).toBe(`Recorded with errors: the demo did not run cleanly in the sandbox (${line})`);
+    // The PE was asked for once the recording was made; its envelope says what the recording shows.
+    tick();
+    const prompt = codex.runs.get(peRuns()[0].id)!.prompt;
+    expect(prompt).toContain("  Recorded in the sandbox from a/demo.tape: recording/a/demo.gif.");
+    expect(prompt).toContain(`  The recording shows an error the designer did not mean to show: ${line}`);
+    expect(prompt).toContain(`Recorded with errors: the demo did not run cleanly in the sandbox (${line})`);
   });
 
   it("a result the studio refuses is recorded as none, with the reason, and not made again in a loop", async () => {

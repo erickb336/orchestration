@@ -10,10 +10,12 @@ import { createServer, type Server } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ANS_CAP, CAST_CAP, TAPE_CAP, probeTerminalSandbox, readTerminalFile, recordTape, refusedEscape, shellProfile, shellReads, validateAnsFrame, validateCast, validateTape } from "./terminal";
+import { ANS_CAP, CAST_CAP, FAILURE_SIGNATURES, TAPE_CAP, probeTerminalSandbox, readTerminalFile, recordTape, refusedEscape, shellProfile, shellReads, transcriptError, validateAnsFrame, validateCast, validateTape } from "./terminal";
 
 const FIXTURE = resolve(__dirname, "fixtures/trips");
 const FALLBACK = resolve(__dirname, "fixtures/trips-fallback");
+/** As the real trial (ORC-029 pass 3) wrote it: demo/demo.tape runs demo/trips.js by its path from the artifact's root. */
+const SUBFOLDER = resolve(__dirname, "fixtures/trips-subfolder");
 const SIZE = "Set Columns 80\nSet Rows 24\n";
 const tape = (body: string) => `Output demo.gif\n${SIZE}${body}`;
 const refusal = (text: string, o: Parameters<typeof validateTape>[1] = {}) => {
@@ -221,6 +223,60 @@ describe("the fallback: hand-written asciicast v3 and .ans frames", () => {
   });
 });
 
+describe("a recording's transcript, scanned for failures", () => {
+  // As the real studio trial's transcript showed it (ORC-029 pass 3): the script was not where the shell started.
+  const TRIAL = [
+    "────────────────────────────────────────────────────────────────────────────────",
+    "> alias trips='node demo/trips.js'",
+    "> trips plan",
+    "node:internal/modules/cjs/loader:1573",
+    "  throw err;",
+    "  ^",
+    "Error: Cannot find module '/private/var/folders/wk/ppy3ppz520j5gq98s27qc2gr0000g",
+    "n/T/orc-vhs-t76sgM/work/demo/trips.js'",
+    "    at Module._resolveFilename (node:internal/modules/cjs/loader:1569:15)",
+    "Node.js v26.8.2",
+    ">",
+  ].join("\n");
+
+  it("names the first line with a failure signature, as the trial's would have been", () => {
+    expect(transcriptError(TRIAL)).toBe("Error: Cannot find module '/private/var/folders/wk/ppy3ppz520j5gq98s27qc2gr0000g");
+  });
+
+  it("knows each signature in its short list, by a line a real tool prints", () => {
+    // One line per signature, in the list's order: a new signature needs a line here.
+    const printed = [
+      "Error: Cannot find module 'left-pad'",
+      "zsh: command not found: trips",
+      "cat: plans/weekend.json: No such file or directory",
+      "bash: ./demo/trips.js: Permission denied",
+      "ReferenceError: ideas is not defined",
+      "Traceback (most recent call last):",
+      "panic: runtime error: index out of range [3] with length 3",
+      "bash: line 1: 4242 Segmentation fault: 11  ./trips",
+      "[1]+  Exit 1                  trips pick 9",
+    ];
+    expect(printed).toHaveLength(FAILURE_SIGNATURES.length);
+    FAILURE_SIGNATURES.forEach((s, i) => expect(s.line.test(printed[i]), s.what).toBe(true));
+    const more = ["bash: trips: command not found", "zsh: no such file or directory: ./trips", "touch: /Users/owner/x: Operation not permitted", "Error: connect EPERM 1.1.1.1:443", "Error [ERR_REQUIRE_ESM]: require() of ES Module", "TypeError: Cannot read properties of undefined (reading 'name')", "SyntaxError: Unexpected token '}'", "Uncaught RangeError: Invalid array length", "zsh: exit 1     trips pick 9"];
+    for (const line of [...printed, ...more]) expect(transcriptError(`> trips plan\n${line}\n>`), line).toBe(line);
+  });
+
+  it("passes a clean demo, its own words about errors, and the commands typed at the prompt", () => {
+    const clean = [
+      "> trips plan",
+      "Weekend of Oct 11-12  5 friends, 3 ideas",
+      "  Error: an indented line is the demo's own text",
+      "Errors: 0   Warnings: 0",
+      "trips check: no errors found",
+      "> node demo/trips.js 2>&1 | grep 'command not found'",
+      "> echo 'Error: shown on purpose' # the typed command, not its output",
+      ">",
+    ].join("\n");
+    expect(transcriptError(clean)).toBeUndefined();
+  });
+});
+
 // ---------- real recordings, where the sandbox and the tools are present ----------
 
 const health = await probeTerminalSandbox();
@@ -254,12 +310,51 @@ describe(`recording with VHS in the sandbox${skipReason}`, () => {
       for (const line of ["> trips plan", "Weekend trips from Lisbon  Sat 10 - Sun 11 Oct", "  1  Sintra     45 min by train   hiking, palaces      EUR 38", "  3  Evora      1 h 30 by train   Roman temple, wine   EUR 52", "> trips pick 1", "  10:00  Pena Palace, then the trail to the Moorish Castle", "Saved. trips share 1 makes a link for your group"]) {
         expect(txt.split("\n")).toContain(line);
       }
+      // A clean demo: nothing in its transcript reads as a failure.
+      expect(r.errorLine).toBeUndefined();
       // The hidden setup line never shows, and the frame is 80 columns wide.
       expect(txt).not.toContain("alias trips");
       expect(txt.split("\n").find((l) => l.startsWith("─"))).toHaveLength(80);
       // The run's temporary folders are gone, and nothing it started is still running.
       expect(readdirSync(tmpRoot)).toEqual([]);
       expect(execFileSync("/bin/ps", ["-axo", "command="], { encoding: "utf8" })).not.toContain(tmpRoot);
+    },
+    90_000,
+  );
+
+  it.skipIf(!health.ok)(
+    "records a tape in a subfolder, as the real trial's designer wrote it: the shell starts at the artifact's root, so its script called by its root path prints its real output; Output and Source stay relative to the tape",
+    async () => {
+      const out = join(dir, "out");
+      const r = await recordTape(SUBFOLDER, out, { tape: "demo/demo.tape", tmpRoot: dir });
+      expect(r.error).toBeUndefined();
+      const real = realpathSync(out);
+      expect(r).toMatchObject({ sandbox: "sandbox-exec", gif: join(real, "demo.gif"), txt: join(real, "demo.txt") });
+      expect(readdirSync(out).sort()).toEqual(["demo.gif", "demo.txt"]);
+      const txt = readFileSync(r.txt!, "utf8");
+      expect(txt.split("\n")).toContain(" 1  Lake Tahoe cabin      3h 40m   $148");
+      expect(txt).not.toContain("Cannot find module");
+      expect(r.errorLine).toBeUndefined();
+    },
+    90_000,
+  );
+
+  it.skipIf(!health.ok)(
+    "a recording whose transcript shows a failure names its first failing line, from the service's own transcript when the tape asks for none",
+    async () => {
+      const src = join(dir, "broken");
+      mkdirSync(join(src, "demo"), { recursive: true });
+      // The trial's mistake the other way round: a path from the tape's folder, while the shell starts at the root.
+      writeFileSync(join(src, "demo", "demo.tape"), `Output demo.gif\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "node trips.js"\nEnter\nSleep 1.5s\n`);
+      writeFileSync(join(src, "demo", "trips.js"), "console.log('not reached')\n");
+      const out = join(dir, "out");
+      const r = await recordTape(src, out, { tape: "demo/demo.tape", tmpRoot: dir });
+      expect(r.error).toBeUndefined();
+      expect(r.sandbox).toBe("sandbox-exec");
+      expect(r.errorLine).toMatch(/^Error: Cannot find module '/);
+      // The service's transcript is not an output: only what the tape asked for is kept.
+      expect(readdirSync(out)).toEqual(["demo.gif"]);
+      expect(r.txt).toBeUndefined();
     },
     90_000,
   );

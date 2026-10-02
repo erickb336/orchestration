@@ -12,9 +12,16 @@
 //   the shell      ttyd and the shell, where the tape's commands run. No network at all, not even
 //                  loopback (the service's API listens there), no Mach services (through LaunchServices a
 //                  sandboxed `open` launches an unsandboxed app), no Apple events, signals only inside
-//                  this sandbox, writes only to the working copy of the tape's folder and a temp folder,
-//                  and no reads in the user's home folder (so a recording cannot show the owner's files)
-//                  apart from those folders and the tools it runs.
+//                  this sandbox, writes only to the working copy of the artifact and a temp folder, and no
+//                  reads in the user's home folder (so a recording cannot show the owner's files) apart
+//                  from those folders and the tools it runs.
+//
+// The working copy holds the whole artifact version, and the shell starts at its root, so paths in the tape's
+// commands are relative to the artifact's root, as in its manifest (`node demo/trips.js`). VHS itself runs in the
+// tape's folder: its own `Output` and `Source` paths are relative to the tape, as VHS has them.
+//
+// After recording, the transcript is scanned for clear failure signatures (FAILURE_SIGNATURES), so a demo that
+// shows an error is not passed off as a clean recording.
 //
 // VHS starts `ttyd` from PATH. That name is a small wrapper that asks this process (a broker on a Unix
 // socket) to start the real ttyd under the shell profile, because the wrapper, inside the recorder
@@ -42,8 +49,8 @@ export const TERMINAL_SIZES: readonly (readonly [number, number])[] = [
   [120, 40],
 ];
 export const TAPE_CAP = 64 * 1024;
-/** The tape's folder, copied before anything reads it: files, bytes, depth. */
-export const FOLDER_CAPS = { files: 200, bytes: 5 * 1024 * 1024, depth: 4 };
+/** The artifact's files, copied before anything reads them: files, bytes, depth (an artifact holds at most 100 files and 20 MB). */
+export const FOLDER_CAPS = { files: 200, bytes: 20 * 1024 * 1024, depth: 8 };
 export const CAST_CAP = 2 * 1024 * 1024;
 export const CAST_MAX_SECONDS = 600;
 export const ANS_CAP = 64 * 1024;
@@ -229,7 +236,7 @@ export function validateTape(text: string, o: { name?: string; readSource?: (rel
 
 // ---------- the folder copy ----------
 
-/** Copy the tape's folder (regular files and folders only, within FOLDER_CAPS). Returns an error, or undefined. */
+/** Copy the artifact's folder (regular files and folders only, within FOLDER_CAPS). Returns an error, or undefined. */
 function copyFolder(src: string, dst: string): string | undefined {
   let files = 0;
   let bytes = 0;
@@ -305,7 +312,7 @@ const subpath = (p: string) => {
 };
 
 /**
- * ttyd and the shell. Parameters: WORK (the copy of the tape's folder, the shell's directory) and
+ * ttyd and the shell. Parameters: WORK (the copy of the artifact, the shell's directory) and
  * SHELL_TMP. The only network operation is ttyd's own listening port, bound and accepted on loopback;
  * nothing may connect out, not even to loopback or a Unix socket (DNS included). Nothing in `reads.deny`
  * is read, apart from WORK, SHELL_TMP and `reads.allow` (later rules win). Signals reach only processes
@@ -527,7 +534,7 @@ async function probe(o: { env?: NodeJS.ProcessEnv; tmpRoot?: string }, sandboxEx
 // ---------- recording ----------
 
 export interface RecordOptions {
-  /** The tape's file name in the folder; default the folder's only top-level .tape. */
+  /** The tape's path in the artifact's folder (`demo/demo.tape`); default the folder's only top-level .tape. */
   tape?: string;
   timeoutMs?: number;
   /** Per output file. */
@@ -552,7 +559,44 @@ export interface RecordResult {
   error?: string;
   /** Why nothing (or not everything) was recorded. "unavailable": no working sandbox or a tool is missing, so use the fallback (hand-written .cast or .ans, labelled as not recorded). */
   reason?: "unavailable" | "invalid-tape" | "failed" | "timeout" | "too-large";
+  /**
+   * Of a recording: the first line of its transcript with a clear failure signature (transcriptError), when it shows
+   * one. Scanned whether or not the tape asked for a transcript.
+   */
+  errorLine?: string;
   durationMs?: number;
+}
+
+/**
+ * Clear signs that a command in a recording failed, as a terminal shows them. Explicit and short on purpose: each is
+ * printed by a shell, Node, Python, Go or the sandbox only when something went wrong, so a planned CLI's own output
+ * does not trip them. A line typed at VHS's prompt ("> ") is the tape's own command, not output, and is skipped.
+ */
+export const FAILURE_SIGNATURES: readonly { what: string; line: RegExp }[] = [
+  { what: "a missing Node module or script", line: /Cannot find module/ },
+  { what: "a missing program (bash, zsh)", line: /command not found/i },
+  { what: "a missing file", line: /No such file or directory/i },
+  { what: "a refusal: a script without its execute bit, or the sandbox", line: /Permission denied|Operation not permitted/i },
+  { what: "an uncaught JavaScript error", line: /^(?:Uncaught )?(?:Error|SyntaxError|ReferenceError|TypeError|RangeError)(?: \[[A-Z0-9_]+\])?:/ },
+  { what: "a Python traceback", line: /^Traceback \(most recent call last\)/ },
+  { what: "a Go panic", line: /^panic: / },
+  { what: "a crash", line: /Segmentation fault/i },
+  { what: "a non-zero exit the shell printed (a bash job, zsh's printexitvalue)", line: /^\[\d+\][+-]?\s+Exit \d+|^zsh: exit \d+/ },
+];
+/** VHS's prompt, for bash and zsh: a line starting with it is a typed command. */
+const PROMPT_LINE = /^> /;
+const ERROR_LINE_CAP = 200;
+
+/**
+ * The first line of a recording's transcript with a failure signature, trimmed, or undefined when it shows none.
+ * "At the start of a line" means at its first column: an indented "Error:" is a demo's own text.
+ */
+export function transcriptError(transcript: string): string | undefined {
+  for (const raw of transcript.split(/\r?\n/)) {
+    const line = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trimEnd();
+    if (!PROMPT_LINE.test(line) && FAILURE_SIGNATURES.some((s) => s.line.test(line))) return line.trim().slice(0, ERROR_LINE_CAP);
+  }
+  return undefined;
 }
 
 /** What VHS 0.12 passes to ttyd right after `--port=N`; the broker requires it (another VHS version is refused, not guessed at). */
@@ -704,12 +748,15 @@ const tail = (s: string, n = 600) =>
     .slice(-n);
 
 /**
- * Record `<tapeDir>/<tape>` into `outDir` (created, and empty), sandboxed as described at the top of
- * this file. The tape's folder is copied first and the tape checked against the copy; VHS runs with
- * one argument, a copy of the tape whose Outputs point into `outDir`. Never runs unsandboxed: without
- * a verified sandbox the result is a refusal with reason "unavailable".
+ * Record `<artifactDir>/<tape>` into `outDir` (created, and empty), sandboxed as described at the top of
+ * this file. The artifact's folder is copied first (the working copy) and the tape checked against the
+ * copy; the shell starts at the copy's root, so the tape's commands name files by their paths in the
+ * artifact. VHS runs in the tape's folder with one argument, a copy of the tape whose Outputs point into
+ * `outDir`. The transcript (the tape's, or the service's own when the tape asks for none) is scanned for
+ * failures (`errorLine`). Never runs unsandboxed: without a verified sandbox the result is a refusal with
+ * reason "unavailable".
  */
-export async function recordTape(tapeDir: string, outDir: string, opts: RecordOptions = {}): Promise<RecordResult> {
+export async function recordTape(artifactDir: string, outDir: string, opts: RecordOptions = {}): Promise<RecordResult> {
   const t0 = Date.now();
   const env = opts.env ?? process.env;
   const log = opts.log ?? (() => {});
@@ -718,18 +765,20 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
   const maxDiskBytes = opts.maxDiskBytes ?? RECORD_DEFAULTS.maxDiskBytes;
   const done = (r: Omit<RecordResult, "durationMs">): RecordResult => ({ ...r, durationMs: Date.now() - t0 });
 
-  // The tape and its folder.
-  let tapeName = opts.tape;
+  // The tape, in the artifact's folder.
+  let given = opts.tape;
   try {
-    if (!tapeName) {
-      const tapes = readdirSync(tapeDir).filter((f) => f.endsWith(".tape"));
+    if (!given) {
+      const tapes = readdirSync(artifactDir).filter((f) => f.endsWith(".tape"));
       if (tapes.length !== 1) return done({ sandbox: null, reason: "invalid-tape", error: tapes.length ? `the folder has ${tapes.length} tapes; name one` : "the folder has no .tape" });
-      tapeName = tapes[0];
+      given = tapes[0];
     }
   } catch (e) {
-    return done({ sandbox: null, reason: "invalid-tape", error: `cannot read the tape's folder: ${e instanceof Error ? e.message : String(e)}` });
+    return done({ sandbox: null, reason: "invalid-tape", error: `cannot read the artifact's folder: ${e instanceof Error ? e.message : String(e)}` });
   }
-  if (!insidePath(tapeName) || !tapeName.endsWith(".tape")) return done({ sandbox: null, reason: "invalid-tape", error: `${tapeName} is not a .tape in the folder` });
+  const tapeName = insidePath(given);
+  if (!tapeName || !tapeName.endsWith(".tape")) return done({ sandbox: null, reason: "invalid-tape", error: `${given} is not a .tape in the folder` });
+  const tapeFolder = posix.dirname(tapeName);
 
   try {
     mkdirSync(outDir, { recursive: true, mode: 0o700 });
@@ -741,6 +790,10 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
   if (/["`\n\r]/.test(out)) return done({ sandbox: null, reason: "failed", error: "the output folder's path has a quote or a line break" });
 
   const root = realpathSync(mkdtempSync(join(opts.tmpRoot ?? tmpdir(), "orc-vhs-")));
+  if (/["`\n\r]/.test(root)) {
+    rmSync(root, { recursive: true, force: true });
+    return done({ sandbox: null, reason: "failed", error: "the temporary folder's path has a quote or a line break" });
+  }
   const d = { work: join(root, "work"), vhsTmp: join(root, "vhs"), shellTmp: join(root, "shell"), sock: join(root, "sock"), bin: join(root, "bin") };
   for (const x of [d.vhsTmp, d.shellTmp, d.sock, d.bin]) mkdirSync(x, { mode: 0o700 });
   const children: ChildProcess[] = [];
@@ -767,9 +820,11 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
   };
 
   try {
-    const copyErr = copyFolder(tapeDir, d.work);
-    if (copyErr) return done({ sandbox: null, reason: "invalid-tape", error: `the tape's folder: ${copyErr}` });
+    const copyErr = copyFolder(artifactDir, d.work);
+    if (copyErr) return done({ sandbox: null, reason: "invalid-tape", error: `the artifact's files: ${copyErr}` });
     const tapePath = join(d.work, tapeName);
+    // VHS's own paths (Source; Output is rewritten below) are relative to the tape, so VHS runs in its folder.
+    const vhsDir = join(d.work, tapeFolder);
     let st;
     try {
       st = lstatSync(tapePath);
@@ -779,7 +834,7 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
     if (!st.isFile() || st.size > TAPE_CAP) return done({ sandbox: null, reason: "invalid-tape", error: `${tapeName} is not a file of at most ${TAPE_CAP / 1024} KB` });
     const readSource = (rel: string) => {
       try {
-        const f = join(d.work, rel);
+        const f = join(vhsDir, rel);
         const s = lstatSync(f);
         return s.isFile() && s.size <= TAPE_CAP ? readFileSync(f, "utf8") : undefined;
       } catch {
@@ -796,8 +851,11 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
     const health = await probeTerminalSandbox({ env, tmpRoot: opts.tmpRoot, sandboxExec });
     if (!health.ok) return done({ sandbox: null, reason: "unavailable", error: `Not recorded: no working sandbox (${health.detail}). Nothing runs unsandboxed; use a hand-written .cast or .ans instead.` });
     for (const rel of Object.values(check.outputs)) mkdirSync(dirname(join(out, rel!)), { recursive: true, mode: 0o700 });
+    // Every recording's transcript is scanned for failures: when the tape asks for none, the service adds its own,
+    // in the recorder's temp folder (VHS keeps one Output per type), and removes it with that folder.
+    const transcript = check.outputs.txt ? join(out, check.outputs.txt) : join(d.vhsTmp, "transcript.txt");
     const runTape = join(root, "run.tape");
-    writeFileSync(runTape, check.normalized!, { mode: 0o600 });
+    writeFileSync(runTape, check.outputs.txt ? check.normalized! : `Output ${quoteForTape(transcript)}\n${check.normalized!}`, { mode: 0o600 });
     writeFileSync(join(root, "recorder.sb"), recorderProfile(), { mode: 0o600 });
 
     // The broker: one ttyd, started in the shell sandbox by its reaper, for the one wrapper that asks.
@@ -839,7 +897,8 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
         for (const k of ["PS1", "PROMPT"] as const) if (typeof req.env?.[k] === "string") shellEnv[k] = req.env[k] as string;
         // The reaper starts ttyd inside the sandbox and ends the whole sandbox afterwards. Not registered with
         // trackLive: killing its group when this process exits would end it before it reaps; it reaps when
-        // its stdin, this process's end of the pipe, closes.
+        // its stdin, this process's end of the pipe, closes. ttyd and its shell inherit its directory: the
+        // working copy's root, so the tape's commands name files by their paths in the artifact.
         const ttyd = spawn(tools.sandboxExec, ["-f", join(root, "shell.sb"), "-D", `WORK=${d.work}`, "-D", `SHELL_TMP=${d.shellTmp}`, tools.node, reaperFile, String(process.pid), beforeFile, tools.ttyd, ...args], { cwd: d.work, env: shellEnv, stdio: ["pipe", "ignore", "pipe"], detached: true });
         reaper = ttyd;
         children.push(ttyd);
@@ -876,7 +935,7 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
       VHS_NO_SANDBOX: "1",
     };
     log(`terminal: recording ${tapeName} in ${root}`);
-    const vhs = spawn(tools.sandboxExec, ["-f", join(root, "recorder.sb"), "-D", `OUT=${out}`, "-D", `VHS_TMP=${d.vhsTmp}`, "-D", `SOCK_DIR=${d.sock}`, tools.vhs, runTape], { cwd: d.work, env: vhsEnv, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    const vhs = spawn(tools.sandboxExec, ["-f", join(root, "recorder.sb"), "-D", `OUT=${out}`, "-D", `VHS_TMP=${d.vhsTmp}`, "-D", `SOCK_DIR=${d.sock}`, tools.vhs, runTape], { cwd: vhsDir, env: vhsEnv, stdio: ["ignore", "pipe", "pipe"], detached: true });
     trackLive(vhs);
     children.push(vhs);
     let vhsOut = "";
@@ -923,6 +982,15 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
       if (size < 0) return failed({ reason: "failed", error: `VHS did not write ${rel}: ${tail(vhsOut) || "no output"}` });
       if (size > maxOutputBytes) return failed({ reason: "too-large", error: `${rel} is ${Math.round(size / 1024 / 1024)} MB, over the ${Math.round(maxOutputBytes / 1024 / 1024)} MB cap; the outputs were removed` });
       result[type] = f;
+    }
+    // A recording that shows a failure says so, with its first failing line.
+    try {
+      const st = lstatSync(transcript);
+      if (!st.isFile() || st.size > maxOutputBytes) throw new Error(st.isFile() ? "it is too large" : "it is not a file");
+      const errorLine = transcriptError(readFileSync(transcript, "utf8"));
+      if (errorLine) result.errorLine = errorLine;
+    } catch (e) {
+      log(`terminal: the transcript of ${tapeName} could not be scanned for failures: ${e instanceof Error ? e.message : String(e)}`);
     }
     return done(result);
   } catch (e) {

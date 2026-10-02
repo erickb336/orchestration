@@ -203,7 +203,8 @@ export async function sendDrafts(send: (name: "sendFeedback", args: object) => P
 /**
  * How one variant of a terminal demo or TUI is shown, from what the service recorded on the version (`demo`):
  * - pending: the service is recording it;
- * - recorded: VHS recorded the designer's tape in the sandbox (a webm or gif, and maybe its text transcript);
+ * - recorded: VHS recorded the designer's tape in the sandbox (a webm or gif, and maybe its text transcript); `error`
+ *   when the recording shows a failure the designer did not mean to show (its first failing line);
  * - hand-written: not recorded (`reason`, when the tape was not); the designer's asciicast (`.cast`, shown as its
  *   transcript) or frame (`.ans`);
  * - not recorded: nothing to play, with the reason.
@@ -211,7 +212,7 @@ export async function sendDrafts(send: (name: "sendFeedback", args: object) => P
  */
 export type DemoView =
   | { status: "pending" }
-  | { status: "recorded"; video?: string; gif?: string; transcript?: string }
+  | { status: "recorded"; video?: string; gif?: string; transcript?: string; error?: string }
   | { status: "hand-written"; cast?: string; frame?: string; reason?: string }
   | { status: "not-recorded"; reason: string };
 
@@ -228,7 +229,7 @@ export function variantDemo(a: StudioArtifact, variantId: string | undefined): D
   if (d?.status === "done") {
     const v = d.variants.find((x) => x.variant === variantId);
     if (!v) return { status: "not-recorded", reason: "The service recorded nothing for this variant." };
-    if (v.status === "recorded") return { status: "recorded", ...(v.webm ? { video: v.webm } : {}), ...(v.gif ? { gif: v.gif } : {}), ...(v.txt ? { transcript: v.txt } : {}) };
+    if (v.status === "recorded" || v.status === "recorded-with-errors") return { status: "recorded", ...(v.webm ? { video: v.webm } : {}), ...(v.gif ? { gif: v.gif } : {}), ...(v.txt ? { transcript: v.txt } : {}), ...(v.status === "recorded-with-errors" ? { error: v.reason } : {}) };
     if (v.status === "hand-written") {
       const cast = firstOf(v.files, "cast");
       const frame = firstOf(v.files, "ans");

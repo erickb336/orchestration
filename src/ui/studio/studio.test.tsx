@@ -375,6 +375,9 @@ describe("terminal artifacts", () => {
     const ra = S.getArtifact(recorded.s, recorded.id, 1);
     expect(variantDemo(ra, "a")).toEqual({ status: "recorded", video: "recording/a/demo.webm", transcript: "recording/a/demo.txt" });
     expect(variantDemo(ra, "b")).toEqual({ status: "not-recorded", reason: "its entry is not a .tape" });
+    // A recording that shows a failure is still played, with its first failing line.
+    const failing = withTerminal({ demo: { status: "done", at: at(5), variants: [{ variant: "a", status: "recorded-with-errors", tape: "a/demo.tape", gif: "recording/a/demo.gif", reason: "Error: Cannot find module '/w/demo/trips.js'" }, { variant: "b", status: "hand-written", files: ["b/plan.ans"] }] } });
+    expect(variantDemo(S.getArtifact(failing.s, failing.id, 1), "a")).toEqual({ status: "recorded", gif: "recording/a/demo.gif", error: "Error: Cannot find module '/w/demo/trips.js'" });
     // A version the service recorded nothing for shows the hand-written files beside the entry.
     expect(variantDemo({ ...a, demo: undefined }, "a")).toEqual({ status: "hand-written", cast: "a/demo.cast" });
   });
@@ -390,6 +393,13 @@ describe("terminal artifacts", () => {
     const played = render(<Studio />, recorded.s, service({ prototypePort: undefined }));
     expect(played).toContain(`src="/api/studio/file?artifact=${recorded.id}&amp;version=1&amp;path=recording%2Fa%2Fdemo.webm"`);
     expect(played).toContain("Recorded with VHS from the designer&#x27;s tape");
+    expect(played).not.toContain("Recorded with errors");
+    // A recording that shows a failure says so plainly, above the recording, as a failure.
+    const failing = withTerminal({ demo: { status: "done", at: at(5), variants: [{ variant: "a", status: "recorded-with-errors", tape: "a/demo.tape", gif: "recording/a/demo.gif", reason: "Error: Cannot find module '/w/demo/trips.js'" }, { variant: "b", status: "hand-written", files: ["b/plan.ans"] }] } });
+    const shown = render(<Studio />, failing.s, service({ prototypePort: undefined }));
+    expect(shown).toContain('class="k-banner k-banner--fail" role="alert"');
+    expect(shown).toContain("Recorded with errors: the demo did not run cleanly in the sandbox (Error: Cannot find module &#x27;/w/demo/trips.js&#x27;).");
+    expect(shown).toContain(`src="/api/studio/file?artifact=${failing.id}&amp;version=1&amp;path=recording%2Fa%2Fdemo.gif"`);
   });
 
   it("a .ans frame is drawn with colours as token classes, never as inline colours, at the smallest studio size it fits", () => {

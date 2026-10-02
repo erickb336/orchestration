@@ -96,6 +96,27 @@ describe("reading studio.json", () => {
     expect(read()[0].files.map((f) => f.path)).toEqual(Object.keys(files));
   });
 
+  it("takes a variant's showsError (a demo of an error path) as true or false, keeps it only when true, and writes it in the version's manifest", () => {
+    const files = { "a/demo.tape": "Output demo.gif\nSet Columns 80\nSet Rows 24\n", "a/demo.js": "process.exit(1)" };
+    const demo = (showsError: unknown) => ({ artifacts: [{ kind: "terminal-demo", title: "trips", variants: [{ id: "a", label: "A", entry: "a/demo.tape", showsError }, { id: "b", label: "B", entry: "a/demo.tape" }], files: Object.keys(files) }] });
+    stage(demo(true), files);
+    expect(read()[0].variants).toEqual([
+      { id: "a", label: "A", entry: "a/demo.tape", showsError: true },
+      { id: "b", label: "B", entry: "a/demo.tape" },
+    ]);
+    const { s, runId } = withRun();
+    const root = studioRoot(dir, "p-1");
+    const art = S.latestArtifacts(importDesignerRun(s, runId, read(), root, at(4)).state)[0];
+    expect(JSON.parse(readFileSync(join(versionDir(root, art.id, 1), "manifest.json"), "utf8")).variants).toEqual([
+      { id: "a", label: "A", entry: "a/demo.tape", showsError: true },
+      { id: "b", label: "B", entry: "a/demo.tape" },
+    ]);
+    stage(demo(false), files);
+    expect(read()[0].variants[0]).toEqual({ id: "a", label: "A", entry: "a/demo.tape" });
+    stage(demo("yes"), files);
+    expect(refusal(read)).toBe('artifact 1: "showsError" of variant "a" is true or false.');
+  });
+
   it("checks terminal files with 3c's validators: each variant's tape as it would record, every .cast and .ans", () => {
     const demo = (files: Record<string, string>, entry = "a/demo.tape") => {
       rmSync(staging, { recursive: true, force: true });

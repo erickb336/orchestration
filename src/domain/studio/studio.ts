@@ -319,10 +319,10 @@ export function recordArtifactMedia(state: State, artifactId: string, version: n
   };
   const variants = result.demo.variants.map((v): VariantDemo => {
     const id = variant(v.variant);
-    if (v.status === "recorded") {
+    if (v.status === "recorded" || v.status === "recorded-with-errors") {
       const outs = { ...(v.webm ? { webm: servicePath(v.webm, `recording/${id}`) } : {}), ...(v.gif ? { gif: servicePath(v.gif, `recording/${id}`) } : {}), ...(v.txt ? { txt: servicePath(v.txt, `recording/${id}`) } : {}) };
       if (!Object.keys(outs).length) throw new ControlError("A recorded variant names its recording.");
-      return { variant: id, status: "recorded", tape: own(v.tape), ...outs };
+      return v.status === "recorded" ? { variant: id, status: "recorded", tape: own(v.tape), ...outs } : { variant: id, status: "recorded-with-errors", tape: own(v.tape), ...outs, reason: reasonText(v.reason) };
     }
     if (v.status === "hand-written") {
       if (!v.files.length || !v.files.every((f) => /\.(cast|ans)$/.test(f))) throw new ControlError("A hand-written variant names its .cast or .ans files.");
@@ -333,7 +333,7 @@ export function recordArtifactMedia(state: State, artifactId: string, version: n
   if (new Set(variants.map((v) => v.variant)).size !== variants.length || variants.length !== a.variants.length) throw new ControlError(`The recording names each variant of ${artifactName(a)} once.`);
   const s = draft(state);
   getArtifact(s, artifactId, version).demo = { status: "done", at: now, variants };
-  const words = (v: VariantDemo) => (v.status === "recorded" ? "recorded" : v.status === "hand-written" ? "hand-written, not recorded" : `not recorded (${v.reason})`);
+  const words = (v: VariantDemo) => (v.status === "recorded" ? "recorded" : v.status === "recorded-with-errors" ? `recorded with errors (${v.reason})` : v.status === "hand-written" ? "hand-written, not recorded" : `not recorded (${v.reason})`);
   event(s, now, "system", "vision", `${artifactName(a)}: ${variants.map((v) => `${variants.length > 1 ? `${variantLabel(a, v.variant)} ` : ""}${words(v)}`).join("; ")}`);
   return s;
 }
@@ -347,13 +347,14 @@ export function shotsNote(a: StudioArtifact): string | undefined {
   return `${sh.failed.length} of ${sh.shots.length + sh.failed.length} screenshots failed: ${sh.failed[0].error}`;
 }
 
-/** What the studio says about how one variant of a terminal demo or TUI is shown, or nothing (it was recorded, or none expected). */
+/** What the studio says about how one variant of a terminal demo or TUI is shown, or nothing (it was recorded cleanly, or none expected). */
 export function demoNote(a: StudioArtifact, variant: string): string | undefined {
   const d = a.demo;
   if (!d) return undefined;
   if (d.status === "pending") return "Recording…";
   const v = d.variants.find((x) => x.variant === variant);
   if (!v || v.status === "recorded") return undefined;
+  if (v.status === "recorded-with-errors") return `Recorded with errors: the demo did not run cleanly in the sandbox (${v.reason})`;
   if (v.status === "hand-written") return v.reason ? `Hand-written, not recorded: ${v.reason}` : "Hand-written, not recorded";
   return `Not recorded: ${v.reason}`;
 }

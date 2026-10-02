@@ -3,17 +3,19 @@
 // recording goes, and what it falls back to (the designer's .cast or .ans) when it is not recorded, with the reason.
 // Real Chrome and VHS run in runs.test.ts, through the scheduler.
 
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MediaResult } from "../../src/domain/studio/studio";
-import { makeDemo, makeShots, notRecordedReason, type StudioMedia } from "./media";
+import { makeDemo, makeShots, notRecordedReason, systemMedia, type StudioMedia } from "./media";
 import type { ShotsOutcome } from "./shots";
-import { recordTape, type RecordResult } from "./terminal";
+import { probeTerminalSandbox, recordTape, type RecordResult } from "./terminal";
 import { writeVersion } from "./testFixtures";
 
 const NOW = "2026-10-02T12:00:00.000Z";
+/** As the real trial (ORC-029 pass 3) wrote it: demo/demo.tape runs demo/trips.js by its path from the artifact's root. */
+const SUBFOLDER = resolve(__dirname, "fixtures/trips-subfolder");
 const now = () => NOW;
 const variantsOf = (r: MediaResult) => ("demo" in r ? r.demo.variants : []);
 let root: string;
@@ -51,7 +53,7 @@ describe("a screen's screenshots", () => {
 });
 
 describe("a terminal demo's variants", () => {
-  const TAPE = "Output demo.gif\nOutput demo.txt\nSet Columns 80\nSet Rows 24\nType \"node trips.js\"\nEnter\n";
+  const TAPE = "Output demo.gif\nOutput demo.txt\nSet Columns 80\nSet Rows 24\nType \"node a/trips.js\"\nEnter\n";
   const FILES = { "a/demo.tape": TAPE, "a/trips.js": "console.log('trips')", "a/demo.cast": '{"version": 3, "term": {"cols": 80, "rows": 24}}\n', "b/plan.ans": "Trips\n", "c/notes.md": "# Later" };
   const VARIANTS = [
     { id: "a", label: "Recorded", entry: "a/demo.tape" },
@@ -60,7 +62,7 @@ describe("a terminal demo's variants", () => {
   ];
   const version = () => writeVersion(studio, "sa-2", 1, FILES, { kind: "terminal-demo", devices: [], variants: VARIANTS });
 
-  it("records the tape from a copy of its own folder into recording/<variant>/; frames are hand-written; a variant with neither says so", async () => {
+  it("records the tape from a copy of the whole version into recording/<variant>/; frames are hand-written; a variant with neither says so", async () => {
     const dir = version();
     const { media, recorded } = stand();
     const r = await makeDemo(media, studio, "sa-2", 1, ["a", "b", "c"], now);
@@ -75,8 +77,9 @@ describe("a terminal demo's variants", () => {
         ],
       },
     });
-    // VHS saw the variant's folder only, and the recording sits in the version's folder; the copy is gone.
-    expect(recorded).toEqual([{ tape: "demo.tape", files: ["demo.cast", "demo.tape", "trips.js"], from: expect.any(String) }]);
+    // VHS saw every file of the version at its path (the tape's commands name files from the artifact's root), and
+    // none of the service's own; the recording sits in the version's folder; the copy is gone.
+    expect(recorded).toEqual([{ tape: "a/demo.tape", files: ["a", "a/demo.cast", "a/demo.tape", "a/trips.js", "b", "b/plan.ans", "c", "c/notes.md"], from: expect.any(String) }]);
     expect(readdirSync(join(dir, "recording", "a")).sort()).toEqual(["demo.gif", "demo.txt"]);
     expect(existsSync(recorded[0].from)).toBe(false);
   });
@@ -104,6 +107,22 @@ describe("a terminal demo's variants", () => {
     expect(notRecordedReason(missing)).toBe(`recording is not available here: ${why}`);
   });
 
+  it("a recording whose transcript shows a failure is recorded with errors, with its first failing line; a variant made to show an error is recorded", async () => {
+    const line = "Error: Cannot find module '/private/var/folders/wk/T/orc-vhs-1/work/demo/trips.js'";
+    writeVersion(studio, "sa-4", 1, { "a/demo.tape": TAPE, "a/trips.js": "1", "b/demo.tape": TAPE, "b/trips.js": "2" }, { kind: "terminal-demo", devices: [], variants: [{ id: "a", label: "A", entry: "a/demo.tape" }, { id: "b", label: "B · the error path", entry: "b/demo.tape", showsError: true }] });
+    const { media } = stand({
+      record: (_root, out) => {
+        mkdirSync(out, { recursive: true });
+        writeFileSync(join(out, "demo.gif"), "GIF8");
+        return { sandbox: "sandbox-exec", gif: join(out, "demo.gif"), errorLine: line };
+      },
+    });
+    expect(variantsOf(await makeDemo(media, studio, "sa-4", 1, ["a", "b"], now))).toEqual([
+      { variant: "a", status: "recorded-with-errors", tape: "a/demo.tape", gif: "recording/a/demo.gif", reason: line },
+      { variant: "b", status: "recorded", tape: "b/demo.tape", gif: "recording/b/demo.gif" },
+    ]);
+  });
+
   it("does not record from a file that no longer matches its hash, and says why", async () => {
     const dir = version();
     rmSync(join(dir, "a", "trips.js"), { force: true });
@@ -126,4 +145,28 @@ describe("a terminal demo's variants", () => {
       },
     });
   });
+});
+
+const sandbox = await probeTerminalSandbox();
+
+describe(`a terminal demo recorded for real, as the trial's designer wrote it${sandbox.ok ? "" : ` (skipped: ${sandbox.detail})`}`, () => {
+  it.skipIf(!sandbox.ok)(
+    "the shell starts at the version's root with all its files, so a script called by its root path prints its real output; a demo that fails on screen is recorded with errors",
+    async () => {
+      const fixture = (p: string) => readFileSync(join(SUBFOLDER, p), "utf8");
+      // b makes the trial's mistake the other way round (a path from its tape's folder), and asks for no transcript.
+      const BROKEN = 'Output demo.gif\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 10ms\nType "node trips.js"\nEnter\nSleep 1.5s\n';
+      const files = { "demo/demo.tape": fixture("demo/demo.tape"), "demo/setup.tape": fixture("demo/setup.tape"), "demo/trips.js": fixture("demo/trips.js"), "b/demo.tape": BROKEN, "b/trips.js": "console.log('not reached')\n" };
+      const dir = writeVersion(studio, "sa-5", 1, files, { kind: "terminal-demo", devices: ["terminal"], variants: [{ id: "a", label: "A", entry: "demo/demo.tape" }, { id: "b", label: "B", entry: "b/demo.tape" }] });
+      const [a, b] = variantsOf(await makeDemo(systemMedia(), studio, "sa-5", 1, ["a", "b"], now));
+      expect(a).toEqual({ variant: "a", status: "recorded", tape: "demo/demo.tape", gif: "recording/a/demo.gif", txt: "recording/a/demo.txt" });
+      const txt = readFileSync(join(dir, "recording", "a", "demo.txt"), "utf8");
+      expect(txt.split("\n")).toContain(" 1  Lake Tahoe cabin      3h 40m   $148");
+      expect(txt).not.toContain("Cannot find module");
+      expect(b).toMatchObject({ variant: "b", status: "recorded-with-errors", tape: "b/demo.tape", gif: "recording/b/demo.gif" });
+      expect(b.status === "recorded-with-errors" ? b.reason : "").toMatch(/^Error: Cannot find module '/);
+      expect(readdirSync(join(dir, "recording", "b"))).toEqual(["demo.gif"]);
+    },
+    120_000,
+  );
 });

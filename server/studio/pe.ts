@@ -35,7 +35,8 @@ function variantLines(a: ReturnType<typeof S.getArtifact>, v: { id: string; labe
     if (mine.length) lines.push(`  Screenshots: ${mine.map((x) => `${x.path} (${x.device})`).join(", ")}.`);
   }
   const demo = a.demo?.status === "done" ? a.demo.variants.find((x) => x.variant === v.id) : undefined;
-  if (demo?.status === "recorded") lines.push(`  Recorded in the sandbox from ${demo.tape}: ${[demo.txt && `${demo.txt} (its text transcript)`, demo.gif, demo.webm].filter(Boolean).join(", ")}.`);
+  if (demo?.status === "recorded" || demo?.status === "recorded-with-errors") lines.push(`  Recorded in the sandbox from ${demo.tape}: ${[demo.txt && `${demo.txt} (its text transcript)`, demo.gif, demo.webm].filter(Boolean).join(", ")}.`);
+  if (demo?.status === "recorded-with-errors") lines.push(`  The recording shows an error the designer did not mean to show: ${demo.reason}`);
   if (demo?.status === "hand-written") lines.push(`  Not recorded${demo.reason ? ` (${demo.reason})` : ""}; the designer's hand-written frames: ${demo.files.join(", ")}.`);
   if (demo?.status === "not-recorded") lines.push(`  Not recorded: ${demo.reason}.`);
   return lines;

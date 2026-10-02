@@ -82,6 +82,20 @@ describe("a version's screenshots and recording", () => {
     expect([S.demoNote(art(none, demo), "a"), S.demoNote(art(none, demo), "b")]).toEqual([`Not recorded: ${reason}`, "Hand-written, not recorded"]);
   });
 
+  it("records a recording that shows a failure as recorded with errors, with its first failing line, and says so plainly", () => {
+    const { s, demo } = studio();
+    const line = "Error: Cannot find module '/private/var/folders/wk/T/orc-vhs-1/work/demo/trips.js'";
+    const done = S.recordArtifactMedia(s, demo, 1, { demo: { status: "done", at: at(9), variants: [{ variant: "a", status: "recorded-with-errors", tape: "a/demo.tape", gif: "recording/a/demo.gif", txt: "recording/a/demo.txt", reason: line }, { variant: "b", status: "recorded", tape: "a/demo.tape", gif: "recording/b/demo.gif" }] } }, at(10));
+    expect(art(done, demo).demo).toEqual({ status: "done", at: at(10), variants: [{ variant: "a", status: "recorded-with-errors", tape: "a/demo.tape", gif: "recording/a/demo.gif", txt: "recording/a/demo.txt", reason: line }, { variant: "b", status: "recorded", tape: "a/demo.tape", gif: "recording/b/demo.gif" }] });
+    expect(lastEvent(done)).toBe(`trips v1: Map first recorded with errors (${line}); Day by day recorded`);
+    expect([S.demoNote(art(done, demo), "a"), S.demoNote(art(done, demo), "b")]).toEqual([`Recorded with errors: the demo did not run cleanly in the sandbox (${line})`, undefined]);
+    // Still a recording: it names one, in its own folder, and its tape is a file of the version.
+    const record = (v: object) => () => S.recordArtifactMedia(s, demo, 1, { demo: { status: "done", at: at(9), variants: [{ variant: "a", status: "recorded-with-errors", tape: "a/demo.tape", reason: line, ...v }, { variant: "b", status: "not-recorded", reason: "none" }] } } as S.MediaResult, at(10));
+    expect(record({})).toThrow("A recorded variant names its recording.");
+    expect(record({ gif: "recording/b/demo.gif" })).toThrow(/not in the version's recording\/a\/ folder/);
+    expect(record({ gif: "recording/a/demo.gif", tape: "a/other.tape" })).toThrow('"a/other.tape" is not a file of trips v1.');
+  });
+
   it("refuses a recording outside the variant's recording folder, a hand-written file the version does not have, and a variant left out", () => {
     const { s, demo } = studio();
     const record = (variants: object[]) => () => S.recordArtifactMedia(s, demo, 1, { demo: { status: "done", at: at(9), variants } } as S.MediaResult, at(10));
