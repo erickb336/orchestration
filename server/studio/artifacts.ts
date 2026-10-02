@@ -14,9 +14,10 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { DEVICES, type Device } from "../../src/domain/types";
 import type { StudioArtifactKind } from "../../src/domain/studio/types";
+import { validateAnsFrame, validateCast, validateTape } from "./terminal";
 
 /** What a designer run hands in, in its staging folder. */
 export const STUDIO_MANIFEST = "studio.json";
@@ -173,8 +174,56 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
       if (p.endsWith(".html") && MODULE_SCRIPT.test(data.toString("utf8"))) throw new ManifestError(`${where}: ${show(p)} has a <script type="module">: ${NO_MODULES}.`);
       return { path: p, sha256: createHash("sha256").update(data).digest("hex"), bytes: data.length, data };
     });
+    checkTerminalFiles(where, a.kind as StudioArtifactKind, variants, files);
     return { kind: a.kind as StudioArtifactKind, title: a.title, devices: devices as Device[], variants, files };
   });
+}
+
+const TERMINAL_KINDS: readonly StudioArtifactKind[] = ["terminal-demo", "tui"];
+const sameFolder = (a: string, b: string) => posix.dirname(a) === posix.dirname(b);
+
+/** The tape a terminal variant records: its entry when that is a .tape, else the one .tape beside its entry. */
+export function variantTape(files: readonly string[], entry: string): string | undefined {
+  if (entry.endsWith(".tape")) return entry;
+  const beside = files.filter((f) => f.endsWith(".tape") && sameFolder(f, entry));
+  return beside.length === 1 ? beside[0] : undefined;
+}
+
+/** The hand-written files a terminal variant is shown with when it is not recorded: the .cast and .ans files beside its entry, the entry first. */
+export function variantFallback(files: readonly string[], entry: string): string[] {
+  const beside = files.filter((f) => /\.(cast|ans)$/.test(f) && sameFolder(f, entry)).sort();
+  return beside.includes(entry) ? [entry, ...beside.filter((f) => f !== entry)] : beside;
+}
+
+/**
+ * 3c's validators, at import: every .cast (asciicast v3) and .ans frame of any artifact, and the tape each variant of
+ * a terminal demo or TUI records (its Sources read from the same folder). A tape that would be refused when recorded
+ * is refused now, with the reason, while the designer can still fix it.
+ */
+function checkTerminalFiles(where: string, kind: StudioArtifactKind, variants: { id: string; entry: string }[], files: StagedFile[]) {
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const text = (f: StagedFile) => {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(f.data);
+    } catch {
+      throw new ManifestError(`${where}: ${show(f.path)} is not UTF-8 text.`);
+    }
+  };
+  for (const f of files) {
+    const check = f.path.endsWith(".cast") ? validateCast(text(f)) : f.path.endsWith(".ans") ? validateAnsFrame(text(f)) : undefined;
+    if (check && !check.ok) throw new ManifestError(`${where}: ${show(f.path)}: ${check.error}.`);
+  }
+  if (!TERMINAL_KINDS.includes(kind)) return;
+  const paths = files.map((f) => f.path);
+  for (const tape of new Set(variants.map((v) => variantTape(paths, v.entry)).filter((t): t is string => t !== undefined))) {
+    const folder = posix.dirname(tape);
+    const readSource = (rel: string) => {
+      const f = byPath.get(folder === "." ? rel : `${folder}/${rel}`);
+      return f ? text(f) : undefined;
+    };
+    const check = validateTape(text(byPath.get(tape)!), { name: tape, readSource });
+    if (!check.ok) throw new ManifestError(`${where}: ${show(tape)} would not record: ${check.errors.join("; ")}.`);
+  }
 }
 
 /** The manifest.json of a version folder (the contract with the prototype server). */

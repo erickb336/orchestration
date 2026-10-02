@@ -96,6 +96,39 @@ describe("reading studio.json", () => {
     expect(read()[0].files.map((f) => f.path)).toEqual(Object.keys(files));
   });
 
+  it("checks terminal files with 3c's validators: each variant's tape as it would record, every .cast and .ans", () => {
+    const demo = (files: Record<string, string>, entry = "a/demo.tape") => {
+      rmSync(staging, { recursive: true, force: true });
+      mkdirSync(staging, { recursive: true });
+      stage({ artifacts: [{ kind: "terminal-demo", title: "trips", variants: [{ id: "a", label: "A", entry }], files: Object.keys(files) }] }, files);
+    };
+    const SIZE = "Set Columns 80\nSet Rows 24\n";
+    demo({ "a/demo.tape": `Output demo.gif\n${SIZE}Set Shell fish\n` });
+    expect(refusal(read)).toBe('artifact 1: "a/demo.tape" would not record: a/demo.tape:4: Set Shell must be bash or zsh.');
+    demo({ "a/demo.tape": `Output ../../demo.gif\n${SIZE}` });
+    expect(refusal(read)).toMatch(/^artifact 1: "a\/demo.tape" would not record: a\/demo.tape:1: Output must be one path inside the tape's folder/);
+    // Sources are read from the tape's folder, and a sourced tape is not checked alone.
+    demo({ "a/demo.tape": `Output demo.gif\n${SIZE}Source intro.tape\n`, "a/intro.tape": 'Type "trips plan"\n' });
+    expect(read()[0].files.map((f) => f.path)).toEqual(["a/demo.tape", "a/intro.tape"]);
+    demo({ "a/demo.tape": `Output demo.gif\n${SIZE}Source intro.tape\n`, "a/intro.tape": "Set Shell fish\n" });
+    expect(refusal(read)).toBe('artifact 1: "a/demo.tape" would not record: intro.tape:1: Set Shell must be bash or zsh.');
+    // When the entry is not a tape, the one tape beside it is the one recorded.
+    demo({ "a/readme.txt": "trips", "a/demo.tape": `Output demo.gif\n${SIZE}Set Shell fish\n` }, "a/readme.txt");
+    expect(refusal(read)).toMatch(/^artifact 1: "a\/demo.tape" would not record/);
+    // Hand-written frames, in any artifact.
+    demo({ "a/demo.cast": '{"version": 2, "width": 80, "height": 24}\n' }, "a/demo.cast");
+    expect(refusal(read)).toBe('artifact 1: "a/demo.cast": the header\'s version is not 3 (asciicast v3).');
+    demo({ "a/plan.ans": "\u001b]8;;file:///etc/passwd\u0007open\u001b]8;;\u0007\n" }, "a/plan.ans");
+    expect(refusal(read)).toMatch(/^artifact 1: "a\/plan.ans": the escape /);
+    stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, "a/frame.ans"] }] }, { ...PAGES, "a/frame.ans": "x".repeat(121) });
+    expect(refusal(read)).toBe('artifact 1: "a/frame.ans": a line is 121 characters wide, more than 120 columns.');
+    rmSync(staging, { recursive: true, force: true });
+    mkdirSync(join(staging, "a"), { recursive: true });
+    writeFileSync(join(staging, "a", "plan.ans"), Buffer.from([0x41, 0xff]));
+    writeFileSync(join(staging, "studio.json"), JSON.stringify({ artifacts: [{ kind: "tui", title: "trips", variants: [{ id: "a", label: "A", entry: "a/plan.ans" }], files: ["a/plan.ans"] }] }));
+    expect(refusal(read)).toBe('artifact 1: "a/plan.ans" is not UTF-8 text.');
+  });
+
   it("refuses a missing or broken studio.json, and kinds this run does not make", () => {
     stage(null);
     expect(refusal(read)).toBe("the run wrote no studio.json.");
