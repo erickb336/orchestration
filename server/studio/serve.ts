@@ -69,7 +69,7 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
  * nothing but the click and the element's place in the page. The app takes it through acceptPinMessage.
  * It is served as a file, not inline, because the policy allows no inline script.
  */
-export const PIN_PATH = "/__orchestrator/pin.js";
+const PIN_PATH = "/__orchestrator/pin.js";
 const PIN_SCRIPT = `(function () {
   if (window.parent === window) return;
   function selector(el) {
@@ -97,7 +97,7 @@ const PIN_SCRIPT = `(function () {
 const PIN_TAG = Buffer.from(`<script src="${PIN_PATH}"></script>`);
 
 /** The headers every response carries, errors included. */
-export function prototypeHeaders(appOrigins: string[]): Record<string, string> {
+function prototypeHeaders(appOrigins: string[]): Record<string, string> {
   return {
     "Content-Security-Policy": `default-src 'self'; connect-src 'none'; form-action 'none'; frame-ancestors ${appOrigins.join(" ")}`,
     "X-Content-Type-Options": "nosniff",
