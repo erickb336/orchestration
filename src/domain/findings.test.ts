@@ -2,6 +2,7 @@
 // the lead's decisions, and the Checks steps that skip while checks are off. Pure domain tests.
 
 import { describe, expect, it } from "vitest";
+import { runCommand } from "./commands";
 import * as F from "./findings";
 import * as M from "./model";
 import { needsYouItems } from "./needsYou";
@@ -173,6 +174,14 @@ describe("decisions: routing, the user's decisions, follow-ups, reopen", () => {
     expect(re.project.triage.askUserBy).toBe("user");
     expect(re.decisions[0].routedTo).toBe("user");
     expect(() => F.routeDecision(F.decideFinding(re, re.decisions[0].id, "accept", undefined, at(11)), re.decisions[0].id, "lead", at(12))).toThrow(/decided/);
+  });
+
+  it("one decision moves between the lead and you only: a decision reaches the PE through the project's route, never one by one (review finding 9)", () => {
+    const { s } = reviewed([finding({ action: "ask-user" })]);
+    const id = s.decisions[0].id;
+    expect(() => F.routeDecision(s, id, "pe" as never, at(9))).toThrow("Send a decision to the lead or to you.");
+    expect(() => runCommand(s, "routeDecision", { decisionId: id, to: "pe" }, at(9))).toThrow("to must be lead or user");
+    expect(F.routeDecision(s, id, "lead", at(9)).events.at(-1)!.message).toBe(`${id} sent to the lead`);
   });
 
   it("follow-up creates a held task of yours seeded from the finding and counts as accepted here; reopen opens it again and keeps usedBy", () => {

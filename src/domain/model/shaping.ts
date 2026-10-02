@@ -166,7 +166,7 @@ function applyFactorySettings(state: State, x: FactorySettings, now: string): St
   }
   if (s.project.autonomy.holdLeadProposals !== x.pausePoints.startEachTask) s = setAutonomy(s, { ...s.project.autonomy, holdLeadProposals: x.pausePoints.startEachTask }, now);
   s = F.setTriageRouting(s, x.pausePoints.tradeoffs, now);
-  if (s.project.changeOrders !== x.pausePoints.changeOrders) s = setChangeOrders(s, x.pausePoints.changeOrders, now);
+  s = setChangeOrders(s, x.pausePoints.changeOrders, now);
   return s;
 }
 
@@ -239,6 +239,7 @@ export function startVision(state: State, now: string): State {
  * orders made from now on; open ones keep theirs.
  */
 export function setChangeOrders(state: State, who: "lead" | "user", now: string): State {
+  if (state.project.changeOrders === who) return state;
   const s = draft(state);
   s.project.changeOrders = who;
   event(s, now, "user", "config", who === "user" ? "Change orders: the lead asks you before it updates tasks" : "Change orders: the lead updates the affected tasks");

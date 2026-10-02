@@ -377,17 +377,19 @@ export function decideFinding(state: State, decisionId: string, decision: UserDe
   return s;
 }
 
-/** Move one open decision between the lead, the PE and the user ("Send to the lead", "Send to me"). A suggestion on it is kept. */
-export function routeDecision(state: State, decisionId: string, to: FindingDecision["routedTo"], now: string): State {
-  if (to !== "lead" && to !== "pe" && to !== "user") throw new ControlError("Route a decision to the lead, the PE or the user.");
+/**
+ * Move one open decision between the lead and the user ("Send to the lead", "Send to me"). A suggestion on it is kept.
+ * A decision reaches the PE only through the project's route (`setTriageRouting`).
+ */
+export function routeDecision(state: State, decisionId: string, to: "lead" | "user", now: string): State {
+  if (to !== "lead" && to !== "user") throw new ControlError("Send a decision to the lead or to you.");
   const s = structuredClone(state);
   const d = getDecision(s, decisionId);
   if (d.status !== "open") throw new ControlError(`${d.id} is decided (${d.status}); reopen it first.`);
-  if (to === "pe" && d.kind === "final-checks") throw new ControlError("Failing final checks are decided by the lead or by you.");
   if (d.routedTo === to) return state;
   d.routedTo = to;
   d.routedAt = now;
-  M.event(s, now, "user", "decision", `${d.id} sent to ${to === "user" ? "you" : DECIDER[to]}`, d.taskId);
+  M.event(s, now, "user", "decision", `${d.id} sent to ${to === "user" ? "you" : "the lead"}`, d.taskId);
   return s;
 }
 

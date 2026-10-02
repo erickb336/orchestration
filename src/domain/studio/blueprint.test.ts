@@ -248,6 +248,15 @@ describe("change orders", () => {
     expect(() => runCommand(s, "setChangeOrders", { who: "pe" }, at(40))).toThrow(InvalidCommandError);
   });
 
+  it("setting change orders to what they already are records nothing (review finding 9)", () => {
+    const s = startFactoryAsOwner(planned().s, at(9), MANUAL);
+    expect(s.project.changeOrders).toBe("lead");
+    expect(runCommand(s, "setChangeOrders", { who: "lead" }, at(10)).state).toBe(s);
+    const yours = runCommand(s, "setChangeOrders", { who: "user" }, at(11)).state;
+    expect(yours.events.length).toBe(s.events.length + 1);
+    expect(runCommand(yours, "setChangeOrders", { who: "user" }, at(12)).state.events).toEqual(yours.events);
+  });
+
   it("with PE review of new work on, the lead's updates wait for the PE; an objection after three rounds waits under Needs you, and your overrule is recorded (2e)", () => {
     const { s: shaping, search } = planned();
     let s = startFactoryAsOwner(shaping, at(9), MANUAL);
