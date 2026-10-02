@@ -265,7 +265,7 @@ describe("Home's latest reply, in the conversation's words", () => {
 
 describe("the shaping panel", () => {
   const shaping = (vision: string) => {
-    const s = structuredClone(M.startShaping(buildSeed(T0, { inFlightRuns: false }), at(1)));
+    const s = structuredClone(M.startVision(buildSeed(T0, { inFlightRuns: false }), at(1)));
     s.project.visions[s.project.visions.length - 1].text = vision;
     return s;
   };

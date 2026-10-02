@@ -7,6 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import * as M from "../src/domain/model";
 import type { CatalogModel, ProviderId, State } from "../src/domain/types";
 import { buildEnvelope, parseOutputs } from "./envelope";
@@ -110,6 +111,7 @@ beforeEach(async () => {
   scheduler = new Scheduler(store, { claude, codex }, { workspaces, leaseMs: 30000, ackTimeoutMs: 10000 });
   await scheduler.refreshHealth();
   cmd("initProject", { name: "Test", repoPath: repo, vision: "Test vision", focus: "Testing" });
+  cmd("startFactory", startFactoryArgs(store.read().state));
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setRoleDefault", { role: "lead", selection: { provider: "claude", model: "claude-sample-large" } });

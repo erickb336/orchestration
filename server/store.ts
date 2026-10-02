@@ -12,10 +12,11 @@ import { internalFlow } from "../src/domain/internalFlows";
 import { builtInCatalog, flowRef } from "../src/domain/flows";
 import { toDef } from "../src/domain/pipeline";
 import { buildSeed } from "../src/domain/seed";
-import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, StaleWriteError, type FlowRef, type State, type StepDef } from "../src/domain/types";
+import { emptyBlueprint, emptyStudio } from "../src/domain/studio/types";
+import { ControlError, DEFAULT_AUTONOMY, DEFAULT_CHECKS, DEFAULT_PR_DELIVERY, DEFAULT_REVIEW_BOTS, DEFAULT_RUN_LIMITS, NO_BUDGETS, StaleWriteError, type FlowRef, type State, type StepDef } from "../src/domain/types";
 import { V13_TEMPLATE_STEPS, V14_TEMPLATES, v14TemplateSteps } from "./legacyTemplates";
 
-export const STATE_FORMAT = 18;
+export const STATE_FORMAT = 19;
 
 export { V13_TEMPLATE_STEPS };
 
@@ -322,6 +323,20 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
       }
     }
     doc.version = 18;
+    return doc;
+  },
+  // Format 19 (ORC-029): Vision and the factory. Every project keeps its stage; one already building needs no
+  // start record (it started before the owner's Start the factory existed). Existing projects were designed for
+  // the desktop. The owner's budgets are added, not set: nothing stops until the owner sets one. The studio and
+  // the blueprint start empty.
+  18: (doc) => {
+    const project = doc.project as Record<string, unknown>;
+    project.devices ??= ["desktop"];
+    project.factoryStarts ??= [];
+    project.budgets ??= { ...NO_BUDGETS };
+    doc.studio ??= emptyStudio();
+    doc.blueprint ??= emptyBlueprint();
+    doc.version = 19;
     return doc;
   },
 };

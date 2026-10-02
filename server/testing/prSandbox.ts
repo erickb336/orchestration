@@ -724,6 +724,7 @@ async function main() {
   await scheduler.refreshHealth();
   // A new store for every run, so the project id, and with it every branch name, is new.
   cmd("initProject", { name: `PR sandbox ${runTag}`, repoPath, vision: "Evidence for pull-request delivery.", focus: "Small files only." });
+  cmd("startFactory", M.startFactoryRequest(st()));
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "auto" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "auto" } });
   cmd("setLeadSelection", { selection: { provider: "claude", model: "auto" } });

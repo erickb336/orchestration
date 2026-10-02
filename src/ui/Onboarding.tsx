@@ -4,60 +4,9 @@ import { useStore } from "./store";
 import { PREF_INVOLVEMENT_CHOSEN, PREF_ONBOARDING_DISMISSED, PREF_STAGE_CHOSEN, usePref } from "./common";
 import { Button, Chip } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
-import { stageStepDone, startNowBlocker } from "./stageChoice";
 
 function scrollToHeading(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-/**
- * The first choice: shape the vision with the lead first, or start building now (the usual behaviour).
- * An empty project of your own starts by shaping, so "Start building now" is a real Start building. The
- * step is done once you chose: "Shape" counts as chosen while already shaping, and "Start building now"
- * asks for a vision first, with the way there. "Start building now" is offered only while shaping; on a
- * project that is already building it would do nothing.
- */
-function StageChoice({ onChosen }: { onChosen: () => void }) {
-  const { state, send, disabled } = useStore();
-  const shaping = state.project.stage === "shaping";
-  const why = startNowBlocker(state);
-  return (
-    <span className="k-actions">
-      <Button
-        size="small"
-        disabled={disabled}
-        onClick={async () => {
-          if (shaping) return onChosen();
-          const r = await send("startShaping");
-          if (r.ok) onChosen();
-        }}
-      >
-        {shaping ? "Keep shaping the vision with the lead" : "Shape the vision with the lead first"}
-      </Button>
-      {shaping && (
-        <Button
-          size="small"
-          disabled={disabled}
-          title={why}
-          onClick={async () => {
-            if (why) return scrollToHeading("shape-h");
-            const r = await send("startBuilding");
-            if (r.ok) onChosen();
-          }}
-        >
-          Start building now
-        </Button>
-      )}
-      {shaping && why && (
-        <span className="muted small">
-          {why}{" "}
-          <Button size="small" variant="quiet" onClick={() => scrollToHeading("shape-h")}>
-            Go to vision
-          </Button>
-        </span>
-      )}
-    </span>
-  );
 }
 
 interface Step {
@@ -98,7 +47,7 @@ export function Onboarding() {
             disabled={disabled}
             title="Try the shaping stage: the lead asks questions and drafts the vision; nothing new starts until you start building again"
             onClick={async () => {
-              const r = await send("startShaping");
+              const r = await send("startVision");
               if (r.ok) setStageChosen("1");
             }}
           >
@@ -114,13 +63,6 @@ export function Onboarding() {
   const health = (p: (typeof PROVIDERS)[number]) => service.providers[p]?.health?.status;
   const anyProvider = PROVIDERS.some((p) => health(p) === "ready");
   const steps: Step[] = [
-    {
-      id: "stage",
-      label: "Choose how to begin: shape the vision with the lead first, or start building now",
-      done: stageStepDone(state, stageChosen),
-      detail: shaping ? "Shaping: the lead answers you and drafts the vision; nothing runs until you start building." : undefined,
-      action: <StageChoice onChosen={() => setStageChosen("1")} />,
-    },
     {
       id: "repo",
       label: "Connect your repository",

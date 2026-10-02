@@ -24,11 +24,13 @@ import * as M from "./model";
 import { DEMO_SCRIPT, type ScriptFinding } from "./demoScript";
 import { builtInCatalog, builtInOrInternal, flowRef } from "./flows";
 import { instantiate, toDef } from "./pipeline";
+import { emptyBlueprint, emptyStudio } from "./studio/types";
 import {
   DEFAULT_AUTONOMY,
   DEFAULT_CHECKS,
   DEFAULT_PR_DELIVERY,
   DEFAULT_RUN_LIMITS,
+  NO_BUDGETS,
   type Actor,
   type Attempt,
   type CheckObs,
@@ -231,7 +233,7 @@ class DemoBuilder {
       "Weekend Trips helps a small group of friends plan a weekend hike together: pick a trail, share the plan, pack the right things, and keep the map working with no signal. It should feel calm and dependable on a phone at a trailhead. Fewer, clearer screens beat more features.";
     const draftReason = "Drafted from the shaping conversation and the trail research note";
     return {
-      version: 18,
+      version: 19,
       seq: 1001,
       project: {
         id: DEMO_PROJECT_ID,
@@ -264,9 +266,12 @@ class DemoBuilder {
         autonomy: { ...DEFAULT_AUTONOMY, autoDeliver: { ...DEFAULT_AUTONOMY.autoDeliver } },
         steeringMode: "apply",
         stage: "building",
+        devices: ["desktop", "mobile"],
+        factoryStarts: [],
         shapingSince: at(4340),
         checks: structuredClone(DEFAULT_CHECKS),
         triage: { askUserBy: "user" },
+        budgets: { ...NO_BUDGETS },
         conventions: { include: true },
         prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
         workerEnvironment: { claude: "isolated", codex: "isolated" },
@@ -299,6 +304,8 @@ class DemoBuilder {
       // The built-in catalog until the server loads the files (it replaces this at start).
       flows: builtInCatalog(),
       notes: [],
+      studio: emptyStudio(),
+      blueprint: emptyBlueprint(),
       events: [
         { id: "ev-1", at: at(4340), actor: "system", kind: "config", message: `${DEMO_PROJECT_NAME} created; shaping the vision with the lead` },
         { id: "ev-2", at: at(4332), actor: "lead", kind: "vision", message: `Lead run ${leadRunId} drafted the vision (${draftId}) from the shaping conversation: ${draftReason}. It waits for you to accept, edit or dismiss it.` },

@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
@@ -77,8 +78,8 @@ describe("migration 13 → 14", () => {
     const upgraded = new Store(path);
     const s = upgraded.read().state;
     // A format-13 document upgrades through 14 (templates), 15 (flows) and each later format.
-    expect(STATE_FORMAT).toBe(18);
-    expect(s.version).toBe(18);
+    expect(STATE_FORMAT).toBe(19);
+    expect(s.version).toBe(19);
     expect(upgraded.read().version).toBe(v0 + 1);
     expect(s.project.checks).toEqual(DEFAULT_CHECKS);
     expect(s.project.triage).toEqual({ askUserBy: "user" }); // the sample project does not plan on its own
@@ -109,7 +110,7 @@ describe("migration 13 → 14", () => {
     expect(upgraded.read().state.project.conventions.include).toBe(false);
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(19);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_13_%'").get()).toBeDefined();
     check.close();
   });
@@ -121,7 +122,7 @@ describe("migration 13 → 14", () => {
     const upgraded = new Store(path);
     expect(upgraded.read().state.project.triage).toEqual({ askUserBy: "lead" });
     upgraded.close();
-    expect(buildSeed(now).version).toBe(18);
+    expect(buildSeed(now).version).toBe(19);
   });
 });
 
@@ -159,6 +160,7 @@ describe("the scheduler: the context event, coverage re-runs and conventions", (
     scheduler = new Scheduler(store, { claude, codex }, { workspaces, leaseMs: 30000, ackTimeoutMs: 10000 });
     await scheduler.refreshHealth();
     cmd("initProject", { name: "Test", repoPath: repo, vision: "Test vision", focus: "Testing" });
+    cmd("startFactory", startFactoryArgs(store.read().state));
     cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
     cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
     cmd("setRoleDefault", { role: "lead", selection: { provider: "claude", model: "claude-sample-large" } });

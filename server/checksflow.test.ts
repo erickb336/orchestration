@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import * as C from "../src/domain/checks";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
@@ -78,6 +79,7 @@ beforeEach(async () => {
   scheduler = new Scheduler(store, { claude, codex }, { workspaces, checks, dataDir: dir, leaseMs: 30000, ackTimeoutMs: 10000 });
   await scheduler.refreshHealth();
   cmd("initProject", { name: "Test", repoPath: repo, vision: "Test vision", focus: "Testing" });
+  cmd("startFactory", startFactoryArgs(store.read().state));
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setRoleDefault", { role: "lead", selection: { provider: "claude", model: "claude-sample-large" } });

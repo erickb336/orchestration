@@ -1,5 +1,7 @@
 // Core domain types. Pure data: no UI, storage, or runtime dependencies.
 
+import type { Blueprint, Studio } from "./studio/types";
+
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
@@ -92,11 +94,44 @@ export interface VisionDoc {
 // ---------- shaping the vision with the lead first ----------
 
 /**
- * "shaping": the user and the lead shape the vision; no worker step runs and no planning run starts.
- * "building": everything runs as usual.
+ * "shaping" (Vision): the user and the lead shape the vision; no worker step runs and no planning run starts.
+ * Every project begins here. "building" (Factory): everything runs as usual; only the owner's `startFactory`
+ * gets here.
  */
 export type ProjectStage = "shaping" | "building";
-export const PROJECT_STAGES: ProjectStage[] = ["shaping", "building"];
+
+/** What the product is designed and shown for: the device scope, chosen in Vision. */
+export type Device = "desktop" | "mobile" | "terminal";
+export const DEVICES: Device[] = ["desktop", "mobile", "terminal"];
+
+/** How the factory runs, set by the owner when they start it (and changeable later through the usual settings). */
+export interface FactorySettings {
+  /** Autopilot: nothing waits for a person. Check-in: the lead plans, and its tasks wait for your go-ahead. Manual: the lead does not plan. */
+  autonomy: "autopilot" | "checkin" | "manual";
+  /** Who merges finished work: you, or automatically (the pull-request merge setting). */
+  merge: "user" | "auto";
+  pausePoints: {
+    /** Findings that ask for a decision: the PE decides (within budget), or you do. */
+    tradeoffs: "pe" | "user";
+    /** A blueprint change after the start: the lead updates the affected tasks, or asks you first. */
+    changeOrders: "lead" | "user";
+    /** New tasks wait for your go-ahead before they start. */
+    startEachTask: boolean;
+  };
+}
+
+/** The owner's agreement that started the factory: who, when, what they agreed to, and how it runs. */
+export interface FactoryStart {
+  at: string;
+  by: "user";
+  /** The blueprint revision agreed to. Until the blueprint exists (ORC-029 2c), the vision revision. */
+  blueprintRev: number;
+  settings: FactorySettings;
+  /** What was still open, named to the owner and confirmed. */
+  openItems: string[];
+  /** The pre-flight's budget estimates, once the PE makes them. */
+  estimate?: { buildUsd?: [number, number]; maintenanceUsdPerMonth?: [number, number]; basis: string };
+}
 
 /** The areas a vision needs to cover; the lead reports how clear each is and asks about the open ones. */
 export type ShapingArea = "intent" | "audience" | "problem" | "outcome" | "scope" | "constraints" | "risks" | "priorities" | "material";
@@ -288,14 +323,28 @@ export interface Project {
   steeringMode: SteeringMode;
   /** Shaping (talk it through with the lead; nothing runs) or building (everything runs). */
   stage: ProjectStage;
+  /** The device scope: what is designed and shown. Set in Vision; at least one. */
+  devices: Device[];
+  /** Every Start the factory, oldest first: the owner's recorded agreements. Projects building before ORC-029 have none. */
+  factoryStarts: FactoryStart[];
   /** When the current shaping session began; coverage reported before it is not reused. */
   shapingSince?: string;
   /** The project's own check commands, run by the service. Desired state; only the user's `setChecks` writes it. */
   checks: ChecksConfig;
   /** The checks sandbox as last probed. Observed; written only by the service. */
   checksHealth?: ChecksHealth;
-  /** Who decides `ask-user` findings: the lead (Autopilot's default) or the user. */
-  triage: { askUserBy: "lead" | "user" };
+  /**
+   * Who decides `ask-user` findings: the lead (Autopilot's default), the PE, or the user. Until the PE runs its
+   * own decisions (ORC-029), a decision routed to the PE goes to the lead's decision runs.
+   */
+  triage: { askUserBy: "lead" | "pe" | "user" };
+  /** The owner's budgets, in dollars; null until set. Only `setBudgets` writes them. */
+  budgets: Budgets;
+  /**
+   * The owner chose to continue past the building budget they had set (`continuePastBudget`). It lasts while
+   * the building budget stays at that amount and the project stays building.
+   */
+  budgetContinued?: { at: string; buildingUsd: number; spentUsd: number };
   /** Give every run the repository's AGENTS.md and CLAUDE.md from the trusted base as labelled project conventions. */
   conventions: { include: boolean };
   /** Last planning run start (for the planning interval). */
@@ -326,6 +375,17 @@ export interface Project {
    */
   defaultFlowId: string;
 }
+
+/**
+ * The owner's budgets. Building: the estimated agent spend to build the project, at the providers'
+ * published prices; at it, nothing new starts. Maintenance: the estimated monthly cost of running it.
+ */
+export interface Budgets {
+  buildingUsd: number | null;
+  maintenanceUsdPerMonth: number | null;
+}
+
+export const NO_BUDGETS: Budgets = { buildingUsd: null, maintenanceUsdPerMonth: null };
 
 /**
  * What a worker process sees of the user's own tool setup.
@@ -981,7 +1041,7 @@ export interface ActivityEvent {
 }
 
 export interface State {
-  version: 18;
+  version: 19;
   seq: number;
   project: Project;
   tasks: Task[];
@@ -1000,6 +1060,10 @@ export interface State {
   flows: Flow[];
   /** Notes sent to running stages (at most 2000; settled notes of finished tasks are pruned first). */
   notes: Note[];
+  /** The vision studio (ORC-029): rounds, artifacts, the owner's feedback, the PE's verdicts and probes. */
+  studio: Studio;
+  /** What the factory builds from, versioned, and the change orders after the start (ORC-029). */
+  blueprint: Blueprint;
 }
 
 /** One entry in the lead conversation. */

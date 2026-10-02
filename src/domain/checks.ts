@@ -469,7 +469,7 @@ export function openFinalChecksDecision(s: State, t: Task, st: Step, art: Artifa
       detail: failedResults(run).map((r) => `${r.label}: ${r.status === "timed-out" ? "timed out" : `exit ${r.exitCode ?? "?"}`}`).join("; "),
       why: `Only you can accept failing checks. A repair round (at most ${MAX_CHECK_ROUNDS}) fixes the change and checks it again.`,
     },
-    routedTo: s.project.triage.askUserBy,
+    routedTo: F.routeOf(s),
     routedAt: now,
     status: "open",
     usedBy: [],

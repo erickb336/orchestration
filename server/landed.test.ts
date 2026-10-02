@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startFactoryArgs } from "../src/domain/testing/factory";
 import * as D from "../src/domain/delivery";
 import * as M from "../src/domain/model";
 import { DEFAULT_PR_DELIVERY, type State } from "../src/domain/types";
@@ -79,6 +80,7 @@ beforeEach(async () => {
   scheduler = new Scheduler(store, { claude, codex }, { workspaces, leaseMs: 120_000, ackTimeoutMs: 10_000 });
   await scheduler.refreshHealth();
   cmd("initProject", { name: "Landed", repoPath: repo, vision: "v", focus: "f" });
+  cmd("startFactory", startFactoryArgs(store.read().state));
   cmd("setRoleDefault", { role: "coder", selection: { provider: "codex", model: "codex-sample-large" } });
   cmd("setRoleDefault", { role: "code_reviewer", selection: { provider: "claude", model: "claude-sample-large" } });
   cmd("setLeadSelection", { selection: { provider: "claude", model: "claude-sample-large" } });
@@ -110,8 +112,8 @@ describe("state format 10", () => {
     const s = upgraded.read().state;
     // Later features raised the format further (steering to 11, shaping to 12, vision documents to 13, …); a
     // format-9 document upgrades through each.
-    expect(STATE_FORMAT).toBe(18);
-    expect(s.version).toBe(18);
+    expect(STATE_FORMAT).toBe(19);
+    expect(s.version).toBe(19);
     expect(s.project.visionDocs).toEqual([]);
     expect(upgraded.read().version).toBe(v0 + 1);
     expect(s.project.prDelivery).toEqual(DEFAULT_PR_DELIVERY);
@@ -124,7 +126,7 @@ describe("state format 10", () => {
     expect(D.deliveryMode(upgraded.read().state)).toBe("local");
     upgraded.close();
     const check = new DatabaseSync(path);
-    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(18);
+    expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(19);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_9_%'").get()).toBeDefined();
     check.close();
   });

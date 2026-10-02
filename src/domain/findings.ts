@@ -7,7 +7,7 @@
 import * as C from "./checks";
 import * as M from "./model";
 import { clip } from "./text";
-import { ControlError, type Artifact, type Finding, type FindingDecision, type LeadRun, type State, type Step, type Task } from "./types";
+import { ControlError, type Artifact, type Finding, type FindingDecision, type LeadRun, type Project, type State, type Step, type Task } from "./types";
 
 export const MAX_DECISIONS = 2000;
 export const MAX_DECISION_WHY = 300;
@@ -152,7 +152,7 @@ export function createDecisions(s: State, t: Task, art: Artifact, now: string): 
       key: f.key,
       kind: "finding",
       finding: { source: f.source, severity: f.severity, title: f.title, detail: f.detail, ...(f.file ? { file: f.file } : {}), ...(f.line ? { line: f.line } : {}), ...(f.why ? { why: f.why } : {}), ...(f.checkId ? { checkId: f.checkId } : {}) },
-      routedTo: s.project.triage.askUserBy,
+      routedTo: routeOf(s),
       routedAt: now,
       status: "open",
       usedBy: [],
@@ -385,13 +385,19 @@ export function owningTask(s: State, t: Task): Task {
 }
 
 /** Who decides `ask-user` findings created from now on. Open decisions stay where they are. */
-export function setTriageRouting(state: State, askUserBy: "lead" | "user", now: string): State {
-  if (askUserBy !== "lead" && askUserBy !== "user") throw new ControlError("Findings that need a decision go to the lead or to you.");
+export function setTriageRouting(state: State, askUserBy: Project["triage"]["askUserBy"], now: string): State {
+  if (askUserBy !== "lead" && askUserBy !== "pe" && askUserBy !== "user") throw new ControlError("Findings that need a decision go to the lead, the PE or you.");
   if (state.project.triage.askUserBy === askUserBy) return state;
   const s = structuredClone(state);
   s.project.triage = { askUserBy };
-  M.event(s, now, "user", "config", `Findings that need a decision now go to ${askUserBy === "lead" ? "the lead" : "you"}; open decisions stay where they are`);
+  const who = askUserBy === "lead" ? "the lead" : askUserBy === "pe" ? "the PE (the lead decides for it until the PE runs its own decisions)" : "you";
+  M.event(s, now, "user", "config", `Findings that need a decision now go to ${who}; open decisions stay where they are`);
   return s;
+}
+
+/** Where a new decision goes: to you, or to the lead's decision runs (which also decide for the PE until it runs its own). */
+export function routeOf(s: State): FindingDecision["routedTo"] {
+  return s.project.triage.askUserBy === "user" ? "user" : "lead";
 }
 
 /** Whether every run is given the repository's AGENTS.md and CLAUDE.md from the trusted base as project conventions. */

@@ -8,10 +8,10 @@ import { Button, Checkbox, Chip, Disclosure, Field, Input, Textarea, useConfirm 
 import { DeliveryCard, deliveryErrors, deliverySteps, liveDelivery, type DeliveryDraft } from "../DeliverySettings";
 import { StartBuildingButton } from "../Shaping";
 import { confirmNewProject } from "../settingsText";
-import { initProjectConfirm, newProjectStage } from "../stageChoice";
+import { initProjectConfirm } from "../stageChoice";
 import { useStore } from "../store";
 import { sendInOrder, useDraft } from "./draft";
-import { Choice, SettingsCard, SettingsSection } from "./parts";
+import { SettingsCard, SettingsSection } from "./parts";
 import type { SectionId } from "./sections";
 
 type ProjectDraft = DeliveryDraft & { repoPath: string; conventions: boolean };
@@ -102,7 +102,7 @@ function StageCard() {
             loading={busy}
             onClick={async () => {
               setBusy(true);
-              await send("startShaping");
+              await send("startVision");
               setBusy(false);
             }}
           >
@@ -127,10 +127,7 @@ function NewProjectCard({ openByDefault }: { openByDefault: boolean }) {
   const [repo, setRepo] = useState("");
   const [vision, setVision] = useState("");
   const [focus, setFocus] = useState("");
-  // Shape the vision with the lead first (the vision may stay empty), or start building now. Until you choose, the
-  // stage follows the vision: shaping while it is empty (building needs a vision), building once written.
-  const [stageChoice, setStageChoice] = useState<"shaping" | "building" | null>(null);
-  const stage = newProjectStage(stageChoice, vision);
+  // Every project begins by shaping its vision with the lead (it may stay empty); building starts only when you start it.
   const docCount = M.currentVisionDocs(state).length;
   return (
     <SettingsCard id="new-project" title="Start a new project" help="Replaces this board and its history with an empty project; refused while any run is active.">
@@ -139,7 +136,7 @@ function NewProjectCard({ openByDefault }: { openByDefault: boolean }) {
           onSubmit={async (e) => {
             e.preventDefault();
             if (!(await confirm(confirmNewProject(name, initProjectConfirm(name, docCount))))) return;
-            await send("initProject", { name, repoPath: repo, vision, focus, stage });
+            await send("initProject", { name, repoPath: repo, vision, focus });
           }}
         >
           <div className="s-fields s-fields--wide">
@@ -150,13 +147,8 @@ function NewProjectCard({ openByDefault }: { openByDefault: boolean }) {
               <Input type="text" className="s-mono" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="/path/to/your/repo" required />
             </Field>
           </div>
-          <fieldset className="s-choices">
-            <legend className="k-field__label">How to begin</legend>
-            <Choice name="new-stage" checked={stage === "shaping"} onChange={() => setStageChoice("shaping")} label="Shape the vision with the lead first" description="The lead drafts the vision and a first roadmap with you; nothing runs until you start building." />
-            <Choice name="new-stage" checked={stage === "building"} onChange={() => setStageChoice("building")} label="Start building now" description="Work runs as soon as there is a task. The vision is required." />
-          </fieldset>
-          <Field label={`Vision${stage === "shaping" ? " (optional while shaping)" : ""}`} className="s-gap">
-            <Textarea value={vision} onChange={(e) => setVision(e.target.value)} required={stage === "building"} />
+          <Field label="Vision (optional while shaping)" className="s-gap">
+            <Textarea value={vision} onChange={(e) => setVision(e.target.value)} />
           </Field>
           <Field label="Current focus">
             <Input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} />

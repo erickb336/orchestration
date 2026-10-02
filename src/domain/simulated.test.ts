@@ -11,7 +11,7 @@ const at = (s: number) => new Date(T0 + s * 1000).toISOString();
 
 function messageRun(simulated: boolean, out: Parameters<typeof M.completeLeadRun>[2], shaping = false) {
   let s = buildSeed(T0, { inFlightRuns: false });
-  if (shaping) s = M.startShaping(s, at(0));
+  if (shaping) s = M.startVision(s, at(0));
   s = M.postMessage(s, "Build a notes app that syncs offline", at(1));
   const r = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(2));
   return M.completeLeadRun(r.state, r.runId, out, at(3), simulated ? { simulated: true } : {});
