@@ -131,7 +131,7 @@ npm run test:real          # the same scenario with real Claude and Codex agents
 
 ## Status
 
-A personal tool under active development. It was built in milestones ORC-001 to ORC-030, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-three are done, one is in progress, four were dropped, and two are planned. Later milestones sometimes replaced earlier ones; the last column says what survives.
+A personal tool under active development. It was built in milestones ORC-001 to ORC-033, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-three are done, one is in progress, four were dropped, and five are planned. Later milestones sometimes replaced earlier ones; the last column says what survives.
 
 **The foundation** (the five milestones in the [project spec](docs/PROJECT_SPEC.md), plus pipelines):
 
@@ -173,8 +173,11 @@ A personal tool under active development. It was built in milestones ORC-001 to 
 | [ORC-026](docs/tasks/ORC-026.md) Write for the reader | A sixteenth principle, our own, given to every agent and the lead | Done |
 | [ORC-027](docs/tasks/ORC-027.md) The real-run test, committed | The end-to-end scenario runs in CI on simulated agents; `npm run test:real` runs it with real ones and leaves a record in [`docs/real-runs/`](docs/real-runs/) | Done |
 | [ORC-028](docs/tasks/ORC-028.md) Fixes from the real run | Investigation revises its report while its review finds something, and a rule keeps every flow from dropping review findings | Done; **verified with real models** |
-| [ORC-029](docs/tasks/ORC-029.md) The vision studio, before the factory | Shape the product with the lead on prototypes you can click (demo sites, mobile mockups, terminal demos), inputs and outputs, and flows; the approved blueprint is what the factory builds from | **In progress** (passes 1–2 of 6 done) |
-| [ORC-030](docs/tasks/ORC-030.md) QA, UI audit and a new demo | After ORC-029: test the product end to end, audit and clean up the UI, then make the new demo | **Planned** |
+| [ORC-029](docs/tasks/ORC-029.md) The vision studio, before the factory | Shape the product with the lead on prototypes you can click (demo sites, mobile mockups, terminal demos), inputs and outputs, and flows; the approved blueprint is what the factory builds from | **In progress** (passes 1–4 of 6 done; 4d next) |
+| [ORC-030](docs/tasks/ORC-030.md) QA, UI audit and a new demo | Test the product end to end, audit and clean up the UI, then make the new demo | **Planned** (after ORC-033) |
+| [ORC-031](docs/tasks/ORC-031.md) Subagents in research steps | Let agents in explicitly read-only research steps start their provider's own subagents, counted, costed, capped and shown; writers stay single-session; each provider is switched on only after real runs prove pause and cost | **Planned** (after ORC-029) |
+| [ORC-032](docs/tasks/ORC-032.md) Import an existing project | Derive an "as it is today" vision from an existing repository, then revise it and build on it | **Planned** (after ORC-031) |
+| [ORC-033](docs/tasks/ORC-033.md) Keep the living vision true | Notice when the code changes outside Orchestrator, keep the vision local, and fix bugs at their root as mismatches with the vision | **Planned** (after ORC-032) |
 
 **Verified with real models: the core run, notes and review repair, not every feature.** The scenario behind `npm run test:real` has run four times with real agents, all on 2026-10-01, and grew with each fix; every run's record is in [`docs/real-runs/`](docs/real-runs/). The latest (15 of 15 checks, from a clean commit) showed:
 
