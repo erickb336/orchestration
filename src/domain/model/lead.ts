@@ -190,13 +190,17 @@ export function reportLeadActivity(state: State, runId: string, note: string): S
   return s;
 }
 
-/** The lead run is confirmed stopped (pause, lead switch) or its process is gone. Its messages stay pending. */
-export function reportLeadStopped(state: State, runId: string, now: string, lost = false): State {
+/**
+ * The lead run is confirmed stopped (pause, lead switch) or its process is gone. Its messages stay pending. The
+ * usage the runtime reports with the stop is recorded, so the building budget counts it.
+ */
+export function reportLeadStopped(state: State, runId: string, now: string, lost = false, usage?: Attempt["usage"]): State {
   const s = draft(state);
   const r = getLeadRun(s, runId);
   if (!r || (r.outcome !== "running" && r.outcome !== "stopping")) return s;
   r.outcome = lost ? "lost" : r.outcome === "stopping" ? "stopped" : "failed";
   r.endedAt = now;
+  if (usage) r.usage = usage;
   if (r.outcome === "failed") r.note = "The lead run stopped without a stop request (for example its time limit).";
   event(s, now, "runtime", "runtime", `Lead run ${r.id} ${r.outcome}`);
   if (r.outcome === "failed" || r.outcome === "lost") {

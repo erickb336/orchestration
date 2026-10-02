@@ -132,7 +132,8 @@ describe("CodexAdapter runs", () => {
     expect(c.type).toBe("completed");
     expect(c.finalText).toContain('"outputs"');
     expect(c.finalText).toContain("```json");
-    expect(c.usage).toEqual({ inputTokens: 120, outputTokens: 30 });
+    // The thread's totals; 80 of the 120 input tokens were read from the prompt cache and are kept apart for pricing.
+    expect(c.usage).toEqual({ inputTokens: 120, cachedInputTokens: 80, outputTokens: 30 });
     expect(c.model).toBe("stub-model");
     expect(adapter.has("att-1")).toBe(false);
 

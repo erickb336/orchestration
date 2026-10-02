@@ -362,6 +362,23 @@ function classify(e: unknown): CommandFailure {
   return new CommandFailure("internal", message);
 }
 
+/**
+ * The owner-only start, enforced where state is written (ORC-029): the project moves from shaping to building
+ * only through the owner's `startFactory` command, and only when it recorded exactly one more start. Any other
+ * write that would move it (another command, the scheduler, a runtime report) is refused before anything is
+ * stored, whatever domain code produced it. Replacing everything with the sample project (`resetSampleData`,
+ * fake runtime only; the sample never reaches a real agent) is a new project, not a start.
+ * Returns why a write is refused, or undefined.
+ */
+function stageRefusal(prev: State, next: State, command: string | undefined): string | undefined {
+  if (prev.project.stage !== "shaping" || next.project.stage !== "building") return undefined;
+  const recorded = next.project.factoryStarts.length - prev.project.factoryStarts.length;
+  if (command === "startFactory" && recorded === 1) return undefined;
+  if (command === "resetSampleData" && next.project.sample) return undefined;
+  const by = command === "startFactory" ? `the startFactory command recorded ${recorded} starts, not 1` : `${command ? `the ${command} command` : "an internal update"} tried to`;
+  return `Refused: only the owner's Start the factory moves the project from Vision to the factory; ${by}. Nothing was written.`;
+}
+
 export class LeaseLostError extends Error {
   constructor(name: string) {
     super(`Lease ${name} is no longer held by this instance`);
@@ -481,6 +498,14 @@ export class Store {
     return { version: row.version, state: JSON.parse(row.json) as State, json: row.json };
   }
 
+  /** Refuse, and log, a write that would start the factory other than by the owner's command (`stageRefusal`). */
+  private guardStage(prev: State, next: State, command: string | undefined) {
+    const refusal = stageRefusal(prev, next, command);
+    if (!refusal) return;
+    console.error(`[orchestrator] ${refusal}`);
+    throw new ControlError(refusal);
+  }
+
   private persist(prevVersion: number, prev: State, next: State, now: string): number {
     const version = prevVersion + 1;
     const r = this.db.prepare("UPDATE state SET version = ?, json = ?, updated_at = ? WHERE id = 1 AND version = ?").run(version, JSON.stringify(next), now, prevVersion);
@@ -530,6 +555,7 @@ export class Store {
       let outcome: ReturnType<typeof runCommand>;
       try {
         outcome = runCommand(cur.state, name, args, now);
+        this.guardStage(cur.state, outcome.state, name);
       } catch (e) {
         failure = classify(e);
         // Record the rejection so a retry with the same key reports the same outcome.
@@ -559,6 +585,7 @@ export class Store {
       }
       const cur = this.load();
       const next = fn(cur.state);
+      this.guardStage(cur.state, next, undefined);
       const json = JSON.stringify(next);
       if (json === cur.json) return { version: cur.version, changed: false };
       return { version: this.persist(cur.version, cur.state, next, now), changed: true };
