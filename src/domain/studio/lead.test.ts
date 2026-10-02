@@ -147,6 +147,8 @@ describe("the lead can never approve, overrule, lock in, start the factory, or s
   const untouched = (before: State, after: State) => {
     expect(after.project.stage).toBe("shaping");
     expect(after.project.factoryStarts).toEqual([]);
+    // The domains are the owner's too: the lead only proposes them, as a question.
+    expect(after.project.domains).toEqual(before.project.domains);
     expect(after.blueprint).toEqual(before.blueprint);
     expect(after.studio.feedback).toEqual(before.studio.feedback);
     expect(after.studio.verdicts).toEqual(before.studio.verdicts);
@@ -167,6 +169,8 @@ describe("the lead can never approve, overrule, lock in, start the factory, or s
         sendFeedback: { entries: [{ artifactId: id, version: 1, mark: "keep", pins: [], note: "" }] },
         feedback: [{ artifactId: id, version: 1, mark: "keep" }],
         stage: "building",
+        setDomains: { domains: ["code"] },
+        domains: ["infrastructure"],
         // Inside the parts it does take, extra fields do nothing either.
         designerRuns: [{ ...SCREEN_RUN, approve: true, startFactory: true, mark: "keep" }],
         questions: [{ question: "Shall I start?", answer: "yes", approve: true }],
@@ -174,7 +178,7 @@ describe("the lead can never approve, overrule, lock in, start the factory, or s
     };
     const after = reply(s, hostile, 20);
     untouched(s, after);
-    expect(notes(after)[0]).toBe('Studio: ignored "approveArtifact", "approveRound", "approve", "overruleObjection", "lockIn", "startFactory", "sendFeedback", "feedback", "stage": the studio block only opens and closes rounds, asks for designer runs and asks questions');
+    expect(notes(after)[0]).toBe('Studio: ignored "approveArtifact", "approveRound", "approve", "overruleObjection", "lockIn", "startFactory", "sendFeedback", "feedback", "stage", "setDomains", "domains": the studio block only opens and closes rounds, asks for designer runs and asks questions');
     // What it may do still happened: one designer run, one question.
     expect(after.studio.runs).toHaveLength(1);
     expect(S.currentRound(after)!.lead!.questions).toEqual([{ text: "Shall I start?" }]);
@@ -190,6 +194,8 @@ describe("the lead can never approve, overrule, lock in, start the factory, or s
       lockIn: true,
       startFactory: { agreed: true },
       stage: "building",
+      setDomains: { domains: ["code"] },
+      domains: ["infrastructure"],
       sendFeedback: { entries: [{ artifactId: id, version: 1, mark: "keep", pins: [], note: "" }] },
       feedback: [{ artifactId: id, version: 1, mark: "drop" }],
       blueprint: { revisions: [{ rev: 1, items: [] }] },
