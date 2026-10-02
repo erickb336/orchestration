@@ -19,8 +19,11 @@ import { currentVision } from "../../src/domain/model/core";
 import { buildingSpend, fmtUsd } from "../../src/domain/spend";
 import * as S from "../../src/domain/studio/studio";
 import { VERDICTS, VERDICT_WORDS, type PeVerdict, type RoundFocus, type StudioArtifact, type StudioRun, type Verdict } from "../../src/domain/studio/types";
-import { ControlError, type State } from "../../src/domain/types";
+import { ControlError, type ProseCheck, type State } from "../../src/domain/types";
 import { lastJsonObject } from "../envelope";
+import { checkDoc, proseDoc, type ProseDoc } from "../prose/record";
+import type { ProseChecker } from "../prose/vale";
+import { studioFeedbackLines, studioPrinciplesLines } from "./writing";
 
 const KIND_WORDS: Record<StudioArtifact["kind"], string> = {
   screen: "a screen",
@@ -165,7 +168,9 @@ export function peEnvelope(state: State, run: StudioRun, where: { folder: string
     `Round ${round.n} is about ${FOCUS_WORDS[round.focus]}.${round.summary ? ` ${round.summary}` : ""}`,
     "",
     ...budgets,
+    ...studioPrinciplesLines(run),
     ...refusedLines(state, run, a),
+    ...studioFeedbackLines(state, run),
     "## Your answer",
     "",
     "End your reply with one JSON block:",
@@ -291,6 +296,38 @@ export function readPeAnswer(finalText: string): S.VerdictInput[] {
   });
 }
 
+/**
+ * The text the owner reads from a PE answer (pass 4d-2b): for each verdict, its reasons, its change, and each open
+ * case with why it matters, one part each ("variant b, change"). The verdict words and the budget figures are not
+ * sentences, and are not checked.
+ */
+export function peDoc(verdicts: readonly S.VerdictInput[]): ProseDoc | undefined {
+  return proseDoc(
+    verdicts.flatMap((v) => {
+      const on = v.variant === undefined ? "the whole artifact" : `variant ${clip(v.variant, 40)}`;
+      return [
+        { name: `${on}, reasons`, text: v.reasons },
+        { name: `${on}, change`, text: v.change ?? "" },
+        ...(v.openCases ?? []).map((c, i) => ({ name: `${on}, open case ${i + 1}`, text: [c.text.trim(), c.why?.trim() ?? ""].filter(Boolean).join("\n") })),
+      ];
+    }),
+  );
+}
+
+/**
+ * Check the text of a PE run's final message against the controlled-English style: in the scheduler, outside the
+ * store's transaction (Vale is a process). Undefined when the answer cannot be read (the run then fails with the
+ * reason, when its verdicts are recorded) or has no text.
+ */
+export function checkPeAnswer(finalText: string, check: ProseChecker, at: string): ProseCheck | undefined {
+  let verdicts: S.VerdictInput[];
+  try {
+    verdicts = readPeAnswer(finalText);
+  } catch {
+    return undefined;
+  }
+  return checkDoc(peDoc(verdicts), check, at);
+}
 
 /**
  * Record a PE run's verdicts on the version it reviewed, as the next pass of its round (the loop rule is the studio's).

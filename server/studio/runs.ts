@@ -13,10 +13,13 @@ import * as R from "../../src/domain/studio/runs";
 import * as S from "../../src/domain/studio/studio";
 import { domainLines } from "../../src/domain/studio/domains";
 import { DESIGNER_KINDS, DOCUMENT_KINDS, type StudioRun } from "../../src/domain/studio/types";
-import type { ModelSelection, State } from "../../src/domain/types";
+import type { ModelSelection, ProseCheck, State } from "../../src/domain/types";
+import { checkDoc, proseDoc, type ProseDoc } from "../prose/record";
+import type { ProseChecker } from "../prose/vale";
 import type { Store } from "../store";
 import { FILE_TYPES, MAX_ARTIFACT_BYTES, MAX_FILE_BYTES, ManifestError, NO_MODULES, STUDIO_MANIFEST, type StagedArtifact, versionDir, writeVersion } from "./artifacts";
 import { repoGlance, trackedAmong } from "./existing";
+import { studioFeedbackLines, studioPrinciplesLines } from "./writing";
 
 /**
  * Ask for a designer run in a round (the service: from pass 4, the lead's studio loop). Without a brief it gets the
@@ -107,6 +110,8 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     "- Make the kinds the brief asks for; when it names none, the kinds of the product's domains.",
     "",
     ...(round.n === 0 ? asIsSection(state, run, where.checkout) : []),
+    ...studioPrinciplesLines(run),
+    ...studioFeedbackLines(state, run),
     "## What to hand in",
     "",
     `End by writing \`${STUDIO_MANIFEST}\` in your working directory:`,
@@ -152,6 +157,32 @@ export interface HandedIn {
 export function handedIn(state: State, runId: string, artifacts: StagedArtifact[]): HandedIn {
   const named = R.getStudioRun(state, runId)?.round === 0 ? [...new Set(artifacts.flatMap((a) => a.provenance ?? []))] : [];
   return { artifacts, tracked: named.length ? trackedAmong(state.project.repoPath, named) : new Set() };
+}
+
+/**
+ * The text the owner reads as the designer's own (pass 4d-2b): the Markdown of its documents (contract, flow,
+ * interface, algorithm, topology), each file one part ("Trip data: doc/index.md"). Undefined when it has none: the
+ * words on a screen or in a terminal demo are the product's, not the designer's to the owner. studio.json has no
+ * field for notes on an artifact.
+ */
+export function designerDoc(artifacts: readonly StagedArtifact[]): ProseDoc | undefined {
+  const title = (t: string) => {
+    const one = t.replace(/\s+/g, " ").trim();
+    return one.length > 60 ? `${one.slice(0, 59)}…` : one;
+  };
+  return proseDoc(
+    artifacts
+      .filter((a) => DOCUMENT_KINDS.includes(a.kind))
+      .flatMap((a) => a.files.filter((f) => f.path.toLowerCase().endsWith(".md")).map((f) => ({ name: `${title(a.title)}: ${f.path}`, text: f.data.toString("utf8") }))),
+  );
+}
+
+/**
+ * Check what a designer run handed in against the controlled-English style: in the scheduler, after `handedIn`,
+ * outside the store's transaction (Vale is a process). Undefined when studio.json was refused or holds no document.
+ */
+export function checkHandedIn(given: HandedIn | { refused: string } | undefined, check: ProseChecker, at: string): ProseCheck | undefined {
+  return given && "artifacts" in given ? checkDoc(designerDoc(given.artifacts), check, at) : undefined;
 }
 
 /**

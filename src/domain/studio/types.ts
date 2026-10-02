@@ -7,7 +7,7 @@
 // blueprint.ts (approval, open items, change orders, task specs' references). The containers exist from state
 // format 19.
 
-import type { Device, PeReviewState, ProviderId } from "../types";
+import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId } from "../types";
 
 /**
  * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
@@ -378,6 +378,18 @@ export interface StudioRun {
   note?: string;
   /** Run by the fake runtime: no agent made what it hands in. */
   simulated?: true;
+  /**
+   * The principles its envelope gave it, in table order, each with the hash of its body: its role's fixed set
+   * (STUDIO_PRINCIPLE_IDS), recorded at dispatch as a task run's snapshot records its own. Absent on runs from before.
+   */
+  principles?: GivenPrinciple[];
+  /**
+   * The check of what it wrote for the owner against the controlled-English style, as `LeadRun.prose`: the PE's
+   * reasons, changes and open cases; the designer's documents. On the run, never on the verdict or the artifact: it
+   * feeds the next run of the same role, and the owner sees no score. Absent on runs from before the check, on runs
+   * with no such text, and on runs that did not complete.
+   */
+  prose?: ProseCheck;
 }
 
 export interface Studio {
