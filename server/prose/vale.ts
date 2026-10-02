@@ -34,8 +34,11 @@ export interface ValeAlert {
 
 export type ValeOutcome = { checked: true; vale: string; alerts: ValeAlert[] } | { checked: false; reason: string };
 
-/** What the service calls to check a text. Tests pass their own. */
-export type ProseChecker = (text: string) => ValeOutcome;
+/**
+ * What the service calls to check a text. Tests pass their own. `config`: another configuration, the one with the
+ * project's words when a dictionary is in force (words.ts).
+ */
+export type ProseChecker = (text: string, config?: string) => ValeOutcome;
 
 export interface ValeOptions {
   /** The binary; found on PATH or in Homebrew's directories when left out. */
@@ -111,8 +114,8 @@ export function runVale(text: string, opts: ValeOptions = {}): ValeOutcome {
 /** The checker the service uses: Vale with this repository's style. */
 export const valeChecker =
   (opts: ValeOptions = {}): ProseChecker =>
-  (text) =>
-    runVale(text, opts);
+  (text, config) =>
+    runVale(text, config ? { ...opts, config } : opts);
 
 const firstLine = (s: string) => (s.trim().split("\n").find((l) => l.trim()) ?? "no output").trim().slice(0, 200);
 

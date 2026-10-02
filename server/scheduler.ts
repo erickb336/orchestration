@@ -24,6 +24,7 @@ import { SimulatedGitHub, type GitHubHost } from "./github";
 import { PrDriver } from "./prdelivery";
 import { checkLeadText, withLeadProse } from "./prose/record";
 import type { ProseChecker } from "./prose/vale";
+import { projectValeConfig } from "./prose/words";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
@@ -515,7 +516,9 @@ export class Scheduler {
       if (e.type !== "completed") continue;
       // A lead reply's text is checked here, outside the transaction (Vale is a process); never blocking the reply.
       if (this.prose && current.leadRuns.some((r) => r.id === e.attemptId)) {
-        const check = checkLeadText(parseLeadOutput(e.finalText), this.prose, now);
+        const prose = this.prose;
+        const words = this.projectWords(current);
+        const check = checkLeadText(parseLeadOutput(e.finalText), (text) => prose(text, words), now);
         if (check) this.leadProse.set(e.attemptId, check);
       }
       const studioRun = R.getStudioRun(current, e.attemptId);
@@ -981,6 +984,20 @@ export class Scheduler {
       const a = S.getArtifact(s, e.artifactId, e.version);
       const none: S.MediaResult = "shots" in e.result ? { shots: { status: "skipped", at: now, reason: why } } : { demo: { status: "done", at: now, variants: a.variants.map((v) => ({ variant: v.id, status: "not-recorded" as const, reason: why })) } };
       return S.recordArtifactMedia(s, e.artifactId, e.version, none, now);
+    }
+  }
+
+  /**
+   * The Vale configuration with the project's words (pass 4d), generated into the data folder from the dictionary in
+   * force; undefined without one, or when it cannot be written (then the repository's style alone checks). Never throws.
+   */
+  private projectWords(state: State): string | undefined {
+    if (!this.dataDir) return undefined;
+    try {
+      return projectValeConfig(this.dataDir, state);
+    } catch (e) {
+      this.log(`The project's words could not be written for the prose check: ${e instanceof Error ? e.message : String(e)}`);
+      return undefined;
     }
   }
 
