@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
+import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
 import { buildSeed } from "./seed";
@@ -16,7 +17,7 @@ const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
 const quiet = () => buildSeed(T0, { inFlightRuns: false });
 /** A new project of the user's own, with a written vision. */
 const fresh = (vision = "Weekend trips for a small group of friends.") => M.initProject(quiet(), { name: "Trips", repoPath: "/tmp/trips", vision, focus: "" }, at(0));
-const MANUAL: FactorySettings = { autonomy: "manual", merge: "user", pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: false } };
+const MANUAL: FactorySettings = { autonomy: "manual", delivery: { mode: "off", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: false } };
 const failure = (fn: () => unknown): Error => {
   try {
     fn();
@@ -102,16 +103,16 @@ describe("Start the factory: the owner's command", () => {
     expect(() => runCommand(s, "startFactory", { ...args, settings: { ...MANUAL, autonomy: "checkin" } }, at(1))).toThrow(/Check-in waits for your go-ahead/);
   });
 
-  it("applies Autopilot through its preset: the lead plans, nothing waits, delivery turns on; the PE decides trade-offs (through the lead's runs for now); merging is automatic", () => {
+  it("applies Autopilot's planning: the lead plans, nothing waits; delivery and the PE's route as chosen; pull requests merge automatically", () => {
     const s = fresh();
     expect(s.project.autonomy.enabled).toBe(false);
-    const started = startFactoryAsOwner(s, at(1), { autonomy: "autopilot", merge: "auto", pausePoints: { tradeoffs: "pe", changeOrders: "user", startEachTask: false } });
+    const started = startFactoryAsOwner(s, at(1), { autonomy: "autopilot", delivery: { mode: "pr", branch: "main", merge: "auto" }, pausePoints: { tradeoffs: "pe", changeOrders: "user", startEachTask: false } });
     const p = started.project;
     expect(M.autonomyMode(p.autonomy)).toBe("autopilot");
-    expect(p.autonomy.autoDeliver.enabled).toBe(true);
+    expect(p.autonomy).toMatchObject({ planningIntervalMinutes: 30, maxProposalsPerCycle: 5, maxOpenProposals: 15, autoRetry: 1, autoDeliver: { enabled: false } });
+    expect(p.prDelivery).toMatchObject({ enabled: true, base: "main", merge: "auto" });
     expect(p.triage.askUserBy).toBe("pe");
     expect(F.routeOf(started)).toBe("lead");
-    expect(p.prDelivery.merge).toBe("auto");
     expect(p.factoryStarts[0].settings.pausePoints.changeOrders).toBe("user");
     // Each setter recorded its own change, before the start.
     const config = started.events.filter((e) => e.kind === "config").map((e) => e.message);
@@ -130,7 +131,7 @@ describe("Start the factory: the owner's command", () => {
     expect(manual.project.autonomy.enabled).toBe(false);
     // Planning on with delivery off ("custom" in Settings) counts as Autopilot here: starting on Autopilot changes nothing, delivery included.
     const custom = M.setAutonomy(fresh(), { ...fresh().project.autonomy, enabled: true }, at(0));
-    const kept = startFactoryAsOwner(custom, at(1), { autonomy: "autopilot", merge: "user", pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: false } });
+    const kept = startFactoryAsOwner(custom, at(1), { autonomy: "autopilot", delivery: { mode: "off", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: false } });
     expect(kept.project.autonomy).toEqual(custom.project.autonomy);
     expect(kept.events.length).toBe(custom.events.length + 1); // only the start itself
   });
@@ -156,9 +157,49 @@ describe("Start the factory: the owner's command", () => {
     expect(routing(lead, toPe)).toEqual(["Findings that need a decision now go to the PE (the lead decides for it until the PE runs its own decisions); open decisions stay where they are"]);
   });
 
+  it("leaves delivery as the settings say: starting on Autopilot from Manual or Check-in turns nothing on, and the record matches the project (review finding 3)", () => {
+    const checkin = M.setAutonomy(fresh(), { ...fresh().project.autonomy, enabled: true, holdLeadProposals: true }, at(0));
+    for (const s of [fresh(), checkin]) {
+      expect(M.currentFactorySettings(s).delivery).toEqual({ mode: "off", merge: "user" });
+      const started = startFactoryAsOwner(s, at(1), { autonomy: "autopilot", pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: false } });
+      expect(M.autonomyMode(started.project.autonomy)).toBe("autopilot");
+      expect([D.deliveryMode(started), started.project.autonomy.autoDeliver.enabled, started.project.prDelivery.enabled]).toEqual(["off", false, false]);
+      expect(started.project.factoryStarts[0].settings.delivery).toEqual({ mode: "off", merge: "user" });
+      expect(M.currentFactorySettings(started).delivery).toEqual({ mode: "off", merge: "user" });
+      expect(started.events.slice(s.events.length).some((e) => e.message.startsWith("Delivery mode"))).toBe(false);
+    }
+  });
+
+  it("applies the delivery chosen, and afterwards the project says what the record says", () => {
+    const local = startFactoryAsOwner(fresh(), at(1), { delivery: { mode: "local", branch: "release", merge: "auto" } });
+    expect([local.project.autonomy.autoDeliver, local.project.prDelivery.enabled]).toEqual([{ enabled: true, branch: "release" }, false]);
+    expect(local.events.map((e) => e.message)).toContain("Delivery mode: local branch release (fast-forward only)");
+    const yours = startFactoryAsOwner(fresh(), at(1), { delivery: { mode: "pr", branch: "develop", merge: "user" } });
+    expect([yours.project.prDelivery.enabled, yours.project.prDelivery.base, yours.project.prDelivery.merge, yours.project.autonomy.autoDeliver.enabled]).toEqual([true, "develop", "hold", false]);
+    const auto = startFactoryAsOwner(fresh(), at(1), { delivery: { mode: "pr", branch: "main", merge: "auto" } });
+    expect(auto.project.prDelivery.merge).toBe("auto");
+    // Turning delivery off from local delivery.
+    const off = startFactoryAsOwner(M.applyAutopilot(fresh(), "main", at(0)), at(1), MANUAL);
+    expect(D.deliveryMode(off)).toBe("off");
+    for (const s of [local, yours, auto, off]) expect(M.currentFactorySettings(s).delivery).toEqual(s.project.factoryStarts[0].settings.delivery);
+  });
+
+  it("refuses delivery that contradicts itself, with a clear message, and changes nothing", () => {
+    const s = fresh();
+    const start = (delivery: unknown) => () => runCommand(s, "startFactory", { ...startFactoryArgs(s), settings: { ...MANUAL, delivery } }, at(1));
+    expect(start({ mode: "local", branch: "release", merge: "user" })).toThrow("Local delivery fast-forwards release without waiting for you; choose pull requests to merge yourself, or turn delivery off.");
+    expect(start({ mode: "off", merge: "auto" })).toThrow("With delivery off nothing merges automatically: finished work stays on the integration branch for you. Choose local delivery or pull requests to merge automatically.");
+    expect(start({ mode: "off", branch: "main", merge: "user" })).toThrow("Delivery is off, so there is no branch to deliver to; leave the branch out, or choose local delivery or pull requests.");
+    expect(start({ mode: "pr", merge: "user" })).toThrow("Name the branch to deliver to.");
+    expect(start({ mode: "local", branch: "-x", merge: "auto" })).toThrow("Choose a valid branch name for delivery.");
+    expect(start({ mode: "pr", branch: "a b", merge: "auto" })).toThrow("Choose a valid base branch name.");
+    expect(start({ mode: "branch", merge: "auto" })).toThrow(/mode must be off, local, pr/);
+    expect(start(undefined)).toThrow(/settings.delivery must be an object/);
+  });
+
   it("the settings as they stand: what the Start building button sends today", () => {
     const s = M.setAutonomy(fresh(), { ...fresh().project.autonomy, enabled: true, holdLeadProposals: true }, at(0));
-    expect(M.currentFactorySettings(s)).toEqual({ autonomy: "checkin", merge: "user", pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: true } });
+    expect(M.currentFactorySettings(s)).toEqual({ autonomy: "checkin", delivery: { mode: "off", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: true } });
     expect(M.startFactoryRequest(s)).toEqual({ agreed: true, blueprintRev: 0, visionRev: 1, settings: M.currentFactorySettings(s), acceptOpen: M.openAreas(s) });
     // The change-order choice is the project's setting: the start sets it, and a later start keeps it.
     const started = startFactoryAsOwner(s, at(1), { pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } });

@@ -17,7 +17,7 @@ import * as S from "./studio";
 const T0 = Date.parse("2026-10-01T12:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
 const fresh = () => M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: "/tmp/trips", vision: "Weekend trips for a small group of friends.", focus: "" }, at(0));
-const MANUAL: FactorySettings = { autonomy: "manual", merge: "user", pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: false } };
+const MANUAL: FactorySettings = { autonomy: "manual", delivery: { mode: "off", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: false } };
 const failure = (fn: () => unknown): Error => {
   try {
     fn();

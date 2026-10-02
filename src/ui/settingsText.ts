@@ -2,7 +2,7 @@
 // without a browser. The involvement card describes each mode with the numbers it actually sets, and
 // the long consent texts are here, as the in-page confirmations that ask for them.
 
-import { AUTOPILOT, type CheckCommand } from "../domain/types";
+import { AUTOPILOT, type CheckCommand, type FactorySettings } from "../domain/types";
 import type { ConfirmOptions } from "./kit";
 import type { Involvement } from "./common";
 
@@ -54,6 +54,27 @@ export function proposalsLine(open: number, deferred: number, max: number): stri
   const deferredText =
     deferred >= max ? `Deferred lead proposals: ${proposals(deferred)}, at the limit of ${max}; they do not count as open, but planning stops until the lead drops some.` : `Deferred lead proposals: ${proposals(deferred)} of at most ${max}; they do not count as open.`;
   return `${openText} ${deferredText}`;
+}
+
+// ---------- Start building ----------
+
+const AUTONOMY_WORD = { autopilot: "Autopilot", checkin: "Check-in", manual: "Manual" } as const;
+
+/**
+ * How the factory runs once started, in one line: the settings Start building sends and records with the owner's
+ * agreement (a stand-in for the pre-flight screen, ORC-029 pass 6). They are changed in Settings before starting.
+ */
+export function factorySettingsText(x: FactorySettings): string {
+  const d = x.delivery;
+  const delivery =
+    d.mode === "pr"
+      ? `pull requests against ${d.branch}, ${d.merge === "auto" ? "merged automatically after an independent review and passing checks" : "which you merge"}`
+      : d.mode === "local"
+        ? `finished work goes to ${d.branch} by itself, fast-forward only`
+        : "delivery off: finished work stays on the integration branch for you to merge";
+  const route = x.pausePoints.tradeoffs;
+  const decisions = route === "user" ? "findings that need a decision come to you" : route === "pe" ? "the PE decides findings that need a decision, within budget (the lead's runs decide for it until the PE runs its own)" : "the lead decides findings that need a decision";
+  return `The factory starts on ${AUTONOMY_WORD[x.autonomy]}; ${delivery}; ${decisions}.`;
 }
 
 // ---------- checks ----------

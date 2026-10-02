@@ -6,11 +6,12 @@
 // and the settings the factory runs with, and releases the roadmap on Autopilot. Going back to vision stops nothing
 // that is running.
 
-import { setPrDelivery } from "../delivery";
+import { deliveryMode, setDeliveryMode, setPrDelivery } from "../delivery";
 import * as F from "../findings";
 import { blueprintRev, openBlueprintItems } from "../studio/blueprint";
 import {
   type Device,
+  type FactoryDelivery,
   type FactorySettings,
   type LeadRun,
   type Message,
@@ -74,7 +75,7 @@ export function currentFactorySettings(s: State): FactorySettings {
   const p = s.project;
   return {
     autonomy: autonomyMode(p.autonomy),
-    merge: p.prDelivery.merge === "auto" ? "auto" : "user",
+    delivery: currentDelivery(s),
     pausePoints: {
       // The route as it is, the lead's included: a start that changes nothing keeps it.
       tradeoffs: p.triage.askUserBy,
@@ -82,6 +83,15 @@ export function currentFactorySettings(s: State): FactorySettings {
       startEachTask: p.autonomy.holdLeadProposals,
     },
   };
+}
+
+/** Delivery as it is now: local delivery is automatic, and with delivery off you merge. */
+function currentDelivery(s: State): FactoryDelivery {
+  const p = s.project;
+  const mode = deliveryMode(s);
+  if (mode === "pr") return { mode, branch: p.prDelivery.base, merge: p.prDelivery.merge === "auto" ? "auto" : "user" };
+  if (mode === "local") return { mode, branch: p.autonomy.autoDeliver.branch, merge: "auto" };
+  return { mode, merge: "user" };
 }
 
 /** What the owner sends to start the factory. */
@@ -113,30 +123,43 @@ export function startFactoryRequest(s: State): FactoryRequest {
   return { agreed: true, blueprintRev: blueprintRev(s), visionRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: preflightOpenItems(s) };
 }
 
-/** Autopilot never waits before a task, and Check-in always does: the two settings must agree. */
+/**
+ * Settings that contradict each other, refused rather than adjusted. Autopilot never waits before a task, and Check-in
+ * always does. Local delivery fast-forwards a branch without anyone merging, and with delivery off nothing merges by
+ * itself.
+ */
 function settingsProblem(x: FactorySettings): string | undefined {
   if (x.autonomy === "autopilot" && x.pausePoints.startEachTask) return "Autopilot starts each task without waiting; choose Check-in to give the go-ahead for each task.";
   if (x.autonomy === "checkin" && !x.pausePoints.startEachTask) return "Check-in waits for your go-ahead before each task the lead plans.";
+  const d = x.delivery;
+  if (d.mode === "local" && d.merge === "user") return `Local delivery fast-forwards ${d.branch ?? "its branch"} without waiting for you; choose pull requests to merge yourself, or turn delivery off.`;
+  if (d.mode === "off" && d.merge === "auto") return "With delivery off nothing merges automatically: finished work stays on the integration branch for you. Choose local delivery or pull requests to merge automatically.";
+  if (d.mode === "off" && d.branch !== undefined) return "Delivery is off, so there is no branch to deliver to; leave the branch out, or choose local delivery or pull requests.";
+  if (d.mode !== "off" && !d.branch) return "Name the branch to deliver to.";
   return undefined;
+}
+
+/** Delivery exactly as chosen, through the delivery setters (which check the branch names). */
+function applyDelivery(state: State, d: FactoryDelivery, now: string): State {
+  if (d.mode !== "pr") return setDeliveryMode(state, { mode: d.mode, branch: d.branch }, now);
+  return setPrDelivery(setDeliveryMode(state, { mode: "pr" }, now), { ...(d.branch ? { base: d.branch } : {}), merge: d.merge === "auto" ? "auto" : "hold" }, now);
 }
 
 /**
  * Apply the factory's settings through the usual setters, each only where it differs, so each change is recorded as
- * usual. Nothing changes that the settings do not name: Autopilot's planning numbers apply without the preset's
- * decision route, which is the settings' own.
+ * usual. Nothing changes that the settings do not name: delivery is applied as given, and Autopilot's planning
+ * numbers apply without the preset's delivery or decision route, which are the settings' own.
  */
 function applyFactorySettings(state: State, x: FactorySettings, now: string): State {
-  let s = state;
+  let s = applyDelivery(state, x.delivery, now);
   if (autonomyMode(s.project.autonomy) !== x.autonomy) {
     const a = s.project.autonomy;
-    if (x.autonomy === "autopilot") s = setAutonomy(s, autopilotAutonomy(a, s.project.prDelivery.enabled ? { ...a.autoDeliver, enabled: false } : { enabled: true, branch: a.autoDeliver.branch }), now);
+    if (x.autonomy === "autopilot") s = setAutonomy(s, autopilotAutonomy(a, a.autoDeliver), now);
     else s = setAutonomy(s, { ...a, enabled: x.autonomy === "checkin", holdLeadProposals: x.autonomy === "checkin" ? true : a.holdLeadProposals }, now);
   }
   if (s.project.autonomy.holdLeadProposals !== x.pausePoints.startEachTask) s = setAutonomy(s, { ...s.project.autonomy, holdLeadProposals: x.pausePoints.startEachTask }, now);
   s = F.setTriageRouting(s, x.pausePoints.tradeoffs, now);
   if (s.project.changeOrders !== x.pausePoints.changeOrders) s = setChangeOrders(s, x.pausePoints.changeOrders, now);
-  const merge = x.merge === "auto" ? "auto" : "hold";
-  if (s.project.prDelivery.merge !== merge) s = setPrDelivery(s, { merge }, now);
   return s;
 }
 

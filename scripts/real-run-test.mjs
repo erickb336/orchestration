@@ -155,11 +155,12 @@ async function main() {
 
   // Project and limits. The project begins in Vision; the scenario starts the factory the way the owner does, with
   // their agreement recorded (ORC-029): Manual (the lead plans nothing), each task waits for a go-ahead (the
-  // scenario starts both itself), decisions on findings come to the owner (the scenario answers them), you merge.
+  // scenario starts both itself), decisions on findings come to the owner (the scenario answers them), delivery off
+  // (finished work stays on the integration branch, and you merge it).
   await cmd("initProject", { name: "Real-run test", repoPath: repo, vision: "Keep the greeting module small and correct.", focus: "Real-run test" });
   s = await state();
   const createdInVision = s.state.project.stage === "shaping" && s.state.project.factoryStarts.length === 0;
-  const settings = { autonomy: "manual", merge: "user", pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } };
+  const settings = { autonomy: "manual", delivery: { mode: "off", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } };
   // The owner's agreement as the pre-flight shows it (the blueprint and vision revisions, every open item), with these settings.
   const agreement = { ...M.startFactoryRequest(s.state), settings };
   await cmd("startFactory", agreement);

@@ -11,6 +11,7 @@ import { SHAPING_AREAS, SHAPING_AREA_LABEL, type LeadQuestion, type State, type 
 import { fmtTime, relTime } from "./common";
 import { Banner, Button, ButtonLink, Card, Chip, Field, Input, Row, Rows, SimulatedChip, Textarea, useConfirm, type ButtonVariant } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
+import { factorySettingsText } from "./settingsText";
 import { useStore } from "./store";
 import { VisionDocsList } from "./VisionDocs";
 import "./vision.css";
@@ -322,7 +323,9 @@ export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonV
   ]
     .filter(Boolean)
     .join(" ");
-  const explanation = [stillOpen, outcome].filter(Boolean).join(" ");
+  // The settings the start sends and records, delivery and who merges included: what the owner agrees to.
+  const runs = factorySettingsText(M.currentFactorySettings(state));
+  const explanation = [stillOpen, outcome, runs].filter(Boolean).join(" ");
   return (
     <div className="v-start">
       <Button
@@ -338,7 +341,7 @@ export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonV
           if (request.acceptOpen.length) {
             const ok = await confirm({
               title: "Start building with areas still open?",
-              text: `${stillOpen}${outcome ? `\n\n${outcome}` : ""}\n\nThe lead keeps answering you, and you can come back to shaping at any time.`,
+              text: `${stillOpen}${outcome ? `\n\n${outcome}` : ""}\n\n${runs} Change these in Settings before you start.\n\nThe lead keeps answering you, and you can come back to shaping at any time.`,
               primaryLabel: "Start building",
             });
             if (!ok) return;

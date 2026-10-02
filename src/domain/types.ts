@@ -108,8 +108,8 @@ export const DEVICES: Device[] = ["desktop", "mobile", "terminal"];
 export interface FactorySettings {
   /** Autopilot: nothing waits for a person. Check-in: the lead plans, and its tasks wait for your go-ahead. Manual: the lead does not plan. */
   autonomy: "autopilot" | "checkin" | "manual";
-  /** Who merges finished work: you, or automatically (the pull-request merge setting). */
-  merge: "user" | "auto";
+  /** How finished work is delivered, and who merges it. The start applies it as given; nothing else changes it. */
+  delivery: FactoryDelivery;
   pausePoints: {
     /**
      * Findings that ask for a decision: the PE decides (within budget), or you do. "lead" is the lead's route a project
@@ -121,6 +121,21 @@ export interface FactorySettings {
     /** New tasks wait for your go-ahead before they start. */
     startEachTask: boolean;
   };
+}
+
+/**
+ * Delivery as the factory runs it, and who merges.
+ * - off: finished work stays on the integration branch, and you merge it;
+ * - local: each finished task is fast-forwarded onto `branch` automatically;
+ * - pr: GitHub pull requests against `branch` (their base), merged by you or automatically.
+ * A combination that contradicts itself (local delivery that you merge, or automatic merging with delivery off) is
+ * refused, never adjusted.
+ */
+export interface FactoryDelivery {
+  mode: "off" | "local" | "pr";
+  /** The branch it delivers to: local delivery's branch, or the pull requests' base. None while delivery is off. */
+  branch?: string;
+  merge: "user" | "auto";
 }
 
 /** The owner's agreement that started the factory: who, when, what they agreed to, and how it runs. */

@@ -93,9 +93,11 @@ function oneOf<T extends string>(o: Args, k: string, options: readonly T[]): T {
 function factorySettings(v: unknown): FactorySettings {
   const o = obj(v, "settings");
   const p = obj(o.pausePoints, "settings.pausePoints");
+  const d = obj(o.delivery, "settings.delivery");
   return {
     autonomy: oneOf(o, "autonomy", ["autopilot", "checkin", "manual"] as const),
-    merge: oneOf(o, "merge", ["user", "auto"] as const),
+    // Whether the combination holds together is the domain's to say (startFactory refuses one that contradicts itself).
+    delivery: { mode: oneOf(d, "mode", ["off", "local", "pr"] as const), ...(d.branch === undefined ? {} : { branch: str(d, "branch") }), merge: oneOf(d, "merge", ["user", "auto"] as const) },
     pausePoints: { tradeoffs: oneOf(p, "tradeoffs", ["lead", "pe", "user"] as const), changeOrders: oneOf(p, "changeOrders", ["lead", "user"] as const), startEachTask: bool(p, "startEachTask") },
   };
 }
