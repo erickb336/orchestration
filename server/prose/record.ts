@@ -29,8 +29,25 @@ interface LeadText {
 const strings = (q: unknown): string[] => {
   if (!q || typeof q !== "object") return [];
   const { question, why } = q as { question?: unknown; why?: unknown };
-  return [question, why].filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim().replace(/\n{2,}/g, "\n"));
+  return [question, why].filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.replace(/\r\n?/g, "\n").trim().replace(/\n{2,}/g, "\n"));
 };
+
+/**
+ * One text to check from named parts, in order, each its own paragraph: what the record's examples point into
+ * ("reply line 2"). Parts with no text are left out; undefined when none has any. The lead's reply is one; a studio
+ * run's text (server/studio/) is another.
+ */
+export function proseDoc(blocks: readonly { name: string; text: string }[]): ProseDoc | undefined {
+  const kept = blocks.map((b) => ({ name: b.name, text: b.text.replace(/\r\n?/g, "\n").trim() })).filter((b) => b.text);
+  if (!kept.length) return undefined;
+  const parts: ProseDoc["parts"] = [];
+  let line = 1;
+  for (const b of kept) {
+    parts.push({ name: b.name, firstLine: line });
+    line += b.text.split("\n").length + 1;
+  }
+  return { text: kept.map((b) => b.text).join("\n\n"), parts };
+}
 
 /**
  * The text the owner reads from a lead reply: the reply, then each question with its reason (the reply's own
@@ -41,18 +58,7 @@ export function leadDoc(out: LeadText): ProseDoc | undefined {
   const list = (x: unknown) => (Array.isArray(x) ? x : []);
   const studioQuestions = out.studio && typeof out.studio === "object" ? (out.studio as { questions?: unknown }).questions : undefined;
   const questions = [...list(out.questions), ...list(studioQuestions)].map(strings).filter((q) => q.length);
-  const reply = out.reply.replace(/\r\n?/g, "\n").trim();
-  const blocks: { name: string; text: string }[] = [];
-  if (reply) blocks.push({ name: "reply", text: reply });
-  questions.forEach((q, i) => blocks.push({ name: `question ${i + 1}`, text: q.join("\n") }));
-  if (!blocks.length) return undefined;
-  const parts: ProseDoc["parts"] = [];
-  let line = 1;
-  for (const b of blocks) {
-    parts.push({ name: b.name, firstLine: line });
-    line += b.text.split("\n").length + 1;
-  }
-  return { text: blocks.map((b) => b.text).join("\n\n"), parts };
+  return proseDoc([{ name: "reply", text: out.reply }, ...questions.map((q, i) => ({ name: `question ${i + 1}`, text: q.join("\n") }))]);
 }
 
 const clip = (s: string, n: number) => {
@@ -105,10 +111,14 @@ export function proseRecord(doc: ProseDoc, outcome: ValeOutcome, at: string): Pr
   return { status: "checked", at, vale: outcome.vale, sentences: marks.length, passed: marks.length - flagged.size, rules, examples };
 }
 
+/** Check one text; undefined when there is none. */
+export function checkDoc(doc: ProseDoc | undefined, check: ProseChecker, at: string): ProseCheck | undefined {
+  return doc ? proseRecord(doc, check(doc.text), at) : undefined;
+}
+
 /** Check the text of a lead reply; undefined when it has none. */
 export function checkLeadText(out: LeadText, check: ProseChecker, at: string): ProseCheck | undefined {
-  const doc = leadDoc(out);
-  return doc ? proseRecord(doc, check(doc.text), at) : undefined;
+  return checkDoc(leadDoc(out), check, at);
 }
 
 /** The state with the record on the lead run, when the run completed (a run stopped or gone keeps none). */

@@ -33,6 +33,7 @@ import {
   type LeadRun,
   type Note,
   type OutputDef,
+  type ProseCheck,
   type RoleId,
   type Severity,
   type State,
@@ -1186,16 +1187,33 @@ export const PROSE_FEEDBACK_EXAMPLES = 3;
  * was not checked, or there is none yet. The owner sees no score; the lead is asked not to mention the check.
  */
 export function proseFeedbackSection(state: State, run: LeadRun): string {
-  const last = lastLeadProse(state, run.id);
+  return proseFeedbackBlock(lastLeadProse(state, run.id));
+}
+
+/** How the feedback names the text it is about: what was checked last time, what it applies to now, and its reader. */
+export interface ProseFeedbackWords {
+  last: string;
+  now: string;
+  reader: string;
+}
+const LEAD_FEEDBACK_WORDS: ProseFeedbackWords = { last: "your last reply", now: "this reply", reader: "user" };
+
+/**
+ * The feedback block from one check: every rule it broke with its count, and at most 3 examples. Empty when it broke
+ * none or was not checked. The lead's runs get it about their last reply; the studio's runs (server/studio/writing.ts)
+ * about their role's last checked text, in their own words.
+ */
+export function proseFeedbackBlock(last: ProseCheck | undefined, words: ProseFeedbackWords = LEAD_FEEDBACK_WORDS): string {
   if (last?.status !== "checked" || !last.rules.length) return "";
+  const Last = `${words.last[0].toUpperCase()}${words.last.slice(1)}`;
   const what = (rule: string) => last.rules.find((r) => r.rule === rule)?.what.replace(/\.$/, "") ?? rule;
   const rules = last.rules.map((r) => `- ${r.what.replace(/\.$/, "")}${r.level === "error" ? " (error)" : ""}: ${r.count}`);
   const examples = last.examples.slice(0, PROSE_FEEDBACK_EXAMPLES).map((x) => `- ${what(x.rule)}, ${x.part} line ${x.line}: "${x.sentence}"${x.match ? ` ("${x.match}")` : ""}`);
   return `
-${PROSE_FEEDBACK_HEADER}
-Your last reply broke these rules of "Write controlled English" (${last.passed} of ${last.sentences} sentences passed). Apply the principle in this reply. Do not mention this check to the user.
+## ${Last} and the writing standard
+${Last} broke these rules of "Write controlled English" (${last.passed} of ${last.sentences} sentences passed). Apply the principle in ${words.now}. Do not mention this check to the ${words.reader}.
 ${rules.join("\n")}
-Examples from your last reply:
+Examples from ${words.last}:
 ${examples.join("\n")}
 `;
 }
