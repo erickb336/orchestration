@@ -75,3 +75,39 @@ Both touch `server/envelope.ts`. 4d-1 owns the feedback section and 4d-2 owns th
 - Explainer videos (a later artifact type).
 - A failing CI check on this repository's documents (ORC-030 can decide, from the report).
 - One instruction per sentence and the missing article. No tool checks them well, so the principle carries them.
+
+## 4d-1 as built (merged in 2a3da31, 2026-10-02)
+
+- **The principle** `principles/write-controlled-english.md` (175 words) goes to every agent run and to the lead, next to "Contextualize and write for the reader". The cap on a step's principles section rose from 1,200 to 1,400 words, because the largest step was already at 1,149 words. ORC-026 raised it before for the same reason.
+- **The Vale style** (`vale/styles/STE80/`), measured on all the real lead text in `docs/real-runs` (159 sentences):
+
+  | Rule | Level | Alerts | Wrong |
+  | --- | --- | --- | --- |
+  | A sentence over 35 words | error | 4 | 0 |
+  | A sentence of 26 to 35 words | warning | 9 | 0 |
+  | A paragraph over 6 sentences | warning | 7 | 0 |
+  | The passive voice | warning | 43 | 4 (about 10%) |
+  | A vague word | warning | 0 | 0 |
+  | A noun cluster | dropped | 2 | 2 |
+
+  Vale's tagger found none of 5 sample noun clusters, so the principle carries that rule alone.
+- **The record** is `LeadRun.prose`: "checked" (Vale's version, sentences checked and passed, up to 12 broken rules with counts and 5 examples) or "not checked" with the reason. The owner sees no score.
+- **The feedback:** the lead's next envelope lists the rules that its last reply broke, with up to 3 examples, and tells the lead not to mention the check to the owner.
+- **The measure** (`scripts/prose-measure.mjs`) on `docs/real-runs`: the lead's messages pass at 79% (33 of 42 sentences), and its briefs to the designer at 57% (49 of 86). `npm run lint:prose` reports 86% over 41 documents and never fails.
+- **Not done:** designer and PE runs get no principles section at all today, so neither writing principle reaches them. Part 2 adds it.
+
+## 4e: the PE loop converges (merged in 1065d79, 2026-10-02)
+
+The fix for the second real trial's finding. **The verdict now keeps three things apart:**
+- `change`: what feasibility, scale, longevity or budget needs. Only a change starts a revision.
+- `openCases` (at most 5): a missing feature, an undecided edge case, or a rule nobody set. Open cases never start a revision. The lead's brief lists them, and the app shows them under PE review as "Questions for you".
+- `earlier` (on passes 2 and 3): each earlier ask, met or not met. A new change on a later pass must answer a risk that the revision itself created (`fromRevision`).
+
+**The service refuses a later pass that grows the asks:** a pass that leaves out an earlier ask, or that sends a variant back with every ask met and no `fromRevision`. The PE retries with the reason. Rejected options: turning the new change into an open case without asking (it rewrites the PE's answer), and a prompt rule alone (the trial showed that it fails).
+
+**The revision brief** gives a feasible-if variant only its change, and tells the designer to add no features. An objection keeps its reasons.
+
+**Replay of the real trial's three passes:** they resolve as 1 change and 7 open cases, the pass-2 "code reset" ask is refused as a new change, and the PE agrees on pass 2.
+
+**Checks after both merges:** `npm test` 1,712 passed and 1 skipped; the build passes; the integration test and both simulated studio trials pass. The next real trial checks whether a real PE follows the new answer format.
+
