@@ -53,7 +53,8 @@ export {
 } from "./model/notes";
 export {
   acceptVisionDraft, answersMessage, coverageOf, dismissVisionDraft, latestQuestions, openAreas, openVisionDraft, roadmapTasks, SHAPING_LABEL,
-  currentFactorySettings, type FactoryRequest, setDevices, startFactory, startFactoryBlocker, startFactoryPlan, startFactoryRequest, startVision,
+  currentFactorySettings, type FactoryRequest, preflightOpenItems, setChangeOrders, setDevices, startFactory, startFactoryBlocker, startFactoryPlan,
+  startFactoryRequest, startVision,
   validateCoverage, validateQuestions, validateVisionDraft,
 } from "./model/shaping";
 export {

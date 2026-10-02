@@ -37,7 +37,7 @@ function format18(path: string, edit: (doc: Record<string, unknown>) => void = (
   const raw = new DatabaseSync(path);
   const doc = JSON.parse((raw.prepare("SELECT json FROM state WHERE id = 1").get() as { json: string }).json) as Record<string, unknown>;
   const project = doc.project as Record<string, unknown>;
-  for (const k of ["budgets", "devices", "factoryStarts"]) delete project[k];
+  for (const k of ["budgets", "devices", "factoryStarts", "changeOrders"]) delete project[k];
   delete doc.studio;
   delete doc.blueprint;
   doc.version = 18;
@@ -48,7 +48,7 @@ function format18(path: string, edit: (doc: Record<string, unknown>) => void = (
 }
 
 describe("the format 18 → 19 migration", () => {
-  it("keeps the stage (a building project needs no start record), scopes existing projects to the desktop, adds the budgets not set and an empty studio and blueprint; nothing else moves; a backup is kept", () => {
+  it("keeps the stage (a building project needs no start record), scopes existing projects to the desktop, adds the budgets not set, change orders to the lead, and an empty studio and blueprint; nothing else moves; a backup is kept", () => {
     const path = join(dir, "old.db");
     const before = format18(path);
     expect((before.project as { stage: string }).stage).toBe("building");
@@ -61,9 +61,10 @@ describe("the format 18 → 19 migration", () => {
     expect(s.project.factoryStarts).toEqual([]);
     expect(s.project.devices).toEqual(["desktop"]);
     expect(s.project.budgets).toEqual({ buildingUsd: null, maintenanceUsdPerMonth: null });
+    expect(s.project.changeOrders).toBe("lead");
     expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [] });
     expect(s.blueprint).toEqual({ revisions: [], changeOrders: [] });
-    const { budgets: _b, devices: _d, factoryStarts: _f, ...project } = s.project;
+    const { budgets: _b, devices: _d, factoryStarts: _f, changeOrders: _c, ...project } = s.project;
     expect(project).toEqual(before.project);
     expect(s.tasks).toEqual(before.tasks);
     expect(s.attempts).toEqual(before.attempts);
@@ -159,8 +160,8 @@ describe("the owner-only start, through the scheduler", () => {
     // The owner starts it: recorded, and on Autopilot the roadmap and the user's task start.
     cmd("startFactory", startFactoryArgs(state(), { autonomy: "autopilot", pausePoints: { tradeoffs: "pe", changeOrders: "lead", startEachTask: false } }));
     expect(state().project.stage).toBe("building");
-    // The lead's steering changed the focus, so the owner agreed to vision r2.
-    expect(state().project.factoryStarts).toEqual([expect.objectContaining({ by: "user", blueprintRev: 2, openItems: M.openAreas(state()) })]);
+    // The lead's steering changed the focus, so the owner agreed to vision r2, with nothing in the blueprint yet.
+    expect(state().project.factoryStarts).toEqual([expect.objectContaining({ by: "user", blueprintRev: 0, visionRev: 2, openItems: M.openAreas(state()) })]);
     tick();
     expect(M.activeAttempts(state()).length).toBeGreaterThan(0);
   });

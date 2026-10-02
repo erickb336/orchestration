@@ -433,6 +433,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       stage: "building",
       devices: ["desktop", "mobile"],
       factoryStarts: [],
+      changeOrders: "lead",
       prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
       // With the `checks` option the sample has checks on with two simulated commands, so the demo shows the
       // loop; a real project starts with them off. Findings that need a decision go to the user.
