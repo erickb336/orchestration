@@ -5,17 +5,24 @@
 // recording the PE's verdicts and a probe's progress are the service's, from the studio's runs (passes 3 and 4);
 // clients cannot send them (SERVICE_COMMANDS in commands.ts). The lead never approves: approval is blueprint.ts's.
 //
-// The loop rule. The PE judges every option before the owner sees it. An artifact version reaches the owner when the
-// PE's latest pass on it finds every variant feasible or feasible-if, or after three passes in its round, with the
-// open objections attached. An objection is never dropped: a later pass on a revision answers it, or the owner
-// overrules it (recorded). What the owner brought and a probe's evidence are not held back.
+// The loop rule (ORC-029 pass 4). The PE judges every option before the owner sees it. When its pass asks for a change
+// (feasible-if) or objects (not-feasible) to a variant, the designer revises the version in the same round and the PE
+// reviews the new one, up to three passes in a round. A version reaches the owner when the PE's latest pass finds
+// every variant feasible, or once review ends (`LoopEnd`: the third pass, a reproduction of the code, the round
+// closed, runs that failed twice, or no provider to run the next step), with the PE's open objections and asked-for
+// changes shown. Where review stands is one value, `PeReview`, and the words the owner and the lead see are made from
+// it. An objection is never dropped: a later pass on a revision answers it, or the owner overrules it (recorded). What
+// the owner brought and a probe's evidence are not held back.
 
 import { draft, event, nextId } from "../model/core";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "../model/textSafety";
-import { ControlError, DEVICES, StaleWriteError, type Device, type State } from "../types";
+import { ControlError, DEVICES, StaleWriteError, type Device, type ProviderId, type State } from "../types";
 import {
+  type ArtifactDemo,
+  type ArtifactShots,
   type BudgetEstimate,
   type Feedback,
+  type LoopEnd,
   type Mark,
   type PeVerdict,
   type Pin,
@@ -26,8 +33,12 @@ import {
   type StudioArtifact,
   type StudioArtifactKind,
   type StudioMaker,
+  type StudioRun,
   type Verdict,
+  type VariantDemo,
   UNGATED_KINDS,
+  VERDICT_WORDS,
+  isUnderWay,
 } from "./types";
 
 /** The PE's passes on an artifact within one round. After the last, the artifact goes to the owner as it is. */
@@ -35,6 +46,8 @@ export const MAX_PE_PASSES = 3;
 const MAX_VARIANTS = 6;
 const MAX_FILES = 100;
 const MAX_PINS = 50;
+/** The longest element description a pin keeps; the prototype's pin script cuts its own at this length (src/runtime/prototype.ts). */
+const MAX_PIN_SELECTOR = 300;
 
 // ---------- text ----------
 
@@ -114,8 +127,9 @@ const variantLabel = (a: StudioArtifact, id: string | undefined) => (id === unde
 // ---------- rounds ----------
 
 /**
- * Open the next round (the service, for the lead's run). What the owner brought is round 0 and only it is about the
- * material; the lead's rounds count from 1. One round at a time: the open one is closed first.
+ * Open the next round (the service, for the lead's run). What already exists is round 0 and only it is about the
+ * material: what the owner brought, or "as it is today" for an existing repository. The lead's other rounds count
+ * from 1. One round at a time: the open one is closed first.
  */
 export function openRound(state: State, input: { focus: RoundFocus; summary?: string; leadRunId?: string }, now: string): { state: State; n: number } {
   const busy = currentRound(state);
@@ -132,7 +146,11 @@ export function openRound(state: State, input: { focus: RoundFocus; summary?: st
 
 const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what you brought", experience: "the experience", data: "the inputs and outputs", flows: "the flows" };
 
-/** Close a round (the service, once the owner answered it or the lead moved on). The summary, when given, replaces the opening one. */
+/**
+ * Close a round (the service, once the owner answered it or the lead moved on). The summary, when given, replaces the
+ * opening one. The lead's close waits while the round is busy (`roundBusy`, lead.ts); a close here is the mechanism:
+ * PE review still going on in the round ends then (`round-closed`), and the version goes to the owner as it is.
+ */
 export function closeRound(state: State, n: number, summary: string | undefined, now: string): State {
   const r = getRound(state, n);
   if (r.closedAt) throw new ControlError(`Round ${n} is already closed.`);
@@ -153,17 +171,37 @@ export interface ArtifactInput {
   round: number;
   kind: StudioArtifactKind;
   title: string;
-  variants: { id: string; label: string }[];
+  /** `entry`: the variant's entry file, one of `files`. */
+  variants: { id: string; label: string; entry?: string }[];
   files: { path: string; sha256: string }[];
   devices: Device[];
   madeBy: StudioMaker;
   supersedes?: string;
+  /** An "as is" artifact's provenance: the repository files the designer reproduced it from (round 0 only). */
+  provenance?: { files: string[] };
 }
 
-/** A path inside the studio workspace: relative, with no empty, "." or ".." segment, no backslash and no control character. */
+/** The most repository files an "as is" artifact names as its provenance. */
+export const MAX_PROVENANCE = 50;
+
+/**
+ * A path that stays inside the folder it is relative to: not absolute, at most 300 characters, with no empty, "." or
+ * ".." name, no backslash and no control character (tabs and newlines included). The one check for the studio's paths:
+ * a version's files, and the repository files an "as is" artifact came from (here, and at the boundary in
+ * server/studio/artifacts.ts).
+ */
+export const isInsidePath = (p: string) => !!p && p.length <= 300 && !p.startsWith("/") && !p.includes("\\") && !/[\u0000-\u001f\u007f]/.test(p) && p.split("/").every((x) => x !== "" && x !== "." && x !== "..");
+
+/** Repository paths an "as is" artifact came from: each inside the repository, each once. */
+function provenanceFiles(files: string[]): string[] {
+  if (!files.length || files.length > MAX_PROVENANCE) throw new ControlError(`An as-is artifact names between 1 and ${MAX_PROVENANCE} repository files it came from.`);
+  for (const p of files) if (!isInsidePath(p)) throw new ControlError(`"${agentLine(p).slice(0, 80)}" is not a file path inside the repository.`);
+  return [...new Set(files)];
+}
+
+/** A path inside the studio workspace. */
 function studioPath(p: string): string {
-  const bad = !p || p.length > 300 || p.startsWith("/") || p.includes("\\") || CONTROL_RE.test(p) || p.split("/").some((x) => x === "" || x === "." || x === "..");
-  if (bad) throw new ControlError(`"${agentLine(p).slice(0, 80)}" is not a file path inside the studio workspace.`);
+  if (!isInsidePath(p)) throw new ControlError(`"${agentLine(p).slice(0, 80)}" is not a file path inside the studio workspace.`);
   return p;
 }
 
@@ -177,23 +215,34 @@ function maker(m: StudioMaker): StudioMaker {
  * Add an artifact, or a new version of one (the service, from a designer's, the PE's or a probe's run, or the owner's
  * upload into round 0). A new version keeps the artifact's kind and starts with the owner's open pins of the version
  * before. Within a round, the designer revises in answer to the PE only until the PE's three passes are done.
+ *
+ * Round 0 holds what already exists: what the owner brought (material), and for an existing repository the designer's
+ * "as is" reproductions of it, each with its provenance (the repository files it came from). Only round 0 holds
+ * as-is artifacts: a later round's are proposals, not what the code does today.
  */
 export function addArtifact(state: State, input: ArtifactInput, now: string): { state: State; artifactId: string; version: number } {
   const round = getRound(state, input.round);
-  if (round.n === 0 && input.kind !== "material") throw new ControlError("Round 0 holds what the owner brought (material) only.");
+  const asIs = input.provenance !== undefined;
+  if (round.n === 0 && input.kind !== "material" && !(asIs && input.madeBy.role === "designer")) {
+    throw new ControlError("Round 0 holds what already exists: what the owner brought (material), and the designer's reproductions of the existing code, labelled as is with the repository files they came from.");
+  }
+  if (asIs && (round.n !== 0 || input.kind === "material" || input.madeBy.role !== "designer")) throw new ControlError("Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.");
+  const provenance = asIs ? { asIs: true as const, files: provenanceFiles(input.provenance!.files) } : undefined;
   const title = required(agentLine(input.title), 200, "The title");
   if (input.variants.length > MAX_VARIANTS) throw new ControlError(`At most ${MAX_VARIANTS} variants side by side.`);
-  const variants = input.variants.map((v) => {
-    if (!/^[A-Za-z0-9_-]{1,20}$/.test(v.id)) throw new ControlError(`"${agentLine(v.id).slice(0, 30)}" is not a variant id (letters, digits, - and _, at most 20).`);
-    return { id: v.id, label: required(agentLine(v.label), 120, `Variant ${v.id}'s label`) };
-  });
-  if (new Set(variants.map((v) => v.id)).size !== variants.length) throw new ControlError("Each variant has its own id.");
   if (!input.files.length || input.files.length > MAX_FILES) throw new ControlError(`An artifact has between 1 and ${MAX_FILES} files.`);
   const files = input.files.map((f) => {
     if (!/^[0-9a-f]{64}$/.test(f.sha256)) throw new ControlError(`${agentLine(f.path).slice(0, 80)}: the SHA-256 is 64 lowercase hex characters.`);
     return { path: studioPath(f.path), sha256: f.sha256 };
   });
   if (new Set(files.map((f) => f.path)).size !== files.length) throw new ControlError("Each file is listed once.");
+  const variants = input.variants.map((v) => {
+    if (!/^[A-Za-z0-9_-]{1,20}$/.test(v.id)) throw new ControlError(`"${agentLine(v.id).slice(0, 30)}" is not a variant id (letters, digits, - and _, at most 20).`);
+    const label = required(agentLine(v.label), 120, `Variant ${v.id}'s label`);
+    if (v.entry !== undefined && !files.some((f) => f.path === v.entry)) throw new ControlError(`Variant ${v.id}'s entry "${agentLine(v.entry).slice(0, 80)}" is not one of the artifact's files.`);
+    return { id: v.id, label, ...(v.entry !== undefined ? { entry: v.entry } : {}) };
+  });
+  if (new Set(variants.map((v) => v.id)).size !== variants.length) throw new ControlError("Each variant has its own id.");
   const outside = input.devices.filter((d) => !state.project.devices.includes(d));
   if (outside.length) throw new ControlError(`${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the project's device scope (${state.project.devices.join(", ")}).`);
   const devices = DEVICES.filter((d) => input.devices.includes(d));
@@ -214,14 +263,142 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
   const s = draft(state);
   const id = prev ? prev.id : nextId(s, "sa");
   const version = prev ? prev.version + 1 : 1;
-  const art: StudioArtifact = { id, round: round.n, version, ...(input.supersedes ? { supersedes: input.supersedes } : {}), kind: input.kind, title, variants, files, devices, madeBy, at: now };
+  const art: StudioArtifact = { id, round: round.n, version, ...(input.supersedes ? { supersedes: input.supersedes } : {}), kind: input.kind, title, variants, files, devices, madeBy, at: now, ...(provenance ? { provenance } : {}) };
   s.studio.artifacts.push(art);
   // A pin on a variant the revision no longer has stays, pinned to the artifact as a whole.
   const carried = (prev ? openPins(s, prev.id, prev.version) : []).map(({ variant, ...pin }) => (variant !== undefined && variants.some((v) => v.id === variant) ? { ...pin, variant } : pin));
   if (prev && carried.length) s.studio.feedback.push({ artifactId: id, version, mark: null, pins: carried, note: "", at: now, carriedFrom: prev.version });
   const who = madeBy.role === "user" ? "you brought" : `by the ${madeBy.role === "pe" ? "PE" : madeBy.role} (${madeBy.provider})`;
-  event(s, now, madeBy.role === "user" ? "user" : "runtime", "vision", `${artifactName(art)} added to round ${round.n}, ${who}${variants.length > 1 ? `; ${variants.length} variants` : ""}${carried.length ? `; ${carried.length} open pin${carried.length === 1 ? "" : "s"} carried from v${prev!.version}` : ""}`);
+  const from = provenance ? `; as is, from ${provenance.files.length === 1 ? provenance.files[0] : `${provenance.files.length} repository files`}` : "";
+  event(s, now, madeBy.role === "user" ? "user" : "runtime", "vision", `${artifactName(art)} added to round ${round.n}, ${who}${from}${variants.length > 1 ? `; ${variants.length} variants` : ""}${carried.length ? `; ${carried.length} open pin${carried.length === 1 ? "" : "s"} carried from v${prev!.version}` : ""}`);
   return { state: s, artifactId: id, version };
+}
+
+// ---------- what the service makes of a version: screenshots and terminal recordings (pass 3) ----------
+
+/** The screen devices a screenshot is taken on. */
+const SHOT_DEVICES: Device[] = ["desktop", "mobile"];
+
+/** What the service makes of a version after import: screenshots of a screen designed for a screen device, or the recording of a terminal demo or TUI. */
+export function mediaKind(a: StudioArtifact): "shots" | "demo" | undefined {
+  if (a.kind === "screen" && a.devices.some((d) => SHOT_DEVICES.includes(d))) return "shots";
+  if (a.kind === "terminal-demo" || a.kind === "tui") return "demo";
+  return undefined;
+}
+
+/**
+ * Mark a version's screenshots or recording as being made (the service, in the transaction that imports it, when it
+ * makes them). Nothing changes for a kind that has neither.
+ */
+export function startArtifactMedia(state: State, artifactId: string, version: number): State {
+  const kind = mediaKind(getArtifact(state, artifactId, version));
+  if (!kind) return state;
+  const s = draft(state);
+  const a = getArtifact(s, artifactId, version);
+  if (kind === "shots") a.shots = { status: "pending" };
+  else a.demo = { status: "pending" };
+  return s;
+}
+
+/** Versions whose screenshots or recording are still being made: the service finishes them, after a restart too. */
+export function pendingMedia(s: State): { artifactId: string; version: number; kind: "shots" | "demo" }[] {
+  return s.studio.artifacts.flatMap((a) => [
+    ...(a.shots?.status === "pending" ? [{ artifactId: a.id, version: a.version, kind: "shots" as const }] : []),
+    ...(a.demo?.status === "pending" ? [{ artifactId: a.id, version: a.version, kind: "demo" as const }] : []),
+  ]);
+}
+
+export type MediaResult = { shots: Exclude<ArtifactShots, { status: "pending" }> } | { demo: Extract<ArtifactDemo, { status: "done" }> };
+
+/** A reason from the service's tools (a browser, VHS): one line of plain text, capped. */
+const reasonText = (x: string) => required(agentLine(x).slice(0, 500), 500, "The reason");
+
+/** A path the service wrote in the version's folder: under `folder/`, inside the workspace. */
+function servicePath(p: string, folder: string): string {
+  if (!p.startsWith(`${folder}/`)) throw new ControlError(`"${agentLine(p).slice(0, 80)}" is not in the version's ${folder}/ folder.`);
+  return studioPath(p);
+}
+
+/**
+ * Record what the service made of a version (the service, when its screenshots or recording finished). Only while
+ * they are pending: a late or repeated result changes nothing. Checked against the version: its variants, devices
+ * and files.
+ */
+export function recordArtifactMedia(state: State, artifactId: string, version: number, result: MediaResult, now: string): State {
+  const a = getArtifact(state, artifactId, version);
+  const variant = (id: string) => {
+    if (!a.variants.some((v) => v.id === id)) throw new ControlError(`${a.title} has no variant ${agentLine(id).slice(0, 30)}.`);
+    return id;
+  };
+  if ("shots" in result) {
+    if (a.shots?.status !== "pending") return state;
+    const r = result.shots;
+    const device = (d: Device) => {
+      if (!a.devices.includes(d) || !SHOT_DEVICES.includes(d)) throw new ControlError(`${artifactName(a)} is not designed for ${d}.`);
+      return d;
+    };
+    const shots: ArtifactShots =
+      r.status === "skipped"
+        ? { status: "skipped", at: now, reason: reasonText(r.reason) }
+        : {
+            status: "taken",
+            at: now,
+            shots: r.shots.map((x) => ({ variant: variant(x.variant), device: device(x.device), path: servicePath(x.path, "shots") })),
+            failed: r.failed.map((x) => ({ variant: variant(x.variant), device: device(x.device), error: reasonText(x.error) })),
+          };
+    if (shots.status === "taken" && !shots.shots.length) throw new ControlError("Taken screenshots name at least one; with none, they were skipped.");
+    const s = draft(state);
+    getArtifact(s, artifactId, version).shots = shots;
+    const failed = shots.status === "taken" && shots.failed.length ? `; ${shots.failed.length} failed` : "";
+    event(s, now, "system", "vision", shots.status === "taken" ? `Screenshots of ${artifactName(a)}: ${shots.shots.length} taken${failed}` : `No screenshots of ${artifactName(a)}: ${shots.reason}`);
+    return s;
+  }
+  if (a.demo?.status !== "pending") return state;
+  const files = new Set(a.files.map((f) => f.path));
+  const own = (p: string) => {
+    if (!files.has(p)) throw new ControlError(`"${agentLine(p).slice(0, 80)}" is not a file of ${artifactName(a)}.`);
+    return p;
+  };
+  const variants = result.demo.variants.map((v): VariantDemo => {
+    const id = variant(v.variant);
+    if (v.status === "recorded" || v.status === "recorded-with-errors") {
+      const outs = { ...(v.webm ? { webm: servicePath(v.webm, `recording/${id}`) } : {}), ...(v.gif ? { gif: servicePath(v.gif, `recording/${id}`) } : {}), ...(v.txt ? { txt: servicePath(v.txt, `recording/${id}`) } : {}) };
+      if (!Object.keys(outs).length) throw new ControlError("A recorded variant names its recording.");
+      return v.status === "recorded" ? { variant: id, status: "recorded", tape: own(v.tape), ...outs } : { variant: id, status: "recorded-with-errors", tape: own(v.tape), ...outs, reason: reasonText(v.reason) };
+    }
+    if (v.status === "hand-written") {
+      if (!v.files.length || !v.files.every((f) => /\.(cast|ans)$/.test(f))) throw new ControlError("A hand-written variant names its .cast or .ans files.");
+      return { variant: id, status: "hand-written", files: v.files.map(own), ...(v.reason ? { reason: reasonText(v.reason) } : {}) };
+    }
+    return { variant: id, status: "not-recorded", reason: reasonText(v.reason) };
+  });
+  if (new Set(variants.map((v) => v.variant)).size !== variants.length || variants.length !== a.variants.length) throw new ControlError(`The recording names each variant of ${artifactName(a)} once.`);
+  const s = draft(state);
+  getArtifact(s, artifactId, version).demo = { status: "done", at: now, variants };
+  const words = (v: VariantDemo) => (v.status === "recorded" ? "recorded" : v.status === "recorded-with-errors" ? `recorded with errors (${v.reason})` : v.status === "hand-written" ? "hand-written, not recorded" : `not recorded (${v.reason})`);
+  event(s, now, "system", "vision", `${artifactName(a)}: ${variants.map((v) => `${variants.length > 1 ? `${variantLabel(a, v.variant)} ` : ""}${words(v)}`).join("; ")}`);
+  return s;
+}
+
+/** What the studio says about a version's screenshots, or nothing (all taken, or none expected). */
+export function shotsNote(a: StudioArtifact): string | undefined {
+  const sh = a.shots;
+  if (!sh || (sh.status === "taken" && !sh.failed.length)) return undefined;
+  if (sh.status === "pending") return "Taking screenshots…";
+  if (sh.status === "skipped") return `No screenshots: ${sh.reason}`;
+  return `${sh.failed.length} of ${sh.shots.length + sh.failed.length} screenshots failed: ${sh.failed[0].error}`;
+}
+
+/** What the studio says about how one variant of a terminal demo or TUI is shown, or nothing (it was recorded cleanly, or none expected). */
+export function demoNote(a: StudioArtifact, variant: string): string | undefined {
+  const d = a.demo;
+  if (!d) return undefined;
+  if (d.status === "pending") return "Recording…";
+  const v = d.variants.find((x) => x.variant === variant);
+  if (!v || v.status === "recorded") return undefined;
+  if (v.status === "recorded-with-errors") return `Recorded with errors: the demo did not run cleanly in the sandbox (${v.reason})`;
+  if (v.status === "hand-written") return v.reason ? `Hand-written, not recorded: ${v.reason}` : "Hand-written, not recorded";
+  return `Not recorded: ${v.reason}`;
 }
 
 // ---------- PE review ----------
@@ -235,41 +412,139 @@ function passesInRound(s: State, artifactId: string, round: number): number {
 /** Whether a verdict covers a variant: a verdict without a variant covers the whole artifact. */
 export const covers = (v: PeVerdict, variant: string | undefined) => v.variant === undefined || v.variant === variant;
 
+/** How many of the designer's runs revising one version for the PE may end without a new version before the loop ends: one retry. */
+export const MAX_REVISION_RUNS = 2;
+/** How many PE runs a version gets that end without a verdict (failed or lost) before its review ends: one retry. */
+export const MAX_PE_RUNS = 2;
+
+/** How many of these runs ended without a result: failed, lost, or stopped. A run a pause stopped is not one: it was asked for again. */
+export const endedWithoutResult = (runs: StudioRun[]) => runs.filter((r) => r.status === "failed" || r.status === "lost" || (r.status === "stopped" && !r.requeue)).length;
+
+/** The designer's runs revising a version within its round, oldest first: the loop's, and any the lead asked for (`revises`). */
+function designerRunsOn(s: State, a: StudioArtifact): StudioRun[] {
+  return s.studio.runs.filter((r) => r.kind === "designer" && r.artifactId === a.id && r.baseVersion === a.version && r.round === a.round);
+}
+
+/** The loop's revisions of a version: the designer's runs the service asked for in answer to the PE, not the lead's (review finding 8). */
+export const revisionRunsOf = (s: State, a: StudioArtifact): StudioRun[] => designerRunsOn(s, a).filter((r) => !r.fromLead);
+
+/** The PE's runs on one version, oldest first. */
+export function peRunsOf(s: State, artifactId: string, version: number): StudioRun[] {
+  return s.studio.runs.filter((r) => r.kind === "pe" && r.artifactId === artifactId && r.baseVersion === version);
+}
+
+/** Why PE review of a version ended, in words that follow "PE review ended: ". `no-provider` comes with its note. */
+export const LOOP_END_WORDS: Record<LoopEnd, string> = {
+  passes: `the PE made its ${MAX_PE_PASSES} passes in the round`,
+  "as-is": "it reproduces the code as it is today, and the designer does not revise a reproduction for the PE",
+  "round-closed": "its round closed before the PE agreed",
+  "no-revision": `the designer's runs revising it ended ${MAX_REVISION_RUNS} times without a new version`,
+  "no-review": `the PE's runs on it ended ${MAX_PE_RUNS} times without a verdict`,
+  "no-provider": "no enabled provider could run the next step",
+  "earlier-rule": "the PE reviewed it under the studio's earlier rule: one pass, and no revision",
+};
+
 /**
- * Where PE review of an artifact version stands.
- * - waiting: no pass on this version yet (`passes` were made on earlier versions of its round);
- * - revising: the latest pass objected and passes remain: the designer revises, or the PE asks for evidence;
- * - agreed: the latest pass found every variant feasible or feasible-if;
- * - objections: the third pass still objected; the version goes to the owner with them.
- * `objections` lists the latest pass's not-feasible verdicts, overruled ones included (they carry `overruled`).
+ * Why PE review of a version is over before the PE agreed, or undefined while it goes on. `pass` is the PE's latest
+ * pass on this version, 0 when it has none. In order: an end the service recorded; the round's last pass; a
+ * reproduction of the code, which is not revised (round 0); the round closed; the revisions or the PE's runs failed.
+ */
+function loopEnd(s: State, a: StudioArtifact, pass: number): LoopEnd | undefined {
+  if (a.reviewEnd) return a.reviewEnd.reason;
+  if (pass >= MAX_PE_PASSES) return "passes";
+  if (pass && a.provenance) return "as-is";
+  const round = s.studio.rounds.find((r) => r.n === a.round);
+  if (!round || round.closedAt) return "round-closed";
+  if (pass && endedWithoutResult(revisionRunsOf(s, a)) >= MAX_REVISION_RUNS) return "no-revision";
+  if (!pass && endedWithoutResult(peRunsOf(s, a.id, a.version)) >= MAX_PE_RUNS) return "no-review";
+  return undefined;
+}
+
+/**
+ * Where PE review of an artifact version stands (the loop rule, ORC-029 pass 4): one value, from which every word the
+ * owner and the lead see is made.
+ * - waiting: the PE has not reviewed this version yet (`passes`: those made on earlier versions of its round);
+ * - revising: the PE's pass `pass` asked for changes or objected, and the designer revises this version;
+ * - agreed: the PE's pass `pass` found every variant feasible;
+ * - ended: review ended before the PE agreed (`ended` says why; `note` gives the reason the service recorded). The
+ *   version goes to the owner with what the PE still asks for and objects to. `pass` is 0 when the PE never reviewed
+ *   this version.
+ * `asks` are the latest pass's feasible-if verdicts (the changes it asks for), and `objections` its not-feasible
+ * ones, overruled ones included (they carry `overruled`).
  */
 export type PeReview =
   | { status: "waiting"; passes: number }
-  | { status: "revising"; pass: number; objections: PeVerdict[] }
+  | { status: "revising"; pass: number; asks: PeVerdict[]; objections: PeVerdict[] }
   | { status: "agreed"; pass: number }
-  | { status: "objections"; pass: number; objections: PeVerdict[] };
+  | { status: "ended"; ended: LoopEnd; note?: string; pass: number; asks: PeVerdict[]; objections: PeVerdict[] };
 
 export function peReview(s: State, a: StudioArtifact): PeReview {
   const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
-  if (!mine.length) return { status: "waiting", passes: passesInRound(s, a.id, a.round) };
-  const pass = Math.max(...mine.map((v) => v.pass));
-  const objections = mine.filter((v) => v.pass === pass && v.verdict === "not-feasible");
-  if (!objections.length) return { status: "agreed", pass };
-  return pass >= MAX_PE_PASSES ? { status: "objections", pass, objections } : { status: "revising", pass, objections };
+  const pass = Math.max(0, ...mine.map((v) => v.pass));
+  const latest = mine.filter((v) => v.pass === pass);
+  const asks = latest.filter((v) => v.verdict === "feasible-if");
+  const objections = latest.filter((v) => v.verdict === "not-feasible");
+  if (pass && !asks.length && !objections.length) return { status: "agreed", pass };
+  const ended = loopEnd(s, a, pass);
+  if (ended) return { status: "ended", ended, ...(a.reviewEnd?.note ? { note: a.reviewEnd.note } : {}), pass, asks, objections };
+  return pass ? { status: "revising", pass, asks, objections } : { status: "waiting", passes: passesInRound(s, a.id, a.round) };
 }
 
-/** Whether the owner sees this version: PE review agreed or ran its three passes; what the owner brought and evidence are never held back. */
+/**
+ * Record that PE review of a version ended because the service could not run its next step (the service, when no
+ * enabled provider can run the PE or the designer's revision). The version goes to the owner as it is, with the
+ * reason; enabling a provider later does not take it back.
+ */
+export function endReview(state: State, artifactId: string, version: number, note: string, now: string): State {
+  const a = getArtifact(state, artifactId, version);
+  const r = peReview(state, a);
+  if (r.status !== "waiting" && r.status !== "revising") return state;
+  const s = draft(state);
+  const art = getArtifact(s, artifactId, version);
+  art.reviewEnd = { reason: "no-provider", at: now, note: reasonText(note) };
+  event(s, now, "system", "vision", `PE review of ${artifactName(a)}: ${outcomeWords(peReview(s, art))}`);
+  return s;
+}
+
+/**
+ * Whether the designer should revise this version for the PE now: it is the newest version of a reviewed kind, in
+ * Vision, its review is revising, and no designer run on it is under way (the loop's, or one the lead asked for).
+ */
+export function revisionDue(s: State, a: StudioArtifact): boolean {
+  if (s.project.stage !== "shaping" || UNGATED_KINDS.includes(a.kind)) return false;
+  if (latestVersion(s, a.id)?.version !== a.version) return false;
+  if (peReview(s, a).status !== "revising") return false;
+  return !designerRunsOn(s, a).some(isUnderWay);
+}
+
+/** Whether the owner sees this version: PE review agreed or ended; what the owner brought and evidence are never held back. */
 export function readyForOwner(s: State, a: StudioArtifact): boolean {
   if (UNGATED_KINDS.includes(a.kind)) return true;
   const r = peReview(s, a);
-  return r.status === "agreed" || r.status === "objections";
+  return r.status === "agreed" || r.status === "ended";
 }
 
 /** The objections of the latest pass on a version that the owner has not overruled, optionally only those covering one variant. */
 export function openObjections(s: State, a: StudioArtifact, variant?: string): PeVerdict[] {
   const r = peReview(s, a);
-  const all = r.status === "revising" || r.status === "objections" ? r.objections : [];
+  const all = r.status === "revising" || r.status === "ended" ? r.objections : [];
   return all.filter((v) => !v.overruled && (variant === undefined || covers(v, variant)));
+}
+
+/**
+ * Why a round cannot close yet, or undefined: one of its studio runs is under way, or one of its versions waits for
+ * PE review or for the designer's revision. Closing it then would end PE review early (review finding 1).
+ */
+export function roundBusy(s: State, n: number): string | undefined {
+  const run = s.studio.runs.find((r) => r.round === n && isUnderWay(r));
+  if (run) return `${run.kind === "pe" ? "the PE's" : run.kind === "probe" ? "a probe's" : "the designer's"} run ${run.id} is ${run.status}`;
+  for (const a of latestArtifacts(s)) {
+    if (a.round !== n || UNGATED_KINDS.includes(a.kind)) continue;
+    const r = peReview(s, a);
+    if (r.status === "waiting") return `${artifactName(a)} waits for PE review`;
+    if (r.status === "revising") return `the designer revises ${artifactName(a)} for the PE`;
+  }
+  return undefined;
 }
 
 export interface VerdictInput {
@@ -307,12 +582,36 @@ export function readEstimate(raw: unknown): BudgetEstimate {
   return estimate({ buildUsd: range(o.buildUsd, "building"), maintenanceUsdPerMonth: range(o.maintenanceUsdPerMonth, "maintenance"), basis: o.basis });
 }
 
+export interface PeVerdictsInput {
+  artifactId: string;
+  version: number;
+  verdicts: VerdictInput[];
+  /** The PE's run that made them (the service's record). */
+  by?: { provider: ProviderId; model: string; runId: string };
+}
+
+/** What comes of a version's review next, in words: "the designer revises", "agreed; it goes to the owner"… */
+export function outcomeWords(r: PeReview): string {
+  switch (r.status) {
+    case "waiting":
+      return "the PE reviews it";
+    case "revising":
+      return "the designer revises";
+    case "agreed":
+      return "agreed; it goes to the owner";
+    case "ended": {
+      const what = [r.objections.length ? "the objections" : "", r.asks.length ? "the changes the PE asks for" : ""].filter(Boolean).join(" and ");
+      return `review ended: ${LOOP_END_WORDS[r.ended]}${r.note ? ` (${r.note})` : ""}; it goes to the owner${what ? ` with ${what}` : ""}`;
+    }
+  }
+}
+
 /**
  * Record one PE pass on an artifact's newest version (the service, from the PE's run): one verdict per variant, or
  * one verdict on the whole artifact. Passes count within the version's round, up to three. Feasible-if states the
  * change; an estimate states its basis. What the owner brought and a probe's evidence are not reviewed.
  */
-export function addPeVerdicts(state: State, input: { artifactId: string; version: number; verdicts: VerdictInput[] }, now: string): { state: State; pass: number } {
+export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string): { state: State; pass: number } {
   const a = getArtifact(state, input.artifactId, input.version);
   if (UNGATED_KINDS.includes(a.kind)) throw new ControlError(`${a.title} is ${a.kind === "material" ? "what you brought" : "a probe's evidence"}: the PE does not review it.`);
   const latest = latestVersion(state, a.id)!;
@@ -335,15 +634,25 @@ export function addPeVerdicts(state: State, input: { artifactId: string; version
     const reasons = required(agentText(v.reasons), 2000, "The verdict's reasons");
     const change = v.change === undefined ? "" : capped(agentText(v.change), 1000, "The stated change");
     if (v.verdict === "feasible-if" && !change) throw new ControlError("Feasible-if states the change that makes it feasible.");
-    return { id: "", artifactId: a.id, version: a.version, ...(v.variant !== undefined ? { variant: v.variant } : {}), pass, verdict: v.verdict, reasons, ...(change ? { change } : {}), ...(v.budget ? { budget: estimate(v.budget) } : {}), at: now };
+    return {
+      id: "",
+      artifactId: a.id,
+      version: a.version,
+      ...(v.variant !== undefined ? { variant: v.variant } : {}),
+      pass,
+      verdict: v.verdict,
+      reasons,
+      ...(change ? { change } : {}),
+      ...(v.budget ? { budget: estimate(v.budget) } : {}),
+      at: now,
+      ...(input.by ? { by: { provider: input.by.provider, model: input.by.model, runId: input.by.runId } } : {}),
+    };
   });
   const s = draft(state);
   for (const r of records) s.studio.verdicts.push({ ...r, id: nextId(s, "pev") });
   const art = getArtifact(s, a.id, a.version);
-  const words: Record<Verdict, string> = { feasible: "feasible", "feasible-if": "feasible if changed", "not-feasible": "not feasible" };
   const r = peReview(s, art);
-  const outcome = r.status === "agreed" ? "agreed; it goes to the owner" : r.status === "objections" ? `still objects after ${MAX_PE_PASSES} passes; it goes to the owner with the objections` : "the designer revises";
-  event(s, now, "runtime", "vision", `PE review of ${artifactName(a)}, pass ${pass}: ${records.map((x) => `${x.variant ? `${variantLabel(a, x.variant)} ` : ""}${words[x.verdict]}`).join(", ")}; ${outcome}`);
+  event(s, now, "runtime", "vision", `PE review of ${artifactName(a)}, pass ${pass}: ${records.map((x) => `${x.variant ? `${variantLabel(a, x.variant)} ` : ""}${VERDICT_WORDS[x.verdict]}`).join(", ")}; ${outcomeWords(r)}`);
   return { state: s, pass };
 }
 
@@ -358,7 +667,7 @@ export function overruleObjection(state: State, verdictId: string, why: string, 
   if (v.overruled) throw new ControlError("You already overruled this objection.");
   const a = getArtifact(state, v.artifactId, v.version);
   const latest = latestVersion(state, a.id)!;
-  if (!readyForOwner(state, latest)) throw new ControlError(`The PE is still reviewing ${latest.title}; it reaches you once the PE agrees or after ${MAX_PE_PASSES} passes.`);
+  if (!readyForOwner(state, latest)) throw new ControlError(`The PE is still reviewing ${latest.title}; it reaches you once the PE agrees or its review ends.`);
   if (latest.version !== a.version || !openObjections(state, a).some((x) => x.id === v.id)) throw new ControlError(`PE review of ${a.title} moved on since this objection; overrule its current objections instead.`);
   const reason = required(ownerText(why), 1000, "Your reason");
   const s = draft(state);
@@ -390,7 +699,7 @@ export function sendFeedback(state: State, entries: FeedbackInput[], now: string
     const a = getArtifact(state, e.artifactId, e.version);
     const latest = latestVersion(state, a.id)!;
     if (latest.version !== a.version) throw new StaleWriteError(a.version, latest.version);
-    if (!readyForOwner(state, a)) throw new ControlError(`${artifactName(a)} is still in PE review; it reaches you once the PE agrees or after ${MAX_PE_PASSES} passes.`);
+    if (!readyForOwner(state, a)) throw new ControlError(`${artifactName(a)} is still in PE review; it reaches you once the PE agrees or its review ends.`);
     const key = `${a.id}@${a.version}`;
     if (seen.has(key)) throw new ControlError(`${artifactName(a)} appears twice; send one answer per artifact.`);
     seen.add(key);
@@ -404,7 +713,9 @@ export function sendFeedback(state: State, entries: FeedbackInput[], now: string
       const inside = (n: number) => Number.isFinite(n) && n >= 0 && n <= 1;
       if (!inside(p.x) || !inside(p.y)) throw new ControlError("A pin's position is a fraction (0 to 1) of the artifact's width and height.");
       const pv = variant(p.variant);
-      return { x: p.x, y: p.y, ...(pv !== undefined ? { variant: pv } : {}), text: required(ownerText(p.text), 1000, "A pinned comment") };
+      // The clicked element as the prototype described it: untrusted text, kept as one line.
+      const selector = p.selector === undefined ? "" : capped(agentLine(p.selector), MAX_PIN_SELECTOR, "A pin's element");
+      return { x: p.x, y: p.y, ...(pv !== undefined ? { variant: pv } : {}), text: required(ownerText(p.text), 1000, "A pinned comment"), ...(selector ? { selector } : {}) };
     });
     const note = capped(ownerText(e.note), 4000, "The note");
     return { artifactId: a.id, version: a.version, mark: e.mark, ...(picked !== undefined ? { pickedVariant: picked } : {}), pins, note, at: now };

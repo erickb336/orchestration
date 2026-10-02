@@ -20,6 +20,47 @@ web
   - Developers decide in seconds whether to try it.
   - The sample project in the demo is only a backdrop; what is shown is Orchestrator itself.
 
+## The core problem
+
+In the owner's words (2026-10-02):
+
+> "The core problem I want this project to solve is how data/artifacts/etc convey things to the human. I want to get as far away from the code as possible and remove human from the loop of development. Human is still looking at code because there is a mismatch between what is in human head vs and what the chat session believes or assumes. This project should be about coming up with the best way to represent each part of the design processes for the human to understand and be able to get information that is needed from the human to reach alignment."
+
+And, refining it the same day: it is "like an information and data representation problem". The owner does not want to look at code at all: "the point is too create the principles and loops so the good code patterns structure etc are a by product that I don't need to worry about. But I believe the way to get there is to help the human get develop the vision and design of the change/product/etc fully before implementation happens", "before the factory starts".
+
+**What this means for every feature:**
+
+- **Before the factory starts, the human's part is made complete.**
+  - In Vision (ORC-029), each part of the design is shown in the form that makes a mismatch with the owner's intent obvious, and the owner's input is asked for in the cheapest form to answer:
+    - the experience as prototypes;
+    - the data as the product's things and how they relate, with worked examples;
+    - the flows, with every rule and edge case decided (for example, as a table of cases and outcomes).
+  - Messy special-casing in code usually comes from a case the design never decided, so deciding cases up front is how good code becomes a by-product.
+  - The pre-flight shows how complete the design is before the owner starts the factory.
+- **Changes after the start are designed the same way.** A new feature or change goes back through the studio, and only its approved design reaches the factory, as a change order.
+- **During building, nobody reviews code.** What the owner used to check in code becomes rules the factory enforces on itself, through its own loops:
+  - structure, data shapes, patterns, nested ternaries and special cases (the owner's list, 2026-10-02);
+  - enforced by principles given to agents, automated checks, and code and PE review that repair what they find.
+  - The owner sees only the decisions that genuinely need them.
+
+**The approach, from Karpathy's guidance** (shared by the owner on 2026-10-02 as "what we are trying to solve"). As agents do more of the work, the owner's work moves into oversight and understanding. So agents' output takes the most understandable form available, in this order of preference:
+
+1. **Controlled writing:** about 80% of ASD-STE100 (Simplified Technical English).
+2. **Diagrams.**
+3. **Interactive web pages.**
+4. **Explainer videos.**
+
+Cheap, discardable artifacts made only for understanding are encouraged. In Orchestrator, this means:
+
+- **A writing standard for every agent that writes to the owner** (lead, PE, designer, reviewers), enforced by a check:
+  - one instruction per sentence;
+  - at most 20 words per procedural sentence and 25 per descriptive sentence, and at most 6 sentences per paragraph;
+  - active voice and simple verb forms;
+  - the same word for the same thing, no noun clusters longer than 3 words, and vertical lists for complex text.
+- **A dictionary for each project**, built from the Vision's data round: approved words, each with one meaning and the words it replaces.
+- **Fixed sentence patterns for rules and acceptance**, in the controlled-language style the owner likes.
+- **The studio's artifact types follow the same order of preference:** diagrams, then web prototypes, then terminal recordings, and later explainer videos.
+
 ## Product Purpose
 
 In the owner's words (2026-10-01): "a starting playground for me to develop and test different patterns for and ways of using multiple agents in my workflows. My goal is to remove myself from the loop as much as possible and review only artifacts and working prototypes rather than spending too much time on details and instead focus on building working solutions that are testable end-to-end."

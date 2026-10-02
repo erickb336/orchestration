@@ -103,8 +103,10 @@ function runToDone(s0: State, id: string, second: number, findings: Partial<Reco
 
 describe("the role", () => {
   it("is enumerated everywhere roles are: the type's lists (the label is checked with the UI helpers, the schema with the flow files), and it is a review role", () => {
-    expect(ROLES).toEqual(["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"]);
+    expect(ROLES).toEqual(["lead", "designer", "pe", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"]);
     expect(STEP_ROLES).toContain("security_reviewer");
+    // The PE (ORC-029) has a role default but runs only in the studio: no flow step uses it until pass 5.
+    expect(STEP_ROLES).not.toContain("pe");
     expect(REVIEW_ROLES).toEqual(["code_reviewer", "security_reviewer", "ux_reviewer"]);
   });
 

@@ -24,7 +24,7 @@ export const MAX_DECISION_WHY = 300;
 const MAX_LEAD_DECISIONS = 20;
 export const DECISION_OPTIONS = ["fix", "accept", "follow-up", "reopen"] as const;
 export type UserDecision = (typeof DECISION_OPTIONS)[number];
-const LEAD_OPTIONS = ["fix", "accept", "follow-up", "ask-user"] as const;
+export const LEAD_OPTIONS = ["fix", "accept", "follow-up", "ask-user"] as const;
 type LeadDecision = (typeof LEAD_OPTIONS)[number];
 
 /** A finding that must be fixed or decided: an error or warning that is not information only. */

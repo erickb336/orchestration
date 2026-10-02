@@ -9,7 +9,11 @@
 
 import type { Device, PeReviewState, ProviderId } from "../types";
 
-/** What a round is about. Round 0 is what the owner brought (material); then the experience, the data crossing each boundary, and the flows. */
+/**
+ * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
+ * repository the designer's "as is" reproductions of it ("as it is today"). Then the experience, the data crossing
+ * each boundary, and the flows.
+ */
 export type RoundFocus = "material" | "experience" | "data" | "flows";
 export const ROUND_FOCUSES: RoundFocus[] = ["material", "experience", "data", "flows"];
 
@@ -24,12 +28,45 @@ export interface Round {
   leadRunId?: string;
   /** What the round explores, then what came of it, in the lead's words. */
   summary: string;
+  /**
+   * The lead's latest message about this round and its questions to the owner, from the studio block of its newest
+   * reply that addressed the round (pass 4). The owner answers in the conversation, with their feedback.
+   */
+  lead?: RoundLead;
 }
 
-export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "material" | "evidence";
-export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "material", "evidence"];
+/** The lead's message for a round, and its questions (ORC-012's: the question, why it matters, options to pick). */
+export interface RoundLead {
+  message: string;
+  questions: RoundQuestion[];
+}
+
+export interface RoundQuestion {
+  text: string;
+  reason?: string;
+  options?: string[];
+}
+
+/**
+ * What an artifact is. A screen product's: screens, terminal demos and TUIs. A code product's (r9): its `interface`
+ * (names, signatures, the error model, usage examples as a caller writes them) and its core `algorithm`s and
+ * primitives (pseudo-code, a worked trace, invariants, cost). An infrastructure system's: its `topology` (what talks to
+ * what, failure and recovery, scale and cost). Any domain's `contract`s (what crosses a boundary, with examples) and
+ * `flow`s (journeys, sequences, and tables of cases and outcomes). The owner's `material`, and a probe's `evidence`.
+ */
+export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "interface" | "algorithm" | "topology" | "material" | "evidence";
+export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology", "material", "evidence"];
+/** Kinds that are documents: plain files (Markdown with code blocks and tables, `.mmd` Mermaid), shown without a device frame. */
+export const DOCUMENT_KINDS: StudioArtifactKind[] = ["contract", "flow", "interface", "algorithm", "topology"];
 /** Kinds the PE does not review: what the owner brought, and a probe's evidence. They reach the owner at once, and a verdict on one is refused. */
 export const UNGATED_KINDS: StudioArtifactKind[] = ["material", "evidence"];
+
+/** One option of an artifact: its id, its label, and its entry file when it has one. */
+export interface StudioVariant {
+  id: string;
+  label: string;
+  entry?: string;
+}
 
 /** Who made an artifact version: the owner (what they brought), or an agent's run. */
 export type StudioMaker = { role: "user" } | { role: "lead" | "designer" | "pe" | "probe"; provider: ProviderId; model: string; attemptId: string };
@@ -49,24 +86,105 @@ export interface StudioArtifact {
   supersedes?: string;
   kind: StudioArtifactKind;
   title: string;
-  /** Options side by side for an open choice; none or one is a single take. */
-  variants: { id: string; label: string }[];
-  /** Relative to the project's studio workspace. Provider-neutral files: the canvas shows them the same whoever made them. */
+  /**
+   * Options side by side for an open choice; none or one is a single take. `entry` is the variant's entry file (a
+   * page, a tape, a .cast or .ans), one of `files`, as the designer named it in studio.json; what the owner brought has none.
+   */
+  variants: StudioVariant[];
+  /**
+   * Relative to the version's folder, `artifacts/<id>/v<version>/` in the project's studio workspace (pass 3). Provider-neutral
+   * files: the canvas shows them the same whoever made them.
+   */
   files: { path: string; sha256: string }[];
   /** The device sizes it is designed for, within the project's device scope; none for a contract or a flow. */
   devices: Device[];
   madeBy: StudioMaker;
   at: string;
+  /**
+   * An "as is" artifact (pass 4): the designer's reproduction of what the existing repository already does, in round
+   * 0 ("as it is today"), with the repository files it came from (paths relative to the repository's root, each a file
+   * the repository tracks, checked at import). Absent on everything else.
+   */
+  provenance?: Provenance;
+  /** A screen's screenshots, which the service takes after import (pass 3). Absent when this service takes none. */
+  shots?: ArtifactShots;
+  /** How a terminal demo or TUI is shown, which the service settles after import (pass 3). Absent when this service records none. */
+  demo?: ArtifactDemo;
+  /**
+   * The end of PE review of this version, when the service recorded it because no other record shows it: no enabled
+   * provider could run the next step, or the version was reviewed under pass 3's rule (recorded at the upgrade).
+   * Every other end is read from the verdicts, the runs and the round (studio.ts, `peReview`).
+   */
+  reviewEnd?: { reason: RecordedEnd; at: string; note?: string };
 }
+
+/**
+ * Why PE review of a version ended before the PE agreed. The version then goes to the owner with what the PE still
+ * asks for and objects to (studio.ts, the loop rule).
+ * - passes: the PE made its last pass in the round;
+ * - as-is: the version reproduces the code as it is today (round 0): the designer does not revise it for the PE;
+ * - round-closed: its round closed first (a round closed before the lead's close waited for PE review);
+ * - no-revision: the designer's runs revising it ended without a new version, twice;
+ * - no-review: the PE's runs on it ended without a verdict, twice;
+ * - no-provider: no enabled provider could run the next step (the PE or the designer's revision);
+ * - earlier-rule: the PE reviewed it under pass 3's rule, one pass and no revision (recorded at the upgrade).
+ */
+export type LoopEnd = "passes" | "as-is" | "round-closed" | "no-revision" | "no-review" | "no-provider" | "earlier-rule";
+/** The ends the service records on the version (`reviewEnd`), because no other record shows them. */
+export type RecordedEnd = Extract<LoopEnd, "no-provider" | "earlier-rule">;
+
+/** Where an "as is" artifact came from: labelled as is, with the repository files the designer reproduced it from. */
+export interface Provenance {
+  asIs: true;
+  files: string[];
+}
+
+/** One screenshot: a variant on a device, relative to the version's folder (`shots/<variant>-<device>.png`). */
+export interface ArtifactShot {
+  variant: string;
+  device: Device;
+  path: string;
+}
+
+/**
+ * The screenshots of a screen version, for its history and for the PE: each variant on each of its devices.
+ * pending: being taken; taken: at least one (`failed` names any that were not, and why); skipped: none, and why
+ * (no Chrome, say).
+ */
+export type ArtifactShots =
+  | { status: "pending" }
+  | { status: "taken"; at: string; shots: ArtifactShot[]; failed: { variant: string; device: Device; error: string }[] }
+  | { status: "skipped"; at: string; reason: string };
+
+/**
+ * How one variant of a terminal demo or TUI is shown. Paths are relative to the version's folder.
+ * recorded: VHS recorded its tape in the sandbox, into `recording/<variant>/` (WebM, GIF and a text transcript, as the
+ * tape asked); recorded-with-errors: recorded, but its transcript shows a failure the designer did not mean to show
+ * (`reason`: the first failing line); hand-written: the designer's .cast or .ans files, not recorded (`reason`: why
+ * its tape was not, when it had one); not-recorded: neither, and why.
+ */
+export type VariantDemo =
+  | { variant: string; status: "recorded"; tape: string; webm?: string; gif?: string; txt?: string }
+  | { variant: string; status: "recorded-with-errors"; tape: string; webm?: string; gif?: string; txt?: string; reason: string }
+  | { variant: string; status: "hand-written"; files: string[]; reason?: string }
+  | { variant: string; status: "not-recorded"; reason: string };
+
+/** A terminal demo's or TUI's variants as shown: pending while the service records them. */
+export type ArtifactDemo = { status: "pending" } | { status: "done"; at: string; variants: VariantDemo[] };
 
 export type Mark = "keep" | "change" | "drop";
 
-/** A comment pinned to a point: `x` and `y` are fractions (0 to 1) of the shown artifact's width and height. */
+/**
+ * A comment pinned to a point: `x` and `y` are fractions (0 to 1) of the shown artifact's width and height.
+ * `selector` describes the element clicked, as the prototype's pin script reported it: the prototype's own text, a
+ * description only, shown as text and never as markup.
+ */
 export interface Pin {
   x: number;
   y: number;
   variant?: string;
   text: string;
+  selector?: string;
 }
 
 /**
@@ -87,6 +205,8 @@ export interface Feedback {
 
 export type Verdict = "feasible" | "feasible-if" | "not-feasible";
 export const VERDICTS: Verdict[] = ["feasible", "feasible-if", "not-feasible"];
+/** A verdict in words: "feasible if changed". */
+export const VERDICT_WORDS: Record<Verdict, string> = { feasible: "feasible", "feasible-if": "feasible if changed", "not-feasible": "not feasible" };
 
 /** A cost estimate: dollar ranges, low to high, and what they are based on (recorded runs, price lists, a probe). */
 export interface BudgetEstimate {
@@ -114,6 +234,8 @@ export interface PeVerdict {
   at: string;
   /** The owner overruled this objection, and why. */
   overruled?: { at: string; why: string };
+  /** The PE's run that made it, with its provider and model (the service's record; absent on verdicts recorded otherwise). */
+  by?: { provider: ProviderId; model: string; runId: string };
 }
 
 export type ProbeStatus = "queued" | "running" | "done" | "failed";
@@ -175,12 +297,65 @@ export interface ChangeOrder {
   peReview?: PeReviewState;
 }
 
+export type StudioRunKind = "designer" | "pe" | "probe";
+export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
+/** What a designer's manifest may hold: the owner brings material, and a probe's run makes evidence. */
+export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology"];
+
+/** queued → running → (stopping →) stopped, completed, failed or lost. A queued run waits for dispatch, which happens in Vision only. */
+export type StudioRunStatus = "queued" | "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";
+/** A run under way: asked for and not ended (queued, running, or stopping until the runtime confirms the stop). */
+export const isUnderWay = (r: { status: StudioRunStatus }) => r.status === "queued" || r.status === "running" || r.status === "stopping";
+
+/**
+ * One agent run of the studio (ORC-029 pass 3): a designer's, the PE's or a probe's, during Vision. Its own record,
+ * like a lead run, never a task attempt: it touches no product branch. It writes only into its staging folder, and
+ * what a designer run hands in is imported as artifact versions. Its usage counts in the building budget.
+ */
+export interface StudioRun {
+  id: string;
+  kind: StudioRunKind;
+  round: number;
+  /** The artifact a designer run revises: what it hands in is a new version of it. */
+  artifactId?: string;
+  /** The version it revises: the artifact's newest when the run was asked for. A result after a newer version is stale. */
+  baseVersion?: number;
+  /** Resolved when the run is asked for, never "auto". */
+  provider: ProviderId;
+  model: string;
+  status: StudioRunStatus;
+  /** What the run is asked to do: the lead's brief and what it asked for, or (asked by the service alone) a labelled placeholder. */
+  brief: string;
+  /** A designer run the lead asked for in its studio block (pass 4): the lead run, and the kinds, variants and devices it asked for. */
+  fromLead?: { leadRunId: string; kinds: StudioArtifactKind[]; variants: number; devices: Device[] };
+  askedAt: string;
+  /** When it was dispatched; absent while queued. */
+  startedAt?: string;
+  endedAt?: string;
+  /** Its staging folder, relative to the project's studio workspace (`<data>/studio/<projectId>/`): the one place it writes. */
+  workspace: string;
+  usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
+  sessionId?: string;
+  actualModel?: string;
+  stopRequestedAt?: string;
+  /** Pausing the project stopped it: once the stop is confirmed the run is asked for again, and it runs when the project resumes. */
+  requeue?: true;
+  /** The run this one repeats after a pause stopped it. */
+  retryOf?: string;
+  activity?: string;
+  /** Why it failed or was refused, or a control failure. */
+  note?: string;
+  /** Run by the fake runtime: no agent made what it hands in. */
+  simulated?: true;
+}
+
 export interface Studio {
   rounds: Round[];
   artifacts: StudioArtifact[];
   feedback: Feedback[];
   verdicts: PeVerdict[];
   probes: Probe[];
+  runs: StudioRun[];
 }
 
 export interface Blueprint {
@@ -188,5 +363,5 @@ export interface Blueprint {
   changeOrders: ChangeOrder[];
 }
 
-export const emptyStudio = (): Studio => ({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [] });
+export const emptyStudio = (): Studio => ({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
 export const emptyBlueprint = (): Blueprint => ({ revisions: [], changeOrders: [] });

@@ -7,10 +7,16 @@ import { MAX_PROVEN_PATHS, MAX_REVIEWED_PATHS, normalizePath } from "../src/doma
 import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
+import { LEAD_REPLY_SCHEMA, schemaMismatch, withNulls, withoutNulls } from "../src/domain/model/leadReplySchema";
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
 import { buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
-import { clip } from "../src/domain/text";
+import { domainLines } from "../src/domain/studio/domains";
+import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
+import * as S from "../src/domain/studio/studio";
+import { DOCUMENT_KINDS, UNGATED_KINDS, isUnderWay, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
+import { clip, truncate } from "../src/domain/text";
+import type { RepoGlance } from "./studio/existing";
 import {
   FINDING_ACTIONS,
   MAX_NOTES_PER_REPLY,
@@ -53,6 +59,8 @@ const ROLE_BRIEFS: Record<RoleId, string> = {
     "You are an independent security reviewer. Review the change for security: injection, authorisation and access control, secrets and credentials, unsafe handling of input, files and commands, and risky dependencies. Report actionable findings with their severity, action and file locations, like any review. Do not change files.",
   ux_reviewer:
     "You are an independent UX reviewer. Compare the implemented experience with the intended flow; check empty, loading, failure, correction, and success states. Report findings. Do not change files.",
+  // Never sent: no flow step uses the PE yet (STEP_ROLES); its studio runs have their own envelope (server/studio/pe.ts).
+  pe: "You are the PE: a rigid principal engineer. Judge feasibility, scale, longevity and budget. Do not change files.",
   // Never sent: a Checks step is run by the service, not by an agent.
   checks: "This step is run by the service.",
 };
@@ -697,7 +705,7 @@ function parseReviewedPaths(raw: unknown): { paths: string[]; invalid: number } 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /** The last fenced JSON object in a message. Summaries may themselves contain ``` fences. */
-function lastJsonObject(text: string): Record<string, unknown> | undefined {
+export function lastJsonObject(text: string): Record<string, unknown> | undefined {
   // Candidates, most likely first: from the last ```json fence to the last closing fence, then each
   // simple fenced block from the end.
   const candidates: string[] = [];
@@ -1012,8 +1020,139 @@ ${open.slice(0, 40).map((d) => decisionLines(state, d)).join("\n")}${open.length
 `;
 }
 
+// ---------- the studio (Vision, ORC-029 pass 4) ----------
+
+/** How many of the open round's artifacts, the owner's answers, and pins per answer the brief lists; the rest is counted. */
+const STUDIO_ARTIFACT_ROWS = 12;
+const STUDIO_FEEDBACK_ROWS = 10;
+const STUDIO_PINS = 3;
+const EARLIER_ROUNDS = 3;
+const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what exists", experience: "the experience", data: "the data", flows: "the flows" };
+
+/** Where PE review of a version stands, in a few words for the lead, made from the studio's one value (`S.peReview`). */
+function peLine(state: State, a: StudioArtifact): string {
+  if (UNGATED_KINDS.includes(a.kind)) return `not reviewed (${a.kind === "material" ? "what the user brought" : "a probe's evidence"})`;
+  const r = S.peReview(state, a);
+  const said = (x: { asks: PeVerdict[]; objections: PeVerdict[] }) => {
+    const objects = x.objections.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.reasons, 140)}${v.overruled ? " (the user overruled it)" : ""}`);
+    const asks = x.asks.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.change ?? v.reasons, 120)}`);
+    return [objects.length ? `; objects: ${objects.join("; ")}` : "", asks.length ? `; asks for changes: ${asks.join("; ")}` : ""].join("");
+  };
+  switch (r.status) {
+    case "waiting":
+      return "PE: reviewing";
+    case "agreed":
+      return `PE agreed (pass ${r.pass})`;
+    case "revising":
+      return `the designer revises for the PE (pass ${r.pass})${said(r)}`;
+    case "ended":
+      return `PE review ended ${r.pass ? `after pass ${r.pass}` : "with no pass"} (${S.LOOP_END_WORDS[r.ended]}${r.note ? `: ${truncate(r.note, 200)}` : ""}), shown to the user${said(r)}`;
+  }
+}
+
+/** One artifact of the open round: id, title, version, kind, variants, devices, "as is" provenance, and PE review. */
+function studioArtifactLine(state: State, a: StudioArtifact): string {
+  const variants = a.variants.length > 1 ? ` · ${a.variants.length} variants: ${a.variants.map((v) => `${v.id} ${truncate(v.label, 30)}`).join(", ")}` : "";
+  const devices = a.devices.length ? ` · ${a.devices.join(", ")}` : "";
+  const p = a.provenance;
+  const asIs = p ? ` · as is, from ${p.files.slice(0, 5).map((f) => truncate(f, 80)).join(", ")}${p.files.length > 5 ? ` and ${p.files.length - 5} more` : ""}` : "";
+  return `  - ${a.id} "${truncate(a.title, 60)}" v${a.version} · ${a.kind}${variants}${devices}${asIs} · ${peLine(state, a)}`;
+}
+
+/** The user's marks, picks, pins and notes since the lead's last reply (not the pins a revision carried forward), newest per version. */
+function studioAnswers(state: State): string[] {
+  const since = state.conversation.filter((m) => m.author === "lead").at(-1)?.at ?? "";
+  const latest = new Map<string, Feedback>();
+  for (const f of state.studio.feedback) if (!f.carriedFrom && f.at > since) latest.set(`${f.artifactId}@${f.version}`, f);
+  const all = [...latest.values()];
+  const lines = all.slice(-STUDIO_FEEDBACK_ROWS).map((f) => {
+    const a = S.getArtifact(state, f.artifactId, f.version);
+    const pins = f.pins.slice(0, STUDIO_PINS).map((p) => `"${truncate(p.text, 100)}"${p.variant ? ` on ${p.variant}` : ""}${p.selector ? ` at ${truncate(p.selector, 40)}` : ""}`);
+    const parts = [
+      f.mark ?? "no mark",
+      f.pickedVariant ? `picked ${f.pickedVariant}` : "",
+      pins.length ? `${f.pins.length} pin${f.pins.length === 1 ? "" : "s"}: ${pins.join(", ")}${f.pins.length > STUDIO_PINS ? ", …" : ""}` : "",
+      f.note ? `note: "${truncate(f.note, 200)}"` : "",
+    ].filter(Boolean);
+    return `- ${a.id} "${truncate(a.title, 60)}" v${a.version}: ${parts.join("; ")}`;
+  });
+  return all.length > STUDIO_FEEDBACK_ROWS ? [`- and ${all.length - STUDIO_FEEDBACK_ROWS} earlier answers, in the studio`, ...lines] : lines;
+}
+
+/**
+ * The lead's studio brief while the project is in Vision (pass 4): what the studio is and the lead's part in it, the
+ * order of focus (aiming at completeness, r8), the domains and devices, the repository (for an "as it is today"
+ * first round), the rounds with their artifacts and PE review, the designer runs under way, and the user's answers
+ * since the lead's last reply. Bounded: the open round's artifacts, the answers and the pins are capped and counted.
+ */
+export function studioBriefSection(state: State, repo?: RepoGlance): string {
+  const p = state.project;
+  const rounds = state.studio.rounds;
+  const open = S.currentRound(state);
+  const repoLine = !repo
+    ? "Repository: its file list was not read for this run; your working directory is a read-only checkout of it."
+    : repo.codeFiles
+      ? `Repository: has code, ${repo.codeFiles} code file${repo.codeFiles === 1 ? "" : "s"} of ${repo.files} tracked (${repo.code.slice(0, 12).join(", ")}${repo.codeFiles > 12 ? ", …" : ""}).`
+      : `Repository: no code yet (${repo.files} tracked file${repo.files === 1 ? "" : "s"}, documents only).`;
+  const start = rounds.length
+    ? ""
+    : repo?.codeFiles
+      ? `\nNo round yet, and the repository has code. Unless the user said otherwise, start with round 0, "as it is today": openRound { "focus": "material", "summary": "As it is today: <what the code does now>" }, and ask the designer to reproduce the key screens, or the interface and core algorithms, or the topology, from the code (one take each, kinds by the domains). The designer reads the code read-only; the service labels each artifact "as is" with the files it came from. The PE checks only that each reproduction is faithful to the code, and the designer does not revise it for the PE: the user corrects it, and later rounds change it.`
+      : "\nNo round yet: open round 1 on the experience once you know enough to brief the designer.";
+  const latest = S.latestArtifacts(state);
+  const openRows = open ? latest.filter((a) => a.round === open.n) : [];
+  const runs = state.studio.runs.filter(isUnderWay);
+  const runLine = runs.length ? `\n  Runs under way: ${runs.slice(0, 8).map((r) => `${r.id} ${r.kind} ${r.status} (asked by ${r.fromLead ? `lead run ${r.fromLead.leadRunId}` : "the service"})`).join(", ")}${runs.length > 8 ? `, and ${runs.length - 8} more` : ""}.` : "";
+  // What the service did not do of the lead's last studio block (leadOutput.ts labels those notes "Studio: ").
+  const notes = (state.conversation.filter((m) => m.author === "lead").at(-1)?.rejected ?? []).filter((n) => n.startsWith("Studio: ")).map((n) => `- ${truncate(n.slice("Studio: ".length), 300)}`);
+  const busy = open ? S.roundBusy(state, open.n) : undefined;
+  const roundLines = open
+    ? [
+        `- Round ${open.n} (${FOCUS_WORDS[open.focus]}), open: ${truncate(open.summary, 300) || "(no summary)"}`,
+        ...(busy ? [`  It cannot close yet: ${busy}.`] : []),
+        ...(openRows.length ? openRows.slice(0, STUDIO_ARTIFACT_ROWS).map((a) => studioArtifactLine(state, a)) : ["  - No artifacts yet."]),
+        ...(openRows.length > STUDIO_ARTIFACT_ROWS ? [`  - and ${openRows.length - STUDIO_ARTIFACT_ROWS} more, in the studio`] : []),
+        ...(open.lead?.questions.length ? [`  Your questions in this round: ${open.lead.questions.map((q, i) => `${i + 1}. ${truncate(q.text, 160)}`).join(" ")}`] : []),
+      ].join("\n") + runLine
+    : `- No round is open.${runLine}`;
+  const earlier = rounds
+    .filter((r) => r.closedAt)
+    .slice(-EARLIER_ROUNDS)
+    .map((r) => `- Round ${r.n} (${FOCUS_WORDS[r.focus]}), closed: ${truncate(r.summary, 200) || "(no summary)"} (${latest.filter((a) => a.round === r.n).length} artifacts)`);
+  const answers = studioAnswers(state);
+  return `
+## The studio
+You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between. The PE reviews every option before the user sees it; when it asks for a change or objects, the designer revises, up to ${S.MAX_PE_PASSES} passes, and then the user sees it with what the PE still says. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
+
+Order of focus, aiming at a design that is complete before the factory starts (revisit a focus when the user's answers call for it):
+1. experience: the key screens or commands, or the interface, or the topology, and how they behave;
+2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary;
+3. flows: every rule and edge case decided, as tables of cases and outcomes (empty, loading, error, offline, first run), because a case the design leaves open becomes special-casing in code.
+
+Product domains: the kind of product this is, which decides what the designer makes. A domain is not the product's subject (travel, finance, "a web app"). There are three:
+- screen: people use it on a screen: in a browser, on a desktop or a phone, or in a terminal;
+- code: other programs use it: a library, an engine, a compiler;
+- infrastructure: systems that run other software: servers, queues, pipelines, deployment.
+The user chooses the domains in the app. You never set them, and you do not ask about them in "questions"; you may recommend domains in one sentence of your reply. The user's choice:
+${domainLines(p.domains).map((l) => `- ${l}`).join("\n")}
+Devices (the user's scope): ${p.devices.join(", ")}.
+${repoLine}${start}
+
+Rounds:
+${roundLines}${earlier.length ? `\n${earlier.join("\n")}` : ""}
+${notes.length ? `\nWhat the service did not do of your last studio block:\n${notes.join("\n")}\n` : ""}
+The user's marks, picks, pins and notes since your last reply (their answers to your questions are in their messages below):
+${answers.length ? answers.join("\n") : "- None."}
+
+Rules for "studio":
+- One round is open at a time: "closeRound" the open one before "openRound" opens the next. A round closes only once its studio runs have ended and the PE's review of each of its versions has ended; until then the service refuses "closeRound" and says why.
+- "designerRuns": at most ${MAX_DESIGNER_RUNS} per reply. Brief the designer on what to make and why, from the vision, the documents and the user's marks. Ask for 2–${MAX_RUN_VARIANTS} variants only where a real choice is open, otherwise 1. Devices come from the scope; documents (${DOCUMENT_KINDS.join(", ")}) have none. "revises" makes an artifact's next version, carrying the user's open pins.
+- "questions": at most 5, about this round's choices (a variant, an undecided case), each with why and up to 4 options; they show beside the round. Keep "questions" outside "studio" for the vision's areas, and never ask one question in both.
+`;
+}
+
 /** Everything the lead sees: vision, open work with what it may do, outcomes, conflicts, conversation, and the rules. */
-export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", docs?: VisionDocReader, conventions?: ConventionsFile[]): string {
+export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", docs?: VisionDocReader, conventions?: ConventionsFile[], repo?: RepoGlance): string {
   const p = state.project;
   const vision = M.currentVision(state);
   const maxProposals = p.autonomy.maxProposalsPerCycle;
@@ -1114,8 +1253,20 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
   "coverage": { ${SHAPING_AREAS.map((a) => `"${a}": "clear|partial|open"`).join(", ")} },
   "questions": [
     { "question": "<one targeted question>", "why": "<why it matters, one line>", "area": "<area key>", "options": ["<option A (recommended, because …)>", "<option B>"] }
-  ]`
+  ],
+  "studio": {
+    "closeRound": { "summary": "<what came of the open round>" },
+    "openRound": { "focus": "material | experience | data | flows", "summary": "<what the round explores>" },
+    "designerRuns": [
+      { "brief": "<what to make and why>", "kinds": ["screen"], "variants": 2, "devices": ["desktop"], "revises": "<an artifact id, only to make its next version>" }
+    ],
+    "questions": [
+      { "question": "<a question about this round>", "why": "<why it matters, one line>", "options": ["<option A (recommended, because …)>", "<option B>"] }
+    ]
+  }`
     : "";
+  // The studio brief goes to the replies that may run the studio: message runs in Vision.
+  const studioBrief = canDraft ? studioBriefSection(state, repo) : "";
   const shapingBrief = shaping
     ? `
 ## Shaping the vision
@@ -1148,7 +1299,7 @@ ${vision.text || "(not written yet)"}
 Current focus: ${vision.focus || "(none)"}${focusLine}
 Focus history (newest first):
 ${focusHistory(state)}
-${visionDocsSection(state, "lead", docs)}${shapingBrief}
+${visionDocsSection(state, "lead", docs)}${shapingBrief}${studioBrief}
 ${principlesSection(LEAD_PRINCIPLES.map((id) => ({ id })), PRINCIPLES_WORD_CAP, LEAD_PRINCIPLES_HEADER)}${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}
 ## Open work (root tasks by priority; child tasks follow their root)
 ${board}
@@ -1188,8 +1339,9 @@ Pick "flowId" from these, or leave it out for the default ("${defaultFlow}").
 ${flows}
 ${steerRules}
 ## Required final output
-End your final message with exactly one fenced JSON block${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft' : ""}${canSteer ? ")" : ""}:
+Your final answer is one JSON object, as the output schema defines. Put your whole message to the user in "reply": the user sees "reply" and what the service applies from the other fields, and nothing else you write. The schema names every field; give null for a field you leave out${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft; leave "studio", or any part of it, out when the studio needs nothing from you' : ""}${canSteer ? ")" : ""}. A field the shape below does not show is null in this run. If you have no output schema, end your final message with the object in exactly one fenced JSON block.
 
+The fields:
 \`\`\`json
 {
   "reply": "<your answer to the user, or a short planning summary>",
@@ -1262,17 +1414,75 @@ ${last.length ? `The user's latest notes on landed work:\n${last.map((x) => x.li
 }
 
 /**
- * Parse the lead's final message. A reply without a JSON block is still a reply (with no proposals).
- * The steering block and the vision draft are passed through as found (a missing value or null becomes
- * undefined); type checks happen in the domain, which treats them as untrusted data.
+ * Parse the lead's final answer: one JSON object, the whole text when the runtime constrained it to the output schema
+ * (LEAD_REPLY_SCHEMA), else the last fenced JSON block. A text without JSON is still a reply (with no proposals); JSON
+ * that does not parse is never repaired. The object is checked against the schema as a defence (a runtime may not
+ * apply it, or may change): a mismatch is noted, and the parts still go to the domain, which checks each one as
+ * untrusted data. A null field means "left out" and is removed; the steering block, the vision draft, the studio
+ * block and the rest pass through as found.
  */
-export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; problem?: string } {
-  const obj = lastJsonObject(finalText);
-  if (!obj) return { reply: clip(finalText.trim(), 4000), proposals: [], problem: "no JSON block; treated the message as a reply without proposals" };
+export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; studio?: unknown; problem?: M.LeadReplyProblem } {
+  const read = readLeadJson(finalText);
+  if (!read.ok) return { reply: read.reply, proposals: [], problem: read.problem };
+  const mismatch = schemaMismatch(LEAD_REPLY_SCHEMA, withNulls(LEAD_REPLY_SCHEMA, read.obj));
+  const obj = withoutNulls(read.obj) as Record<string, unknown>;
   const reply = typeof obj.reply === "string" ? clip(obj.reply, 8000) : "";
   const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
-  const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
-  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions") };
+  const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions" | "studio") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
+  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions"), ...given("studio"), ...(mismatch ? { problem: { kind: "schema" as const, where: mismatch } } : {}) };
+}
+
+/**
+ * The lead's JSON object, or why there is none: the reply to show and the problem. The candidate that failed is the
+ * one the reader takes first: the last ```json block (to the end when it is not closed), else the last fenced block
+ * that starts as JSON, else the whole text when it does.
+ */
+function readLeadJson(text: string): { ok: true; obj: Record<string, unknown> } | { ok: false; reply: string; problem: M.LeadReplyProblem } {
+  const whole = text.trim();
+  if (whole.startsWith("{")) {
+    try {
+      const v: unknown = JSON.parse(whole);
+      if (isObject(v)) return { ok: true, obj: v };
+    } catch {
+      /* not the whole text; look for a block */
+    }
+  }
+  const obj = lastJsonObject(text);
+  if (obj) return { ok: true, obj };
+  const open = text.lastIndexOf("```json");
+  const close = text.lastIndexOf("```");
+  const fenced = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].reverse().find((m) => /^\s*[[{]/.test(m[1]));
+  const failed =
+    open >= 0
+      ? { json: text.slice(open + 7, close > open + 7 ? close : undefined), before: text.slice(0, open) }
+      : fenced
+        ? { json: fenced[1], before: text.slice(0, fenced.index) }
+        : /^[[{]/.test(whole)
+          ? { json: whole, before: "" }
+          : undefined;
+  if (!failed) return { ok: false, reply: clip(whole, 4000), problem: { kind: "no-json" } };
+  // The text before the JSON is shown as the reply; the JSON itself is not.
+  const reply = clip(failed.before.trim(), 4000);
+  const json = failed.json.trim();
+  try {
+    JSON.parse(json);
+    return { ok: false, reply, problem: { kind: "not-object" } };
+  } catch (err) {
+    return { ok: false, reply, problem: { kind: "unparsed", where: parseErrorWhere(err, json) } };
+  }
+}
+
+/** The parser's reason and the line and column it stopped at ("expected ',' or '}' after property value at line 60, column 1"), never the text. */
+function parseErrorWhere(err: unknown, json: string): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const at = /^([\s\S]*?)(?: in JSON)? at position (\d+)/.exec(message);
+  // V8 quotes the start of the text in some messages ('Unexpected token 'x', "{…" is not valid JSON'); it is left out.
+  const reason = (at ? at[1] : message.replace(/,\s*"[\s\S]*" is not valid JSON$/, "")).trim();
+  const said = clip(reason.charAt(0).toLowerCase() + reason.slice(1), 120);
+  if (!at) return said;
+  const before = json.slice(0, Number(at[2]));
+  const line = before.split("\n").length;
+  return `${said} at line ${line}, column ${before.length - before.lastIndexOf("\n")}`;
 }
 
 /** A step that waits for child tasks sees how each of them ended. */

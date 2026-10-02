@@ -5,6 +5,7 @@ import { PROVIDERS, type Autonomy, type ModelSelection, type RoleId, type Runner
 export const ROLE_LABEL: Record<RoleId, string> = {
   lead: "Lead",
   designer: "Designer",
+  pe: "PE",
   coder: "Coder",
   code_reviewer: "Code reviewer",
   security_reviewer: "Security reviewer",

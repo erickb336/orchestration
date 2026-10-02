@@ -1,0 +1,551 @@
+{
+  "scenario": "studio-trial",
+  "mode": "real",
+  "startedAt": "2026-10-02T11:35:02.810Z",
+  "orchestrator": {
+    "commit": "d4e832dfac72",
+    "uncommittedChanges": false
+  },
+  "capUsd": 5,
+  "steps": [
+    {
+      "name": "service started",
+      "atMs": 1581,
+      "runtime": "real",
+      "health": {
+        "claude": "ready",
+        "codex": "ready"
+      },
+      "prototypePort": 5602
+    },
+    {
+      "name": "project created",
+      "atMs": 1615,
+      "stage": "shaping",
+      "devices": [
+        "desktop",
+        "mobile",
+        "terminal"
+      ],
+      "budgets": {
+        "buildingUsd": 7,
+        "maintenanceUsdPerMonth": 10
+      },
+      "peDefault": "the other provider than the designer's"
+    },
+    {
+      "name": "round opened",
+      "atMs": 1618,
+      "round": 1
+    },
+    {
+      "name": "designer run asked for: the trip plan screens",
+      "atMs": 1621,
+      "run": "studio-1008",
+      "spentSoFar": "$0.00",
+      "runLimit": "$2.00"
+    },
+    {
+      "name": "designer run ended: the trip plan screens",
+      "atMs": 62088,
+      "run": "studio-1008",
+      "status": "completed",
+      "model": "claude-sonnet-5-5",
+      "usage": {
+        "costUsd": 0.1797612,
+        "inputTokens": 66590,
+        "outputTokens": 10162
+      },
+      "note": null,
+      "tookMs": 60467
+    },
+    {
+      "name": "designer run asked for: the trips CLI and its TUI",
+      "atMs": 62091,
+      "run": "studio-1019",
+      "spentSoFar": "$0.18",
+      "runLimit": "$2.00"
+    },
+    {
+      "name": "designer run ended: the trips CLI and its TUI",
+      "atMs": 87287,
+      "run": "studio-1019",
+      "status": "completed",
+      "model": "claude-sonnet-5-5",
+      "usage": {
+        "costUsd": 0.07665259999999999,
+        "inputTokens": 41265,
+        "outputTokens": 3664
+      },
+      "note": null,
+      "tookMs": 25196
+    },
+    {
+      "name": "studio settled",
+      "atMs": 142727,
+      "artifacts": [
+        "Trip plan v1 (screen, 3 variants)",
+        "trips plan and trips pick v1 (terminal-demo, 1 variant)",
+        "trips with no arguments v1 (tui, 2 variants)"
+      ]
+    }
+  ],
+  "checks": {
+    "both designer runs completed: a screen in 2-3 variants for desktop and mobile, and a terminal demo or TUI": {
+      "ok": true,
+      "detail": {
+        "runs": [
+          "completed",
+          "completed"
+        ],
+        "screens": [
+          "3 variants, desktop+mobile"
+        ],
+        "terminals": [
+          "terminal-demo",
+          "tui"
+        ]
+      }
+    },
+    "the prototype is served sandboxed: a fetch from inside it to the app's API fails, in Chrome": {
+      "ok": true,
+      "detail": {
+        "sandbox": "allow-scripts",
+        "frameOrigin": "null",
+        "fetch": "failed: TypeError: Failed to fetch"
+      }
+    },
+    "the screenshots exist: each variant on each device, served as PNG": {
+      "ok": true,
+      "detail": [
+        {
+          "artifact": "Trip plan",
+          "status": "taken",
+          "taken": 6,
+          "expected": 6,
+          "served": 6,
+          "note": null
+        }
+      ]
+    },
+    "each terminal variant was recorded in the sandbox, or says why it was not": {
+      "ok": true,
+      "detail": [
+        {
+          "artifact": "trips plan and trips pick",
+          "variant": "a",
+          "status": "recorded",
+          "served": "image/gif",
+          "reason": null,
+          "ok": true
+        },
+        {
+          "artifact": "trips with no arguments",
+          "variant": "a",
+          "status": "hand-written",
+          "served": null,
+          "reason": "hand-written frames, with no tape to record",
+          "ok": true
+        },
+        {
+          "artifact": "trips with no arguments",
+          "variant": "b",
+          "status": "hand-written",
+          "served": null,
+          "reason": "hand-written frames, with no tape to record",
+          "ok": true
+        }
+      ]
+    },
+    "the PE's verdicts were recorded on every artifact, by the PE's own runs": {
+      "ok": true,
+      "detail": {
+        "reviewed": [
+          {
+            "artifact": "Trip plan",
+            "review": "agreed",
+            "verdicts": [
+              "a: feasible-if",
+              "b: feasible-if",
+              "c: feasible-if"
+            ]
+          },
+          {
+            "artifact": "trips plan and trips pick",
+            "review": "agreed",
+            "verdicts": [
+              "a: feasible-if"
+            ]
+          },
+          {
+            "artifact": "trips with no arguments",
+            "review": "agreed",
+            "verdicts": [
+              "a: feasible-if",
+              "b: feasible-if"
+            ]
+          }
+        ],
+        "peRuns": [
+          "codex completed",
+          "codex completed",
+          "codex completed"
+        ]
+      }
+    },
+    "the PE ran on the other provider than the designer's (the default)": {
+      "ok": true,
+      "detail": [
+        "studio-1015: codex · gpt-6.1-sol",
+        "studio-1029: codex · gpt-6.1-sol",
+        "studio-1031: codex · gpt-6.1-sol"
+      ]
+    },
+    "the owner can send feedback on every artifact the PE reviewed": {
+      "ok": true,
+      "detail": [
+        {
+          "artifact": "Trip plan",
+          "sent": true
+        },
+        {
+          "artifact": "trips plan and trips pick",
+          "sent": true
+        },
+        {
+          "artifact": "trips with no arguments",
+          "sent": true
+        }
+      ]
+    },
+    "the project is still in Vision, with no factory start": {
+      "ok": true,
+      "detail": {
+        "stage": "shaping"
+      }
+    },
+    "the estimated Claude spend stayed under the $5.00 cap": {
+      "ok": true,
+      "detail": {
+        "claude": "$0.26",
+        "withoutCost": 0
+      }
+    }
+  },
+  "ok": true,
+  "runs": [
+    {
+      "id": "studio-1008",
+      "kind": "designer",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "status": "completed",
+      "usage": {
+        "costUsd": 0.1797612,
+        "inputTokens": 66590,
+        "outputTokens": 10162
+      },
+      "estimatedUsd": 0.1797612,
+      "simulated": false,
+      "note": null,
+      "artifact": null
+    },
+    {
+      "id": "studio-1015",
+      "kind": "pe",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "status": "completed",
+      "usage": {
+        "inputTokens": 54787,
+        "cachedInputTokens": 19840,
+        "outputTokens": 1020
+      },
+      "estimatedUsd": 0.082078,
+      "simulated": false,
+      "note": null,
+      "artifact": "sa-1011 v1"
+    },
+    {
+      "id": "studio-1019",
+      "kind": "designer",
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "status": "completed",
+      "usage": {
+        "costUsd": 0.07665259999999999,
+        "inputTokens": 41265,
+        "outputTokens": 3664
+      },
+      "estimatedUsd": 0.07665259999999999,
+      "simulated": false,
+      "note": null,
+      "artifact": null
+    },
+    {
+      "id": "studio-1029",
+      "kind": "pe",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "status": "completed",
+      "usage": {
+        "inputTokens": 35630,
+        "cachedInputTokens": 21120,
+        "outputTokens": 532
+      },
+      "estimatedUsd": 0.036452,
+      "simulated": false,
+      "note": null,
+      "artifact": "sa-1022 v1"
+    },
+    {
+      "id": "studio-1031",
+      "kind": "pe",
+      "provider": "codex",
+      "model": "gpt-6.1-sol",
+      "status": "completed",
+      "usage": {
+        "inputTokens": 44809,
+        "cachedInputTokens": 40064,
+        "outputTokens": 708
+      },
+      "estimatedUsd": 0.0205764,
+      "simulated": false,
+      "note": null,
+      "artifact": "sa-1024 v1"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "sa-1011",
+      "version": 1,
+      "kind": "screen",
+      "title": "Trip plan",
+      "devices": [
+        "desktop",
+        "mobile"
+      ],
+      "variants": [
+        {
+          "id": "a",
+          "label": "A · Day by day first",
+          "entry": "a/index.html"
+        },
+        {
+          "id": "b",
+          "label": "B · Map first",
+          "entry": "b/index.html"
+        },
+        {
+          "id": "c",
+          "label": "C · Cost first",
+          "entry": "c/index.html"
+        }
+      ],
+      "files": 7,
+      "shots": {
+        "status": "taken",
+        "at": "2026-10-02T11:36:02.196Z",
+        "shots": [
+          {
+            "variant": "a",
+            "device": "desktop",
+            "path": "shots/a-desktop.png"
+          },
+          {
+            "variant": "a",
+            "device": "mobile",
+            "path": "shots/a-mobile.png"
+          },
+          {
+            "variant": "b",
+            "device": "desktop",
+            "path": "shots/b-desktop.png"
+          },
+          {
+            "variant": "b",
+            "device": "mobile",
+            "path": "shots/b-mobile.png"
+          },
+          {
+            "variant": "c",
+            "device": "desktop",
+            "path": "shots/c-desktop.png"
+          },
+          {
+            "variant": "c",
+            "device": "mobile",
+            "path": "shots/c-mobile.png"
+          }
+        ],
+        "failed": []
+      },
+      "demo": null,
+      "peReview": "agreed"
+    },
+    {
+      "id": "sa-1022",
+      "version": 1,
+      "kind": "terminal-demo",
+      "title": "trips plan and trips pick",
+      "devices": [
+        "terminal"
+      ],
+      "variants": [
+        {
+          "id": "a",
+          "label": "A · plan then pick",
+          "entry": "demo/demo.tape"
+        }
+      ],
+      "files": 2,
+      "shots": null,
+      "demo": {
+        "status": "done",
+        "at": "2026-10-02T11:36:46.273Z",
+        "variants": [
+          {
+            "variant": "a",
+            "status": "recorded",
+            "tape": "demo/demo.tape",
+            "gif": "recording/a/demo/demo.gif",
+            "txt": "recording/a/demo/demo.txt"
+          }
+        ]
+      },
+      "peReview": "agreed"
+    },
+    {
+      "id": "sa-1024",
+      "version": 1,
+      "kind": "tui",
+      "title": "trips with no arguments",
+      "devices": [
+        "terminal"
+      ],
+      "variants": [
+        {
+          "id": "a",
+          "label": "A · List and detail",
+          "entry": "tui/a-list-detail.ans"
+        },
+        {
+          "id": "b",
+          "label": "B · Cards",
+          "entry": "tui/b-cards.ans"
+        }
+      ],
+      "files": 2,
+      "shots": null,
+      "demo": {
+        "status": "done",
+        "at": "2026-10-02T11:36:46.273Z",
+        "variants": [
+          {
+            "variant": "a",
+            "status": "hand-written",
+            "files": [
+              "tui/a-list-detail.ans",
+              "tui/b-cards.ans"
+            ]
+          },
+          {
+            "variant": "b",
+            "status": "hand-written",
+            "files": [
+              "tui/b-cards.ans",
+              "tui/a-list-detail.ans"
+            ]
+          }
+        ]
+      },
+      "peReview": "agreed"
+    }
+  ],
+  "verdicts": [
+    {
+      "artifact": "sa-1011 v1",
+      "variant": "a",
+      "verdict": "feasible-if",
+      "reasons": "The responsive day list uses durable browser standards and readily supports 2–12 friends and a few trips monthly. However, participation is only a count, the map is decorative SVG without actual locations, and the mobile cost summary follows the entire itinerary. The stated 2026 dates have incorrect weekdays, and gas is described as included without appearing in the totals. A small shared backend is technically sufficient, but the remaining $6.82 build allowance and $10 monthly ceiling are not validated by recorded implementation costs or provider prices.",
+      "change": "Add an explicit in/out response and pending participant states; show the total near the mobile trip heading. Store organiser-entered addresses with external map links instead of the decorative map. Derive weekdays and totals from shared trip data, explicitly include or exclude gas, and distinguish fixed shared expenses from per-person estimates. Specify proposal, editing and sharing flows plus a trips CLI using the same versioned data contract, and validate build and hosting costs before factory approval.",
+      "budget": null,
+      "by": {
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "runId": "studio-1015"
+      }
+    },
+    {
+      "artifact": "sa-1011 v1",
+      "variant": "b",
+      "verdict": "feasible-if",
+      "reasons": "The day selector and responsive panel are straightforward and scale comfortably to the stated groups and trip volume. The central map is invented geometry, not geographic data; its mobile SVG uses slice cropping that can hide stops, and clickable SVG markers lack keyboard access. A real map introduces unselected data, licensing and provider dependencies that affect longevity and budget. Neither the remaining $6.82 build allowance nor the $10 monthly limit is demonstrated to cover that integration and the shared backend/CLI.",
+      "change": "Define a real geographic map using organiser-supplied coordinates and addresses; select a maintainable map source with documented licensing and costs within budget, avoiding mandatory routing or place-search APIs. Fit all stops on mobile and provide keyboard-accessible controls and an address-list fallback. Add in/out and pending states, proposal/edit/share flows, generated calendar labels and participant-aware expense calculations. Specify and review the trips CLI against the same versioned trip contract before approval.",
+      "budget": null,
+      "by": {
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "runId": "studio-1015"
+      }
+    },
+    {
+      "artifact": "sa-1011 v1",
+      "variant": "c",
+      "verdict": "feasible-if",
+      "reasons": "The cost summary and native details elements are feasible, dependency-light and maintainable, and a 12-person list is manageable. The sample arithmetic reconciles to $604 and $151 each, but gives no rule for changing attendance or separating fixed lodging from per-person food and activities. 'Each pays' also presents estimates as obligations, and the screen lacks participation responses and actionable place information. Its simpler UI avoids map-provider costs, but available evidence does not establish that the complete browser/backend/CLI product fits the remaining $6.82 build budget or $10 monthly maintenance ceiling.",
+      "change": "Label amounts as estimates and define fixed shared versus per-person expenses, confirmed participant allocation and deterministic cent rounding. Add in/out and pending states, organiser proposal/edit/share controls, and addresses with external map links. Display the year and derive correct weekdays from stored dates. Specify a trips CLI sharing a versioned trip and cost contract with the browser, then validate implementation and hosting costs within both ceilings.",
+      "budget": null,
+      "by": {
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "runId": "studio-1015"
+      }
+    },
+    {
+      "artifact": "sa-1022 v1",
+      "variant": "a",
+      "verdict": "feasible-if",
+      "reasons": "The plan-then-pick CLI is straightforward to build, but the recorded demo fails with MODULE_NOT_FOUND, so the proposed experience was not demonstrated. The source uses fixed fixtures: five voters, identical itineraries for every destination, unexplained per-person estimates, and an unsupported 'trips book' next step. Groups of 2–12 and a few trips monthly are modest computational loads, but attendance, shared persistence and cost recalculation remain unspecified. Longevity is plausible with a shared, versioned trip format and manually entered places and estimates; no external data dependency is necessary. Desktop and mobile browser experiences are absent and could not be assessed. The stated spend leaves about $6.74 for building, but there is no recorded comparable build cost, provider pricing or probe establishing that delivery fits this allowance or the $10 monthly limit; budget figures are therefore omitted. Network verification was unavailable.",
+      "change": "Repair the recording's script path and provide a successful plan/pick recording. Define pick as viewing an option or committing the group choice, and remove the booking prompt unless its behavior is explicitly scoped. Specify destination-specific day plans and places, attendance distinct from preference votes, and itemized estimates with currency and a clear split rule that updates for 2–12 participants. Define one persistent trip model shared by browser and CLI, and provide desktop/mobile experience evidence before approving those surfaces. Keep places and costs manually entered for this scope, and supply a build-cost basis and a hosting/storage pricing basis that fit the remaining build allowance and monthly cap.",
+      "budget": null,
+      "by": {
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "runId": "studio-1029"
+      }
+    },
+    {
+      "artifact": "sa-1024 v1",
+      "variant": "a",
+      "verdict": "feasible-if",
+      "reasons": "A list/detail TUI is readily buildable and can handle 12 friends and a few trips monthly with scrolling. The frame conflates votes with attendance and leaves the $126-per-person denominator unclear; it also shows only Saturday for a two-day trip. Longevity requires resize handling, readable text statuses and maintained terminal support. User-entered places, costs and drive estimates avoid mandatory paid data services. Budget fit remains unverified: $6.74 of the build budget remains, but no recorded comparable build costs, provider prices or probes support an estimate.",
+      "change": "Define proposal selection versus commitment, show the participant count used to split costs, and provide access to both days and place details. Specify scrolling for ideas, attendees and itinerary, a narrow-terminal layout, and recoverable loading/error states. Treat travel times as labelled organiser estimates unless a data source is separately justified.",
+      "budget": null,
+      "by": {
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "runId": "studio-1031"
+      }
+    },
+    {
+      "artifact": "sa-1024 v1",
+      "variant": "b",
+      "verdict": "feasible-if",
+      "reasons": "The cards are buildable at the illustrated size, but a fixed three-card row and single attendee line do not cover narrower terminals, additional proposals or 12 longer names. A responsive card layout can support the stated scale without substantial infrastructure. Votes, attendance, cost allocation and access to the second day remain ambiguous. Maintainability depends on adaptive rendering and text fallbacks rather than preserving this fixed frame. Budget fit is unverified; no supported cost basis establishes that implementation fits the remaining $6.74 or hosting stays below $10 monthly.",
+      "change": "Stack or page cards at smaller widths, scroll additional proposals and attendees, and keep selection visible during keyboard navigation. Define voting versus commitment, expose the cost-split denominator, and make both days and place details accessible. Specify resize and error recovery, and use labelled organiser-entered travel estimates unless a data source is justified.",
+      "budget": null,
+      "by": {
+        "provider": "codex",
+        "model": "gpt-6.1-sol",
+        "runId": "studio-1031"
+      }
+    }
+  ],
+  "spend": {
+    "claudeUsd": 0.2564,
+    "claudeRunsWithoutCost": 0,
+    "buildingUsd": 0.3955
+  },
+  "finishedAt": "2026-10-02T11:37:26.787Z"
+}

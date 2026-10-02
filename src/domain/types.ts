@@ -5,14 +5,19 @@ import type { Blueprint, BudgetEstimate, Studio } from "./studio/types";
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
 
-/** `security_reviewer` reviews a change for security beside the code review; its findings count like the code review's. */
-export type RoleId = "lead" | "designer" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks";
+/**
+ * `security_reviewer` reviews a change for security beside the code review; its findings count like the code review's.
+ * `pe` is the principal engineer of the vision studio (ORC-029): it reviews the designer's options before the owner sees them.
+ */
+export type RoleId = "lead" | "designer" | "pe" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks";
 /** Agent roles: they have role defaults, task role overrides and a resolved provider. */
-export const ROLES: RoleId[] = ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
+export const ROLES: RoleId[] = ["lead", "designer", "pe", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
 /** Roles the service runs itself; never resolved to a provider. */
 const SERVICE_ROLES: RoleId[] = ["checks"];
+/** Roles that run only in the vision studio: no flow step uses the PE until it reviews new work in the factory (ORC-029 pass 5). */
+const STUDIO_ROLES: RoleId[] = ["pe"];
 /** What a step definition may use. */
-export const STEP_ROLES: RoleId[] = [...ROLES, ...SERVICE_ROLES];
+export const STEP_ROLES: RoleId[] = [...ROLES.filter((r) => !STUDIO_ROLES.includes(r)), ...SERVICE_ROLES];
 /** Roles whose findings gate repairs and merges. */
 export const REVIEW_ROLES: RoleId[] = ["code_reviewer", "security_reviewer", "ux_reviewer"];
 
@@ -103,6 +108,14 @@ export type ProjectStage = "shaping" | "building";
 /** What the product is designed and shown for: the device scope, chosen in Vision. */
 export type Device = "desktop" | "mobile" | "terminal";
 export const DEVICES: Device[] = ["desktop", "mobile", "terminal"];
+
+/**
+ * What kind of product the project is (ORC-029 r9), which decides the studio's rounds and artifacts: screen products
+ * (a UI on a terminal, browser, desktop or phone), code products (libraries, SDKs, engines, compilers), and
+ * infrastructure systems (backends, pipelines, deployments). A project can be more than one.
+ */
+export type ProjectDomain = "screen" | "code" | "infrastructure";
+export const PROJECT_DOMAINS: ProjectDomain[] = ["screen", "code", "infrastructure"];
 
 /** How the factory runs, set by the owner when they start it (and changeable later through the usual settings). */
 export interface FactorySettings {
@@ -348,6 +361,11 @@ export interface Project {
   stage: ProjectStage;
   /** The device scope: what is designed and shown. Set in Vision; at least one. */
   devices: Device[];
+  /**
+   * The product's domains as the owner confirmed them (`setDomains`, the owner's only); empty until they choose. The
+   * lead proposes them, as a question; it never sets them. Designer briefs follow them (src/domain/studio/domains.ts).
+   */
+  domains: ProjectDomain[];
   /** Every Start the factory, oldest first: the owner's recorded agreements. Projects building before ORC-029 have none. */
   factoryStarts: FactoryStart[];
   /**
@@ -1202,6 +1220,12 @@ export interface LeadRun {
   actualModel?: string;
   usage?: Attempt["usage"];
   note?: string;
+  /**
+   * The lead's final text as the runtime returned it, kept when the answer could not be used as sent (no JSON, JSON
+   * that does not parse, or a schema mismatch; `note` says which), so diagnosis needs no provider's own history. Its
+   * first 65,536 characters; only the newest few runs keep one (leadOutput.ts).
+   */
+  rawAnswer?: { text: string; truncated?: true };
   /** The vision revision the run started from. Absent on runs from before steering existed (they cannot steer). */
   visionRev?: number;
   /** The change set this run's reply produced. */

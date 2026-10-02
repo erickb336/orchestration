@@ -1,0 +1,6 @@
+#!/bin/sh
+# Orchestrator's recorder (server/studio/container.ts). VHS starts `ttyd` from PATH, and this comes first.
+# VHS runs in the tape's folder, so its own Output and Source paths are relative to the tape. The tape's shell
+# starts at the artifact's root (/work), so the tape's commands name files by their paths in the artifact.
+cd /work || exit 1
+exec /usr/bin/ttyd "$@"

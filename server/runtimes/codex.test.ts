@@ -3,7 +3,7 @@
 // `codex --version`.
 
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,11 +43,12 @@ function make(mode: string, extra: Partial<CodexAdapterOptions> = {}, env: NodeJ
   adapters.push(adapter);
   const events: AdapterEvent[] = [];
   adapter.onEvent((e) => events.push(e));
+  // Complete lines only: the stub appends each entry with its newline, and a read can land while it is writing one.
   const stubLog = () =>
     existsSync(logFile)
       ? readFileSync(logFile, "utf8")
-          .trim()
           .split("\n")
+          .slice(0, -1)
           .map((l) => JSON.parse(l))
       : [];
   return { adapter, events, stubLog };
@@ -159,7 +160,8 @@ describe("CodexAdapter runs", () => {
     expect(recv.map((m) => m.method)).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
     expect(recv.every((m) => !("jsonrpc" in m))).toBe(true);
     expect(recv[0].params.clientInfo).toEqual({ name: "orchestration", title: "Orchestrator", version: "0.1.0" });
-    expect(recv[2].params).toEqual({ model: "stub-model", cwd: dir, approvalPolicy: "never", sandbox: "workspace-write" });
+    // Ephemeral: never written to ~/.codex/sessions, so the run is not in the user's own Codex history.
+    expect(recv[2].params).toEqual({ model: "stub-model", cwd: dir, approvalPolicy: "never", sandbox: "workspace-write", ephemeral: true });
     expect(recv[3].params).toEqual({
       threadId: "thr_stub_1",
       input: [{ type: "text", text: "Do the thing.", text_elements: [] }],
@@ -174,8 +176,19 @@ describe("CodexAdapter runs", () => {
     adapter.start(assignment("att-r", { workspace: { path: dir, access: "read" } }));
     await waitFor(() => terminals(events).length > 0);
     const recv = stubLog().filter((l) => l.recv).map((l) => l.recv);
-    expect(recv.find((m) => m.method === "thread/start").params.sandbox).toBe("read-only");
+    expect(recv.find((m) => m.method === "thread/start").params).toMatchObject({ sandbox: "read-only", ephemeral: true });
     expect(recv.find((m) => m.method === "turn/start").params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: false });
+  });
+
+  it("passes an output schema on turn/start, and the turn's final message (the JSON answer) is the final text (ORC-029 pass 4)", async () => {
+    const { adapter, events, stubLog } = make("complete");
+    const schema = { type: "object", properties: { reply: { type: "string" } }, required: ["reply"], additionalProperties: false };
+    adapter.start(assignment("att-s", { role: "lead", workspace: { path: dir, access: "read" }, outputs: [], outputSchema: schema }));
+    await waitFor(() => terminals(events).length > 0);
+    expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: '{"reply":"Stub reply."}' });
+    const recv = stubLog().filter((l) => l.recv).map((l) => l.recv);
+    expect(recv.find((m) => m.method === "turn/start").params.outputSchema).toEqual(schema);
+    expect(recv.find((m) => m.method === "thread/start").params.ephemeral).toBe(true);
   });
 
   it("starting the same attempt twice is a no-op", async () => {
@@ -583,6 +596,68 @@ describe("worker isolation", () => {
     expect(argv).toContain('mcp_servers."weird name".enabled=false');
     expect(argv.join(" ")).not.toContain("mcp_servers.user_repl"); // allowed connection stays on
     expect(argv.join(" ")).not.toContain("mcp_servers.off"); // already disabled by the user
+  });
+
+  it("a studio run (ORC-029) is isolated even when its assignment says local: plugins and apps off, no connections, and its staging folder is its one writable root", async () => {
+    const { adapter, events, stubLog } = make("complete");
+    await adapter.health();
+    adapter.start(assignment("studio-7", { studio: true, role: "designer", environment: "local", connections: ["user_repl"] }));
+    await waitFor(() => terminals(events).length > 0);
+    const argv = lastAppServerArgv(stubLog);
+    expect(argv.join(" ")).toContain("--disable plugins --disable apps");
+    expect(argv).toEqual(expect.arrayContaining([...ISOLATION_FEATURE_ARGS, ...ISOLATION_CONFIG_ARGS]));
+    // Its allowed connections are ignored: every enabled MCP server is off.
+    expect(argv).toEqual(expect.arrayContaining(["-c", "mcp_servers.user_repl.enabled=false", "-c", 'mcp_servers."weird name".enabled=false']));
+    const turn = stubLog()
+      .filter((l: { recv?: { method?: string } }) => l.recv?.method === "turn/start")
+      .pop().recv;
+    expect(turn.params.sandboxPolicy).toEqual({ type: "workspaceWrite", writableRoots: [dir], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true });
+    expect(existsSync(join(dir, ".tmp"))).toBe(true);
+    expect(existsSync(`${dir}.tmp`)).toBe(false);
+  });
+
+  it("a studio PE run reads its version under the read-only sandbox, with its temp folder outside the version: nothing is written into it (review finding 6)", async () => {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const spawn: CodexAdapterOptions["spawn"] = (command, args, options) => {
+      envs.push(options.env ?? {});
+      return nodeSpawn(command, args, options);
+    };
+    const { adapter, events, stubLog } = make("complete", { spawn });
+    await adapter.health();
+    const version = join(dir, "artifacts", "sa-1", "v1");
+    const tmp = join(dir, "staging", "studio-9");
+    mkdirSync(version, { recursive: true });
+    writeFileSync(join(version, "index.html"), "<h1>Trip plan</h1>");
+    adapter.start(assignment("studio-9", { studio: true, role: "pe", environment: "isolated", workspace: { path: version, access: "read", tmp } }));
+    await waitFor(() => terminals(events).length > 0);
+    expect(terminals(events)[0].type).toBe("completed");
+    const turn = stubLog()
+      .filter((l: { recv?: { method?: string } }) => l.recv?.method === "turn/start")
+      .pop().recv;
+    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: false });
+    expect(turn.params.cwd).toBe(version);
+    const worker = envs.at(-1)!;
+    expect([worker.TMPDIR, worker.TMP, worker.TEMP]).toEqual([tmp, tmp, tmp]);
+    expect(existsSync(tmp)).toBe(true);
+    // The version's folder holds what the import wrote, and nothing else.
+    expect(readdirSync(version)).toEqual(["index.html"]);
+  });
+
+  it("a read-only studio run without a temp folder from the service does not start", async () => {
+    const { adapter, events } = make("complete");
+    await adapter.health();
+    adapter.start(assignment("studio-10", { studio: true, role: "pe", environment: "isolated", workspace: { path: dir, access: "read" } }));
+    await waitFor(() => terminals(events).length > 0);
+    expect(terminals(events)[0]).toMatchObject({ type: "failed", message: expect.stringContaining("A read-only studio run needs a temp folder outside the version it reads") });
+    expect(existsSync(join(dir, ".tmp"))).toBe(false);
+  });
+
+  it("a studio run fails closed, like any isolated run, when the MCP servers cannot be listed", async () => {
+    const { adapter, events } = make("complete", {}, { CODEX_STUB_MCP_FAIL: "1" });
+    await adapter.health();
+    adapter.start(assignment("studio-8", { studio: true, role: "designer", environment: "local" }));
+    await waitFor(() => terminals(events).length > 0);
+    expect((terminals(events)[0] as { message: string }).message).toMatch(/worker isolation/);
   });
 
   it("lists the user's configured MCP servers as connections", async () => {

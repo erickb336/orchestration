@@ -3,7 +3,8 @@
 // Codex CLI (method names and fields from ../codex-protocol). No network, no model, no credentials.
 //
 // Behaviour is selected with CODEX_STUB_MODE:
-//   complete            normal turn: command, file change, agent messages, token usage, completed
+//   complete            normal turn: command, file change, agent messages, token usage, completed (with an
+//                       outputSchema on turn/start, the final message is the JSON answer {"reply":"Stub reply."})
 //   interrupt-honoured  turn stays running; turn/interrupt -> turn/completed(interrupted)
 //   interrupt-ignored   turn stays running; turn/interrupt is acknowledged but never completes
 //   steer               turn stays running; turn/steer with the active turn id is accepted, echoed as an
@@ -85,6 +86,10 @@ const FINAL = [
   "```",
 ].join("\n");
 
+/** The turn's output schema (turn/start `outputSchema`): the final message is then the JSON answer alone, as Codex gives it. */
+let outputSchema = null;
+const STRUCTURED_FINAL = JSON.stringify({ reply: "Stub reply." });
+
 function runTurn() {
   activeTurn = TURN;
   notify("turn/started", { threadId: THREAD, turn: turnObj("inProgress") });
@@ -103,7 +108,7 @@ function runTurn() {
             modelContextWindow: null,
           },
         });
-        item({ type: "agentMessage", id: "i4", text: FINAL, phase: "final_answer", memoryCitation: null, delivery: null, questions: null });
+        item({ type: "agentMessage", id: "i4", text: outputSchema ? STRUCTURED_FINAL : FINAL, phase: "final_answer", memoryCitation: null, delivery: null, questions: null });
         completeTurn("completed");
       });
       return;
@@ -199,6 +204,7 @@ function handle(msg) {
     }
     case "turn/start":
       send({ id, result: { turn: turnObj("inProgress") } });
+      outputSchema = params?.outputSchema ?? null;
       runTurn();
       return;
     case "turn/interrupt":

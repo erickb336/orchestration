@@ -144,7 +144,7 @@ export function AgentsSection({ current, onDirty }: { current: boolean; onDirty:
               state={state}
               label={ROLE_LABEL[role]}
               value={v.roles[role]}
-              inheritLabel={role === "security_reviewer" ? "Same as the code reviewer" : "Project default"}
+              inheritLabel={role === "security_reviewer" ? "Same as the code reviewer" : role === "pe" ? "The other provider than the designer's" : "Project default"}
               enabled={enabledList}
               onChange={(sel) => draft.set({ roles: { ...v.roles, [role]: sel } })}
             />

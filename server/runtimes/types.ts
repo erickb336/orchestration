@@ -33,11 +33,27 @@ export interface Assignment {
   /** Concrete model id resolved before dispatch (never "auto"). */
   model: string;
   workspace: {
-    /** Absolute path of this attempt's git worktree. The agent's cwd. */
+    /** Absolute path of this attempt's git worktree (a studio run's staging folder). The agent's cwd. */
     path: string;
     /** "write": may edit files in the worktree. "read": must not modify anything. */
     access: "write" | "read";
+    /**
+     * Directories the run may read but never write: a studio run's read-only checkout of the product. Claude's guard
+     * allows reads there; Codex's sandbox (0.159.2) has no readable-roots setting and does not confine reads anyway.
+     */
+    readRoots?: string[];
+    /**
+     * A folder outside `path` for the run's temporary files, which the service gives a read-only studio run (the
+     * PE): its working directory is an immutable artifact version, so nothing may be written there.
+     */
+    tmp?: string;
   };
+  /**
+   * A Vision studio run (ORC-029): it writes only in its staging folder, has no shell, and is isolated whatever
+   * `environment` says, so the user's own setup (Codex plugins such as Sites, Claude's settings and MCP servers) can
+   * never publish anything. `connections` are ignored.
+   */
+  studio?: true;
   /**
    * "isolated": no user settings, MCP servers, plugins, or web tools. "local": the user's own
    * provider configuration (user-level settings, MCP servers, plugins). In both, the worker's own
@@ -51,6 +67,12 @@ export interface Assignment {
   prompt: string;
   /** Declared outputs the final message must report. */
   outputs: OutputDef[];
+  /**
+   * A JSON Schema the final answer must match (the lead's reply). The runtime constrains the answer to it (Claude:
+   * `outputFormat`; Codex: the turn's `outputSchema`) and returns the answer as JSON in `finalText`. A runtime that
+   * cannot apply it returns the agent's last message as usual; the service checks the answer either way.
+   */
+  outputSchema?: Record<string, unknown>;
   limits: AssignmentLimits;
 }
 

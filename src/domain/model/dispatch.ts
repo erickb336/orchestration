@@ -8,9 +8,9 @@ import { budgetStop } from "../spend";
 import { type Attempt, type CheckRunRecord, type ProviderId, type State, type Task, DEFAULT_CHECKS } from "../types";
 import { acceptedOutput, consumedInputs } from "./artifacts";
 import {
-  activeAgentAttempts,
   activeAttempts,
   activeServiceAttempts,
+  busyAgents,
   currentSpec,
   currentVision,
   draft,
@@ -89,7 +89,8 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
   // A stable sort: tasks the lead did not name keep their relative (creation) order.
   const tasks = s.tasks.map((t) => ({ t, rank: dispatchRank(s, t) })).sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]).map((x) => x.t);
   for (const t of tasks) {
-    if (activeAgentAttempts(s).length >= s.project.workerLimit) break;
+    // Studio runs count too: one still finishing after Start the factory keeps its place (ORC-029 pass 3).
+    if (busyAgents(s) >= s.project.workerLimit) break;
     if (t.lifecycle !== "ready" && t.lifecycle !== "active") continue;
     if (t.hold || t.holdBeforeStart || t.heldForShaping || t.controlFailure || t.legacySpecUnavailable) continue;
     // New work the lead planned starts once PE review agreed or the owner overruled its objection (ORC-029 2e).
@@ -110,7 +111,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
     // conditional step with nothing to do still settles by skipping; only starting work is withheld.
     const deferred = noNewWork || !!deferredBy(s, t);
     for (const st of [...t.steps]) {
-      if (activeAgentAttempts(s).length >= s.project.workerLimit) break;
+      if (busyAgents(s) >= s.project.workerLimit) break;
       if (st.state !== "pending") continue;
       const depsDone = st.dependsOn.every((d) => isSettled(getStep(t, d)));
       if (!depsDone) continue;
@@ -218,7 +219,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       if (deferred) continue; // nothing new starts on a deferred task, nor on any task while shaping or at the budget
       const r = resolveStep(s, t, st);
       if (r.ok && opts.deferred?.includes(r.selection.provider)) continue;
-      if (r.ok && activeAgentAttempts(s).filter((x) => x.snapshot.provider === r.selection.provider).length >= (s.project.providerLimits?.[r.selection.provider] ?? s.project.workerLimit)) continue;
+      if (r.ok && busyAgents(s, r.selection.provider) >= (s.project.providerLimits?.[r.selection.provider] ?? s.project.workerLimit)) continue;
       const down = r.ok ? opts.unavailable?.[r.selection.provider] : undefined;
       if (!r.ok || down) {
         // Never substitute another provider: block with the reason and let the user act.

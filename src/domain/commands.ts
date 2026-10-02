@@ -10,15 +10,19 @@ import * as M from "./model";
 import * as P from "./peReview";
 import type { PeReviewTarget } from "./peReview";
 import * as B from "./studio/blueprint";
+import { setDomains } from "./studio/domains";
+import * as R from "./studio/runs";
 import * as S from "./studio/studio";
-import { type Mark, type StudioMaker, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, VERDICTS } from "./studio/types";
+import { type Mark, type StudioMaker, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
 import {
   ControlError,
   DEVICES,
+  PROJECT_DOMAINS,
   PROVIDERS,
   ROLES,
   STEERING_MODES,
   type Device,
+  type ProjectDomain,
   type FactorySettings,
   type ModelSelection,
   type PrDeliveryConfig,
@@ -139,7 +143,7 @@ function feedbackEntry(v: unknown): S.FeedbackInput {
   if (e.mark !== null && !["keep", "change", "drop"].includes(e.mark as string)) throw new InvalidCommandError("mark must be keep, change, drop or null");
   const pins = array<unknown>(e.pins, "pins").map((x) => {
     const p = obj(x, "pin");
-    return { x: num(p, "x"), y: num(p, "y"), ...(p.variant === undefined ? {} : { variant: str(p, "variant") }), text: str(p, "text") };
+    return { x: num(p, "x"), y: num(p, "y"), ...(p.variant === undefined ? {} : { variant: str(p, "variant") }), text: str(p, "text"), ...(p.selector === undefined ? {} : { selector: str(p, "selector") }) };
   });
   return { artifactId: str(e, "artifactId"), version: int(e, "version"), mark: e.mark as Mark | null, ...(e.pickedVariant === undefined ? {} : { pickedVariant: str(e, "pickedVariant") }), pins, note: str(e, "note") };
 }
@@ -167,7 +171,7 @@ function peReviewTarget(a: Args): PeReviewTarget {
  * them like any command, but a client never sends them: the HTTP endpoint refuses them, as it refuses
  * `stageVisionDoc`.
  */
-export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus", "recordPeReview"]);
+export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus", "recordPeReview", "startStudioRun"]);
 
 // ---- registry ----
 
@@ -214,6 +218,17 @@ export const COMMANDS = {
       now,
     ),
   ),
+  /** The product's domains: at least one of screen, code and infrastructure. The owner's only; the lead proposes them as a question. */
+  setDomains: same((s, now, a) =>
+    setDomains(
+      s,
+      strings(a.domains, "domains").map((d) => {
+        if (!PROJECT_DOMAINS.includes(d as ProjectDomain)) throw new InvalidCommandError(`unknown domain ${d}: choose screen, code or infrastructure`);
+        return d as ProjectDomain;
+      }),
+      now,
+    ),
+  ),
   /** Accept the lead's draft as drafted or with edits: a user-authored revision, compare-and-set on the vision. */
   acceptVisionDraft: same((s, now, a) =>
     M.acceptVisionDraft(s, str(a, "draftId"), num(a, "expectedRev"), { text: a.text === undefined ? undefined : str(a, "text"), focus: a.focus === undefined ? undefined : str(a, "focus") }, now),
@@ -250,7 +265,7 @@ export const COMMANDS = {
         title: str(a, "title"),
         variants: array<unknown>(a.variants, "variants").map((x) => {
           const v = obj(x, "variant");
-          return { id: str(v, "id"), label: str(v, "label") };
+          return { id: str(v, "id"), label: str(v, "label"), ...(v.entry === undefined ? {} : { entry: str(v, "entry") }) };
         }),
         files: array<unknown>(a.files, "files").map((x) => {
           const f = obj(x, "file");
@@ -262,6 +277,7 @@ export const COMMANDS = {
         }),
         madeBy: studioMaker(a.madeBy),
         ...(a.supersedes === undefined ? {} : { supersedes: str(a, "supersedes") }),
+        ...(a.provenance === undefined ? {} : { provenance: { files: strings(obj(a.provenance, "provenance").files, "provenance.files") } }),
       },
       now,
     );
@@ -280,6 +296,21 @@ export const COMMANDS = {
   setProbeStatus: same((s, now, a) =>
     S.setProbeStatus(s, str(a, "probeId"), { status: oneOf(a, "status", ["running", "done", "failed"] as const), attemptId: optStr(a, "attemptId"), result: optStr(a, "result"), failure: optStr(a, "failure") }, now),
   ),
+  /** Ask for a studio run in a round, with its brief: queued, and dispatched in Vision only (a designer's, until pass 4). Returns { runId }. */
+  startStudioRun: (s, now, a) => {
+    const r = R.requestStudioRun(
+      s,
+      {
+        kind: oneOf(a, "kind", STUDIO_RUN_KINDS),
+        round: int(a, "round"),
+        ...(a.artifactId === undefined ? {} : { artifactId: str(a, "artifactId") }),
+        ...(a.selection === undefined ? {} : { selection: selection(a.selection) }),
+        brief: str(a, "brief"),
+      },
+      now,
+    );
+    return { state: r.state, result: { runId: r.runId } };
+  },
 
   // PE review of new work in the factory (ORC-029 2e)
   /** The service's (SERVICE_COMMANDS), from the PE's review run: one verdict on pending work; on a task, with the spec revision the PE read. */

@@ -17,6 +17,8 @@
     "test": "vitest run",
     "test:integration": "node --import tsx scripts/real-run-test.mjs --fake",
     "test:real": "node --import tsx scripts/real-run-test.mjs",
+    "trial:studio": "node --import tsx scripts/studio-trial.mjs",
+    "recorder:build": "docker build --tag orchestrator-recorder:1 docker/recorder",
     "preview": "vite preview",
     "setup": "node scripts/orchestrator.mjs setup",
     "status": "node scripts/orchestrator.mjs status",
@@ -29,8 +31,11 @@
     "ajv": "8.20.0",
     "canonicalize": "5.1.0",
     "driver.js": "1.8.0",
+    "mermaid": "11.17.2",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",

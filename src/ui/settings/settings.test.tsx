@@ -14,7 +14,7 @@ import { StoreContext, type SendResult, type ServiceStore } from "../store";
 import { AdvancedSection } from "./Advanced";
 import { AgentsSection } from "./Agents";
 import { changedKeys, intIn, numIn, pruneEdits, sendInOrder } from "./draft";
-import { ProjectSection } from "./Project";
+import { ProjectSection, domainsError } from "./Project";
 import { QualitySection } from "./Quality";
 import { CARD_SECTION, SECTIONS, cardHref, parseSettingsHash, settingsHref } from "./sections";
 import { WorkingStyleSection } from "./WorkingStyle";
@@ -127,6 +127,24 @@ describe("the Settings page", () => {
     const t = text(render(s, <ProjectSection current onDirty={noop} />));
     for (const x of ["Repository path", "Stage", "Back to shaping", "Delivery", "Off", "Local branch", "GitHub pull requests", "Remote", "Base branch", "You merge", "Merges automatically"]) expect(t).toContain(x);
     for (const x of ["Review bots", "This repository has no CI", "Protected files", "Re-run a check GitHub cancelled", "Open pull requests at most"]) expect(t).not.toContain(x);
+  });
+
+  it("Project › Kind of product: the three kinds as checkboxes, with who uses each and what the designer makes; any combination, never none once chosen", () => {
+    const empty = { ...s, project: { ...s.project, domains: [] } };
+    const html = render(empty, <ProjectSection current onDirty={noop} />);
+    const t = text(html);
+    expect(t).toContain("Kind of product Not chosen yet.");
+    expect(t).toContain("Screen product People use it on a screen: in a browser, on a desktop or a phone, or in a terminal. The designer makes screens and terminal demos.");
+    expect(t).toContain("Code product Other programs use it: a library, an engine or a compiler.");
+    expect(t).toContain("Infrastructure It runs other software: servers, queues or deployment.");
+    expect(count(html, 'type="checkbox" class="k-check__box"')).toBeGreaterThanOrEqual(3);
+    const chosen = text(render({ ...s, project: { ...s.project, domains: ["screen", "infrastructure"] } }, <ProjectSection current onDirty={noop} />));
+    expect(chosen).not.toContain("Not chosen yet.");
+    // Any combination saves; none is refused once some are chosen, and is no change while none are.
+    expect(domainsError(["screen"], ["code", "infrastructure"])).toBeUndefined();
+    expect(domainsError(["screen"], [])).toBe("Choose at least one kind.");
+    expect(domainsError([], [])).toBeUndefined();
+    expect(cardHref("domains")).toBe("#/settings/project/domains");
   });
 
   it("Agents holds the providers, the lead's model, the models per role, agents at once and run limits; no capability table", () => {

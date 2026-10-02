@@ -18,6 +18,7 @@ export const CARD_SECTION = {
   steering: "working-style",
   notifications: "working-style",
   repository: "project",
+  domains: "project",
   stage: "project",
   delivery: "project",
   "new-project": "project",

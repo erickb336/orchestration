@@ -5,6 +5,7 @@
 //   ORCHESTRATION_STATIC directory of the built UI to serve (npm start sets it to dist)
 //   ORCHESTRATION_DEV_UI extra host:port allowed as Host/Origin (npm run dev sets the Vite address)
 //   ORCHESTRATION_RUNTIME "fake" (default, simulated) or "real" (Claude and Codex agents run here)
+//   ORCHESTRATION_PROTOTYPE_PORT port of the studio's prototype server on 127.0.0.1 (default: the API port + 1)
 
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -20,6 +21,9 @@ import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { defaultRecorderRoot, sweepStages } from "./studio/container";
+import { systemMedia } from "./studio/media";
+import { createPrototypeServer, projectStudioDir } from "./studio/serve";
 import { VisionDocStore } from "./visiondocs";
 import { WorkspaceManager } from "./workspaces";
 
@@ -99,7 +103,8 @@ if (mode === "fake") {
   log(`Flows: ${flows.map((f) => f.name).join(", ")}`);
 }
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
-const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir });
+// Studio versions get screenshots (the system Chrome) and terminal recordings (VHS, sandboxed or not at all), in both modes.
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir, studioMedia: systemMedia(log) });
 // Check logs are pruned at start and once a day (older than 14 days, or beyond 200 MiB in all).
 const pruneLogs = () => {
   try {
@@ -111,8 +116,23 @@ const pruneLogs = () => {
 };
 pruneLogs();
 setInterval(pruneLogs, 24 * 60 * 60_000).unref();
+// A service stopped mid-recording leaves the recorder's stage folder behind; old ones are removed at start.
+{
+  const root = defaultRecorderRoot();
+  const swept = sweepStages(root);
+  if (swept.removed.length) log(`Recorder: removed ${swept.removed.length} stage folder${swept.removed.length === 1 ? "" : "s"} left in ${root}`);
+  if (swept.failed.length) log(`Recorder: could not remove ${swept.failed.join(", ")} in ${root}`);
+}
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
+const prototypePort = Number(process.env.ORCHESTRATION_PROTOTYPE_PORT ?? port + 1);
+// The studio's prototypes: agent-written code, served on a second listener (server/studio/serve.ts). Without it the
+// service still runs; prototypes just cannot be shown.
+const prototypes = createPrototypeServer({
+  studioDir: () => projectStudioDir(dataDir, store.read().state.project.id),
+  appOrigins: allowedHosts.map((h) => `http://${h}`),
+  log,
+});
 
 const server = createHttpServer({
   store,
@@ -124,6 +144,8 @@ const server = createHttpServer({
   startedAt: new Date().toISOString(),
   allowedHosts,
   staticDir,
+  prototypePort,
+  prototypeServer: prototypes,
   log,
 });
 
@@ -135,6 +157,11 @@ server.on("error", (e: NodeJS.ErrnoException) => {
   store.close();
   process.exit(1);
 });
+
+prototypes.on("error", (e: NodeJS.ErrnoException) =>
+  log(e.code === "EADDRINUSE" ? `Prototype port ${prototypePort} is already in use, so prototypes cannot be shown; set ORCHESTRATION_PROTOTYPE_PORT.` : `Prototype server error: ${e.message}`),
+);
+prototypes.listen(prototypePort, "127.0.0.1", () => log(`Prototypes served on http://p-<artifact>-v<n>.localhost:${prototypePort} (loopback only)`));
 
 server.listen(port, "127.0.0.1", () => {
   log(`Service listening on http://127.0.0.1:${port} (loopback only)`);
@@ -156,6 +183,8 @@ function shutdown(reason: string) {
     void scheduler.stop();
     server.close();
     server.closeAllConnections();
+    prototypes.close();
+    prototypes.closeAllConnections();
     store.close();
   } finally {
     process.exit(reason === "uncaughtException" ? 1 : 0);

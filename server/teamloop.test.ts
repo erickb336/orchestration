@@ -338,7 +338,12 @@ describe("lead and integration edge cases", () => {
     const msg = st().conversation.find((m) => m.author === "lead")!;
     expect(msg.text).toBe("Mixed batch.");
     expect(msg.proposedTaskIds).toHaveLength(1);
-    expect(msg.rejected).toHaveLength(2);
+    // The output schema's note names the first mismatches; each proposal is then checked on its own.
+    expect(msg.rejected).toEqual([
+      "The reply's JSON did not match the output schema (/proposals/0/title must be string; /proposals/1/options/0 must be object; /proposals/1/options/1 must be object). The service checked each part on its own.",
+      expect.stringContaining('"(untitled)"'),
+      expect.stringContaining('"Null option"'),
+    ]);
     expect(leadRun()).toBeUndefined();
   });
 

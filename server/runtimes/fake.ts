@@ -1,12 +1,20 @@
 // Fake runtime (simulated). It implements the same adapter contract as the real Claude and Codex
 // adapters, so the scheduler exercises one path for both. Its "processes" live only in this
 // service's memory; they vanish when the service stops, which lets restart reconciliation be tested
-// honestly. It advances only when the scheduler calls tick(). No agent executes.
+// honestly. It advances only when the scheduler calls tick(). No agent executes. A studio designer run writes a
+// sample prototype into its staging folder (server/studio/sample.ts), which the service imports like a real one, and
+// a revision marks the variants its brief names; a studio PE run answers with simulated verdicts on the version it
+// was given.
 
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AckMode } from "../../src/api";
+import { schemaMismatch, withNulls, type JsonSchema } from "../../src/domain/model/leadReplySchema";
+import { DOCUMENT_KINDS, type StudioArtifactKind } from "../../src/domain/studio/types";
 import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, scriptedFinding, scriptedSummary } from "../../src/domain/demoScript";
 import type { CatalogModel, OutputDef, ProviderId, State } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
+import { TERMINAL_BRIEF, designerAsk, fakePeAnswer, reviseSample, variantsToRevise, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
 import { statusAnswer, statusQuestion } from "./fakeStatus";
 import type { AdapterEvent, Assignment, ProviderHealth, RuntimeAdapter } from "./types";
 
@@ -28,8 +36,17 @@ interface Proc {
   lead?: "planning" | "message" | "decisions";
   /** The lead envelope, kept so a simulated message run can steer from what it was shown. */
   prompt?: string;
+  /** The output schema a lead run's answer must match, when the service gave one. */
+  outputSchema?: Record<string, unknown>;
   /** ORC-022: notes handed to this run, each acknowledged after `ticks` more ticks (a simulated delay). */
   notes?: { id: string; ticks: number }[];
+  /**
+   * ORC-029: a studio run's working directory: a designer's staging folder, where it writes the sample prototype when
+   * it completes, or the folder of the version a PE run reviews (read only).
+   */
+  studio?: string;
+  /** ORC-029: a studio run's role: the designer hands in a sample, the PE answers with verdicts. */
+  studioRole?: "designer" | "pe";
 }
 
 /** ORC-022: how many ticks a simulated run takes to acknowledge a note (about two seconds in the service). */
@@ -193,6 +210,50 @@ function fakeShaping(prompt: string): { questions: Record<string, unknown>[]; co
   return { questions, coverage };
 }
 
+const FOCUS_ORDER = ["experience", "data", "flows"] as const;
+const FOCUS_WORDS: Record<string, string> = { "what exists": "material", "the experience": "experience", "the data": "data", "the flows": "flows" };
+
+/**
+ * ORC-029 pass 4: a simulated studio block, built only from the lead's studio brief in the envelope (a reply in
+ * Vision). When no round is open it plans the next one and asks for one designer run and one question, so the demo
+ * shows the loop: round 0 "as it is today" when the repository has code and there is no round yet, else the next
+ * focus in order (the experience, then the data, then the flows). While a round is open it plans nothing. Every text
+ * says it is simulated.
+ */
+export function fakeStudio(prompt: string): Record<string, unknown> | undefined {
+  if (!/^## The studio$/m.test(prompt) || !/^- No round is open\./m.test(prompt)) return undefined;
+  const scope = (/^Devices \(the user's scope\): ([^\n]*)\.$/m.exec(prompt)?.[1] ?? "desktop").split(", ");
+  const screens = scope.filter((d) => d === "desktop" || d === "mobile");
+  const asIs = /^No round yet, and the repository has code\./m.test(prompt);
+  const done = [...prompt.matchAll(/^- Round \d+ \(([^)]*)\), closed/gm)].map((m) => FOCUS_WORDS[m[1]]);
+  const focus = asIs ? "material" : FOCUS_ORDER.find((f) => !done.includes(f));
+  if (!focus) return undefined;
+  const run =
+    focus === "material"
+      ? screens.length
+        ? { brief: "Simulated lead: reproduce the main screen as the code has it today, read-only, and name the files it came from.", kinds: ["screen"], variants: 1, devices: screens }
+        : { brief: "Simulated lead: reproduce the main command as the code has it today, read-only, and name the files it came from.", kinds: ["terminal-demo"], variants: 1, devices: ["terminal"] }
+      : focus === "experience"
+        ? screens.length
+          ? { brief: "Simulated lead: make the main screen of the vision in two takes that differ in a real choice.", kinds: ["screen"], variants: 2, devices: screens }
+          : { brief: "Simulated lead: make a terminal demo of the main command.", kinds: ["terminal-demo"], variants: 1, devices: ["terminal"] }
+        : focus === "data"
+          ? { brief: "Simulated lead: describe the product's things and how they relate, with a worked example.", kinds: ["contract"], variants: 1, devices: [] }
+          : { brief: "Simulated lead: decide every case of the main flow, as a table of cases and outcomes.", kinds: ["flow"], variants: 1, devices: [] };
+  const summary = {
+    material: "As it is today (simulated): what the code in the repository does now.",
+    experience: "The experience (simulated): the main screen, in two takes.",
+    data: "The data (simulated): the product's things and how they relate.",
+    flows: "The flows (simulated): every case of the main flow, decided.",
+  }[focus];
+  // The owner chooses the domains in the app; the brief tells the lead not to ask about them.
+  const question =
+    focus === "material"
+      ? { question: "Is this how the product works today? (simulated)", why: "Later rounds change what the code does now, so it must be right first.", options: ["Yes", "Mostly: see my pins", "No"] }
+      : { question: "Is anything missing from this round? (simulated)", why: "A case the design leaves open becomes special-casing in code.", options: ["Nothing is missing", "Yes: see my note"] };
+  return { openRound: { focus, summary }, designerRuns: [run], questions: [question] };
+}
+
 /**
  * The one task a simulated planning run proposes: the first idea of the story that is not on the board the
  * envelope shows, else a plain "Small improvement" numbered after the ones already there. Never a run id.
@@ -231,17 +292,27 @@ export function fakePlanningProposal(prompt: string): Record<string, unknown> {
 }
 
 /**
- * A simulated lead reply in the required JSON shape. Planning runs propose one small task; message runs may steer
+ * A simulated lead reply in the required JSON shape, as text: the reply, then the object in a fenced JSON block (what a
+ * lead sends when its runtime applies no output schema).
+ */
+export function fakeLeadText(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = "", board?: State, nowMs = Date.now()): string {
+  const out = fakeLeadReply(attemptId, trigger, prompt, board, nowMs);
+  return `${String(out.reply)}\n\n\`\`\`json\n${JSON.stringify(out, null, 2)}\n\`\`\`\n`;
+}
+
+/**
+ * A simulated lead reply: the object a lead sends. Planning runs propose one small task; message runs may steer
  * or draft the vision. ORC-025 (L3): a message run that only asks about the board ("what needs me?", "how is
  * offline maps going?") is answered from `board`, the service's state now (fakeStatus.ts); without it (unit tests
  * of the text alone), the reply says what the demo lead can do.
  */
-export function fakeLeadText(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = "", board?: State, nowMs = Date.now()): string {
+export function fakeLeadReply(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = "", board?: State, nowMs = Date.now()): Record<string, unknown> {
   void attemptId; // never part of any title or text
   const proposals = trigger === "planning" ? [fakePlanningProposal(prompt)] : [];
   const steer = trigger === "message" ? fakeSteer(prompt) : undefined;
   const vision = trigger === "message" ? fakeVision(prompt) : undefined;
   const shaping = trigger === "message" ? fakeShaping(prompt) : undefined;
+  const studio = trigger === "message" ? fakeStudio(prompt) : undefined;
   // ORC-013: the simulated lead accepts every finding routed to it; a real lead weighs each one.
   // ORC-029 2d: the decisions it takes as the PE state their cost; accepting adds none.
   const decisions = [
@@ -256,8 +327,13 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message" 
   const newest = newestMessageLine(prompt);
   const question = trigger === "message" && !vision && !steer && board && newest ? statusQuestion(board, newest.text, newest.fromTaskId) : undefined;
   const notes = (steer?.notes ?? []) as { task: string }[];
+  // ORC-029 pass 4: what the simulated lead asked of the studio, said after the rest of the reply.
+  const round = studio?.openRound as { focus: string } | undefined;
+  const studioLine = round
+    ? ` I opened a round on ${round.focus === "material" ? "the product as it is today" : `the ${round.focus}`} and asked the designer for one run, with one question beside it (simulated).`
+    : "";
   // The reply carries the simulated chip; the text says only what happened.
-  const reply =
+  const replyText =
     trigger === "planning"
       ? "I reviewed the board and proposed one small task."
       : vision
@@ -272,7 +348,84 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message" 
             : question && board
               ? statusAnswer(board, question, nowMs)
               : "Noted; I changed nothing. Ask me what is running, what needs you or how a task is going; tell me what to focus on; or ask me to tell the coder on a task something.";
-  return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}) }, null, 2)}\n\`\`\`\n`;
+  const reply = `${replyText}${studioLine}`;
+  return { reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}), ...(studio ? { studio } : {}) };
+}
+
+/**
+ * The simulated lead's answer under an output schema, as a constrained model gives it: the object with every field the
+ * schema names (null where the lead left it out), as JSON. An object the schema refuses fails the run, so the simulated
+ * loop proves the schema accepts what the simulated lead sends.
+ */
+export function fakeLeadAnswer(reply: Record<string, unknown>, schema: Record<string, unknown>): { ok: true; json: string } | { ok: false; why: string } {
+  const answer = withNulls(schema as JsonSchema, reply);
+  const why = schemaMismatch(schema as JsonSchema, answer);
+  return why ? { ok: false, why } : { ok: true, json: JSON.stringify(answer) };
+}
+
+// ---------- the simulated designer's documents and "as is" reproductions (ORC-029 pass 4) ----------
+
+/** The document kind a designer's brief asks for, when every kind it names is a document ("The lead asks for: contract; …"). */
+export function documentAsk(brief: string): StudioArtifactKind | undefined {
+  const kinds = /The lead asks for: ([a-z, -]+);/.exec(brief)?.[1]?.split(", ") as StudioArtifactKind[] | undefined;
+  return kinds?.length && kinds.every((k) => DOCUMENT_KINDS.includes(k)) ? kinds[0] : undefined;
+}
+
+/**
+ * The repository's code files an "as it is today" designer envelope lists (round 0), at most three, for the
+ * simulated designer's provenance; undefined when the envelope is not round 0's. The simulated designer reads no
+ * code: it names files the service listed from git, so the import's check that the repository has them holds.
+ */
+export function asIsFiles(prompt: string): string[] | undefined {
+  if (!/^## As it is today$/m.test(prompt)) return undefined;
+  const listed = /^- Code in the repository \([^)]*\): (.+)\.$/m.exec(prompt)?.[1];
+  if (!listed || listed === "none") return [];
+  return listed
+    .split(", ")
+    .sort((a, b) => Number(!/\.html?$/.test(a)) - Number(!/\.html?$/.test(b)))
+    .slice(0, 3);
+}
+
+const DOCUMENT_TEXT: Record<string, { title: string; md: string; mmd: string }> = {
+  contract: {
+    title: "Trip data (simulated sample)",
+    md: "# Trip data\n\n> Simulated sample: the fake runtime made this, not a designer agent.\n\n| Thing | What it holds | How it relates |\n| --- | --- | --- |\n| Trip | the place, the dates, the cost each | has people and one plan |\n| Person | a name, in or out | joins trips |\n| Plan | days and stops | belongs to one trip |\n\n## A worked example\n\n```json\n{ \"trip\": \"Lake weekend\", \"people\": [\"AM\", \"JR\"], \"costEach\": 140 }\n```\n",
+    mmd: "erDiagram\n  TRIP ||--o{ PERSON : has\n  TRIP ||--|| PLAN : has\n",
+  },
+  flow: {
+    title: "Saying you are in (simulated sample)",
+    md: "# Saying you are in\n\n> Simulated sample: the fake runtime made this, not a designer agent.\n\n| Case | Outcome |\n| --- | --- |\n| The trip has room | You are in; the cost each is shown again |\n| The trip is full | You join the waiting list |\n| The trip has started | You cannot join; the organiser is told |\n",
+    mmd: "flowchart LR\n  ask[You say you are in] --> room{Room left?}\n  room -- yes --> in[You are in]\n  room -- no --> wait[Waiting list]\n",
+  },
+};
+
+/** Write a document sample (Markdown and Mermaid) and its studio.json into a run's staging folder, as a designer agent would. */
+export function writeDocumentSample(staging: string, kind: StudioArtifactKind) {
+  const text = DOCUMENT_TEXT[kind] ?? { ...DOCUMENT_TEXT.contract, title: `${kind[0].toUpperCase()}${kind.slice(1)} (simulated sample)` };
+  mkdirSync(join(staging, "doc"), { recursive: true });
+  writeFileSync(join(staging, "doc", "index.md"), text.md);
+  writeFileSync(join(staging, "doc", "diagram.mmd"), text.mmd);
+  const manifest = { artifacts: [{ kind, title: text.title, devices: [], variants: [{ id: "a", label: "A · As drafted", entry: "doc/index.md" }], files: ["doc/index.md", "doc/diagram.mmd"] }] };
+  writeFileSync(join(staging, "studio.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+/**
+ * Turn the sample just written into "as is" reproductions: each artifact names `files` as its provenance and says
+ * so in its title; a screen keeps one take (what the code does now has no variants).
+ */
+export function markAsIs(staging: string, files: string[]) {
+  const path = join(staging, "studio.json");
+  const manifest = JSON.parse(readFileSync(path, "utf8")) as { artifacts: { kind: string; title: string; variants: { id: string; label: string; entry: string }[]; files: string[]; provenance?: string[] }[] };
+  for (const a of manifest.artifacts) {
+    a.title = a.title.replace(" (simulated sample)", " as it is today (simulated sample)");
+    if (files.length) a.provenance = files;
+    if (a.kind !== "screen") continue;
+    const [first] = a.variants;
+    const folder = first.entry.includes("/") ? `${first.entry.slice(0, first.entry.lastIndexOf("/"))}/` : "";
+    a.variants = [{ ...first, label: "As it is today" }];
+    a.files = a.files.filter((f) => f.startsWith(folder));
+  }
+  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 function jitter(id: string) {
@@ -366,7 +519,13 @@ export class FakeAdapter implements RuntimeAdapter {
   start(a: Assignment) {
     if (a.role === "lead" && a.stepId === "LEAD") {
       if (this.procs.has(a.attemptId)) return;
-      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : /^# Lead run \S+ \(decisions on findings\)/.test(a.prompt) ? "decisions" : "message", prompt: a.prompt });
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : /^# Lead run \S+ \(decisions on findings\)/.test(a.prompt) ? "decisions" : "message", prompt: a.prompt, ...(a.outputSchema ? { outputSchema: a.outputSchema } : {}) });
+      this.emit({ type: "started", attemptId: a.attemptId });
+      return;
+    }
+    if (a.studio) {
+      if (this.procs.has(a.attemptId)) return;
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], studio: a.workspace.path, studioRole: a.role === "pe" ? "pe" : "designer", prompt: a.prompt });
       this.emit({ type: "started", attemptId: a.attemptId });
       return;
     }
@@ -466,6 +625,58 @@ export class FakeAdapter implements RuntimeAdapter {
       if (p.progress >= 100) {
         this.dropNotes(id, p, "the run ended first");
         this.procs.delete(id);
+        if (p.studio !== undefined && p.studioRole === "pe") {
+          // A simulated PE reads the version's manifest and answers as a real one would: a verdict per variant.
+          const answer = fakePeAnswer(p.studio);
+          this.emit(answer.ok ? { type: "completed", attemptId: id, finalText: answer.text } : { type: "failed", attemptId: id, message: `The simulated PE could not read the version: ${answer.error}` });
+          continue;
+        }
+        if (p.studio !== undefined && existsSync(p.studio) && readdirSync(p.studio).length) {
+          // A revision: its staging folder starts with the files of the version it revises. The simulated designer
+          // marks the variants its brief asks it to revise, and hands in that one artifact.
+          const ask = designerAsk(p.prompt ?? "");
+          try {
+            this.emit({ type: "completed", attemptId: id, finalText: reviseSample(p.studio, { terminal: ask.terminal, variants: variantsToRevise(ask.brief) }) });
+          } catch (e) {
+            this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not revise: ${e instanceof Error ? e.message : String(e)}` });
+          }
+          continue;
+        }
+        if (p.studio !== undefined) {
+          // A simulated designer writes a sample and its studio.json, which the service imports as a real one's: the
+          // trips CLI's terminal demo and TUI when its brief asks for one, else the trip plan's screens.
+          const ask = designerAsk(p.prompt ?? "");
+          const doc = documentAsk(ask.brief);
+          const terminal = !doc && TERMINAL_BRIEF.test(ask.brief);
+          const asIs = asIsFiles(p.prompt ?? "");
+          try {
+            if (doc) writeDocumentSample(p.studio, doc);
+            else if (terminal) writeTerminalSample(p.studio, ask.terminal);
+            else writeSamplePrototype(p.studio);
+            if (asIs) markAsIs(p.studio, asIs);
+          } catch (e) {
+            this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not write its sample: ${e instanceof Error ? e.message : String(e)}` });
+            continue;
+          }
+          this.emit({
+            type: "completed",
+            attemptId: id,
+            finalText: doc
+              ? `Made a ${doc} document in Markdown and Mermaid (simulated sample).`
+              : asIs
+                ? `Reproduced the ${terminal ? "trips CLI" : "trip plan"} as it is today, as is, from ${asIs.join(", ") || "no file"} (simulated sample).`
+                : terminal
+                  ? "Made a terminal demo of the trips CLI, and its TUI in two layouts (simulated sample)."
+                  : "Made the trip plan in two variants, for desktop and mobile (simulated sample).",
+          });
+          continue;
+        }
+        if (p.lead && p.outputSchema) {
+          const answer = fakeLeadAnswer(fakeLeadReply(id, p.lead, p.prompt, p.lead === "message" ? this.board?.() : undefined, nowMs), p.outputSchema);
+          if (answer.ok) this.emit({ type: "completed", attemptId: id, finalText: answer.json });
+          else this.emit({ type: "failed", attemptId: id, message: `The simulated lead's answer does not match the output schema: ${answer.why}` });
+          continue;
+        }
         this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt, p.lead === "message" ? this.board?.() : undefined, nowMs) : fakeFinalText(id, p.outputs, p.stepId, p.taskId, p.title) });
       } else this.emit({ type: "progress", attemptId: id, percent: p.progress });
     }

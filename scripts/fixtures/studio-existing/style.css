@@ -1,0 +1,9 @@
+body { margin: 0; font: 16px/1.4 system-ui, sans-serif; color: #1d2733; background: #f6f4ef; }
+header { padding: 20px 24px 4px; }
+h1 { margin: 0; font-size: 24px; }
+.lead { margin: 4px 0 0; color: #5b6673; }
+.trips { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin: 0; padding: 16px 24px; list-style: none; }
+.trip { padding: 14px 16px; border-radius: 12px; background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.trip h2 { margin: 0 0 6px; font-size: 18px; }
+.trip p { margin: 2px 0; color: #5b6673; }
+.trip button { margin-top: 10px; padding: 6px 12px; border: 0; border-radius: 8px; background: #3c7a89; color: #fff; font: inherit; }

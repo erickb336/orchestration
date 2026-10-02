@@ -13,6 +13,8 @@ import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
+import { APP_FILE_HEADERS, appStudioFile } from "./studio/files";
+import { projectStudioDir } from "./studio/serve";
 import type { VisionDocStore } from "./visiondocs";
 import type { WorkspaceManager } from "./workspaces";
 import { CommandFailure, type CommandResult, type Store } from "./store";
@@ -32,6 +34,13 @@ interface HttpOptions {
   allowedHosts: string[];
   /** Directory with the built UI to serve, if any. */
   staticDir?: string;
+  /**
+   * The prototype server's port (server/studio/serve.ts). The UI's pages may then frame its origins only: a
+   * prototype's own policy cannot stop it navigating its frame elsewhere, the page's frame-src does.
+   */
+  prototypePort?: number;
+  /** The prototype listener itself: while it is listening, the state and health payloads name its port (`service.prototypePort`). */
+  prototypeServer?: Server;
   log?: (msg: string) => void;
 }
 
@@ -46,6 +55,30 @@ const TYPES: Record<string, string> = {
   ".ico": "image/x-icon",
   ".json": "application/json",
 };
+
+/**
+ * The policy of the app's own pages: everything from the app's origin, nothing from anywhere else, so no request
+ * leaves the page whatever an agent wrote (ORC-029 F2; pass 4 review, finding 2). Images may also be data: (the
+ * studio's diagrams) or blob:, styles may be inline (React's style attributes), and the API and its live updates
+ * (/api/stream) are on the same origin. Frames: only the prototype server's origins, because a prototype's own policy
+ * cannot stop it navigating its frame elsewhere, and the page's frame-src does. The studio's diagram frame is a srcdoc
+ * document, which inherits this policy and adds its own (src/ui/studio/diagrams.ts). Nothing may frame the app.
+ */
+export function appPagePolicy(prototypePort?: number): string {
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    `frame-src ${prototypePort ? `http://*.localhost:${prototypePort}` : "'none'"}`,
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
 
 export function createHttpServer(opts: HttpOptions): Server {
   const { store, scheduler, fakeConfig } = opts;
@@ -88,6 +121,9 @@ export function createHttpServer(opts: HttpOptions): Server {
       providers,
       leadBlocked: scheduler.leadBlocked,
     };
+    // From the listener, not the configuration: a port that was busy at start serves nothing, and the app says so.
+    const proto = opts.prototypeServer?.listening ? opts.prototypeServer.address() : null;
+    if (proto && typeof proto === "object") out.prototypePort = proto.port;
     if (real && opts.workspaces) {
       const project = store.read().state.project;
       if (project.sample) out.repo = { ok: false, reason: "This is the sample project; real runs are disabled for it. Start a new project below." };
@@ -161,6 +197,22 @@ export function createHttpServer(opts: HttpOptions): Server {
     return res.end(readFileSync(file));
   };
 
+  /**
+   * A file of a studio artifact version of the current project, for the studio's terminal text, screenshots and
+   * recordings (server/studio/files.ts): plain text, PNG, GIF and WebM only, never anything that runs.
+   */
+  const studioFile = (res: ServerResponse, query: URLSearchParams) => {
+    const { state } = store.read();
+    const studioDir = opts.dataDir ? projectStudioDir(opts.dataDir, state.project.id) : undefined;
+    const r = appStudioFile(studioDir, query, (id, version) => state.studio.artifacts.some((a) => a.id === id && a.version === version));
+    if (!r.ok) {
+      res.writeHead(r.status, { "Content-Type": "application/json; charset=utf-8", ...APP_FILE_HEADERS });
+      return res.end(JSON.stringify({ error: r.error, kind: r.status === 403 ? "forbidden" : "invalid" } satisfies CommandError));
+    }
+    res.writeHead(200, { "Content-Type": r.type, "Content-Length": r.body.length, ...APP_FILE_HEADERS });
+    return res.end(r.body);
+  };
+
   const readJson = (req: IncomingMessage): Promise<unknown> =>
     new Promise((resolveBody, reject) => {
       let size = 0;
@@ -226,7 +278,7 @@ export function createHttpServer(opts: HttpOptions): Server {
       else res.destroy();
     });
     body.on("open", () => {
-      res.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream", "X-Content-Type-Options": "nosniff" });
+      res.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": appPagePolicy(opts.prototypePort) });
       body.pipe(res);
     });
   };
@@ -261,6 +313,7 @@ export function createHttpServer(opts: HttpOptions): Server {
         if (path === "/api/change") return change(res, url.searchParams.get("task") ?? "");
         if (path === "/api/checks/suggest") return suggest(res);
         if (path === "/api/checks/log") return checkLog(res, url.searchParams.get("run") ?? "", url.searchParams.get("check") ?? "");
+        if (path === "/api/studio/file") return studioFile(res, url.searchParams);
         return fail(res, 404, "invalid", "Not found");
       }
 

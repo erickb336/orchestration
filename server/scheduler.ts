@@ -7,11 +7,16 @@
 // everything in one lease-checked transaction, so state changes stay serialized.
 
 import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import * as C from "../src/domain/checks";
 import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
+import { LEAD_REPLY_SCHEMA } from "../src/domain/model/leadReplySchema";
+import * as R from "../src/domain/studio/runs";
+import * as S from "../src/domain/studio/studio";
+import { DESIGNER_KINDS } from "../src/domain/studio/types";
 import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner } from "./checks";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
@@ -20,6 +25,12 @@ import { PrDriver } from "./prdelivery";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
+import { ManifestError, readStaged, studioRoot, versionDir } from "./studio/artifacts";
+import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
+import { PeAnswerError, peEnvelope, readPeAnswer, recordPeRun } from "./studio/pe";
+import { repoGlance } from "./studio/existing";
+import { askForRevisions } from "./studio/revise";
+import { designerEnvelope, handedIn, importDesignerRun, prepareStaging, type HandedIn } from "./studio/runs";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
 
@@ -48,6 +59,11 @@ interface SchedulerOptions {
   checks?: CheckRunner;
   /** The service's data directory (next to the database): check caches and logs live under it. */
   dataDir?: string;
+  /**
+   * What makes a studio version's screenshots and terminal recordings after import (server/studio/media.ts). Without
+   * it none are made, and the versions record none.
+   */
+  studioMedia?: StudioMedia;
 }
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
@@ -65,7 +81,16 @@ interface Launched {
   taskId: string;
   /** A check run: the protected inputs its change touched, computed at launch, recorded with the result. */
   touchedInputs?: string[];
+  /** A studio run: its staging folder, removed once what it handed in was imported. */
+  staging?: string;
+  /** A read-only studio run (the PE): its temp folder, outside the version it reads, removed when the run ends. */
+  tmp?: string;
 }
+
+/** What the scheduler saw of a studio run outside the store: a lost process, an unconfirmed stop, a launch that failed. */
+type StudioIssue = { id: string; kind: "lost" } | { id: string; kind: "timeout" } | { id: string; kind: "failed"; reason: string };
+/** A designer run's studio.json, read and checked before the transaction that imports it. */
+type StudioOutput = HandedIn | { refused: string };
 
 /**
  * What the service recorded about a run before it started (the changed-path set a reviewer was shown,
@@ -88,7 +113,16 @@ interface HealthEvent {
   /** When the probe began (the scheduler's clock): a "Check again" asked for later is not cleared by this result. */
   startedAt: string;
 }
-type QueueEvent = AdapterEvent | ContextEvent | HealthEvent;
+/** A studio version's screenshots or recording, made after import; recorded under the lease, for the project it was made in. */
+interface MediaEvent {
+  type: "studio-media";
+  attemptId: "";
+  projectId: string;
+  artifactId: string;
+  version: number;
+  result: S.MediaResult;
+}
+type QueueEvent = AdapterEvent | ContextEvent | HealthEvent | MediaEvent;
 
 /** A simulated head commit: "sim" and 9 hex digits, short enough to show whole where commits are cut to 12 characters. */
 export const simSha = (key: string) => `sim${createHash("sha256").update(key).digest("hex").slice(0, 9)}`;
@@ -113,6 +147,11 @@ export class Scheduler {
   private failedStarts = 0;
   private readonly workspaces?: WorkspaceManager;
   private readonly visionDocs?: VisionDocStore;
+  private readonly media?: StudioMedia;
+  /** Studio versions' screenshots and recordings, made one at a time, after the run that handed them in completed. */
+  private mediaChain: Promise<void> = Promise.resolve();
+  /** The pending ones this instance started (project, version and kind), so each is made once per process. */
+  private mediaStarted = new Set<string>();
   private queue: QueueEvent[] = [];
   private launched = new Map<string, Launched>();
   /** Notes this instance handed to an adapter, so each is handed over once; cleared with the runs. */
@@ -133,6 +172,7 @@ export class Scheduler {
     this.workspaces = opts.workspaces;
     this.visionDocs = opts.visionDocs;
     this.dataDir = opts.dataDir;
+    this.media = opts.studioMedia;
     this.checks = opts.checks ?? (this.workspaces ? undefined : new SimulatedChecks());
     this.checks?.onEvent((e) => this.queue.push(e));
     this.leaseMs = opts.leaseMs ?? 15000;
@@ -264,6 +304,8 @@ export class Scheduler {
         }
         const lead = M.activeLeadRun(next);
         if (lead && !this.adapterFor(lead.provider).has(lead.id)) next = M.reportLeadStopped(next, lead.id, now, true);
+        // A studio run without a process is lost, or stopped if it was stopping (a paused one is then asked for again).
+        for (const r of R.activeStudioRuns(next)) if (!this.adapterFor(r.provider).has(r.id)) next = R.reportStudioRunStopped(next, r.id, now, { lost: true });
         return next;
       },
       now,
@@ -344,9 +386,10 @@ export class Scheduler {
     const { state } = this.store.read();
     const active = new Map(M.activeAttempts(state).map((a) => [a.id, a]));
     const leadRun = M.activeLeadRun(state);
+    const studioActive = new Set(R.activeStudioRuns(state).map((r) => r.id));
     for (const adapter of this.allRunners()) {
       for (const id of adapter.ids()) {
-        if (!active.has(id) && id !== leadRun?.id) {
+        if (!active.has(id) && id !== leadRun?.id && !studioActive.has(id)) {
           adapter.kill(id); // its run is no longer active: it must never report into state again
           this.launched.delete(id);
         }
@@ -443,15 +486,27 @@ export class Scheduler {
       }
     }
 
+    // 2c. Studio runs (Vision): supervise the active ones, then dispatch queued ones (in Vision only) and launch them.
+    const studioIssues = this.studioCycle(state, nowMs, lease, canDispatch, { unavailable, deferred });
+
     // 3. The fake runtime advances on the scheduler's clock; real adapters report on their own.
     for (const adapter of Object.values(this.adapters)) if (adapter instanceof FakeAdapter && this.auto) adapter.tick(nowMs);
     if (this.checks instanceof SimulatedChecks && this.auto) this.checks.tick(nowMs);
 
-    // 4. Drain adapter events. Work that touches git happens here, outside the transaction.
+    // 4. Drain adapter events. Work that touches git happens here, outside the transaction, and so does reading
+    //    what a studio run handed in.
     const events = this.queue.splice(0);
     const completions = new Map<string, { outputs: M.OutputReport[]; problems: string[] }>();
+    const studioOutputs = new Map<string, StudioOutput>();
+    const current = this.store.read().state;
     for (const e of events) {
       if (e.type !== "completed") continue;
+      const studioRun = R.getStudioRun(current, e.attemptId);
+      if (studioRun) {
+        // A designer hands in files; the PE answers in its final message, read in the transaction.
+        if (studioRun.kind === "designer") studioOutputs.set(e.attemptId, this.readStudioOutput(current, e.attemptId));
+        continue;
+      }
       try {
         completions.set(e.attemptId, this.collectOutputs(state, e));
       } catch (err) {
@@ -467,7 +522,7 @@ export class Scheduler {
           for (const l of lost) next = M.reportRunLost(next, l.id, l.reason, now);
           for (const e of events) {
             try {
-              next = this.applyEvent(next, e, completions, now);
+              next = R.getStudioRun(next, e.attemptId) ? this.applyStudioEvent(next, e, studioOutputs, now) : this.applyEvent(next, e, completions, now);
             } catch (err) {
               // One bad event must not discard the batch (and with it other runs' terminal events).
               this.log(`Could not apply ${e.type} for ${e.attemptId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -479,7 +534,15 @@ export class Scheduler {
             else if (l.kind === "timeout") next = M.reportLeadStopTimeout(next, l.id, now);
             else next = M.reportLeadFailed(next, l.id, l.reason ?? "could not start", now);
           }
-          return next;
+          for (const l of studioIssues) {
+            if (l.kind === "lost") next = R.reportStudioRunStopped(next, l.id, now, { lost: true });
+            else if (l.kind === "timeout") next = R.reportStudioStopTimeout(next, l.id, now);
+            else next = R.reportStudioRunFailed(next, l.id, l.reason, now);
+          }
+          // The PE reviews each designer version before the owner sees it: asked for once the version is imported
+          // and its screenshots or recording are made (applied above), and again after a review ended without a verdict.
+          // When its pass asks for changes, the designer revises the version, and the PE reviews the new one (the loop).
+          return askForRevisions(R.askForPeReviews(next, now), now);
         },
         now,
         lease,
@@ -489,17 +552,23 @@ export class Scheduler {
       if (!(err instanceof LeaseLostError)) this.queue.unshift(...events);
       throw err;
     }
+    const after = this.store.read().state;
     for (const e of events) {
       if (e.type !== "completed" && e.type !== "failed" && e.type !== "stopped") continue;
       const info = this.launched.get(e.attemptId);
-      // Lead checkouts are only for reading the repository during the run: remove them afterwards.
+      // Lead and studio checkouts are only for reading the repository during the run: remove them afterwards.
       // A check run's throwaway copy of the change goes too, pass or fail.
-      if ((info?.taskId === "LEAD" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
+      if ((info?.taskId === "LEAD" || info?.taskId === "STUDIO" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
+      // A studio run's staging folder goes once what it handed in is imported; a failed or stopped run's stays, to look at.
+      if (info?.staging && R.getStudioRun(after, e.attemptId)?.status === "completed") rmSync(info.staging, { recursive: true, force: true });
+      if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
       this.launched.delete(e.attemptId);
     }
     this.conventionsCache = undefined;
     // Notes the lead's reply just sent (applied in the drain above) go to their live runs now.
     this.sendNotes(this.store.read().state);
+    // Screenshots and recordings of studio versions imported just now, or left pending by an earlier service.
+    this.startMedia(this.store.read().state);
 
     // 5. Integration: one finished task per cycle, frozen while the project is paused; then delivery.
     this.integrateNext(nowMs, lease);
@@ -643,7 +712,7 @@ export class Scheduler {
   prune(): number {
     if (!this.workspaces) return 0;
     const { state } = this.store.read();
-    const keep = new Set([...M.activeAttempts(state).map((a) => a.id), ...(M.activeLeadRun(state) ? [M.activeLeadRun(state)!.id] : [])]);
+    const keep = new Set([...M.activeAttempts(state).map((a) => a.id), ...(M.activeLeadRun(state) ? [M.activeLeadRun(state)!.id] : []), ...R.activeStudioRuns(state).map((r) => r.id)]);
     const throwaway = new Set(state.attempts.filter((a) => a.snapshot.provider === "service" && !keep.has(a.id)).map((a) => a.id));
     return this.workspaces.prune({ repoPath: state.project.repoPath, projectId: state.project.id, keep, throwaway });
   }
@@ -703,14 +772,260 @@ export class Scheduler {
         workspace: { path: workspace?.path ?? "", access: "read" },
         environment: state.project.workerEnvironment[run.provider],
         connections: state.project.workerConnections[run.provider],
-        prompt: buildLeadEnvelope(state, run, "read", this.visionDocs?.reader(state.project.id), conventions),
+        // In Vision the lead's studio brief says whether the repository has code (an "as it is today" first round).
+        prompt: buildLeadEnvelope(state, run, "read", this.visionDocs?.reader(state.project.id), conventions, state.project.stage === "shaping" && !state.project.sample ? repoGlance(state.project.repoPath) : undefined),
         outputs: [],
+        // The runtime constrains the lead's answer to its reply schema, so one missing brace cannot lose the reply.
+        outputSchema: LEAD_REPLY_SCHEMA,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
       return undefined;
     } catch (e) {
       this.launched.delete(runId);
       return `Could not start the lead: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * Studio runs, like the lead's: an active run whose process is gone is lost (after a short grace for its last
+   * events), a stop is forwarded until the runtime confirms it, and one unconfirmed past the limit is a control
+   * failure. Then queued runs are dispatched, committed before any process starts (the domain decides: Vision only,
+   * not paused, below the budget, within the limits), and launched. Returns what is applied with the drain.
+   */
+  private studioCycle(state: State, nowMs: number, lease: { name: string; holder: string; nowMs: number }, canDispatch: boolean, avail: { unavailable: Partial<Record<ProviderId, string>>; deferred: ProviderId[] }): StudioIssue[] {
+    const issues: StudioIssue[] = [];
+    for (const r of R.activeStudioRuns(state)) {
+      const adapter = this.adapterFor(r.provider);
+      const launched = this.launched.get(r.id);
+      if (!adapter.has(r.id) && !this.queue.some((e) => e.attemptId === r.id)) {
+        if (!launched) issues.push({ id: r.id, kind: "lost" });
+        else {
+          launched.goneSince ??= nowMs;
+          if (nowMs - launched.goneSince > 10_000) {
+            this.launched.delete(r.id);
+            issues.push({ id: r.id, kind: "lost" });
+          }
+        }
+      } else if (r.status === "stopping") {
+        if (adapter instanceof FakeAdapter) adapter.interruptAt(r.id, nowMs);
+        else adapter.interrupt(r.id);
+        if (r.stopRequestedAt && nowMs - Date.parse(r.stopRequestedAt) >= this.ackTimeoutMs) issues.push({ id: r.id, kind: "timeout" });
+      }
+    }
+    // A sample or unconfigured project never reaches a real agent. With nothing queued there is nothing to write.
+    if (!canDispatch || !state.studio.runs.some((r) => r.status === "queued")) return issues;
+    const now = new Date(nowMs).toISOString();
+    const simulated = (Object.keys(this.adapters) as ProviderId[]).filter((p) => this.adapters[p] instanceof FakeAdapter);
+    let started: string[] = [];
+    this.store.update(
+      (s) => {
+        const d = R.dispatchStudioRuns(s, now, { ...avail, simulated });
+        started = d.started;
+        return d.state;
+      },
+      now,
+      lease,
+    );
+    if (!started.length) return issues;
+    const fresh = this.store.read().state;
+    for (const id of started) {
+      const err = this.launchStudio(fresh, id);
+      if (err) issues.push({ id, kind: "failed", reason: err });
+    }
+    return issues;
+  }
+
+  /**
+   * Start a studio run. A designer's: a fresh staging folder under the data directory (the one place it writes), a
+   * read-only checkout of the product (real mode), and its envelope. The PE's: read-only, in the folder of the version
+   * it reviews (the files, screenshots and recordings), with nothing to write. Isolated, with no connections and no
+   * shell, whatever the project's environment setting: the adapters enforce it for `studio` runs too.
+   */
+  private launchStudio(state: State, runId: string): string | undefined {
+    const run = R.getStudioRun(state, runId)!;
+    if (run.kind === "probe") return "Probe runs cannot start yet; they come in ORC-029 pass 4";
+    if (!this.dataDir) return "This service has no data directory for the studio";
+    const adapter = this.adapterFor(run.provider);
+    const limits = state.project.runLimits;
+    if (run.kind === "pe") {
+      try {
+        const root = studioRoot(this.dataDir, state.project.id);
+        const folder = versionDir(root, run.artifactId!, run.baseVersion!);
+        // Its temp files go in its own staging folder: the version it reads is immutable (review finding 6).
+        const tmp = join(root, run.workspace);
+        rmSync(tmp, { recursive: true, force: true });
+        mkdirSync(tmp, { recursive: true });
+        // A reproduction of the code as it is today is judged against the code: the PE reads a checkout of it (review finding 5).
+        const asIs = !!S.getArtifact(state, run.artifactId!, run.baseVersion!).provenance;
+        const checkout = asIs && this.workspaces ? this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "STUDIO", stepId: run.kind, access: "read" }) : undefined;
+        this.launched.set(runId, { provider: run.provider, access: "read", workspace: checkout, stepId: run.kind, taskId: "STUDIO", tmp });
+        adapter.start({
+          attemptId: runId,
+          taskId: "STUDIO",
+          stepId: run.kind,
+          role: "pe",
+          provider: run.provider,
+          model: run.model,
+          workspace: { path: folder, access: "read", tmp, ...(checkout ? { readRoots: [checkout.path] } : {}) },
+          studio: true,
+          environment: "isolated",
+          connections: [],
+          prompt: peEnvelope(state, run, { folder, checkout: checkout?.path }),
+          outputs: [],
+          limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
+        });
+        return undefined;
+      } catch (e) {
+        const info = this.launched.get(runId);
+        if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
+        if (info?.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
+        this.launched.delete(runId);
+        return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    }
+    let checkout: PreparedWorkspace | undefined;
+    try {
+      const staging = prepareStaging(state, run, studioRoot(this.dataDir, state.project.id));
+      if (this.workspaces) checkout = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "STUDIO", stepId: run.kind, access: "read" });
+      this.launched.set(runId, { provider: run.provider, access: "write", workspace: checkout, stepId: run.kind, taskId: "STUDIO", staging });
+      adapter.start({
+        attemptId: runId,
+        taskId: "STUDIO",
+        stepId: run.kind,
+        role: "designer",
+        provider: run.provider,
+        model: run.model,
+        workspace: { path: staging, access: "write", ...(checkout ? { readRoots: [checkout.path] } : {}) },
+        studio: true,
+        environment: "isolated",
+        connections: [],
+        prompt: designerEnvelope(state, run, { staging, checkout: checkout?.path }),
+        outputs: [],
+        limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
+      });
+      return undefined;
+    } catch (e) {
+      this.launched.delete(runId);
+      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout.path);
+      return `Could not start the studio run: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * Make the screenshots or recording of every studio version still pending, one at a time and outside any
+   * transaction; each result is queued and recorded in a later drain, under the lease. Each is started once per
+   * process: one whose result could not be recorded is not retried in a loop, and one an earlier service left
+   * pending (it stopped meanwhile) is made again here. Nothing starts while the project is paused: what waits is
+   * made once it resumes, like the studio's runs (review finding 5).
+   */
+  private startMedia(state: State) {
+    if (!this.media || !this.dataDir || state.project.hold) return;
+    const media = this.media;
+    const projectId = state.project.id;
+    let studioDir: string;
+    try {
+      studioDir = studioRoot(this.dataDir, projectId);
+    } catch (e) {
+      return this.log(`Studio screenshots and recordings: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    for (const p of S.pendingMedia(state)) {
+      const key = `${projectId}/${p.artifactId}@${p.version}/${p.kind}`;
+      if (this.mediaStarted.has(key)) continue;
+      this.mediaStarted.add(key);
+      const variants = S.getArtifact(state, p.artifactId, p.version).variants.map((v) => v.id);
+      const now = () => new Date().toISOString();
+      this.mediaChain = this.mediaChain
+        .then(async () => {
+          // Paused since it was queued behind another: it is asked for again once the project resumes.
+          if (this.store.read().state.project.hold) return void this.mediaStarted.delete(key);
+          const result = p.kind === "shots" ? await makeShots(media, studioDir, p.artifactId, p.version, now) : await makeDemo(media, studioDir, p.artifactId, p.version, variants, now);
+          this.queue.push({ type: "studio-media", attemptId: "", projectId, artifactId: p.artifactId, version: p.version, result });
+        })
+        .catch((e) => this.log(`Studio ${p.kind === "shots" ? "screenshots" : "recording"} of ${p.artifactId} v${p.version} failed: ${e instanceof Error ? e.message : String(e)}`));
+    }
+  }
+
+  /** Resolves when the studio screenshots and recordings started so far are made (their results are queued). */
+  mediaIdle(): Promise<void> {
+    return this.mediaChain;
+  }
+
+  /**
+   * Record a version's screenshots or recording, for the project it was made in. A result the domain refuses is
+   * recorded as none made, with the reason, so the version does not stay pending.
+   */
+  private applyMedia(s: State, e: MediaEvent, now: string): State {
+    if (s.project.id !== e.projectId) return s;
+    try {
+      return S.recordArtifactMedia(s, e.artifactId, e.version, e.result, now);
+    } catch (err) {
+      const why = `the result could not be recorded (${err instanceof Error ? err.message : String(err)})`;
+      this.log(`Studio media for ${e.artifactId} v${e.version}: ${why}`);
+      const a = S.getArtifact(s, e.artifactId, e.version);
+      const none: S.MediaResult = "shots" in e.result ? { shots: { status: "skipped", at: now, reason: why } } : { demo: { status: "done", at: now, variants: a.variants.map((v) => ({ variant: v.id, status: "not-recorded" as const, reason: why })) } };
+      return S.recordArtifactMedia(s, e.artifactId, e.version, none, now);
+    }
+  }
+
+  /**
+   * Read and check the studio.json a finished designer run left in its staging folder, and look up the repository
+   * files its provenance names: here, outside the store's transaction (review finding 11). Never throws.
+   */
+  private readStudioOutput(state: State, runId: string): StudioOutput {
+    const staging = this.launched.get(runId)?.staging;
+    if (!staging) return { refused: "its staging folder is not known to this service (it was started before a restart)" };
+    try {
+      return handedIn(state, runId, readStaged(staging, DESIGNER_KINDS));
+    } catch (e) {
+      return { refused: e instanceof ManifestError ? e.message : `it could not be read (${e instanceof Error ? e.message : String(e)})` };
+    }
+  }
+
+  /**
+   * A studio run's report. A result counts only from a run still running or stopping, and only when it is not stale
+   * (its round still open, its artifact not revised meanwhile): then what it handed in is imported, its version
+   * folders written before the transaction commits, and the run completes. A refused studio.json fails the run with
+   * the reason, and nothing is recorded.
+   */
+  private applyStudioEvent(s: State, e: QueueEvent, outputs: Map<string, StudioOutput>, now: string): State {
+    switch (e.type) {
+      case "started":
+        return R.reportStudioRunStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
+      case "activity":
+        return R.reportStudioRunActivity(s, e.attemptId, e.note);
+      case "stopped":
+        return R.reportStudioRunStopped(s, e.attemptId, now, { usage: e.usage });
+      case "failed":
+        return R.reportStudioRunFailed(s, e.attemptId, e.message, now, e.usage);
+      case "completed": {
+        const run = R.getStudioRun(s, e.attemptId)!;
+        if (!R.isActiveStudioRun(run)) return s;
+        const started = e.model ? R.reportStudioRunStarted(s, run.id, { actualModel: e.model }) : s;
+        const fail = (why: string) => R.reportStudioRunFailed(started, run.id, why, now, e.usage);
+        const stale = R.staleReason(started, run);
+        if (stale) return fail(`Its result is stale: ${stale}. Nothing was ${run.kind === "pe" ? "recorded" : "imported"}.`);
+        if (run.kind === "pe") {
+          // The PE's verdicts, from its final message: checked, then recorded on the version it reviewed.
+          try {
+            const r = recordPeRun(started, R.getStudioRun(started, run.id)!, readPeAnswer(e.finalText), now);
+            return R.completeStudioRun(r.state, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
+          } catch (err) {
+            return fail(`Its verdicts were refused: ${err instanceof PeAnswerError || err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        const out = outputs.get(run.id);
+        if (!out || "refused" in out) return fail(`studio.json was refused: ${out && "refused" in out ? out.refused : "it was not read"}`);
+        try {
+          const r = importDesignerRun(started, run.id, out, studioRoot(this.dataDir!, s.project.id), now);
+          // Screenshots and recordings are made after this transaction commits; the run completes without them.
+          const marked = this.media ? r.imported.reduce((acc, v) => S.startArtifactMedia(acc, v.artifactId, v.version), r.state) : r.state;
+          return R.completeStudioRun(marked, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
+        } catch (err) {
+          return fail(`studio.json was refused: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      default:
+        return s;
     }
   }
 
@@ -957,6 +1272,7 @@ export class Scheduler {
     // The service's own record of what a run was given; applied only while the run is active.
     if (e.type === "context") return M.reportRunContext(s, e.attemptId, { scope: e.scope, conventions: e.conventions, decisions: e.decisions });
     if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now, { startedAt: e.startedAt });
+    if (e.type === "studio-media") return this.applyMedia(s, e, now);
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
       case "started": {
@@ -1019,8 +1335,9 @@ export class Scheduler {
         // A reply from the fake runtime is recorded as simulated on what it changed (the focus, the change set, a draft).
         const run = s.leadRuns.find((r) => r.id === e.attemptId);
         const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
-        // The steering block, the vision draft, the decisions and any parse problem go through as found; the domain validates them.
-        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, problem: out.problem }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
+        // The steering block, the vision draft, the decisions, the studio block and any parse problem go through as found; the domain validates them.
+        // The final text goes too: the run keeps it when the answer could not be used as sent.
+        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
       }
     }
   }
@@ -1065,6 +1382,9 @@ export class Scheduler {
     this.isActive = false;
     this.killAll();
     await Promise.all(this.allRunners().map((a) => a.shutdown().catch(() => undefined)));
+    // A screenshot or recording in progress is waited for, so Chrome and VHS end with it; its result is dropped with
+    // the queue, so the version stays pending and the next service makes it again.
+    await this.mediaChain;
   }
 
   /** Forget runtime processes after the project state was replaced. */

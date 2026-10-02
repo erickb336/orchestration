@@ -345,14 +345,37 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
 function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   const project = doc.project as Record<string, unknown>;
   project.devices ??= ["desktop"];
+  // The product's domains (pass 4) came after the first format-19 builds: not chosen yet, so the lead asks.
+  project.domains ??= [];
   project.factoryStarts ??= [];
   project.changeOrders ??= "lead";
   project.budgets ??= { ...NO_BUDGETS };
   doc.studio ??= emptyStudio();
+  // Studio runs (pass 3a) came after the first format-19 builds: none were recorded before them.
+  (doc.studio as { runs?: unknown[] }).runs ??= [];
   doc.blueprint ??= emptyBlueprint();
   const blueprint = doc.blueprint as { changeOrders?: Record<string, unknown>[] };
   for (const co of (blueprint.changeOrders ??= [])) co.handler ??= project.changeOrders;
+  endPass3Reviews(doc.studio as { artifacts: Record<string, unknown>[]; verdicts: Record<string, unknown>[] });
   return doc;
+}
+
+/**
+ * Pass 3's PE passes carry `lastPass`: under the rule of the time, the pass ended review of its version (one pass, no
+ * revision), and the owner was shown the version. Pass 4's loop has no such field, so a version whose last pass asked
+ * for a change or objected would read "revising" again: hidden from the owner, its overrules ignored, and a paid
+ * designer run asked for (review finding 3). The end is recorded on the version (`reviewEnd: earlier-rule`), then the
+ * field goes. Idempotent: a document without `lastPass` is left as it is.
+ */
+function endPass3Reviews(studio: { artifacts: Record<string, unknown>[]; verdicts: Record<string, unknown>[] }) {
+  for (const v of studio.verdicts.filter((x) => x.lastPass)) {
+    const mine = studio.verdicts.filter((x) => x.artifactId === v.artifactId && x.version === v.version);
+    const last = Math.max(...mine.map((x) => x.pass as number));
+    const asked = mine.some((x) => x.pass === last && x.verdict !== "feasible");
+    const a = studio.artifacts.find((x) => x.id === v.artifactId && x.version === v.version);
+    if (a && asked && v.pass === last) a.reviewEnd ??= { reason: "earlier-rule", at: v.at };
+  }
+  for (const v of studio.verdicts) delete v.lastPass;
 }
 const SCHEMA_VERSION = 1;
 

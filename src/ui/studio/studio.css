@@ -1,0 +1,250 @@
+/* The studio (ORC-029 pass 3d, src/ui/studio): the three-column canvas of pass 1's screen 2, built for real.
+   Layout and frames only: type sizes and state colours come from the tokens (styles.css) and the kit. Every class
+   is prefixed st- so nothing collides with other screens. */
+
+/* The page may be wider than the other screens: the prototype in the centre needs the room. */
+main.st-wide { max-width: 1600px; }
+
+.st-head p { margin: var(--space-1) 0 0; max-width: 60rem; }
+
+/* ---------- the canvas: rounds and artifacts | the artifact | the lead and your feedback ---------- */
+.st-canvas {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr) 17rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  min-width: 0;
+}
+.st-col { min-width: 0; padding: var(--space-3); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); align-content: start; }
+.st-left { border-right: 1px solid var(--border); }
+.st-right { border-left: 1px solid var(--border); background: var(--surface); border-radius: 0 var(--radius) var(--radius) 0; }
+.st-col p { margin: 0; }
+.st-col h2 { margin: 0; }
+@media (max-width: 1100px) {
+  .st-canvas { grid-template-columns: 12rem minmax(0, 1fr); }
+  .st-right { grid-column: 1 / -1; border-left: none; border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }
+}
+@media (max-width: 760px) {
+  .st-canvas { grid-template-columns: minmax(0, 1fr); }
+  .st-left { border-right: none; border-bottom: 1px solid var(--border); }
+  .st-col { padding: var(--space-2); }
+}
+
+/* A small uppercase heading, as in the prototype. */
+.st-label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; margin: 0 0 var(--space-2); }
+.st-summary { margin: 0 0 var(--space-2); overflow-wrap: anywhere; }
+
+/* ---------- the left column: rounds, artifacts, runs ---------- */
+.st-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
+.st-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: none;
+  font-size: var(--fs-small);
+  font-weight: 450;
+  color: var(--muted);
+}
+.st-item:hover:not(:disabled) { background: var(--surface); color: var(--text); }
+.st-item[aria-current="true"] { background: var(--surface-2); border-color: var(--border); color: var(--text); }
+.st-item__title { min-width: 0; overflow-wrap: anywhere; }
+/* An artifact: its title on its own line, then what it is and your mark. */
+.st-item--artifact { flex-wrap: wrap; gap: var(--space-1) var(--space-2); color: var(--text); }
+.st-item--artifact .st-item__title { flex: 1 0 100%; }
+.st-item__line { color: var(--muted); font-size: var(--fs-micro); }
+
+.st-runs { list-style: none; margin: var(--space-3) 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+.st-runs li { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); justify-items: start; min-width: 0; overflow-wrap: anywhere; }
+/* A run's name ("Designer · Claude · claude-…: queued") wraps in the narrow column rather than running under the centre. */
+.st-runs .k-pill { white-space: normal; max-width: 100%; border-radius: var(--radius); }
+
+/* ---------- the centre: toolbar, stage, marks, pins ---------- */
+.st-stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); min-width: 0; }
+.st-toolbar, .st-markbar { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; min-width: 0; }
+.st-toolbar__grp { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; min-width: 0; }
+.st-title { font-size: var(--fs-h3); margin: 0; }
+.st-hint { margin: 0; color: var(--st-you); }
+/* An "as is" artifact: a reproduction of the code as it is today, with the repository files it came from. */
+.st-asis { display: grid; gap: var(--space-1); padding: var(--space-2) var(--space-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); min-width: 0; }
+.st-asis p { margin: 0; }
+.st-asis__files { margin: 0; padding-left: 1.1rem; display: grid; gap: 2px; font-size: var(--fs-small); overflow-wrap: anywhere; }
+
+.st-stage {
+  position: relative;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+}
+.st-stage--pinning { border-color: var(--st-you); box-shadow: 0 0 0 1px var(--st-you); }
+.st-stage--terminal { justify-items: stretch; }
+@media (max-width: 760px) { .st-stage { padding: var(--space-2); } }
+
+/* Content of a fixed size scaled down to the room it has (ScaledBox). */
+.st-fit { width: 100%; min-width: 0; display: flex; justify-content: center; }
+.st-fit__box { overflow: hidden; flex: none; }
+.st-fit__inner { transform-origin: 0 0; }
+
+/* The device frames. The page area is white, as a browser's is, until the prototype paints its own. */
+.st-browser { width: 100%; height: 100%; display: grid; grid-template-rows: 32px minmax(0, 1fr); border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px var(--border-strong); }
+.st-browser__bar { display: flex; gap: 6px; align-items: center; padding: 0 12px; background: var(--surface-2); color: var(--muted); font-size: var(--fs-small); }
+.st-browser__bar i { width: 10px; height: 10px; border-radius: 99px; background: var(--border-strong); }
+.st-browser__url { margin-left: 10px; padding: 2px 10px; border-radius: 6px; background: var(--bg); min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.st-phone { width: 100%; height: 100%; padding: 12px; border-radius: 52px; background: var(--surface-2); box-shadow: 0 0 0 1px var(--border-strong); }
+.st-phone .st-viewport { border-radius: 40px; }
+.st-viewport { position: relative; width: 100%; height: 100%; overflow: hidden; background: white; }
+.st-viewport__frame { display: block; width: 100%; height: 100%; border: 0; }
+
+/* Pins: numbered markers in the attention colour, over the frame (never catching clicks) and in the list. */
+.st-pins { position: absolute; inset: 0; pointer-events: none; }
+.st-pin {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  margin: -24px 0 0 -12px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px 99px 99px 0;
+  transform: rotate(-45deg);
+  background: var(--st-you);
+  color: var(--bg);
+  font-size: var(--fs-micro);
+  font-weight: 750;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.st-pin > span { transform: rotate(45deg); }
+.st-pin--static { position: static; margin: 0; flex: none; transform: none; border-radius: 99px; }
+.st-pinlist { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.st-pinrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-2); align-items: start; }
+.st-pinrow__main { display: grid; gap: var(--space-1); min-width: 0; }
+.st-pinrow .k-field { margin: 0; }
+.st-selector { overflow-wrap: anywhere; }
+@media (max-width: 480px) { .st-pinrow { grid-template-columns: auto minmax(0, 1fr); } .st-pinrow > .k-btn { grid-column: 2; justify-self: start; } }
+
+/* Your mark: the pressed one in its state's colour. */
+.st-mark[aria-pressed="true"] { font-weight: 650; }
+.st-mark--keep[aria-pressed="true"] { background: var(--st-done-bg); border-color: var(--st-done); color: var(--st-done); }
+.st-mark--change[aria-pressed="true"] { background: var(--st-you-bg); border-color: var(--st-you); color: var(--st-you); }
+.st-mark--drop[aria-pressed="true"] { background: var(--st-fail-bg); border-color: var(--st-fail); color: var(--st-fail); }
+.st-markbar .k-btn[aria-pressed="true"]:not(.st-mark) { border-color: var(--text); background: var(--surface-2); }
+
+/* A plain frame for a file shown as it is, and a screenshot. */
+.st-plain { width: 100%; height: 40rem; max-height: 70vh; border-radius: var(--radius-control); overflow: hidden; background: white; }
+.st-plain__frame { display: block; width: 100%; height: 100%; border: 0; }
+.st-shot { display: grid; gap: var(--space-2); justify-items: center; width: 100%; }
+.st-shot img { max-width: 100%; height: auto; border-radius: var(--radius-control); box-shadow: 0 0 0 1px var(--border-strong); }
+
+/* ---------- terminal windows ---------- */
+.st-term { margin: 0; max-width: 100%; justify-self: center; border-radius: 10px; overflow: hidden; background: var(--bg); box-shadow: 0 0 0 1px var(--border-strong); }
+.st-term__bar { display: flex; gap: 6px; align-items: center; padding: 7px 10px; background: var(--surface-2); color: var(--muted); font-size: var(--fs-micro); }
+.st-term__bar i { width: 10px; height: 10px; border-radius: 99px; background: var(--border-strong); flex: none; }
+.st-term__bar span { margin-left: 6px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.st-term__screen { overflow-x: auto; max-width: 100%; }
+.st-term__text {
+  margin: 0;
+  padding: 10px 12px;
+  box-sizing: content-box;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-small);
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre;
+}
+.st-term__media { display: block; max-width: 100%; height: auto; }
+
+/* Terminal colours, from the state tokens (and mixes of them for magenta and cyan). */
+.st-term { --t-black: var(--border-strong); --t-red: var(--st-fail); --t-green: var(--st-done); --t-yellow: var(--st-you); --t-blue: var(--st-work); --t-magenta: color-mix(in srgb, var(--st-fail) 55%, var(--st-work)); --t-cyan: color-mix(in srgb, var(--st-work) 50%, var(--st-done)); --t-white: var(--text); }
+.st-a-fg-black { color: var(--t-black); } .st-a-fg-red { color: var(--t-red); } .st-a-fg-green { color: var(--t-green); } .st-a-fg-yellow { color: var(--t-yellow); }
+.st-a-fg-blue { color: var(--t-blue); } .st-a-fg-magenta { color: var(--t-magenta); } .st-a-fg-cyan { color: var(--t-cyan); } .st-a-fg-white { color: var(--t-white); }
+.st-a-fg-bg { color: var(--bg); }
+.st-a-bright { filter: brightness(1.2); }
+.st-a-bg-black { background: var(--t-black); } .st-a-bg-red { background: color-mix(in srgb, var(--t-red) 35%, var(--bg)); } .st-a-bg-green { background: color-mix(in srgb, var(--t-green) 35%, var(--bg)); }
+.st-a-bg-yellow { background: color-mix(in srgb, var(--t-yellow) 35%, var(--bg)); } .st-a-bg-blue { background: color-mix(in srgb, var(--t-blue) 35%, var(--bg)); }
+.st-a-bg-magenta { background: color-mix(in srgb, var(--t-magenta) 35%, var(--bg)); } .st-a-bg-cyan { background: color-mix(in srgb, var(--t-cyan) 35%, var(--bg)); }
+.st-a-bg-white { background: var(--t-white); } .st-a-bg-fg { background: var(--text); }
+.st-a-bold { font-weight: 700; } .st-a-dim { opacity: 0.65; } .st-a-italic { font-style: italic; } .st-a-underline { text-decoration: underline; }
+
+/* ---------- the right column ---------- */
+/* The lead's message for the round, its paragraphs as written; then its questions, each with suggested answers. */
+.st-leadmsg { font-size: var(--fs-meta); white-space: pre-line; overflow-wrap: anywhere; }
+.st-questions { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-3); }
+/* A list item keeps its number, so its parts are spaced by margins rather than laid out as a grid. */
+.st-question { min-width: 0; overflow-wrap: anywhere; }
+.st-question > * + * { margin-top: var(--space-1); }
+.st-chips { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.st-chips .k-btn[aria-pressed="true"] { border-color: var(--text); background: var(--surface-2); }
+/* The kinds of product (the studio's prompt): a chosen kind has a check; the only chosen one cannot be cleared, and still shows as chosen. */
+.st-kinds .k-btn[aria-pressed="true"]::before { content: "✓"; margin-right: 0.35em; }
+.st-kinds .k-btn[aria-pressed="true"][aria-disabled="true"] { opacity: 1; cursor: default; }
+.st-sum { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); font-size: var(--fs-small); overflow-wrap: anywhere; }
+/* PE review: one verdict per variant, each with its reasons, its change and its budget effect. */
+.st-verdicts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.st-verdict { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; padding-top: var(--space-2); border-top: 1px solid var(--border); }
+.st-right .k-field { margin: 0; }
+/* An artifact's versions, oldest first: each with the PE's pass on it; the one shown is marked, as in the left column. */
+.st-version { flex-direction: column; align-items: stretch; gap: var(--space-1); color: var(--text); }
+.st-version__head { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); align-items: center; }
+.st-version__text { color: var(--muted); font-size: var(--fs-micro); overflow-wrap: anywhere; }
+
+/* ---------- documents: interfaces, algorithms, topologies, contracts and flows (pass 4a) ---------- */
+.st-stage--doc { justify-items: stretch; }
+.st-doc { display: grid; gap: var(--space-5); min-width: 0; width: 100%; max-width: 48rem; justify-self: center; }
+.st-doc__file { display: grid; gap: var(--space-2); min-width: 0; }
+.st-doc__path { margin: 0; font-family: ui-monospace, "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
+.st-doc__md { min-width: 0; overflow-wrap: anywhere; font-size: var(--fs-body); line-height: 1.6; }
+.st-doc__md > :first-child { margin-top: 0; }
+.st-doc__md p, .st-doc__md ul, .st-doc__md ol, .st-doc__md blockquote, .st-doc__md hr { margin: 0 0 var(--space-3); }
+.st-doc__md ul, .st-doc__md ol { padding-left: 1.4rem; }
+.st-doc__md li + li { margin-top: var(--space-1); }
+.st-doc__md blockquote { padding-left: var(--space-3); border-left: 3px solid var(--border-strong); color: var(--muted); }
+.st-doc__md hr { border: 0; border-top: 1px solid var(--border); }
+.st-doc__md :not(pre) > code { padding: 0.1em 0.35em; border-radius: 4px; background: var(--surface-2); }
+.st-doc__h { margin: var(--space-5) 0 var(--space-2); line-height: 1.3; }
+h3.st-doc__h { font-size: var(--fs-h2); }
+h4.st-doc__h { font-size: var(--fs-h3); }
+h5.st-doc__h { font-size: var(--fs-body); }
+h6.st-doc__h { font-size: var(--fs-meta); color: var(--muted); }
+.st-doc__link { text-decoration: underline dotted; }
+.st-doc__img { max-width: 100%; height: auto; border-radius: var(--radius-control); }
+/* Code blocks: monospaced, as written, scrolling on their own rather than widening the page. */
+.st-doc__code {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow-x: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: var(--fs-small);
+  line-height: 1.5;
+  white-space: pre;
+}
+.st-doc__code code { font-size: inherit; }
+/* Tables: real tables, in a box that scrolls sideways on a narrow screen. */
+.st-doc__table { margin: 0 0 var(--space-3); overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-control); }
+.st-doc__table table { width: auto; min-width: 100%; }
+.st-doc__table th { background: var(--surface-2); }
+/* Words in a cell wrap only between words; a table wider than the screen scrolls in its box. */
+.st-doc__table th, .st-doc__table td { overflow-wrap: normal; }
+.st-doc__table tr:last-child td { border-bottom: none; }
+/* A Mermaid diagram: the drawing as an image, its source folded under it. */
+.st-doc__diagram { margin: 0 0 var(--space-3); padding: var(--space-3); display: grid; gap: var(--space-2); min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-control); }
+/* A diagram shrinks to fit, down to 60% of its size (MermaidDiagram sets that floor); a wider one scrolls sideways in its box instead of becoming unreadable. */
+.st-doc__drawing { overflow-x: auto; min-width: 0; }
+.st-doc__drawing img { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+.st-doc__source { justify-self: stretch; min-width: 0; }
+.st-doc__source summary { cursor: pointer; }
+.st-doc__source .st-doc__code { margin: var(--space-2) 0 0; }
+/* The frame Mermaid draws in (diagrams.ts): laid out, so Mermaid can measure text, but off the screen and never shown. */
+.st-diagram-frame { position: fixed; left: -10000px; top: 0; width: 1200px; height: 900px; border: 0; visibility: hidden; pointer-events: none; }

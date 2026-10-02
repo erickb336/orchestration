@@ -1,14 +1,16 @@
 // What a completed lead run returns. Proposals are validated here and become tasks; steering, vision
-// drafts, coverage and questions are validated by their own modules.
+// drafts, coverage, questions and the studio block (rounds, designer runs and the round's questions, in Vision)
+// are validated by their own modules.
 
 import * as F from "../findings";
 import { childDefault, effectiveDefault, eligibleIds, findFlow, flowRef } from "../flows";
 import { newWorkReview, PE_REVIEW_HOLD } from "../peReview";
 import { instantiate, toDef } from "../pipeline";
-import { type SpecOption, type SteeringChangeSet, type LeadQuestion, type SpecContent, type State, type VisionDraft } from "../types";
+import { type SpecOption, type SteeringChangeSet, type LeadQuestion, type LeadRun, type SpecContent, type State, type VisionDraft } from "../types";
 import { currentSpec, draft, event, nextId } from "./core";
 import { deferredLeadRoots, getLeadRun, openLeadProposals } from "./lead";
 import { type RunReport } from "./runs";
+import { applyStudioBlock, setRoundLead, type StudioBlockResult } from "../studio/lead";
 import { draftFromRun, validateCoverage, validateQuestions, validateVisionDraft } from "./shaping";
 import { steerFromRun, supersedeSuggestions } from "./steering";
 
@@ -46,8 +48,49 @@ interface LeadOutput {
   questions?: unknown;
   /** The lead's decisions on findings routed to it, as found (untrusted; validated in the findings module). */
   decisions?: unknown;
-  /** Why the output could not be read (no JSON block): recorded on the run and shown under the reply. */
-  problem?: string;
+  /** The lead's studio block in Vision, as found (untrusted; validated in src/domain/studio/lead.ts). */
+  studio?: unknown;
+  /** Why the answer could not be used as sent: recorded on the run and shown under the reply. */
+  problem?: LeadReplyProblem;
+  /** The final text as the runtime returned it: kept on the run only with a problem (keepRawAnswer). */
+  answerText?: string;
+}
+
+/** The most of a lead's final text a run keeps, in characters (about 64 KB). */
+export const MAX_RAW_ANSWER = 65_536;
+/** How many lead runs keep their final text: the newest ones, so the state (rewritten on every change) stays small. */
+export const MAX_RAW_ANSWERS = 5;
+
+/** Keep the run's final text for diagnosis, capped, and drop it from the older runs past the limit. Mutates a draft. */
+function keepRawAnswer(s: State, r: LeadRun, text: string) {
+  r.rawAnswer = text.length > MAX_RAW_ANSWER ? { text: text.slice(0, MAX_RAW_ANSWER), truncated: true } : { text };
+  const keeping = s.leadRuns.filter((x) => x.rawAnswer);
+  for (const old of keeping.slice(0, Math.max(0, keeping.length - MAX_RAW_ANSWERS))) delete old.rawAnswer;
+}
+
+/** Why the lead's answer could not be used as sent (parseLeadOutput, server/envelope.ts). */
+export type LeadReplyProblem =
+  /** No JSON at all: the message is a reply without proposals. */
+  | { kind: "no-json" }
+  /** JSON that does not parse. `where`: the parser's reason and the line and column. */
+  | { kind: "unparsed"; where: string }
+  /** JSON that parses to something other than an object. */
+  | { kind: "not-object" }
+  /** An object that does not match the output schema. `where`: the first mismatches. Its parts still go to the checks below. */
+  | { kind: "schema"; where: string };
+
+/** The note for a problem, the same on the run and under the reply: what failed, where, and what the service did. */
+export function leadReplyNote(p: LeadReplyProblem): string {
+  switch (p.kind) {
+    case "no-json":
+      return "The reply had no JSON block, so nothing was changed.";
+    case "unparsed":
+      return `The reply's JSON did not parse (${p.where}), so nothing was changed.`;
+    case "not-object":
+      return "The reply's JSON was not an object, so nothing was changed.";
+    case "schema":
+      return `The reply's JSON did not match the output schema (${p.where}). The service checked each part on its own.`;
+  }
 }
 
 /** How long a dropped title stays off limits to planning. */
@@ -89,7 +132,7 @@ export function validateProposal(s: State, p: LeadProposal, now?: string, who: "
 
 /** Apply a completed lead run: its reply, and each valid proposal as a new lead-authored task. */
 export function completeLeadRun(state: State, runId: string, out: LeadOutput, now: string, run: RunReport = {}): State {
-  const s = draft(state);
+  let s = draft(state);
   const r = getLeadRun(s, runId);
   if (!r || (r.outcome !== "running" && r.outcome !== "stopping")) return s;
   if (r.outcome === "stopping") {
@@ -105,8 +148,9 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   if (run.actualModel) r.actualModel = run.actualModel;
   const rejected: string[] = [];
   if (out.problem) {
-    r.note = out.problem;
-    rejected.push("The reply had no machine-readable block, so nothing was changed.");
+    r.note = leadReplyNote(out.problem);
+    rejected.push(r.note);
+    if (out.answerText !== undefined) keepRawAnswer(s, r, out.answerText);
   }
   // Steering, before the proposals so they are created under the new focus and after the
   // deferrals and drops that make room. Two guards make it apply once: the run-outcome guard above and
@@ -188,16 +232,22 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   if (r.messageIds.length) supersedeSuggestions(s, set, now);
   const applied = set?.changes.filter((c) => c.status === "applied").length ?? 0;
   const suggested = set?.changes.filter((c) => c.status === "suggested").length ?? 0;
-  s.conversation.push({
-    id: nextId(s, "msg"),
-    at: now,
-    author: "lead",
-    text:
-      out.reply.trim() ||
-      (visionDraft
-        ? "I drafted the vision; see below."
-        : questions.length
-          ? "I have a few questions; see below."
+  // The studio block, last: it opens and closes rounds and asks for designer runs through the studio's own rules,
+  // which return a new state (the run record above is final by now). It approves nothing and starts nothing.
+  let studio: StudioBlockResult | undefined;
+  if (out.studio !== undefined && out.studio !== null) {
+    studio = applyStudioBlock(s, r, out.studio, now);
+    s = studio.state;
+    rejected.push(...studio.notes.map((n) => `Studio: ${n}`));
+  }
+  const text =
+    out.reply.trim() ||
+    (visionDraft
+      ? "I drafted the vision; see below."
+      : questions.length || studio?.questions.length
+        ? "I have a few questions; see below."
+        : studio?.runs.length
+          ? "I asked the designer for this round; see the studio."
           : applied
             ? "I made the changes listed below."
             : suggested
@@ -206,7 +256,14 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
                 ? "I went through the findings that were waiting for me; see below."
                 : created.length
                   ? "I proposed new work; see the linked tasks."
-                  : "No reply."),
+                  : "No reply.");
+  // The round the block addressed shows this reply and its questions beside its artifacts.
+  if (studio?.round !== undefined) setRoundLead(s, studio.round, text, studio.questions);
+  s.conversation.push({
+    id: nextId(s, "msg"),
+    at: now,
+    author: "lead",
+    text,
     leadRunId: r.id,
     ...(created.length ? { proposedTaskIds: created } : {}),
     ...(rejected.length ? { rejected } : {}),

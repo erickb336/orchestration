@@ -6,7 +6,7 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
 import { lastObjection, PE_REVIEW_HOLD, peReviewHold } from "./peReview";
-import { budgetStop, buildingSpend, fmtUsd, type Spend, type UnknownCost } from "./spend";
+import { budgetStop, buildingSpend, type UnknownCost } from "./spend";
 import { blueprintItems, openChangeOrders } from "./studio/blueprint";
 import type { ChangeOrder } from "./studio/types";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task } from "./types";
@@ -102,8 +102,8 @@ const mergeAsked = (pr: PrDelivery) => pr.mergeRequested?.headSha === pr.headSha
 export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[] {
   const items: NeedsYouEntry[] = [];
   const stop = budgetStop(state);
-  if (stop) items.push({ kind: "open", key: "budget", what: `The building budget is reached: ${fmtUsd(stop.spend.usd)} of ${fmtUsd(stop.budgetUsd)}`, detail: budgetDetail(stop.spend), action: "Settings", href: "#/settings/project" });
-  // Apart from the stop: while a building budget is set, a run it cannot count is the owner's to know about.
+  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(), action: "Settings", href: "#/settings/project" });
+  // Apart from the stop: while a building budget is set, a run with no recorded cost is the owner's to know about.
   const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
   if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project" });
   // You asked to see change orders before the lead updates tasks. The Tasks page lists the affected tasks until the blueprint has its own page (ORC-029 pass 6).
@@ -152,17 +152,15 @@ function changeOrderDetail(state: State, co: ChangeOrder): string {
   return `You changed the blueprint: ${titles.join(", ")}. ${touches} You asked to look before the lead updates tasks.`;
 }
 
-/** What the budget stop means, and how many runs are not in the total (their own item names them). */
-function budgetDetail(spend: Spend): string {
-  const n = spend.unknown.length;
-  const unknown = n ? ` ${n} run${n === 1 ? "" : "s"} with no recorded cost ${n === 1 ? "is" : "are"} not in the total.` : "";
-  return `Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.${unknown}`;
+/** What the budget stop means (the runs with no recorded cost have their own item). */
+function budgetDetail(): string {
+  return "Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.";
 }
 
 /** "a", "a and b", "a, b and c". */
 const listed = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
 
-/** "3 runs have no recorded cost (model gpt-x has no price; no usage was recorded for 1), so the building budget cannot count them". */
+/** "3 runs have no recorded cost (model gpt-x has no price; no usage was recorded for 1)". */
 function unknownCostLine(unknown: UnknownCost[]): string {
   const n = unknown.length;
   const models = [...new Set(unknown.filter((u) => u.reason === "no-price").map((u) => u.model))];
@@ -171,13 +169,13 @@ function unknownCostLine(unknown: UnknownCost[]): string {
     ...(models.length ? [`${models.length === 1 ? "model" : "models"} ${listed(models)} ${models.length === 1 ? "has" : "have"} no price`] : []),
     ...(noUsage ? [noUsage === n ? "no usage was recorded" : `no usage was recorded for ${noUsage}`] : []),
   ].join("; ");
-  return `${n} run${n === 1 ? " has" : "s have"} no recorded cost (${why}), so the building budget cannot count ${n === 1 ? "it" : "them"}`;
+  return `${n} run${n === 1 ? " has" : "s have"} no recorded cost (${why})`;
 }
 
-/** What it means for the stop, and the runs (the first five are named). */
+/** What it means for the stop (spend.ts, `budgetStop`), and the runs (the first five are named). */
 function unknownCostDetail(unknown: UnknownCost[]): string {
   const named = unknown.slice(0, 5).map((u) => `${u.runId} (${u.provider} · ${u.model}, ${u.reason === "no-price" ? "no price" : "no usage recorded"})`);
-  return `The budget's stop counts only runs with a recorded cost, so it can come late. Not counted: ${named.join(", ")}${unknown.length > 5 ? ` and ${unknown.length - 5} more` : ""}.`;
+  return `The budget's stop counts each at its run limit, the most it could cost; one with no spend limit (Codex has none) stops new work until you raise the budget or continue past it. Runs: ${named.join(", ")}${unknown.length > 5 ? ` and ${unknown.length - 5} more` : ""}.`;
 }
 
 /** The two options as one line: "A, Guest link · B, One-time code". */

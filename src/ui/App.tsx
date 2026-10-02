@@ -1,5 +1,5 @@
-// The shell: the demo bar with its Simulation menu, the header with Home · Tasks ·
-// Results · Settings, the live indicator, "Message the lead" (the one primary action) and the Project menu
+// The shell: the demo bar with its Simulation menu, the header with Home · Vision · Tasks · Results · Settings, the
+// live indicator, "Message the lead" (the one primary action) and the Project menu
 // that pauses and resumes. The lead drawer opens from the header on every page. The kit's ConfirmProvider
 // and ToastRegion are mounted once here, so every screen can confirm in page and show one toast.
 
@@ -21,12 +21,19 @@ import { parseRoute } from "./route";
 import { ShapingBanner } from "./Shaping";
 import { SIM_MENU_BUTTON_ID, TourButton, useFirstRunTour } from "./Tour";
 import { Gallery } from "./kit/Gallery";
+import { Studio } from "./studio/Studio";
+import { waitingForYourMark } from "./studio/studioView";
 import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm } from "./kit";
 import { cx } from "./kit/cx";
 
-/** The tabs: the page each one opens, its label and its address. Home keeps `overview` and Results keeps `review` as internal names. Activity is reached from Tasks. */
+/**
+ * The tabs: the page each one opens, its label and its address. Home keeps `overview` and Results keeps `review` as
+ * internal names. Activity is reached from Tasks. Vision (ORC-029 r12) is always here, in Vision and in Factory:
+ * opening it is navigation only, and never stops or changes the factory.
+ */
 export const TABS = [
   { page: "overview", label: "Home", href: "#/overview" },
+  { page: "vision", label: "Vision", href: "#/vision" },
   { page: "tasks", label: "Tasks", href: "#/tasks", tour: "tab-tasks" },
   { page: "review", label: "Results", href: "#/results", tour: "tab-results" },
   { page: "settings", label: "Settings", href: "#/settings" },
@@ -94,6 +101,7 @@ function Gate() {
 function Shell() {
   const route = useRoute();
   const { notice, setNotice, service } = useStore();
+  // A task page belongs to Tasks.
   const tab = route.page === "task" ? "tasks" : route.page;
   const demo = service.runtime === "fake";
   useBrowserNotifications();
@@ -134,6 +142,7 @@ function Shell() {
             <a key={t.page} href={t.href} aria-current={tab === t.page ? "page" : undefined} data-tour={"tour" in t ? t.tour : undefined}>
               {t.label}
               {t.page === "review" && <ResultsBadge />}
+              {t.page === "vision" && <VisionBadge />}
             </a>
           ))}
         </nav>
@@ -143,13 +152,13 @@ function Shell() {
           <ProjectMenu />
         </div>
       </header>
-      {/* There is no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel and the board its own banner. */}
-      {route.page !== "tasks" && route.page !== "overview" && (
+      {/* There is no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel, the board its own banner, and the studio is Vision itself. */}
+      {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && (
         <div className="shell-banner">
           <ShapingBanner />
         </div>
       )}
-      <main className={leadOpen ? "with-lead" : undefined}>
+      <main className={cx(leadOpen && "with-lead", route.page === "vision" && "st-wide") || undefined}>
         {route.page === "overview" && <Overview />}
         {route.page === "tasks" && <Board />}
         {route.page === "task" && <TaskDetail key={route.id} id={route.id} />}
@@ -157,6 +166,7 @@ function Shell() {
         {route.page === "activity" && <Activity />}
         {route.page === "settings" && <Settings />}
         {route.page === "kit" && <Gallery />}
+        {route.page === "vision" && <Studio />}
       </main>
       {leadOpen && <LeadDrawer onClose={closeLead} />}
       <ToastRegion toast={notice ? { tone: notice.kind === "error" ? "fail" : "neutral", onDismiss: () => setNotice(null), children: notice.message } : null} />
@@ -241,6 +251,19 @@ export function ResultsBadge() {
   const n = prsNeedingYou(state).length;
   if (n === 0) return null;
   const text = `${n} pull request${n === 1 ? "" : "s"} waiting for you`;
+  return (
+    <span className="badge-new tab-badge" title={text} aria-label={text}>
+      {n}
+    </span>
+  );
+}
+
+/** The Vision badge counts the artifacts the PE has passed to you that you have not marked yet. Persistent, like Results'. */
+export function VisionBadge() {
+  const { state } = useStore();
+  const n = waitingForYourMark(state).length;
+  if (n === 0) return null;
+  const text = `${n} artifact${n === 1 ? "" : "s"} waiting for your mark`;
   return (
     <span className="badge-new tab-badge" title={text} aria-label={text}>
       {n}

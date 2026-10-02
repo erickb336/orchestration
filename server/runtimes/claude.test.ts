@@ -335,6 +335,21 @@ describe("ClaudeAdapter", () => {
     expect(inputs).toHaveLength(1); // nothing but the envelope was streamed
   });
 
+  it("never saves a session or a memory to the user's own Claude history, for every kind of run", async () => {
+    const { adapter, calls } = setup();
+    const kinds: Partial<Assignment>[] = [
+      { attemptId: "coder" },
+      { attemptId: "lead", role: "lead", workspace: { path: ws, access: "read" }, outputSchema: { type: "object" } },
+      { attemptId: "studio", role: "designer", studio: true },
+      { attemptId: "local", environment: "local" },
+    ];
+    for (const k of kinds) adapter.start(assignment(k));
+    await waitFor(() => calls.length === kinds.length);
+    expect(calls.map((c) => c.options.persistSession)).toEqual([false, false, false, false]);
+    expect(calls.map((c) => c.options.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY)).toEqual(["1", "1", "1", "1"]);
+    for (const k of kinds) adapter.kill(k.attemptId!);
+  });
+
   it("falls back to the last assistant text when the result text is empty", async () => {
     const { adapter, events, stream, calls } = setup();
     adapter.start(assignment());
@@ -344,6 +359,48 @@ describe("ClaudeAdapter", () => {
     stream.end();
     await waitFor(() => terminals(events).length === 1);
     expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: "Part A \npart B" });
+  });
+
+  describe("an output schema (ORC-029 pass 4: the lead's reply)", () => {
+    const schema = { type: "object", properties: { reply: { type: "string" } }, required: ["reply"], additionalProperties: false };
+
+    it("is passed as outputFormat, the SDK's StructuredOutput tool is allowed, and the structured result is the final text as JSON", async () => {
+      const { adapter, events, stream, calls } = setup();
+      adapter.start(assignment({ outputSchema: schema }, "read"));
+      await waitFor(() => calls.length === 1);
+      const opts = calls[0].options;
+      expect(opts.outputFormat).toEqual({ type: "json_schema", schema });
+      const signal = new AbortController().signal;
+      expect((await opts.canUseTool!("StructuredOutput", { reply: "Hi." }, { signal } as never))?.behavior).toBe("allow");
+      // The model's prose around the tool call is not the answer.
+      stream.push(init(), assistant([{ type: "text", text: "Let me answer through the tool." }]), result("success", { result: "", structured_output: { reply: "Hi." } }));
+      stream.end();
+      await waitFor(() => terminals(events).length === 1);
+      expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: '{"reply":"Hi."}' });
+    });
+
+    it("without a schema: no outputFormat, StructuredOutput is refused, and a stray structured result is ignored", async () => {
+      const { adapter, events, stream, calls } = setup();
+      adapter.start(assignment({}, "read"));
+      await waitFor(() => calls.length === 1);
+      const opts = calls[0].options;
+      expect(opts.outputFormat).toBeUndefined();
+      expect((await opts.canUseTool!("StructuredOutput", { reply: "Hi." }, { signal: new AbortController().signal } as never))?.behavior).toBe("deny");
+      stream.push(init(), result("success", { structured_output: { reply: "Hi." } }));
+      stream.end();
+      await waitFor(() => terminals(events).length === 1);
+      expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: "Done.\n```json\n{}\n```" });
+    });
+
+    it("a runtime that returns no structured result: the last message is the answer, for the service to read as before", async () => {
+      const { adapter, events, stream, calls } = setup();
+      adapter.start(assignment({ outputSchema: schema }, "read"));
+      await waitFor(() => calls.length === 1);
+      stream.push(init(), result("success"));
+      stream.end();
+      await waitFor(() => terminals(events).length === 1);
+      expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: "Done.\n```json\n{}\n```" });
+    });
   });
 
   it("starting the same id twice is a no-op", async () => {
@@ -538,6 +595,7 @@ describe("ClaudeAdapter", () => {
       ["error_max_turns", /turn limit \(7 turns\)/],
       ["error_max_budget_usd", /spend limit \(\$0\.5\)/],
       ["error_during_execution", /failed during execution: boom/],
+      ["error_max_structured_output_retries", /its answer did not match the output schema after the SDK's retries \(boom\)/],
     ])("%s → failed", async (subtype, pattern) => {
       const { adapter, events, stream, calls } = setup();
       adapter.start(assignment());
@@ -1019,5 +1077,55 @@ describe("worker environment and connections", () => {
     ]);
     const none = setup({ claudeConfigPath: path.join(tmpdir(), "does-not-exist", ".claude.json") });
     expect(await none.adapter.listConnections()).toEqual([]);
+  });
+});
+
+describe("studio runs (ORC-029 pass 3a)", () => {
+  let repo: string;
+  beforeEach(() => {
+    repo = mkdtempSync(path.join(tmpdir(), "claude-adapter-repo-"));
+    writeFileSync(path.join(repo, "README.md"), "The product.\n");
+    symlinkSync(outside, path.join(repo, "linked"));
+  });
+  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+
+  const configWith = (servers: Record<string, unknown>) => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), "claude-cfg-")), ".claude.json");
+    writeFileSync(file, JSON.stringify({ mcpServers: servers }));
+    return file;
+  };
+  const sig = { signal: new AbortController().signal } as never;
+
+  it("have no Artifact tool, no shell, no settings and no connections, even with the shell on and an assignment that says local", async () => {
+    const { adapter, calls } = setup({ allowShell: true, claudeConfigPath: configWith({ cloudflare: { type: "stdio", command: "cf-mcp", args: [] } }) });
+    adapter.start(assignment({ studio: true, role: "designer", environment: "local", connections: ["cloudflare"] }));
+    await waitFor(() => calls.length === 1);
+    const opts = calls[0].options;
+    expect(opts.tools).toEqual(["Read", "Glob", "Grep", "Write", "Edit"]);
+    expect(opts.disallowedTools).toEqual(expect.arrayContaining(["Bash", "Agent", "Task", "WebFetch", "WebSearch"]));
+    expect(opts.settingSources).toEqual([]);
+    expect(opts.strictMcpConfig).toBe(true);
+    expect(opts.mcpServers).toEqual({});
+    for (const tool of ["Artifact", "Bash", "mcp__cloudflare__deploy"]) expect((await opts.canUseTool!(tool, {}, sig))?.behavior, tool).toBe("deny");
+    // The same shell setting gives an ordinary writer its shell: only the studio run goes without.
+    const writer = setup({ allowShell: true });
+    writer.adapter.start(assignment());
+    await waitFor(() => writer.calls.length === 1);
+    expect(writer.calls[0].options.tools).toContain("Bash");
+  });
+
+  it("write only in their staging folder and may read the product's checkout, never write it", async () => {
+    const { adapter, calls } = setup();
+    adapter.start(assignment({ studio: true, role: "designer", workspace: { path: ws, access: "write", readRoots: [repo] } }));
+    await waitFor(() => calls.length === 1);
+    const use = async (tool: string, input: Record<string, unknown>) => (await calls[0].options.canUseTool!(tool, input, sig))?.behavior;
+    expect(await use("Write", { file_path: path.join(ws, "a", "index.html"), content: "<p>" })).toBe("allow");
+    expect(await use("Read", { file_path: path.join(repo, "README.md") })).toBe("allow");
+    expect(await use("Grep", { pattern: "product", path: repo })).toBe("allow");
+    expect(await use("Write", { file_path: path.join(repo, "README.md"), content: "x" })).toBe("deny");
+    expect(await use("Edit", { file_path: path.join(repo, "README.md"), old_string: "The", new_string: "A" })).toBe("deny");
+    // Reading out of the checkout through a link in it, or anywhere else, is not allowed.
+    expect(await use("Read", { file_path: path.join(repo, "linked", "secret.txt") })).toBe("deny");
+    expect(await use("Read", { file_path: path.join(outside, "secret.txt") })).toBe("deny");
   });
 });

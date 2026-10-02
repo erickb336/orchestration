@@ -1,4 +1,5 @@
-// Home: the three things you look at daily, then the focus. Needs you first, with the simple decisions taken in
+// Home: the three things you look at daily, then the focus. While in Vision, the shaping panel leads (the studio is
+// Vision, in the main navigation). Needs you first, with the simple decisions taken in
 // place; Progress by area beside New results and the lead's latest reply; the Focus card last, with the vision
 // text, its revisions and its documents behind "Vision and history". Usage and the service's details live in
 // Settings (Diagnostics.tsx); the lead conversation opens from the header.

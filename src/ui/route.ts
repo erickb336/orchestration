@@ -1,8 +1,10 @@
 // The hash routes, as pure functions so they can be tested without React. `#/results` is the Results page
-// (the tab used to be called Review); `#/review` still opens it. A query after the page name (`#/overview?history=1`,
-// `#/tasks?area=Maps`) never changes which page opens; the page reads it.
+// (the tab used to be called Review); `#/review` still opens it. `#/vision` is Vision, the studio, in the main
+// navigation (ORC-029 r12). A
+// query after the page name (`#/overview?history=1`, `#/tasks?area=Maps`) never changes which page opens; the page
+// reads it.
 
-export type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" | "kit" } | { page: "task"; id: string };
+export type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" | "kit" | "vision" } | { page: "task"; id: string };
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/");
@@ -11,6 +13,8 @@ export function parseRoute(hash: string): Route {
   if (page === "results" || page === "review") return { page: "review" };
   // The component kit's gallery, #/kit. Not in the navigation.
   if (page === "kit") return { page: "kit" };
+  // Vision, the studio (ORC-029): a main navigation item, in Vision and in Factory.
+  if (page === "vision") return { page: "vision" };
   if (page === "overview" || page === "activity" || page === "settings") return { page };
   return { page: "tasks" };
 }

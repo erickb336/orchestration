@@ -11,7 +11,7 @@
 
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { truncate as oneLine } from "../../src/domain/text";
 import type { CatalogModel, ProviderId } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
@@ -40,12 +40,21 @@ const PINNED_CODEX_VERSION = "0.159.2";
  * under --strict-config), and `multi_agent` is a known feature flag (`codex features list` shows it
  * false with `--disable multi_agent`). Together they keep native subagents off.
  */
-/** A run's private temp directory: a sibling of its worktree (never inside it, so nothing is committed). */
+/**
+ * A run's private temp directory: a sibling of its worktree (never inside it, so nothing is committed). A designer's
+ * studio run's is inside its staging folder, the one place it writes; only the files its manifest lists are
+ * imported. A read-only studio run (the PE) reads an immutable artifact version, so its temp directory is the one the
+ * service gives it, outside that version; without one it does not start.
+ */
 function runTmpDir(a: Assignment): string {
-  const dir = `${a.workspace.path}.tmp`;
+  if (a.studio && a.workspace.access === "read" && !a.workspace.tmp) throw new Error("A read-only studio run needs a temp folder outside the version it reads; the service gives none.");
+  const dir = a.workspace.tmp ?? (a.studio ? join(a.workspace.path, ".tmp") : `${a.workspace.path}.tmp`);
   mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+/** Isolated from the user's own Codex setup: every run but a local one, and a studio run always (plugins such as Sites could publish). */
+const isolated = (a: Assignment) => a.environment !== "local" || a.studio === true;
 
 /**
  * Every app-server the service starts: native sub-agents off, and the repository's own
@@ -253,7 +262,7 @@ export class CodexAdapter implements RuntimeAdapter {
     let child: ChildProcess;
     try {
       // Isolation fails closed: an isolated run never starts unless the user's MCP servers are known.
-      if (a.environment !== "local" && !this.configuredMcp) throw new Error(this.isolationError);
+      if (isolated(a) && !this.configuredMcp) throw new Error(this.isolationError);
       child = this.spawnProcess(this.appServerArgs(a), false, { TMPDIR: runTmpDir(a), TMP: runTmpDir(a), TEMP: runTmpDir(a) });
     } catch (e) {
       // Keep the contract asynchronous: register, then fail on the next tick.
@@ -322,6 +331,9 @@ export class CodexAdapter implements RuntimeAdapter {
         cwd: a.workspace.path,
         approvalPolicy: "never",
         sandbox: a.workspace.access === "write" ? "workspace-write" : "read-only",
+        // Never written to ~/.codex/sessions, so no run shows up in the user's own Codex history. The adapter never
+        // resumes a thread; the run's record is the service's.
+        ephemeral: true,
       };
       const thread = await rpc.request("thread/start", threadParams);
       if (run.done) return;
@@ -332,8 +344,9 @@ export class CodexAdapter implements RuntimeAdapter {
       const sandboxPolicy: SandboxPolicy =
         a.workspace.access === "write"
           ? // Writable: the worktree and this run's private temp directory only. System temp directories
-            // are shared with other runs and the service, so they are excluded.
-            { type: "workspaceWrite", writableRoots: [a.workspace.path, runTmpDir(a)], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
+            // are shared with other runs and the service, so they are excluded. A studio run's temp directory is
+            // inside its staging folder, so the folder is its one writable root.
+            { type: "workspaceWrite", writableRoots: a.studio ? [a.workspace.path] : [a.workspace.path, runTmpDir(a)], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
           : { type: "readOnly", networkAccess: false };
       const turnParams: TurnStartParams = {
         threadId: run.threadId,
@@ -341,6 +354,8 @@ export class CodexAdapter implements RuntimeAdapter {
         cwd: a.workspace.path,
         approvalPolicy: "never",
         sandboxPolicy,
+        // The turn's final message is constrained to the schema, so it is the JSON answer itself.
+        ...(a.outputSchema ? { outputSchema: a.outputSchema as TurnStartParams["outputSchema"] } : {}),
       };
       const turn = await rpc.request("turn/start", turnParams);
       if (run.done) return;
@@ -797,8 +812,8 @@ export class CodexAdapter implements RuntimeAdapter {
    * run's allowed connections is disabled. Local: the user's own Codex setup applies.
    */
   private appServerArgs(a?: Assignment): string[] {
-    if (a?.environment === "local") return [...APP_SERVER_ARGS];
-    const allowed = new Set(a?.connections ?? []);
+    if (a && !isolated(a)) return [...APP_SERVER_ARGS];
+    const allowed = new Set(a?.studio ? [] : (a?.connections ?? []));
     const disable = (this.configuredMcp ?? []).filter((c) => c.enabled && !allowed.has(c.name)).map((c) => c.name);
     return [...APP_SERVER_ARGS, ...ISOLATION_FEATURE_ARGS, ...ISOLATION_CONFIG_ARGS, ...mcpDisableArgs(disable)];
   }

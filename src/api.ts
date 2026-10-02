@@ -23,6 +23,8 @@ export interface ServiceInfo {
   leadBlocked?: string;
   /** Real mode: whether the configured repository can host worktrees, and why not. */
   repo?: { ok: boolean; reason?: string; branch?: string };
+  /** ORC-029: the port of the prototype listener (studio artifacts at p-<artifactId>-v<n>.localhost:<port>), when it is running. */
+  prototypePort?: number;
 }
 
 interface ProviderInfo {

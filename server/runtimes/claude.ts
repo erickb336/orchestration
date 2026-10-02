@@ -134,6 +134,11 @@ const ALWAYS_DISALLOWED = ["Agent", "Task", "WebFetch", "WebSearch", "NotebookEd
 const FILE_PATH_TOOLS = new Set(["Read", "Write", "Edit"]);
 const SEARCH_TOOLS = new Set(["Glob", "Grep"]);
 const MUTATING_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
+/**
+ * The tool through which the Agent SDK takes an answer constrained to `outputFormat` (the CLI adds it to the session; a
+ * real lead run called it, 2026-10-02). It touches no file, so the guard allows it on a run with an output schema.
+ */
+const STRUCTURED_OUTPUT_TOOL = "StructuredOutput";
 
 /** Environment variables that select a cloud provider instead of an Anthropic API key. */
 const CLOUD_PROVIDER_FLAGS: Array<[string, string]> = [
@@ -194,22 +199,28 @@ function realpathNearest(p: string): string {
 /**
  * The containment guard shared by the PreToolUse hook and canUseTool. `workspace` is the worktree
  * path as given; it is resolved with realpath so symlinked parents (e.g. /tmp on macOS) compare correctly.
+ * `readRoots` are directories the run may read but never write (a studio run's checkout of the product).
  */
-export function createWorkspaceGuard(workspace: string, allowedTools: readonly string[], mcp: "any" | readonly string[] = []) {
+export function createWorkspaceGuard(workspace: string, allowedTools: readonly string[], mcp: "any" | readonly string[] = [], readRoots: readonly string[] = []) {
   const mcpAllowed = mcp === "any" ? "any" : new Set(mcp.map(normalizeServer));
-  const root = path.resolve(workspace);
-  let realRoot: string;
-  try {
-    realRoot = realpathSync.native(root);
-  } catch {
-    realRoot = root;
-  }
+  const resolved = (dir: string) => {
+    const lexical = path.resolve(dir);
+    try {
+      return { lexical, real: realpathSync.native(lexical) };
+    } catch {
+      return { lexical, real: lexical };
+    }
+  };
+  const { lexical: root, real: realRoot } = resolved(workspace);
+  const reads = readRoots.map(resolved);
   const allowed = new Set(allowedTools);
 
   const checkPath = (raw: unknown, mutating: boolean): GuardVerdict => {
     if (typeof raw !== "string" || raw.length === 0) return { ok: false, reason: "Missing path argument." };
     if (raw.includes("\0")) return { ok: false, reason: "Invalid path." };
     const lexical = path.resolve(root, raw);
+    // A read inside a read-only root, there both lexically and in its real location, is allowed; a write never is.
+    if (!mutating && reads.some((r) => (isInside(lexical, r.lexical) || isInside(lexical, r.real)) && isInside(realpathNearest(lexical), r.real))) return { ok: true };
     // Lexical check first (catches ../ escapes even when the target does not exist) ...
     if (!isInside(lexical, root) && !isInside(lexical, realRoot)) {
       return { ok: false, reason: `Path is outside this assignment's worktree: ${raw}` };
@@ -707,11 +718,14 @@ export class ClaudeAdapter implements RuntimeAdapter {
 
   private buildOptions(run: Run): Options {
     const a = run.a;
-    const local = a.environment === "local";
-    const policy = toolPolicy(a.workspace.access, this.allowShell);
+    // A studio run is isolated with no connections and no shell, whatever the assignment's environment says: the
+    // user's own setup could publish, and a shell could write outside its staging folder.
+    const studio = a.studio === true;
+    const local = a.environment === "local" && !studio;
+    const policy = toolPolicy(a.workspace.access, this.allowShell && !studio);
     // Isolated: only the allowed connections, configured from the user's own MCP definitions.
-    const selected = local ? {} : this.mcpConfigsFor(a.connections);
-    const guard = createWorkspaceGuard(a.workspace.path, policy.tools, local ? "any" : Object.keys(selected));
+    const selected = local ? {} : this.mcpConfigsFor(studio ? [] : a.connections);
+    const guard = createWorkspaceGuard(a.workspace.path, a.outputSchema ? [...policy.tools, STRUCTURED_OUTPUT_TOOL] : policy.tools, local ? "any" : Object.keys(selected), a.workspace.readRoots);
 
     const preToolUse: HookCallback = async (input) => {
       const i = input as unknown as Rec;
@@ -747,6 +761,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       // their hooks would run commands outside the workspace guard.
       ...(local ? { settingSources: ["user"] as "user"[] } : { settingSources: [], strictMcpConfig: true, mcpServers: selected }),
       systemPrompt: { type: "preset", preset: "claude_code" },
+      // Never saved to ~/.claude/projects, so no run shows up in the user's own Claude history. The adapter never
+      // resumes a session; the run's record is the service's.
+      persistSession: false,
       tools: policy.tools,
       disallowedTools: policy.disallowedTools,
       // Non-interactive: edits and out-of-cwd access prompt, and every prompt is answered by canUseTool.
@@ -758,6 +775,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       env: {
         ...claudeWorkerEnv(this.env),
         CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: "1",
+        // No auto-memory: with persistSession off, the CLI still made ~/.claude/projects/<working folder>/memory for a
+        // real run (2026-10-02). A run neither reads nor writes the user's own Claude memory.
+        CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
         CLAUDE_AGENT_SDK_CLIENT_APP: "orchestration/0.1.0",
         // The agent-kit plugin's hooks stay off: the envelope already gives each step its principles. Only a local
         // run loads the user's plugins, but every run gets it, so the rule is simple.
@@ -768,6 +788,8 @@ export class ClaudeAdapter implements RuntimeAdapter {
       },
     };
     if (a.limits.maxBudgetUsd !== undefined) options.maxBudgetUsd = a.limits.maxBudgetUsd;
+    // The answer is constrained to the schema; the result carries it as `structured_output` (handleResult).
+    if (a.outputSchema) options.outputFormat = { type: "json_schema", schema: a.outputSchema };
     return options;
   }
 
@@ -901,11 +923,13 @@ export class ClaudeAdapter implements RuntimeAdapter {
       }
       // After an interrupt, a success result marked as aborted means the stop took effect.
       if (run.interruptRequested && abortedReason) return stopped();
-      // Otherwise the turn finished (possibly racing the interrupt).
+      // Otherwise the turn finished (possibly racing the interrupt). An answer constrained to the run's schema is the
+      // result's `structured_output`, returned as JSON; without one, the last message is the answer as usual.
+      const structured = run.a.outputSchema && m.structured_output !== undefined && m.structured_output !== null ? JSON.stringify(m.structured_output) : undefined;
       const completed: AdapterEvent = {
         type: "completed",
         attemptId: id,
-        finalText: resultText.trim() !== "" ? resultText : run.lastText,
+        finalText: structured ?? (resultText.trim() !== "" ? resultText : run.lastText),
         usage,
         model: run.model ?? firstModel(m),
       };
@@ -941,6 +965,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
         message = `Claude stopped: reached the spend limit${
           run.a.limits.maxBudgetUsd !== undefined ? ` ($${run.a.limits.maxBudgetUsd})` : ""
         } before finishing.`;
+        break;
+      case "error_max_structured_output_retries":
+        message = `Claude stopped: its answer did not match the output schema after the SDK's retries${errors.length ? ` (${truncate(redact(errors.join("; ")), 300)})` : ""}.`;
         break;
       case "error_during_execution": {
         const detail = errors.join("; ") || run.stderrTail;
