@@ -143,3 +143,20 @@ The estimated Claude spend stays within what is left of the owner's $5 cap for p
 
 **Not done:** the lead's brief shows the PE's status per artifact, not the full history of verdicts.
 
+## The real trial (2026-10-02T17-41-38Z, record in `docs/real-runs/`)
+
+`npm run trial:studio -- --lead --cap-usd 3 --codex-usd 1`, with Claude on the owner's subscription and Codex on its ChatGPT sign-in. **Result: 7 of 9 checks passed.** The estimated Claude spend was $0.20. With pass 3's trial, the trials spent about $0.46 of the owner's $5.
+
+**"As it is today" worked end to end:**
+- The lead (claude-sonnet-5-5) read `index.html` and `style.css`, opened round 0 with a correct summary, and asked for one designer run.
+- The designer reproduced the Trip board on desktop and mobile, labelled "as is" with both files.
+- The PE (Codex, gpt-6.1-sol) agreed. The prototype was sandboxed, and the owner could send feedback.
+
+**The short idea failed (2 checks).** Findings:
+1. **High: one missing brace loses the lead's whole reply.** The lead wrote a good reply: a vision draft, four questions, round 1 and a designer brief. Its JSON block left the `vision` object open, so the block did not parse, and nothing was applied. **The root-cause fix:** schema-constrained output for the lead's reply. The Claude Agent SDK has `outputFormat: { type: "json_schema" }` (with retries), and Codex has `codex exec --output-schema`. A repair parser (for example `jsonrepair`) is rejected: it closes the brace in the wrong place and silently changes the structure.
+2. **Medium: the service's note is false.** It said "The reply had no machine-readable block". There was a block, and it was not valid JSON. The note must say what failed, and where.
+3. **Medium: the lead misread "domain".** In both projects it asked about a subject domain ("Travel and group planning", "Web app") instead of the product domain (screen, code, infrastructure). **The fix:** the lead proposes domains as a structured field with a reason, and the app shows a fixed domain choice with the lead's recommendation selected. A fixed choice is a control, not a free-text question.
+4. **Low (pass 4d): the lead's messages are long.** Many sentences have more than 25 words.
+
+The trial also caught a setup mistake (mine): without `ORCHESTRATION_CLAUDE_AUTH=subscription`, Claude reported "not-configured". The trial now prints each provider's reason.
+
