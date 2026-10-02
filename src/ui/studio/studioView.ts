@@ -47,12 +47,56 @@ export function standing(s: State, a: StudioArtifact): Standing {
   return { kind: "pe", text: r.status === "revising" ? `The PE objected on pass ${r.pass}; the designer revises before it reaches you.` : "Waiting for PE review. You can look at it now, and mark it once the PE agrees." };
 }
 
-/** How an artifact is shown: a screen in a device frame, a terminal window, or the entry file in a plain frame. */
-export type ShowKind = "screen" | "terminal" | "file";
+/**
+ * The kinds shown as documents (pass 4): Markdown with code blocks and tables, and Mermaid diagrams, never in a
+ * device frame. `interface`, `algorithm` and `topology` are the kinds pass 4b adds for code products and
+ * infrastructure (ORC-029 r9); a string list, so the studio shows them as soon as the domain has them.
+ */
+export const DOCUMENT_KINDS: readonly string[] = ["interface", "algorithm", "topology", "contract", "flow"];
+
+/** How an artifact is shown: a screen in a device frame, a terminal window, a document, or the entry file in a plain frame. */
+export type ShowKind = "screen" | "terminal" | "document" | "file";
 export function showKind(a: StudioArtifact): ShowKind {
   if (a.kind === "screen") return "screen";
   if (a.kind === "terminal-demo" || a.kind === "tui") return "terminal";
+  if (DOCUMENT_KINDS.includes(a.kind)) return "document";
   return "file";
+}
+
+/** What a document file is, by its extension: Markdown, a Mermaid diagram, or plain text; undefined for anything else. */
+export function documentType(path: string): "markdown" | "mermaid" | "text" | undefined {
+  const ext = /\.([^./]+)$/.exec(path)?.[1].toLowerCase();
+  return ext === "md" || ext === "markdown" ? "markdown" : ext === "mmd" || ext === "mermaid" ? "mermaid" : ext === "txt" ? "text" : undefined;
+}
+
+const MAX_DOCUMENT_FILES = 12;
+
+/**
+ * The files a document artifact shows for a variant, in order: its entry when it is a document, then the other
+ * document files beside it. An artifact with one take or none shows all its document files. Read through the app's
+ * own service (`serviceFileUrl`), never from the prototype server.
+ */
+export function documentFiles(a: StudioArtifact, variantId: string | undefined): string[] {
+  const docs = a.files.map((f) => f.path).filter((p) => documentType(p));
+  const entry = a.variants.find((v) => v.id === variantId)?.entry;
+  const first = (xs: string[]) => (entry !== undefined && xs.includes(entry) ? [entry, ...xs.filter((p) => p !== entry)] : xs);
+  if (a.variants.length <= 1) return first(docs).slice(0, MAX_DOCUMENT_FILES);
+  if (entry === undefined) return [];
+  return first(docs.filter((p) => folderOf(p) === folderOf(entry))).slice(0, MAX_DOCUMENT_FILES);
+}
+
+/** A path a document refers to (an image), resolved inside its version's folder, or undefined when it leaves the folder or is a URL. */
+export function resolveInVersion(from: string, ref: string): string | undefined {
+  if (!ref || /^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith("/") || ref.startsWith("#")) return undefined;
+  const parts = folderOf(from) ? folderOf(from).split("/") : [];
+  for (const seg of ref.split(/[?#]/)[0].split("/")) {
+    if (seg === "" || seg === ".") continue;
+    if (seg === "..") {
+      if (!parts.length) return undefined;
+      parts.pop();
+    } else parts.push(seg);
+  }
+  return parts.join("/") || undefined;
 }
 
 /** "screen · 2 variants", "terminal demo · v2". */

@@ -20,7 +20,28 @@ import { StoreContext, type ServiceStore } from "../store";
 import { frameSize, readCast, renderAnsi } from "./ansi";
 import { TerminalText } from "./Frames";
 import { LeadPanel, Studio } from "./Studio";
-import { MAX_MESSAGE, addPin, answerBlocker, changedDrafts, deviceOptions, draftFrom, draftKey, pinFromMessage, roundLead, sendAnswer, serviceFileUrl, variantDemo, variantEntry, type Draft, type RoundLead } from "./studioView";
+import { MarkdownDoc, MermaidDiagram, mermaidConfig } from "./Document";
+import {
+  MAX_MESSAGE,
+  addPin,
+  answerBlocker,
+  changedDrafts,
+  deviceOptions,
+  documentFiles,
+  documentType,
+  draftFrom,
+  draftKey,
+  pinFromMessage,
+  resolveInVersion,
+  roundLead,
+  sendAnswer,
+  serviceFileUrl,
+  showKind,
+  variantDemo,
+  variantEntry,
+  type Draft,
+  type RoundLead,
+} from "./studioView";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -470,6 +491,146 @@ describe("PE review in the right column", () => {
     s = R.dispatchStudioRuns(R.askForPeReviews(s, at(9)), at(10)).state;
     s = R.reportStudioRunStopped(s, s.studio.runs.filter((r) => r.kind === "pe")[1].id, at(11), { lost: true });
     expect(render(<Studio />, s)).toContain(">No verdict<");
+  });
+});
+
+describe("document artifacts: interfaces, algorithms, topologies, contracts and flows", () => {
+  /** A contract the designer handed in as Markdown with a Mermaid file beside it, agreed by the PE. */
+  function withContract() {
+    const r = openRound(vision(), "data", at(1));
+    const a = addScreen(r.state, r.n, at(2), {
+      kind: "contract",
+      title: "Trips API",
+      variants: [],
+      devices: [],
+      files: [
+        { path: "api/contract.md", sha256: sha("a") },
+        { path: "api/flow.mmd", sha256: sha("b") },
+        { path: "api/notes.html", sha256: sha("c") },
+      ],
+    });
+    return { s: peAgrees(a.state, a.id, 1, [], at(3)), id: a.id };
+  }
+
+  it("each document kind is shown as a document; screens and terminal demos are not", () => {
+    const { s, id } = withContract();
+    const a = S.getArtifact(s, id, 1);
+    for (const kind of ["interface", "algorithm", "topology", "contract", "flow"]) expect(showKind({ ...a, kind: kind as never })).toBe("document");
+    expect(showKind({ ...a, kind: "screen" })).toBe("screen");
+    expect(showKind({ ...a, kind: "tui" })).toBe("terminal");
+    expect(showKind({ ...a, kind: "material" })).toBe("file");
+  });
+
+  it("in the viewer: no device frame and no prototype frame; its Markdown and Mermaid files, read through the app's own service", () => {
+    const { s, id } = withContract();
+    const html = render(<Studio />, s);
+    expect(html).toContain('aria-label="Trips API, a document"');
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("in a browser window");
+    expect(html).not.toContain("in a phone frame");
+    expect(html).not.toContain('aria-label="Device"');
+    expect(html).not.toContain("Pin a comment");
+    // Both document files, named; the HTML file is not a document and is never read from the app's origin.
+    expect(html).toContain("Reading api/contract.md…");
+    expect(html).toContain("Reading api/flow.mmd…");
+    expect(html).not.toContain("notes.html");
+    expect(serviceFileUrl(S.getArtifact(s, id, 1), "api/flow.mmd")).toBe(`/api/studio/file?artifact=${id}&version=1&path=api%2Fflow.mmd`);
+  });
+
+  it("which files a variant shows: its entry first, then the documents beside it; one take shows them all", () => {
+    const { s, id } = withContract();
+    const a = S.getArtifact(s, id, 1);
+    expect(documentFiles(a, undefined)).toEqual(["api/contract.md", "api/flow.mmd"]);
+    const two = {
+      ...a,
+      variants: [
+        { id: "a", label: "A · REST", entry: "a/flow.mmd" },
+        { id: "b", label: "B · Events", entry: "b/api.md" },
+      ],
+      files: ["a/api.md", "a/flow.mmd", "b/api.md", "b/index.html"].map((path, i) => ({ path, sha256: sha("abcd"[i]) })),
+    };
+    expect(documentFiles(two, "a")).toEqual(["a/flow.mmd", "a/api.md"]);
+    expect(documentFiles(two, "b")).toEqual(["b/api.md"]);
+    expect(documentFiles({ ...two, variants: [{ id: "x", label: "X" }, { id: "y", label: "Y" }] }, "x")).toEqual([]);
+    expect(documentType("a/API.MD")).toBe("markdown");
+    expect(documentType("a/flow.mermaid")).toBe("mermaid");
+    expect(documentType("a/index.html")).toBeUndefined();
+  });
+
+  it("Markdown is rendered safely: headings under the page's, code blocks monospaced, tables as tables, raw HTML as text, links out only when http(s), images only the version's own", () => {
+    const { s, id } = withContract();
+    const a = { ...S.getArtifact(s, id, 1), files: [...S.getArtifact(s, id, 1).files, { path: "api/shot.png", sha256: sha("d") }] };
+    const md = [
+      "# Trips API",
+      "",
+      "Every call returns `JSON`.",
+      "",
+      "```ts",
+      "export function plan(trip: Trip): DayPlan[];",
+      "```",
+      "",
+      "| Status | Meaning |",
+      "| --- | --- |",
+      "| 404 | No such trip |",
+      "",
+      '<script>alert("x")</script><img src=x onerror="alert(1)">',
+      "",
+      "[docs](https://example.com/docs) [steal](javascript:alert(1)) [settings](#/settings)",
+      "",
+      "![the plan](shot.png) ![tracker](https://example.com/pixel.png)",
+    ].join("\n");
+    const html = renderToStaticMarkup(<MarkdownDoc text={md} artifact={a} path="api/contract.md" />);
+    expect(html).toContain('<h3 class="st-doc__h">Trips API</h3>');
+    expect(html).not.toContain("<h1");
+    expect(html).toContain("<code>JSON</code>");
+    expect(html).toContain('<pre class="st-doc__code"><code class="language-ts">export function plan(trip: Trip): DayPlan[];\n</code></pre>');
+    expect(html).toMatch(/<div class="st-doc__table"><table><thead><tr><th>Status<\/th><th>Meaning<\/th><\/tr><\/thead><tbody><tr><td>404<\/td><td>No such trip<\/td><\/tr><\/tbody><\/table><\/div>/);
+    // Raw HTML is shown as text, never as markup.
+    expect(html).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
+    expect(html).not.toMatch(/<script|<img src="x"|onerror="/);
+    // Links: out of the app in a new tab when http(s); anything else is text.
+    expect(html).toContain('<a href="https://example.com/docs" target="_blank" rel="noopener noreferrer">docs</a>');
+    expect(html).toContain('<span class="st-doc__link">steal</span>');
+    expect(html).toContain('<span class="st-doc__link">settings</span>');
+    expect(html).not.toContain("javascript:");
+    // Images: the version's own PNG through the app's service; nothing from elsewhere is loaded.
+    expect(html).toContain(`<img src="/api/studio/file?artifact=${id}&amp;version=1&amp;path=api%2Fshot.png" alt="the plan" class="st-doc__img"/>`);
+    expect(html).toContain("[Image: tracker, not shown: only the artifact&#x27;s own PNG and GIF files are.]");
+    expect(html).not.toContain("pixel.png");
+  });
+
+  it("a mermaid block, or a .mmd file, is a diagram the app draws, with its source under it", () => {
+    const { s, id } = withContract();
+    const a = S.getArtifact(s, id, 1);
+    const html = renderToStaticMarkup(<MarkdownDoc text={"Before.\n\n```mermaid\nflowchart LR\n  A[Pick a trail] --> B{Date ok?}\n```\n"} artifact={a} path="api/contract.md" />);
+    expect(html).toContain('<figure class="st-doc__diagram">');
+    expect(html).toContain("Drawing the diagram…");
+    expect(html).toContain("<summary class=\"small muted\">Diagram source</summary>");
+    expect(html).toContain("flowchart LR\n  A[Pick a trail] --&gt; B{Date ok?}</code>");
+    expect(html).not.toContain("language-mermaid");
+    const file = renderToStaticMarkup(<MermaidDiagram source={"sequenceDiagram\n  App->>API: plan"} label="The diagram in api/flow.mmd" />);
+    expect(file).toContain("Drawing the diagram…");
+    expect(file).toContain("sequenceDiagram\n  App-&gt;&gt;API: plan");
+  });
+
+  it("Mermaid runs at strict security, and a diagram's own directives cannot relax it, its labels or its sanitiser", () => {
+    const tokens: Record<string, string> = { "--surface": "#1a1b1e", "--text": "#ececea", "--muted": " #a3a6ad " };
+    const c = mermaidConfig((name) => tokens[name] ?? "");
+    expect(c).toMatchObject({ securityLevel: "strict", startOnLoad: false, htmlLabels: false, suppressErrorRendering: true, theme: "base" });
+    for (const key of ["securityLevel", "startOnLoad", "secure", "htmlLabels", "dompurifyConfig", "maxTextSize"]) expect(c.secure).toContain(key);
+    // The look comes from the design tokens; unset ones are left to Mermaid.
+    expect(c.themeVariables).toMatchObject({ background: "#1a1b1e", primaryTextColor: "#ececea", lineColor: "#a3a6ad", darkMode: true });
+    expect(c.themeVariables).not.toHaveProperty("primaryColor");
+  });
+
+  it("a path a document refers to stays inside its version's folder", () => {
+    expect(resolveInVersion("api/contract.md", "shot.png")).toBe("api/shot.png");
+    expect(resolveInVersion("api/contract.md", "./img/a.png")).toBe("api/img/a.png");
+    expect(resolveInVersion("api/contract.md", "../top.png")).toBe("top.png");
+    expect(resolveInVersion("api/contract.md", "../../etc/passwd")).toBeUndefined();
+    expect(resolveInVersion("api/contract.md", "/abs.png")).toBeUndefined();
+    expect(resolveInVersion("api/contract.md", "https://example.com/a.png")).toBeUndefined();
+    expect(resolveInVersion("api/contract.md", "data:image/png;base64,AAAA")).toBeUndefined();
   });
 });
 

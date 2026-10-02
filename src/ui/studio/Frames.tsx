@@ -177,10 +177,10 @@ export function TerminalText({ lines, cols, rows, label }: { lines: TermLine[]; 
   );
 }
 
-type Loaded = { status: "loading" } | { status: "ok"; text: string } | { status: "error"; message: string };
+export type Loaded = { status: "loading" } | { status: "ok"; text: string } | { status: "error"; message: string };
 
 /** A version's text file, read through the app's own service (the prototype origin cannot be read from here). */
-function useServiceText(url: string): Loaded {
+export function useServiceText(url: string): Loaded {
   const [loaded, setLoaded] = useState<{ url: string; value: Loaded }>({ url, value: { status: "loading" } });
   useEffect(() => {
     let live = true;

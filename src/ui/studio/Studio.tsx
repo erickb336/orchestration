@@ -22,6 +22,7 @@ import { Banner, Button, Chip, EmptyState, Field, Input, SegmentedControl, Simul
 import { cx } from "../kit/cx";
 import { useLeadContext } from "../LeadDrawer";
 import { useStore } from "../store";
+import { DocumentArtifact } from "./Document";
 import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback, TerminalFile, TerminalRecording } from "./Frames";
 import {
   DEVICE_LABEL,
@@ -391,7 +392,7 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
       {locked && st.kind !== "open" && <p className="small muted">{locked}</p>}
       {kind === "screen" && shots && <p className="small muted">{shots}</p>}
 
-      <div className={cx("st-stage", pinMode && "st-stage--pinning", kind === "terminal" && "st-stage--terminal")}>
+      <div className={cx("st-stage", pinMode && "st-stage--pinning", kind === "terminal" && "st-stage--terminal", kind === "document" && "st-stage--doc")}>
         {kind === "screen" ? (
           !entry ? (
             <EmptyState title="No entry file">The designer named no entry file for this variant, so there is no page to show.</EmptyState>
@@ -402,6 +403,8 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
           )
         ) : kind === "terminal" ? (
           <TerminalArtifact key={variant} artifact={a} variant={variant} />
+        ) : kind === "document" ? (
+          <DocumentArtifact key={variant} artifact={a} variant={variant} />
         ) : src ? (
           <PlainFrame src={src} title={frameTitle} />
         ) : (
