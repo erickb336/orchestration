@@ -10,7 +10,12 @@ import * as M from "../src/domain/model";
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
 import { buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
-import { clip } from "../src/domain/text";
+import { domainLines } from "../src/domain/studio/domains";
+import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
+import * as S from "../src/domain/studio/studio";
+import { DOCUMENT_KINDS, UNGATED_KINDS, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
+import { clip, truncate } from "../src/domain/text";
+import type { RepoGlance } from "./studio/existing";
 import {
   FINDING_ACTIONS,
   MAX_NOTES_PER_REPLY,
@@ -1014,8 +1019,126 @@ ${open.slice(0, 40).map((d) => decisionLines(state, d)).join("\n")}${open.length
 `;
 }
 
+// ---------- the studio (Vision, ORC-029 pass 4) ----------
+
+/** How many of the open round's artifacts, the owner's answers, and pins per answer the brief lists; the rest is counted. */
+const STUDIO_ARTIFACT_ROWS = 12;
+const STUDIO_FEEDBACK_ROWS = 10;
+const STUDIO_PINS = 3;
+const EARLIER_ROUNDS = 3;
+const FOCUS_WORDS: Record<RoundFocus, string> = { material: "what exists", experience: "the experience", data: "the data", flows: "the flows" };
+
+/** Where PE review of a version stands, in a few words for the lead. */
+function peLine(state: State, a: StudioArtifact): string {
+  if (UNGATED_KINDS.includes(a.kind)) return "not reviewed (what the user brought)";
+  const r = S.peReview(state, a);
+  const reasons = (vs: PeVerdict[]) => vs.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.reasons, 140)}${v.overruled ? " (the user overruled it)" : ""}`).join("; ");
+  if (r.status === "waiting") return "PE: reviewing";
+  const asks = (vs: PeVerdict[]) => vs.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.change ?? v.reasons, 120)}`).join("; ");
+  if (r.status === "revising") {
+    const parts = [r.objections.length ? `objects: ${reasons(r.objections)}` : "", r.changes.length ? `asks for changes: ${asks(r.changes)}` : ""].filter(Boolean);
+    return `the designer revises for the PE (pass ${r.pass}); ${parts.join("; ")}`;
+  }
+  if (r.status === "objections") return `PE still objects after pass ${r.pass}, shown to the user: ${reasons(r.objections)}`;
+  const changes = state.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version && v.pass === r.pass && v.verdict === "feasible-if" && v.change);
+  return `PE agreed (pass ${r.pass})${changes.length ? `, if: ${changes.map((v) => `${v.variant ? `${v.variant}: ` : ""}${truncate(v.change!, 120)}`).join("; ")}` : ""}`;
+}
+
+/** One artifact of the open round: id, title, version, kind, variants, devices, "as is" provenance, and PE review. */
+function studioArtifactLine(state: State, a: StudioArtifact): string {
+  const variants = a.variants.length > 1 ? ` · ${a.variants.length} variants: ${a.variants.map((v) => `${v.id} ${truncate(v.label, 30)}`).join(", ")}` : "";
+  const devices = a.devices.length ? ` · ${a.devices.join(", ")}` : "";
+  const p = a.provenance;
+  const asIs = p ? ` · as is, from ${p.files.slice(0, 5).map((f) => truncate(f, 80)).join(", ")}${p.files.length > 5 ? ` and ${p.files.length - 5} more` : ""}` : "";
+  return `  - ${a.id} "${truncate(a.title, 60)}" v${a.version} · ${a.kind}${variants}${devices}${asIs} · ${peLine(state, a)}`;
+}
+
+/** The user's marks, picks, pins and notes since the lead's last reply (not the pins a revision carried forward), newest per version. */
+function studioAnswers(state: State): string[] {
+  const since = state.conversation.filter((m) => m.author === "lead").at(-1)?.at ?? "";
+  const latest = new Map<string, Feedback>();
+  for (const f of state.studio.feedback) if (!f.carriedFrom && f.at > since) latest.set(`${f.artifactId}@${f.version}`, f);
+  const all = [...latest.values()];
+  const lines = all.slice(-STUDIO_FEEDBACK_ROWS).map((f) => {
+    const a = S.getArtifact(state, f.artifactId, f.version);
+    const pins = f.pins.slice(0, STUDIO_PINS).map((p) => `"${truncate(p.text, 100)}"${p.variant ? ` on ${p.variant}` : ""}${p.selector ? ` at ${truncate(p.selector, 40)}` : ""}`);
+    const parts = [
+      f.mark ?? "no mark",
+      f.pickedVariant ? `picked ${f.pickedVariant}` : "",
+      pins.length ? `${f.pins.length} pin${f.pins.length === 1 ? "" : "s"}: ${pins.join(", ")}${f.pins.length > STUDIO_PINS ? ", …" : ""}` : "",
+      f.note ? `note: "${truncate(f.note, 200)}"` : "",
+    ].filter(Boolean);
+    return `- ${a.id} "${truncate(a.title, 60)}" v${a.version}: ${parts.join("; ")}`;
+  });
+  return all.length > STUDIO_FEEDBACK_ROWS ? [`- and ${all.length - STUDIO_FEEDBACK_ROWS} earlier answers, in the studio`, ...lines] : lines;
+}
+
+/**
+ * The lead's studio brief while the project is in Vision (pass 4): what the studio is and the lead's part in it, the
+ * order of focus (aiming at completeness, r8), the domains and devices, the repository (for an "as it is today"
+ * first round), the rounds with their artifacts and PE review, the designer runs under way, and the user's answers
+ * since the lead's last reply. Bounded: the open round's artifacts, the answers and the pins are capped and counted.
+ */
+export function studioBriefSection(state: State, repo?: RepoGlance): string {
+  const p = state.project;
+  const rounds = state.studio.rounds;
+  const open = S.currentRound(state);
+  const repoLine = !repo
+    ? "Repository: its file list was not read for this run; your working directory is a read-only checkout of it."
+    : repo.codeFiles
+      ? `Repository: has code, ${repo.codeFiles} code file${repo.codeFiles === 1 ? "" : "s"} of ${repo.files} tracked (${repo.code.slice(0, 12).join(", ")}${repo.codeFiles > 12 ? ", …" : ""}).`
+      : `Repository: no code yet (${repo.files} tracked file${repo.files === 1 ? "" : "s"}, documents only).`;
+  const start = rounds.length
+    ? ""
+    : repo?.codeFiles
+      ? `\nNo round yet, and the repository has code. Unless the user said otherwise, start with round 0, "as it is today": openRound { "focus": "material", "summary": "As it is today: <what the code does now>" }, and ask the designer to reproduce the key screens, or the interface and core algorithms, or the topology, from the code (one take each, kinds by the domains). The designer reads the code read-only; the service labels each artifact "as is" with the files it came from. The user corrects them, and later rounds change them.`
+      : "\nNo round yet: open round 1 on the experience once you know enough to brief the designer.";
+  const latest = S.latestArtifacts(state);
+  const openRows = open ? latest.filter((a) => a.round === open.n) : [];
+  const runs = state.studio.runs.filter((r) => r.status === "queued" || r.status === "running" || r.status === "stopping");
+  const runLine = runs.length ? `\n  Runs under way: ${runs.slice(0, 8).map((r) => `${r.id} ${r.kind} ${r.status}${r.fromLead ? ` (asked by lead run ${r.fromLead.leadRunId})` : ""}`).join(", ")}${runs.length > 8 ? `, and ${runs.length - 8} more` : ""}.` : "";
+  const roundLines = open
+    ? [
+        `- Round ${open.n} (${FOCUS_WORDS[open.focus]}), open: ${truncate(open.summary, 300) || "(no summary)"}`,
+        ...(openRows.length ? openRows.slice(0, STUDIO_ARTIFACT_ROWS).map((a) => studioArtifactLine(state, a)) : ["  - No artifacts yet."]),
+        ...(openRows.length > STUDIO_ARTIFACT_ROWS ? [`  - and ${openRows.length - STUDIO_ARTIFACT_ROWS} more, in the studio`] : []),
+        ...(open.lead?.questions.length ? [`  Your questions in this round: ${open.lead.questions.map((q, i) => `${i + 1}. ${truncate(q.text, 160)}`).join(" ")}`] : []),
+      ].join("\n") + runLine
+    : `- No round is open.${runLine}`;
+  const earlier = rounds
+    .filter((r) => r.closedAt)
+    .slice(-EARLIER_ROUNDS)
+    .map((r) => `- Round ${r.n} (${FOCUS_WORDS[r.focus]}), closed: ${truncate(r.summary, 200) || "(no summary)"} (${latest.filter((a) => a.round === r.n).length} artifacts)`);
+  const answers = studioAnswers(state);
+  return `
+## The studio
+You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between; the PE reviews every option before the user sees it. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
+
+Order of focus, aiming at a design that is complete before the factory starts (revisit a focus when the user's answers call for it):
+1. experience: the key screens or commands, or the interface, or the topology, and how they behave;
+2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary;
+3. flows: every rule and edge case decided, as tables of cases and outcomes (empty, loading, error, offline, first run), because a case the design leaves open becomes special-casing in code.
+
+Domains (the user's to choose; until they do, propose them as one question with options, from the vision and the repository; you never set them):
+${domainLines(p.domains).map((l) => `- ${l}`).join("\n")}
+Devices (the user's scope): ${p.devices.join(", ")}.
+${repoLine}${start}
+
+Rounds:
+${roundLines}${earlier.length ? `\n${earlier.join("\n")}` : ""}
+
+The user's marks, picks, pins and notes since your last reply (their answers to your questions are in their messages below):
+${answers.length ? answers.join("\n") : "- None."}
+
+Rules for "studio":
+- One round is open at a time: "closeRound" the open one before "openRound" opens the next.
+- "designerRuns": at most ${MAX_DESIGNER_RUNS} per reply. Brief the designer on what to make and why, from the vision, the documents and the user's marks. Ask for 2–${MAX_RUN_VARIANTS} variants only where a real choice is open, otherwise 1. Devices come from the scope; documents (${DOCUMENT_KINDS.join(", ")}) have none. "revises" makes an artifact's next version, carrying the user's open pins.
+- "questions": at most 5, about this round's choices (a variant, an undecided case, the domains), each with why and up to 4 options; they show beside the round. Keep "questions" outside "studio" for the vision's areas, and never ask one question in both.
+`;
+}
+
 /** Everything the lead sees: vision, open work with what it may do, outcomes, conflicts, conversation, and the rules. */
-export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", docs?: VisionDocReader, conventions?: ConventionsFile[]): string {
+export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", docs?: VisionDocReader, conventions?: ConventionsFile[], repo?: RepoGlance): string {
   const p = state.project;
   const vision = M.currentVision(state);
   const maxProposals = p.autonomy.maxProposalsPerCycle;
@@ -1116,8 +1239,20 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
   "coverage": { ${SHAPING_AREAS.map((a) => `"${a}": "clear|partial|open"`).join(", ")} },
   "questions": [
     { "question": "<one targeted question>", "why": "<why it matters, one line>", "area": "<area key>", "options": ["<option A (recommended, because …)>", "<option B>"] }
-  ]`
+  ],
+  "studio": {
+    "closeRound": { "summary": "<what came of the open round>" },
+    "openRound": { "focus": "material | experience | data | flows", "summary": "<what the round explores>" },
+    "designerRuns": [
+      { "brief": "<what to make and why>", "kinds": ["screen"], "variants": 2, "devices": ["desktop"], "revises": "<an artifact id, only to make its next version>" }
+    ],
+    "questions": [
+      { "question": "<a question about this round>", "why": "<why it matters, one line>", "options": ["<option A (recommended, because …)>", "<option B>"] }
+    ]
+  }`
     : "";
+  // The studio brief goes to the replies that may run the studio: message runs in Vision.
+  const studioBrief = canDraft ? studioBriefSection(state, repo) : "";
   const shapingBrief = shaping
     ? `
 ## Shaping the vision
@@ -1150,7 +1285,7 @@ ${vision.text || "(not written yet)"}
 Current focus: ${vision.focus || "(none)"}${focusLine}
 Focus history (newest first):
 ${focusHistory(state)}
-${visionDocsSection(state, "lead", docs)}${shapingBrief}
+${visionDocsSection(state, "lead", docs)}${shapingBrief}${studioBrief}
 ${principlesSection(LEAD_PRINCIPLES.map((id) => ({ id })), PRINCIPLES_WORD_CAP, LEAD_PRINCIPLES_HEADER)}${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}
 ## Open work (root tasks by priority; child tasks follow their root)
 ${board}
@@ -1190,7 +1325,7 @@ Pick "flowId" from these, or leave it out for the default ("${defaultFlow}").
 ${flows}
 ${steerRules}
 ## Required final output
-End your final message with exactly one fenced JSON block${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft' : ""}${canSteer ? ")" : ""}:
+End your final message with exactly one fenced JSON block${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft; leave "studio", or any part of it, out when the studio needs nothing from you' : ""}${canSteer ? ")" : ""}:
 
 \`\`\`json
 {
@@ -1265,16 +1400,16 @@ ${last.length ? `The user's latest notes on landed work:\n${last.map((x) => x.li
 
 /**
  * Parse the lead's final message. A reply without a JSON block is still a reply (with no proposals).
- * The steering block and the vision draft are passed through as found (a missing value or null becomes
- * undefined); type checks happen in the domain, which treats them as untrusted data.
+ * The steering block, the vision draft, the studio block and the rest are passed through as found (a missing value
+ * or null becomes undefined); type checks happen in the domain, which treats them as untrusted data.
  */
-export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; problem?: string } {
+export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; studio?: unknown; problem?: string } {
   const obj = lastJsonObject(finalText);
   if (!obj) return { reply: clip(finalText.trim(), 4000), proposals: [], problem: "no JSON block; treated the message as a reply without proposals" };
   const reply = typeof obj.reply === "string" ? clip(obj.reply, 8000) : "";
   const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
-  const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
-  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions") };
+  const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions" | "studio") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
+  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions"), ...given("studio") };
 }
 
 /** A step that waits for child tasks sees how each of them ended. */

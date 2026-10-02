@@ -109,6 +109,14 @@ export type ProjectStage = "shaping" | "building";
 export type Device = "desktop" | "mobile" | "terminal";
 export const DEVICES: Device[] = ["desktop", "mobile", "terminal"];
 
+/**
+ * What kind of product the project is (ORC-029 r9), which decides the studio's rounds and artifacts: screen products
+ * (a UI on a terminal, browser, desktop or phone), code products (libraries, SDKs, engines, compilers), and
+ * infrastructure systems (backends, pipelines, deployments). A project can be more than one.
+ */
+export type ProjectDomain = "screen" | "code" | "infrastructure";
+export const PROJECT_DOMAINS: ProjectDomain[] = ["screen", "code", "infrastructure"];
+
 /** How the factory runs, set by the owner when they start it (and changeable later through the usual settings). */
 export interface FactorySettings {
   /** Autopilot: nothing waits for a person. Check-in: the lead plans, and its tasks wait for your go-ahead. Manual: the lead does not plan. */
@@ -353,6 +361,11 @@ export interface Project {
   stage: ProjectStage;
   /** The device scope: what is designed and shown. Set in Vision; at least one. */
   devices: Device[];
+  /**
+   * The product's domains as the owner confirmed them (`setDomains`, the owner's only); empty until they choose. The
+   * lead proposes them, as a question; it never sets them. Designer briefs follow them (src/domain/studio/domains.ts).
+   */
+  domains: ProjectDomain[];
   /** Every Start the factory, oldest first: the owner's recorded agreements. Projects building before ORC-029 have none. */
   factoryStarts: FactoryStart[];
   /**

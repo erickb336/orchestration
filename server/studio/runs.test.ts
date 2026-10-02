@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as M from "../../src/domain/model";
 import * as R from "../../src/domain/studio/runs";
 import * as S from "../../src/domain/studio/studio";
 import { startFactoryArgs } from "../../src/domain/testing/factory";
@@ -161,6 +162,80 @@ describe("a designer run at the service", () => {
     expect(state().events.slice(-2).map((e) => e.message)).toEqual([`Designer run ${id} completed: Trip plan v1 (2 variants)`, expect.stringMatching(/^PE run studio-\d+ asked for in round 1, reviewing Trip plan v1, on Codex/)]);
     // The studio never moves the project: it is still in Vision, with no start recorded.
     expect(state().project).toMatchObject({ stage: "shaping", factoryStarts: [] });
+  });
+
+  it("its envelope follows the product's domains, and says how a document (interface, algorithm, topology, contract, flow) is handed in", async () => {
+    await service();
+    const first = startDesignerRun(store, { round: 1, brief: "Make the route planner's interface." }, iso());
+    tick();
+    expect(claude.runs.get(first)!.prompt).toContain("## The product's domains\n\n- Not chosen yet by the owner.\n- Make the kinds the brief asks for; when it names none, the kinds of the product's domains.");
+    cmd("setDomains", { domains: ["infrastructure", "code"] });
+    const second = startDesignerRun(store, { round: 1, brief: "Make the route planner's topology." }, iso());
+    tick();
+    const prompt = claude.runs.get(second)!.prompt;
+    expect(prompt).toMatch(/\n- A code product \(interface, algorithm\): the interface \(names, signatures, the error model, usage examples as a caller writes them\) and the core algorithms/);
+    expect(prompt).toMatch(/\n- An infrastructure system \(topology\): the topology \(the components and what talks to what, as a Mermaid diagram\), a failure and recovery table, a scaling and cost model/);
+    expect(prompt).toContain("`kind`: one of screen, terminal-demo, tui, contract, flow, interface, algorithm, topology.");
+    expect(prompt).toContain("- A document (contract, flow, interface, algorithm, topology) is plain files: Markdown (.md) with code blocks and tables, and Mermaid (.mmd) for diagrams, which the app renders. Its variant's entry is its main .md file; it has no devices.");
+    expect(prompt).toContain('Names use only letters, digits, ".", "_", "-" and spaces.');
+    // Only round 0 of an existing repository is "as it is today".
+    expect(prompt).not.toContain("## As it is today");
+  });
+
+  it("in round 0 (as it is today), it is asked to reproduce the code read-only and name each artifact's provenance; a Codex designer is told its reads are not confined", async () => {
+    await service({ workspaces: true });
+    const repo = state().project.repoPath;
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src", "index.html"), "<h1>Trips</h1>");
+    execFileSync("git", ["-C", repo, "add", "-A"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the trip list"]);
+    cmd("initProject", { name: "Trips", repoPath: repo, vision: "Weekend trips for a small group of friends.", focus: "" });
+    cmd("openRound", { focus: "material", summary: "As it is today" });
+    const id = startDesignerRun(store, { round: 0, brief: "Reproduce the trip list as it is today." }, iso());
+    tick();
+    const a = claude.runs.get(id)!;
+    expect(a.prompt).toContain(`# Studio run ${id}: the designer, round 0 (material)`);
+    expect(a.prompt).toContain("## As it is today\n\nThis round reproduces what the product's repository already does, before anything changes");
+    expect(a.prompt).toContain(`- Read the code, read-only, in the checkout at ${a.workspace.readRoots![0]}. The service lets you read only that checkout and your working directory.`);
+    expect(a.prompt).toContain("- Reproduce what the code does now, not what it could become");
+    expect(a.prompt).toContain('give every artifact `"provenance"`: the repository files it came from');
+    expect(a.prompt).toContain("- Code in the repository (1 of 2 tracked files): src/index.html.");
+    const cx = startDesignerRun(store, { round: 0, brief: "Reproduce the trip list as it is today.", selection: { provider: "codex", model: "auto" } }, iso());
+    tick();
+    expect(codex.runs.get(cx)!.prompt).toContain("On Codex the service cannot confine what you read (as for every Codex run), so read only that checkout.");
+  });
+
+  it("the lead's envelope in Vision says whether the repository has code, read from git at HEAD", async () => {
+    await service({ workspaces: true });
+    const repo = state().project.repoPath;
+    cmd("postMessage", { text: "What do we have?" });
+    tick();
+    expect(claude.runs.get(M.activeLeadRun(state())!.id)!.prompt).toContain("Repository: no code yet (1 tracked file, documents only).");
+    claude.emit({ type: "completed", attemptId: M.activeLeadRun(state())!.id, finalText: "Nothing yet." });
+    tick();
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src", "index.html"), "<h1>Trips</h1>");
+    execFileSync("git", ["-C", repo, "add", "-A"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the trip list"]);
+    cmd("postMessage", { text: "And now?" });
+    tick();
+    expect(claude.runs.get(M.activeLeadRun(state())!.id)!.prompt).toContain("Repository: has code, 1 code file of 2 tracked (src/index.html).");
+  });
+
+  it("is asked for by the lead's reply: its studio block's designer runs are queued, and the scheduler starts them with the lead's brief", async () => {
+    await service();
+    cmd("postMessage", { text: "Show me the trip plan." });
+    tick();
+    const lead = M.activeLeadRun(state())!;
+    const block = { reply: "Two takes on the trip plan.", proposals: [], studio: { designerRuns: [{ brief: "Make the trip plan screen.", kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] }], questions: [{ question: "Map or days first?", why: "It sets the layout.", options: ["Map", "Days"] }] } };
+    claude.emit({ type: "completed", attemptId: lead.id, finalText: `Here it is.\n\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`\n`, usage: { costUsd: 0.05 } });
+    tick();
+    const run = state().studio.runs.find((r) => r.fromLead?.leadRunId === lead.id)!;
+    expect(run).toMatchObject({ kind: "designer", round: 1, fromLead: { kinds: ["screen"], variants: 2, devices: ["desktop", "mobile"] } });
+    expect(S.currentRound(state())!.lead).toEqual({ message: "Two takes on the trip plan.", questions: [{ text: "Map or days first?", reason: "It sets the layout.", options: ["Map", "Days"] }] });
+    tick();
+    expect(runOf(run.id).status).toBe("running");
+    expect(claude.runs.get(run.id)!.prompt).toContain("## The brief\n\nMake the trip plan screen.\n\nThe lead asks for: screen; 2 variants side by side, differing in a real choice; for desktop, mobile.\n\n## Where you work");
   });
 
   it("a refused studio.json fails the run with the reason; nothing is recorded, and its staging folder stays to look at", async () => {

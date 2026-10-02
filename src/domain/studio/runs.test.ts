@@ -45,6 +45,15 @@ describe("asking for a studio run", () => {
     expect(runOf(codex.state, codex.result.runId)).toMatchObject({ provider: "codex", model: "codex-sample-large" });
   });
 
+  it("in round 0 (as it is today), the designer reproduces the existing code and the PE reviews what it made, as in any round", () => {
+    const zero = openRound(fresh(), "material", at(1));
+    const d = ask(zero.state, { round: 0, brief: "Reproduce the trip list as it is today." });
+    expect(runOf(d.state, d.result.runId)).toMatchObject({ kind: "designer", round: 0, status: "queued" });
+    const a = addScreen(d.state, 0, at(3), { title: "Trip list (as is)", variants: [{ id: "a", label: "As it is today" }], provenance: { files: ["src/TripList.tsx"] } });
+    const pe = R.askForPeReviews(a.state, at(4));
+    expect(R.peRunsOf(pe, a.id, 1)).toEqual([expect.objectContaining({ kind: "pe", round: 0, status: "queued", provider: "codex" })]);
+  });
+
   it("a revision names the artifact and the version it revises", () => {
     const { s, n } = inRound();
     const a = addScreen(s, n, at(2));
@@ -57,8 +66,6 @@ describe("asking for a studio run", () => {
     expect(() => ask(startFactoryAsOwner(s, at(2)), { round: n })).toThrow("Studio runs happen in Vision. Go back to vision first.");
     expect(() => ask(s, { round: 2 })).toThrow("There is no round 2.");
     expect(() => ask(run(s, "closeRound", { round: n }, at(2)).state, { round: n })).toThrow("Round 1 is closed.");
-    const zero = openRound(fresh(), "material", at(1));
-    expect(() => ask(zero.state, { round: 0 })).toThrow(/Round 0 holds what the owner brought/);
     expect(() => ask(s, { round: n, artifactId: "sa-99" })).toThrow("Unknown studio artifact sa-99.");
     expect(() => ask(s, { round: n, brief: " \u0007 " })).toThrow("The brief is empty.");
     expect(() => ask(s, { round: n, kind: "probe" })).toThrow("Probe runs cannot be asked for yet; they come in ORC-029 pass 4.");

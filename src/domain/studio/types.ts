@@ -9,7 +9,11 @@
 
 import type { Device, PeReviewState, ProviderId } from "../types";
 
-/** What a round is about. Round 0 is what the owner brought (material); then the experience, the data crossing each boundary, and the flows. */
+/**
+ * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
+ * repository the designer's "as is" reproductions of it ("as it is today"). Then the experience, the data crossing
+ * each boundary, and the flows.
+ */
 export type RoundFocus = "material" | "experience" | "data" | "flows";
 export const ROUND_FOCUSES: RoundFocus[] = ["material", "experience", "data", "flows"];
 
@@ -24,10 +28,36 @@ export interface Round {
   leadRunId?: string;
   /** What the round explores, then what came of it, in the lead's words. */
   summary: string;
+  /**
+   * The lead's latest message about this round and its questions to the owner, from the studio block of its newest
+   * reply that addressed the round (pass 4). The owner answers in the conversation, with their feedback.
+   */
+  lead?: RoundLead;
 }
 
-export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "material" | "evidence";
-export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "material", "evidence"];
+/** The lead's message for a round, and its questions (ORC-012's: the question, why it matters, options to pick). */
+export interface RoundLead {
+  message: string;
+  questions: RoundQuestion[];
+}
+
+export interface RoundQuestion {
+  text: string;
+  reason?: string;
+  options?: string[];
+}
+
+/**
+ * What an artifact is. A screen product's: screens, terminal demos and TUIs. A code product's (r9): its `interface`
+ * (names, signatures, the error model, usage examples as a caller writes them) and its core `algorithm`s and
+ * primitives (pseudo-code, a worked trace, invariants, cost). An infrastructure system's: its `topology` (what talks to
+ * what, failure and recovery, scale and cost). Any domain's `contract`s (what crosses a boundary, with examples) and
+ * `flow`s (journeys, sequences, and tables of cases and outcomes). The owner's `material`, and a probe's `evidence`.
+ */
+export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "interface" | "algorithm" | "topology" | "material" | "evidence";
+export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology", "material", "evidence"];
+/** Kinds that are documents: plain files (Markdown with code blocks and tables, `.mmd` Mermaid), shown without a device frame. */
+export const DOCUMENT_KINDS: StudioArtifactKind[] = ["contract", "flow", "interface", "algorithm", "topology"];
 /** Kinds the PE does not review: what the owner brought, and a probe's evidence. They reach the owner at once, and a verdict on one is refused. */
 export const UNGATED_KINDS: StudioArtifactKind[] = ["material", "evidence"];
 
@@ -70,10 +100,22 @@ export interface StudioArtifact {
   devices: Device[];
   madeBy: StudioMaker;
   at: string;
+  /**
+   * An "as is" artifact (pass 4): the designer's reproduction of what the existing repository already does, in round
+   * 0 ("as it is today"), with the repository files it came from (paths relative to the repository's root, each a file
+   * the repository tracks, checked at import). Absent on everything else.
+   */
+  provenance?: Provenance;
   /** A screen's screenshots, which the service takes after import (pass 3). Absent when this service takes none. */
   shots?: ArtifactShots;
   /** How a terminal demo or TUI is shown, which the service settles after import (pass 3). Absent when this service records none. */
   demo?: ArtifactDemo;
+}
+
+/** Where an "as is" artifact came from: labelled as is, with the repository files the designer reproduced it from. */
+export interface Provenance {
+  asIs: true;
+  files: string[];
 }
 
 /** One screenshot: a variant on a device, relative to the version's folder (`shots/<variant>-<device>.png`). */
@@ -235,7 +277,7 @@ export interface ChangeOrder {
 export type StudioRunKind = "designer" | "pe" | "probe";
 export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
 /** What a designer's manifest may hold: the owner brings material, and a probe's run makes evidence. */
-export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow"];
+export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology"];
 
 /** queued → running → (stopping →) stopped, completed, failed or lost. A queued run waits for dispatch, which happens in Vision only. */
 export type StudioRunStatus = "queued" | "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";
@@ -257,8 +299,10 @@ export interface StudioRun {
   provider: ProviderId;
   model: string;
   status: StudioRunStatus;
-  /** What the run is asked to do. Until the lead writes studio briefs (pass 4), a labelled placeholder. */
+  /** What the run is asked to do: the lead's brief and what it asked for, or (asked by the service alone) a labelled placeholder. */
   brief: string;
+  /** A designer run the lead asked for in its studio block (pass 4): the lead run, and the kinds, variants and devices it asked for. */
+  fromLead?: { leadRunId: string; kinds: StudioArtifactKind[]; variants: number; devices: Device[] };
   askedAt: string;
   /** When it was dispatched; absent while queued. */
   startedAt?: string;

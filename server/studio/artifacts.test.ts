@@ -2,6 +2,7 @@
 // paths inside the folder, no links, entries among the files), and each artifact is recorded and copied into the
 // immutable version folder the prototype server reads, with manifest.json in the agreed layout.
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -158,7 +159,7 @@ describe("reading studio.json", () => {
     stage({ screens: [] });
     expect(refusal(read)).toBe('studio.json has no "artifacts" list.');
     stage({ artifacts: [{ ...TRIP_PLAN, kind: "material" }] });
-    expect(refusal(read)).toBe('artifact 1: the kind "material" is not one this run makes (screen, terminal-demo, tui, contract, flow).');
+    expect(refusal(read)).toBe('artifact 1: the kind "material" is not one this run makes (screen, terminal-demo, tui, contract, flow, interface, algorithm, topology).');
   });
 
   it("refuses file types outside the allowlist, paths outside the folder, the service's own manifest, and entries that are not files", () => {
@@ -186,6 +187,27 @@ describe("reading studio.json", () => {
     expect(tryFiles(["a/missing.css"])).toBe('"a/missing.css" is listed but is not in the run\'s folder.');
     stage({ artifacts: [{ ...TRIP_PLAN, variants: [{ id: "a", label: "A", entry: "a/home.html" }] }] });
     expect(refusal(read)).toBe('artifact 1: the entry "a/home.html" of variant "a" is not one of its files.');
+  });
+
+  it("allows only ASCII letters, digits, '.', '_', '-' and spaces in each name of a path (review finding 9)", () => {
+    const tryFile = (file: string) => {
+      stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, file] }] }, { ...PAGES, [file]: "notes" });
+      return () => read();
+    };
+    const why = 'has a name with a character other than A–Z, a–z, 0–9, ".", "_", "-" or a space.';
+    // A lookalike Cyrillic "а", an accent, the same accent decomposed, a full-width letter, an emoji, a colon, a quote.
+    for (const file of ["а/notes.txt", "a/café.txt", "a/café.txt", "a/ｎotes.txt", "a/🗺.txt", "a/x:y.txt", 'a/"q".txt', "a/semi;colon.txt"]) {
+      expect(refusal(tryFile(file))).toBe(`artifact 1: ${JSON.stringify(file)} ${why}`);
+    }
+    for (const file of ["a/Day plan 2.txt", "a/day_plan-v2.final.txt", "notes.txt"]) {
+      expect(tryFile(file)()[0].files.map((f) => f.path)).toContain(file);
+    }
+  });
+
+  it("takes a document artifact's Markdown and Mermaid files (md and mmd are on the allowlist)", () => {
+    const files = { "api/interface.md": "# Interface\n\n```ts\nplan(trip: Trip): Plan\n```\n", "api/topology.mmd": "graph LR\n  app --> api\n" };
+    stage({ artifacts: [{ kind: "contract", title: "Trip API", variants: [{ id: "a", label: "A", entry: "api/interface.md" }], files: Object.keys(files) }] }, files);
+    expect(read()[0].files.map((f) => f.path)).toEqual(["api/interface.md", "api/topology.mmd"]);
   });
 
   it("refuses symbolic links, to a file or through a folder, and hard links: nothing outside the folder is read", () => {
@@ -308,6 +330,61 @@ describe("importing a designer run", () => {
     expect((thrown as Error).message).toBe("terminal is outside the project's device scope (desktop, mobile).");
     expect(S.latestArtifacts(s)).toEqual([]);
     expect(readdirSync(join(root, "artifacts")).flatMap((a) => readdirSync(join(root, "artifacts", a)))).toEqual([]);
+  });
+
+  describe("as it is today (round 0 of an existing repository)", () => {
+    /** A repository with one existing screen, and a designer run reproducing it in round 0. */
+    function asIsRun(): { s: State; runId: string } {
+      const repo = join(dir, "repo");
+      mkdirSync(join(repo, "src"), { recursive: true });
+      writeFileSync(join(repo, "README.md"), "# Trips\n");
+      writeFileSync(join(repo, "src", "index.html"), "<h1>Trips</h1>");
+      writeFileSync(join(repo, "src", "trips.css"), "h1 {}");
+      execFileSync("git", ["init", "-q", "-b", "main", repo]);
+      execFileSync("git", ["-C", repo, "add", "-A"]);
+      execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]);
+      const base = runCommand(M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: repo, vision: "Weekend trips.", focus: "" }, at(0)), "openRound", { focus: "material", summary: "As it is today" }, at(1)).state;
+      const asked = runCommand(base, "startStudioRun", { kind: "designer", round: 0, brief: "Reproduce the trip list as it is today." }, at(2));
+      const runId = (asked.result as { runId: string }).runId;
+      return { s: R.dispatchStudioRuns(asked.state, at(3)).state, runId };
+    }
+    const ONE = { ...TRIP_PLAN, title: "Trip list (as is)", variants: [TRIP_PLAN.variants[0]], files: ["a/index.html", "a/style.css"] };
+
+    it("reads each artifact's provenance, and refuses one that is not a list of paths from the repository's root", () => {
+      stage({ artifacts: [{ ...ONE, provenance: ["src/index.html", "src/trips.css", "src/index.html"] }] });
+      expect(read()[0].provenance).toEqual(["src/index.html", "src/trips.css"]);
+      for (const provenance of ["src/index.html", [], [1], ["../etc/passwd"], ["/etc/passwd"], ["src/./a.ts"]]) {
+        stage({ artifacts: [{ ...ONE, provenance }] });
+        expect(refusal(read)).toMatch(/^artifact 1: (the provenance .* is not a path from the repository's root|"provenance" lists 1 to 50 repository files)/);
+      }
+    });
+
+    it("records the reproduction as is, with the repository files it came from, in the version and its manifest.json", () => {
+      stage({ artifacts: [{ ...ONE, provenance: ["src/index.html", "src/trips.css"] }] });
+      const { s, runId } = asIsRun();
+      const root = studioRoot(dir, "p-1");
+      const r = importDesignerRun(s, runId, read(), root, at(4));
+      const art = S.latestArtifacts(r.state)[0];
+      expect(art).toMatchObject({ round: 0, kind: "screen", title: "Trip list (as is)", provenance: { asIs: true, files: ["src/index.html", "src/trips.css"] } });
+      expect(JSON.parse(readFileSync(join(versionDir(root, art.id, 1), "manifest.json"), "utf8")).provenance).toEqual({ asIs: true, files: ["src/index.html", "src/trips.css"] });
+    });
+
+    it("refuses a provenance the repository does not have, and a reproduction without provenance; nothing is recorded", () => {
+      const { s, runId } = asIsRun();
+      const root = studioRoot(dir, "p-1");
+      stage({ artifacts: [{ ...ONE, provenance: ["src/index.html", "src/TripList.tsx"] }] });
+      expect(refusal(() => importDesignerRun(s, runId, read(), root, at(4)))).toBe('the provenance of "Trip list (as is)" names "src/TripList.tsx", which the repository does not have.');
+      stage({ artifacts: [ONE] });
+      expect(() => importDesignerRun(s, runId, read(), root, at(4))).toThrow(/^Round 0 holds what already exists/);
+      expect(S.latestArtifacts(s)).toEqual([]);
+    });
+
+    it("outside round 0, a provenance the designer lists is not recorded: a later round's artifacts are proposals", () => {
+      stage({ artifacts: [{ ...TRIP_PLAN, provenance: ["src/index.html"] }] });
+      const { s, runId } = withRun();
+      const r = importDesignerRun(s, runId, read(), studioRoot(dir, "p-1"), at(4));
+      expect(S.latestArtifacts(r.state)[0].provenance).toBeUndefined();
+    });
   });
 
   it("a folder left by an import that did not commit is replaced; the studio folder needs a plain project id", () => {

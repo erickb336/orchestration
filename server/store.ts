@@ -345,6 +345,8 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
 function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   const project = doc.project as Record<string, unknown>;
   project.devices ??= ["desktop"];
+  // The product's domains (pass 4) came after the first format-19 builds: not chosen yet, so the lead asks.
+  project.domains ??= [];
   project.factoryStarts ??= [];
   project.changeOrders ??= "lead";
   project.budgets ??= { ...NO_BUDGETS };

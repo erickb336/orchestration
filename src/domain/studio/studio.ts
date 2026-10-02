@@ -123,8 +123,9 @@ const variantLabel = (a: StudioArtifact, id: string | undefined) => (id === unde
 // ---------- rounds ----------
 
 /**
- * Open the next round (the service, for the lead's run). What the owner brought is round 0 and only it is about the
- * material; the lead's rounds count from 1. One round at a time: the open one is closed first.
+ * Open the next round (the service, for the lead's run). What already exists is round 0 and only it is about the
+ * material: what the owner brought, or "as it is today" for an existing repository. The lead's other rounds count
+ * from 1. One round at a time: the open one is closed first.
  */
 export function openRound(state: State, input: { focus: RoundFocus; summary?: string; leadRunId?: string }, now: string): { state: State; n: number } {
   const busy = currentRound(state);
@@ -168,6 +169,19 @@ export interface ArtifactInput {
   devices: Device[];
   madeBy: StudioMaker;
   supersedes?: string;
+  /** An "as is" artifact's provenance: the repository files the designer reproduced it from (round 0 only). */
+  provenance?: { files: string[] };
+}
+
+/** The most repository files an "as is" artifact names as its provenance. */
+const MAX_PROVENANCE = 50;
+
+/** Repository paths an "as is" artifact came from: relative, with no empty, "." or ".." segment, no backslash or control character; each once. */
+function provenanceFiles(files: string[]): string[] {
+  if (!files.length || files.length > MAX_PROVENANCE) throw new ControlError(`An as-is artifact names between 1 and ${MAX_PROVENANCE} repository files it came from.`);
+  const bad = (p: string) => !p || p.length > 300 || p.startsWith("/") || p.includes("\\") || CONTROL_RE.test(p) || p.split("/").some((x) => x === "" || x === "." || x === "..");
+  for (const p of files) if (bad(p)) throw new ControlError(`"${agentLine(p).slice(0, 80)}" is not a file path inside the repository.`);
+  return [...new Set(files)];
 }
 
 /** A path inside the studio workspace: relative, with no empty, "." or ".." segment, no backslash and no control character. */
@@ -187,10 +201,19 @@ function maker(m: StudioMaker): StudioMaker {
  * Add an artifact, or a new version of one (the service, from a designer's, the PE's or a probe's run, or the owner's
  * upload into round 0). A new version keeps the artifact's kind and starts with the owner's open pins of the version
  * before. Within a round, the designer revises in answer to the PE only until the PE's three passes are done.
+ *
+ * Round 0 holds what already exists: what the owner brought (material), and for an existing repository the designer's
+ * "as is" reproductions of it, each with its provenance (the repository files it came from). Only round 0 holds
+ * as-is artifacts: a later round's are proposals, not what the code does today.
  */
 export function addArtifact(state: State, input: ArtifactInput, now: string): { state: State; artifactId: string; version: number } {
   const round = getRound(state, input.round);
-  if (round.n === 0 && input.kind !== "material") throw new ControlError("Round 0 holds what the owner brought (material) only.");
+  const asIs = input.provenance !== undefined;
+  if (round.n === 0 && input.kind !== "material" && !(asIs && input.madeBy.role === "designer")) {
+    throw new ControlError("Round 0 holds what already exists: what the owner brought (material), and the designer's reproductions of the existing code, labelled as is with the repository files they came from.");
+  }
+  if (asIs && (round.n !== 0 || input.kind === "material" || input.madeBy.role !== "designer")) throw new ControlError("Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.");
+  const provenance = asIs ? { asIs: true as const, files: provenanceFiles(input.provenance!.files) } : undefined;
   const title = required(agentLine(input.title), 200, "The title");
   if (input.variants.length > MAX_VARIANTS) throw new ControlError(`At most ${MAX_VARIANTS} variants side by side.`);
   if (!input.files.length || input.files.length > MAX_FILES) throw new ControlError(`An artifact has between 1 and ${MAX_FILES} files.`);
@@ -226,13 +249,14 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
   const s = draft(state);
   const id = prev ? prev.id : nextId(s, "sa");
   const version = prev ? prev.version + 1 : 1;
-  const art: StudioArtifact = { id, round: round.n, version, ...(input.supersedes ? { supersedes: input.supersedes } : {}), kind: input.kind, title, variants, files, devices, madeBy, at: now };
+  const art: StudioArtifact = { id, round: round.n, version, ...(input.supersedes ? { supersedes: input.supersedes } : {}), kind: input.kind, title, variants, files, devices, madeBy, at: now, ...(provenance ? { provenance } : {}) };
   s.studio.artifacts.push(art);
   // A pin on a variant the revision no longer has stays, pinned to the artifact as a whole.
   const carried = (prev ? openPins(s, prev.id, prev.version) : []).map(({ variant, ...pin }) => (variant !== undefined && variants.some((v) => v.id === variant) ? { ...pin, variant } : pin));
   if (prev && carried.length) s.studio.feedback.push({ artifactId: id, version, mark: null, pins: carried, note: "", at: now, carriedFrom: prev.version });
   const who = madeBy.role === "user" ? "you brought" : `by the ${madeBy.role === "pe" ? "PE" : madeBy.role} (${madeBy.provider})`;
-  event(s, now, madeBy.role === "user" ? "user" : "runtime", "vision", `${artifactName(art)} added to round ${round.n}, ${who}${variants.length > 1 ? `; ${variants.length} variants` : ""}${carried.length ? `; ${carried.length} open pin${carried.length === 1 ? "" : "s"} carried from v${prev!.version}` : ""}`);
+  const from = provenance ? `; as is, from ${provenance.files.length === 1 ? provenance.files[0] : `${provenance.files.length} repository files`}` : "";
+  event(s, now, madeBy.role === "user" ? "user" : "runtime", "vision", `${artifactName(art)} added to round ${round.n}, ${who}${from}${variants.length > 1 ? `; ${variants.length} variants` : ""}${carried.length ? `; ${carried.length} open pin${carried.length === 1 ? "" : "s"} carried from v${prev!.version}` : ""}`);
   return { state: s, artifactId: id, version };
 }
 

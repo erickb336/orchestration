@@ -432,6 +432,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       steeringMode: "apply",
       stage: "building",
       devices: ["desktop", "mobile"],
+      domains: ["screen"],
       factoryStarts: [],
       changeOrders: "lead",
       prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
