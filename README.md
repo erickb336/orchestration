@@ -174,7 +174,7 @@ A personal tool under active development. It was built in milestones ORC-001 to 
 | [ORC-027](docs/tasks/ORC-027.md) The real-run test, committed | The end-to-end scenario runs in CI on simulated agents; `npm run test:real` runs it with real ones and leaves a record in [`docs/real-runs/`](docs/real-runs/) | Done |
 | [ORC-028](docs/tasks/ORC-028.md) Fixes from the real run | Investigation revises its report while its review finds something, and a rule keeps every flow from dropping review findings | Done; **verified with real models** |
 | [ORC-029](docs/tasks/ORC-029.md) The vision studio, before the factory | Shape the product with the lead on prototypes you can click (demo sites, mobile mockups, terminal demos), inputs and outputs, and flows; the approved blueprint is what the factory builds from | **Planned** |
-| [ORC-031](docs/tasks/ORC-031.md) Subagents, allowed and tracked | Let an agent start its provider's own subagents, counted, costed, capped and shown; each provider is switched on only after real runs prove pause, cost and safety | **Planned** (after ORC-029) |
+| [ORC-031](docs/tasks/ORC-031.md) Subagents in research steps | Let agents in explicitly read-only research steps start their provider's own subagents, counted, costed, capped and shown; writers stay single-session; each provider is switched on only after real runs prove pause and cost | **Planned** (after ORC-029) |
 
 **Verified with real models: the core run, notes and review repair, not every feature.** The scenario behind `npm run test:real` has run four times with real agents, all on 2026-10-01, and grew with each fix; every run's record is in [`docs/real-runs/`](docs/real-runs/). The latest (15 of 15 checks, from a clean commit) showed:
 
