@@ -3,7 +3,7 @@
 // `codex --version`.
 
 import { spawn as nodeSpawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -588,6 +588,42 @@ describe("worker isolation", () => {
     expect(turn.params.sandboxPolicy).toEqual({ type: "workspaceWrite", writableRoots: [dir], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true });
     expect(existsSync(join(dir, ".tmp"))).toBe(true);
     expect(existsSync(`${dir}.tmp`)).toBe(false);
+  });
+
+  it("a studio PE run reads its version under the read-only sandbox, with its temp folder outside the version: nothing is written into it (review finding 6)", async () => {
+    const envs: NodeJS.ProcessEnv[] = [];
+    const spawn: CodexAdapterOptions["spawn"] = (command, args, options) => {
+      envs.push(options.env ?? {});
+      return nodeSpawn(command, args, options);
+    };
+    const { adapter, events, stubLog } = make("complete", { spawn });
+    await adapter.health();
+    const version = join(dir, "artifacts", "sa-1", "v1");
+    const tmp = join(dir, "staging", "studio-9");
+    mkdirSync(version, { recursive: true });
+    writeFileSync(join(version, "index.html"), "<h1>Trip plan</h1>");
+    adapter.start(assignment("studio-9", { studio: true, role: "pe", environment: "isolated", workspace: { path: version, access: "read", tmp } }));
+    await waitFor(() => terminals(events).length > 0);
+    expect(terminals(events)[0].type).toBe("completed");
+    const turn = stubLog()
+      .filter((l: { recv?: { method?: string } }) => l.recv?.method === "turn/start")
+      .pop().recv;
+    expect(turn.params.sandboxPolicy).toEqual({ type: "readOnly", networkAccess: false });
+    expect(turn.params.cwd).toBe(version);
+    const worker = envs.at(-1)!;
+    expect([worker.TMPDIR, worker.TMP, worker.TEMP]).toEqual([tmp, tmp, tmp]);
+    expect(existsSync(tmp)).toBe(true);
+    // The version's folder holds what the import wrote, and nothing else.
+    expect(readdirSync(version)).toEqual(["index.html"]);
+  });
+
+  it("a read-only studio run without a temp folder from the service does not start", async () => {
+    const { adapter, events } = make("complete");
+    await adapter.health();
+    adapter.start(assignment("studio-10", { studio: true, role: "pe", environment: "isolated", workspace: { path: dir, access: "read" } }));
+    await waitFor(() => terminals(events).length > 0);
+    expect(terminals(events)[0]).toMatchObject({ type: "failed", message: expect.stringContaining("A read-only studio run needs a temp folder outside the version it reads") });
+    expect(existsSync(join(dir, ".tmp"))).toBe(false);
   });
 
   it("a studio run fails closed, like any isolated run, when the MCP servers cannot be listed", async () => {

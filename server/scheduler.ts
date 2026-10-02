@@ -7,7 +7,7 @@
 // everything in one lease-checked transaction, so state changes stay serialized.
 
 import { createHash, randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import * as C from "../src/domain/checks";
 import * as D from "../src/domain/delivery";
@@ -80,6 +80,8 @@ interface Launched {
   touchedInputs?: string[];
   /** A studio run: its staging folder, removed once what it handed in was imported. */
   staging?: string;
+  /** A read-only studio run (the PE): its temp folder, outside the version it reads, removed when the run ends. */
+  tmp?: string;
 }
 
 /** What the scheduler saw of a studio run outside the store: a lost process, an unconfirmed stop, a launch that failed. */
@@ -555,6 +557,7 @@ export class Scheduler {
       if ((info?.taskId === "LEAD" || info?.taskId === "STUDIO" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
       // A studio run's staging folder goes once what it handed in is imported; a failed or stopped run's stays, to look at.
       if (info?.staging && R.getStudioRun(after, e.attemptId)?.status === "completed") rmSync(info.staging, { recursive: true, force: true });
+      if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
       this.launched.delete(e.attemptId);
     }
     this.conventionsCache = undefined;
@@ -839,8 +842,13 @@ export class Scheduler {
     const limits = state.project.runLimits;
     if (run.kind === "pe") {
       try {
-        const folder = versionDir(studioRoot(this.dataDir, state.project.id), run.artifactId!, run.baseVersion!);
-        this.launched.set(runId, { provider: run.provider, access: "read", stepId: run.kind, taskId: "STUDIO" });
+        const root = studioRoot(this.dataDir, state.project.id);
+        const folder = versionDir(root, run.artifactId!, run.baseVersion!);
+        // Its temp files go in its own staging folder: the version it reads is immutable (review finding 6).
+        const tmp = join(root, run.workspace);
+        rmSync(tmp, { recursive: true, force: true });
+        mkdirSync(tmp, { recursive: true });
+        this.launched.set(runId, { provider: run.provider, access: "read", stepId: run.kind, taskId: "STUDIO", tmp });
         adapter.start({
           attemptId: runId,
           taskId: "STUDIO",
@@ -848,7 +856,7 @@ export class Scheduler {
           role: "pe",
           provider: run.provider,
           model: run.model,
-          workspace: { path: folder, access: "read" },
+          workspace: { path: folder, access: "read", tmp },
           studio: true,
           environment: "isolated",
           connections: [],
@@ -858,6 +866,8 @@ export class Scheduler {
         });
         return undefined;
       } catch (e) {
+        const tmp = this.launched.get(runId)?.tmp;
+        if (tmp) rmSync(tmp, { recursive: true, force: true });
         this.launched.delete(runId);
         return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
       }

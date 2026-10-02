@@ -42,6 +42,11 @@ export interface Assignment {
      * allows reads there; Codex's sandbox (0.159.2) has no readable-roots setting and does not confine reads anyway.
      */
     readRoots?: string[];
+    /**
+     * A folder outside `path` for the run's temporary files, which the service gives a read-only studio run (the
+     * PE): its working directory is an immutable artifact version, so nothing may be written there.
+     */
+    tmp?: string;
   };
   /**
    * A Vision studio run (ORC-029): it writes only in its staging folder, has no shell, and is isolated whatever

@@ -385,6 +385,9 @@ describe("the PE's runs at the service", () => {
     tick();
     const pe = peRuns()[0];
     const a = codex.runs.get(pe.id)!;
+    // Its temp folder is its own staging folder, outside the immutable version it reads (review finding 6).
+    const tmp = join(dataDir, "studio", state().project.id, "staging", pe.id);
+    expect(existsSync(tmp)).toBe(true);
     expect({ ...a, prompt: undefined }).toEqual({
       attemptId: pe.id,
       taskId: "STUDIO",
@@ -392,7 +395,7 @@ describe("the PE's runs at the service", () => {
       role: "pe",
       provider: "codex",
       model: "codex-sample-large",
-      workspace: { path: folder, access: "read" },
+      workspace: { path: folder, access: "read", tmp },
       studio: true,
       environment: "isolated",
       connections: [],
@@ -416,6 +419,7 @@ describe("the PE's runs at the service", () => {
     ]));
     tick();
     expect(runOf(pe.id)).toMatchObject({ status: "completed", usage: { inputTokens: 12_000, outputTokens: 900 } });
+    expect(existsSync(tmp)).toBe(false);
     expect(state().studio.verdicts.map((v) => ({ variant: v.variant, verdict: v.verdict, by: v.by, lastPass: v.lastPass, budget: v.budget }))).toEqual([
       { variant: "a", verdict: "feasible", by: { provider: "codex", model: "codex-sample-large-actual", runId: pe.id }, lastPass: true, budget: undefined },
       { variant: "b", verdict: "feasible-if", by: { provider: "codex", model: "codex-sample-large-actual", runId: pe.id }, lastPass: true, budget },
