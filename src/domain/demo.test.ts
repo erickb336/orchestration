@@ -408,7 +408,8 @@ describe("the demo state", () => {
     const inv = task(s, "WT-012");
     expect(inv).toMatchObject({ lifecycle: "done", flow: { id: "investigation", chosenBy: "lead" }, integration: { status: "not-needed" } });
     expect(M.currentSpec(inv).content).toMatchObject({ area: "Reliability", title: "Why does the map drain the battery on long hikes?" });
-    expect(inv.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "S2:done", "S3:done"]);
+    // The review's one note blocks nothing, so the revise step is skipped (ORC-028) and the lead writes the spec.
+    expect(inv.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:done", "S2:done", "S3:skipped", "S4:done"]);
     const report = M.acceptedOutput(s, inv, "S1", "report")!;
     expect(report.kind).toBe("report");
     expect(report.summary).toMatch(/GPS is polled once a second for the whole hike, screen off included/);
@@ -417,7 +418,7 @@ describe("the demo state", () => {
     expect(evidence.findings).toEqual([expect.objectContaining({ severity: "info", action: "no-op", title: "Figures from one phone on one hike" })]);
     expect(evidence.openFindings).toBe(0);
     expect(F.awaitingDecision(s, inv)).toBeUndefined();
-    const brief = M.acceptedOutput(s, inv, "S3", "brief")!;
+    const brief = M.acceptedOutput(s, inv, "S4", "brief")!;
     expect(brief.kind).toBe("brief");
     expect(brief.summary).toMatch(/polls the location every 30 seconds while the screen is off/);
     expect(s.attempts.find((a) => a.id === brief.attemptId)?.snapshot).toMatchObject({ provider: "claude", role: "lead" });

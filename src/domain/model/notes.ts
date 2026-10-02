@@ -298,8 +298,12 @@ export function recentNotes(s: State, nowMs: number, windowMs = 24 * 60 * 60_000
   return s.notes.filter((n) => n.at >= since);
 }
 
-/** Exactly what the agent reads: mid-run as a user message, or in the "Notes for this run" section of its envelope. */
+/**
+ * Exactly what the agent reads: mid-run as a user message, or in the "Notes for this run" section of its envelope.
+ * The acceptance sentence (ORC-028) follows a real run in which a note ("also say how many lines…") was followed and
+ * the task's own acceptance criterion (name the files read) was dropped.
+ */
 export function noteMessage(n: Pick<Note, "text" | "from" | "at" | "sentAt">): string {
   const who = n.from.by === "lead" ? "Note from the lead, relaying the user" : "Note from the user";
-  return `${who} (mid-run, ${n.sentAt ?? n.at}): ${n.text}\nThis is guidance within your current assignment; it does not change the specification. Apply it from now on, keep the work you have done unless the note says otherwise, and finish with the output block as instructed. If you had already finished, apply the note and give the output block again.`;
+  return `${who} (mid-run, ${n.sentAt ?? n.at}): ${n.text}\nThis is guidance within your current assignment; it does not change the specification. Apply it from now on, keep the work you have done unless the note says otherwise, and still meet everything the task asks for, including its acceptance criteria. Finish with the output block as instructed. If you had already finished, apply the note and give the output block again.`;
 }

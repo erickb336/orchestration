@@ -52,7 +52,8 @@ const TABLE: Record<string, Record<string, string[]>> = {
     S6: ["prove-it-works"],
   },
   design: { S1: ["exhaust-the-design-space", "experience-first"], S2: ["experience-first"], S3: ["experience-first"], S4: ["sequence-verifiable-units"] },
-  investigation: { S1: ["fix-root-causes", "prove-it-works"], S2: ["prove-it-works"], S3: ["fix-root-causes"] },
+  // ORC-028: S3 revises the report with the investigator's two; the lead's step moved to S4.
+  investigation: { S1: ["fix-root-causes", "prove-it-works"], S2: ["prove-it-works"], S3: ["fix-root-causes", "prove-it-works"], S4: ["fix-root-causes"] },
   goal: { S1: ["foundational-thinking", "sequence-verifiable-units"], S2: ["prove-it-works"] },
   revert: { S1: ["laziness-protocol"], S2: ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"], SR1: ["boundary-discipline"], S3: ["prove-it-works"] },
   "delivery-review": { S1: ["laziness-protocol", "test-behavior-not-implementation", "migrate-callers-then-delete-legacy-apis", "minimize-reader-load"], SR1: ["boundary-discipline"] },

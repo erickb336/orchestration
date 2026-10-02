@@ -30,7 +30,7 @@ import { leaksIn, scrubHomePaths } from "./recordLeaks.mjs";
 
 const FAKE = process.argv.includes("--fake");
 /** PASSED needs exactly this many checks, all passing: a check that silently stopped running fails the test. */
-const EXPECTED_CHECKS = 13;
+const EXPECTED_CHECKS = 15;
 const ROOT = resolve(import.meta.dirname, "..");
 const PORT = Number(process.env.ORCHESTRATION_TEST_PORT ?? 5399);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -100,14 +100,14 @@ const state = () => api("/api/state");
 const active = (s, taskId) => s.state.attempts.filter((a) => a.taskId === taskId && (a.outcome === "running" || a.outcome === "stopping"));
 const task = (s, id) => s.state.tasks.find((t) => t.id === id);
 
-async function until(what, pred, timeoutMs) {
+async function until(what, pred, timeoutMs, pollMs = 500) {
   const start = Date.now();
   for (;;) {
     const s = await state();
     const v = pred(s);
     if (v) return { s, v, waitedMs: Date.now() - start };
     if (Date.now() - start > timeoutMs) throw new Error(`Timed out after ${timeoutMs / 1000}s waiting for: ${what}`);
-    await sleep(500);
+    await sleep(pollMs);
   }
 }
 
@@ -146,7 +146,8 @@ async function main() {
   await cmd("setRunLimits", { maxTurns: 12, timeoutMinutes: 5, maxBudgetUsd: 0.5 });
   s = await state();
   const flow = s.state.flows.find((p) => p.id === FLOW_ID);
-  check(`the built-in ${FLOW_ID} flow is loaded with its three steps`, !!flow && flow.source === "built-in" && flow.steps.map((st) => st.role).join(",") === "coder,code_reviewer,lead", flow ? { name: flow.name, steps: flow.steps.map((st) => `${st.id} ${st.purpose}`), hash: flow.hash.slice(0, 8) } : null);
+  // Investigation since ORC-028: investigate, review, revise the report while the review finds something, the lead's spec.
+  check(`the built-in ${FLOW_ID} flow is loaded with its four steps`, !!flow && flow.source === "built-in" && flow.steps.map((st) => st.role).join(",") === "coder,code_reviewer,coder,lead", flow ? { name: flow.name, steps: flow.steps.map((st) => `${st.id} ${st.purpose}`), hash: flow.hash.slice(0, 8) } : null);
   if (!flow) throw new Error(`The built-in ${FLOW_ID} flow is not in the state`);
   log(`Flow: ${flow.name} (${FLOW_ID}): ${flow.steps.map((st) => `${st.id} ${st.purpose} (${st.role})`).join(" → ")}`);
   const codexModel = FAKE ? s.state.project.catalog.codex[0].id : "auto";
@@ -230,13 +231,16 @@ async function main() {
   // run; a note to it counts only once that runtime acknowledges it (Claude: the SDK replays the message; Codex:
   // turn/steer answers). Whether the report then answers the note is recorded, not checked: following a note is
   // the model's choice, and greeting.js has three lines whether or not the report says so.
+  // The note goes as soon as the run is dispatched (polled every 100 ms), as early as a person could send one: Codex
+  // may not have started its thread yet, which the adapter must hold the note through (ORC-027's review).
+  // `sentBeforeThreadStarted` records whether that path was taken.
   const NOTE = "Also say in your report how many lines greeting.js has.";
   const sent = [];
   for (const [label, id] of [
     ["codex", codexTask],
     ["claude", claudeTask],
   ]) {
-    const { s: live } = await until(`${label} first step running again`, (x) => active(x, id).find((a) => a.stepId === "S1") || task(x, id).steps.find((st) => st.id === "S1").state === "done", 60000);
+    const { s: live } = await until(`${label} first step running again`, (x) => active(x, id).find((a) => a.stepId === "S1") || task(x, id).steps.find((st) => st.id === "S1").state === "done", 60000, 100);
     const run = active(live, id).find((a) => a.stepId === "S1");
     if (!run) {
       check(`${label}: a note reached the running worker and its runtime acknowledged it`, false, "the first step finished before a note could be sent");
@@ -252,7 +256,7 @@ async function main() {
       continue;
     }
     sent.push({ label, id, noteId: result.noteId, run: run.id });
-    record(`${label}: note sent`, { note: result.noteId, run: run.id });
+    record(`${label}: note sent`, { note: result.noteId, run: run.id, sentBeforeThreadStarted: !run.sessionId });
   }
   for (const n of sent) {
     const { v: note } = await until(`${n.label} note settled`, (x) => {
@@ -275,18 +279,39 @@ async function main() {
   ]) {
     const t = task(final, id);
     const runs = final.state.attempts.filter((a) => a.taskId === id).map((a) => ({ id: a.id, step: a.stepId, provider: a.snapshot.provider, model: a.snapshot.model, actualModel: a.actualModel ?? null, outcome: a.outcome, usage: a.usage ?? null, note: a.note ?? null }));
-    const report = final.state.artifacts.find((a) => a.taskId === id && a.name === "report");
-    const brief = final.state.artifacts.find((a) => a.taskId === id && a.name === "brief");
-    // A hint only, not a check: does the report give greeting.js's line count, as the note asked?
+    const report = newest(final, id, "report");
+    const brief = newest(final, id, "brief");
+    // A hint only, not a check: does the final report give greeting.js's line count, as the note asked?
     const answersNote = report ? /\b(3|three)\b[^.\n]{0,20}\blines?\b/i.test(report.summary) : null;
-    record(`${label}: result`, { lifecycle: t.lifecycle, blocked: t.steps.find((st) => st.state === "blocked")?.blockedReason ?? null, runs, report: report ? { summary: report.summary, answersNote } : null, brief: brief ? { summary: brief.summary } : null });
+    const reviews = final.state.artifacts.filter((a) => a.taskId === id && a.kind === "review-findings").map((a) => ({ step: a.stepId, open: a.openFindings ?? 0, findings: (a.findings ?? []).map((f) => `${f.severity}/${f.action}: ${f.title}`) }));
+    record(`${label}: result`, { lifecycle: t.lifecycle, blocked: t.steps.find((st) => st.state === "blocked")?.blockedReason ?? null, steps: t.steps.map((st) => `${st.id}:${st.state}`), runs, reviews, report: report ? { step: report.stepId, summary: report.summary, answersNote } : null, brief: brief ? { summary: brief.summary } : null });
+  }
+  // 6. No review finding dropped (ORC-028). The lead's run of 2026-10-01 ended an Investigation as Done with an open
+  // auto-fix warning, because that flow's review fed no repair. Every conditional (repair) step whose review found
+  // something that needed a fix must have run, not been skipped.
+  for (const [label, id] of [
+    ["codex", codexTask],
+    ["claude", claudeTask],
+  ]) {
+    const t = task(final, id);
+    const open = (ref) => {
+      const art = final.state.artifacts.filter((a) => a.taskId === id && a.stepId === ref.step && a.name === ref.output).at(-1);
+      return art?.openFindings ?? 0;
+    };
+    const repairs = t.steps.filter((st) => st.runIf?.length);
+    const dropped = repairs.filter((st) => st.state === "skipped" && st.runIf.some((r) => open(r) > 0)).map((st) => st.id);
+    check(`${label}: review findings that needed a fix were revised, not dropped`, repairs.length > 0 && dropped.length === 0, {
+      revised: repairs.filter((st) => st.state === "done").map((st) => st.id),
+      skippedClean: repairs.filter((st) => st.state === "skipped").map((st) => st.id),
+      dropped,
+    });
   }
   for (const [label, id] of [
     ["codex", codexTask],
     ["claude", claudeTask],
   ]) {
-    const report = final.state.artifacts.find((a) => a.taskId === id && a.name === "report");
-    const brief = final.state.artifacts.find((a) => a.taskId === id && a.name === "brief");
+    const report = newest(final, id, "report");
+    const brief = newest(final, id, "brief");
     check(`${label}: task completed with a recorded report and brief`, task(final, id).lifecycle === "done" && !!report && !!brief);
   }
   check("managed repository main branch untouched, and nothing committed by the investigation", git("rev-list", "--count", "main") === "1" && git("status", "--porcelain") === "");
@@ -307,6 +332,11 @@ function gitEmail() {
   } catch {
     return null;
   }
+}
+
+/** A task's newest artifact by output name (the revised report, when the review asked for one). */
+function newest(s, taskId, name) {
+  return s.state.artifacts.filter((a) => a.taskId === taskId && a.name === name).at(-1);
 }
 
 function taskLabel(s, id) {

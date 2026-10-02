@@ -1,5 +1,6 @@
 // Flows, the service side: every built-in flow file passes flows/flow.schema.json (validation lives in
-// tests, never at runtime), the six flows equal the format-14 templates apart from the security review,
+// tests, never at runtime), the six flows equal the format-14 templates apart from the security review and
+// Investigation's revise step (ORC-028),
 // the removed commands and the removed reload endpoint are gone over HTTP, migration 14 → 15 → 16 for an
 // older database (no file export any more), migration 15 → 16 for a format-15 database with every renamed
 // field, and a custom pipeline that keeps running across the upgrade. Temporary directories only.
@@ -120,6 +121,15 @@ describe("the built-in files", () => {
       const t = V14_TEMPLATES[id];
       // One deliberate addition: Bug fix's verification now reads the code review's findings beside the security review's (item 11: "the final verification reads both").
       const expected = t.steps.map(toDef).map(described).map((st) => (id === "bugfix" && st.id === "S5" ? { ...st, inputs: st.inputs.flatMap((r) => (r.step === "C2" ? [{ step: "S3", output: "findings" }, r] : [r])) } : st));
+      // Another (ORC-028): Investigation revises its report while the review finds something, as Design does, so no
+      // finding is dropped; the lead's step moves to S4 and reads the revised report beside the first.
+      if (id === "investigation") {
+        const lead = expected.pop()!;
+        expected.push(
+          toDef({ id: "S3", purpose: "Revise the report", role: "coder", dependsOn: ["S2"], inputs: [{ step: "S1", output: "report" }, { step: "S2", output: "findings" }], outputs: [{ name: "report", kind: "report" }], runIf: [{ step: "S2", output: "findings" }], iterate: { from: "S2", max: 3 } }),
+          { ...lead, id: "S4", dependsOn: ["S3"], inputs: [{ step: "S1", output: "report" }, { step: "S3", output: "report" }, { step: "S2", output: "findings" }] },
+        );
+      }
       expect(withoutSecurity(p.steps), id).toEqual(expected);
       expect(p.name, id).toBe(t.name);
       expect(p.steps.some((s) => s.role === "security_reviewer"), id).toBe(["change", "feature", "bugfix"].includes(id));

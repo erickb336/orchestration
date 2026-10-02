@@ -268,7 +268,7 @@ describe("the service's own paths", () => {
     expect(r.imported).toEqual(["IMP-1"]);
     const t = task(r.state, "IMP-1");
     expect(t.flow).toMatchObject({ id: "investigation", chosenBy: "default" });
-    expect(t.steps.map((x) => x.id)).toEqual(["S1", "S2", "S3"]);
+    expect(t.steps.map((x) => x.id)).toEqual(["S1", "S2", "S3", "S4"]);
     expect(t.flowSince).toBe(1);
   });
 

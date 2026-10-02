@@ -62,7 +62,7 @@ In the owner's words (2026-10-01): "a starting playground for me to develop and 
   - quality gates (sandboxed checks, triaged findings, review coverage);
   - six flows, with a code review and a security review beside it wherever code changes (ORC-021);
   - one component kit for every screen, shown at `#/kit`, so the UI stays consistent (ORC-025).
-- **Verified with real models (two runs on 2026-10-01):** Claude and Codex agents running at once, truthful pause and resume per task and per project, notes acknowledged by both runtimes, and both tasks completing with a review and the lead's brief (`npm run test:real`; records in `docs/real-runs/`).
+- **Verified with real models (three runs on 2026-10-01):** Claude and Codex agents running at once, truthful pause and resume per task and per project, notes acknowledged by both runtimes (also when sent before the agent started), review findings repaired before the lead's spec, and both tasks completing (`npm run test:real`; records in `docs/real-runs/`).
 - **Not yet verified with real models:** pull-request delivery, conversations with the lead, and the principles' effect. The README must say so until evidence exists.
 - **Constraints:**
   - nothing claims a capability without evidence;
