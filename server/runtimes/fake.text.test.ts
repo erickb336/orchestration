@@ -2,9 +2,11 @@
 
 import { describe, expect, it } from "vitest";
 import { DEMO_SCRIPT, NEUTRAL_FINDING, PLANNING_IDEAS } from "../../src/domain/demoScript";
+import { LEAD_REPLY_SCHEMA, schemaMismatch } from "../../src/domain/model/leadReplySchema";
 import type { OutputDef } from "../../src/domain/types";
 import { parseLeadOutput, parseOutputs } from "../envelope";
-import { fakeFinalText, fakeLeadText, fakePlanningProposal, fakeSteer, fakeVision, taskTitleIn } from "./fake";
+import { FakeAdapter, fakeFinalText, fakeLeadAnswer, fakeLeadReply, fakeLeadText, fakePlanningProposal, fakeSteer, fakeVision, taskTitleIn } from "./fake";
+import type { AdapterEvent, Assignment } from "./types";
 
 const breakdown: OutputDef[] = [{ name: "plan", kind: "breakdown" }];
 const review: OutputDef[] = [{ name: "findings", kind: "review-findings" }];
@@ -106,5 +108,105 @@ describe("fake runtime text (ORC-017)", () => {
       expect(String(v.text)).toMatch(/The simulation wrote this from your newest message alone/);
     }
     expect(String(later.reason)).toBe("Redrawn from your newest message after 2 exchanges; the assumptions are yours to confirm or change.");
+  });
+});
+
+// ORC-029 pass 4: the lead's reply is schema-constrained output. Under a schema the simulated lead answers as a
+// constrained model does (every field, null where left out, the JSON alone), and a reply the schema refuses fails.
+describe("the simulated lead under the output schema", () => {
+  const prompts = {
+    planning: "# Lead run run-1 (planning)\n## Open work\n",
+    steering: [
+      "# Lead run run-2 (reply to the user)",
+      "## Open work",
+      '- T-001 [Running] P5 "Low" area:General · by lead · may: priority, defer, drop · steps: S1 coder running (Codex, run-12)',
+      "",
+      "## Messages to answer now",
+      "- focus on offline maps instead, and tell the coder to skip the README",
+      "",
+      "## Rules",
+      "",
+    ].join("\n"),
+    shaping: [
+      "# Lead run run-3 (reply to the user)",
+      "Project stage: shaping",
+      "",
+      "## The studio",
+      "Devices (the user's scope): desktop, mobile.",
+      "No round yet, and the repository has code.",
+      "- Not chosen yet by the owner.",
+      "- No round is open.",
+      "",
+      "## Conversation (most recent last)",
+      "User: hello",
+      "",
+      "## Messages to answer now",
+      "- A hiking planner that works offline",
+      "",
+      "## Rules",
+      "",
+    ].join("\n"),
+    decisions: ["# Lead run run-4 (decisions on findings)", "## Decisions waiting for you", "- fd-1 on T-001 x", "", "## Decisions you make as the PE", "- fd-2 on T-002 y", "", "## Rules", ""].join("\n"),
+  };
+  const replies = {
+    planning: fakeLeadReply(RUN, "planning", prompts.planning),
+    steering: fakeLeadReply(RUN, "message", prompts.steering),
+    shaping: fakeLeadReply(RUN, "message", prompts.shaping),
+    decisions: fakeLeadReply(RUN, "decisions", prompts.decisions),
+  };
+
+  it("every kind of simulated reply matches the schema, and reads back as the same reply", () => {
+    // Each prompt gives the parts it is for, so the check covers every field the simulated lead sends.
+    expect(replies.planning.proposals).toHaveLength(1);
+    expect(replies.steering.steer).toMatchObject({ focus: expect.any(String), tasks: [{ id: "T-001", defer: true }], notes: [{ task: "T-001", step: "S1" }] });
+    expect(Object.keys(replies.shaping)).toEqual(expect.arrayContaining(["vision", "coverage", "questions", "studio"]));
+    expect(replies.shaping.studio).toMatchObject({ openRound: { focus: "material" }, designerRuns: [{ kinds: ["screen"], devices: ["desktop", "mobile"] }] });
+    expect(replies.decisions.decisions).toEqual([expect.objectContaining({ id: "fd-1" }), expect.objectContaining({ id: "fd-2", cost: expect.any(Object) })]);
+    for (const [kind, reply] of Object.entries(replies)) {
+      const answer = fakeLeadAnswer(reply, LEAD_REPLY_SCHEMA);
+      expect(answer, kind).toMatchObject({ ok: true });
+      const json = (answer as { json: string }).json;
+      // The JSON alone, with every field: it matches the schema with nothing filled in.
+      expect(schemaMismatch(LEAD_REPLY_SCHEMA, JSON.parse(json)), kind).toBeUndefined();
+      const { problem, ...out } = parseLeadOutput(json);
+      expect(problem, kind).toBeUndefined();
+      expect(out, kind).toEqual(reply);
+    }
+  });
+
+  it("the simulated runtime answers a lead run with the schema's JSON, and fails a run whose reply the schema refuses", () => {
+    const fake = new FakeAdapter("claude", { ackMode: "normal", ackDelayMs: 0, progressPerTick: 100 });
+    const events: AdapterEvent[] = [];
+    fake.onEvent((e) => events.push(e));
+    const lead = (attemptId: string, outputSchema?: Record<string, unknown>): Assignment => ({
+      attemptId,
+      taskId: "LEAD",
+      stepId: "LEAD",
+      role: "lead",
+      provider: "claude",
+      model: "sample",
+      workspace: { path: "", access: "read" },
+      environment: "isolated",
+      connections: [],
+      prompt: prompts.planning,
+      outputs: [],
+      ...(outputSchema ? { outputSchema } : {}),
+      limits: { maxTurns: 1, timeoutMs: 0 },
+    });
+    fake.start(lead("with-schema", LEAD_REPLY_SCHEMA));
+    fake.start(lead("without-schema"));
+    // A schema with a field the simulated lead never sends.
+    fake.start(lead("refused", { type: "object", properties: { verdict: { type: "string" } }, required: ["verdict"], additionalProperties: false }));
+    fake.tick(Date.now());
+    const end = (id: string) => events.find((e) => e.attemptId === id && (e.type === "completed" || e.type === "failed"))!;
+    const constrained = end("with-schema");
+    expect(constrained.type).toBe("completed");
+    expect(JSON.parse((constrained as { finalText: string }).finalText)).toMatchObject({ reply: expect.any(String), steer: null, studio: null, proposals: [expect.objectContaining({ title: expect.any(String) })] });
+    expect(end("without-schema")).toMatchObject({ type: "completed", finalText: expect.stringContaining("```json") });
+    expect(end("refused")).toEqual({
+      type: "failed",
+      attemptId: "refused",
+      message: expect.stringMatching(/^The simulated lead's answer does not match the output schema: the reply must have required property 'verdict'/),
+    });
   });
 });

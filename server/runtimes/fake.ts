@@ -9,6 +9,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AckMode } from "../../src/api";
+import { schemaMismatch, withNulls, type JsonSchema } from "../../src/domain/model/leadReplySchema";
 import { DOCUMENT_KINDS, type StudioArtifactKind } from "../../src/domain/studio/types";
 import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, scriptedFinding, scriptedSummary } from "../../src/domain/demoScript";
 import type { CatalogModel, OutputDef, ProviderId, State } from "../../src/domain/types";
@@ -35,6 +36,8 @@ interface Proc {
   lead?: "planning" | "message" | "decisions";
   /** The lead envelope, kept so a simulated message run can steer from what it was shown. */
   prompt?: string;
+  /** The output schema a lead run's answer must match, when the service gave one. */
+  outputSchema?: Record<string, unknown>;
   /** ORC-022: notes handed to this run, each acknowledged after `ticks` more ticks (a simulated delay). */
   notes?: { id: string; ticks: number }[];
   /**
@@ -289,12 +292,21 @@ export function fakePlanningProposal(prompt: string): Record<string, unknown> {
 }
 
 /**
- * A simulated lead reply in the required JSON shape. Planning runs propose one small task; message runs may steer
+ * A simulated lead reply in the required JSON shape, as text: the reply, then the object in a fenced JSON block (what a
+ * lead sends when its runtime applies no output schema).
+ */
+export function fakeLeadText(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = "", board?: State, nowMs = Date.now()): string {
+  const out = fakeLeadReply(attemptId, trigger, prompt, board, nowMs);
+  return `${String(out.reply)}\n\n\`\`\`json\n${JSON.stringify(out, null, 2)}\n\`\`\`\n`;
+}
+
+/**
+ * A simulated lead reply: the object a lead sends. Planning runs propose one small task; message runs may steer
  * or draft the vision. ORC-025 (L3): a message run that only asks about the board ("what needs me?", "how is
  * offline maps going?") is answered from `board`, the service's state now (fakeStatus.ts); without it (unit tests
  * of the text alone), the reply says what the demo lead can do.
  */
-export function fakeLeadText(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = "", board?: State, nowMs = Date.now()): string {
+export function fakeLeadReply(attemptId: string, trigger: "planning" | "message" | "decisions", prompt = "", board?: State, nowMs = Date.now()): Record<string, unknown> {
   void attemptId; // never part of any title or text
   const proposals = trigger === "planning" ? [fakePlanningProposal(prompt)] : [];
   const steer = trigger === "message" ? fakeSteer(prompt) : undefined;
@@ -337,7 +349,18 @@ export function fakeLeadText(attemptId: string, trigger: "planning" | "message" 
               ? statusAnswer(board, question, nowMs)
               : "Noted; I changed nothing. Ask me what is running, what needs you or how a task is going; tell me what to focus on; or ask me to tell the coder on a task something.";
   const reply = `${replyText}${studioLine}`;
-  return `${reply}\n\n\`\`\`json\n${JSON.stringify({ reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}), ...(studio ? { studio } : {}) }, null, 2)}\n\`\`\`\n`;
+  return { reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}), ...(studio ? { studio } : {}) };
+}
+
+/**
+ * The simulated lead's answer under an output schema, as a constrained model gives it: the object with every field the
+ * schema names (null where the lead left it out), as JSON. An object the schema refuses fails the run, so the simulated
+ * loop proves the schema accepts what the simulated lead sends.
+ */
+export function fakeLeadAnswer(reply: Record<string, unknown>, schema: Record<string, unknown>): { ok: true; json: string } | { ok: false; why: string } {
+  const answer = withNulls(schema as JsonSchema, reply);
+  const why = schemaMismatch(schema as JsonSchema, answer);
+  return why ? { ok: false, why } : { ok: true, json: JSON.stringify(answer) };
 }
 
 // ---------- the simulated designer's documents and "as is" reproductions (ORC-029 pass 4) ----------
@@ -496,7 +519,7 @@ export class FakeAdapter implements RuntimeAdapter {
   start(a: Assignment) {
     if (a.role === "lead" && a.stepId === "LEAD") {
       if (this.procs.has(a.attemptId)) return;
-      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : /^# Lead run \S+ \(decisions on findings\)/.test(a.prompt) ? "decisions" : "message", prompt: a.prompt });
+      this.procs.set(a.attemptId, { progress: 0, outputs: [], lead: /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : /^# Lead run \S+ \(decisions on findings\)/.test(a.prompt) ? "decisions" : "message", prompt: a.prompt, ...(a.outputSchema ? { outputSchema: a.outputSchema } : {}) });
       this.emit({ type: "started", attemptId: a.attemptId });
       return;
     }
@@ -646,6 +669,12 @@ export class FakeAdapter implements RuntimeAdapter {
                   ? "Made a terminal demo of the trips CLI, and its TUI in two layouts (simulated sample)."
                   : "Made the trip plan in two variants, for desktop and mobile (simulated sample).",
           });
+          continue;
+        }
+        if (p.lead && p.outputSchema) {
+          const answer = fakeLeadAnswer(fakeLeadReply(id, p.lead, p.prompt, p.lead === "message" ? this.board?.() : undefined, nowMs), p.outputSchema);
+          if (answer.ok) this.emit({ type: "completed", attemptId: id, finalText: answer.json });
+          else this.emit({ type: "failed", attemptId: id, message: `The simulated lead's answer does not match the output schema: ${answer.why}` });
           continue;
         }
         this.emit({ type: "completed", attemptId: id, finalText: p.lead ? fakeLeadText(id, p.lead, p.prompt, p.lead === "message" ? this.board?.() : undefined, nowMs) : fakeFinalText(id, p.outputs, p.stepId, p.taskId, p.title) });
