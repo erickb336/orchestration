@@ -298,7 +298,7 @@ async function main() {
   const artifacts = S.latestArtifacts(st).filter((a) => a.madeBy.role === "designer");
   evidence.runs = st.studio.runs.map((r) => ({ id: r.id, kind: r.kind, provider: r.provider, model: r.actualModel ?? r.model, status: r.status, usage: r.usage ?? null, estimatedUsd: Spend.estimateUsd(r, Spend.PRICES).usd, simulated: !!r.simulated, note: r.note ?? null, artifact: r.artifactId ? `${r.artifactId} v${r.baseVersion}` : null }));
   evidence.artifacts = artifacts.map((a) => ({ id: a.id, version: a.version, kind: a.kind, title: a.title, devices: a.devices, variants: a.variants, files: a.files.length, shots: a.shots ?? null, demo: a.demo ?? null, peReview: S.peReview(st, a).status }));
-  evidence.verdicts = st.studio.verdicts.map((v) => ({ artifact: `${v.artifactId} v${v.version}`, variant: v.variant ?? null, verdict: v.verdict, reasons: v.reasons, change: v.change ?? null, budget: v.budget ?? null, by: v.by ?? null }));
+  evidence.verdicts = st.studio.verdicts.map(verdictRecord);
   record("studio settled", { artifacts: artifacts.map((a) => `${a.title} v${a.version} (${a.kind}, ${a.variants.length} variant${a.variants.length === 1 ? "" : "s"})`) });
 
   const screens = artifacts.filter((a) => a.kind === "screen");
@@ -440,11 +440,29 @@ async function leadProject(key, { repoPath, vision, message, carried }) {
       round: round ? { n: round.n, focus: round.focus, summary: round.summary, lead: round.lead ?? null } : null,
       runs: st.studio.runs.map((r) => ({ id: r.id, kind: r.kind, provider: r.provider, model: r.actualModel ?? r.model, status: r.status, usage: r.usage ?? null, simulated: !!r.simulated, note: r.note ?? null, fromLead: r.fromLead ?? null })),
       artifacts: artifacts.map((a) => ({ id: a.id, version: a.version, round: a.round, kind: a.kind, title: a.title, variants: a.variants.length, devices: a.devices, provenance: a.provenance ?? null, peReview: S.peReview(st, a).status })),
-      verdicts: st.studio.verdicts.map((v) => ({ artifact: `${v.artifactId} v${v.version}`, variant: v.variant ?? null, verdict: v.verdict, reasons: v.reasons, by: v.by ?? null })),
+      verdicts: st.studio.verdicts.map(verdictRecord),
     },
   ];
   return { key, lead, round, asked: asked.map((r) => st.studio.runs.find((y) => y.id === r.id)), artifacts, state: st, spend: claudeSpend(st) };
 }
+
+/**
+ * A PE verdict as the record keeps it: with its pass, the change it asks for, its checks of the earlier asks and its
+ * open cases, so a record shows whether the loop converged (the second real trial recorded the reasons only).
+ */
+const verdictRecord = (v) => ({
+  artifact: `${v.artifactId} v${v.version}`,
+  pass: v.pass,
+  variant: v.variant ?? null,
+  verdict: v.verdict,
+  reasons: v.reasons,
+  change: v.change ?? null,
+  earlier: v.earlier ?? null,
+  fromRevision: !!v.fromRevision,
+  openCases: v.openCases ?? null,
+  budget: v.budget ?? null,
+  by: v.by ?? null,
+});
 
 /** Whether the PE reviewed every one of these artifacts through its own runs, and the owner may now see them. */
 const reviewed = (st, artifacts) => artifacts.length > 0 && artifacts.every((a) => S.readyForOwner(st, a) && st.studio.verdicts.some((v) => v.artifactId === a.id && v.version === a.version && v.by));
