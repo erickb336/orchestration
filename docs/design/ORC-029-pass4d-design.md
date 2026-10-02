@@ -137,3 +137,18 @@ These are the undecided cases that the owner decides; in the second trial, the d
 - **The measure** on `docs/real-runs` (Vale 3.24.0): the PE's verdicts pass at 78% (83 of 107 sentences), the lead's messages at 79% and its briefs at 57%.
 - **Checks after the merge:** `npm test` 1,720 passed and 1 skipped; the typecheck passes; `trial:studio -- --fake --lead` passes.
 
+## 4d-2a as built (merged 2026-10-02)
+
+- **The dictionary:** a `dictionary` artifact holds `dictionary.json`, a list of `{ term, meaning, avoid[] }`, checked at import: no duplicate terms, and an avoided word may not be another term. The app shows a table. The owner marks each row keep, change or drop, in one click, and "Keep the other N" marks the rest. A row marked change or drop blocks approval until the next version, so a dropped term never comes into force. Row marks are a new part of the feedback shape, not pins: a pin is a comment at a point and needs text.
+- **In force:** the dictionary version that the owner approved into the blueprint (the newest approved, when there are two). Task agents, the lead, the designer and the PE get "The project's words" (at most 40 terms). Vale gets one substitution rule per term, generated into the service's data folder, never the repository: "Use 'trip', not 'journey' or 'outing' (the project's dictionary)." is an error. The lead's, the designer's and the PE's checks all use it.
+- **Rules:** a flow artifact may carry `rules.json`. Each rule must fit one of EARS's five patterns, and each example "Given …, when …, then …". The import refuses a line that fits no pattern, with its id and the patterns. The app shows the rules with their pattern (always, event, state, unwanted, optional), and the owner marks each one. The flows brief asks for every edge case as an "If …, then …" rule.
+- **Not verified with real models:** a real designer writing `dictionary.json` or `rules.json`.
+
+## One table of rules per artifact kind (merged 2026-10-02)
+
+`UNGATED_KINDS` meant two things: the PE does not review a kind, and the owner does not mark it. Six places chose their words with a two-way ternary on the kind's name. It is replaced by `KIND_RULES: Record<StudioArtifactKind, KindRule>`, one row per kind, with who makes it, whether the PE reviews it (and why not), and whether the owner's mark is asked for. A new kind cannot be added without a row. `peReview` has a status `"not-reviewed"` with the reason, and it is the only code that reads the PE column.
+
+**The lead's decision:** a dictionary goes to the owner with no PE review. The PE judges feasibility, scale, longevity and budget, and a word list raises none of them. The owner still marks its rows. The lead's brief now says which artifacts the PE reviews.
+
+**Checks after all merges:** `npm test` 1,770 passed and 1 skipped; the build passes; the integration test and both simulated studio trials pass. The dictionary's PE panel was checked in rendered markup, not in a browser.
+
