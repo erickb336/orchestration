@@ -26,8 +26,17 @@ export interface Round {
   summary: string;
 }
 
-export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "material" | "evidence";
-export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "material", "evidence"];
+/**
+ * What an artifact is. A screen product's: screens, terminal demos and TUIs. A code product's (r9): its `interface`
+ * (names, signatures, the error model, usage examples as a caller writes them) and its core `algorithm`s and
+ * primitives (pseudo-code, a worked trace, invariants, cost). An infrastructure system's: its `topology` (what talks to
+ * what, failure and recovery, scale and cost). Any domain's `contract`s (what crosses a boundary, with examples) and
+ * `flow`s (journeys, sequences, and tables of cases and outcomes). The owner's `material`, and a probe's `evidence`.
+ */
+export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "interface" | "algorithm" | "topology" | "material" | "evidence";
+export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology", "material", "evidence"];
+/** Kinds that are documents: plain files (Markdown with code blocks and tables, `.mmd` Mermaid), shown without a device frame. */
+export const DOCUMENT_KINDS: StudioArtifactKind[] = ["contract", "flow", "interface", "algorithm", "topology"];
 /** Kinds the PE does not review: what the owner brought, and a probe's evidence. They reach the owner at once, and a verdict on one is refused. */
 export const UNGATED_KINDS: StudioArtifactKind[] = ["material", "evidence"];
 
@@ -240,7 +249,7 @@ export interface ChangeOrder {
 export type StudioRunKind = "designer" | "pe" | "probe";
 export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
 /** What a designer's manifest may hold: the owner brings material, and a probe's run makes evidence. */
-export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow"];
+export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology"];
 
 /** queued → running → (stopping →) stopped, completed, failed or lost. A queued run waits for dispatch, which happens in Vision only. */
 export type StudioRunStatus = "queued" | "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";

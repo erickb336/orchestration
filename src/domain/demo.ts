@@ -267,6 +267,7 @@ class DemoBuilder {
         steeringMode: "apply",
         stage: "building",
         devices: ["desktop", "mobile"],
+        domains: ["screen"],
         factoryStarts: [],
         changeOrders: "lead",
         shapingSince: at(4340),

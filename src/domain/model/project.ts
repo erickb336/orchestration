@@ -96,6 +96,8 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.project.stage = "shaping";
   s.project.shapingSince = now;
   s.project.devices = ["desktop", "mobile"];
+  // Not chosen yet: the lead proposes the domains, and the owner confirms them.
+  s.project.domains = [];
   s.project.factoryStarts = [];
   s.project.changeOrders = "lead";
   s.project.hold = false;

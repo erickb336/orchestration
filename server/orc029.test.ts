@@ -37,7 +37,7 @@ function format18(path: string, edit: (doc: Record<string, unknown>) => void = (
   const raw = new DatabaseSync(path);
   const doc = JSON.parse((raw.prepare("SELECT json FROM state WHERE id = 1").get() as { json: string }).json) as Record<string, unknown>;
   const project = doc.project as Record<string, unknown>;
-  for (const k of ["budgets", "devices", "factoryStarts", "changeOrders"]) delete project[k];
+  for (const k of ["budgets", "devices", "domains", "factoryStarts", "changeOrders"]) delete project[k];
   delete doc.studio;
   delete doc.blueprint;
   doc.version = 18;
@@ -60,11 +60,13 @@ describe("the format 18 → 19 migration", () => {
     expect(s.project.stage).toBe("building");
     expect(s.project.factoryStarts).toEqual([]);
     expect(s.project.devices).toEqual(["desktop"]);
+    // The product's domains are not chosen yet: the lead asks, the owner confirms.
+    expect(s.project.domains).toEqual([]);
     expect(s.project.budgets).toEqual({ buildingUsd: null, maintenanceUsdPerMonth: null });
     expect(s.project.changeOrders).toBe("lead");
     expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
     expect(s.blueprint).toEqual({ revisions: [], changeOrders: [] });
-    const { budgets: _b, devices: _d, factoryStarts: _f, changeOrders: _c, ...project } = s.project;
+    const { budgets: _b, devices: _d, domains: _m, factoryStarts: _f, changeOrders: _c, ...project } = s.project;
     expect(project).toEqual(before.project);
     expect(s.tasks).toEqual(before.tasks);
     expect(s.attempts).toEqual(before.attempts);
@@ -144,7 +146,7 @@ describe("format-19 databases written before all of format 19's fields existed (
     early19(path, (doc) => {
       const project = doc.project as Record<string, unknown>;
       project.changeOrders = "user";
-      for (const k of ["devices", "factoryStarts", "budgets"]) delete project[k];
+      for (const k of ["devices", "domains", "factoryStarts", "budgets"]) delete project[k];
       delete doc.studio;
       (doc as { blueprint: unknown }).blueprint = { revisions: [], changeOrders: [order(3), { ...order(4), handler: "lead" }] };
     });
@@ -152,7 +154,7 @@ describe("format-19 databases written before all of format 19's fields existed (
     opened.push(store);
     const s = store.read().state;
     expect(s.blueprint.changeOrders.map((c) => c.handler)).toEqual(["user", "lead"]);
-    expect(s.project).toMatchObject({ changeOrders: "user", devices: ["desktop"], factoryStarts: [], budgets: { buildingUsd: null, maintenanceUsdPerMonth: null } });
+    expect(s.project).toMatchObject({ changeOrders: "user", devices: ["desktop"], domains: [], factoryStarts: [], budgets: { buildingUsd: null, maintenanceUsdPerMonth: null } });
     expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
   });
 

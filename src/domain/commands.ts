@@ -10,16 +10,19 @@ import * as M from "./model";
 import * as P from "./peReview";
 import type { PeReviewTarget } from "./peReview";
 import * as B from "./studio/blueprint";
+import { setDomains } from "./studio/domains";
 import * as R from "./studio/runs";
 import * as S from "./studio/studio";
 import { type Mark, type StudioMaker, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
 import {
   ControlError,
   DEVICES,
+  PROJECT_DOMAINS,
   PROVIDERS,
   ROLES,
   STEERING_MODES,
   type Device,
+  type ProjectDomain,
   type FactorySettings,
   type ModelSelection,
   type PrDeliveryConfig,
@@ -211,6 +214,17 @@ export const COMMANDS = {
       strings(a.devices, "devices").map((d) => {
         if (!DEVICES.includes(d as Device)) throw new InvalidCommandError(`unknown device ${d}: choose desktop, mobile or terminal`);
         return d as Device;
+      }),
+      now,
+    ),
+  ),
+  /** The product's domains: at least one of screen, code and infrastructure. The owner's only; the lead proposes them as a question. */
+  setDomains: same((s, now, a) =>
+    setDomains(
+      s,
+      strings(a.domains, "domains").map((d) => {
+        if (!PROJECT_DOMAINS.includes(d as ProjectDomain)) throw new InvalidCommandError(`unknown domain ${d}: choose screen, code or infrastructure`);
+        return d as ProjectDomain;
       }),
       now,
     ),

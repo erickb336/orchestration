@@ -11,7 +11,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as R from "../../src/domain/studio/runs";
 import * as S from "../../src/domain/studio/studio";
-import { DESIGNER_KINDS, type StudioRun } from "../../src/domain/studio/types";
+import { domainLines } from "../../src/domain/studio/domains";
+import { DESIGNER_KINDS, DOCUMENT_KINDS, type StudioRun } from "../../src/domain/studio/types";
 import type { ModelSelection, State } from "../../src/domain/types";
 import type { Store } from "../store";
 import { FILE_TYPES, MAX_ARTIFACT_BYTES, MAX_FILE_BYTES, ManifestError, NO_MODULES, STUDIO_MANIFEST, type StagedArtifact, versionDir, writeVersion } from "./artifacts";
@@ -73,6 +74,12 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     "",
     `Design for ${devices.map((d) => SIZES[d]).join("; ")}.`,
     "",
+    "## The product's domains",
+    "",
+    // Designer briefs follow the domain (r9): what the studio shows for a screen product, a code product, an infrastructure system.
+    ...domainLines(state.project.domains).map((l) => `- ${l}`),
+    "- Make the kinds the brief asks for; when it names none, the kinds of the product's domains.",
+    "",
     "## What to hand in",
     "",
     `End by writing \`${STUDIO_MANIFEST}\` in your working directory:`,
@@ -86,7 +93,8 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     `- \`kind\`: one of ${DESIGNER_KINDS.join(", ")}. \`devices\`: those it is designed for, within the project's devices (none for a contract or a flow).`,
     "- `variants`: 1 to 6 options side by side, each with an id (letters, digits, - and _), a short label, and its entry file.",
     "- `files`: every file of the artifact, as paths relative to your working directory, each listed once; every entry is one of them.",
-    `- File types: ${FILE_TYPES.join(", ")}. At most ${MAX_FILE_BYTES / 1024 / 1024} MB a file and ${MAX_ARTIFACT_BYTES / 1024 / 1024} MB an artifact. No links. The folders shots/, recording/ and __orchestrator/ are the service's.`,
+    `- File types: ${FILE_TYPES.join(", ")}. At most ${MAX_FILE_BYTES / 1024 / 1024} MB a file and ${MAX_ARTIFACT_BYTES / 1024 / 1024} MB an artifact. Names use only letters, digits, ".", "_", "-" and spaces. No links. The folders shots/, recording/ and __orchestrator/ are the service's.`,
+    `- A document (${DOCUMENT_KINDS.join(", ")}) is plain files: Markdown (.md) with code blocks and tables, and Mermaid (.mmd) for diagrams, which the app renders. Its variant's entry is its main .md file; it has no devices. Write rules and edge cases as tables of cases and outcomes.`,
     "- A terminal demo or TUI variant's entry is a VHS `.tape`, which the service records in a sandbox: `Set Columns` and `Set Rows` to 80×24, 100×30 or 120×40, `Set Shell` bash or zsh, `Output` .webm, .gif and .txt (one each), no Copy, Paste, Screenshot or Env.",
     "  - The tape's shell starts at the artifact's root, with a copy of every file the artifact lists, so paths in the tape's commands are relative to the artifact's root, as in studio.json: a tape at `demo/demo.tape` runs `node demo/trips.js`, not `node trips.js`.",
     "  - VHS's own `Output` and `Source` paths are relative to the tape's folder: `Output demo.gif` (the service writes it into recording/<variant>/), and Source only of a .tape in that folder.",

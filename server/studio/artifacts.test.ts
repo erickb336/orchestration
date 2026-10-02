@@ -158,7 +158,7 @@ describe("reading studio.json", () => {
     stage({ screens: [] });
     expect(refusal(read)).toBe('studio.json has no "artifacts" list.');
     stage({ artifacts: [{ ...TRIP_PLAN, kind: "material" }] });
-    expect(refusal(read)).toBe('artifact 1: the kind "material" is not one this run makes (screen, terminal-demo, tui, contract, flow).');
+    expect(refusal(read)).toBe('artifact 1: the kind "material" is not one this run makes (screen, terminal-demo, tui, contract, flow, interface, algorithm, topology).');
   });
 
   it("refuses file types outside the allowlist, paths outside the folder, the service's own manifest, and entries that are not files", () => {
