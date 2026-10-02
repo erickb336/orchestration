@@ -773,8 +773,8 @@ export class Scheduler {
         if (r.stopRequestedAt && nowMs - Date.parse(r.stopRequestedAt) >= this.ackTimeoutMs) issues.push({ id: r.id, kind: "timeout" });
       }
     }
-    // A sample or unconfigured project never reaches a real agent.
-    if (!canDispatch) return issues;
+    // A sample or unconfigured project never reaches a real agent. With nothing queued there is nothing to write.
+    if (!canDispatch || !state.studio.runs.some((r) => r.status === "queued")) return issues;
     const now = new Date(nowMs).toISOString();
     const simulated = (Object.keys(this.adapters) as ProviderId[]).filter((p) => this.adapters[p] instanceof FakeAdapter);
     let started: string[] = [];
