@@ -9,11 +9,12 @@
 // The browser is the system Chrome through playwright-core (CHROME_PATH or the installed Google Chrome). Without
 // it these tests are skipped, with the reason printed.
 
+import { randomBytes } from "node:crypto";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Browser, BrowserContext, Frame, Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { acceptPinMessage, prototypeOrigin } from "../../src/runtime/prototype";
 import { createHttpServer } from "../http";
@@ -21,8 +22,8 @@ import { FakeAdapter, defaultFakeConfig } from "../runtimes/fake";
 import { Scheduler } from "../scheduler";
 import { Store } from "../store";
 import { createPrototypeServer } from "./serve";
-import { launchChrome } from "./shots";
-import { TINY_PNG, close, listen, writeVersion } from "./testFixtures";
+import { deadProxy, launchChrome, noNetworkArgs } from "./shots";
+import { TINY_PNG, close, lanAddress, listen, netLogHosts, outsideHosts, outsideListeners, outsidePage, writeVersion } from "./testFixtures";
 
 const chrome = await launchChrome();
 const browser: Browser | undefined = "browser" in chrome ? chrome.browser : undefined;
@@ -323,5 +324,68 @@ describe.skipIf(!browser)("a hostile prototype in the app's sandboxed frame", ()
     expect(seen).toContain("https://example.com/orchestrator-escape");
     expect(protoRequests.slice(start.proto).map((r) => `${r.host} ${r.url} ${r.status}`)).toEqual(expect.arrayContaining([`p-sa-2-v1.localhost:${protoPort} /a/secret.js 200`]));
     await context.close();
+  }, 60_000);
+});
+
+// Ways out that no page policy covers (pass 3 review, finding 3): WebRTC (STUN over UDP, TURN over TCP), and the
+// browser's own DNS prefetch and preconnect. connect-src does not apply to them, and neither does the frame's sandbox.
+// Listeners on this machine's network address stand in for servers on the internet, and Chrome's own network log
+// shows which host names it looked up. Each run uses a Chrome profile of its own, as a person's Chrome has one (an
+// incognito context never prefetches).
+const LAN = lanAddress();
+describe.skipIf(!browser || !LAN)("a prototype's WebRTC, DNS prefetch and preconnect", () => {
+  /** The outside page in a fresh profile: framed by the app page as the studio frames it, or top-level as the screenshots load it. */
+  async function visit(how: "owner's frame" | "screenshot flags"): Promise<{ hits: string[]; looked: Record<string, string[]>; ice: string[]; tag: string }> {
+    const listeners = await outsideListeners();
+    const tag = randomBytes(4).toString("hex");
+    const id = how === "owner's frame" ? "sa-5" : "sa-6";
+    writeVersion(join(root, "studio", "p-test"), id, 1, { "a/index.html": outsidePage(LAN!, listeners, tag) });
+    writeFileSync(join(root, "static", "outside.html"), appPage(`${prototypeOrigin(id, 1, protoPort)}/a/index.html`, true));
+    const dir = mkdtempSync(join(root, "profile-"));
+    const netLog = join(dir, "netlog.json");
+    const proxy = how === "screenshot flags" ? await deadProxy() : undefined;
+    const path = process.env.CHROME_PATH;
+    let ice: string[] = [];
+    const context = await chromium.launchPersistentContext(join(dir, "profile"), {
+      headless: true,
+      ...(path ? { executablePath: path } : { channel: "chrome" }),
+      args: [`--log-net-log=${netLog}`, "--net-log-capture-mode=Everything", ...(proxy ? noNetworkArgs(proxy.port) : [])],
+    });
+    try {
+      const page = context.pages()[0] ?? (await context.newPage());
+      const origin = prototypeOrigin(id, 1, protoPort);
+      if (how === "owner's frame") await page.goto(`http://127.0.0.1:${appPort}/outside.html`);
+      else await page.goto(`${origin}/a/index.html`);
+      const frame = how === "owner's frame" ? await prototypeFrame(page, origin) : page.mainFrame();
+      if (how === "screenshot flags") await frame.waitForFunction(() => (globalThis as { __done?: boolean }).__done === true, undefined, { timeout: 15_000 });
+      await page.waitForTimeout(1500);
+      ice = await js<string[]>(frame, "window.__ice");
+    } finally {
+      await context.close();
+      await listeners.close();
+      proxy?.close();
+    }
+    return { hits: listeners.hits(), looked: netLogHosts(netLog, tag), ice, tag };
+  }
+  const queried = (events: string[] | undefined) => (events ?? []).some((e) => /DNS_TRANSACTION|HOST_RESOLVER_SYSTEM_TASK|HOST_RESOLVER_DNS_TASK/.test(e));
+
+  it("in the owner's own Chrome, from the studio's sandboxed frame, still reach the network: the app cannot stop them (the design says so)", async () => {
+    const { hits, looked, ice, tag } = await visit("owner's frame");
+    expect(ice.filter((c) => / typ host /.test(c)).length).toBeGreaterThan(0);
+    // What the owner's browser allows today (Chrome 154, 2026-10-02). If this starts to fail, Chrome closed a way
+    // out: update "F2 as built" in docs/design/ORC-029-pass4-design.md.
+    expect(hits).toEqual(expect.arrayContaining(["STUN: 20 bytes over UDP", "TURN: a TCP connection", "preconnect: a TCP connection"]));
+    const h = outsideHosts(tag);
+    expect({ dnsPrefetch: queried(looked[h.dnsPrefetch]), scripted: queried(looked[h.scripted]), preconnect: queried(looked[h.preconnect]), stun: queried(looked[h.stun]) }).toEqual({ dnsPrefetch: true, scripted: true, preconnect: true, stun: true });
+  }, 60_000);
+
+  it("in a Chrome with the screenshot browser's flags, reach nothing: no packet, no connection, no name looked up", async () => {
+    const { hits, looked, ice, tag } = await visit("screenshot flags");
+    expect(hits).toEqual([]);
+    expect(Object.entries(looked).filter(([, events]) => queried(events))).toEqual([]);
+    // They were tried: WebRTC gathered and found no way out (not one candidate), and the preconnect to a name went to
+    // the proxy, which is dead, without a lookup.
+    expect(ice).toEqual(["end"]);
+    expect(looked[outsideHosts(tag).preconnect]).toEqual(expect.arrayContaining(["HTTP_STREAM_JOB_CONTROLLER"]));
   }, 60_000);
 });
