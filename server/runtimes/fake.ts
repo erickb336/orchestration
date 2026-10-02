@@ -2,14 +2,16 @@
 // adapters, so the scheduler exercises one path for both. Its "processes" live only in this
 // service's memory; they vanish when the service stops, which lets restart reconciliation be tested
 // honestly. It advances only when the scheduler calls tick(). No agent executes. A studio designer run writes a
-// sample prototype into its staging folder (server/studio/sample.ts), which the service imports like a real one; a
-// studio PE run answers with simulated verdicts on the version it was given.
+// sample prototype into its staging folder (server/studio/sample.ts), which the service imports like a real one, and
+// a revision marks the variants its brief names; a studio PE run answers with simulated verdicts on the version it
+// was given.
 
+import { existsSync, readdirSync } from "node:fs";
 import type { AckMode } from "../../src/api";
 import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, scriptedFinding, scriptedSummary } from "../../src/domain/demoScript";
 import type { CatalogModel, OutputDef, ProviderId, State } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
-import { TERMINAL_BRIEF, designerAsk, fakePeAnswer, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
+import { TERMINAL_BRIEF, designerAsk, fakePeAnswer, reviseSample, variantsToRevise, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
 import { statusAnswer, statusQuestion } from "./fakeStatus";
 import type { AdapterEvent, Assignment, ProviderHealth, RuntimeAdapter } from "./types";
 
@@ -486,6 +488,17 @@ export class FakeAdapter implements RuntimeAdapter {
           // A simulated PE reads the version's manifest and answers as a real one would: a verdict per variant.
           const answer = fakePeAnswer(p.studio);
           this.emit(answer.ok ? { type: "completed", attemptId: id, finalText: answer.text } : { type: "failed", attemptId: id, message: `The simulated PE could not read the version: ${answer.error}` });
+          continue;
+        }
+        if (p.studio !== undefined && existsSync(p.studio) && readdirSync(p.studio).length) {
+          // A revision: its staging folder starts with the files of the version it revises. The simulated designer
+          // marks the variants its brief asks it to revise, and hands in that one artifact.
+          const ask = designerAsk(p.prompt ?? "");
+          try {
+            this.emit({ type: "completed", attemptId: id, finalText: reviseSample(p.studio, { terminal: ask.terminal, variants: variantsToRevise(ask.brief) }) });
+          } catch (e) {
+            this.emit({ type: "failed", attemptId: id, message: `The simulated designer could not revise: ${e instanceof Error ? e.message : String(e)}` });
+          }
           continue;
         }
         if (p.studio !== undefined) {
