@@ -206,8 +206,9 @@ describe("the cap", () => {
     expect(C.addCheckRound(s, t, c2, at(2), "user")).toBeUndefined();
     for (const st of t.steps.filter((x) => /-r1-/.test(x.id) && x.role !== "checks")) out.push({ name: `check round ${st.id}`, ids: [...EVERY_RUN_PRINCIPLE_IDS, ...stepPrinciples(st), ...(repairable(st) ? [PREMISE_ID] : [])] });
     expect(out.map((x) => x.name)).toEqual(expect.arrayContaining(["change S1", "bugfix S2", "revert S1", "delivery-review SR1", "check round C2-r1-fix", "check round C2-r1-review", "check round C2-r1-security"]));
-    // The automatic one reaches exactly the repairs: the three flows' loop repairs, Design S3 and the check-round fix.
-    expect(out.filter((x) => x.ids.includes(PREMISE_ID)).map((x) => x.name)).toEqual(["change S3", "bugfix S4", "feature S5", "design S3", "check round C2-r1-fix"]);
+    // The automatic one reaches exactly the repairs: the three flows' loop repairs, Design S3, Investigation S3 (ORC-028)
+    // and the check-round fix.
+    expect(out.filter((x) => x.ids.includes(PREMISE_ID)).map((x) => x.name)).toEqual(["change S3", "bugfix S4", "feature S5", "design S3", "investigation S3", "check round C2-r1-fix"]);
     return out;
   }
 

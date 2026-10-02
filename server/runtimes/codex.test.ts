@@ -361,7 +361,8 @@ describe("notes", () => {
     expect(noteEvents(events)).toEqual([]);
     expect(steers(stubLog)).toHaveLength(0);
     await waitFor(() => noteEvents(events).length === 1);
-    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "delivered" }]);
+    // The outcome says the note was held: evidence of this path in a real run's record (ORC-028 review).
+    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "delivered", heldForTurn: true }]);
     expect(steers(stubLog)).toHaveLength(1);
     expect(steers(stubLog)[0].params).toMatchObject({ threadId: "thr_stub_1", expectedTurnId: "turn_stub_1" });
     await waitFor(() => terminals(events).length === 1);
@@ -377,7 +378,7 @@ describe("notes", () => {
     expect(noteEvents(events)).toEqual([]);
     adapter.interrupt("att-1");
     await waitFor(() => terminals(events).length === 1);
-    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "not-delivered", reason: "the run was stopped first" }]);
+    expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "not-delivered", reason: "the run was stopped first", heldForTurn: true }]);
     const types = events.map((e) => e.type);
     expect(types.indexOf("note")).toBeLessThan(types.findIndex((t) => t === "stopped" || t === "failed"));
     await settle(2200);

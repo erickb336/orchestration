@@ -57,7 +57,7 @@ It opens a sample project (Weekend Trips, a hiking app) on a simulated runtime, 
 | **Bug fix** | A defect you can reproduce | reproduce → then as Change; the lead confirms the bug is gone |
 | **Feature** | New screens, flows or copy | design → implement → checks with a UX review beside them → code and security review → repair → final checks → verify |
 | **Design** | Settling a design first | design → UX review → revise → the lead writes the implementation brief |
-| **Investigation** | The cause is unknown | gather evidence → review it → the lead proposes a spec (no code) |
+| **Investigation** | The cause is unknown | gather evidence → review it → revise the report while the review finds something (up to three rounds) → the lead proposes a spec (no code) |
 | **Goal** | Work too big for one task | the lead breaks it into child tasks that run in parallel, then evaluates and re-plans |
 
 Each flow is a short JSON file in [`flows/`](flows/). To change one, edit its file and run `npm test`. The security review adds one review run per round.
@@ -116,8 +116,8 @@ npm run typecheck
 npm test
 npm run build
 npm run capture    # retake the README images from the demo (needs Chrome and ffmpeg)
-npm run test:integration   # the end-to-end scenario on simulated agents (about 70 s; CI runs it)
-npm run test:real          # the same scenario with real Claude and Codex agents (your credentials, about $0.14)
+npm run test:integration   # the end-to-end scenario on simulated agents (about 90 s; CI runs it)
+npm run test:real          # the same scenario with real Claude and Codex agents (your credentials; about $0.19 last time)
 ```
 
 **Where things are:**
@@ -131,7 +131,7 @@ npm run test:real          # the same scenario with real Claude and Codex agents
 
 ## Status
 
-A personal tool under active development. It was built in milestones ORC-001 to ORC-027, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-two are done, four were dropped, and one is planned. Later milestones sometimes replaced earlier ones; the last column says what survives.
+A personal tool under active development. It was built in milestones ORC-001 to ORC-028, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-three are done, four were dropped, and one is planned. Later milestones sometimes replaced earlier ones; the last column says what survives.
 
 **The foundation** (the five milestones in the [project spec](docs/PROJECT_SPEC.md), plus pipelines):
 
@@ -172,17 +172,18 @@ A personal tool under active development. It was built in milestones ORC-001 to 
 | [ORC-025](docs/tasks/ORC-025.md) UI audit and rebuild | One dark theme, a component kit, every screen rebuilt, a new demo | Done |
 | [ORC-026](docs/tasks/ORC-026.md) Write for the reader | A sixteenth principle, our own, given to every agent and the lead | Done |
 | [ORC-027](docs/tasks/ORC-027.md) The real-run test, committed | The end-to-end scenario runs in CI on simulated agents; `npm run test:real` runs it with real ones and leaves a record in [`docs/real-runs/`](docs/real-runs/) | Done |
+| [ORC-028](docs/tasks/ORC-028.md) Fixes from the real run | Investigation revises its report while its review finds something, and a rule keeps every flow from dropping review findings | Done; **verified with real models** |
 
-**Verified with real models: the core run and notes, not every feature.** The scenario behind `npm run test:real` has run twice with real agents, both on 2026-10-01: an earlier version without notes (11 of 11 checks), then the current one (13 of 13). Each run's record is in [`docs/real-runs/`](docs/real-runs/). The current one checked:
+**Verified with real models: the core run, notes and review repair, not every feature.** The scenario behind `npm run test:real` has run four times with real agents, all on 2026-10-01, and grew with each fix; every run's record is in [`docs/real-runs/`](docs/real-runs/). The latest (15 of 15 checks, from a clean commit) showed:
 
 - a Codex agent (gpt-6.1-sol) and a Claude agent (Haiku 4.5) worked at the same time, each in its own worktree;
 - Pause showed "Pausing" until each runtime confirmed the stop (1.5 to 2 seconds), and Resume started a fresh attempt;
 - a project-wide pause reached both;
-- **a note sent to each running agent was acknowledged by its runtime** (Codex in 1.7 seconds, Claude in 7.7). Both reports then did what the note asked, which neither did in the run without a note. Claude's report also dropped the list of files it read, which the task required; the review and the lead's brief both caught it;
-- both tasks finished, with a review and the lead's brief on Claude Sonnet 5.5;
-- the managed repository's `main` was untouched.
+- **a note sent as soon as each agent was dispatched was acknowledged by both runtimes** (Codex in 1.8 seconds, Claude in 5.8);
+- **the Claude task's review found an error in its report** (a wrong line count, given in answer to the note) and a gap. The revise step fixed both, on Codex, and the second review was clean. Before [ORC-028](docs/tasks/ORC-028.md), such findings were left open and the task still read Done;
+- both tasks finished with the lead's spec, and the managed repository's `main` was untouched.
 
-Each run takes under a minute and about $0.14 of Claude usage. **Not yet run with real models:** pull-request delivery, conversations with the lead, and whether the principles change what agents do. Every feature is also tested against simulated and scripted Claude and Codex runtimes, and CI runs the same scenario on simulated agents.
+It took 88 seconds and about $0.19 of Claude usage. **Not yet run with real models:** pull-request delivery, conversations with the lead (and notes the lead sends), whether the principles change what agents do, and a Codex note that arrives before its turn starts (held by the adapter; covered by tests, but no real run has hit that moment yet). Every feature is also tested against simulated and scripted Claude and Codex runtimes, and CI runs the same scenario on simulated agents.
 
 ## License
 

@@ -213,6 +213,11 @@ describe("the note's life", () => {
     expect(note(d, n.id)).toMatchObject({ status: "delivered", via: "live", settledAt: at(6) });
     expect(note(d, n.id).reason).toBeUndefined();
     expect(d.events[d.events.length - 1].message).toBe(`Note ${n.id} delivered to S2's run ${run.id}`);
+    expect(note(d, n.id).heldForTurn).toBeUndefined();
+    // Held by the runtime until the agent's turn began (Codex, ORC-028 review): recorded on the note and in the feed.
+    const held = M.reportNoteOutcome(s, { attemptId: run.id, noteId: n.id, outcome: "delivered", heldForTurn: true }, at(6));
+    expect(note(held, n.id)).toMatchObject({ status: "delivered", heldForTurn: true });
+    expect(held.events[held.events.length - 1].message).toBe(`Note ${n.id} delivered to S2's run ${run.id}, held until the agent's turn began`);
     // Or refused, with the runtime's reason.
     const nd = M.reportNoteOutcome(s, { attemptId: run.id, noteId: n.id, outcome: "not-delivered", reason: " no active turn " }, at(6));
     expect(note(nd, n.id)).toMatchObject({ status: "not-delivered", reason: "no active turn", settledAt: at(6) });
@@ -375,7 +380,7 @@ describe("the note's life", () => {
   it("the text an agent reads is exactly the framing from the spec, for the lead and for the user", () => {
     const lead: Pick<Note, "text" | "from" | "at" | "sentAt"> = { text: "Skip the README.", from: { by: "lead", leadRunId: "lead-1", changeSetId: "cs-lead-1", changeId: "cs-lead-1.1", messageIds: ["msg-1"] }, at: at(0), sentAt: at(2) };
     expect(M.noteMessage(lead)).toBe(
-      `Note from the lead, relaying the user (mid-run, ${at(2)}): Skip the README.\nThis is guidance within your current assignment; it does not change the specification. Apply it from now on, keep the work you have done unless the note says otherwise, and finish with the output block as instructed. If you had already finished, apply the note and give the output block again.`,
+      `Note from the lead, relaying the user (mid-run, ${at(2)}): Skip the README.\nThis is guidance within your current assignment; it does not change the specification. Apply it from now on, keep the work you have done unless the note says otherwise, and still meet everything the task asks for, including its acceptance criteria. Finish with the output block as instructed. If you had already finished, apply the note and give the output block again.`,
     );
     expect(M.noteMessage({ text: "Use the helper.", from: { by: "user" }, at: at(0) })).toMatch(new RegExp(`^Note from the user \\(mid-run, ${at(0)}\\): Use the helper\\.\\n`));
   });

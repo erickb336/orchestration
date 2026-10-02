@@ -76,8 +76,9 @@ export type AdapterEvent =
   /**
    * The outcome of `note()` for one note. "delivered" only on the runtime's acknowledgment
    * (Codex: `turn/steer` accepted; Claude: an assistant message names the note's uuid). Never terminal for the run.
+   * `heldForTurn`: the note arrived before the agent's turn existed and the adapter held it until then (Codex).
    */
-  | { type: "note"; attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string };
+  | { type: "note"; attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string; heldForTurn?: true };
 
 /** An MCP server found in the user's own provider configuration (never includes its settings or secrets). */
 export interface Connection {

@@ -227,6 +227,8 @@ export interface Note {
   sentAt?: string;
   /** When it was delivered or found undeliverable. */
   settledAt?: string;
+  /** The note arrived while the agent was still starting, and the runtime held it until the agent's turn began (Codex). */
+  heldForTurn?: true;
   /** The acknowledgment (or the note itself) came from the fake runtime. The UI labels it. */
   simulated?: true;
 }

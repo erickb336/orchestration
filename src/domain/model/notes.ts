@@ -248,7 +248,7 @@ export function rerunWithNote(state: State, taskId: string, stepId: string, note
  * for another run, or for a note no longer waiting, changes nothing: stale-result protection. `simulated`:
  * the answer came from the fake runtime.
  */
-export function reportNoteOutcome(state: State, e: { attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string }, now: string, simulated?: true): State {
+export function reportNoteOutcome(state: State, e: { attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string; heldForTurn?: true }, now: string, simulated?: true): State {
   const n0 = state.notes.find((x) => x.id === e.noteId);
   if (!n0 || n0.attemptId !== e.attemptId || n0.status !== "sending") return state;
   const s = draft(state);
@@ -258,12 +258,15 @@ export function reportNoteOutcome(state: State, e: { attemptId: string; noteId: 
   if (e.outcome === "not-delivered") n.reason = (e.reason?.replace(/\s+/g, " ").trim() || "the runtime did not take it").slice(0, 300);
   else delete n.reason;
   if (simulated) n.simulated = true;
+  if (e.heldForTurn) n.heldForTurn = true;
   event(
     s,
     now,
     "runtime",
     "runtime",
-    e.outcome === "delivered" ? `Note ${n.id} delivered to ${n.stepId}'s run ${n.attemptId}${n.via === "start" ? " at start" : ""}` : `Note ${n.id} to ${n.stepId}'s run ${n.attemptId} not delivered: ${n.reason}`,
+    e.outcome === "delivered"
+      ? `Note ${n.id} delivered to ${n.stepId}'s run ${n.attemptId}${n.via === "start" ? " at start" : ""}${n.heldForTurn ? ", held until the agent's turn began" : ""}`
+      : `Note ${n.id} to ${n.stepId}'s run ${n.attemptId} not delivered: ${n.reason}`,
     n.taskId,
   );
   return s;
@@ -298,8 +301,12 @@ export function recentNotes(s: State, nowMs: number, windowMs = 24 * 60 * 60_000
   return s.notes.filter((n) => n.at >= since);
 }
 
-/** Exactly what the agent reads: mid-run as a user message, or in the "Notes for this run" section of its envelope. */
+/**
+ * Exactly what the agent reads: mid-run as a user message, or in the "Notes for this run" section of its envelope.
+ * The acceptance sentence (ORC-028) follows a real run in which a note ("also say how many lines…") was followed and
+ * the task's own acceptance criterion (name the files read) was dropped.
+ */
 export function noteMessage(n: Pick<Note, "text" | "from" | "at" | "sentAt">): string {
   const who = n.from.by === "lead" ? "Note from the lead, relaying the user" : "Note from the user";
-  return `${who} (mid-run, ${n.sentAt ?? n.at}): ${n.text}\nThis is guidance within your current assignment; it does not change the specification. Apply it from now on, keep the work you have done unless the note says otherwise, and finish with the output block as instructed. If you had already finished, apply the note and give the output block again.`;
+  return `${who} (mid-run, ${n.sentAt ?? n.at}): ${n.text}\nThis is guidance within your current assignment; it does not change the specification. Apply it from now on, keep the work you have done unless the note says otherwise, and still meet everything the task asks for, including its acceptance criteria. Finish with the output block as instructed. If you had already finished, apply the note and give the output block again.`;
 }

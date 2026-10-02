@@ -2,7 +2,7 @@
   "$schema": "./flow.schema.json",
   "id": "investigation",
   "name": "Investigation",
-  "description": "Gather evidence, review it, and propose a follow-up implementation spec.",
+  "description": "Gather evidence, review it, revise the report while the review finds something (up to three rounds), and propose a follow-up implementation spec.",
   "whenToUse": "The cause or the right change is unknown; the result is a spec, not code.",
   "steps": [
     {
@@ -24,12 +24,28 @@
       "principles": ["prove-it-works"]
     },
     {
+      "$comment": "ORC-028: the review's findings are repaired, as in every other flow; the real run of 2026-10-01 had one dropped.",
       "id": "S3",
-      "purpose": "Propose follow-up spec",
-      "role": "lead",
+      "purpose": "Revise the report",
+      "role": "coder",
       "dependsOn": ["S2"],
       "inputs": [
         { "step": "S1", "output": "report" },
+        { "step": "S2", "output": "findings" }
+      ],
+      "outputs": [{ "name": "report", "kind": "report" }],
+      "runIf": [{ "step": "S2", "output": "findings" }],
+      "iterate": { "from": "S2", "max": 3 },
+      "principles": ["fix-root-causes", "prove-it-works"]
+    },
+    {
+      "id": "S4",
+      "purpose": "Propose follow-up spec",
+      "role": "lead",
+      "dependsOn": ["S3"],
+      "inputs": [
+        { "step": "S1", "output": "report" },
+        { "step": "S3", "output": "report" },
         { "step": "S2", "output": "findings" }
       ],
       "outputs": [{ "name": "brief", "kind": "brief" }],

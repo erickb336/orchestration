@@ -208,7 +208,8 @@ export const DEMO_SCRIPT: Record<string, TaskScript> = {
     },
     findings: { "*": { title: "A stale forecast is shown as current", detail: "Hide the alert when the forecast is older than a day.", file: "src/trip/Weather.tsx", line: 27 } },
   },
-  // An Investigation. The result is a spec, not code; the review of the evidence leaves one note that blocks nothing.
+  // An Investigation. The result is a spec, not code; the review of the evidence leaves one note that blocks nothing, so
+  // the revise step is skipped.
   "WT-012": {
     outputs: {
       report: "GPS is polled once a second for the whole hike, screen off included, and every fix redraws the hidden map: together 61% of the drain over a 5-hour recording (GPS 38%, redraws 23%). Tile loading and the rest account for the remainder.",

@@ -103,7 +103,7 @@ describe("the card's one line", () => {
     expect(line(idle, "EX-001")).toBe("Up next: step 2 of 9 · Implement");
     expect(line(idle, "EX-005")).toBe("Paused before it started");
     expect(line(idle, "EX-007")).toBe("Waiting for EX-002");
-    expect(line(idle, "EX-003")).toBe("Not started · 3 steps");
+    expect(line(idle, "EX-003")).toBe("Not started · 4 steps"); // an Investigation (ORC-028: four steps)
     const demo = buildDemo(T0);
     expect(line(demo, "WT-009")).toBe("Stopped at step 2 of 8 · Fix");
     expect(line(demo, "WT-010")).toBe("The lead deferred it: It needs a connection anyway, and offline maps comes first.");

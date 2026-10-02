@@ -1,5 +1,6 @@
 // The pure flow resolver. The six built-in files resolve in order; every flow passes the graph
-// rules, every flow that changes code has an independent code review and a security review beside it,
+// rules, every flow that changes code has an independent code review and a security review beside it, every
+// review's findings feed a step that repairs them (ORC-028),
 // every flow has `whenToUse`; the rules the service relies on; who may use what; hashes and summaries.
 // No files are read here: the built-ins are compiled in.
 
@@ -98,11 +99,62 @@ describe("the six flows", () => {
     expect(INTERNAL_FLOWS.find((p) => p.id === "delivery-checks")!.steps.map((s) => s.role)).toEqual(["checks"]);
   });
 
-  it("Design and Investigation are unchanged: no security review, since neither produces code", () => {
+  it("Design and Investigation have no security review, since neither produces code", () => {
     for (const id of ["design", "investigation", "goal"]) expect(builtIn(id).steps.some((s) => s.role === "security_reviewer"), id).toBe(false);
     expect(ids(builtIn("design").steps)).toEqual(["S1", "S2", "S3", "S4"]);
-    expect(ids(builtIn("investigation").steps)).toEqual(["S1", "S2", "S3"]);
+    // ORC-028: Investigation revises its report while the review finds something, as Design revises its design.
+    expect(ids(builtIn("investigation").steps)).toEqual(["S1", "S2", "S3", "S4"]);
     expect(ids(builtIn("goal").steps)).toEqual(["S1", "S2", "S3"]);
+  });
+});
+
+describe("no review finding is dropped (ORC-028)", () => {
+  /**
+   * Review steps nothing repairs. A repair is a writer (coder or designer) that runs on the review's findings output,
+   * produces the kind of work the review read, and loops back to the review or before it, so its work is reviewed again.
+   * Only the six flows: the internal delivery review is a merge gate whose repairs are fix tasks (delivery/repair.ts),
+   * and a revert is gated by that review.
+   */
+  const unrepaired = (steps: StepDef[]) =>
+    steps
+      .filter((r) => r.outputs.some((o) => o.kind === "review-findings"))
+      .filter((r) => {
+        const findings = r.outputs.filter((o) => o.kind === "review-findings").map((o) => o.name);
+        const kindOf = (ref: { step: string; output: string }) => steps.find((x) => x.id === ref.step)?.outputs.find((o) => o.name === ref.output)?.kind;
+        const reviewed = new Set(r.inputs.map(kindOf).filter((k) => k && k !== "review-findings" && k !== "check-results"));
+        const at = (id: string) => steps.findIndex((x) => x.id === id);
+        return !steps.some(
+          (s) =>
+            (s.role === "coder" || s.role === "designer") &&
+            !!s.runIf?.some((x) => x.step === r.id && findings.includes(x.output)) &&
+            s.outputs.some((o) => reviewed.has(o.kind)) &&
+            !!s.iterate &&
+            at(s.iterate.from) <= at(r.id),
+        );
+      })
+      .map((r) => r.id);
+
+  it("every review in every built-in flow is the condition of a step that repairs what it finds", () => {
+    // The real run of 2026-10-01 (docs/real-runs/2026-10-02T02-22-16-079Z.json) ended an Investigation as Done with an
+    // open auto-fix warning, because that flow's review fed nothing. Design, Change, Bug fix and Feature already
+    // repaired; this keeps a new or edited flow from repeating it.
+    for (const p of builtInCatalog()) expect(unrepaired(p.steps), p.id).toEqual([]);
+  });
+
+  it("the rule catches the shape that dropped the finding: Investigation before ORC-028", () => {
+    const before = builtIn("investigation").steps.filter((s) => s.id !== "S3").map((s) => (s.id === "S4" ? { ...s, id: "S3", dependsOn: ["S2"], inputs: s.inputs.filter((r) => r.step !== "S3") } : s));
+    expect(ids(before)).toEqual(["S1", "S2", "S3"]);
+    expect(validatePipeline(before)).toEqual([]);
+    expect(unrepaired(before)).toEqual(["S2"]);
+  });
+
+  it("and the shapes that only look like a repair: a non-writer, no loop back, or another kind of work", () => {
+    const steps = builtIn("investigation").steps;
+    const withS3 = (over: Partial<StepDef>) => steps.map((s) => (s.id === "S3" ? { ...s, ...over } : s));
+    expect(unrepaired(steps)).toEqual([]);
+    expect(unrepaired(withS3({ role: "lead" }))).toEqual(["S2"]);
+    expect(unrepaired(withS3({ iterate: undefined }))).toEqual(["S2"]);
+    expect(unrepaired(withS3({ outputs: [{ name: "brief", kind: "brief" }] }))).toEqual(["S2"]);
   });
 });
 

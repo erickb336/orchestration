@@ -640,7 +640,7 @@ class DemoBuilder {
     this.offlineMapsTileCache(); // WT-001: failed check → finding → repair → merged, in Review
     this.largerTapTargets(); // WT-008: merged, reviewed
     this.laterSpecs(); // WT-012 and WT-013: an investigation and a design, published once the first changes had landed
-    this.batteryInvestigation(); // WT-012: the evidence, a review of it, the lead's follow-up spec; nothing to integrate
+    this.batteryInvestigation(); // WT-012: the evidence, a review of it (nothing to revise), the lead's follow-up spec; nothing to integrate
     this.inviteScreenDesign(); // WT-013: the design, a UX finding revised away, the lead's brief; nothing to integrate
     this.tripSharingGoal(); // WT-004 and its children; WT-004.1's security finding repaired, merged and reviewed
     this.fasterTrailSearch(); // WT-011: your own Change task, merged, in Review
@@ -986,13 +986,15 @@ class DemoBuilder {
     this.promote(["WT-012", "WT-013"], 3480);
   }
 
-  /** WT-012: an Investigation. The evidence (Codex), a review of it for gaps (Claude, one note that blocks nothing), the lead's follow-up spec; nothing to integrate. */
+  /** WT-012: an Investigation. The evidence (Codex), a review of it for gaps (Claude, one note that blocks nothing, so the
+   *  revise step is skipped), the lead's follow-up spec; nothing to integrate. */
   private batteryInvestigation() {
     const id = "WT-012";
     const script = DEMO_SCRIPT[id].outputs!;
     this.output(id, "S1", 3470, 3390, script.report);
     this.review(id, "S2", 3389, 3370, undefined, script["S2.findings"], [scripted(id, "S2", "info", "no-op")]);
-    this.output(id, "S3", 3369, 3355, script.brief);
+    this.skip(id, "S3", 3369);
+    this.output(id, "S4", 3368, 3355, script.brief);
     this.nothingToIntegrate(id, 3354);
   }
 

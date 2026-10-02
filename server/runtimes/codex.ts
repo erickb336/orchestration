@@ -145,6 +145,8 @@ interface Run {
   /** Notes that arrived before the run's turn existed (the scheduler counts a run as running from dispatch,
    *  while Codex is still starting its thread). Steered as soon as the turn id is known. */
   heldNotes: { id: string; text: string }[];
+  /** Ids of every note that was held, so each outcome, whenever it comes, says so (`heldForTurn`). */
+  heldIds: Set<string>;
 }
 
 /** The Codex CLI this project installs, or `codex` from the PATH. Shared with the check runner. */
@@ -255,7 +257,7 @@ export class CodexAdapter implements RuntimeAdapter {
       child = this.spawnProcess(this.appServerArgs(a), false, { TMPDIR: runTmpDir(a), TMP: runTmpDir(a), TEMP: runTmpDir(a) });
     } catch (e) {
       // Keep the contract asynchronous: register, then fail on the next tick.
-      const placeholder = { a, done: false, timers: new Set(), notes: new Set(), heldNotes: [] } as unknown as Run;
+      const placeholder = { a, done: false, timers: new Set(), notes: new Set(), heldNotes: [], heldIds: new Set() } as unknown as Run;
       this.runs.set(a.attemptId, placeholder);
       setImmediate(() => this.finish(placeholder, { type: "failed", attemptId: a.attemptId, message: this.spawnFailure(e) }));
       return;
@@ -270,6 +272,7 @@ export class CodexAdapter implements RuntimeAdapter {
       timers: new Set(),
       notes: new Set(),
       heldNotes: [],
+      heldIds: new Set(),
     };
     run.rpc = new JsonRpcConnection(child.stdout!, child.stdin!, {
       onNotification: (n) => this.onNotification(run, n),
@@ -370,6 +373,7 @@ export class CodexAdapter implements RuntimeAdapter {
     run.notes.add(note.id);
     if (!run.threadId || !run.turnId) {
       run.heldNotes.push(note);
+      run.heldIds.add(note.id);
       return;
     }
     this.steer(run, note);
@@ -382,7 +386,7 @@ export class CodexAdapter implements RuntimeAdapter {
       if (!run.notes.has(note.id)) continue; // settled already
       if (run.interruptRequested) {
         run.notes.delete(note.id);
-        this.emit({ type: "note", attemptId: run.a.attemptId, noteId: note.id, outcome: "not-delivered", reason: "the run is stopping" });
+        this.emit({ type: "note", attemptId: run.a.attemptId, noteId: note.id, outcome: "not-delivered", reason: "the run is stopping", ...this.held(run, note.id) });
         continue;
       }
       this.steer(run, note);
@@ -392,7 +396,7 @@ export class CodexAdapter implements RuntimeAdapter {
   private steer(run: Run, note: { id: string; text: string }) {
     const attemptId = run.a.attemptId;
     const settle = (outcome: "delivered" | "not-delivered", reason?: string) =>
-      this.emit({ type: "note", attemptId, noteId: note.id, outcome, ...(reason !== undefined && { reason }) });
+      this.emit({ type: "note", attemptId, noteId: note.id, outcome, ...(reason !== undefined && { reason }), ...this.held(run, note.id) });
     const params: TurnSteerParams = {
       threadId: run.threadId!,
       expectedTurnId: run.turnId!,
@@ -418,12 +422,17 @@ export class CodexAdapter implements RuntimeAdapter {
     return truncate(`Codex app-server error: ${this.clean(e instanceof Error ? e.message : String(e))}`, 300);
   }
 
-  /** Report every note still awaiting the app-server's answer as not delivered. */
+  /** Report every note still awaiting the app-server's answer (or still held) as not delivered. */
   private settleNotes(run: Run, reason: string) {
     for (const noteId of run.notes) {
       run.notes.delete(noteId);
-      this.emit({ type: "note", attemptId: run.a.attemptId, noteId, outcome: "not-delivered", reason });
+      this.emit({ type: "note", attemptId: run.a.attemptId, noteId, outcome: "not-delivered", reason, ...this.held(run, noteId) });
     }
+  }
+
+  /** The `heldForTurn` mark for a note's outcome: evidence that it waited for the turn to exist. */
+  private held(run: Run, noteId: string): { heldForTurn?: true } {
+    return run.heldIds.has(noteId) ? { heldForTurn: true } : {};
   }
 
   private remember(attemptId: string) {
