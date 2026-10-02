@@ -115,7 +115,7 @@ export function pinFromMessage(pinMode: boolean, event: { source: unknown; data:
 // ---------- the owner's feedback ----------
 
 /** A pin as the viewer keeps it: the domain's, with the clicked element's selector when the prototype sent one. */
-export type DraftPin = Pin & { selector?: string };
+export type DraftPin = Pin;
 
 /** The owner's unsent answer on one version: what `sendFeedback` takes for it. */
 export interface Draft {
@@ -132,9 +132,9 @@ export function draftFrom(f: Feedback | undefined): Draft {
   return { mark: f?.mark ?? null, ...(f?.pickedVariant ? { pickedVariant: f.pickedVariant } : {}), pins: (f?.pins ?? []).map((p) => ({ ...p })), note: f?.note ?? "" };
 }
 
-/** Pins are the same by place, variant and comment; the selector only describes the place (and the domain does not keep it yet). */
+/** Pins are the same by place, variant, comment and element. */
 function samePins(a: DraftPin[], b: DraftPin[]) {
-  return a.length === b.length && a.every((p, i) => p.x === b[i].x && p.y === b[i].y && p.variant === b[i].variant && p.text.trim() === b[i].text.trim());
+  return a.length === b.length && a.every((p, i) => p.x === b[i].x && p.y === b[i].y && p.variant === b[i].variant && p.text.trim() === b[i].text.trim() && p.selector === b[i].selector);
 }
 
 export function sameDraft(a: Draft, b: Draft): boolean {
@@ -174,7 +174,7 @@ export function sendBlocker(changed: { artifact: StudioArtifact; draft: Draft }[
   return undefined;
 }
 
-/** The `sendFeedback` entries for the changed drafts. A pin carries its selector too (kept once the domain records it). */
+/** The `sendFeedback` entries for the changed drafts. A pin carries the element it is on, when the prototype said. */
 export function feedbackEntries(changed: { artifact: StudioArtifact; draft: Draft }[]) {
   return changed.map(({ artifact, draft }) => ({
     artifactId: artifact.id,

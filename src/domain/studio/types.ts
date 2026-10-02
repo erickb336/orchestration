@@ -109,12 +109,17 @@ export type ArtifactDemo = { status: "pending" } | { status: "done"; at: string;
 
 export type Mark = "keep" | "change" | "drop";
 
-/** A comment pinned to a point: `x` and `y` are fractions (0 to 1) of the shown artifact's width and height. */
+/**
+ * A comment pinned to a point: `x` and `y` are fractions (0 to 1) of the shown artifact's width and height.
+ * `selector` describes the element clicked, as the prototype's pin script reported it: the prototype's own text, a
+ * description only, shown as text and never as markup.
+ */
 export interface Pin {
   x: number;
   y: number;
   variant?: string;
   text: string;
+  selector?: string;
 }
 
 /**

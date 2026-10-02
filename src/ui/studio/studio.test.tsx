@@ -214,9 +214,13 @@ describe("Send feedback", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].name).toBe("sendFeedback");
     const f = S.currentFeedback(after, id, 1)!;
-    expect(f).toMatchObject({ mark: "change", pickedVariant: "b", note: "Prefer B on phones.", pins: [{ x: 0.25, y: 0.5, variant: "a", text: "Make the map smaller on phones." }] });
+    expect(f).toMatchObject({ mark: "change", pickedVariant: "b", note: "Prefer B on phones.", pins: [{ x: 0.25, y: 0.5, variant: "a", text: "Make the map smaller on phones.", selector: "main > div.map" }] });
     // Once recorded, the same draft is no longer a change: nothing is sent twice.
     expect(changedDrafts(after, { [draftKey(a)]: draft })).toEqual([]);
+    // The recorded pin names its element, so the list shows it instead of saying it is not recorded.
+    const html = render(<Studio />, after);
+    expect(html).toContain('<code class="st-selector">main &gt; div.map</code>');
+    expect(html).not.toContain("The element is not recorded");
   });
 
   it("sends nothing while nothing changed or a version is still with the PE, and keeps the drafts when the service refuses", async () => {

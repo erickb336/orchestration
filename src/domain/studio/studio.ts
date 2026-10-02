@@ -38,6 +38,8 @@ export const MAX_PE_PASSES = 3;
 const MAX_VARIANTS = 6;
 const MAX_FILES = 100;
 const MAX_PINS = 50;
+/** The longest element description a pin keeps; the prototype's pin script cuts its own at this length (src/runtime/prototype.ts). */
+const MAX_PIN_SELECTOR = 300;
 
 // ---------- text ----------
 
@@ -536,7 +538,9 @@ export function sendFeedback(state: State, entries: FeedbackInput[], now: string
       const inside = (n: number) => Number.isFinite(n) && n >= 0 && n <= 1;
       if (!inside(p.x) || !inside(p.y)) throw new ControlError("A pin's position is a fraction (0 to 1) of the artifact's width and height.");
       const pv = variant(p.variant);
-      return { x: p.x, y: p.y, ...(pv !== undefined ? { variant: pv } : {}), text: required(ownerText(p.text), 1000, "A pinned comment") };
+      // The clicked element as the prototype described it: untrusted text, kept as one line.
+      const selector = p.selector === undefined ? "" : capped(agentLine(p.selector), MAX_PIN_SELECTOR, "A pin's element");
+      return { x: p.x, y: p.y, ...(pv !== undefined ? { variant: pv } : {}), text: required(ownerText(p.text), 1000, "A pinned comment"), ...(selector ? { selector } : {}) };
     });
     const note = capped(ownerText(e.note), 4000, "The note");
     return { artifactId: a.id, version: a.version, mark: e.mark, ...(picked !== undefined ? { pickedVariant: picked } : {}), pins, note, at: now };

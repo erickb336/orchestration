@@ -140,7 +140,7 @@ function feedbackEntry(v: unknown): S.FeedbackInput {
   if (e.mark !== null && !["keep", "change", "drop"].includes(e.mark as string)) throw new InvalidCommandError("mark must be keep, change, drop or null");
   const pins = array<unknown>(e.pins, "pins").map((x) => {
     const p = obj(x, "pin");
-    return { x: num(p, "x"), y: num(p, "y"), ...(p.variant === undefined ? {} : { variant: str(p, "variant") }), text: str(p, "text") };
+    return { x: num(p, "x"), y: num(p, "y"), ...(p.variant === undefined ? {} : { variant: str(p, "variant") }), text: str(p, "text"), ...(p.selector === undefined ? {} : { selector: str(p, "selector") }) };
   });
   return { artifactId: str(e, "artifactId"), version: int(e, "version"), mark: e.mark as Mark | null, ...(e.pickedVariant === undefined ? {} : { pickedVariant: str(e, "pickedVariant") }), pins, note: str(e, "note") };
 }

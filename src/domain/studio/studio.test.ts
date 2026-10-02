@@ -245,6 +245,21 @@ describe("the owner's feedback", () => {
     s = addScreen(nextRound(s, 5).state, 2, at(6), { artifactId: id }).state;
     expect(failure(() => run(s, "sendFeedback", { entries: [entry({ mark: "keep" })] }, at(7)))).toBeInstanceOf(StaleWriteError);
   });
+
+  it("a pin keeps the element it is on, as the prototype described it: one line of text, capped, and carried to the next version", () => {
+    let { s, id } = tripPlan();
+    s = peAgrees(s, id, 1, ["A", "B", "C"], at(3));
+    const pin = (selector: string) => ({ artifactId: id, version: 1, mark: null, pins: [{ x: 0.2, y: 0.3, text: "Bigger icons", selector }], note: "" });
+    s = run(s, "sendFeedback", { entries: [pin("main > div.map:nth-of-type(2)")] }, at(4)).state;
+    expect(S.openPins(s, id, 1)).toEqual([{ x: 0.2, y: 0.3, text: "Bigger icons", selector: "main > div.map:nth-of-type(2)" }]);
+    // Untrusted text from the prototype: control characters go, and a long one is refused, not cut silently.
+    const cleaned = run(s, "sendFeedback", { entries: [pin("main\u0007 > \nh1")] }, at(5)).state;
+    expect(S.openPins(cleaned, id, 1)[0].selector).toBe("main > h1");
+    expect(() => run(s, "sendFeedback", { entries: [pin("x".repeat(301))] }, at(5))).toThrow("A pin's element is over 300 characters.");
+    // A revision starts with the open pins, elements included.
+    s = addScreen(nextRound(s, 6).state, 2, at(7), { artifactId: id }).state;
+    expect(S.openPins(s, id, 2)[0].selector).toBe("main > div.map:nth-of-type(2)");
+  });
 });
 
 describe("probes", () => {
