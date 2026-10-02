@@ -5,7 +5,7 @@
 import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
-import { budgetStop, fmtUsd, type Spend } from "./spend";
+import { budgetStop, buildingSpend, fmtUsd, type Spend, type UnknownCost } from "./spend";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task } from "./types";
 
 export interface NeedsYou {
@@ -93,6 +93,9 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   const items: NeedsYouEntry[] = [];
   const stop = budgetStop(state);
   if (stop) items.push({ kind: "open", key: "budget", what: `The building budget is reached: ${fmtUsd(stop.spend.usd)} of ${fmtUsd(stop.budgetUsd)}`, detail: budgetDetail(stop.spend), action: "Settings", href: "#/settings/project" });
+  // Apart from the stop: while a building budget is set, a run it cannot count is the owner's to know about.
+  const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
+  if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project" });
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
     items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings/project/delivery" });
@@ -124,12 +127,32 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   return items;
 }
 
-/** What the budget stop means, and the runs whose cost is unknown (they are not in the total; the first five are named). */
+/** What the budget stop means, and how many runs are not in the total (their own item names them). */
 function budgetDetail(spend: Spend): string {
-  const n = spend.unpriced.length;
-  const named = spend.unpriced.slice(0, 5).map((u) => `${u.runId} (${u.provider} · ${u.model})`).join(", ");
-  const unknown = n ? ` ${n} run${n === 1 ? " has" : "s have"} no price, so ${n === 1 ? "its" : "their"} cost is unknown and not in the total: ${named}${n > 5 ? ` and ${n - 5} more` : ""}.` : "";
+  const n = spend.unknown.length;
+  const unknown = n ? ` ${n} run${n === 1 ? "" : "s"} with no recorded cost ${n === 1 ? "is" : "are"} not in the total.` : "";
   return `Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.${unknown}`;
+}
+
+/** "a", "a and b", "a, b and c". */
+const listed = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
+
+/** "3 runs have no recorded cost (model gpt-x has no price; no usage was recorded for 1), so the building budget cannot count them". */
+function unknownCostLine(unknown: UnknownCost[]): string {
+  const n = unknown.length;
+  const models = [...new Set(unknown.filter((u) => u.reason === "no-price").map((u) => u.model))];
+  const noUsage = unknown.filter((u) => u.reason === "no-usage").length;
+  const why = [
+    ...(models.length ? [`${models.length === 1 ? "model" : "models"} ${listed(models)} ${models.length === 1 ? "has" : "have"} no price`] : []),
+    ...(noUsage ? [noUsage === n ? "no usage was recorded" : `no usage was recorded for ${noUsage}`] : []),
+  ].join("; ");
+  return `${n} run${n === 1 ? " has" : "s have"} no recorded cost (${why}), so the building budget cannot count ${n === 1 ? "it" : "them"}`;
+}
+
+/** What it means for the stop, and the runs (the first five are named). */
+function unknownCostDetail(unknown: UnknownCost[]): string {
+  const named = unknown.slice(0, 5).map((u) => `${u.runId} (${u.provider} · ${u.model}, ${u.reason === "no-price" ? "no price" : "no usage recorded"})`);
+  return `The budget's stop counts only runs with a recorded cost, so it can come late. Not counted: ${named.join(", ")}${unknown.length > 5 ? ` and ${unknown.length - 5} more` : ""}.`;
 }
 
 /** The two options as one line: "A, Guest link · B, One-time code". */
