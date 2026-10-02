@@ -11,8 +11,9 @@
 // every variant feasible, or once review ends (`LoopEnd`: the third pass, a reproduction of the code, the round
 // closed, runs that failed twice, or no provider to run the next step), with the PE's open objections and asked-for
 // changes shown. Where review stands is one value, `PeReview`, and the words the owner and the lead see are made from
-// it. An objection is never dropped: a later pass on a revision answers it, or the owner overrules it (recorded). What
-// the owner brought and a probe's evidence are not held back.
+// it. An objection is never dropped: a later pass on a revision answers it, or the owner overrules it (recorded). A
+// kind the PE does not review (`KIND_RULES` in types.ts: what the owner brought, a probe's evidence, the dictionary) is
+// not held back: its review is "not-reviewed", from which the same words are made.
 //
 // Convergence (the second real trial, 2026-10-02: the PE asked for more on each pass, the designer added it all, and
 // the loop ended without agreement). Only a change sends a variant back; the product questions the PE notices are
@@ -47,7 +48,7 @@ import {
   type Verdict,
   type VariantDemo,
   type VariantRules,
-  UNGATED_KINDS,
+  KIND_RULES,
   VERDICT_WORDS,
   isUnderWay,
 } from "./types";
@@ -500,6 +501,7 @@ function loopEnd(s: State, a: StudioArtifact, pass: number): LoopEnd | undefined
 /**
  * Where PE review of an artifact version stands (the loop rule, ORC-029 pass 4): one value, from which every word the
  * owner and the lead see is made.
+ * - not-reviewed: the PE does not review this kind (`KIND_RULES`); `why` says why. It is with the owner at once;
  * - waiting: the PE has not reviewed this version yet (`passes`: those made on earlier versions of its round);
  * - revising: the PE's pass `pass` asked for changes or objected, and the designer revises this version;
  * - agreed: the PE's pass `pass` found every variant feasible;
@@ -510,12 +512,15 @@ function loopEnd(s: State, a: StudioArtifact, pass: number): LoopEnd | undefined
  * ones, overruled ones included (they carry `overruled`).
  */
 export type PeReview =
+  | { status: "not-reviewed"; why: string }
   | { status: "waiting"; passes: number }
   | { status: "revising"; pass: number; asks: PeVerdict[]; objections: PeVerdict[] }
   | { status: "agreed"; pass: number }
   | { status: "ended"; ended: LoopEnd; note?: string; pass: number; asks: PeVerdict[]; objections: PeVerdict[] };
 
 export function peReview(s: State, a: StudioArtifact): PeReview {
+  const rule = KIND_RULES[a.kind];
+  if (!rule.peReviews) return { status: "not-reviewed", why: rule.why };
   const mine = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version);
   const pass = Math.max(0, ...mine.map((v) => v.pass));
   const latest = mine.filter((v) => v.pass === pass);
@@ -544,21 +549,21 @@ export function endReview(state: State, artifactId: string, version: number, not
 }
 
 /**
- * Whether the designer should revise this version for the PE now: it is the newest version of a reviewed kind, in
- * Vision, its review is revising, and no designer run on it is under way (the loop's, or one the lead asked for).
+ * Whether the designer should revise this version for the PE now: it is the newest version, in Vision, its review is
+ * revising (never so for a kind the PE does not review), and no designer run on it is under way (the loop's, or one
+ * the lead asked for).
  */
 export function revisionDue(s: State, a: StudioArtifact): boolean {
-  if (s.project.stage !== "shaping" || UNGATED_KINDS.includes(a.kind)) return false;
+  if (s.project.stage !== "shaping") return false;
   if (latestVersion(s, a.id)?.version !== a.version) return false;
   if (peReview(s, a).status !== "revising") return false;
   return !designerRunsOn(s, a).some(isUnderWay);
 }
 
-/** Whether the owner sees this version: PE review agreed or ended; what the owner brought and evidence are never held back. */
+/** Whether the owner sees this version: PE review is not waiting or revising. A kind the PE does not review is never held back. */
 export function readyForOwner(s: State, a: StudioArtifact): boolean {
-  if (UNGATED_KINDS.includes(a.kind)) return true;
   const r = peReview(s, a);
-  return r.status === "agreed" || r.status === "ended";
+  return r.status !== "waiting" && r.status !== "revising";
 }
 
 /**
@@ -607,7 +612,7 @@ export function roundBusy(s: State, n: number): string | undefined {
   const run = s.studio.runs.find((r) => r.round === n && isUnderWay(r));
   if (run) return `${run.kind === "pe" ? "the PE's" : run.kind === "probe" ? "a probe's" : "the designer's"} run ${run.id} is ${run.status}`;
   for (const a of latestArtifacts(s)) {
-    if (a.round !== n || UNGATED_KINDS.includes(a.kind)) continue;
+    if (a.round !== n) continue;
     const r = peReview(s, a);
     if (r.status === "waiting") return `${artifactName(a)} waits for PE review`;
     if (r.status === "revising") return `the designer revises ${artifactName(a)} for the PE`;
@@ -669,6 +674,8 @@ export interface PeVerdictsInput {
 /** What comes of a version's review next, in words: "the designer revises", "agreed; it goes to the owner"… */
 export function outcomeWords(r: PeReview): string {
   switch (r.status) {
+    case "not-reviewed":
+      return `the PE does not review it: ${r.why}`;
     case "waiting":
       return "the PE reviews it";
     case "revising":
@@ -699,7 +706,7 @@ function askChecks(due: PeVerdict[], given: AskCheck[], on: string): AskCheck[] 
 /**
  * Record one PE pass on an artifact's newest version (the service, from the PE's run): one verdict per variant, or
  * one verdict on the whole artifact. Passes count within the version's round, up to three. Feasible-if states the
- * change; an estimate states its basis. What the owner brought and a probe's evidence are not reviewed.
+ * change; an estimate states its basis. A kind the PE does not review (`KIND_RULES`) gets no verdict.
  *
  * On a later pass (convergence): each verdict checks every earlier ask on its variant (met or not), and one that sends
  * the variant back has an ask that is not met, or says that the revision created the risk (`fromRevision`). Open
@@ -707,7 +714,8 @@ function askChecks(due: PeVerdict[], given: AskCheck[], on: string): AskCheck[] 
  */
 export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string): { state: State; pass: number } {
   const a = getArtifact(state, input.artifactId, input.version);
-  if (UNGATED_KINDS.includes(a.kind)) throw new ControlError(`${a.title} is ${a.kind === "material" ? "what you brought" : "a probe's evidence"}: the PE does not review it.`);
+  const review = peReview(state, a);
+  if (review.status === "not-reviewed") throw new ControlError(`The PE does not review ${a.title}: ${review.why}.`);
   const latest = latestVersion(state, a.id)!;
   if (latest.version !== a.version) throw new ControlError(`${artifactName(a)} was revised (v${latest.version}); the PE reviews the newest version.`);
   const pass = passesInRound(state, a.id, a.round) + 1;

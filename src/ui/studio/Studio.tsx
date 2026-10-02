@@ -897,10 +897,8 @@ function PeReviewPanel({ artifact: a, onVersion }: { artifact: StudioArtifact | 
   return (
     <section className="k-stack k-stack--tight" aria-label="PE review">
       <h2 className="st-label">PE review</h2>
-      {!a ? (
+      {!a || !view ? (
         <p className="small muted">The PE reviews each option the designer makes before it reaches you.</p>
-      ) : !view ? (
-        <p className="small muted">The PE does not review {a.kind === "material" ? "what you brought" : "a probe's evidence"}.</p>
       ) : (
         <>
           <div className="st-toolbar__grp">

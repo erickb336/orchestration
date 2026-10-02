@@ -10,12 +10,12 @@ import { runCommand } from "../../domain/commands";
 import * as M from "../../domain/model";
 import { buildSeed } from "../../domain/seed";
 import * as S from "../../domain/studio/studio";
-import { DESIGNER, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
+import { DESIGNER, addScreen, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
 import { ConfirmProvider } from "../kit";
 import { StoreContext, type ServiceStore } from "../store";
 import { Studio } from "./Studio";
-import { changedDrafts, draftFrom, draftKey, draftSummary, keepUnmarked, rowMark, sendAnswer, showKind, tableRows, toggleRow, waitingForYourMark, type Draft } from "./studioView";
+import { changedDrafts, draftFrom, draftKey, draftSummary, keepUnmarked, peView, rowMark, sendAnswer, showKind, tableRows, toggleRow, versionHistory, waitingForYourMark, type Draft } from "./studioView";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -45,11 +45,11 @@ const WORDS = [
   { term: "member", meaning: "A person who said they are in.", avoid: [] },
   { term: "waiting list", meaning: "Who said they are in after the trip was full.", avoid: ["waitlist"] },
 ];
-/** The data round with the designer's dictionary; agreed by the PE unless `pe` is false. */
-function withWords(pe = true) {
+/** The data round with the designer's dictionary, which reaches the owner with no PE review. */
+function withWords() {
   const r = openRound(vision(), "data", at(1));
   const a = run<{ artifactId: string }>(r.state, "addStudioArtifact", { round: r.n, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("d") }], devices: [], madeBy: DESIGNER, dictionary: WORDS }, at(2));
-  return { s: pe ? peAgrees(a.state, a.result.artifactId, 1, ["a"], at(3)) : a.state, id: a.result.artifactId };
+  return { s: a.state, id: a.result.artifactId };
 }
 const RULES = [
   { id: "R1", text: "When a member says they are in, the app shall show the cost each." },
@@ -88,9 +88,15 @@ describe("the dictionary as a table", () => {
     expect(html).not.toContain("<iframe");
   });
 
-  it("while the PE reviews it, the marks are locked", () => {
-    const html = render(withWords(false).s);
-    expect(html).toMatch(/aria-label="Your mark on &quot;trip&quot;"><button[^>]*aria-disabled="true"/);
+  it("the PE does not review it: PE review says why, and its marks are open at once", () => {
+    const html = render(withWords().s);
+    expect(visible(html)).toContain("PE review Not reviewed The PE does not review it: it is a word list, and the PE judges feasibility, scale, longevity and budget.");
+    expect(html).toMatch(/aria-label="Your mark on &quot;trip&quot;"><button[^>]*aria-pressed="false"[^>]*>Keep</);
+    expect(html).not.toMatch(/aria-label="Your mark on &quot;trip&quot;"><button[^>]*aria-disabled="true"/);
+    // A flow the PE has not reviewed yet: its rule marks are locked.
+    const r = openRound(vision(), "flows", at(1));
+    const flow = run(r.state, "addStudioArtifact", { round: r.n, kind: "flow", title: "Saying you are in", variants: [{ id: "a", label: "As drafted", entry: "doc/index.md" }], files: [{ path: "doc/index.md", sha256: sha("1") }, { path: "doc/rules.json", sha256: sha("2") }], devices: [], madeBy: DESIGNER, rules: [{ variant: "a", path: "doc/rules.json", rules: RULES, examples: [] }] }, at(2)).state;
+    expect(render(flow)).toMatch(/aria-label="Your mark on rule R1"><button[^>]*aria-disabled="true"/);
   });
 
   it("one click marks a row and a second clears it; Keep the rest marks only the open rows", () => {
@@ -135,10 +141,26 @@ describe("the dictionary as a table", () => {
   it("is in force once approved, and says so; with every term marked, it no longer waits for your mark", () => {
     const { s, id } = withWords();
     expect(waitingForYourMark(s).map((a) => a.id)).toEqual([id]);
+    const some = runCommand(s, "sendFeedback", { entries: [{ artifactId: id, version: 1, mark: null, pins: [], note: "", rows: [{ row: "trip", mark: "keep" }] }] }, at(9)).state;
+    expect(waitingForYourMark(some).map((a) => a.id)).toEqual([id]);
     const marked = runCommand(s, "sendFeedback", { entries: [{ artifactId: id, version: 1, mark: null, pins: [], note: "", rows: WORDS.map((w) => ({ row: w.term, mark: "keep" })) }] }, at(10)).state;
     expect(waitingForYourMark(marked)).toEqual([]);
     const approved = runCommand(marked, "approveArtifact", { artifactId: id, version: 1 }, at(11)).state;
     expect(visible(render(approved))).toContain("In force These are the project's words. Every agent gets them, and the writing check reports a word to avoid.");
+  });
+});
+
+describe("what waits for your mark, by the kind's rules", () => {
+  it("a dictionary waits for your mark with no PE review; what you brought is not reviewed and does not wait", () => {
+    const zero = openRound(vision(), "material", at(1));
+    const brought = addScreen(zero.state, zero.n, at(2), { kind: "material", title: "Group page sketch", variants: [], devices: [], madeBy: { role: "user" } });
+    const data = openRound(runCommand(brought.state, "closeRound", { round: 0 }, at(3)).state, "data", at(3));
+    const words = run<{ artifactId: string }>(data.state, "addStudioArtifact", { round: data.n, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("d") }], devices: [], madeBy: DESIGNER, dictionary: WORDS }, at(4));
+    const s = words.state;
+    expect(waitingForYourMark(s).map((a) => a.title)).toEqual(["Words"]);
+    const sketch = S.getArtifact(s, brought.id, 1);
+    expect(peView(s, sketch, M.providerLabel)).toEqual({ tone: "neutral", state: "Not reviewed", text: "The PE does not review it: it is source material, not a design.", simulated: false, verdicts: [] });
+    expect(versionHistory(s, sketch)).toEqual([{ version: 1, round: 0, current: true, tone: "neutral", state: "not reviewed", text: "The PE does not review it: it is source material, not a design." }]);
   });
 });
 

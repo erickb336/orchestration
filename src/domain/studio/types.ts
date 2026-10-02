@@ -57,11 +57,48 @@ export interface RoundQuestion {
  * `material`, and a probe's `evidence`.
  */
 export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "interface" | "algorithm" | "topology" | "dictionary" | "material" | "evidence";
-export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology", "dictionary", "material", "evidence"];
+
+/** Who makes an artifact of a kind: the designer, the owner (what they bring into round 0), or a probe's run (its evidence). */
+export type KindMaker = "designer" | "owner" | "probe";
+
+/**
+ * The rules of one artifact kind: who makes it, whether the PE reviews it, and whether it waits for the owner's mark.
+ * The studio reads these here, from no list of its own. How a kind is shown (`DOCUMENT_KINDS`, the viewer) is apart.
+ * - `maker`: who makes it. The lead asks the designer only for the designer's kinds.
+ * - `peReviews`: whether the PE reviews each version before the owner sees it. When it does not, its review is
+ *   "not-reviewed" (`peReview`, studio.ts): the version reaches the owner at once, the PE gives it no verdict, and the
+ *   designer never revises it for the PE. `why` says why, in words that follow "The PE does not review it: ", for the
+ *   owner and the lead alike.
+ * - `ownerMark`: "asked": the version waits for the owner's mark (on a table: a mark on each row), and it counts as
+ *   waiting for them until then. "optional": the owner may mark it, and nothing waits for the mark.
+ */
+export type KindRule = { maker: KindMaker; ownerMark: "asked" | "optional" } & ({ peReviews: true } | { peReviews: false; why: string });
+
+/**
+ * One row for each kind (the type refuses a kind without one). The dictionary goes to the owner with no PE review
+ * (the lead's decision, 2026-10-02): the PE judges feasibility, scale, longevity and budget, and a word list raises
+ * none of them. The owner still marks its terms.
+ */
+export const KIND_RULES: Record<StudioArtifactKind, KindRule> = {
+  screen: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  "terminal-demo": { maker: "designer", peReviews: true, ownerMark: "asked" },
+  tui: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  contract: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  flow: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  interface: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  algorithm: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  topology: { maker: "designer", peReviews: true, ownerMark: "asked" },
+  dictionary: { maker: "designer", peReviews: false, why: "it is a word list, and the PE judges feasibility, scale, longevity and budget", ownerMark: "asked" },
+  material: { maker: "owner", peReviews: false, why: "it is source material, not a design", ownerMark: "optional" },
+  evidence: { maker: "probe", peReviews: false, why: "it is a probe's evidence for the PE, not a design", ownerMark: "optional" },
+};
+
+/** Every kind, in the table's order. */
+export const STUDIO_ARTIFACT_KINDS = Object.keys(KIND_RULES) as StudioArtifactKind[];
+/** What a designer's manifest may hold: the owner brings material, and a probe's run makes evidence. */
+export const DESIGNER_KINDS = STUDIO_ARTIFACT_KINDS.filter((k) => KIND_RULES[k].maker === "designer");
 /** Kinds that are documents: plain files (Markdown with code blocks and tables, `.mmd` Mermaid), shown without a device frame. */
 export const DOCUMENT_KINDS: StudioArtifactKind[] = ["contract", "flow", "interface", "algorithm", "topology"];
-/** Kinds the PE does not review: what the owner brought, and a probe's evidence. They reach the owner at once, and a verdict on one is refused. */
-export const UNGATED_KINDS: StudioArtifactKind[] = ["material", "evidence"];
 
 /** One option of an artifact: its id, its label, and its entry file when it has one. */
 export interface StudioVariant {
@@ -389,8 +426,6 @@ export interface ChangeOrder {
 
 export type StudioRunKind = "designer" | "pe" | "probe";
 export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
-/** What a designer's manifest may hold: the owner brings material, and a probe's run makes evidence. */
-export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "interface", "algorithm", "topology", "dictionary"];
 
 /** queued → running → (stopping →) stopped, completed, failed or lost. A queued run waits for dispatch, which happens in Vision only. */
 export type StudioRunStatus = "queued" | "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";

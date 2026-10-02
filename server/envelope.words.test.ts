@@ -7,7 +7,7 @@ import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
 import * as R from "../src/domain/studio/runs";
 import * as S from "../src/domain/studio/studio";
-import { DESIGNER, addScreen, openRound, peAgrees, run, sha } from "../src/domain/testing/studio";
+import { DESIGNER, addScreen, openRound, run, sha } from "../src/domain/testing/studio";
 import type { State } from "../src/domain/types";
 import { PROJECT_WORDS_HEADER, buildEnvelope, buildLeadEnvelope } from "./envelope";
 import { peEnvelope } from "./studio/pe";
@@ -27,12 +27,11 @@ const SECTION = [
   "- member: A person who said they are in.",
 ].join("\n");
 
-/** The data round with the dictionary the designer handed in, agreed by the PE; approved by the owner when `approve`. */
+/** The data round with the dictionary the designer handed in, which the PE does not review; approved by the owner when `approve`. */
 function withWords(approve: boolean, entries: object[] = WORDS): { s: State; id: string } {
   const r = openRound(fresh(), "data", at(1));
   const a = run<{ artifactId: string }>(r.state, "addStudioArtifact", { round: r.n, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("d") }], devices: [], madeBy: DESIGNER, dictionary: entries }, at(2));
-  const s = peAgrees(a.state, a.result.artifactId, 1, ["a"], at(3));
-  return { s: approve ? run(s, "approveArtifact", { artifactId: a.result.artifactId, version: 1 }, at(4)).state : s, id: a.result.artifactId };
+  return { s: approve ? run(a.state, "approveArtifact", { artifactId: a.result.artifactId, version: 1 }, at(4)).state : a.state, id: a.result.artifactId };
 }
 
 function leadText(s: State): string {
@@ -61,7 +60,7 @@ describe("the project's words in every agent's envelope", () => {
     for (const text of [leadText(s), designerText(s), peText(s), taskText(s)]) expect(text).toContain(SECTION);
   });
 
-  it("is in no envelope while the dictionary is only handed in and agreed by the PE", () => {
+  it("is in no envelope while the dictionary is only handed in, not approved", () => {
     const { s } = withWords(false);
     for (const text of [leadText(s), designerText(s), peText(s), taskText(s)]) expect(text).not.toContain(PROJECT_WORDS_HEADER);
   });
