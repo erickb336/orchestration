@@ -19,8 +19,13 @@ import { Scheduler } from "../scheduler";
 import { Store } from "../store";
 import { ScriptedAdapter } from "../testing/scripted";
 import { WorkspaceManager } from "../workspaces";
+import { systemMedia, type StudioMedia } from "./media";
 import { startDesignerRun } from "./runs";
 import { SAMPLE_FILES, SAMPLE_MANIFEST } from "./sample";
+import { createPrototypeServer } from "./serve";
+import { launchChrome, type ShotsOutcome } from "./shots";
+import { probeTerminalSandbox, type RecordResult } from "./terminal";
+import { close, get, listen } from "./testFixtures";
 
 let dir: string;
 let dataDir: string;
@@ -49,12 +54,12 @@ function gitRepo(): string {
   return repo;
 }
 
-async function service(opts: { workspaces?: boolean } = {}) {
+async function service(opts: { workspaces?: boolean; media?: StudioMedia } = {}) {
   const repo = opts.workspaces ? gitRepo() : join(dir, "repo");
   store = new Store(join(dataDir, "db.sqlite"));
   claude = new ScriptedAdapter("claude");
   codex = new ScriptedAdapter("codex");
-  scheduler = new Scheduler(store, { claude, codex }, { dataDir, leaseMs: 60_000, ackTimeoutMs: 10_000, ...(opts.workspaces ? { workspaces: new WorkspaceManager(join(dataDir, "worktrees")) } : {}) });
+  scheduler = new Scheduler(store, { claude, codex }, { dataDir, leaseMs: 60_000, ackTimeoutMs: 10_000, ...(opts.workspaces ? { workspaces: new WorkspaceManager(join(dataDir, "worktrees")) } : {}), ...(opts.media ? { studioMedia: opts.media } : {}) });
   await scheduler.refreshHealth();
   cmd("initProject", { name: "Trips", repoPath: repo, vision: "Weekend trips for a small group of friends.", focus: "" });
   cmd("openRound", { focus: "experience" });
@@ -329,4 +334,207 @@ describe("a designer run at the service", () => {
     expect(readFileSync(join(dataDir, "studio", state().project.id, "artifacts", art.id, "v1", "a", "style.css"), "utf8")).toBe("h1 { color: teal; }");
     expect(readFileSync(join(dataDir, "studio", state().project.id, "artifacts", art.id, "v2", "a", "style.css"), "utf8")).toBe("h1 { color: coral; }");
   });
+});
+
+// ---------- after an import: screenshots and recordings ----------
+
+/** Gates still closed when a test ends: opened then, so the scheduler's stop does not wait on them. */
+const gates: (() => void)[] = [];
+afterEach(() => {
+  for (const open of gates.splice(0)) open();
+});
+/** A stand-in for Chrome and VHS that answers only once released, so a test sees what happens meanwhile. */
+function gated(answers: { shots?: ShotsOutcome; record?: RecordResult }) {
+  const calls: string[] = [];
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => (release = r));
+  gates.push(release);
+  const media: StudioMedia = {
+    shots: async (_dir, artifactId, version) => {
+      calls.push(`shots ${artifactId} v${version}`);
+      await gate;
+      return answers.shots ?? { skipped: "no answer" };
+    },
+    record: async (_tapeDir, _outDir, tape) => {
+      calls.push(`record ${tape}`);
+      await gate;
+      return answers.record ?? { sandbox: null, reason: "failed", error: "no answer" };
+    },
+  };
+  return { media, calls, release };
+}
+/** Let started media jobs reach their first await. */
+const flush = () => new Promise((r) => setImmediate(r));
+/** Let the media jobs finish, then apply what they queued. */
+async function settleMedia() {
+  await scheduler.mediaIdle();
+  tick();
+}
+
+const TAPE = 'Output demo.gif\nOutput demo.webm\nOutput demo.txt\nSet Columns 80\nSet Rows 24\nSet TypingSpeed 20ms\nType "node trips.js plan"\nEnter\nSleep 1500ms\n';
+const TRIPS_JS = 'console.log("Weekend trips from Lisbon");\nconsole.log("  1  Sintra     45 min by train");\n';
+const DEMO_FILES: Record<string, string> = { "a/demo.tape": TAPE, "a/trips.js": TRIPS_JS, "a/demo.cast": '{"version": 3, "term": {"cols": 80, "rows": 24}}\n[0.5, "o", "trips plan\\r\\n"]\n', "b/plan.ans": "Weekend trips\n" };
+const TRIPS_DEMO = {
+  kind: "terminal-demo",
+  title: "trips",
+  variants: [
+    { id: "a", label: "A · Recorded", entry: "a/demo.tape" },
+    { id: "b", label: "B · Frames", entry: "b/plan.ans" },
+  ],
+  files: Object.keys(DEMO_FILES),
+};
+
+describe("after an import, the service's screenshots and recordings", () => {
+  it("the run completes at once; the screenshots follow and are recorded on the version", async () => {
+    const shots = { shots: [{ variant: "a", device: "desktop" as const, path: "shots/a-desktop.png" }, { variant: "b", device: "mobile" as const, path: "shots/b-mobile.png" }], failed: [] };
+    const g = gated({ shots });
+    await service({ media: g.media });
+    const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan." }, iso());
+    tick();
+    handIn(claude.runs.get(id)!);
+    finish(id);
+    tick();
+    // Completed and imported, while the screenshots are still being taken.
+    const art = S.latestArtifacts(state())[0];
+    expect(runOf(id).status).toBe("completed");
+    expect(art.shots).toEqual({ status: "pending" });
+    await flush();
+    expect(g.calls).toEqual([`shots ${art.id} v1`]);
+    // Started once, however many cycles pass meanwhile.
+    tick();
+    await flush();
+    expect(g.calls).toHaveLength(1);
+    expect(S.getArtifact(state(), art.id, 1).shots).toEqual({ status: "pending" });
+    g.release();
+    await settleMedia();
+    expect(S.getArtifact(state(), art.id, 1).shots).toEqual({ status: "taken", at: iso(), ...shots });
+    expect(state().events.at(-1)!.message).toBe("Screenshots of Trip plan v1: 2 taken");
+  });
+
+  it("says why there are no screenshots when they were skipped", async () => {
+    const g = gated({ shots: { skipped: "no Chrome found" } });
+    g.release();
+    await service({ media: g.media });
+    const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan." }, iso());
+    tick();
+    handIn(claude.runs.get(id)!);
+    finish(id);
+    tick();
+    await settleMedia();
+    const art = S.latestArtifacts(state())[0];
+    expect(art.shots).toMatchObject({ status: "skipped", reason: "no Chrome found" });
+    expect(S.shotsNote(art)).toBe("No screenshots: no Chrome found");
+  });
+
+  it("a terminal demo's tape is recorded after the run completes; not recorded, the hand-written frames are shown, with the reason", async () => {
+    const g = gated({ record: { sandbox: null, reason: "unavailable", error: "Not recorded: no working sandbox (shellWriteOutside allowed). Nothing runs unsandboxed; use a hand-written .cast or .ans instead." } });
+    await service({ media: g.media });
+    const id = startDesignerRun(store, { round: 1, brief: "Make the trips demo." }, iso());
+    tick();
+    handIn(claude.runs.get(id)!, { artifacts: [TRIPS_DEMO] }, DEMO_FILES);
+    finish(id);
+    tick();
+    const art = S.latestArtifacts(state())[0];
+    expect([runOf(id).status, art.demo, art.shots]).toEqual(["completed", { status: "pending" }, undefined]);
+    expect(S.demoNote(art, "a")).toBe("Recording…");
+    await flush();
+    expect(g.calls).toEqual(["record demo.tape"]);
+    g.release();
+    await settleMedia();
+    const reason = "recording is not available here: no working sandbox (shellWriteOutside allowed)";
+    expect(S.getArtifact(state(), art.id, 1).demo).toEqual({
+      status: "done",
+      at: iso(),
+      variants: [
+        { variant: "a", status: "hand-written", files: ["a/demo.cast"], reason },
+        { variant: "b", status: "hand-written", files: ["b/plan.ans"] },
+      ],
+    });
+    expect(S.demoNote(S.getArtifact(state(), art.id, 1), "a")).toBe(`Hand-written, not recorded: ${reason}`);
+  });
+
+  it("a result the studio refuses is recorded as none, with the reason, and not made again in a loop", async () => {
+    const g = gated({ shots: { shots: [{ variant: "z", device: "desktop", path: "shots/z-desktop.png" }], failed: [] } });
+    g.release();
+    await service({ media: g.media });
+    const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan." }, iso());
+    tick();
+    handIn(claude.runs.get(id)!);
+    finish(id);
+    tick();
+    await settleMedia();
+    await settleMedia();
+    const art = S.latestArtifacts(state())[0];
+    expect(art.shots).toMatchObject({ status: "skipped", reason: "the result could not be recorded (Trip plan has no variant z.)" });
+    expect(g.calls).toHaveLength(1);
+  });
+
+  it("a version an earlier service left pending is made by the next one", async () => {
+    await service();
+    const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan." }, iso());
+    tick();
+    handIn(claude.runs.get(id)!);
+    finish(id);
+    tick();
+    const art = S.latestArtifacts(state())[0];
+    // This service makes none; say an earlier one had started and stopped before it finished.
+    expect(art.shots).toBeUndefined();
+    store.update((s) => S.startArtifactMedia(s, art.id, 1), iso());
+    await scheduler.stop();
+    const g = gated({ shots: { skipped: "no Chrome found" } });
+    g.release();
+    scheduler = new Scheduler(store, { claude, codex }, { dataDir, leaseMs: 60_000, studioMedia: g.media });
+    tick();
+    await settleMedia();
+    expect(g.calls).toEqual([`shots ${art.id} v1`]);
+    expect(S.getArtifact(state(), art.id, 1).shots).toMatchObject({ status: "skipped", reason: "no Chrome found" });
+  });
+});
+
+const chrome = await launchChrome();
+if ("browser" in chrome) await chrome.browser.close();
+const sandbox = await probeTerminalSandbox();
+const realSkip = "missing" in chrome ? `no Chrome (${chrome.missing})` : !sandbox.ok ? `no terminal sandbox (${sandbox.detail})` : "";
+
+describe(`with the system Chrome and VHS${realSkip ? ` (skipped: ${realSkip})` : ""}`, () => {
+  it.skipIf(!!realSkip)(
+    "a designer's screen gets its screenshots and its terminal demo its sandboxed recording, served from the version",
+    async () => {
+      await service({ media: systemMedia() });
+      const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan and the trips demo." }, iso());
+      tick();
+      handIn(claude.runs.get(id)!, { artifacts: [TRIP_PLAN, TRIPS_DEMO] }, { ...PAGES, ...DEMO_FILES });
+      finish(id);
+      tick();
+      expect(runOf(id).status).toBe("completed");
+      const [screen, demo] = S.latestArtifacts(state());
+      for (let i = 0; i < 20 && S.pendingMedia(state()).length; i++) await settleMedia();
+      const project = join(dataDir, "studio", state().project.id);
+      const shots = S.getArtifact(state(), screen.id, 1).shots;
+      expect(shots).toMatchObject({ status: "taken", failed: [] });
+      expect(shots?.status === "taken" && shots.shots.map((s) => s.path).sort()).toEqual(["shots/a-desktop.png", "shots/a-mobile.png", "shots/b-desktop.png", "shots/b-mobile.png"]);
+      expect(S.getArtifact(state(), demo.id, 1).demo).toEqual({
+        status: "done",
+        at: expect.any(String),
+        variants: [
+          { variant: "a", status: "recorded", tape: "a/demo.tape", gif: "recording/a/demo.gif", webm: "recording/a/demo.webm", txt: "recording/a/demo.txt" },
+          { variant: "b", status: "hand-written", files: ["b/plan.ans"] },
+        ],
+      });
+      expect(readFileSync(join(project, "artifacts", demo.id, "v1", "recording", "a", "demo.txt"), "utf8")).toContain("Weekend trips from Lisbon");
+      // The prototype server serves them, each as its kind.
+      const server = createPrototypeServer({ studioDir: () => project, appOrigins: ["http://127.0.0.1:5319"] });
+      const port = await listen(server);
+      try {
+        const type = async (artifactId: string, path: string) => (await get(port, `p-${artifactId}-v1.localhost:${port}`, path)).headers["content-type"];
+        expect(await type(screen.id, "/shots/a-mobile.png")).toBe("image/png");
+        expect(await type(demo.id, "/recording/a/demo.gif")).toBe("image/gif");
+        expect(await type(demo.id, "/recording/a/demo.webm")).toBe("video/webm");
+        expect(await type(demo.id, "/recording/a/demo.txt")).toBe("text/plain; charset=utf-8");
+      } finally {
+        await close(server);
+      }
+    },
+    120_000,
+  );
 });
