@@ -10,6 +10,8 @@ import { startFactoryAsOwner } from "./testing/factory";
 import { needsYouItems } from "./needsYou";
 import { buildSeed } from "./seed";
 import { budgetStop, buildingSpend, estimateUsd, PRICES, type ModelPrice } from "./spend";
+import * as R from "./studio/runs";
+import type { StudioRun } from "./studio/types";
 import type { Attempt, LeadRun, State } from "./types";
 
 const T0 = Date.parse("2026-10-01T12:00:00Z");
@@ -138,6 +140,37 @@ describe("the building spend", () => {
     ];
     s.leadRuns = [{ id: "lead-1", trigger: "planning", provider: "claude", model: "claude-test-20260101", startedAt: at(0), endedAt: at(1), outcome: "failed", messageIds: [], usage: { inputTokens: 1_000_000, outputTokens: 0 } }];
     expect(buildingSpend(s, LIST)).toEqual({ usd: 3.5, runs: 4, unknown: [{ runId: "run-c", provider: "codex", model: "gpt-mystery", reason: "no-price" }] });
+  });
+
+  it("counts Vision's studio runs (spec r5): finished ones priced like any run, queued and running ones not yet, and one refused before it started as a known $0", () => {
+    const s = buildSeed(T0, { inFlightRuns: false });
+    s.attempts = [];
+    s.leadRuns = [];
+    const studio = (id: string, status: StudioRun["status"], over: Partial<StudioRun> = {}): StudioRun => ({ id, kind: "designer", round: 1, provider: "codex", model: "gpt-test", status, brief: "b", askedAt: at(0), workspace: `staging/${id}`, ...over });
+    s.studio.runs = [
+      studio("studio-1", "completed", { usage: { inputTokens: 1_000_000, outputTokens: 0 } }),
+      studio("studio-2", "stopped", { provider: "claude", model: "sonnet", sessionId: "sess", usage: { costUsd: 0.25 } }),
+      studio("studio-3", "failed", { note: "not started: round 1 was closed" }),
+      studio("studio-4", "lost", { sessionId: "thr-4" }),
+      studio("studio-5", "queued", { usage: { costUsd: 99 } }),
+      studio("studio-6", "running", { usage: { costUsd: 99 } }),
+    ];
+    expect(buildingSpend(s, LIST)).toEqual({ usd: 2.25, runs: 4, unknown: [{ runId: "studio-4", provider: "codex", model: "gpt-test", reason: "no-usage" }] });
+  });
+
+  it("a designer run's spend reaches the building budget, and then no studio run starts until the owner raises it", () => {
+    let s = M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: "/tmp/trips", vision: "Weekend trips.", focus: "" }, at(0));
+    s = runCommand(s, "openRound", { focus: "experience" }, at(1)).state;
+    const ask = (st: State, sec: number) => runCommand(st, "startStudioRun", { kind: "designer", round: 1, brief: "Make the trip plan." }, at(sec)) as { state: State; result: { runId: string } };
+    const first = ask(s, 2);
+    s = R.dispatchStudioRuns(first.state, at(3)).state;
+    s = R.completeStudioRun(s, first.result.runId, at(4), { summary: "1 artifact", usage: { costUsd: 2 } });
+    s = runCommand(s, "setBudgets", { buildingUsd: 2, maintenanceUsdPerMonth: null }, at(5)).state;
+    expect(budgetStop(s)).toMatchObject({ budgetUsd: 2, spend: { usd: 2, runs: 1 } });
+    const second = ask(s, 6);
+    expect(R.dispatchStudioRuns(second.state, at(7)).started).toEqual([]);
+    const raised = runCommand(second.state, "setBudgets", { buildingUsd: 3, maintenanceUsdPerMonth: null }, at(8)).state;
+    expect(R.dispatchStudioRuns(raised, at(9)).started).toEqual([second.result.runId]);
   });
 });
 
