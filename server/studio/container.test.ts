@@ -8,7 +8,7 @@ import { chmodSync, existsSync, lutimesSync, mkdirSync, mkdtempSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { RECORDER_IMAGE, STAGE_SWEEP_AGE_MS, containerArgs, containerName, defaultRecorderRoot, dockerReady, judgeProbe, parseProbe, probeRecorder, startContainer, sweepStages, type HostSide, type ProbeFacts } from "./container";
+import { RECORDER_IMAGE, STAGE_SWEEP_AGE_MS, containerArgs, containerName, defaultRecorderRoot, dockerReady, judgeProbe, parseProbe, probeRecorder, startContainer, startRecording, sweepStages, type HostSide, type ProbeFacts } from "./container";
 
 let dir: string;
 beforeEach(() => {
@@ -254,6 +254,55 @@ describe("when recording is unavailable, and why", () => {
     expect(Date.now() - t0).toBeLessThan(10_000);
     expect(r.code).toBeNull(); // killed, not finished
     expect(slow.calls()).toEqual([`run --name ${name} image`, `kill ${name}`, `rm --force ${name}`]);
+  });
+});
+
+describe("one recording at a time", () => {
+  const env = { PATH: process.env.PATH ?? "" };
+  /** A stand-in docker whose `run` logs when it starts and ends, and takes `seconds` (failing with `exit`). */
+  function timed(seconds: number, exit = 0) {
+    const log = join(dir, "timed.log");
+    const file = join(dir, `timed-${seconds}-${exit}`);
+    writeFileSync(file, `#!/bin/bash\nif [ "$1" = run ]; then echo "start $3" >> ${JSON.stringify(log)}; sleep ${seconds}; echo "end $3" >> ${JSON.stringify(log)}; exit ${exit}; fi\necho "$1 $2" >> ${JSON.stringify(log)}\n`);
+    chmodSync(file, 0o755);
+    return { file, calls: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : []) };
+  }
+  const start = (docker: string, name: string, timeoutMs: number) => startRecording(docker, ["run", "--name", name, "image"], { env, name, timeoutMs });
+
+  it("two recordings started together run one after the other, and the wait does not count toward the time limit", async () => {
+    const d = timed(1);
+    const t0 = Date.now();
+    // 1.6 s each: the second waits about 1 s for its turn, then runs 1 s. Counted from the call it would time out.
+    const [a, b] = [start(d.file, "rec-a", 1600), start(d.file, "rec-b", 1600)];
+    const [ra, rb] = await Promise.all([a.done, b.done]);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(2000);
+    expect(d.calls()).toEqual(["start rec-a", "end rec-a", "start rec-b", "end rec-b"]);
+    expect([ra, rb].map((r) => [r.code, r.timedOut])).toEqual([
+      [0, false],
+      [0, false],
+    ]);
+  });
+
+  it("the time limit stops a recording that runs too long, and the next one then gets its turn", async () => {
+    const slow = timed(5);
+    const quick = timed(0);
+    const [a, b] = [start(slow.file, "rec-slow", 500), start(quick.file, "rec-quick", 2000)];
+    const ra = await a.done;
+    expect(ra.timedOut).toBe(true);
+    expect((await b.done).code).toBe(0);
+    expect(slow.calls().slice(0, 3)).toEqual(["start rec-slow", "kill rec-slow", "rm --force"]);
+    expect(slow.calls()).toContain("start rec-quick");
+  });
+
+  it("a failed recording frees the turn; a stopped one that waits never starts", async () => {
+    const failing = timed(0.3, 1);
+    const ok = timed(0.3);
+    const [a, b, c] = [start(failing.file, "rec-fail", 5000), start(ok.file, "rec-stopped", 5000), start(ok.file, "rec-next", 5000)];
+    await b.stop();
+    expect((await a.done).code).toBe(1);
+    expect(await b.done).toEqual({ code: null, output: "stopped before its turn", timedOut: false });
+    expect((await c.done).code).toBe(0);
+    expect(ok.calls()).toEqual(["start rec-fail", "end rec-fail", "start rec-next", "end rec-next"]);
   });
 });
 

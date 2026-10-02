@@ -249,6 +249,69 @@ export function startContainer(docker: string, args: string[], o: { env: Record<
   return { name: o.name, done, stop, remove };
 }
 
+// ---------- one recording at a time ----------
+
+/**
+ * The end of this process's recorder queue: recordings run one at a time. Each container may use 1 GB and 1.5 CPUs
+ * (RECORDER_LIMITS), and the VM Docker runs in may have only 2 GB and 2 CPUs (Colima's default here), so two or three
+ * at once (several artifacts imported together) slow each other to a timeout or are killed for memory. The probe does
+ * not wait in it: it is short, and cached once it passes.
+ */
+let recorderQueue: Promise<void> = Promise.resolve();
+
+/** Waits for this process's recorder turn. The caller runs, then calls the release it got. */
+function recorderTurn(): Promise<() => void> {
+  let release!: () => void;
+  const mine = new Promise<void>((r) => (release = r));
+  const before = recorderQueue;
+  recorderQueue = before.then(() => mine);
+  return before.then(() => release);
+}
+
+export interface RunningRecording extends RunningContainer {
+  /** As a container's, and whether the time limit stopped it. */
+  done: Promise<{ code: number | null; output: string; timedOut: boolean }>;
+}
+
+/**
+ * A recording's container (startContainer), started when no other recording of this process runs, and stopped
+ * `timeoutMs` after it starts: the time it waits for its turn does not count. stop() or remove() before its turn ends
+ * the wait, and nothing starts.
+ */
+export function startRecording(docker: string, args: string[], o: { env: Record<string, string>; name: string; stdin?: string; cap?: number; timeoutMs: number }): RunningRecording {
+  let run: RunningContainer | undefined;
+  let cancelled = false;
+  const done = recorderTurn().then(async (release) => {
+    try {
+      if (cancelled) return { code: null, output: "stopped before its turn", timedOut: false };
+      const started = startContainer(docker, args, o);
+      run = started;
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        void started.stop();
+      }, o.timeoutMs);
+      const r = await started.done;
+      clearTimeout(timer);
+      return { ...r, timedOut };
+    } finally {
+      release();
+    }
+  });
+  return {
+    name: o.name,
+    done,
+    stop: async () => {
+      cancelled = true;
+      await run?.stop();
+    },
+    remove: async () => {
+      cancelled = true;
+      await run?.remove();
+    },
+  };
+}
+
 // ---------- is Docker there ----------
 
 export type DockerReady = { ok: true; docker: string; imageId: string } | { ok: false; reason: string };

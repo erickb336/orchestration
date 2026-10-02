@@ -23,7 +23,7 @@
 
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix } from "node:path";
-import { OUT, WORK, containerArgs, containerName, defaultRecorderRoot, dockerEnv, makeStage, probeRecorder, startContainer, type RunningContainer } from "./container";
+import { OUT, WORK, containerArgs, containerName, defaultRecorderRoot, dockerEnv, makeStage, probeRecorder, startRecording, type RunningContainer } from "./container";
 
 // ---------- limits ----------
 
@@ -472,24 +472,20 @@ export async function recordTape(artifactDir: string, outDir: string, opts: Reco
     const denv = dockerEnv(env);
     const command = ["/usr/bin/timeout", "--kill-after=5", String(Math.ceil(timeoutMs / 1000) + CONTAINER_GRACE_S), "/usr/bin/vhs", "-"];
     const args = containerArgs({ name, work: stage.work, out: stage.out, workdir: tapeFolder === "." ? WORK : posix.join(WORK, tapeFolder), command, image: opts.image, stdin: true });
-    log(`terminal: recording ${tapeName} in the container ${name}`);
-    const run = startContainer(health.docker, args, { env: denv, name, stdin: tape });
+    log(`terminal: recording ${tapeName} in the container ${name} (one recording at a time)`);
+    // One recording at a time in this service; the time limit counts from the container's start, not from its turn.
+    const run = startRecording(health.docker, args, { env: denv, name, stdin: tape, timeoutMs });
     container = run;
-    let stopped: "timeout" | "too-large" | undefined;
-    const stop = (why: "timeout" | "too-large") => {
-      if (stopped) return;
-      stopped = why;
-      void run.stop();
-    };
-    const timer = setTimeout(() => stop("timeout"), timeoutMs);
+    let stopped: "too-large" | undefined;
     const watch = setInterval(() => {
-      if (folderBytes(stage.dir) > maxDiskBytes) stop("too-large");
+      if (stopped || folderBytes(stage.dir) <= maxDiskBytes) return;
+      stopped = "too-large";
+      void run.stop();
     }, 1000);
-    const { code, output } = await run.done;
-    clearTimeout(timer);
+    const { code, output, timedOut } = await run.done;
     clearInterval(watch);
 
-    if (stopped === "timeout") return done({ sandbox: "container", reason: "timeout", error: `VHS did not finish within ${Math.round(timeoutMs / 1000)} s; it was stopped` });
+    if (timedOut) return done({ sandbox: "container", reason: "timeout", error: `VHS did not finish within ${Math.round(timeoutMs / 1000)} s; it was stopped` });
     if (stopped === "too-large") return done({ sandbox: "container", reason: "too-large", error: `the recording wrote more than ${Math.round(maxDiskBytes / 1024 / 1024)} MB; it was stopped` });
     if (code === 124) return done({ sandbox: "container", reason: "timeout", error: "VHS did not finish within its time; the container stopped it (exit 124)" });
     if (code !== 0) return done({ sandbox: "container", reason: "failed", error: `VHS failed (exit ${code ?? "?"}): ${tail(output) || "no output"}` });
