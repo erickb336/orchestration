@@ -230,13 +230,20 @@ export function parseJUnit(xml: string, clean: Clean): { ok: true; cases: TestCa
   return { ok: true, cases: out };
 }
 
-/** The cases kept in the state: every case when they fit, else the tagged ones first, in the report's order. */
+/**
+ * The cases kept in the state: every case when they fit; else the tagged ones (the rules' evidence), then the failing
+ * ones, then the rest, kept in the report's order.
+ */
 function keep(all: TestCaseResult[]): { cases: TestCaseResult[]; counts: Record<TestCaseResult["status"], number>; truncated: boolean } {
   const counts: Record<TestCaseResult["status"], number> = { passed: 0, failed: 0, skipped: 0, error: 0 };
   for (const c of all) counts[c.status]++;
   if (all.length <= MAX_CASES) return { cases: all, counts, truncated: false };
-  const tagged = all.map((c, i) => ({ c, i, tagged: tagsIn(c.name).length + tagsIn(c.suite).length > 0 }));
-  const chosen = [...tagged.filter((x) => x.tagged), ...tagged.filter((x) => !x.tagged)].slice(0, MAX_CASES).sort((a, b) => a.i - b.i);
+  const rank = (c: TestCaseResult) => (tagsIn(c.name).length + tagsIn(c.suite).length > 0 ? 0 : c.status === "failed" || c.status === "error" ? 1 : 2);
+  const chosen = all
+    .map((c, i) => ({ c, i, r: rank(c) }))
+    .sort((a, b) => a.r - b.r || a.i - b.i)
+    .slice(0, MAX_CASES)
+    .sort((a, b) => a.i - b.i);
   return { cases: chosen.map((x) => x.c), counts, truncated: true };
 }
 

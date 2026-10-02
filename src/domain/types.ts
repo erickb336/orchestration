@@ -634,8 +634,8 @@ export interface TestCaseResult {
 
 /**
  * What the service read from a check run's JUnit report, after the commands ran in the throwaway copy.
- * - read: the test cases (at most 400, the tagged ones first; `truncated` when more were in the report) and the
- *   counts of every case in the report;
+ * - read: the test cases (at most 400: the tagged ones first, then the failing ones; `truncated` when more were in the
+ *   report) and the counts of every case in the report;
  * - missing: the commands wrote no report at the path;
  * - refused: the file is not one the service reads (too large, a DTD or an entity declaration, nested too deep, not
  *   well-formed XML, or a path that leaves the copy), and why.

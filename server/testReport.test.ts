@@ -114,14 +114,15 @@ describe("what reaches the state: no local paths, no secrets, capped, at most 40
     expect(r.status === "read" && r.cases[0].message).toBe(`line one line two ${"x".repeat(281)}…`);
   });
 
-  it("over 400 cases: every tagged case is kept, the rest fill up in the report's order, and the counts cover all", () => {
+  it("over 400 cases: every tagged case is kept, then the failing ones, then the rest in the report's order; the counts cover all", () => {
     const untagged = Array.from({ length: 450 }, (_, i) => `<testcase name="plain ${i}"/>`).join("");
     const tagged = '<testcase name="[bi-3 R1] kept"/><testcase name="[bi-3 R2] kept too"><failure message="no"/></testcase>';
-    const r = read(`<testsuite>${untagged}${tagged}</testsuite>`);
+    const failing = '<testcase name="plain but failing"><error message="boom"/></testcase>';
+    const r = read(`<testsuite>${untagged}${failing}${tagged}</testsuite>`);
     if (r.status !== "read") throw new Error(reasonOf(r));
     expect(r.cases).toHaveLength(MAX_CASES);
-    expect(r.cases.slice(-3).map((c) => c.name)).toEqual(["plain 397", "[bi-3 R1] kept", "[bi-3 R2] kept too"]);
-    expect(r.counts).toEqual({ passed: 451, failed: 1, skipped: 0, error: 0 });
+    expect(r.cases.slice(-4).map((c) => c.name)).toEqual(["plain 396", "plain but failing", "[bi-3 R1] kept", "[bi-3 R2] kept too"]);
+    expect(r.counts).toEqual({ passed: 451, failed: 1, skipped: 0, error: 1 });
     expect(r.truncated).toBe(true);
   });
 });
