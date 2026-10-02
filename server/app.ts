@@ -21,6 +21,7 @@ import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { defaultRecorderRoot, sweepStages } from "./studio/container";
 import { systemMedia } from "./studio/media";
 import { createPrototypeServer, projectStudioDir } from "./studio/serve";
 import { VisionDocStore } from "./visiondocs";
@@ -115,6 +116,13 @@ const pruneLogs = () => {
 };
 pruneLogs();
 setInterval(pruneLogs, 24 * 60 * 60_000).unref();
+// A service stopped mid-recording leaves the recorder's stage folder behind; old ones are removed at start.
+{
+  const root = defaultRecorderRoot();
+  const swept = sweepStages(root);
+  if (swept.removed.length) log(`Recorder: removed ${swept.removed.length} stage folder${swept.removed.length === 1 ? "" : "s"} left in ${root}`);
+  if (swept.failed.length) log(`Recorder: could not remove ${swept.failed.join(", ")} in ${root}`);
+}
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
 const prototypePort = Number(process.env.ORCHESTRATION_PROTOTYPE_PORT ?? port + 1);

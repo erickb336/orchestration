@@ -22,7 +22,7 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -444,8 +444,51 @@ export function probeRecorder(o: { docker?: string; env?: NodeJS.ProcessEnv; ima
   })();
 }
 
+/** The prefixes of the stage folders: a recording's (terminal.ts) and the probe's. makeStage takes no other. */
+type StagePrefix = "orc-rec-" | "orc-probe-";
+/** A stage folder's name: a StagePrefix and the six characters mkdtemp adds. Any other name under the root is not ours. */
+const STAGE_NAME = /^orc-(?:rec|probe)-[A-Za-z0-9]{6}$/;
+/**
+ * How old a stage folder must be before the sweep removes it. A recording ends within its limit (120 s, and the
+ * container's own timeout 15 s after it) and the probe within 60 s, so a folder this old has no live recording; a
+ * second service on the same machine records in it only while it is new.
+ */
+export const STAGE_SWEEP_AGE_MS = 60 * 60_000;
+
+/**
+ * Removes the stage folders that a service stopped mid-recording (a crash) left under `root`, for the service's
+ * start. Only folders the recorder made (by name), only when older than `minAgeMs` (by their own time, not a link's),
+ * and never through a link: a root that is a link, and an entry that is one, are left alone, and the removal unlinks
+ * links inside a folder without following them. Never throws; says what it removed and what it could not.
+ */
+export function sweepStages(root: string, o: { minAgeMs?: number; now?: number } = {}): { removed: string[]; failed: string[] } {
+  const out = { removed: [] as string[], failed: [] as string[] };
+  const minAge = o.minAgeMs ?? STAGE_SWEEP_AGE_MS;
+  const now = o.now ?? Date.now();
+  let names: string[];
+  try {
+    if (!lstatSync(root).isDirectory()) return out;
+    names = readdirSync(root);
+  } catch {
+    return out; // no root yet: nothing recorded on this machine
+  }
+  for (const name of names) {
+    if (!STAGE_NAME.test(name)) continue;
+    const dir = join(root, name);
+    try {
+      const st = lstatSync(dir);
+      if (!st.isDirectory() || now - st.mtimeMs < minAge) continue;
+      rmSync(dir, { recursive: true, force: true });
+      out.removed.push(name);
+    } catch {
+      out.failed.push(name);
+    }
+  }
+  return out;
+}
+
 /** A new stage folder under `root`: `work/` and `out/`, private to this user. */
-export function makeStage(root: string, prefix: string): { dir: string; work: string; out: string } {
+export function makeStage(root: string, prefix: StagePrefix): { dir: string; work: string; out: string } {
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const dir = realpathSync(mkdtempSync(join(root, prefix)));
   const s = { dir, work: join(dir, "work"), out: join(dir, "out") };

@@ -4,11 +4,11 @@
 // needed. Where Docker and the image are present, the real probe passes, and a docker that drops the isolation flags
 // fails it.
 
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { RECORDER_IMAGE, containerArgs, containerName, defaultRecorderRoot, dockerReady, judgeProbe, parseProbe, probeRecorder, startContainer, type HostSide, type ProbeFacts } from "./container";
+import { RECORDER_IMAGE, STAGE_SWEEP_AGE_MS, containerArgs, containerName, defaultRecorderRoot, dockerReady, judgeProbe, parseProbe, probeRecorder, startContainer, sweepStages, type HostSide, type ProbeFacts } from "./container";
 
 let dir: string;
 beforeEach(() => {
@@ -254,6 +254,65 @@ describe("when recording is unavailable, and why", () => {
     expect(Date.now() - t0).toBeLessThan(10_000);
     expect(r.code).toBeNull(); // killed, not finished
     expect(slow.calls()).toEqual([`run --name ${name} image`, `kill ${name}`, `rm --force ${name}`]);
+  });
+});
+
+describe("the stage folders a crash left (the sweep at the service's start)", () => {
+  const HOUR = 60 * 60_000;
+  /** A folder (with a file) or a link at root/name, its own time `age` ago. */
+  function make(root: string, name: string, age: number, link?: string): string {
+    const p = join(root, name);
+    if (link) symlinkSync(link, p);
+    else {
+      mkdirSync(join(p, "work"), { recursive: true });
+      writeFileSync(join(p, "work", "tape.tape"), "Output demo.gif");
+    }
+    const t = new Date(Date.now() - age);
+    lutimesSync(p, t, t);
+    return p;
+  }
+
+  it("removes only old folders the recorder made, by name, and never follows a link", () => {
+    const root = join(dir, "recorder");
+    const outside = join(dir, "outside");
+    mkdirSync(root);
+    mkdirSync(outside);
+    writeFileSync(join(outside, "keep.txt"), "not the recorder's");
+    make(root, "orc-rec-a1B2c3", 2 * HOUR);
+    const probe = make(root, "orc-probe-Zz9yX8", 2 * HOUR);
+    // Inside an old stage: a link to a folder outside. The link goes; what it points at stays.
+    symlinkSync(outside, join(probe, "work", "escape"));
+    make(root, "orc-rec-new000", 5 * 60_000); // a recording that may still run
+    make(root, "test-terminal-abc123", 2 * HOUR); // a test's folder
+    make(root, "orc-rec-toolong1", 2 * HOUR); // not mkdtemp's six characters
+    make(root, "orc-rec-link00", 2 * HOUR, outside); // a link named like a stage
+    writeFileSync(join(root, "orc-rec-file00"), "a file named like a stage");
+
+    const r = sweepStages(root);
+
+    expect(r).toEqual({ removed: expect.arrayContaining(["orc-rec-a1B2c3", "orc-probe-Zz9yX8"]), failed: [] });
+    expect(r.removed).toHaveLength(2);
+    expect(readdirSync(root).sort()).toEqual(["orc-rec-file00", "orc-rec-link00", "orc-rec-new000", "orc-rec-toolong1", "test-terminal-abc123"]);
+    expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("not the recorder's");
+  });
+
+  it("does nothing through a root that is a link, or when there is no root yet", () => {
+    const real = join(dir, "real");
+    mkdirSync(real);
+    make(real, "orc-rec-a1B2c3", 2 * HOUR);
+    symlinkSync(real, join(dir, "root-link"));
+    expect(sweepStages(join(dir, "root-link"))).toEqual({ removed: [], failed: [] });
+    expect(readdirSync(real)).toEqual(["orc-rec-a1B2c3"]);
+    expect(sweepStages(join(dir, "missing"))).toEqual({ removed: [], failed: [] });
+  });
+
+  it("a folder younger than the age, an hour by default, stays; the age counts from the folder's own time", () => {
+    const root = join(dir, "recorder");
+    mkdirSync(root);
+    make(root, "orc-rec-a1B2c3", 30 * 60_000);
+    expect(sweepStages(root).removed).toEqual([]);
+    expect(STAGE_SWEEP_AGE_MS).toBe(HOUR);
+    expect(sweepStages(root, { minAgeMs: 10 * 60_000 }).removed).toEqual(["orc-rec-a1B2c3"]);
   });
 });
 
