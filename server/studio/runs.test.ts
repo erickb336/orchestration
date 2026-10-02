@@ -4,6 +4,7 @@
 // the owner-only start are untouched by any of it.
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -12,12 +13,14 @@ import * as R from "../../src/domain/studio/runs";
 import * as S from "../../src/domain/studio/studio";
 import { startFactoryArgs } from "../../src/domain/testing/factory";
 import type { State } from "../../src/domain/types";
+import { FakeAdapter, defaultFakeConfig } from "../runtimes/fake";
 import type { Assignment } from "../runtimes/types";
 import { Scheduler } from "../scheduler";
 import { Store } from "../store";
 import { ScriptedAdapter } from "../testing/scripted";
 import { WorkspaceManager } from "../workspaces";
 import { startDesignerRun } from "./runs";
+import { SAMPLE_FILES, SAMPLE_MANIFEST } from "./sample";
 
 let dir: string;
 let dataDir: string;
@@ -258,6 +261,38 @@ describe("a designer run at the service", () => {
     logged.mockRestore();
     expect(store.read()).toEqual(before);
     expect(runOf(id).status).toBe("running");
+  });
+
+  it("with the fake runtime, a simulated designer hands in the sample trip plan, which goes through the same check and import", async () => {
+    store = new Store(join(dataDir, "db.sqlite"));
+    const catalog = store.read().state.project.catalog;
+    const fake = { claude: new FakeAdapter("claude", defaultFakeConfig(), catalog.claude), codex: new FakeAdapter("codex", defaultFakeConfig(), catalog.codex) };
+    scheduler = new Scheduler(store, fake, { dataDir, leaseMs: 60_000 });
+    cmd("initProject", { name: "Weekend Trips", repoPath: join(dir, "repo"), vision: "Weekend trips for a small group of friends.", focus: "" });
+    cmd("openRound", { focus: "experience" });
+    const id = startDesignerRun(store, { round: 1 }, iso());
+    for (let i = 0; i < 60 && runOf(id).status !== "completed"; i++) tick();
+    expect(runOf(id)).toMatchObject({ status: "completed", simulated: true });
+    const art = S.latestArtifacts(state())[0];
+    expect(art).toMatchObject({
+      title: "Trip plan (simulated sample)",
+      kind: "screen",
+      devices: ["desktop", "mobile"],
+      variants: [
+        { id: "a", label: "A · Map first" },
+        { id: "b", label: "B · Day by day" },
+      ],
+      files: Object.entries(SAMPLE_FILES).map(([path, text]) => ({ path, sha256: createHash("sha256").update(text).digest("hex") })),
+    });
+    const folder = join(dataDir, "studio", state().project.id, "artifacts", art.id, "v1");
+    for (const v of ["a", "b"]) {
+      const page = readFileSync(join(folder, v, "index.html"), "utf8");
+      expect(page).toContain("Simulated sample: the fake runtime made this, not a designer agent.");
+      expect(page).toContain("Lake weekend");
+      // Nothing to fetch and nothing inline: the prototype server's policy blocks both.
+      expect(page).not.toMatch(/https?:\/\/|style="|<script|<style/);
+    }
+    expect(JSON.parse(readFileSync(join(folder, "manifest.json"), "utf8")).variants).toEqual(SAMPLE_MANIFEST.artifacts[0].variants);
   });
 
   it("in real mode, the product is checked out read-only beside the run and removed after it; a revision starts from the version it revises", async () => {

@@ -66,6 +66,7 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     where.checkout ? `- The product's repository, as committed, is readable at ${where.checkout}. Read it to match an existing app; you cannot write there.` : "- No checkout of the product's repository is available to read.",
     ...(prev ? [`- Your working directory starts with the files of ${S.artifactName(prev)}, the version you revise: ${prev.files.map((f) => f.path).join(", ")}.`] : []),
     "- There is no network, and prototypes are shown offline in a sandbox that blocks every request: no CDN, web font, remote image or script. Everything a prototype needs is in its files.",
+    '- Styles and scripts go in their own .css and .js files: the sandbox blocks inline `<style>` and `<script>` blocks and `style="…"` attributes.',
     "",
     `## The project's devices: ${devices.join(", ")}`,
     "",
