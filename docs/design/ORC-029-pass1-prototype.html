@@ -160,14 +160,13 @@ button { font: inherit; color: inherit; }
 /* ---------- device frames ---------- */
 .device { background: var(--wt-bg); color: var(--wt-ink); container-type: inline-size; overflow: hidden; position: relative; font-family: var(--font); }
 .device.desktop { width: min(100%, 860px); border-radius: 10px; box-shadow: 0 0 0 1px #3a3c42; }
-.device.tablet { width: min(100%, 560px); border-radius: 22px; box-shadow: 0 0 0 10px #26272b, 0 0 0 11px #3a3c42; }
 .device.phone { width: min(100%, 300px); border-radius: 36px; box-shadow: 0 0 0 9px #26272b, 0 0 0 10px #3a3c42; }
 .chrome { display: flex; gap: 6px; align-items: center; padding: 8px 10px; background: #e7e3d8; border-bottom: 1px solid var(--wt-line); font-size: 11px; color: var(--wt-muted); }
 .chrome i { width: 9px; height: 9px; border-radius: 99px; background: #cfc9bb; display: block; }
 .chrome .url { margin-left: 8px; background: #f7f5ef; border-radius: 6px; padding: 2px 10px; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .notch { height: 26px; display: grid; place-items: center; }
 .notch span { width: 84px; height: 20px; background: #111; border-radius: 0 0 14px 14px; display: block; }
-.device.phone .chrome, .device.tablet .chrome { display: none; }
+.device.phone .chrome { display: none; }
 .device:not(.phone) .notch { display: none; }
 .wt { padding: 14px; display: grid; gap: 12px; }
 .wt-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
@@ -209,12 +208,7 @@ button { font: inherit; color: inherit; }
 .term { background: var(--t-bg); color: var(--t-fg); font-family: var(--mono); font-size: 12.5px; line-height: 1.45; border-radius: 10px; overflow: hidden; box-shadow: 0 0 0 1px #2b2d31; max-width: 100%; }
 .term .bar { display: flex; gap: 6px; align-items: center; padding: 7px 10px; background: #1b1c1f; color: #8b8f96; font-size: 11px; font-family: var(--font); }
 .term .bar i { width: 10px; height: 10px; border-radius: 99px; background: #3a3c42; display: block; }
-.term.tmux .bar { display: none; }
-.term.bare .bar { display: none; }
-.term.bare { box-shadow: none; border-radius: 0; }
 .term .scr { padding: 10px 12px; white-space: pre; overflow-x: auto; min-height: 120px; }
-.term .status { background: #1f6f43; color: #e9f5ec; padding: 1px 10px; font-size: 11.5px; white-space: pre; overflow: hidden; }
-.term:not(.tmux) .status { display: none; }
 .g { color: var(--t-green); } .y { color: var(--t-yellow); } .r { color: var(--t-red); } .b { color: var(--t-blue); } .d { color: var(--t-dim); } .sel { background: var(--t-sel); }
 .cursor { display: inline-block; width: 0.6em; background: var(--t-fg); animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
@@ -280,7 +274,7 @@ pre.mermaid { margin: 0; }
   <!-- ===== what this page is (review) ===== -->
   <section class="rv" aria-labelledby="t-intro" data-uncommentable>
     <div class="rv-intro">
-      <span class="rv-tag">Orchestrator · ORC-029 · pass 1 of 6 · prototype with sample data</span>
+      <span class="rv-tag">Orchestrator · ORC-029 · pass 1 of 6 · prototype with sample data · version 3, after your marks</span>
       <h1 id="t-intro">The vision studio, before the factory</h1>
       <p>This is a clickable prototype of the screens ORC-029 adds. Nothing here runs agents; every artifact, reply and number is a sample. It comes before any backend work, so the experience is settled first.</p>
       <p><b>Where it fits.</b> Today, Shaping is text only. ORC-029 makes Vision an interactive studio with prototypes, inputs and outputs, and flows. The factory only starts when you choose Start the factory. Your decisions so far: keep the name Orchestrator; Vision is a separate, always interactive step; the canvas layout; marks, pins and variants; the hiking app plus a CLI with TUI layouts.</p>
@@ -307,7 +301,7 @@ pre.mermaid { margin: 0; }
   <!-- ===== 1. new project ===== -->
   <section class="screen" data-screen="start" role="tabpanel" aria-labelledby="tab-start">
     <div class="rv rv-bar" data-review="s-start" data-uncommentable>
-      <div class="ask"><span class="rv-tag">Screen 1 · New project</span><p>Every project starts in Vision. There are two ways in: start from an idea, or from what you already have (designs, documents, a prototype, a CLI's output), which become round 0. There is no way to skip to the factory.</p></div>
+      <div class="ask"><span class="rv-tag">Screen 1 · New project</span><p>Every project starts in Vision, from the idea. Designs, documents and prototypes are optional additions (round 0), and you choose which devices to design for. There is no way to skip to the factory. <i>Changed after your mark: one way in; device scope chosen here.</i></p></div>
     </div>
     <div class="app">
       <header class="hdr"><span class="brand">Orchestrator</span>
@@ -316,17 +310,18 @@ pre.mermaid { margin: 0; }
       <div class="pad">
         <div><h2>New project: Weekend Trips</h2><p class="muted small">Repository <span class="mono">~/code/weekend-trips</span> · nothing runs until you start the factory</p></div>
         <p class="framing">The factory builds exactly what the blueprint shows, with many agents at once. Changing the blueprint now takes minutes; changing built work takes runs.</p>
-        <div class="choices">
-          <div class="card"><span class="label">Start from an idea</span><h3>Tell the lead what you want to build</h3>
-            <div class="field"><textarea id="idea" rows="4">A hiking trip planner for small groups: pick a trail, plan the days around the weather, and share the plan with the group. Web first, then phones. A small CLI for organisers who live in the terminal.</textarea></div>
-            <div><button class="btn primary" type="button" data-go="studio">Start the vision</button></div>
-            <p class="small muted">The lead asks a few questions, then a designer makes the first screens for you to react to.</p></div>
-          <div class="card"><span class="label">Start from what you have</span><h3>Bring designs, documents, prototypes</h3>
-            <div class="drop" id="dropzone">Drop files or a folder here, or <button class="btn" type="button" id="addfiles">Add samples</button><span class="micro">Images, Penpot or Figma exports, HTML prototypes, screenshots of a running app, a CLI's help and output, specs</span></div>
-            <div class="files" id="files"></div>
-            <div><button class="btn primary" type="button" id="round0" disabled data-go="studio">Review them as round 0</button></div>
-            <p class="small muted">They load into the studio as round 0. The lead says what they cover and what is missing; you mark them like any other artifact.</p></div>
-        </div>
+        <div class="card"><span class="label">Start with the idea</span><h3>Tell the lead what you want to build</h3>
+          <div class="field"><textarea id="idea" rows="4">A hiking trip planner for small groups: pick a trail, plan the days around the weather, and share the plan with the group. Web first, then phones. A small CLI for organisers who live in the terminal.</textarea></div>
+          <div class="grid2">
+            <div><span class="label">Show prototypes for</span>
+              <div class="chips" role="group" aria-label="Device scope"><button class="chip" type="button" data-scope="desktop" aria-pressed="true">Desktop</button><button class="chip" type="button" data-scope="phone" aria-pressed="true">Mobile</button><button class="chip" type="button" data-scope="terminal" aria-pressed="true">Terminal</button></div>
+              <p class="micro muted">Only these sizes are designed and shown; change it later in the studio.</p></div>
+            <div><span class="label">Optional: bring what you have</span>
+              <div class="drop" id="dropzone"><span>Designs, documents, prototypes, screenshots, a CLI's output</span><button class="btn" type="button" id="addfiles">Add samples</button></div>
+              <div class="files" id="files"></div></div>
+          </div>
+          <div><button class="btn primary" type="button" data-go="studio">Start the vision</button></div>
+          <p class="small muted">The lead reads the idea and anything you added (round 0), asks a few questions, then a designer makes the first screens for you to react to.</p></div>
       </div>
     </div>
   </section>
@@ -334,7 +329,7 @@ pre.mermaid { margin: 0; }
   <!-- ===== 2. studio: screens ===== -->
   <section class="screen" data-screen="studio" role="tabpanel" aria-labelledby="tab-studio" hidden>
     <div class="rv rv-bar" data-review="s-studio" data-uncommentable>
-      <div class="ask"><span class="rv-tag">Screen 2 · The studio canvas, a screens round</span><p>The layout you picked. Left: rounds and this round's artifacts. Middle: the artifact at desktop, tablet or phone size, with three variants, Keep/Change/Drop, and pins. Right: the lead's message and questions. Try a variant, a device size, a mark and a pin, then Send feedback.</p></div>
+      <div class="ask"><span class="rv-tag">Screen 2 · The studio canvas, a screens round</span><p>Left: rounds and this round's artifacts. Middle: the artifact on desktop or mobile (only the devices chosen at the start), with three variants, Keep/Change/Drop, and pins. Right: the lead, its questions and PE review. <i>Changed after your mark: no tablet; no Share; artifacts stay local.</i></p></div>
     </div>
     <div class="app">
       <header class="hdr"><span class="brand">Orchestrator</span>
@@ -355,9 +350,8 @@ pre.mermaid { margin: 0; }
           <div class="toolbar">
             <div class="grp"><b id="art-title">Trip plan</b><span class="small muted" id="art-sub">Designer · Claude · v1, 3 variants</span></div>
             <div class="grp">
-              <span class="seg" role="group" aria-label="Device size"><button type="button" data-dev="desktop" aria-pressed="true">Desktop</button><button type="button" data-dev="tablet" aria-pressed="false">Tablet</button><button type="button" data-dev="phone" aria-pressed="false">Phone</button></span>
+              <span class="seg" role="group" aria-label="Device"><button type="button" data-dev="desktop" aria-pressed="true">Desktop</button><button type="button" data-dev="phone" aria-pressed="false">Mobile</button></span>
               <button class="btn" type="button" id="pinbtn" aria-pressed="false">Pin a comment</button>
-              <button class="btn quiet" type="button" id="sharebtn">Share…</button>
             </div>
           </div>
           <div class="stage" id="stage" aria-label="The artifact"></div>
@@ -365,23 +359,21 @@ pre.mermaid { margin: 0; }
             <div class="variants" id="variants" role="group" aria-label="Variants"></div>
             <div class="grp" role="group" aria-label="Your mark"><button class="markbtn" type="button" data-mark="keep">Keep</button><button class="markbtn" type="button" data-mark="change">Change</button><button class="markbtn" type="button" data-mark="drop">Drop</button></div>
           </div>
-          <div class="card" id="sharepanel" hidden><span class="label">Share this artifact (open question)</span>
-            <p class="small">The studio's copy stays local and is the blueprint's source. Share publishes a copy, private by default, and only after you approve that publish. Provider pages open in a new tab; they cannot be shown in this canvas.</p>
-            <ul class="checklist small"><li>• A Claude artifact page (first; needs one real test)</li><li>• Codex Sites, or a preview deploy on your own Vercel, Cloudflare or Netlify account (later)</li><li>• Export as one HTML file or a folder</li></ul></div>
+          <p class="micro muted">Artifacts stay on this computer: the studio shows the files the designer wrote, whichever provider wrote them.</p>
         </div>
         <aside class="col right">
-          <div class="leadmsg"><span class="who"><span class="pill work">The lead</span>Claude · round 3</span>
+          <div class="leadmsg"><span class="who"><span class="pill work">The lead</span>Claude (default) · round 3</span>
             <p>You kept the day list from round 1 and asked for the weather to be easier to see. Here are three takes on the trip plan: A puts the map first, B is a timeline by hour, C is a card per day. Phone size is where they differ most.</p>
             <p class="small muted">Covered so far: 4 of 7 screens, 2 of 3 contracts, 1 of 3 flows.</p></div>
           <div class="critic" aria-label="PE review">
-            <span class="who"><span class="pill fail">PE review</span>Codex · principal engineer · agreed after 1 revision</span>
+            <span class="who"><span class="pill fail">PE review</span>Codex (the other provider, by default) · agreed after 1 revision</span>
             <div class="verdicts">
               <div class="verdict"><span class="vb if">if</span><span><b>A · Map first:</b> feasible if the map draws from cached vector tiles. Raster tiles for a whole region will not fit offline on a phone. <span class="muted">Designer revised A to vector tiles; agreed.</span></span></div>
               <div class="verdict"><span class="vb yes">yes</span><span><b>B · Timeline:</b> renders from the plan data alone; the cheapest to keep working for years.</span></div>
               <div class="verdict"><span class="vb yes">yes</span><span><b>C · Day cards:</b> feasible; the elevation line needs the trail's profile, which the trail data already has.</span></div>
             </div>
-            <div class="probe"><span class="label">Budget</span><span>A adds about $40 a month in tile hosting at 1,000 users; B and C add nothing. Within your running budget of $50 a month either way.</span><span class="muted">Estimate from the tile provider's price list; sample figures</span></div>
-            <div class="probe"><span class="label">Probe the PE asked for</span><span>Hourly forecasts for trailheads, cached for offline: which sources allow it, at what cost?</span><span class="muted">2 of 3 sources checked · $0.40 of $5 probe budget used · result goes into the blueprint as evidence</span></div>
+            <div class="probe"><span class="label">Budget</span><span>A adds about $40 a month in tile hosting at 1,000 users; B and C add nothing. Within your maintenance budget of $50 a month either way.</span><span class="muted">Estimate from the tile provider's price list; sample figures</span></div>
+            <div class="probe"><span class="label">Probe the PE asked for</span><span>Hourly forecasts for trailheads, cached for offline: which sources allow it, at what cost?</span><span class="muted">2 of 3 sources checked · $0.40, counted in the building budget · result goes into the blueprint as evidence</span></div>
           </div>
           <div class="qs" id="qs">
             <div class="q"><span>1. Should the plan work offline on the trail?</span><span class="chips"><button class="chip" type="button">Yes, cache the plan</button><button class="chip" type="button">Map tiles too</button><button class="chip" type="button">Not now</button></span></div>
@@ -399,7 +391,7 @@ pre.mermaid { margin: 0; }
   <!-- ===== 3. studio: CLI and TUI ===== -->
   <section class="screen" data-screen="cli" role="tabpanel" aria-labelledby="tab-cli" hidden>
     <div class="rv rv-bar" data-review="s-cli" data-uncommentable>
-      <div class="ask"><span class="rv-tag">Screen 3 · The studio canvas, a CLI round</span><p>For a CLI, the artifacts are terminal demos and TUI mockups, not only a command list. Play the demo (recorded in a sandbox; for a CLI that does not exist yet, the script prints the planned output). Then switch the TUI's layout (three variants), its terminal size and its window frame.</p></div>
+      <div class="ask"><span class="rv-tag">Screen 3 · The studio canvas, a CLI round</span><p>For a CLI, the artifacts are terminal demos and TUI mockups, not only a command list. Play the demo (recorded in a sandbox; for a CLI that does not exist yet, the script prints the planned output). Then switch the TUI's layout (three variants) and terminal size. <i>Changed after your mark: always shown in a window.</i></p></div>
     </div>
     <div class="app">
       <header class="hdr"><span class="brand">Orchestrator</span>
@@ -419,11 +411,10 @@ pre.mermaid { margin: 0; }
             </div>
             <div class="toolbar">
               <span class="seg" role="group" aria-label="Terminal size"><button type="button" data-size="80" aria-pressed="true">80×24</button><button type="button" data-size="100" aria-pressed="false">100×30</button><button type="button" data-size="120" aria-pressed="false">120×40</button></span>
-              <span class="seg" role="group" aria-label="Window frame"><button type="button" data-frame="window" aria-pressed="true">Window</button><button type="button" data-frame="tmux" aria-pressed="false">tmux pane</button><button type="button" data-frame="bare" aria-pressed="false">Bare</button></span>
             </div>
-            <div class="term" id="tui-term"><div class="bar"><i></i><i></i><i></i><span style="margin-left:6px" id="tui-title">trips ui — 80×24</span></div><div class="scr" id="tui-scr"></div><div class="status" id="tui-status"></div></div>
+            <div class="term" id="tui-term"><div class="bar"><i></i><i></i><i></i><span style="margin-left:6px" id="tui-title">trips ui — 80×24</span></div><div class="scr" id="tui-scr"></div></div>
             <p class="small muted">Keys shown in the mockup are part of the design to review: j/k to move, enter to open, / to search, q to quit.</p>
-            <div class="critic"><span class="who"><span class="pill fail">PE review</span>Codex · agreed after 1 revision</span><div class="verdicts"><div class="verdict"><span class="vb if">if</span><span><b>B · Dashboard</b> needs 100 columns; below that it must fall back to A. Many terminals open at 80×24. <span class="muted">Designer added the fallback; agreed.</span></span></div><div class="verdict"><span class="vb yes">yes</span><span><b>A</b> and <b>C</b> work at 80×24 and in a tmux pane.</span></div></div></div>
+            <div class="critic"><span class="who"><span class="pill fail">PE review</span>Codex · agreed after 1 revision</span><div class="verdicts"><div class="verdict"><span class="vb if">if</span><span><b>B · Dashboard</b> needs 100 columns; below that it must fall back to A. Many terminals open at 80×24. <span class="muted">Designer added the fallback; agreed.</span></span></div><div class="verdict"><span class="vb yes">yes</span><span><b>A</b> and <b>C</b> work at 80×24.</span></div></div></div>
           </div>
         </div>
       </div>
@@ -433,7 +424,7 @@ pre.mermaid { margin: 0; }
   <!-- ===== 4. inputs and outputs ===== -->
   <section class="screen" data-screen="io" role="tabpanel" aria-labelledby="tab-io" hidden>
     <div class="rv rv-bar" data-review="s-io" data-uncommentable>
-      <div class="ask"><span class="rv-tag">Screen 4 · Inputs and outputs</span><p>Round 2 settles what crosses each boundary, with examples, before any task builds it: the form, the API, the CLI's arguments, output and exit codes, and the files. The examples become the factory's acceptance tests.</p></div>
+      <div class="ask"><span class="rv-tag">Screen 4 · Inputs and outputs</span><p>Round 2 is all about data: what crosses each boundary, with examples, before any task builds it. The form, the API, the CLI's arguments, output and exit codes, and the files. The examples become the factory's acceptance tests.</p></div>
     </div>
     <div class="app">
       <header class="hdr"><span class="brand">Orchestrator</span>
@@ -539,9 +530,8 @@ flowchart LR
           <div class="bpitem"><span>Probe: hourly forecasts cached offline</span><span class="pill work">running</span><span class="v">evidence for the offline flow</span></div>
           <div class="bpitem"><span>TUI dashboard: needs 100 columns, falls back to the list</span><span class="pill done">agreed</span><span class="v">after 1 revision</span></div></div>
         <div class="card"><span class="label">Budget · set by you, estimated by the PE</span>
-          <div class="bpitem"><span>Building (the factory's agent usage)</span><span class="pill done">$40</span><span class="v">PE estimate $18–30 for 7 tasks, from past runs' recorded costs</span></div>
-          <div class="bpitem"><span>Running, per month (hosting, forecast API)</span><span class="pill done">$50</span><span class="v">PE estimate $25–35 at 1,000 users; $65 with map A's tiles at 2,000</span></div>
-          <div class="bpitem"><span>Probes in Vision</span><span class="pill done">$5</span><span class="v">$0.40 used</span></div></div>
+          <div class="bpitem"><span>Building budget (agent usage, probes included)</span><span class="pill done">$40</span><span class="v">PE estimate $18–30 for 7 tasks, from past runs' recorded costs; $0.40 spent on probes</span></div>
+          <div class="bpitem"><span>Maintenance budget, estimated per month (hosting, forecast API, upkeep)</span><span class="pill done">$50</span><span class="v">PE estimate $25–35 at 1,000 users; $65 with map A's tiles at 2,000</span></div></div>
         <div class="card"><span class="label">The vision · r3, accepted by you</span>
           <p class="small">A hiking trip planner for groups of 2–12: pick a trail, plan the days around the weather, share the plan. Web first, phones next, and a small CLI for organisers. Not in scope: navigation on the trail, payments.</p>
           <p class="small muted">Who it is for ✓ · Problem ✓ · Outcome ✓ · Scope ✓ · Constraints ✓ · Risks ◐ · First milestone ✓ · Material ✓ · Why now ✓</p></div>
@@ -552,7 +542,7 @@ flowchart LR
   <!-- ===== 7. pre-flight ===== -->
   <section class="screen" data-screen="preflight" role="tabpanel" aria-labelledby="tab-preflight" hidden>
     <div class="rv rv-bar" data-review="s-preflight" data-uncommentable>
-      <div class="ask"><span class="rv-tag">Screen 7 · Pre-flight and Start the factory</span><p>The one way the factory starts: your explicit agreement, from here. It shows what the blueprint covers, what is still open, and what the factory will do. Open items are named, not blocked on. Tick the agreement and press Start to see the recorded start.</p></div>
+      <div class="ask"><span class="rv-tag">Screen 7 · Pre-flight and Start the factory</span><p>The one way the factory starts: your explicit agreement, from here. It shows what the blueprint covers, what is still open, and what the factory will do, and it is where you set how the factory runs and where it asks you. <i>Changed after your mark: the factory's settings are set here, and recorded with the start.</i></p></div>
     </div>
     <div class="app">
       <header class="hdr"><span class="brand">Orchestrator</span>
@@ -575,17 +565,28 @@ flowchart LR
             <ul class="checklist">
               <li>• 7 tasks, from the blueprint: 4 Feature, 2 Change, 1 Design (the offline flow)</li>
               <li>• Lead Claude · coders Codex · reviewers Claude, security review beside each code review</li>
-              <li>• Autopilot: tasks start on their own; findings are repaired</li>
-              <li>• Delivery: pull requests to <span class="mono">main</span>; you merge</li>
               <li>• Up to 3 agents at once · 12 turns, 30 minutes per run</li>
-              <li>• Budget: PE estimate $18–30 to build (your limit $40); the factory pauses and asks you if it reaches $40</li>
-              <li>• Running: PE estimate $25–35 a month (your limit $50)</li>
+              <li>• Building budget $40: PE estimate $18–30; the factory stops and asks you at $40</li>
+              <li>• Maintenance budget $50 a month: PE estimate $25–35</li>
             </ul></div>
         </div>
+        <div class="card"><span class="label">How the factory runs · set here, change any time later</span>
+          <div class="grid2">
+            <div class="q"><span>How much it does on its own</span><span class="seg" role="group" aria-label="Autonomy"><button type="button" data-auto="auto" aria-pressed="true">Autopilot</button><button type="button" data-auto="check" aria-pressed="false">Check-in</button><button type="button" data-auto="manual" aria-pressed="false">Manual</button></span><span class="micro muted" id="auto-help">Tasks start and are repaired on their own; you are asked only where you say below.</span></div>
+            <div class="q"><span>Who merges</span><span class="seg" role="group" aria-label="Who merges"><button type="button" data-merge="you" aria-pressed="true">You merge</button><button type="button" data-merge="auto" aria-pressed="false">Merges automatically</button></span><span class="micro muted">Pull requests to <span class="mono">main</span></span></div>
+          </div>
+          <span class="label">Where it pauses or asks for your input</span>
+          <ul class="checklist">
+            <li><label class="agree"><input type="checkbox" checked disabled><span>At the building budget: always stops and asks</span></label></li>
+            <li><label class="agree"><input type="checkbox" id="ask-tradeoff"><span>Trade-off decisions: ask me <span class="muted">(off: the PE decides within budget, recorded, and you can reverse it)</span></span></label></li>
+            <li><label class="agree"><input type="checkbox" id="ask-change"><span>Change orders: ask me before the lead updates tasks</span></label></li>
+            <li><label class="agree"><input type="checkbox" id="ask-start"><span>Before each task starts: wait for my go-ahead</span></label></li>
+            <li><label class="agree"><input type="checkbox" checked id="ask-merge"><span>Before merging: I merge each pull request</span></label></li>
+          </ul></div>
         <div class="card">
           <label class="agree"><input type="checkbox" id="agree"><span>I have reviewed blueprint r4 and want the factory to build it, with the open items above as they are.</span></label>
           <div class="toolbar"><div class="grp"><button class="btn quiet" type="button" data-go="studio">Back to the studio</button></div><div class="grp"><button class="btn primary" type="button" id="start" disabled>Start the factory</button></div></div>
-          <div class="started" id="started" hidden><b>The factory started.</b><span>Started by you, 1 Oct 2026, 21:40, from blueprint r4. Recorded with this pre-flight summary and the open items you accepted.</span><span class="muted">The lead cannot start or restart the factory; only this button can.</span><div><button class="btn" type="button" data-go="factory">Go to the factory</button></div></div>
+          <div class="started" id="started" hidden><b>The factory started.</b><span>Started by you, 1 Oct 2026, 21:40, from blueprint r4. Recorded with this pre-flight summary, the settings above and the open items you accepted.</span><span class="muted">The lead cannot start or restart the factory; only this button can.</span><div><button class="btn" type="button" data-go="factory">Go to the factory</button></div></div>
         </div>
       </div>
     </div>
@@ -594,7 +595,7 @@ flowchart LR
   <!-- ===== 8. factory ===== -->
   <section class="screen" data-screen="factory" role="tabpanel" aria-labelledby="tab-factory" hidden>
     <div class="rv rv-bar" data-review="s-factory" data-uncommentable>
-      <div class="ask"><span class="rv-tag">Screen 8 · The factory</span><p>After the start, Home is the factory floor: one production line per area, work moving along it, Needs you first. Here a blueprint change after the start shows as a change order, listing the tasks it touches.</p></div>
+      <div class="ask"><span class="rv-tag">Screen 8 · The factory</span><p>After the start, Home is the factory floor: one production line per area, work moving along it, Needs you first, and the two budgets. A blueprint change after the start shows as a change order, listing the tasks it touches. <i>Changed after your mark: a building budget and an estimated maintenance budget.</i></p></div>
     </div>
     <div class="app">
       <header class="hdr"><span class="brand">Orchestrator</span>
@@ -605,7 +606,10 @@ flowchart LR
         <div class="card"><span class="label">Decided by the PE on Autopilot</span>
           <div class="verdicts"><div class="verdict"><span class="vb yes">PE</span><span><b>WT-3 Weather:</b> cache each forecast for 6 hours rather than fetch it on every view. Saves about $12 a month and works offline; a forecast can be up to 6 hours old, and the screen says so. Within your budget, so it was the PE's call; anything over budget comes to you. <span class="muted">The review finding asked for a decision; you were not asked because the factory is on Autopilot.</span></span></div></div>
           <div style="display:flex;gap:8px"><button class="btn" type="button">Reverse</button><button class="btn quiet" type="button">See the reasons</button></div></div>
-        <p class="small muted">Spent so far: $11.20 of your $40 building budget · PE estimate for the rest: $9–16</p>
+        <div class="grid2">
+          <div class="card"><span class="label">Building budget</span><span><b class="num">$11.20</b> of $40 spent · PE estimate for the rest: $9–16</span></div>
+          <div class="card"><span class="label">Maintenance budget, estimated</span><span>$25–35 a month of your $50, at 1,000 users · updated as tasks land</span></div>
+        </div>
         <div class="lines">
           <div class="line"><span class="small"><b>Trip planning</b><br><span class="muted">3 tasks</span></span><div class="belt"><span class="job done">WT-1 Trail search ✓</span><span class="job run"><span class="pill work">building</span>WT-2 Trip plan</span><span class="job">WT-3 Weather</span></div></div>
           <div class="line"><span class="small"><b>Trip sharing</b><br><span class="muted">2 tasks</span></span><div class="belt"><span class="job run"><span class="pill work">review</span>WT-6 Invite sheet</span><span class="job"><span class="pill you">change order</span>WT-7 Join</span></div></div>
@@ -620,8 +624,8 @@ flowchart LR
   <section class="rv" data-uncommentable aria-labelledby="t-q">
     <span class="rv-tag" id="t-q">Three questions across the screens</span>
     <div class="rv-bar" data-review="q-critic"><div class="ask"><b class="small">PE review (your idea).</b><p>The PE is a rigid principal engineer who judges every option on feasibility, scale, longevity and budget (what it costs to build and to run, against the budgets you set), on the other provider than the designer. The designer revises until the PE agrees (up to three rounds); if they still disagree, you see the objection and can overrule it, recorded. The PE can ask the lead for <b>probes</b>: small Vision tasks that bring evidence, such as surveying how many city councils publish transcripts and video for Council Record, or extracting one council's minutes. Probes run within a Vision budget you set, never in the factory. <b>On Autopilot, the PE makes the factory's trade-off calls</b> (findings that ask for a decision, choices between options), within your budget, each recorded with its reasons and reversible by you. Anything that would go over budget comes to you.</p></div></div>
-    <div class="rv-bar" data-review="q-share"><div class="ask"><b class="small">Sharing artifacts (researched).</b><p>Neither Claude's nor Codex's published pages can be shown inside our canvas: both refuse to be framed. Both can publish privately in one step, and their own tools do it without asking. So: the studio's local copy stays the source of truth; <b>Share</b> publishes a copy only when you approve that publish (first target: a Claude artifact page; later Codex Sites or a preview deploy); and agents in the studio (designer, PE) have native publishing turned off.</p></div></div>
-    <div class="rv-bar" data-review="q-lead"><div class="ask"><b class="small">One provider leads Vision.</b><p>The research shows the artifact tools don't decide it, since neither embeds. Proposal: Claude leads and designs in Vision (you said you would mostly use Claude at first); PE review runs on Codex, so the check is independent. The factory keeps either provider as lead, as AGENTS.md requires.</p></div></div>
+    <div class="rv-bar" data-review="q-share"><div class="ask"><b class="small">Sharing artifacts: decided, keep them local.</b><p><i>Your mark: keep these artifacts local. So there is no Share; agents' own publishing stays off.</i> The research behind it: Neither Claude's nor Codex's published pages can be shown inside our canvas: both refuse to be framed. Both can publish privately in one step, and their own tools do it without asking. So: the studio's local copy stays the source of truth; <b>Share</b> publishes a copy only when you approve that publish (first target: a Claude artifact page; later Codex Sites or a preview deploy); and agents in the studio (designer, PE) have native publishing turned off.</p></div></div>
+    <div class="rv-bar" data-review="q-lead"><div class="ask"><b class="small">Lead and PE providers: decided, not fixed.</b><p><i>Your mark: either may be Claude or Codex, since the canvas shows the same local files whichever provider made them; the lead defaults to Claude, the PE to the other provider.</i> Earlier proposal: The research shows the artifact tools don't decide it, since neither embeds. Proposal: Claude leads and designs in Vision (you said you would mostly use Claude at first); PE review runs on Codex, so the check is independent. The factory keeps either provider as lead, as AGENTS.md requires.</p></div></div>
   </section>
 </div>
 
@@ -654,8 +658,12 @@ flowchart LR
   ];
   $("#addfiles").addEventListener("click", () => {
     $("#files").innerHTML = SAMPLES.map(([n, k]) => `<div class="file"><span class="mono">${esc(n)}</span><span class="muted">${esc(k)}</span></div>`).join("");
-    $("#round0").disabled = false;
   });
+  $$("[data-scope]").forEach((b) => b.addEventListener("click", () => {
+    b.setAttribute("aria-pressed", String(b.getAttribute("aria-pressed") !== "true"));
+    if (!$$("[data-scope]").some((x) => x.getAttribute("aria-pressed") === "true")) b.setAttribute("aria-pressed", "true");
+    applyScope();
+  }));
 
   // ---------- 2. studio canvas ----------
   const ART = {
@@ -731,7 +739,7 @@ flowchart LR
     $("#fbsum").textContent = parts.length ? `Will send: ${parts.join(", ")}, and your note.` : "Nothing marked yet.";
   }
   $("#sendfb").addEventListener("click", () => { $("#sent").hidden = false; });
-  $("#sharebtn").addEventListener("click", () => { $("#sharepanel").hidden = !$("#sharepanel").hidden; });
+
 
   // Pins: in Orchestrator a pin goes to the lead; here it opens claude.ai's comment box on that spot, so Claude reads it.
   let comments = null;
@@ -806,7 +814,7 @@ flowchart LR
   pos = CH[0].at + 3.2; drawDemo(); // a resting frame with the first table visible
 
   // ---------- 3. TUI mockup ----------
-  const tui = { layout: "list", cols: 80, frame: "window" };
+  const tui = { layout: "list", cols: 80 };
   const pad = (s, n) => { const plain = s.replace(/<[^>]+>/g, ""); return s + " ".repeat(Math.max(0, n - [...plain].length)); };
   const cut = (s, n) => ([...s].length > n ? [...s].slice(0, n - 1).join("") + "…" : s);
   function boxRow(l, w) { return "│" + pad(l, w - 2) + "│"; }
@@ -841,10 +849,7 @@ flowchart LR
       rows.push('<span class="d"> type to filter · enter plan · esc back</span>');
     }
     $("#tui-scr").innerHTML = rows.join("\n");
-    const term = $("#tui-term");
-    term.className = "term" + (tui.frame === "tmux" ? " tmux" : tui.frame === "bare" ? " bare" : "");
     $("#tui-title").textContent = `trips ui — ${W}×${H + 2}`;
-    $("#tui-status").textContent = pad(`[trips] 0:ui*  1:zsh`, Math.max(20, W - 22)) + "\"Lost Lake\" 21:40";
   }
   function segBind(attr, key, map = (v) => v) {
     $$(`[data-${attr}]`).forEach((b) => b.addEventListener("click", () => {
@@ -853,10 +858,22 @@ flowchart LR
       renderTui();
     }));
   }
-  segBind("tui", "layout"); segBind("size", "cols", Number); segBind("frame", "frame");
+  segBind("tui", "layout"); segBind("size", "cols", Number);
 
   // ---------- 7. pre-flight ----------
   $("#agree").addEventListener("change", () => { $("#start").disabled = !$("#agree").checked; });
+  const AUTO_HELP = { auto: "Tasks start and are repaired on their own; you are asked only where you say below.", check: "The lead proposes; you confirm each new task. Repairs run on their own.", manual: "Nothing starts until you start it." };
+  $$("[data-auto]").forEach((b) => b.addEventListener("click", () => {
+    $$("[data-auto]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    $("#auto-help").textContent = AUTO_HELP[b.dataset.auto];
+    $("#ask-start").checked = b.dataset.auto === "manual";
+    $("#ask-tradeoff").checked = b.dataset.auto !== "auto";
+  }));
+  $$("[data-merge]").forEach((b) => b.addEventListener("click", () => {
+    $$("[data-merge]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    $("#ask-merge").checked = b.dataset.merge === "you";
+  }));
+  $("#ask-merge").addEventListener("change", () => { const you = $("#ask-merge").checked; $$("[data-merge]").forEach((x) => x.setAttribute("aria-pressed", String((x.dataset.merge === "you") === you))); });
   $("#start").addEventListener("click", () => {
     $("#started").hidden = false; $("#start").disabled = true; $("#agree").disabled = true;
     $("#pf-step1").classList.remove("on"); $("#pf-step2").classList.add("on"); $("#pf-step2").innerHTML = "<b>2</b>Factory running";
@@ -930,6 +947,13 @@ flowchart LR
       }
       renderCounts(); localSave();
     }, () => { $("#rv-status").textContent = "Live saving stopped; marks are kept in this browser."; db = null; });
+  }
+
+  function applyScope() {
+    const on = (k) => $(`[data-scope="${k}"]`).getAttribute("aria-pressed") === "true";
+    $$("[data-dev]").forEach((b) => { b.hidden = !on(b.dataset.dev); });
+    if (!on(proto.dev)) { const first = ["desktop", "phone"].find(on); if (first) { proto.dev = first; $$("[data-dev]").forEach((x) => x.setAttribute("aria-pressed", String(x.dataset.dev === first))); renderStage(); } }
+    const cli = $('[data-art="cli"]'); if (cli) cli.hidden = !on("terminal");
   }
 
   // ---------- first paint ----------
