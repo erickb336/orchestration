@@ -8,7 +8,7 @@ import { buildSeed } from "../src/domain/seed";
 import { PRICES, estimateUsd } from "../src/domain/spend";
 import * as R from "../src/domain/studio/runs";
 import type { State } from "../src/domain/types";
-import { claudeSpend } from "./trialSpend.mjs";
+import { claudeExposure, claudeSpend } from "./trialSpend.mjs";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -38,6 +38,21 @@ describe("the studio trial's Claude spend", () => {
     const spend = claudeSpend(s, { estimate, limitOf: (r) => (r.id === ids[1] ? 1.5 : 2) });
     expect(spend.usd).toBeCloseTo(1.8);
     expect(spend.unknown).toEqual([{ id: ids[1], countedUsd: 1.5 }]);
+  });
+
+  it("the exposure adds each queued Claude run at its limit, so the trial can pause before the service starts one (review finding 9)", () => {
+    const { s, ids } = studio();
+    const queued = s.studio.runs.at(-1)!.id;
+    const limitOf = (r: { id: string }) => (r.id === ids[1] ? 1.5 : 2);
+    const x = claudeExposure(s, { estimate, limitOf });
+    expect(x.usd).toBeCloseTo(0.3 + 1.5 + 2);
+    expect(x.queued).toEqual([queued]);
+    // Started, it has no cost yet: it still counts at its limit, once.
+    const running = R.dispatchStudioRuns(s, at(8)).state;
+    expect(R.getStudioRun(running, queued)!.status).toBe("running");
+    expect(claudeExposure(running, { estimate, limitOf })).toMatchObject({ usd: expect.closeTo(3.8), queued: [] });
+    // In the fake runtime it is the spend so far.
+    expect(claudeExposure(s, { estimate, limitOf, simulated: true }).usd).toBeCloseTo(0.3);
   });
 
   it("in the fake runtime, a simulated run with no cost counts as $0, and is listed", () => {
