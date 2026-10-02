@@ -1,0 +1,78 @@
+Here is my first draft of the vision and the first studio round. I've opened round 1 on the experience, and nothing is built yet.
+
+**What I understand so far**
+- Weekend Trips is a small browser app, on desktop and phones, for a group of friends planning one weekend away.
+- It covers three things: who is in, the day plan, and what it costs each person.
+- The repository has no code (one tracked file, documents only), and no vision documents are attached. So everything below beyond your one-line idea is an assumption.
+
+**Round 1: experience**
+The designer will make the trip home screen, the one screen everyone opens, in two variants on desktop and mobile. The choice is real: should the trip read as a timeline of days, or as a dashboard of three cards (who, plan, costs)? You can mark, pin and pick between them.
+
+**Suggestions you may not have considered**
+- **Joining:** friends probably join from a shared link with no account. That decides how much of the app has to exist.
+- **Costs:** "what it costs each" could mean an even split or tracking who paid what. Tracking is much bigger, so I'd start with a simple per-person estimate.
+- **Non-goals:** booking, payments, maps and chat are out of scope for now (assumption).
+
+The questions below are about the vision itself. I've put the round's own questions, including the domain choice, beside the round.
+
+```json
+{
+  "reply": "Draft vision and round 1 are ready. The designer will explore the trip home screen in two variants (timeline vs. three-card dashboard) on desktop and mobile. I assumed link-based joining with no accounts, one trip at a time, and a simple per-person cost split; please confirm or correct these in the questions. No tasks proposed yet: with no code and the shape still open, work should follow the design.",
+  "proposals": [],
+  "vision": {
+    "text": "Weekend Trips: a small group of friends (about 3-8) plans one weekend away together: who is in, the day-by-day plan, and what it costs each person. It runs in the browser on desktop and phones.\n\nProblem: today the plan lives scattered across group chat, notes and spreadsheets, and nobody has one clear view of who is coming, what is happening when, and what each person owes. (assumption)\n\nAudience: the friend who organizes (creates the trip) and the friends who join and contribute. Joining is by shared link, no account needed. (assumption)\n\nOutcome: everyone can open one page and know who is in, what the plan is for each day, and their share of the cost. Success: a group can plan a full weekend in one sitting without falling back to a chat thread. (assumption)\n\nIn scope: trip with dates; member list with in/out/maybe status; day plan with timed items; costs as items split among members with a per-person total. (assumption)\n\nOut of scope for now: booking, payments, maps, chat, accounts and multi-trip history. (assumption)\n\nConstraints: browser only, responsive for desktop and mobile; studio trial, so keep it small. (assumption)\n\nRisks: cost splitting grows into expense tracking; shared editing without accounts needs clear rules about who can change what.\n\nFirst milestone: one trip, shared by link, with the who/plan/cost views usable on a phone. (assumption)",
+  "coverage": { "intent": "partial", "audience": "partial", "problem": "partial", "outcome": "partial", "scope": "partial", "constraints": "partial", "risks": "partial", "priorities": "open", "material": "open" },
+  "questions": [
+    {
+      "question": "How do friends join a trip?",
+      "why": "It decides whether the app needs accounts, and what 'who is in' means.",
+      "area": "audience",
+      "options": ["Shared link, no account, just a name (recommended: least friction for a small trusted group)", "Sign-in with email", "Organizer adds everyone by hand"]
+    },
+    {
+      "question": "What should 'what it costs each' mean?",
+      "why": "A simple estimate and full expense tracking are very different sizes of product.",
+      "area": "scope",
+      "options": ["Planned costs split evenly or among chosen people (recommended)", "Track who actually paid and settle up", "Just a total estimate per person"]
+    },
+    {
+      "question": "What is the planning moment you want to fix: deciding together, or recording a decided plan?",
+      "why": "It sets whether voting and suggestions matter or one organizer edits.",
+      "area": "problem",
+      "options": ["Deciding together (suggest and vote)", "Recording what the organizer decided (recommended: simpler)", "Both"]
+    },
+    {
+      "question": "Do you have any existing material, such as a sample itinerary, a spreadsheet or an app you like?",
+      "why": "It would ground the designs in a real trip.",
+      "area": "material",
+      "options": ["Yes, I'll attach it", "No, use an invented example weekend"]
+    }
+  ],
+  "studio": {
+    "openRound": {
+      "focus": "experience",
+      "summary": "Explore the trip home screen, the one page a friend opens, on desktop and mobile, and choose how it is organized."
+    },
+    "designerRuns": [
+      {
+        "brief": "Design the trip home screen for Weekend Trips, a small app where about 3-8 friends plan a weekend: who is in, the day plan, and what it costs each person. Use an invented example trip (e.g. a cabin weekend, Fri-Sun, 5 friends, a few timed items per day, a few costs). Make 2 variants: (1) a single timeline of days with members and per-person cost summarized at top and bottom; (2) a dashboard of three cards (Who's in, Plan, Costs) that open into detail. Show where a friend sets their own in/maybe/out status and how they add a plan item or a cost. Make it comfortable on a phone first, and show its desktop layout too. Keep to three features, polished.",
+        "kinds": ["screen"],
+        "variants": 2,
+        "devices": ["desktop", "mobile"]
+      }
+    ],
+    "questions": [
+      {
+        "question": "Which domain should this product be designed in?",
+        "why": "It sets the vocabulary and conventions the designs and blueprint follow; only you can choose it.",
+        "options": ["Travel and group planning (recommended: matches the vision)", "Personal finance and expense splitting", "Event scheduling", "Something else"]
+      },
+      {
+        "question": "When you open the two variants, which first impression feels closer to your idea: a story of the weekend, or a control panel for it?",
+        "why": "It picks the structure every later screen builds on.",
+        "options": ["Story of the weekend (timeline)", "Control panel (three cards)", "Neither, I'll pin comments"]
+      }
+    ]
+  }
+}
+```

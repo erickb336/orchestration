@@ -50,8 +50,33 @@ interface LeadOutput {
   decisions?: unknown;
   /** The lead's studio block in Vision, as found (untrusted; validated in src/domain/studio/lead.ts). */
   studio?: unknown;
-  /** Why the output could not be read (no JSON block): recorded on the run and shown under the reply. */
-  problem?: string;
+  /** Why the answer could not be used as sent: recorded on the run and shown under the reply. */
+  problem?: LeadReplyProblem;
+}
+
+/** Why the lead's answer could not be used as sent (parseLeadOutput, server/envelope.ts). */
+export type LeadReplyProblem =
+  /** No JSON at all: the message is a reply without proposals. */
+  | { kind: "no-json" }
+  /** JSON that does not parse. `where`: the parser's reason and the line and column. */
+  | { kind: "unparsed"; where: string }
+  /** JSON that parses to something other than an object. */
+  | { kind: "not-object" }
+  /** An object that does not match the output schema. `where`: the first mismatches. Its parts still go to the checks below. */
+  | { kind: "schema"; where: string };
+
+/** The note for a problem, the same on the run and under the reply: what failed, where, and what the service did. */
+export function leadReplyNote(p: LeadReplyProblem): string {
+  switch (p.kind) {
+    case "no-json":
+      return "The reply had no JSON block, so nothing was changed.";
+    case "unparsed":
+      return `The reply's JSON did not parse (${p.where}), so nothing was changed.`;
+    case "not-object":
+      return "The reply's JSON was not an object, so nothing was changed.";
+    case "schema":
+      return `The reply's JSON did not match the output schema (${p.where}). The service checked each part on its own.`;
+  }
 }
 
 /** How long a dropped title stays off limits to planning. */
@@ -109,8 +134,8 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   if (run.actualModel) r.actualModel = run.actualModel;
   const rejected: string[] = [];
   if (out.problem) {
-    r.note = out.problem;
-    rejected.push("The reply had no machine-readable block, so nothing was changed.");
+    r.note = leadReplyNote(out.problem);
+    rejected.push(r.note);
   }
   // Steering, before the proposals so they are created under the new focus and after the
   // deferrals and drops that make room. Two guards make it apply once: the run-outcome guard above and

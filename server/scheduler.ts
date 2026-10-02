@@ -13,6 +13,7 @@ import * as C from "../src/domain/checks";
 import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
+import { LEAD_REPLY_SCHEMA } from "../src/domain/model/leadReplySchema";
 import * as R from "../src/domain/studio/runs";
 import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
@@ -774,6 +775,8 @@ export class Scheduler {
         // In Vision the lead's studio brief says whether the repository has code (an "as it is today" first round).
         prompt: buildLeadEnvelope(state, run, "read", this.visionDocs?.reader(state.project.id), conventions, state.project.stage === "shaping" && !state.project.sample ? repoGlance(state.project.repoPath) : undefined),
         outputs: [],
+        // The runtime constrains the lead's answer to its reply schema, so one missing brace cannot lose the reply.
+        outputSchema: LEAD_REPLY_SCHEMA,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
       return undefined;
