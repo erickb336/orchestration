@@ -3,7 +3,7 @@
 // budgets. Pure: derived from state only.
 
 import pricesJson from "./prices.json";
-import type { BudgetEstimate } from "./studio/types";
+import type { BudgetEstimate, StudioRun } from "./studio/types";
 import { type Attempt, type FindingDecision, type LeadRun, type PeCall, type ProviderId, type Runner, type State, isProvider } from "./types";
 
 /** One model's published API price, in dollars per million tokens, with where and when it was read. */
@@ -36,8 +36,11 @@ export type NoCostReason = "no-price" | "no-usage";
  */
 export type RunCost = { basis: "reported" | "priced" | "not-started"; usd: number; estimated: true } | { basis: "unknown"; usd: null; estimated: true; reason: NoCostReason };
 
-/** A task step's run or a lead run. */
-type Run = Attempt | LeadRun;
+/** A task step's run, a lead run, or a studio run (Vision's). */
+type Run = Attempt | LeadRun | StudioRun;
+
+/** Where a run stands: a studio run's status, the others' outcome. */
+const outcomeOf = (r: Run) => ("status" in r ? r.status : r.outcome);
 
 /** The provider and the model a run ran on: the model the runtime reported, else the one it was started with. */
 function ranOn(r: Run): { provider: Runner; model: string } {
@@ -55,7 +58,7 @@ function ranOn(r: Run): { provider: Runner; model: string } {
  * A run that started and then ended with no usage stays unknown: it may have used tokens nobody recorded.
  */
 function neverStarted(r: Run): boolean {
-  if (r.outcome !== "failed" && r.outcome !== "stopped") return false;
+  if (outcomeOf(r) !== "failed" && outcomeOf(r) !== "stopped") return false;
   if (r.sessionId !== undefined || r.actualModel !== undefined) return false;
   const u = r.usage;
   return u === undefined || (u.costUsd === undefined && !u.inputTokens && !u.outputTokens);
@@ -99,15 +102,17 @@ export interface Spend {
 }
 
 /**
- * The building spend: every finished agent run of the project, the lead's included (a new project
- * starts with none, so this is everything since its first Vision round). Check runs are the service's
- * own and cost nothing; running work is counted when it finishes.
+ * The building spend: every finished agent run of the project, the lead's and the studio's included (a new
+ * project starts with none, so this is everything since its first Vision round, and Vision's work counts: spec
+ * r5). Check runs are the service's own and cost nothing; running work is counted when it finishes, and a
+ * studio run still queued has not run.
  */
 export function buildingSpend(s: State, prices: readonly ModelPrice[] = PRICES): Spend {
   const out: Spend = { usd: 0, runs: 0, unknown: [] };
-  const runs: Run[] = [...s.attempts.filter((a) => isProvider(a.snapshot.provider)), ...s.leadRuns];
+  const runs: Run[] = [...s.attempts.filter((a) => isProvider(a.snapshot.provider)), ...s.leadRuns, ...s.studio.runs];
   for (const r of runs) {
-    if (r.outcome === "running" || r.outcome === "stopping") continue;
+    const o = outcomeOf(r);
+    if (o === "running" || o === "stopping" || o === "queued") continue;
     out.runs++;
     const c = estimateUsd(r, prices);
     if (c.basis === "unknown") out.unknown.push({ runId: r.id, ...ranOn(r), reason: c.reason });

@@ -51,7 +51,10 @@ export interface StudioArtifact {
   title: string;
   /** Options side by side for an open choice; none or one is a single take. */
   variants: { id: string; label: string }[];
-  /** Relative to the project's studio workspace. Provider-neutral files: the canvas shows them the same whoever made them. */
+  /**
+   * Relative to the version's folder, `artifacts/<id>/v<version>/` in the project's studio workspace (pass 3). Provider-neutral
+   * files: the canvas shows them the same whoever made them.
+   */
   files: { path: string; sha256: string }[];
   /** The device sizes it is designed for, within the project's device scope; none for a contract or a flow. */
   devices: Device[];
@@ -175,12 +178,61 @@ export interface ChangeOrder {
   peReview?: PeReviewState;
 }
 
+export type StudioRunKind = "designer" | "pe" | "probe";
+export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
+/** What a designer's manifest may hold: the owner brings material, and a probe's run makes evidence. */
+export const DESIGNER_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow"];
+
+/** queued → running → (stopping →) stopped, completed, failed or lost. A queued run waits for dispatch, which happens in Vision only. */
+export type StudioRunStatus = "queued" | "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";
+
+/**
+ * One agent run of the studio (ORC-029 pass 3): a designer's, the PE's or a probe's, during Vision. Its own record,
+ * like a lead run, never a task attempt: it touches no product branch. It writes only into its staging folder, and
+ * what a designer run hands in is imported as artifact versions. Its usage counts in the building budget.
+ */
+export interface StudioRun {
+  id: string;
+  kind: StudioRunKind;
+  round: number;
+  /** The artifact a designer run revises: what it hands in is a new version of it. */
+  artifactId?: string;
+  /** The version it revises: the artifact's newest when the run was asked for. A result after a newer version is stale. */
+  baseVersion?: number;
+  /** Resolved when the run is asked for, never "auto". */
+  provider: ProviderId;
+  model: string;
+  status: StudioRunStatus;
+  /** What the run is asked to do. Until the lead writes studio briefs (pass 4), a labelled placeholder. */
+  brief: string;
+  askedAt: string;
+  /** When it was dispatched; absent while queued. */
+  startedAt?: string;
+  endedAt?: string;
+  /** Its staging folder, relative to the project's studio workspace (`<data>/studio/<projectId>/`): the one place it writes. */
+  workspace: string;
+  usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
+  sessionId?: string;
+  actualModel?: string;
+  stopRequestedAt?: string;
+  /** Pausing the project stopped it: once the stop is confirmed the run is asked for again, and it runs when the project resumes. */
+  requeue?: true;
+  /** The run this one repeats after a pause stopped it. */
+  retryOf?: string;
+  activity?: string;
+  /** Why it failed or was refused, or a control failure. */
+  note?: string;
+  /** Run by the fake runtime: no agent made what it hands in. */
+  simulated?: true;
+}
+
 export interface Studio {
   rounds: Round[];
   artifacts: StudioArtifact[];
   feedback: Feedback[];
   verdicts: PeVerdict[];
   probes: Probe[];
+  runs: StudioRun[];
 }
 
 export interface Blueprint {
@@ -188,5 +240,5 @@ export interface Blueprint {
   changeOrders: ChangeOrder[];
 }
 
-export const emptyStudio = (): Studio => ({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [] });
+export const emptyStudio = (): Studio => ({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
 export const emptyBlueprint = (): Blueprint => ({ revisions: [], changeOrders: [] });

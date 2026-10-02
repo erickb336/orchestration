@@ -1010,3 +1010,53 @@ describe("worker environment and connections", () => {
     expect(await none.adapter.listConnections()).toEqual([]);
   });
 });
+
+describe("studio runs (ORC-029 pass 3a)", () => {
+  let repo: string;
+  beforeEach(() => {
+    repo = mkdtempSync(path.join(tmpdir(), "claude-adapter-repo-"));
+    writeFileSync(path.join(repo, "README.md"), "The product.\n");
+    symlinkSync(outside, path.join(repo, "linked"));
+  });
+  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+
+  const configWith = (servers: Record<string, unknown>) => {
+    const file = path.join(mkdtempSync(path.join(tmpdir(), "claude-cfg-")), ".claude.json");
+    writeFileSync(file, JSON.stringify({ mcpServers: servers }));
+    return file;
+  };
+  const sig = { signal: new AbortController().signal } as never;
+
+  it("have no Artifact tool, no shell, no settings and no connections, even with the shell on and an assignment that says local", async () => {
+    const { adapter, calls } = setup({ allowShell: true, claudeConfigPath: configWith({ cloudflare: { type: "stdio", command: "cf-mcp", args: [] } }) });
+    adapter.start(assignment({ studio: true, role: "designer", environment: "local", connections: ["cloudflare"] }));
+    await waitFor(() => calls.length === 1);
+    const opts = calls[0].options;
+    expect(opts.tools).toEqual(["Read", "Glob", "Grep", "Write", "Edit"]);
+    expect(opts.disallowedTools).toEqual(expect.arrayContaining(["Bash", "Agent", "Task", "WebFetch", "WebSearch"]));
+    expect(opts.settingSources).toEqual([]);
+    expect(opts.strictMcpConfig).toBe(true);
+    expect(opts.mcpServers).toEqual({});
+    for (const tool of ["Artifact", "Bash", "mcp__cloudflare__deploy"]) expect((await opts.canUseTool!(tool, {}, sig))?.behavior, tool).toBe("deny");
+    // The same shell setting gives an ordinary writer its shell: only the studio run goes without.
+    const writer = setup({ allowShell: true });
+    writer.adapter.start(assignment());
+    await waitFor(() => writer.calls.length === 1);
+    expect(writer.calls[0].options.tools).toContain("Bash");
+  });
+
+  it("write only in their staging folder and may read the product's checkout, never write it", async () => {
+    const { adapter, calls } = setup();
+    adapter.start(assignment({ studio: true, role: "designer", workspace: { path: ws, access: "write", readRoots: [repo] } }));
+    await waitFor(() => calls.length === 1);
+    const use = async (tool: string, input: Record<string, unknown>) => (await calls[0].options.canUseTool!(tool, input, sig))?.behavior;
+    expect(await use("Write", { file_path: path.join(ws, "a", "index.html"), content: "<p>" })).toBe("allow");
+    expect(await use("Read", { file_path: path.join(repo, "README.md") })).toBe("allow");
+    expect(await use("Grep", { pattern: "product", path: repo })).toBe("allow");
+    expect(await use("Write", { file_path: path.join(repo, "README.md"), content: "x" })).toBe("deny");
+    expect(await use("Edit", { file_path: path.join(repo, "README.md"), old_string: "The", new_string: "A" })).toBe("deny");
+    // Reading out of the checkout through a link in it, or anywhere else, is not allowed.
+    expect(await use("Read", { file_path: path.join(repo, "linked", "secret.txt") })).toBe("deny");
+    expect(await use("Read", { file_path: path.join(outside, "secret.txt") })).toBe("deny");
+  });
+});

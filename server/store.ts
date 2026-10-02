@@ -349,6 +349,8 @@ function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   project.changeOrders ??= "lead";
   project.budgets ??= { ...NO_BUDGETS };
   doc.studio ??= emptyStudio();
+  // Studio runs (pass 3a) came after the first format-19 builds: none were recorded before them.
+  (doc.studio as { runs?: unknown[] }).runs ??= [];
   doc.blueprint ??= emptyBlueprint();
   const blueprint = doc.blueprint as { changeOrders?: Record<string, unknown>[] };
   for (const co of (blueprint.changeOrders ??= [])) co.handler ??= project.changeOrders;
