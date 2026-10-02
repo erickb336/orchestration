@@ -20,7 +20,8 @@ At most three implementers, on disjoint files; the lead integrates. Each unit en
 
 ## 4a. Vision in the navigation, and the lead's panel
 
-- **Navigation (r12).** Vision is an item in the main navigation, beside Home, Tasks, Results and Settings, always one click away. Opening it never stops or changes the factory. The "Back to vision" stage switch is removed from Settings and Home. Pause the factory stays where it is.
+- **Navigation (r12).** Vision is an item in the main navigation, beside Home, Tasks, Results and Settings, always one click away. Opening it never stops or changes the factory. Pause the factory stays where it is.
+  - **The lead's decision:** the "Back to vision" stage switch stays until pass 5. Until pass 5 adds the draft and Lock in, the vision can only be revised while the project is in Vision, so removing the switch now would leave no way to revise it after the start.
 - **The lead's panel.** The studio's right column shows the lead's message for the round, its questions (with option chips, as in ORC-012), and a box for "Message the lead" that posts to the same conversation as the header button. PE review and the feedback summary stay below it. The owner's feedback and answers go together as one message (ORC-012's "Send answers" pattern).
 - **Document artifacts.** The kinds `interface`, `algorithm`, `topology`, `contract` and `flow` are shown as documents: Markdown with code blocks, Mermaid for diagrams (rendered by the app, never by the prototype server), and tables. They have no device frame.
 - **Kit only;** a browser pass at 1280 and 375 wide.
@@ -79,3 +80,13 @@ The estimated Claude spend stays within what is left of the owner's $5 cap for p
 - `npm test`, the typecheck, the build, `npm run test:integration` and `npm run trial:studio -- --fake` (extended for the lead's round and the loop).
 - A browser pass at 1280 and 375 wide.
 - An independent review, then a pull request.
+
+## Started (2026-10-02)
+
+- **Before the units:** the recorder fixes from the real trial (root-relative paths, and "recorded-with-errors") are merged. Real terminal recording is paused in the service until recordings run in a container (pass 3 review finding 1). Demos fall back to their hand-written files, with the reason shown.
+- **The three units run in parallel.** Pass 3's remaining review findings ride along where the units own the files:
+  - finding 4 (the "not independent" label) in 4a;
+  - findings 8 (the trial cap) and 9 (ASCII paths) in 4b;
+  - findings 5 (no media while paused), 6 (the Codex PE temp folder), 7 (retry counting) and 10 (the PE's data-not-instructions line) in 4c.
+- **After pass 4:** findings 1–3 (the container recorder, other folders, WebRTC) and 11 (duplication).
+
