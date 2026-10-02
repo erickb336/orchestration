@@ -123,6 +123,37 @@ describe("dispatch", () => {
     expect(d.started).toEqual([c1.result.runId, x1.result.runId]);
     expect(R.activeStudioRuns(d.state).map((r) => r.id)).toEqual([c1.result.runId, x1.result.runId]);
   });
+
+  it("after Start the factory, studio runs still finishing count toward Agents at once and each provider's limit: task runs wait for their place", () => {
+    const { s: base, n } = inRound();
+    const newTask = (s: State, title: string, sec: number) => M.createTask(s, { title, area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: false, flowId: "change" }, at(sec));
+    const tasks = (s: State, sec: number) => M.dispatchEligible(M.leadPromoteProposals(s, at(sec)), at(sec));
+    const taskRuns = (s: State) => M.activeAttempts(s).map((a) => `${a.taskId} ${a.snapshot.provider}`);
+
+    // Agents at once: two, both taken by studio runs (one per provider) when the owner starts the factory.
+    const t1 = newTask(M.setWorkerLimit(base, 2, at(1)), "Plan a trip", 2);
+    const t2 = newTask(t1.state, "Share a plan", 2);
+    const c = ask(t2.state, { round: n }, 3);
+    const x = ask(c.state, { round: n, selection: { provider: "codex", model: "auto" } }, 3);
+    const studio = dispatch(x.state, 4);
+    expect(studio.started).toEqual([c.result.runId, x.result.runId]);
+    const building = tasks(startFactoryAsOwner(studio.state, at(5)), 6);
+    expect(taskRuns(building)).toEqual([]);
+    // One studio run finishes: one task run takes its place, and no more.
+    const one = tasks(R.completeStudioRun(building, x.result.runId, at(7), { summary: "Trip plan v1" }), 8);
+    // (The Change flow's first step, planning, runs on Codex.)
+    expect(taskRuns(one)).toEqual([`${t1.newId} codex`]);
+    expect(M.activeAttempts(one).length + R.activeStudioRuns(one).length).toBe(2);
+
+    // A provider's limit: Codex's one place is taken by a studio run, so a Codex task run waits while Agents at once has room.
+    const limited = M.setProviderLimit(M.setWorkerLimit(base, 3, at(1)), "codex", 1, at(1));
+    const t3 = newTask(limited, "Plan a trip", 2);
+    const x2 = ask(t3.state, { round: n, selection: { provider: "codex", model: "auto" } }, 3);
+    const running = dispatch(x2.state, 4);
+    const waiting = tasks(startFactoryAsOwner(running.state, at(5)), 6);
+    expect(taskRuns(waiting)).toEqual([]);
+    expect(taskRuns(tasks(R.completeStudioRun(waiting, x2.result.runId, at(7), { summary: "Trip plan v1" }), 8))).toEqual([`${t3.newId} codex`]);
+  });
 });
 
 describe("pause, stop and stale results", () => {

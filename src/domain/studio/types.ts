@@ -60,7 +60,42 @@ export interface StudioArtifact {
   devices: Device[];
   madeBy: StudioMaker;
   at: string;
+  /** A screen's screenshots, which the service takes after import (pass 3). Absent when this service takes none. */
+  shots?: ArtifactShots;
+  /** How a terminal demo or TUI is shown, which the service settles after import (pass 3). Absent when this service records none. */
+  demo?: ArtifactDemo;
 }
+
+/** One screenshot: a variant on a device, relative to the version's folder (`shots/<variant>-<device>.png`). */
+export interface ArtifactShot {
+  variant: string;
+  device: Device;
+  path: string;
+}
+
+/**
+ * The screenshots of a screen version, for its history and for the PE: each variant on each of its devices.
+ * pending: being taken; taken: at least one (`failed` names any that were not, and why); skipped: none, and why
+ * (no Chrome, say).
+ */
+export type ArtifactShots =
+  | { status: "pending" }
+  | { status: "taken"; at: string; shots: ArtifactShot[]; failed: { variant: string; device: Device; error: string }[] }
+  | { status: "skipped"; at: string; reason: string };
+
+/**
+ * How one variant of a terminal demo or TUI is shown. Paths are relative to the version's folder.
+ * recorded: VHS recorded its tape in the sandbox, into `recording/<variant>/` (WebM, GIF and a text transcript, as the
+ * tape asked); hand-written: the designer's .cast or .ans files, not recorded (`reason`: why its tape was not, when
+ * it had one); not-recorded: neither, and why.
+ */
+export type VariantDemo =
+  | { variant: string; status: "recorded"; tape: string; webm?: string; gif?: string; txt?: string }
+  | { variant: string; status: "hand-written"; files: string[]; reason?: string }
+  | { variant: string; status: "not-recorded"; reason: string };
+
+/** A terminal demo's or TUI's variants as shown: pending while the service records them. */
+export type ArtifactDemo = { status: "pending" } | { status: "done"; at: string; variants: VariantDemo[] };
 
 export type Mark = "keep" | "change" | "drop";
 

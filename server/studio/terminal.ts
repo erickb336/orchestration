@@ -12,11 +12,15 @@
 //   the shell      ttyd and the shell, where the tape's commands run. No network at all, not even
 //                  loopback (the service's API listens there), no Mach services (through LaunchServices a
 //                  sandboxed `open` launches an unsandboxed app), no Apple events, signals only inside
-//                  this sandbox, writes only to the working copy of the tape's folder and a temp folder.
+//                  this sandbox, writes only to the working copy of the tape's folder and a temp folder,
+//                  and no reads in the user's home folder (so a recording cannot show the owner's files)
+//                  apart from those folders and the tools it runs.
 //
 // VHS starts `ttyd` from PATH. That name is a small wrapper that asks this process (a broker on a Unix
 // socket) to start the real ttyd under the shell profile, because the wrapper, inside the recorder
-// sandbox, cannot apply a sandbox of its own.
+// sandbox, cannot apply a sandbox of its own. The first process of the shell sandbox is a reaper that
+// starts ttyd and, when the recording ends, ends every process of the sandbox, including any the tape
+// detached into a session of its own (see reaperSource).
 //
 // The ORC-013 checks sandbox cannot run VHS: it refuses loopback by design, and VHS panics when it
 // cannot bind a port. Without a working sandbox nothing is recorded: terminal demos fall back to
@@ -25,7 +29,7 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, copyFileSync } from "node:fs";
 import { createServer, type Server as NetServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { delimiter, dirname, isAbsolute, join, posix } from "node:path";
 import { killGroup, trackLive } from "../processes";
 
@@ -284,23 +288,83 @@ export function recorderProfile(): string {
 }
 
 /**
+ * What the shell may not read, so a tape cannot show the owner's files in a recording: the user's home
+ * folders. Inside them it still reads its own folders (always) and `allow`: the tools it runs, when they
+ * are installed in a home folder. Real paths.
+ */
+export interface ShellReads {
+  deny: string[];
+  allow: string[];
+}
+
+/** A path a profile can name as a string: absolute, with no quote, backslash or control character. */
+const SBPL_PATH = /^\/[^"\\\u0000-\u001f\u007f]*$/;
+const subpath = (p: string) => {
+  if (!SBPL_PATH.test(p)) throw new Error(`a sandbox profile cannot name ${JSON.stringify(p)}`);
+  return `(subpath "${p}")`;
+};
+
+/**
  * ttyd and the shell. Parameters: WORK (the copy of the tape's folder, the shell's directory) and
  * SHELL_TMP. The only network operation is ttyd's own listening port, bound and accepted on loopback;
- * nothing may connect out, not even to loopback or a Unix socket (DNS included).
+ * nothing may connect out, not even to loopback or a Unix socket (DNS included). Nothing in `reads.deny`
+ * is read, apart from WORK, SHELL_TMP and `reads.allow` (later rules win). Signals reach only processes
+ * of this same sandbox, which is also how the reaper finds them.
  */
-export function shellProfile(port: number): string {
+export function shellProfile(port: number, reads: ShellReads = { deny: [], allow: [] }): string {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`not a port: ${port}`);
+  const readRules = reads.deny.length ? `(deny file-read* ${reads.deny.map(subpath).join(" ")})\n(allow file-read* (subpath (param "WORK")) (subpath (param "SHELL_TMP"))${reads.allow.map((p) => ` ${subpath(p)}`).join("")})\n` : "";
   return `(version 1)
 (allow default)
 (deny network*)
 (allow network-bind network-inbound (local ip "localhost:${port}"))
 (deny appleevent-send)
 (deny mach-lookup)
-(deny signal)
+(deny signal (with no-log))
 (allow signal (target same-sandbox))
 (deny file-write*)
 (allow file-write* (subpath (param "WORK")) (subpath (param "SHELL_TMP")) ${DEVICES})
-`;
+${readRules}`;
+}
+
+/**
+ * The home folders the shell may not read: the user's, from the system, and HOME when it names another
+ * folder; then, of `keep`, those inside one of them. A string says why no profile can be built.
+ */
+export function shellReads(env: NodeJS.ProcessEnv, keep: string[]): ShellReads | string {
+  const deny = new Set<string>();
+  let system: string | undefined;
+  try {
+    system = userInfo().homedir;
+  } catch {
+    /* no user record */
+  }
+  for (const h of [system, env.HOME]) {
+    if (!h || !isAbsolute(h)) continue;
+    let real: string;
+    try {
+      real = realpathSync(h);
+    } catch {
+      continue;
+    }
+    if (real === "/") continue;
+    if (!SBPL_PATH.test(real)) return `the home folder ${JSON.stringify(real)} cannot be named in a sandbox profile`;
+    deny.add(real);
+  }
+  const inside = (p: string) => [...deny].some((h) => p === h || p.startsWith(`${h}/`));
+  const allow = [...new Set(keep.filter((p) => SBPL_PATH.test(p) && inside(p)))];
+  return { deny: [...deny], allow };
+}
+
+/** A tool's folder and its install folder (`<prefix>/bin/<tool>`, links resolved), which the shell must still read. */
+function toolFolders(bin: string): string[] {
+  let real = bin;
+  try {
+    real = realpathSync(bin);
+  } catch {
+    /* as given */
+  }
+  return [dirname(bin), dirname(real), dirname(dirname(real))];
 }
 
 // ---------- the tools ----------
@@ -350,11 +414,14 @@ export interface TerminalSandboxHealth {
   ok: boolean;
   detail: string;
   /** Each verdict: only an explicit refusal by the sandbox counts as "denied". */
-  probes: Partial<Record<"shellNetwork" | "shellLoopback" | "shellWriteOutside" | "recorderNetwork" | "recorderLoopback" | "recorderWriteOutside", "denied" | "allowed" | "unknown">>;
+  probes: Partial<Record<"shellNetwork" | "shellLoopback" | "shellWriteOutside" | "shellReadHome" | "shellSignal" | "recorderNetwork" | "recorderLoopback" | "recorderWriteOutside", "denied" | "allowed" | "unknown">>;
 }
 
 const CONNECT = `const s=require("node:net").connect(Number(process.argv[2]),process.argv[1]);s.on("connect",()=>{console.log("CONNECTED");process.exit(0)});s.on("error",e=>{console.log("DENIED "+e.code);process.exit(3)});setTimeout(()=>{console.log("TIMEOUT");process.exit(4)},3000)`;
 const WRITE = `try{require("node:fs").writeFileSync(process.argv[1],"x");console.log("WROTE")}catch(e){console.log("DENIED "+e.code);process.exit(3)}`;
+/** Lists a folder: only whether it could, never a name or what a file holds. */
+const LIST = `try{require("node:fs").readdirSync(process.argv[1]);console.log("LISTED")}catch(e){console.log("DENIED "+e.code);process.exit(3)}`;
+const SIGNAL = `try{process.kill(Number(process.argv[1]),0);console.log("SIGNALLED")}catch(e){console.log("DENIED "+e.code);process.exit(3)}`;
 
 function runCapture(cmd: string, args: string[], o: { env: NodeJS.ProcessEnv; cwd: string; timeoutMs: number }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((res) => {
@@ -383,10 +450,11 @@ const healthCache = new Map<string, Promise<TerminalSandboxHealth>>();
 
 /**
  * Prove the two profiles on this machine before anything is recorded, with service-owned commands in
- * a scratch folder: the shell profile must refuse a connection to the internet, to a loopback port this
- * process listens on, and a write outside its folders; the recorder profile must refuse the internet
- * and outside writes, and must reach loopback. Only explicit refusals count. Cached for the process
- * once it passes; `fresh` checks again.
+ * a scratch folder: the shell profile must refuse a write outside its folders, a signal to this process
+ * (the reaper relies on it), a read of the user's home folder, and a connection to the internet or to a
+ * loopback port this process listens on; the recorder profile must refuse the internet and outside
+ * writes, and must reach loopback. Only explicit refusals count. Cached for the process once it passes;
+ * `fresh` checks again.
  */
 export function probeTerminalSandbox(o: { env?: NodeJS.ProcessEnv; tmpRoot?: string; fresh?: boolean; sandboxExec?: string } = {}): Promise<TerminalSandboxHealth> {
   const key = o.sandboxExec ?? SANDBOX_EXEC;
@@ -414,16 +482,27 @@ async function probe(o: { env?: NodeJS.ProcessEnv; tmpRoot?: string }, sandboxEx
     s.listen(0, "127.0.0.1", () => res(s));
   });
   const port = (listener.address() as { port: number }).port;
+  const reads = shellReads(o.env ?? process.env, toolFolders(tools.node));
+  if (typeof reads === "string") {
+    listener.close();
+    rmSync(root, { recursive: true, force: true });
+    return { ok: false, detail: reads, probes };
+  }
   // The shell profile's own port is one nobody listens on; the probe's listener stands for the service.
-  writeFileSync(join(root, "shell.sb"), shellProfile(port === 65535 ? 65534 : port + 1));
+  writeFileSync(join(root, "shell.sb"), shellProfile(port === 65535 ? 65534 : port + 1, reads));
   writeFileSync(join(root, "recorder.sb"), recorderProfile());
   const env = { PATH: STD_PATH.join(":"), HOME: o.env?.HOME ?? process.env.HOME ?? "/", TMPDIR: dirs.shellTmp };
   const inShell = (args: string[]) => runCapture(tools.sandboxExec, ["-f", join(root, "shell.sb"), "-D", `WORK=${dirs.work}`, "-D", `SHELL_TMP=${dirs.shellTmp}`, tools.node, ...args], { env, cwd: dirs.work, timeoutMs: 10_000 });
   const inRecorder = (args: string[]) => runCapture(tools.sandboxExec, ["-f", join(root, "recorder.sb"), "-D", `OUT=${dirs.out}`, "-D", `VHS_TMP=${dirs.vhsTmp}`, "-D", `SOCK_DIR=${dirs.sock}`, tools.node, ...args], { env: { ...env, TMPDIR: dirs.vhsTmp }, cwd: dirs.out, timeoutMs: 10_000 });
   const outside = join(root, "outside.txt");
   // In order, stopping at the first wrong answer (so a stand-in that sandboxes nothing never reaches the network).
-  const steps: [keyof TerminalSandboxHealth["probes"], "denied" | "allowed", () => Promise<"denied" | "allowed" | "unknown">][] = [
+  type Step = [keyof TerminalSandboxHealth["probes"], "denied" | "allowed", () => Promise<"denied" | "allowed" | "unknown">];
+  // The user's home folder: listed, not read, and only to see that it is refused.
+  const homeStep: Step[] = reads.deny.slice(0, 1).map((home) => ["shellReadHome", "denied", async () => verdict(await inShell(["-e", LIST, home]), "LISTED")]);
+  const steps: Step[] = [
     ["shellWriteOutside", "denied", async () => verdict(await inShell(["-e", WRITE, outside]), "WROTE")],
+    ["shellSignal", "denied", async () => verdict(await inShell(["-e", SIGNAL, String(process.pid)]), "SIGNALLED")],
+    ...homeStep,
     ["recorderWriteOutside", "denied", async () => verdict(await inRecorder(["-e", WRITE, outside]), "WROTE")],
     ["shellLoopback", "denied", async () => verdict(await inShell(["-e", CONNECT, "127.0.0.1", String(port)]), "CONNECTED")],
     ["recorderLoopback", "allowed", async () => verdict(await inRecorder(["-e", CONNECT, "127.0.0.1", String(port)]), "CONNECTED")],
@@ -438,7 +517,7 @@ async function probe(o: { env?: NodeJS.ProcessEnv; tmpRoot?: string }, sandboxEx
       if (existsSync(outside)) probes[k] = k.endsWith("WriteOutside") ? "allowed" : probes[k];
       if (probes[k] !== want) return { ok: false, detail: `the sandbox profiles did not behave as required: ${k} ${probes[k]} (want ${want})`, probes };
     }
-    return { ok: true, detail: "sandbox-exec verified: the shell cannot reach the network or loopback or write outside its folders; the recorder reaches loopback only and writes only to its folders.", probes };
+    return { ok: true, detail: "sandbox-exec verified: the shell cannot reach the network or loopback, write outside its folders, read the home folder or signal the service; the recorder reaches loopback only and writes only to its folders.", probes };
   } finally {
     listener.close();
     rmSync(root, { recursive: true, force: true });
@@ -502,6 +581,67 @@ for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(sig, () => { s.des
 `;
 }
 
+/** The highest process id on macOS. */
+const MAX_PID = 99_999;
+/** The reaper's exit code when the sandbox did not hold, so it signalled nothing but ttyd. */
+const REAPER_REFUSED = 97;
+/** How long the cleanup waits for the reaper to end the shell sandbox. */
+const REAP_WAIT_MS = 15_000;
+
+/**
+ * The reaper, the first process of the shell sandbox: sandbox-exec starts it, it starts the real ttyd,
+ * and when the recording ends (the broker asks, its stdin closes, or ttyd exits) it ends every process
+ * of this sandbox, detached ones included: a process that double-forked into a session of its own, with
+ * no terminal and an empty environment, is still in the sandbox. The profile lets a process signal only
+ * processes of its own sandbox, so the ones the reaper can signal are exactly the tape's. It stops them
+ * all first, round after round until no new one appears (so none forks away meanwhile), then kills
+ * them. Two guards: it signals nothing unless a signal to the service is refused (the sandbox holds),
+ * and it never signals a process the service listed before VHS started. It starts ttyd at once, since
+ * VHS opens ttyd's page without waiting. A tape can still kill the reaper first; then what it left keeps
+ * running, but inside the sandbox (no network, no home folder, no writes outside its removed folders),
+ * and the cleanup logs it.
+ */
+function reaperSource(): string {
+  return `"use strict";
+// Orchestrator's shell reaper (server/studio/terminal.ts). Arguments: the service's pid, the file listing the
+// processes that ran before the recording, the real ttyd, and its arguments.
+const [service, beforeFile, ttyd, ...args] = process.argv.slice(2);
+const child = require("node:child_process").spawn(ttyd, args, { stdio: ["ignore", "ignore", "inherit"] });
+const before = new Set(require("node:fs").readFileSync(beforeFile, "utf8").split("\\n").map(Number).filter((n) => n > 0));
+let code = null;
+let reaping = false;
+function reap(why) {
+  if (reaping) return;
+  reaping = true;
+  let holds = false;
+  try { process.kill(Number(service), 0); } catch (e) { holds = e.code === "EPERM"; }
+  if (!holds) {
+    try { child.kill("SIGKILL"); } catch {}
+    process.stderr.write("orchestrator-reaper: the sandbox does not hold; only ttyd was ended\\n");
+    process.exit(${REAPER_REFUSED});
+  }
+  const stopped = new Set();
+  for (let round = 0; round < 50; round++) {
+    let found = 0;
+    for (let pid = 2; pid <= ${MAX_PID}; pid++) {
+      if (pid === process.pid || before.has(pid) || stopped.has(pid)) continue;
+      try { process.kill(pid, "SIGSTOP"); stopped.add(pid); found++; } catch {}
+    }
+    if (!found) break;
+  }
+  for (const pid of stopped) { try { process.kill(pid, "SIGKILL"); } catch {} }
+  process.stderr.write("orchestrator-reaper: ended " + stopped.size + " (" + why + ")\\n");
+  process.exit(code ?? 0);
+}
+child.on("exit", (c) => { code = c ?? 1; reap("ttyd exited"); });
+child.on("error", () => { code = 1; reap("ttyd did not start"); });
+process.stdin.on("data", (d) => { if (String(d).includes("reap")) reap("asked"); });
+process.stdin.on("end", () => reap("the service is gone"));
+process.stdin.on("error", () => reap("the service is gone"));
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(sig, () => reap(sig));
+`;
+}
+
 function folderBytes(dir: string): number {
   let total = 0;
   const walk = (d: string) => {
@@ -524,6 +664,18 @@ function folderBytes(dir: string): number {
   };
   walk(dir);
   return total;
+}
+
+/** Every process id on the machine (empty if ps cannot run). */
+function processIds(): number[] {
+  try {
+    return execFileSync("/bin/ps", ["-axo", "pid="], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })
+      .split("\n")
+      .map(Number)
+      .filter((n) => Number.isInteger(n) && n > 0);
+  } catch {
+    return [];
+  }
 }
 
 /** Kill every process whose command line names `marker` (Chrome and its helpers carry their profile folder). */
@@ -593,7 +745,21 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
   for (const x of [d.vhsTmp, d.shellTmp, d.sock, d.bin]) mkdirSync(x, { mode: 0o700 });
   const children: ChildProcess[] = [];
   let broker: NetServer | undefined;
-  const cleanup = () => {
+  /** The shell sandbox's reaper (it runs ttyd), once the broker started it. */
+  let reaper: ChildProcess | undefined;
+  const reap = () => {
+    if (reaper && reaper.exitCode === null && reaper.signalCode === null) reaper.stdin?.end("reap\n");
+  };
+  // The shell's processes go first, through the reaper (they may have left its group and session), then
+  // everything this run started, then Chrome's helpers by their profile folder; then the folders.
+  const cleanup = async () => {
+    if (reaper && reaper.exitCode === null && reaper.signalCode === null) {
+      const exited = new Promise<void>((res) => reaper!.once("exit", () => res()));
+      reap();
+      await Promise.race([exited, new Promise<void>((res) => setTimeout(res, REAP_WAIT_MS).unref())]);
+    }
+    if (reaper && reaper.signalCode !== null) log(`terminal: the shell's reaper was ended by ${reaper.signalCode} before it finished; a process the tape left may still run, inside the shell sandbox`);
+    else if (reaper?.exitCode === REAPER_REFUSED) log("terminal: the shell's reaper found the sandbox did not hold and ended only ttyd");
     for (const c of children) killGroup(c, "SIGKILL");
     sweep(d.vhsTmp);
     broker?.close();
@@ -634,8 +800,12 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
     writeFileSync(runTape, check.normalized!, { mode: 0o600 });
     writeFileSync(join(root, "recorder.sb"), recorderProfile(), { mode: 0o600 });
 
-    // The broker: one ttyd, started in the shell sandbox, for the one wrapper that asks.
+    // The broker: one ttyd, started in the shell sandbox by its reaper, for the one wrapper that asks.
     const socketPath = join(d.sock, "b.sock");
+    const reaperFile = join(d.bin, "reaper.cjs");
+    const beforeFile = join(d.bin, "before.txt");
+    const reads = shellReads(env, [...toolFolders(tools.node), ...toolFolders(tools.ttyd), d.bin]);
+    if (typeof reads === "string") return done({ sandbox: null, reason: "unavailable", error: `Not recorded: ${reads}. Use a hand-written .cast or .ans instead.` });
     const shellPath = [dirname(tools.node), dirname(tools.ttyd), ...STD_PATH].filter((v, i, a) => a.indexOf(v) === i).join(":");
     let brokerError: string | undefined;
     let ttydStderr = "";
@@ -664,19 +834,23 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
           brokerError = `VHS started ttyd with unexpected arguments (${args.slice(0, 3).join(" ")}…); this VHS version is not supported`;
           return sock.destroy();
         }
-        writeFileSync(join(root, "shell.sb"), shellProfile(port), { mode: 0o600 });
+        writeFileSync(join(root, "shell.sb"), shellProfile(port, reads), { mode: 0o600 });
         const shellEnv: Record<string, string> = { PATH: shellPath, HOME: env.HOME ?? "/", LANG: env.LANG ?? "en_US.UTF-8", TMPDIR: d.shellTmp, BASH_SILENCE_DEPRECATION_WARNING: "1" };
         for (const k of ["PS1", "PROMPT"] as const) if (typeof req.env?.[k] === "string") shellEnv[k] = req.env[k] as string;
-        const ttyd = spawn(tools.sandboxExec, ["-f", join(root, "shell.sb"), "-D", `WORK=${d.work}`, "-D", `SHELL_TMP=${d.shellTmp}`, tools.ttyd, ...args], { cwd: d.work, env: shellEnv, stdio: ["ignore", "ignore", "pipe"], detached: true });
-        trackLive(ttyd);
+        // The reaper starts ttyd inside the sandbox and ends the whole sandbox afterwards. Not registered with
+        // trackLive: killing its group when this process exits would end it before it reaps; it reaps when
+        // its stdin, this process's end of the pipe, closes.
+        const ttyd = spawn(tools.sandboxExec, ["-f", join(root, "shell.sb"), "-D", `WORK=${d.work}`, "-D", `SHELL_TMP=${d.shellTmp}`, tools.node, reaperFile, String(process.pid), beforeFile, tools.ttyd, ...args], { cwd: d.work, env: shellEnv, stdio: ["pipe", "ignore", "pipe"], detached: true });
+        reaper = ttyd;
         children.push(ttyd);
+        ttyd.stdin!.on("error", () => {});
         ttyd.stderr!.setEncoding("utf8").on("data", (x: string) => (ttydStderr = (ttydStderr + x).slice(-2000)));
         ttyd.on("error", (e) => {
           brokerError = `could not start ttyd: ${e.message}`;
           sock.destroy();
         });
         ttyd.on("exit", (code) => sock.end(`exit ${code ?? 1}\n`));
-        sock.on("close", () => killGroup(ttyd, "SIGTERM"));
+        sock.on("close", reap);
       });
       sock.on("error", () => {});
     });
@@ -686,6 +860,9 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
     });
     const wrapper = join(d.bin, "ttyd");
     writeFileSync(wrapper, wrapperSource(tools.node, tools.ttyd, socketPath), { mode: 0o700 });
+    writeFileSync(reaperFile, reaperSource(), { mode: 0o600 });
+    // Every process running before VHS starts, so before the tape can start any: the reaper never signals these.
+    writeFileSync(beforeFile, processIds().join("\n"), { mode: 0o600 });
 
     // VHS, with one argument, inside the recorder sandbox.
     const vhsEnv: Record<string, string> = {
@@ -709,7 +886,9 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
     const stop = (why: "timeout" | "too-large") => {
       if (stopped) return;
       stopped = why;
-      for (const c of children) killGroup(c, "SIGKILL");
+      // The shell's side through its reaper (the cleanup below waits for it); VHS and Chrome at once.
+      reap();
+      for (const c of children) if (c !== reaper) killGroup(c, "SIGKILL");
       sweep(d.vhsTmp);
     };
     const timer = setTimeout(() => stop("timeout"), timeoutMs);
@@ -749,7 +928,7 @@ export async function recordTape(tapeDir: string, outDir: string, opts: RecordOp
   } catch (e) {
     return done({ sandbox: null, reason: "failed", error: e instanceof Error ? e.message : String(e) });
   } finally {
-    cleanup();
+    await cleanup();
   }
 }
 

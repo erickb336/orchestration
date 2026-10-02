@@ -1,6 +1,6 @@
 // What the fake runtime's designer hands in (ORC-029 pass 3a): a small sample prototype of Weekend Trips' trip plan,
-// in two variants, for desktop and mobile, in plain HTML and CSS with nothing fetched and no inline styles (the
-// prototype server's content security policy allows neither). It goes through the same
+// in two variants, for desktop and mobile, in plain HTML and CSS with nothing fetched (the prototype server's
+// content security policy allows no network). It goes through the same
 // studio.json check and import as a real designer's work, so the demo and the tests need no agent. Every page says
 // it is a simulated sample.
 

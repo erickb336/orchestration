@@ -6,12 +6,17 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ServiceInfo } from "../../src/api";
 import { acceptPinMessage } from "../../src/runtime/prototype";
+import { createHttpServer } from "../http";
+import { FakeAdapter, defaultFakeConfig } from "../runtimes/fake";
+import { Scheduler } from "../scheduler";
+import { Store } from "../store";
 import { createPrototypeServer, projectStudioDir } from "./serve";
 import { TINY_PNG, close, get, listen, sha256, writeVersion } from "./testFixtures";
 
 const APP = ["http://127.0.0.1:5319", "http://localhost:5319"];
-const CSP = "default-src 'self'; connect-src 'none'; form-action 'none'; frame-ancestors http://127.0.0.1:5319 http://localhost:5319";
+const CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-ancestors http://127.0.0.1:5319 http://localhost:5319";
 const PAGE = "<!doctype html><html><head><link rel=stylesheet href=style.css></head><body><h1>Trip plan</h1></body></html>";
 
 let root: string;
@@ -137,6 +142,40 @@ describe("the prototype server", () => {
     for (const p of ["/shots/b-mobile.png", "/shots/a-terminal.png", "/shots/c-desktop.png", "/shots/note.html", "/shots/"]) expect((await get(port, host(), p)).status, p).toBe(404);
   });
 
+  it("serves a terminal demo's text as plain text with nosniff: the transcript, a hand-written asciicast and .ans frames", async () => {
+    const cast = '{"version": 3, "term": {"cols": 80, "rows": 24}}\n[0.5, "o", "<script>alert(1)</script>"]\n';
+    writeVersion(studio, "sa-6", 1, { "a/demo.cast": cast, "a/demo.txt": "> trips plan\n", "a/plan.ans": "\u001b[1mTrips\u001b[0m\n", "a/photo.jpeg": "jpeg" }, { kind: "terminal-demo", devices: [], variants: [{ id: "a", label: "A", entry: "a/demo.cast" }] });
+    for (const [path, body] of [["/a/demo.cast", cast], ["/a/demo.txt", "> trips plan\n"], ["/a/plan.ans", "\u001b[1mTrips\u001b[0m\n"]]) {
+      const r = await get(port, host("sa-6"), path);
+      expect([r.status, r.headers["content-type"], r.headers["x-content-type-options"], r.body.toString()], path).toEqual([200, "text/plain; charset=utf-8", "nosniff", body]);
+    }
+    expect((await get(port, host("sa-6"), "/a/photo.jpeg")).headers["content-type"]).toBe("image/jpeg");
+  });
+
+  it("serves a variant's recording as GIF, WebM or text, each only when its bytes are of that kind, and nothing else from recording/", async () => {
+    const gif = Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(10)]);
+    const webm = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(10)]);
+    const rec = join(studio, "artifacts", "sa-1", "v1", "recording");
+    mkdirSync(join(rec, "a", "media"), { recursive: true });
+    mkdirSync(join(rec, "c"), { recursive: true });
+    writeFileSync(join(rec, "a", "trips.gif"), gif);
+    writeFileSync(join(rec, "a", "media", "trips.webm"), webm);
+    writeFileSync(join(rec, "a", "trips.txt"), "> trips plan\n");
+    writeFileSync(join(rec, "a", "fake.gif"), "<script>alert(1)</script>");
+    writeFileSync(join(rec, "a", "page.html"), "<p>hi</p>");
+    writeFileSync(join(rec, "c", "trips.gif"), gif);
+    symlinkSync(join(rec, "a", "trips.gif"), join(rec, "a", "linked.gif"));
+    const served = async (p: string) => {
+      const r = await get(port, host(), p);
+      return r.status === 200 ? [r.headers["content-type"], r.headers["x-content-type-options"], r.body.length] : r.status;
+    };
+    expect(await served("/recording/a/trips.gif")).toEqual(["image/gif", "nosniff", gif.length]);
+    expect(await served("/recording/a/media/trips.webm")).toEqual(["video/webm", "nosniff", webm.length]);
+    expect(await served("/recording/a/trips.txt")).toEqual(["text/plain; charset=utf-8", "nosniff", 13]);
+    // Not of its kind, not a recording type, not a variant of this version, a link, a folder.
+    for (const p of ["/recording/a/fake.gif", "/recording/a/page.html", "/recording/c/trips.gif", "/recording/a/linked.gif", "/recording/a/", "/recording/a", "/recording/"]) expect(await served(p), p).toBe(404);
+  });
+
   it("answers GET and HEAD only, and serves nothing without a studio folder or a manifest", async () => {
     expect((await get(port, host(), "/a/style.css", "POST")).status).toBe(405);
     const head = await get(port, host(), "/a/style.css", "HEAD");
@@ -185,5 +224,35 @@ describe("acceptPinMessage", () => {
     ];
     for (const data of refused) expect(acceptPinMessage({ source: frame, data }, frame), JSON.stringify(data)).toBeNull();
     expect(acceptPinMessage({ source: frame, data: { ...pin, selector: "a".repeat(300) } }, frame)?.selector).toHaveLength(300);
+  });
+});
+
+describe("the service's state and health name the prototype listener's port", () => {
+  it("while it listens, and not before or after", async () => {
+    const store = new Store(join(root, "test.db"));
+    const config = defaultFakeConfig();
+    const scheduler = new Scheduler(store, { claude: new FakeAdapter("claude", config), codex: new FakeAdapter("codex", config) });
+    const prototypes = createPrototypeServer({ studioDir: () => studio, appOrigins: APP });
+    // The app's port first: its allowed Host names it.
+    const free = createPrototypeServer({ studioDir: () => undefined, appOrigins: APP });
+    const appPort = await listen(free);
+    await close(free);
+    const app = createHttpServer({ store, scheduler, startedAt: new Date().toISOString(), allowedHosts: [`127.0.0.1:${appPort}`], prototypePort: appPort + 1, prototypeServer: prototypes });
+    await new Promise<void>((r) => app.listen(appPort, "127.0.0.1", r));
+    const service = async () => {
+      const replies = await Promise.all(["/api/state", "/api/health"].map((p) => get(appPort, `127.0.0.1:${appPort}`, p)));
+      return replies.map((r) => (JSON.parse(r.body.toString()) as { service: ServiceInfo }).service.prototypePort);
+    };
+    try {
+      expect(await service()).toEqual([undefined, undefined]);
+      const protoPort = await listen(prototypes);
+      expect(await service()).toEqual([protoPort, protoPort]);
+      await close(prototypes);
+      expect(await service()).toEqual([undefined, undefined]);
+    } finally {
+      await close(app);
+      await scheduler.stop();
+      store.close();
+    }
   });
 });

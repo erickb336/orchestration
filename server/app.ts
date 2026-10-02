@@ -21,6 +21,7 @@ import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
+import { systemMedia } from "./studio/media";
 import { createPrototypeServer, projectStudioDir } from "./studio/serve";
 import { VisionDocStore } from "./visiondocs";
 import { WorkspaceManager } from "./workspaces";
@@ -101,7 +102,8 @@ if (mode === "fake") {
   log(`Flows: ${flows.map((f) => f.name).join(", ")}`);
 }
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
-const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir });
+// Studio versions get screenshots (the system Chrome) and terminal recordings (VHS, sandboxed or not at all), in both modes.
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir, studioMedia: systemMedia(log) });
 // Check logs are pruned at start and once a day (older than 14 days, or beyond 200 MiB in all).
 const pruneLogs = () => {
   try {
@@ -116,6 +118,13 @@ setInterval(pruneLogs, 24 * 60 * 60_000).unref();
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
 const prototypePort = Number(process.env.ORCHESTRATION_PROTOTYPE_PORT ?? port + 1);
+// The studio's prototypes: agent-written code, served on a second listener (server/studio/serve.ts). Without it the
+// service still runs; prototypes just cannot be shown.
+const prototypes = createPrototypeServer({
+  studioDir: () => projectStudioDir(dataDir, store.read().state.project.id),
+  appOrigins: allowedHosts.map((h) => `http://${h}`),
+  log,
+});
 
 const server = createHttpServer({
   store,
@@ -128,6 +137,7 @@ const server = createHttpServer({
   allowedHosts,
   staticDir,
   prototypePort,
+  prototypeServer: prototypes,
   log,
 });
 
@@ -140,13 +150,6 @@ server.on("error", (e: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-// The studio's prototypes: agent-written code, served on a second listener (server/studio/serve.ts). Without it the
-// service still runs; prototypes just cannot be shown.
-const prototypes = createPrototypeServer({
-  studioDir: () => projectStudioDir(dataDir, store.read().state.project.id),
-  appOrigins: allowedHosts.map((h) => `http://${h}`),
-  log,
-});
 prototypes.on("error", (e: NodeJS.ErrnoException) =>
   log(e.code === "EADDRINUSE" ? `Prototype port ${prototypePort} is already in use, so prototypes cannot be shown; set ORCHESTRATION_PROTOTYPE_PORT.` : `Prototype server error: ${e.message}`),
 );

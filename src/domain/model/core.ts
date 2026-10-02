@@ -1,7 +1,7 @@
 // Helpers every model module shares: the draft copy, lookups, activity events, and the run bookkeeping
 // (stop requests, settling notes) that several topics need. model.ts re-exports the public ones.
 
-import { type ActivityEvent, type Actor, type Attempt, type EventKind, type State, type Step, type Task, ControlError, isProvider } from "../types";
+import { type ActivityEvent, type Actor, type Attempt, type EventKind, type ProviderId, type State, type Step, type Task, ControlError, isProvider } from "../types";
 
 export function draft(state: State): State {
   return structuredClone(state);
@@ -62,6 +62,17 @@ export function activeAttempts(s: State, taskId?: string) {
 /** Active runs of agents (a provider's worker). Service runs (checks) count against their own limit. */
 export function activeAgentAttempts(s: State) {
   return s.attempts.filter((a) => isActive(a) && isProvider(a.snapshot.provider));
+}
+
+/**
+ * How many agents are running, as the worker limits count them ("Agents at once" and each provider's limit): active
+ * task runs on a provider and the studio's active runs (ORC-029 pass 3), so studio work still finishing after the
+ * owner starts the factory keeps its place. With a provider, only that provider's.
+ */
+export function busyAgents(s: State, provider?: ProviderId): number {
+  const tasks = activeAgentAttempts(s).filter((a) => provider === undefined || a.snapshot.provider === provider).length;
+  const studio = s.studio.runs.filter((r) => (r.status === "running" || r.status === "stopping") && (provider === undefined || r.provider === provider)).length;
+  return tasks + studio;
 }
 
 /** Active check runs (run by the service), bounded by `checks.maxConcurrent`. */

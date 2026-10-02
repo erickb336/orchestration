@@ -90,6 +90,45 @@ describe("reading studio.json", () => {
     });
   });
 
+  it("takes a terminal demo's tape, its script, and hand-written .cast and .ans files", () => {
+    const files = { "a/demo.tape": "Output demo.gif\nSet Columns 80\nSet Rows 24\n", "a/demo.js": "console.log('trips')", "b/demo.cast": '{"version": 3, "term": {"cols": 80, "rows": 24}}\n', "b/plan.ans": "Trips\n" };
+    stage({ artifacts: [{ kind: "terminal-demo", title: "trips", variants: [{ id: "a", label: "Recorded", entry: "a/demo.tape" }, { id: "b", label: "Hand-written", entry: "b/demo.cast" }], files: Object.keys(files) }] }, files);
+    expect(read()[0].files.map((f) => f.path)).toEqual(Object.keys(files));
+  });
+
+  it("checks terminal files with 3c's validators: each variant's tape as it would record, every .cast and .ans", () => {
+    const demo = (files: Record<string, string>, entry = "a/demo.tape") => {
+      rmSync(staging, { recursive: true, force: true });
+      mkdirSync(staging, { recursive: true });
+      stage({ artifacts: [{ kind: "terminal-demo", title: "trips", variants: [{ id: "a", label: "A", entry }], files: Object.keys(files) }] }, files);
+    };
+    const SIZE = "Set Columns 80\nSet Rows 24\n";
+    demo({ "a/demo.tape": `Output demo.gif\n${SIZE}Set Shell fish\n` });
+    expect(refusal(read)).toBe('artifact 1: "a/demo.tape" would not record: a/demo.tape:4: Set Shell must be bash or zsh.');
+    demo({ "a/demo.tape": `Output ../../demo.gif\n${SIZE}` });
+    expect(refusal(read)).toMatch(/^artifact 1: "a\/demo.tape" would not record: a\/demo.tape:1: Output must be one path inside the tape's folder/);
+    // Sources are read from the tape's folder, and a sourced tape is not checked alone.
+    demo({ "a/demo.tape": `Output demo.gif\n${SIZE}Source intro.tape\n`, "a/intro.tape": 'Type "trips plan"\n' });
+    expect(read()[0].files.map((f) => f.path)).toEqual(["a/demo.tape", "a/intro.tape"]);
+    demo({ "a/demo.tape": `Output demo.gif\n${SIZE}Source intro.tape\n`, "a/intro.tape": "Set Shell fish\n" });
+    expect(refusal(read)).toBe('artifact 1: "a/demo.tape" would not record: intro.tape:1: Set Shell must be bash or zsh.');
+    // When the entry is not a tape, the one tape beside it is the one recorded.
+    demo({ "a/readme.txt": "trips", "a/demo.tape": `Output demo.gif\n${SIZE}Set Shell fish\n` }, "a/readme.txt");
+    expect(refusal(read)).toMatch(/^artifact 1: "a\/demo.tape" would not record/);
+    // Hand-written frames, in any artifact.
+    demo({ "a/demo.cast": '{"version": 2, "width": 80, "height": 24}\n' }, "a/demo.cast");
+    expect(refusal(read)).toBe('artifact 1: "a/demo.cast": the header\'s version is not 3 (asciicast v3).');
+    demo({ "a/plan.ans": "\u001b]8;;file:///etc/passwd\u0007open\u001b]8;;\u0007\n" }, "a/plan.ans");
+    expect(refusal(read)).toMatch(/^artifact 1: "a\/plan.ans": the escape /);
+    stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, "a/frame.ans"] }] }, { ...PAGES, "a/frame.ans": "x".repeat(121) });
+    expect(refusal(read)).toBe('artifact 1: "a/frame.ans": a line is 121 characters wide, more than 120 columns.');
+    rmSync(staging, { recursive: true, force: true });
+    mkdirSync(join(staging, "a"), { recursive: true });
+    writeFileSync(join(staging, "a", "plan.ans"), Buffer.from([0x41, 0xff]));
+    writeFileSync(join(staging, "studio.json"), JSON.stringify({ artifacts: [{ kind: "tui", title: "trips", variants: [{ id: "a", label: "A", entry: "a/plan.ans" }], files: ["a/plan.ans"] }] }));
+    expect(refusal(read)).toBe('artifact 1: "a/plan.ans" is not UTF-8 text.');
+  });
+
   it("refuses a missing or broken studio.json, and kinds this run does not make", () => {
     stage(null);
     expect(refusal(read)).toBe("the run wrote no studio.json.");
@@ -106,12 +145,23 @@ describe("reading studio.json", () => {
       stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, ...files] }] }, { ...PAGES, ...extra });
       return refusal(read);
     };
-    expect(tryFiles(["run.sh"], { "run.sh": "curl evil" })).toBe('artifact 1: "run.sh" is not an allowed file type (html, css, js, svg, png, jpg, jpeg, webp, woff2, json, txt, md, mmd, tape, ans).');
+    expect(tryFiles(["run.sh"], { "run.sh": "curl evil" })).toBe('artifact 1: "run.sh" is not an allowed file type (html, css, js, svg, png, jpg, jpeg, webp, woff2, json, txt, md, mmd, tape, cast, ans).');
     expect(tryFiles(["a/Index.HTML"], { "a/Index.HTML": "<p>" })).toMatch(/"a\/Index.HTML" is not an allowed file type/);
     expect(tryFiles(["/etc/hosts.txt"])).toBe('artifact 1: "/etc/hosts.txt" is not a relative path inside the run\'s folder (no absolute paths, no "..").');
     expect(tryFiles(["../outside/secret.txt"])).toMatch(/"\.\.\/outside\/secret\.txt" is not a relative path inside the run's folder/);
     expect(tryFiles(["a/../../x.txt"])).toMatch(/is not a relative path inside the run's folder/);
     expect(tryFiles(["manifest.json"], { "manifest.json": "{}" })).toBe('artifact 1: "manifest.json" is reserved for the service.');
+    expect(tryFiles(["MANIFEST.json"], { "MANIFEST.json": "{}" })).toBe('artifact 1: "MANIFEST.json" is reserved for the service.');
+    // The service's own folders of a version: the pin script's path, the screenshots and the recordings.
+    const reserved = "is in a folder reserved for the service (__orchestrator/, shots/, recording/).";
+    expect(tryFiles(["__orchestrator/pin.js"], { "__orchestrator/pin.js": "1" })).toBe(`artifact 1: "__orchestrator/pin.js" ${reserved}`);
+    expect(tryFiles(["shots/a-desktop.png"], { "shots/a-desktop.png": "png" })).toBe(`artifact 1: "shots/a-desktop.png" ${reserved}`);
+    expect(tryFiles(["Shots/a-mobile.png"], { "Shots/a-mobile.png": "png" })).toBe(`artifact 1: "Shots/a-mobile.png" ${reserved}`);
+    expect(tryFiles(["recording/a/demo.gif.txt"], { "recording/a/demo.gif.txt": "x" })).toBe(`artifact 1: "recording/a/demo.gif.txt" ${reserved}`);
+    // Only at the top of the version: a variant may have a folder of that name.
+    stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, "a/shots/hero.png", "shots.txt"] }] }, { ...PAGES, "a/shots/hero.png": "png", "shots.txt": "notes" });
+    expect(read()[0].files.map((f) => f.path)).toContain("a/shots/hero.png");
+    expect(tryFiles(["A/style.css"], { "A/style.css": "h1 {}" })).toBe("artifact 1 lists a file twice (paths that differ only in case are one file on this disk).");
     expect(tryFiles(["a/missing.css"])).toBe('"a/missing.css" is listed but is not in the run\'s folder.');
     stage({ artifacts: [{ ...TRIP_PLAN, variants: [{ id: "a", label: "A", entry: "a/home.html" }] }] });
     expect(refusal(read)).toBe('artifact 1: the entry "a/home.html" of variant "a" is not one of its files.');
@@ -128,6 +178,21 @@ describe("reading studio.json", () => {
     expect(withLink(() => symlinkSync(join(outside, "secret.txt"), join(staging, "a", "notes.txt")), "a/notes.txt")).toBe('"a/notes.txt": it is a symbolic link; links are not imported.');
     expect(withLink(() => symlinkSync(outside, join(staging, "linked")), "linked/secret.txt")).toBe('"linked/secret.txt": the folder "linked" is a symbolic link; links are not imported.');
     expect(withLink(() => linkSync(join(outside, "secret.txt"), join(staging, "a", "copy.txt")), "a/copy.txt")).toBe('"a/copy.txt" is a hard link; links are not imported.');
+  });
+
+  it("refuses a page with an ES module script, in any HTML file, and takes plain and inline scripts", () => {
+    const why = "plain scripts only (no ES modules): a module needs a CORS header that would let other websites read local prototypes.";
+    for (const tag of ['<script type="module" src="app.js"></script>', "<SCRIPT defer type = 'module'>import './x.js'</SCRIPT>", "<script type=module>1</script>"]) {
+      stage({ artifacts: [TRIP_PLAN] }, { ...PAGES, "b/index.html": `<!doctype html><h1>B</h1>${tag}` });
+      expect(refusal(read)).toBe(`artifact 1: "b/index.html" has a <script type="module">: ${why}`);
+    }
+    // A page that is not an entry is checked too: an entry can link to it.
+    stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, "a/more.html"] }] }, { ...PAGES, "a/more.html": '<script type="module" src="m.js"></script>' });
+    expect(refusal(read)).toBe(`artifact 1: "a/more.html" has a <script type="module">: ${why}`);
+    // Plain scripts, inline or from a file, and inline styles are fine.
+    const plain = '<!doctype html><style>h1 { color: teal; }</style><h1 style="margin: 0">A</h1><script>document.title = "A";</script><script src="app.js"></script><script type="text/javascript">1</script>';
+    stage({ artifacts: [TRIP_PLAN] }, { ...PAGES, "a/index.html": plain });
+    expect(read()[0].files.find((f) => f.path === "a/index.html")!.data.toString()).toBe(plain);
   });
 
   it("refuses a file over 2 MB and an artifact over 20 MB", () => {
@@ -180,6 +245,12 @@ describe("importing a designer run", () => {
       expect(statSync(join(folder, p)).mode & 0o222).toBe(0);
     }
     expect(readdirSync(join(dir, "studio", "p-1", "artifacts", art.id))).toEqual(["v1"]);
+    // The files are read-only, the folder is not: the service adds the screenshots and recordings beside them.
+    for (const media of ["shots", "recording"]) {
+      mkdirSync(join(folder, media, "a"), { recursive: true });
+      writeFileSync(join(folder, media, "a", "x.png"), "png");
+    }
+    expect(readdirSync(folder).sort()).toEqual(["a", "b", "manifest.json", "recording", "shots"]);
   });
 
   it("a revision hands in one artifact, recorded as the next version in its own folder; the earlier folder is untouched", () => {

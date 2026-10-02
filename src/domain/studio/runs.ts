@@ -8,7 +8,7 @@
 // resumes with the project. A result counts only from a run still running or stopping, and only while it is not
 // stale: its round still open, and the artifact it revises not revised by anyone else meanwhile.
 
-import { activeAgentAttempts, currentVision, draft, event, nextId } from "../model/core";
+import { busyAgents, currentVision, draft, event, nextId } from "../model/core";
 import { providerLabel } from "../model/resolution";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
 import { budgetStop } from "../spend";
@@ -165,7 +165,6 @@ export function dispatchStudioRuns(state: State, now: string, opts: StudioDispat
   if (budgetStop(state)) return { state, started: [] };
   const s = draft(state);
   const started: string[] = [];
-  const busy = (p?: ProviderId) => activeAgentAttempts(s).filter((a) => p === undefined || a.snapshot.provider === p).length + activeStudioRuns(s).filter((r) => p === undefined || r.provider === p).length;
   for (const r of s.studio.runs) {
     if (r.status !== "queued") continue;
     const stale = staleReason(s, r);
@@ -179,8 +178,8 @@ export function dispatchStudioRuns(state: State, now: string, opts: StudioDispat
       fail(s, r, `${providerLabel(r.provider)} is not available: ${down}`, now);
       continue;
     }
-    if (busy() >= s.project.workerLimit) break;
-    if (busy(r.provider) >= (s.project.providerLimits?.[r.provider] ?? s.project.workerLimit)) continue;
+    if (busyAgents(s) >= s.project.workerLimit) break;
+    if (busyAgents(s, r.provider) >= (s.project.providerLimits?.[r.provider] ?? s.project.workerLimit)) continue;
     r.status = "running";
     r.startedAt = now;
     if (opts.simulated?.includes(r.provider)) r.simulated = true;

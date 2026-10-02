@@ -4,6 +4,9 @@
 //   <dataDir>/studio/<projectId>/artifacts/<artifactId>/v<n>/  one artifact version, never rewritten once recorded:
 //       its files, at the paths the designer gave them, and manifest.json:
 //       { artifactId, version, kind, title, devices, variants: [{ id, label, entry }], files: [{ path, sha256, bytes }] }
+//       and, written by the service after import (media.ts): shots/<variant>-<device>.png for a screen, and
+//       recording/<variant>/ for a terminal demo or TUI that VHS recorded. The files are read-only; the folders are
+//       not, so those can be added.
 //
 // A designer run ends by writing studio.json in its staging folder. It is an agent's output, so it is checked here, at
 // the boundary, before anything is copied: the kinds, the file types, the sizes, paths that stay inside the folder,
@@ -11,16 +14,22 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, posix } from "node:path";
 import { DEVICES, type Device } from "../../src/domain/types";
 import type { StudioArtifactKind } from "../../src/domain/studio/types";
+import { validateAnsFrame, validateCast, validateTape } from "./terminal";
 
 /** What a designer run hands in, in its staging folder. */
 export const STUDIO_MANIFEST = "studio.json";
 /** What the service writes in each version folder. */
 export const VERSION_MANIFEST = "manifest.json";
-/** The file types an artifact may hold, by extension (lowercase). */
-export const FILE_TYPES: readonly string[] = ["html", "css", "js", "svg", "png", "jpg", "jpeg", "webp", "woff2", "json", "txt", "md", "mmd", "tape", "ans"];
+/** The file types an artifact may hold, by extension (lowercase). A terminal demo is a VHS .tape, or hand-written .cast (asciicast v3) or .ans frames. */
+export const FILE_TYPES: readonly string[] = ["html", "css", "js", "svg", "png", "jpg", "jpeg", "webp", "woff2", "json", "txt", "md", "mmd", "tape", "cast", "ans"];
+/**
+ * Folders of a version that are the service's, never the designer's: the pin script's path on the prototype server,
+ * the screenshots (shots.ts) and the terminal recordings (media.ts), written beside the files after import.
+ */
+export const RESERVED_FOLDERS: readonly string[] = ["__orchestrator", "shots", "recording"];
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 256 * 1024;
@@ -62,6 +71,15 @@ export class ManifestError extends Error {
   }
 }
 
+/**
+ * A `<script type="module">` in a page. The prototype server allows plain scripts only: the app frames a prototype
+ * in an opaque origin, where a module script loads only with a CORS header, and that header would let any website
+ * read local prototypes (design 3b as built). Every HTML file is checked, not only the entries, since a page can
+ * link to another.
+ */
+const MODULE_SCRIPT = /<script\b[^>]*\btype\s*=\s*["']?\s*module\b/i;
+export const NO_MODULES = "plain scripts only (no ES modules): a module needs a CORS header that would let other websites read local prototypes";
+
 const show = (x: string) => JSON.stringify(x.length > 80 ? `${x.slice(0, 80)}…` : x);
 const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
 
@@ -70,7 +88,10 @@ function filePath(p: unknown, where: string): string {
   if (typeof p !== "string") throw new ManifestError(`${where}: a file is not a path.`);
   const outside = !p || p.length > 300 || p.startsWith("/") || p.includes("\\") || /[\u0000-\u001f\u007f]/.test(p) || p.split("/").some((x) => x === "" || x === "." || x === "..");
   if (outside) throw new ManifestError(`${where}: ${show(p)} is not a relative path inside the run's folder (no absolute paths, no "..").`);
-  if (p === VERSION_MANIFEST || p === STUDIO_MANIFEST) throw new ManifestError(`${where}: ${show(p)} is reserved for the service.`);
+  // Compared without case: the Mac's disk does not tell "Shots/" from "shots/".
+  const lower = p.toLowerCase();
+  if (lower === VERSION_MANIFEST || lower === STUDIO_MANIFEST) throw new ManifestError(`${where}: ${show(p)} is reserved for the service.`);
+  if (p.includes("/") && RESERVED_FOLDERS.includes(lower.split("/")[0])) throw new ManifestError(`${where}: ${show(p)} is in a folder reserved for the service (${RESERVED_FOLDERS.map((f) => `${f}/`).join(", ")}).`);
   const ext = /\.([^./]+)$/.exec(p)?.[1];
   if (!ext || !FILE_TYPES.includes(ext)) throw new ManifestError(`${where}: ${show(p)} is not an allowed file type (${FILE_TYPES.join(", ")}).`);
   return p;
@@ -138,7 +159,7 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
     if (!Array.isArray(devices) || !devices.every((d) => DEVICES.includes(d as Device))) throw new ManifestError(`${where}: devices are a list of ${DEVICES.join(", ")}.`);
     if (!Array.isArray(a.files) || !a.files.length || a.files.length > MAX_FILES) throw new ManifestError(`${where} lists between 1 and ${MAX_FILES} files.`);
     const paths = a.files.map((p) => filePath(p, where));
-    if (new Set(paths).size !== paths.length) throw new ManifestError(`${where} lists a file twice.`);
+    if (new Set(paths.map((p) => p.toLowerCase())).size !== paths.length) throw new ManifestError(`${where} lists a file twice (paths that differ only in case are one file on this disk).`);
     if (!Array.isArray(a.variants) || !a.variants.length || a.variants.length > MAX_VARIANTS) throw new ManifestError(`${where} has between 1 and ${MAX_VARIANTS} variants, each with its entry file.`);
     const variants = a.variants.map((v) => {
       if (!isObj(v) || typeof v.id !== "string" || typeof v.label !== "string" || typeof v.entry !== "string") throw new ManifestError(`${where}: a variant is { "id", "label", "entry" }.`);
@@ -150,10 +171,59 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
       const data = readInside(staging, p, MAX_FILE_BYTES);
       total += data.length;
       if (total > MAX_ARTIFACT_BYTES) throw new ManifestError(`${where} is over the ${mb(MAX_ARTIFACT_BYTES)} limit for an artifact.`);
+      if (p.endsWith(".html") && MODULE_SCRIPT.test(data.toString("utf8"))) throw new ManifestError(`${where}: ${show(p)} has a <script type="module">: ${NO_MODULES}.`);
       return { path: p, sha256: createHash("sha256").update(data).digest("hex"), bytes: data.length, data };
     });
+    checkTerminalFiles(where, a.kind as StudioArtifactKind, variants, files);
     return { kind: a.kind as StudioArtifactKind, title: a.title, devices: devices as Device[], variants, files };
   });
+}
+
+const TERMINAL_KINDS: readonly StudioArtifactKind[] = ["terminal-demo", "tui"];
+const sameFolder = (a: string, b: string) => posix.dirname(a) === posix.dirname(b);
+
+/** The tape a terminal variant records: its entry when that is a .tape, else the one .tape beside its entry. */
+export function variantTape(files: readonly string[], entry: string): string | undefined {
+  if (entry.endsWith(".tape")) return entry;
+  const beside = files.filter((f) => f.endsWith(".tape") && sameFolder(f, entry));
+  return beside.length === 1 ? beside[0] : undefined;
+}
+
+/** The hand-written files a terminal variant is shown with when it is not recorded: the .cast and .ans files beside its entry, the entry first. */
+export function variantFallback(files: readonly string[], entry: string): string[] {
+  const beside = files.filter((f) => /\.(cast|ans)$/.test(f) && sameFolder(f, entry)).sort();
+  return beside.includes(entry) ? [entry, ...beside.filter((f) => f !== entry)] : beside;
+}
+
+/**
+ * 3c's validators, at import: every .cast (asciicast v3) and .ans frame of any artifact, and the tape each variant of
+ * a terminal demo or TUI records (its Sources read from the same folder). A tape that would be refused when recorded
+ * is refused now, with the reason, while the designer can still fix it.
+ */
+function checkTerminalFiles(where: string, kind: StudioArtifactKind, variants: { id: string; entry: string }[], files: StagedFile[]) {
+  const byPath = new Map(files.map((f) => [f.path, f]));
+  const text = (f: StagedFile) => {
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(f.data);
+    } catch {
+      throw new ManifestError(`${where}: ${show(f.path)} is not UTF-8 text.`);
+    }
+  };
+  for (const f of files) {
+    const check = f.path.endsWith(".cast") ? validateCast(text(f)) : f.path.endsWith(".ans") ? validateAnsFrame(text(f)) : undefined;
+    if (check && !check.ok) throw new ManifestError(`${where}: ${show(f.path)}: ${check.error}.`);
+  }
+  if (!TERMINAL_KINDS.includes(kind)) return;
+  const paths = files.map((f) => f.path);
+  for (const tape of new Set(variants.map((v) => variantTape(paths, v.entry)).filter((t): t is string => t !== undefined))) {
+    const folder = posix.dirname(tape);
+    const readSource = (rel: string) => {
+      const f = byPath.get(folder === "." ? rel : `${folder}/${rel}`);
+      return f ? text(f) : undefined;
+    };
+    const check = validateTape(text(byPath.get(tape)!), { name: tape, readSource });
+    if (!check.ok) throw new ManifestError(`${where}: ${show(tape)} would not record: ${check.errors.join("; ")}.`);
+  }
 }
 
 /** The manifest.json of a version folder (the contract with the prototype server). */

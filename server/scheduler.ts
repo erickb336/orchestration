@@ -14,6 +14,7 @@ import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import * as R from "../src/domain/studio/runs";
+import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
 import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner } from "./checks";
@@ -24,6 +25,7 @@ import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, type StagedArtifact } from "./studio/artifacts";
+import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
 import { designerEnvelope, importDesignerRun, prepareStaging } from "./studio/runs";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
@@ -53,6 +55,11 @@ interface SchedulerOptions {
   checks?: CheckRunner;
   /** The service's data directory (next to the database): check caches and logs live under it. */
   dataDir?: string;
+  /**
+   * What makes a studio version's screenshots and terminal recordings after import (server/studio/media.ts). Without
+   * it none are made, and the versions record none.
+   */
+  studioMedia?: StudioMedia;
 }
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
@@ -100,7 +107,16 @@ interface HealthEvent {
   /** When the probe began (the scheduler's clock): a "Check again" asked for later is not cleared by this result. */
   startedAt: string;
 }
-type QueueEvent = AdapterEvent | ContextEvent | HealthEvent;
+/** A studio version's screenshots or recording, made after import; recorded under the lease, for the project it was made in. */
+interface MediaEvent {
+  type: "studio-media";
+  attemptId: "";
+  projectId: string;
+  artifactId: string;
+  version: number;
+  result: S.MediaResult;
+}
+type QueueEvent = AdapterEvent | ContextEvent | HealthEvent | MediaEvent;
 
 /** A simulated head commit: "sim" and 9 hex digits, short enough to show whole where commits are cut to 12 characters. */
 export const simSha = (key: string) => `sim${createHash("sha256").update(key).digest("hex").slice(0, 9)}`;
@@ -125,6 +141,11 @@ export class Scheduler {
   private failedStarts = 0;
   private readonly workspaces?: WorkspaceManager;
   private readonly visionDocs?: VisionDocStore;
+  private readonly media?: StudioMedia;
+  /** Studio versions' screenshots and recordings, made one at a time, after the run that handed them in completed. */
+  private mediaChain: Promise<void> = Promise.resolve();
+  /** The pending ones this instance started (project, version and kind), so each is made once per process. */
+  private mediaStarted = new Set<string>();
   private queue: QueueEvent[] = [];
   private launched = new Map<string, Launched>();
   /** Notes this instance handed to an adapter, so each is handed over once; cleared with the runs. */
@@ -145,6 +166,7 @@ export class Scheduler {
     this.workspaces = opts.workspaces;
     this.visionDocs = opts.visionDocs;
     this.dataDir = opts.dataDir;
+    this.media = opts.studioMedia;
     this.checks = opts.checks ?? (this.workspaces ? undefined : new SimulatedChecks());
     this.checks?.onEvent((e) => this.queue.push(e));
     this.leaseMs = opts.leaseMs ?? 15000;
@@ -533,6 +555,8 @@ export class Scheduler {
     this.conventionsCache = undefined;
     // Notes the lead's reply just sent (applied in the drain above) go to their live runs now.
     this.sendNotes(this.store.read().state);
+    // Screenshots and recordings of studio versions imported just now, or left pending by an earlier service.
+    this.startMedia(this.store.read().state);
 
     // 5. Integration: one finished task per cycle, frozen while the project is paused; then delivery.
     this.integrateNext(nowMs, lease);
@@ -835,6 +859,59 @@ export class Scheduler {
     }
   }
 
+  /**
+   * Make the screenshots or recording of every studio version still pending, one at a time and outside any
+   * transaction; each result is queued and recorded in a later drain, under the lease. Each is started once per
+   * process: one whose result could not be recorded is not retried in a loop, and one an earlier service left
+   * pending (it stopped meanwhile) is made again here.
+   */
+  private startMedia(state: State) {
+    if (!this.media || !this.dataDir) return;
+    const media = this.media;
+    const projectId = state.project.id;
+    let studioDir: string;
+    try {
+      studioDir = studioRoot(this.dataDir, projectId);
+    } catch (e) {
+      return this.log(`Studio screenshots and recordings: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    for (const p of S.pendingMedia(state)) {
+      const key = `${projectId}/${p.artifactId}@${p.version}/${p.kind}`;
+      if (this.mediaStarted.has(key)) continue;
+      this.mediaStarted.add(key);
+      const variants = S.getArtifact(state, p.artifactId, p.version).variants.map((v) => v.id);
+      const now = () => new Date().toISOString();
+      this.mediaChain = this.mediaChain
+        .then(async () => {
+          const result = p.kind === "shots" ? await makeShots(media, studioDir, p.artifactId, p.version, now) : await makeDemo(media, studioDir, p.artifactId, p.version, variants, now);
+          this.queue.push({ type: "studio-media", attemptId: "", projectId, artifactId: p.artifactId, version: p.version, result });
+        })
+        .catch((e) => this.log(`Studio ${p.kind === "shots" ? "screenshots" : "recording"} of ${p.artifactId} v${p.version} failed: ${e instanceof Error ? e.message : String(e)}`));
+    }
+  }
+
+  /** Resolves when the studio screenshots and recordings started so far are made (their results are queued). */
+  mediaIdle(): Promise<void> {
+    return this.mediaChain;
+  }
+
+  /**
+   * Record a version's screenshots or recording, for the project it was made in. A result the domain refuses is
+   * recorded as none made, with the reason, so the version does not stay pending.
+   */
+  private applyMedia(s: State, e: MediaEvent, now: string): State {
+    if (s.project.id !== e.projectId) return s;
+    try {
+      return S.recordArtifactMedia(s, e.artifactId, e.version, e.result, now);
+    } catch (err) {
+      const why = `the result could not be recorded (${err instanceof Error ? err.message : String(err)})`;
+      this.log(`Studio media for ${e.artifactId} v${e.version}: ${why}`);
+      const a = S.getArtifact(s, e.artifactId, e.version);
+      const none: S.MediaResult = "shots" in e.result ? { shots: { status: "skipped", at: now, reason: why } } : { demo: { status: "done", at: now, variants: a.variants.map((v) => ({ variant: v.id, status: "not-recorded" as const, reason: why })) } };
+      return S.recordArtifactMedia(s, e.artifactId, e.version, none, now);
+    }
+  }
+
   /** Read and check the studio.json a finished designer run left in its staging folder. Never throws. */
   private readStudioOutput(runId: string): StudioOutput {
     const staging = this.launched.get(runId)?.staging;
@@ -873,7 +950,9 @@ export class Scheduler {
         if (!out || "refused" in out) return fail(`studio.json was refused: ${out && "refused" in out ? out.refused : "it was not read"}`);
         try {
           const r = importDesignerRun(started, run.id, out.artifacts, studioRoot(this.dataDir!, s.project.id), now);
-          return R.completeStudioRun(r.state, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
+          // Screenshots and recordings are made after this transaction commits; the run completes without them.
+          const marked = this.media ? r.imported.reduce((acc, v) => S.startArtifactMedia(acc, v.artifactId, v.version), r.state) : r.state;
+          return R.completeStudioRun(marked, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
         } catch (err) {
           return fail(`studio.json was refused: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1126,6 +1205,7 @@ export class Scheduler {
     // The service's own record of what a run was given; applied only while the run is active.
     if (e.type === "context") return M.reportRunContext(s, e.attemptId, { scope: e.scope, conventions: e.conventions, decisions: e.decisions });
     if (e.type === "checks-health") return C.reportChecksHealth(s, e.health, now, { startedAt: e.startedAt });
+    if (e.type === "studio-media") return this.applyMedia(s, e, now);
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
       case "started": {
@@ -1234,6 +1314,9 @@ export class Scheduler {
     this.isActive = false;
     this.killAll();
     await Promise.all(this.allRunners().map((a) => a.shutdown().catch(() => undefined)));
+    // A screenshot or recording in progress is waited for, so Chrome and VHS end with it; its result is dropped with
+    // the queue, so the version stays pending and the next service makes it again.
+    await this.mediaChain;
   }
 
   /** Forget runtime processes after the project state was replaced. */

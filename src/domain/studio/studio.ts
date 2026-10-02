@@ -14,6 +14,8 @@ import { draft, event, nextId } from "../model/core";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "../model/textSafety";
 import { ControlError, DEVICES, StaleWriteError, type Device, type State } from "../types";
 import {
+  type ArtifactDemo,
+  type ArtifactShots,
   type BudgetEstimate,
   type Feedback,
   type Mark,
@@ -27,6 +29,7 @@ import {
   type StudioArtifactKind,
   type StudioMaker,
   type Verdict,
+  type VariantDemo,
   UNGATED_KINDS,
 } from "./types";
 
@@ -222,6 +225,132 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
   const who = madeBy.role === "user" ? "you brought" : `by the ${madeBy.role === "pe" ? "PE" : madeBy.role} (${madeBy.provider})`;
   event(s, now, madeBy.role === "user" ? "user" : "runtime", "vision", `${artifactName(art)} added to round ${round.n}, ${who}${variants.length > 1 ? `; ${variants.length} variants` : ""}${carried.length ? `; ${carried.length} open pin${carried.length === 1 ? "" : "s"} carried from v${prev!.version}` : ""}`);
   return { state: s, artifactId: id, version };
+}
+
+// ---------- what the service makes of a version: screenshots and terminal recordings (pass 3) ----------
+
+/** The screen devices a screenshot is taken on. */
+const SHOT_DEVICES: Device[] = ["desktop", "mobile"];
+
+/** What the service makes of a version after import: screenshots of a screen designed for a screen device, or the recording of a terminal demo or TUI. */
+export function mediaKind(a: StudioArtifact): "shots" | "demo" | undefined {
+  if (a.kind === "screen" && a.devices.some((d) => SHOT_DEVICES.includes(d))) return "shots";
+  if (a.kind === "terminal-demo" || a.kind === "tui") return "demo";
+  return undefined;
+}
+
+/**
+ * Mark a version's screenshots or recording as being made (the service, in the transaction that imports it, when it
+ * makes them). Nothing changes for a kind that has neither.
+ */
+export function startArtifactMedia(state: State, artifactId: string, version: number): State {
+  const kind = mediaKind(getArtifact(state, artifactId, version));
+  if (!kind) return state;
+  const s = draft(state);
+  const a = getArtifact(s, artifactId, version);
+  if (kind === "shots") a.shots = { status: "pending" };
+  else a.demo = { status: "pending" };
+  return s;
+}
+
+/** Versions whose screenshots or recording are still being made: the service finishes them, after a restart too. */
+export function pendingMedia(s: State): { artifactId: string; version: number; kind: "shots" | "demo" }[] {
+  return s.studio.artifacts.flatMap((a) => [
+    ...(a.shots?.status === "pending" ? [{ artifactId: a.id, version: a.version, kind: "shots" as const }] : []),
+    ...(a.demo?.status === "pending" ? [{ artifactId: a.id, version: a.version, kind: "demo" as const }] : []),
+  ]);
+}
+
+export type MediaResult = { shots: Exclude<ArtifactShots, { status: "pending" }> } | { demo: Extract<ArtifactDemo, { status: "done" }> };
+
+/** A reason from the service's tools (a browser, VHS): one line of plain text, capped. */
+const reasonText = (x: string) => required(agentLine(x).slice(0, 500), 500, "The reason");
+
+/** A path the service wrote in the version's folder: under `folder/`, inside the workspace. */
+function servicePath(p: string, folder: string): string {
+  if (!p.startsWith(`${folder}/`)) throw new ControlError(`"${agentLine(p).slice(0, 80)}" is not in the version's ${folder}/ folder.`);
+  return studioPath(p);
+}
+
+/**
+ * Record what the service made of a version (the service, when its screenshots or recording finished). Only while
+ * they are pending: a late or repeated result changes nothing. Checked against the version: its variants, devices
+ * and files.
+ */
+export function recordArtifactMedia(state: State, artifactId: string, version: number, result: MediaResult, now: string): State {
+  const a = getArtifact(state, artifactId, version);
+  const variant = (id: string) => {
+    if (!a.variants.some((v) => v.id === id)) throw new ControlError(`${a.title} has no variant ${agentLine(id).slice(0, 30)}.`);
+    return id;
+  };
+  if ("shots" in result) {
+    if (a.shots?.status !== "pending") return state;
+    const r = result.shots;
+    const device = (d: Device) => {
+      if (!a.devices.includes(d) || !SHOT_DEVICES.includes(d)) throw new ControlError(`${artifactName(a)} is not designed for ${d}.`);
+      return d;
+    };
+    const shots: ArtifactShots =
+      r.status === "skipped"
+        ? { status: "skipped", at: now, reason: reasonText(r.reason) }
+        : {
+            status: "taken",
+            at: now,
+            shots: r.shots.map((x) => ({ variant: variant(x.variant), device: device(x.device), path: servicePath(x.path, "shots") })),
+            failed: r.failed.map((x) => ({ variant: variant(x.variant), device: device(x.device), error: reasonText(x.error) })),
+          };
+    if (shots.status === "taken" && !shots.shots.length) throw new ControlError("Taken screenshots name at least one; with none, they were skipped.");
+    const s = draft(state);
+    getArtifact(s, artifactId, version).shots = shots;
+    const failed = shots.status === "taken" && shots.failed.length ? `; ${shots.failed.length} failed` : "";
+    event(s, now, "system", "vision", shots.status === "taken" ? `Screenshots of ${artifactName(a)}: ${shots.shots.length} taken${failed}` : `No screenshots of ${artifactName(a)}: ${shots.reason}`);
+    return s;
+  }
+  if (a.demo?.status !== "pending") return state;
+  const files = new Set(a.files.map((f) => f.path));
+  const own = (p: string) => {
+    if (!files.has(p)) throw new ControlError(`"${agentLine(p).slice(0, 80)}" is not a file of ${artifactName(a)}.`);
+    return p;
+  };
+  const variants = result.demo.variants.map((v): VariantDemo => {
+    const id = variant(v.variant);
+    if (v.status === "recorded") {
+      const outs = { ...(v.webm ? { webm: servicePath(v.webm, `recording/${id}`) } : {}), ...(v.gif ? { gif: servicePath(v.gif, `recording/${id}`) } : {}), ...(v.txt ? { txt: servicePath(v.txt, `recording/${id}`) } : {}) };
+      if (!Object.keys(outs).length) throw new ControlError("A recorded variant names its recording.");
+      return { variant: id, status: "recorded", tape: own(v.tape), ...outs };
+    }
+    if (v.status === "hand-written") {
+      if (!v.files.length || !v.files.every((f) => /\.(cast|ans)$/.test(f))) throw new ControlError("A hand-written variant names its .cast or .ans files.");
+      return { variant: id, status: "hand-written", files: v.files.map(own), ...(v.reason ? { reason: reasonText(v.reason) } : {}) };
+    }
+    return { variant: id, status: "not-recorded", reason: reasonText(v.reason) };
+  });
+  if (new Set(variants.map((v) => v.variant)).size !== variants.length || variants.length !== a.variants.length) throw new ControlError(`The recording names each variant of ${artifactName(a)} once.`);
+  const s = draft(state);
+  getArtifact(s, artifactId, version).demo = { status: "done", at: now, variants };
+  const words = (v: VariantDemo) => (v.status === "recorded" ? "recorded" : v.status === "hand-written" ? "hand-written, not recorded" : `not recorded (${v.reason})`);
+  event(s, now, "system", "vision", `${artifactName(a)}: ${variants.map((v) => `${variants.length > 1 ? `${variantLabel(a, v.variant)} ` : ""}${words(v)}`).join("; ")}`);
+  return s;
+}
+
+/** What the studio says about a version's screenshots, or nothing (all taken, or none expected). */
+export function shotsNote(a: StudioArtifact): string | undefined {
+  const sh = a.shots;
+  if (!sh || (sh.status === "taken" && !sh.failed.length)) return undefined;
+  if (sh.status === "pending") return "Taking screenshots…";
+  if (sh.status === "skipped") return `No screenshots: ${sh.reason}`;
+  return `${sh.failed.length} of ${sh.shots.length + sh.failed.length} screenshots failed: ${sh.failed[0].error}`;
+}
+
+/** What the studio says about how one variant of a terminal demo or TUI is shown, or nothing (it was recorded, or none expected). */
+export function demoNote(a: StudioArtifact, variant: string): string | undefined {
+  const d = a.demo;
+  if (!d) return undefined;
+  if (d.status === "pending") return "Recording…";
+  const v = d.variants.find((x) => x.variant === variant);
+  if (!v || v.status === "recorded") return undefined;
+  if (v.status === "hand-written") return v.reason ? `Hand-written, not recorded: ${v.reason}` : "Hand-written, not recorded";
+  return `Not recorded: ${v.reason}`;
 }
 
 // ---------- PE review ----------

@@ -8,10 +8,15 @@
 //   directory listing, no path the manifest does not name, no symlink, no type outside the allowlist;
 // - every response carries a policy that allows no network (connect-src and form-action 'none', every other load
 //   from the version's own origin only), may be framed by the app only, and is never cached or given cookies.
+//   Inline styles and scripts are allowed (the lead's decision, design 3b as built): agents write them by default,
+//   and they give a prototype nothing a script file from its own origin could not. ES modules are not supported:
+//   in the frame's opaque origin a module needs a CORS header, which would let any website read local prototypes,
+//   so the studio's import refuses `<script type="module">` (artifacts.ts).
 //
 // The version folders are written by the studio service (3a): <studioDir>/artifacts/<artifactId>/v<n>/ with the
 // files and a manifest.json. Screenshots the service takes (shots.ts) sit beside them in shots/, outside the
-// manifest, and are served as PNGs only.
+// manifest, and are served as PNGs only. A terminal demo VHS recorded (terminal.ts, media.ts) sits in
+// recording/<variant>/, and is served as GIF, WebM or text only, each checked for its kind.
 
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from "node:fs";
@@ -35,7 +40,11 @@ export interface PrototypeManifest {
   files: { path: string; sha256: string; bytes: number }[];
 }
 
-/** Served types, by extension: the studio's file allowlist, plus the GIF and WebM of a terminal recording. Anything else is refused. */
+/**
+ * Served types, by extension: the studio's file allowlist, plus the GIF and WebM of a terminal recording. Anything
+ * else is refused. Text the designer wrote (a transcript, a hand-written asciicast, .ans frames) is plain text, so
+ * with nosniff a browser shows it and never runs or renders it.
+ */
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -43,6 +52,7 @@ const TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
   ".webp": "image/webp",
   ".woff2": "font/woff2",
   ".json": "application/json; charset=utf-8",
@@ -50,9 +60,17 @@ const TYPES: Record<string, string> = {
   ".md": "text/plain; charset=utf-8",
   ".mmd": "text/plain; charset=utf-8",
   ".tape": "text/plain; charset=utf-8",
+  ".cast": "text/plain; charset=utf-8",
   ".ans": "text/plain; charset=utf-8",
   ".gif": "image/gif",
   ".webm": "video/webm",
+};
+
+/** What a recording may be, by extension, and how its first bytes must start (a transcript: any text). */
+const RECORDING_SIGNATURES: Record<string, Buffer | null> = {
+  ".gif": Buffer.from("GIF8", "latin1"),
+  ".webm": Buffer.from([0x1a, 0x45, 0xdf, 0xa3]),
+  ".txt": null,
 };
 
 /** The largest file served; the studio's own caps are lower. */
@@ -67,7 +85,7 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
  * The pin script, served at PIN_PATH and added to every HTML page. On a click it posts the position (fractions of
  * the document) and a short selector of the clicked element to the frame's parent, and nothing else; it reads
  * nothing but the click and the element's place in the page. The app takes it through acceptPinMessage.
- * It is served as a file, not inline, because the policy allows no inline script.
+ * It is served as a file from the service's own path, so every page gets the same script and no page can stand in for it.
  */
 const PIN_PATH = "/__orchestrator/pin.js";
 const PIN_SCRIPT = `(function () {
@@ -99,7 +117,7 @@ const PIN_TAG = Buffer.from(`<script src="${PIN_PATH}"></script>`);
 /** The headers every response carries, errors included. */
 function prototypeHeaders(appOrigins: string[]): Record<string, string> {
   return {
-    "Content-Security-Policy": `default-src 'self'; connect-src 'none'; form-action 'none'; frame-ancestors ${appOrigins.join(" ")}`,
+    "Content-Security-Policy": `default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-ancestors ${appOrigins.join(" ")}`,
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "no-store",
   };
@@ -217,6 +235,17 @@ export function createPrototypeServer(opts: PrototypeServerOptions): Server {
         const png = known ? readVersionFile(studioDir, artifactId, version, rel) : undefined;
         if (!png || !png.subarray(0, 8).equals(PNG_SIGNATURE)) return refuse(res, 404, "Not found", head);
         return reply(res, 200, TYPES[".png"], png, head);
+      }
+
+      // A terminal recording the service made: recording/<variant>/<the tape's Output path>, GIF, WebM or text.
+      if (rel.startsWith("recording/")) {
+        const [variant, ...rest] = rel.slice("recording/".length).split("/");
+        const ext = extname(rel).toLowerCase();
+        const signature = RECORDING_SIGNATURES[ext];
+        const known = manifest.variants.some((v) => v.id === variant) && rest.length > 0 && safePath(rest.join("/")) && signature !== undefined;
+        const body = known ? readVersionFile(studioDir, artifactId, version, rel) : undefined;
+        if (!body || (signature && !body.subarray(0, signature.length).equals(signature))) return refuse(res, 404, "Not found", head);
+        return reply(res, 200, TYPES[ext], body, head);
       }
 
       const entry = manifest.files.find((f) => f.path === rel);
