@@ -310,10 +310,11 @@ export function readEstimate(raw: unknown): BudgetEstimate {
 /**
  * Record one PE pass on an artifact's newest version (the service, from the PE's run): one verdict per variant, or
  * one verdict on the whole artifact. Passes count within the version's round, up to three. Feasible-if states the
- * change; an estimate states its basis.
+ * change; an estimate states its basis. What the owner brought and a probe's evidence are not reviewed.
  */
 export function addPeVerdicts(state: State, input: { artifactId: string; version: number; verdicts: VerdictInput[] }, now: string): { state: State; pass: number } {
   const a = getArtifact(state, input.artifactId, input.version);
+  if (UNGATED_KINDS.includes(a.kind)) throw new ControlError(`${a.title} is ${a.kind === "material" ? "what you brought" : "a probe's evidence"}: the PE does not review it.`);
   const latest = latestVersion(state, a.id)!;
   if (latest.version !== a.version) throw new ControlError(`${artifactName(a)} was revised (v${latest.version}); the PE reviews the newest version.`);
   const pass = passesInRound(state, a.id, a.round) + 1;

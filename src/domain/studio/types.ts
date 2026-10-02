@@ -28,7 +28,7 @@ export interface Round {
 
 export type StudioArtifactKind = "screen" | "terminal-demo" | "tui" | "contract" | "flow" | "material" | "evidence";
 export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-demo", "tui", "contract", "flow", "material", "evidence"];
-/** Kinds the PE does not hold back from the owner: what the owner brought, and a probe's evidence. The PE may still judge them. */
+/** Kinds the PE does not review: what the owner brought, and a probe's evidence. They reach the owner at once, and a verdict on one is refused. */
 export const UNGATED_KINDS: StudioArtifactKind[] = ["material", "evidence"];
 
 /** Who made an artifact version: the owner (what they brought), or an agent's run. */
