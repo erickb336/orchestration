@@ -296,7 +296,7 @@ function DomainPrompt() {
       tone={chosen.length ? "done" : "you"}
       title={chosen.length ? `Saved: ${chosen.map((d) => DOMAIN_WORDS[d]).join(" and ")}.` : "What kind of product is it?"}
       actions={
-        <div className="k-actions" role="group" aria-label="Kind of product">
+        <div className="st-chips st-kinds" role="group" aria-label="Kind of product">
           {DOMAIN_CHOICES.map((c) => {
             const on = chosen.includes(c.value);
             const last = on && chosen.length === 1;

@@ -430,7 +430,7 @@ describe("the product's kinds (domains), while they are not chosen", () => {
     const html = render(<Studio />, s);
     expect(html).toContain("What kind of product is it?");
     expect(html).toContain("Screen product: people use it on a screen. Code product: other programs use it. Infrastructure: it runs other software.");
-    const group = /<div class="k-actions" role="group" aria-label="Kind of product">(.*?)<\/div>/.exec(html)?.[1] ?? "";
+    const group = /<div class="st-chips st-kinds" role="group" aria-label="Kind of product">(.*?)<\/div>/.exec(html)?.[1] ?? "";
     expect([...group.matchAll(/<button[^>]*aria-pressed="(true|false)"[^>]*>([^<]+)<\/button>/g)].map((m) => [m[2], m[1]])).toEqual([
       ["Screen product", "false"],
       ["Code product", "false"],
