@@ -111,3 +111,17 @@ The fix for the second real trial's finding. **The verdict now keeps three thing
 
 **Checks after both merges:** `npm test` 1,712 passed and 1 skipped; the build passes; the integration test and both simulated studio trials pass. The next real trial checks whether a real PE follows the new answer format.
 
+## The third real trial (2026-10-02T20-06-37Z, record in `docs/real-runs/`)
+
+`npm run trial:studio -- --lead --cap-usd 2.5 --codex-usd 0.5`, on 4d-1 and 4e. **Result: 9 of 9 checks passed.** The estimated Claude spend was $0.29, against $1.23 in the second trial. The trials and checks have now spent about $2.12 of the owner's $5 for Claude.
+
+**The PE loop converged on the first pass.** On the trip home screen, the PE (Codex) found both variants feasible and sent its product questions to the owner as open cases, not as changes. The six open cases:
+- Does attendance apply to the whole trip or separately to each day?
+- Should costs split equally among confirmed attendees, including lodging, or can each expense have different participants?
+- What should the screen show when nobody is confirmed, several people are undecided, or shares leave a remainder of cents?
+- Who can change attendance and plan items, and must changes persist and appear on other friends' devices?
+- Are the amounts planning estimates or actual expenses that track who paid?
+- How should someone set the time for a new activity in variant B?
+
+These are the undecided cases that the owner decides; in the second trial, the designer invented answers to them. "As it is today" passed again: the PE found the reproduction faithful on the first pass.
+
