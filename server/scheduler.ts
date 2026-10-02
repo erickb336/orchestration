@@ -7,11 +7,14 @@
 // everything in one lease-checked transaction, so state changes stay serialized.
 
 import { createHash, randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import * as C from "../src/domain/checks";
 import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
+import * as R from "../src/domain/studio/runs";
+import { DESIGNER_KINDS } from "../src/domain/studio/types";
 import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner } from "./checks";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
@@ -20,6 +23,8 @@ import { PrDriver } from "./prdelivery";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
+import { ManifestError, readStaged, studioRoot, type StagedArtifact } from "./studio/artifacts";
+import { designerEnvelope, importDesignerRun, prepareStaging } from "./studio/runs";
 import type { VisionDocStore } from "./visiondocs";
 import type { PreparedWorkspace, WorkspaceManager, WorkspaceSeed } from "./workspaces";
 
@@ -65,7 +70,14 @@ interface Launched {
   taskId: string;
   /** A check run: the protected inputs its change touched, computed at launch, recorded with the result. */
   touchedInputs?: string[];
+  /** A studio run: its staging folder, removed once what it handed in was imported. */
+  staging?: string;
 }
+
+/** What the scheduler saw of a studio run outside the store: a lost process, an unconfirmed stop, a launch that failed. */
+type StudioIssue = { id: string; kind: "lost" } | { id: string; kind: "timeout" } | { id: string; kind: "failed"; reason: string };
+/** A designer run's studio.json, read and checked before the transaction that imports it. */
+type StudioOutput = { artifacts: StagedArtifact[] } | { refused: string };
 
 /**
  * What the service recorded about a run before it started (the changed-path set a reviewer was shown,
@@ -264,6 +276,8 @@ export class Scheduler {
         }
         const lead = M.activeLeadRun(next);
         if (lead && !this.adapterFor(lead.provider).has(lead.id)) next = M.reportLeadStopped(next, lead.id, now, true);
+        // A studio run without a process is lost, or stopped if it was stopping (a paused one is then asked for again).
+        for (const r of R.activeStudioRuns(next)) if (!this.adapterFor(r.provider).has(r.id)) next = R.reportStudioRunStopped(next, r.id, now, { lost: true });
         return next;
       },
       now,
@@ -344,9 +358,10 @@ export class Scheduler {
     const { state } = this.store.read();
     const active = new Map(M.activeAttempts(state).map((a) => [a.id, a]));
     const leadRun = M.activeLeadRun(state);
+    const studioActive = new Set(R.activeStudioRuns(state).map((r) => r.id));
     for (const adapter of this.allRunners()) {
       for (const id of adapter.ids()) {
-        if (!active.has(id) && id !== leadRun?.id) {
+        if (!active.has(id) && id !== leadRun?.id && !studioActive.has(id)) {
           adapter.kill(id); // its run is no longer active: it must never report into state again
           this.launched.delete(id);
         }
@@ -443,15 +458,25 @@ export class Scheduler {
       }
     }
 
+    // 2c. Studio runs (Vision): supervise the active ones, then dispatch queued ones (in Vision only) and launch them.
+    const studioIssues = this.studioCycle(state, nowMs, lease, canDispatch, { unavailable, deferred });
+
     // 3. The fake runtime advances on the scheduler's clock; real adapters report on their own.
     for (const adapter of Object.values(this.adapters)) if (adapter instanceof FakeAdapter && this.auto) adapter.tick(nowMs);
     if (this.checks instanceof SimulatedChecks && this.auto) this.checks.tick(nowMs);
 
-    // 4. Drain adapter events. Work that touches git happens here, outside the transaction.
+    // 4. Drain adapter events. Work that touches git happens here, outside the transaction, and so does reading
+    //    what a studio run handed in.
     const events = this.queue.splice(0);
     const completions = new Map<string, { outputs: M.OutputReport[]; problems: string[] }>();
+    const studioOutputs = new Map<string, StudioOutput>();
+    const current = this.store.read().state;
     for (const e of events) {
       if (e.type !== "completed") continue;
+      if (R.getStudioRun(current, e.attemptId)) {
+        studioOutputs.set(e.attemptId, this.readStudioOutput(e.attemptId));
+        continue;
+      }
       try {
         completions.set(e.attemptId, this.collectOutputs(state, e));
       } catch (err) {
@@ -467,7 +492,7 @@ export class Scheduler {
           for (const l of lost) next = M.reportRunLost(next, l.id, l.reason, now);
           for (const e of events) {
             try {
-              next = this.applyEvent(next, e, completions, now);
+              next = R.getStudioRun(next, e.attemptId) ? this.applyStudioEvent(next, e, studioOutputs, now) : this.applyEvent(next, e, completions, now);
             } catch (err) {
               // One bad event must not discard the batch (and with it other runs' terminal events).
               this.log(`Could not apply ${e.type} for ${e.attemptId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -479,6 +504,11 @@ export class Scheduler {
             else if (l.kind === "timeout") next = M.reportLeadStopTimeout(next, l.id, now);
             else next = M.reportLeadFailed(next, l.id, l.reason ?? "could not start", now);
           }
+          for (const l of studioIssues) {
+            if (l.kind === "lost") next = R.reportStudioRunStopped(next, l.id, now, { lost: true });
+            else if (l.kind === "timeout") next = R.reportStudioStopTimeout(next, l.id, now);
+            else next = R.reportStudioRunFailed(next, l.id, l.reason, now);
+          }
           return next;
         },
         now,
@@ -489,12 +519,15 @@ export class Scheduler {
       if (!(err instanceof LeaseLostError)) this.queue.unshift(...events);
       throw err;
     }
+    const after = this.store.read().state;
     for (const e of events) {
       if (e.type !== "completed" && e.type !== "failed" && e.type !== "stopped") continue;
       const info = this.launched.get(e.attemptId);
-      // Lead checkouts are only for reading the repository during the run: remove them afterwards.
+      // Lead and studio checkouts are only for reading the repository during the run: remove them afterwards.
       // A check run's throwaway copy of the change goes too, pass or fail.
-      if ((info?.taskId === "LEAD" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
+      if ((info?.taskId === "LEAD" || info?.taskId === "STUDIO" || info?.provider === "service") && info.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
+      // A studio run's staging folder goes once what it handed in is imported; a failed or stopped run's stays, to look at.
+      if (info?.staging && R.getStudioRun(after, e.attemptId)?.status === "completed") rmSync(info.staging, { recursive: true, force: true });
       this.launched.delete(e.attemptId);
     }
     this.conventionsCache = undefined;
@@ -643,7 +676,7 @@ export class Scheduler {
   prune(): number {
     if (!this.workspaces) return 0;
     const { state } = this.store.read();
-    const keep = new Set([...M.activeAttempts(state).map((a) => a.id), ...(M.activeLeadRun(state) ? [M.activeLeadRun(state)!.id] : [])]);
+    const keep = new Set([...M.activeAttempts(state).map((a) => a.id), ...(M.activeLeadRun(state) ? [M.activeLeadRun(state)!.id] : []), ...R.activeStudioRuns(state).map((r) => r.id)]);
     const throwaway = new Set(state.attempts.filter((a) => a.snapshot.provider === "service" && !keep.has(a.id)).map((a) => a.id));
     return this.workspaces.prune({ repoPath: state.project.repoPath, projectId: state.project.id, keep, throwaway });
   }
@@ -711,6 +744,142 @@ export class Scheduler {
     } catch (e) {
       this.launched.delete(runId);
       return `Could not start the lead: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
+   * Studio runs, like the lead's: an active run whose process is gone is lost (after a short grace for its last
+   * events), a stop is forwarded until the runtime confirms it, and one unconfirmed past the limit is a control
+   * failure. Then queued runs are dispatched, committed before any process starts (the domain decides: Vision only,
+   * not paused, below the budget, within the limits), and launched. Returns what is applied with the drain.
+   */
+  private studioCycle(state: State, nowMs: number, lease: { name: string; holder: string; nowMs: number }, canDispatch: boolean, avail: { unavailable: Partial<Record<ProviderId, string>>; deferred: ProviderId[] }): StudioIssue[] {
+    const issues: StudioIssue[] = [];
+    for (const r of R.activeStudioRuns(state)) {
+      const adapter = this.adapterFor(r.provider);
+      const launched = this.launched.get(r.id);
+      if (!adapter.has(r.id) && !this.queue.some((e) => e.attemptId === r.id)) {
+        if (!launched) issues.push({ id: r.id, kind: "lost" });
+        else {
+          launched.goneSince ??= nowMs;
+          if (nowMs - launched.goneSince > 10_000) {
+            this.launched.delete(r.id);
+            issues.push({ id: r.id, kind: "lost" });
+          }
+        }
+      } else if (r.status === "stopping") {
+        if (adapter instanceof FakeAdapter) adapter.interruptAt(r.id, nowMs);
+        else adapter.interrupt(r.id);
+        if (r.stopRequestedAt && nowMs - Date.parse(r.stopRequestedAt) >= this.ackTimeoutMs) issues.push({ id: r.id, kind: "timeout" });
+      }
+    }
+    // A sample or unconfigured project never reaches a real agent.
+    if (!canDispatch) return issues;
+    const now = new Date(nowMs).toISOString();
+    const simulated = (Object.keys(this.adapters) as ProviderId[]).filter((p) => this.adapters[p] instanceof FakeAdapter);
+    let started: string[] = [];
+    this.store.update(
+      (s) => {
+        const d = R.dispatchStudioRuns(s, now, { ...avail, simulated });
+        started = d.started;
+        return d.state;
+      },
+      now,
+      lease,
+    );
+    if (!started.length) return issues;
+    const fresh = this.store.read().state;
+    for (const id of started) {
+      const err = this.launchStudio(fresh, id);
+      if (err) issues.push({ id, kind: "failed", reason: err });
+    }
+    return issues;
+  }
+
+  /**
+   * Start a studio run: a fresh staging folder under the data directory (the one place it writes), a read-only
+   * checkout of the product (real mode), and its envelope. Isolated, with no connections and no shell, whatever the
+   * project's environment setting: the adapters enforce it for `studio` runs too.
+   */
+  private launchStudio(state: State, runId: string): string | undefined {
+    const run = R.getStudioRun(state, runId)!;
+    if (run.kind !== "designer") return "Only designer runs can start yet; the PE's and probes' runs come in ORC-029 pass 4";
+    if (!this.dataDir) return "This service has no data directory for the studio";
+    const adapter = this.adapterFor(run.provider);
+    const limits = state.project.runLimits;
+    let checkout: PreparedWorkspace | undefined;
+    try {
+      const staging = prepareStaging(state, run, studioRoot(this.dataDir, state.project.id));
+      if (this.workspaces) checkout = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "STUDIO", stepId: run.kind, access: "read" });
+      this.launched.set(runId, { provider: run.provider, access: "write", workspace: checkout, stepId: run.kind, taskId: "STUDIO", staging });
+      adapter.start({
+        attemptId: runId,
+        taskId: "STUDIO",
+        stepId: run.kind,
+        role: "designer",
+        provider: run.provider,
+        model: run.model,
+        workspace: { path: staging, access: "write", ...(checkout ? { readRoots: [checkout.path] } : {}) },
+        studio: true,
+        environment: "isolated",
+        connections: [],
+        prompt: designerEnvelope(state, run, { staging, checkout: checkout?.path }),
+        outputs: [],
+        limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
+      });
+      return undefined;
+    } catch (e) {
+      this.launched.delete(runId);
+      if (checkout && this.workspaces) this.workspaces.remove(state.project.repoPath, checkout.path);
+      return `Could not start the studio run: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /** Read and check the studio.json a finished designer run left in its staging folder. Never throws. */
+  private readStudioOutput(runId: string): StudioOutput {
+    const staging = this.launched.get(runId)?.staging;
+    if (!staging) return { refused: "its staging folder is not known to this service (it was started before a restart)" };
+    try {
+      return { artifacts: readStaged(staging, DESIGNER_KINDS) };
+    } catch (e) {
+      return { refused: e instanceof ManifestError ? e.message : `it could not be read (${e instanceof Error ? e.message : String(e)})` };
+    }
+  }
+
+  /**
+   * A studio run's report. A result counts only from a run still running or stopping, and only when it is not stale
+   * (its round still open, its artifact not revised meanwhile): then what it handed in is imported, its version
+   * folders written before the transaction commits, and the run completes. A refused studio.json fails the run with
+   * the reason, and nothing is recorded.
+   */
+  private applyStudioEvent(s: State, e: QueueEvent, outputs: Map<string, StudioOutput>, now: string): State {
+    switch (e.type) {
+      case "started":
+        return R.reportStudioRunStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
+      case "activity":
+        return R.reportStudioRunActivity(s, e.attemptId, e.note);
+      case "stopped":
+        return R.reportStudioRunStopped(s, e.attemptId, now, { usage: e.usage });
+      case "failed":
+        return R.reportStudioRunFailed(s, e.attemptId, e.message, now, e.usage);
+      case "completed": {
+        const run = R.getStudioRun(s, e.attemptId)!;
+        if (!R.isActiveStudioRun(run)) return s;
+        const started = e.model ? R.reportStudioRunStarted(s, run.id, { actualModel: e.model }) : s;
+        const fail = (why: string) => R.reportStudioRunFailed(started, run.id, why, now, e.usage);
+        const stale = R.staleReason(started, run);
+        if (stale) return fail(`Its result is stale: ${stale}. Nothing was imported.`);
+        const out = outputs.get(run.id);
+        if (!out || "refused" in out) return fail(`studio.json was refused: ${out && "refused" in out ? out.refused : "it was not read"}`);
+        try {
+          const r = importDesignerRun(started, run.id, out.artifacts, studioRoot(this.dataDir!, s.project.id), now);
+          return R.completeStudioRun(r.state, run.id, now, { usage: e.usage, actualModel: e.model, summary: r.summary });
+        } catch (err) {
+          return fail(`studio.json was refused: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      default:
+        return s;
     }
   }
 
