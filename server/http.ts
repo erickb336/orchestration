@@ -56,6 +56,30 @@ const TYPES: Record<string, string> = {
   ".json": "application/json",
 };
 
+/**
+ * The policy of the app's own pages: everything from the app's origin, nothing from anywhere else, so no request
+ * leaves the page whatever an agent wrote (ORC-029 F2; pass 4 review, finding 2). Images may also be data: (the
+ * studio's diagrams) or blob:, styles may be inline (React's style attributes), and the API and its live updates
+ * (/api/stream) are on the same origin. Frames: only the prototype server's origins, because a prototype's own policy
+ * cannot stop it navigating its frame elsewhere, and the page's frame-src does. The studio's diagram frame is a srcdoc
+ * document, which inherits this policy and adds its own (src/ui/studio/diagrams.ts). Nothing may frame the app.
+ */
+export function appPagePolicy(prototypePort?: number): string {
+  return [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    `frame-src ${prototypePort ? `http://*.localhost:${prototypePort}` : "'none'"}`,
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
 export function createHttpServer(opts: HttpOptions): Server {
   const { store, scheduler, fakeConfig } = opts;
   const real = !scheduler.isFake;
@@ -254,8 +278,7 @@ export function createHttpServer(opts: HttpOptions): Server {
       else res.destroy();
     });
     body.on("open", () => {
-      const frames = opts.prototypePort ? { "Content-Security-Policy": `frame-src http://*.localhost:${opts.prototypePort}` } : {};
-      res.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream", "X-Content-Type-Options": "nosniff", ...frames });
+      res.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": appPagePolicy(opts.prototypePort) });
       body.pipe(res);
     });
   };

@@ -15,18 +15,22 @@
 import { useCallback, useState } from "react";
 import * as M from "../../domain/model";
 import * as S from "../../domain/studio/studio";
+import { DOMAIN_WORDS } from "../../domain/studio/domains";
 import type { Mark, Round, StudioArtifact } from "../../domain/studio/types";
+import type { ProjectDomain } from "../../domain/types";
 import type { PinMessage } from "../../runtime/prototype";
 import { relTime, selectionText } from "../common";
-import { Banner, Button, Chip, EmptyState, Field, Input, SegmentedControl, SimulatedChip, StatePill, Textarea } from "../kit";
+import { Banner, Button, Chip, Disclosure, EmptyState, Field, Input, SegmentedControl, SimulatedChip, StatePill, Textarea } from "../kit";
 import { cx } from "../kit/cx";
 import { useLeadContext } from "../LeadDrawer";
 import { useStore } from "../store";
 import { DocumentArtifact } from "./Document";
 import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback, TerminalFile, TerminalRecording } from "./Frames";
 import {
+  AS_IS_FILES_SHOWN,
+  AS_IS_LABEL,
   DEVICE_LABEL,
-  FOCUS_LABEL,
+  DOMAIN_CHOICES,
   addPin,
   answerBlocker,
   answerParts,
@@ -42,6 +46,7 @@ import {
   prototypeUrl,
   roundArtifacts,
   roundLead,
+  roundLabel,
   roundRuns,
   roundsNewestFirst,
   runLine,
@@ -49,6 +54,7 @@ import {
   serviceFileUrl,
   showKind,
   standing,
+  toggleDomain,
   versionHistory,
   usdRange,
   variantDemo,
@@ -156,6 +162,7 @@ export function Studio() {
       {state.project.stage !== "shaping" && (
         <Banner tone="info">The factory has started. Looking at Vision changes nothing in it. You can mark artifacts and message the lead here; designer and PE runs wait until the project is back in Vision (Back to shaping, in Settings › Project).</Banner>
       )}
+      <DomainPrompt />
       {state.studio.rounds.length === 0 ? (
         <EmptyState
           title="No rounds yet."
@@ -177,7 +184,7 @@ export function Studio() {
                   <li key={r.n}>
                     <button type="button" className="st-item" aria-current={r.n === n ? "true" : undefined} onClick={() => choose(() => (setRoundChoice(r.n), setArtifactChoice(undefined)))}>
                       <span className="st-item__title">
-                        {r.n} · {FOCUS_LABEL[r.focus]}
+                        {r.n} · {roundLabel(state, r)}
                       </span>
                       <StatePill tone={r.closedAt ? "neutral" : "work"}>{r.closedAt ? "closed" : "open"}</StatePill>
                     </button>
@@ -264,6 +271,53 @@ export function Studio() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * While the product's kinds are not chosen: one compact question with the three kinds (r9). Each click saves at once
+ * (setDomains), so one click answers it; after that it stays, to add a second kind, until Done or you leave Vision.
+ * Settings › Project changes them later.
+ */
+function DomainPrompt() {
+  const { state, send, disabled } = useStore();
+  const [answered, setAnswered] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const chosen = state.project.domains;
+  if (chosen.length && !answered) return null;
+  const choose = async (d: ProjectDomain) => {
+    setBusy(true);
+    const r = await send("setDomains", { domains: toggleDomain(chosen, d) });
+    setBusy(false);
+    if (r.ok) setAnswered(true);
+  };
+  return (
+    <Banner
+      tone={chosen.length ? "done" : "you"}
+      title={chosen.length ? `Saved: ${chosen.map((d) => DOMAIN_WORDS[d]).join(" and ")}.` : "What kind of product is it?"}
+      actions={
+        <div className="st-chips st-kinds" role="group" aria-label="Kind of product">
+          {DOMAIN_CHOICES.map((c) => {
+            const on = chosen.includes(c.value);
+            const last = on && chosen.length === 1;
+            return (
+              <Button key={c.value} size="small" aria-pressed={on} title={c.use} disabled={disabled || busy || last} disabledReason={disabled ? "The service is offline." : last ? "At least one kind stays chosen." : undefined} onClick={() => void choose(c.value)}>
+                {c.label}
+              </Button>
+            );
+          })}
+          {chosen.length > 0 && (
+            <Button size="small" variant="quiet" onClick={() => setAnswered(false)}>
+              Done
+            </Button>
+          )}
+        </div>
+      }
+    >
+      {chosen.length
+        ? "Choose another kind too if it fits. You can change this later in Settings › Project."
+        : "Choose every kind that fits. The designer makes what each kind needs. Screen product: people use it on a screen. Code product: other programs use it. Infrastructure: it runs other software."}
+    </Banner>
   );
 }
 
@@ -394,6 +448,7 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
         </div>
       </div>
 
+      {a.provenance?.asIs && <AsIsNote files={a.provenance.files} />}
       {locked && st.kind !== "open" && <p className="small muted">{locked}</p>}
       {kind === "screen" && shots && <p className="small muted">{shots}</p>}
 
@@ -456,6 +511,36 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
       {draft.pins.length > 0 && <PinList artifact={a} draft={draft} update={update} locked={locked} />}
       <p className="micro muted">Artifacts stay on this computer: the studio shows the files the designer wrote, whichever provider wrote them.</p>
     </div>
+  );
+}
+
+/**
+ * An "as is" artifact (round 0 of an existing repository): the designer's reproduction of what the code does now, not
+ * a proposal, with the repository files it came from. It is there for you to correct.
+ */
+function AsIsNote({ files }: { files: string[] }) {
+  const list = (paths: string[]) => (
+    <ul className="st-asis__files">
+      {paths.map((f) => (
+        <li key={f}>
+          <code>{f}</code>
+        </li>
+      ))}
+    </ul>
+  );
+  return (
+    <section className="st-asis" aria-label={AS_IS_LABEL}>
+      <p className="small">
+        <Chip strong>{AS_IS_LABEL}</Chip> The designer made this from the code, to show what the product does now. It is not a proposal. Correct what it gets wrong: mark it, pin comments or write a note.
+      </p>
+      <p className="micro muted">Made from {plural(files.length, "file")} in the repository:</p>
+      {list(files.slice(0, AS_IS_FILES_SHOWN))}
+      {files.length > AS_IS_FILES_SHOWN && (
+        <Disclosure label="The other files" count={files.length - AS_IS_FILES_SHOWN}>
+          {list(files.slice(AS_IS_FILES_SHOWN))}
+        </Disclosure>
+      )}
+    </section>
   );
 }
 

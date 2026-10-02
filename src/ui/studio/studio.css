@@ -69,6 +69,10 @@ main.st-wide { max-width: 1600px; }
 .st-toolbar__grp { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; min-width: 0; }
 .st-title { font-size: var(--fs-h3); margin: 0; }
 .st-hint { margin: 0; color: var(--st-you); }
+/* An "as is" artifact: a reproduction of the code as it is today, with the repository files it came from. */
+.st-asis { display: grid; gap: var(--space-1); padding: var(--space-2) var(--space-3); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); min-width: 0; }
+.st-asis p { margin: 0; }
+.st-asis__files { margin: 0; padding-left: 1.1rem; display: grid; gap: 2px; font-size: var(--fs-small); overflow-wrap: anywhere; }
 
 .st-stage {
   position: relative;
@@ -178,6 +182,9 @@ main.st-wide { max-width: 1600px; }
 .st-question > * + * { margin-top: var(--space-1); }
 .st-chips { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 .st-chips .k-btn[aria-pressed="true"] { border-color: var(--text); background: var(--surface-2); }
+/* The kinds of product (the studio's prompt): a chosen kind has a check; the only chosen one cannot be cleared, and still shows as chosen. */
+.st-kinds .k-btn[aria-pressed="true"]::before { content: "✓"; margin-right: 0.35em; }
+.st-kinds .k-btn[aria-pressed="true"][aria-disabled="true"] { opacity: 1; cursor: default; }
 .st-sum { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); font-size: var(--fs-small); overflow-wrap: anywhere; }
 /* PE review: one verdict per variant, each with its reasons, its change and its budget effect. */
 .st-verdicts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
@@ -237,3 +244,5 @@ h6.st-doc__h { font-size: var(--fs-meta); color: var(--muted); }
 .st-doc__source { justify-self: stretch; min-width: 0; }
 .st-doc__source summary { cursor: pointer; }
 .st-doc__source .st-doc__code { margin: var(--space-2) 0 0; }
+/* The frame Mermaid draws in (diagrams.ts): laid out, so Mermaid can measure text, but off the screen and never shown. */
+.st-diagram-frame { position: fixed; left: -10000px; top: 0; width: 1200px; height: 900px; border: 0; visibility: hidden; pointer-events: none; }

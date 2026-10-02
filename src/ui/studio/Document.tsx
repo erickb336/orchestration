@@ -4,26 +4,30 @@
 //
 // What an agent wrote is untrusted. Markdown is rendered to React elements (react-markdown, with GitHub's tables
 // from remark-gfm): raw HTML is never rendered (it shows as text), links open outside the app only when they are
-// http(s), and images load only from the version's own files. Mermaid runs in the app at securityLevel "strict",
-// with the keys a diagram's own directives could relax locked, and its SVG is shown as an image, so nothing in it
-// can run or load anything.
+// http(s), and images load only from the version's own files. Mermaid never runs in the app's page: while it lays a
+// diagram out, some of its syntax loads URLs (pass 4 review, finding 2). It runs in a sandboxed frame that can reach
+// nothing (diagrams.ts), at securityLevel "strict", with the keys a diagram's own directives could use to add CSS or
+// URLs or to relax it locked. The app shows the SVG it returns as an image, where nothing runs or loads. The app
+// page's own policy (server/http.ts) allows no request outside the app either.
 
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { MermaidConfig } from "mermaid";
 import type { StudioArtifact } from "../../domain/studio/types";
 import { EmptyState } from "../kit";
+import { drawDiagram } from "./diagrams";
 import { useServiceText } from "./Frames";
 import { documentFiles, documentType, resolveInVersion, serviceFileUrl } from "./studioView";
 
-/** The tokens the diagrams take their look from (styles.css); read once, when Mermaid loads. */
+/** The tokens the diagrams take their look from (styles.css); read once, when the first diagram is drawn. */
 const DIAGRAM_TOKENS = { background: "--surface", primaryColor: "--surface-2", secondaryColor: "--surface", tertiaryColor: "--bg", mainBkg: "--surface-2", primaryTextColor: "--text", textColor: "--text", primaryBorderColor: "--border-strong", nodeBorder: "--border-strong", lineColor: "--muted", clusterBkg: "--bg", clusterBorder: "--border-strong", edgeLabelBackground: "--surface", noteBkgColor: "--surface-2", noteTextColor: "--text", noteBorderColor: "--border-strong", actorBkg: "--surface-2", actorBorder: "--border-strong", actorTextColor: "--text", signalColor: "--text", signalTextColor: "--text" } as const;
 
 /**
  * Mermaid's settings: strict security, no start on load, labels as SVG text (no HTML), and errors returned rather
- * than drawn. `secure` lists the keys a diagram's own `%%{init}%%` directive cannot change: Mermaid's defaults, plus
- * the labels, the sanitiser's settings and the look. `token` reads a design token's value ("" when unset).
+ * than drawn. `secure` lists the keys a diagram's own `%%{init}%%` directive or front matter cannot change: Mermaid's
+ * defaults, the labels, the sanitiser's settings, the look, and every key that adds CSS or a URL (themeCSS, the fonts,
+ * absolute arrow-marker URLs, KaTeX's stylesheet mode). `token` reads a design token's value ("" when unset).
  */
 export function mermaidConfig(token: (name: string) => string): MermaidConfig {
   const themeVariables: Record<string, string | boolean> = { darkMode: true, fontSize: "14px" };
@@ -40,23 +44,19 @@ export function mermaidConfig(token: (name: string) => string): MermaidConfig {
     darkMode: true,
     fontFamily: 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
     themeVariables,
-    secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "maxEdges", "htmlLabels", "dompurifyConfig", "theme", "themeVariables", "darkMode", "fontFamily"],
+    secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "maxEdges", "htmlLabels", "dompurifyConfig", "theme", "themeVariables", "darkMode", "fontFamily", "altFontFamily", "themeCSS", "arrowMarkerAbsolute", "legacyMathML", "forceLegacyMathML"],
   };
 }
 
-type MermaidApi = (typeof import("mermaid"))["default"];
-let mermaidReady: Promise<MermaidApi> | undefined;
-/** Mermaid, loaded on first use (it is large) and set up once. */
-function loadMermaid(): Promise<MermaidApi> {
-  mermaidReady ??= import("mermaid").then(({ default: mermaid }) => {
+let config: MermaidConfig | undefined;
+/** The settings, with the design tokens read once, when the first diagram is drawn. */
+function diagramConfig(): MermaidConfig {
+  if (!config) {
     const style = getComputedStyle(document.documentElement);
-    mermaid.initialize(mermaidConfig((name) => style.getPropertyValue(name)));
-    return mermaid;
-  });
-  return mermaidReady;
+    config = mermaidConfig((name) => style.getPropertyValue(name));
+  }
+  return config;
 }
-// Mermaid renders one diagram at a time (it measures text in the page); diagrams wait their turn.
-let queue: Promise<unknown> = Promise.resolve();
 
 /** Mermaid's SVG as an image: sized from its viewBox, as a data URL. Nothing in an image runs or loads. */
 function svgImage(svg: string): { src: string; width?: number; height?: number } {
@@ -78,27 +78,19 @@ const MIN_DIAGRAM_SCALE = 0.6;
 
 type Drawn = { status: "drawing" } | { status: "ok"; src: string; width?: number; height?: number } | { status: "error"; message: string };
 
-/** A Mermaid diagram, drawn in the app, with its source under it. `label` says what it is, for the image's text alternative. */
+/** A Mermaid diagram, drawn in the diagram frame, with its source under it. `label` says what it is, for the image's text alternative. */
 export function MermaidDiagram({ source, label }: { source: string; label: string }) {
-  const id = `st-mmd-${useId().replace(/[^A-Za-z0-9_-]/g, "")}`;
   const [drawn, setDrawn] = useState<{ source: string; value: Drawn }>({ source, value: { status: "drawing" } });
   useEffect(() => {
     let live = true;
-    const draw = async () => {
-      const mermaid = await loadMermaid();
-      const { svg } = await mermaid.render(id, source);
-      return svgImage(svg);
-    };
-    const job = queue.then(draw);
-    queue = job.catch(() => undefined);
-    job.then(
+    drawDiagram(source, diagramConfig()).then(svgImage).then(
       (img) => live && setDrawn({ source, value: { status: "ok", ...img } }),
       (e: unknown) => live && setDrawn({ source, value: { status: "error", message: (e instanceof Error ? e.message : String(e)).split("\n")[0].slice(0, 300) } }),
     );
     return () => {
       live = false;
     };
-  }, [id, source]);
+  }, [source]);
   const value = drawn.source === source ? drawn.value : { status: "drawing" as const };
   return (
     <figure className="st-doc__diagram">

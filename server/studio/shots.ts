@@ -7,9 +7,15 @@
 // The pages load from a private prototype server on a free loopback port, so they carry the same policy the app's
 // frames do (no network). The page is the top window here, where that policy does not stop a navigation, so the
 // browser is also allowed to load the version's own origin only. Every page has a time limit.
+//
+// Some ways out are outside any page policy and outside request interception: WebRTC (STUN and TURN), and the
+// browser's own DNS prefetch and preconnect (pass 3 review, finding 3). This Chrome starts with flags that close them
+// (noNetworkArgs): WebRTC may use no UDP and only a proxy, the proxy is a dead one of ours, and no host name
+// resolves but *.localhost.
 
 import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { join } from "node:path";
 import type { Browser, BrowserContext } from "playwright-core";
 import { prototypeOrigin } from "../../src/runtime/prototype";
@@ -22,10 +28,36 @@ const SIZES: Record<ShotDevice, { viewport: { width: number; height: number }; d
 const PAGE_TIMEOUT_MS = 20_000;
 
 /**
- * The system Chrome through playwright-core: CHROME_PATH if set, or the installed Google Chrome. Never downloads a
- * browser. Says why there is none instead of throwing.
+ * The flags that give the screenshot browser no way to the network that request interception cannot see:
+ * - WebRTC may use no UDP, and TCP only through the proxy: no STUN, and TURN only through the proxy;
+ * - the proxy is a dead one (deadProxy), so a TURN or preconnect connection to an address ends there;
+ * - no host name resolves but *.localhost, which Chrome answers itself: DNS prefetch and preconnect to a name send no
+ *   DNS query.
+ * Chrome never sends loopback or *.localhost addresses to a proxy, so the version's own origin still loads.
  */
-export async function launchChrome(): Promise<{ browser: Browser } | { missing: string }> {
+export function noNetworkArgs(deadProxyPort: number): string[] {
+  return ["--webrtc-ip-handling-policy=disable_non_proxied_udp", `--proxy-server=http://127.0.0.1:${deadProxyPort}`, "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE *.localhost"];
+}
+
+/** A proxy that lets nothing through: a loopback port that closes each connection at once, and counts them. */
+export async function deadProxy(): Promise<{ port: number; refused: () => number; close: () => void }> {
+  let refused = 0;
+  const server = createServer((socket) => {
+    refused++;
+    socket.destroy();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return { port: (server.address() as { port: number }).port, refused: () => refused, close: () => server.close() };
+}
+
+/**
+ * The system Chrome through playwright-core: CHROME_PATH if set, or the installed Google Chrome, with `args` added.
+ * Never downloads a browser. Says why there is none instead of throwing.
+ */
+export async function launchChrome(args: string[] = []): Promise<{ browser: Browser } | { missing: string }> {
   let chromium: typeof import("playwright-core").chromium;
   try {
     ({ chromium } = await import("playwright-core"));
@@ -34,7 +66,7 @@ export async function launchChrome(): Promise<{ browser: Browser } | { missing: 
   }
   const path = process.env.CHROME_PATH;
   try {
-    return { browser: await chromium.launch({ headless: true, ...(path ? { executablePath: path } : { channel: "chrome" }) }) };
+    return { browser: await chromium.launch({ headless: true, args, ...(path ? { executablePath: path } : { channel: "chrome" }) }) };
   } catch {
     return { missing: "no Chrome found" };
   }
@@ -79,8 +111,12 @@ export async function captureShots(opts: { studioDir: string; artifactId: string
   const devices = SHOT_DEVICES.filter((d) => manifest.devices.includes(d));
   if (!devices.length || !manifest.variants.length) return { shots: [], failed: [] };
 
-  const chrome = await launchChrome();
-  if ("missing" in chrome) return { skipped: chrome.missing };
+  const proxy = await deadProxy();
+  const chrome = await launchChrome(noNetworkArgs(proxy.port));
+  if ("missing" in chrome) {
+    proxy.close();
+    return { skipped: chrome.missing };
+  }
   const { browser } = chrome;
   const server = createPrototypeServer({ studioDir: () => studioDir, appOrigins: ["'none'"] });
   const out: Extract<ShotsOutcome, { shots: Shot[] }> = { shots: [], failed: [] };
@@ -127,6 +163,9 @@ export async function captureShots(opts: { studioDir: string; artifactId: string
     await within(timeout, "Closing Chrome", browser.close()).catch(() => {});
     server.closeAllConnections();
     server.close();
+    proxy.close();
+    const refused = proxy.refused();
+    if (refused) log(`Screenshots of ${artifactId} v${version}: the dead proxy refused ${refused} connection${refused === 1 ? "" : "s"} (a page tried to reach an address).`);
   }
   return out;
 }

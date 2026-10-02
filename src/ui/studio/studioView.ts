@@ -7,12 +7,41 @@ import { budgetStop } from "../../domain/spend";
 import * as S from "../../domain/studio/studio";
 import * as R from "../../domain/studio/runs";
 import { UNGATED_KINDS, type BudgetEstimate, type Feedback, type Mark, type Pin, type Round, type RoundFocus, type StudioArtifact, type StudioRun, type Verdict } from "../../domain/studio/types";
-import type { Device, State } from "../../domain/types";
+import { PROJECT_DOMAINS, type Device, type ProjectDomain, type State } from "../../domain/types";
 import { acceptPinMessage, prototypeOrigin, type PinMessage } from "../../runtime/prototype";
 
 // ---------- rounds and artifacts ----------
 
 export const FOCUS_LABEL: Record<RoundFocus, string> = { material: "What you brought", experience: "The experience", data: "Inputs and outputs", flows: "Flows" };
+
+/** Round 0 of an existing repository: the designer's reproductions of what the code does now (pass 4, "as is"). */
+export const AS_IS_LABEL = "As it is today";
+
+/** A round's name: its focus, or "As it is today" for a round 0 that holds the designer's "as is" reproductions. */
+export function roundLabel(s: State, r: Round): string {
+  return r.focus === "material" && s.studio.artifacts.some((a) => a.round === r.n && a.provenance?.asIs) ? AS_IS_LABEL : FOCUS_LABEL[r.focus];
+}
+
+/** How many of an "as is" artifact's files show before "Show all". */
+export const AS_IS_FILES_SHOWN = 6;
+
+// ---------- the product's kinds (project domains) ----------
+
+/**
+ * The kinds of product the owner chooses from (`setDomains`), in Settings › Project and in the studio's prompt: what
+ * each is, by who uses it, and what the designer makes for it.
+ */
+export const DOMAIN_CHOICES: readonly { value: ProjectDomain; label: string; use: string; makes: string }[] = [
+  { value: "screen", label: "Screen product", use: "People use it on a screen: in a browser, on a desktop or a phone, or in a terminal.", makes: "The designer makes screens and terminal demos." },
+  { value: "code", label: "Code product", use: "Other programs use it: a library, an engine or a compiler.", makes: "The designer makes the interface and the core algorithms." },
+  { value: "infrastructure", label: "Infrastructure", use: "It runs other software: servers, queues or deployment.", makes: "The designer makes the topology, what fails and how it recovers, and the scale and cost." },
+];
+
+/** The kinds with `d` added, or taken away when it is there; always in the fixed order. */
+export function toggleDomain(chosen: readonly ProjectDomain[], d: ProjectDomain): ProjectDomain[] {
+  const next = chosen.includes(d) ? chosen.filter((x) => x !== d) : [...chosen, d];
+  return PROJECT_DOMAINS.filter((x) => next.includes(x));
+}
 
 /** The rounds, newest first. */
 export const roundsNewestFirst = (s: State): Round[] => [...s.studio.rounds].sort((a, b) => b.n - a.n);
@@ -99,10 +128,10 @@ export function resolveInVersion(from: string, ref: string): string | undefined 
   return parts.join("/") || undefined;
 }
 
-/** "screen · 2 variants", "terminal demo · v2". */
+/** "screen · 2 variants", "terminal demo · v2", "as is · screen". */
 export function artifactLine(a: StudioArtifact): string {
   const kind = a.kind.replace("-", " ");
-  const parts = [kind, a.variants.length > 1 ? `${a.variants.length} variants` : "", a.version > 1 ? `v${a.version}` : ""].filter(Boolean);
+  const parts = [a.provenance?.asIs ? "as is" : "", kind, a.variants.length > 1 ? `${a.variants.length} variants` : "", a.version > 1 ? `v${a.version}` : ""].filter(Boolean);
   return parts.join(" · ");
 }
 

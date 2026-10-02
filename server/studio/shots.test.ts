@@ -2,6 +2,7 @@
 // beside the version and served by the prototype server; a page that never settles times out without holding the
 // rest; nothing leaves the machine; without Chrome nothing is captured, and the outcome says so.
 
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, readdirSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
@@ -9,7 +10,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPrototypeServer, versionDir } from "./serve";
 import { captureShots, launchChrome } from "./shots";
-import { close, get, listen, pngSize, writeVersion } from "./testFixtures";
+import { chromeWritingNetLog, close, get, lanAddress, listen, netLogHosts, outsideListeners, outsidePage, pngSize, writeVersion } from "./testFixtures";
 
 const chrome = await launchChrome();
 const browser = "browser" in chrome ? chrome.browser : undefined;
@@ -132,6 +133,35 @@ describe.skipIf(!browser)("captureShots", () => {
     expect(outcome).toEqual({ shots: [{ variant: "a", device: "desktop", path: "shots/a-desktop.png" }, { variant: "b", device: "desktop", path: "shots/b-desktop.png" }], failed: [] });
     expect(await centre(readFileSync(join(versionDir(studio, "sa-3", 1), "shots", "a-desktop.png")))).toBe(RED);
     expect(outsideRequests).toEqual([]);
+  }, 60_000);
+
+  // Outside any page policy and request interception (pass 3 review, finding 3). The page holds its load event for 5 s
+  // while it tries. Without the flags, the same capture sends STUN packets and looks up the STUN server's name (checked
+  // 2026-10-02); escape.test.ts shows each way out from a Chrome without them, and none from one with them.
+  it.skipIf(!lanAddress())("gives a page no WebRTC, DNS prefetch or preconnect: nothing reaches the network, no name is looked up", async () => {
+    const lan = lanAddress()!;
+    const listeners = await outsideListeners();
+    const tag = randomBytes(4).toString("hex");
+    writeVersion(studio, "sa-5", 1, { "a/index.html": outsidePage(lan, listeners, tag, 5000) }, { devices: ["desktop"] });
+    const netLog = join(root, "netlog.json");
+    const chrome = chromeWritingNetLog(root, netLog);
+    const before = process.env.CHROME_PATH;
+    if (chrome) process.env.CHROME_PATH = chrome;
+    const logged: string[] = [];
+    try {
+      const outcome = await captureShots({ studioDir: studio, artifactId: "sa-5", version: 1, log: (m) => logged.push(m) });
+      expect(outcome).toEqual({ shots: [{ variant: "a", device: "desktop", path: "shots/a-desktop.png" }], failed: [] });
+    } finally {
+      if (before === undefined) delete process.env.CHROME_PATH;
+      else process.env.CHROME_PATH = before;
+      await listeners.close();
+    }
+    expect(listeners.hits()).toEqual([]);
+    if (chrome) {
+      // No host name of the page was looked up: the resolver answered none of them, and no DNS query went out.
+      const looked = netLogHosts(netLog, tag);
+      expect(Object.values(looked).flat().filter((e) => /DNS_TRANSACTION|HOST_RESOLVER_SYSTEM_TASK|HOST_RESOLVER_DNS_TASK/.test(e))).toEqual([]);
+    } else process.stderr.write("Not checked: the DNS lookups, which need Chrome's network log (no Chrome at its install path or CHROME_PATH).\n");
   }, 60_000);
 
   it("writes nothing through a shots/ that is a link", async () => {

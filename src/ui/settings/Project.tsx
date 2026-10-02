@@ -1,30 +1,37 @@
-// Settings › Project: the repository, the stage, and how finished work leaves (the delivery mode,
-// the remote and base, who merges). Settings wait for Save; Start building and Back to shaping are actions and
+// Settings › Project: the repository, the kind of product (its domains), the stage, and how finished work leaves
+// (the delivery mode, the remote and base, who merges). Settings wait for Save; Start building and Back to shaping are actions and
 // act at once. In real mode, Start a new project is its own form with its own button.
 
 import { useState } from "react";
 import * as M from "../../domain/model";
+import type { ProjectDomain } from "../../domain/types";
 import { Button, Checkbox, Chip, Disclosure, Field, Input, Textarea, useConfirm } from "../kit";
 import { DeliveryCard, deliveryErrors, deliverySteps, liveDelivery, type DeliveryDraft } from "../DeliverySettings";
 import { StartBuildingButton } from "../Shaping";
 import { confirmNewProject } from "../settingsText";
+import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { initProjectConfirm } from "../stageChoice";
 import { useStore } from "../store";
 import { sendInOrder, useDraft } from "./draft";
 import { SettingsCard, SettingsSection } from "./parts";
 import type { SectionId } from "./sections";
 
-type ProjectDraft = DeliveryDraft & { repoPath: string; conventions: boolean };
+type ProjectDraft = DeliveryDraft & { repoPath: string; conventions: boolean; domains: ProjectDomain[] };
+
+/** Why the chosen kinds cannot be saved: none chosen, once the project has some (they can be changed, never cleared). */
+export function domainsError(live: readonly ProjectDomain[], chosen: readonly ProjectDomain[]): string | undefined {
+  return live.length && !chosen.length ? "Choose at least one kind." : undefined;
+}
 
 export function ProjectSection({ current, onDirty }: { current: boolean; onDirty: (id: SectionId, dirty: boolean) => void }) {
   const { state, service, send } = useStore();
   const confirm = useConfirm();
   const real = service.runtime === "real";
   const liveDel = liveDelivery(state);
-  const live: ProjectDraft = { ...liveDel, repoPath: state.project.repoPath, conventions: state.project.conventions?.include ?? true };
+  const live: ProjectDraft = { ...liveDel, repoPath: state.project.repoPath, conventions: state.project.conventions?.include ?? true, domains: state.project.domains };
   const draft = useDraft(live);
   const v = draft.value;
-  const errors = { repoPath: v.repoPath.trim() ? undefined : "Give the repository's path.", ...deliveryErrors(v) };
+  const errors = { repoPath: v.repoPath.trim() ? undefined : "Give the repository's path.", domains: domainsError(live.domains, v.domains), ...deliveryErrors(v) };
   const invalid = Object.values(errors).find(Boolean);
 
   const save = async (begin: () => void) => {
@@ -34,6 +41,7 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
     return sendInOrder([
       () => (draft.changed.has("repoPath") ? send("setRepoPath", { repoPath: v.repoPath.trim() }) : null),
       () => (draft.changed.has("conventions") ? send("setConventions", { include: v.conventions }) : null),
+      () => (draft.changed.has("domains") && v.domains.length ? send("setDomains", { domains: v.domains }) : null),
       ...delivery,
     ]);
   };
@@ -65,6 +73,30 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
             checked={v.conventions}
             onChange={(e) => draft.set({ conventions: e.target.checked })}
           />
+        )}
+      </SettingsCard>
+
+      <SettingsCard
+        id="domains"
+        title="Kind of product"
+        help={live.domains.length ? "What the studio's designer makes follows it. Choose every kind that fits." : "Not chosen yet. What the studio's designer makes follows it. Choose every kind that fits."}
+      >
+        <fieldset className="s-choices">
+          <legend className="sr-only">Kind of product</legend>
+          {DOMAIN_CHOICES.map((c) => (
+            <Checkbox
+              key={c.value}
+              label={c.label}
+              hint={`${c.use} ${c.makes}`}
+              checked={v.domains.includes(c.value)}
+              onChange={() => draft.set({ domains: toggleDomain(v.domains, c.value) })}
+            />
+          ))}
+        </fieldset>
+        {errors.domains && (
+          <p className="s-error" role="alert">
+            {errors.domains}
+          </p>
         )}
       </SettingsCard>
 

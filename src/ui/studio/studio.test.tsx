@@ -21,9 +21,12 @@ import { frameSize, readCast, renderAnsi } from "./ansi";
 import { TerminalText } from "./Frames";
 import { LeadPanel, Studio } from "./Studio";
 import { MarkdownDoc, MermaidDiagram, mermaidConfig } from "./Document";
+import { MAX_SVG_CHARS, diagramFrameDocument, diagramFramePolicy, readDiagramReply } from "./diagrams";
 import {
+  DOMAIN_CHOICES,
   MAX_MESSAGE,
   addPin,
+  artifactLine,
   answerBlocker,
   changedDrafts,
   deviceOptions,
@@ -33,10 +36,12 @@ import {
   draftKey,
   pinFromMessage,
   resolveInVersion,
+  roundLabel,
   roundLead,
   sendAnswer,
   serviceFileUrl,
   showKind,
+  toggleDomain,
   variantDemo,
   variantEntry,
   versionHistory,
@@ -418,6 +423,80 @@ describe("where a variant is served from", () => {
   });
 });
 
+describe("the product's kinds (domains), while they are not chosen", () => {
+  it("the studio asks once, compactly: three kinds, none pressed, each a click that saves; gone once they are chosen", () => {
+    const s = vision();
+    expect(s.project.domains).toEqual([]);
+    const html = render(<Studio />, s);
+    expect(html).toContain("What kind of product is it?");
+    expect(html).toContain("Screen product: people use it on a screen. Code product: other programs use it. Infrastructure: it runs other software.");
+    const group = /<div class="st-chips st-kinds" role="group" aria-label="Kind of product">(.*?)<\/div>/.exec(html)?.[1] ?? "";
+    expect([...group.matchAll(/<button[^>]*aria-pressed="(true|false)"[^>]*>([^<]+)<\/button>/g)].map((m) => [m[2], m[1]])).toEqual([
+      ["Screen product", "false"],
+      ["Code product", "false"],
+      ["Infrastructure", "false"],
+    ]);
+    // Even with no round yet: the kind decides what the designer makes in round 1.
+    expect(html).toContain("No rounds yet.");
+
+    // A click sends setDomains with that kind, which the real command table accepts; then the prompt is gone.
+    const chosen = runCommand(s, "setDomains", { domains: toggleDomain(s.project.domains, "code") }, at(5)).state;
+    expect(chosen.project.domains).toEqual(["code"]);
+    expect(render(<Studio />, chosen)).not.toContain("What kind of product is it?");
+  });
+
+  it("a kind toggles in and out, always in the same order", () => {
+    expect(toggleDomain([], "infrastructure")).toEqual(["infrastructure"]);
+    expect(toggleDomain(["infrastructure"], "screen")).toEqual(["screen", "infrastructure"]);
+    expect(toggleDomain(["screen", "infrastructure"], "screen")).toEqual(["infrastructure"]);
+  });
+
+  it("the words: each kind by who uses it and what the designer makes, in short sentences", () => {
+    expect(DOMAIN_CHOICES.map((c) => c.value)).toEqual(["screen", "code", "infrastructure"]);
+    for (const c of DOMAIN_CHOICES) for (const sentence of `${c.use} ${c.makes}`.split(/(?<=\.)\s/)) expect(sentence.split(/\s+/).length).toBeLessThanOrEqual(20);
+  });
+});
+
+describe("as it is today (round 0 of an existing repository)", () => {
+  /** Round 0 with the designer's reproduction of the trip board, labelled as is, from `files`; agreed by the PE. */
+  function withAsIs(files: string[]) {
+    const r = openRound(vision(), "material", at(1));
+    const a = addScreen(r.state, r.n, at(2), { title: "Trip board", variants: [{ id: "a", label: "As is", entry: "board/index.html" }], files: [{ path: "board/index.html", sha256: sha("a") }], provenance: { files } });
+    return { s: peAgrees(a.state, a.id, 1, ["a"], at(3)), id: a.id };
+  }
+
+  it("the round is named As it is today, not What you brought; the artifact says it is a reproduction to correct, with the files it came from", () => {
+    const { s, id } = withAsIs(["src/board/index.html", "src/board/style.css"]);
+    expect(roundLabel(s, s.studio.rounds[0])).toBe("As it is today");
+    expect(artifactLine(S.getArtifact(s, id, 1))).toBe("as is · screen");
+    const html = render(<Studio />, s);
+    expect(html).toContain("0 · As it is today");
+    expect(html).not.toContain("What you brought");
+    expect(html).toContain('aria-label="As it is today"');
+    expect(html).toContain("It is not a proposal. Correct what it gets wrong");
+    expect(html).toContain("Made from 2 files in the repository:");
+    expect(html).toContain("<code>src/board/index.html</code>");
+    expect(html).toContain("<code>src/board/style.css</code>");
+    // You can mark it, as any artifact the PE agreed on.
+    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Keep<\/button>/);
+  });
+
+  it("a long list of files shows the first six; the rest are one click away", () => {
+    const files = Array.from({ length: 9 }, (_, i) => `src/part-${i + 1}.js`);
+    const html = render(<Studio />, withAsIs(files).s);
+    expect(html).toContain("Made from 9 files in the repository:");
+    expect(html.indexOf("src/part-6.js")).toBeLessThan(html.indexOf("The other files"));
+    expect(html.indexOf("src/part-7.js")).toBeGreaterThan(html.indexOf("The other files"));
+  });
+
+  it("what the owner brought, and every later round, keep their names", () => {
+    const { s } = withSample();
+    expect(s.studio.rounds.map((r) => roundLabel(s, r))).toEqual(["The experience"]);
+    const material = openRound(vision(), "material", at(1)).state;
+    expect(roundLabel(material, material.studio.rounds[0])).toBe("What you brought");
+  });
+});
+
 describe("PE review in the right column", () => {
   /** The sample, with a PE run on Codex (simulated) that made one pass with these verdicts. */
   function reviewed(verdicts: object[]) {
@@ -715,9 +794,32 @@ describe("document artifacts: interfaces, algorithms, topologies, contracts and 
     const c = mermaidConfig((name) => tokens[name] ?? "");
     expect(c).toMatchObject({ securityLevel: "strict", startOnLoad: false, htmlLabels: false, suppressErrorRendering: true, theme: "base" });
     for (const key of ["securityLevel", "startOnLoad", "secure", "htmlLabels", "dompurifyConfig", "maxTextSize"]) expect(c.secure).toContain(key);
+    // Nor add CSS or a URL (pass 4 review, finding 2): themeCSS, the fonts, absolute marker URLs, KaTeX's stylesheet mode.
+    for (const key of ["themeCSS", "fontFamily", "altFontFamily", "themeVariables", "arrowMarkerAbsolute", "legacyMathML", "forceLegacyMathML"]) expect(c.secure).toContain(key);
     // The look comes from the design tokens; unset ones are left to Mermaid.
     expect(c.themeVariables).toMatchObject({ background: "#1a1b1e", primaryTextColor: "#ececea", lineColor: "#a3a6ad", darkMode: true });
     expect(c.themeVariables).not.toHaveProperty("primaryColor");
+  });
+
+  it("Mermaid draws in a frame whose own policy allows no request and only its two scripts; its replies are read strictly", () => {
+    const scripts = ["http://127.0.0.1:5319/assets/mermaid.min-x.js", "http://127.0.0.1:5319/assets/diagramFrame-y.js"];
+    expect(diagramFramePolicy(scripts)).toBe(`default-src 'none'; script-src ${scripts.join(" ")}; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`);
+    // A query (the dev server adds one) is not part of a policy's source; the script tag keeps it.
+    expect(diagramFramePolicy(["http://127.0.0.1:5317/src/ui/studio/diagramFrame.js?no-inline"])).toContain("script-src http://127.0.0.1:5317/src/ui/studio/diagramFrame.js;");
+    const doc = diagramFrameDocument(scripts);
+    // The policy comes first, then Mermaid, then the frame's script; no inline script.
+    expect(doc.indexOf("Content-Security-Policy")).toBeLessThan(doc.indexOf(scripts[0]));
+    expect(doc.indexOf(`<script src="${scripts[0]}">`)).toBeLessThan(doc.indexOf(`<script src="${scripts[1]}">`));
+    expect(doc.match(/<script/g)).toHaveLength(2);
+    expect(diagramFrameDocument(['http://x/a.js"><script>alert(1)</script>'])).not.toContain("<script>alert");
+
+    expect(readDiagramReply({ type: "orc-diagram-ready", mermaid: true })).toEqual({ kind: "ready", mermaid: true });
+    expect(readDiagramReply({ type: "orc-diagram-drawn", id: 3, svg: "<svg/>" })).toEqual({ kind: "drawn", id: 3, svg: "<svg/>" });
+    expect(readDiagramReply({ type: "orc-diagram-failed", id: 3, message: "Parse error" })).toEqual({ kind: "failed", id: 3, message: "Parse error" });
+    expect(readDiagramReply({ type: "orc-diagram-drawn", id: 3, svg: "x".repeat(MAX_SVG_CHARS + 1) })).toEqual({ kind: "failed", id: 3, message: "The drawing is too large to show." });
+    for (const bad of [null, "orc-diagram-drawn", { type: "orc-diagram-drawn", id: "3", svg: "<svg/>" }, { type: "orc-diagram-drawn", id: 1.5, svg: "<svg/>" }, { type: "orc-diagram-drawn", id: 3, svg: 7 }, { type: "orchestrator-pin", id: 3 }]) {
+      expect(readDiagramReply(bad)).toBeNull();
+    }
   });
 
   it("a path a document refers to stays inside its version's folder", () => {
