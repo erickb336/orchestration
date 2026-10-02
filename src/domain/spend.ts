@@ -28,10 +28,11 @@ export type NoCostReason = "no-price" | "no-usage";
 /**
  * One run's cost. Every figure is an estimate: a cost the runtime reports (Claude) is computed by the
  * runtime at list prices and is not billed on a subscription, and no run records how it was billed.
+ * `not-started`: the run ended before its runtime started it, so nothing ran: a known $0 (see `neverStarted`).
  * `unknown`: the run has no recorded cost (no reported cost, and no usage or no price to work one out);
  * unknown, never zero.
  */
-export type RunCost = { basis: "reported" | "priced"; usd: number; estimated: true } | { basis: "unknown"; usd: null; estimated: true; reason: NoCostReason };
+export type RunCost = { basis: "reported" | "priced" | "not-started"; usd: number; estimated: true } | { basis: "unknown"; usd: null; estimated: true; reason: NoCostReason };
 
 /** A task step's run or a lead run. */
 type Run = Attempt | LeadRun;
@@ -43,6 +44,22 @@ function ranOn(r: Run): { provider: Runner; model: string } {
 }
 
 /**
+ * The run ended before its runtime started it, so it cost nothing. Read from the run's own fields:
+ * - it failed or was stopped (a completed run ran; a lost run's process may have run unobserved);
+ * - the runtime never reported its start: no session id and no model. Both real runtimes report them as the
+ *   run starts and before any model request (Codex its thread id once the thread exists, before the turn that
+ *   uses tokens; Claude its session id on the session's init, before the first request);
+ * - and it recorded no tokens and no cost.
+ * A run that started and then ended with no usage stays unknown: it may have used tokens nobody recorded.
+ */
+function neverStarted(r: Run): boolean {
+  if (r.outcome !== "failed" && r.outcome !== "stopped") return false;
+  if (r.sessionId !== undefined || r.actualModel !== undefined) return false;
+  const u = r.usage;
+  return u === undefined || (u.costUsd === undefined && !u.inputTokens && !u.outputTokens);
+}
+
+/**
  * A run's cost: the runtime's reported cost when there is one, otherwise its tokens at the model's price.
  * Every input token is priced at the full input price, since the runtimes report cached input inside the
  * input count: for a run that read from a cache, the figure is an upper bound.
@@ -50,6 +67,7 @@ function ranOn(r: Run): { provider: Runner; model: string } {
 export function estimateUsd(run: Run, prices: readonly ModelPrice[]): RunCost {
   const u = run.usage;
   if (u?.costUsd !== undefined) return { basis: "reported", usd: u.costUsd, estimated: true };
+  if (neverStarted(run)) return { basis: "not-started", usd: 0, estimated: true };
   if (u?.inputTokens === undefined || u.outputTokens === undefined) return { basis: "unknown", usd: null, estimated: true, reason: "no-usage" };
   const { provider, model } = ranOn(run);
   const price = prices.find((p) => p.provider === provider && p.model === model);

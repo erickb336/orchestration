@@ -76,6 +76,36 @@ describe("one run's cost", () => {
     expect(estimateUsd(attempt({ provider: "codex", model: "gpt-test", usage: { inputTokens: 1000 } }), LIST)).toMatchObject({ basis: "unknown", reason: "no-usage" });
   });
 
+  it("a run that failed or was stopped before its runtime started it (no session, no model, no tokens) is a known $0; any other run with no usage stays unknown", () => {
+    const zero = { basis: "not-started", usd: 0, estimated: true };
+    expect(estimateUsd(attempt({ provider: "codex", model: "gpt-test", outcome: "failed" }), LIST)).toEqual(zero);
+    expect(estimateUsd(attempt({ provider: "codex", model: "gpt-unknown", outcome: "stopped" }), LIST)).toEqual(zero);
+    expect(estimateUsd(attempt({ provider: "codex", model: "gpt-test", outcome: "failed", usage: { inputTokens: 0, outputTokens: 0 } }), LIST)).toEqual(zero);
+    // The runtime reported the start: it may have used tokens nobody recorded.
+    expect(estimateUsd({ ...attempt({ provider: "codex", model: "gpt-test", outcome: "failed" }), sessionId: "thr-1" }, LIST)).toMatchObject({ basis: "unknown", reason: "no-usage" });
+    expect(estimateUsd(attempt({ provider: "codex", model: "auto", actualModel: "gpt-test", outcome: "stopped" }), LIST)).toMatchObject({ basis: "unknown", reason: "no-usage" });
+    // A completed run ran; a lost run's process may have run unobserved.
+    expect(estimateUsd(attempt({ provider: "codex", model: "gpt-test", outcome: "completed" }), LIST)).toMatchObject({ basis: "unknown", reason: "no-usage" });
+    expect(estimateUsd(attempt({ provider: "codex", model: "gpt-test", outcome: "lost" }), LIST)).toMatchObject({ basis: "unknown", reason: "no-usage" });
+    // Recorded tokens are priced, whatever the start says.
+    expect(estimateUsd(attempt({ provider: "codex", model: "gpt-test", outcome: "failed", usage: { inputTokens: 500_000, outputTokens: 0 } }), LIST)).toMatchObject({ basis: "priced", usd: 1 });
+    const lead: LeadRun = { id: "lead-1", trigger: "message", provider: "codex", model: "gpt-test", startedAt: at(0), endedAt: at(1), outcome: "failed", messageIds: [] };
+    expect(estimateUsd(lead, LIST)).toEqual(zero);
+    expect(estimateUsd({ ...lead, outcome: "lost" }, LIST)).toMatchObject({ basis: "unknown" });
+  });
+
+  it("a stopped run keeps the usage reported with the stop, a worker's and the lead's", () => {
+    const s = buildSeed(T0);
+    const [run] = running(s, "EX-001");
+    const paused = M.pauseTask(s, "EX-001", at(1));
+    expect(paused.attempts.find((a) => a.id === run.id)?.outcome).toBe("stopping");
+    const stopped = M.acknowledgeStop(paused, run.id, at(2), { usage: { inputTokens: 1_000_000, outputTokens: 0 } });
+    expect(stopped.attempts.find((a) => a.id === run.id)).toMatchObject({ outcome: "stopped", usage: { inputTokens: 1_000_000, outputTokens: 0 } });
+    const { state: withLead, runId } = M.startLeadRun(buildSeed(T0, { inFlightRuns: false }), { provider: "claude", model: "claude-test-20260101", trigger: "message" }, at(0));
+    const leadStopped = M.reportLeadStopped(withLead, runId, at(1), false, { costUsd: 0.3 });
+    expect(leadStopped.leadRuns.find((r) => r.id === runId)).toMatchObject({ outcome: "failed", usage: { costUsd: 0.3 } });
+  });
+
   it("prices a lead run the same way", () => {
     const r: LeadRun = { id: "lead-1", trigger: "message", provider: "codex", model: "gpt-test", startedAt: at(0), endedAt: at(1), outcome: "completed", messageIds: [], usage: { inputTokens: 500_000, outputTokens: 0 } };
     expect(estimateUsd(r, LIST)).toEqual({ basis: "priced", usd: 1, estimated: true });
