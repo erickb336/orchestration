@@ -102,6 +102,21 @@ describe("artifacts and their versions", () => {
     expect(() => addScreen(s, 1, at(5), { madeBy: { role: "designer", provider: "gemini", model: "m", attemptId: "r" } })).toThrow(InvalidCommandError);
     expect(() => addScreen(s, 2, at(5))).toThrow("There is no round 2.");
   });
+
+  it("each variant records the entry file the designer named, which must be one of its files", () => {
+    const s = openRound(fresh(), "experience", at(1)).state;
+    const files = [
+      { path: "a/index.html", sha256: sha("a") },
+      { path: "b/plan.html", sha256: sha("b") },
+    ];
+    const variants = [
+      { id: "a", label: "Map first", entry: "a/index.html" },
+      { id: "b", label: "Day by day", entry: "b/plan.html" },
+    ];
+    const r = addScreen(s, 1, at(2), { variants, files });
+    expect(art(r.state, r.id, 1).variants).toEqual(variants);
+    expect(() => addScreen(s, 1, at(2), { variants: [{ id: "a", label: "Map first", entry: "a/missing.html" }], files })).toThrow('Variant a\'s entry "a/missing.html" is not one of the artifact\'s files.');
+  });
 });
 
 describe("PE review: the loop rule", () => {

@@ -251,7 +251,7 @@ export const COMMANDS = {
         title: str(a, "title"),
         variants: array<unknown>(a.variants, "variants").map((x) => {
           const v = obj(x, "variant");
-          return { id: str(v, "id"), label: str(v, "label") };
+          return { id: str(v, "id"), label: str(v, "label"), ...(v.entry === undefined ? {} : { entry: str(v, "entry") }) };
         }),
         files: array<unknown>(a.files, "files").map((x) => {
           const f = obj(x, "file");

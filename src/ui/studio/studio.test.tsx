@@ -61,8 +61,8 @@ function withSample(opts: { pe?: boolean } = {}) {
   const a = addScreen(s, r.n, at(4), {
     title: "Trip plan (simulated sample)",
     variants: [
-      { id: "a", label: "A · Map first" },
-      { id: "b", label: "B · Day by day" },
+      { id: "a", label: "A · Map first", entry: "a/index.html" },
+      { id: "b", label: "B · Day by day", entry: "b/index.html" },
     ],
     files: SAMPLE_FILES,
     madeBy: { ...DESIGNER, attemptId: runId },
@@ -232,17 +232,18 @@ describe("Send feedback", () => {
 });
 
 describe("where a variant is served from", () => {
-  it("its entry: the one the record names, else assumed from the files", () => {
+  it("its entry: the one the designer named, as the version records it; never guessed", () => {
     const { s, id } = withSample();
     const a = S.getArtifact(s, id, 1);
     expect(variantEntry(a, "a")).toBe("a/index.html");
     expect(variantEntry(a, "b")).toBe("b/index.html");
-    // Once the state's variant record carries the entry the designer named (see the report of pass 3d).
-    const withEntry: { id: string; label: string; entry: string }[] = [{ id: "a", label: "A", entry: "b/index.html" }];
-    const named = { ...a, variants: withEntry };
+    // An entry that is not where the files suggest is still the one shown.
+    const named = { ...a, variants: [{ id: "a", label: "A", entry: "b/index.html" }] };
     expect(variantEntry(named, "a")).toBe("b/index.html");
-    const flat = { ...a, variants: [{ id: "x", label: "X" }, { id: "y", label: "Y" }], files: [{ path: "map.html", sha256: sha("e") }, { path: "days.html", sha256: sha("f") }] };
-    expect(variantEntry(flat, "y")).toBe("days.html");
+    // A variant that names none shows nothing rather than a guess.
+    expect(variantEntry({ ...a, variants: [{ id: "x", label: "X" }] }, "x")).toBeUndefined();
+    // What the owner brought has no variants: its first page.
+    expect(variantEntry({ ...a, variants: [], files: [{ path: "notes.md", sha256: sha("e") }, { path: "sketch.html", sha256: sha("f") }] }, undefined)).toBe("sketch.html");
   });
 });
 

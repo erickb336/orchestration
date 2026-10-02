@@ -143,6 +143,8 @@ describe("a designer run at the service", () => {
     const art = S.latestArtifacts(state())[0];
     expect(runOf(id)).toMatchObject({ status: "completed", usage: { costUsd: 0.42 } });
     expect(art).toMatchObject({ round: 1, version: 1, title: "Trip plan", madeBy: { role: "designer", provider: "claude", model: "claude-sample-large-actual", attemptId: id } });
+    // Each variant keeps the entry the designer named, so the viewer never guesses it.
+    expect(art.variants).toEqual(TRIP_PLAN.variants);
     const folder = join(dataDir, "studio", state().project.id, "artifacts", art.id, "v1");
     expect(readdirSync(folder).sort()).toEqual(["a", "b", "manifest.json"]);
     expect(readFileSync(join(folder, "b", "index.html"), "utf8")).toBe(PAGES["b/index.html"]);
@@ -288,8 +290,8 @@ describe("a designer run at the service", () => {
       kind: "screen",
       devices: ["desktop", "mobile"],
       variants: [
-        { id: "a", label: "A · Map first" },
-        { id: "b", label: "B · Day by day" },
+        { id: "a", label: "A · Map first", entry: "a/index.html" },
+        { id: "b", label: "B · Day by day", entry: "b/index.html" },
       ],
       files: Object.entries(SAMPLE_FILES).map(([path, text]) => ({ path, sha256: createHash("sha256").update(text).digest("hex") })),
     });

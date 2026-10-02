@@ -219,10 +219,8 @@ describe("importing a designer run", () => {
       version: 1,
       kind: "screen",
       title: "Trip plan",
-      variants: [
-        { id: "a", label: "A · Map first" },
-        { id: "b", label: "B · Day by day" },
-      ],
+      // Each variant keeps the entry the designer named, as manifest.json does.
+      variants: TRIP_PLAN.variants,
       files: Object.entries(PAGES).map(([path, text]) => ({ path, sha256: sha(text) })),
       devices: ["desktop", "mobile"],
       madeBy: { role: "designer", provider: "claude", model: "claude-sample-large", attemptId: runId },

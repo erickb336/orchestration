@@ -75,25 +75,13 @@ export function deviceOptions(projectDevices: readonly Device[], a: StudioArtifa
 // ---------- where a variant is served ----------
 
 /**
- * A variant's entry file. The designer names it in studio.json, and the service keeps it in the version's
- * manifest.json; the state's variant record has only the id and label (see the report of pass 3d). Until the record
- * carries `entry`, it is assumed: `<variant id>/index.html`, else the only HTML file under `<variant id>/`, else
- * `index.html`, else the variant's own HTML file by position, else the first HTML file.
+ * A variant's entry file: the one the designer named in studio.json, which the version records on the variant. An
+ * artifact without variants (what the owner brought) shows its first HTML file, else its first file. Undefined for a
+ * variant that names none.
  */
 export function variantEntry(a: StudioArtifact, variantId: string | undefined): string | undefined {
-  const paths = a.files.map((f) => f.path);
-  const v = a.variants.find((x) => x.id === variantId) as { id: string; entry?: unknown } | undefined;
-  if (typeof v?.entry === "string" && paths.includes(v.entry)) return v.entry;
-  const html = paths.filter((p) => /\.html?$/i.test(p));
-  if (variantId !== undefined) {
-    if (html.includes(`${variantId}/index.html`)) return `${variantId}/index.html`;
-    const under = html.filter((p) => p.startsWith(`${variantId}/`));
-    if (under.length === 1) return under[0];
-  }
-  if (html.includes("index.html")) return "index.html";
-  const i = a.variants.findIndex((x) => x.id === variantId);
-  if (i >= 0 && html.length === a.variants.length) return html[i];
-  return html[0] ?? paths[0];
+  if (!a.variants.length) return a.files.find((f) => /\.html?$/i.test(f.path))?.path ?? a.files[0]?.path;
+  return a.variants.find((x) => x.id === variantId)?.entry;
 }
 
 /** A path in a version's folder as a URL path: each segment encoded. */

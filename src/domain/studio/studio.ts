@@ -156,7 +156,8 @@ export interface ArtifactInput {
   round: number;
   kind: StudioArtifactKind;
   title: string;
-  variants: { id: string; label: string }[];
+  /** `entry`: the variant's entry file, one of `files`. */
+  variants: { id: string; label: string; entry?: string }[];
   files: { path: string; sha256: string }[];
   devices: Device[];
   madeBy: StudioMaker;
@@ -186,17 +187,19 @@ export function addArtifact(state: State, input: ArtifactInput, now: string): { 
   if (round.n === 0 && input.kind !== "material") throw new ControlError("Round 0 holds what the owner brought (material) only.");
   const title = required(agentLine(input.title), 200, "The title");
   if (input.variants.length > MAX_VARIANTS) throw new ControlError(`At most ${MAX_VARIANTS} variants side by side.`);
-  const variants = input.variants.map((v) => {
-    if (!/^[A-Za-z0-9_-]{1,20}$/.test(v.id)) throw new ControlError(`"${agentLine(v.id).slice(0, 30)}" is not a variant id (letters, digits, - and _, at most 20).`);
-    return { id: v.id, label: required(agentLine(v.label), 120, `Variant ${v.id}'s label`) };
-  });
-  if (new Set(variants.map((v) => v.id)).size !== variants.length) throw new ControlError("Each variant has its own id.");
   if (!input.files.length || input.files.length > MAX_FILES) throw new ControlError(`An artifact has between 1 and ${MAX_FILES} files.`);
   const files = input.files.map((f) => {
     if (!/^[0-9a-f]{64}$/.test(f.sha256)) throw new ControlError(`${agentLine(f.path).slice(0, 80)}: the SHA-256 is 64 lowercase hex characters.`);
     return { path: studioPath(f.path), sha256: f.sha256 };
   });
   if (new Set(files.map((f) => f.path)).size !== files.length) throw new ControlError("Each file is listed once.");
+  const variants = input.variants.map((v) => {
+    if (!/^[A-Za-z0-9_-]{1,20}$/.test(v.id)) throw new ControlError(`"${agentLine(v.id).slice(0, 30)}" is not a variant id (letters, digits, - and _, at most 20).`);
+    const label = required(agentLine(v.label), 120, `Variant ${v.id}'s label`);
+    if (v.entry !== undefined && !files.some((f) => f.path === v.entry)) throw new ControlError(`Variant ${v.id}'s entry "${agentLine(v.entry).slice(0, 80)}" is not one of the artifact's files.`);
+    return { id: v.id, label, ...(v.entry !== undefined ? { entry: v.entry } : {}) };
+  });
+  if (new Set(variants.map((v) => v.id)).size !== variants.length) throw new ControlError("Each variant has its own id.");
   const outside = input.devices.filter((d) => !state.project.devices.includes(d));
   if (outside.length) throw new ControlError(`${outside.join(", ")} ${outside.length === 1 ? "is" : "are"} outside the project's device scope (${state.project.devices.join(", ")}).`);
   const devices = DEVICES.filter((d) => input.devices.includes(d));

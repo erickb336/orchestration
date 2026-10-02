@@ -31,6 +31,13 @@ export const STUDIO_ARTIFACT_KINDS: StudioArtifactKind[] = ["screen", "terminal-
 /** Kinds the PE does not review: what the owner brought, and a probe's evidence. They reach the owner at once, and a verdict on one is refused. */
 export const UNGATED_KINDS: StudioArtifactKind[] = ["material", "evidence"];
 
+/** One option of an artifact: its id, its label, and its entry file when it has one. */
+export interface StudioVariant {
+  id: string;
+  label: string;
+  entry?: string;
+}
+
 /** Who made an artifact version: the owner (what they brought), or an agent's run. */
 export type StudioMaker = { role: "user" } | { role: "lead" | "designer" | "pe" | "probe"; provider: ProviderId; model: string; attemptId: string };
 export const STUDIO_AGENT_ROLES = ["lead", "designer", "pe", "probe"] as const;
@@ -49,8 +56,11 @@ export interface StudioArtifact {
   supersedes?: string;
   kind: StudioArtifactKind;
   title: string;
-  /** Options side by side for an open choice; none or one is a single take. */
-  variants: { id: string; label: string }[];
+  /**
+   * Options side by side for an open choice; none or one is a single take. `entry` is the variant's entry file (a
+   * page, a tape, a .cast or .ans), one of `files`, as the designer named it in studio.json; what the owner brought has none.
+   */
+  variants: StudioVariant[];
   /**
    * Relative to the version's folder, `artifacts/<id>/v<version>/` in the project's studio workspace (pass 3). Provider-neutral
    * files: the canvas shows them the same whoever made them.
