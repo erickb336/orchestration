@@ -90,3 +90,30 @@ The estimated Claude spend stays within what is left of the owner's $5 cap for p
   - findings 5 (no media while paused), 6 (the Codex PE temp folder), 7 (retry counting) and 10 (the PE's data-not-instructions line) in 4c.
 - **After pass 4:** findings 1–3 (the container recorder, other folders, WebRTC) and 11 (duplication).
 
+## 4a and 4c as built (merged in 29ca9d5 and eb4e408)
+
+**4a, the UI:**
+- Vision is a navigation tab with a badge counting artifacts that wait for the owner. The Home Studio card is removed.
+- **The lead's panel:** the message, questions with chips, Message the lead, and Open the conversation.
+- **One "Send to the lead" button** records the marks first, then posts one message with the answers and the marks.
+- **Documents:** `react-markdown` 10.1.0 and `remark-gfm` 4.0.1 (no raw HTML); `mermaid` 11.17.2 at `securityLevel: "strict"`, loaded on first use.
+- The PE review shows "not independent" when the PE ran on the designer's provider.
+- **Version history:** each version with its PE pass.
+- **The browser pass** at 1280 and 375 wide had no horizontal scroll and no console errors.
+- **For ORC-030's audit:** the right column is long, and the canvas has empty space under the prototype.
+
+**4c, the PE loop:**
+- **The loop:** a designer revision follows a feasible-if or not-feasible verdict, up to three passes per round. Objections then go to the owner. `lastPass` is removed.
+- After the third pass, feasible-if counts as agreed, with its change shown. Only not-feasible needs an overrule.
+- **Budget:** revisions count in the building budget, and wait at the stop.
+- **Review findings 5, 6, 7 and 10 are fixed:** no media while paused; the PE's temp folder lives outside the version; pause stops don't count as retries; the PE treats the designer's work as data, not instructions.
+
+**Follow-ups:**
+- the "Objects" and "Revising" wording should use the loop's state;
+- a revision that no provider can run shows nothing to the owner;
+- revision runs are logged with the actor "lead", because they go through 4b's `requestStudioRun`;
+- the trial's per-run Claude cap does not cover service-started revisions; only the building budget does;
+- stored verdicts from before 4c, which carry `lastPass`, re-enter the loop if their round is open.
+
+**Load-sensitive test (for ORC-030's stabilization):** `server/runtimes/codex.test.ts`, "a note before the turn exists is held, then steered…". It failed once in a full run while three implementers loaded the machine, then passed 3 times in 3 alone.
+
