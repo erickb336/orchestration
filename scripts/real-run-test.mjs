@@ -6,7 +6,8 @@
 //   node scripts/real-run-test.mjs           real Claude + Codex (needs credentials, see below)
 //   node scripts/real-run-test.mjs --fake    the same scenario against the fake runtime (no cost)
 //
-// Credentials: Claude needs ANTHROPIC_API_KEY (or Bedrock/Vertex/Foundry settings). Codex uses your
+// Credentials: Claude needs ANTHROPIC_API_KEY (or Bedrock/Vertex/Foundry settings), or your own subscription
+// token with ORCHESTRATION_CLAUDE_AUTH=subscription (see docs/real-agents.md). Codex uses your
 // local Codex sign-in (`npx codex login`) or OPENAI_API_KEY / CODEX_API_KEY. Nothing is printed or
 // stored except whether each provider reported itself ready.
 //

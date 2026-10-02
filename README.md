@@ -135,7 +135,15 @@ A personal tool under active development, built in milestones ORC-001 to ORC-026
 
 **Next:** [ORC-023](docs/tasks/ORC-023.md), Orchestrator inside Claude Code, is planned.
 
-**Not yet verified with real models.** Every feature is tested against simulated and scripted Claude and Codex runtimes. Runs with real models still need checking: `node scripts/real-run-test.mjs` does it with your credentials.
+**Verified with real models: the core run, not every feature.** On 2026-10-01, `node scripts/real-run-test.mjs` passed with real agents:
+
+- a Codex agent (gpt-6.1-sol) and a Claude agent (Haiku 4.5) worked at the same time, each in its own worktree;
+- Pause showed "Pausing" until each runtime confirmed the stop (about 2 seconds), and Resume started a fresh attempt;
+- a project-wide pause reached both;
+- both tasks then finished, with a review and the lead's brief on Claude Sonnet 5.5;
+- the managed repository's `main` was untouched.
+
+Ten runs took 54 seconds and an estimated $0.14 of Claude usage. **Not yet run with real models:** notes to a running agent, pull-request delivery, conversations with the lead, and whether the principles change what agents do. Every feature is also tested against simulated and scripted Claude and Codex runtimes.
 
 ## License
 
