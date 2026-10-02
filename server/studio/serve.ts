@@ -36,7 +36,8 @@ export interface PrototypeManifest {
   kind: string;
   title: string;
   devices: string[];
-  variants: { id: string; label: string; entry: string }[];
+  /** `showsError`: a terminal variant whose demo shows an error on purpose (artifacts.ts). */
+  variants: { id: string; label: string; entry: string; showsError?: boolean }[];
   files: { path: string; sha256: string; bytes: number }[];
 }
 

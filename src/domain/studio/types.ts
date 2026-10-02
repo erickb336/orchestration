@@ -96,11 +96,13 @@ export type ArtifactShots =
 /**
  * How one variant of a terminal demo or TUI is shown. Paths are relative to the version's folder.
  * recorded: VHS recorded its tape in the sandbox, into `recording/<variant>/` (WebM, GIF and a text transcript, as the
- * tape asked); hand-written: the designer's .cast or .ans files, not recorded (`reason`: why its tape was not, when
- * it had one); not-recorded: neither, and why.
+ * tape asked); recorded-with-errors: recorded, but its transcript shows a failure the designer did not mean to show
+ * (`reason`: the first failing line); hand-written: the designer's .cast or .ans files, not recorded (`reason`: why
+ * its tape was not, when it had one); not-recorded: neither, and why.
  */
 export type VariantDemo =
   | { variant: string; status: "recorded"; tape: string; webm?: string; gif?: string; txt?: string }
+  | { variant: string; status: "recorded-with-errors"; tape: string; webm?: string; gif?: string; txt?: string; reason: string }
   | { variant: string; status: "hand-written"; files: string[]; reason?: string }
   | { variant: string; status: "not-recorded"; reason: string };
 

@@ -183,7 +183,8 @@ if (cmd === "plan") {
 }
 `;
 
-const TRIPS_TAPE = `# Simulated sample: a terminal demo of \`trips\`, the Weekend Trips CLI. trips.js prints its planned output.
+const TRIPS_TAPE = `# Simulated sample: a terminal demo of \`trips\`, the Weekend Trips CLI. cli/trips.js prints its planned output; the
+# shell starts at the artifact's root, so the tape names it by that path.
 Output trips.gif
 Output trips.webm
 Output trips.txt
@@ -195,7 +196,7 @@ Set FontSize 16
 Set TypingSpeed 40ms
 
 Hide
-Type "alias trips='node trips.js' && clear"
+Type "alias trips='node cli/trips.js' && clear"
 Enter
 Show
 

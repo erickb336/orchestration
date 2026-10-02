@@ -3,7 +3,7 @@
 //   <dataDir>/studio/<projectId>/staging/<runId>/              a studio run's staging folder: the one place it writes
 //   <dataDir>/studio/<projectId>/artifacts/<artifactId>/v<n>/  one artifact version, never rewritten once recorded:
 //       its files, at the paths the designer gave them, and manifest.json:
-//       { artifactId, version, kind, title, devices, variants: [{ id, label, entry }], files: [{ path, sha256, bytes }] }
+//       { artifactId, version, kind, title, devices, variants: [{ id, label, entry, showsError? }], files: [{ path, sha256, bytes }] }
 //       and, written by the service after import (media.ts): shots/<variant>-<device>.png for a screen, and
 //       recording/<variant>/ for a terminal demo or TUI that VHS recorded. The files are read-only; the folders are
 //       not, so those can be added.
@@ -54,12 +54,23 @@ export interface StagedFile {
   data: Buffer;
 }
 
+/**
+ * A variant as studio.json gives it. `showsError`: a terminal demo or TUI that shows an error on purpose (an error
+ * path), so a failure in its recording's transcript is expected rather than reported (media.ts).
+ */
+export interface StagedVariant {
+  id: string;
+  label: string;
+  entry: string;
+  showsError?: true;
+}
+
 /** One artifact of a run's studio.json, checked, with its files read. Titles and labels are checked by the domain when recorded. */
 export interface StagedArtifact {
   kind: StudioArtifactKind;
   title: string;
   devices: Device[];
-  variants: { id: string; label: string; entry: string }[];
+  variants: StagedVariant[];
   files: StagedFile[];
 }
 
@@ -161,10 +172,11 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
     const paths = a.files.map((p) => filePath(p, where));
     if (new Set(paths.map((p) => p.toLowerCase())).size !== paths.length) throw new ManifestError(`${where} lists a file twice (paths that differ only in case are one file on this disk).`);
     if (!Array.isArray(a.variants) || !a.variants.length || a.variants.length > MAX_VARIANTS) throw new ManifestError(`${where} has between 1 and ${MAX_VARIANTS} variants, each with its entry file.`);
-    const variants = a.variants.map((v) => {
+    const variants = a.variants.map((v): StagedVariant => {
       if (!isObj(v) || typeof v.id !== "string" || typeof v.label !== "string" || typeof v.entry !== "string") throw new ManifestError(`${where}: a variant is { "id", "label", "entry" }.`);
       if (!paths.includes(v.entry)) throw new ManifestError(`${where}: the entry ${show(v.entry)} of variant ${show(v.id)} is not one of its files.`);
-      return { id: v.id, label: v.label, entry: v.entry };
+      if (v.showsError !== undefined && typeof v.showsError !== "boolean") throw new ManifestError(`${where}: "showsError" of variant ${show(v.id)} is true or false.`);
+      return { id: v.id, label: v.label, entry: v.entry, ...(v.showsError === true ? { showsError: true as const } : {}) };
     });
     let total = 0;
     const files = paths.map((p): StagedFile => {
@@ -233,7 +245,7 @@ export interface VersionManifest {
   kind: StudioArtifactKind;
   title: string;
   devices: Device[];
-  variants: { id: string; label: string; entry: string }[];
+  variants: StagedVariant[];
   files: { path: string; sha256: string; bytes: number }[];
 }
 

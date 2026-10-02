@@ -453,6 +453,7 @@ function TerminalArtifact({ artifact: a, variant }: { artifact: StudioArtifact; 
   if (demo.status === "recorded") {
     return (
       <div className="st-stack">
+        {demo.error && <Banner tone="fail">{note ? `${note}.` : `Recorded with errors: ${demo.error}`}</Banner>}
         {demo.video || demo.gif ? (
           <TerminalRecording title={a.title} video={demo.video && serviceFileUrl(a, demo.video)} gif={demo.gif && serviceFileUrl(a, demo.gif)} />
         ) : (

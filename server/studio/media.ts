@@ -7,16 +7,19 @@
 //   Chrome there are none, and the version says why.
 // - A terminal demo or TUI, per variant: the tape it records (its entry, or the one .tape beside it) is recorded with
 //   recordTape (terminal.ts) inside the sandbox, never outside it, into recording/<variant>/ (WebM, GIF and a text
-//   transcript, as the tape asks). A variant that is not recorded (no working sandbox, a missing tool, a failure) is
-//   shown with its hand-written .cast or .ans files when it has them, and otherwise says why it has nothing.
+//   transcript, as the tape asks). A recording whose transcript shows a failure is "recorded-with-errors", with its
+//   first failing line, unless the variant says it shows an error on purpose (`showsError`). A variant that is not
+//   recorded (no working sandbox, a missing tool, a failure) is shown with its hand-written .cast or .ans files when it
+//   has them, and otherwise says why it has nothing.
 //
-// Both kinds of file were checked at import (artifacts.ts); a tape is recorded from a copy of its folder made from
-// the version's files, each checked against its recorded hash.
+// Both kinds of file were checked at import (artifacts.ts); a tape is recorded from a copy of the whole version made
+// from its files, each checked against its recorded hash, with the shell at the copy's root: paths in a tape's
+// commands are relative to the artifact's root, as everywhere else.
 
 import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, posix, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import type { MediaResult } from "../../src/domain/studio/studio";
 import type { ArtifactShots, VariantDemo } from "../../src/domain/studio/types";
 import { variantFallback, variantTape } from "./artifacts";
@@ -27,13 +30,13 @@ import { recordTape, type RecordResult } from "./terminal";
 /** The tools behind the screenshots and recordings; the service uses systemMedia, tests stand in for it. Neither throws. */
 export interface StudioMedia {
   shots(studioDir: string, artifactId: string, version: number): Promise<ShotsOutcome>;
-  /** Record `tape` (relative to `tapeDir`) into `outDir`, sandboxed or not at all. */
-  record(tapeDir: string, outDir: string, tape: string): Promise<RecordResult>;
+  /** Record `tape` (its path in the artifact, under `artifactDir`) into `outDir`, sandboxed or not at all. */
+  record(artifactDir: string, outDir: string, tape: string): Promise<RecordResult>;
 }
 
 export const systemMedia = (log?: (msg: string) => void): StudioMedia => ({
   shots: (studioDir, artifactId, version) => captureShots({ studioDir, artifactId, version, log }),
-  record: (tapeDir, outDir, tape) => recordTape(tapeDir, outDir, { tape, log }),
+  record: (artifactDir, outDir, tape) => recordTape(artifactDir, outDir, { tape, log }),
 });
 
 /** The screenshots of a screen version, as the version records them. */
@@ -66,14 +69,14 @@ export function notRecordedReason(r: RecordResult): string {
 }
 
 /**
- * Copy the files of one folder of a version (those the manifest lists under it, each checked against its hash) into
- * a new temporary folder, for VHS to record from. Returns it, or why it could not.
+ * Copy every file of a version (those its manifest lists, at their paths, each checked against its hash) into a new
+ * temporary folder, for VHS to record from: a tape's commands may run any file of the artifact by its path. The
+ * service's own folders (shots/, recording/) are not listed, so not copied. Returns it, or why it could not.
  */
-function copyTapeFolder(dir: string, manifest: PrototypeManifest, folder: string): string | { error: string } {
-  const prefix = folder === "." ? "" : `${folder}/`;
+function copyVersion(dir: string, manifest: PrototypeManifest): string | { error: string } {
   const tmp = mkdtempSync(join(tmpdir(), "orc-tape-"));
   try {
-    for (const f of manifest.files.filter((x) => x.path.startsWith(prefix))) {
+    for (const f of manifest.files) {
       const from = join(dir, f.path);
       const st = lstatSync(from);
       const data = st.isFile() ? readFileSync(from) : undefined;
@@ -81,7 +84,7 @@ function copyTapeFolder(dir: string, manifest: PrototypeManifest, folder: string
         rmSync(tmp, { recursive: true, force: true });
         return { error: `${f.path} is missing or does not match its recorded hash` };
       }
-      const to = join(tmp, f.path.slice(prefix.length));
+      const to = join(tmp, f.path);
       mkdirSync(dirname(to), { recursive: true });
       writeFileSync(to, data, { mode: 0o644 });
     }
@@ -110,7 +113,7 @@ export async function makeDemo(media: StudioMedia, studioDir: string, artifactId
       shownVariants.push(fallback.length ? { variant: v.id, status: "hand-written", files: fallback } : { variant: v.id, status: "not-recorded", reason: "its entry is not a .tape, and no single .tape, nor a .cast or .ans, is beside it" });
       continue;
     }
-    const copy = copyTapeFolder(dir, manifest, posix.dirname(tape));
+    const copy = copyVersion(dir, manifest);
     if (typeof copy !== "string") {
       shownVariants.push(shown(`its files could not be read: ${copy.error}`));
       continue;
@@ -120,7 +123,7 @@ export async function makeDemo(media: StudioMedia, studioDir: string, artifactId
     let r: RecordResult;
     try {
       rmSync(out, { recursive: true, force: true });
-      r = await media.record(copy, out, posix.basename(tape));
+      r = await media.record(copy, out, tape);
     } catch (e) {
       r = { sandbox: null, reason: "failed", error: e instanceof Error ? e.message : String(e) };
     } finally {
@@ -137,9 +140,11 @@ export async function makeDemo(media: StudioMedia, studioDir: string, artifactId
       }
     };
     const outputs = { webm: rel(r.webm), gif: rel(r.gif), txt: rel(r.txt) };
-    // Recorded means recorded in the sandbox: anything else is not shown as a recording.
+    // Recorded means recorded in the sandbox: anything else is not shown as a recording. One that shows a failure says
+    // so, unless the designer made it to show one.
     if (!r.error && r.sandbox === "sandbox-exec" && (outputs.webm || outputs.gif || outputs.txt)) {
-      shownVariants.push({ variant: v.id, status: "recorded", tape, ...(outputs.webm ? { webm: outputs.webm } : {}), ...(outputs.gif ? { gif: outputs.gif } : {}), ...(outputs.txt ? { txt: outputs.txt } : {}) });
+      const files = { ...(outputs.webm ? { webm: outputs.webm } : {}), ...(outputs.gif ? { gif: outputs.gif } : {}), ...(outputs.txt ? { txt: outputs.txt } : {}) };
+      shownVariants.push(r.errorLine && v.showsError !== true ? { variant: v.id, status: "recorded-with-errors", tape, ...files, reason: r.errorLine } : { variant: v.id, status: "recorded", tape, ...files });
     } else {
       rmSync(out, { recursive: true, force: true });
       shownVariants.push(shown(notRecordedReason(r)));
