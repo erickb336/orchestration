@@ -96,7 +96,7 @@ function factorySettings(v: unknown): FactorySettings {
   return {
     autonomy: oneOf(o, "autonomy", ["autopilot", "checkin", "manual"] as const),
     merge: oneOf(o, "merge", ["user", "auto"] as const),
-    pausePoints: { tradeoffs: oneOf(p, "tradeoffs", ["pe", "user"] as const), changeOrders: oneOf(p, "changeOrders", ["lead", "user"] as const), startEachTask: bool(p, "startEachTask") },
+    pausePoints: { tradeoffs: oneOf(p, "tradeoffs", ["lead", "pe", "user"] as const), changeOrders: oneOf(p, "changeOrders", ["lead", "user"] as const), startEachTask: bool(p, "startEachTask") },
   };
 }
 

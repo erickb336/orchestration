@@ -96,7 +96,7 @@ describe("Start the factory: the owner's command", () => {
     const s = fresh();
     const args = startFactoryArgs(s);
     expect(() => runCommand(s, "startFactory", { ...args, settings: { ...MANUAL, autonomy: "turbo" } }, at(1))).toThrow(/autonomy must be autopilot, checkin, manual/);
-    expect(() => runCommand(s, "startFactory", { ...args, settings: { ...MANUAL, pausePoints: { ...MANUAL.pausePoints, tradeoffs: "lead" } } }, at(1))).toThrow(/tradeoffs must be pe, user/);
+    expect(() => runCommand(s, "startFactory", { ...args, settings: { ...MANUAL, pausePoints: { ...MANUAL.pausePoints, tradeoffs: "anyone" } } }, at(1))).toThrow(/tradeoffs must be lead, pe, user/);
     expect(() => runCommand(s, "startFactory", { ...args, acceptOpen: "all" }, at(1))).toThrow(/acceptOpen must be an array/);
     expect(() => runCommand(s, "startFactory", { ...args, settings: { ...MANUAL, autonomy: "autopilot", pausePoints: { ...MANUAL.pausePoints, startEachTask: true } } }, at(1))).toThrow(/Autopilot starts each task without waiting/);
     expect(() => runCommand(s, "startFactory", { ...args, settings: { ...MANUAL, autonomy: "checkin" } }, at(1))).toThrow(/Check-in waits for your go-ahead/);
@@ -133,6 +133,27 @@ describe("Start the factory: the owner's command", () => {
     const kept = startFactoryAsOwner(custom, at(1), { autonomy: "autopilot", merge: "user", pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: false } });
     expect(kept.project.autonomy).toEqual(custom.project.autonomy);
     expect(kept.events.length).toBe(custom.events.length + 1); // only the start itself
+  });
+
+  it("keeps the owner's decision route: only settings that choose another route change it (review finding 2)", () => {
+    const routing = (before: State, after: State) => after.events.slice(before.events.length).map((e) => e.message).filter((m) => m.startsWith("Findings that need a decision"));
+    // The owner sent findings to the lead before starting; the Start building button sends the settings as they stand.
+    const lead = F.setTriageRouting(fresh(), "lead", at(0));
+    const kept = runCommand(lead, "startFactory", startFactoryArgs(lead), at(1)).state;
+    expect(kept.project.triage.askUserBy).toBe("lead");
+    expect(kept.project.factoryStarts[0].settings.pausePoints.tradeoffs).toBe("lead");
+    expect(routing(lead, kept)).toEqual([]);
+    // Starting on Autopilot from Manual applies Autopilot's planning, not its route: the lead's and yours are kept.
+    const autopilot = { autonomy: "autopilot", pausePoints: { changeOrders: "lead", startEachTask: false } } as const;
+    const fromLead = startFactoryAsOwner(lead, at(1), { ...autopilot, pausePoints: { ...autopilot.pausePoints, tradeoffs: "lead" } });
+    expect([M.autonomyMode(fromLead.project.autonomy), fromLead.project.triage.askUserBy, routing(lead, fromLead)]).toEqual(["autopilot", "lead", []]);
+    const yours = fresh();
+    const fromYou = startFactoryAsOwner(yours, at(1), { ...autopilot, pausePoints: { ...autopilot.pausePoints, tradeoffs: "user" } });
+    expect([M.autonomyMode(fromYou.project.autonomy), fromYou.project.triage.askUserBy, routing(yours, fromYou)]).toEqual(["autopilot", "user", []]);
+    // A route the owner chooses is applied and recorded.
+    const toPe = startFactoryAsOwner(lead, at(1), { pausePoints: { tradeoffs: "pe", changeOrders: "lead", startEachTask: false } });
+    expect(toPe.project.triage.askUserBy).toBe("pe");
+    expect(routing(lead, toPe)).toEqual(["Findings that need a decision now go to the PE (the lead decides for it until the PE runs its own decisions); open decisions stay where they are"]);
   });
 
   it("the settings as they stand: what the Start building button sends today", () => {

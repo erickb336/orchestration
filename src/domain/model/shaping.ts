@@ -28,7 +28,7 @@ import {
   StaleWriteError,
 } from "../types";
 import { activeAttempts, currentVision, draft, event, touch } from "./core";
-import { applyAutopilot, autonomyMode, setAutonomy } from "./lead";
+import { autonomyMode, autopilotAutonomy, setAutonomy } from "./lead";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "./textSafety";
 import { pushVision } from "./vision";
 
@@ -76,8 +76,8 @@ export function currentFactorySettings(s: State): FactorySettings {
     autonomy: autonomyMode(p.autonomy),
     merge: p.prDelivery.merge === "auto" ? "auto" : "user",
     pausePoints: {
-      // Decisions routed to the lead go to the PE once it decides (the lead decides for it until then).
-      tradeoffs: p.triage.askUserBy === "user" ? "user" : "pe",
+      // The route as it is, the lead's included: a start that changes nothing keeps it.
+      tradeoffs: p.triage.askUserBy,
       changeOrders: p.changeOrders,
       startEachTask: p.autonomy.holdLeadProposals,
     },
@@ -120,12 +120,16 @@ function settingsProblem(x: FactorySettings): string | undefined {
   return undefined;
 }
 
-/** Apply the factory's settings through the usual setters, each only where it differs, so each change is recorded as usual. */
+/**
+ * Apply the factory's settings through the usual setters, each only where it differs, so each change is recorded as
+ * usual. Nothing changes that the settings do not name: Autopilot's planning numbers apply without the preset's
+ * decision route, which is the settings' own.
+ */
 function applyFactorySettings(state: State, x: FactorySettings, now: string): State {
   let s = state;
   if (autonomyMode(s.project.autonomy) !== x.autonomy) {
     const a = s.project.autonomy;
-    if (x.autonomy === "autopilot") s = applyAutopilot(s, a.autoDeliver.branch, now);
+    if (x.autonomy === "autopilot") s = setAutonomy(s, autopilotAutonomy(a, s.project.prDelivery.enabled ? { ...a.autoDeliver, enabled: false } : { enabled: true, branch: a.autoDeliver.branch }), now);
     else s = setAutonomy(s, { ...a, enabled: x.autonomy === "checkin", holdLeadProposals: x.autonomy === "checkin" ? true : a.holdLeadProposals }, now);
   }
   if (s.project.autonomy.holdLeadProposals !== x.pausePoints.startEachTask) s = setAutonomy(s, { ...s.project.autonomy, holdLeadProposals: x.pausePoints.startEachTask }, now);

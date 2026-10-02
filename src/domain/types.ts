@@ -111,8 +111,11 @@ export interface FactorySettings {
   /** Who merges finished work: you, or automatically (the pull-request merge setting). */
   merge: "user" | "auto";
   pausePoints: {
-    /** Findings that ask for a decision: the PE decides (within budget), or you do. */
-    tradeoffs: "pe" | "user";
+    /**
+     * Findings that ask for a decision: the PE decides (within budget), or you do. "lead" is the lead's route a project
+     * may already have (ORC-013): the start keeps whichever route the owner leaves in place.
+     */
+    tradeoffs: "lead" | "pe" | "user";
     /** A blueprint change after the start: the lead updates the affected tasks, or asks you first. */
     changeOrders: "lead" | "user";
     /** New tasks wait for your go-ahead before they start. */

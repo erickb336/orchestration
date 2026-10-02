@@ -341,21 +341,22 @@ export function autonomyMode(a: Autonomy): FactorySettings["autonomy"] {
  */
 export function applyAutopilot(state: State, branch: string, now: string): State {
   const a = state.project.autonomy;
-  const next = setAutonomy(
-    state,
-    {
-      enabled: true,
-      planningIntervalMinutes: AUTOPILOT.planningIntervalMinutes,
-      maxProposalsPerCycle: AUTOPILOT.maxProposalsPerCycle,
-      maxOpenProposals: AUTOPILOT.maxOpenProposals,
-      holdLeadProposals: false,
-      operatingHours: a.operatingHours,
-      autoRetry: AUTOPILOT.autoRetry,
-      autoDeliver: state.project.prDelivery.enabled ? { ...a.autoDeliver, enabled: false } : { enabled: true, branch },
-    },
-    now,
-  );
+  const next = setAutonomy(state, autopilotAutonomy(a, state.project.prDelivery.enabled ? { ...a.autoDeliver, enabled: false } : { enabled: true, branch }), now);
   // On Autopilot the lead decides ask-user findings, so work does not wait for a person. It
   // never turns checks on or changes the sandbox.
   return F.setTriageRouting(next, "lead", now);
+}
+
+/** Autopilot's planning numbers and no holds, with the operating hours kept and the delivery given. */
+export function autopilotAutonomy(a: Autonomy, autoDeliver: Autonomy["autoDeliver"]): Autonomy {
+  return {
+    enabled: true,
+    planningIntervalMinutes: AUTOPILOT.planningIntervalMinutes,
+    maxProposalsPerCycle: AUTOPILOT.maxProposalsPerCycle,
+    maxOpenProposals: AUTOPILOT.maxOpenProposals,
+    holdLeadProposals: false,
+    operatingHours: a.operatingHours,
+    autoRetry: AUTOPILOT.autoRetry,
+    autoDeliver,
+  };
 }
