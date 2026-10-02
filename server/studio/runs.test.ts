@@ -141,7 +141,10 @@ describe("a designer run at the service", () => {
     expect(a.prompt).toContain("VHS's own `Output` and `Source` paths are relative to the tape's folder");
     expect(a.prompt).toContain("The demo runs with no network (not even localhost) and no access to the home folder (`~`)");
     expect(a.prompt).toContain("A CLI that does not exist yet is a `.js` script the tape runs with `node`");
-    expect(a.prompt).toContain('It must run cleanly in the sandbox, from the artifact\'s root.');
+    expect(a.prompt).toContain('It must run cleanly in the container, from the artifact\'s root.');
+    // The recorder has bash only: a zsh tape falls back to the hand-written frames.
+    expect(a.prompt).toContain("`Set Shell bash`");
+    expect(a.prompt).toContain("Use bash: the recorder has no zsh. A tape that sets zsh is not recorded; the variant then shows its hand-written frames, with the reason.");
     expect(a.prompt).toContain('sets `"showsError": true` on its variant');
     expect(readdirSync(staging)).toEqual([]);
     expect(runOf(id)).toMatchObject({ status: "running", sessionId: `claude-session-${id}`, actualModel: "claude-sample-large-actual" });
@@ -562,9 +565,9 @@ describe("the PE's runs at the service", () => {
     pePass(3);
     // The third pass still objects: the loop is over, and the objection goes to the owner, never dropped.
     const v3 = S.getArtifact(state(), artifactId, 3);
-    expect(S.peReview(state(), v3)).toMatchObject({ status: "objections", pass: 3, ended: "passes" });
+    expect(S.peReview(state(), v3)).toMatchObject({ status: "ended", pass: 3, ended: "passes" });
     expect(S.openObjections(state(), v3).map((o) => o.reasons)).toEqual([`${prices} (pass 3)`]);
-    expect(state().events.map((e) => e.message)).toContain("PE review of Trip plan v3, pass 3: A · Map first feasible, B · Day by day not feasible; still objects after 3 passes; it goes to the owner with the objections");
+    expect(state().events.map((e) => e.message)).toContain("PE review of Trip plan v3, pass 3: A · Map first feasible, B · Day by day not feasible; review ended: the PE made its 3 passes in the round; it goes to the owner with the objections");
     tick();
     expect(revisions()).toHaveLength(2);
     expect(peRuns()).toHaveLength(3);
@@ -612,7 +615,7 @@ describe("the PE's runs at the service", () => {
     expect(S.openPins(state(), artifactId, 3)).toEqual([{ x: 0.5, y: 0.2, variant: "b", text: "Show the drive times.", selector: "main > section.day" }]);
   });
 
-  it("an answer that cannot be recorded fails the run with the reason; the service asks once more, then stops", async () => {
+  it("an answer that cannot be recorded fails the run with the reason; the service asks once more, then review ends and the owner sees it", async () => {
     await service();
     const { artifactId } = designed();
     tick();
@@ -628,7 +631,9 @@ describe("the PE's runs at the service", () => {
     expect(runOf(second.id)).toMatchObject({ status: "failed", note: "Its verdicts were refused: The pass leaves out variant b: the PE judges every option the owner will see." });
     tick();
     expect(peRuns()).toHaveLength(2);
-    expect(S.peReview(state(), S.getArtifact(state(), artifactId, 1))).toEqual({ status: "waiting", passes: 0 });
+    // Review ended there: the owner sees the version, unreviewed, never left "waiting" (review finding 6).
+    expect(S.peReview(state(), S.getArtifact(state(), artifactId, 1))).toEqual({ status: "ended", ended: "no-review", pass: 0, asks: [], objections: [] });
+    expect(S.readyForOwner(state(), S.getArtifact(state(), artifactId, 1))).toBe(true);
   });
 
   it("with the fake runtime, the loop shows: the simulated PE asks for a change on v1, the simulated designer revises that variant, and the PE agrees with v2, all labelled simulated", async () => {

@@ -17,6 +17,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { DEVICES, type Device } from "../../src/domain/types";
+import { MAX_PROVENANCE, isInsidePath } from "../../src/domain/studio/studio";
 import type { StudioArtifactKind } from "../../src/domain/studio/types";
 import { validateAnsFrame, validateCast, validateTape } from "./terminal";
 
@@ -102,8 +103,7 @@ const mb = (n: number) => `${(n / (1024 * 1024)).toFixed(1)} MB`;
 /** A path an artifact may list: relative, inside the folder, of an allowed type, and not the service's own manifest. */
 function filePath(p: unknown, where: string): string {
   if (typeof p !== "string") throw new ManifestError(`${where}: a file is not a path.`);
-  const outside = !p || p.length > 300 || p.startsWith("/") || p.includes("\\") || /[\u0000-\u001f\u007f]/.test(p) || p.split("/").some((x) => x === "" || x === "." || x === "..");
-  if (outside) throw new ManifestError(`${where}: ${show(p)} is not a relative path inside the run's folder (no absolute paths, no "..").`);
+  if (!isInsidePath(p)) throw new ManifestError(`${where}: ${show(p)} is not a relative path inside the run's folder (no absolute paths, no "..").`);
   // Plain ASCII names only (review finding 9): no lookalike letters, and no name that two disks normalize differently.
   if (!p.split("/").every((x) => SEGMENT.test(x))) throw new ManifestError(`${where}: ${show(p)} has a name with a character other than A–Z, a–z, 0–9, ".", "_", "-" or a space.`);
   // Compared without case: the Mac's disk does not tell "Shots/" from "shots/".
@@ -199,8 +199,6 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
   });
 }
 
-const MAX_PROVENANCE = 50;
-
 /**
  * An "as is" artifact's provenance: 1 to 50 paths in the repository, relative to its root, with no "." or ".." name.
  * Whether the repository has each file is checked when the run is imported (runs.ts).
@@ -208,8 +206,7 @@ const MAX_PROVENANCE = 50;
 function provenanceOf(raw: unknown, where: string): string[] {
   if (!Array.isArray(raw) || !raw.length || raw.length > MAX_PROVENANCE || !raw.every((p) => typeof p === "string")) throw new ManifestError(`${where}: "provenance" lists 1 to ${MAX_PROVENANCE} repository files, as paths from the repository's root.`);
   for (const p of raw as string[]) {
-    const bad = !p || p.length > 300 || p.startsWith("/") || p.includes("\\") || /[\u0000-\u001f\u007f]/.test(p) || p.split("/").some((x) => x === "" || x === "." || x === "..");
-    if (bad) throw new ManifestError(`${where}: the provenance ${show(p)} is not a path from the repository's root (no absolute paths, no "..").`);
+    if (!isInsidePath(p)) throw new ManifestError(`${where}: the provenance ${show(p)} is not a path from the repository's root (no absolute paths, no "..").`);
   }
   return [...new Set(raw as string[])];
 }

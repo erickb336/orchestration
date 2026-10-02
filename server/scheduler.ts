@@ -852,7 +852,10 @@ export class Scheduler {
         const tmp = join(root, run.workspace);
         rmSync(tmp, { recursive: true, force: true });
         mkdirSync(tmp, { recursive: true });
-        this.launched.set(runId, { provider: run.provider, access: "read", stepId: run.kind, taskId: "STUDIO", tmp });
+        // A reproduction of the code as it is today is judged against the code: the PE reads a checkout of it (review finding 5).
+        const asIs = !!S.getArtifact(state, run.artifactId!, run.baseVersion!).provenance;
+        const checkout = asIs && this.workspaces ? this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId: runId, taskId: "STUDIO", stepId: run.kind, access: "read" }) : undefined;
+        this.launched.set(runId, { provider: run.provider, access: "read", workspace: checkout, stepId: run.kind, taskId: "STUDIO", tmp });
         adapter.start({
           attemptId: runId,
           taskId: "STUDIO",
@@ -860,18 +863,19 @@ export class Scheduler {
           role: "pe",
           provider: run.provider,
           model: run.model,
-          workspace: { path: folder, access: "read", tmp },
+          workspace: { path: folder, access: "read", tmp, ...(checkout ? { readRoots: [checkout.path] } : {}) },
           studio: true,
           environment: "isolated",
           connections: [],
-          prompt: peEnvelope(state, run, { folder }),
+          prompt: peEnvelope(state, run, { folder, checkout: checkout?.path }),
           outputs: [],
           limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
         });
         return undefined;
       } catch (e) {
-        const tmp = this.launched.get(runId)?.tmp;
-        if (tmp) rmSync(tmp, { recursive: true, force: true });
+        const info = this.launched.get(runId);
+        if (info?.tmp) rmSync(info.tmp, { recursive: true, force: true });
+        if (info?.workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, info.workspace.path);
         this.launched.delete(runId);
         return `Could not start the PE run: ${e instanceof Error ? e.message : String(e)}`;
       }

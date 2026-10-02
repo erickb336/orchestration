@@ -57,6 +57,22 @@ describe("as it is today: round 0 of an existing repository (pass 4)", () => {
     expect(art(v3.state, a.id, 3).provenance).toBeUndefined();
   });
 
+  it("a reproduction is not revised for the PE: what the PE says of its faithfulness goes to the owner at once (review finding 5)", () => {
+    const zero = openRound(fresh(), "material", at(1));
+    const a = addScreen(zero.state, 0, at(2), asIs());
+    const s = pePass(a.state, a.id, 1, [{ verdict: "feasible-if", reasons: "The list matches the code.", change: "The code sorts trips by date; the reproduction does not." }], at(3));
+    const v1 = art(s, a.id, 1);
+    expect(S.peReview(s, v1)).toMatchObject({ status: "ended", ended: "as-is", pass: 1, objections: [], asks: [{ change: "The code sorts trips by date; the reproduction does not." }] });
+    expect(S.revisionDue(s, v1)).toBe(false);
+    expect(S.readyForOwner(s, v1)).toBe(true);
+    expect(s.events.at(-1)!.message).toBe(
+      "PE review of Trip list (as is) v1, pass 1: feasible if changed; review ended: it reproduces the code as it is today, and the designer does not revise a reproduction for the PE; it goes to the owner with the changes the PE asks for",
+    );
+    // The owner corrects it: a mark, and the round can close.
+    expect(S.currentFeedback(feedback(s, a.id, 1, { mark: "change", note: "Sort by date, as the code does." }, at(4)), a.id, 1)?.mark).toBe("change");
+    expect(S.roundBusy(s, 0)).toBeUndefined();
+  });
+
   it("refuses as-is artifacts anywhere else, from anyone else, and provenance that is not a path in the repository", () => {
     const zero = openRound(fresh(), "material", at(1));
     const outside = "Only the designer's reproductions of the existing code in round 0 (as it is today) are labelled as is.";
@@ -165,11 +181,11 @@ describe("PE review: the loop rule", () => {
     expect(S.peReview(s, art(s, id, 1))).toEqual({ status: "waiting", passes: 0 });
     expect(S.readyForOwner(s, art(s, id, 1))).toBe(false);
     expect(S.revisionDue(s, art(s, id, 1))).toBe(false);
-    expect(() => feedback(s, id, 1, { mark: "keep" }, at(3))).toThrow("Trip plan v1 is still in PE review; it reaches you once the PE agrees or after 3 passes.");
+    expect(() => feedback(s, id, 1, { mark: "keep" }, at(3))).toThrow("Trip plan v1 is still in PE review; it reaches you once the PE agrees or its review ends.");
     s = pePass(s, id, 1, [{ variant: "A", verdict: "feasible-if" }, { variant: "B", verdict: "not-feasible", reasons: "Hourly forecasts for every trailhead cost too much." }, { variant: "C", verdict: "feasible" }], at(3));
     const one = S.peReview(s, art(s, id, 1));
     expect(one).toMatchObject({ status: "revising", pass: 1 });
-    expect(one.status === "revising" && one.changes.map((v) => v.variant)).toEqual(["A"]);
+    expect(one.status === "revising" && one.asks.map((v) => v.variant)).toEqual(["A"]);
     expect(S.openObjections(s, art(s, id, 1)).map((v) => [v.variant, v.reasons])).toEqual([["B", "Hourly forecasts for every trailhead cost too much."]]);
     expect(S.readyForOwner(s, art(s, id, 1))).toBe(false);
     expect(S.revisionDue(s, art(s, id, 1))).toBe(true);
@@ -179,7 +195,7 @@ describe("PE review: the loop rule", () => {
     expect(S.peReview(s, art(s, id, 2))).toEqual({ status: "waiting", passes: 1 });
     expect(S.revisionDue(s, art(s, id, 1))).toBe(false);
     s = pePass(s, id, 2, [{ variant: "A", verdict: "feasible-if" }, { variant: "B", verdict: "feasible" }, { variant: "C", verdict: "feasible" }], at(5));
-    expect(S.peReview(s, art(s, id, 2))).toMatchObject({ status: "revising", pass: 2, objections: [], changes: [expect.objectContaining({ variant: "A" })] });
+    expect(S.peReview(s, art(s, id, 2))).toMatchObject({ status: "revising", pass: 2, objections: [], asks: [expect.objectContaining({ variant: "A" })] });
     expect(S.readyForOwner(s, art(s, id, 2))).toBe(false);
     // The third version is feasible throughout: it goes to the owner.
     s = addScreen(s, 1, at(6), { artifactId: id }).state;
@@ -191,7 +207,7 @@ describe("PE review: the loop rule", () => {
     expect(S.currentFeedback(feedback(s, id, 3, { mark: "keep", pickedVariant: "A" }, at(8)), id, 3)).toMatchObject({ mark: "keep", pickedVariant: "A" });
   });
 
-  it("a change the PE still asks for after the third pass goes to the owner with its verdict; with no objection left, nothing waits on an overrule", () => {
+  it("a change the PE still asks for after the third pass goes to the owner with its verdict, never as agreed; with no objection left, nothing waits on an overrule", () => {
     let { s, id } = tripPlan();
     const asks = (v: number, sec: number) => pePass(s, id, v, [{ variant: "A", verdict: "feasible" }, { variant: "B", verdict: "feasible-if", change: `page the days (pass ${v})` }, { variant: "C", verdict: "feasible" }], at(sec));
     s = asks(1, 3);
@@ -199,8 +215,11 @@ describe("PE review: the loop rule", () => {
     s = asks(2, 5);
     s = addScreen(s, 1, at(6), { artifactId: id }).state;
     s = asks(3, 7);
-    expect(S.peReview(s, art(s, id, 3))).toEqual({ status: "agreed", pass: 3 });
-    expect(s.events.at(-1)?.message).toBe("PE review of Trip plan v3, pass 3: Map first feasible, Timeline feasible if changed, Day cards feasible; still asks for changes after 3 passes; it goes to the owner with them");
+    expect(S.peReview(s, art(s, id, 3))).toMatchObject({ status: "ended", ended: "passes", pass: 3, objections: [], asks: [{ variant: "B", change: "page the days (pass 3)" }] });
+    expect(S.readyForOwner(s, art(s, id, 3))).toBe(true);
+    expect(s.events.at(-1)?.message).toBe(
+      "PE review of Trip plan v3, pass 3: Map first feasible, Timeline feasible if changed, Day cards feasible; review ended: the PE made its 3 passes in the round; it goes to the owner with the changes the PE asks for",
+    );
     expect(S.revisionDue(s, art(s, id, 3))).toBe(false);
     // Shown, never dropped: the verdict and its change stay on the version the owner sees.
     expect(s.studio.verdicts.filter((v) => v.version === 3 && v.verdict === "feasible-if").map((v) => v.change)).toEqual(["page the days (pass 3)"]);
@@ -216,11 +235,11 @@ describe("PE review: the loop rule", () => {
     s = addScreen(s, 1, at(6), { artifactId: id }).state;
     s = objects(3, 7);
     const review = S.peReview(s, art(s, id, 3));
-    expect(review).toMatchObject({ status: "objections", pass: 3, ended: "passes" });
+    expect(review).toMatchObject({ status: "ended", pass: 3, ended: "passes", asks: [] });
     expect(S.revisionDue(s, art(s, id, 3))).toBe(false);
     expect(S.readyForOwner(s, art(s, id, 3))).toBe(true);
     expect(S.openObjections(s, art(s, id, 3)).map((v) => v.reasons)).toEqual(["still too costly (pass 3)"]);
-    expect(s.events.at(-1)?.message).toMatch(/still objects after 3 passes; it goes to the owner with the objections$/);
+    expect(s.events.at(-1)?.message).toMatch(/; review ended: the PE made its 3 passes in the round; it goes to the owner with the objections$/);
     // Every objection stays recorded, on the version it was made on.
     expect(s.studio.verdicts.filter((v) => v.verdict === "not-feasible").map((v) => [v.version, v.pass])).toEqual([[1, 1], [2, 2], [3, 3]]);
     expect(() => objects(3, 8)).toThrow("PE review of Trip plan ended after 3 passes in round 1; it went to the owner with the open objections.");
@@ -266,7 +285,7 @@ describe("PE review: the loop rule", () => {
     expect(S.revisionDue(s, v())).toBe(true);
     const second = revision(10);
     s = R.reportStudioRunFailed(s, second, "studio.json was refused: it lists no artifact", at(11));
-    expect(S.peReview(s, v())).toMatchObject({ status: "objections", pass: 1, ended: "no-revision" });
+    expect(S.peReview(s, v())).toMatchObject({ status: "ended", pass: 1, ended: "no-revision" });
     expect(S.revisionDue(s, v())).toBe(false);
     expect(S.readyForOwner(s, v())).toBe(true);
     // The owner answers: marks it, and overrules the objection with a reason, which is recorded.
@@ -276,7 +295,7 @@ describe("PE review: the loop rule", () => {
     expect(S.openObjections(s, v())).toEqual([]);
     // A round closed while the PE still objects ends its loop too.
     const closed = run(objected, "closeRound", { round: 1 }, at(4)).state;
-    expect(S.peReview(closed, art(closed, id, 1))).toMatchObject({ status: "objections", ended: "round-closed" });
+    expect(S.peReview(closed, art(closed, id, 1))).toMatchObject({ status: "ended", ended: "round-closed" });
     expect(S.revisionDue(closed, art(closed, id, 1))).toBe(false);
     // Outside Vision nothing is revised; back in Vision the loop goes on.
     expect(S.revisionDue(startFactoryAsOwner(objected, at(4)), art(objected, id, 1))).toBe(false);
@@ -328,7 +347,7 @@ describe("the owner overrules an objection", () => {
     const objects = (v: number, sec: number) => pePass(s, id, v, [{ variant: "A", verdict: "feasible" }, { variant: "B", verdict: "not-feasible", reasons: "too costly" }, { variant: "C", verdict: "feasible" }], at(sec));
     s = objects(1, 3);
     const early = S.openObjections(s, art(s, id, 1))[0];
-    expect(() => run(s, "overruleObjection", { verdictId: early.id, why: "I accept the cost." }, at(4))).toThrow("The PE is still reviewing Trip plan; it reaches you once the PE agrees or after 3 passes.");
+    expect(() => run(s, "overruleObjection", { verdictId: early.id, why: "I accept the cost." }, at(4))).toThrow("The PE is still reviewing Trip plan; it reaches you once the PE agrees or its review ends.");
     s = addScreen(s, 1, at(4), { artifactId: id }).state;
     s = objects(2, 5);
     s = addScreen(s, 1, at(6), { artifactId: id }).state;
@@ -343,7 +362,7 @@ describe("the owner overrules an objection", () => {
     expect(s.events.at(-1)).toMatchObject({ actor: "user", kind: "decision", message: "You overruled the PE's objection to Trip plan v3 (Timeline): The group pays for the forecasts." });
     expect(S.openObjections(s, art(s, id, 3))).toEqual([]);
     // Overruled, not dropped: the objection is still in the latest pass, marked.
-    expect(S.peReview(s, art(s, id, 3))).toMatchObject({ status: "objections", objections: [expect.objectContaining({ id: objection.id, reasons: "too costly" })] });
+    expect(S.peReview(s, art(s, id, 3))).toMatchObject({ status: "ended", objections: [expect.objectContaining({ id: objection.id, reasons: "too costly" })] });
     expect(() => run(s, "overruleObjection", { verdictId: objection.id, why: "again" }, at(9))).toThrow("You already overruled this objection.");
   });
 });

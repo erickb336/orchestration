@@ -14,7 +14,7 @@
 
 import * as R from "../../src/domain/studio/runs";
 import * as S from "../../src/domain/studio/studio";
-import type { PeVerdict, StudioArtifact } from "../../src/domain/studio/types";
+import { VERDICT_WORDS, type PeVerdict, type StudioArtifact } from "../../src/domain/studio/types";
 import { ControlError, type ModelSelection, type State } from "../../src/domain/types";
 
 const REASONS_CAP = 1000;
@@ -27,8 +27,6 @@ const BRIEF_CAP = 19_000;
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 /** Agent or owner text, on one line. */
 const line = (text: string) => text.replace(/\s+/g, " ").trim();
-
-const VERDICT_WORDS = { feasible: "feasible", "feasible-if": "feasible if changed", "not-feasible": "not feasible" } as const;
 
 /** The owner's feedback on the artifact so far: every version's current answer, oldest first, and the pins carried to this one. */
 function ownerLines(s: State, a: StudioArtifact): string[] {
@@ -70,15 +68,15 @@ function ownerLines(s: State, a: StudioArtifact): string[] {
 export function revisionBrief(s: State, a: StudioArtifact): string {
   const review = S.peReview(s, a);
   if (review.status !== "revising") throw new ControlError(`${S.artifactName(a)} is not being revised for the PE.`);
-  const latest = s.studio.verdicts.filter((v) => v.artifactId === a.id && v.version === a.version && v.pass === review.pass);
-  const asks = (v: PeVerdict | undefined) => !!v && v.verdict !== "feasible";
+  // What sends the version back: the PE's objections and the changes it asks for, on a variant or on the whole.
+  const sent: PeVerdict[] = [...review.objections, ...review.asks];
   const what = (v: PeVerdict) =>
     [
       `  The PE found it ${VERDICT_WORDS[v.verdict]}. Its reasons: ${clip(line(v.reasons), REASONS_CAP)}`,
       ...(v.change ? [`  ${v.verdict === "not-feasible" ? "What would change its verdict" : "The change it asks for"}: ${clip(line(v.change), CHANGE_CAP)}`] : []),
     ].join("\n");
-  const whole = latest.find((v) => v.variant === undefined);
-  const revise = whole ? (asks(whole) ? a.variants : []) : a.variants.filter((v) => asks(latest.find((x) => x.variant === v.id)));
+  const whole = sent.find((v) => v.variant === undefined);
+  const revise = whole ? a.variants : a.variants.filter((v) => sent.some((x) => x.variant === v.id));
   const keep = a.variants.filter((v) => !revise.includes(v));
   const owner = ownerLines(s, a);
   const brief = [
@@ -90,7 +88,7 @@ export function revisionBrief(s: State, a: StudioArtifact): string {
       ? ["Revise the artifact as a whole:", `- Revise it as a whole.`, what(whole)]
       : [
           "Revise only these variants, keeping each one's id, label and entry file:",
-          ...revise.map((v) => `- Revise \`${v.id}\` (${v.label})${v.entry ? `, entry ${v.entry}` : ""}.\n${what(whole ?? latest.find((x) => x.variant === v.id)!)}`),
+          ...revise.map((v) => `- Revise \`${v.id}\` (${v.label})${v.entry ? `, entry ${v.entry}` : ""}.\n${what(whole ?? sent.find((x) => x.variant === v.id)!)}`),
           ...(keep.length ? ["", "Leave these exactly as they are, file for file; the PE found them feasible:", ...keep.map((v) => `- \`${v.id}\` (${v.label}).`)] : []),
         ]),
     "",
@@ -112,8 +110,9 @@ function makerSelection(s: State, a: StudioArtifact): ModelSelection | undefined
 /**
  * Ask for a designer run revising every version the PE sent back (the service, on each cycle, after the PE's verdicts
  * are recorded): in the version's round, with the revision brief, on the designer's provider and model that made it,
- * else the designer's default. A version whose revision cannot be asked for (no provider can run it) is asked again
- * on a later cycle. Queued: dispatch starts it in Vision, never while paused or past the building budget.
+ * else the designer's default. When no enabled provider can run it, review of the version ends there (`no-provider`,
+ * with the reason), and it goes to the owner with what the PE asks for. Queued: dispatch starts it in Vision, never
+ * while paused or past the building budget.
  */
 export function askForRevisions(state: State, now: string): State {
   if (state.project.stage !== "shaping") return state;
@@ -122,14 +121,18 @@ export function askForRevisions(state: State, now: string): State {
     if (!S.revisionDue(s, a)) continue;
     const brief = revisionBrief(s, a);
     const same = makerSelection(s, a);
+    let refused: string | undefined;
     for (const selection of same ? [same, undefined] : [undefined]) {
       try {
         s = R.requestStudioRun(s, { kind: "designer", round: a.round, artifactId: a.id, brief, ...(selection ? { selection } : {}) }, now).state;
+        refused = undefined;
         break;
       } catch (e) {
         if (!(e instanceof ControlError)) throw e;
+        refused = e.message;
       }
     }
+    if (refused) s = S.endReview(s, a.id, a.version, `the designer's revision cannot run: ${refused}`, now);
   }
   return s;
 }
