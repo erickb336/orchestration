@@ -142,6 +142,40 @@ At most three implementers at once, on disjoint files; the lead integrates. Each
   - A detached shell process can outlive the run: kill the process group.
   - **Longevity (PE):** Apple has deprecated `sandbox-exec`, and the wrapper depends on VHS 0.12's ttyd arguments. The probe runs before every recording, and a failure falls back to hand-written recordings, so a macOS or VHS update degrades safely rather than running unsandboxed.
 
+### Integration as built (09d3fbd..5495da2; merged in eb64139)
+
+- **`prototypePort`** is reported while the prototype listener is up.
+- **The policy** allows inline styles and scripts, and nothing else changed. `type="module"` is refused in any HTML file of a version.
+- **The manifest** allows `cast`. Paths under `__orchestrator/`, `shots/` and `recording/` are reserved, compared ignoring case (the Mac's disk does). There are no `.sh` files: a planned CLI is a `.js` script run with `node`.
+- **After an import:**
+  - Screenshots and recordings follow the run's completion, one at a time.
+  - A version left pending by a stopped service is redone.
+  - A refused result is recorded with its reason, never retried in a loop.
+  - The domain gives the UI `shotsNote` and `demoNote`.
+- **Terminal demos:**
+  - Tapes, `.cast` and `.ans` files are checked at import, so the designer can still fix them.
+  - Each variant's tape is recorded in the sandbox into `recording/<variant>/`. Otherwise it falls back to its hand-written file, with the reason.
+  - Recordings are served only when their first bytes match their type.
+- **The shell profile** denies reads in the home directory, checked by the sandbox probe before each recording.
+- **A reaper inside the sandbox** ends every process it can signal after recording, because the shell runs in its own session and a tape can detach further. A tape that kills the reaper first leaves a process that is still sandboxed and logged.
+- **Studio runs count** toward "Agents at once" and the per-provider limits.
+
+### 3d as built (4fb25fc)
+
+- **The viewer** at `#/vision`, reached from a Studio card on Home during Vision:
+  - the left column: rounds, artifacts and runs;
+  - the centre: the prototype in a sandboxed frame at desktop or mobile size, within the device scope, with variants, Keep/Change/Drop, and pins accepted only in Pin mode with their selector;
+  - terminal frames;
+  - the right column: the feedback summary and Send feedback.
+- **The browser pass** at 1280 and 375 wide found no horizontal scroll and no console errors.
+- **Still needed, being finished now:**
+  - a minimal PE run, pulled forward from pass 4. Without it, the owner can never send feedback, because the domain holds marking until the PE agrees;
+  - the variant's entry file in the state;
+  - keeping the pin selector;
+  - an app-side file route for text, screenshots and recordings;
+  - wiring the recording status and `prototypePort`;
+  - the studio trial script.
+
 ## 3d. The artifact viewer
 
 - **A new route, `#/vision`,** is a first slice of the studio screen approved in pass 1 (the canvas layout). It shows:
