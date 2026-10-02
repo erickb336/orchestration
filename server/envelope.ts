@@ -16,6 +16,7 @@ import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import * as S from "../src/domain/studio/studio";
 import { DOCUMENT_KINDS, UNGATED_KINDS, isUnderWay, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
 import { clip, truncate } from "../src/domain/text";
+import { lastLeadProse } from "./prose/record";
 import type { RepoGlance } from "./studio/existing";
 import {
   FINDING_ACTIONS,
@@ -129,8 +130,12 @@ export function capConventions(files: { file: string; blob: string; text: string
 
 /** The lead's own runs (conversation, planning, decisions) get these: the table in docs/tasks/ORC-024.md, kept with the table order so Settings can show it. */
 export const LEAD_PRINCIPLES = LEAD_PRINCIPLE_IDS;
-/** The section is at most this many words; principles that do not fit are named with their "apply when" only. */
-export const PRINCIPLES_WORD_CAP = 1200;
+/**
+ * The section is at most this many words; principles that do not fit are named with their "apply when" only. 1,200
+ * when every run got "Contextualize and write for the reader" (ORC-026); 1,400 since every run also gets "Write
+ * controlled English" (ORC-029 pass 4d), so the largest step stays at least 50 words under it.
+ */
+export const PRINCIPLES_WORD_CAP = 1400;
 export const PRINCIPLES_HEADER = "## Principles for this step";
 /** For the lead's runs, which are not steps. */
 export const LEAD_PRINCIPLES_HEADER = "## Principles for this run";
@@ -1152,6 +1157,32 @@ Rules for "studio":
 }
 
 /** Everything the lead sees: vision, open work with what it may do, outcomes, conflicts, conversation, and the rules. */
+// ---------- the writing standard: feedback on the lead's last reply ----------
+
+export const PROSE_FEEDBACK_HEADER = "## Your last reply and the writing standard";
+/** The feedback shows at most this many examples. */
+export const PROSE_FEEDBACK_EXAMPLES = 3;
+
+/**
+ * The rules of "Write controlled English" that the lead's last checked reply broke (server/prose/), each with its
+ * count, and at most 3 examples: one short block before the output instructions. Empty when that reply broke none,
+ * was not checked, or there is none yet. The owner sees no score; the lead is asked not to mention the check.
+ */
+export function proseFeedbackSection(state: State, run: LeadRun): string {
+  const last = lastLeadProse(state, run.id);
+  if (last?.status !== "checked" || !last.rules.length) return "";
+  const what = (rule: string) => last.rules.find((r) => r.rule === rule)?.what.replace(/\.$/, "") ?? rule;
+  const rules = last.rules.map((r) => `- ${r.what.replace(/\.$/, "")}${r.level === "error" ? " (error)" : ""}: ${r.count}`);
+  const examples = last.examples.slice(0, PROSE_FEEDBACK_EXAMPLES).map((x) => `- ${what(x.rule)}, ${x.part} line ${x.line}: "${x.sentence}"${x.match ? ` ("${x.match}")` : ""}`);
+  return `
+${PROSE_FEEDBACK_HEADER}
+Your last reply broke these rules of "Write controlled English" (${last.passed} of ${last.sentences} sentences passed). Apply the principle in this reply. Do not mention this check to the user.
+${rules.join("\n")}
+Examples from your last reply:
+${examples.join("\n")}
+`;
+}
+
 export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", docs?: VisionDocReader, conventions?: ConventionsFile[], repo?: RepoGlance): string {
   const p = state.project;
   const vision = M.currentVision(state);
@@ -1337,7 +1368,7 @@ ${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).j
 ## Flows
 Pick "flowId" from these, or leave it out for the default ("${defaultFlow}").
 ${flows}
-${steerRules}
+${steerRules}${proseFeedbackSection(state, run)}
 ## Required final output
 Your final answer is one JSON object, as the output schema defines. Put your whole message to the user in "reply": the user sees "reply" and what the service applies from the other fields, and nothing else you write. The schema names every field; give null for a field you leave out${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft; leave "studio", or any part of it, out when the studio needs nothing from you' : ""}${canSteer ? ")" : ""}. A field the shape below does not show is null in this run. If you have no output schema, end your final message with the object in exactly one fenced JSON block.
 

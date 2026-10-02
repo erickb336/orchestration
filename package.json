@@ -13,6 +13,7 @@
     "start": "node scripts/orchestrator.mjs start",
     "typecheck": "tsc -b --noEmit && tsc -p tsconfig.server.json",
     "principles": "node --import tsx scripts/principles.mjs",
+    "lint:prose": "node --import tsx scripts/lint-prose.mjs",
     "pretest": "npm run principles --silent",
     "test": "vitest run",
     "test:integration": "node --import tsx scripts/real-run-test.mjs --fake",

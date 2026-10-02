@@ -1,0 +1,41 @@
+# Warning: words that tell the reader nothing they can check. Each needs the specific thing instead:
+# - which ones: "various", "relevant", "a number of", "numerous";
+# - the rest of the list: "etc.", "and so on";
+# - what counts as right: "appropriate(ly)", "suitable", "proper(ly)";
+# - when: "as needed", "as required", "if necessary".
+# Kept short on purpose: common words ("some", "several", "things") are often exact enough, and noise trains
+# writers to ignore the check.
+extends: existence
+message: "'%s' is vague. Name the specific thing, number or condition."
+description: "A vague word."
+level: warning
+ignorecase: true
+nonword: true
+tokens:
+  - '\bvarious\b'
+  - '\betc\b\.?'
+  - '\band so on\b'
+  - '\bappropriate(?:ly)?\b'
+  - '\brelevant\b'
+  - '\bsuitable\b'
+  - '\bproper(?:ly)?\b'
+  - '\bas (?:needed|required)\b'
+  - '\bif necessary\b'
+  - '\ba number of\b'
+  - '\bnumerous\b'
+tests:
+  - name: various
+    input: "We fixed various bugs."
+    want: "1:10:STE80.Vague:'various' is vague. Name the specific thing, number or condition."
+  - name: etc
+    input: "It checks names, dates, etc. before it saves."
+    want: "1:25:STE80.Vague:'etc.' is vague. Name the specific thing, number or condition."
+  - name: appropriate
+    input: "Take the appropriate action."
+    want: "1:10:STE80.Vague:'appropriate' is vague. Name the specific thing, number or condition."
+  - name: two in one sentence
+    input: "Update the relevant files as needed."
+    want: "1:12:STE80.Vague:'relevant' is vague. Name the specific thing, number or condition.\n1:27:STE80.Vague:'as needed' is vague. Name the specific thing, number or condition."
+  - name: specific words
+    input: "We fixed three bugs in the parser. Update README.md and the schema when the format changes. The property is set."
+    want: ""

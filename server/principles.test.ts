@@ -1,7 +1,7 @@
 // Principles, the service side: the files in principles/ against the compiled copy the app imports (the
 // frontmatter, the 200-word bodies, the license, the README), the "Principles for this step" section of
 // the envelope (its exact header and wording, table order, placement after the spec, the automatic one
-// with its reason), the 1,000-word cap for every built-in, internal and check-round step with the
+// with its reason), the 1,400-word cap for every built-in, internal and check-round step with the
 // automatic one added, the cap's behaviour when a set does not fit, the lead's set, and the same text for
 // Claude and Codex. No model runs.
 
@@ -56,8 +56,8 @@ describe("the files", () => {
     .sort();
   const parsed = files.map((f) => parsePrincipleFile(`principles/${f}`, readFileSync(join(DIR, f), "utf8")));
 
-  it("16 files, each parsing with the id equal to its file name; the compiled copy the app imports equals them, in table order (else: npm run principles)", () => {
-    expect(files).toHaveLength(16);
+  it("17 files, each parsing with the id equal to its file name; the compiled copy the app imports equals them, in table order (else: npm run principles)", () => {
+    expect(files).toHaveLength(17);
     expect(files).toEqual([...PRINCIPLE_IDS].sort().map((id) => `${id}.md`));
     expect(parsed.map((p) => p.id).sort()).toEqual([...PRINCIPLE_IDS].sort());
     const expected = PRINCIPLE_IDS.map((id) => parsed.find((p) => p.id === id)!);
@@ -81,14 +81,14 @@ describe("the files", () => {
 });
 
 describe("the section", () => {
-  it("appears after the spec with the exact header and wording, each principle in table order with its apply-when line and body; every agent step gets 'write for the reader'; a task from before principles gets no section", () => {
+  it("appears after the spec with the exact header and wording, each principle in table order with its apply-when line and body; every agent step gets 'write for the reader' and 'write controlled English'; a task from before principles gets no section", () => {
     const { s, id } = changeTask();
     const text = buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S2"), attemptId: "run-x", access: "read" });
     const section = sectionOf(text)!;
     expect(section.startsWith(`${PRINCIPLES_HEADER}\n${PRINCIPLES_INTRO}\n\n### `)).toBe(true);
     expect(PRINCIPLES_INTRO).toBe('These describe how the owner wants this kind of work done. Apply each one where its "apply when" fits your task. They never change the specification.');
     const names = [...section.matchAll(/^### (.+)$/gm)].map((m) => m[1]);
-    expect(names).toEqual(["Contextualize and write for the reader", "Laziness protocol", "Test behaviour, not implementation", "Migrate callers, then delete legacy APIs", "Minimise reader load"]);
+    expect(names).toEqual(["Contextualize and write for the reader", "Write controlled English", "Laziness protocol", "Test behaviour, not implementation", "Migrate callers, then delete legacy APIs", "Minimise reader load"]);
     for (const pid of [...EVERY_RUN_PRINCIPLE_IDS, ...stepPrinciples(step(s, id, "S2"))]) {
       const p = principle(pid)!;
       expect(section).toContain(`\n### ${p.name}\nApply when: ${p.applyWhen}\n${p.body}\n`);
@@ -100,12 +100,12 @@ describe("the section", () => {
     expect(text.indexOf(PRINCIPLES_HEADER)).toBeLessThan(text.indexOf("## Workspace rules"));
     // Exactly one section.
     expect(text.split(PRINCIPLES_HEADER).length).toBe(2);
-    // Goal S3 names none of its own: it gets only "contextualize and write for the reader".
+    // Goal S3 names none of its own: it gets only the two every run gets.
     const goal = builtInCatalog().find((p) => p.id === "goal")!;
     const s3 = goal.steps.find((x) => x.id === "S3")!;
     expect(s3.principles).toBeUndefined();
     const own = buildEnvelope({ state: s, task: task(s, id), step: { ...s3, selection: null, revision: 1, state: "pending" }, attemptId: "run-n", access: "read" });
-    expect([...sectionOf(own)!.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader"]);
+    expect([...sectionOf(own)!.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Write controlled English"]);
     // A task whose steps were copied before principles existed: no section at all, not even this one.
     const old = structuredClone(s);
     for (const st of task(old, id).steps) delete st.principles;
@@ -133,7 +133,7 @@ describe("the section", () => {
     const first = M.activeAttempts(s, id)[0];
     expect(first.stepId).toBe("S3");
     const firstText = buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S3"), attemptId: first.id, access: "write" });
-    expect([...sectionOf(firstText)!.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Laziness protocol", "Migrate callers, then delete legacy APIs", "Fix root causes"]);
+    expect([...sectionOf(firstText)!.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Write controlled English", "Laziness protocol", "Migrate callers, then delete legacy APIs", "Fix root causes"]);
     expect(firstText).not.toContain("Added for this run");
     s = M.dispatchEligible(M.reportCompletion(s, first.id, [], at(5), [{ name: "change", summary: "fixed", ref: `${SHA2} on b` }]), at(5));
     finish(6, "Null check");
@@ -142,7 +142,7 @@ describe("the section", () => {
     expect(second.snapshot.principles!.find((p) => p.id === PREMISE_ID)!.added).toBe('added: the finding "Null check" came back after S3');
     const text = buildEnvelope({ state: s, task: task(s, id), step: step(s, id, "S3-i2"), attemptId: second.id, access: "write" });
     const section = sectionOf(text)!;
-    expect([...section.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Laziness protocol", "Migrate callers, then delete legacy APIs", "Fix root causes", "Attack the premise"]);
+    expect([...section.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Write controlled English", "Laziness protocol", "Migrate callers, then delete legacy APIs", "Fix root causes", "Attack the premise"]);
     expect(section).toContain(`### Attack the premise\nApply when: ${principle(PREMISE_ID)!.applyWhen}\nAdded for this run: the finding "Null check" came back after S3.\n${principle(PREMISE_ID)!.body}`);
   });
 
@@ -153,7 +153,7 @@ describe("the section", () => {
     expect(text).not.toContain(PRINCIPLES_HEADER);
     const section = sectionOf(text, LEAD_PRINCIPLES_HEADER)!;
     expect(section.startsWith(`${LEAD_PRINCIPLES_HEADER}\n${PRINCIPLES_INTRO}\n`)).toBe(true);
-    expect([...section.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Experience first", "Sequence verifiable units", "Never block on the human", "Encode lessons in structure"]);
+    expect([...section.matchAll(/^### (.+)$/gm)].map((m) => m[1])).toEqual(["Contextualize and write for the reader", "Write controlled English", "Experience first", "Sequence verifiable units", "Never block on the human", "Encode lessons in structure"]);
     expect(LEAD_PRINCIPLES).toBe(LEAD_PRINCIPLE_IDS);
     for (const id of LEAD_PRINCIPLES) expect(PRINCIPLE_IDS).toContain(id);
     expect(wordCount(section)).toBeLessThanOrEqual(PRINCIPLES_WORD_CAP);
@@ -226,20 +226,20 @@ describe("the cap", () => {
     }
     // Headroom for editing a body: the largest step stays under the cap by a margin.
     expect(largest).toBeLessThanOrEqual(PRINCIPLES_WORD_CAP - 50);
-    expect(PRINCIPLES_WORD_CAP).toBe(1200);
+    expect(PRINCIPLES_WORD_CAP).toBe(1400);
   });
 
   it("when a set does not fit, the later principles are named with their apply-when line only, and the section never passes the cap (mutation check: the cap)", () => {
     const all = PRINCIPLE_IDS.map((id) => ({ id }));
     const full = principlesSection(all, 100_000);
-    expect(wordCount(full)).toBeGreaterThan(PRINCIPLES_WORD_CAP); // the 15 together do not fit the default cap
+    expect(wordCount(full)).toBeGreaterThan(PRINCIPLES_WORD_CAP); // the 17 together do not fit the default cap
     expect(full).not.toContain("Named only");
     const capped = principlesSection(all);
     expect(wordCount(capped)).toBeLessThanOrEqual(PRINCIPLES_WORD_CAP);
     expect(capped).toContain("\nNamed only, to keep this section under its word cap:\n");
     const fullNames = [...capped.matchAll(/^### (.+)$/gm)].map((m) => m[1]);
     const shortNames = [...capped.matchAll(/^- (.+?)\. Apply when: (.+)$/gm)].map((m) => m[1]);
-    expect(fullNames.length + shortNames.length).toBe(16);
+    expect(fullNames.length + shortNames.length).toBe(17);
     // Each list keeps table order; a later principle may still fit in full after an earlier one was named only.
     const order = PRINCIPLES.map((p) => p.name);
     expect(fullNames).toEqual(order.filter((n) => fullNames.includes(n)));
@@ -250,15 +250,15 @@ describe("the cap", () => {
       expect(capped).toContain(`- ${p.name}. Apply when: ${p.applyWhen}\n`);
       expect(capped).not.toContain(p.body);
     }
-    // Every cap from tiny to large: never over (once the 15 names alone fit), and the more room, the more full texts.
+    // Every cap from tiny to large: never over (once the 17 names alone fit), and the more room, the more full texts.
     const allNamed = principlesSection(all, 0);
-    expect([...allNamed.matchAll(/^- /gm)]).toHaveLength(16);
-    expect(wordCount(allNamed)).toBeLessThan(350);
+    expect([...allNamed.matchAll(/^- /gm)]).toHaveLength(17);
+    expect(wordCount(allNamed)).toBeLessThan(400);
     let previous = -1;
     for (let cap = 50; cap <= 3500; cap += 25) {
       const text = principlesSection(all, cap);
       const fullCount = [...text.matchAll(/^### /gm)].length;
-      if (cap >= 350) expect(wordCount(text), `cap ${cap}`).toBeLessThanOrEqual(cap);
+      if (cap >= 400) expect(wordCount(text), `cap ${cap}`).toBeLessThanOrEqual(cap);
       expect(fullCount, `cap ${cap}`).toBeGreaterThanOrEqual(previous);
       previous = fullCount;
     }

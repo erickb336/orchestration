@@ -17,11 +17,13 @@ import { LEAD_REPLY_SCHEMA } from "../src/domain/model/leadReplySchema";
 import * as R from "../src/domain/studio/runs";
 import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
-import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
+import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner } from "./checks";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
 import { SimulatedGitHub, type GitHubHost } from "./github";
 import { PrDriver } from "./prdelivery";
+import { checkLeadText, withLeadProse } from "./prose/record";
+import type { ProseChecker } from "./prose/vale";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
@@ -64,6 +66,11 @@ interface SchedulerOptions {
    * it none are made, and the versions record none.
    */
   studioMedia?: StudioMedia;
+  /**
+   * What checks the lead's replies and questions against the controlled-English style (server/prose/): Vale in the
+   * service. Without it nothing is checked and the lead runs record nothing.
+   */
+  prose?: ProseChecker;
 }
 
 /** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
@@ -148,6 +155,9 @@ export class Scheduler {
   private readonly workspaces?: WorkspaceManager;
   private readonly visionDocs?: VisionDocStore;
   private readonly media?: StudioMedia;
+  private readonly prose?: ProseChecker;
+  /** The checks of lead replies drained this cycle, made before the transaction and recorded in it. */
+  private leadProse = new Map<string, ProseCheck>();
   /** Studio versions' screenshots and recordings, made one at a time, after the run that handed them in completed. */
   private mediaChain: Promise<void> = Promise.resolve();
   /** The pending ones this instance started (project, version and kind), so each is made once per process. */
@@ -173,6 +183,7 @@ export class Scheduler {
     this.visionDocs = opts.visionDocs;
     this.dataDir = opts.dataDir;
     this.media = opts.studioMedia;
+    this.prose = opts.prose;
     this.checks = opts.checks ?? (this.workspaces ? undefined : new SimulatedChecks());
     this.checks?.onEvent((e) => this.queue.push(e));
     this.leaseMs = opts.leaseMs ?? 15000;
@@ -499,8 +510,14 @@ export class Scheduler {
     const completions = new Map<string, { outputs: M.OutputReport[]; problems: string[] }>();
     const studioOutputs = new Map<string, StudioOutput>();
     const current = this.store.read().state;
+    this.leadProse.clear();
     for (const e of events) {
       if (e.type !== "completed") continue;
+      // A lead reply's text is checked here, outside the transaction (Vale is a process); never blocking the reply.
+      if (this.prose && current.leadRuns.some((r) => r.id === e.attemptId)) {
+        const check = checkLeadText(parseLeadOutput(e.finalText), this.prose, now);
+        if (check) this.leadProse.set(e.attemptId, check);
+      }
       const studioRun = R.getStudioRun(current, e.attemptId);
       if (studioRun) {
         // A designer hands in files; the PE answers in its final message, read in the transaction.
@@ -1337,7 +1354,10 @@ export class Scheduler {
         const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
         // The steering block, the vision draft, the decisions, the studio block and any parse problem go through as found; the domain validates them.
         // The final text goes too: the run keeps it when the answer could not be used as sent.
-        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
+        const next = M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
+        // The check of its text goes on the run (not on the message: the owner sees no score); the lead's next run is told what it broke.
+        const prose = this.leadProse.get(e.attemptId);
+        return prose ? withLeadProse(next, e.attemptId, prose) : next;
       }
     }
   }

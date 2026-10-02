@@ -8,6 +8,14 @@
     "hash": "09372724e6be1f0a94cf436940cfdbd1afe509a8d5bbfdadb2e7639e748856d3"
   },
   {
+    "id": "write-controlled-english",
+    "name": "Write controlled English",
+    "applyWhen": "writing any text a person reads: a reply, a question, a reason, a note, a report, a specification.",
+    "source": "the writing rules of ASD-STE100 (Simplified Technical English, asd-ste100.org), summarised and relaxed to about 80% in the owner's agent kit's own words (writing/ste-80.md, github.com/erickb336/agent-kit, MIT); the idea of \"80% of the way\" is from Andrej Karpathy (2026)",
+    "body": "Write so that a person understands the text on the first read. Follow about 80% of ASD-STE100.\n\n**Sentences.** Put one instruction in each sentence. Keep a procedure sentence to 20 words and a descriptive one to 25. Keep a paragraph to 6 sentences, about one topic. Keep \"the\", \"a\" and \"an\".\n\n**Verbs.** Use the active voice and simple verb forms: the command form and the simple present, past and future. In instructions, do not use \"-ing\" or perfect forms.\n\n**Words.** Use one word for one thing, and the project's dictionary words when it has one. Do not stack more than 3 nouns. Explain a new name where it first appears. Name the thing, not a vague word (\"various\", \"etc.\").\n\n**Structure.** Put the main point first. Use vertical lists for steps, options and anything with more than three parts. Put a warning before its instruction.\n\nThe limits are targets: a sentence can be a little longer when splitting it makes it harder to read. Use a diagram or a table when it is clearer than text.",
+    "hash": "554c5b31ea06c9c970e9cfa61e26e520fe4a271e204b7af5bcb41c86380214a6"
+  },
+  {
     "id": "exhaust-the-design-space",
     "name": "Exhaust the design space",
     "applyWhen": "a new interaction or an architectural choice has no precedent in the code.",

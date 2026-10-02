@@ -19,6 +19,7 @@ import type { GitHubHost } from "./github";
 import { createHttpServer } from "./http";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
+import { valeChecker } from "./prose/vale";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
 import { defaultRecorderRoot, sweepStages } from "./studio/container";
@@ -104,7 +105,8 @@ if (mode === "fake") {
 }
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
 // Studio versions get screenshots (the system Chrome) and terminal recordings (VHS, sandboxed or not at all), in both modes.
-const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir, studioMedia: systemMedia(log) });
+// The lead's replies are checked against the controlled-English style with Vale, when it is installed (else "not checked").
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir, studioMedia: systemMedia(log), prose: valeChecker() });
 // Check logs are pruned at start and once a day (older than 14 days, or beyond 200 MiB in all).
 const pruneLogs = () => {
   try {

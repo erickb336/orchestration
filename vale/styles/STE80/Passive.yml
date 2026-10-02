@@ -1,0 +1,30 @@
+# Warning: the passive voice: a form of "be", then a past participle (Vale's part-of-speech tag VBN), with at most
+# one word between them ("is not blocked"). The tagger reads some possessive pronouns as participles ("it is yours"),
+# so they are left out. Measured on the lead's real text (scripts/prose-measure.mjs): about 1 alert in 10 is not a
+# passive ("is a named export", "as is (recommended)"), because the word between can be any word.
+extends: sequence
+message: "Passive voice. Say who does it, in the active voice."
+description: "The passive voice."
+level: warning
+ignorecase: true
+tokens:
+  - pattern: '(?:am|is|are|was|were|be|been|being)'
+  - tag: VBN
+    pattern: '(?!(?:yours|ours|theirs|hers|mine)$)\S+'
+    skip: 1
+tests:
+  - name: by someone
+    input: "The file was written by the lead."
+    want: "1:10:STE80.Passive:Passive voice. Say who does it, in the active voice."
+  - name: with a word between
+    input: "The reply is not blocked."
+    want: "1:11:STE80.Passive:Passive voice. Say who does it, in the active voice."
+  - name: perfect
+    input: "It has been merged."
+    want: "1:8:STE80.Passive:Passive voice. Say who does it, in the active voice."
+  - name: plain
+    input: "Errors are reported to the owner."
+    want: "1:8:STE80.Passive:Passive voice. Say who does it, in the active voice."
+  - name: active voice, adjectives and possessives
+    input: "The lead writes the file. The file is ready. Nothing changes. It is a long sentence. The check is green. The choice is yours in the app."
+    want: ""
