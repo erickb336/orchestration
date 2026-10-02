@@ -247,3 +247,18 @@ The diff `0391420..80dce53`, read by a reviewer that did not write it. **No agen
 - **F1, the domain and the server:** findings 1, 3, 4, 5 (server part), 6 (the shape), 8, 9, 10 and 11. The lead's brief explains the product domains and does not ask about them in free text.
 - **F2, the app and its security:** findings 2, 5 (the "As is" label), 7 (the owner's domain control), and pass 3 finding 3 (WebRTC and DNS prefetch). The recorder's stage folders are swept at start. Finding 6's wording follows F1's shape, after F1 merges.
 
+## The lead's reply as schema-constrained output (real trial finding 1; merged 2026-10-02)
+
+- **One JSON Schema** (`src/domain/model/leadReplySchema.ts`) covers every field that the lead sends. Every field is required, and null means "left out", because Codex's strict mode refuses optional fields. Claude accepts the same schema, so there is one schema, not two.
+- **The runtimes enforce it:** Claude through `outputFormat` (the answer comes back as `structured_output`), and Codex through `outputSchema` on `turn/start`. The Claude guard allows the SDK's `StructuredOutput` tool, only on a run with a schema; the tool touches no file.
+- **On arrival,** `parseLeadOutput` reads the JSON, never repairs it, and checks it again with ajv. Each note names the failure: no JSON, JSON that does not parse (with the line and column), not an object, or a schema mismatch. The trial's broken reply is the regression fixture.
+- **A failed reply keeps its raw text** on the lead run (`rawAnswer`, at most 64 KB, on the newest 5 runs), so diagnosis needs no personal history.
+
+**No personal history from runs** (the owner, 2026-10-02: runs left "a lot of codex chats stranded"). Codex threads start with `ephemeral: true`. Claude runs set `persistSession: false` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`; without the second setting, a run still made an empty memory folder. The owner chose a clean-up: 16 of the 20 old Codex threads were archived (reversible), and the ChatGPT app held 4 open. 44 Claude session folders went to the Trash.
+
+**Real checks:** one lead-shaped call per provider, with the schema. Both returned valid JSON, left no history, and delivered a note on the run. The estimated cost was $0.14 for Claude and about $0.06 for Codex. The trials and checks have now spent about $0.60 of the owner's $5 for Claude.
+
+**Not verified:** Claude's retry-limit path, a full-size lead envelope under the schema on real models (the next real trial checks it), and a view of `rawAnswer` in the app.
+
+**Load:** the real recording tests can time out when other test runs share Colima's 2-CPU, 2 GB machine. They pass alone (34 of 34). F2 adds one recording at a time.
+
