@@ -6,7 +6,12 @@ import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ServiceInfo } from "../../src/api";
 import { acceptPinMessage } from "../../src/runtime/prototype";
+import { createHttpServer } from "../http";
+import { FakeAdapter, defaultFakeConfig } from "../runtimes/fake";
+import { Scheduler } from "../scheduler";
+import { Store } from "../store";
 import { createPrototypeServer, projectStudioDir } from "./serve";
 import { TINY_PNG, close, get, listen, sha256, writeVersion } from "./testFixtures";
 
@@ -185,5 +190,35 @@ describe("acceptPinMessage", () => {
     ];
     for (const data of refused) expect(acceptPinMessage({ source: frame, data }, frame), JSON.stringify(data)).toBeNull();
     expect(acceptPinMessage({ source: frame, data: { ...pin, selector: "a".repeat(300) } }, frame)?.selector).toHaveLength(300);
+  });
+});
+
+describe("the service's state and health name the prototype listener's port", () => {
+  it("while it listens, and not before or after", async () => {
+    const store = new Store(join(root, "test.db"));
+    const config = defaultFakeConfig();
+    const scheduler = new Scheduler(store, { claude: new FakeAdapter("claude", config), codex: new FakeAdapter("codex", config) });
+    const prototypes = createPrototypeServer({ studioDir: () => studio, appOrigins: APP });
+    // The app's port first: its allowed Host names it.
+    const free = createPrototypeServer({ studioDir: () => undefined, appOrigins: APP });
+    const appPort = await listen(free);
+    await close(free);
+    const app = createHttpServer({ store, scheduler, startedAt: new Date().toISOString(), allowedHosts: [`127.0.0.1:${appPort}`], prototypePort: appPort + 1, prototypeServer: prototypes });
+    await new Promise<void>((r) => app.listen(appPort, "127.0.0.1", r));
+    const service = async () => {
+      const replies = await Promise.all(["/api/state", "/api/health"].map((p) => get(appPort, `127.0.0.1:${appPort}`, p)));
+      return replies.map((r) => (JSON.parse(r.body.toString()) as { service: ServiceInfo }).service.prototypePort);
+    };
+    try {
+      expect(await service()).toEqual([undefined, undefined]);
+      const protoPort = await listen(prototypes);
+      expect(await service()).toEqual([protoPort, protoPort]);
+      await close(prototypes);
+      expect(await service()).toEqual([undefined, undefined]);
+    } finally {
+      await close(app);
+      await scheduler.stop();
+      store.close();
+    }
   });
 });

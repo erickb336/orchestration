@@ -37,6 +37,8 @@ interface HttpOptions {
    * prototype's own policy cannot stop it navigating its frame elsewhere, the page's frame-src does.
    */
   prototypePort?: number;
+  /** The prototype listener itself: while it is listening, the state and health payloads name its port (`service.prototypePort`). */
+  prototypeServer?: Server;
   log?: (msg: string) => void;
 }
 
@@ -93,6 +95,9 @@ export function createHttpServer(opts: HttpOptions): Server {
       providers,
       leadBlocked: scheduler.leadBlocked,
     };
+    // From the listener, not the configuration: a port that was busy at start serves nothing, and the app says so.
+    const proto = opts.prototypeServer?.listening ? opts.prototypeServer.address() : null;
+    if (proto && typeof proto === "object") out.prototypePort = proto.port;
     if (real && opts.workspaces) {
       const project = store.read().state.project;
       if (project.sample) out.repo = { ok: false, reason: "This is the sample project; real runs are disabled for it. Start a new project below." };

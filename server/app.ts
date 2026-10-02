@@ -116,6 +116,13 @@ setInterval(pruneLogs, 24 * 60 * 60_000).unref();
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
 const prototypePort = Number(process.env.ORCHESTRATION_PROTOTYPE_PORT ?? port + 1);
+// The studio's prototypes: agent-written code, served on a second listener (server/studio/serve.ts). Without it the
+// service still runs; prototypes just cannot be shown.
+const prototypes = createPrototypeServer({
+  studioDir: () => projectStudioDir(dataDir, store.read().state.project.id),
+  appOrigins: allowedHosts.map((h) => `http://${h}`),
+  log,
+});
 
 const server = createHttpServer({
   store,
@@ -128,6 +135,7 @@ const server = createHttpServer({
   allowedHosts,
   staticDir,
   prototypePort,
+  prototypeServer: prototypes,
   log,
 });
 
@@ -140,13 +148,6 @@ server.on("error", (e: NodeJS.ErrnoException) => {
   process.exit(1);
 });
 
-// The studio's prototypes: agent-written code, served on a second listener (server/studio/serve.ts). Without it the
-// service still runs; prototypes just cannot be shown.
-const prototypes = createPrototypeServer({
-  studioDir: () => projectStudioDir(dataDir, store.read().state.project.id),
-  appOrigins: allowedHosts.map((h) => `http://${h}`),
-  log,
-});
 prototypes.on("error", (e: NodeJS.ErrnoException) =>
   log(e.code === "EADDRINUSE" ? `Prototype port ${prototypePort} is already in use, so prototypes cannot be shown; set ORCHESTRATION_PROTOTYPE_PORT.` : `Prototype server error: ${e.message}`),
 );
