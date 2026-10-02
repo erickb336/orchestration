@@ -43,6 +43,24 @@ And, refining it the same day: it is "like an information and data representatio
   - enforced by principles given to agents, automated checks, and code and PE review that repair what they find.
   - The owner sees only the decisions that genuinely need them.
 
+**The approach, from Karpathy's guidance** (shared by the owner on 2026-10-02 as "what we are trying to solve"). As agents do more of the work, the owner's work moves into oversight and understanding. So agents' output takes the most understandable form available, in this order of preference:
+
+1. **Controlled writing:** about 80% of ASD-STE100 (Simplified Technical English).
+2. **Diagrams.**
+3. **Interactive web pages.**
+4. **Explainer videos.**
+
+Cheap, discardable artifacts made only for understanding are encouraged. In Orchestrator, this means:
+
+- **A writing standard for every agent that writes to the owner** (lead, PE, designer, reviewers), enforced by a check:
+  - one instruction per sentence;
+  - at most 20 words per procedural sentence and 25 per descriptive sentence, and at most 6 sentences per paragraph;
+  - active voice and simple verb forms;
+  - the same word for the same thing, no noun clusters longer than 3 words, and vertical lists for complex text.
+- **A dictionary for each project**, built from the Vision's data round: approved words, each with one meaning and the words it replaces.
+- **Fixed sentence patterns for rules and acceptance**, in the controlled-language style the owner likes.
+- **The studio's artifact types follow the same order of preference:** diagrams, then web prototypes, then terminal recordings, and later explainer videos.
+
 ## Product Purpose
 
 In the owner's words (2026-10-01): "a starting playground for me to develop and test different patterns for and ways of using multiple agents in my workflows. My goal is to remove myself from the loop as much as possible and review only artifacts and working prototypes rather than spending too much time on details and instead focus on building working solutions that are testable end-to-end."
