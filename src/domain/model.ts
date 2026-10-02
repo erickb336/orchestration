@@ -41,7 +41,7 @@ export {
   reportLeadActivity, reportLeadFailed, reportLeadStarted, reportLeadStopped, reportLeadStopTimeout, setAutonomy, setLeadSelection, startLeadRun,
   stopLeadReply,
 } from "./model/lead";
-export { completeLeadRun, type LeadProposal, proposeTask, validateProposal } from "./model/leadOutput";
+export { completeLeadRun, type LeadProposal, type LeadReplyProblem, leadReplyNote, proposeTask, validateProposal } from "./model/leadOutput";
 export { stripHostile, stripInvisible } from "./model/textSafety";
 export { steerPermission, validateSteer, visionContentMovedSince } from "./model/steering";
 export {

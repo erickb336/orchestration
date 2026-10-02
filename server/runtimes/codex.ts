@@ -331,6 +331,9 @@ export class CodexAdapter implements RuntimeAdapter {
         cwd: a.workspace.path,
         approvalPolicy: "never",
         sandbox: a.workspace.access === "write" ? "workspace-write" : "read-only",
+        // Never written to ~/.codex/sessions, so no run shows up in the user's own Codex history. The adapter never
+        // resumes a thread; the run's record is the service's.
+        ephemeral: true,
       };
       const thread = await rpc.request("thread/start", threadParams);
       if (run.done) return;
@@ -351,6 +354,8 @@ export class CodexAdapter implements RuntimeAdapter {
         cwd: a.workspace.path,
         approvalPolicy: "never",
         sandboxPolicy,
+        // The turn's final message is constrained to the schema, so it is the JSON answer itself.
+        ...(a.outputSchema ? { outputSchema: a.outputSchema as TurnStartParams["outputSchema"] } : {}),
       };
       const turn = await rpc.request("turn/start", turnParams);
       if (run.done) return;

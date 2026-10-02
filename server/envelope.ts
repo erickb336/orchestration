@@ -7,6 +7,7 @@ import { MAX_PROVEN_PATHS, MAX_REVIEWED_PATHS, normalizePath } from "../src/doma
 import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
+import { LEAD_REPLY_SCHEMA, schemaMismatch, withNulls, withoutNulls } from "../src/domain/model/leadReplySchema";
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
 import { buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
@@ -1325,8 +1326,9 @@ Pick "flowId" from these, or leave it out for the default ("${defaultFlow}").
 ${flows}
 ${steerRules}
 ## Required final output
-End your final message with exactly one fenced JSON block${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft; leave "studio", or any part of it, out when the studio needs nothing from you' : ""}${canSteer ? ")" : ""}:
+Your final answer is one JSON object, as the output schema defines. Put your whole message to the user in "reply": the user sees "reply" and what the service applies from the other fields, and nothing else you write. The schema names every field; give null for a field you leave out${canSteer ? ' (leave "steer" out when the user only asked a question' : ""}${canDraft ? '; leave "vision" out until you have enough to draft; leave "studio", or any part of it, out when the studio needs nothing from you' : ""}${canSteer ? ")" : ""}. A field the shape below does not show is null in this run. If you have no output schema, end your final message with the object in exactly one fenced JSON block.
 
+The fields:
 \`\`\`json
 {
   "reply": "<your answer to the user, or a short planning summary>",
@@ -1399,17 +1401,75 @@ ${last.length ? `The user's latest notes on landed work:\n${last.map((x) => x.li
 }
 
 /**
- * Parse the lead's final message. A reply without a JSON block is still a reply (with no proposals).
- * The steering block, the vision draft, the studio block and the rest are passed through as found (a missing value
- * or null becomes undefined); type checks happen in the domain, which treats them as untrusted data.
+ * Parse the lead's final answer: one JSON object, the whole text when the runtime constrained it to the output schema
+ * (LEAD_REPLY_SCHEMA), else the last fenced JSON block. A text without JSON is still a reply (with no proposals); JSON
+ * that does not parse is never repaired. The object is checked against the schema as a defence (a runtime may not
+ * apply it, or may change): a mismatch is noted, and the parts still go to the domain, which checks each one as
+ * untrusted data. A null field means "left out" and is removed; the steering block, the vision draft, the studio
+ * block and the rest pass through as found.
  */
-export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; studio?: unknown; problem?: string } {
-  const obj = lastJsonObject(finalText);
-  if (!obj) return { reply: clip(finalText.trim(), 4000), proposals: [], problem: "no JSON block; treated the message as a reply without proposals" };
+export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; studio?: unknown; problem?: M.LeadReplyProblem } {
+  const read = readLeadJson(finalText);
+  if (!read.ok) return { reply: read.reply, proposals: [], problem: read.problem };
+  const mismatch = schemaMismatch(LEAD_REPLY_SCHEMA, withNulls(LEAD_REPLY_SCHEMA, read.obj));
+  const obj = withoutNulls(read.obj) as Record<string, unknown>;
   const reply = typeof obj.reply === "string" ? clip(obj.reply, 8000) : "";
   const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
   const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions" | "studio") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
-  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions"), ...given("studio") };
+  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions"), ...given("studio"), ...(mismatch ? { problem: { kind: "schema" as const, where: mismatch } } : {}) };
+}
+
+/**
+ * The lead's JSON object, or why there is none: the reply to show and the problem. The candidate that failed is the
+ * one the reader takes first: the last ```json block (to the end when it is not closed), else the last fenced block
+ * that starts as JSON, else the whole text when it does.
+ */
+function readLeadJson(text: string): { ok: true; obj: Record<string, unknown> } | { ok: false; reply: string; problem: M.LeadReplyProblem } {
+  const whole = text.trim();
+  if (whole.startsWith("{")) {
+    try {
+      const v: unknown = JSON.parse(whole);
+      if (isObject(v)) return { ok: true, obj: v };
+    } catch {
+      /* not the whole text; look for a block */
+    }
+  }
+  const obj = lastJsonObject(text);
+  if (obj) return { ok: true, obj };
+  const open = text.lastIndexOf("```json");
+  const close = text.lastIndexOf("```");
+  const fenced = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].reverse().find((m) => /^\s*[[{]/.test(m[1]));
+  const failed =
+    open >= 0
+      ? { json: text.slice(open + 7, close > open + 7 ? close : undefined), before: text.slice(0, open) }
+      : fenced
+        ? { json: fenced[1], before: text.slice(0, fenced.index) }
+        : /^[[{]/.test(whole)
+          ? { json: whole, before: "" }
+          : undefined;
+  if (!failed) return { ok: false, reply: clip(whole, 4000), problem: { kind: "no-json" } };
+  // The text before the JSON is shown as the reply; the JSON itself is not.
+  const reply = clip(failed.before.trim(), 4000);
+  const json = failed.json.trim();
+  try {
+    JSON.parse(json);
+    return { ok: false, reply, problem: { kind: "not-object" } };
+  } catch (err) {
+    return { ok: false, reply, problem: { kind: "unparsed", where: parseErrorWhere(err, json) } };
+  }
+}
+
+/** The parser's reason and the line and column it stopped at ("expected ',' or '}' after property value at line 60, column 1"), never the text. */
+function parseErrorWhere(err: unknown, json: string): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const at = /^([\s\S]*?)(?: in JSON)? at position (\d+)/.exec(message);
+  // V8 quotes the start of the text in some messages ('Unexpected token 'x', "{…" is not valid JSON'); it is left out.
+  const reason = (at ? at[1] : message.replace(/,\s*"[\s\S]*" is not valid JSON$/, "")).trim();
+  const said = clip(reason.charAt(0).toLowerCase() + reason.slice(1), 120);
+  if (!at) return said;
+  const before = json.slice(0, Number(at[2]));
+  const line = before.split("\n").length;
+  return `${said} at line ${line}, column ${before.length - before.lastIndexOf("\n")}`;
 }
 
 /** A step that waits for child tasks sees how each of them ended. */

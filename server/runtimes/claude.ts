@@ -134,6 +134,11 @@ const ALWAYS_DISALLOWED = ["Agent", "Task", "WebFetch", "WebSearch", "NotebookEd
 const FILE_PATH_TOOLS = new Set(["Read", "Write", "Edit"]);
 const SEARCH_TOOLS = new Set(["Glob", "Grep"]);
 const MUTATING_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
+/**
+ * The tool through which the Agent SDK takes an answer constrained to `outputFormat` (the CLI adds it to the session; a
+ * real lead run called it, 2026-10-02). It touches no file, so the guard allows it on a run with an output schema.
+ */
+const STRUCTURED_OUTPUT_TOOL = "StructuredOutput";
 
 /** Environment variables that select a cloud provider instead of an Anthropic API key. */
 const CLOUD_PROVIDER_FLAGS: Array<[string, string]> = [
@@ -720,7 +725,7 @@ export class ClaudeAdapter implements RuntimeAdapter {
     const policy = toolPolicy(a.workspace.access, this.allowShell && !studio);
     // Isolated: only the allowed connections, configured from the user's own MCP definitions.
     const selected = local ? {} : this.mcpConfigsFor(studio ? [] : a.connections);
-    const guard = createWorkspaceGuard(a.workspace.path, policy.tools, local ? "any" : Object.keys(selected), a.workspace.readRoots);
+    const guard = createWorkspaceGuard(a.workspace.path, a.outputSchema ? [...policy.tools, STRUCTURED_OUTPUT_TOOL] : policy.tools, local ? "any" : Object.keys(selected), a.workspace.readRoots);
 
     const preToolUse: HookCallback = async (input) => {
       const i = input as unknown as Rec;
@@ -756,6 +761,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       // their hooks would run commands outside the workspace guard.
       ...(local ? { settingSources: ["user"] as "user"[] } : { settingSources: [], strictMcpConfig: true, mcpServers: selected }),
       systemPrompt: { type: "preset", preset: "claude_code" },
+      // Never saved to ~/.claude/projects, so no run shows up in the user's own Claude history. The adapter never
+      // resumes a session; the run's record is the service's.
+      persistSession: false,
       tools: policy.tools,
       disallowedTools: policy.disallowedTools,
       // Non-interactive: edits and out-of-cwd access prompt, and every prompt is answered by canUseTool.
@@ -767,6 +775,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
       env: {
         ...claudeWorkerEnv(this.env),
         CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS: "1",
+        // No auto-memory: with persistSession off, the CLI still made ~/.claude/projects/<working folder>/memory for a
+        // real run (2026-10-02). A run neither reads nor writes the user's own Claude memory.
+        CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
         CLAUDE_AGENT_SDK_CLIENT_APP: "orchestration/0.1.0",
       },
       stderr: (data: string) => {
@@ -774,6 +785,8 @@ export class ClaudeAdapter implements RuntimeAdapter {
       },
     };
     if (a.limits.maxBudgetUsd !== undefined) options.maxBudgetUsd = a.limits.maxBudgetUsd;
+    // The answer is constrained to the schema; the result carries it as `structured_output` (handleResult).
+    if (a.outputSchema) options.outputFormat = { type: "json_schema", schema: a.outputSchema };
     return options;
   }
 
@@ -907,11 +920,13 @@ export class ClaudeAdapter implements RuntimeAdapter {
       }
       // After an interrupt, a success result marked as aborted means the stop took effect.
       if (run.interruptRequested && abortedReason) return stopped();
-      // Otherwise the turn finished (possibly racing the interrupt).
+      // Otherwise the turn finished (possibly racing the interrupt). An answer constrained to the run's schema is the
+      // result's `structured_output`, returned as JSON; without one, the last message is the answer as usual.
+      const structured = run.a.outputSchema && m.structured_output !== undefined && m.structured_output !== null ? JSON.stringify(m.structured_output) : undefined;
       const completed: AdapterEvent = {
         type: "completed",
         attemptId: id,
-        finalText: resultText.trim() !== "" ? resultText : run.lastText,
+        finalText: structured ?? (resultText.trim() !== "" ? resultText : run.lastText),
         usage,
         model: run.model ?? firstModel(m),
       };
@@ -947,6 +962,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
         message = `Claude stopped: reached the spend limit${
           run.a.limits.maxBudgetUsd !== undefined ? ` ($${run.a.limits.maxBudgetUsd})` : ""
         } before finishing.`;
+        break;
+      case "error_max_structured_output_retries":
+        message = `Claude stopped: its answer did not match the output schema after the SDK's retries${errors.length ? ` (${truncate(redact(errors.join("; ")), 300)})` : ""}.`;
         break;
       case "error_during_execution": {
         const detail = errors.join("; ") || run.stderrTail;

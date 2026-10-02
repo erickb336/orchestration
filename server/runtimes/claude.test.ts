@@ -324,6 +324,21 @@ describe("ClaudeAdapter", () => {
     expect(inputs).toHaveLength(1); // nothing but the envelope was streamed
   });
 
+  it("never saves a session or a memory to the user's own Claude history, for every kind of run", async () => {
+    const { adapter, calls } = setup();
+    const kinds: Partial<Assignment>[] = [
+      { attemptId: "coder" },
+      { attemptId: "lead", role: "lead", workspace: { path: ws, access: "read" }, outputSchema: { type: "object" } },
+      { attemptId: "studio", role: "designer", studio: true },
+      { attemptId: "local", environment: "local" },
+    ];
+    for (const k of kinds) adapter.start(assignment(k));
+    await waitFor(() => calls.length === kinds.length);
+    expect(calls.map((c) => c.options.persistSession)).toEqual([false, false, false, false]);
+    expect(calls.map((c) => c.options.env?.CLAUDE_CODE_DISABLE_AUTO_MEMORY)).toEqual(["1", "1", "1", "1"]);
+    for (const k of kinds) adapter.kill(k.attemptId!);
+  });
+
   it("falls back to the last assistant text when the result text is empty", async () => {
     const { adapter, events, stream, calls } = setup();
     adapter.start(assignment());
@@ -333,6 +348,48 @@ describe("ClaudeAdapter", () => {
     stream.end();
     await waitFor(() => terminals(events).length === 1);
     expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: "Part A \npart B" });
+  });
+
+  describe("an output schema (ORC-029 pass 4: the lead's reply)", () => {
+    const schema = { type: "object", properties: { reply: { type: "string" } }, required: ["reply"], additionalProperties: false };
+
+    it("is passed as outputFormat, the SDK's StructuredOutput tool is allowed, and the structured result is the final text as JSON", async () => {
+      const { adapter, events, stream, calls } = setup();
+      adapter.start(assignment({ outputSchema: schema }, "read"));
+      await waitFor(() => calls.length === 1);
+      const opts = calls[0].options;
+      expect(opts.outputFormat).toEqual({ type: "json_schema", schema });
+      const signal = new AbortController().signal;
+      expect((await opts.canUseTool!("StructuredOutput", { reply: "Hi." }, { signal } as never))?.behavior).toBe("allow");
+      // The model's prose around the tool call is not the answer.
+      stream.push(init(), assistant([{ type: "text", text: "Let me answer through the tool." }]), result("success", { result: "", structured_output: { reply: "Hi." } }));
+      stream.end();
+      await waitFor(() => terminals(events).length === 1);
+      expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: '{"reply":"Hi."}' });
+    });
+
+    it("without a schema: no outputFormat, StructuredOutput is refused, and a stray structured result is ignored", async () => {
+      const { adapter, events, stream, calls } = setup();
+      adapter.start(assignment({}, "read"));
+      await waitFor(() => calls.length === 1);
+      const opts = calls[0].options;
+      expect(opts.outputFormat).toBeUndefined();
+      expect((await opts.canUseTool!("StructuredOutput", { reply: "Hi." }, { signal: new AbortController().signal } as never))?.behavior).toBe("deny");
+      stream.push(init(), result("success", { structured_output: { reply: "Hi." } }));
+      stream.end();
+      await waitFor(() => terminals(events).length === 1);
+      expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: "Done.\n```json\n{}\n```" });
+    });
+
+    it("a runtime that returns no structured result: the last message is the answer, for the service to read as before", async () => {
+      const { adapter, events, stream, calls } = setup();
+      adapter.start(assignment({ outputSchema: schema }, "read"));
+      await waitFor(() => calls.length === 1);
+      stream.push(init(), result("success"));
+      stream.end();
+      await waitFor(() => terminals(events).length === 1);
+      expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: "Done.\n```json\n{}\n```" });
+    });
   });
 
   it("starting the same id twice is a no-op", async () => {
@@ -527,6 +584,7 @@ describe("ClaudeAdapter", () => {
       ["error_max_turns", /turn limit \(7 turns\)/],
       ["error_max_budget_usd", /spend limit \(\$0\.5\)/],
       ["error_during_execution", /failed during execution: boom/],
+      ["error_max_structured_output_retries", /its answer did not match the output schema after the SDK's retries \(boom\)/],
     ])("%s → failed", async (subtype, pattern) => {
       const { adapter, events, stream, calls } = setup();
       adapter.start(assignment());

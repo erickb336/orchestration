@@ -67,6 +67,12 @@ export interface Assignment {
   prompt: string;
   /** Declared outputs the final message must report. */
   outputs: OutputDef[];
+  /**
+   * A JSON Schema the final answer must match (the lead's reply). The runtime constrains the answer to it (Claude:
+   * `outputFormat`; Codex: the turn's `outputSchema`) and returns the answer as JSON in `finalText`. A runtime that
+   * cannot apply it returns the agent's last message as usual; the service checks the answer either way.
+   */
+  outputSchema?: Record<string, unknown>;
   limits: AssignmentLimits;
 }
 

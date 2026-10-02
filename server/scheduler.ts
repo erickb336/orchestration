@@ -13,6 +13,7 @@ import * as C from "../src/domain/checks";
 import * as D from "../src/domain/delivery";
 import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
+import { LEAD_REPLY_SCHEMA } from "../src/domain/model/leadReplySchema";
 import * as R from "../src/domain/studio/runs";
 import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
@@ -774,6 +775,8 @@ export class Scheduler {
         // In Vision the lead's studio brief says whether the repository has code (an "as it is today" first round).
         prompt: buildLeadEnvelope(state, run, "read", this.visionDocs?.reader(state.project.id), conventions, state.project.stage === "shaping" && !state.project.sample ? repoGlance(state.project.repoPath) : undefined),
         outputs: [],
+        // The runtime constrains the lead's answer to its reply schema, so one missing brace cannot lose the reply.
+        outputSchema: LEAD_REPLY_SCHEMA,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
       });
       return undefined;
@@ -1326,7 +1329,8 @@ export class Scheduler {
         const run = s.leadRuns.find((r) => r.id === e.attemptId);
         const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
         // The steering block, the vision draft, the decisions, the studio block and any parse problem go through as found; the domain validates them.
-        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
+        // The final text goes too: the run keeps it when the answer could not be used as sent.
+        return M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
       }
     }
   }

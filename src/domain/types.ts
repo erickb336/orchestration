@@ -1220,6 +1220,12 @@ export interface LeadRun {
   actualModel?: string;
   usage?: Attempt["usage"];
   note?: string;
+  /**
+   * The lead's final text as the runtime returned it, kept when the answer could not be used as sent (no JSON, JSON
+   * that does not parse, or a schema mismatch; `note` says which), so diagnosis needs no provider's own history. Its
+   * first 65,536 characters; only the newest few runs keep one (leadOutput.ts).
+   */
+  rawAnswer?: { text: string; truncated?: true };
   /** The vision revision the run started from. Absent on runs from before steering existed (they cannot steer). */
   visionRev?: number;
   /** The change set this run's reply produced. */

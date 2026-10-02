@@ -528,8 +528,8 @@ describe("L/M/O/Q. drops, undo idempotency, untrusted output, duplicate events",
     const r2 = ask("hello?");
     claude.replyText(r2.id, "Just prose, no block.");
     tick();
-    expect(state().leadRuns.find((x) => x.id === r2.id)!.note).toMatch(/no JSON block/);
-    expect(state().conversation.filter((m) => m.author === "lead").pop()!.rejected).toEqual(["The reply had no machine-readable block, so nothing was changed."]);
+    expect(state().leadRuns.find((x) => x.id === r2.id)!.note).toBe("The reply had no JSON block, so nothing was changed.");
+    expect(state().conversation.filter((m) => m.author === "lead").pop()!.rejected).toEqual(["The reply had no JSON block, so nothing was changed."]);
     expect(state().steering).toHaveLength(1);
   });
 
