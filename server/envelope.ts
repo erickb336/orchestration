@@ -1096,7 +1096,7 @@ export function studioBriefSection(state: State, repo?: RepoGlance): string {
   const start = rounds.length
     ? ""
     : repo?.codeFiles
-      ? `\nNo round yet, and the repository has code. Unless the user said otherwise, start with round 0, "as it is today": openRound { "focus": "material", "summary": "As it is today: <what the code does now>" }, and ask the designer to reproduce the key screens, or the interface and core algorithms, or the topology, from the code (one take each, kinds by the domains). The designer reads the code read-only; the service labels each artifact "as is" with the files it came from. The user corrects them, and later rounds change them.`
+      ? `\nNo round yet, and the repository has code. Unless the user said otherwise, start with round 0, "as it is today": openRound { "focus": "material", "summary": "As it is today: <what the code does now>" }, and ask the designer to reproduce the key screens, or the interface and core algorithms, or the topology, from the code (one take each, kinds by the domains). The designer reads the code read-only; the service labels each artifact "as is" with the files it came from. The PE checks only that each reproduction is faithful to the code, and the designer does not revise it for the PE: the user corrects it, and later rounds change it.`
       : "\nNo round yet: open round 1 on the experience once you know enough to brief the designer.";
   const latest = S.latestArtifacts(state);
   const openRows = open ? latest.filter((a) => a.round === open.n) : [];

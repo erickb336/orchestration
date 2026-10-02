@@ -209,6 +209,43 @@ describe("a designer run at the service", () => {
     expect(codex.runs.get(cx)!.prompt).toContain("On Codex the service cannot confine what you read (as for every Codex run), so read only that checkout.");
   });
 
+  it("a reproduction is imported with its provenance, reviewed by a PE that reads the code and judges only its faithfulness, and never revised for the PE (review findings 5 and 11)", async () => {
+    await service({ workspaces: true });
+    const repo = state().project.repoPath;
+    mkdirSync(join(repo, "src"));
+    writeFileSync(join(repo, "src", "index.html"), "<h1>Trips</h1>");
+    execFileSync("git", ["-C", repo, "add", "-A"]);
+    execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the trip list"]);
+    cmd("initProject", { name: "Trips", repoPath: repo, vision: "Weekend trips for a small group of friends.", focus: "" });
+    cmd("openRound", { focus: "material", summary: "As it is today" });
+    const id = startDesignerRun(store, { round: 0, brief: "Reproduce the trip list as it is today." }, iso());
+    tick();
+    const asIs = { ...TRIP_PLAN, title: "Trip list (as is)", variants: [TRIP_PLAN.variants[0]], files: ["a/index.html", "a/style.css"], provenance: ["src/index.html"] };
+    handIn(claude.runs.get(id)!, { artifacts: [asIs] });
+    finish(id);
+    tick();
+    const [v1] = S.latestArtifacts(state());
+    expect(v1).toMatchObject({ round: 0, provenance: { asIs: true, files: ["src/index.html"] } });
+    tick();
+    const pe = state().studio.runs.find((r) => r.kind === "pe")!;
+    const a = codex.runs.get(pe.id)!;
+    // It reads a checkout of the code beside the version, and is told what to judge.
+    const checkout = a.workspace.readRoots![0];
+    expect(readFileSync(join(checkout, "src", "index.html"), "utf8")).toBe("<h1>Trips</h1>");
+    expect(a.prompt).toContain("Judge each variant on one thing only: does it reproduce the code faithfully? The designer named the repository files it came from: src/index.html.");
+    expect(a.prompt).toContain(`- The product's repository, as committed, is readable at ${checkout}.`);
+    expect(a.prompt).toContain("- The designer does not revise a reproduction for you: your verdict goes to the owner with the artifact, and the owner corrects it.");
+    expect(a.prompt).not.toContain("## The budgets");
+    peFinish(pe.id, answer([{ variant: "a", verdict: "feasible-if", reasons: "The list matches.", change: "The code sorts trips by date." }]));
+    tick();
+    tick();
+    // Its pass asked for a change: review ends there, the owner sees it, and no designer run revises it.
+    expect(S.peReview(state(), S.getArtifact(state(), v1.id, 1))).toMatchObject({ status: "ended", ended: "as-is", asks: [{ change: "The code sorts trips by date." }] });
+    expect(state().studio.runs.filter((r) => r.kind === "designer")).toHaveLength(1);
+    // The PE's checkout is removed once its run ends.
+    expect(existsSync(checkout)).toBe(false);
+  });
+
   it("the lead's envelope in Vision says whether the repository has code, read from git at HEAD", async () => {
     await service({ workspaces: true });
     const repo = state().project.repoPath;
