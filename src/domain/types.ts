@@ -1232,6 +1232,53 @@ export interface LeadRun {
   changeSetId?: string;
   /** The coverage this run reported (message runs only; the latest one stands). */
   coverage?: Coverage;
+  /**
+   * The check of this run's reply and questions against the controlled-English style (principles/
+   * write-controlled-english.md, vale/). It lives on the run, not on the message: it describes the writer, it feeds the
+   * lead's next run, and the owner sees no score. Absent on runs from before the check and on runs with no text.
+   */
+  prose?: ProseCheck;
+}
+
+/**
+ * The result of checking a text with Vale and the STE80 style. "not-checked" says why (for example, Vale was not
+ * found); a check never blocks the text. Compact: counts by rule and a few examples (src/domain/prose.ts caps them).
+ */
+export type ProseCheck =
+  | {
+      status: "checked";
+      at: string;
+      /** Vale's version, as `vale --version` reported it. */
+      vale: string;
+      /** The sentences checked (Vale's own segmentation) and how many had no alert. */
+      sentences: number;
+      passed: number;
+      /** Each rule the text broke, errors first, with its description from the rule file. Empty: none. */
+      rules: ProseRuleCount[];
+      /** The first alert of each broken rule, then more in text order: at most 5. */
+      examples: ProseExample[];
+    }
+  | { status: "not-checked"; at: string; reason: string };
+
+export interface ProseRuleCount {
+  /** The rule's Vale name, for example "STE80.SentenceLong". */
+  rule: string;
+  level: "error" | "warning";
+  /** The rule's description, for example "A sentence of 26 to 35 words." */
+  what: string;
+  count: number;
+}
+
+export interface ProseExample {
+  rule: string;
+  /** Where the alert is: "reply", or "question 2" (the lead's questions, in order). */
+  part: string;
+  /** The line within that part, from 1. */
+  line: number;
+  /** The sentence the alert is in, at most 200 characters. */
+  sentence: string;
+  /** The words the rule matched, when they are a part of the sentence ("was written", "various"). */
+  match?: string;
 }
 
 /** Bounds on the lead's own initiative. Off until the user turns it on. */

@@ -1,0 +1,14 @@
+# Not a rule: it marks each sentence, at the level "suggestion", which the configuration hides. The service asks for
+# suggestions and uses these marks to count the sentences it checked and the share that pass, with Vale's own idea
+# of a sentence (server/prose/vale.ts).
+extends: script
+message: "A sentence."
+description: "Counts sentences; never shown."
+level: suggestion
+scope: sentence
+script: |
+  matches := [{begin: 0, end: len(scope)}]
+tests:
+  - name: one mark per sentence
+    input: "One sentence. Another one.\n\n- A list item"
+    want: "1:1:STE80.Sentence:A sentence.\n1:15:STE80.Sentence:A sentence.\n3:3:STE80.Sentence:A sentence."

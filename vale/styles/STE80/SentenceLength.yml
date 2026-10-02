@@ -1,0 +1,29 @@
+# Error: a sentence over 35 words. A word is a run of non-space characters with a letter or a digit in it (Vale
+# shows inline code as asterisks, so a code span counts as one word). A script, as SentenceLong.yml is, so both count
+# the same way and report the whole sentence (`occurrence` reports only its first word).
+extends: script
+message: "This sentence is over 35 words. Split it: keep a sentence to 25 words or fewer."
+description: "A sentence over 35 words."
+level: error
+scope: sentence
+script: |
+  text := import("text")
+  matches := []
+  words := text.re_find(`\S*[\p{L}\p{N}*]\S*`, scope, -1)
+  n := words == undefined ? 0 : len(words)
+  if n > 35 {
+    matches = append(matches, {begin: 0, end: len(scope)})
+  }
+tests:
+  - name: 36 words is an error
+    input: "One two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five six."
+    want: "1:1:STE80.SentenceLength:This sentence is over 35 words. Split it: keep a sentence to 25 words or fewer."
+  - name: 35 words is not
+    input: "One two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five."
+    want: ""
+  - name: dashes and arrows are not words
+    input: "One two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five six seven eight nine ten — → one two three four five."
+    want: ""
+  - name: inline code is one word
+    input: "One `two three` four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five six seven eight nine ten one two three four five six."
+    want: ""
