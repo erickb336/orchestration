@@ -19,8 +19,8 @@ import { parseRoute } from "../route";
 import { StoreContext, type ServiceStore } from "../store";
 import { frameSize, readCast, renderAnsi } from "./ansi";
 import { TerminalText } from "./Frames";
-import { Studio } from "./Studio";
-import { addPin, changedDrafts, deviceOptions, draftFrom, draftKey, pinFromMessage, sendBlocker, sendDrafts, serviceFileUrl, variantDemo, variantEntry, type Draft } from "./studioView";
+import { LeadPanel, Studio } from "./Studio";
+import { MAX_MESSAGE, addPin, answerBlocker, changedDrafts, deviceOptions, draftFrom, draftKey, pinFromMessage, roundLead, sendAnswer, serviceFileUrl, variantDemo, variantEntry, type Draft, type RoundLead } from "./studioView";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -74,6 +74,13 @@ function withSample(opts: { pe?: boolean } = {}) {
 }
 
 const PIN = { type: "orchestrator-pin", x: 0.25, y: 0.5, selector: "main > div.map" };
+
+/** The round with the lead's message and questions on it, as the lead's run records them (pass 4b's `round.lead`). */
+function withLead(s: State, n: number, lead: RoundLead): State {
+  const next = structuredClone(s);
+  Object.assign(next.studio.rounds.find((r) => r.n === n)!, { lead });
+  return next;
+}
 
 describe("Vision in the main navigation", () => {
   it("#/vision opens the studio", () => {
@@ -144,7 +151,7 @@ describe("the viewer's states, in plain words", () => {
 });
 
 describe("the fake designer's sample in the viewer", () => {
-  it("shows the variant's entry sandboxed on its own origin, in a desktop frame, with the variants, the marks, Pin a comment and Send feedback", () => {
+  it("shows the variant's entry sandboxed on its own origin, in a desktop frame, with the variants, the marks, Pin a comment and Send to the lead", () => {
     const { s, id } = withSample();
     const html = render(<Studio />, s);
     // The frame: its own origin on the prototype port, scripts only, never same-origin.
@@ -156,12 +163,10 @@ describe("the fake designer's sample in the viewer", () => {
     expect(html).toContain(">Mobile<");
     expect(html).toContain("A · Map first");
     expect(html).toContain("B · Day by day");
-    for (const label of [">Keep<", ">Change<", ">Drop<", "Pin a comment", "Send feedback"]) expect(html).toContain(label);
+    for (const label of [">Keep<", ">Change<", ">Drop<", "Pin a comment", "Send to the lead"]) expect(html).toContain(label);
     // The fake runtime made it: labelled so.
     expect(html).toContain("simulated");
-    // The lead's panel and PE review are pass 4: a labelled placeholder, not made-up content.
-    expect(html).toContain("Not built yet: the lead&#x27;s message for this round");
-    expect(html).toContain("Nothing marked yet.");
+    expect(html).toContain("Nothing marked or written yet.");
   });
 
   it("the device switch offers only the project's devices", () => {
@@ -222,47 +227,156 @@ describe("pins", () => {
     const pinned = addPin(draftFrom(undefined), PIN as never, "b");
     expect(pinned.pins).toEqual([{ x: 0.25, y: 0.5, variant: "b", text: "", selector: "main > div.map" }]);
     const changed = changedDrafts(s, { [draftKey(a)]: pinned });
-    expect(sendBlocker(changed)).toBe("Write a comment for pin 1 on Trip plan (simulated sample), or remove it.");
+    expect(answerBlocker({ round: 1, questions: [], answers: [], message: "", changed })).toBe("Write a comment for pin 1 on Trip plan (simulated sample), or remove it.");
   });
 });
 
-describe("Send feedback", () => {
-  it("sends every changed draft as one sendFeedback, which the domain records on each version", async () => {
-    const { s, id } = withSample();
+describe("the lead's panel", () => {
+  const LEAD = {
+    message: "You kept the day list from round 1.\nHere are two takes on the trip plan: A puts the map first, B is a day by day list.",
+    questions: [
+      { text: "Should the plan work offline on the trail?", reason: "Phones lose signal on trails.", options: ["Yes, cache the plan", "Map tiles too", "Not now"] },
+      { text: "Distances in miles or kilometres?" },
+    ],
+  };
+
+  it("shows the round's message, its questions with suggested answers and an answer box, and Message the lead, above PE review and your feedback", () => {
+    const { s, n } = withSample();
+    const html = render(<Studio />, withLead(s, n, LEAD));
+    expect(html).not.toContain("Not built yet");
+    expect(html).toContain('<section class="k-stack k-stack--tight" aria-label="The lead">');
+    expect(html).toContain('<p class="st-leadmsg">You kept the day list from round 1.\nHere are two takes on the trip plan');
+    expect(html).toContain("Should the plan work offline on the trail?");
+    expect(html).toContain("Why: Phones lose signal on trails.");
+    expect(html).toContain('aria-label="Suggested answers to question 1"');
+    for (const o of ["Yes, cache the plan", "Map tiles too", "Not now"]) expect(html).toMatch(new RegExp(`<button[^>]*aria-pressed="false"[^>]*>${o}</button>`));
+    // The second question has no suggestions: only its answer box.
+    expect(html).not.toContain("Suggested answers to question 2");
+    expect(html).toContain("Your answer to question 2");
+    expect(html).toContain(">Message the lead<");
+    expect(html).toContain(">Open the conversation<");
+    // Simulated: the fake runtime's lead wrote it.
+    expect(html).toContain("Simulated: the demo&#x27;s lead wrote this round&#x27;s message and questions; no model ran.");
+    // The lead first, then PE review, then your feedback and the one Send.
+    const lead = html.indexOf('aria-label="The lead"');
+    const pe = html.indexOf('aria-label="PE review"');
+    const yours = html.indexOf('aria-label="Your feedback"');
+    expect(lead).toBeGreaterThan(0);
+    expect(pe).toBeGreaterThan(lead);
+    expect(yours).toBeGreaterThan(pe);
+    expect(html).toContain(">Send to the lead<");
+    expect(html).not.toContain("Send feedback");
+  });
+
+  it("a suggested answer fills the answer box, pressed", () => {
+    const { s, n } = withSample();
+    const round = withLead(s, n, LEAD).studio.rounds.find((r) => r.n === n)!;
+    const html = render(<LeadPanel round={round} answers={["Map tiles too", ""]} onAnswer={() => {}} message="" onMessage={() => {}} />, s);
+    expect(html).toMatch(/<button[^>]*aria-pressed="true"[^>]*>Map tiles too<\/button>/);
+    expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Yes, cache the plan<\/button>/);
+    expect(html).toMatch(/<input[^>]*value="Map tiles too"/);
+  });
+
+  it("without the lead's words for the round (a round from before pass 4), it says so, and you can still write to the lead", () => {
+    const { s, n } = withSample();
+    const html = render(<Studio />, s);
+    expect(html).toContain(`The lead has written nothing for round ${n}. Write to it below; it answers in the conversation.`);
+    expect(html).not.toContain("The lead asks");
+    expect(html).toContain(">Message the lead<");
+    expect(html).toContain("Nothing marked or written yet.");
+  });
+
+  it("reads the lead's record defensively: ORC-012's question shape too, and nothing made up from a malformed one", () => {
+    const round = (lead: unknown) => ({ n: 1, focus: "experience", openedAt: at(1), summary: "", lead }) as never;
+    expect(roundLead(round(undefined))).toBeUndefined();
+    expect(roundLead(round({ message: "  ", questions: "no" }))).toBeUndefined();
+    expect(roundLead(round({ message: "Two takes.", questions: [{ question: "Offline?", why: "Trails.", options: ["Yes", 3, " "] }, { text: "" }, null] }))).toEqual({
+      message: "Two takes.",
+      questions: [{ text: "Offline?", reason: "Trails.", options: ["Yes"] }],
+    });
+  });
+});
+
+describe("Send to the lead: your marks, answers and message as one message", () => {
+  const questions = [{ text: "Should the plan work offline on the trail?", options: ["Yes, cache the plan", "Not now"] }, { text: "Distances in miles or kilometres?" }];
+
+  /** A send that runs each command against the state, as the service would, and records the calls. */
+  function service2(start: State) {
+    const calls: { name: string; args: object }[] = [];
+    let state = start;
+    const send = async (name: "sendFeedback" | "postMessage", args: object) => {
+      calls.push({ name, args });
+      state = runCommand(state, name, args, at(20 + calls.length)).state;
+      return { ok: true };
+    };
+    return { calls, send, after: () => state };
+  }
+
+  it("records the marks on each version, then posts one message with your message, your answers and a line per marked artifact", async () => {
+    const { s, id, n } = withSample();
     const a = S.getArtifact(s, id, 1);
     const draft: Draft = { ...addPin(draftFrom(undefined), PIN as never, "a"), mark: "change", pickedVariant: "b" };
     draft.pins[0].text = "Make the map smaller on phones.";
     draft.note = "Prefer B on phones.";
-    const calls: { name: string; args: object }[] = [];
-    let after = s;
-    const send = async (name: "sendFeedback", args: object) => {
-      calls.push({ name, args });
-      after = runCommand(s, name, args, at(20)).state;
-      return { ok: true };
-    };
-    const sent = await sendDrafts(send, s, { [draftKey(a)]: draft });
-    expect(sent).toEqual([draftKey(a)]);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].name).toBe("sendFeedback");
-    const f = S.currentFeedback(after, id, 1)!;
-    expect(f).toMatchObject({ mark: "change", pickedVariant: "b", note: "Prefer B on phones.", pins: [{ x: 0.25, y: 0.5, variant: "a", text: "Make the map smaller on phones.", selector: "main > div.map" }] });
+    const svc = service2(s);
+    const before = s.conversation.length;
+    const r = await sendAnswer(svc.send, s, { [draftKey(a)]: draft }, { round: n, questions, answers: ["Yes, cache the plan", ""], message: "Keep A's map header on desktop." });
+    expect(r).toEqual({ recorded: [draftKey(a)], posted: true });
+    expect(svc.calls.map((c) => c.name)).toEqual(["sendFeedback", "postMessage"]);
+    // The marks are recorded on the version, pins with their element.
+    const after = svc.after();
+    expect(S.currentFeedback(after, id, 1)).toMatchObject({ mark: "change", pickedVariant: "b", note: "Prefer B on phones.", pins: [{ x: 0.25, y: 0.5, variant: "a", text: "Make the map smaller on phones.", selector: "main > div.map" }] });
+    // One message in the conversation, the one the header's Message the lead opens.
+    const added = after.conversation.slice(before);
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject({ author: "user" });
+    expect(added[0].text).toBe(
+      [
+        "Keep A's map header on desktop.",
+        `My answers to round ${n}:\n\nQ: Should the plan work offline on the trail?\nA: Yes, cache the plan`,
+        "My feedback, recorded on each version:\n- Trip plan (simulated sample) v1: Change, picked B · Day by day, 1 pin, a note",
+      ].join("\n\n"),
+    );
     // Once recorded, the same draft is no longer a change: nothing is sent twice.
     expect(changedDrafts(after, { [draftKey(a)]: draft })).toEqual([]);
-    // The recorded pin names its element, so the list shows it instead of saying it is not recorded.
     const html = render(<Studio />, after);
     expect(html).toContain('<code class="st-selector">main &gt; div.map</code>');
     expect(html).not.toContain("The element is not recorded");
   });
 
-  it("sends nothing while nothing changed or a version is still with the PE, and keeps the drafts when the service refuses", async () => {
-    const { s, id } = withSample({ pe: false });
+  it("answers or a message alone are one postMessage, and a message alone is exactly what you wrote", async () => {
+    const { s, n } = withSample();
+    const answersOnly = service2(s);
+    expect(await sendAnswer(answersOnly.send, s, {}, { round: n, questions, answers: ["", "Kilometres"], message: "" })).toEqual({ recorded: [], posted: true });
+    expect(answersOnly.calls.map((c) => c.name)).toEqual(["postMessage"]);
+    expect(answersOnly.calls[0].args).toEqual({ text: `My answers to round ${n}:\n\nQ: Distances in miles or kilometres?\nA: Kilometres` });
+    const messageOnly = service2(s);
+    await sendAnswer(messageOnly.send, s, {}, { round: n, questions, answers: [], message: "  Can we see a calmer palette?  " });
+    expect(messageOnly.calls).toEqual([{ name: "postMessage", args: { text: "Can we see a calmer palette?" } }]);
+  });
+
+  it("sends nothing until there is something, a pin has its comment and it fits; refused marks stop the message", async () => {
+    const { s, id, n } = withSample({ pe: false });
     const a = S.getArtifact(s, id, 1);
-    const send = async () => ({ ok: true });
-    expect(await sendDrafts(send, s, {})).toBeNull();
-    expect(await sendDrafts(send, s, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } })).toBeNull();
+    const empty = { round: n, questions, answers: [], message: "" };
+    const svc = service2(s);
+    expect(answerBlocker({ ...empty, changed: [] })).toBe("Mark, pick or pin something, answer a question, or write to the lead first.");
+    expect(await sendAnswer(svc.send, s, {}, empty)).toBeNull();
+    // A version still with the PE is not yours to mark: its draft is not sent.
+    expect(await sendAnswer(svc.send, s, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, empty)).toBeNull();
+    expect(svc.calls).toEqual([]);
     const agreed = peAgrees(s, id, 1, ["a", "b"], at(7));
-    expect(await sendDrafts(async () => ({ ok: false }), agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } })).toBeNull();
-    expect(sendBlocker(changedDrafts(agreed, {}))).toBe("Mark, pick or pin something first.");
+    const pinned = addPin(draftFrom(undefined), PIN as never, "b");
+    expect(answerBlocker({ ...empty, message: "Hi", changed: changedDrafts(agreed, { [draftKey(a)]: pinned }) })).toBe("Write a comment for pin 1 on Trip plan (simulated sample), or remove it.");
+    expect(answerBlocker({ ...empty, message: "x".repeat(MAX_MESSAGE + 1), changed: [] })).toBe(`Together this is over ${MAX_MESSAGE} characters; shorten your message or your answers.`);
+    // The service refuses the marks (the version moved, say): the message is not posted, so it never speaks of marks that were not recorded.
+    const names: string[] = [];
+    const refuse = async (name: "sendFeedback" | "postMessage") => (names.push(name), { ok: false });
+    expect(await sendAnswer(refuse, agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, { ...empty, message: "Hi" })).toBeNull();
+    expect(names).toEqual(["sendFeedback"]);
+    // The marks recorded but the message refused: the drafts can clear, and the message stays to send again.
+    const half = async (name: "sendFeedback" | "postMessage") => ({ ok: name === "sendFeedback" });
+    expect(await sendAnswer(half, agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, { ...empty, message: "Hi" })).toEqual({ recorded: [draftKey(a)], posted: false });
   });
 });
 
@@ -312,8 +426,6 @@ describe("PE review in the right column", () => {
     expect(html).not.toContain("Waiting for PE review. You can look at it now");
     expect(html).not.toContain("with the PE");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
-    // The lead's panel stays a placeholder until pass 4.
-    expect(html).toContain("Not built yet: the lead&#x27;s message for this round and its questions come here in pass 4 of the studio.");
   });
 
   it("an objection says plainly that it is waiting for you, and you can answer", () => {

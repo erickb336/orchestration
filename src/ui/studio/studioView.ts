@@ -2,6 +2,7 @@
 // and artifacts to list, what each artifact shows (a device frame, a terminal window or a plain frame), where its
 // prototype is served, which pins to take, and the owner's unsent feedback, sent as one `sendFeedback`.
 
+import * as M from "../../domain/model";
 import { budgetStop } from "../../domain/spend";
 import * as S from "../../domain/studio/studio";
 import * as R from "../../domain/studio/runs";
@@ -162,7 +163,7 @@ export function draftSummary(a: StudioArtifact, d: Draft): string {
   return [mark, d.pickedVariant ? `picked ${label(d.pickedVariant)}` : "", d.pins.length ? `${d.pins.length} pin${d.pins.length === 1 ? "" : "s"}` : "", d.note.trim() ? "a note" : ""].filter(Boolean).join(", ");
 }
 
-/** The versions whose draft differs from the owner's current feedback: what Send feedback sends. Only versions the owner can answer (theirs, newest). */
+/** The versions whose draft differs from the owner's current feedback: the marks Send sends. Only versions the owner can answer (theirs, newest). */
 export function changedDrafts(s: State, drafts: Readonly<Record<string, Draft>>): { artifact: StudioArtifact; draft: Draft }[] {
   const out: { artifact: StudioArtifact; draft: Draft }[] = [];
   for (const a of S.latestArtifacts(s)) {
@@ -171,16 +172,6 @@ export function changedDrafts(s: State, drafts: Readonly<Record<string, Draft>>)
     if (!sameDraft(d, draftFrom(S.currentFeedback(s, a.id, a.version)))) out.push({ artifact: a, draft: d });
   }
   return out;
-}
-
-/** Why Send feedback cannot send yet, in words, or undefined. */
-export function sendBlocker(changed: { artifact: StudioArtifact; draft: Draft }[]): string | undefined {
-  if (!changed.length) return "Mark, pick or pin something first.";
-  for (const { artifact, draft } of changed) {
-    const empty = draft.pins.findIndex((p) => !p.text.trim());
-    if (empty >= 0) return `Write a comment for pin ${empty + 1} on ${artifact.title}, or remove it.`;
-  }
-  return undefined;
 }
 
 /** The `sendFeedback` entries for the changed drafts. A pin carries the element it is on, when the prototype said. */
@@ -195,15 +186,106 @@ export function feedbackEntries(changed: { artifact: StudioArtifact; draft: Draf
   }));
 }
 
+// ---------- the lead's panel, and your answer to the round ----------
+
+/** One of the lead's questions for a round: what it asks, why, and the answers it suggests. */
+export interface RoundQuestion {
+  text: string;
+  reason?: string;
+  options?: string[];
+}
+
+/** The lead's words for a round, which the lead's run records on the round (pass 4b): its message and its questions. */
+export interface RoundLead {
+  message: string;
+  questions: RoundQuestion[];
+}
+
+const trimmed = (x: unknown) => (typeof x === "string" ? x.trim() : "");
+
 /**
- * Send feedback: every changed draft as one `sendFeedback`, the owner's answer to the round. Returns the drafts it
- * sent (their keys), to clear once the state holds them, or null when nothing was sent (blocked, or refused).
+ * The lead's message and questions for a round, from the round's `lead` record (pass 4b), or undefined when it has
+ * none (a round opened before pass 4, or by the service alone). Read defensively, and ORC-012's question shape
+ * (`question`, `why`) is read too, so the panel shows what is there rather than nothing.
  */
-export async function sendDrafts(send: (name: "sendFeedback", args: object) => Promise<{ ok: boolean }>, s: State, drafts: Readonly<Record<string, Draft>>): Promise<string[] | null> {
-  const changed = changedDrafts(s, drafts);
-  if (sendBlocker(changed)) return null;
-  const r = await send("sendFeedback", { entries: feedbackEntries(changed) });
-  return r.ok ? changed.map((c) => draftKey(c.artifact)) : null;
+export function roundLead(r: Round | undefined): RoundLead | undefined {
+  const raw = (r as { lead?: unknown } | undefined)?.lead;
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  const questions = (Array.isArray(o.questions) ? o.questions : []).flatMap((q): RoundQuestion[] => {
+    if (!q || typeof q !== "object") return [];
+    const x = q as Record<string, unknown>;
+    const text = trimmed(x.text) || trimmed(x.question);
+    if (!text) return [];
+    const reason = trimmed(x.reason) || trimmed(x.why);
+    const options = Array.isArray(x.options) ? x.options.map(trimmed).filter(Boolean) : [];
+    return [{ text, ...(reason ? { reason } : {}), ...(options.length ? { options } : {}) }];
+  });
+  const message = trimmed(o.message);
+  return message || questions.length ? { message, questions } : undefined;
+}
+
+/** The longest message the conversation takes (domain/model/lead.ts postMessage). */
+export const MAX_MESSAGE = 8000;
+
+/** Your answer to a round, before it is sent: your changed marks, your answers to the lead's questions, and your message. */
+export interface Answer {
+  round: number | undefined;
+  questions: RoundQuestion[];
+  answers: string[];
+  message: string;
+  changed: { artifact: StudioArtifact; draft: Draft }[];
+}
+
+/**
+ * The one message to the lead, in the conversation the header's Message the lead opens: your message, then your
+ * answers (ORC-012's "Send answers" form; unanswered questions are left out), then a line for each artifact you
+ * marked (the marks, picks, pins and notes themselves are recorded on each version). "" when there is nothing to send.
+ */
+export function answerMessage(x: Answer): string {
+  const parts: string[] = [];
+  if (x.message.trim()) parts.push(x.message.trim());
+  const qa = M.answersMessage(
+    x.questions.map((q) => ({ question: q.text, why: q.reason ?? "" })),
+    x.answers,
+  );
+  if (qa) parts.push(`My answers${x.round !== undefined ? ` to round ${x.round}` : ""}:\n\n${qa}`);
+  if (x.changed.length) parts.push(`My feedback, recorded on each version:\n${x.changed.map(({ artifact: a, draft }) => `- ${a.title} v${a.version}: ${draftSummary(a, draft) || "cleared"}`).join("\n")}`);
+  return parts.join("\n\n");
+}
+
+/** What Send would send, in a few words each, for the summary above it: "2 answers", "a message". */
+export function answerParts(x: Answer): string[] {
+  const answered = x.questions.filter((_, i) => (x.answers[i] ?? "").trim()).length;
+  return [answered ? `${answered} answer${answered === 1 ? "" : "s"} to the lead's questions` : "", x.message.trim() ? "a message to the lead" : ""].filter(Boolean);
+}
+
+/** Why Send cannot send yet, in words, or undefined. */
+export function answerBlocker(x: Answer): string | undefined {
+  for (const { artifact, draft } of x.changed) {
+    const empty = draft.pins.findIndex((p) => !p.text.trim());
+    if (empty >= 0) return `Write a comment for pin ${empty + 1} on ${artifact.title}, or remove it.`;
+  }
+  const text = answerMessage(x);
+  if (!text) return "Mark, pick or pin something, answer a question, or write to the lead first.";
+  if (text.length > MAX_MESSAGE) return `Together this is over ${MAX_MESSAGE} characters; shorten your message or your answers.`;
+  return undefined;
+}
+
+type Send = (name: "sendFeedback" | "postMessage", args: object) => Promise<{ ok: boolean }>;
+
+/**
+ * Send to the lead: your changed marks as one `sendFeedback`, recorded on each version (compare-and-set on the
+ * version you saw), then everything as one `postMessage`, the one message the lead answers. The marks go first, so
+ * the message never speaks of marks the service refused. Returns the drafts recorded (their keys, to clear) and
+ * whether the message was posted, or null when nothing was sent (blocked, or the marks were refused).
+ */
+export async function sendAnswer(send: Send, s: State, drafts: Readonly<Record<string, Draft>>, x: Omit<Answer, "changed">): Promise<{ recorded: string[]; posted: boolean } | null> {
+  const answer = { ...x, changed: changedDrafts(s, drafts) };
+  if (answerBlocker(answer)) return null;
+  if (answer.changed.length && !(await send("sendFeedback", { entries: feedbackEntries(answer.changed) })).ok) return null;
+  const posted = (await send("postMessage", { text: answerMessage(answer) })).ok;
+  return { recorded: answer.changed.map((c) => draftKey(c.artifact)), posted };
 }
 
 // ---------- terminal artifacts ----------
