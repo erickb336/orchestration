@@ -14,6 +14,7 @@
 
 import { useCallback, useState } from "react";
 import * as M from "../../domain/model";
+import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DOMAIN_WORDS } from "../../domain/studio/domains";
 import type { Mark, Round, StudioArtifact } from "../../domain/studio/types";
@@ -380,7 +381,7 @@ function RunLines({ n }: { n: number }) {
 function NoArtifacts({ n }: { n: number }) {
   const { state } = useStore();
   const runs = roundRuns(state, n);
-  const working = runs.find((r) => r.status === "running" || r.status === "stopping");
+  const working = runs.find(R.isActiveStudioRun);
   const queued = runs.find((r) => r.status === "queued");
   const ended = runs.find((r) => r.status === "failed" || r.status === "lost" || r.status === "stopped");
   if (working) return <EmptyState title={`The designer is working on round ${n}.`}>Its artifacts appear here when it finishes.</EmptyState>;

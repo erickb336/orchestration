@@ -6,7 +6,22 @@ import * as M from "../../domain/model";
 import { budgetStop } from "../../domain/spend";
 import * as S from "../../domain/studio/studio";
 import * as R from "../../domain/studio/runs";
-import { UNGATED_KINDS, type BudgetEstimate, type Feedback, type Mark, type Pin, type Round, type RoundFocus, type StudioArtifact, type StudioRun, type Verdict } from "../../domain/studio/types";
+import {
+  DOCUMENT_KINDS,
+  UNGATED_KINDS,
+  isUnderWay,
+  type BudgetEstimate,
+  type Feedback,
+  type Mark,
+  type Pin,
+  type Round,
+  type RoundFocus,
+  type RoundLead,
+  type RoundQuestion,
+  type StudioArtifact,
+  type StudioRun,
+  type Verdict,
+} from "../../domain/studio/types";
 import { PROJECT_DOMAINS, type Device, type ProjectDomain, type State } from "../../domain/types";
 import { acceptPinMessage, prototypeOrigin, type PinMessage } from "../../runtime/prototype";
 
@@ -76,14 +91,7 @@ export function standing(s: State, a: StudioArtifact): Standing {
   return { kind: "pe", text: r.status === "revising" ? `The PE objected on pass ${r.pass}; the designer revises before it reaches you.` : "Waiting for PE review. You can look at it now, and mark it once the PE agrees." };
 }
 
-/**
- * The kinds shown as documents (pass 4): Markdown with code blocks and tables, and Mermaid diagrams, never in a
- * device frame. `interface`, `algorithm` and `topology` are the kinds pass 4b adds for code products and
- * infrastructure (ORC-029 r9); a string list, so the studio shows them as soon as the domain has them.
- */
-export const DOCUMENT_KINDS: readonly string[] = ["interface", "algorithm", "topology", "contract", "flow"];
-
-/** How an artifact is shown: a screen in a device frame, a terminal window, a document, or the entry file in a plain frame. */
+/** How an artifact is shown: a screen in a device frame, a terminal window, a document (the domain's `DOCUMENT_KINDS`), or the entry file in a plain frame. */
 export type ShowKind = "screen" | "terminal" | "document" | "file";
 export function showKind(a: StudioArtifact): ShowKind {
   if (a.kind === "screen") return "screen";
@@ -261,41 +269,13 @@ export function feedbackEntries(changed: { artifact: StudioArtifact; draft: Draf
 
 // ---------- the lead's panel, and your answer to the round ----------
 
-/** One of the lead's questions for a round: what it asks, why, and the answers it suggests. */
-export interface RoundQuestion {
-  text: string;
-  reason?: string;
-  options?: string[];
-}
-
-/** The lead's words for a round, which the lead's run records on the round (pass 4b): its message and its questions. */
-export interface RoundLead {
-  message: string;
-  questions: RoundQuestion[];
-}
-
-const trimmed = (x: unknown) => (typeof x === "string" ? x.trim() : "");
-
 /**
- * The lead's message and questions for a round, from the round's `lead` record (pass 4b), or undefined when it has
- * none (a round opened before pass 4, or by the service alone). Read defensively, and ORC-012's question shape
- * (`question`, `why`) is read too, so the panel shows what is there rather than nothing.
+ * The lead's message and questions for a round, as its run recorded them, checked (domain/studio/lead.ts), or
+ * undefined when it wrote neither (a round opened by the service alone).
  */
 export function roundLead(r: Round | undefined): RoundLead | undefined {
-  const raw = (r as { lead?: unknown } | undefined)?.lead;
-  if (!raw || typeof raw !== "object") return undefined;
-  const o = raw as Record<string, unknown>;
-  const questions = (Array.isArray(o.questions) ? o.questions : []).flatMap((q): RoundQuestion[] => {
-    if (!q || typeof q !== "object") return [];
-    const x = q as Record<string, unknown>;
-    const text = trimmed(x.text) || trimmed(x.question);
-    if (!text) return [];
-    const reason = trimmed(x.reason) || trimmed(x.why);
-    const options = Array.isArray(x.options) ? x.options.map(trimmed).filter(Boolean) : [];
-    return [{ text, ...(reason ? { reason } : {}), ...(options.length ? { options } : {}) }];
-  });
-  const message = trimmed(o.message);
-  return message || questions.length ? { message, questions } : undefined;
+  const lead = r?.lead;
+  return lead && (lead.message.trim() || lead.questions.length) ? lead : undefined;
 }
 
 /** The longest message the conversation takes (domain/model/lead.ts postMessage). */
@@ -491,7 +471,7 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
   }
   // Waiting for the PE: why, from its runs.
   if (a.shots?.status === "pending" || a.demo?.status === "pending") return { ...base, tone: "neutral", state: "Waiting", text: `The PE reviews it once the ${a.shots?.status === "pending" ? "screenshots are taken" : "recording is made"}.` };
-  if (run && (run.status === "running" || run.status === "stopping")) return { ...base, tone: "work", state: "Reviewing", text: "The PE is reading this version: its files, screenshots and recordings." };
+  if (run && R.isActiveStudioRun(run)) return { ...base, tone: "work", state: "Reviewing", text: "The PE is reading this version: its files, screenshots and recordings." };
   if (run?.status === "queued") return { ...base, tone: "neutral", state: "Queued", text: runLine(s, run, providerLabel).text };
   if (run &&(run.status === "failed" || run.status === "lost" || run.status === "stopped")) {
     const why = run.note ?? `its run was ${run.status}`;
@@ -572,7 +552,7 @@ export interface RunLine {
  */
 export function roundRuns(s: State, n: number): StudioRun[] {
   const mine = s.studio.runs.filter((r) => r.round === n);
-  const live = mine.filter((r) => r.status === "queued" || r.status === "running" || r.status === "stopping");
+  const live = mine.filter(isUnderWay);
   const last = mine.filter((r) => !live.includes(r)).at(-1);
   return last && last.status !== "completed" ? [...live, last] : live;
 }

@@ -11,6 +11,7 @@ import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DESIGNER, addScreen, feedback, openRound, peAgrees, pePass, run, sha } from "../../domain/testing/studio";
+import type { RoundLead } from "../../domain/studio/types";
 import type { State } from "../../domain/types";
 import { TABS, VisionBadge } from "../App";
 import { ConfirmProvider } from "../kit";
@@ -46,7 +47,6 @@ import {
   variantEntry,
   versionHistory,
   type Draft,
-  type RoundLead,
 } from "./studioView";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
@@ -313,14 +313,12 @@ describe("the lead's panel", () => {
     expect(html).toContain("Nothing marked or written yet.");
   });
 
-  it("reads the lead's record defensively: ORC-012's question shape too, and nothing made up from a malformed one", () => {
-    const round = (lead: unknown) => ({ n: 1, focus: "experience", openedAt: at(1), summary: "", lead }) as never;
-    expect(roundLead(round(undefined))).toBeUndefined();
-    expect(roundLead(round({ message: "  ", questions: "no" }))).toBeUndefined();
-    expect(roundLead(round({ message: "Two takes.", questions: [{ question: "Offline?", why: "Trails.", options: ["Yes", 3, " "] }, { text: "" }, null] }))).toEqual({
-      message: "Two takes.",
-      questions: [{ text: "Offline?", reason: "Trails.", options: ["Yes"] }],
-    });
+  it("shows the lead's record as its run stored it, and nothing when the lead wrote neither a message nor a question", () => {
+    const round = (lead?: RoundLead) => ({ n: 1, focus: "experience" as const, openedAt: at(1), summary: "", ...(lead ? { lead } : {}) });
+    expect(roundLead(round())).toBeUndefined();
+    expect(roundLead(round({ message: "  ", questions: [] }))).toBeUndefined();
+    const lead = { message: "", questions: [{ text: "Offline?", reason: "Trails.", options: ["Yes"] }] };
+    expect(roundLead(round(lead))).toEqual(lead);
   });
 });
 
