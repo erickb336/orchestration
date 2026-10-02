@@ -335,6 +335,48 @@ describe("ClaudeAdapter", () => {
     expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: "Part A \npart B" });
   });
 
+  describe("an output schema (ORC-029 pass 4: the lead's reply)", () => {
+    const schema = { type: "object", properties: { reply: { type: "string" } }, required: ["reply"], additionalProperties: false };
+
+    it("is passed as outputFormat, the SDK's StructuredOutput tool is allowed, and the structured result is the final text as JSON", async () => {
+      const { adapter, events, stream, calls } = setup();
+      adapter.start(assignment({ outputSchema: schema }, "read"));
+      await waitFor(() => calls.length === 1);
+      const opts = calls[0].options;
+      expect(opts.outputFormat).toEqual({ type: "json_schema", schema });
+      const signal = new AbortController().signal;
+      expect((await opts.canUseTool!("StructuredOutput", { reply: "Hi." }, { signal } as never))?.behavior).toBe("allow");
+      // The model's prose around the tool call is not the answer.
+      stream.push(init(), assistant([{ type: "text", text: "Let me answer through the tool." }]), result("success", { result: "", structured_output: { reply: "Hi." } }));
+      stream.end();
+      await waitFor(() => terminals(events).length === 1);
+      expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: '{"reply":"Hi."}' });
+    });
+
+    it("without a schema: no outputFormat, StructuredOutput is refused, and a stray structured result is ignored", async () => {
+      const { adapter, events, stream, calls } = setup();
+      adapter.start(assignment({}, "read"));
+      await waitFor(() => calls.length === 1);
+      const opts = calls[0].options;
+      expect(opts.outputFormat).toBeUndefined();
+      expect((await opts.canUseTool!("StructuredOutput", { reply: "Hi." }, { signal: new AbortController().signal } as never))?.behavior).toBe("deny");
+      stream.push(init(), result("success", { structured_output: { reply: "Hi." } }));
+      stream.end();
+      await waitFor(() => terminals(events).length === 1);
+      expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: "Done.\n```json\n{}\n```" });
+    });
+
+    it("a runtime that returns no structured result: the last message is the answer, for the service to read as before", async () => {
+      const { adapter, events, stream, calls } = setup();
+      adapter.start(assignment({ outputSchema: schema }, "read"));
+      await waitFor(() => calls.length === 1);
+      stream.push(init(), result("success"));
+      stream.end();
+      await waitFor(() => terminals(events).length === 1);
+      expect(terminals(events)[0]).toMatchObject({ type: "completed", finalText: "Done.\n```json\n{}\n```" });
+    });
+  });
+
   it("starting the same id twice is a no-op", async () => {
     const { adapter, calls } = setup();
     adapter.start(assignment());
@@ -527,6 +569,7 @@ describe("ClaudeAdapter", () => {
       ["error_max_turns", /turn limit \(7 turns\)/],
       ["error_max_budget_usd", /spend limit \(\$0\.5\)/],
       ["error_during_execution", /failed during execution: boom/],
+      ["error_max_structured_output_retries", /its answer did not match the output schema after the SDK's retries \(boom\)/],
     ])("%s → failed", async (subtype, pattern) => {
       const { adapter, events, stream, calls } = setup();
       adapter.start(assignment());

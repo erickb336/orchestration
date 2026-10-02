@@ -351,6 +351,8 @@ export class CodexAdapter implements RuntimeAdapter {
         cwd: a.workspace.path,
         approvalPolicy: "never",
         sandboxPolicy,
+        // The turn's final message is constrained to the schema, so it is the JSON answer itself.
+        ...(a.outputSchema ? { outputSchema: a.outputSchema as TurnStartParams["outputSchema"] } : {}),
       };
       const turn = await rpc.request("turn/start", turnParams);
       if (run.done) return;
