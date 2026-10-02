@@ -119,6 +119,20 @@ New module `src/domain/studio/` with its own types file, so it rarely conflicts 
   - Affected tasks are those whose spec cites a changed item, through a new optional spec field `blueprintRefs`.
   - With `changeOrders: "user"`, it waits under Needs you. Otherwise the lead proposes the updates through steering.
 
+### 2c as built (7eb56a5, merged in 0fdc0d3)
+
+Decisions the implementer made where the design was open:
+
+- **The start checks two tokens:** `blueprintRev` and `visionRev`. A vision edit makes no blueprint revision, so the blueprint alone would have dropped the existing guard. The start record keeps both.
+- **The change-order choice** is a flat `Project.changeOrders: "lead" | "user"`, not a copy of every pause point. The other pause points already live in their own settings. Format 19 defaults it to `"lead"`.
+- **PE passes count per round:** a new round starts again at pass 1. A pass judges every variant, and after three passes a further revision in that round is refused.
+- **The owner acts on the newest version only.** Approving a variant with an objection that has not been overruled is refused, so every overrule is explicit. Approving a round never downgrades an item.
+- **Material and probe evidence** are not held back for PE review.
+- **Ids:** an `id` names an artifact across its versions, and `supersedes` hands over a blueprint item.
+- **Pins** are fractions (0–1) of the artifact's size.
+- **Service-only commands** (refused over HTTP): `openRound`, `closeRound`, `addStudioArtifact`, `addPeVerdicts`, `addProbe`, `setProbeStatus`.
+- **Not yet:** resolving a change order (pass 5), and counting running probes as pre-flight open items (2e).
+
 ## 2d. The PE as a decision route
 
 - **The route:** `triage.askUserBy` gains `"pe"`. The Autopilot preset sets it; Check-in and Manual set `"user"`.
