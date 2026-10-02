@@ -2,6 +2,7 @@
 // project-wide pause. Steering reuses the helpers that work on a draft (writePriority, deferInto, dropInto, …).
 
 import * as F from "../findings";
+import { activeStudioRuns, requestStudioStop } from "../studio/runs";
 import { type Actor, type Deferral, type State, type Task, ControlError } from "../types";
 import { activeAttempts, assertOpen, currentSpec, draft, event, getTask, isOpen, requestStop, touch } from "./core";
 import { applyBreakdown, descendants } from "./fanout";
@@ -266,6 +267,8 @@ export function pauseProject(state: State, now: string): State {
   for (const a of active) requestStop(s, a, "project-pause", now);
   const lead = activeLeadRun(s);
   if (lead && lead.outcome === "running") requestLeadStop(s, lead, "project paused", now);
+  // A studio run that pausing stops is asked for again once the stop is confirmed: it runs when the project resumes.
+  for (const r of activeStudioRuns(s)) requestStudioStop(s, r, "project paused", now, true);
   return s;
 }
 

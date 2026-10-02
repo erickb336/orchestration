@@ -62,7 +62,7 @@ describe("the format 18 → 19 migration", () => {
     expect(s.project.devices).toEqual(["desktop"]);
     expect(s.project.budgets).toEqual({ buildingUsd: null, maintenanceUsdPerMonth: null });
     expect(s.project.changeOrders).toBe("lead");
-    expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [] });
+    expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
     expect(s.blueprint).toEqual({ revisions: [], changeOrders: [] });
     const { budgets: _b, devices: _d, factoryStarts: _f, changeOrders: _c, ...project } = s.project;
     expect(project).toEqual(before.project);
@@ -153,7 +153,18 @@ describe("format-19 databases written before all of format 19's fields existed (
     const s = store.read().state;
     expect(s.blueprint.changeOrders.map((c) => c.handler)).toEqual(["user", "lead"]);
     expect(s.project).toMatchObject({ changeOrders: "user", devices: ["desktop"], factoryStarts: [], budgets: { buildingUsd: null, maintenanceUsdPerMonth: null } });
-    expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [] });
+    expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
+  });
+
+  it("a studio from before studio runs (pass 3a) gains an empty list of runs and keeps what it holds", () => {
+    const path = join(dir, "early-studio.db");
+    const round = { n: 1, focus: "experience", openedAt: "2026-10-02T09:00:00.000Z", summary: "" };
+    early19(path, (doc) => {
+      doc.studio = { rounds: [round], artifacts: [], feedback: [], verdicts: [], probes: [] };
+    });
+    const store = new Store(path);
+    opened.push(store);
+    expect(store.read().state.studio).toEqual({ rounds: [round], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
   });
 });
 

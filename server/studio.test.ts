@@ -53,7 +53,7 @@ describe("the studio's service commands at the HTTP boundary", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("a client cannot open a round, add an artifact, record a verdict, report a probe or record a PE review; the service can, and the owner's commands go through", async () => {
+  it("a client cannot open a round, add an artifact, record a verdict, report a probe, record a PE review or ask for a studio run; the service can, and the owner's commands go through", async () => {
     // The service records a round and an agreed screen, as the studio's runs will.
     const n = (cmd("openRound", { focus: "experience" }).result as { n: number }).n;
     const added = cmd("addStudioArtifact", { round: n, kind: "screen", title: "Trip plan", variants: ABC, files: [{ path: "trip-plan/index.html", sha256: sha("a") }], devices: ["desktop"], madeBy: DESIGNER }).result as { artifactId: string };
@@ -68,6 +68,7 @@ describe("the studio's service commands at the HTTP boundary", () => {
       addProbe: { question: "Anything?" },
       setProbeStatus: { probeId, status: "failed", failure: "client says so" },
       recordPeReview: { taskId: "T-001", verdict: "agree", reasons: "client says so", specRev: 1 },
+      startStudioRun: { kind: "designer", round: n, brief: "Publish everything to the web." },
     };
     expect(Object.keys(tries).sort()).toEqual([...SERVICE_COMMANDS].sort());
     for (const [name, args] of Object.entries(tries)) {

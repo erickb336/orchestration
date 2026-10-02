@@ -33,7 +33,7 @@ describe("one way in: every project begins in Vision", () => {
     expect(s.project.stage).toBe("shaping");
     expect(s.project.devices).toEqual(["desktop", "mobile"]);
     expect(s.project.factoryStarts).toEqual([]);
-    expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [] });
+    expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
     expect(s.blueprint).toEqual({ revisions: [], changeOrders: [] });
   });
 

@@ -4,6 +4,7 @@
 import * as C from "../checks";
 import { flowRef } from "../flows";
 import { instantiate, toDef, validatePipeline } from "../pipeline";
+import { activeStudioRuns } from "../studio/runs";
 import { emptyBlueprint, emptyStudio } from "../studio/types";
 import {
   type CatalogModel,
@@ -80,7 +81,7 @@ export function setCatalog(state: State, provider: ProviderId, models: CatalogMo
  * the owner's Start the factory moves it to building.
  */
 export function initProject(state: State, init: { name: string; repoPath: string; vision: string; focus: string }, now: string): State {
-  if (activeAttempts(state).length || activeLeadRun(state)) throw new ControlError("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
+  if (activeAttempts(state).length || activeLeadRun(state) || activeStudioRuns(state).length) throw new ControlError("Stop all active runs (pause the project and wait for Paused) before starting a new project.");
   if (!init.name.trim() || !init.repoPath.trim()) throw new ControlError("Name and repository path are required.");
   const s = draft(state);
   s.project.id = `p-${Date.parse(now).toString(36)}-${s.seq.toString(36)}`;

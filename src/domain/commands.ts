@@ -10,8 +10,9 @@ import * as M from "./model";
 import * as P from "./peReview";
 import type { PeReviewTarget } from "./peReview";
 import * as B from "./studio/blueprint";
+import * as R from "./studio/runs";
 import * as S from "./studio/studio";
-import { type Mark, type StudioMaker, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, VERDICTS } from "./studio/types";
+import { type Mark, type StudioMaker, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
 import {
   ControlError,
   DEVICES,
@@ -167,7 +168,7 @@ function peReviewTarget(a: Args): PeReviewTarget {
  * them like any command, but a client never sends them: the HTTP endpoint refuses them, as it refuses
  * `stageVisionDoc`.
  */
-export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus", "recordPeReview"]);
+export const SERVICE_COMMANDS: ReadonlySet<string> = new Set(["openRound", "closeRound", "addStudioArtifact", "addPeVerdicts", "addProbe", "setProbeStatus", "recordPeReview", "startStudioRun"]);
 
 // ---- registry ----
 
@@ -280,6 +281,21 @@ export const COMMANDS = {
   setProbeStatus: same((s, now, a) =>
     S.setProbeStatus(s, str(a, "probeId"), { status: oneOf(a, "status", ["running", "done", "failed"] as const), attemptId: optStr(a, "attemptId"), result: optStr(a, "result"), failure: optStr(a, "failure") }, now),
   ),
+  /** Ask for a studio run in a round, with its brief: queued, and dispatched in Vision only (a designer's, until pass 4). Returns { runId }. */
+  startStudioRun: (s, now, a) => {
+    const r = R.requestStudioRun(
+      s,
+      {
+        kind: oneOf(a, "kind", STUDIO_RUN_KINDS),
+        round: int(a, "round"),
+        ...(a.artifactId === undefined ? {} : { artifactId: str(a, "artifactId") }),
+        ...(a.selection === undefined ? {} : { selection: selection(a.selection) }),
+        brief: str(a, "brief"),
+      },
+      now,
+    );
+    return { state: r.state, result: { runId: r.runId } };
+  },
 
   // PE review of new work in the factory (ORC-029 2e)
   /** The service's (SERVICE_COMMANDS), from the PE's review run: one verdict on pending work; on a task, with the spec revision the PE read. */
