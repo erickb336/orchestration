@@ -147,6 +147,14 @@ function feedbackEntry(v: unknown): S.FeedbackInput {
   });
   return { artifactId: str(e, "artifactId"), version: int(e, "version"), mark: e.mark as Mark | null, ...(e.pickedVariant === undefined ? {} : { pickedVariant: str(e, "pickedVariant") }), pins, note: str(e, "note") };
 }
+function askCheck(v: unknown): { ask: string; met: boolean } {
+  const o = obj(v, "earlier ask");
+  return { ask: str(o, "ask"), met: bool(o, "met") };
+}
+function openCase(v: unknown): { text: string; why?: string } {
+  const o = obj(v, "open case");
+  return { text: str(o, "text"), ...(o.why === undefined ? {} : { why: str(o, "why") }) };
+}
 function verdictInput(v: unknown): S.VerdictInput {
   const o = obj(v, "verdict");
   const b = o.budget === undefined ? undefined : obj(o.budget, "budget");
@@ -155,6 +163,9 @@ function verdictInput(v: unknown): S.VerdictInput {
     verdict: oneOf(o, "verdict", VERDICTS),
     reasons: str(o, "reasons"),
     ...(o.change === undefined ? {} : { change: str(o, "change") }),
+    ...(o.earlier === undefined ? {} : { earlier: array<unknown>(o.earlier, "earlier").map(askCheck) }),
+    ...(o.fromRevision === undefined ? {} : { fromRevision: bool(o, "fromRevision") }),
+    ...(o.openCases === undefined ? {} : { openCases: array<unknown>(o.openCases, "openCases").map(openCase) }),
     ...(b ? { budget: { buildUsd: range(b.buildUsd, "budget.buildUsd"), maintenanceUsdPerMonth: range(b.maintenanceUsdPerMonth, "budget.maintenanceUsdPerMonth"), basis: str(b, "basis") } } : {}),
   };
 }

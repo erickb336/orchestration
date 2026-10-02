@@ -216,9 +216,34 @@ export interface BudgetEstimate {
 }
 
 /**
+ * A product question the PE noticed while it judged a variant: a missing feature, an undecided edge case, a rule
+ * nobody set. It is the owner's to decide, through the lead (its studio brief lists the open round's), and it never
+ * sends the variant back to the designer. `why`: why it matters, in the PE's words.
+ */
+export interface OpenCase {
+  text: string;
+  why?: string;
+}
+
+/**
+ * The PE's check, on a later pass in a round, of one change it asked for earlier in the round on this variant: `ask`
+ * is the id of the earlier verdict that asked for it, and `met` whether this version meets it. A check that is not
+ * met on a feasible verdict means the PE no longer asks for it.
+ */
+export interface AskCheck {
+  ask: string;
+  met: boolean;
+}
+
+/**
  * The PE's verdict on one artifact version: on one variant, or on the whole artifact when `variant` is absent. The
  * verdicts of one review make one pass; passes count from 1 within the round the version was made in, up to 3.
  * A not-feasible verdict is an objection; it is never dropped, and only the owner overrules it.
+ *
+ * Only `change` sends the variant back to the designer (with the verdict: feasible-if or not-feasible). On a later
+ * pass the PE first checks each earlier ask (`earlier`), and a change then answers an ask that is not met, or a risk
+ * the revision created (`fromRevision`), so the loop converges. Product questions are `openCases`, for the owner.
+ * Verdicts stored before these three fields existed have none of them and read the same.
  */
 export interface PeVerdict {
   id: string;
@@ -230,6 +255,12 @@ export interface PeVerdict {
   reasons: string;
   /** The change that makes it feasible (feasible-if), or the evidence that would change the verdict (not-feasible). */
   change?: string;
+  /** On a later pass in the round: the PE's check of each change it asked for earlier on this variant. Absent on a first pass. */
+  earlier?: AskCheck[];
+  /** On a later pass: the change answers a risk that the revision itself created, not an earlier ask. */
+  fromRevision?: true;
+  /** Product questions for the owner. Absent when the PE raised none. */
+  openCases?: OpenCase[];
   budget?: BudgetEstimate;
   at: string;
   /** The owner overruled this objection, and why. */

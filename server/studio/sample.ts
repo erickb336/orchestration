@@ -337,12 +337,21 @@ export function reviseSample(staging: string, opts: { terminal: boolean; variant
 }
 
 /**
- * What the fake runtime's PE answers (ORC-029 passes 3 and 4): it reads the version's manifest.json, as a PE agent
- * reads the folder. On an artifact's first version with two or more variants it asks for a stand-in change to the
- * second (feasible-if), so the demo shows the designer revising in answer; it agrees with every variant of every
- * other version. Every reason says it is simulated: nothing was judged.
+ * The earlier asks a PE envelope lists on a later pass ("- `pev-3` on `b` (…), pass 1, …"; server/studio/pe.ts), by
+ * the variant each is on (none: the whole artifact).
  */
-export function fakePeAnswer(folder: string): { ok: true; text: string } | { ok: false; error: string } {
+export function earlierAsksIn(prompt: string): { ask: string; variant?: string }[] {
+  return [...prompt.matchAll(/^- `([^`]+)` on (?:`([^`]+)`|the whole artifact)[^\n]*, pass \d+, /gm)].map((m) => ({ ask: m[1], ...(m[2] !== undefined ? { variant: m[2] } : {}) }));
+}
+
+/**
+ * What the fake runtime's PE answers (ORC-029 passes 3 and 4): it reads the version's manifest.json, as a PE agent
+ * reads the folder, and its envelope. On an artifact's first version with two or more variants it asks for a stand-in
+ * change to the second (feasible-if), and raises one stand-in open case on it, so the demo shows the designer
+ * revising in answer and a question going to the owner through the lead. On every other version it checks each
+ * earlier ask its envelope lists, finds each met, and agrees. Every reason says it is simulated: nothing was judged.
+ */
+export function fakePeAnswer(folder: string, prompt = ""): { ok: true; text: string } | { ok: false; error: string } {
   let variants: { id: string }[];
   let version: unknown;
   try {
@@ -354,12 +363,24 @@ export function fakePeAnswer(folder: string): { ok: true; text: string } | { ok:
   }
   const reasons = "Simulated: the fake runtime's PE, not an agent. It judged nothing about feasibility, scale, longevity or budget;";
   const objects = version === 1 && variants.length >= 2;
+  const asks = earlierAsksIn(prompt);
+  const earlier = (variant?: string) => {
+    const mine = asks.filter((x) => variant === undefined || x.variant === undefined || x.variant === variant);
+    return mine.length ? { earlier: mine.map((x) => ({ ask: x.ask, met: true })) } : {};
+  };
+  const agrees = (variant?: string) => ({ ...(variant !== undefined ? { variant } : {}), ...earlier(variant), verdict: "feasible", reasons: `${reasons} it agrees so the demo can go on${asks.length ? ", and finds each earlier ask met" : ""}.` });
   const verdicts = variants.length
     ? variants.map((v, i) =>
         objects && i === 1
-          ? { variant: v.id, verdict: "feasible-if", reasons: `${reasons} it asks for a change on the first version, so the demo shows the designer revising.`, change: "Simulated: a stand-in change, which the fake designer marks on this variant in a revision." }
-          : { variant: v.id, verdict: "feasible", reasons: `${reasons} it agrees so the demo can go on.` },
+          ? {
+              variant: v.id,
+              verdict: "feasible-if",
+              reasons: `${reasons} it asks for a change on the first version, so the demo shows the designer revising.`,
+              change: "Simulated: a stand-in change, which the fake designer marks on this variant in a revision.",
+              openCases: [{ text: "Simulated: when a friend drops out after the cabin is booked, who pays their share?", why: "Simulated: a stand-in question, so the demo shows an open case going to the owner through the lead." }],
+            }
+          : agrees(v.id),
       )
-    : [{ verdict: "feasible", reasons: `${reasons} it agrees so the demo can go on.` }];
+    : [agrees()];
   return { ok: true, text: `Simulated PE review: no agent read this version.\n\n\`\`\`json\n${JSON.stringify({ verdicts }, null, 2)}\n\`\`\`\n` };
 }

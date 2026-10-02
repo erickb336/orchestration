@@ -13,6 +13,12 @@
 // changes shown. Where review stands is one value, `PeReview`, and the words the owner and the lead see are made from
 // it. An objection is never dropped: a later pass on a revision answers it, or the owner overrules it (recorded). What
 // the owner brought and a probe's evidence are not held back.
+//
+// Convergence (the second real trial, 2026-10-02: the PE asked for more on each pass, the designer added it all, and
+// the loop ended without agreement). Only a change sends a variant back; the product questions the PE notices are
+// open cases, for the owner through the lead. On a later pass the PE first checks each change it asked for earlier in
+// the round (met or not), and a change then answers an ask that is not met, or a risk the revision created, said so.
+// `addPeVerdicts` refuses a later pass that does neither, so the asks cannot grow from pass to pass.
 
 import { draft, event, nextId } from "../model/core";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "../model/textSafety";
@@ -20,10 +26,12 @@ import { ControlError, DEVICES, StaleWriteError, type Device, type ProviderId, t
 import {
   type ArtifactDemo,
   type ArtifactShots,
+  type AskCheck,
   type BudgetEstimate,
   type Feedback,
   type LoopEnd,
   type Mark,
+  type OpenCase,
   type PeVerdict,
   type Pin,
   type Probe,
@@ -524,6 +532,37 @@ export function readyForOwner(s: State, a: StudioArtifact): boolean {
   return r.status === "agreed" || r.status === "ended";
 }
 
+/**
+ * The changes the PE asked for so far in a version's round, which its next pass on this version checks first: the
+ * feasible-if and not-feasible verdicts on the round's versions up to this one, on the whole artifact or on a variant
+ * this version still has, oldest first. None before the round's first pass.
+ */
+export function earlierAsks(s: State, a: StudioArtifact): PeVerdict[] {
+  const before = new Set(versionsOf(s, a.id).filter((v) => v.round === a.round && v.version <= a.version).map((v) => v.version));
+  return s.studio.verdicts.filter((v) => v.artifactId === a.id && before.has(v.version) && v.verdict !== "feasible" && (v.variant === undefined || a.variants.some((x) => x.id === v.variant)));
+}
+
+/** The earlier asks a verdict on `variant` checks: those on its variant or on the whole artifact; every one for a verdict on the whole. */
+export const asksOn = (asks: PeVerdict[], variant: string | undefined): PeVerdict[] => (variant === undefined ? asks : asks.filter((x) => covers(x, variant)));
+
+/** An open case as the owner and the lead see it: the variant it was raised on (none: the whole artifact), on which pass and version. */
+export interface RaisedCase extends OpenCase {
+  variant?: string;
+  pass: number;
+  version: number;
+}
+
+/**
+ * The open cases the PE raised on an artifact in a version's round, up to that version, oldest first: product
+ * questions for the owner, which the lead asks about. A later pass does not repeat them, so the earlier passes' count.
+ */
+export function openCasesOf(s: State, a: StudioArtifact): RaisedCase[] {
+  const mine = new Set(versionsOf(s, a.id).filter((v) => v.round === a.round && v.version <= a.version).map((v) => v.version));
+  return s.studio.verdicts
+    .filter((v) => v.artifactId === a.id && mine.has(v.version) && v.openCases?.length)
+    .flatMap((v) => v.openCases!.map((c) => ({ ...c, ...(v.variant !== undefined ? { variant: v.variant } : {}), pass: v.pass, version: v.version })));
+}
+
 /** The objections of the latest pass on a version that the owner has not overruled, optionally only those covering one variant. */
 export function openObjections(s: State, a: StudioArtifact, variant?: string): PeVerdict[] {
   const r = peReview(s, a);
@@ -552,8 +591,16 @@ export interface VerdictInput {
   verdict: Verdict;
   reasons: string;
   change?: string;
+  /** On a later pass: the check of each earlier ask on this variant (`earlierAsks`), each once. */
+  earlier?: AskCheck[];
+  /** On a later pass: the change answers a risk the revision created. */
+  fromRevision?: boolean;
+  openCases?: OpenCase[];
   budget?: BudgetEstimate;
 }
+
+/** The most open cases on one verdict: the PE groups related questions, as the lead's questions are grouped (at most 5 a round). */
+export const MAX_OPEN_CASES = 5;
 
 function estimate(b: BudgetEstimate): BudgetEstimate {
   const range = (r: [number, number] | undefined, what: string) => {
@@ -607,9 +654,27 @@ export function outcomeWords(r: PeReview): string {
 }
 
 /**
+ * A verdict's checks of the earlier asks on its variant (`due`): each due ask once, and nothing else, in the order
+ * the asks were made. Throws a ControlError that says what is wrong.
+ */
+function askChecks(due: PeVerdict[], given: AskCheck[], on: string): AskCheck[] {
+  for (const c of given) {
+    if (!due.some((x) => x.id === c.ask)) throw new ControlError(`The verdict on ${on} checks "${agentLine(c.ask).slice(0, 30)}", which is not one of the PE's earlier asks on it in this round.`);
+  }
+  if (new Set(given.map((c) => c.ask)).size !== given.length) throw new ControlError(`The verdict on ${on} checks an earlier ask twice.`);
+  const missing = due.filter((x) => !given.some((c) => c.ask === x.id));
+  if (missing.length) throw new ControlError(`The verdict on ${on} leaves out earlier ask ${missing.map((x) => x.id).join(", ")}: on a later pass, the PE first says whether each change it asked for is met.`);
+  return due.map((x) => ({ ask: x.id, met: given.find((c) => c.ask === x.id)!.met }));
+}
+
+/**
  * Record one PE pass on an artifact's newest version (the service, from the PE's run): one verdict per variant, or
  * one verdict on the whole artifact. Passes count within the version's round, up to three. Feasible-if states the
  * change; an estimate states its basis. What the owner brought and a probe's evidence are not reviewed.
+ *
+ * On a later pass (convergence): each verdict checks every earlier ask on its variant (met or not), and one that sends
+ * the variant back has an ask that is not met, or says that the revision created the risk (`fromRevision`). Open
+ * cases (at most 5 a verdict) are recorded for the owner; they never send a variant back.
  */
 export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string): { state: State; pass: number } {
   const a = getArtifact(state, input.artifactId, input.version);
@@ -630,10 +695,25 @@ export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string)
     const missing = a.variants.filter((v) => !named.includes(v.id)).map((v) => v.id);
     if (missing.length) throw new ControlError(`The pass leaves out variant ${missing.join(", ")}: the PE judges every option the owner will see.`);
   }
+  const asks = earlierAsks(state, a);
   const records: PeVerdict[] = vs.map((v) => {
+    const on = v.variant === undefined ? "the whole artifact" : `variant ${v.variant}`;
     const reasons = required(agentText(v.reasons), 2000, "The verdict's reasons");
     const change = v.change === undefined ? "" : capped(agentText(v.change), 1000, "The stated change");
     if (v.verdict === "feasible-if" && !change) throw new ControlError("Feasible-if states the change that makes it feasible.");
+    const earlier = askChecks(asksOn(asks, v.variant), v.earlier ?? [], on);
+    // A later pass asks for no more than it asked before, unless the revision created a new risk (the loop converges).
+    if (pass > 1 && v.verdict !== "feasible" && !v.fromRevision && !earlier.some((c) => !c.met)) {
+      throw new ControlError(
+        `The verdict on ${on} sends it back, but ${earlier.length ? "it finds every earlier ask met" : "the PE asked for no change on it earlier in the round"}. On a later pass, a change is for an earlier ask that is not met, or for a risk this revision created ("fromRevision"); a missing feature or an undecided case is an open case for the owner.`,
+      );
+    }
+    if (v.fromRevision && (pass === 1 || v.verdict === "feasible")) throw new ControlError(`The verdict on ${on} says its change answers a risk the revision created, but it ${pass === 1 ? "is on the round's first take" : "asks for no change"}.`);
+    const openCases = (v.openCases ?? []).map((c) => {
+      const why = c.why === undefined ? "" : capped(agentLine(c.why), 300, "An open case's why");
+      return { text: required(agentLine(c.text), 300, "An open case"), ...(why ? { why } : {}) };
+    });
+    if (openCases.length > MAX_OPEN_CASES) throw new ControlError(`At most ${MAX_OPEN_CASES} open cases on one verdict; group related questions.`);
     return {
       id: "",
       artifactId: a.id,
@@ -643,6 +723,9 @@ export function addPeVerdicts(state: State, input: PeVerdictsInput, now: string)
       verdict: v.verdict,
       reasons,
       ...(change ? { change } : {}),
+      ...(earlier.length ? { earlier } : {}),
+      ...(v.fromRevision ? { fromRevision: true as const } : {}),
+      ...(openCases.length ? { openCases } : {}),
       ...(v.budget ? { budget: estimate(v.budget) } : {}),
       at: now,
       ...(input.by ? { by: { provider: input.by.provider, model: input.by.model, runId: input.by.runId } } : {}),

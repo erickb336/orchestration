@@ -626,8 +626,9 @@ export class FakeAdapter implements RuntimeAdapter {
         this.dropNotes(id, p, "the run ended first");
         this.procs.delete(id);
         if (p.studio !== undefined && p.studioRole === "pe") {
-          // A simulated PE reads the version's manifest and answers as a real one would: a verdict per variant.
-          const answer = fakePeAnswer(p.studio);
+          // A simulated PE reads the version's manifest and its envelope (its earlier asks), and answers as a real one
+          // would: a verdict per variant, each with its checks of the earlier asks on a later pass.
+          const answer = fakePeAnswer(p.studio, p.prompt ?? "");
           this.emit(answer.ok ? { type: "completed", attemptId: id, finalText: answer.text } : { type: "failed", attemptId: id, message: `The simulated PE could not read the version: ${answer.error}` });
           continue;
         }

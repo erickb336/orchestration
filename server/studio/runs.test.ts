@@ -557,14 +557,18 @@ describe("the PE's runs at the service", () => {
     const { artifactId, folder } = designed();
     const v1 = snapshot(folder);
     const prices = "Live prices for every stop need a paid API the budget does not cover.";
-    /** The PE's pass on the version under review: map first is feasible; day by day objected to, with the pass's own reasons. */
+    /**
+     * The PE's pass on the version under review: map first is feasible; day by day objected to, with the pass's own
+     * reasons. On a later pass it first finds each earlier objection to day by day not met.
+     */
     const pePass = (pass: number) => {
       tick();
       const pe = peRuns().at(-1)!;
       expect(pe).toMatchObject({ status: "running", baseVersion: pass });
+      const earlier = state().studio.verdicts.filter((v) => v.variant === "b").map((v) => ({ ask: v.id, met: false }));
       peFinish(pe.id, answer([
         { variant: "a", verdict: "feasible", reasons: "A drawn map: no tiles, no API." },
-        { variant: "b", verdict: "not-feasible", reasons: `${prices} (pass ${pass})`, change: "A free source of prices, or a budget for one." },
+        { variant: "b", verdict: "not-feasible", reasons: `${prices} (pass ${pass})`, change: "A free source of prices, or a budget for one.", ...(earlier.length ? { earlier } : {}) },
       ]));
       tick();
       return pe;
@@ -592,11 +596,15 @@ describe("the PE's runs at the service", () => {
     reviseAndHandIn(1);
     expect(S.versionsOf(state(), artifactId).map((v) => [v.version, v.round])).toEqual([[1, 1], [2, 1]]);
     expect(snapshot(folder)).toEqual(v1);
-    // The PE reviews v2, told what it said on v1.
+    // The PE reviews v2, told what it asked for on v1, to check first.
     tick();
     const second = peRuns().at(-1)!;
     expect(second).toMatchObject({ baseVersion: 2 });
-    expect(codex.runs.get(second.id)!.prompt).toContain(`## Your previous pass\n\nThis is pass 2 of 3 in round 1. On Trip plan v1 your pass 1 said:\n- \`a\` (A · Map first): feasible. A drawn map: no tiles, no API.\n- \`b\` (B · Day by day): not feasible. ${prices} (pass 1) What would change the verdict: A free source of prices, or a budget for one.`);
+    const ask = state().studio.verdicts.find((v) => v.variant === "b")!.id;
+    expect(codex.runs.get(second.id)!.prompt).toContain(
+      `## Your earlier asks\n\nThis is pass 2 of 3 in round 1. The designer revised the artifact since your pass 1. Check these asks first. For each one, say whether this version meets it:\n- \`${ask}\` on \`b\` (B · Day by day), pass 1, not feasible. Your reasons: ${prices} (pass 1) What would change your verdict: A free source of prices, or a budget for one.\n`,
+    );
+    expect(codex.runs.get(second.id)!.prompt).toContain("On your pass 1 you found `a` (A · Map first) feasible. Judge it again too.");
     pePass(2);
     reviseAndHandIn(2);
     pePass(3);
@@ -697,10 +705,16 @@ describe("the PE's runs at the service", () => {
       [2, 2, "b", "feasible"],
     ]);
     expect(verdicts.every((v) => v.reasons.startsWith("Simulated: the fake runtime's PE, not an agent."))).toBe(true);
+    // On pass 2 the simulated PE checked its one earlier ask, from its envelope, and found it met.
+    expect(verdicts[3].earlier).toEqual([{ ask: verdicts[1].id, met: true }]);
+    // Its open case is recorded for the owner, not sent to the designer.
+    const question = "Simulated: when a friend drops out after the cabin is booked, who pays their share?";
+    expect(S.openCasesOf(state(), art)).toMatchObject([{ variant: "b", pass: 1, text: question }]);
     // The revision: the simulated designer, asked by the service, changed only the variant the PE asked about.
     const revision = state().studio.runs.find((r) => r.kind === "designer" && r.baseVersion === 1)!;
     expect(revision).toMatchObject({ status: "completed", simulated: true, round: 1, artifactId: art.id });
     expect(revision.brief).toContain("- Revise `b` (B · Day by day), entry b/index.html.");
+    expect(revision.brief).not.toContain("drops out");
     const versionFile = (v: number, p: string) => readFileSync(join(dataDir, "studio", state().project.id, "artifacts", art.id, `v${v}`, p), "utf8");
     expect(versionFile(2, "a/index.html")).toBe(versionFile(1, "a/index.html"));
     expect(versionFile(2, "b/index.html")).toContain("Simulated revision: the fake runtime's designer marked this variant revised in answer to the PE");
