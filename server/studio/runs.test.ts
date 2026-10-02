@@ -159,7 +159,7 @@ describe("a designer run at the service", () => {
     expect(runOf(id)).toMatchObject({
       status: "failed",
       usage: { costUsd: 0.42 },
-      note: 'studio.json was refused: artifact 1: "a/run.sh" is not an allowed file type (html, css, js, svg, png, jpg, jpeg, webp, woff2, json, txt, md, mmd, tape, ans).',
+      note: 'studio.json was refused: artifact 1: "a/run.sh" is not an allowed file type (html, css, js, svg, png, jpg, jpeg, webp, woff2, json, txt, md, mmd, tape, cast, ans).',
     });
     expect(S.latestArtifacts(state())).toEqual([]);
     expect(existsSync(join(dataDir, "studio", state().project.id, "artifacts"))).toBe(false);

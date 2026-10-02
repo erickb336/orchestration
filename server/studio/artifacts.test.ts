@@ -90,6 +90,12 @@ describe("reading studio.json", () => {
     });
   });
 
+  it("takes a terminal demo's tape, its script, and hand-written .cast and .ans files", () => {
+    const files = { "a/demo.tape": "Output demo.gif\nSet Columns 80\nSet Rows 24\n", "a/demo.js": "console.log('trips')", "b/demo.cast": '{"version": 3, "term": {"cols": 80, "rows": 24}}\n', "b/plan.ans": "Trips\n" };
+    stage({ artifacts: [{ kind: "terminal-demo", title: "trips", variants: [{ id: "a", label: "Recorded", entry: "a/demo.tape" }, { id: "b", label: "Hand-written", entry: "b/demo.cast" }], files: Object.keys(files) }] }, files);
+    expect(read()[0].files.map((f) => f.path)).toEqual(Object.keys(files));
+  });
+
   it("refuses a missing or broken studio.json, and kinds this run does not make", () => {
     stage(null);
     expect(refusal(read)).toBe("the run wrote no studio.json.");
@@ -106,12 +112,23 @@ describe("reading studio.json", () => {
       stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, ...files] }] }, { ...PAGES, ...extra });
       return refusal(read);
     };
-    expect(tryFiles(["run.sh"], { "run.sh": "curl evil" })).toBe('artifact 1: "run.sh" is not an allowed file type (html, css, js, svg, png, jpg, jpeg, webp, woff2, json, txt, md, mmd, tape, ans).');
+    expect(tryFiles(["run.sh"], { "run.sh": "curl evil" })).toBe('artifact 1: "run.sh" is not an allowed file type (html, css, js, svg, png, jpg, jpeg, webp, woff2, json, txt, md, mmd, tape, cast, ans).');
     expect(tryFiles(["a/Index.HTML"], { "a/Index.HTML": "<p>" })).toMatch(/"a\/Index.HTML" is not an allowed file type/);
     expect(tryFiles(["/etc/hosts.txt"])).toBe('artifact 1: "/etc/hosts.txt" is not a relative path inside the run\'s folder (no absolute paths, no "..").');
     expect(tryFiles(["../outside/secret.txt"])).toMatch(/"\.\.\/outside\/secret\.txt" is not a relative path inside the run's folder/);
     expect(tryFiles(["a/../../x.txt"])).toMatch(/is not a relative path inside the run's folder/);
     expect(tryFiles(["manifest.json"], { "manifest.json": "{}" })).toBe('artifact 1: "manifest.json" is reserved for the service.');
+    expect(tryFiles(["MANIFEST.json"], { "MANIFEST.json": "{}" })).toBe('artifact 1: "MANIFEST.json" is reserved for the service.');
+    // The service's own folders of a version: the pin script's path, the screenshots and the recordings.
+    const reserved = "is in a folder reserved for the service (__orchestrator/, shots/, recording/).";
+    expect(tryFiles(["__orchestrator/pin.js"], { "__orchestrator/pin.js": "1" })).toBe(`artifact 1: "__orchestrator/pin.js" ${reserved}`);
+    expect(tryFiles(["shots/a-desktop.png"], { "shots/a-desktop.png": "png" })).toBe(`artifact 1: "shots/a-desktop.png" ${reserved}`);
+    expect(tryFiles(["Shots/a-mobile.png"], { "Shots/a-mobile.png": "png" })).toBe(`artifact 1: "Shots/a-mobile.png" ${reserved}`);
+    expect(tryFiles(["recording/a/demo.gif.txt"], { "recording/a/demo.gif.txt": "x" })).toBe(`artifact 1: "recording/a/demo.gif.txt" ${reserved}`);
+    // Only at the top of the version: a variant may have a folder of that name.
+    stage({ artifacts: [{ ...TRIP_PLAN, files: [...TRIP_PLAN.files, "a/shots/hero.png", "shots.txt"] }] }, { ...PAGES, "a/shots/hero.png": "png", "shots.txt": "notes" });
+    expect(read()[0].files.map((f) => f.path)).toContain("a/shots/hero.png");
+    expect(tryFiles(["A/style.css"], { "A/style.css": "h1 {}" })).toBe("artifact 1 lists a file twice (paths that differ only in case are one file on this disk).");
     expect(tryFiles(["a/missing.css"])).toBe('"a/missing.css" is listed but is not in the run\'s folder.');
     stage({ artifacts: [{ ...TRIP_PLAN, variants: [{ id: "a", label: "A", entry: "a/home.html" }] }] });
     expect(refusal(read)).toBe('artifact 1: the entry "a/home.html" of variant "a" is not one of its files.');
@@ -195,6 +212,12 @@ describe("importing a designer run", () => {
       expect(statSync(join(folder, p)).mode & 0o222).toBe(0);
     }
     expect(readdirSync(join(dir, "studio", "p-1", "artifacts", art.id))).toEqual(["v1"]);
+    // The files are read-only, the folder is not: the service adds the screenshots and recordings beside them.
+    for (const media of ["shots", "recording"]) {
+      mkdirSync(join(folder, media, "a"), { recursive: true });
+      writeFileSync(join(folder, media, "a", "x.png"), "png");
+    }
+    expect(readdirSync(folder).sort()).toEqual(["a", "b", "manifest.json", "recording", "shots"]);
   });
 
   it("a revision hands in one artifact, recorded as the next version in its own folder; the earlier folder is untouched", () => {

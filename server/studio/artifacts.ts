@@ -4,6 +4,9 @@
 //   <dataDir>/studio/<projectId>/artifacts/<artifactId>/v<n>/  one artifact version, never rewritten once recorded:
 //       its files, at the paths the designer gave them, and manifest.json:
 //       { artifactId, version, kind, title, devices, variants: [{ id, label, entry }], files: [{ path, sha256, bytes }] }
+//       and, written by the service after import (media.ts): shots/<variant>-<device>.png for a screen, and
+//       recording/<variant>/ for a terminal demo or TUI that VHS recorded. The files are read-only; the folders are
+//       not, so those can be added.
 //
 // A designer run ends by writing studio.json in its staging folder. It is an agent's output, so it is checked here, at
 // the boundary, before anything is copied: the kinds, the file types, the sizes, paths that stay inside the folder,
@@ -19,8 +22,13 @@ import type { StudioArtifactKind } from "../../src/domain/studio/types";
 export const STUDIO_MANIFEST = "studio.json";
 /** What the service writes in each version folder. */
 export const VERSION_MANIFEST = "manifest.json";
-/** The file types an artifact may hold, by extension (lowercase). */
-export const FILE_TYPES: readonly string[] = ["html", "css", "js", "svg", "png", "jpg", "jpeg", "webp", "woff2", "json", "txt", "md", "mmd", "tape", "ans"];
+/** The file types an artifact may hold, by extension (lowercase). A terminal demo is a VHS .tape, or hand-written .cast (asciicast v3) or .ans frames. */
+export const FILE_TYPES: readonly string[] = ["html", "css", "js", "svg", "png", "jpg", "jpeg", "webp", "woff2", "json", "txt", "md", "mmd", "tape", "cast", "ans"];
+/**
+ * Folders of a version that are the service's, never the designer's: the pin script's path on the prototype server,
+ * the screenshots (shots.ts) and the terminal recordings (media.ts), written beside the files after import.
+ */
+export const RESERVED_FOLDERS: readonly string[] = ["__orchestrator", "shots", "recording"];
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 256 * 1024;
@@ -79,7 +87,10 @@ function filePath(p: unknown, where: string): string {
   if (typeof p !== "string") throw new ManifestError(`${where}: a file is not a path.`);
   const outside = !p || p.length > 300 || p.startsWith("/") || p.includes("\\") || /[\u0000-\u001f\u007f]/.test(p) || p.split("/").some((x) => x === "" || x === "." || x === "..");
   if (outside) throw new ManifestError(`${where}: ${show(p)} is not a relative path inside the run's folder (no absolute paths, no "..").`);
-  if (p === VERSION_MANIFEST || p === STUDIO_MANIFEST) throw new ManifestError(`${where}: ${show(p)} is reserved for the service.`);
+  // Compared without case: the Mac's disk does not tell "Shots/" from "shots/".
+  const lower = p.toLowerCase();
+  if (lower === VERSION_MANIFEST || lower === STUDIO_MANIFEST) throw new ManifestError(`${where}: ${show(p)} is reserved for the service.`);
+  if (p.includes("/") && RESERVED_FOLDERS.includes(lower.split("/")[0])) throw new ManifestError(`${where}: ${show(p)} is in a folder reserved for the service (${RESERVED_FOLDERS.map((f) => `${f}/`).join(", ")}).`);
   const ext = /\.([^./]+)$/.exec(p)?.[1];
   if (!ext || !FILE_TYPES.includes(ext)) throw new ManifestError(`${where}: ${show(p)} is not an allowed file type (${FILE_TYPES.join(", ")}).`);
   return p;
@@ -147,7 +158,7 @@ export function readStaged(staging: string, kinds: readonly StudioArtifactKind[]
     if (!Array.isArray(devices) || !devices.every((d) => DEVICES.includes(d as Device))) throw new ManifestError(`${where}: devices are a list of ${DEVICES.join(", ")}.`);
     if (!Array.isArray(a.files) || !a.files.length || a.files.length > MAX_FILES) throw new ManifestError(`${where} lists between 1 and ${MAX_FILES} files.`);
     const paths = a.files.map((p) => filePath(p, where));
-    if (new Set(paths).size !== paths.length) throw new ManifestError(`${where} lists a file twice.`);
+    if (new Set(paths.map((p) => p.toLowerCase())).size !== paths.length) throw new ManifestError(`${where} lists a file twice (paths that differ only in case are one file on this disk).`);
     if (!Array.isArray(a.variants) || !a.variants.length || a.variants.length > MAX_VARIANTS) throw new ManifestError(`${where} has between 1 and ${MAX_VARIANTS} variants, each with its entry file.`);
     const variants = a.variants.map((v) => {
       if (!isObj(v) || typeof v.id !== "string" || typeof v.label !== "string" || typeof v.entry !== "string") throw new ManifestError(`${where}: a variant is { "id", "label", "entry" }.`);
