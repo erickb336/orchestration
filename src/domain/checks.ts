@@ -84,7 +84,7 @@ const SEPARATE_VALUE: Record<string, Set<string>> = { python: new Set(PY_SEPARAT
  * Each entry lists what the command must carry; any flag of an inner list satisfies it.
  * bun is not here: bun install has hooks beyond lifecycle scripts (bunfig.toml) that could not be
  * ruled out, so its installs run offline. Every other prepare command (pip, uv, poetry, bundle,
- * gradle, mix, swift, cargo, go, make, …) runs offline too; the user prefetches in their own environment.
+ * gradle, mix, swift, cargo, go, make, …) runs offline too in the host sandbox; the project's environment installs them.
  */
 const NETWORK_INSTALL_FLAGS: Record<string, string[][]> = {
   npm: [["--ignore-scripts", "--ignore-scripts=true"]],
@@ -97,7 +97,8 @@ const NETWORK_INSTALL_FLAGS: Record<string, string[][]> = {
 };
 /** Flags that switch those protections back on. Refused wherever they appear next to an install that may use the network. */
 const CONTRADICTING_FLAG = /^--(no-ignore-scripts|ignore-scripts=(?!true$).*|no-ignore-pnpmfile|ignore-pnpmfile=(?!true$).*|mode=(?!skip-build$).*)$/;
-export const NETWORK_RULE = "downloads the network may be used for: npm, pnpm, yarn installs only; other setup commands run offline";
+/** The host sandbox's network rule, in words. The project's environment (src/domain/environment.ts) is what installs any language's dependencies. */
+export const NETWORK_RULE = "only npm, pnpm and yarn installs get the network here; other languages need the project's environment and Docker";
 /** Names a check environment never takes from the settings (the service sets or drops them itself). */
 const RESERVED_ENV = new Set(["PATH", "HOME", "NODE_OPTIONS", "LD_PRELOAD"]);
 /** Prefixes a check environment never takes from the settings, whatever the case: package-manager configuration. */
