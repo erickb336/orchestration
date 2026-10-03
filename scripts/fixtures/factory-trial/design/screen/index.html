@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Split</title>
+    <style>
+      body { margin: 0; font: 16px/1.5 system-ui, sans-serif; background: #f7f5f0; color: #1d1d1b; }
+      header { padding: 16px 24px; background: #23443a; color: #fff; }
+      header h1 { margin: 0; font-size: 1.5rem; }
+      main { max-width: 480px; margin: 0 auto; padding: 24px; }
+      form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; align-items: end; }
+      label { display: grid; gap: 4px; font-weight: 600; }
+      input { font: inherit; min-width: 0; padding: 8px 10px; border: 1px solid #b9b4a8; border-radius: 6px; background: #fff; }
+      button { grid-column: 1 / -1; font: inherit; font-weight: 600; padding: 10px; border: 0; border-radius: 6px; background: #23443a; color: #fff; }
+      .share { margin-top: 24px; padding: 16px; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / 0.12); font-size: 1.25rem; }
+      .error { color: #9b1c1c; }
+    </style>
+  </head>
+  <body>
+    <header><h1>Split</h1></header>
+    <main>
+      <form id="split">
+        <label>Total ($) <input id="total" inputmode="decimal" value="90.00" /></label>
+        <label>People <input id="people" inputmode="numeric" value="3" /></label>
+        <button type="submit">Split</button>
+      </form>
+      <p class="share" id="share" role="status">Each person pays $30.00</p>
+    </main>
+    <script>
+      // The prototype's behaviour: an equal share, rounded down to the cent, and a refusal for fewer than one person.
+      document.getElementById("split").addEventListener("submit", (e) => {
+        e.preventDefault();
+        const cents = Math.round(Number(document.getElementById("total").value) * 100);
+        const people = Number(document.getElementById("people").value);
+        const out = document.getElementById("share");
+        const ok = Number.isInteger(people) && people >= 1;
+        out.className = ok ? "share" : "share error";
+        out.textContent = ok ? `Each person pays $${(Math.floor(cents / people) / 100).toFixed(2)}` : "Need at least one person";
+      });
+    </script>
+  </body>
+</html>
