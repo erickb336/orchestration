@@ -55,6 +55,12 @@ export async function buildApp() {
   return dist;
 }
 
+/** Remove the build buildApp made (not QA_DIST's). */
+export function removeApp() {
+  if (madeDist) rmSync(madeDist, { recursive: true, force: true });
+  madeDist = undefined;
+}
+
 // ---------- the service ----------
 
 /**
@@ -201,8 +207,11 @@ export async function openPage(browser, width, o = {}) {
     if (r.url().includes("/api/stream") && why.includes("ERR_ABORTED")) return;
     page.qaErrors.push(`request failed: ${r.url()} (${why})`);
   });
+  // The addresses that answered 404: a console line "Failed to load resource" does not name them.
+  page.qaNotFound = [];
   page.on("response", (r) => {
     if (r.status() >= 500) page.qaErrors.push(`server error ${r.status()}: ${r.url()}`);
+    if (r.status() === 404) page.qaNotFound.push(r.url());
   });
   page.qaContext = ctx;
   return page;
@@ -302,7 +311,8 @@ export function journey(name) {
       if (m.scroll > m.client) j.check(false, `${view}: no horizontal scroll`, { scroll: m.scroll, client: m.client, wider: await widest(page) });
       else j.check(true, `${view}: no horizontal scroll`);
       const errs = page.qaErrors.splice(0);
-      j.check(errs.length === 0, `${view}: no console error, page error or failed request`, errs.slice(0, 5));
+      const nf = page.qaNotFound.splice(0);
+      j.check(errs.length === 0, `${view}: no console error, page error or failed request`, [...errs.slice(0, 5), ...nf.slice(0, 3).map((u) => `404: ${u}`)]);
     },
     /** Print the summary, write result.json, and exit 1 when a check failed. */
     finish(extra = {}) {
@@ -353,8 +363,7 @@ export async function runJourney(name, makeState, body, o = {}) {
     }
   }
   await browser.close();
-  if (madeDist) rmSync(madeDist, { recursive: true, force: true });
-  madeDist = undefined;
+  removeApp();
   return j.finish();
 }
 
