@@ -27,6 +27,14 @@ export function taskCiting(s: State, refs: string[], title: string, sec: number)
   return { s: run(c.state, "editSpec", { taskId: t.id, expectedRev: 1, content, reason: "Cites the blueprint" }, at(sec)).state, id: t.id };
 }
 
+/** A lead proposal of planned work whose spec cites these blueprint items, which the PE agreed to (if it reviews new work). */
+export function leadTaskCiting(s: State, refs: string[], title: string, sec: number): { s: State; id: string } {
+  const d = structuredClone(s);
+  const id = M.proposeTask(d, leadProposal(title, refs) as M.LeadProposal, at(sec), true);
+  const reviewed = d.tasks.find((t) => t.id === id)!.peReview;
+  return { s: reviewed ? runCommand(d, "recordPeReview", { taskId: id, specRev: 1, verdict: "feasible", reasons: "Fits." }, at(sec)).state : d, id };
+}
+
 /** The owner's go-ahead: the task starts (its first step runs). */
 export const startTask = (s: State, taskId: string, sec: number) => M.dispatchEligible(M.leadPromoteProposals(M.startHeldTask(s, taskId, at(sec)), at(sec)), at(sec));
 
@@ -34,11 +42,13 @@ const item = (s: State, artifactId: string) => B.blueprintItems(s).find((i) => i
 
 /**
  * The factory runs from blueprint r1: Trip plan, Trip list and Reminders. Four tasks cite them: one runs (Trip plan),
- * one is queued (Trip list, citing Trip plan too), one is queued and builds only Reminders, and one has landed (an early
- * Trip plan, a fixture: landing runs the whole flow). The owner revises Trip plan (v2, after their note on v1), drops
- * Reminders and adds Packing list, and locks it in: a change order that touches all four tasks and brings one new item.
+ * one is queued (Trip list, citing Trip plan too), one is queued and builds only Reminders (the lead's own proposal,
+ * which the PE agreed to; with `retiringBy: "user"`, the owner's task), and one has landed (an early Trip plan, a
+ * fixture: landing runs the whole flow). The others are the owner's tasks. The owner revises Trip plan (v2, after their
+ * note on v1), drops Reminders and adds Packing list, and locks it in: a change order that touches all four tasks and
+ * brings one new item.
  */
-export function changeOrdered(handler: "lead" | "user" = "lead") {
+export function changeOrdered(handler: "lead" | "user" = "lead", retiringBy: "lead" | "user" = "lead") {
   let s = M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: "/tmp/trips", vision: "Weekend trips for a small group of friends.", focus: "" }, at(0));
   s = openRound(s, "experience", at(1)).state;
   const plan = screen(s, 1, "Trip plan", 2);
@@ -48,7 +58,7 @@ export function changeOrdered(handler: "lead" | "user" = "lead") {
   const ids = { plan: item(s, plan.id), list: item(s, list.id), remind: item(s, remind.id) };
   const running = taskCiting(s, [ids.plan], "Trip plan screen", 7);
   const queued = taskCiting(running.s, [ids.plan, ids.list], "Trip list screen", 8);
-  const retiring = taskCiting(queued.s, [ids.remind], "Outing reminders", 9);
+  const retiring = (retiringBy === "lead" ? leadTaskCiting : taskCiting)(queued.s, [ids.remind], "Outing reminders", 9);
   const early = taskCiting(retiring.s, [ids.plan], "Early trip plan", 10);
   s = startTask(early.s, running.id, 11);
   s = structuredClone(s);

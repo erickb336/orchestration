@@ -8,7 +8,8 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "../commands";
 import * as M from "../model";
 import { needsYouItems } from "../needsYou";
-import { at, changeOrdered, startTask, T0, taskCiting } from "../testing/changeOrders";
+import { newWorkReviewsDue } from "../peReview";
+import { answerChangeOrder, at, changeOrdered, startTask, T0, taskCiting } from "../testing/changeOrders";
 import { run } from "../testing/studio";
 import type { State } from "../types";
 
@@ -178,6 +179,84 @@ describe("the lead's answer: one line per update", () => {
     const done = M.completeLeadRun(m.state, m.runId, { reply: "Hi.", proposals: [], changeOrder: fullAnswer(f) } as never, at(21));
     expect(order(done)).toEqual(order(f.s));
     expect(done.conversation.at(-1)!.rejected).toEqual(["Change order this run was not asked to answer a change order; nothing was changed"]);
+  });
+});
+
+describe("the owner's authority: what the lead may not do (review findings 1 and 2)", () => {
+  const rev = (f: { s: State }) => order(f.s).rev;
+  /** The state with a task's PE review set as given (the review's own rules are tested in peReview.test.ts). */
+  const withReview = (s: State, id: string, peReview: NonNullable<State["tasks"][number]["peReview"]>) => {
+    const d = structuredClone(s);
+    d.tasks.find((t) => t.id === id)!.peReview = peReview;
+    return d;
+  };
+  const round = (verdict: "feasible-if" | "not-feasible", specRev: number) => ({ at: at(19), verdict, reasons: "The map hides the days.", change: "Put the days first.", specRev });
+
+  it('"retire" applies only to a task the Lock in agreed to retire: the owner\'s task it agreed to update stays', () => {
+    const f = changeOrdered();
+    const { s } = answer(f.s, { rev: rev(f), updates: [{ action: "retire", task: f.tasks.queued, why: "Not needed.", proposal: null }] }, 20);
+    expect(task(s, f.tasks.queued).lifecycle).not.toBe("cancelled");
+    expect(order(s).lines).toBeUndefined();
+    expect(order(s).notes![0]).toBe(`${f.tasks.queued}: the Lock in agreed "the lead updates its spec", not "retired"`);
+  });
+
+  it("the owner's task that the Lock in agreed to retire becomes a suggestion, never a cancel; your go-ahead retires it", () => {
+    const f = changeOrdered("lead", "user");
+    const a = answer(f.s, { rev: rev(f), updates: [{ action: "retire", task: f.tasks.retiring, why: "You dropped Reminders.", proposal: null }] }, 20);
+    expect(task(a.s, f.tasks.retiring).lifecycle).not.toBe("cancelled");
+    const line = order(a.s).lines![0];
+    expect(rowsOf(a.s, a.setId)[0]).toMatchObject({ status: "suggested", note: "your task: only you cancel it" });
+    expect(needsDetail(a.s)).toMatch(/1 of the lead's updates waits for your go-ahead/);
+    const s = M.applySteering(a.s, a.setId, line.changeId, at(30)).state;
+    expect(task(s, f.tasks.retiring).lifecycle).toBe("cancelled");
+  });
+
+  it("the lead's own task that the owner changed becomes a suggestion too", () => {
+    const f = changeOrdered();
+    const changed = runCommand(f.s, "setPriority", { taskId: f.tasks.retiring, priority: 2 }, at(19)).state;
+    const a = answer(changed, { rev: rev(f), updates: [{ action: "retire", task: f.tasks.retiring, why: "You dropped Reminders.", proposal: null }] }, 20);
+    expect(task(a.s, f.tasks.retiring).lifecycle).not.toBe("cancelled");
+    expect(rowsOf(a.s, a.setId)[0]).toMatchObject({ status: "suggested", note: "you changed this task" });
+  });
+
+  it('"retire" is refused while the PE reviews the task, or its objection waits for you', () => {
+    const f = changeOrdered();
+    const retire = { rev: rev(f), updates: [{ action: "retire", task: f.tasks.retiring, why: "You dropped Reminders.", proposal: null }] };
+    const reviewing = answer(withReview(f.s, f.tasks.retiring, { status: "pending", rounds: [] }), retire, 20).s;
+    expect(task(reviewing, f.tasks.retiring).lifecycle).not.toBe("cancelled");
+    expect(order(reviewing).notes![0]).toBe(`${f.tasks.retiring}: the PE is reviewing it; only you cancel it`);
+    const objects = answer(withReview(f.s, f.tasks.retiring, { status: "objected", rounds: [round("not-feasible", 1)] }), retire, 20).s;
+    expect(task(objects, f.tasks.retiring).lifecycle).not.toBe("cancelled");
+    expect(order(objects).notes![0]).toBe(`${f.tasks.retiring}: the PE objects to it; only you overrule the objection or cancel it`);
+  });
+
+  it('"update-spec" never clears a PE objection or an unfinished review that waits for you', () => {
+    const f = changeOrdered();
+    const update = { rev: rev(f), updates: [fullAnswer(f).updates[0]] };
+    for (const [review, note] of [
+      [{ status: "objected", rounds: [round("not-feasible", 2)] }, `${f.tasks.queued}: the PE objects to it; only you edit it, overrule the objection or cancel it`],
+      [{ status: "ended", rounds: [], ended: { at: at(19), why: "the PE run failed twice", by: "service" } }, `${f.tasks.queued}: its PE review could not finish; only you edit it, start it or cancel it`],
+    ] as const) {
+      const held = withReview(f.s, f.tasks.queued, structuredClone(review) as never);
+      const { s } = answer(held, update, 20);
+      expect(M.currentSpec(task(s, f.tasks.queued)).rev).toBe(2);
+      expect(task(s, f.tasks.queued).peReview).toEqual(review);
+      expect(order(s).lines).toBeUndefined();
+      expect(order(s).notes![0]).toBe(note);
+      expect(s.conversation.at(-1)!.rejected![0]).toBe(`Change order r${rev(f)}: ${note}`);
+    }
+  });
+
+  it('"update-spec" while the PE reviews the task keeps its rounds: the PE reviews the update as the next round', () => {
+    const f = changeOrdered();
+    // The PE asked a change on round 1, and the change order's run answers before a run revises it for the PE.
+    const held = withReview(f.s, f.tasks.queued, { status: "pending", rounds: [round("feasible-if", 2)] });
+    const { s } = answerChangeOrder(held, { rev: rev(f), updates: [fullAnswer(f).updates[0]] }, 20);
+    const t = task(s, f.tasks.queued);
+    expect(M.currentSpec(t).rev).toBe(3);
+    expect(t.peReview).toMatchObject({ status: "pending", rounds: [round("feasible-if", 2)] });
+    expect(t.peReview!.earlier).toBeUndefined();
+    expect(newWorkReviewsDue(s)).toContainEqual({ taskId: t.id, specRev: 3 });
   });
 });
 

@@ -8,11 +8,13 @@
 //
 // Each accepted update is one line of the change order and one row of the run's steering change set (ORC-009), so the
 // owner undoes each line alone, or all of them, with steering's Undo:
-// - update-spec: a queued task's spec, revised by the lead to build the versions in force. Undo writes the spec before
-//   back, with its PE review as it was.
+// - update-spec: a queued task's spec, revised by the lead to build the versions in force. A PE objection or an
+//   unfinished review that waits for the owner refuses it. Undo writes the spec before back, with its PE review as it was.
 // - revise: a new task that revises a running or landed task and waits for it to land (r14: the running task keeps
 //   running). Undo cancels the new task while it has not started.
-// - retire: a queued task that builds only dropped parts, dropped as steering drops one. Undo reopens it.
+// - retire: a queued task the Lock in agreed to retire (it builds only dropped parts), dropped as steering drops one.
+//   As in steering, PE review that is not settled keeps the task, and the owner's task or a task the owner changed is
+//   only suggested. Undo reopens it.
 // - new-task: a new task for the new work. Undo cancels it while it has not started.
 // The change order's handler says who gives the go-ahead: "lead", each update applies at once; "user" ("ask me
 // first"), each waits as a suggestion until the owner applies it (steering's Apply) or dismisses it. With PE review of
@@ -23,11 +25,11 @@
 // what was done per line, in the design's words. One completed lead run answers a change order: what it leaves goes to
 // the owner (Needs you), who applies or dismisses lines, cancels a task, or closes the change order as it stands.
 
-import { PE_REVIEW_HOLD, newWorkReview, peReviewHold } from "../peReview";
-import { blueprintItems } from "../studio/blueprint";
+import { PE_OBJECTS_HOLD, PE_UNFINISHED_HOLD, newWorkReview, peReviewHold, peReviewKeeps } from "../peReview";
+import { blueprintItems, HANDLING_WORDS } from "../studio/blueprint";
 import { CHANGE_ORDER_LINE_KINDS, type BlueprintItem, type ChangeOrder, type ChangeOrderLine, type ChangeOrderLineKind } from "../studio/types";
 import { ControlError, type LeadRun, type SteeringChange, type SteeringChangeSet, type State, type Task } from "../types";
-import { cancelInto, dropInto, openDependent, reopenDropped, started } from "./controls";
+import { cancelInto, dropInto, openDependent, reopenDropped, started, userTouched } from "./controls";
 import { currentSpec, currentVision, draft, event, getTask, isOpen } from "./core";
 import { type LeadProposal, proposeTask, specContentOf, validateProposal } from "./leadOutput";
 import { editSpecInto } from "./specs";
@@ -180,7 +182,9 @@ function stateWords(t: Task): string {
 
 /**
  * Why this update cannot apply to the task as it is now, or undefined. The same check runs when the lead answers and
- * when the owner gives the go-ahead later, so a line never applies to a task that moved on.
+ * when the owner gives the go-ahead later, so a line never applies to a task that moved on. What only the owner may do
+ * is refused here: a PE objection or an unfinished review that waits for the owner stays (finding 2), and a task is
+ * retired only where the Lock in agreed it, never under PE review (finding 1).
  */
 function whyNot(s: State, co: ChangeOrder, u: Update, now: string): string | undefined {
   const t = u.taskId ? s.tasks.find((x) => x.id === u.taskId) : undefined;
@@ -188,18 +192,26 @@ function whyNot(s: State, co: ChangeOrder, u: Update, now: string): string | und
   if (t && isDelivery(t)) return `${t.id}: a delivery task; only you change it`;
   const proposal = u.proposal && withRefs(s, u.proposal, t);
   switch (u.kind) {
-    case "update-spec":
+    case "update-spec": {
       if (!queued(s, t!)) return `${t!.id} ${stateWords(t!)}: only a queued task's spec is updated; ${t!.lifecycle === "cancelled" ? "nothing is left to change" : 'plan a revision task instead ("revise")'}`;
+      // Only the owner's edit reopens work the PE objected to (reopenPeReviewInto); the lead's update would clear it.
+      const hold = peReviewHold(t!.peReview);
+      if (hold === PE_OBJECTS_HOLD) return `${t!.id}: the PE objects to it; only you edit it, overrule the objection or cancel it`;
+      if (hold === PE_UNFINISHED_HOLD) return `${t!.id}: its PE review could not finish; only you edit it, start it or cancel it`;
       return prefixed(t!.id, validateProposal(s, proposal!, now, "lead", t!.id));
+    }
     case "revise":
       if (t!.lifecycle === "cancelled") return `${t!.id} is cancelled: nothing is left to revise`;
       if (queued(s, t!)) return `${t!.id} has not started: update its spec instead ("update-spec")`;
       return prefixed(t!.id, validateProposal(s, proposal!, now));
     case "retire": {
       if (!queued(s, t!)) return `${t!.id} ${stateWords(t!)}: only a queued task is retired; ${t!.lifecycle === "cancelled" ? "it is already gone" : 'plan a revision task instead ("revise")'}`;
+      const handling = co.tasks.find((x) => x.taskId === t!.id)!.handling;
+      if (handling !== "retire") return `${t!.id}: the Lock in agreed "${HANDLING_WORDS[handling]}", not "${HANDLING_WORDS.retire}"`;
       if (t!.parentTaskId) return `${t!.id} is a child task of ${t!.parentTaskId}: only you cancel it`;
-      const hold = peReviewHold(t!.peReview);
-      if (hold && hold !== PE_REVIEW_HOLD) return `${t!.id}: the PE's objection to it waits for you; only you cancel it`;
+      // Steering's rule for a drop (ORC-009): PE review that is not settled keeps the task, and only the owner cancels it.
+      const keeps = peReviewKeeps(t!.peReview);
+      if (keeps) return `${t!.id}: ${keeps}`;
       const dep = openDependent(s, t!, "drop");
       if (dep) return `${t!.id} is kept: ${dep.id} depends on it`;
       return undefined;
@@ -215,6 +227,21 @@ function whyNot(s: State, co: ChangeOrder, u: Update, now: string): string | und
 }
 
 const prefixed = (id: string, why: string | undefined) => (why ? `${id}: ${why}` : undefined);
+
+/**
+ * Why the lead's update waits for the owner's go-ahead whatever the change order's handler, or undefined: the lead
+ * never does what only the owner may. Steering's rules for a cancel (ORC-009): the owner's own task, or a task the owner
+ * changed by hand, is cancelled only by the owner, so the lead's retirement of one is a suggestion. The owner's
+ * go-ahead satisfies it. Run after `whyNot`.
+ */
+function ownersCall(s: State, u: Update): string | undefined {
+  const t = u.taskId ? getTask(s, u.taskId) : undefined;
+  if (u.kind === "retire") {
+    if (t!.specs[0]?.author !== "lead") return "your task: only you cancel it";
+    if (userTouched(t!)) return "you changed this task";
+  }
+  return undefined;
+}
 
 // ---------- applying a line ----------
 
@@ -236,7 +263,8 @@ function applyLineInto(s: State, co: ChangeOrder, line: ChangeOrderLine, row: St
         const earlier = t!.peReview;
         editSpecInto(s, t!, prev.rev, specContentOf(s, proposal!), reason, "lead", now);
         // The updated spec is new work: it waits for the PE before it starts, and the earlier review stays on the record.
-        const fresh = newWorkReview(s);
+        // A review under way keeps its rounds: the PE reviews the update as its next round, so the cap of rounds holds.
+        const fresh = earlier?.status === "pending" ? undefined : newWorkReview(s);
         if (fresh) t!.peReview = { ...fresh, ...(earlier ? { earlier: [...(earlier.earlier ?? []), { rounds: earlier.rounds, closedAt: now, specRev: prev.rev }] } : {}) };
         line.before = { specRev: prev.rev, ...(earlier ? { peReview: structuredClone(earlier) } : {}) };
         line.items = refsOf(t!);
@@ -326,9 +354,10 @@ export function answerChangeOrderInto(s: State, r: LeadRun, raw: unknown, set: S
     const row: SteeringChange = { id: `${set.id}.${set.changes.length + 1}`, kind: u.kind, ...(u.taskId ? { taskId: u.taskId } : {}), before: null, after: null, why: u.why, status: "suggested" };
     const items = u.proposal ? (withRefs(s, u.proposal, u.taskId ? getTask(s, u.taskId) : undefined).blueprintRefs ?? []) : [];
     const line: ChangeOrderLine = { changeId: row.id, kind: u.kind, ...(u.taskId ? { taskId: u.taskId } : {}), items, words: "", why: u.why, ...(u.proposal ? { proposal: structuredClone(u.proposal) as unknown as Record<string, unknown> } : {}) };
-    if (askFirst) {
+    const owners = ownersCall(s, u);
+    if (askFirst || owners) {
       line.words = lineWords(s, co, line);
-      row.note = "waits for your go-ahead (change orders: ask me first)";
+      row.note = owners ?? "waits for your go-ahead (change orders: ask me first)";
     } else {
       const why = applyLineInto(s, co, line, row, set, now);
       if (why) {
@@ -544,7 +573,7 @@ export function changeOrderNeeds(s: State, co: ChangeOrder): { waiting: number; 
   const left = outstanding(s, co);
   // What waits for the go-ahead is not "not handled": it has a line.
   const notHandled = { tasks: left.tasks.filter((id) => !suggested.some((l) => l.taskId === id)), items: left.items.filter((id) => !suggested.some((l) => l.kind === "new-task" && l.items.includes(id))) };
-  const parts = [waiting ? `${waiting} of the lead's update${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : "", isSettled(notHandled) ? "" : `not handled: ${outstandingWords(s, notHandled)}`].filter(Boolean);
+  const parts = [waiting ? `${waiting} of the lead's updates wait${waiting === 1 ? "s" : ""} for your go-ahead` : "", isSettled(notHandled) ? "" : `not handled: ${outstandingWords(s, notHandled)}`].filter(Boolean);
   return parts.length ? { waiting, left, words: parts.join("; ") } : undefined;
 }
 

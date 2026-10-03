@@ -17,7 +17,7 @@ import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import { captureItems } from "../src/domain/studio/evidence";
 import { testedItems } from "../src/domain/studio/ruleResults";
 import * as S from "../src/domain/studio/studio";
-import { DOCUMENT_KINDS, isChangeOrderKind, isUnderWay, type BlueprintItem, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
+import { DOCUMENT_KINDS, isChangeOrderKind, isUnderWay, type BlueprintItem, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact, type TaskHandling } from "../src/domain/studio/types";
 import { clip, truncate } from "../src/domain/text";
 import { leadBlueprintSection, newWorkNote, peChangeSection, peQuestionsSection, sentBackSection, stepBlueprintSection } from "./factoryLink";
 import { lastLeadProse } from "./prose/record";
@@ -1317,11 +1317,14 @@ function whatChanged(state: State, item: BlueprintItem, replaces: BlueprintItem)
   return truncate(parts.join("; "), CHANGE_ORDER_WORDS);
 }
 
-/** What the lead does now about a touched task, from its state now (r14): a queued task's spec, or a revision task. */
-function updateFor(state: State, t: Task | undefined, onlyDropped: boolean): string {
+/**
+ * What the lead does now about a touched task, from its state now (r14): a queued task's spec, or a revision task. A
+ * queued task is retired only where the Lock in agreed it (the domain refuses any other retirement).
+ */
+function updateFor(state: State, t: Task | undefined, handling: TaskHandling): string {
   if (!t || t.lifecycle === "cancelled") return "none (it is cancelled)";
   const queued = (t.lifecycle === "proposed" || t.lifecycle === "ready") && !state.attempts.some((a) => a.taskId === t.id);
-  if (queued) return onlyDropped ? '"retire"' : '"update-spec"';
+  if (queued) return handling === "retire" ? '"retire"' : '"update-spec"';
   return '"revise"';
 }
 
@@ -1347,9 +1350,8 @@ export function changeOrderSection(state: State, run: LeadRun): string {
   const tasks = co.tasks.map(({ taskId, handling }) => {
     const t = state.tasks.find((x) => x.id === taskId);
     const refs = t ? (M.currentSpec(t).content.blueprintRefs ?? []) : [];
-    const onlyDropped = refs.length > 0 && refs.every((r) => inForce.get(r)?.status === "dropped");
     const cites = refs.length ? refs.map((r) => `${r} (${role(r)})`).join(", ") : "nothing";
-    return `- ${taskId} "${t ? truncate(M.currentSpec(t).content.title, 80) : "?"}" [${t ? M.stateLabel(state, t) : "unknown"}]: cites ${cites}. Planned at the Lock in: ${B.HANDLING_WORDS[handling]}. Your update: ${updateFor(state, t, onlyDropped)}.`;
+    return `- ${taskId} "${t ? truncate(M.currentSpec(t).content.title, 80) : "?"}" [${t ? M.stateLabel(state, t) : "unknown"}]: cites ${cites}. Planned at the Lock in: ${B.HANDLING_WORDS[handling]}. Your update: ${updateFor(state, t, handling)}.`;
   });
   const newWork = co.newWork.map((id) => `- ${inForce.has(id) ? blueprintItemLine(state, inForce.get(id)!) : id}: no task cites it yet. Your update: "new-task", citing ${id}.`);
   const pe = state.project.peReviewsNewWork ? "\n- PE review of new work is on: an updated spec, a revision task and a new task each wait for the PE before they start. A retirement starts nothing." : "";
@@ -1374,7 +1376,8 @@ Rules for "changeOrder":
 - "rev": ${co.rev}. In "updates", one entry per task above, and one per new task. At most ${M.MAX_CHANGE_ORDER_UPDATES}.
 - "update-spec": a queued task's whole proposal again, revised to build the version in force; keep its title unless the change renames it. Its "blueprintRefs" are the approved items it builds (left out: the ones it cites now that are still approved). The service adds a cited flow's rules to its acceptance from the version in force.
 - "revise": a new task that revises a running or landed task: it builds the change on top of that work, and waits until that task lands. Give its whole proposal, with a title of its own.
-- "retire": a queued task that builds only dropped parts. "proposal" is null.
+- "retire": a queued task the Lock in agreed to retire (it builds only dropped parts). "proposal" is null. The user's own task, or a task the user changed, waits for the user's go-ahead. A task under PE review stays.
+- A PE objection or an unfinished PE review waits for the user: "update-spec" does not apply to such a task.
 - "new-task": "task" is null; the whole proposal of a new task, citing at least one item this change order adds or changes.
 - "why": one sentence, in the design's words.
 - ${who}${pe}
