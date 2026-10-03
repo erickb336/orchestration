@@ -110,7 +110,9 @@ const PAGE = (server) => `<!doctype html>
   Object.assign(r, {
     directOutside: await tcp("1.1.1.1", 443),
     directHostAddress: await tcp("192.168.5.2", canary),
-    directDockerBridge: await tcp("172.17.0.1", canary),
+    // The Docker VM on its default bridge, on its SSH port: it answers when it is reachable (the tests prove it from a
+    // container on the ordinary network), so a refusal here would mean the VM was reached.
+    directDockerBridge: await tcp("172.17.0.1", 22),
     directHostGateway: await tcp("host.docker.internal", canary),
     dnsOutside: await lookup("example.com"),
   });

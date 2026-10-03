@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { createServer, type Server as NetServer } from "node:net";
 import { blockedEnvName, hardenedInstall, isRebuild, networkRefusal, yarnrcRefusal } from "../src/domain/checks";
 import type { CheckResult, ChecksConfig, ChecksHealth } from "../src/domain/types";
-import type { EnvironmentPlan } from "../src/domain/environment";
+import type { EnvironmentPlan, UnconfirmedDevcontainer } from "../src/domain/environment";
 import { killGroup, trackLive } from "./processes";
 import { SECRET_NAME, redact } from "./redact";
 import { clearReport, readTestReport } from "./testReport";
@@ -118,8 +118,10 @@ export interface CheckAssignment {
   testReport?: string;
   /** The project's environment, when it has one: the run goes to its containers when Docker is there. */
   environment?: EnvironmentAssignment;
-  /** Why a run with an environment ran in the host sandbox instead (set by the environment runner when it hands the run over). */
+  /** Why a run with an environment ran in the host sandbox instead (set by the environment runner when it hands the run over, or by the scheduler when the dev container is not confirmed and no image is). */
   hostReason?: string;
+  /** A dev container at the trusted base whose digest the owner has not confirmed: not used, and named in the run's record. */
+  unconfirmed?: UnconfirmedDevcontainer;
 }
 
 /** The environment of one run: its plan, the project (for its cache folder), and a dev container's Dockerfile text read at the trusted base. */
@@ -429,7 +431,7 @@ export abstract class BaseChecks implements CheckRunner {
     }
     const tests = a.testReport ? (reportRefused ? { status: "refused" as const, path: a.testReport, reason: reportRefused } : readTestReport(a.testReport, { workspace: a.workspace, scratch: [a.tmpDir, a.cacheDir], env: this.baseEnv })) : undefined;
     if (tests) this.emit({ type: "activity", attemptId: a.attemptId, note: `Test report ${tests.path}: ${tests.status === "read" ? `${tests.counts.passed} passed, ${tests.counts.failed + tests.counts.error} failed, ${tests.counts.skipped} skipped` : tests.reason}`.slice(0, 200) });
-    const report: CheckRunReport = { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(this.simulated ? { simulated: true as const } : {}), ...(tests ? { tests } : {}), ...(a.hostReason ? { environment: { ran: "host" as const, reason: a.hostReason } } : {}) };
+    const report: CheckRunReport = { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(this.simulated ? { simulated: true as const } : {}), ...(tests ? { tests } : {}), ...(a.hostReason ? { environment: { ran: "host" as const, reason: a.hostReason, ...(a.unconfirmed ? { unconfirmed: a.unconfirmed } : {}) } } : {}) };
     this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: report });
   }
 

@@ -25,16 +25,45 @@ for (const [net, bits] of [
   ["192.88.99.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
 ])
   LOCAL4.addSubnet(net, bits, "ipv4");
-for (const [net, bits] of [["::", 128], ["::1", 128], ["::ffff:0:0", 96], ["64:ff9b::", 96], ["100::", 64], ["2001:db8::", 32], ["fc00::", 7], ["fe80::", 10], ["ff00::", 8]]) LOCAL6.addSubnet(net, bits, "ipv6");
+// IPv6 ranges that are never a registry's address. The forms that carry an IPv4 address are refused whole (IPv4-
+// compatible ::/96, SIIT ::ffff:0:0:0/96, 6to4 2002::/16, Teredo inside 2001::/23, local-use NAT64 64:ff9b:1::/48),
+// except two, judged by the IPv4 address they carry: IPv4-mapped (::ffff:0:0/96) and NAT64 (64:ff9b::/96).
+for (const [net, bits] of [
+  ["::", 96], ["::ffff:0:0:0", 96], ["64:ff9b:1::", 48], ["100::", 64], ["2001::", 23], ["2001:db8::", 32], ["2002::", 16], ["3fff::", 20], ["5f00::", 16],
+  ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
+])
+  LOCAL6.addSubnet(net, bits, "ipv6");
 
-/** Is this resolved address on the public internet? An IPv4 address mapped into IPv6 is judged as IPv4. */
+/** An IPv6 address as its eight 16-bit words, from any form (a zone, a dotted IPv4 tail); undefined when it is not IPv6. */
+function words6(ip) {
+  const s = String(ip).replace(/%.*$/, "");
+  if (isIP(s) !== 6) return undefined;
+  let text = s;
+  const dotted = /^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(text);
+  if (dotted) {
+    const o = dotted.slice(2).map(Number);
+    text = `${dotted[1]}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`;
+  }
+  const gap = text.indexOf("::");
+  const part = (t) => (t ? t.split(":") : []);
+  const head = gap < 0 ? part(text) : part(text.slice(0, gap));
+  const tail = gap < 0 ? [] : part(text.slice(gap + 2));
+  return [...head, ...Array(8 - head.length - tail.length).fill("0"), ...tail].map((x) => parseInt(x, 16));
+}
+
+/**
+ * Is this resolved address on the public internet? Every textual form of IPv6 is read into its words first, so an
+ * IPv4 address inside IPv6 is judged as that IPv4 address (mapped, NAT64) or refused with its whole range.
+ */
 export function isPublicAddress(ip) {
-  const v = isIP(ip);
-  if (v === 4) return !LOCAL4.check(ip, "ipv4");
-  if (v !== 6) return false;
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
-  if (mapped) return isPublicAddress(mapped[1]);
-  return !LOCAL6.check(ip, "ipv6");
+  if (isIP(String(ip)) === 4) return !LOCAL4.check(String(ip), "ipv4");
+  const w = words6(ip);
+  if (!w) return false;
+  const v4 = () => `${w[6] >> 8}.${w[6] & 255}.${w[7] >> 8}.${w[7] & 255}`;
+  const zeros = (from, to) => w.slice(from, to).every((x) => x === 0);
+  if (zeros(0, 5) && w[5] === 0xffff) return isPublicAddress(v4());
+  if (w[0] === 0x64 && w[1] === 0xff9b && zeros(2, 6)) return isPublicAddress(v4());
+  return !LOCAL6.check(w.map((x) => x.toString(16)).join(":"), "ipv6");
 }
 
 const looksLikeAddress = (h) => isIP(h) !== 0 || /^[0-9.]+$/.test(h) || /^0x[0-9a-f.x]*$/i.test(h) || h.startsWith("[");

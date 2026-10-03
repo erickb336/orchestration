@@ -6,16 +6,18 @@
 // Node, Python and Go fixtures and the hostile one. Skipped, with the reason, without Docker or the image.
 
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { IMAGE_TABLE, environmentPlan, environmentSource, parseDevcontainer, type EnvironmentPlan } from "../../src/domain/environment";
+import { IMAGE_TABLE, environmentPlan, environmentSource, type EnvironmentPlan } from "../../src/domain/environment";
+import { readDevcontainer } from "../environment/devcontainer";
 import { DEFAULT_INSTALL, type CaptureItem, type ItemCapture } from "../../src/domain/studio/evidence";
 import type { CheckRunReport } from "../checks";
 import { removeTree } from "../environment/copy";
 import { EnvironmentChecks } from "../environment/runner";
+import { PreparedEnvironments } from "../environment/prepared";
 import type { AdapterEvent } from "../runtimes/types";
 import { RECORDER_IMAGE, defaultRecorderRoot, dockerEnv, dockerReady, runDocker } from "./container";
 import { captureEvidence } from "./evidence";
@@ -203,7 +205,8 @@ const DEMO: CaptureItem = { itemId: "bi-2", kind: "terminal-demo", title: "Fixtu
 describe(`capturing evidence in the project's environment${skipReason}`, () => {
   const TEST_ID = `evtest-${Math.random().toString(36).slice(2, 8)}`;
   let envRoot = "";
-  let lender: EnvironmentChecks;
+  let lender: PreparedEnvironments;
+  let checks: EnvironmentChecks;
   const row = (label: string) => IMAGE_TABLE.find((r) => r.label === label)!;
   const settingPlan = (label: string, prepare: string[][]): EnvironmentPlan => environmentPlan(environmentSource(undefined, { rev: 1, image: row(label).image, prepare, hosts: [] }).source!, { rev: 1, prepare, hosts: [] });
   const envContainersLeft = () => (ready.ok ? execFileSync(ready.docker, ["ps", "--all", "--filter", `name=orc-env-`, "--format", "{{.Names}}"], { encoding: "utf8" }).trim().split("\n").filter((n) => n.startsWith(`orc-env-preview-${process.pid}-`) || n.startsWith(`orc-env-session-${process.pid}-`)) : []);
@@ -212,7 +215,8 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
     if (!ready.ok || envRoot) return;
     // Under the home folder: Colima shares only it with its VM.
     envRoot = mkdtempSync(join(homedir(), ".cache", "orchestrator-env-e2-test-"));
-    lender = new EnvironmentChecks({ root: envRoot, fallback: () => ({ start: () => { throw new Error("handed to the host sandbox"); } }) as never, log: (m) => console.log(m) });
+    lender = new PreparedEnvironments({ root: envRoot, log: (m) => console.log(m) });
+    checks = new EnvironmentChecks({ environments: lender, fallback: () => ({ start: () => { throw new Error("handed to the host sandbox"); } }) as never, log: (m) => console.log(m) });
   });
   afterEach(() => {
     // Nothing a capture made stays behind: its stage folders and its containers are gone.
@@ -269,8 +273,10 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
   it.skipIf(!ready.ok)(
     "Node, from its dev container: its page (served on 127.0.0.1 with ms) and its CLI in a terminal",
     async () => {
-      const found = { file: ".devcontainer/devcontainer.json", parsed: parseDevcontainer(readFileSync(join(ENV_FIXTURES, "node/.devcontainer/devcontainer.json"), "utf8"), ".devcontainer/devcontainer.json") };
-      const plan = environmentPlan(environmentSource(found, undefined).source!, { rev: 1, prepare: [["npm", "ci"]], hosts: [] });
+      // Read as the scheduler reads it, and confirmed by its digest as the owner confirms it (review finding 3).
+      const found = readDevcontainer((p) => (existsSync(join(ENV_FIXTURES, "node", p)) ? { text: readFileSync(join(ENV_FIXTURES, "node", p), "utf8"), truncated: false } : undefined))!;
+      const setting = { rev: 1, prepare: [["npm", "ci"]], hosts: [], devcontainer: { file: found.file, sha256: found.sha256! } };
+      const plan = environmentPlan(environmentSource(found, setting).source!, setting);
       const c = await capture("node", plan, ["node", "server.js"]);
       expect(c.r.path).toMatchObject({ via: "environment", from: "devcontainer", prepare: "ran", imageId: expect.stringMatching(/^sha256:/) });
       const got = expectCaptured(c, "demo.cast", "demo.txt");
@@ -292,16 +298,16 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
       const project = `${TEST_ID}-reuse`;
       const workspace = change(join(ENV_FIXTURES, "node"));
       const id = "chk-reuse";
-      const checks = await new Promise<AdapterEvent>((res) => {
-        const off = lender.onEvent((e) => {
+      const checked = await new Promise<AdapterEvent>((res) => {
+        const off = checks.onEvent((e) => {
           if (e.attemptId !== id || (e.type !== "completed" && e.type !== "failed" && e.type !== "stopped")) return;
           off();
           res(e);
         });
-        lender.start({ attemptId: id, taskId: "T1", stepId: "C1", workspace, target: SHA, commands: [{ id: "test", label: "npm test", kind: "check", argv: ["npm", "test"], timeoutMs: 600_000 }], runTimeoutMs: 1_500_000, sandbox: "none", prepareNetwork: true, env: {}, tmpDir: join(dir, "chk.tmp"), cacheDir: join(dir, "chk.cache"), logDir: join(dir, "chk.logs"), environment: { plan, project } });
+        checks.start({ attemptId: id, taskId: "T1", stepId: "C1", workspace, target: SHA, commands: [{ id: "test", label: "npm test", kind: "check", argv: ["npm", "test"], timeoutMs: 600_000 }], runTimeoutMs: 1_500_000, sandbox: "none", prepareNetwork: true, env: {}, tmpDir: join(dir, "chk.tmp"), cacheDir: join(dir, "chk.cache"), logDir: join(dir, "chk.logs"), environment: { plan, project } });
       });
-      if (checks.type !== "completed") throw new Error(JSON.stringify(checks).slice(0, 400));
-      const record = (checks.checks as CheckRunReport).environment as { prepare: string; key: string };
+      if (checked.type !== "completed") throw new Error(JSON.stringify(checked).slice(0, 400));
+      const record = (checked.checks as CheckRunReport).environment as { prepare: string; key: string };
       expect(record.prepare).toBe("ran");
 
       const out = join(dir, "evidence");
@@ -354,11 +360,13 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
       });
       try {
         const port = (canary.address() as { port: number }).port;
-        // The control: a container on Docker's ordinary network does reach the canary, so a leak would show.
-        const control = `const s=require("node:net").connect(${port},"host.lima.internal");s.on("connect",()=>{console.log("CONNECTED");s.destroy()});s.on("error",(e)=>console.log(e.code))`;
+        // The control: a container on Docker's ordinary network does reach the canary and the Docker VM's SSH port
+        // (172.17.0.1:22), so a leak to the hostile targets would show.
+        const reach = (host: string, p: number) => `new Promise((r) => require("node:net").connect(${p}, "${host}").on("connect", function () { this.destroy(); r("CONNECTED") }).on("error", (e) => r(e.code)))`;
+        const control = `Promise.all([${reach("host.lima.internal", port)}, ${reach("172.17.0.1", 22)}]).then((x) => console.log(x.join(" ")))`;
         const reached = execFileSync(ready.ok ? ready.docker : "docker", ["run", "--rm", "--pull", "never", "--network", "bridge", "--user", "10001:10001", RECORDER_IMAGE, "/usr/local/bin/node", "-e", control], { encoding: "utf8", timeout: 60_000 }).trim();
         await new Promise((r) => setTimeout(r, 200));
-        expect({ reached, hits }).toEqual({ reached: "CONNECTED", hits: 1 });
+        expect({ reached, hits }).toEqual({ reached: "CONNECTED CONNECTED", hits: 1 });
         hits = 0;
 
         const c = await capture("hostile", settingPlan("Node", [["npm", "ci"]]), ["node", "hostile.js", "preview"], { extra: { "canary.json": JSON.stringify({ canary: port }) }, settleMs: 5000 });
@@ -371,7 +379,10 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
         for (const url of ["http://1.1.1.1/", `http://192.168.5.2:${port}/`, `http://host.lima.internal:${port}/`, `http://host.docker.internal:${port}/`, `http://127.0.0.1:${port}/`]) expect(probes).toContain(`${url} blocked`);
         expect(probes).toMatch(/webrtc no srflx/);
         expect(probes).not.toMatch(/REACHED/);
-        const refused = /^(ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|EAI_AGAIN|ENOTFOUND)$/;
+        // No route or no answer: a refusal (ECONNREFUSED) would mean a host answered, except on the container's own
+        // loopback, where nothing listens on the canary's port.
+        const unreachable = /^(ENETUNREACH|EHOSTUNREACH|TIMEOUT)$/;
+        const unresolved = /^(EAI_AGAIN|ENOTFOUND)$/;
         const preview = JSON.parse(/HOSTILE (\{.*\})/.exec(warning("HOSTILE"))![1]) as Record<string, string>;
         console.log(`hostile preview: ${JSON.stringify(preview)}`);
         // The transcript shows the terminal's rows: the CLI's one long line wraps at the tape's 120 columns.
@@ -380,7 +391,9 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
         console.log(`hostile CLI: ${JSON.stringify(cli)}`);
         for (const [what, r] of [["preview", preview], ["cli", cli]] as const) {
           expect(r.phase, what).toBe(what);
-          for (const k of ["directOutside", "directHostAddress", "directDockerBridge", "directHostGateway", "directLima", "ownLoopback", "dnsOutside"]) expect(r[k], `${what} ${k}`).toMatch(refused);
+          for (const k of ["directOutside", "directHostAddress", "directDockerBridge"]) expect(r[k], `${what} ${k}`).toMatch(unreachable);
+          for (const k of ["directHostGateway", "directLima", "dnsOutside"]) expect(r[k], `${what} ${k}`).toMatch(unresolved);
+          expect(r.ownLoopback, `${what} ownLoopback`).toBe("ECONNREFUSED");
         }
         expect(cli.terminal).toBe("a terminal");
         expect(captured(c.r.items[1]).files.map((f) => f.path)).toEqual(["bi-2/hostile.cast", "bi-2/hostile.txt"]);

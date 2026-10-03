@@ -21,7 +21,8 @@ import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
 import { REVIEW_ROLES, isProvider, type Artifact, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner, type EnvironmentAssignment } from "./checks";
-import { DEVCONTAINER_FILES, environmentPlan, environmentSource, parseDevcontainer, type DevcontainerFound } from "../src/domain/environment";
+import { checksPrepareCommands, environmentPlan, environmentSource, type UnconfirmedDevcontainer } from "../src/domain/environment";
+import { readDevcontainer } from "./environment/devcontainer";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
 import { prototypeFolders, readsPrototypes } from "./factoryLink";
 import { SimulatedGitHub, type GitHubHost } from "./github";
@@ -1327,31 +1328,25 @@ export class Scheduler {
 
   /**
    * The project's environment for a check run (docs/design/project-environment.md): the dev container at the trusted
-   * base (never the change's), else the image the owner confirmed. Nothing when the project has neither; the runner
-   * then runs the checks in the host sandbox as before.
+   * base (never the change's) if the owner confirmed its digest, else the image the owner confirmed. Nothing when the
+   * project has neither; the runner then runs the checks in the host sandbox as before. A dev container the owner has
+   * not confirmed goes with the run (`unconfirmed`), so its record asks the owner, and the reason it was not used
+   * becomes the host sandbox's reason when nothing else is set up.
    */
-  private environmentFor(state: State): { environment: EnvironmentAssignment } | Record<string, never> {
+  private environmentFor(state: State): { environment?: EnvironmentAssignment; hostReason?: string; unconfirmed?: UnconfirmedDevcontainer } {
     if (!this.workspaces || state.project.sample || !state.project.repoPath) return {};
     const ref = M.trustedBaseRef(state);
-    const read = (path: string) => {
+    const found = readDevcontainer((path, maxBytes) => {
       try {
-        return this.workspaces!.readFileAt({ repoPath: state.project.repoPath, ref, path, maxBytes: 256 * 1024 });
+        return this.workspaces!.readFileAt({ repoPath: state.project.repoPath, ref, path, maxBytes });
       } catch {
         return undefined;
       }
-    };
-    let found: DevcontainerFound | undefined;
-    for (const file of DEVCONTAINER_FILES) {
-      const r = read(file);
-      if (r) {
-        found = { file, parsed: r.truncated ? { refused: `${file} is larger than 256 KB` } : parseDevcontainer(r.text, file) };
-        break;
-      }
-    }
-    const { source } = environmentSource(found, state.project.environment);
-    if (!source) return {};
-    const dockerfile = "build" in source ? read(source.build.dockerfile) : undefined;
-    return { environment: { plan: environmentPlan(source, state.project.environment), project: state.project.id, ...(dockerfile && !dockerfile.truncated ? { dockerfile: dockerfile.text } : {}) } };
+    });
+    const { source, unconfirmed, note } = environmentSource(found, state.project.environment);
+    const waiting = unconfirmed ? { unconfirmed } : {};
+    if (!source) return unconfirmed && note ? { hostReason: note, ...waiting } : {};
+    return { environment: { plan: environmentPlan(source, state.project.environment, checksPrepareCommands(state.project.checks)), project: state.project.id, ...("build" in source && found?.dockerfile !== undefined ? { dockerfile: found.dockerfile } : {}) }, ...waiting };
   }
 
   /**
@@ -1382,7 +1377,8 @@ export class Scheduler {
       if (!outDir) throw new Error(`the project id ${state.project.id} cannot name an evidence folder`);
       this.launched.set(attemptId, { provider: "service", access: "read", workspace, stepId: step.id, taskId: task.id });
       // A project with an environment is captured in it, as its checks run (docs/design/project-environment.md, E2).
-      runner.start({ attemptId, taskId: task.id, stepId: step.id, workspace: path, sha: target, items: structuredClone(snap.items), preview: structuredClone(snap.preview), outDir, ...(runner.simulated ? {} : this.environmentFor(state)) });
+      const env = runner.simulated ? undefined : this.environmentFor(state).environment;
+      runner.start({ attemptId, taskId: task.id, stepId: step.id, workspace: path, sha: target, items: structuredClone(snap.items), preview: structuredClone(snap.preview), outDir, ...(env ? { environment: env } : {}) });
       return undefined;
     } catch (e) {
       this.launched.delete(attemptId);

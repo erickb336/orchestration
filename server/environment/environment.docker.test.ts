@@ -4,11 +4,12 @@
 // skipped, with the reason, when it is not running. Pulls official images by digest the first time.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { IMAGE_TABLE, environmentPlan, environmentSource, parseDevcontainer, type EnvironmentPlan, type EnvironmentRunRecord } from "../../src/domain/environment";
+import { IMAGE_TABLE, environmentPlan, environmentSource, type EnvironmentPlan, type EnvironmentRunRecord } from "../../src/domain/environment";
+import { readDevcontainer } from "./devcontainer";
 import type { CheckResult, TestReport } from "../../src/domain/types";
 import type { CheckRunReport } from "../checks";
 import type { AdapterEvent } from "../runtimes/types";
@@ -16,6 +17,7 @@ import { dockerEnv, findDocker, runDocker } from "../studio/container";
 import { removeTree } from "./copy";
 import { PROXY_IMAGE } from "./docker";
 import { EnvironmentChecks } from "./runner";
+import { PreparedEnvironments } from "./prepared";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
 const docker = findDocker(process.env);
@@ -31,6 +33,7 @@ const TEST_ID = `envtest-${Math.random().toString(36).slice(2, 8)}`;
 let root = "";
 let scratch = "";
 let runner: EnvironmentChecks;
+let environments: PreparedEnvironments;
 const timings: string[] = [];
 
 beforeAll(() => {
@@ -38,7 +41,8 @@ beforeAll(() => {
   // Under the home folder: Colima shares only it with its VM.
   root = mkdtempSync(join(homedir(), ".cache", "orchestrator-env-test-"));
   scratch = mkdtempSync(join(tmpdir(), "orc-env-real-"));
-  runner = new EnvironmentChecks({ root, fallback: () => ({ start: () => { throw new Error("handed to the host sandbox"); } }) as never, log: (m) => console.log(m) });
+  environments = new PreparedEnvironments({ root, log: (m) => console.log(m) });
+  runner = new EnvironmentChecks({ environments, fallback: () => ({ start: () => { throw new Error("handed to the host sandbox"); } }) as never, log: (m) => console.log(m) });
 });
 afterAll(async () => {
   if (ready) {
@@ -90,14 +94,16 @@ const read = (t: TestReport | undefined) => (t?.status === "read" ? t.counts : t
 describe(`the project environment, in Docker${skipReason}`, () => {
   it.skipIf(!ready)("proves its network on this machine before the first run", async () => {
     const t0 = Date.now();
-    const r = await runner.ready();
+    const r = await environments.ready();
     timings.push(`setup probe: ${((Date.now() - t0) / 1000).toFixed(1)} s`);
     expect(r).toMatchObject({ ok: true });
   }, 120_000);
 
   it.skipIf(!ready)("Node, from its dev container: npm ci through the proxy, the test with no network, JUnit; the next commit reuses the prepare", async () => {
-    const found = { file: ".devcontainer/devcontainer.json", parsed: parseDevcontainer(readFileSync(join(FIXTURES, "node/.devcontainer/devcontainer.json"), "utf8"), ".devcontainer/devcontainer.json") };
-    const plan = environmentPlan(environmentSource(found, undefined).source!, { rev: 1, prepare: [["npm", "ci"]], hosts: [] });
+    // Read as the scheduler reads it, and confirmed by its digest as the owner confirms it (review finding 3).
+    const found = readDevcontainer((p) => (existsSync(join(FIXTURES, "node", p)) ? { text: readFileSync(join(FIXTURES, "node", p), "utf8"), truncated: false } : undefined))!;
+    const setting = { rev: 1, prepare: [["npm", "ci"]], hosts: [], devcontainer: { file: found.file, sha256: found.sha256! } };
+    const plan = environmentPlan(environmentSource(found, setting).source!, setting);
     expect(plan.source).toMatchObject({ from: "devcontainer", image: PROXY_IMAGE });
     const first = await run("node", plan, ["npm", "test"]);
     expect(statuses(first.results), first.results.map((r) => r.excerpt).join("\n")).toEqual(["env-prepare-1:passed", "test:passed"]);
@@ -140,11 +146,16 @@ describe(`the project environment, in Docker${skipReason}`, () => {
 
     it.skipIf(!ready)("cannot reach a host that is not a registry, the Docker host or this computer, in either phase; the canary sees nothing", async () => {
       const port = (canary.address() as { port: number }).port;
-      // The control: a container on Docker's ordinary network does reach the canary, so a leak would show.
-      const control = await runDocker(docker!, ["run", "--rm", "--add-host", "orchestrator-host:host-gateway", "--user", "10001:10001", "--entrypoint", "node", PROXY_IMAGE, "-e", `require("node:net").connect(${port}, "orchestrator-host").on("connect", () => { console.log("CONNECTED"); process.exit(0) }).on("error", (e) => console.log(e.code))`], { env: dockerEnv(process.env), timeoutMs: 60_000 });
-      expect(control.stdout.trim()).toBe("CONNECTED");
-      expect(hits).toBe(1);
+      // The control: a container on Docker's ordinary network does reach the canary (through the host gateway and at
+      // the Mac's address) and the Docker VM's SSH port, so a leak to any of the hostile targets would show.
+      const reach = (host: string, p: number) => `new Promise((r) => require("node:net").connect(${p}, "${host}").on("connect", function () { this.destroy(); r("CONNECTED") }).on("error", (e) => r(e.code)))`;
+      const control = await runDocker(docker!, ["run", "--rm", "--add-host", "orchestrator-host:host-gateway", "--user", "10001:10001", "--entrypoint", "node", PROXY_IMAGE, "-e", `Promise.all([${reach("orchestrator-host", port)}, ${reach("192.168.5.2", port)}, ${reach("172.17.0.1", 22)}]).then((x) => console.log(x.join(" ")))`], { env: dockerEnv(process.env), timeoutMs: 60_000 });
+      expect(control.stdout.trim()).toBe("CONNECTED CONNECTED CONNECTED");
+      expect(hits).toBe(2);
       hits = 0;
+      // No route or no answer: a refusal (ECONNREFUSED) would mean a host answered.
+      const unreachable = /^(ENETUNREACH|EHOSTUNREACH|TIMEOUT)$/;
+      const unresolved = /^(EAI_AGAIN|ENOTFOUND)$/;
 
       // The change carries a report full of passes, and its install script plants another: neither may be read.
       const plant = (dir: string) => {
@@ -163,13 +174,13 @@ describe(`the project environment, in Docker${skipReason}`, () => {
       const prep = line("prepare");
       console.log(`hostile prepare: ${JSON.stringify(prep)}`);
       for (const k of ["proxyNotRegistry", "proxyLoopback", "proxyLocalhost", "proxyHostGateway", "proxyHostAddress", "proxyRegistryPlainPort"]) expect(prep[k], k).toMatch(/^HTTP\/1\.1 403 /);
-      for (const k of ["directOutside", "directHostAddress", "directDockerBridge", "directHostGateway"]) expect(prep[k], k).toMatch(/^(ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|EAI_AGAIN|ENOTFOUND)$/);
-      expect(prep.dnsOutside).toMatch(/^(EAI_AGAIN|ENOTFOUND)$/);
+      for (const k of ["directOutside", "directHostAddress", "directDockerBridge"]) expect(prep[k], k).toMatch(unreachable);
+      for (const k of ["directHostGateway", "dnsOutside"]) expect(prep[k], k).toMatch(unresolved);
       const runPhase = line("run");
       console.log(`hostile run: ${JSON.stringify(runPhase)}`);
-      for (const k of ["directOutside", "directHostAddress", "directDockerBridge", "directHostGateway"]) expect(runPhase[k], k).toMatch(/^(ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|EAI_AGAIN|ENOTFOUND)$/);
+      for (const k of ["directOutside", "directHostAddress", "directDockerBridge"]) expect(runPhase[k], k).toMatch(unreachable);
+      for (const k of ["directHostGateway", "dnsOutside"]) expect(runPhase[k], k).toMatch(unresolved);
       expect(runPhase.proxyNotRegistry).toBe("NO PROXY");
-      expect(runPhase.dnsOutside).toMatch(/^(EAI_AGAIN|ENOTFOUND)$/);
       expect(r.env.refused?.join(" ")).toMatch(/example\.com \(not on the list of registries\)/);
       expect(r.env.refused?.join(" ")).toMatch(/127\.0\.0\.1 \(an IP address/);
       expect(hits).toBe(0);

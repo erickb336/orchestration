@@ -187,13 +187,13 @@ export const NO_EVIDENCE_WORDS: Record<NoEvidence, string> = {
  * - recorder: in the recorder's image, for a project without an environment (Node only: npm, pnpm or yarn).
  */
 export type EvidencePath =
-  | { via: "environment"; from: "devcontainer" | "setting"; image: string; imageId?: string; prepare?: "ran" | "reused" | "failed"; key?: string }
+  | { via: "environment"; from: "devcontainer" | "setting"; image: string; imageId?: string; prepare?: "ran" | "reused" | "failed" | "none"; key?: string }
   | { via: "recorder"; image: string };
 
 /** The path in a few words, for summaries. */
 export function evidencePathWords(p: EvidencePath): string {
   if (p.via === "recorder") return `in the recorder's image ${p.image}`;
-  const prep = p.prepare === "reused" ? ", its prepare reused" : p.prepare === "failed" ? ", its prepare failed" : "";
+  const prep = p.prepare === "reused" ? ", its prepare reused" : p.prepare === "failed" ? ", its prepare failed" : p.prepare === "none" ? ", with nothing to prepare" : "";
   return `in the project's environment (${p.from === "devcontainer" ? "its dev container" : "the confirmed image"} ${p.image.replace(/@sha256:([0-9a-f]{12})[0-9a-f]+$/, "@sha256:$1…")}${prep})`;
 }
 
