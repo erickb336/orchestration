@@ -8,10 +8,12 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "../../domain/commands";
 import * as M from "../../domain/model";
+import { buildSeed } from "../../domain/seed";
 import { ControlError, StaleWriteError, type FactorySettings, type State } from "../../domain/types";
 import { fmtTime } from "../common";
 import { renderScreen, visible } from "../testStore";
-import { Preflight, StartFactoryLink, type PreflightProps } from "./Preflight";
+import { Preflight, type PreflightProps } from "./Preflight";
+import { StartFactoryLink } from "./StartFactoryLink";
 import { preflightScene } from "./preflightScene";
 import * as V from "./preflightView";
 
@@ -121,11 +123,15 @@ describe("the pre-flight", () => {
     const b = start(s, V.seenNow(s), V.chooseAutonomy(M.currentFactorySettings(s), "checkin"), at(400));
     const { html, text } = page(b);
     expect(text).toContain(
-      `The factory started. Recorded. Started by you, ${fmtTime(at(400))}, from Lock in 1 and vision r1. Recorded with your agreement: the Lock in summary, how the factory runs, the 4 open items you accepted. The factory starts on Check-in;`,
+      `The factory started. Started by you, ${fmtTime(at(400))}, from Lock in 1 and vision r1. Recorded with your agreement: the Lock in summary, how the factory runs, the 4 open items you accepted. The factory starts on Check-in;`,
     );
     expect(html).toMatch(/<a href="#\/overview"[^>]*>Go to the factory floor<\/a>/);
     expect(text).not.toContain("I have reviewed the blueprint");
     expect(visible(renderScreen(<StartFactoryLink />, b))).toBe("");
+    // A project already in the factory with no recorded start (seeded, or from before the pre-flight) says so.
+    const seeded = buildSeed(Date.parse("2026-10-02T09:00:00Z"), { inFlightRuns: false });
+    expect(seeded.project.factoryStarts).toEqual([]);
+    expect(page(seeded).text).toBe("Vision › Start the factory The factory is running. No start is recorded: this project was in the factory before the pre-flight existed. Vision stays open while the factory runs, and each later change goes through Lock in. Go to the factory floor Open Vision");
   });
 });
 

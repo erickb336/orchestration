@@ -214,10 +214,12 @@ export function startGate(s: State, agreed: boolean, offline: boolean): string |
   return undefined;
 }
 
-/** What the start recorded: who, when, from what, and how the factory runs. Undefined before the start. */
+/** What the start recorded: who, when, from what, and how the factory runs. Undefined while the project is in Vision. */
 export function startedWords(s: State): { title: string; lines: string[] } | undefined {
+  if (s.project.stage !== "building") return undefined;
+  const after = "Vision stays open while the factory runs, and each later change goes through Lock in.";
   const start = s.project.factoryStarts.at(-1);
-  if (!start) return undefined;
+  if (!start) return { title: "The factory is running.", lines: ["No start is recorded: this project was in the factory before the pre-flight existed.", after] };
   const from = start.blueprintRev ? `Lock in ${start.blueprintRev}` : "the vision alone, since nothing was approved yet,";
   const open = start.openItems.length;
   return {
@@ -226,7 +228,7 @@ export function startedWords(s: State): { title: string; lines: string[] } | und
       `Started by you, ${fmtTime(start.at)}, from ${from} and vision r${start.visionRev}.`,
       `Recorded with your agreement: ${[start.blueprintRev ? "the Lock in summary" : "", "how the factory runs", open ? `the ${count(open, "open item")} you accepted` : ""].filter(Boolean).join(", ")}.`,
       factorySettingsText(start.settings),
-      "Only you can start the factory. Vision stays open while it runs, and each later change goes through Lock in.",
+      `Only you can start the factory. ${after}`,
     ],
   };
 }

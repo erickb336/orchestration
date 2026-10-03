@@ -9,28 +9,13 @@
 import { useEffect, useState } from "react";
 import * as M from "../../domain/model";
 import type { FactorySettings, State } from "../../domain/types";
-import { Banner, Button, ButtonLink, Card, Checkbox, Chip, Row, Rows, SegmentedControl, SimulatedChip, type ButtonVariant } from "../kit";
+import { Banner, Button, ButtonLink, Card, Checkbox, Chip, Row, Rows, SegmentedControl, SimulatedChip } from "../kit";
 import { useStore } from "../store";
 import { LockInBudgets, LockInChanges, LockInNewWork, LockInTasks } from "../studio/LockIn";
 import { lockInWords } from "../studio/lockInView";
 import * as V from "./preflightView";
 import "../studio/studio.css";
 import "./preflight.css";
-
-/** The way to the pre-flight, from Home, Vision and Settings while the project is in Vision. An empty vision says why it cannot start yet. */
-export function StartFactoryLink({ variant = "primary" }: { variant?: ButtonVariant }) {
-  const { state } = useStore();
-  if (state.project.stage !== "shaping") return null;
-  const why = M.startFactoryBlocker(state);
-  return (
-    <div className="pf-link">
-      <ButtonLink variant={variant} href={V.PREFLIGHT_HASH}>
-        Start the factory…
-      </ButtonLink>
-      {why && <p className="small muted no-margin">{why}</p>}
-    </div>
-  );
-}
 
 export function PreflightPage() {
   const { state, send, disabled, service } = useStore();
@@ -91,7 +76,7 @@ export interface PreflightProps {
 /** The pre-flight as it stands: what the owner reads, the settings they chose, and their agreement. */
 export function Preflight(p: PreflightProps) {
   const s = p.state;
-  const started = s.project.stage === "building" ? V.startedWords(s) : undefined;
+  const started = V.startedWords(s);
   const blocker = M.startFactoryBlocker(s);
   const open = V.openLines(s);
   const w = lockInWords(s);
@@ -313,7 +298,6 @@ function Started({ words }: { words: { title: string; lines: string[] } }) {
   return (
     <Banner
       tone="done"
-      title="Recorded."
       actions={
         <>
           <ButtonLink size="small" variant="primary" href="#/overview">

@@ -29,6 +29,7 @@ import { relTime, selectionText } from "../common";
 import { Banner, Button, Chip, Disclosure, EmptyState, Field, Input, SegmentedControl, SimulatedChip, StatePill, Textarea } from "../kit";
 import { cx } from "../kit/cx";
 import { useLeadContext } from "../LeadDrawer";
+import { StartFactoryLink } from "../preflight/StartFactoryLink";
 import { useStore } from "../store";
 import { DocumentArtifact } from "./Document";
 import { DraftBar, InForcePane } from "./Draft";
@@ -174,10 +175,12 @@ export function Studio() {
       </header>
       {B.hasDraft(state) ? (
         <DraftBar />
+      ) : state.project.stage === "shaping" ? (
+        <Banner tone="info" actions={<StartFactoryLink size="small" />}>
+          Nothing is in the draft yet. What you approve goes into the draft, and Start the factory is your first Lock in.
+        </Banner>
       ) : (
-        state.project.stage !== "shaping" && (
-          <Banner tone="info">The factory has started. Vision stays open: the designer and the PE go on working here, and what you approve goes into the draft. The factory builds from the version you locked in, never from the draft.</Banner>
-        )
+        <Banner tone="info">The factory has started. Vision stays open: the designer and the PE go on working here, and what you approve goes into the draft. The factory builds from the version you locked in, never from the draft.</Banner>
       )}
       <DomainPrompt />
       {state.studio.rounds.length === 0 ? (

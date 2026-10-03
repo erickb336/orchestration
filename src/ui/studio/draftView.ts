@@ -79,7 +79,7 @@ export function draftHeading(s: State): { title: string; since: string } {
   const rev = B.blueprintRev(s);
   const since = rev
     ? `Since Lock in ${rev} (${fmtTime(B.currentBlueprint(s)!.at)}). The factory builds from Lock in ${rev}, never from the draft.`
-    : "Nothing is locked in yet. Start the factory on Home is your first Lock in.";
+    : "Nothing is locked in yet. Start the factory is your first Lock in.";
   return { title, since };
 }
 
@@ -99,7 +99,7 @@ export function discardConfirm(s: State): { title: string; text: string; primary
 
 /** Why the owner cannot lock in now, or undefined. In Vision, Start the factory is the first Lock in. */
 export function lockInBlocker(s: State): string | undefined {
-  if (s.project.stage === "shaping") return "In Vision, Start the factory on Home is your first Lock in.";
+  if (s.project.stage === "shaping") return "In Vision, Start the factory is your first Lock in.";
   const c = B.draftChanges(s);
   if (draftChangeCount(s) === 0) return c.open.length ? "There is nothing to lock in: the draft holds only open items, which stay in the draft." : "There is nothing to lock in: the draft is the version in force.";
   return undefined;

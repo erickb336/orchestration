@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import * as B from "../../domain/studio/blueprint";
 import { Banner, ButtonLink, Button, Card, Checkbox, Chip, Disclosure, EmptyState, Row, Rows } from "../kit";
 import { changeOrderHref } from "../changeOrder/changeOrderView";
+import { PREFLIGHT_HASH } from "../preflight/preflightView";
 import { useStore } from "../store";
 import { ChangeLines } from "./Draft";
 import { lockInBlocker } from "./draftView";
@@ -183,8 +184,8 @@ function Agree({ words, button, agreed, onAgree, blocker, busy, onLockIn }: { wo
   const { state } = useStore();
   if (state.project.stage === "shaping") {
     return (
-      <Banner tone="info" title="In Vision, Start the factory is your first Lock in." actions={<ButtonLink size="small" variant="primary" href="#/overview">Go to Start the factory</ButtonLink>}>
-        It puts these changes into force, with the settings it shows you on Home.
+      <Banner tone="info" title="In Vision, Start the factory is your first Lock in." actions={<ButtonLink size="small" variant="primary" href={PREFLIGHT_HASH}>Start the factory…</ButtonLink>}>
+        It puts these changes into force, with the settings you choose on its pre-flight.
       </Banner>
     );
   }
