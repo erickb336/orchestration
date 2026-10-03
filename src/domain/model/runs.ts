@@ -24,6 +24,7 @@ import {
   settleStoppedStep,
   touch,
 } from "./core";
+import { stepReviewInto } from "../peReview";
 import { applyBreakdown, expandIteration } from "./fanout";
 import { providerLabel } from "./resolution";
 
@@ -316,10 +317,14 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
       }
     }
     event(s, now, "runtime", "runtime", `${st.id} completed by ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model}${produced.length ? `; produced ${produced.join(", ")}` : ""}`, t.id);
-    // Breakdown outputs become child tasks; loops append their next iteration.
+    // Breakdown outputs become child tasks; loops append their next iteration. New work the PE reviews first (a
+    // breakdown, a design a coder builds) waits: its children are created, and the steps after it start, once the PE
+    // agrees or you overrule (src/domain/peReview.ts).
     const breakdowns = st.outputs.filter((d) => d.kind === "breakdown");
     const gated = t.reviewEveryStep && t.steps.some((x) => !isSettled(x));
-    if (breakdowns.length && gated) {
+    if (stepReviewInto(s, t, st, now)) {
+      // held for the PE
+    } else if (breakdowns.length && gated) {
       // Children are created when the person resumes, from the (possibly edited) latest version.
       t.pendingBreakdowns = breakdowns.map((d) => ({ stepId: st.id, output: d.name }));
     } else if (breakdowns.length) {

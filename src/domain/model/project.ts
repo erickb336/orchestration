@@ -100,6 +100,8 @@ export function initProject(state: State, init: { name: string; repoPath: string
   s.project.domains = [];
   s.project.factoryStarts = [];
   s.project.changeOrders = "lead";
+  // New work in the factory waits for PE review: on for a new project (ORC-029 pass 5).
+  s.project.peReviewsNewWork = true;
   s.project.hold = false;
   s.project.lastVisitAt = now;
   // Delivery to GitHub is a choice made per project and repository: a new project starts with it off

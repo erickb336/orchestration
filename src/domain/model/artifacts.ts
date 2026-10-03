@@ -4,6 +4,7 @@
 import * as F from "../findings";
 import { type Artifact, type Attempt, type ConsumedInput, type State, type StepDef, type Task, ControlError } from "../types";
 import { activeAttempts, assertOpen, draft, event, findStep, getStep, getTask, isSettled, nextId, requestStop, touch } from "./core";
+import { peReviewStands, reopenStepReviewInto } from "../peReview";
 import { applyBreakdown } from "./fanout";
 
 export function latestArtifact(s: State, t: Task, stepId: string, output: string): Artifact | undefined {
@@ -156,7 +157,10 @@ export function editArtifact(
   }
   touch(t, now);
   event(s, now, "user", "spec", `Edited ${st.id}.${base.name} (v${version}): ${art.editReason}${downstream.size ? `; re-submitting ${[...downstream].join(", ")}` : ""}`, t.id);
-  if (base.kind === "breakdown" && st.state === "done") {
+  // Your edit of a breakdown or a design the PE objected to starts a new review of it; one the PE is still reviewing
+  // is reviewed as you edited it. Either way its children wait for the PE's agreement.
+  reopenStepReviewInto(s, t, st, version, now);
+  if (base.kind === "breakdown" && st.state === "done" && !peReviewStands(st.peReview)) {
     // Child tasks follow the edited breakdown: now, or when the task resumes if it is paused.
     const pb = { stepId: st.id, output: base.name };
     const already = (t.pendingBreakdowns ?? []).some((x) => x.stepId === pb.stepId && x.output === pb.output);

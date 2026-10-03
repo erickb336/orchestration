@@ -4,14 +4,16 @@
 
 import * as F from "../findings";
 import { childDefault, effectiveDefault, eligibleIds, findFlow, flowRef } from "../flows";
-import { newWorkReview, PE_REVIEW_HOLD } from "../peReview";
+import { newWorkReview, PE_REVIEW_HOLD, proposalsToRevise, unrevisedInto } from "../peReview";
+import { blueprintAcceptance, leadRefsProblem } from "../studio/blueprint";
 import { instantiate, toDef } from "../pipeline";
 import { type SpecOption, type SteeringChangeSet, type LeadQuestion, type LeadRun, type SpecContent, type State, type VisionDraft } from "../types";
-import { currentSpec, draft, event, nextId } from "./core";
+import { currentSpec, draft, event, getTask, nextId } from "./core";
 import { deferredLeadRoots, getLeadRun, openLeadProposals } from "./lead";
 import { type RunReport } from "./runs";
 import { applyStudioBlock, setRoundLead, type StudioBlockResult } from "../studio/lead";
 import { draftFromRun, validateCoverage, validateQuestions, validateVisionDraft } from "./shaping";
+import { editSpecInto } from "./specs";
 import { steerFromRun, supersedeSuggestions } from "./steering";
 
 export interface LeadProposal {
@@ -30,6 +32,10 @@ export interface LeadProposal {
   /** The flow to run. Absent: the project default. */
   flowId?: string;
   priority: number;
+  /** The approved blueprint items the task builds, by id (ORC-029 pass 5). A cited flow's rules and examples join its acceptance. */
+  blueprintRefs?: string[];
+  /** A proposal the PE sent back: this revises that task's spec instead of proposing a new task (pass 5). */
+  revises?: string;
 }
 
 /** The flow a proposal or breakdown item names, when it names one. */
@@ -98,9 +104,10 @@ const DROP_GUARD_MS = 7 * 24 * 60 * 60_000;
 
 /**
  * Check a proposal against the spec requirements. Returns a reason when it cannot become a task.
- * `who`: a lead proposal, or a breakdown item ("child": its flow may not break down again).
+ * `who`: a lead proposal, or a breakdown item ("child": its flow may not break down again). `revising`: the task a
+ * revision for the PE replaces the spec of (its own title is not a duplicate).
  */
-export function validateProposal(s: State, p: LeadProposal, now?: string, who: "lead" | "child" = "lead"): string | undefined {
+export function validateProposal(s: State, p: LeadProposal, now?: string, who: "lead" | "child" = "lead", revising?: string): string | undefined {
   // Lead output is untrusted data: check types before anything else.
   const isStr = (v: unknown, max: number) => typeof v === "string" && v.trim().length > 0 && v.length <= max;
   if (!p || typeof p !== "object") return "not an object";
@@ -121,8 +128,13 @@ export function validateProposal(s: State, p: LeadProposal, now?: string, who: "
   const flow = findFlow(s, flowId);
   if (!flow) return `unknown flow "${flowId}"; choose one of: ${eligibleIds(s, who).join(", ")}`;
   if (who === "child" && flow.breaksDown) return `child tasks cannot break down further (flow "${flow.name}"); use a flow without breakdown steps: ${eligibleIds(s, "child").join(", ")}`;
+  // The blueprint items it builds: approved items only (pass 5, the factory link).
+  if (p.blueprintRefs !== undefined) {
+    const why = leadRefsProblem(s, p.blueprintRefs);
+    if (why) return why;
+  }
   const title = (p.title as string).trim().toLowerCase();
-  if (s.tasks.some((t) => t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === title)) return "a task with this title already exists";
+  if (s.tasks.some((t) => t.id !== revising && t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === title)) return "a task with this title already exists";
   // Work the lead dropped when the focus changed is not proposed again for a week.
   const nowMs = now ? Date.parse(now) : Date.now();
   const dropped = s.tasks.find((t) => t.lifecycle === "cancelled" && t.dropped && nowMs - Date.parse(t.dropped.at) < DROP_GUARD_MS && currentSpec(t).content.title.trim().toLowerCase() === title);
@@ -200,12 +212,22 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
   const shaping = s.project.stage === "shaping";
   const hold = !s.project.autonomy.enabled || s.project.autonomy.holdLeadProposals;
   const created: string[] = [];
+  const revised: string[] = [];
   const label = (p: unknown) => {
     const t = p && typeof p === "object" ? (p as { title?: unknown }).title : undefined;
     return typeof t === "string" ? t.slice(0, 80) : "(untitled)";
   };
-  for (const [i, p] of out.proposals.entries()) {
-    if (i >= limit) {
+  let proposed = 0;
+  for (const p of out.proposals) {
+    // A revision of work the PE sent back (pass 5): a new spec revision of that task, not a new proposal.
+    const revises = p && typeof p === "object" ? (p as { revises?: unknown }).revises : undefined;
+    if (revises !== undefined && revises !== null) {
+      const why = reviseForPeInto(s, p, revises, now);
+      if (why) rejected.push(`"${label(p)}": ${why}`);
+      else revised.push(String(revises));
+      continue;
+    }
+    if (proposed++ >= limit) {
       rejected.push(`"${label(p)}": more than ${limit} proposals in one run`);
       continue;
     }
@@ -228,6 +250,8 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
       rejected.push(`"${label(p)}": invalid (${err instanceof Error ? err.message : String(err)})`);
     }
   }
+  // Work the PE sent back that this run was shown and left as it was goes to the user with the objection (pass 5).
+  const leftForUser = unrevisedInto(s, r.id, now);
   // A completed message run decides the held suggestions, and its rows supersede older ones for the same target.
   if (r.messageIds.length) supersedeSuggestions(s, set, now);
   const applied = set?.changes.filter((c) => c.status === "applied").length ?? 0;
@@ -256,7 +280,9 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
                 ? "I went through the findings that were waiting for me; see below."
                 : created.length
                   ? "I proposed new work; see the linked tasks."
-                  : "No reply.");
+                  : revised.length
+                    ? "I revised the work the PE sent back; the PE reviews it again."
+                    : "No reply.");
   // The round the block addressed shows this reply and its questions beside its artifacts.
   if (studio?.round !== undefined) setRoundLead(s, studio.round, text, studio.questions);
   s.conversation.push({
@@ -266,7 +292,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     text,
     leadRunId: r.id,
     ...(created.length ? { proposedTaskIds: created } : {}),
-    ...(rejected.length ? { rejected } : {}),
+    ...(rejected.length || leftForUser.length ? { rejected: [...rejected, ...leftForUser.map((id) => `${id}: not revised, so the PE's objection goes to you`)] } : {}),
     ...(set ? { changeSetId: set.id } : {}),
     ...(visionDraft ? { visionDraftId: visionDraft.id } : {}),
     ...(questions.length ? { questions } : {}),
@@ -278,26 +304,39 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     now,
     "lead",
     "spec",
-    `Lead run ${r.id} replied${visionDraft ? " and drafted the vision" : ""}${decided.length ? ` and went through ${decided.length} decision${decided.length === 1 ? "" : "s"}` : ""}${created.length ? ` and proposed ${created.join(", ")}${shaping ? " (roadmap, held while shaping)" : ""}` : ""}${rejected.length ? `; ${rejected.length} item${rejected.length === 1 ? "" : "s"} rejected` : ""}`,
+    `Lead run ${r.id} replied${visionDraft ? " and drafted the vision" : ""}${decided.length ? ` and went through ${decided.length} decision${decided.length === 1 ? "" : "s"}` : ""}${created.length ? ` and proposed ${created.join(", ")}${shaping ? " (roadmap, held while shaping)" : ""}` : ""}${revised.length ? ` and revised ${revised.join(", ")} for the PE` : ""}${rejected.length ? `; ${rejected.length} item${rejected.length === 1 ? "" : "s"} rejected` : ""}`,
   );
   return s;
 }
 
 /**
- * Create a lead-authored task from a validated proposal on a draft state. Also used by the findings module
- * for follow-ups. `who`: who named the flow when the proposal names one; the project default
- * (or the child default for breakdown items) applies otherwise, recorded as chosen by "default".
+ * The lead revises a proposal the PE sent back (pass 5): its whole proposal becomes the task's next spec revision (by
+ * the lead, so an objection is not reopened), and the PE reviews it again. The task keeps its flow and priority.
+ * Returns why it cannot, or undefined. Mutates the draft.
  */
-export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string, fromShaping = false, who: "lead" | "breakdown" = "lead"): string {
-  let n = s.tasks.length + 1;
-  const ids = new Set(s.tasks.map((x) => x.id));
-  while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
-  const id = fixedId ?? `T-${String(n).padStart(3, "0")}`;
-  const named = namedFlow(p);
-  const flow = typeof named === "string" ? findFlow(s, named)! : who === "breakdown" ? childDefault(s) : effectiveDefault(s);
-  const ref = flowRef(flow, typeof named === "string" ? who : "default");
+function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: string): string | undefined {
+  if (typeof revises !== "string") return '"revises" must be a task id';
+  const t = proposalsToRevise(s).find((x) => x.id === revises);
+  if (!t) return `${revises.slice(0, 40)} is not work the PE sent back for revision`;
+  const why = validateProposal(s, p, now, "lead", t.id);
+  if (why) return why;
+  const spec = currentSpec(t);
+  const round = t.peReview!.rounds.length;
+  editSpecInto(s, getTask(s, t.id), spec.rev, specContentOf(s, p), `Revised for the PE (round ${round} asked for a change)`, "lead", now);
+  return undefined;
+}
+
+/**
+ * A proposal's spec content: the lead's fields, the recommended option selected, and (pass 5) the blueprint items it
+ * builds, with the acceptance their rules and examples give, after the lead's own checks.
+ */
+function specContentOf(s: State, p: LeadProposal): SpecContent {
   const list = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => String(x).trim()).filter(Boolean) : []);
-  const content: SpecContent = {
+  const refs = [...new Set(list(p.blueprintRefs))];
+  const fromBlueprint = blueprintAcceptance(s, refs);
+  // A line the lead already wrote with a rule's tag is not repeated.
+  const acceptance = [...list(p.acceptance), ...fromBlueprint.filter((line) => !list(p.acceptance).some((x) => x.startsWith(line.slice(0, line.indexOf("]") + 1))))];
+  return {
     title: p.title.trim().slice(0, 200),
     area: (p.area ?? "").trim().slice(0, 60) || "General",
     whyNow: (p.whyNow ?? "").trim(),
@@ -321,15 +360,33 @@ export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolea
     rationale: p.rationale.trim(),
     uncertainty: (p.uncertainty ?? "").trim(),
     overrideReason: "",
-    acceptance: list(p.acceptance),
+    acceptance,
     validationPlan: "",
     rollback: "Discard the orchestration branch; delivery to your branch happens only if you turned it on.",
     effort: "small",
+    ...(refs.length ? { blueprintRefs: refs } : {}),
   };
+}
+
+/**
+ * Create a lead-authored task from a validated proposal on a draft state. Also used by the findings module
+ * for follow-ups. `who`: who named the flow when the proposal names one; the project default
+ * (or the child default for breakdown items) applies otherwise, recorded as chosen by "default".
+ */
+export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolean, fixedId?: string, fromShaping = false, who: "lead" | "breakdown" = "lead"): string {
+  let n = s.tasks.length + 1;
+  const ids = new Set(s.tasks.map((x) => x.id));
+  while (ids.has(`T-${String(n).padStart(3, "0")}`)) n++;
+  const id = fixedId ?? `T-${String(n).padStart(3, "0")}`;
+  const named = namedFlow(p);
+  const flow = typeof named === "string" ? findFlow(s, named)! : who === "breakdown" ? childDefault(s) : effectiveDefault(s);
+  const ref = flowRef(flow, typeof named === "string" ? who : "default");
+  const content = specContentOf(s, p);
   const defs = structuredClone(flow.steps).map(toDef);
   // New work the lead plans while building waits for PE review when the project has it on (ORC-029 2e). The state is
-  // the service's: nothing the lead sends (a proposal's or an item's own fields) reaches it.
-  const peReview = fromShaping ? undefined : newWorkReview(s);
+  // the service's: nothing the lead sends (a proposal's or an item's own fields) reaches it. A breakdown item has none
+  // of its own: the PE reviewed the breakdown before its children existed (pass 5).
+  const peReview = fromShaping || who === "breakdown" ? undefined : newWorkReview(s);
   s.tasks.push({
     id,
     priority: Number.isFinite(p.priority) ? Math.min(99, Math.max(1, Math.round(p.priority))) : 5,

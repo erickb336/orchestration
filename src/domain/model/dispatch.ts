@@ -115,6 +115,8 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       if (st.state !== "pending") continue;
       const depsDone = st.dependsOn.every((d) => isSettled(getStep(t, d)));
       if (!depsDone) continue;
+      // What a step it depends on made waits for PE review (a breakdown, a design): nothing after it starts yet.
+      if (st.dependsOn.some((d) => peReviewHold(getStep(t, d).peReview))) continue;
       if (st.waitForChildren && !childrenSettled(s, t)) continue;
       if ((opts.holdWriters || opts.staleBase?.(t)) && st.role === "coder" && !consumedInputs(s, t, st).some((i) => s.artifacts.find((x) => x.id === i.artifactId)?.kind === "code-change")) continue;
       if ((st.iteration ?? 1) > 1 && st.dependsOn.length && st.dependsOn.every((d) => getStep(t, d).state === "skipped")) {

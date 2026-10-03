@@ -192,6 +192,50 @@ export function validateBlueprintRefs(s: State, refs: string[]): string[] {
   return [...new Set(refs)];
 }
 
+/** The most blueprint items one task cites. */
+export const MAX_BLUEPRINT_REFS = 20;
+
+/**
+ * Why the lead's citations cannot stand, or undefined (pass 5, the factory link): each must name an approved item of
+ * the blueprint. An open item is not a design the owner approved, so the factory does not build from it.
+ */
+export function leadRefsProblem(s: State, refs: unknown): string | undefined {
+  if (!Array.isArray(refs) || !refs.every((r) => typeof r === "string")) return '"blueprintRefs" must be a list of blueprint item ids';
+  if (refs.length > MAX_BLUEPRINT_REFS) return `it cites ${refs.length} blueprint items; at most ${MAX_BLUEPRINT_REFS}`;
+  const items = blueprintItems(s);
+  const unknown = refs.filter((r) => !items.some((i) => i.id === r));
+  if (unknown.length) return `not in the blueprint: ${[...new Set(unknown)].join(", ")}`;
+  const open = refs.filter((r) => items.some((i) => i.id === r && i.status === "open"));
+  if (open.length) return `${[...new Set(open)].join(", ")} ${open.length === 1 ? "is" : "are"} still open in the blueprint, not approved; cite only approved items`;
+  return undefined;
+}
+
+/** A cited item's version as approved: the artifact it stands for, at the approved version. */
+export function citedArtifact(s: State, item: BlueprintItem): StudioArtifact | undefined {
+  return versionsOf(s, item.artifactId).find((a) => a.version === item.version);
+}
+
+/**
+ * The acceptance a spec takes from the blueprint items it cites (pass 5): each rule and each example of a cited flow
+ * (the approved variant's, or the only one's), tagged with its id, and one line for each cited contract. The tag is
+ * the rule's or the example's id ("[R3] When …"), which the acceptance tests name; the item follows each line.
+ */
+export function blueprintAcceptance(s: State, refs: readonly string[]): string[] {
+  const lines: string[] = [];
+  for (const id of refs) {
+    const item = blueprintItems(s).find((i) => i.id === id);
+    const a = item && citedArtifact(s, item);
+    if (!item || !a) continue;
+    const from = `(${item.kind} "${item.title}", ${item.id})`;
+    if (item.kind === "contract") lines.push(`[${item.id}] What crosses the boundary matches the approved contract "${item.title}" v${item.version}, with its examples.`);
+    const rules = a.rules?.find((r) => r.variant === (item.variant ?? a.variants[0]?.id)) ?? (a.rules?.length === 1 ? a.rules[0] : undefined);
+    if (!rules) continue;
+    for (const r of rules.rules) lines.push(`[${r.id}] ${r.text} ${from}`);
+    for (const e of rules.examples) lines.push(`[${e.id}] ${e.text} ${from}`);
+  }
+  return lines;
+}
+
 /** Open change orders, oldest first; with `handler`, only those waiting for the owner or marked for the lead. */
 export function openChangeOrders(s: State, handler?: ChangeOrder["handler"]): ChangeOrder[] {
   return s.blueprint.changeOrders.filter((c) => c.status === "open" && (handler === undefined || c.handler === handler));

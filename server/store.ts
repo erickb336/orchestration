@@ -349,6 +349,9 @@ function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   project.domains ??= [];
   project.factoryStarts ??= [];
   project.changeOrders ??= "lead";
+  // PE review of new work (pass 5) came after the first format-19 builds. A project stored before it is off until the
+  // owner turns it on, so loading a database never starts a paid PE run by itself. A new project starts with it on.
+  project.peReviewsNewWork ??= false;
   project.budgets ??= { ...NO_BUDGETS };
   doc.studio ??= emptyStudio();
   // Studio runs (pass 3a) came after the first format-19 builds: none were recorded before them.

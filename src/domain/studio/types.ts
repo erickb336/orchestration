@@ -424,6 +424,17 @@ export interface ChangeOrder {
   peReview?: PeReviewState;
 }
 
+/**
+ * New work in the factory that a PE run reviews (pass 5): a lead proposal at a spec revision (`specRev`), or the
+ * breakdown or design a step made, at an output version (`stepId`, `version`).
+ */
+export interface NewWorkReviewRef {
+  taskId: string;
+  stepId?: string;
+  specRev?: number;
+  version?: number;
+}
+
 export type StudioRunKind = "designer" | "pe" | "probe";
 export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
 
@@ -440,7 +451,13 @@ export const isUnderWay = (r: { status: StudioRunStatus }) => r.status === "queu
 export interface StudioRun {
   id: string;
   kind: StudioRunKind;
-  round: number;
+  /** The Vision round it works in. Absent on a PE run that reviews new work in the factory (`review`). */
+  round?: number;
+  /**
+   * A PE run on new work in the factory (pass 5): what it reviews, and the version it reads. It runs while building,
+   * never in Vision, and its verdict is recorded on that work (src/domain/peReview.ts).
+   */
+  review?: NewWorkReviewRef;
   /** The artifact a designer run revises: what it hands in is a new version of it. */
   artifactId?: string;
   /** The version it revises: the artifact's newest when the run was asked for. A result after a newer version is stale. */

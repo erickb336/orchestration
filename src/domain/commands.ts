@@ -185,10 +185,14 @@ function verdictInput(v: unknown): S.VerdictInput {
   };
 }
 
-/** The work a PE review verdict or an overrule is about: `taskId` (a lead proposal or a breakdown item), or `changeOrder` (a blueprint revision). */
+/**
+ * The work a PE review verdict or an overrule is about: `taskId` (a lead proposal), `taskId` with `stepId` (the
+ * breakdown or the design that step made), or `changeOrder` (a blueprint revision).
+ */
 function peReviewTarget(a: Args): PeReviewTarget {
   if ((a.taskId === undefined) === (a.changeOrder === undefined)) throw new InvalidCommandError("name the work: taskId, or changeOrder");
-  return a.taskId !== undefined ? { taskId: str(a, "taskId") } : { changeOrder: int(a, "changeOrder") };
+  if (a.taskId === undefined) return { changeOrder: int(a, "changeOrder") };
+  return { taskId: str(a, "taskId"), ...(a.stepId === undefined ? {} : { stepId: str(a, "stepId") }) };
 }
 
 /**
@@ -340,11 +344,17 @@ export const COMMANDS = {
     return { state: r.state, result: { runId: r.runId } };
   },
 
-  // PE review of new work in the factory (ORC-029 2e)
-  /** The service's (SERVICE_COMMANDS), from the PE's review run: one verdict on pending work; on a task, with the spec revision the PE read. */
-  recordPeReview: same((s, now, a) =>
-    P.recordPeReview(s, { target: peReviewTarget(a), verdict: oneOf(a, "verdict", ["agree", "object"] as const), reasons: str(a, "reasons"), ...(a.specRev === undefined ? {} : { specRev: int(a, "specRev") }) }, now),
-  ),
+  // PE review of new work in the factory (ORC-029 2e, pass 5)
+  /**
+   * The service's (SERVICE_COMMANDS), from the PE's review run: one verdict (pass 4e's shape) on pending work, with what
+   * the PE read: a proposal's spec revision (`specRev`), or a step's output version (`version`).
+   */
+  recordPeReview: same((s, now, a) => {
+    const { variant: _variant, ...v } = verdictInput(a);
+    return P.recordPeReview(s, { ...v, target: peReviewTarget(a), ...(a.specRev === undefined ? {} : { specRev: int(a, "specRev") }), ...(a.version === undefined ? {} : { version: int(a, "version") }) }, now);
+  }),
+  /** The owner's: PE review of new work on or off. Off releases the work the PE is still reviewing; an objection already with you stays. */
+  setPeReviewsNewWork: same((s, now, a) => P.setPeReviewsNewWork(s, bool(a, "on"), now)),
   /** The owner's: overrule the PE's objection after three rounds, with your reason (recorded). */
   overrulePeReview: same((s, now, a) => P.overrulePeReview(s, peReviewTarget(a), str(a, "why"), now)),
 

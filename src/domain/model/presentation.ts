@@ -3,7 +3,7 @@
 
 import * as C from "../checks";
 import * as F from "../findings";
-import { PE_REVIEW_HOLD, peReviewHold } from "../peReview";
+import { PE_OBJECTS_HOLD, PE_REVIEW_HOLD, peReviewHold, reviewedWhat, taskReviewHold } from "../peReview";
 import { type Deferral, type State, type Step, type Task, REVIEW_ROLES } from "../types";
 import { activeAttempts, findStep, getStep, isOpen, isSettled } from "./core";
 import { childrenSettled, currentChildren } from "./fanout";
@@ -128,6 +128,13 @@ export function stateLabel(s: State, t: Task): string {
   if ((col === "running" || col === "reviewing") && deferredBy(s, t)) return `${col === "running" ? "Running" : "In review"} · deferred after this step`;
   if (col === "reviewing") return "In review";
   if (col === "deferred") return deferredLabel(s, t)!;
+  // What a step made (a breakdown, a design) waits for PE review, or the PE objects to it (ORC-029 pass 5).
+  const stepReview = t.lifecycle === "active" && active.length === 0 ? taskReviewHold(t) : undefined;
+  if (stepReview?.step) {
+    const what = `${stepReview.step.id}'s ${reviewedWhat(t, stepReview.step)}`;
+    if (stepReview.hold === PE_REVIEW_HOLD) return stepReview.step.state === "done" ? `Waiting for PE review of ${what}` : `${stepReview.step.id} revises its ${reviewedWhat(t, stepReview.step)} for the PE`;
+    return stepReview.hold === PE_OBJECTS_HOLD ? `The PE objects to ${what}: needs you` : `PE review of ${what} could not finish: needs you`;
+  }
   if (t.lifecycle === "active" && active.length === 0 && waitingForChildren(s, t)) {
     const open = currentChildren(s, t).filter(isOpen).length;
     if (open === 0) return "Waiting for child pull requests to merge";
@@ -150,7 +157,7 @@ export function stateLabel(s: State, t: Task): string {
   }
   // PE review comes first: the involvement setting applies once the PE agreed (ORC-029 2e).
   const review = peReviewHold(t.peReview);
-  if ((col === "ready" || col === "proposed") && review) return review === PE_REVIEW_HOLD ? "Waiting for PE review" : "The PE objects: needs you";
+  if ((col === "ready" || col === "proposed") && review) return review === PE_REVIEW_HOLD ? "Waiting for PE review" : review === PE_OBJECTS_HOLD ? "The PE objects: needs you" : "PE review could not finish: needs you";
   // "Wait for my go-ahead" is the setting; the state names what it waits for. A project pause shows in the header, not here.
   if (col === "ready" && t.holdBeforeStart) return "Waiting for your go-ahead";
   // A dependency wait is shown before the stage, with shaping noted.

@@ -18,7 +18,12 @@ export function editSpec(
   now: string,
 ): State {
   const s = draft(state);
-  const t = getTask(s, taskId);
+  editSpecInto(s, getTask(s, taskId), expectedRev, content, reason, actor, now);
+  return s;
+}
+
+/** `editSpec` on a draft state: mutates `s` and the task `t`, which must be one of its tasks. */
+export function editSpecInto(s: State, t: Task, expectedRev: number, content: SpecContent, reason: string, actor: Actor, now: string) {
   assertOpen(t, "Editing");
   const prev = currentSpec(t);
   if (prev.rev !== expectedRev) throw new StaleWriteError(expectedRev, prev.rev);
@@ -69,7 +74,6 @@ export function editSpec(
     }
     if (active.length) event(s, now, "system", "control", `Integration frozen until ${active.length} run${active.length === 1 ? "" : "s"} on r${prev.rev} stop${active.length === 1 ? "s" : ""}; r${rev} runs after reconciliation`, t.id);
   }
-  return s;
 }
 
 export function overrideSelection(state: State, taskId: string, expectedRev: number, optionId: string, reason: string, now: string): State {

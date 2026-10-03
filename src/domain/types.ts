@@ -1,6 +1,6 @@
 // Core domain types. Pure data: no UI, storage, or runtime dependencies.
 
-import type { Blueprint, BudgetEstimate, Studio } from "./studio/types";
+import type { AskCheck, Blueprint, BudgetEstimate, OpenCase, Studio, Verdict } from "./studio/types";
 
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
@@ -375,11 +375,13 @@ export interface Project {
    */
   changeOrders: "lead" | "user";
   /**
-   * PE review of new work in the factory (ORC-029 2e): while true, the lead's proposals and breakdown items made while
-   * building, and the lead's updates for a change order, wait for the PE's agreement before they start. Absent (off)
-   * until the PE's review runs exist (pass 5), so nothing waits for a review nobody runs.
+   * PE review of new work in the factory (ORC-029 2e, switched on in pass 5): while true, new work made while building
+   * waits for the PE's agreement before it starts: the lead's proposals, a Goal's breakdown (before its child tasks
+   * exist), the design of a Feature (before it is built), and the lead's updates for a change order. Only the owner
+   * sets it (`setPeReviewsNewWork`). On for a new project; a project stored before the setting existed loads with it
+   * off, so an upgrade never starts a paid PE run by itself.
    */
-  peReviewsNewWork?: boolean;
+  peReviewsNewWork: boolean;
   /** When the current shaping session began; coverage reported before it is not reused. */
   shapingSince?: string;
   /** The project's own check commands, run by the service. Desired state; only the user's `setChecks` writes it. */
@@ -656,29 +658,51 @@ export interface FindingDecision {
 }
 
 /**
- * Where PE review of one piece of new work stands (ORC-029 2e): a lead proposal, a breakdown item, or the lead's
- * updates for a change order.
- * - pending: held from starting, "waiting for PE review"; an objection before the last round keeps it pending while
- *   the lead revises it;
- * - agreed: released under the usual involvement rules;
- * - objected: the PE still objected after three rounds, so it waits for the owner (Needs you) with the objection,
- *   until the owner overrules it (recorded), edits the work (a new review starts), or cancels it. It is never dropped.
+ * Where PE review of one piece of new work stands (ORC-029 2e, pass 5): a lead proposal (on the task), a Goal's
+ * breakdown or a Feature's design (on the step that made it), or the lead's updates for a change order.
+ * - pending: held from starting, "waiting for PE review"; a change the PE asks for before the last round keeps it
+ *   pending while the lead or the designer revises it;
+ * - agreed: the PE found it feasible; released under the usual involvement rules;
+ * - objected: the PE still asks for a change after three rounds, or the lead did not revise it, so it waits for the
+ *   owner (Needs you) with the objection, until the owner overrules it (recorded), edits the work (a new review
+ *   starts), or cancels it. It is never dropped;
+ * - ended: review stopped without the PE's last word (`ended` says why). When the service ended it (the PE could not
+ *   run) it waits for the owner like an objection; when the owner turned PE review of new work off, it is released.
  * Only the service records the PE's verdicts (`recordPeReview`), and only the owner overrules.
  */
 export interface PeReviewState {
-  status: "pending" | "agreed" | "objected";
-  /** The PE's verdicts in the current review, oldest first: one per round, at most three. `specRev` is the task spec revision it read. */
+  status: "pending" | "agreed" | "objected" | "ended";
+  /** The PE's verdicts in the current review, oldest first: one per round, at most three. */
   rounds: PeReviewRound[];
   overruled?: { at: string; why: string };
-  /** Earlier reviews, oldest first: each closed when the owner edited the work the PE objected to (`specRev`, the edit), which started this one. */
-  earlier?: { rounds: PeReviewRound[]; closedAt: string; specRev: number }[];
+  ended?: { at: string; why: string; by: "service" | "owner" };
+  /** Earlier reviews, oldest first: each closed when the owner edited the work the PE objected to (`specRev`, the edit, or the output version), which started this one. */
+  earlier?: { rounds: PeReviewRound[]; closedAt: string; specRev?: number; version?: number }[];
 }
 
+/**
+ * One round of PE review of new work: the PE's verdict in the shape of the studio's (pass 4e). Only `change` sends
+ * the work back for revision (feasible-if or not-feasible); `openCases` are product questions for the owner, which the
+ * lead's brief lists; on a later round `earlier` checks each earlier ask ("r1", "r2"), and a new change answers a risk
+ * the revision created (`fromRevision`).
+ */
 export interface PeReviewRound {
   at: string;
-  verdict: "agree" | "object";
+  verdict: Verdict;
   reasons: string;
+  change?: string;
+  openCases?: OpenCase[];
+  earlier?: AskCheck[];
+  fromRevision?: true;
+  budget?: BudgetEstimate;
+  /** A proposal: the spec revision the PE read. */
   specRev?: number;
+  /** A breakdown or a design: the version of the step's output the PE read. */
+  version?: number;
+  /** The PE's run that gave it (the service's record). */
+  by?: { provider: ProviderId; model: string; runId: string };
+  /** A proposal sent back: the lead run that was shown it to revise. When that run completes without revising it, the objection goes to the owner. */
+  shownTo?: string;
 }
 
 /**
@@ -957,6 +981,12 @@ export interface Step extends StepDef {
   coverageRetries?: number;
   /** The gap, bound to the change (`to`) it was found on; a different change starts the count over. */
   coverageGap?: { missing: string[]; extra: string[]; to?: string };
+  /**
+   * PE review of what this step made (ORC-029 pass 5): a Goal's breakdown before its child tasks exist, or a design a
+   * coder step builds (the Feature flow's design step). While it stands, the steps that depend on this one wait, and a
+   * breakdown's children are not created. Absent on steps whose output is not reviewed.
+   */
+  peReview?: PeReviewState;
 }
 
 export type SelectionSource = "step" | "task-role" | "independence" | "project-role" | "project-default" | "service";
