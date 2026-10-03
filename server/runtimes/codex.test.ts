@@ -352,7 +352,8 @@ describe("sub-agents (ORC-031)", () => {
       adapter.start(a);
       await waitFor(() => terminals(events).length === i + 1);
     }
-    const argvs = stubLog().filter((l) => l.argv?.[0] === "app-server").map((l) => l.argv as string[]);
+    // The runs' own app-servers (local mode), not the isolated one that archives the research run's thread.
+    const argvs = stubLog().filter((l) => l.argv?.[0] === "app-server" && !l.argv.includes("plugins")).map((l) => l.argv as string[]);
     const threads = recvOf(stubLog, "thread/start").map((m) => m.params);
     expect(argvs[0]).toEqual(["app-server", "-c", "project_doc_max_bytes=0", "-c", "agents.max_threads=3", "-c", "agents.max_depth=1"]);
     // Codex forks a sub-agent from its parent's session file: on an ephemeral thread every spawn fails (real run).
@@ -386,6 +387,17 @@ describe("sub-agents (ORC-031)", () => {
     // Every sub-agent event comes before the terminal one.
     expect(events.findIndex((e) => e.type === "completed")).toBe(events.length - 1);
     expect(recvOf(stubLog, "thread/read").map((m) => m.params)).toEqual([{ threadId: "thr_sub_a", includeTurns: false }]);
+    // The kept threads leave Codex's history once the run's app-server has exited: archived, the parent's first.
+    await waitFor(() => recvOf(stubLog, "thread/archive").length === 3);
+    expect(recvOf(stubLog, "thread/archive").map((m) => m.params.threadId)).toEqual(["thr_stub_1", "thr_sub_a", "thr_sub_b"]);
+  });
+
+  it("an ephemeral run archives nothing", async () => {
+    const { adapter, events, stubLog } = make("subagents");
+    adapter.start(assignment("att-e", { workspace: { path: dir, access: "read" } }));
+    await waitFor(() => terminals(events).length > 0);
+    await settle(400);
+    expect(recvOf(stubLog, "thread/archive")).toEqual([]);
   });
 
   it("a sub-agent that slips through where none is allowed is still reported", async () => {

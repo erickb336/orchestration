@@ -254,6 +254,9 @@ function handle(msg) {
       if (mode === "interrupt-honoured" || STEER_MODES.has(mode)) later(20, () => completeTurn("interrupted"));
       if (mode === "subagents-interrupt") later(20, () => completeTurn("interrupted"));
       return;
+    case "thread/archive":
+      send({ id, result: {} });
+      return;
     case "thread/read":
       // A sub-agent's model is on its thread (ORC-031).
       send({ id, result: { thread: { ...threadObj("stub-sub-model"), id: params?.threadId, parentThreadId: THREAD } } });

@@ -363,6 +363,7 @@ export class CodexAdapter implements RuntimeAdapter {
       if (exited) return;
       exited = true;
       run.rpc.close();
+      this.archiveKept(run);
       if (run.done) return;
       this.finish(run, { type: "failed", attemptId: a.attemptId, message: this.exitFailure(run, code, signal), usage: run.usage });
     };
@@ -695,6 +696,20 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 
   // ---------------------------------------------------------------- sub-agents (ORC-031)
+
+  /**
+   * A run that kept its thread (it allowed sub-agents) leaves it and each sub-agent's in Codex's history: archived once
+   * its app-server has exited, as housekeeping does (the owner can unarchive them). One that is not archived is left
+   * for housekeeping's next sweep, which finds it by its originator.
+   */
+  private archiveKept(run: Run) {
+    if (!run.threadId || !allowsSubagents(run.a)) return;
+    const ids = [run.threadId, ...run.subs.keys()];
+    void this.archiveThreads(ids).then((out) => {
+      const left = [...out.values()].filter((o) => o !== "archived").length;
+      if (left) this.log(`codex[${run.a.attemptId}]: ${left} of ${ids.length} threads not archived; housekeeping sweeps them later`);
+    });
+  }
 
   /** Report a sub-agent's start once, and ask Codex for its model. Its usage never counts in the parent's. */
   private subStarted(run: Run, threadId: string, asked: string, model?: string) {
