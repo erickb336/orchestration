@@ -441,6 +441,52 @@ describe("ask me first: the updates wait for your go-ahead", () => {
   });
 });
 
+describe("a line keeps its own status (review finding 7)", () => {
+  /** The state after the steering log evicted this set (it keeps the newest 200). */
+  const evicted = (s: State, setId: string) => ({ ...s, steering: s.steering.filter((x) => x.id !== setId) });
+
+  it("each line records where it stands, with steering's Undo, Apply and Dismiss", () => {
+    const f = changeOrdered("user");
+    const a = answer(f.s, fullAnswer(f), 20);
+    expect(order(a.s).lines!.map((l) => l.status)).toEqual(["suggested", "suggested", "suggested", "suggested", "suggested"]);
+    const [first, , , , last] = order(a.s).lines!;
+    let s = M.applySteering(a.s, a.setId, first.changeId, at(30)).state;
+    s = M.dismissSteering(s, a.setId, last.changeId, at(31)).state;
+    expect(order(s).lines![0]).toMatchObject({ status: "applied", appliedBy: "user", resolvedAt: at(30) });
+    expect(order(s).lines![4]).toMatchObject({ status: "dismissed", resolvedAt: at(31) });
+    s = M.undoSteering(s, a.setId, first.changeId, at(32)).state;
+    expect(order(s).lines![0]).toMatchObject({ status: "undone", resolvedAt: at(32) });
+    const g = changeOrdered();
+    const lead = answer(g.s, fullAnswer(g), 20).s;
+    expect(order(lead).lines!.map((l) => [l.status, l.appliedBy, l.resolvedAt])).toEqual(order(lead).lines!.map(() => ["applied", "lead", at(21)]));
+  });
+
+  it("an open change order's lines still work after the steering log evicts their set", () => {
+    const f = changeOrdered("user");
+    const a = answer(f.s, fullAnswer(f), 20);
+    const lines = order(a.s).lines!;
+    let s = evicted(a.s, a.setId);
+    expect(M.changeOrderLines(s, order(s)).map((v) => v.status)).toEqual(["suggested", "suggested", "suggested", "suggested", "suggested"]);
+    expect(needsDetail(s)).toMatch(/ 5 of the lead's updates wait for your go-ahead\.$/);
+    // Apply, Dismiss and Undo name the set the screen knows; the line answers for it.
+    const applied = M.applySteering(s, a.setId, lines[0].changeId, at(30));
+    expect(applied.result).toEqual({ applied: [lines[0].changeId], left: [] });
+    s = applied.state;
+    expect(M.currentSpec(task(s, f.tasks.queued))).toMatchObject({ rev: 3, author: "lead" });
+    const undone = M.undoSteering(s, a.setId, lines[0].changeId, at(31));
+    expect(undone.result).toEqual({ undone: [lines[0].changeId], left: [] });
+    s = undone.state;
+    expect(M.currentSpec(task(s, f.tasks.queued))).toMatchObject({ rev: 4, author: "user" });
+    expect(M.undoSteering(s, a.setId, lines[0].changeId, at(32)).result.left).toEqual([{ id: lines[0].changeId, why: "already undone" }]);
+    s = M.dismissSteering(s, a.setId, lines[4].changeId, at(33)).state;
+    for (const i of [1, 2, 3]) s = M.applySteering(s, a.setId, lines[i].changeId, at(34)).state;
+    expect(order(s).status).toBe("done");
+    expect(order(s).closed!.record).toEqual([`Undone by you: ${order(s).lines![0].words}`, ...order(s).lines!.slice(1, 4).map((l) => l.words), `Dismissed by you: ${order(s).lines![4].words}`]);
+    // A set that is not a change order's is still unknown.
+    expect(() => M.undoSteering(s, "cs-none", undefined, at(35))).toThrow("Unknown change set cs-none");
+  });
+});
+
 describe("the change order's state as the owner and the scheduler see it", () => {
   it("a task you cancel and new work another task plans settle what the lead left: the scheduler closes it", () => {
     const f = changeOrdered();

@@ -575,13 +575,29 @@ export const CHANGE_ORDER_LINE_KINDS: ChangeOrderLineKind[] = ["update-spec", "r
 export const isChangeOrderKind = (k: string): k is ChangeOrderLineKind => (CHANGE_ORDER_LINE_KINDS as string[]).includes(k);
 
 /**
- * One of the lead's updates for a change order, as the service accepted it. Its state (applied, waiting for the owner's
- * go-ahead, undone, dismissed) is its steering row's (`changeId`); the PE review of its work is the task's own
- * (`taskId` for an update, `madeTaskId` for a revision or a new task).
+ * Where a change order's line stands. The line keeps it (review finding 7): the steering log keeps only the newest
+ * 200 change sets, and the row there mirrors the line while its set is in the log.
+ * - "suggested": it waits for the owner's go-ahead (Apply) or Dismiss;
+ * - "applied": by the lead at once, or by the owner's go-ahead (`appliedBy`);
+ * - "undone", "dismissed": by the owner;
+ * - "refused": its record shows it never applied and cannot apply (a row from an earlier build that steering rejected,
+ *   skipped or superseded).
+ */
+export type ChangeOrderLineStatus = "applied" | "suggested" | "dismissed" | "undone" | "refused";
+
+/**
+ * One of the lead's updates for a change order, as the service accepted it, with where it stands (`status`). Its
+ * steering row (`changeId`) shows it under the lead's reply; the PE review of its work is the task's own (`taskId` for
+ * an update, `madeTaskId` for a revision or a new task).
  */
 export interface ChangeOrderLine {
-  /** The steering row that carries it (`${changeSetId}.${n}`): Undo, Apply and Dismiss act on it. */
+  /** The steering row that carries it (`${changeSetId}.${n}`): Undo, Apply and Dismiss name it, with or without its set. */
   changeId: string;
+  status: ChangeOrderLineStatus;
+  /** Who applied it: the lead at once, or the owner's go-ahead. */
+  appliedBy?: "lead" | "user";
+  /** When its status last changed (applied, undone or dismissed). */
+  resolvedAt?: string;
   kind: ChangeOrderLineKind;
   /** The task the change order touches; absent for new work. */
   taskId?: string;
@@ -597,6 +613,12 @@ export interface ChangeOrderLine {
   proposal?: Record<string, unknown>;
   /** An applied spec update: the spec revision and PE review it replaced, which Undo restores. */
   before?: { specRev: number; peReview?: PeReviewState };
+  /**
+   * An applied spec update: the spec revisions the lead wrote for it, oldest first: the update, then each revision the
+   * PE asked for (review finding 6). Undo restores `before` while the newest is the task's spec; any other edit since
+   * (the owner's) keeps it.
+   */
+  specRevs?: number[];
 }
 
 /**

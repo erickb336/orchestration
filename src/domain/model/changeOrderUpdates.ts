@@ -249,17 +249,24 @@ function ownersCall(s: State, u: Update): string | undefined {
 
 // ---------- applying a line ----------
 
+/** The steering change set a line's row is in: `${changeSetId}.${n}`. */
+const setIdOf = (changeId: string) => changeId.slice(0, changeId.lastIndexOf("."));
+
 /**
- * Apply one line now, on a draft: the lead's at once, or the owner's go-ahead later. Checks it against the task as it
- * is now first. Records on the line what Undo needs, and on the row what changed. Returns why it did not apply.
+ * Apply one line now, on a draft: the lead's at once, or the owner's go-ahead later (`by`). Checks it against the task
+ * as it is now first. Records on the line its status and what Undo needs, and on its steering row, while its set is in
+ * the log, what changed. Returns why it did not apply.
  */
-function applyLineInto(s: State, co: ChangeOrder, line: ChangeOrderLine, row: SteeringChange, set: SteeringChangeSet, now: string): string | undefined {
+function applyLineInto(s: State, co: ChangeOrder, line: ChangeOrderLine, row: SteeringChange | undefined, now: string, by: "lead" | "user"): string | undefined {
   const u: Update = { kind: line.kind, ...(line.taskId ? { taskId: line.taskId } : {}), why: line.why, ...(line.proposal ? { proposal: line.proposal as unknown as LeadProposal } : {}) };
   const why = whyNot(s, co, u, now);
   if (why) return why;
   const t = line.taskId ? getTask(s, line.taskId) : undefined;
   const proposal = u.proposal && withRefs(s, u.proposal, t);
   const reason = `Change order r${co.rev}${line.why ? `: ${line.why}` : ""}`;
+  // What changed, for the row (steering's change list shows it).
+  let before: SteeringChange["before"] = null;
+  let after: SteeringChange["after"] = null;
   try {
     switch (line.kind) {
       case "update-spec": {
@@ -271,9 +278,10 @@ function applyLineInto(s: State, co: ChangeOrder, line: ChangeOrderLine, row: St
         const fresh = earlier?.status === "pending" ? undefined : newWorkReview(s);
         if (fresh) t!.peReview = { ...fresh, ...(earlier ? { earlier: [...(earlier.earlier ?? []), { rounds: earlier.rounds, closedAt: now, specRev: prev.rev }] } : {}) };
         line.before = { specRev: prev.rev, ...(earlier ? { peReview: structuredClone(earlier) } : {}) };
+        line.specRevs = [currentSpec(t!).rev];
         line.items = refsOf(t!);
-        row.before = prev.rev;
-        row.after = currentSpec(t!).rev;
+        before = prev.rev;
+        after = currentSpec(t!).rev;
         break;
       }
       case "revise":
@@ -285,14 +293,14 @@ function applyLineInto(s: State, co: ChangeOrder, line: ChangeOrderLine, row: St
         if (line.kind === "revise") made.dependsOn = [line.taskId!];
         line.madeTaskId = id;
         line.items = refsOf(made);
-        row.after = id;
-        if (line.kind === "new-task") row.taskId = id;
+        after = id;
+        if (row && line.kind === "new-task") row.taskId = id;
         break;
       }
       case "retire":
-        row.before = t!.lifecycle;
-        dropInto(s, t!, set.id, line.why || `change order r${co.rev}`, now, row.id);
-        row.after = "cancelled";
+        before = t!.lifecycle;
+        dropInto(s, t!, setIdOf(line.changeId), line.why || `change order r${co.rev}`, now, line.changeId);
+        after = "cancelled";
         break;
     }
   } catch (e) {
@@ -301,6 +309,8 @@ function applyLineInto(s: State, co: ChangeOrder, line: ChangeOrderLine, row: St
   }
   delete line.proposal;
   line.words = lineWords(s, co, line);
+  Object.assign(line, { status: "applied", appliedBy: by, resolvedAt: now });
+  if (row) Object.assign(row, { before, after });
   return undefined;
 }
 
@@ -357,13 +367,13 @@ export function answerChangeOrderInto(s: State, r: LeadRun, raw: unknown, set: S
     set ??= newSet(s, r, co, now, simulated);
     const row: SteeringChange = { id: `${set.id}.${set.changes.length + 1}`, kind: u.kind, ...(u.taskId ? { taskId: u.taskId } : {}), before: null, after: null, why: u.why, status: "suggested" };
     const items = u.proposal ? (withRefs(s, u.proposal, u.taskId ? getTask(s, u.taskId) : undefined).blueprintRefs ?? []) : [];
-    const line: ChangeOrderLine = { changeId: row.id, kind: u.kind, ...(u.taskId ? { taskId: u.taskId } : {}), items, words: "", why: u.why, ...(u.proposal ? { proposal: structuredClone(u.proposal) as unknown as Record<string, unknown> } : {}) };
+    const line: ChangeOrderLine = { changeId: row.id, status: "suggested", kind: u.kind, ...(u.taskId ? { taskId: u.taskId } : {}), items, words: "", why: u.why, ...(u.proposal ? { proposal: structuredClone(u.proposal) as unknown as Record<string, unknown> } : {}) };
     const owners = ownersCall(s, u);
     if (askFirst || owners) {
       line.words = lineWords(s, co, line);
       row.note = owners ?? "waits for your go-ahead (change orders: ask me first)";
     } else {
-      const why = applyLineInto(s, co, line, row, set, now);
+      const why = applyLineInto(s, co, line, row, now, "lead");
       if (why) {
         notes.push(why);
         continue;
@@ -380,7 +390,9 @@ export function answerChangeOrderInto(s: State, r: LeadRun, raw: unknown, set: S
   const left = outstanding(s, co);
   if (!isSettled(left)) notes.push(`not handled: ${outstandingWords(s, left)}`);
   const lines = co.lines ?? [];
-  event(s, now, "lead", "vision", `Lead run ${r.id} answered change order r${co.rev}: ${lines.length ? `${lines.length} update${lines.length === 1 ? "" : "s"}${askFirst ? " waiting for your go-ahead" : " applied"}` : "no update"}${notes.length ? `; ${notes.length} note${notes.length === 1 ? "" : "s"}` : ""}${set ? ` (${set.id})` : ""}`);
+  const n = (status: ChangeOrderLine["status"]) => lines.filter((l) => l.status === status).length;
+  const counts = [n("applied") ? `${n("applied")} applied` : "", n("suggested") ? `${n("suggested")} waiting for your go-ahead` : ""].filter(Boolean).join(", ");
+  event(s, now, "lead", "vision", `Lead run ${r.id} answered change order r${co.rev}: ${lines.length ? `${lines.length} update${lines.length === 1 ? "" : "s"} (${counts})` : "no update"}${notes.length ? `; ${notes.length} note${notes.length === 1 ? "" : "s"}` : ""}${set ? ` (${set.id})` : ""}`);
   return finish();
 }
 
@@ -393,28 +405,34 @@ function newSet(s: State, r: LeadRun, co: ChangeOrder, now: string, simulated?: 
   return set;
 }
 
-// ---------- the owner's Undo and go-ahead (steeringChanges.ts calls these for the line kinds) ----------
+// ---------- the owner's Undo, go-ahead and Dismiss ----------
+// Steering's commands (steeringChanges.ts) call these for a row of a line kind, and `lineCommandInto` when the
+// steering log no longer holds the line's set: the line itself carries its status and what Undo needs.
 
 /** Undo one applied line, compare-and-set. Returns why it was left as is, or undefined when undone. Mutates the draft. */
-export function undoChangeOrderRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: string): string | undefined {
-  const found = lineOf(s, c.id);
-  if (!found) return "its change order line is not on record";
-  const { line } = found;
+function undoLineInto(s: State, line: ChangeOrderLine, now: string): string | undefined {
+  const why = undoneInto(s, line, now);
+  if (!why) Object.assign(line, { status: "undone", resolvedAt: now });
+  return why;
+}
+
+function undoneInto(s: State, line: ChangeOrderLine, now: string): string | undefined {
   if (line.kind === "retire") {
     const t = s.tasks.find((x) => x.id === line.taskId);
-    return t ? reopenDropped(s, t, set.id, now) : "task not found";
+    return t ? reopenDropped(s, t, setIdOf(line.changeId), now) : "task not found";
   }
   if (line.kind === "update-spec") {
     const t = s.tasks.find((x) => x.id === line.taskId);
     if (!t) return "task not found";
     if (!isOpen(t)) return `${t.id} is ${t.lifecycle}`;
     if (!queued(s, t)) return `${t.id} started on the updated spec; edit its spec yourself`;
+    // Compare-and-set: the spec is still the lead's for this line (its update, or a revision the PE asked for).
     const rev = currentSpec(t).rev;
-    if (rev !== c.after) return `its spec changed since (now r${rev})`;
+    if (rev !== line.specRevs?.at(-1)) return `its spec changed since (now r${rev})`;
     const old = t.specs.find((x) => x.rev === line.before?.specRev);
     if (!old) return "the spec before is not on record";
     try {
-      editSpecInto(s, t, rev, structuredClone(old.content), `Undid the lead's update for change order (${c.id})`, "user", now);
+      editSpecInto(s, t, rev, structuredClone(old.content), `Undid the lead's update for change order (${line.changeId})`, "user", now);
     } catch (e) {
       if (e instanceof ControlError) return e.message;
       throw e;
@@ -430,15 +448,45 @@ export function undoChangeOrderRow(s: State, set: SteeringChangeSet, c: Steering
   if (started(s, t)) return `${t.id} has started; cancel it yourself`;
   const dep = openDependent(s, t, "drop");
   if (dep) return `${dep.id} depends on it`;
-  cancelInto(s, t, now, { actor: "user", reason: `undo of ${c.id}` });
+  cancelInto(s, t, now, { actor: "user", reason: `undo of ${line.changeId}` });
   return undefined;
 }
 
-/** The owner's go-ahead on one line that waits for it. Returns why it was left as is, or undefined when applied. Mutates the draft. */
-export function applyChangeOrderRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: string): string | undefined {
+/** Undo one applied row of a line kind. Returns why it was left as is, or undefined when undone. Mutates the draft. */
+export function undoChangeOrderRow(s: State, c: SteeringChange, now: string): string | undefined {
   const found = lineOf(s, c.id);
-  if (!found) return "its change order line is not on record";
-  return applyLineInto(s, found.co, found.line, c, set, now);
+  return found ? undoLineInto(s, found.line, now) : "its change order line is not on record";
+}
+
+/** The owner's go-ahead on one row of a line kind that waits for it. Returns why it was left as is, or undefined when applied. Mutates the draft. */
+export function applyChangeOrderRow(s: State, c: SteeringChange, now: string): string | undefined {
+  const found = lineOf(s, c.id);
+  return found ? applyLineInto(s, found.co, found.line, c, now, "user") : "its change order line is not on record";
+}
+
+/** The owner dismissed one row of a line kind that waited for the go-ahead. Mutates the draft. */
+export function dismissChangeOrderRow(s: State, c: SteeringChange, now: string) {
+  const found = lineOf(s, c.id);
+  if (found?.line.status === "suggested") Object.assign(found.line, { status: "dismissed", resolvedAt: now });
+}
+
+/**
+ * The owner's Undo, Apply or Dismiss of one line whose steering set the log no longer holds (it keeps the newest 200),
+ * from the line's own record (review finding 7). Undefined when `changeId` names no line of set `changeSetId`; else
+ * why it was left as is (`why`), or nothing when it was done. Mutates the draft; the caller settles the change orders.
+ */
+export function lineCommandInto(s: State, op: "undo" | "apply" | "dismiss", changeSetId: string, changeId: string, now: string): { why?: string } | undefined {
+  const found = setIdOf(changeId) === changeSetId ? lineOf(s, changeId) : undefined;
+  if (!found) return undefined;
+  const { co, line } = found;
+  let why: string | undefined;
+  if (op === "undo") why = line.status === "undone" ? "already undone" : line.status !== "applied" ? "not applied" : undoLineInto(s, line, now);
+  else if (line.status !== "suggested") why = line.status === "applied" ? "already applied" : `not a suggestion (${line.status})`;
+  else if (op === "apply") why = applyLineInto(s, co, line, undefined, now, "user");
+  else Object.assign(line, { status: "dismissed", resolvedAt: now });
+  const done = op === "undo" ? "Undid" : op === "apply" ? "Applied" : "Dismissed";
+  if (!why) event(s, now, "user", "control", `${done} the lead's update ${changeId} for change order r${co.rev}: ${line.words}`);
+  return why ? { why } : {};
 }
 
 // ---------- closing ----------
@@ -451,16 +499,7 @@ export interface Outstanding {
 const isSettled = (o: Outstanding) => !o.tasks.length && !o.items.length;
 
 /** A line the owner or the lead settled: applied, or undone or dismissed by the owner. A line that waits for the go-ahead is not. */
-function settledLine(s: State, line: ChangeOrderLine): boolean {
-  const status = rowOf(s, line.changeId)?.status;
-  return status === "applied" || status === "undone" || status === "dismissed";
-}
-
-/** The steering row that carries a line. */
-export function rowOf(s: State, changeId: string): SteeringChange | undefined {
-  const setId = changeId.slice(0, changeId.lastIndexOf("."));
-  return s.steering.find((x) => x.id === setId)?.changes.find((c) => c.id === changeId);
-}
+const settledLine = (line: ChangeOrderLine) => line.status === "applied" || line.status === "undone" || line.status === "dismissed";
 
 /**
  * What is left to handle: a touched task is handled by a settled line for it, or when it is cancelled; a new-work item
@@ -471,12 +510,12 @@ export function outstanding(s: State, co: ChangeOrder): Outstanding {
   const tasks = co.tasks
     .map((x) => x.taskId)
     .filter((id) => {
-      if (lines.some((l) => l.taskId === id && settledLine(s, l))) return false;
+      if (lines.some((l) => l.taskId === id && settledLine(l))) return false;
       const t = s.tasks.find((x) => x.id === id);
       return !!t && t.lifecycle !== "cancelled";
     });
   const items = co.newWork.filter((id) => {
-    if (lines.some((l) => l.kind === "new-task" && l.items.includes(id) && settledLine(s, l))) return false;
+    if (lines.some((l) => l.kind === "new-task" && l.items.includes(id) && settledLine(l))) return false;
     return !s.tasks.some((t) => t.lifecycle !== "cancelled" && refsOf(t).includes(id));
   });
   return { tasks, items };
@@ -491,20 +530,19 @@ function outstandingWords(s: State, o: Outstanding): string {
 function closingRecord(s: State, co: ChangeOrder, by: "service" | "user"): string[] {
   const record: string[] = [];
   for (const line of co.lines ?? []) {
-    const status = rowOf(s, line.changeId)?.status;
-    if (status === "applied") record.push(line.words);
-    else if (status === "undone") record.push(`Undone by you: ${line.words}`);
-    else if (status === "dismissed") record.push(`Dismissed by you: ${line.words}`);
-    else if (status === "suggested" && by === "user") record.push(`Not applied: ${line.words}`);
+    if (line.status === "applied") record.push(line.words);
+    else if (line.status === "undone") record.push(`Undone by you: ${line.words}`);
+    else if (line.status === "dismissed") record.push(`Dismissed by you: ${line.words}`);
+    else if (line.status === "refused" || by === "user") record.push(`Not applied: ${line.words}`);
   }
   const lines = co.lines ?? [];
   for (const { taskId } of co.tasks) {
-    if (lines.some((l) => l.taskId === taskId && settledLine(s, l))) continue;
+    if (lines.some((l) => l.taskId === taskId && settledLine(l))) continue;
     const t = s.tasks.find((x) => x.id === taskId);
     record.push(t?.lifecycle === "cancelled" ? `${taskId}: cancelled` : `${taskId}: not handled`);
   }
   for (const id of co.newWork) {
-    if (lines.some((l) => l.kind === "new-task" && l.items.includes(id) && settledLine(s, l))) continue;
+    if (lines.some((l) => l.kind === "new-task" && l.items.includes(id) && settledLine(l))) continue;
     const by = s.tasks.filter((t) => t.lifecycle !== "cancelled" && refsOf(t).includes(id)).map((t) => t.id);
     record.push(by.length ? `${itemName(s, id)}: planned in ${listed(by)}` : `${itemName(s, id)}: not planned`);
   }
@@ -551,11 +589,11 @@ export function closeChangeOrder(state: State, rev: number, now: string): State 
 
 // ---------- what the owner and the screens read ----------
 
-/** One line as the change order screen shows it: the line, its row's state, and the PE review of its work. */
+/** One line as the change order screen shows it: the line, where it stands, and the PE review of its work. */
 export interface ChangeOrderLineView {
   line: ChangeOrderLine;
-  /** The row's state: applied, waiting for the go-ahead ("suggested"), undone or dismissed. */
-  status: SteeringChange["status"];
+  /** Where it stands: applied, waiting for the go-ahead ("suggested"), undone, dismissed or refused. */
+  status: ChangeOrderLine["status"];
   /** The PE review of the line's work (the updated task, or the task it made); absent when it has none. */
   review?: NonNullable<Task["peReview"]>;
   /** The task the line's work is: the updated or retired task, or the task it made. */
@@ -567,14 +605,14 @@ export function changeOrderLines(s: State, co: ChangeOrder): ChangeOrderLineView
   return (co.lines ?? []).map((line) => {
     const workTaskId = line.kind === "revise" || line.kind === "new-task" ? line.madeTaskId : line.taskId;
     const work = workTaskId ? s.tasks.find((t) => t.id === workTaskId) : undefined;
-    return { line, status: rowOf(s, line.changeId)?.status ?? "rejected", ...(work?.peReview && line.kind !== "retire" ? { review: work.peReview } : {}), ...(workTaskId ? { workTaskId } : {}) };
+    return { line, status: line.status, ...(work?.peReview && line.kind !== "retire" ? { review: work.peReview } : {}), ...(workTaskId ? { workTaskId } : {}) };
   });
 }
 
 /** What waits for the owner on an open change order once the lead answered: lines for the go-ahead, and what is not handled. */
 export function changeOrderNeeds(s: State, co: ChangeOrder): { waiting: number; left: Outstanding; words: string } | undefined {
   if (co.status !== "open" || !leadAnswered(s, co)) return undefined;
-  const suggested = (co.lines ?? []).filter((l) => rowOf(s, l.changeId)?.status === "suggested");
+  const suggested = (co.lines ?? []).filter((l) => l.status === "suggested");
   const waiting = suggested.length;
   const left = outstanding(s, co);
   // What waits for the go-ahead is not "not handled": it has a line.
