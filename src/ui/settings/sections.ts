@@ -20,6 +20,7 @@ export const CARD_SECTION = {
   repository: "project",
   domains: "project",
   preview: "project",
+  environment: "project",
   stage: "project",
   delivery: "project",
   "new-project": "project",
