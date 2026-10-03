@@ -4,6 +4,7 @@
 import * as C from "../checks";
 import * as F from "../findings";
 import { PE_OBJECTS_HOLD, PE_REVIEW_HOLD, peReviewHold, reviewedWhat, taskReviewHold } from "../peReview";
+import { budgetStop } from "../spend";
 import { type Deferral, type State, type Step, type Task, REVIEW_ROLES } from "../types";
 import { activeAttempts, findStep, getStep, isOpen, isSettled } from "./core";
 import { childrenSettled, currentChildren } from "./fanout";
@@ -145,8 +146,9 @@ export function stateLabel(s: State, t: Task): string {
   if (awaiting) return F.awaitingLabel(awaiting);
   // A Checks step that would start next waits while the sandbox is not ready; nothing runs unsandboxed by itself.
   if (t.lifecycle === "active" && active.length === 0 && C.checksHeld(s) && t.steps.some((st) => st.state === "pending" && st.role === "checks" && st.dependsOn.every((d) => isSettled(getStep(t, d))))) return C.HELD_LABEL;
-  // While shaping, a step that would start next waits for Start building; nothing is paused.
-  if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (in Vision)" : "Queued for next step";
+  // While shaping, a step that would start next waits for Start building; nothing is paused. At the building budget
+  // no step starts either (dispatchEligible).
+  if (t.lifecycle === "active" && active.length === 0) return s.project.stage === "shaping" ? "Next step waits (in Vision)" : budgetStop(s) ? BUDGET_HELD_STEP : "Queued for next step";
   if (col === "proposed" && waitingOn(s, t)) return waitingLabel(s, t);
   // The roadmap's own hold is named as such; the user's hold before start keeps its own label. What follows
   // Start building is decided by the involvement setting at that moment, so the label reads it now; a
@@ -163,8 +165,16 @@ export function stateLabel(s: State, t: Task): string {
   // A dependency wait is shown before the stage, with shaping noted.
   if (col === "ready" && waitingOn(s, t)) return waitingLabel(s, t);
   if (col === "ready" && s.project.stage === "shaping") return "Ready (in Vision)";
+  // At the building budget nothing new starts (dispatchEligible), so a task that would start waits for the budget.
+  if (col === "ready" && budgetStop(s)) return BUDGET_HELD;
   return col[0].toUpperCase() + col.slice(1);
 }
+
+/** The state of a task, or of its next step, that only the building budget holds (ORC-030 Q-24). */
+export const BUDGET_HELD = "Held at the building budget";
+export const BUDGET_HELD_STEP = "Next step held at the building budget";
+/** Whether only the building budget holds this task now: it would start, or start its next step, but for the budget stop. */
+export const heldByBudget = (s: State, t: Task): boolean => [BUDGET_HELD, BUDGET_HELD_STEP].includes(stateLabel(s, t));
 
 /** "Waiting on T-x", or "Waiting on T-x (deferred)" when the prerequisite itself is deferred; "(shaping)" while nothing would start anyway. */
 function waitingLabel(s: State, t: Task): string {
