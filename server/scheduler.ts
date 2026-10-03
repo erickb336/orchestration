@@ -1381,7 +1381,8 @@ export class Scheduler {
       const outDir = evidenceDir(this.dataDir ?? join(this.workspaces?.root ?? path, ".."), state.project.id, attemptId);
       if (!outDir) throw new Error(`the project id ${state.project.id} cannot name an evidence folder`);
       this.launched.set(attemptId, { provider: "service", access: "read", workspace, stepId: step.id, taskId: task.id });
-      runner.start({ attemptId, taskId: task.id, stepId: step.id, workspace: path, sha: target, items: structuredClone(snap.items), preview: structuredClone(snap.preview), outDir });
+      // A project with an environment is captured in it, as its checks run (docs/design/project-environment.md, E2).
+      runner.start({ attemptId, taskId: task.id, stepId: step.id, workspace: path, sha: target, items: structuredClone(snap.items), preview: structuredClone(snap.preview), outDir, ...(runner.simulated ? {} : this.environmentFor(state)) });
       return undefined;
     } catch (e) {
       this.launched.delete(attemptId);
