@@ -232,7 +232,8 @@ describe("CodexAdapter runs", () => {
   });
 
   it("an interrupt before the turn has started kills the process", async () => {
-    const { adapter, events, stubLog } = make("slow-thread");
+    // The gate stays shut: Codex never answers thread/start, so the turn cannot start, however slow the machine.
+    const { adapter, events, stubLog } = make("complete", {}, { CODEX_STUB_THREAD_GATE: join(dir, "gate") });
     adapter.start(assignment());
     await waitFor(() => stubLog().some((l) => l.recv?.method === "thread/start"));
     adapter.interrupt("att-1");
@@ -474,7 +475,9 @@ describe("notes", () => {
   });
 
   it("a note before the turn exists is held, then steered once the turn starts (ORC-027 review)", async () => {
-    const { adapter, events, stubLog } = make("steer", {}, { CODEX_STUB_THREAD_DELAY_MS: "300" });
+    // Codex answers thread/start only when the test opens the gate: the note always comes before the turn exists.
+    const gate = join(dir, "gate");
+    const { adapter, events, stubLog } = make("steer", {}, { CODEX_STUB_THREAD_GATE: gate });
     adapter.start(assignment());
     await waitFor(() => stubLog().some((l) => l.recv?.method === "thread/start"));
     adapter.note("att-1", { id: "early", text: NOTE });
@@ -482,6 +485,7 @@ describe("notes", () => {
     // Held: neither settled nor sent while Codex is still starting the thread.
     expect(noteEvents(events)).toEqual([]);
     expect(steers(stubLog)).toHaveLength(0);
+    writeFileSync(gate, "");
     await waitFor(() => noteEvents(events).length === 1);
     // The outcome says the note was held: evidence of this path in a real run's record (ORC-028 review).
     expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "delivered", heldForTurn: true }]);
@@ -492,7 +496,8 @@ describe("notes", () => {
   });
 
   it("a held note whose run is stopped before its turn starts → not-delivered, before the terminal event", async () => {
-    const { adapter, events, stubLog } = make("slow-thread");
+    const gate = join(dir, "gate");
+    const { adapter, events, stubLog } = make("complete", {}, { CODEX_STUB_THREAD_GATE: gate });
     adapter.start(assignment());
     await waitFor(() => stubLog().some((l) => l.recv?.method === "thread/start"));
     adapter.note("att-1", { id: "early", text: NOTE });
@@ -503,7 +508,9 @@ describe("notes", () => {
     expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "not-delivered", reason: "the run was stopped first", heldForTurn: true }]);
     const types = events.map((e) => e.type);
     expect(types.indexOf("note")).toBeLessThan(types.findIndex((t) => t === "stopped" || t === "failed"));
-    await settle(2200);
+    // Codex may answer late: the stopped run still sends nothing.
+    writeFileSync(gate, "");
+    await settle(200);
     expect(steers(stubLog)).toHaveLength(0);
     expect(noteEvents(events)).toHaveLength(1);
   });

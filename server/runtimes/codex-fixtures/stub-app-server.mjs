@@ -15,8 +15,8 @@
 //   auth-fail           error notification (unauthorized) then turn/completed(failed)
 //   crash               exits with code 101 mid-turn after writing a panic to stderr
 //   approval            sends a command approval request, then completes echoing the decision
-//   slow-thread         thread/start answers after 2s (to interrupt before the turn starts)
-//   (any mode)          CODEX_STUB_THREAD_DELAY_MS=n delays thread/start's answer by n ms (a note before the turn exists)
+//   (any mode)          CODEX_STUB_THREAD_GATE=<file>: thread/start answers only once that file exists, so a test acts
+//                       before the turn exists (a note, an interrupt) and then opens the gate itself; no clock decides
 //   thread-error        thread/start answers with a JSON-RPC error
 //   account-none        account/read reports no account
 //   hang                never answers initialize
@@ -26,7 +26,7 @@
 // CODEX_STUB_STEER_SILENT=1: turn/steer is never answered (any mode).
 
 import { spawn } from "node:child_process";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 
 const mode = process.env.CODEX_STUB_MODE || "complete";
 const logFile = process.env.CODEX_STUB_LOG;
@@ -242,9 +242,15 @@ function handle(msg) {
         send({ id, result: { thread: threadObj(model), model, modelProvider: "openai", serviceTier: null, cwd, approvalPolicy: params?.approvalPolicy, sandbox: { type: "readOnly", networkAccess: false } } });
         notify("thread/started", { thread: threadObj(model) });
       };
-      if (mode === "slow-thread") later(2000, answer);
-      else if (process.env.CODEX_STUB_THREAD_DELAY_MS) later(Number(process.env.CODEX_STUB_THREAD_DELAY_MS), answer);
-      else answer();
+      const gate = process.env.CODEX_STUB_THREAD_GATE;
+      if (!gate) answer();
+      else {
+        const wait = setInterval(() => {
+          if (!existsSync(gate)) return;
+          clearInterval(wait);
+          answer();
+        }, 5);
+      }
       return;
     }
     case "turn/start":
