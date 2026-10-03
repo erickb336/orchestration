@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readlinkSync, symlinkSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CACHE, ENV_USER, PROXY_IMAGE, WORK, buildArgs, networkArgs, phaseArgs, proxyArgs } from "./docker";
+import { CACHE, ENV_USER, PROXY_IMAGE, WORK, buildArgs, commitArgs, networkArgs, phaseArgs, proxyArgs } from "./docker";
 import { addedEntries, cloneEntries, copyWorktree, listTree, prepareInputs, prepareKey, removeTree } from "./copy";
 
 /** The value after each occurrence of a flag, among docker's own options (before the image). */
@@ -17,16 +17,21 @@ const values = (args: string[], flag: string) => {
 describe("the argument lists", () => {
   const base = { name: "orc-env-prep-1-abc", image: "python:3.13@sha256:" + "a".repeat(64), work: "/Users/me/.cache/orchestrator/environment/p/runs/a1/work", cache: "/Users/me/.cache/orchestrator/environment/p/cache", argv: ["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"] };
 
-  it("prepare: the private network only, through the proxy, hardened, two mounts", () => {
+  it("prepare: the private network only, through the proxy, hardened, two mounts, kept for its commit", () => {
     const args = phaseArgs({ ...base, phase: { kind: "prepare", privateNet: "orc-env-net-1-abc", proxy: "orc-env-proxy-1-abc" } });
     expect(values(args, "--network")).toEqual(["orc-env-net-1-abc"]);
     expect(values(args, "--env")).toContain("HTTPS_PROXY=http://orc-env-proxy-1-abc:3128");
-    expect(values(args, "--env")).toContain("HOME=/cache/home");
+    expect(values(args, "--env")).toContain("HOME=/var/tmp/home");
+    expect(values(args, "--env")).toContain("XDG_CACHE_HOME=/cache/xdg");
     expect(values(args, "--mount")).toEqual([`type=bind,source=${base.work},target=${WORK}`, `type=bind,source=${base.cache},target=${CACHE}`]);
     expect(values(args, "--user")).toEqual([ENV_USER]);
     expect(values(args, "--cap-drop")).toEqual(["ALL"]);
     expect(values(args, "--security-opt")).toEqual(["no-new-privileges"]);
-    expect(args).toContain("--read-only");
+    // Not removed when it ends: the service commits what it wrote outside its mounts, then removes it.
+    expect(args).not.toContain("--rm");
+    expect(values(args, "--tmpfs")).toEqual(["/tmp:rw,exec,nosuid,nodev,size=536870912"]);
+    expect(values(args, "--pids-limit")).toEqual(["1024"]);
+    expect(values(args, "--memory")).toEqual(values(args, "--memory-swap"));
     expect(values(args, "--pull")).toEqual(["never"]);
     expect(args).not.toContain("--add-host");
     expect(args).not.toContain("--privileged");
@@ -36,10 +41,20 @@ describe("the argument lists", () => {
     expect(args.slice(args.indexOf(base.image) + 1)).toEqual(base.argv.slice(1));
   });
 
-  it("run: --network none and no proxy", () => {
-    const args = phaseArgs({ ...base, argv: ["python3", "-m", "pytest"], phase: { kind: "run" } });
+  it("run: --network none, no proxy, the copy as its only mount, removed when it ends", () => {
+    const args = phaseArgs({ ...base, cache: undefined, argv: ["python3", "-m", "pytest"], phase: { kind: "run" } });
     expect(values(args, "--network")).toEqual(["none"]);
-    expect(args.join(" ")).not.toMatch(/PROXY/);
+    expect(values(args, "--env").filter((e) => /PROXY=./i.test(e))).toEqual([]);
+    expect(values(args, "--env")).toContain("HTTPS_PROXY=");
+    expect(values(args, "--mount")).toEqual([`type=bind,source=${base.work},target=${WORK}`]);
+    expect(args).toContain("--rm");
+    expect(values(args, "--user")).toEqual([ENV_USER]);
+    expect(values(args, "--cap-drop")).toEqual(["ALL"]);
+  });
+
+  it("an ended prepare container becomes the next image", () => {
+    expect(commitArgs("orc-env-prep-1-abc")).toEqual(["commit", "--change", "LABEL orchestrator.environment=prepared", "orc-env-prep-1-abc"]);
+    expect(() => commitArgs("-x")).toThrow(/not a container name/);
   });
 
   it("refuses a mount path, a name or a command it cannot pass safely", () => {

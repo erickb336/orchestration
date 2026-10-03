@@ -1,0 +1,11 @@
+{
+  "name": "env-fixture-node",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test --test-reporter=junit --test-reporter-destination=reports/junit.xml test/ms.js"
+  },
+  "dependencies": {
+    "ms": "2.1.3"
+  }
+}

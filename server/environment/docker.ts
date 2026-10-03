@@ -7,12 +7,15 @@
 //   proxy            egress-proxy.mjs in the official Node image (pinned by digest), on both networks: the prepare
 //                    phase's only way out. HTTPS by host name, the registries' list only.
 //   prepare          the project's setup commands, on the private network only, with HTTPS_PROXY set to the proxy.
-//   run              the checks' commands, `--network none`.
+//                    Two mounts: the copy of the worktree (/work) and the project's cache folder (/cache, where
+//                    XDG_CACHE_HOME points). Not removed when it ends: the service commits what it wrote outside the
+//                    mounts (a toolchain's own folders, HOME) as the prepared image, then removes it.
+//   run              the checks' commands, `--network none`, on the prepared image, with one mount: the copy (/work).
 //
-// Every container: a non-root user, no capabilities, no new privileges, a read-only root with a private /tmp, limits on
-// processes, memory and CPU, its own name (so the service can kill it), the image's entrypoint replaced by the program
-// itself, and exactly two mounts: the copy of the worktree (/work) and the project's cache folder (/cache, HOME is in
-// it). No Docker socket, no other host folder, no host gateway entry, and no variable from the service's environment.
+// Every container: a non-root user, no capabilities, no new privileges, a private /tmp, limits on processes, memory and
+// CPU, its own name (so the service can kill it), and the image's entrypoint replaced by the program itself. The image's
+// own files stay writable inside the container (toolchains write there); those writes never reach this computer. No
+// Docker socket, no other host folder, no host gateway entry, and no variable from the service's environment.
 
 import { randomBytes } from "node:crypto";
 
@@ -23,7 +26,8 @@ export const PROXY_PORT = 3128;
 export const ENV_USER = "10001:10001";
 export const WORK = "/work";
 export const CACHE = "/cache";
-export const HOME = "/cache/home";
+/** HOME inside the container's own file system (/var/tmp is writable by every user in the official images). */
+export const HOME = "/var/tmp/home";
 /**
  * Per container. The Docker VM here has 2 CPUs and 2 GB (Colima's default), and one environment run goes at a time.
  * tmpfs pages count toward the memory limit.
@@ -69,11 +73,12 @@ export function networkArgs(name: string, kind: "private" | "egress"): string[] 
 }
 
 /** The hardening every container of the environment gets. */
-function hardened(limits: typeof ENV_LIMITS): string[] {
+function hardened(limits: typeof ENV_LIMITS, readOnly: boolean): string[] {
   return [
-    "--read-only",
+    ...(readOnly ? ["--read-only"] : []),
     "--tmpfs",
-    `/tmp:rw,nosuid,nodev,size=${limits.tmpBytes}`,
+    // Toolchains run what they build in /tmp (go test, go tool), so the environment's /tmp allows it; the proxy's does not.
+    `/tmp:rw,${readOnly ? "noexec" : "exec"},nosuid,nodev,size=${limits.tmpBytes}`,
     "--cap-drop",
     "ALL",
     "--security-opt",
@@ -106,7 +111,7 @@ export function proxyArgs(o: { name: string; privateNet: string; egressNet: stri
     o.privateNet,
     "--network",
     o.egressNet,
-    ...hardened(PROXY_LIMITS),
+    ...hardened(PROXY_LIMITS, true),
     "--label",
     `${LABEL}=proxy`,
     "--env",
@@ -124,9 +129,9 @@ export interface PhaseSpec {
   name: string;
   /** The image to run: a reference or an image id. */
   image: string;
-  /** Host folders: the copy of the worktree (/work) and the project's cache folder (/cache). */
+  /** Host folders: the copy of the worktree (/work) and, for prepare, the project's cache folder (/cache). */
   work: string;
-  cache: string;
+  cache?: string;
   /** The command, each argument as is. argv[0] replaces the image's entrypoint. */
   argv: string[];
   /** prepare: on the private network, through the proxy (by its container name). run: no network. */
@@ -136,7 +141,9 @@ export interface PhaseSpec {
 /** `docker run`'s arguments for one command of a phase. Throws on a name, a path or an argument it cannot pass safely. */
 export function phaseArgs(s: PhaseSpec): string[] {
   need(NAME.test(s.name), `not a container name: ${JSON.stringify(s.name)}`);
-  for (const p of [s.work, s.cache]) need(MOUNTABLE.test(p), `Docker cannot mount ${JSON.stringify(p)} (a comma, a quote or a control character)`);
+  const prepare = s.phase.kind === "prepare";
+  need(!prepare || s.cache !== undefined, "prepare needs the cache folder");
+  for (const p of [s.work, ...(prepare ? [s.cache!] : [])]) need(MOUNTABLE.test(p), `Docker cannot mount ${JSON.stringify(p)} (a comma, a quote or a control character)`);
   need(!s.image.startsWith("-") && s.image.length > 0, `not an image: ${JSON.stringify(s.image)}`);
   need(s.argv.length > 0 && !s.argv[0].startsWith("-") && s.argv.every((a) => !/[\0]/.test(a)), "not a command");
   const env: Record<string, string> = {
@@ -145,27 +152,28 @@ export function phaseArgs(s: PhaseSpec): string[] {
     LANG: "C.UTF-8",
     CI: "1",
     NO_COLOR: "1",
-    ...(s.phase.kind === "prepare" ? proxyEnv(s.phase.proxy) : {}),
+    // prepare: through the proxy, with a download cache shared by the project's prepares. run: the proxy variables
+    // are emptied, because the prepared image keeps the variables its prepare container had.
+    ...(s.phase.kind === "prepare" ? { ...proxyEnv(s.phase.proxy), XDG_CACHE_HOME: `${CACHE}/xdg` } : { ...Object.fromEntries(Object.keys(proxyEnv("x")).map((k) => [k, ""])), XDG_CACHE_HOME: `${HOME}/.cache` }),
   };
   for (const k of Object.keys(env)) need(ENV_NAME.test(k), `not a variable: ${k}`);
   if (s.phase.kind === "prepare") need(NAME.test(s.phase.privateNet) && NAME.test(s.phase.proxy), "not a network or proxy name");
   return [
     "run",
-    "--rm",
+    ...(prepare ? [] : ["--rm"]),
     "--name",
     s.name,
     "--pull",
     "never",
     "--network",
     s.phase.kind === "prepare" ? s.phase.privateNet : "none",
-    ...hardened(ENV_LIMITS),
+    ...hardened(ENV_LIMITS, false),
     "--label",
     `${LABEL}=${s.phase.kind}`,
     ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]),
     "--mount",
     `type=bind,source=${s.work},target=${WORK}`,
-    "--mount",
-    `type=bind,source=${s.cache},target=${CACHE}`,
+    ...(prepare ? ["--mount", `type=bind,source=${s.cache},target=${CACHE}`] : []),
     "--workdir",
     WORK,
     "--entrypoint",
@@ -183,4 +191,10 @@ export function buildArgs(o: { tag: string; dockerfile: string; context: string 
   need(/^orc-env-[a-z0-9-]+:[0-9a-f]{12,64}$/.test(o.tag), `not a tag: ${JSON.stringify(o.tag)}`);
   for (const p of [o.dockerfile, o.context]) need(p.startsWith("/") && !p.includes("\0"), `not an absolute path: ${JSON.stringify(p)}`);
   return ["build", "--network", "none", "--label", `${LABEL}=build`, "--tag", o.tag, "--file", o.dockerfile, o.context];
+}
+
+/** `docker commit` for an ended prepare container: what it wrote outside its mounts becomes the next image. */
+export function commitArgs(container: string): string[] {
+  need(NAME.test(container), `not a container name: ${JSON.stringify(container)}`);
+  return ["commit", "--change", `LABEL ${LABEL}=prepared`, container];
 }

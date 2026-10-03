@@ -27,7 +27,7 @@ import { redact } from "../redact";
 import { dockerEnv, findDocker, runDocker, startContainer } from "../studio/container";
 import { clearReport, readTestReport } from "../testReport";
 import { addedEntries, cloneEntries, copyWorktree, listTree, prepareInputs, prepareKey, removeTree } from "./copy";
-import { MOUNTABLE, PROXY_IMAGE, PROXY_PORT, buildArgs, envName, networkArgs, phaseArgs, proxyArgs } from "./docker";
+import { MOUNTABLE, PROXY_IMAGE, PROXY_PORT, buildArgs, commitArgs, envName, networkArgs, phaseArgs, proxyArgs } from "./docker";
 
 export const defaultEnvironmentRoot = () => join(homedir(), ".cache", "orchestrator", "environment");
 export const PROXY_SCRIPT = readFileSync(new URL("./egress-proxy.mjs", import.meta.url), "utf8");
@@ -198,7 +198,7 @@ export class EnvironmentChecks extends BaseChecks {
     const { a } = run;
     const env = a.environment!;
     const d = this.dirs(env.project, a.attemptId);
-    for (const dir of [d.cache, join(d.cache, "home"), d.prepared, d.run]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const dir of [join(d.cache, "xdg"), d.prepared, d.run]) mkdirSync(dir, { recursive: true, mode: 0o700 });
     if (!MOUNTABLE.test(d.work) || !MOUNTABLE.test(d.cache)) return this.handOff(run, `Docker cannot mount ${JSON.stringify(d.run)}`);
     (run as Run & { stage?: string }).stage = d.run;
     copyWorktree(a.workspace, d.work);
@@ -211,17 +211,23 @@ export class EnvironmentChecks extends BaseChecks {
     const from = env.plan.source.from;
     const t0 = Date.now();
     let record: EnvironmentRunRecord;
-    const reuse = this.preparedOf(d, key);
+    // The run phase runs on the prepared image: the base image plus what the prepare wrote outside the copy.
+    let runImage = image.id;
+    const tag = `orc-env-${slug(env.project)}:${key}`;
+    const reuse = prepCmds.length ? await this.preparedOf(docker, d, key, tag) : undefined;
+    if (run.done) return;
     if (reuse) {
       cloneEntries(join(d.prepared, key, "copy"), d.work, reuse.added);
-      for (const c of prepCmds) run.results.push({ ...notRun(c), status: "passed", excerpt: `Reused the copy prepared for ${reuse.sha.slice(0, 12)}: the same image, prepare commands, hosts and prepare inputs.` });
+      runImage = reuse.imageId;
+      for (const c of prepCmds) run.results.push({ ...notRun(c), status: "passed", excerpt: `Reused what the prepare made for ${reuse.sha.slice(0, 12)}: the same image, prepare commands, hosts and prepare inputs.` });
       record = { ran: "container", from, image: image.ref, imageId: image.id, prepare: "reused", key, reusedFrom: reuse.sha, prepareMs: 0 };
-      this.emit({ type: "activity", attemptId: a.attemptId, note: `Reused the prepared copy of ${reuse.sha.slice(0, 12)} (${image.ref})`.slice(0, 200) });
+      this.emit({ type: "activity", attemptId: a.attemptId, note: `Reused the prepare of ${reuse.sha.slice(0, 12)} (${image.ref})`.slice(0, 200) });
     } else {
-      const out = prepCmds.length ? await this.preparePhase(run, docker, image.id, d, prepCmds) : { ok: true, refused: [] as string[] };
+      const out = prepCmds.length ? await this.preparePhase(run, docker, image.id, d, prepCmds) : { ok: true, refused: [] as string[], imageId: image.id };
       if (run.done) return;
       if (run.stopRequested) return this.finish(run, { type: "stopped", attemptId: a.attemptId, how: "interrupted" });
-      if (out.ok && prepCmds.length) this.savePrepared(d, key, before, a.target);
+      if (out.ok && out.imageId) runImage = out.imageId;
+      if (out.ok && out.imageId && prepCmds.length) await this.savePrepared(docker, d, key, tag, out.imageId, before, a.target);
       record = { ran: "container", from, image: image.ref, imageId: image.id, prepare: out.ok ? "ran" : "failed", key, prepareMs: Date.now() - t0, ...(out.refused.length ? { refused: out.refused } : {}) };
       if (!out.ok) {
         for (const c of a.commands) if (c.kind === "check") run.results.push(notRun(c));
@@ -235,7 +241,7 @@ export class EnvironmentChecks extends BaseChecks {
       if (run.done || run.stopRequested) break;
       this.emit({ type: "activity", attemptId: a.attemptId, note: `Running ${c.label} (${c.argv.join(" ")}) in the project's environment, with no network`.slice(0, 200) });
       const t1 = Date.now();
-      const cap = await this.execIn(run, docker, phaseArgs({ name: envName("run"), image: image.id, work: d.work, cache: d.cache, argv: c.argv, phase: { kind: "run" } }), c.timeoutMs);
+      const cap = await this.execIn(run, docker, phaseArgs({ name: envName("run"), image: runImage, work: d.work, argv: c.argv, phase: { kind: "run" } }), c.timeoutMs);
       if (run.done) return;
       if (run.stopRequested || cap.ended) break;
       run.results.push(resultOf(c, cap, Date.now() - t1, this.baseEnv, a.logDir, a.attemptId));
@@ -318,34 +324,49 @@ export class EnvironmentChecks extends BaseChecks {
     return "id" in r ? { ref: tag, id: r.id } : { refused: r.error };
   }
 
-  /** The prepared copy for `key`, when one is kept: the commit it was prepared for and the entries it holds. */
-  private preparedOf(d: Dirs, key: string): { sha: string; added: string[] } | undefined {
+  /**
+   * What an earlier prepare with this key made, when it is all still here: the entries it added to its copy (with the
+   * commit it ran for) and its image, tagged by the key.
+   */
+  private async preparedOf(docker: string, d: Dirs, key: string, tag: string): Promise<{ sha: string; added: string[]; imageId: string } | undefined> {
+    let meta: { sha?: unknown; added?: unknown; key?: unknown };
     try {
-      const meta = JSON.parse(readFileSync(join(d.prepared, key, "meta.json"), "utf8")) as { sha?: unknown; added?: unknown; key?: unknown };
-      if (meta.key !== key || typeof meta.sha !== "string" || !Array.isArray(meta.added) || !meta.added.every((x) => typeof x === "string")) return undefined;
-      return { sha: meta.sha, added: meta.added as string[] };
+      meta = JSON.parse(readFileSync(join(d.prepared, key, "meta.json"), "utf8")) as typeof meta;
     } catch {
       return undefined;
     }
+    if (meta.key !== key || typeof meta.sha !== "string" || !Array.isArray(meta.added) || !meta.added.every((x) => typeof x === "string")) return undefined;
+    const i = await runDocker(docker, ["image", "inspect", "--format", "{{.Id}}", tag], { env: this.denv, timeoutMs: 30_000 });
+    const imageId = i.stdout.trim();
+    if (i.code !== 0 || !imageId.startsWith("sha256:")) return undefined;
+    return { sha: meta.sha, added: meta.added as string[], imageId };
   }
 
-  /** Keep what the prepare added, for later commits with the same key; then keep only the newest few. Never fails the run. */
-  private savePrepared(d: Dirs, key: string, before: ReadonlySet<string>, sha: string) {
+  /**
+   * Keep what the prepare made, for later commits with the same key: the entries it added to the copy, and its image
+   * under the key's tag. Then keep only the newest few of both. Never fails the run.
+   */
+  private async savePrepared(docker: string, d: Dirs, key: string, tag: string, imageId: string, before: ReadonlySet<string>, sha: string) {
     const tmp = join(d.prepared, `.tmp-${key}-${randomBytes(4).toString("hex")}`);
     try {
+      const t = await runDocker(docker, ["tag", imageId, tag], { env: this.denv, timeoutMs: 30_000 });
+      if (t.code !== 0) throw new Error(`docker tag: ${t.stderr.trim().slice(0, 160)}`);
       const added = addedEntries(d.work, before);
       mkdirSync(join(tmp, "copy"), { recursive: true, mode: 0o700 });
       const kept = cloneEntries(d.work, join(tmp, "copy"), added);
       writeFileSync(join(tmp, "meta.json"), JSON.stringify({ key, sha, added: kept, at: new Date().toISOString() }), { mode: 0o600 });
       if (existsSync(join(d.prepared, key))) removeTree(tmp);
       else renameSync(tmp, join(d.prepared, key));
-      const kept3 = readdirSync(d.prepared)
+      const all = readdirSync(d.prepared)
         .filter((n) => /^[0-9a-f]{16}$/.test(n))
         .map((n) => ({ n, at: statSync(join(d.prepared, n)).mtimeMs }))
         .sort((x, y) => y.at - x.at);
-      for (const old of kept3.slice(KEEP_PREPARED)) removeTree(join(d.prepared, old.n));
+      for (const old of all.slice(KEEP_PREPARED)) {
+        removeTree(join(d.prepared, old.n));
+        await runDocker(docker, ["image", "rm", `${tag.split(":")[0]}:${old.n}`], { env: this.denv, timeoutMs: 60_000 });
+      }
     } catch (e) {
-      this.log(`checks: the prepared copy was not kept: ${e instanceof Error ? e.message : String(e)}`);
+      this.log(`checks: the prepare was not kept for reuse: ${e instanceof Error ? e.message : String(e)}`);
       try {
         removeTree(tmp);
       } catch {
@@ -402,7 +423,7 @@ export class EnvironmentChecks extends BaseChecks {
   }
 
   /** The prepare phase: each setup command in its own container on the private network, through the proxy, in order. */
-  private async preparePhase(run: Run, docker: string, imageId: string, d: Dirs, cmds: PlannedCheck[]): Promise<{ ok: boolean; refused: string[] }> {
+  private async preparePhase(run: Run, docker: string, baseImage: string, d: Dirs, cmds: PlannedCheck[]): Promise<{ ok: boolean; refused: string[]; imageId?: string }> {
     const { a } = run;
     const egress = await this.startEgress(docker, a.environment!.plan.hosts);
     if ("error" in egress) {
@@ -411,6 +432,8 @@ export class EnvironmentChecks extends BaseChecks {
       return { ok: false, refused: [] };
     }
     let ok = true;
+    // Each command runs on the image the one before it left; the last image is the prepared image.
+    let imageId = baseImage;
     const logs: string[] = [];
     try {
       for (const c of cmds) {
@@ -421,9 +444,17 @@ export class EnvironmentChecks extends BaseChecks {
         }
         this.emit({ type: "activity", attemptId: a.attemptId, note: `Preparing: ${c.argv.join(" ")} (the network goes only to the registries)`.slice(0, 200) });
         const t0 = Date.now();
-        const cap = await this.execIn(run, docker, phaseArgs({ name: envName("prep"), image: imageId, work: d.work, cache: d.cache, argv: c.argv, phase: { kind: "prepare", privateNet: egress.privateNet, proxy: egress.proxy } }), c.timeoutMs);
+        const name = envName("prep");
+        const cap = await this.execIn(run, docker, phaseArgs({ name, image: imageId, work: d.work, cache: d.cache, argv: c.argv, phase: { kind: "prepare", privateNet: egress.privateNet, proxy: egress.proxy } }), c.timeoutMs);
+        let r = resultOf(c, cap, Date.now() - t0, this.baseEnv, a.logDir, a.attemptId);
+        if (cap.exitCode === 0 && !cap.ended && !run.done) {
+          const committed = await runDocker(docker, commitArgs(name), { env: this.denv, timeoutMs: 10 * 60_000 });
+          const id = committed.stdout.trim();
+          if (committed.code === 0 && id.startsWith("sha256:")) imageId = id;
+          else r = { ...r, status: "failed", excerpt: `The service could not keep what this command made (docker commit: ${committed.stderr.trim().slice(0, 200)}).\n${r.excerpt}` };
+        }
+        await runDocker(docker, ["rm", "--force", name], { env: this.denv, timeoutMs: 30_000 });
         if (run.done || run.stopRequested || cap.ended) break;
-        const r = resultOf(c, cap, Date.now() - t0, this.baseEnv, a.logDir, a.attemptId);
         run.results.push(r);
         if (r.status !== "passed") ok = false;
       }
@@ -441,7 +472,7 @@ export class EnvironmentChecks extends BaseChecks {
     // The repair (and the owner) see what the proxy refused, next to the command that failed.
     const failed = run.results.find((r) => r.kind === "prepare" && r.status !== "passed" && r.status !== "not-run");
     if (failed && refused.length) failed.excerpt = `[The proxy refused: ${refused.join("; ")}. Add a host in Settings › Project › Environment if it is a registry.]\n${failed.excerpt}`;
-    return { ok: ok && !run.stopRequested, refused };
+    return { ok: ok && !run.stopRequested, refused, ...(ok ? { imageId } : {}) };
   }
 
   /**
@@ -474,6 +505,7 @@ export class EnvironmentChecks extends BaseChecks {
       // Only the probe: a hosts entry for the host gateway, so it can show the host is out of reach.
       args.splice(args.indexOf("--workdir"), 0, "--add-host", "orchestrator-host:host-gateway");
       const r = await startContainer(docker, args, { env: this.denv, name, cap: 16_000 }).done;
+      await runDocker(docker, ["rm", "--force", name], { env: this.denv, timeoutMs: 30_000 });
       const line = r.output.split("\n").reverse().find((l) => l.trim().startsWith('{"orchestratorEnvProbe":1'));
       if (!line) return `the probe printed no result (exit ${r.code ?? "?"}): ${r.output.trim().slice(-200)}`;
       return judgeEnvProbe(JSON.parse(line) as EnvProbeFacts, hits);
