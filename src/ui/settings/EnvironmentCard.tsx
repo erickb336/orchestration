@@ -1,7 +1,7 @@
 // Settings › Project › Environment (docs/design/project-environment.md): where the checks run when Docker is present,
-// for any language. The status line says where the environment comes from (the repository's dev container first, else
-// the image you confirm); the fields edit the Project section's draft, and Save sends setEnvironment, the owner's
-// command. The lead may propose an image; only Save sets one.
+// for any language. The status line says where the environment comes from (the repository's dev container, once you
+// confirm it by its digest, else the image you confirm); the fields edit the Project section's draft, and Save sends
+// setEnvironment, the owner's command. The lead may propose an image; only Save sets one or confirms a dev container.
 
 import { useEffect, useState } from "react";
 import type { EnvironmentFound } from "../../api";
@@ -9,7 +9,7 @@ import { REGISTRY_HOSTS } from "../../domain/environment";
 import { Banner, Button, Chip, Disclosure, Field, Input, StatePill, Textarea } from "../kit";
 import { useStore } from "../store";
 import { SettingsCard } from "./parts";
-import { addHost, environmentProblem, lastPrepareLine, shortImage, sourceLine, takeProposal, type EnvironmentDraft } from "./environment";
+import { addHost, confirmDevcontainer, environmentProblem, lastPrepareLine, shortImage, sourceLine, takeProposal, type EnvironmentDraft } from "./environment";
 
 export function EnvironmentCard({ v, set }: { v: EnvironmentDraft; set: (p: Partial<EnvironmentDraft>) => void }) {
   const { state, service } = useStore();
@@ -28,7 +28,10 @@ export function EnvironmentCard({ v, set }: { v: EnvironmentDraft; set: (p: Part
       live = false;
     };
   }, [real, state.project.repoPath]);
-  const source = sourceLine(found, state.project.environment?.image);
+  const source = sourceLine(found, state.project.environment);
+  // A dev container the form does not confirm yet: "Confirm this dev container" puts its digest in the form.
+  const dc = found?.devcontainer;
+  const confirmable = dc?.sha256 && confirmDevcontainer(dc).envDevcontainer !== v.envDevcontainer ? dc : undefined;
   const proposal = found?.proposal && found.proposal.image !== v.envImage.trim() ? found.proposal : undefined;
   const problem = environmentProblem(v);
   const last = lastPrepareLine(state);
@@ -50,6 +53,16 @@ export function EnvironmentCard({ v, set }: { v: EnvironmentDraft; set: (p: Part
         <span className="muted">{source.text}</span>
       </div>
       {found?.reason && <p className="s-note">{found.reason}</p>}
+      {confirmable && (
+        <div className="s-inline">
+          <span>
+            <code>{confirmable.file}</code> at <code>{found!.ref}</code>, sha256 <code className="s-mono">{confirmable.sha256!.slice(0, 12)}…</code>: read it in the repository before you confirm it.
+          </span>
+          <Button size="small" onClick={() => set(confirmDevcontainer(confirmable))}>
+            Confirm this dev container
+          </Button>
+        </div>
+      )}
       {proposal && (
         <div className="s-inline">
           <span>
