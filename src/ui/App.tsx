@@ -19,10 +19,11 @@ import { messageStatusText } from "./notes";
 import { useBrowserNotifications } from "./notifications";
 import { agentsStopping, agentsWorking, liveIndicatorText, prsNeedingYou, unreadLeadReplies } from "./progress";
 import { factoryPlaceWords, visionPlaceWords } from "./placesView";
-import { parseRoute } from "./route";
+import { parseRoute, tabOf } from "./route";
 import { ShapingBanner } from "./Shaping";
 import { SIM_MENU_BUTTON_ID, TourButton, useFirstRunTour } from "./Tour";
 import { Gallery } from "./kit/Gallery";
+import { LockInPage } from "./studio/LockIn";
 import { Studio } from "./studio/Studio";
 import { waitingForYourMark } from "./studio/studioView";
 import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm } from "./kit";
@@ -104,7 +105,7 @@ function Shell() {
   const route = useRoute();
   const { notice, setNotice, service } = useStore();
   // A task page belongs to Tasks.
-  const tab = route.page === "task" ? "tasks" : route.page;
+  const tab = tabOf(route);
   const demo = service.runtime === "fake";
   useBrowserNotifications();
   // The first-run tour, demo only, once per browser.
@@ -155,7 +156,7 @@ function Shell() {
         </div>
       </header>
       {/* There is no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel, the board its own banner, and the studio is Vision itself. */}
-      {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && (
+      {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && route.page !== "lock-in" && (
         <div className="shell-banner">
           <ShapingBanner />
         </div>
@@ -169,6 +170,7 @@ function Shell() {
         {route.page === "settings" && <Settings />}
         {route.page === "kit" && <Gallery />}
         {route.page === "vision" && <Studio />}
+        {route.page === "lock-in" && <LockInPage />}
       </main>
       {leadOpen && <LeadDrawer onClose={closeLead} />}
       <ToastRegion toast={notice ? { tone: notice.kind === "error" ? "fail" : "neutral", onDismiss: () => setNotice(null), children: notice.message } : null} />
