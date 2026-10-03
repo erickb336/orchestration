@@ -101,6 +101,17 @@ describe("Chip and StatePill", () => {
     expect(paused).not.toContain("k-pill__dot");
     expect(paused).toContain(">Paused</span>");
   });
+
+  it("with an href the pill is a link to the place it describes; without one it is not", () => {
+    expect(
+      html(
+        <StatePill tone="work" pulse href="#/tasks" title="3 agents working">
+          Factory running · 3 agents
+        </StatePill>,
+      ),
+    ).toBe('<a class="k-pill k-pill--work k-pill--pulse k-pill--link" href="#/tasks" title="3 agents working"><span class="k-pill__dot" aria-hidden="true"></span><span class="k-pill__text">Factory running · 3 agents</span></a>');
+    expect(html(<StatePill tone="done">Done</StatePill>)).toBe('<span class="k-pill k-pill--done"><span class="k-pill__dot" aria-hidden="true"></span>Done</span>');
+  });
 });
 
 describe("Card and Banner", () => {

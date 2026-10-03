@@ -304,14 +304,18 @@ export function variantRules(a: StudioArtifact, variantId: string | undefined): 
 }
 
 /**
- * Where a dictionary version stands: the project's words (approved into the draft, which the studio works with), or
- * not yet, and why (domain/studio/blueprint.ts). Locking it in for the factory is the next UI unit's to show.
+ * Where a dictionary version stands (domain/studio/blueprint.ts): in force (locked in: the factory's agents get it),
+ * in the draft (approved: the studio works with it, and the factory's agents get it at your next Lock in), or not in
+ * force, and which version is.
  */
-export function dictionaryStanding(s: State, a: StudioArtifact): { inForce: boolean; text: string } {
-  const force = B.dictionaryInDraft(s);
-  if (force && force.artifact.id === a.id && force.artifact.version === a.version) return { inForce: true, text: "These are the project's words. Every agent gets them, and the writing check reports a word to avoid." };
-  if (force) return { inForce: false, text: `Not in force. ${force.artifact.title} v${force.artifact.version} is the project's dictionary until you approve this version.` };
-  return { inForce: false, text: "Not in force yet. Approve it into the blueprint to make these the project's words." };
+export function dictionaryStanding(s: State, a: StudioArtifact): { place: "in force" | "in the draft" | "not in force"; text: string } {
+  const is = (d: B.DictionaryInForce | undefined) => !!d && d.artifact.id === a.id && d.artifact.version === a.version;
+  const force = B.dictionaryInForce(s);
+  const drafted = B.dictionaryInDraft(s);
+  if (is(force)) return { place: "in force", text: "These are the project's words. Every agent gets them, and the writing check reports a word to avoid." };
+  if (is(drafted)) return { place: "in the draft", text: `The studio uses these words now. The factory's agents get them at your next Lock in${force ? `; until then they keep ${force.artifact.title} v${force.artifact.version}` : ""}.` };
+  if (drafted) return { place: "not in force", text: `Not in force. ${drafted.artifact.title} v${drafted.artifact.version} is the project's dictionary until you approve this version.` };
+  return { place: "not in force", text: "Not in force yet. Approve it into the blueprint to make these the project's words." };
 }
 
 /** The versions whose draft differs from the owner's current feedback: the marks Send sends. Only versions the owner can answer (theirs, newest). */

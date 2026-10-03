@@ -14,6 +14,7 @@ import { DELIVERY_CONFIRM, LANDED_FLAG_LABEL, landedVerdict, landedWhere, landed
 import { Actions, Banner, Button, ButtonLink, Card, Chip, Disclosure, EmptyState, Row, Rows, SegmentedControl, SimulatedChip, useConfirm } from "./kit";
 import { BULK_LIMIT, FILTER_LABEL, FILTER_TITLE, bulkLabel, emptyText, matchesFilter, prLists, reviewsLine, showBulk, type ResultsFilter } from "./resultsView";
 import { useStore } from "./store";
+import { ResultsTabs } from "./studio/Reality";
 import { ago } from "./tasksView";
 import "./task/task.css";
 import "./results.css";
@@ -40,6 +41,7 @@ export function Review() {
   return (
     <div className="k-stack r-page">
       <h1>Results</h1>
+      <ResultsTabs value="work" />
 
       {showGitHub && gh?.problem && (
         <Banner

@@ -10,7 +10,7 @@ import { runCommand } from "../../domain/commands";
 import * as M from "../../domain/model";
 import { buildSeed } from "../../domain/seed";
 import * as S from "../../domain/studio/studio";
-import { DESIGNER, addScreen, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
+import { DESIGNER, addScreen, lockInAsOwner, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
 import { ConfirmProvider } from "../kit";
 import { StoreContext, type ServiceStore } from "../store";
@@ -138,7 +138,7 @@ describe("the dictionary as a table", () => {
     expect(visible(html)).toContain("2 of 3 terms marked");
   });
 
-  it("is in force once approved, and says so; with every term marked, it no longer waits for your mark", () => {
+  it("is in the draft once approved and in force once locked in, and says so; with every term marked, it no longer waits for your mark", () => {
     const { s, id } = withWords();
     expect(waitingForYourMark(s).map((a) => a.id)).toEqual([id]);
     const some = runCommand(s, "sendFeedback", { entries: [{ artifactId: id, version: 1, mark: null, pins: [], note: "", rows: [{ row: "trip", mark: "keep" }] }] }, at(9)).state;
@@ -146,7 +146,9 @@ describe("the dictionary as a table", () => {
     const marked = runCommand(s, "sendFeedback", { entries: [{ artifactId: id, version: 1, mark: null, pins: [], note: "", rows: WORDS.map((w) => ({ row: w.term, mark: "keep" })) }] }, at(10)).state;
     expect(waitingForYourMark(marked)).toEqual([]);
     const approved = runCommand(marked, "approveArtifact", { artifactId: id, version: 1 }, at(11)).state;
-    expect(visible(render(approved))).toContain("In force These are the project's words. Every agent gets them, and the writing check reports a word to avoid.");
+    expect(visible(render(approved))).toContain("In the draft The studio uses these words now. The factory's agents get them at your next Lock in.");
+    const locked = lockInAsOwner(approved, at(12));
+    expect(visible(render(locked))).toContain("In force These are the project's words. Every agent gets them, and the writing check reports a word to avoid.");
   });
 });
 

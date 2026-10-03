@@ -1,10 +1,11 @@
 // The shell: the demo bar with its Simulation menu, the header with Home · Vision · Tasks · Results · Settings, the
-// live indicator, "Message the lead" (the one primary action) and the Project menu
-// that pauses and resumes. The lead drawer opens from the header on every page. The kit's ConfirmProvider
+// two places (Vision and the Factory, each a link that says where it stands; ORC-029 pass 5), "Message the lead"
+// (the one primary action) and the Project menu that pauses and resumes. The lead drawer opens from the header on every page. The kit's ConfirmProvider
 // and ToastRegion are mounted once here, so every screen can confirm in page and show one toast.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as M from "../domain/model";
+import { factoryPlace, visionPlace } from "../domain/places";
 import { StoreContext, useServiceContext, useServiceStore, useStore } from "./store";
 import { Board } from "./Board";
 import { TaskDetail } from "./TaskDetail";
@@ -17,10 +18,13 @@ import { LeadDrawer, LeadDrawerContext, type LeadContext } from "./LeadDrawer";
 import { messageStatusText } from "./notes";
 import { useBrowserNotifications } from "./notifications";
 import { agentsStopping, agentsWorking, liveIndicatorText, prsNeedingYou, unreadLeadReplies } from "./progress";
-import { parseRoute } from "./route";
+import { factoryPlaceWords, visionPlaceWords } from "./placesView";
+import { parseRoute, tabOf } from "./route";
 import { ShapingBanner } from "./Shaping";
 import { SIM_MENU_BUTTON_ID, TourButton, useFirstRunTour } from "./Tour";
 import { Gallery } from "./kit/Gallery";
+import { LockInPage } from "./studio/LockIn";
+import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
 import { waitingForYourMark } from "./studio/studioView";
 import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm } from "./kit";
@@ -102,7 +106,7 @@ function Shell() {
   const route = useRoute();
   const { notice, setNotice, service } = useStore();
   // A task page belongs to Tasks.
-  const tab = route.page === "task" ? "tasks" : route.page;
+  const tab = tabOf(route);
   const demo = service.runtime === "fake";
   useBrowserNotifications();
   // The first-run tour, demo only, once per browser.
@@ -146,14 +150,14 @@ function Shell() {
             </a>
           ))}
         </nav>
+        <Places />
         <div className="right">
-          <LiveIndicator />
           <LeadButton open={leadOpen} onClick={() => (leadOpen ? closeLead() : openLead())} />
           <ProjectMenu />
         </div>
       </header>
       {/* There is no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel, the board its own banner, and the studio is Vision itself. */}
-      {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && (
+      {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && route.page !== "lock-in" && (
         <div className="shell-banner">
           <ShapingBanner />
         </div>
@@ -167,6 +171,8 @@ function Shell() {
         {route.page === "settings" && <Settings />}
         {route.page === "kit" && <Gallery />}
         {route.page === "vision" && <Studio />}
+        {route.page === "lock-in" && <LockInPage />}
+        {route.page === "reality" && <Reality />}
       </main>
       {leadOpen && <LeadDrawer onClose={closeLead} />}
       <ToastRegion toast={notice ? { tone: notice.kind === "error" ? "fail" : "neutral", onDismiss: () => setNotice(null), children: notice.message } : null} />
@@ -334,21 +340,25 @@ export function SimBanner() {
 }
 
 /**
- * How many agents work right now, with the pulsing work dot. Runs that are still stopping count as busy
- * ("2 agents stopping"); "Idle" only when no agent run is active. The demo bar says
- * once that everything is simulated, so this says nothing about it.
+ * The two places, side by side on every screen (ORC-029 pass 5, screen 1): Vision says whether a draft waits for your
+ * Lock in, and the Factory whether it runs and how many agents work. Each is a link: Vision opens the studio, the
+ * Factory opens the tasks. The Factory's title keeps the live count of runs working and stopping.
  */
-function LiveIndicator() {
+export function Places() {
   const { state } = useStore();
-  const working = agentsWorking(state);
-  const stopping = agentsStopping(state);
-  const busy = working + stopping > 0;
-  const text = liveIndicatorText(working, stopping, state.project.stage === "shaping");
+  const now = useNow();
+  const vision = visionPlaceWords(visionPlace(state), now);
+  const factory = factoryPlace(state);
+  const words = factoryPlaceWords(factory, liveIndicatorText(agentsWorking(state), agentsStopping(state)));
   return (
-    <span className={`live${busy ? " working" : ""}`} aria-live="polite" title={busy ? "Agent runs in progress; the service's check runs are not counted" : "No agent run is in progress"}>
-      {busy && <span className="dot" aria-hidden="true" />}
-      {text}
-    </span>
+    <nav className="places" aria-label="Vision and the factory">
+      <StatePill tone={vision.tone} href="#/vision" title={vision.title}>
+        {vision.text}
+      </StatePill>
+      <StatePill tone={words.tone} pulse={words.tone === "work"} paused={factory.state === "paused"} href="#/tasks" title={words.title}>
+        {words.text}
+      </StatePill>
+    </nav>
   );
 }
 
