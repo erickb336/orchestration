@@ -237,13 +237,13 @@ describe("the cost of subagents and the budget", () => {
     // Codex: 1M input tokens at $2 and 100k output at $10 = $3, apart from the parent's $1.
     const s = finished("codex", { count: 1, mostAtOnce: 1, items: [item({ usage: { inputTokens: 1_000_000, outputTokens: 100_000 } })] });
     expect(buildingSpend(s, LIST)).toMatchObject({ usd: 4, runs: 1, unknown: [] });
-    expect(subagentsCost(s.attempts[0], LIST)).toEqual({ usd: 3, inParentUsd: 0, unknown: 0 });
+    expect(subagentsCost(s.attempts[0], LIST)).toEqual({ usd: 3, inParentUsd: 0, unknown: 0, running: 0 });
   });
 
   it("does not add subagents already inside the parent's reported cost, and still shows what they cost", () => {
     const s = finished("claude", { count: 1, mostAtOnce: 1, items: [item({ usageInParent: true, usage: { costUsd: 0.4 } })] });
     expect(buildingSpend(s, LIST).usd).toBe(1);
-    expect(subagentsCost(s.attempts[0], LIST)).toEqual({ usd: 0.4, inParentUsd: 0.4, unknown: 0 });
+    expect(subagentsCost(s.attempts[0], LIST)).toEqual({ usd: 0.4, inParentUsd: 0.4, unknown: 0, running: 0 });
   });
 
   it("counts a subagent with no recorded cost as unknown, never zero, and the stop counts it", () => {
@@ -255,7 +255,7 @@ describe("the cost of subagents and the budget", () => {
     const budgeted = { ...s, project: { ...s.project, budgets: { ...s.project.budgets, buildingUsd: 100 } } };
     expect(budgetStop(budgeted, LIST)?.countedUsd).toBeNull();
     // A refusal never ran: a known $0.
-    expect(subagentsCost(s.attempts[0], LIST)).toEqual({ usd: 0, inParentUsd: 0, unknown: 1 });
+    expect(subagentsCost(s.attempts[0], LIST)).toEqual({ usd: 0, inParentUsd: 0, unknown: 1, running: 0 });
   });
 
   it("counts each unlisted subagent as unknown", () => {
@@ -279,8 +279,8 @@ describe("Needs you", () => {
     const { state, runId } = investigation(project());
     const s = reportSubagent(state, runId, { phase: "started", id: "x", asked: "Look around", usageInParent: true }, at(10));
     const entry = needsYouItems(s).find((i) => i.key === `helpers-${runId}`);
-    expect(entry).toMatchObject({ kind: "open", what: HELPER_SLIPPED_THROUGH, action: "Open" });
-    expect(entry?.kind === "open" ? entry.detail : "").toContain("started a helper agent");
+    expect(entry).toMatchObject({ kind: "helpers", runId, what: HELPER_SLIPPED_THROUGH, action: "Open" });
+    expect(entry?.kind === "helpers" ? entry.detail : "").toContain("started a helper agent");
     expect(needsYouItems(markSubagentsSeen(s, runId, at(11))).some((i) => i.key === `helpers-${runId}`)).toBe(false);
   });
 

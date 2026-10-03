@@ -99,7 +99,9 @@ export type NeedsYouEntry =
   | { kind: "choose"; key: string; task: Task; options: SpecOption[]; recommendedId: string; specRev: number }
   | { kind: "finding"; key: string; task: Task; decision: FindingDecision }
   | { kind: "start"; key: string; task: Task }
-  | { kind: "open"; key: string; task?: Task; what: string; detail?: string; action: string; href: string };
+  | { kind: "open"; key: string; task?: Task; what: string; detail?: string; action: string; href: string }
+  /** A run whose agent started helpers where none is allowed (ORC-031): Open the run, or Mark as seen in place. */
+  | { kind: "helpers"; key: string; task?: Task; runId: string; what: string; detail: string; action: string; href: string };
 
 /** Whether Merge can be offered in place: the same conditions as the task page's Merge button, on a pull request that is ready. */
 function mergeInPlace(state: State, task: Task, pr: PrDelivery, nowMs: number): boolean {
@@ -120,7 +122,7 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   // A run's agent started the provider's own subagents where none is allowed (ORC-031): the owner knows, until they mark it as seen.
   for (const x of slippedThrough(state)) {
     const task = x.taskId ? state.tasks.find((t) => t.id === x.taskId) : undefined;
-    items.push({ kind: "open", key: `helpers-${x.runId}`, ...(task ? { task } : {}), what: HELPER_SLIPPED_THROUGH, detail: helperDetail(x.name, x.count), action: "Open", href: x.href });
+    items.push({ kind: "helpers", key: `helpers-${x.runId}`, ...(task ? { task } : {}), runId: x.runId, what: HELPER_SLIPPED_THROUGH, detail: helperDetail(x.name, x.count), action: "Open", href: x.href });
   }
   // A change order the lead answered that still waits for you: its updates for your go-ahead ("ask me first"), or what
   // the lead left (pass 5). "Open" goes to the change order's screen (#/tasks/change-order/<rev>).
@@ -177,7 +179,7 @@ export const HELPER_SLIPPED_THROUGH = "A helper agent started where none is allo
 
 /** What happened and what the service did: "T-4 S1's run run-12 started 2 helper agents. …" */
 function helperDetail(name: string, count: number): string {
-  return `${name} started ${count === 1 ? "a helper agent" : `${count} helper agents`}. The provider should have switched them off. They are counted and shown on the run, and their cost counts in the budget. Mark them as seen on the run.`;
+  return `${name} started ${count === 1 ? "a helper agent" : `${count} helper agents`}. The provider should have switched them off. They are counted and shown on the run, and their cost counts in the budget. Mark them as seen once you know why.`;
 }
 
 /** What the budget stop means (the runs with no recorded cost have their own item). */

@@ -136,6 +136,8 @@ function NeedsYouRow({ item }: { item: NeedsYouEntry }) {
       return <FindingRow task={item.task} decision={item.decision} />;
     case "start":
       return <StartRow task={item.task} />;
+    case "helpers":
+      return <HelpersRow item={item} />;
     default:
       return (
         <NeedsYouItem
@@ -336,6 +338,30 @@ function StartRow({ task }: { task: Task }) {
         <Button size="small" variant="primary" disabled={disabled} onClick={() => void send("startHeldTask", { taskId: task.id })}>
           Start
         </Button>
+      }
+    />
+  );
+}
+
+/** Helper agents that started where none is allowed (ORC-031): Open the run, or Mark as seen here. */
+function HelpersRow({ item }: { item: Extract<NeedsYouEntry, { kind: "helpers" }> }) {
+  const { send, disabled } = useStore();
+  return (
+    <NeedsYouItem
+      taskId={item.task?.id ?? ""}
+      title={item.task ? titleOf(item.task) : item.what}
+      href={item.task ? taskHref(item.task) : undefined}
+      what={item.task ? `${item.what}:` : "Needs you:"}
+      detail={item.detail}
+      actions={
+        <>
+          <ButtonLink size="small" href={item.href}>
+            {item.action}
+          </ButtonLink>
+          <Button size="small" disabled={disabled} title="It leaves Needs you; the record stays on the run" onClick={() => void send("markSubagentsSeen", { runId: item.runId })}>
+            Mark as seen
+          </Button>
+        </>
       }
     />
   );

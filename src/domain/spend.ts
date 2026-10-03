@@ -114,11 +114,18 @@ export interface SubagentsCost {
   inParentUsd: number;
   /** Subagents with no recorded cost, the unlisted ones included: unknown, never zero. */
   unknown: number;
+  /** Subagents of a run still under way that have not ended: their cost comes when they end. */
+  running: number;
 }
 
 export function subagentsCost(r: Run, prices: readonly ModelPrice[] = PRICES): SubagentsCost {
-  const out: SubagentsCost = { usd: 0, inParentUsd: 0, unknown: r.subagents?.unlisted ?? 0 };
+  const out: SubagentsCost = { usd: 0, inParentUsd: 0, unknown: r.subagents?.unlisted ?? 0, running: 0 };
+  const live = ["running", "stopping"].includes(outcomeOf(r));
   for (const sub of r.subagents?.items ?? []) {
+    if (live && !sub.ended) {
+      out.running++;
+      continue;
+    }
     const c = subagentUsd(r, sub, prices);
     if (c.basis === "unknown") out.unknown++;
     else {

@@ -9,6 +9,7 @@ import { ROLE_LABEL, fmtTime, relTime } from "../common";
 import { flowLineText } from "../flowView";
 import { Actions, Button, Card, Chip, Field, SimulatedChip, StatePill, StepList, Textarea, type StepItem } from "../kit";
 import { canSendNote, noteSourceLabel, noteStatusLabel, noteTone } from "../notes";
+import { NOTES_TO_PARENT_ONLY, notesReachParentOnly } from "../helpersView";
 import { useStore } from "../store";
 import { stepWords } from "./stepWords";
 import { isOpenTask } from "./needsYouItems";
@@ -103,7 +104,7 @@ function SendNote({ state, task, st }: { state: State; task: Task; st: Step }) {
     );
   const hint = !can
     ? `${st.id} is no longer running, so this note cannot reach it. Ask the lead to rerun ${st.id} with it, or cancel.`
-    : `One paragraph, ${length}/${MAX_NOTE_LENGTH}. Guidance within the spec; the agent keeps its work so far.${service.runtime === "fake" ? " In the demo the agent acknowledges after a moment." : ""}`;
+    : `One paragraph, ${length}/${MAX_NOTE_LENGTH}. Guidance within the spec; the agent keeps its work so far.${notesReachParentOnly(state, task, st) ? ` ${NOTES_TO_PARENT_ONLY}` : ""}${service.runtime === "fake" ? " In the demo the agent acknowledges after a moment." : ""}`;
   return (
     <form
       className="t-note-form"
