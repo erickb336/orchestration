@@ -8,7 +8,7 @@ import { runCommand } from "./commands";
 import * as M from "./model";
 import { needsYouItems } from "./needsYou";
 import { buildSeed } from "./seed";
-import { budgetStop, buildingSpend, estimateUsd, PRICES, type ModelPrice } from "./spend";
+import { budgetStop, buildingSpend, estimateUsd, pastBudget, PRICES, unrecordedWords, type ModelPrice } from "./spend";
 import * as R from "./studio/runs";
 import type { StudioRun } from "./studio/types";
 import type { Attempt, LeadRun, State } from "./types";
@@ -147,7 +147,7 @@ describe("the building spend", () => {
       { ...attempt({ provider: "service", model: "checks" }), id: "run-e" },
     ];
     s.leadRuns = [{ id: "lead-1", trigger: "planning", provider: "claude", model: "claude-test-20260101", startedAt: at(0), endedAt: at(1), outcome: "failed", messageIds: [], usage: { inputTokens: 1_000_000, outputTokens: 0 } }];
-    expect(buildingSpend(s, LIST)).toEqual({ usd: 3.5, runs: 4, unknown: [{ runId: "run-c", provider: "codex", model: "gpt-mystery", reason: "no-price" }] });
+    expect(buildingSpend(s, LIST)).toEqual({ usd: 3.5, runs: 4, unknown: [{ runId: "run-c", provider: "codex", model: "gpt-mystery", reason: "no-price", countedUsd: 0.00012 }] });
   });
 
   it("counts Vision's studio runs (spec r5): finished ones priced like any run, queued and running ones not yet, and one refused before it started as a known $0", () => {
@@ -163,7 +163,7 @@ describe("the building spend", () => {
       studio("studio-5", "queued", { usage: { costUsd: 99 } }),
       studio("studio-6", "running", { usage: { costUsd: 99 } }),
     ];
-    expect(buildingSpend(s, LIST)).toEqual({ usd: 2.25, runs: 4, unknown: [{ runId: "studio-4", provider: "codex", model: "gpt-test", reason: "no-usage" }] });
+    expect(buildingSpend(s, LIST)).toEqual({ usd: 2.25, runs: 4, unknown: [{ runId: "studio-4", provider: "codex", model: "gpt-test", reason: "no-usage", countedUsd: null }] });
   });
 
   it("a designer run's spend reaches the building budget, and then no studio run starts until the owner raises it", () => {
@@ -182,6 +182,89 @@ describe("the building spend", () => {
   });
 });
 
+describe("costs the providers do not report: a paused Codex run, a model with no price (B-02)", () => {
+  /** What the Codex adapter reports for a run that ended with its first model request open, and for one that made none. */
+  const NO_REQUEST = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+  const OPEN_REQUEST = { ...NO_REQUEST, openRequest: true as const };
+  /** A finished Codex run on gpt-test, as the runtime reported it (it started: a session and a model). */
+  const codex = (id: string, outcome: Attempt["outcome"], usage?: Attempt["usage"], model = "gpt-test"): Attempt => ({ ...attempt({ provider: "codex", model, actualModel: model, usage, outcome }), id, sessionId: `thr-${id}` });
+  /** A full run on gpt-test: 35,000 input tokens and 300 output tokens, $0.073. */
+  const FULL = { inputTokens: 35_000, outputTokens: 300 };
+  function withRuns(attempts: Attempt[], buildingUsd: number | null = 40): State {
+    const s = buildSeed(T0, { inFlightRuns: false });
+    s.attempts = attempts;
+    s.leadRuns = [];
+    return M.setBudgets(s, { buildingUsd, maintenanceUsdPerMonth: null }, at(1));
+  }
+
+  it("a run that made no model request is a known $0, even on a model with no price", () => {
+    expect(estimateUsd(codex("run-a", "stopped", NO_REQUEST), LIST)).toEqual({ basis: "priced", usd: 0, estimated: true });
+    expect(estimateUsd(codex("run-a", "stopped", NO_REQUEST, "gpt-unpriced"), LIST)).toEqual({ basis: "priced", usd: 0, estimated: true });
+  });
+
+  it("a run that ended with a model request open is never $0: the request has no record, whatever was recorded before it", () => {
+    expect(estimateUsd(codex("run-a", "stopped", OPEN_REQUEST), LIST)).toEqual({ basis: "unknown", usd: null, estimated: true, reason: "open-request", recordedUsd: 0 });
+    expect(estimateUsd(codex("run-a", "failed", { ...FULL, openRequest: true }), LIST)).toEqual({ basis: "unknown", usd: null, estimated: true, reason: "open-request", recordedUsd: 0.073 });
+  });
+
+  it("the budget counts an open request at the dearest finished run on its model, else at the run limit; the recorded part counts as spent", () => {
+    const paused = withRuns([codex("run-full", "completed", FULL), codex("run-paused", "stopped", { ...FULL, openRequest: true }), codex("run-early", "stopped", OPEN_REQUEST)]);
+    expect(buildingSpend(paused, LIST)).toEqual({
+      usd: 0.146,
+      runs: 3,
+      unknown: [
+        { runId: "run-paused", provider: "codex", model: "gpt-test", reason: "open-request", countedUsd: 0.073 },
+        { runId: "run-early", provider: "codex", model: "gpt-test", reason: "open-request", countedUsd: 0.073 },
+      ],
+    });
+    // With no finished run on the model yet, the run limit is the estimate: the most the owner lets one run spend.
+    const first = withRuns([codex("run-early", "stopped", OPEN_REQUEST)]);
+    expect(buildingSpend(first, LIST).unknown).toEqual([{ runId: "run-early", provider: "codex", model: "gpt-test", reason: "open-request", countedUsd: 2 }]);
+  });
+
+  it("the real run's pause (run-1038, run-1046): two Codex runs stopped early no longer hold new work; they count at an estimate until the budget is reached", () => {
+    const s = withRuns([codex("run-1035", "completed", FULL), codex("run-1038", "stopped", OPEN_REQUEST), codex("run-1046", "stopped", OPEN_REQUEST)]);
+    expect(budgetStop(s, LIST)).toBeUndefined();
+    // $0.073 spent and two open requests at $0.073 each: $0.219 counted.
+    expect(budgetStop(M.setBudgets(s, { buildingUsd: 0.2, maintenanceUsdPerMonth: null }, at(2)), LIST)).toMatchObject({
+      countedUsd: expect.closeTo(0.219, 10),
+      why: "The building budget is reached: $0.22 of $0.20, of which $0.15 is an estimate for 2 unrecorded costs",
+    });
+  });
+
+  it("a model with no price counts at the dearest price its provider has in the list, never $0", () => {
+    const s = withRuns([codex("run-x", "completed", { inputTokens: 1_000_000, outputTokens: 100_000 }, "gpt-unpriced")]);
+    // 1,000,000 × $2 + 100,000 × $10 per million: gpt-test's price, the dearest Codex price in the list.
+    expect(buildingSpend(s, LIST).unknown).toEqual([{ runId: "run-x", provider: "codex", model: "gpt-unpriced", reason: "no-price", countedUsd: 3 }]);
+    expect(budgetStop(s, LIST)).toBeUndefined();
+    expect(budgetStop(M.setBudgets(s, { buildingUsd: 2, maintenanceUsdPerMonth: null }, at(2)), LIST)).toMatchObject({ countedUsd: 3 });
+    // A provider with no price at all in the list: nothing to count it at, so the spend cannot be checked.
+    expect(buildingSpend(s, LIST.filter((p) => p.provider !== "codex")).unknown).toEqual([{ runId: "run-x", provider: "codex", model: "gpt-unpriced", reason: "no-price", countedUsd: null }]);
+  });
+
+  it("a Codex run with no usage report at all (lost by the service) still cannot be counted: the stop holds new work and names the run", () => {
+    const s = withRuns([codex("run-lost", "lost")]);
+    expect(budgetStop(s, LIST)).toMatchObject({ countedUsd: null, why: "The building spend cannot be checked against the $40.00 budget: 1 run with no recorded cost has no spend limit" });
+    const stopItem = needsYouItems(s, T0).find((i) => i.key === "budget");
+    expect(stopItem).toMatchObject({ kind: "open", detail: "Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it. Not counted: run-lost (codex · gpt-test, no usage recorded)." });
+  });
+
+  it("costs counted at an estimate need nothing from the owner: no Needs-you item of their own (D-3)", () => {
+    const s = withRuns([codex("run-1035", "completed", FULL), codex("run-1038", "stopped", OPEN_REQUEST), codex("run-x", "completed", FULL, "gpt-unpriced")]);
+    expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("budget"))).toEqual([]);
+  });
+
+  it("a PE call is checked against the spend with each open request at its estimate: within budget it stays the PE's, past it the owner's", () => {
+    const s = withRuns([codex("run-1035", "completed", FULL), codex("run-1038", "stopped", OPEN_REQUEST)], 1);
+    const cost = (hi: number) => ({ buildUsd: [0, hi] as [number, number], basis: "Two repair runs" });
+    expect(pastBudget(s, cost(0.5), LIST)).toBeUndefined();
+    // $0.073 spent, $0.073 estimated, and up to $0.86 more: $1.006, past $1.
+    expect(pastBudget(s, cost(0.86), LIST)).toBe("up to $0.86 more would take the building spend to $1.01, past the $1.00 budget ($0.07 spent, $0.07 estimated for unrecorded costs)");
+    // A run nothing bounds still sends any building cost to the owner.
+    expect(pastBudget(withRuns([codex("run-lost", "lost")], 1), cost(0.01), LIST)).toBe("1 run has no recorded cost and no spend limit, so up to $0.01 more cannot be checked against the $1.00 budget");
+  });
+});
+
 describe("runs with no recorded cost, while a building budget is set", () => {
   const tokens = { inputTokens: 9_000_000, outputTokens: 9_000_000 };
   const codexRun = (id: string, model: string, usage?: Attempt["usage"]): Attempt => ({ ...attempt({ provider: "codex", model, usage }), id });
@@ -192,61 +275,40 @@ describe("runs with no recorded cost, while a building budget is set", () => {
     s.leadRuns = leadRuns;
     return s;
   }
-  const item = (s: State) => needsYouItems(s, T0).find((i) => i.key === "budget-unknown");
+  const budgetItems = (s: State) => needsYouItems(s, T0).filter((i) => i.key.startsWith("budget"));
 
-  it("are named under Needs you; a Codex run has no spend limit to count it at, so the stop holds new work, however high the budget (review finding 4)", () => {
+  it("count at an estimate, never as $0: work on a model with no price reaches a budget far above the spend it recorded (review finding 4)", () => {
     const s = withRuns([codexRun("run-a", "gpt-x", tokens), codexRun("run-b", "gpt-x", tokens), codexRun("run-c", "gpt-x", tokens), codexRun("run-d", "gpt-6.1-sol", { inputTokens: 1000, outputTokens: 100 })]);
     // No building budget (a maintenance budget alone does not count runs): nothing to enforce, nothing to say.
-    expect(item(s)).toBeUndefined();
     expect(budgetStop(s)).toBeUndefined();
-    expect(item(M.setBudgets(s, { buildingUsd: null, maintenanceUsdPerMonth: 50 }, at(1)))).toBeUndefined();
-    // A budget far above the spend with a recorded cost: $27 of work has no price, so the spend cannot be checked.
+    expect(budgetItems(M.setBudgets(s, { buildingUsd: null, maintenanceUsdPerMonth: 50 }, at(1)))).toEqual([]);
+    // Each gpt-x run: 9,000,000 input and output tokens at the dearest Codex price in the list ($10 and $50 a million), $540.
     const set = M.setBudgets(s, { buildingUsd: 100, maintenanceUsdPerMonth: null }, at(1));
-    expect(budgetStop(set)).toMatchObject({ countedUsd: null, why: "The building spend cannot be checked against the $100.00 budget: 3 runs with no recorded cost have no spend limit" });
-    expect(needsYouItems(set, T0)[0]).toMatchObject({ key: "budget", what: "The building spend cannot be checked against the $100.00 budget: 3 runs with no recorded cost have no spend limit" });
-    expect(item(set)).toEqual({
-      kind: "open",
-      key: "budget-unknown",
-      what: "3 runs have no recorded cost (model gpt-x has no price)",
-      detail:
-        "The budget's stop counts each at its run limit, the most it could cost; one with no spend limit (Codex has none) stops new work until you raise the budget or continue past it. Runs: run-a (codex · gpt-x, no price), run-b (codex · gpt-x, no price), run-c (codex · gpt-x, no price).",
-      action: "Settings",
-      href: "#/settings/project/budgets",
-    });
-    // Once every run has a recorded cost there is nothing to say.
-    expect(item(withRuns([codexRun("run-d", "gpt-6.1-sol", { inputTokens: 1000, outputTokens: 100 })]))).toBeUndefined();
+    expect(budgetStop(set)).toMatchObject({ countedUsd: expect.closeTo(1620.003, 6), why: "The building budget is reached: $1620.00 of $100.00, of which $1620.00 is an estimate for 3 unrecorded costs" });
+    expect(budgetItems(set)).toEqual([expect.objectContaining({ key: "budget", what: "The building budget is reached: $1620.00 of $100.00, of which $1620.00 is an estimate for 3 unrecorded costs" })]);
+    expect(unrecordedWords(buildingSpend(set))).toBe("3 unrecorded costs count at an estimate of $1620.00: model gpt-x has no price, so the dearest price of its provider applies.");
   });
 
-  it("names every model with no price and counts the runs with no usage, the lead's included; the first five runs are listed", () => {
+  it("a run nothing bounds (a Codex run with no usage) holds new work; the stop names it, and the lead's lost run counts at the run limit", () => {
     const lead: LeadRun = { id: "lead-1", trigger: "message", provider: "claude", model: "claude-opus-5-5", startedAt: at(0), endedAt: at(1), outcome: "lost", messageIds: [], sessionId: "s-1" };
-    const s = withRuns(
-      [codexRun("run-a", "gpt-x", tokens), codexRun("run-b", "gpt-y", tokens), codexRun("run-c", "gpt-x", tokens), codexRun("run-d", "gpt-z", tokens), codexRun("run-e", "gpt-6.1-sol")],
-      [lead],
-    );
-    const one = item(M.setBudgets(s, { buildingUsd: 100, maintenanceUsdPerMonth: null }, at(1)));
-    expect(one).toMatchObject({
-      what: "6 runs have no recorded cost (models gpt-x, gpt-y and gpt-z have no price; no usage was recorded for 2)",
-      detail:
-        "The budget's stop counts each at its run limit, the most it could cost; one with no spend limit (Codex has none) stops new work until you raise the budget or continue past it. Runs: run-a (codex · gpt-x, no price), run-b (codex · gpt-y, no price), " +
-        "run-c (codex · gpt-x, no price), run-d (codex · gpt-z, no price), run-e (codex · gpt-6.1-sol, no usage recorded) and 1 more.",
-    });
-    const single = item(M.setBudgets(withRuns([], [lead]), { buildingUsd: 100, maintenanceUsdPerMonth: null }, at(1)));
-    expect(single).toMatchObject({ what: "1 run has no recorded cost (no usage was recorded)" });
+    const s = M.setBudgets(withRuns([codexRun("run-a", "gpt-x", { inputTokens: 2000, outputTokens: 200 }), codexRun("run-e", "gpt-6.1-sol")], [lead]), { buildingUsd: 100, maintenanceUsdPerMonth: null }, at(1));
+    expect(budgetStop(s)).toMatchObject({ countedUsd: null, why: "The building spend cannot be checked against the $100.00 budget: 1 run with no recorded cost has no spend limit" });
+    expect(budgetItems(s)).toEqual([
+      expect.objectContaining({
+        key: "budget",
+        detail: "Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it. Not counted: run-e (codex · gpt-6.1-sol, no usage recorded).",
+      }),
+    ]);
+    expect(unrecordedWords(buildingSpend(s))).toBe("1 run has no recorded cost and no spend limit, so the spend cannot be checked. 2 more unrecorded costs count at an estimate of $2.03.");
   });
 
   it("a task run of the fake runtime is a known $0: it never holds new work, however small the budget", () => {
     const sim: Attempt = { ...codexRun("run-s", "codex-sample-large"), simulated: true };
     const s = M.setBudgets(withRuns([sim, { ...sim, id: "run-t" }]), { buildingUsd: 0.01, maintenanceUsdPerMonth: null }, at(1));
     expect(budgetStop(s)).toBeUndefined();
-    expect(item(s)).toBeUndefined();
+    expect(budgetItems(s)).toEqual([]);
     // The same runs without the mark have no recorded cost: the stop holds new work.
     expect(budgetStop(M.setBudgets(withRuns([codexRun("run-s", "codex-sample-large")]), { buildingUsd: 0.01, maintenanceUsdPerMonth: null }, at(1)))).toBeDefined();
-  });
-
-  it("at the stop, both are asked: the stop first, then the runs it cannot count", () => {
-    const s = withRuns([codexRun("run-a", "gpt-x", tokens), codexRun("run-d", "gpt-6.1-sol", { inputTokens: 1_000_000, outputTokens: 0 })]);
-    const keys = needsYouItems(M.setBudgets(s, { buildingUsd: 2, maintenanceUsdPerMonth: null }, at(1)), T0).map((i) => i.key);
-    expect(keys.slice(0, 2)).toEqual(["budget", "budget-unknown"]);
   });
 });
 
@@ -315,22 +377,23 @@ describe("the budget stop", () => {
     }
     expect(buildingSpend(s)).toMatchObject({ usd: 0, runs: 5 });
     s = runCommand(s, "setBudgets", { buildingUsd: 0.01, maintenanceUsdPerMonth: null }, at(4)).state;
-    expect(budgetStop(s)).toMatchObject({ countedUsd: 10, why: "The building budget is reached: $10.00 of $0.01, counting 5 runs with no recorded cost at the $2.00 run limit" });
+    expect(budgetStop(s)).toMatchObject({ countedUsd: 10, why: "The building budget is reached: $10.00 of $0.01, of which $10.00 is an estimate for 5 unrecorded costs" });
     const next = runCommand(s, "startStudioRun", { kind: "designer", round: 1, brief: "One more." }, at(5)).state;
     expect(R.dispatchStudioRuns(next, at(6)).started).toEqual([]);
     // A budget above the five runs' limits lets work start again.
     expect(budgetStop(runCommand(s, "setBudgets", { buildingUsd: 10.01, maintenanceUsdPerMonth: null }, at(7)).state)).toBeUndefined();
   });
 
-  it("runs with no recorded cost are never counted as zero: a Codex run with no price holds the stop, and the owner is told why", () => {
+  it("runs with no recorded cost are never counted as zero: a Codex run with no price counts at its provider's dearest price, and Codex runs with no usage hold the stop", () => {
     const unknownOnly = finishCodexRun(M.startHeldTask(buildSeed(T0), "EX-004", at(0)), "gpt-unknown", { inputTokens: 9_000_000, outputTokens: 9_000_000 });
     expect(buildingSpend(unknownOnly).usd).toBe(0);
-    expect(buildingSpend(unknownOnly).unknown).toContainEqual({ runId: expect.any(String), provider: "codex", model: "gpt-unknown", reason: "no-price" });
-    // $9 of work on a model with no price, and the sample's Codex runs with no usage: no spend limit counts them.
+    // 9,000,000 input and output tokens at the dearest pinned Codex price ($10 and $50 a million): $540.
+    expect(buildingSpend(unknownOnly).unknown).toContainEqual({ runId: expect.any(String), provider: "codex", model: "gpt-unknown", reason: "no-price", countedUsd: 540 });
+    // The sample's finished Codex runs recorded no usage: no spend limit counts them.
     const budgeted = M.setBudgets(unknownOnly, { buildingUsd: 1, maintenanceUsdPerMonth: null }, at(2));
-    expect(budgetStop(budgeted)).toMatchObject({ countedUsd: null, why: "The building spend cannot be checked against the $1.00 budget: 4 runs with no recorded cost have no spend limit" });
+    expect(budgetStop(budgeted)).toMatchObject({ countedUsd: null, why: "The building spend cannot be checked against the $1.00 budget: 3 runs with no recorded cost have no spend limit" });
     expect(running(M.dispatchEligible(budgeted, at(3)), "EX-004")).toHaveLength(0);
-    expect(needsYouItems(budgeted, T0).find((i) => i.key === "budget-unknown")).toMatchObject({ kind: "open", what: "8 runs have no recorded cost (model gpt-unknown has no price; no usage was recorded for 7)" });
+    expect(needsYouItems(budgeted, T0).find((i) => i.key === "budget")).toMatchObject({ kind: "open", detail: expect.stringContaining("Not counted: run-3 (codex · codex-sample-large, no usage recorded), run-6") });
     // The owner may continue past it: work starts again.
     expect(budgetStop(M.continuePastBudget(budgeted, at(4)))).toBeUndefined();
   });

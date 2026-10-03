@@ -7,6 +7,7 @@
 //                       outputSchema on turn/start, the final message is the JSON answer {"reply":"Stub reply."})
 //   interrupt-honoured  turn stays running; turn/interrupt -> turn/completed(interrupted)
 //   interrupt-ignored   turn stays running; turn/interrupt is acknowledged but never completes
+//   usage-interrupt     like interrupt-honoured, after one model request's usage is reported (the next is open)
 //   steer               turn stays running; turn/steer with the active turn id is accepted, echoed as an
 //                       agent message "steered: <text>", and the turn then completes (interrupts honoured)
 //   steer-refused       like steer, but turn/steer answers with a JSON-RPC error (non-steerable turn)
@@ -164,6 +165,9 @@ function runTurn() {
     case "steer-wrong-turn":
       later(10, () => notify("item/started", { item: { type: "commandExecution", id: "i1", command: "sleep 100" }, threadId: THREAD, turnId: TURN }));
       return;
+    case "usage-interrupt":
+      later(10, () => usage(THREAD, TURN, 300, 100, 20));
+      return;
     case "grandchild": {
       const gc = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
       writeFileSync(process.env.CODEX_STUB_PID_FILE, String(gc.pid));
@@ -254,7 +258,7 @@ function handle(msg) {
       return;
     case "turn/interrupt":
       send({ id, result: {} });
-      if (mode === "interrupt-honoured" || STEER_MODES.has(mode)) later(20, () => completeTurn("interrupted"));
+      if (mode === "interrupt-honoured" || mode === "usage-interrupt" || STEER_MODES.has(mode)) later(20, () => completeTurn("interrupted"));
       if (mode === "subagents-interrupt") later(20, () => completeTurn("interrupted"));
       return;
     case "thread/archive":

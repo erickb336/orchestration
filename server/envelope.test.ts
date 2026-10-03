@@ -307,7 +307,7 @@ describe("the lead's decisions section", () => {
     expect(text).toContain("## Decisions you make as the PE (1)");
     expect(text).toContain("The PE does not run its own decisions yet, so you decide them with this brief");
     expect(text).toContain(
-      "- Budgets: building $50.00, of which about $0.00 is spent (9 runs have no recorded cost, which makes the building spend uncertain: a call that adds any building cost goes to the user); maintenance $20.00 a month, not yet estimated (the pre-flight makes the estimate), so a call that adds any maintenance cost goes to the user. Spending past a budget is never the PE's call",
+      "- Budgets: building $50.00, of which about $0.00 is spent (4 runs have no recorded cost and no spend limit, which makes the building spend unknown: a call that adds any building cost goes to the user); maintenance $20.00 a month, not yet estimated (the pre-flight makes the estimate), so a call that adds any maintenance cost goes to the user. Spending past a budget is never the PE's call",
     );
     expect(text).not.toContain("not counted");
     // Once a start records the pre-flight's estimate, the brief gives it with the calls that stand.

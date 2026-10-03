@@ -459,11 +459,15 @@ describe("the PE's route (ORC-029 2d)", () => {
     expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "up to $1.00 more would take the building spend to $8.00, past the $5.00 budget ($7.00 spent)" } });
   });
 
-  it("a run with no recorded cost makes the building spend unknown, never $0: a call that adds any building cost goes to the owner (review finding 2)", () => {
+  it("a run with no recorded cost and no spend limit makes the building spend unknown, never $0: a call that adds any building cost goes to the owner (review finding 2)", () => {
     const { s: s0, runId } = peCase(3, { buildingUsd: 50, maintenanceUsdPerMonth: null });
     const s = structuredClone(s0);
-    delete s.attempts.find((a) => a.outcome === "completed" && a.snapshot.provider !== "service")!.usage;
-    expect(buildingSpend(s).unknown).toHaveLength(1);
+    const run = s.attempts.find((a) => a.outcome === "completed" && a.snapshot.provider !== "service")!;
+    delete run.usage;
+    // A Claude run counts at its run limit, its spend cap (B-02); a Codex run has none, so nothing bounds it.
+    expect(buildingSpend({ ...s, attempts: s.attempts.map((a) => (a.id === run.id ? { ...a, snapshot: { ...a.snapshot, provider: "claude" } } : a)) }).unknown).toMatchObject([{ countedUsd: 2 }]);
+    run.snapshot.provider = "codex";
+    expect(buildingSpend(s).unknown).toMatchObject([{ countedUsd: null }]);
     const [d1, d2, d3] = s.decisions;
     const out = complete(s, runId, [
       { id: d1.id, decision: "accept", why: "Nothing to build.", cost: { buildUsd: [0, 0], basis: "Accepting builds nothing" } },
@@ -471,7 +475,7 @@ describe("the PE's route (ORC-029 2d)", () => {
       { id: d3.id, decision: "accept", why: "Fine.", cost: { maintenanceUsdPerMonth: [0, 0], basis: "Nothing runs" } },
     ]);
     expect(out.decisions[0]).toMatchObject({ status: "accept", decidedBy: "pe" });
-    expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "1 run has no recorded cost, so the building spend is unknown, and up to $1.00 more cannot be checked against the $50.00 budget" } });
+    expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "1 run has no recorded cost and no spend limit, so up to $1.00 more cannot be checked against the $50.00 budget" } });
     expect(out.decisions[2].pe?.pastBudget).toBe("it states no building cost, and the building budget is $50.00");
   });
 

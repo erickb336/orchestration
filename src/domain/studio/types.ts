@@ -8,7 +8,7 @@
 // (rounds, artifacts, feedback, PE review, probes) and blueprint.ts (approval, the draft, Lock in and its summary,
 // open items, change orders, task specs' references). The containers exist from state format 19.
 
-import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId, RunSubagents, SubagentAllowance } from "../types";
+import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId, RunSubagents, RunUsage, SubagentAllowance } from "../types";
 
 /**
  * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
@@ -682,7 +682,7 @@ export interface StudioRun {
   endedAt?: string;
   /** Its staging folder, relative to the project's studio workspace (`<data>/studio/<projectId>/`): the one place it writes. */
   workspace: string;
-  usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
+  usage?: RunUsage;
   sessionId?: string;
   actualModel?: string;
   stopRequestedAt?: string;

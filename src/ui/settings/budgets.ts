@@ -3,7 +3,7 @@
 // about the spend and the budget stop. Continue past the budget is its own command (continuePastBudget) and acts at
 // once.
 
-import { budgetStop, buildingSpend, fmtUsd, maintenanceEstimate } from "../../domain/spend";
+import { budgetStop, buildingSpend, fmtUsd, maintenanceEstimate, unrecordedWords } from "../../domain/spend";
 import { DEVICES, type Device, type State } from "../../domain/types";
 import type { ConfirmOptions } from "../kit";
 import type { SendResult } from "../store";
@@ -55,12 +55,12 @@ export interface BudgetWords {
 export function budgetWords(s: State): BudgetWords {
   const b = s.project.budgets;
   const spend = buildingSpend(s);
-  const unknown = spend.unknown.length ? `; ${runs(spend.unknown.length)} with no recorded cost, not counted` : "";
+  const unrecorded = unrecordedWords(spend);
   const m = maintenanceEstimate(s);
   const stop = budgetStop(s);
   const c = s.project.budgetContinued;
   return {
-    spent: `Spent so far: ${fmtUsd(spend.usd)}${b.buildingUsd === null ? "" : ` of ${fmtUsd(b.buildingUsd)}`} in ${runs(spend.runs)}${unknown}.`,
+    spent: `Spent so far: ${fmtUsd(spend.usd)}${b.buildingUsd === null ? "" : ` of ${fmtUsd(b.buildingUsd)}`} in ${runs(spend.runs)}.${unrecorded ? ` ${unrecorded}` : ""}`,
     maintenance: m.startUsd === null ? "Maintenance estimate: none yet. Until there is one, a PE call that adds a monthly cost comes to you." : `Maintenance estimate: up to ${fmtUsd(m.startUsd + m.callsUsd)} a month.`,
     ...(stop ? { stop: { title: `${stop.why}.`, text: "Nothing new starts: no task step and no studio run. Raise the building budget and save, or continue past it." } } : {}),
     ...(c && c.buildingUsd === b.buildingUsd ? { continued: `You continued past the ${fmtUsd(c.buildingUsd)} budget at ${fmtUsd(c.spentUsd)} spent. New work starts until you change the building budget.` } : {}),

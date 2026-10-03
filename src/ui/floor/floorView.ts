@@ -7,7 +7,7 @@
 
 import * as F from "../../domain/findings";
 import * as M from "../../domain/model";
-import { budgetStop, committedBuildUsd, fmtUsd } from "../../domain/spend";
+import { budgetStop, buildingSpend, committedBuildUsd, fmtUsd, unrecordedWords } from "../../domain/spend";
 import * as B from "../../domain/studio/blueprint";
 import type { ChangeOrder, UsdRange } from "../../domain/studio/types";
 import type { FindingDecision, PeCall, State, Step, Task } from "../../domain/types";
@@ -135,7 +135,7 @@ export interface BudgetWords {
   building: {
     /** "$11.20 of $40.00 spent", or "$11.20 spent". */
     spent: string;
-    /** Runs with no recorded cost: the spend may be higher (never counted as $0). */
+    /** The costs with no full record and their estimate, or that the spend cannot be checked (never counted as $0). */
     unknown?: string;
     /** "PE estimate for the rest: $9.00–$16.00", or "PE estimate for the rest: no estimate". */
     estimate: string;
@@ -162,12 +162,12 @@ export function budgetWords(s: State): BudgetWords {
   const budget = b.building.budgetUsd;
   const estimate = s.project.factoryStarts.at(-1)?.estimate?.buildUsd;
   const committed = committedBuildUsd(s);
-  const unknown = b.building.unknownRuns;
+  const unknown = unrecordedWords(buildingSpend(s));
   const m = b.maintenance;
   return {
     building: {
       spent: budget === null ? `${fmtUsd(b.building.spentUsd)} spent` : `${fmtUsd(b.building.spentUsd)} of ${fmtUsd(budget)} spent`,
-      ...(unknown ? { unknown: `${count(unknown, "run")} ${unknown === 1 ? "has" : "have"} no recorded cost, so the spend may be higher.` } : {}),
+      ...(unknown ? { unknown } : {}),
       estimate: `PE estimate for the rest: ${estimate ? range(estimate) : "no estimate"}`,
       ...(committed > 0 ? { committed: `Up to ${fmtUsd(committed)} is committed to PE calls whose work has not run.` } : {}),
       stop: stopWords(s, budget),

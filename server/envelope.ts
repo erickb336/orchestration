@@ -10,7 +10,7 @@ import * as M from "../src/domain/model";
 import { LEAD_REPLY_SCHEMA, schemaMismatch, withNulls, withoutNulls } from "../src/domain/model/leadReplySchema";
 import { childDefault, effectiveDefault, eligible, flowSummary } from "../src/domain/flows";
 import { LEAD_PRINCIPLE_IDS, orderPrinciples, principle, wordCount } from "../src/domain/principles";
-import { buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
+import { buildingSpend, committedBuildUsd, countedSpend, fmtUsd, maintenanceEstimate } from "../src/domain/spend";
 import * as B from "../src/domain/studio/blueprint";
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
@@ -1104,11 +1104,13 @@ function peDecisionsSection(state: State): string {
   const b = state.project.budgets;
   const spent = buildingSpend(state);
   const committed = committedBuildUsd(state);
-  const unknown = spent.unknown.length;
+  const counted = countedSpend(spent);
+  const unknown = counted === null ? spent.unknown.filter((u) => u.countedUsd === null).length : 0;
+  const estimated = counted === null ? 0 : counted - spent.usd;
   const building =
     b.buildingUsd === null
       ? "not set"
-      : `${fmtUsd(b.buildingUsd)}, of which about ${fmtUsd(spent.usd)} is spent${committed ? ` and up to ${fmtUsd(committed)} is committed to PE calls whose work has not run` : ""}${unknown ? ` (${unknown} run${unknown === 1 ? " has" : "s have"} no recorded cost, which makes the building spend uncertain: a call that adds any building cost goes to the user)` : ""}`;
+      : `${fmtUsd(b.buildingUsd)}, of which about ${fmtUsd(spent.usd)} is spent${estimated > 0 ? `, about ${fmtUsd(estimated)} is estimated for costs no run recorded` : ""}${committed ? ` and up to ${fmtUsd(committed)} is committed to PE calls whose work has not run` : ""}${unknown ? ` (${unknown} run${unknown === 1 ? " has" : "s have"} no recorded cost and no spend limit, which makes the building spend unknown: a call that adds any building cost goes to the user)` : ""}`;
   const m = maintenanceEstimate(state);
   const maintenance =
     b.maintenanceUsdPerMonth === null

@@ -253,7 +253,7 @@ describe("the cost of subagents and the budget", () => {
     const s = finished("codex", { count: 2, mostAtOnce: 1, items: [item({ id: "a" }), item({ id: "b", ended: "refused" })] });
     const spend = buildingSpend(s, LIST);
     expect(spend.usd).toBe(1);
-    expect(spend.unknown).toEqual([{ runId: "run-x helper a", provider: "codex", model: "gpt-test", reason: "no-usage" }]);
+    expect(spend.unknown).toEqual([{ runId: "run-x helper a", provider: "codex", model: "gpt-test", reason: "no-usage", countedUsd: null }]);
     // Codex has no spend limit, so the stop cannot check the spend and holds new work.
     const budgeted = { ...s, project: { ...s.project, budgets: { ...s.project.budgets, buildingUsd: 100 } } };
     expect(budgetStop(budgeted, LIST)?.countedUsd).toBeNull();

@@ -4,7 +4,7 @@
 
 import type { EnvironmentRunRecord } from "../../src/domain/environment";
 import type { EvidenceRun } from "../../src/domain/studio/evidence";
-import type { CatalogModel, CheckResult, OutputDef, ProviderId, RoleId, SubagentAllowance, SubagentReport, TestReport } from "../../src/domain/types";
+import type { CatalogModel, CheckResult, OutputDef, ProviderId, RoleId, RunUsage, SubagentAllowance, SubagentReport, TestReport } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 
 /** What a service check run (server/checks.ts) reports when it completes. */
@@ -89,13 +89,8 @@ export interface Assignment {
   allowSubagents?: SubagentAllowance;
 }
 
-export interface Usage {
-  inputTokens?: number;
-  /** Of `inputTokens`, those read from the provider's prompt cache (Codex reports them). */
-  cachedInputTokens?: number;
-  outputTokens?: number;
-  costUsd?: number;
-}
+/** What a run used, as the domain records it (`RunUsage`, with `openRequest` for a model request that has no usage report). */
+export type Usage = RunUsage;
 
 export type AdapterEvent =
   /** The provider accepted the run. `sessionId` is the provider's own id (thread/session). */
