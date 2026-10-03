@@ -17,6 +17,7 @@
     "pretest": "npm run principles --silent",
     "test": "vitest run",
     "test:integration": "node --import tsx scripts/real-run-test.mjs --fake",
+    "qa": "node --import tsx scripts/qa/run-all.mjs",
     "test:real": "node --import tsx scripts/real-run-test.mjs",
     "trial:studio": "node --import tsx scripts/studio-trial.mjs",
     "trial:factory": "node --import tsx scripts/factory-trial.mjs",
