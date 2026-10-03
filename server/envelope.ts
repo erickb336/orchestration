@@ -1196,10 +1196,22 @@ export function studioBriefSection(state: State, repo?: RepoGlance): string {
     .slice(-EARLIER_ROUNDS)
     .map((r) => `- Round ${r.n} (${FOCUS_WORDS[r.focus]}), closed: ${truncate(r.summary, 200) || "(no summary)"} (${latest.filter((a) => a.round === r.n).length} artifacts)`);
   const answers = studioAnswers(state);
+  // While the factory runs (pass 5, r10), the studio works on the draft, and the factory keeps the version in force.
+  const draftVision = state.blueprint.draft.vision;
+  const building =
+    p.stage === "building"
+      ? `
+The factory is running. Vision stays open: when the user's messages are about the design, run the studio as before. What the user approves goes into the draft, not into force: the factory keeps building from the version in force until the user locks the draft in, and then you adjust the tasks it touches (a change order). Opening a round never stops or changes the factory. Leave "studio" out when the user's messages are about the work in the factory, not the design.${
+          draftVision
+            ? `\nThe vision text in the draft (the user changed it; it goes into force at their Lock in, and the factory keeps the text above until then): ${truncate(draftVision.text, 3000)}`
+            : ""
+        }
+`
+      : "";
   return `
 ## The studio
 You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between. The PE reviews each design before the user sees it (not dictionaries, material or evidence); when it asks for a change or objects, the designer revises, up to ${S.MAX_PE_PASSES} passes, and then the user sees it with what the PE still says. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
-
+${building}
 Order of focus, aiming at a design that is complete before the factory starts (revisit a focus when the user's answers call for it):
 1. experience: the key screens or commands, or the interface, or the topology, and how they behave;
 2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary. Also ask the designer for the project's dictionary (kind "dictionary"): each word the product uses, with one meaning and the words it replaces. Base it on the vision and, for an existing repository, on the names in the code. When the user approves it, every agent gets its words;
@@ -1415,10 +1427,12 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
   // Steering is available only to runs that answer user messages, never decided by the trigger.
   const canSteer = run.messageIds.length > 0;
   const mode = p.steeringMode;
-  // The shaping brief and the vision contract go to message runs while shaping. A planning run never
-  // starts while shaping; if one from before finishes now, it cannot draft (the domain refuses).
+  // The shaping brief, coverage and the areas' questions go to message runs while shaping. The studio brief and the
+  // vision draft go to message runs in either stage (ORC-029 pass 5, r10): Vision stays open while the factory runs, on
+  // the draft. A planning run never drafts (the domain refuses).
   const shaping = p.stage === "shaping";
-  const canDraft = shaping && canSteer;
+  const canDraft = canSteer;
+  const canShape = shaping && canSteer;
   const roots = state.tasks.filter((t) => !t.parentTaskId);
   // The review and fix tasks the service creates for a pull request are delivery's, not steerable, and
   // not the lead's to see on its board (`steerPermission` rejects them as well).
@@ -1503,11 +1517,15 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
     "text": "<the whole vision: intent, who it is for, the problem, the outcome and how success is measured, scope in and out, constraints, risks, the first milestone; mark every proposed default (assumption)>",
     "focus": "<the first focus, one line>",
     "reason": "<what in the conversation, the documents or the repository this draft rests on>"
-  },
+  },${
+    canShape
+      ? `
   "coverage": { ${SHAPING_AREAS.map((a) => `"${a}": "clear|partial|open"`).join(", ")} },
   "questions": [
     { "question": "<one targeted question>", "why": "<why it matters, one line>", "area": "<area key>", "options": ["<option A (recommended, because …)>", "<option B>"] }
-  ],
+  ],`
+      : ""
+  }
   "studio": {
     "closeRound": { "summary": "<what came of the open round>" },
     "openRound": { "focus": "material | experience | data | flows", "summary": "<what the round explores>" },
@@ -1519,7 +1537,8 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
     ]
   }`
     : "";
-  // The studio brief goes to the replies that may run the studio: message runs in Vision.
+  // The studio brief goes to the replies that may run the studio: message runs, in Vision and while the factory runs
+  // (pass 5): when the user talks to the lead about the design, the lead may open rounds on the draft.
   const studioBrief = canDraft ? studioBriefSection(state, repo) : "";
   const shapingBrief = shaping
     ? `

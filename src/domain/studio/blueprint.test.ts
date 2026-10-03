@@ -92,7 +92,8 @@ describe("approving into the draft", () => {
     expect(B.blueprintItems(s)).toEqual([item]);
     expect(B.draftChanges(s).changed).toEqual([{ item: { ...item, version: 2, variant: "C" }, replaces: item }]);
     s = lockIn(s, 10);
-    expect(B.currentBlueprint(s)).toMatchObject({ rev: 2, visionRev: 2, reason: "locked in: changed Trip plan v1 → v2", items: [{ id: item.id, version: 2, variant: "C", status: "approved" }] });
+    // The vision edit after the start waited in the draft too, and goes into force with it (pass 5, r10).
+    expect(B.currentBlueprint(s)).toMatchObject({ rev: 2, visionRev: 2, reason: "locked in: changed Trip plan v1 → v2; changed the vision text", items: [{ id: item.id, version: 2, variant: "C", status: "approved" }] });
     expect(s.blueprint.revisions[0].items[0]).toMatchObject({ version: 1, variant: "B" });
   });
 

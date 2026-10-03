@@ -162,7 +162,8 @@ describe("V4 removal and history", () => {
   });
 
   it("every other revision carries the set forward: a hand edit, the lead's focus change, an accepted draft, an undo", () => {
-    let s = add(seed(), doc("a.md", { hash: hash(1) }), 1);
+    // In Vision, where a hand edit of the text goes into force at once (while building it waits in the draft).
+    let s = add(inVision(seed(), at(0)), doc("a.md", { hash: hash(1) }), 1);
     const ids = M.currentVision(s).docIds;
     s = M.editVision(s, 2, "New text", "New focus", "edited", at(2));
     expect(M.currentVision(s)).toMatchObject({ rev: 3, text: "New text", docIds: ids });

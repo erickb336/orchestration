@@ -25,7 +25,7 @@ export {
 } from "./model/controls";
 export { setProjectDefault, setProviderEnabled, setProviderLimit, setRoleDefault, setStepSelection, setTaskRoleOverride, setWorkerLimit } from "./model/steps";
 export { autoRetryCandidates, autoRetryStep, rerunStep, retryStep } from "./model/retries";
-export { editVision, markVisited, setSteeringMode } from "./model/vision";
+export { draftVisionText, editVision, markVisited, setSteeringMode } from "./model/vision";
 export { dispatchEligible, dispatchRank, leadPromoteProposals } from "./model/dispatch";
 export {
   acknowledgeStop, type OutputReport, reportActivity, reportCompletion, reportProgress, reportRunContext, reportRunFailed, reportRunLost,

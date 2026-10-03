@@ -55,11 +55,32 @@ describe("the lead's studio brief", () => {
     expect(brief).toContain('- "designerRuns": at most 3 per reply.');
     expect(text).toContain('"studio": {\n    "closeRound": { "summary": "<what came of the open round>" },\n    "openRound": { "focus": "material | experience | data | flows"');
     expect(text).toContain('leave "studio", or any part of it, out when the studio needs nothing from you');
-    // Not to a decisions run, and not once the factory has started.
+    // Not to a decisions run, nor to a planning run once the factory has started.
     expect(envelope(fresh(), DOCS, "decisions")).not.toContain("## The studio");
-    const building = envelope(startFactoryAsOwner(fresh(), at(1)), DOCS);
-    expect(building).not.toContain("## The studio");
-    expect(building).not.toContain('"studio": {');
+    expect(envelope(startFactoryAsOwner(fresh(), at(1)), DOCS, "planning")).not.toMatch(/## The studio|"studio": \{/);
+  });
+
+  it("goes to replies while the factory runs too (pass 5): the studio works on the draft, and the factory keeps the version in force", () => {
+    const started = startFactoryAsOwner(fresh(), at(1));
+    const text = envelope(started);
+    const brief = section(text);
+    expect(brief).toContain("You run Vision's studio.");
+    expect(brief).toContain(
+      'The factory is running. Vision stays open: when the user\'s messages are about the design, run the studio as before. What the user approves goes into the draft, not into force: the factory keeps building from the version in force until the user locks the draft in, and then you adjust the tasks it touches (a change order). Opening a round never stops or changes the factory. Leave "studio" out when the user\'s messages are about the work in the factory, not the design.',
+    );
+    expect(text).toContain('"studio": {\n    "closeRound"');
+    // The vision may be drafted (it goes into the draft); the shaping brief and coverage are Vision's only.
+    expect(text).toContain('"vision": {');
+    expect(text).not.toMatch(/"coverage": \{|## Shaping the vision/);
+    // A vision text in the draft is shown to the studio; the vision in force heads the brief, as the factory reads it.
+    const edited = M.editVision(started, 1, "Weekend trips, offline on the trail.", "", "offline", at(2));
+    const withDraft = envelope(edited);
+    expect(withDraft).toContain("## Vision (r1)\nWeekend trips for a small group of friends.\n");
+    expect(section(withDraft)).toContain("\nThe vision text in the draft (the user changed it; it goes into force at their Lock in, and the factory keeps the text above until then): Weekend trips, offline on the trail.\n");
+    // The factory's lead (a planning run) reads the vision in force, and nothing of the draft.
+    const plan = envelope(edited, undefined, "planning");
+    expect(plan).toContain("## Vision (r1)\nWeekend trips for a small group of friends.\n");
+    expect(plan).not.toContain("offline on the trail");
   });
 
   it("for a repository with code and no round yet, starts with round 0, as it is today", () => {

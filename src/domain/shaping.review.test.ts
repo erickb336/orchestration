@@ -196,8 +196,10 @@ describe("no empty vision while building", () => {
     const cleared = M.editVision(shaping(seed()), 1, "", "", "clear", at(1));
     expect(M.currentVision(cleared)).toMatchObject({ rev: 2, text: "" });
     expect(() => startFactoryAsOwner(cleared, at(2))).toThrow(/Write or accept a vision first/);
-    // A real edit while building is unaffected.
-    expect(M.currentVision(M.editVision(seed(), 1, "New", "f", "why", at(1))).text).toBe("New");
+    // A real edit while building goes into the draft (ORC-029 pass 5, r10): in force at the owner's Lock in.
+    const edited = M.editVision(seed(), 1, "New", "f", "why", at(1));
+    expect(M.draftVisionText(edited)).toBe("New");
+    expect(M.currentVision(edited).text).not.toBe("New");
   });
 });
 

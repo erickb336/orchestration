@@ -14,10 +14,11 @@
 
 import { buildingSpend, maintenanceEstimate } from "../spend";
 import { currentSpec, currentVision, draft, event, nextId } from "../model/core";
+import { pushVision } from "../model/vision";
 import { newWorkReview } from "../peReview";
 import { ControlError, StaleWriteError, type State, type Task } from "../types";
 import { artifactName, covers, currentFeedback, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
-import type { BlueprintItem, BlueprintRevision, ChangeOrder, DictionaryEntry, ItemEstimate, LockInSummary, StudioArtifact, TaskHandling, TouchedTask, TouchedTaskState, UsdRange } from "./types";
+import type { BlueprintItem, BlueprintRevision, ChangeOrder, DictionaryEntry, DraftVision, ItemEstimate, LockInSummary, StudioArtifact, TaskHandling, TouchedTask, TouchedTaskState, UsdRange } from "./types";
 
 // ---------- the version in force ----------
 
@@ -84,9 +85,9 @@ function upsert(items: BlueprintItem[], item: BlueprintItem): BlueprintItem[] {
   return items.some((i) => i.id === item.id) ? items.map((i) => (i.id === item.id ? item : i)) : [...items, item];
 }
 
-/** Change the draft on a draft state: its items, a new draft revision, and the owner's event. */
+/** Change the draft's items on a draft state: a new draft revision, and the owner's event. The draft's vision text stays. */
 function changeDraft(s: State, items: BlueprintItem[], what: string, now: string) {
-  s.blueprint.draft = { rev: s.blueprint.draft.rev + 1, items };
+  s.blueprint.draft = { ...s.blueprint.draft, rev: s.blueprint.draft.rev + 1, items };
   event(s, now, "user", "vision", `The draft: ${what}`);
 }
 
@@ -165,6 +166,8 @@ export interface DraftChanges {
   /** The items as they are in force, which the draft drops. */
   dropped: BlueprintItem[];
   open: BlueprintItem[];
+  /** The draft's vision text, when it differs from the text in force (an edit after the start). */
+  vision?: DraftVision;
 }
 
 /**
@@ -186,10 +189,12 @@ export function draftChanges(s: State): DraftChanges {
       else if (!same(f, d)) out.changed.push({ item: d, replaces: f });
     } else if (f && f.status !== "dropped") out.dropped.push(f);
   }
+  const vision = s.blueprint.draft.vision;
+  if (vision && vision.text !== currentVision(s).text) out.vision = vision;
   return out;
 }
 
-const hasChange = (c: DraftChanges) => c.added.length + c.changed.length + c.dropped.length > 0;
+const hasChange = (c: DraftChanges) => c.added.length + c.changed.length + c.dropped.length > 0 || !!c.vision;
 
 /** Whether the draft holds anything to show: a change, or an open item. */
 export function hasDraft(s: State): boolean {
@@ -207,6 +212,8 @@ export function discardDraft(state: State, seenRev: number, now: string): State 
   if (seenRev !== rev) throw new StaleWriteError(seenRev, rev);
   if (!hasDraft(state)) throw new ControlError("There is no draft to discard: it is the version in force.");
   const s = draft(state);
+  // The draft's vision text goes too: the vision in force stands.
+  delete s.blueprint.draft.vision;
   changeDraft(s, structuredClone(blueprintItems(s)), `discarded; it is the version in force${blueprintRev(s) ? ` (r${blueprintRev(s)})` : ""} again`, now);
   return s;
 }
@@ -298,7 +305,7 @@ export function lockInSummary(s: State): LockInSummary {
   return {
     draftRev: draftRev(s),
     inForceRev: blueprintRev(s),
-    changes: { added: c.added, changed: c.changed, dropped: c.dropped },
+    changes: { added: c.added, changed: c.changed, dropped: c.dropped, ...(c.vision ? { vision: { text: c.vision.text, reason: c.vision.reason, replacesRev: currentVision(s).rev } } : {}) },
     tasks,
     newWork: c.added.filter((i) => !cited.has(i.id)).map((i) => i.id),
     budgets: {
@@ -320,6 +327,7 @@ function changeWords(c: LockInSummary["changes"]): string {
     c.added.length ? `added ${c.added.map(name).join(", ")}` : "",
     c.changed.length ? `changed ${c.changed.map((x) => `${x.replaces.title} v${x.replaces.version} → v${x.item.version}`).join(", ")}` : "",
     c.dropped.length ? `dropped ${c.dropped.map(name).join(", ")}` : "",
+    c.vision ? "changed the vision text" : "",
   ]
     .filter(Boolean)
     .join("; ");
@@ -334,6 +342,11 @@ function changeWords(c: LockInSummary["changes"]): string {
  */
 export function putDraftInForce(s: State, now: string): void {
   const summary = lockInSummary(s);
+  // The draft's vision text goes into force first, so the revision stands on it (pass 5, r10). The focus in force stays.
+  const dv = s.blueprint.draft.vision;
+  if (summary.changes.vision && dv) {
+    pushVision(s, { author: "user", text: dv.text, focus: currentVision(s).focus, reason: `Locked in: ${dv.reason}`, ...(dv.source ? { source: { ...dv.source, messageIds: [...dv.source.messageIds] } } : {}), ...(dv.simulated ? { simulated: true as const } : {}) }, now);
+  }
   const byId = new Map(draftItems(s).map((i) => [i.id, i]));
   const dropped = new Set(summary.changes.dropped.map((i) => i.id));
   const kept = blueprintItems(s).map((f) => {
@@ -346,6 +359,7 @@ export function putDraftInForce(s: State, now: string): void {
   const rev = blueprintRev(s) + 1;
   const reason = `locked in: ${changeWords(summary.changes)}`;
   s.blueprint.revisions.push({ rev, at: now, visionRev: currentVision(s).rev, reason, items: structuredClone(items), lockIn: { by: "user", summary } });
+  // The draft moves on; its vision text is in force now, so it holds none.
   s.blueprint.draft = { rev: s.blueprint.draft.rev + 1, items: s.blueprint.draft.items };
   const open = summary.stillOpen.length;
   event(s, now, "user", "vision", `Lock in r${rev}: ${changeWords(summary.changes)}${open ? `; ${open} open item${open === 1 ? " stays" : "s stay"} in the draft` : ""}`);

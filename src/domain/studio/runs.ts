@@ -18,7 +18,8 @@
 // resumes with the project. A result counts only from a run still running or stopping, and only while it is not
 // stale: its round still open, and the artifact it revises not revised by anyone else meanwhile.
 
-import { busyAgents, currentVision, draft, event, nextId } from "../model/core";
+import { busyAgents, draft, event, nextId } from "../model/core";
+import { draftVisionText } from "../model/vision";
 import { providerLabel } from "../model/resolution";
 import { CONTROL_RE, stripInvisible, visibleOrEmpty } from "../model/textSafety";
 import { budgetStop } from "../spend";
@@ -239,7 +240,8 @@ export function placeholderBrief(s: State, round: number): string {
     data: "the inputs and outputs: the data crossing each boundary",
     flows: "the flows: the user's journeys, the system's sequence, and the states (empty, loading, error, offline, first run)",
   };
-  const vision = currentVision(s).text.trim();
+  // The studio works on the draft (pass 5): its vision text, which is the one in force until the owner edits it.
+  const vision = draftVisionText(s).trim();
   return [
     "PLACEHOLDER BRIEF. The lead's studio brief comes in ORC-029 pass 4; this one is built from the vision and the round's focus only.",
     "",

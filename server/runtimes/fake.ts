@@ -221,7 +221,9 @@ const FOCUS_WORDS: Record<string, string> = { "what exists": "material", "the ex
  * says it is simulated.
  */
 export function fakeStudio(prompt: string): Record<string, unknown> | undefined {
-  if (!/^## The studio$/m.test(prompt) || !/^- No round is open\./m.test(prompt)) return undefined;
+  // The simulated lead runs the studio in Vision only: while the factory runs it gets the studio brief too (pass 5), but
+  // it cannot tell a message about the design from one about the work, so it opens no round there.
+  if (!/^Project stage: shaping$/m.test(prompt) || !/^## The studio$/m.test(prompt) || !/^- No round is open\./m.test(prompt)) return undefined;
   const scope = (/^Devices \(the user's scope\): ([^\n]*)\.$/m.exec(prompt)?.[1] ?? "desktop").split(", ");
   const screens = scope.filter((d) => d === "desktop" || d === "mobile");
   const asIs = /^No round yet, and the repository has code\./m.test(prompt);

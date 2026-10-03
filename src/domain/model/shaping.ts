@@ -33,7 +33,7 @@ import {
 import { currentVision, draft, event, touch } from "./core";
 import { autonomyMode, autopilotAutonomy, setAutonomy } from "./lead";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "./textSafety";
-import { pushVision } from "./vision";
+import { draftVisionText, pushVision, setDraftVisionInto } from "./vision";
 
 const MAX_VISION_TEXT = 8000;
 const MAX_VISION_FOCUS = 300;
@@ -293,7 +293,8 @@ export function validateVisionDraft(s: State, r: LeadRun, vision: unknown): Vali
     if (typeof v.reason !== "string") return { ok: false, why: "the reason must be text" };
     reason = cleanLine(v.reason).slice(0, 500) || reason;
   }
-  if (text === cur.text.trim() && focus === oneLine(cur.focus)) return { ok: false, why: "the draft is the same as the current vision" };
+  // While building, the text to compare with is the draft's (an edit after the start waits there for Lock in).
+  if (text === draftVisionText(s).trim() && focus === oneLine(cur.focus)) return { ok: false, why: "the draft is the same as the current vision" };
   return { ok: true, draft: { text, focus, reason } };
 }
 
@@ -474,13 +475,25 @@ export function acceptVisionDraft(state: State, draftId: string, expectedRev: nu
   if (text.length > MAX_VISION_TEXT) throw new ControlError(`The vision is limited to ${MAX_VISION_TEXT} characters.`);
   if (focus.length > MAX_VISION_FOCUS) throw new ControlError(`The focus is limited to ${MAX_VISION_FOCUS} characters.`);
   // Accepting what already stands would record a revision that changes nothing.
-  if (text === cur.text.trim() && focus === oneLine(cur.focus)) throw new ControlError("Nothing differs from the current vision; change the text or dismiss the draft.");
+  const base = draftVisionText(state);
+  if (text === base.trim() && focus === oneLine(cur.focus)) throw new ControlError("Nothing differs from the current vision; change the text or dismiss the draft.");
   const s = draft(state);
   const draftRec = getVisionDraft(s, draftId);
+  const why = `${edited ? "Accepted the lead's draft with edits" : "Accepted the lead's draft"} (${d.id}): ${d.reason}`;
+  const source = { draftId: d.id, leadRunId: d.leadRunId, messageIds: [...d.messageIds] };
+  if (s.project.stage === "building") {
+    // While building (pass 5, r10), the text joins the blueprint's draft until your Lock in; a new focus applies now.
+    if (text !== base) setDraftVisionInto(s, { text, reason: why, source, ...(d.simulated ? { simulated: true as const } : {}) }, now);
+    const rev = focus !== cur.focus ? pushVision(s, { author: "user", text: cur.text, focus, reason: why, source, ...(d.simulated ? { simulated: true as const } : {}) }, now) : undefined;
+    draftRec.status = "accepted";
+    draftRec.resolvedAt = now;
+    if (rev) draftRec.visionRev = rev.rev;
+    return s;
+  }
   const rev = pushVision(
     s,
     // A draft the simulated lead wrote stays labelled once it is the vision, edited or not.
-    { author: "user", text, focus, reason: `${edited ? "Accepted the lead's draft with edits" : "Accepted the lead's draft"} (${d.id}): ${d.reason}`, source: { draftId: d.id, leadRunId: d.leadRunId, messageIds: [...d.messageIds] }, ...(d.simulated ? { simulated: true as const } : {}) },
+    { author: "user", text, focus, reason: why, source, ...(d.simulated ? { simulated: true as const } : {}) },
     now,
     `Vision r${cur.rev + 1} by you: accepted the lead's draft ${d.id}${edited ? " with edits" : ""}`,
   );
