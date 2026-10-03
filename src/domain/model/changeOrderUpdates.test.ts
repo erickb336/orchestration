@@ -508,6 +508,24 @@ describe("a line keeps its own status (review finding 7)", () => {
   });
 });
 
+describe("a refused steering block (review finding 10)", () => {
+  it("never carries the change order's rows: they go into a set of their own, which keeps the refusal as a note", () => {
+    const f = changeOrdered();
+    const r = M.startLeadRun(f.s, { provider: "claude", model: "m", trigger: "change-order" }, at(20));
+    const reply = (changeOrder: unknown) => M.completeLeadRun(r.state, r.runId, { reply: "", proposals: [], steer: { focus: "Trips first" }, changeOrder } as never, at(21));
+    const s = reply(fullAnswer(f));
+    const sets = s.steering.filter((x) => x.id === `cs-${r.runId}`);
+    expect(sets).toHaveLength(1);
+    expect(sets[0].refused).toBeUndefined();
+    expect(sets[0].changes.map((c) => c.status)).toEqual(["applied", "applied", "applied", "applied", "applied"]);
+    expect(sets[0].notes).toEqual(["The lead's steering block was refused: planning runs cannot steer."]);
+    expect(s.conversation.at(-1)).toMatchObject({ changeSetId: sets[0].id, text: "I made the changes listed below." });
+    // With no update applied, the refused set stays as it was: the reply says nothing was applied, which is true.
+    const none = reply({ rev: order(f.s).rev, updates: [] });
+    expect(none.steering.filter((x) => x.id === `cs-${r.runId}`)).toEqual([expect.objectContaining({ refused: "planning runs cannot steer", changes: [] })]);
+  });
+});
+
 describe("the change order's state as the owner and the scheduler see it", () => {
   it("a task you cancel and new work another task plans settle what the lead left: the scheduler closes it", () => {
     const f = changeOrdered();

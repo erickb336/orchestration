@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { ServiceInfo } from "../api";
 import { buildDemo } from "../domain/demo";
 import { buildSeed } from "../domain/seed";
+import { at as coAt, changeOrdered, fullAnswer } from "../domain/testing/changeOrders";
 import * as M from "../domain/model";
 import type { FindingDecision, State, SteeringChange } from "../domain/types";
 import { Conversation } from "./Conversation";
@@ -78,6 +79,25 @@ describe("the lead conversation", () => {
     expect(words).not.toContain("Delivered when the run started");
     expect(words).toContain("sent; no Undo: a sent note cannot be unsent");
     expect(count(markup, ">Undo</button>")).toBe(2); // the deferral's and the focus's rows; never the note's
+  });
+
+  it("a change order's rows under a reply whose steering was refused read as applied, never as 'none were applied' (review finding 10)", () => {
+    const f = changeOrdered();
+    const r = M.startLeadRun(f.s, { provider: "claude", model: "m", trigger: "change-order" }, coAt(20));
+    const s = M.completeLeadRun(r.state, r.runId, { reply: "Done.", proposals: [], steer: { focus: "Trips first" }, changeOrder: fullAnswer(f) } as never, coAt(21));
+    const words = text(render(s));
+    expect(words).toContain("steering block was refused: planning runs cannot steer.");
+    expect(words).not.toContain("none were applied");
+    // A set an earlier build stored refused, with the rows in it, reads the same way.
+    const stored = structuredClone(s);
+    const set = stored.steering.find((x) => x.id === `cs-${r.runId}`)!;
+    Object.assign(set, { refused: "planning runs cannot steer", notes: [] });
+    const old = text(render(stored));
+    expect(old).toContain("steering block was refused: planning runs cannot steer.");
+    expect(old).not.toContain("none were applied");
+    // A refused set with no rows still says that nothing was applied, which is true.
+    Object.assign(set, { changes: [] });
+    expect(text(render(stored))).toContain("The lead asked for changes, but none were applied: planning runs cannot steer.");
   });
 
   it("shows no internal ids and no scheduler buttons", () => {

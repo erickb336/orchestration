@@ -328,19 +328,24 @@ export function lineOf(s: State, changeId: string): { co: ChangeOrder; line: Cha
 /**
  * A completed lead run's answer to the change order it was shown, on a draft (completeLeadRun). `raw` is the reply's
  * "changeOrder" block as found. Each accepted update becomes a line of the change order and a row of the run's change
- * set (`set`, made here when the reply has none); with handler "lead" it applies now, with "user" it waits for the
- * owner. Returns the set (when the answer gave it a row) and the notes for the reply: refused updates, and what the
- * answer left out. A run shown no change order changes nothing.
+ * set (`set`, made here when the reply has none, or when the reply's steering block was refused); with handler "lead"
+ * it applies now, with "user" it waits for the owner. Returns the reply's set (the one with the rows, when the answer
+ * gave any) and the notes for the reply: refused updates, and what the answer left out. A run shown no change order
+ * changes nothing.
  */
 export function answerChangeOrderInto(s: State, r: LeadRun, raw: unknown, set: SteeringChangeSet | undefined, now: string, simulated?: true): { set?: SteeringChangeSet; notes: string[] } {
   const co = changeOrderShownTo(s, r.id);
   const given = raw !== undefined && raw !== null;
   if (!co) return { set, notes: given ? ["this run was not asked to answer a change order; nothing was changed"] : [] };
   const notes: string[] = [];
+  // A refused set says that nothing under the reply applied (review finding 10): it never carries a row. The rows go
+  // into a set made when the first one is kept, which takes the refused set's place and keeps its refusal as a note.
+  let rows = set && !set.refused ? set : undefined;
+  const setId = set?.id ?? `cs-${r.id}`;
   const finish = () => {
     co.notes = [...(co.notes ?? []), ...notes];
     settleChangeOrdersInto(s, now);
-    return { set, notes: notes.map((n) => `r${co.rev}: ${n}`) };
+    return { set: rows ?? set, notes: notes.map((n) => `r${co.rev}: ${n}`) };
   };
   if (co.status !== "open") return { set, notes: given ? [`r${co.rev} is closed; nothing was changed`] : [] };
   if (!given) {
@@ -364,8 +369,7 @@ export function answerChangeOrderInto(s: State, r: LeadRun, raw: unknown, set: S
       notes.push(refused);
       continue;
     }
-    set ??= newSet(s, r, co, now, simulated);
-    const row: SteeringChange = { id: `${set.id}.${set.changes.length + 1}`, kind: u.kind, ...(u.taskId ? { taskId: u.taskId } : {}), before: null, after: null, why: u.why, status: "suggested" };
+    const row: SteeringChange = { id: `${setId}.${(rows?.changes.length ?? 0) + 1}`, kind: u.kind, ...(u.taskId ? { taskId: u.taskId } : {}), before: null, after: null, why: u.why, status: "suggested" };
     const items = u.proposal ? (withRefs(s, u.proposal, u.taskId ? getTask(s, u.taskId) : undefined).blueprintRefs ?? []) : [];
     const line: ChangeOrderLine = { changeId: row.id, status: "suggested", kind: u.kind, ...(u.taskId ? { taskId: u.taskId } : {}), items, words: "", why: u.why, ...(u.proposal ? { proposal: structuredClone(u.proposal) as unknown as Record<string, unknown> } : {}) };
     const owners = ownersCall(s, u);
@@ -381,7 +385,8 @@ export function answerChangeOrderInto(s: State, r: LeadRun, raw: unknown, set: S
       row.status = "applied";
       row.appliedBy = "lead";
     }
-    set.changes.push(row);
+    rows ??= newSet(s, r, co, now, simulated);
+    rows.changes.push(row);
     co.lines = [...(co.lines ?? []), line];
     // The lead's acceptance lines its spec leaves out (a line under a rule's tag), named for the lead and the owner.
     if (u.proposal) notes.push(...refusedAcceptance(s, withRefs(s, u.proposal, u.taskId ? getTask(s, u.taskId) : undefined)).map((l) => `${u.taskId ?? `"${String(u.proposal!.title).slice(0, 80)}"`}: ${refusedAcceptanceNote(l)}`));
@@ -392,15 +397,24 @@ export function answerChangeOrderInto(s: State, r: LeadRun, raw: unknown, set: S
   const lines = co.lines ?? [];
   const n = (status: ChangeOrderLine["status"]) => lines.filter((l) => l.status === status).length;
   const counts = [n("applied") ? `${n("applied")} applied` : "", n("suggested") ? `${n("suggested")} waiting for your go-ahead` : ""].filter(Boolean).join(", ");
-  event(s, now, "lead", "vision", `Lead run ${r.id} answered change order r${co.rev}: ${lines.length ? `${lines.length} update${lines.length === 1 ? "" : "s"} (${counts})` : "no update"}${notes.length ? `; ${notes.length} note${notes.length === 1 ? "" : "s"}` : ""}${set ? ` (${set.id})` : ""}`);
+  event(s, now, "lead", "vision", `Lead run ${r.id} answered change order r${co.rev}: ${lines.length ? `${lines.length} update${lines.length === 1 ? "" : "s"} (${counts})` : "no update"}${notes.length ? `; ${notes.length} note${notes.length === 1 ? "" : "s"}` : ""}${rows ? ` (${rows.id})` : ""}`);
   return finish();
 }
 
-/** The change set a change-order run's lines go into, when the reply has none. Pushed onto the state and the run. */
+/**
+ * The change set a change-order run's lines go into, when the reply has none it may use. A refused set of the reply
+ * (its steering block was refused) gives it its place and its refusal, as a note. On the state and the run.
+ */
 function newSet(s: State, r: LeadRun, co: ChangeOrder, now: string, simulated?: true): SteeringChangeSet {
-  const set: SteeringChangeSet = { id: `cs-${r.id}`, leadRunId: r.id, messageIds: [...r.messageIds], at: now, mode: s.project.steeringMode, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, reason: `Change order r${co.rev}`, notes: [], changes: [], ...(simulated ? { simulated: true as const } : {}) };
-  s.steering.push(set);
-  if (s.steering.length > 200) s.steering.splice(0, s.steering.length - 200);
+  const id = `cs-${r.id}`;
+  const at = s.steering.findIndex((x) => x.id === id);
+  const refused = at >= 0 ? s.steering[at].refused : undefined;
+  const set: SteeringChangeSet = { id, leadRunId: r.id, messageIds: [...r.messageIds], at: now, mode: s.project.steeringMode, basedOnVisionRev: r.visionRev ?? currentVision(s).rev, reason: `Change order r${co.rev}`, notes: refused ? [`The lead's steering block was refused: ${refused}.`] : [], changes: [], ...(simulated ? { simulated: true as const } : {}) };
+  if (at >= 0) s.steering[at] = set;
+  else {
+    s.steering.push(set);
+    if (s.steering.length > 200) s.steering.splice(0, s.steering.length - 200);
+  }
   r.changeSetId = set.id;
   return set;
 }
