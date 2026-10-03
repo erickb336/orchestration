@@ -89,3 +89,23 @@ These are product choices, not bugs. Each has my recommendation.
 | D-7 | Schedule the milestone for your code concerns (structure, data shapes, nested ternaries, special cases) as principles and automated checks (docs/tasks/ORC-029.md:474). It has no ORC number. | Now, after ORC-030, or not. | After ORC-030. |
 | D-8 | A studio prototype can still send a few bytes out in your Chrome (WebRTC STUN and TURN, `dns-prefetch`, `preconnect`; docs/safety.md:29). | Accept and document (now); ship a recommended Chrome policy; route the studio through a local proxy. | Accept: the page holds only the designer's own files. |
 | D-9 | Keep the Mac awake while the factory runs (docs/PROJECT_SPEC.md:203; see B-13). | Label only (now); hold a power assertion while runs are active; wait for the Mac mini. | Hold the assertion while runs are active, then test sleep and wake (B-13). |
+
+## Fixed on 2026-10-03, with their root causes
+
+Each fix has a test that failed before it. The workers' options and choices are in `ORC-030-S1.md` and `ORC-030-S2.md`.
+
+| ID | Fix | Root | Lesson (proposed) |
+| --- | --- | --- | --- |
+| B-02, D-3 | Codex reports a request's usage only when it completes, so all 10 paused Codex runs in the records had none. The adapter now reports totals or zeros at every end and marks a cut-off request; the budgets count that request at the dearest finished run on its model (or the run limit before there is one), and a model with no price at its provider's dearest price. Only a cost with no limit still holds the stop, and the stop names the run. The "no recorded cost" item is gone from Needs you. | Design: "no request", "a request cut off" and "no record" were one unknown with no limit. | An adapter states what it knows: zero is not "nothing". The real-run scenario should set a building budget. |
+| B-03 | The PE's estimate for the rest of the build is the sum of its own estimates on the approved parts that no landed work has built; maintenance sums every part plus the PE's standing calls. The unwritten `FactoryStart.estimate` field is gone. | Build: pass 6 designed it, and nothing wrote it. | A field that nothing writes should fail a check. |
+| B-06 | "Ask the PE again" when its runs end with no verdict. The version was never stuck, only unreviewed. | Design: the end state got a label, not an action. | Every end state the owner sees has an action. |
+| B-18 | The decisions cap keeps the PE calls the budgets count, by the same rule. | Design. | One rule decides what counts; the cap uses it. |
+| B-05 | The probe of the checks follows the route a run takes: the environment when it is set and Docker passed, else the host sandbox. | Build: E1 moved the checks, not their probe. | A probe tests the same route as the work it gates. |
+| B-04 | Housekeeping finds the environment's containers and networks by the `orchestrator.environment` label, and its work folders when no container can use them. A test makes every container kind with the real naming functions. | Design, and a check that missed it. | Every resource kind comes from one list, and the clean-up's test goes through that list. |
+| B-32 | The recorder runs as this computer's user (10001 only as root), as the environment does since 2868c70. The image needs no change. | A check that missed it: every proof ran on Colima, which maps every user. | A container that writes to a bind mount runs as the folder's owner. CI's Linux runner is a second platform: run the container tests there. |
+| B-33 | The Docker stand-in's container ends with its test process. | Build. | — |
+| B-17 | The note tests wait on a gate the test opens, not on a 300 ms delay. | A check that waited on wall-clock time. | A test controls the order of events and never bets on a delay. |
+
+**Found by CI on Linux, fixed before ORC-029 merged:** containers ran as user 10001 and could not write the copy on a Linux host (2868c70); the hostile test's control assumed Colima's addresses (4410d9f, then 1c04b4f). Root: a check that missed it, as B-32.
+
+**Not verified:** a Linux host for the recorder (CI does not build its image); a real Codex run that confirms a cut-off request gets no usage report.
