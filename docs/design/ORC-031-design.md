@@ -54,3 +54,6 @@
 2. Two helpers, interrupted while they work.
 
 It checks the four points and writes a scrubbed record to `docs/real-runs/`. Only if every check passes does a person set `childAgentTracking` to "supported".
+
+**The lead's rerun on the fixed adapter (2026-10-03, `docs/real-runs/2026-10-03T08-35-46-945Z.json`, about $0.055 on Sonnet): all four points held.** The cap allowed two helpers and refused the third; the hook and the guard decided the helpers' own tool calls (a read outside the folder was refused); each helper ended with its model; the helpers' work was inside the session's total (30,245 tokens against 14,589 in the parent's own loop); the interrupt stopped both helpers, with nothing after the stop. **Claude's `childAgentTracking` is now "supported".** The earlier Haiku run (`2026-10-03T08-25-14-231Z`) made no tool call in its first run, so it could not test the cap; it is kept as a record.
+

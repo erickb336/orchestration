@@ -124,9 +124,10 @@ const CLAUDE_CAPABILITIES: CapabilityMap = {
   resume: "unverified",
   usageReporting: "supported",
   // ORC-031 31b: a research run with `allowSubagents` may start read-only helpers, counted, capped and reported
-  // (`subagent` events). Stays "unsupported" until real runs prove pause, cost, safety and the cap (docs/real-runs);
-  // until then the service turns the setting on for no research step.
-  childAgentTracking: "unsupported",
+  // (`subagent` events). "Supported" on the evidence of a real run that proved all four points: pause stops the
+  // helpers, their work is inside the session's total (the budget counts it through the parent), the hook and the
+  // guard decide their own tool calls, and the cap holds (docs/real-runs/2026-10-03T08-35-46-945Z.json).
+  childAgentTracking: "supported",
 };
 
 const READ_TOOLS = ["Read", "Glob", "Grep"] as const;

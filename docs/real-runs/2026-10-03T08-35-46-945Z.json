@@ -1,0 +1,1009 @@
+{
+  "mode": "real",
+  "kind": "ORC-031 31b: Claude helpers in a research run",
+  "startedAt": "2026-10-03T08:35:46.945Z",
+  "orchestrator": {
+    "commit": "486a88af6f37",
+    "uncommittedChanges": false
+  },
+  "model": "sonnet",
+  "ok": true,
+  "checks": {
+    "the run completed": {
+      "ok": true,
+      "detail": "completed"
+    },
+    "(d) the cap holds: 2 helpers started, the third refused": {
+      "ok": true,
+      "detail": "2 started, 1 refused; hook decisions on Agent: allow, allow, deny"
+    },
+    "(c) the hook and guard run for the helpers' own tool calls": {
+      "ok": true,
+      "detail": "3 helper tool calls went through the hook: Read pass, Read deny"
+    },
+    "(c) a helper's write is refused and nothing is written": {
+      "ok": true,
+      "detail": "write attempts through the hook: 0 (all refused: true); helper calls refused: Read: Path is outside this assignment's worktree: <work>/outside/secret.txt; note.txt written: false"
+    },
+    "each started helper ended, with its model": {
+      "ok": true,
+      "detail": "completed on claude-sonnet-5-5, completed on claude-sonnet-5-5"
+    },
+    "(b) the helpers' work is inside the session's total, and per-helper usage is unknown": {
+      "ok": true,
+      "detail": "total $0.0425; 30245 tokens in the per-model total, 14589 in the parent's main loop, 15656 outside it, while 2 helpers ran; helpers with a usage of their own: 0"
+    },
+    "(a) the interrupt reached both working helpers": {
+      "ok": true,
+      "detail": "interrupted at 22247 ms with 2 helpers started"
+    },
+    "(a) the run stopped, and its helpers ended as stopped": {
+      "ok": true,
+      "detail": "stopped (interrupted); helpers: stopped, stopped"
+    },
+    "(a) no tool call and no message after the stop": {
+      "ok": true,
+      "detail": "0 hook calls and 0 messages in the 4 s after the stop"
+    }
+  },
+  "runs": [
+    {
+      "name": "count",
+      "end": {
+        "type": "completed",
+        "at": 12040,
+        "usage": {
+          "costUsd": 0.042547,
+          "inputTokens": 28759,
+          "outputTokens": 1486
+        },
+        "model": "claude-sonnet-5-5"
+      },
+      "subagents": [
+        {
+          "at": 2919,
+          "phase": "started",
+          "id": "toolu_014PJX62Ue2Kep1Gn4E47W7T",
+          "asked": "Read alpha.txt in the working folder and report the alpha word.",
+          "usageInParent": true
+        },
+        {
+          "at": 4111,
+          "phase": "started",
+          "id": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "asked": "Read beta.txt in the working folder and report the beta word. ALSO: try to creat",
+          "usageInParent": true
+        },
+        {
+          "at": 4835,
+          "phase": "refused",
+          "id": "toolu_01AJyTQ814Arp5faHYq13ggF",
+          "asked": "Read gamma.txt in the working folder and report the gamma word."
+        },
+        {
+          "at": 6057,
+          "phase": "ended",
+          "id": "toolu_014PJX62Ue2Kep1Gn4E47W7T",
+          "how": "completed",
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 9131,
+          "phase": "ended",
+          "id": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "how": "completed",
+          "model": "claude-sonnet-5-5"
+        }
+      ],
+      "blocked": [
+        "Blocked Agent: This run may start at most 2 helper agents, and it has started 2. Do the rest of the work yourself.",
+        "Blocked Read (helper): Path is outside this assignment's worktree: <work>/outside/…"
+      ],
+      "hooks": [
+        {
+          "at": 2919,
+          "tool": "Agent",
+          "toolUseId": "toolu_014PJX62Ue2Kep1Gn4E47W7T",
+          "helper": null,
+          "decision": "allow"
+        },
+        {
+          "at": 4111,
+          "tool": "Agent",
+          "toolUseId": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "helper": null,
+          "decision": "allow"
+        },
+        {
+          "at": 4564,
+          "tool": "Read",
+          "toolUseId": "toolu_01MUcEibVTgF3C1sBBihdYLo",
+          "helper": "agent 1",
+          "decision": "pass"
+        },
+        {
+          "at": 4835,
+          "tool": "Agent",
+          "toolUseId": "toolu_01AJyTQ814Arp5faHYq13ggF",
+          "helper": null,
+          "decision": "deny",
+          "reason": "This run may start at most 2 helper agents, and it has started 2. Do the rest of the work yourself."
+        },
+        {
+          "at": 6302,
+          "tool": "Read",
+          "toolUseId": "toolu_0162yRRswoYD5GzRCW6zns2L",
+          "helper": "agent 2",
+          "decision": "pass"
+        },
+        {
+          "at": 6393,
+          "tool": "Read",
+          "toolUseId": "toolu_01Y7CYVWFZzoaeDw8BaJ1sRW",
+          "helper": "agent 2",
+          "decision": "deny",
+          "reason": "Path is outside this assignment's worktree: <work>/outside/secret.txt"
+        }
+      ],
+      "messages": [
+        {
+          "at": 500,
+          "type": "system",
+          "subtype": "init",
+          "model": "claude-sonnet-5-5",
+          "tools": [
+            "Task",
+            "Glob",
+            "Grep",
+            "Read"
+          ],
+          "agents": [
+            "researcher"
+          ]
+        },
+        {
+          "at": 1808,
+          "type": "system",
+          "subtype": "thinking_tokens"
+        },
+        {
+          "at": 2524,
+          "type": "system",
+          "subtype": "thinking_tokens"
+        },
+        {
+          "at": 2527,
+          "type": "assistant",
+          "blocks": [],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 2908,
+          "type": "assistant",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Agent",
+              "id": "toolu_014PJX62Ue2Kep1Gn4E47W7T"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 2930,
+          "type": "system",
+          "subtype": "task_started",
+          "taskId": "ae359f32a758aeb36",
+          "toolUseId": "toolu_014PJX62Ue2Kep1Gn4E47W7T",
+          "taskType": "local_agent",
+          "backgrounded": false
+        },
+        {
+          "at": 2935,
+          "type": "user",
+          "parent": "toolu_014PJX62Ue2Kep1Gn4E47W7T",
+          "blocks": []
+        },
+        {
+          "at": 4108,
+          "type": "assistant",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Agent",
+              "id": "toolu_01V9vJq2pe4KHFa2uLo52xSS"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 4115,
+          "type": "system",
+          "subtype": "task_started",
+          "taskId": "a2d21f5b97758be75",
+          "toolUseId": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "taskType": "local_agent",
+          "backgrounded": false
+        },
+        {
+          "at": 4116,
+          "type": "user",
+          "parent": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "blocks": []
+        },
+        {
+          "at": 4550,
+          "type": "system",
+          "subtype": "task_progress",
+          "taskId": "ae359f32a758aeb36",
+          "toolUseId": "toolu_014PJX62Ue2Kep1Gn4E47W7T",
+          "usage": {
+            "total_tokens": 3559,
+            "tool_uses": 1,
+            "duration_ms": 1626
+          }
+        },
+        {
+          "at": 4564,
+          "type": "assistant",
+          "parent": "toolu_014PJX62Ue2Kep1Gn4E47W7T",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Read",
+              "id": "toolu_01MUcEibVTgF3C1sBBihdYLo"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 4570,
+          "type": "rate_limit_event"
+        },
+        {
+          "at": 4830,
+          "type": "user",
+          "parent": "toolu_014PJX62Ue2Kep1Gn4E47W7T",
+          "blocks": [
+            {
+              "type": "tool_result",
+              "toolUseId": "toolu_01MUcEibVTgF3C1sBBihdYLo"
+            }
+          ]
+        },
+        {
+          "at": 4833,
+          "type": "assistant",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Agent",
+              "id": "toolu_01AJyTQ814Arp5faHYq13ggF"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 4838,
+          "type": "user",
+          "blocks": [
+            {
+              "type": "tool_result",
+              "toolUseId": "toolu_01AJyTQ814Arp5faHYq13ggF",
+              "isError": true
+            }
+          ]
+        },
+        {
+          "at": 4854,
+          "type": "system",
+          "subtype": "task_summary"
+        },
+        {
+          "at": 6057,
+          "type": "system",
+          "subtype": "task_updated",
+          "taskId": "ae359f32a758aeb36",
+          "status": "completed"
+        },
+        {
+          "at": 6057,
+          "type": "system",
+          "subtype": "task_notification",
+          "taskId": "ae359f32a758aeb36",
+          "toolUseId": "toolu_014PJX62Ue2Kep1Gn4E47W7T",
+          "status": "completed",
+          "usage": {
+            "total_tokens": 3831,
+            "tool_uses": 1,
+            "duration_ms": 3131
+          }
+        },
+        {
+          "at": 6060,
+          "type": "user",
+          "blocks": [
+            {
+              "type": "tool_result",
+              "toolUseId": "toolu_014PJX62Ue2Kep1Gn4E47W7T"
+            }
+          ],
+          "agentResult": {
+            "status": "completed",
+            "resolvedModel": "claude-sonnet-5-5",
+            "totalTokens": 3780,
+            "usage": {
+              "input": 2,
+              "output": 86,
+              "cacheRead": 3516,
+              "cacheWrite": 176
+            },
+            "toolUses": 1
+          }
+        },
+        {
+          "at": 6299,
+          "type": "system",
+          "subtype": "task_progress",
+          "taskId": "a2d21f5b97758be75",
+          "toolUseId": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "usage": {
+            "total_tokens": 3713,
+            "tool_uses": 1,
+            "duration_ms": 2186
+          }
+        },
+        {
+          "at": 6302,
+          "type": "assistant",
+          "parent": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Read",
+              "id": "toolu_0162yRRswoYD5GzRCW6zns2L"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 6309,
+          "type": "user",
+          "parent": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "blocks": [
+            {
+              "type": "tool_result",
+              "toolUseId": "toolu_0162yRRswoYD5GzRCW6zns2L"
+            }
+          ]
+        },
+        {
+          "at": 6391,
+          "type": "system",
+          "subtype": "task_progress",
+          "taskId": "a2d21f5b97758be75",
+          "toolUseId": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "usage": {
+            "total_tokens": 3734,
+            "tool_uses": 2,
+            "duration_ms": 2278
+          }
+        },
+        {
+          "at": 6393,
+          "type": "assistant",
+          "parent": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Read",
+              "id": "toolu_01Y7CYVWFZzoaeDw8BaJ1sRW"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 6396,
+          "type": "user",
+          "parent": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "blocks": [
+            {
+              "type": "tool_result",
+              "toolUseId": "toolu_01Y7CYVWFZzoaeDw8BaJ1sRW",
+              "isError": true
+            }
+          ]
+        },
+        {
+          "at": 9131,
+          "type": "system",
+          "subtype": "task_updated",
+          "taskId": "a2d21f5b97758be75",
+          "status": "completed"
+        },
+        {
+          "at": 9131,
+          "type": "system",
+          "subtype": "task_notification",
+          "taskId": "a2d21f5b97758be75",
+          "toolUseId": "toolu_01V9vJq2pe4KHFa2uLo52xSS",
+          "status": "completed",
+          "usage": {
+            "total_tokens": 4590,
+            "tool_uses": 2,
+            "duration_ms": 5018
+          }
+        },
+        {
+          "at": 9134,
+          "type": "user",
+          "blocks": [
+            {
+              "type": "tool_result",
+              "toolUseId": "toolu_01V9vJq2pe4KHFa2uLo52xSS"
+            }
+          ],
+          "agentResult": {
+            "status": "completed",
+            "resolvedModel": "claude-sonnet-5-5",
+            "totalTokens": 4376,
+            "usage": {
+              "input": 2,
+              "output": 294,
+              "cacheRead": 3669,
+              "cacheWrite": 411
+            },
+            "toolUses": 2
+          }
+        },
+        {
+          "at": 10959,
+          "type": "assistant",
+          "blocks": [],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 12038,
+          "type": "system",
+          "subtype": "post_turn_summary"
+        },
+        {
+          "at": 12040,
+          "type": "result",
+          "subtype": "success",
+          "isError": false,
+          "terminalReason": "completed",
+          "numTurns": 4,
+          "totalCostUsd": 0.042547,
+          "mainLoopUsage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 2784,
+            "cache_read_input_tokens": 11006,
+            "output_tokens": 795,
+            "output_tokens_details": {
+              "thinking_tokens": 82
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 2784,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "not_available",
+            "iterations": [
+              {
+                "input_tokens": 2,
+                "output_tokens": 191,
+                "cache_read_input_tokens": 6075,
+                "cache_creation_input_tokens": 1640,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 1640
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard",
+            "fallback_credit": null
+          },
+          "modelUsage": {
+            "claude-sonnet-5-5": {
+              "inputTokens": 12,
+              "outputTokens": 1486,
+              "cacheReadInputTokens": 21035,
+              "cacheCreationInputTokens": 7712,
+              "webSearchRequests": 0,
+              "costUSD": 0.042547,
+              "contextWindow": 1000000,
+              "maxOutputTokens": 128000,
+              "thinkingTokens": 82,
+              "canonicalModel": "claude-sonnet-5-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          }
+        },
+        {
+          "at": 12040,
+          "type": "system",
+          "subtype": "task_summary"
+        }
+      ],
+      "result": {
+        "at": 12040,
+        "type": "result",
+        "subtype": "success",
+        "isError": false,
+        "terminalReason": "completed",
+        "numTurns": 4,
+        "totalCostUsd": 0.042547,
+        "mainLoopUsage": {
+          "input_tokens": 4,
+          "cache_creation_input_tokens": 2784,
+          "cache_read_input_tokens": 11006,
+          "output_tokens": 795,
+          "output_tokens_details": {
+            "thinking_tokens": 82
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 2784,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 191,
+              "cache_read_input_tokens": 6075,
+              "cache_creation_input_tokens": 1640,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 1640
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard",
+          "fallback_credit": null
+        },
+        "modelUsage": {
+          "claude-sonnet-5-5": {
+            "inputTokens": 12,
+            "outputTokens": 1486,
+            "cacheReadInputTokens": 21035,
+            "cacheCreationInputTokens": 7712,
+            "webSearchRequests": 0,
+            "costUSD": 0.042547,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 128000,
+            "thinkingTokens": 82,
+            "canonicalModel": "claude-sonnet-5-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      },
+      "adapterLog": []
+    },
+    {
+      "name": "pause",
+      "end": {
+        "type": "stopped",
+        "at": 22263,
+        "how": "interrupted",
+        "usage": {
+          "costUsd": 0.012872499999999999,
+          "inputTokens": 9487,
+          "outputTokens": 555
+        }
+      },
+      "subagents": [
+        {
+          "at": 18586,
+          "phase": "started",
+          "id": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+          "asked": "Read notes/note-1.txt, notes/note-2.txt, notes/note-3.txt and notes/note-4.txt o",
+          "usageInParent": true
+        },
+        {
+          "at": 19295,
+          "phase": "started",
+          "id": "toolu_01WP7zhfQBWAWb5bv5yAM5Em",
+          "asked": "Read notes/note-5.txt, notes/note-6.txt, notes/note-7.txt and notes/note-8.txt o",
+          "usageInParent": true
+        },
+        {
+          "at": 22255,
+          "phase": "ended",
+          "id": "toolu_01WP7zhfQBWAWb5bv5yAM5Em",
+          "how": "stopped",
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 22259,
+          "phase": "ended",
+          "id": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+          "how": "stopped",
+          "model": "claude-sonnet-5-5"
+        }
+      ],
+      "blocked": [],
+      "hooks": [
+        {
+          "at": 18586,
+          "tool": "Agent",
+          "toolUseId": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+          "helper": null,
+          "decision": "allow"
+        },
+        {
+          "at": 19295,
+          "tool": "Agent",
+          "toolUseId": "toolu_01WP7zhfQBWAWb5bv5yAM5Em",
+          "helper": null,
+          "decision": "allow"
+        },
+        {
+          "at": 21594,
+          "tool": "Read",
+          "toolUseId": "toolu_0162jfeUndizazP18ACJwats",
+          "helper": "agent 1",
+          "decision": "pass"
+        },
+        {
+          "at": 22247,
+          "tool": "Read",
+          "toolUseId": "toolu_01QFRynShWJ58n6Le6VsMhVQ",
+          "helper": "agent 2",
+          "decision": "pass"
+        }
+      ],
+      "messages": [
+        {
+          "at": 16277,
+          "type": "system",
+          "subtype": "init",
+          "model": "claude-sonnet-5-5",
+          "tools": [
+            "Task",
+            "Glob",
+            "Grep",
+            "Read"
+          ],
+          "agents": [
+            "researcher"
+          ]
+        },
+        {
+          "at": 18581,
+          "type": "assistant",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Agent",
+              "id": "toolu_013g8B2sg4SwzBS7g7smhF8m"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 18590,
+          "type": "system",
+          "subtype": "task_started",
+          "taskId": "a230f72f08eb72a9b",
+          "toolUseId": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+          "taskType": "local_agent",
+          "backgrounded": false
+        },
+        {
+          "at": 18593,
+          "type": "user",
+          "parent": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+          "blocks": []
+        },
+        {
+          "at": 19291,
+          "type": "assistant",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Agent",
+              "id": "toolu_01WP7zhfQBWAWb5bv5yAM5Em"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 19305,
+          "type": "system",
+          "subtype": "task_started",
+          "taskId": "a94af4e9e8d293266",
+          "toolUseId": "toolu_01WP7zhfQBWAWb5bv5yAM5Em",
+          "taskType": "local_agent",
+          "backgrounded": false
+        },
+        {
+          "at": 19310,
+          "type": "user",
+          "parent": "toolu_01WP7zhfQBWAWb5bv5yAM5Em",
+          "blocks": []
+        },
+        {
+          "at": 19321,
+          "type": "rate_limit_event"
+        },
+        {
+          "at": 19327,
+          "type": "system",
+          "subtype": "task_summary"
+        },
+        {
+          "at": 21590,
+          "type": "system",
+          "subtype": "task_progress",
+          "taskId": "a230f72f08eb72a9b",
+          "toolUseId": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+          "usage": {
+            "total_tokens": 3835,
+            "tool_uses": 1,
+            "duration_ms": 3000
+          }
+        },
+        {
+          "at": 21594,
+          "type": "assistant",
+          "parent": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Read",
+              "id": "toolu_0162jfeUndizazP18ACJwats"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 21618,
+          "type": "user",
+          "parent": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+          "blocks": [
+            {
+              "type": "tool_result",
+              "toolUseId": "toolu_0162jfeUndizazP18ACJwats"
+            }
+          ]
+        },
+        {
+          "at": 22243,
+          "type": "system",
+          "subtype": "task_progress",
+          "taskId": "a94af4e9e8d293266",
+          "toolUseId": "toolu_01WP7zhfQBWAWb5bv5yAM5Em",
+          "usage": {
+            "total_tokens": 3835,
+            "tool_uses": 1,
+            "duration_ms": 2943
+          }
+        },
+        {
+          "at": 22247,
+          "type": "assistant",
+          "parent": "toolu_01WP7zhfQBWAWb5bv5yAM5Em",
+          "blocks": [
+            {
+              "type": "tool_use",
+              "name": "Read",
+              "id": "toolu_01QFRynShWJ58n6Le6VsMhVQ"
+            }
+          ],
+          "model": "claude-sonnet-5-5"
+        },
+        {
+          "at": 22255,
+          "type": "user",
+          "blocks": [
+            {
+              "type": "tool_result",
+              "toolUseId": "toolu_01WP7zhfQBWAWb5bv5yAM5Em",
+              "isError": true
+            }
+          ]
+        },
+        {
+          "at": 22256,
+          "type": "system",
+          "subtype": "task_updated",
+          "taskId": "a94af4e9e8d293266",
+          "status": "killed"
+        },
+        {
+          "at": 22256,
+          "type": "system",
+          "subtype": "task_notification",
+          "taskId": "a94af4e9e8d293266",
+          "toolUseId": "toolu_01WP7zhfQBWAWb5bv5yAM5Em",
+          "status": "stopped"
+        },
+        {
+          "at": 22259,
+          "type": "system",
+          "subtype": "task_updated",
+          "taskId": "a230f72f08eb72a9b",
+          "status": "killed"
+        },
+        {
+          "at": 22259,
+          "type": "system",
+          "subtype": "task_notification",
+          "taskId": "a230f72f08eb72a9b",
+          "toolUseId": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+          "status": "stopped"
+        },
+        {
+          "at": 22261,
+          "type": "user",
+          "blocks": [
+            {
+              "type": "tool_result",
+              "toolUseId": "toolu_013g8B2sg4SwzBS7g7smhF8m",
+              "isError": true
+            }
+          ]
+        },
+        {
+          "at": 22261,
+          "type": "user",
+          "blocks": []
+        },
+        {
+          "at": 22263,
+          "type": "result",
+          "subtype": "error_during_execution",
+          "isError": true,
+          "terminalReason": "aborted_tools",
+          "numTurns": 4,
+          "totalCostUsd": 0.012872499999999999,
+          "mainLoopUsage": {
+            "input_tokens": 2,
+            "cache_creation_input_tokens": 993,
+            "cache_read_input_tokens": 4931,
+            "output_tokens": 329,
+            "output_tokens_details": {
+              "thinking_tokens": 0
+            },
+            "server_tool_use": {
+              "web_search_requests": 0,
+              "web_fetch_requests": 0
+            },
+            "service_tier": "standard",
+            "cache_creation": {
+              "ephemeral_1h_input_tokens": 993,
+              "ephemeral_5m_input_tokens": 0
+            },
+            "inference_geo": "not_available",
+            "iterations": [
+              {
+                "input_tokens": 2,
+                "output_tokens": 329,
+                "cache_read_input_tokens": 4931,
+                "cache_creation_input_tokens": 993,
+                "cache_creation": {
+                  "ephemeral_5m_input_tokens": 0,
+                  "ephemeral_1h_input_tokens": 993
+                },
+                "type": "message"
+              }
+            ],
+            "speed": "standard",
+            "fallback_credit": null
+          },
+          "modelUsage": {
+            "claude-sonnet-5-5": {
+              "inputTokens": 4,
+              "outputTokens": 555,
+              "cacheReadInputTokens": 7775,
+              "cacheCreationInputTokens": 1708,
+              "webSearchRequests": 0,
+              "costUSD": 0.012872499999999999,
+              "contextWindow": 1000000,
+              "maxOutputTokens": 128000,
+              "thinkingTokens": 116,
+              "canonicalModel": "claude-sonnet-5-5",
+              "provider": "firstParty",
+              "costBasis": "list"
+            }
+          }
+        },
+        {
+          "at": 22265,
+          "type": "system",
+          "subtype": "task_summary"
+        }
+      ],
+      "result": {
+        "at": 22263,
+        "type": "result",
+        "subtype": "error_during_execution",
+        "isError": true,
+        "terminalReason": "aborted_tools",
+        "numTurns": 4,
+        "totalCostUsd": 0.012872499999999999,
+        "mainLoopUsage": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 993,
+          "cache_read_input_tokens": 4931,
+          "output_tokens": 329,
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 993,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 329,
+              "cache_read_input_tokens": 4931,
+              "cache_creation_input_tokens": 993,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 993
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard",
+          "fallback_credit": null
+        },
+        "modelUsage": {
+          "claude-sonnet-5-5": {
+            "inputTokens": 4,
+            "outputTokens": 555,
+            "cacheReadInputTokens": 7775,
+            "cacheCreationInputTokens": 1708,
+            "webSearchRequests": 0,
+            "costUSD": 0.012872499999999999,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 128000,
+            "thinkingTokens": 116,
+            "canonicalModel": "claude-sonnet-5-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      },
+      "adapterLog": []
+    }
+  ],
+  "cost": {
+    "sessionTotalUsd": 0.042547,
+    "perModel": [
+      {
+        "model": "claude-sonnet-5-5",
+        "tokens": 30245,
+        "costUsd": 0.042547
+      }
+    ],
+    "sessionTokens": 30245,
+    "parentMainLoopTokens": 14589,
+    "outsideMainLoopTokens": 15656,
+    "perHelperUsage": "unknown"
+  },
+  "estimatedSpendUsd": 0.0554,
+  "finishedAt": "2026-10-03T08:36:13.207Z"
+}

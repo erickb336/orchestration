@@ -228,7 +228,7 @@ describe("ClaudeAdapter", () => {
       interrupt: "supported",
       resume: "unverified",
       usageReporting: "supported",
-      childAgentTracking: "unsupported",
+      childAgentTracking: "supported",
     });
   });
 
