@@ -50,6 +50,8 @@ Without setup, the same choices are environment variables:
 
 In subscription mode no API key or cloud setting is passed to agents.
 
+**Agents sign in with the inference-only token, not your full login** (the owner's choice, 2026-10-03). A full login would let agents use your claude.ai connectors (Figma, Linear, Slack, Drive) and show your plan's usage, but every agent would then reach everything you are connected to, and they would share your own Claude Code login. With the inference-only token, agents can call the model and use MCP servers configured on this computer, and nothing else of your account.
+
 ## Checking that real agents work
 
 `npm run test:real` runs one short scenario with real agents, against a throwaway repository inside this checkout's ignored `evidence/` folder:
