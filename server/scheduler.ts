@@ -183,6 +183,8 @@ export class Scheduler {
   private studioProse = new Map<string, ProseCheck>();
   /** Paused writers' work recorded this cycle (ORC-030 C4), by run: recorded before the transaction, kept in it. */
   private pausedWorks = new Map<string, M.RunReport["pausedWork"]>();
+  /** Runs this cycle that could not start because their paused work could not be applied (C4). */
+  private carryFailed = new Set<string>();
   private readonly keepAwake?: { set(active: boolean): void };
   /** Studio versions' screenshots and recordings, made one at a time, after the run that handed them in completed. */
   private mediaChain: Promise<void> = Promise.resolve();
@@ -400,6 +402,7 @@ export class Scheduler {
   private runCycle(nowMs: number) {
     const now = new Date(nowMs).toISOString();
     const lease = this.lease(nowMs);
+    this.carryFailed.clear();
     const { unavailable, deferred } = this.availability();
     const project = this.store.read().state.project;
     const repoPath = project.repoPath;
@@ -584,7 +587,7 @@ export class Scheduler {
       this.store.update(
         (s: State) => {
           let next = s;
-          for (const f of failedToStart) next = M.reportRunFailed(next, f.id, f.reason, now);
+          for (const f of failedToStart) next = M.reportRunFailed(next, f.id, f.reason, now, this.carryFailed.has(f.id) ? { pausedWorkUnusable: true } : {});
           for (const l of lost) next = M.reportRunLost(next, l.id, l.reason, now);
           for (const e of events) {
             try {
@@ -1219,7 +1222,13 @@ export class Scheduler {
             : target && task.deliverInto!.mergeBase && fetched
               ? { kind: "merge", ref: fetched }
               : undefined;
-        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access, baseRef, seed });
+        try {
+          workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access, baseRef, seed });
+        } catch (e) {
+          // Paused work that cannot be applied would fail every retry the same way: the step lets go of it (C4).
+          if (seed?.kind === "carry") this.carryFailed.add(attemptId);
+          throw e;
+        }
         try {
           if (review && workspace.base !== review.headSha) throw new Error(`the workspace is not at the commit under review (${review.headSha.slice(0, 12)})`);
           // A read-only step that receives a code change (a reviewer, the lead's verification) is

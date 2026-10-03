@@ -217,6 +217,36 @@ describe("pause and resume a writer mid-change (scheduler, scripted runtimes)", 
     expect(task(id).steps[0].pausedWork).toBeUndefined();
   });
 
+  it("paused work that cannot be applied fails that start once; the step lets go of it, and Retry starts from the base", () => {
+    const id = newTask("Lost work");
+    oneStep(id);
+    tick();
+    const first = run(id);
+    writeFileSync(join(codex.runs.get(first.id)!.workspace.path, "wip.txt"), "started\n");
+    cmd("pauseTask", { taskId: id });
+    tick();
+    codex.emit({ type: "stopped", attemptId: first.id, how: "interrupted" });
+    tick();
+    // The paused run's commit is gone from the repository (for example, someone deleted its branch and git collected it).
+    store.update((s) => {
+      const n = structuredClone(s);
+      n.tasks.find((t) => t.id === id)!.steps[0].pausedWork!.commit = "f".repeat(40);
+      return n;
+    }, iso());
+    cmd("resumeTask", { taskId: id });
+    tick();
+    const failed = st().attempts.filter((a) => a.taskId === id).at(-1)!;
+    expect(failed.outcome).toBe("failed");
+    expect(failed.note).toMatch(/no longer in the repository/);
+    expect(task(id).steps[0].state).toBe("blocked");
+    expect(task(id).steps[0].pausedWork).toBeUndefined();
+    expect(st().events.some((e) => e.taskId === id && e.message.includes(`${first.id}'s changes could not be applied`))).toBe(true);
+    cmd("retryStep", { taskId: id, stepId: "S1" });
+    tick();
+    expect(run(id).snapshot.startedFrom).toBeUndefined();
+    expect(existsSync(join(codex.runs.get(run(id).id)!.workspace.path, "wip.txt"))).toBe(false);
+  });
+
   it("a writer that changed nothing keeps nothing; the next run starts from the base", () => {
     const id = newTask("Nothing yet");
     oneStep(id);

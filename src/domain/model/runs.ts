@@ -139,6 +139,12 @@ export function reportRunFailed(state: State, attemptId: string, message: string
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
   event(s, now, "runtime", wasStopping ? "runtime" : "blocked", `${a.id} failed: ${message}`, t.id);
+  // Paused work that cannot be applied (its commit is gone) would fail every retry the same way: let go of it.
+  const pw = st?.pausedWork;
+  if (run.pausedWorkUnusable && pw && pw.attemptId === a.snapshot.startedFrom?.attemptId) {
+    delete st!.pausedWork;
+    event(s, now, "system", "control", `${pw.attemptId}'s changes could not be applied; ${st!.id}'s next run starts from the base`, t.id);
+  }
   settleSendingNotes(s, a.id, "the run ended before the runtime answered", now);
   return s;
 }
@@ -196,6 +202,8 @@ export interface RunReport {
    * the run changed nothing. Absent: nothing was recorded (not a writer, or the service could not record them).
    */
   pausedWork?: Omit<PausedWork, "attemptId" | "at"> | null;
+  /** The paused work a failed run started from could not be applied to its workspace (C4): its step lets go of it. */
+  pausedWorkUnusable?: true;
 }
 
 /** The stops after which a writer's changes are kept for its step's next run: the owner's pauses. */
