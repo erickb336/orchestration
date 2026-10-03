@@ -297,8 +297,8 @@ describe("PE review: the loop rule", () => {
     const closed = run(objected, "closeRound", { round: 1 }, at(4)).state;
     expect(S.peReview(closed, art(closed, id, 1))).toMatchObject({ status: "ended", ended: "round-closed" });
     expect(S.revisionDue(closed, art(closed, id, 1))).toBe(false);
-    // Outside Vision nothing is revised; back in Vision the loop goes on.
-    expect(S.revisionDue(startFactoryAsOwner(objected, at(4)), art(objected, id, 1))).toBe(false);
+    // The loop goes on while the factory runs (pass 5): the designer revises the draft's design, never the factory's.
+    expect(S.revisionDue(startFactoryAsOwner(objected, at(4)), art(objected, id, 1))).toBe(true);
   });
 
   it("a pass judges every option the owner will see: one verdict per variant, or one on the whole; feasible-if states its change; an estimate states its basis", () => {
@@ -381,7 +381,7 @@ describe("the project's dictionary: no PE review, and the owner marks its terms 
     expect(S.roundBusy(agreed, n)).toBeUndefined();
   });
 
-  it("the owner marks its terms at once and approves it into the blueprint", () => {
+  it("the owner marks its terms at once and approves it into the blueprint's draft", () => {
     const { s, words } = dataRound();
     const marked = feedback(s, words, 1, { rows: WORDS.map((w) => ({ row: w.term, mark: "keep" })) }, at(4));
     expect(S.currentFeedback(marked, words, 1)?.rows).toEqual([
@@ -389,7 +389,8 @@ describe("the project's dictionary: no PE review, and the owner marks its terms 
       { row: "member", mark: "keep" },
     ]);
     const approved = run(marked, "approveArtifact", { artifactId: words, version: 1 }, at(5)).state;
-    expect(approved.blueprint.revisions.at(-1)?.items).toEqual([{ id: expect.any(String), kind: "dictionary", title: "Words", artifactId: words, version: 1, status: "approved" }]);
+    expect(approved.blueprint.draft.items).toEqual([{ id: expect.any(String), kind: "dictionary", title: "Words", artifactId: words, version: 1, status: "approved" }]);
+    expect(approved.blueprint.revisions).toEqual([]);
   });
 });
 

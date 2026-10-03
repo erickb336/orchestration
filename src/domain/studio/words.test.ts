@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import * as M from "../model";
 import { buildSeed } from "../seed";
-import { DESIGNER, openRound, peAgrees, run, sha } from "../testing/studio";
+import { DESIGNER, lockInAsOwner, openRound, peAgrees, run, sha } from "../testing/studio";
 import type { State } from "../types";
 import * as B from "./blueprint";
 import * as S from "./studio";
@@ -201,24 +201,33 @@ describe("the dictionary in the studio", () => {
     ]);
     expect(() => approve(s, id, 1)).toThrow('Words v1 cannot be approved yet: you marked 1 term Change or Drop ("member"); the next version makes the change, or clear those marks to approve this one.');
     s = marks(s, id, 1, [{ row: "member", mark: "keep" }]);
-    expect(B.currentBlueprint(approve(s, id, 1))?.items).toMatchObject([{ kind: "dictionary", artifactId: id, version: 1, status: "approved" }]);
+    expect(B.draftItems(approve(s, id, 1))).toMatchObject([{ kind: "dictionary", artifactId: id, version: 1, status: "approved" }]);
   });
 
-  it("is in force only once approved, at the version approved; with two dictionaries approved, the one approved last", () => {
+  it("is the studio's words once approved into the draft, and the factory's once locked in, at the version approved; with two approved, the one approved last", () => {
     let { s, id } = withDictionary();
-    expect(B.dictionaryInForce(s)).toBeUndefined(); // with the owner, not approved by them
+    expect(B.dictionaryInDraft(s)).toBeUndefined(); // with the owner, not approved by them
     s = approve(s, id, 1);
+    expect(B.dictionaryInDraft(s)).toMatchObject({ artifact: { id, version: 1 }, entries: WORDS });
+    // The factory never reads the draft: in force only after the first Lock in (Start the factory).
+    expect(B.dictionaryInForce(s)).toBeUndefined();
+    s = lockInAsOwner(s, at(55));
     expect(B.dictionaryInForce(s)).toMatchObject({ artifact: { id, version: 1 }, entries: WORDS });
-    // A new version is not in force until the owner approves it.
+    // A new version is not the project's words until the owner approves it, nor the factory's until a Lock in.
     const v2 = run<{ version: number }>(s, "addStudioArtifact", { artifactId: id, round: 1, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("e") }], devices: [], madeBy: DESIGNER, dictionary: [WORDS[0]] }, at(60));
     s = v2.state;
-    expect(B.dictionaryInForce(s)?.artifact.version).toBe(1);
+    expect(B.dictionaryInDraft(s)?.artifact.version).toBe(1);
     s = run(s, "approveArtifact", { artifactId: id, version: 2 }, at(62)).state;
+    expect(B.dictionaryInDraft(s)).toMatchObject({ artifact: { id, version: 2 }, entries: [WORDS[0]] });
+    expect(B.dictionaryInForce(s)?.artifact.version).toBe(1);
+    s = lockInAsOwner(s, at(63));
     expect(B.dictionaryInForce(s)).toMatchObject({ artifact: { id, version: 2 }, entries: [WORDS[0]] });
-    // A second dictionary, approved later, is the one in force.
+    // A second dictionary, approved later, is the draft's words, and the factory's once locked in.
     const other = withDictionary(s, [{ term: "outing", meaning: "A day out." }], 70);
     s = approve(other.s, other.id, 1);
-    expect(B.dictionaryInForce(s)?.artifact.id).toBe(other.id);
+    expect(B.dictionaryInDraft(s)?.artifact.id).toBe(other.id);
+    expect(B.dictionaryInForce(s)?.artifact.id).toBe(id);
+    expect(B.dictionaryInForce(lockInAsOwner(s, at(80)))?.artifact.id).toBe(other.id);
   });
 });
 
@@ -264,7 +273,7 @@ describe("a flow's rules in the studio", () => {
     expect(() => marks(s, id, 1, [{ row: "R9", variant: "a", mark: "keep" }])).toThrow('Saying you are in v1 has no rule "R9" on A.');
     // A rule marked Change on B holds B back, not A.
     expect(() => run(s, "approveArtifact", { artifactId: id, version: 1, variant: "b" }, at(50))).toThrow('you marked 1 rule Change or Drop ("R2")');
-    expect(B.currentBlueprint(run(s, "approveArtifact", { artifactId: id, version: 1, variant: "a" }, at(50)).state)?.items[0]).toMatchObject({ variant: "a", status: "approved" });
+    expect(B.draftItems(run(s, "approveArtifact", { artifactId: id, version: 1, variant: "a" }, at(50)).state)[0]).toMatchObject({ variant: "a", status: "approved" });
   });
 
   it("refuses rules on another kind, and marks on an artifact with no rows", () => {

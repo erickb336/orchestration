@@ -10,7 +10,7 @@ import * as F from "./findings";
 import * as M from "./model";
 import { needsYouItems, needsYouOf } from "./needsYou";
 import { buildSeed } from "./seed";
-import { startFactoryArgs } from "./testing/factory";
+import { inVision, startFactoryArgs } from "./testing/factory";
 import { ControlError, StaleWriteError, type State } from "./types";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
@@ -299,7 +299,7 @@ describe("code changes are never PE-reviewed", () => {
   });
 
   it("the roadmap planned in Vision is not held for PE review when the factory starts", () => {
-    let s = M.startVision(factory(), at(1));
+    let s = inVision(factory(), at(1));
     s = leadPlans(M.postMessage(s, "plan it", at(2)), { proposals: [proposal("First step")] }, 3).s;
     const [planned] = M.roadmapTasks(s);
     expect(planned.peReview).toBeUndefined();

@@ -151,8 +151,8 @@ describe("Vision in the main navigation", () => {
       expect(html).toContain("<h1 class=\"no-margin\">Vision</h1>");
       expect(sent).toEqual([]);
     }
-    // In Factory it says what Vision can and cannot do there.
-    expect(render(<Studio />, factory)).toContain("Looking at Vision changes nothing in it.");
+    // In Factory it says what Vision does there: it stays open, and approvals go into the draft.
+    expect(render(<Studio />, factory)).toContain("The factory builds from the version you locked in, never from the draft.");
   });
 
   it("its badge counts the agents' artifacts the PE passed to you that you have not marked", () => {
@@ -878,14 +878,14 @@ describe("PE review in the right column", () => {
     expect(peText(revision)).toContain("On pass 1 of 3, the PE asks for changes to B · Day by day. The designer revises it before it reaches you. The designer's revision waits at the budget stop. The building budget is reached: $6.00 of $5.00.");
   });
 
-  it("a PE run with no verdict while the factory runs says when the PE is asked again, and promises nothing else", () => {
+  it("a PE run with no verdict while the factory runs is asked again, as in Vision (pass 5), and promises nothing else", () => {
     const { s: designed } = withSample({ pe: false });
     let s = R.dispatchStudioRuns(R.askForPeReviews(designed, at(6)), at(7)).state;
     s = R.reportStudioRunFailed(s, s.studio.runs.find((r) => r.kind === "pe")!.id, "no verdicts", at(8));
     s = M.startFactory(s, M.startFactoryRequest(s), at(9));
     expect(s.project.stage).toBe("building");
     const text = peText(s);
-    expect(text).toContain("The PE's run ended without a verdict (no verdicts). The PE reviews it when the project is back in Vision.");
+    expect(text).toContain("The PE's run ended without a verdict (no verdicts). The service asks the PE again.");
     expect(text).not.toContain("next pass");
   });
 });

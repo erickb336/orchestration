@@ -5,7 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
-import { startFactoryAsOwner } from "./testing/factory";
+import { runCommand } from "./commands";
+import { inVision, startFactoryAsOwner } from "./testing/factory";
 import { setPipeline } from "./testing/pipelines";
 import { buildSeed } from "./seed";
 import { ControlError, StaleWriteError, type LeadQuestion, type LeadRun, type State } from "./types";
@@ -17,7 +18,8 @@ const seed = () => buildSeed(T0);
 const quiet = () => buildSeed(T0, { inFlightRuns: false });
 const task = (s: State, id: string) => s.tasks.find((t) => t.id === id)!;
 const running = (s: State, id?: string) => M.activeAttempts(s, id);
-const shaping = (s: State) => M.startVision(s, at(0));
+/** The sample as a project in Vision, with its runs (a fixture: no command goes back from the factory since pass 5). */
+const shaping = (s: State) => inVision(s, at(0));
 const vision = (s: State) => M.currentVision(s);
 const oneStep = [{ id: "S1", purpose: "Implement", role: "coder" as const, dependsOn: [], inputs: [], outputs: [{ name: "change", kind: "code-change" as const }] }];
 
@@ -103,7 +105,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     expect(running(s, "EX-004")).toHaveLength(1);
   });
 
-  it("a running step is never interrupted by going back to shaping; its result is accepted; the next step waits for Start building", () => {
+  it("a running step in a project in Vision is never interrupted; its result is accepted; the next step waits for Start building", () => {
     let s = shaping(seed());
     const [a] = running(s, "EX-001");
     expect(a.outcome).toBe("running");
@@ -140,9 +142,9 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     expect(s.project.hold).toBe(false);
   });
 
-  it("startVision is refused while already shaping; startFactory while already building", () => {
-    expect(() => shaping(shaping(seed()))).toThrow(/Already shaping/);
+  it("startFactory is refused while already building, and no command goes back to Vision (pass 5: Vision stays open, Pause stops building)", () => {
     expect(() => startFactoryAsOwner(seed(), at(0))).toThrow(/Already building/);
+    expect(() => runCommand(seed(), "startVision", {}, at(0))).toThrow("Unknown command startVision");
   });
 });
 

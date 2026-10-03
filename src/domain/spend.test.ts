@@ -6,7 +6,6 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
 import * as M from "./model";
-import { startFactoryAsOwner } from "./testing/factory";
 import { needsYouItems } from "./needsYou";
 import { buildSeed } from "./seed";
 import { budgetStop, buildingSpend, estimateUsd, PRICES, type ModelPrice } from "./spend";
@@ -337,7 +336,7 @@ describe("the budget stop", () => {
     expect(budgetStop(raised)).toBeUndefined();
   });
 
-  it("continuing past the budget is the owner's recorded choice; it starts work again until the budget changes or the project goes back to shaping", () => {
+  it("continuing past the budget is the owner's recorded choice; it starts work again until the budget changes", () => {
     const s = spentProject();
     const spend = buildingSpend(s).usd;
     const stopped = M.setBudgets(s, { buildingUsd: spend, maintenanceUsdPerMonth: null }, at(2));
@@ -350,10 +349,6 @@ describe("the budget stop", () => {
     // A new budget amount the spend has reached stops again.
     const lowered = M.setBudgets(past, { buildingUsd: spend / 2, maintenanceUsdPerMonth: null }, at(5));
     expect(running(M.dispatchEligible(lowered, at(6)), "EX-004")).toHaveLength(0);
-    // Going back to shaping ends it: the next start meets the stop again.
-    const back = startFactoryAsOwner(M.startVision(past, at(5)), at(6));
-    expect(back.project.budgetContinued).toBeUndefined();
-    expect(budgetStop(back)?.budgetUsd).toBe(spend);
   });
 
   it("changing the building budget ends continuing past it: set, continue, raise, then set it back, and the stop applies again", () => {

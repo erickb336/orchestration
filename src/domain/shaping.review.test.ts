@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
-import { startFactoryAsOwner } from "./testing/factory";
+import { inVision, startFactoryAsOwner } from "./testing/factory";
 import { buildEmptyProject, buildSeed } from "./seed";
 import { SHAPING_AREAS, StaleWriteError, type LeadRun, type State } from "./types";
 
@@ -16,7 +16,7 @@ const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
 const seed = () => buildSeed(T0, { inFlightRuns: false });
 const task = (s: State, id: string) => s.tasks.find((t) => t.id === id)!;
 const running = (s: State, id?: string) => M.activeAttempts(s, id);
-const shaping = (s: State) => M.startVision(s, at(0));
+const shaping = (s: State) => inVision(s, at(0));
 const roomy = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, maxOpenProposals: 50 }, at(0));
 const autopilot = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, enabled: true, holdLeadProposals: false, maxOpenProposals: 50 }, at(0));
 const checkin = (s: State) => M.setAutonomy(s, { ...s.project.autonomy, enabled: true, holdLeadProposals: true, maxOpenProposals: 50 }, at(0));
@@ -191,7 +191,7 @@ describe("no empty vision while building", () => {
     expect(M.currentVision(empty).text).toBe("");
     expect(M.startFactoryBlocker(empty)).toBe("Write or accept a vision first.");
     expect(seed().project.stage).toBe("building"); // the sample keeps working as before
-    expect(() => M.editVision(seed(), 1, "   ", "f", "clear", at(1))).toThrow("The vision cannot be empty while building. Go back to shaping to clear it.");
+    expect(() => M.editVision(seed(), 1, "   ", "f", "clear", at(1))).toThrow("The vision cannot be empty while building.");
     expect(M.currentVision(seed()).rev).toBe(1);
     const cleared = M.editVision(shaping(seed()), 1, "", "", "clear", at(1));
     expect(M.currentVision(cleared)).toMatchObject({ rev: 2, text: "" });
@@ -202,7 +202,7 @@ describe("no empty vision while building", () => {
 });
 
 describe("coverage", () => {
-  it("none reported means every area is open; a block with no valid entry keeps the previous coverage; a new shaping session starts from nothing", () => {
+  it("none reported means every area is open; a block with no valid entry keeps the previous coverage", () => {
     const s0 = shaping(seed());
     expect(M.coverageOf(s0)).toBeUndefined();
     expect(M.openAreas(s0)).toEqual(SHAPING_AREAS);
@@ -213,16 +213,6 @@ describe("coverage", () => {
     expect(empty.state.leadRuns.at(-1)!.coverage).toBeUndefined();
     expect(M.coverageOf(empty.state)).toEqual(M.coverageOf(first.state));
     expect(M.openAreas(empty.state)).toEqual(M.openAreas(first.state));
-    // An earlier session's coverage is not reused once the user starts building and comes back to shaping.
-    const built = startFactoryAsOwner(M.editVision(empty.state, 1, "Vision", "f", "w", at(9)), at(10));
-    const again = M.startVision(built, at(11));
-    expect(again.project.shapingSince).toBe(at(11));
-    expect(M.coverageOf(again)).toBeUndefined();
-    expect(M.openAreas(again)).toEqual(SHAPING_AREAS);
-    const fresh = leadReply(again, { coverage: { audience: "clear" } }, 12);
-    expect(M.coverageOf(fresh.state)).toMatchObject({ audience: "clear", intent: "open", scope: "open" });
-    // The order of the notes above matters less than this: nothing from the first session leaked through.
-    expect(M.openAreas(fresh.state)).toEqual(SHAPING_AREAS.filter((a) => a !== "audience"));
   });
 });
 
