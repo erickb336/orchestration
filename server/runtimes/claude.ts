@@ -26,7 +26,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { CatalogModel } from "../../src/domain/types";
+import type { CatalogModel, SubagentReport } from "../../src/domain/types";
 import { truncate as oneLine } from "../../src/domain/text";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 import { homedir } from "node:os";
@@ -123,14 +123,24 @@ const CLAUDE_CAPABILITIES: CapabilityMap = {
   interrupt: "supported",
   resume: "unverified",
   usageReporting: "supported",
-  // Native subagents are disabled (Agent/Task tool disallowed, built-in agents off).
+  // ORC-031 31b: a research run with `allowSubagents` may start read-only helpers, counted, capped and reported
+  // (`subagent` events). Stays "unsupported" until real runs prove pause, cost, safety and the cap (docs/real-runs);
+  // until then the service turns the setting on for no research step.
   childAgentTracking: "unsupported",
 };
 
 const READ_TOOLS = ["Read", "Glob", "Grep"] as const;
 const WRITE_TOOLS = ["Write", "Edit"] as const;
-/** Always removed from the model's context. "Agent" is the subagent tool; "Task" is its legacy name. */
-const ALWAYS_DISALLOWED = ["Agent", "Task", "WebFetch", "WebSearch", "NotebookEdit"];
+/** The subagent tool: "Agent", and "Task", its legacy name. */
+const SUBAGENT_TOOLS = ["Agent", "Task"] as const;
+const isSubagentTool = (name: string) => (SUBAGENT_TOOLS as readonly string[]).includes(name);
+/** Removed from the model's context, except the subagent tool on a run allowed helpers (toolPolicy). */
+const ALWAYS_DISALLOWED = [...SUBAGENT_TOOLS, "WebFetch", "WebSearch", "NotebookEdit"];
+/**
+ * The only helper a research run may start (`Options.agents`; the built-in agents stay off): read-only like its
+ * parent, and unable to start helpers of its own. Every Agent call is set to it (see startHelper).
+ */
+const HELPER_TYPE = "researcher";
 const FILE_PATH_TOOLS = new Set(["Read", "Write", "Edit"]);
 const SEARCH_TOOLS = new Set(["Glob", "Grep"]);
 const MUTATING_TOOLS = new Set(["Write", "Edit", "NotebookEdit"]);
@@ -162,13 +172,16 @@ interface ToolPolicy {
   disallowedTools: string[];
 }
 
-export function toolPolicy(access: "read" | "write", allowShell = false): ToolPolicy {
+/** `helpers`: the run may start subagents (ORC-031), which only a read-only run may; a writing run ignores it. */
+export function toolPolicy(access: "read" | "write", allowShell = false, helpers = false): ToolPolicy {
   const tools: string[] = [...READ_TOOLS];
   if (access === "write") {
     tools.push(...WRITE_TOOLS);
     if (allowShell) tools.push("Bash");
   }
-  const disallowedTools = [...ALWAYS_DISALLOWED];
+  const subagents = helpers && access === "read";
+  if (subagents) tools.push("Agent");
+  const disallowedTools = ALWAYS_DISALLOWED.filter((t) => !(subagents && isSubagentTool(t)));
   if (access === "read") disallowedTools.push(...WRITE_TOOLS);
   if (!tools.includes("Bash")) disallowedTools.push("Bash");
   return { tools, disallowedTools };
@@ -357,6 +370,21 @@ function addUsage(a: Usage, b: Usage): Usage {
   return out;
 }
 
+/**
+ * A helper's own usage, from the Agent tool's structured result (`tool_use_result.usage`, AgentOutput in
+ * sdk-tools.d.ts). Shown on the run; the budgets do not add it, since the session's total already includes every
+ * helper's calls (`usageInParent`). Whether this covers all of the helper's calls or only its last one is not yet
+ * checked against a real run.
+ */
+function helperUsage(out: Rec): Usage | undefined {
+  const u = asRec(out.usage);
+  const input = num(u.input_tokens);
+  const output = num(u.output_tokens);
+  if (input === undefined || output === undefined) return undefined;
+  const read = num(u.cache_read_input_tokens) ?? 0;
+  return { inputTokens: input + read + (num(u.cache_creation_input_tokens) ?? 0), cachedInputTokens: read, outputTokens: output };
+}
+
 function describeToolUse(name: string, input: Rec, workspace: string): string {
   const rel = (p: unknown) => {
     if (typeof p !== "string") return "?";
@@ -455,6 +483,12 @@ interface Run {
   sawAuthError: boolean;
   stderrTail: string;
   done: Promise<void>;
+  /** What the run may start (ORC-031): set only for a read-only run whose assignment allows helpers. */
+  helperCap?: number;
+  /** Its subagents by Agent tool-use id, started (the hook allowed them) or seen in tagged messages; true while open. */
+  helpers: Map<string, boolean>;
+  /** How many the hook allowed: what the cap counts. */
+  helpersAllowed: number;
 }
 
 export class ClaudeAdapter implements RuntimeAdapter {
@@ -518,9 +552,62 @@ export class ClaudeAdapter implements RuntimeAdapter {
     this.emitRaw({ type: "activity", attemptId: run.a.attemptId, note: truncate(note) });
   }
 
+  // --- helpers (ORC-031) ----------------------------------------------------------------------
+
+  private helperEvent(run: Run, subagent: SubagentReport) {
+    if (run.terminal || run.forgotten) return;
+    this.emitRaw({ type: "subagent", attemptId: run.a.attemptId, subagent });
+  }
+
+  /**
+   * The hook's decision on one Agent call. Allowed only on a run with a cap, from the parent (a helper starts none),
+   * and below the cap; then it is counted and reported started, and its input is set to the run's one read-only helper
+   * type, in the foreground (so it ends within the parent's turn, and an interrupt of that turn reaches it), with no
+   * isolation (a worktree copy or a remote session would leave this run's workspace). Every refusal is reported.
+   * Synchronous: parallel calls of one message are counted one at a time.
+   */
+  private startHelper(run: Run, toolUseId: string, input: Rec, fromHelper: boolean): { ok: true; input: Rec } | { ok: false; reason: string } {
+    const id = toolUseId || `refused-${randomUUID()}`;
+    const asked = typeof input.prompt === "string" ? input.prompt : typeof input.description === "string" ? input.description : "";
+    const refuse = (reason: string) => {
+      this.helperEvent(run, { phase: "refused", id, asked });
+      return { ok: false as const, reason };
+    };
+    const cap = run.helperCap;
+    if (cap === undefined) return refuse("This run may not start helper agents: only a read-only research step whose owner allows helpers may.");
+    if (fromHelper) return refuse("A helper agent may not start helpers of its own.");
+    if (!toolUseId) return refuse("The helper call has no tool-use id, so it cannot be tracked.");
+    if (run.helpersAllowed >= cap) return refuse(`This run may start at most ${cap} helper agent${cap === 1 ? "" : "s"}, and it has started ${run.helpersAllowed}. Do the rest of the work yourself.`);
+    run.helpersAllowed++;
+    run.helpers.set(id, true);
+    const model = typeof input.model === "string" ? input.model : undefined;
+    this.helperEvent(run, { phase: "started", id, asked, ...(model ? { model } : {}), usageInParent: true });
+    this.activity(run, `Started helper ${run.helpersAllowed} of at most ${cap}`);
+    const { isolation: _i, mode: _m, name: _n, team_name: _t, ...rest } = input;
+    return { ok: true, input: { ...rest, subagent_type: HELPER_TYPE, run_in_background: false } };
+  }
+
+  /** A message tagged with a tool-use id the hook never allowed: a helper that slipped through. It ran, so it counts. */
+  private sawHelper(run: Run, toolUseId: string) {
+    if (run.helpers.has(toolUseId)) return;
+    run.helpers.set(toolUseId, true);
+    this.log(`[claude ${run.a.attemptId}] a helper agent ran that the hook never allowed`);
+    this.helperEvent(run, { phase: "started", id: toolUseId, asked: "", usageInParent: true });
+  }
+
+  private endHelper(run: Run, toolUseId: string, how: "completed" | "failed" | "stopped", out?: Rec) {
+    if (run.helpers.get(toolUseId) !== true) return;
+    run.helpers.set(toolUseId, false);
+    const model = out && typeof out.resolvedModel === "string" ? out.resolvedModel : undefined;
+    const usage = out ? helperUsage(out) : undefined;
+    this.helperEvent(run, { phase: "ended", id: toolUseId, how: run.interruptRequested && how !== "completed" ? "stopped" : how, ...(model ? { model } : {}), ...(usage ? { usage } : {}) });
+  }
+
   /** Emit the single terminal event for a run. Later calls are ignored. */
   private finish(run: Run, e: AdapterEvent) {
     if (run.terminal || run.forgotten) return;
+    // A helper still open ends with its session: the process exits once this run settles.
+    for (const [id, open] of run.helpers) if (open) this.endHelper(run, id, e.type === "failed" ? "failed" : "stopped");
     run.terminal = true;
     this.clearTimers(run);
     // Notes still outstanding settle first: nothing acknowledged them, so nothing was delivered.
@@ -695,7 +782,13 @@ export class ClaudeAdapter implements RuntimeAdapter {
       sawAuthError: false,
       stderrTail: "",
       done: Promise.resolve(),
+      helpers: new Map(),
+      helpersAllowed: 0,
     };
+    // Helpers only on a run that cannot write (ORC-031): the service sends the allowance only for a research step,
+    // and this boundary refuses it on any other.
+    if (assignment.allowSubagents && assignment.workspace.access === "read") run.helperCap = assignment.allowSubagents.cap;
+    else if (assignment.allowSubagents) this.log(`[claude ${assignment.attemptId}] helpers not allowed: the run may write`);
     this.runs.set(assignment.attemptId, run);
     // The envelope opens the input stream, shaped as the SDK shapes a string prompt; notes follow it.
     run.input.push({
@@ -722,28 +815,41 @@ export class ClaudeAdapter implements RuntimeAdapter {
     // user's own setup could publish, and a shell could write outside its staging folder.
     const studio = a.studio === true;
     const local = a.environment === "local" && !studio;
-    const policy = toolPolicy(a.workspace.access, this.allowShell && !studio);
+    const helpers = run.helperCap !== undefined;
+    const policy = toolPolicy(a.workspace.access, this.allowShell && !studio, helpers);
     // Isolated: only the allowed connections, configured from the user's own MCP definitions.
     const selected = local ? {} : this.mcpConfigsFor(studio ? [] : a.connections);
-    const guard = createWorkspaceGuard(a.workspace.path, a.outputSchema ? [...policy.tools, STRUCTURED_OUTPUT_TOOL] : policy.tools, local ? "any" : Object.keys(selected), a.workspace.readRoots);
+    // The subagent tool is never on the guard's list: the hook decides each call (startHelper), and canUseTool
+    // passes only a call the hook allowed. A helper's own tool calls reach the same hook and the same guard.
+    const guardTools = policy.tools.filter((t) => !isSubagentTool(t));
+    const guard = createWorkspaceGuard(a.workspace.path, a.outputSchema ? [...guardTools, STRUCTURED_OUTPUT_TOOL] : guardTools, local ? "any" : Object.keys(selected), a.workspace.readRoots);
 
     const preToolUse: HookCallback = async (input) => {
       const i = input as unknown as Rec;
       if (i.hook_event_name !== "PreToolUse") return {};
       const name = String(i.tool_name ?? "");
-      const verdict = guard(name, i.tool_input);
-      if (verdict.ok) return {};
-      this.activity(run, `Blocked ${name}: ${verdict.reason}`);
-      return {
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: verdict.reason,
-        },
+      // `agent_id` is set when the call comes from inside a helper (BaseHookInput in sdk.d.ts).
+      const fromHelper = typeof i.agent_id === "string" && i.agent_id !== "";
+      const deny = (reason: string) => {
+        this.activity(run, `Blocked ${name}${fromHelper ? " (helper)" : ""}: ${reason}`);
+        return { hookSpecificOutput: { hookEventName: "PreToolUse" as const, permissionDecision: "deny" as const, permissionDecisionReason: reason } };
       };
+      if (isSubagentTool(name)) {
+        const decision = this.startHelper(run, typeof i.tool_use_id === "string" ? i.tool_use_id : "", asRec(i.tool_input), fromHelper);
+        if (!decision.ok) return deny(decision.reason);
+        return { hookSpecificOutput: { hookEventName: "PreToolUse" as const, permissionDecision: "allow" as const, updatedInput: decision.input } };
+      }
+      const verdict = guard(name, i.tool_input);
+      return verdict.ok ? {} : deny(verdict.reason);
     };
 
-    const canUseTool: CanUseTool = async (toolName, input): Promise<PermissionResult> => {
+    const canUseTool: CanUseTool = async (toolName, input, ctx): Promise<PermissionResult> => {
+      if (isSubagentTool(toolName)) {
+        // Only a call the hook allowed and counted; any other never reaches the provider's subagents.
+        if (run.helpers.has(ctx?.toolUseID ?? "")) return { behavior: "allow", updatedInput: input };
+        this.activity(run, `Blocked ${toolName}: not allowed by the run's helper check`);
+        return { behavior: "deny", message: "This run may not start a helper agent here." };
+      }
       const verdict = guard(toolName, input);
       if (verdict.ok) return { behavior: "allow", updatedInput: input };
       this.activity(run, `Blocked ${toolName}: ${verdict.reason}`);
@@ -788,6 +894,20 @@ export class ClaudeAdapter implements RuntimeAdapter {
       },
     };
     if (a.limits.maxBudgetUsd !== undefined) options.maxBudgetUsd = a.limits.maxBudgetUsd;
+    // The one helper type a research run may start: the parent's read tools only, no subagent tool, the parent's model
+    // unless the call names one, and the run's turn limit. The built-in agents stay off (the env flag above).
+    if (helpers) {
+      options.agents = {
+        [HELPER_TYPE]: {
+          description: "A read-only research helper: searches and reads files in the working folder and reports what it finds.",
+          prompt: "You are a read-only research helper. Read, search and report; you cannot change any file. Use only the Read, Glob and Grep tools, inside the working folder.",
+          tools: [...READ_TOOLS],
+          disallowedTools: [...ALWAYS_DISALLOWED, ...WRITE_TOOLS, "Bash"],
+          model: "inherit",
+          maxTurns: a.limits.maxTurns,
+        },
+      };
+    }
     // The answer is constrained to the schema; the result carries it as `structured_output` (handleResult).
     if (a.outputSchema) options.outputFormat = { type: "json_schema", schema: a.outputSchema };
     return options;
@@ -826,15 +946,27 @@ export class ClaudeAdapter implements RuntimeAdapter {
   private handleMessage(run: Run, msg: SDKMessage) {
     const m = msg as unknown as Rec;
     const id = run.a.attemptId;
+    // A message from inside a helper names the Agent call that started it (sdk.d.ts: parent_tool_use_id).
+    if (typeof m.parent_tool_use_id === "string" && m.parent_tool_use_id !== "") this.sawHelper(run, m.parent_tool_use_id);
     switch (m.type) {
+      case "user": {
+        // The Agent call's result ends its helper; the structured result has its model and usage (AgentOutput).
+        const content = Array.isArray(asRec(m.message).content) ? (asRec(m.message).content as unknown[]).map(asRec) : [];
+        const results = content.filter((b) => b.type === "tool_result" && typeof b.tool_use_id === "string" && run.helpers.get(b.tool_use_id) === true);
+        for (const b of results) this.endHelper(run, b.tool_use_id as string, b.is_error === true ? "failed" : "completed", results.length === 1 && content.length === 1 ? asRec(m.tool_use_result) : undefined);
+        return;
+      }
       case "system": {
         if (m.subtype === "session_state_changed" && typeof m.state === "string") run.sessionState = m.state;
+        if (m.subtype === "task_notification" && typeof m.tool_use_id === "string") {
+          this.endHelper(run, m.tool_use_id, m.status === "completed" ? "completed" : m.status === "failed" ? "failed" : "stopped");
+        }
         if (m.subtype === "init" && !run.started) {
           run.started = true;
           run.sessionId = typeof m.session_id === "string" ? m.session_id : undefined;
           run.model = typeof m.model === "string" ? m.model : undefined;
           const tools = Array.isArray(m.tools) ? (m.tools as unknown[]).map(String) : [];
-          if (tools.includes("Agent") || tools.includes("Task")) {
+          if (run.helperCap === undefined && tools.some(isSubagentTool)) {
             this.log(`[claude ${id}] warning: the session reports a subagent tool despite being disallowed`);
           }
           if (!run.terminal && !run.forgotten) {
