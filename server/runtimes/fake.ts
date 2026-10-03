@@ -53,8 +53,9 @@ interface Proc {
 export const NOTE_ACK_TICKS = 2;
 
 /**
- * How many ticks a simulated lead run takes, whatever the steps' pace: a reply, not a step of work. At a step's pace a
- * note the owner sent through the lead reached a coder that had just finished, in most tries (ORC-030 QA, Q-14).
+ * The most ticks a simulated lead run takes, whatever the steps' pace (fewer when steps are faster): a reply, not a
+ * step of work. At a step's pace a note the owner sent through the lead reached a coder that had just finished, in
+ * most tries (ORC-030 QA, Q-14).
  */
 export const LEAD_TICKS = 2;
 
@@ -806,7 +807,8 @@ export class FakeAdapter implements RuntimeAdapter {
         p.notes = p.notes!.filter((x) => x.id !== n.id);
         this.emit({ type: "note", attemptId: id, noteId: n.id, outcome: "delivered" });
       }
-      p.progress = Math.min(100, p.progress + (p.lead ? Math.ceil(100 / LEAD_TICKS) : this.config.progressPerTick + jitter(id)));
+      const step = this.config.progressPerTick + jitter(id);
+      p.progress = Math.min(100, p.progress + (p.lead ? Math.max(step, Math.ceil(100 / LEAD_TICKS)) : step));
       if (p.progress >= 100) {
         this.dropNotes(id, p, "the run ended first");
         this.procs.delete(id);
