@@ -64,3 +64,38 @@ export function changeOrdered(handler: "lead" | "user" = "lead") {
   s = runCommand(s, "lockIn", { draftRev: s.blueprint.draft.rev }, at(18)).state;
   return { s, ids: { ...ids, packing: item(s, packing.id) }, tasks: { running: running.id, queued: queued.id, retiring: retiring.id, early: early.id } };
 }
+
+/** A lead proposal (spec content) as the lead's change order block gives it, citing `refs`. */
+export const leadProposal = (title: string, refs?: string[]) => ({
+  title,
+  outcome: `${title} is built as the blueprint shows.`,
+  options: [
+    { id: "A", name: "Build it", approach: "Build what the approved prototype shows." },
+    { id: "B", name: "Defer", approach: "Wait." },
+  ],
+  recommendedOptionId: "A",
+  rationale: "The user locked it in.",
+  acceptance: ["The screen matches the approved prototype."],
+  ...(refs ? { blueprintRefs: refs } : {}),
+});
+
+/** The lead's full answer to `changeOrdered`: a spec update, two revisions, a retirement and a new task. */
+export function fullAnswer(f: ReturnType<typeof changeOrdered>) {
+  return {
+    rev: f.s.blueprint.changeOrders.at(-1)!.rev,
+    updates: [
+      { action: "update-spec", task: f.tasks.queued, why: "Day list first, the map below it.", proposal: leadProposal("Trip list screen", [f.ids.plan, f.ids.list]) },
+      { action: "revise", task: f.tasks.running, why: "The map moves below the days.", proposal: leadProposal("Move the trip plan map below the days", [f.ids.plan]) },
+      { action: "retire", task: f.tasks.retiring, why: "You dropped Reminders.", proposal: null },
+      { action: "revise", task: f.tasks.early, why: "The early plan shows the map first.", proposal: leadProposal("Revise the early trip plan", [f.ids.plan]) },
+      { action: "new-task", task: null, why: "One shared list per trip.", proposal: leadProposal("Packing list screen", [f.ids.packing]) },
+    ],
+  };
+}
+
+/** A change-order lead run, started at `sec` and completed a second later with this block. */
+export function answerChangeOrder(s: State, block: unknown, sec: number): { s: State; runId: string; setId: string } {
+  const r = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "change-order" }, at(sec));
+  const done = M.completeLeadRun(r.state, r.runId, { reply: "", proposals: [], changeOrder: block } as never, at(sec + 1));
+  return { s: done, runId: r.runId, setId: `cs-${r.runId}` };
+}

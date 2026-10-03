@@ -5,7 +5,8 @@
 
 import { useEffect, useState } from "react";
 import * as B from "../../domain/studio/blueprint";
-import { Banner, ButtonLink, Button, Card, Checkbox, Chip, EmptyState, Row, Rows } from "../kit";
+import { Banner, ButtonLink, Button, Card, Checkbox, Chip, Disclosure, EmptyState, Row, Rows } from "../kit";
+import { changeOrderHref } from "../changeOrder/changeOrderView";
 import { useStore } from "../store";
 import { ChangeLines } from "./Draft";
 import { lockInBlocker } from "./draftView";
@@ -67,6 +68,18 @@ export function LockInPage() {
                   <section aria-labelledby="li-changes">
                     <h3 id="li-changes">What changes</h3>
                     <ChangeLines lines={w.changeLines} label="What changes" />
+                    {w.vision && (
+                      <Disclosure label={`The vision text: your draft against r${w.vision.replacesRev}, the text in force`} className="st-lockin__vision">
+                        <p className="small muted no-margin">The lead and the agents read the new text from this Lock in on.</p>
+                        <div className="diff" aria-label={`The vision text: your draft against r${w.vision.replacesRev}`}>
+                          {w.vision.diff.map((d, i) => (
+                            <div key={i} className={d.kind}>
+                              {d.text}
+                            </div>
+                          ))}
+                        </div>
+                      </Disclosure>
+                    )}
                   </section>
                   <section aria-labelledby="li-tasks">
                     <h3 id="li-tasks">The tasks it touches</h3>
@@ -163,9 +176,15 @@ function Done({ rev }: { rev: number }) {
       title={`Locked in, as Lock in ${rev}.`}
       actions={
         <>
-          <ButtonLink size="small" href="#/tasks">
-            Open the tasks
-          </ButtonLink>
+          {order ? (
+            <ButtonLink size="small" variant="primary" href={changeOrderHref(order.rev)}>
+              Open change order {order.rev}
+            </ButtonLink>
+          ) : (
+            <ButtonLink size="small" href="#/tasks">
+              Open the tasks
+            </ButtonLink>
+          )}
           <ButtonLink size="small" variant="quiet" href="#/vision">
             Back to the studio
           </ButtonLink>
@@ -175,8 +194,8 @@ function Done({ rev }: { rev: number }) {
       The factory now builds from Lock in {rev}.{" "}
       {order
         ? order.handler === "user"
-          ? `Change order ${rev} waits for you before the lead updates the tasks.`
-          : `The lead adjusts the tasks as change order ${rev}.`
+          ? `The lead plans the updates to the tasks as change order ${rev}. Each update waits for your go-ahead there.`
+          : `The lead adjusts the tasks as change order ${rev}. You can undo each update there.`
         : B.blueprintRev(state) >= rev
           ? "No task cites what changed and nothing new is to be built, so there is no change order."
           : ""}

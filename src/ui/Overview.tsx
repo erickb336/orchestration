@@ -517,10 +517,28 @@ function FocusCard({ state }: { state: State }) {
   );
 }
 
-/** Inside "Vision and history": the text with its editor, what changed from the previous revision, every revision, and the documents. */
+/** The editor's hint while the factory runs: where an edit of the text goes, and where the focus goes. */
+export const VISION_DRAFT_HINT = "The factory runs, so your edit of the text goes into the draft, not into force. It goes into force with your next Lock in. A new focus applies at once.";
+
+/**
+ * The vision text the editor works on (the draft's while building, `draftVisionText`), and, when an edit of it waits
+ * in the draft, why and until when.
+ */
+export function visionDraftWords(s: State): { building: boolean; text: string; waiting?: string } {
+  const building = s.project.stage === "building";
+  const dv = s.blueprint.draft.vision;
+  return { building, text: M.draftVisionText(s), ...(building && dv ? { waiting: `"${dv.reason}". It goes into force with your next Lock in. Until then the factory builds from the text in force.` } : {}) };
+}
+
+/**
+ * Inside "Vision and history": the text with its editor, what changed from the previous revision, every revision, and
+ * the documents. While the factory runs, the editor works on the draft's text (ORC-029 pass 5): the factory builds
+ * from the text in force until the owner's next Lock in, and both texts show while they differ.
+ */
 function VisionDetails({ state, scrollToHistory }: { state: State; scrollToHistory: boolean }) {
   const { send, disabled } = useStore();
   const vision = M.currentVision(state);
+  const draft = visionDraftWords(state);
   const visions = state.project.visions;
   const prev = visions.length > 1 ? visions[visions.length - 2] : undefined;
   const diff = prev ? diffLines([`Focus: ${prev.focus}`, ...prev.text.split("\n")], [`Focus: ${vision.focus}`, ...vision.text.split("\n")]).filter((d) => d.kind !== "same") : [];
@@ -531,12 +549,23 @@ function VisionDetails({ state, scrollToHistory }: { state: State; scrollToHisto
 
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  // The vision revision the draft started from; saving against it lets the service reject a stale draft.
+  // The vision revision the edit started from; saving against it lets the service reject a stale edit. While building,
+  // the text it started from is the draft's: a change to the draft's text meanwhile (another tab, the lead's draft you
+  // accepted) is stale too.
   const [baseRev, setBaseRev] = useState(vision.rev);
-  const staleDraft = editing && !saving && vision.rev !== baseRev;
-  const [text, setText] = useState(vision.text);
+  const [baseText, setBaseText] = useState(draft.text);
+  const staleRev = editing && !saving && vision.rev !== baseRev;
+  const staleText = editing && !saving && !staleRev && draft.building && draft.text !== baseText;
+  const staleDraft = staleRev || staleText;
+  const [text, setText] = useState(draft.text);
   const [focus, setFocus] = useState(vision.focus);
   const [reason, setReason] = useState("");
+  const load = () => {
+    setText(draft.text);
+    setFocus(vision.focus);
+    setBaseRev(vision.rev);
+    setBaseText(draft.text);
+  };
 
   return (
     <div className="k-stack k-stack--tight vision-details">
@@ -556,23 +585,16 @@ function VisionDetails({ state, scrollToHistory }: { state: State; scrollToHisto
             }
           }}
         >
-          {staleDraft && (
+          {staleRev && (
             <Banner
               tone="fail"
               title={`The vision changed to r${vision.rev} while you were editing`}
               actions={
                 <>
-                  <Button size="small" onClick={() => setBaseRev(vision.rev)}>
+                  <Button size="small" onClick={() => (setBaseRev(vision.rev), setBaseText(draft.text))}>
                     Save over r{vision.rev} anyway
                   </Button>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      setText(vision.text);
-                      setFocus(vision.focus);
-                      setBaseRev(vision.rev);
-                    }}
-                  >
+                  <Button size="small" onClick={load}>
                     Discard draft and load r{vision.rev}
                   </Button>
                 </>
@@ -581,7 +603,25 @@ function VisionDetails({ state, scrollToHistory }: { state: State; scrollToHisto
               {vision.author}: {vision.reason}. Your draft is kept.
             </Banner>
           )}
-          <Field label="Vision">
+          {staleText && (
+            <Banner
+              tone="fail"
+              title="The vision text in the draft changed while you were editing"
+              actions={
+                <>
+                  <Button size="small" onClick={() => setBaseText(draft.text)}>
+                    Save over it anyway
+                  </Button>
+                  <Button size="small" onClick={load}>
+                    Discard my edit and load it
+                  </Button>
+                </>
+              }
+            >
+              Your edit is kept.
+            </Banner>
+          )}
+          <Field label={draft.building ? "Vision (the draft's text)" : "Vision"} hint={draft.building ? VISION_DRAFT_HINT : undefined}>
             <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} />
           </Field>
           <Field label="Current focus">
@@ -592,7 +632,7 @@ function VisionDetails({ state, scrollToHistory }: { state: State; scrollToHisto
           </Field>
           <div className="k-actions">
             <Button type="submit" variant="primary" disabled={disabled || saving || staleDraft} loading={saving}>
-              {saving ? "Saving…" : `Save as r${vision.rev + 1}`}
+              {saving ? "Saving…" : draft.building && text !== draft.text ? "Save to the draft" : `Save as r${vision.rev + 1}`}
             </Button>
             <Button variant="quiet" onClick={() => setEditing(false)}>
               Cancel
@@ -601,18 +641,36 @@ function VisionDetails({ state, scrollToHistory }: { state: State; scrollToHisto
         </form>
       ) : (
         <>
-          <p className="vision-text">{vision.text || <span className="muted">No vision written yet.</span>}</p>
+          {draft.waiting ? (
+            <>
+              <Banner
+                tone="you"
+                title="Your edit of the vision text waits in the draft."
+                actions={
+                  <ButtonLink size="small" href="#/vision/lock-in">
+                    Review and lock in
+                  </ButtonLink>
+                }
+              >
+                {draft.waiting}
+              </Banner>
+              <p className="small muted no-margin">In the draft:</p>
+              <p className="vision-text">{draft.text}</p>
+              <p className="small muted no-margin">In force (r{vision.rev}), what the factory builds from:</p>
+              <p className="vision-text muted">{vision.text}</p>
+            </>
+          ) : (
+            <p className="vision-text">{vision.text || <span className="muted">No vision written yet.</span>}</p>
+          )}
           <div className="k-actions">
             <Button
               size="small"
               onClick={() => {
-                setText(vision.text);
-                setFocus(vision.focus);
-                setBaseRev(vision.rev);
+                load();
                 setEditing(true);
               }}
             >
-              Edit vision
+              {draft.waiting ? "Edit the draft's text" : "Edit vision"}
             </Button>
           </div>
         </>

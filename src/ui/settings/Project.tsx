@@ -1,5 +1,5 @@
-// Settings › Project: the repository, the kind of product (its domains), the stage, and how finished work leaves
-// (the delivery mode, the remote and base, who merges). Settings wait for Save; Start building is an action and acts
+// Settings › Project: the repository, the kind of product (its domains), the preview the service runs for evidence,
+// the stage, and how finished work leaves (the delivery mode, the remote and base, who merges). Settings wait for Save; Start building is an action and acts
 // at once. In real mode, Start a new project is its own form with its own button.
 
 import { useState } from "react";
@@ -14,9 +14,11 @@ import { initProjectConfirm } from "../stageChoice";
 import { useStore } from "../store";
 import { sendInOrder, useDraft } from "./draft";
 import { SettingsCard, SettingsSection } from "./parts";
+import { PreviewCard } from "./PreviewCard";
+import { PREVIEW_KEYS, livePreview, previewProblem, previewSteps, type PreviewDraft } from "./preview";
 import type { SectionId } from "./sections";
 
-type ProjectDraft = DeliveryDraft & { repoPath: string; conventions: boolean; domains: ProjectDomain[] };
+type ProjectDraft = DeliveryDraft & PreviewDraft & { repoPath: string; conventions: boolean; domains: ProjectDomain[] };
 
 /** Why the chosen kinds cannot be saved: none chosen, once the project has some (they can be changed, never cleared). */
 export function domainsError(live: readonly ProjectDomain[], chosen: readonly ProjectDomain[]): string | undefined {
@@ -28,10 +30,11 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
   const confirm = useConfirm();
   const real = service.runtime === "real";
   const liveDel = liveDelivery(state);
-  const live: ProjectDraft = { ...liveDel, repoPath: state.project.repoPath, conventions: state.project.conventions?.include ?? true, domains: state.project.domains };
+  const live: ProjectDraft = { ...liveDel, ...livePreview(state), repoPath: state.project.repoPath, conventions: state.project.conventions?.include ?? true, domains: state.project.domains };
   const draft = useDraft(live);
   const v = draft.value;
-  const errors = { repoPath: v.repoPath.trim() ? undefined : "Give the repository's path.", domains: domainsError(live.domains, v.domains), ...deliveryErrors(v) };
+  const previewChanged = PREVIEW_KEYS.some((k) => draft.changed.has(k));
+  const errors = { repoPath: v.repoPath.trim() ? undefined : "Give the repository's path.", domains: domainsError(live.domains, v.domains), ...deliveryErrors(v), preview: previewChanged ? previewProblem(v) : undefined };
   const invalid = Object.values(errors).find(Boolean);
 
   const save = async (begin: () => void) => {
@@ -42,6 +45,7 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
       () => (draft.changed.has("repoPath") ? send("setRepoPath", { repoPath: v.repoPath.trim() }) : null),
       () => (draft.changed.has("conventions") ? send("setConventions", { include: v.conventions }) : null),
       () => (draft.changed.has("domains") && v.domains.length ? send("setDomains", { domains: v.domains }) : null),
+      ...previewSteps(v, draft.changed as ReadonlySet<string>, send),
       ...delivery,
     ]);
   };
@@ -51,7 +55,7 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
     <SettingsSection
       id="project"
       title="Project"
-      help="Your repository, the stage, and how finished work leaves Orchestrator. Changes here wait for Save; Start building acts at once."
+      help="Your repository, the preview for evidence, the stage, and how finished work leaves Orchestrator. Changes here wait for Save; Start building acts at once."
       current={current}
       draft={draft}
       invalid={invalid}
@@ -99,6 +103,8 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
           </p>
         )}
       </SettingsCard>
+
+      <PreviewCard v={v} set={draft.set} />
 
       <StageCard />
 

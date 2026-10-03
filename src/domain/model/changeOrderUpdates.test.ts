@@ -161,7 +161,7 @@ describe("the lead's answer: one line per update", () => {
     expect(s.conversation.at(-1)!.rejected).toEqual(co.notes!.map((n) => `Change order r${rev}: ${n}`));
     expect(co.status).toBe("open");
     expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order"))).toEqual([
-      { kind: "open", key: `change-order-${rev}`, what: `Change order: blueprint r${rev}`, detail: `You changed the blueprint: Packing list (v1), Trip plan (v2); dropped Reminders (v1). It touches ${f.tasks.running}, ${f.tasks.queued}, ${f.tasks.retiring}, ${f.tasks.early}. Not handled: ${f.tasks.running}, ${f.tasks.queued}, ${f.tasks.early} and Packing list v1 (no task yet).`, action: "Open", href: "#/tasks" },
+      { kind: "open", key: `change-order-${rev}`, what: `Change order: blueprint r${rev}`, detail: `You changed the blueprint: Packing list (v1), Trip plan (v2); dropped Reminders (v1). It touches ${f.tasks.running}, ${f.tasks.queued}, ${f.tasks.retiring}, ${f.tasks.early}. Not handled: ${f.tasks.running}, ${f.tasks.queued}, ${f.tasks.early} and Packing list v1 (no task yet).`, action: "Open", href: `#/tasks/change-order/${rev}` },
     ]);
     // You close it as it stands: what is left is recorded as not handled.
     const closed = runCommand(s, "closeChangeOrder", { rev }, at(30)).state;

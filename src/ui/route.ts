@@ -4,11 +4,11 @@
 // query after the page name (`#/overview?history=1`, `#/tasks?area=Maps`) never changes which page opens; the page
 // reads it.
 
-export type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" | "kit" | "vision" | "lock-in" | "reality" } | { page: "task"; id: string };
+export type Route = { page: "overview" | "tasks" | "review" | "activity" | "settings" | "kit" | "vision" | "lock-in" | "reality" } | { page: "task"; id: string } | { page: "change-order"; rev: number };
 
-/** The page under the tab it belongs to: a task page to Tasks, the Lock in summary to Vision, Design and reality to Results. */
+/** The page under the tab it belongs to: a task page and a change order to Tasks, the Lock in summary to Vision, Design and reality to Results. */
 export function tabOf(route: Route): string {
-  if (route.page === "task") return "tasks";
+  if (route.page === "task" || route.page === "change-order") return "tasks";
   if (route.page === "lock-in") return "vision";
   if (route.page === "reality") return "review";
   return route.page;
@@ -19,6 +19,9 @@ export function parseRoute(hash: string): Route {
   const page = parts[0].split("?")[0];
   const sub = parts[1]?.split("?")[0];
   if (page === "task" && parts[1]) return { page: "task", id: decodeURIComponent(parts[1].split("?")[0]) };
+  // A change order (ORC-029 pass 5, screen 4), under Tasks: `#/tasks/change-order/3`.
+  const rev = Number(parts[2]?.split("?")[0]);
+  if (page === "tasks" && sub === "change-order" && Number.isInteger(rev) && rev > 0) return { page: "change-order", rev };
   // Design and reality (ORC-029 pass 5): each part of the design beside what the factory built, under Results.
   if ((page === "results" || page === "review") && sub === "design") return { page: "reality" };
   if (page === "results" || page === "review") return { page: "review" };

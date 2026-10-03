@@ -75,6 +75,22 @@ describe("the Lock in summary", () => {
     expect(v.html).not.toContain('type="checkbox"');
   });
 
+  it("a vision text in the draft is one more change: the summary names it and shows the text against the one in force", () => {
+    const { s, at } = blueprintScene();
+    const v = s.project.visions.at(-1)!;
+    const edited = runCommand(s, "editVision", { expectedRev: v.rev, text: `${v.text}\nEach friend packs from one shared list.`, focus: v.focus, reason: "Packing is shared" }, at(400)).state;
+    const { html, text } = page(edited);
+    expect(text).toContain('4 changes go into force What changes Changed Vision text ("Packing is shared"; it goes into force with the Lock in) Added Packing list v1');
+    expect(text).toContain(`The vision text: your draft against r${v.rev}, the text in force The lead and the agents read the new text from this Lock in on. Weekend trips for a small group of friends. Each friend packs from one shared list.`);
+    expect(html).toContain('<div class="add">Each friend packs from one shared list.</div>');
+    expect(text).toContain("Put these 4 changes into force");
+    // A draft that changes only the vision text can be locked in, and says there is nothing new to build.
+    const only = runCommand(runCommand(s, "discardDraft", { draftRev: s.blueprint.draft.rev }, at(401)).state, "editVision", { expectedRev: v.rev, text: "Weekend trips for friends.", focus: v.focus, reason: "Shorter" }, at(402)).state;
+    const w = lockInWords(only);
+    expect([w.heading, w.button, w.estimate.total]).toEqual(["1 change goes into force", "Lock in 1 change", "Nothing new to build: the Lock in only changes the vision text."]);
+    expect(page(only).text).not.toContain("Nothing to lock in");
+  });
+
   it("the Lock in button waits for the agreement", () => {
     const { s } = blueprintScene();
     const { html } = page(s);

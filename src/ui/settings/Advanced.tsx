@@ -1,7 +1,8 @@
 // Settings › Advanced: the developer forms and the diagnostics, out of the way of the settings
 // you use. Pull-request options beyond the basics, what the app found on GitHub, the checks sandbox, the agents'
 // environment (real mode), the providers' capabilities, data import and export, and Usage and service.
-// Settings wait for Save; Check again, Download, Import and Remove act at once.
+// Settings wait for Save; Check again, Download, Import, Remove, the housekeeping checkbox and Clean up now act at
+// once (the intro says so).
 
 import { useState } from "react";
 import * as M from "../../domain/model";
@@ -74,7 +75,7 @@ export function AdvancedSection({ current, onDirty }: { current: boolean; onDirt
     <SettingsSection
       id="advanced"
       title="Advanced"
-      help="Developer settings and diagnostics. Changes here wait for Save; Check again, Download, Import and Remove act at once."
+      help="Developer settings and diagnostics. Most changes here wait for Save. These act at once: Check again, Download, Import, Remove, the housekeeping checkbox and Clean up now."
       current={current}
       draft={draft}
       invalid={invalid}
