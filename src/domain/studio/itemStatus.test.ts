@@ -40,11 +40,12 @@ describe("an item's factory status", () => {
     expect(itemFactoryStatus(s, "bi-404")).toBeUndefined();
   });
 
-  it("after the Lock in: the dropped item leaves the list, the new one is designed, and running work on the old version still builds", () => {
+  it("after the Lock in: the dropped item leaves the list, the new one is designed, and running work on the old version does not build the new one", () => {
     const sc = blueprintScene();
     const s = lockInAsOwner(sc.s, sc.at(400));
     expect(statuses(s)).toEqual({
-      "Trip plan v2": "being-built",
+      // Review finding 15: T-001 still runs, but it builds v1, so nothing builds v2 yet.
+      "Trip plan v2": "designed",
       "Trip data v1": "built-not-verified",
       "Words v1": "in-force",
       "Join flow v1": "fails-a-check",
@@ -54,6 +55,12 @@ describe("an item's factory status", () => {
     // T-001's spec is from before v2 came into force: it builds the earlier version.
     expect(itemFactoryStatus(s, sc.items.plan)!.tasks).toEqual([{ taskId: sc.tasks.plan, title: "Trip plan screen", state: "running", thisVersion: false }]);
     expect(itemFactoryStatus(s, sc.items.plan)!.since).toBe(sc.at(400));
+    // New work on v2 that runs is being built (as in the scene: started on the owner's go-ahead, then dispatched).
+    const revision = citingTask(s, "Trip plan: day list first", [sc.items.plan], sc.at(410));
+    const started = M.startHeldTask(revision.s, revision.taskId, sc.at(420));
+    const d = M.dispatchEligible(M.leadPromoteProposals(started, sc.at(420)), sc.at(421));
+    expect(M.activeAttempts(d, revision.taskId)).toHaveLength(1);
+    expect(status(d, sc.items.plan)).toBe("being-built");
   });
 
   it("work that built an earlier version does not build this one; new work on this version that landed is built, and a screen is not verified without evidence", () => {

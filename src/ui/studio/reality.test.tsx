@@ -43,7 +43,7 @@ describe("Design and reality", () => {
     const locked = lockInAsOwner(sc.s, sc.at(400));
     expect(rows(locked).map((r) => r.match(/^.*? v\d+/)![0])).toEqual(["Trip plan v2", "Trip data v1", "Words v1", "Join flow v1", "Share costs v1", "Packing list v1"]);
     expect(visible(renderScreen(<Reality />, locked, svc))).toContain("Dropped, so not listed: Reminders v1.");
-    expect(rows(locked)[0]).toBe(`Trip plan v2 screen being built ${sc.tasks.plan} running (from before v2) design`);
+    expect(rows(locked)[0]).toBe(`Trip plan v2 screen designed ${sc.tasks.plan} running (from before v2) design`);
   });
 
   it("a row shows the evidence thumbnails: the design, and the built screenshot or recording once captured", () => {
@@ -124,7 +124,7 @@ describe("Design and reality", () => {
     expect(why(sc.s, sc.items.reminders)).toBe("Your draft drops it. The factory keeps it until you lock in the draft.");
     const locked = lockInAsOwner(sc.s, sc.at(400));
     expect(why(locked, sc.items.packing)).toBe("Locked in. No task builds it yet: the lead plans its tasks.");
-    expect(why(locked, sc.items.plan)).toBe(`${sc.tasks.plan} builds it now.`);
+    expect(why(locked, sc.items.plan)).toBe(`Locked in. ${sc.tasks.plan} builds an earlier version; nothing builds v2 yet.`);
     // Landed work whose rules have no test, or a skipped one, is not proved.
     const tag = (line: string) => `[${sc.items.join} ${line}]`;
     const fix = citingTask(sc.s, "Fix the expired link", [sc.items.join], sc.at(400));
