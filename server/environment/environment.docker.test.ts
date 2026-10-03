@@ -26,6 +26,8 @@ const skipReason = ready ? "" : ` (skipped: ${docker ? "Docker is not running" :
 const row = (label: string) => IMAGE_TABLE.find((r) => r.label === label)!;
 const settingPlan = (label: string, prepare: string[][]): EnvironmentPlan => environmentPlan(environmentSource(undefined, { rev: 1, image: row(label).image, prepare, hosts: [] }).source!, { rev: 1, prepare, hosts: [] });
 
+/** The tests' projects, so their prepared images (orc-env-<project>:<key>) can be removed afterwards, and only theirs. */
+const TEST_ID = `envtest-${Math.random().toString(36).slice(2, 8)}`;
 let root = "";
 let scratch = "";
 let runner: EnvironmentChecks;
@@ -38,7 +40,12 @@ beforeAll(() => {
   scratch = mkdtempSync(join(tmpdir(), "orc-env-real-"));
   runner = new EnvironmentChecks({ root, fallback: () => ({ start: () => { throw new Error("handed to the host sandbox"); } }) as never, log: (m) => console.log(m) });
 });
-afterAll(() => {
+afterAll(async () => {
+  if (ready) {
+    const images = await runDocker(docker!, ["images", "--format", "{{.Repository}}:{{.Tag}}"], { env: dockerEnv(process.env), timeoutMs: 30_000 });
+    const ours = images.stdout.split("\n").filter((x) => x.startsWith(`orc-env-${TEST_ID}-`));
+    if (ours.length) await runDocker(docker!, ["image", "rm", ...ours], { env: dockerEnv(process.env), timeoutMs: 120_000 });
+  }
   if (root) removeTree(root);
   if (scratch) removeTree(scratch);
   if (timings.length) console.log(`environment timings:\n  ${timings.join("\n  ")}`);
@@ -67,7 +74,7 @@ async function run(fixture: string, plan: EnvironmentPlan, argv: string[], o: { 
     commands: [{ id: "test", label: argv.join(" "), kind: "check", argv, timeoutMs: 10 * 60_000 }],
     runTimeoutMs: 25 * 60_000, sandbox: "codex", prepareNetwork: true, env: {}, tmpDir: join(scratch, `${id}.tmp`), cacheDir: join(scratch, `${id}.cache`), logDir: join(scratch, `${id}.logs`),
     testReport: o.testReport ?? "reports/junit.xml",
-    environment: { plan, project: o.project ?? fixture },
+    environment: { plan, project: `${TEST_ID}-${o.project ?? fixture}` },
   });
   const e = await end;
   if (e.type !== "completed") throw new Error(`the run did not complete: ${JSON.stringify(e).slice(0, 600)}`);
