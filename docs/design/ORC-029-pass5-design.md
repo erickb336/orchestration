@@ -82,3 +82,14 @@ The screens come first, with sample data, before any backend work (the owner's r
 
 **Still to come in pass 5:** the change order screen, the evidence beside the design, the settings forms (5e); the factory trial (5f); an independent review; one real trial.
 
+## The independent review of pass 5 (2026-10-03)
+
+The diff `97d7435..ab23aa9`, read by a reviewer that did not write it: **2 high, 6 medium and 6 low findings.** The blueprint's store guard is sound: only the owner's `lockIn` and `startFactory` write `blueprint.revisions`.
+
+- **High 1:** the lead's "retire" in a change order could cancel a task that the owner wrote, against the Lock in's agreed handling.
+- **High 2:** the lead's spec update in a change order could clear a PE objection that waits for the owner.
+- **Medium:** a new project kept the old project's preview setting (3); the lead could replace a rule's text under its own tag (4); a spec update dropped the owner's chosen option and fields (5); per-line Undo broke after a PE round (6); a line's status lived only in the capped steering log (7); a networked install could send data to hosts named in a lockfile or `.npmrc` (8).
+- **Low:** the test report's declaration guard could be bypassed with a processing instruction (9); change-order rows in a refused steering set (10); a failing tagged test dropped from a large report (11); the overclaim "an agent cannot plant results" (12); the Lock in record versus what the owner saw (13); the store guard's reference comparison (14); "being built" counting work on an older version (15); and a stage folder that may leak (to verify).
+
+**The fix round:** R1 fixes 1, 2, 4, 5, 6, 7 and 10 (the change orders); R2 fixes 3, 9, 11–15 and the stage folder; **8 is closed by the project environment's egress proxy** (`docs/design/project-environment.md`, units E1 and E2), which also makes the checks and the evidence language agnostic (the owner, 2026-10-03: "Really this should be language agnostic for what we build").
+
