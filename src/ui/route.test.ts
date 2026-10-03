@@ -44,8 +44,8 @@ describe("routes", () => {
     expect(parseRoute("#/task/WT-1?x=1")).toEqual({ page: "task", id: "WT-1" });
   });
 
-  it("the History link opens the vision history on the Overview", () => {
-    expect(parseRoute(HISTORY_HASH)).toEqual({ page: "overview" });
+  it("the History link opens the vision history in Vision, where the vision text lives (ORC-030 C1)", () => {
+    expect(parseRoute(HISTORY_HASH)).toEqual({ page: "vision" });
     expect(historyRequested(HISTORY_HASH)).toBe(true);
     expect(historyRequested("#/overview")).toBe(false);
     expect(historyRequested("#/overview?history=0")).toBe(false);

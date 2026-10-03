@@ -92,7 +92,8 @@ const visible = (html: string) =>
 /** The visible text of the studio's PE review panel. */
 const peText = (state: State) => {
   const html = render(<Studio />, state);
-  return visible(html.slice(html.indexOf('aria-label="PE review"'), html.indexOf('aria-label="Your feedback"')));
+  const from = html.indexOf('aria-label="PE review"');
+  return visible(html.slice(from, html.indexOf("</aside>", from)));
 };
 
 /** A project in Vision (desktop and mobile), as one starts. */
@@ -152,8 +153,8 @@ describe("Vision in the main navigation", () => {
       expect(html).toContain("<h1 class=\"no-margin\">Vision</h1>");
       expect(sent).toEqual([]);
     }
-    // In Factory it says what Vision does there: it stays open, and approvals go into the draft.
-    expect(render(<Studio />, factory)).toContain("The factory builds from the version you locked in, never from the draft.");
+    // In Factory it says what the factory builds from, and that a part you keep goes into the draft.
+    expect(visible(render(<Studio />, factory))).toContain("Nothing is in the draft. The factory builds from the vision text. A part you mark Keep goes into the draft when you send it.");
   });
 
   it("its badge counts the agents' artifacts the PE passed to you that you have not marked", () => {
@@ -212,7 +213,19 @@ describe("the fake designer's sample in the viewer", () => {
     for (const label of [">Keep<", ">Change<", ">Drop<", "Pin a comment", "Send to the lead"]) expect(html).toContain(label);
     // The fake runtime made it: labelled so.
     expect(html).toContain("simulated");
-    expect(html).toContain("Nothing marked or written yet.");
+    expect(html).toContain("Keep puts the part in the draft when you send. Drop takes it out.");
+  });
+
+  it("your answer is one bar under the part: the variant, Keep, Change, Drop, the note and Send; the right column has none of them (ORC-030 a-vision-actions)", () => {
+    const { s } = withSample();
+    const html = render(<Studio />, s);
+    const bar = html.slice(html.indexOf('aria-label="Your answer"'), html.indexOf('aria-label="What the lead and the PE said"'));
+    const right = html.slice(html.indexOf('aria-label="What the lead and the PE said"'));
+    expect(visible(bar)).toMatch(/A · Map first B · Day by day Pick this variant Keep Change Drop Note on Trip plan \(simulated sample\) Send to the lead Keep puts the part in the draft when you send\. Drop takes it out\./);
+    expect(bar).toContain('placeholder="Note on Trip plan (simulated sample)…"');
+    for (const mine of [">Keep<", ">Send to the lead<", "Note on", "<textarea", "Pick this variant"]) expect(right).not.toContain(mine);
+    // The note is the one box per part: there is no other box for the lead in Vision.
+    expect(html.match(/<textarea/g)).toHaveLength(1);
   });
 
   it("the device switch offers only the project's devices", () => {
@@ -245,11 +258,12 @@ describe("the fake designer's sample in the viewer", () => {
     expect(html).toContain(`src="/api/studio/file?artifact=${id}&amp;version=1&amp;path=shots%2Fa-desktop.png"`);
   });
 
-  it("Vision is reached from the main navigation, so Home has no studio card of its own", () => {
+  it("Vision is reached from the main navigation; Home has only the vision's line, with Open Vision, and no studio card", () => {
     const { s } = withSample();
     const html = render(<Overview />, s);
     expect(html).not.toContain("Open the studio");
-    expect(html).not.toContain('href="#/vision"');
+    expect(html.match(/href="#\/vision"/g)).toHaveLength(1);
+    expect(html).toMatch(/<a href="#\/vision" class="k-btn k-btn--small">Open Vision<\/a>/);
   });
 });
 
@@ -286,7 +300,7 @@ describe("the lead's panel", () => {
     ],
   };
 
-  it("shows the round's message, its questions with suggested answers and an answer box, and Message the lead, above PE review and your feedback", () => {
+  it("shows the round's message and its questions with suggested answers and an answer box, above PE review; no message box of its own (ORC-030 a-vision-two-boxes)", () => {
     const { s, n } = withSample();
     const html = render(<Studio />, withLead(s, n, LEAD));
     expect(html).not.toContain("Not built yet");
@@ -299,37 +313,46 @@ describe("the lead's panel", () => {
     // The second question has no suggestions: only its answer box.
     expect(html).not.toContain("Suggested answers to question 2");
     expect(html).toContain("Your answer to question 2");
-    expect(html).toContain(">Message the lead<");
-    expect(html).toContain(">Open the conversation<");
+    expect(html).toContain("Your answers go with Send to the lead, with your marks.");
+    // The header's Message the lead is the one way to write to the lead beyond your answer: the studio has no box, and no second way to the conversation.
+    expect(html).not.toContain(">Message the lead<");
+    expect(html).not.toContain("Anything else for the lead");
+    expect(html).not.toContain(">Open the conversation<");
     // Simulated: the fake runtime's lead wrote it.
     expect(html).toContain("Simulated: the demo&#x27;s lead wrote this round&#x27;s message and questions; no model ran.");
-    // The lead first, then PE review, then your feedback and the one Send.
+    // The right column: the lead first, then PE review, and nothing of yours. Your answer is the bar under the part, before the right column.
     const lead = html.indexOf('aria-label="The lead"');
     const pe = html.indexOf('aria-label="PE review"');
-    const yours = html.indexOf('aria-label="Your feedback"');
-    expect(lead).toBeGreaterThan(0);
+    const bar = html.indexOf('aria-label="Your answer"');
+    const right = html.indexOf('aria-label="What the lead and the PE said"');
+    expect(lead).toBeGreaterThan(right);
     expect(pe).toBeGreaterThan(lead);
-    expect(yours).toBeGreaterThan(pe);
-    expect(html).toContain(">Send to the lead<");
+    expect(bar).toBeGreaterThan(html.indexOf('aria-label="The artifact"'));
+    expect(bar).toBeLessThan(right);
+    expect(html).not.toContain('aria-label="Your feedback"');
+    expect(html.match(/>Send to the lead</g)).toHaveLength(1);
     expect(html).not.toContain("Send feedback");
   });
 
   it("a suggested answer fills the answer box, pressed", () => {
     const { s, n } = withSample();
     const round = withLead(s, n, LEAD).studio.rounds.find((r) => r.n === n)!;
-    const html = render(<LeadPanel round={round} answers={["Map tiles too", ""]} onAnswer={() => {}} message="" onMessage={() => {}} />, s);
+    const html = render(<LeadPanel round={round} answers={["Map tiles too", ""]} onAnswer={() => {}} />, s);
     expect(html).toMatch(/<button[^>]*aria-pressed="true"[^>]*>Map tiles too<\/button>/);
     expect(html).toMatch(/<button[^>]*aria-pressed="false"[^>]*>Yes, cache the plan<\/button>/);
     expect(html).toMatch(/<input[^>]*value="Map tiles too"/);
   });
 
-  it("without the lead's words for the round (a round from before pass 4), it says so, and you can still write to the lead", () => {
-    const { s, n } = withSample();
+  it("without the lead's words for the round (a round from before pass 4), it says so; the note on the part still writes to the lead", () => {
+    const { s, n, id } = withSample();
     const html = render(<Studio />, s);
-    expect(html).toContain(`The lead has written nothing for round ${n}. Write to it below; it answers in the conversation.`);
+    expect(html).toContain(`The lead has written nothing for round ${n}.`);
     expect(html).not.toContain("The lead asks");
-    expect(html).toContain(">Message the lead<");
-    expect(html).toContain("Nothing marked or written yet.");
+    expect(html).toContain(`Note on Trip plan (simulated sample)`);
+    // A note alone is something to send: it goes to the lead as the feedback on that version.
+    const a = S.getArtifact(s, id, 1);
+    const changed = changedDrafts(s, { [draftKey(a)]: { ...draftFrom(undefined), note: "Bigger map." } });
+    expect(answerBlocker({ round: n, questions: [], answers: [], message: "", changed })).toBeUndefined();
   });
 
   it("shows the lead's record as its run stored it, and nothing when the lead wrote neither a message nor a question", () => {
@@ -404,7 +427,7 @@ describe("Send to the lead: your marks, answers and message as one message", () 
     const a = S.getArtifact(s, id, 1);
     const empty = { round: n, questions, answers: [], message: "" };
     const svc = service2(s);
-    expect(answerBlocker({ ...empty, changed: [] })).toBe("Mark, pick or pin something, answer a question, or write to the lead first.");
+    expect(answerBlocker({ ...empty, changed: [] })).toBe("Mark, pick or pin something, write a note, or answer a question first.");
     expect(await sendAnswer(svc.send, s, {}, empty)).toBeNull();
     // A version still with the PE is not yours to mark: its draft is not sent.
     expect(await sendAnswer(svc.send, s, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, empty)).toBeNull();

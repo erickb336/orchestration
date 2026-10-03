@@ -4,8 +4,8 @@
 // What it drives, as the owner sees it:
 // 1. Vision: the owner marks the new design Keep (Trip plan v2 and Packing list, round 2) and Reminders Drop (round 1).
 //    Before Send the feedback says what each does to the draft; Send does it (ORC-030 Q-01: Keep is the approval).
-// 2. The draft bar, with its three changes.
-// 3. Review and lock in: what changes, the tasks it touches and what happens to each, the new work and the budgets.
+// 2. The draft bar: one line ("Draft · 3 changes"), and Show lists the three changes.
+// 3. Lock in…: what changes, the tasks it touches and what happens to each, the new work and the budgets.
 //    Then the agreement and Lock in, which makes change order 2.
 // 4. The change order (#/tasks/change-order/2): the simulated lead's updates, one row each. Undo on the retired task,
 //    and Undo on the new task (with its confirmation). Then the Tasks page.
@@ -118,18 +118,21 @@ async function journeyBody(j, page, service) {
 
   // ---------- 2. The draft ----------
   await j.step("the draft bar", async () => {
-    const bar = page.locator(".st-draftbar");
+    // The draft bar with a draft: one line; Show opens its list (ORC-030 a-vision-draft-bar).
+    const bar = page.locator(".st-draftbar:not(.st-draftbar--empty)");
     await bar.waitFor({ timeout: 10_000 });
+    const line = (await bar.innerText()).replace(/\s+/g, " ");
+    j.check(/^Draft · 3 changes( · \d+ open)? Show Lock in…$/.test(line), 'the draft bar is one line: "Draft · 3 changes", Show and Lock in…', line.slice(0, 120));
+    await bar.getByRole("button", { name: "Show" }).click();
     const words = await bar.innerText();
-    j.check(/Draft · 3 changes/.test(words), 'the draft bar says "Draft · 3 changes"', words.slice(0, 120));
-    j.check(/Trip plan/.test(words) && /Packing list/.test(words) && /Reminders/.test(words), "it lists Trip plan, Packing list and Reminders");
+    j.check(/Trip plan/.test(words) && /Packing list/.test(words) && /Reminders/.test(words), "Show lists Trip plan, Packing list and Reminders");
     j.check(/Vision · draft, 3 changes/.test(await text(page)), 'the header says "Vision · draft, 3 changes"');
     await view("Vision with a draft", "3-draft-bar");
   });
 
   // ---------- 3. Lock in: what changes, then put it into force ----------
   await j.step("the Lock in summary", async () => {
-    await page.getByRole("link", { name: "Review and lock in" }).click();
+    await page.getByRole("link", { name: "Lock in…" }).click();
     await page.getByRole("heading", { name: "Lock in 2 · the summary" }).waitFor({ timeout: 10_000 });
     for (const h of ["What changes", "The tasks it touches", "New work", "The budgets", "What stays open"]) j.check(await page.getByRole("heading", { name: h, exact: true }).count(), `the summary has "${h}"`);
     const tasks = page.getByRole("list", { name: "The tasks it touches" });

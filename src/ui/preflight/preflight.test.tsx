@@ -1,6 +1,7 @@
-// ORC-029 pass 6, unit 6a: the pre-flight, Start the factory's screen. It shows the blueprint by focus with PE review
-// on each approved item and what is still open (named and confirmed, never a block); the first Lock in's summary;
-// what the factory will do; and how it runs, set here. Start the factory sends the revisions and the open items the
+// ORC-029 pass 6, unit 6a: the pre-flight, Start the factory's screen. It shows the blueprint as one list (ORC-030 C1:
+// each part with its focus, new or changed, the PE's verdict and its estimate; it is also the first Lock in's "what
+// changes") and what is still open (named and confirmed, never a block); what the factory will do (the agents in one
+// line, the two budgets as fields beside the PE's estimate); and how it runs, set here. Start the factory sends the revisions and the open items the
 // screen showed, with the settings chosen on it, and the domain records them. An empty vision blocks. There is no DOM
 // test environment here, so the screen is rendered through react-dom/server, and its choices are the pure functions
 // in preflightView.ts that the controls call.
@@ -31,30 +32,47 @@ const start = (s: State, seen: V.Seen, settings: FactorySettings, at: string) =>
 };
 
 describe("the pre-flight", () => {
-  it("shows the blueprint by focus with PE review on each approved item, and names what is still open", () => {
-    const { text } = page(preflightScene().s);
-    expect(text).toContain("The blueprint The experience · 2 approved Trip plan v1 PE: agreed Packing list v1 PE: agreed Inputs and outputs · 2 approved Trip data v1 PE: agreed Words v1 PE: not reviewed Flows · 1 approved Join flow v1 PE: agreed");
+  it("shows the blueprint as one list: each part with its focus, new or changed, the PE's verdict and its estimate; then what is still open (ORC-030 a-pre-one-list)", () => {
+    const { s } = preflightScene();
+    expect(V.partLines(s).map((l) => [l.name, l.focus, l.change, l.pe?.word, l.estimate])).toEqual([
+      ["Trip plan v1", "The experience", "new", "PE: agreed", "no estimate"],
+      ["Packing list v1", "The experience", "new", "PE: agreed", "building $3–$5, maintenance $0.40–$0.80 a month"],
+      ["Trip data v1", "Inputs and outputs", "new", "PE: agreed", "no estimate"],
+      ["Words v1", "Inputs and outputs", "new", "PE: not reviewed", "no estimate"],
+      ["Join flow v1", "Flows", "new", "PE: agreed", "no estimate"],
+    ]);
+    const { html, text } = page(s);
+    expect(text).toContain(
+      "The blueprint 5 Start the factory is your first Lock in: it puts these 5 parts into force as Lock in 1, and records this summary with your agreement. Trip plan v1 The experience · new PE: agreed No estimate Packing list v1 The experience · new PE: agreed Estimate: building $3–$5, maintenance $0.40–$0.80 a month Trip data v1",
+    );
+    // One list: no second list of the same parts under "What changes", and no card of its own for the first Lock in.
+    expect(html.match(/aria-label="The parts"/g)).toHaveLength(1);
+    for (const gone of ["What changes", "Your first Lock in", "Added Trip plan v1", "· 2 approved"]) expect(text).not.toContain(gone);
+    expect(text).toContain("No task builds these parts yet. The lead plans the tasks after the start, and the PE reviews them before they start.");
     expect(text).toContain(
       'Still open Open Areas of the vision not clear yet: "Constraints: technical, time, budget, platforms" and "Risks and unknowns". Open Trip map v1: you marked it Change. It stays in the draft. Open A PE probe is still running: Can the trip plan load offline on the trail? None of these stops the start.',
     );
   });
 
-  it("holds the first Lock in's summary, from the Lock in screen's parts", () => {
-    const { text } = page(preflightScene().s);
-    expect(text).toContain("Your first Lock in Start the factory is your first Lock in. It puts the draft into force as Lock in 1, and records this summary with your agreement. The open items stay in the draft.");
-    expect(text).toContain("What changes Added Trip plan v1 (new; no task builds it yet) Added Packing list v1 (new; no task builds it yet) Added Trip data v1");
-    expect(text).toContain("New work Trip plan v1, Packing list v1, Trip data v1, Words v1, Join flow v1 have no task yet.");
+  it("a task that cites a part the start changes is listed under the parts, with what happens to it", () => {
+    const { s } = preflightScene();
+    // The fixture's planned tasks cite no part: there is no "The tasks it touches" to show.
+    expect(page(s).text).not.toContain("The tasks it touches");
   });
 
-  it("says what the factory will do: the planned tasks by flow, the agents, the limits, and the budgets beside the PE's estimate (no estimate, never $0)", () => {
+  it("says what the factory will do: the planned tasks by flow, the agents in one line, and the budgets beside the PE's estimate (no estimate, never $0)", () => {
     const { s } = preflightScene();
-    const { text } = page(s);
+    const { html, text } = page(s);
     expect(text).toContain("The tasks 2 planned tasks: 1 Feature and 1 Change. T-001 Packing list Feature Starts when the factory starts T-002 Join by link Change Starts when the factory starts");
-    expect(text).toContain("Claude · auto: the lead, the designer, the code reviewer, the security reviewer and the UX reviewer. Codex · auto: the coder. The PE: the other provider than the one that made the work, so its review is independent.");
-    expect(text).toContain("Up to 3 agents at once (Claude at most 3 and Codex at most 3). Each run stops at 40 turns or 20 minutes; a Claude run also stops at $2.00.");
-    expect(text).toContain("Building: $0.00 spent of $40.00. The factory stops and asks you at $40.00.");
-    expect(text).toContain("No total estimate: 4 changes have no estimate from the PE. Trip plan v1: no estimate. Packing list v1: building $3–$5, maintenance $0.40–$0.80 a month.");
-    expect(text).toContain("Maintenance: no estimate yet. The budget is $10.00 a month.");
+    // The agents: one line from Settings › Agents, with the way to change them (ORC-030 a-pre-agents).
+    expect(text).toContain("The agents Claude leads, designs and reviews; Codex codes; the PE reviews on the other provider; at most 3 agents at once. Change in Settings");
+    expect(html).toContain('<a href="#/settings/agents">Change in Settings</a>');
+    for (const gone of ["Each run stops at", "Claude · auto:", "so its review is independent"]) expect(text).not.toContain(gone);
+    // The budgets: the fields hold the setting; under each, the spend and the PE's estimate (ORC-030 a-pre-budgets).
+    expect(html).toMatch(/<label class="k-field__label" for="[^"]+">Building budget \(dollars\)<\/label><input type="text" inputMode="decimal"[^>]*value="40"/);
+    expect(html).toMatch(/<label class="k-field__label" for="[^"]+">Maintenance budget \(dollars a month\)<\/label><input type="text" inputMode="decimal"[^>]*value="10"/);
+    expect(text).toContain("At it, the factory stops and asks you. $0.00 spent so far; 1 run has no recorded cost, so the spend may be higher. No total estimate from the PE: 4 parts have none.");
+    expect(text).toContain("Maintenance budget (dollars a month) No total estimate from the PE for these parts: 4 parts have none.");
     // On Check-in, the same tasks wait for your go-ahead.
     expect(page(s, { settings: V.chooseAutonomy(M.currentFactorySettings(s), "checkin") }).text).toContain("T-001 Packing list Feature Waits for your go-ahead");
     // With nothing planned, the lead plans after the start.
@@ -63,13 +81,47 @@ describe("the pre-flight", () => {
     expect(page(empty).text).toContain("Nothing is approved yet. The factory builds from the vision text alone.");
   });
 
-  it("beside the budgets, the way to set them: Settings › Project › Budgets (ORC-030 Q-09)", () => {
+  it("the agents' line follows Settings › Agents: who does what, where the PE runs, and how many at once", () => {
+    const { s, at } = preflightScene();
+    expect(V.agentsLine(s)).toBe("Claude leads, designs and reviews; Codex codes; the PE reviews on the other provider; at most 3 agents at once.");
+    // Reviews on Codex: each provider does two things, so commas keep the line short; a PE set to one provider says which.
+    let x = runCommand(s, "setRoleDefault", { role: "code_reviewer", selection: { provider: "codex", model: "auto" } }, at(400)).state;
+    x = runCommand(x, "setRoleDefault", { role: "ux_reviewer", selection: { provider: "codex", model: "auto" } }, at(401)).state;
+    x = runCommand(x, "setRoleDefault", { role: "pe", selection: { provider: "codex", model: "auto" } }, at(402)).state;
+    expect(V.agentsLine(x)).toBe("Claude leads and designs, Codex codes and reviews, the PE reviews on Codex; at most 3 agents at once.");
+  });
+
+  it("the budgets are set on the pre-flight itself, and they are the setting in Settings › Project › Budgets (ORC-030 Q-09, a-pre-budgets)", () => {
     const { s, at } = preflightScene();
     const none = M.initProject(s, { name: "Empty", repoPath: "/tmp/empty", vision: "A to-do list.", focus: "" }, at(500));
     const unset = page(none);
-    expect(unset.text).toContain("Building: $0.00 spent. No building budget is set. No part to estimate: the draft approves none. Maintenance: no estimate yet. No maintenance budget is set. Set the budgets in Settings › Project › Budgets");
-    expect(unset.html).toContain('<a href="#/settings/project/budgets">Set the budgets in Settings › Project › Budgets</a>');
-    expect(page(s).html).toContain('<a href="#/settings/project/budgets">Change them in Settings › Project › Budgets</a>');
+    expect(unset.html).toMatch(/>Building budget \(dollars\)<\/label><input type="text" inputMode="decimal" placeholder="Not set"[^>]*value=""/);
+    expect(unset.text).toContain("Not set: the factory does not stop for cost. $0.00 spent so far. No part to estimate: the draft approves none.");
+    expect(unset.html).toContain('The same budgets as in <a href="#/settings/project/budgets">Settings › Project › Budgets</a>');
+    // Save sends the same command as Settings › Project › Budgets, and the screen shows the new budget.
+    const saved = runCommand(none, "setBudgets", { buildingUsd: 25, maintenanceUsdPerMonth: null }, at(501)).state;
+    expect(saved.project.budgets).toEqual({ buildingUsd: 25, maintenanceUsdPerMonth: null });
+    expect(page(saved).html).toMatch(/>Building budget \(dollars\)<\/label><input type="text" inputMode="decimal"[^>]*value="25"/);
+    expect(page(saved).text).toContain("It stops at $25.00 and asks you before it spends more.");
+  });
+
+  it("budgets saved on the screen show at once, with no stale banner; a budget from elsewhere, or anything else that moved, is stale", () => {
+    const { s, at } = preflightScene();
+    const seen = V.seenNow(s);
+    const mine = { buildingUsd: 55, maintenanceUsdPerMonth: 12 };
+    const budgeted = runCommand(s, "setBudgets", mine, at(406)).state;
+    // The Lock in summary records the budgets, so the screen moved: the owner's own save is not stale.
+    expect(V.sameSeen(V.seenNow(budgeted), seen)).toBe(false);
+    expect(V.ownBudgetsSaved(V.seenNow(budgeted), seen, budgeted.project.budgets, mine)).toBe(true);
+    // Not the owner's save on this screen (another tab, other amounts): stale.
+    expect(V.ownBudgetsSaved(V.seenNow(budgeted), seen, budgeted.project.budgets, null)).toBe(false);
+    expect(V.ownBudgetsSaved(V.seenNow(budgeted), seen, budgeted.project.budgets, { buildingUsd: 60, maintenanceUsdPerMonth: 12 })).toBe(false);
+    // The draft moved too: stale, whatever the budgets.
+    const map = s.studio.artifacts.find((a) => a.title === "Trip map")!.id;
+    const moved = runCommand(runCommand(budgeted, "sendFeedback", { entries: [{ artifactId: map, version: 1, mark: null, pins: [], note: "", rows: [] }] }, at(407)).state, "approveArtifact", { artifactId: map, version: 1 }, at(408)).state;
+    expect(V.ownBudgetsSaved(V.seenNow(moved), seen, moved.project.budgets, mine)).toBe(false);
+    // The start names what the screen showed after the save, and the domain takes it.
+    expect(start(budgeted, V.seenNow(budgeted), M.currentFactorySettings(budgeted), at(409)).project.stage).toBe("building");
   });
 
   it("an empty vision blocks: it says why, and Start the factory and the agreement wait", () => {

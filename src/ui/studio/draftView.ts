@@ -71,16 +71,30 @@ export function draftLines(s: State): DraftLine[] {
   ];
 }
 
-/** The draft bar's heading and the line under it: since which Lock in, and what the factory builds from. */
+/**
+ * The draft bar's one line ("Draft · 5 changes · 1 open", ORC-030 a-vision-draft-bar) and the line that Show opens
+ * above the list: since which Lock in, and what the factory builds from.
+ */
 export function draftHeading(s: State): { title: string; since: string } {
   const c = B.draftChanges(s);
   const changes = draftChangeCount(s);
-  const title = `Draft · ${[changes ? count(changes, "change") : "", c.open.length ? count(c.open.length, "open item") : ""].filter(Boolean).join(", ")}`;
+  const title = ["Draft", changes ? count(changes, "change") : "", c.open.length ? `${c.open.length} open` : ""].filter(Boolean).join(" · ");
   const rev = B.blueprintRev(s);
   const since = rev
     ? `Since Lock in ${rev} (${fmtTime(B.currentBlueprint(s)!.at)}). The factory builds from Lock in ${rev}, never from the draft.`
     : "Nothing is locked in yet. Start the factory is your first Lock in.";
   return { title, since };
+}
+
+/**
+ * The bar while the draft is empty (ORC-030 a-vision-empty): what puts a part in it, and, while the factory runs, what
+ * the factory builds from.
+ */
+export function emptyDraftWords(s: State): { title: string; text: string } {
+  const keep = "A part you mark Keep goes into the draft when you send it.";
+  if (s.project.stage === "shaping") return { title: "Nothing is in the draft yet.", text: `${keep} Start the factory is your first Lock in.` };
+  const rev = B.blueprintRev(s);
+  return { title: "Nothing is in the draft.", text: `The factory builds from ${rev ? `Lock in ${rev}` : "the vision text"}. ${keep}` };
 }
 
 /** The confirmation before Discard the draft: what goes, what stays, and what the draft becomes. */

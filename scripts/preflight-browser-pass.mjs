@@ -2,7 +2,8 @@
 // (src/ui/preflight/preflightScene.ts), served by the real service with its page policy, in the system Chrome at 1280
 // and 375 wide. For each width, on a fresh copy of the state, it:
 // - opens Home and checks "Start the factory…" leads to #/vision/pre-flight;
-// - opens the pre-flight and checks: no horizontal scroll, no console error, no page error;
+// - opens the pre-flight and checks: no horizontal scroll, no console error, no page error; one list of the parts, the
+//   agents in one line, and the budget fields filled from Settings (ORC-030 C1);
 // - at 1280, approves Trip map in another "tab" (a command to the service) and checks the stale banner;
 // - chooses Check-in, ticks the agreement, presses Start the factory, and checks the confirmation and the record.
 // It writes screenshots to evidence/ (or $PREFLIGHT_PASS_OUT) and exits 1 when a check fails.
@@ -94,6 +95,17 @@ for (const width of WIDTHS) {
   await p.waitForTimeout(400);
   await noScroll("the pre-flight");
   await shot("screen");
+  // ORC-030 C1: one list of parts, the agents in one line, and the two budgets as fields filled from Settings.
+  const parts = await p.getByRole("list", { name: "The parts" }).getByRole("listitem").count();
+  if (parts !== 5) fail(`the blueprint lists ${parts} parts, not 5`);
+  else ok("the blueprint: one list of the 5 parts");
+  if ((await p.getByText("What changes", { exact: true }).count()) || (await p.getByText("Your first Lock in", { exact: true }).count())) fail("a second list of the same parts is still there");
+  else ok("no second list of the same parts");
+  const fields = [await p.getByRole("textbox", { name: "Building budget (dollars)" }).inputValue(), await p.getByRole("textbox", { name: "Maintenance budget (dollars a month)" }).inputValue()];
+  if (fields.join() !== "40,10") fail(`the budget fields hold ${fields.join(" and ")}, not 40 and 10`);
+  else ok("the budget fields hold the setting: 40 and 10");
+  if (!(await p.getByText(/^Claude leads, designs and reviews; Codex codes; the PE reviews on the other provider; at most 3 agents at once\./).count())) fail("the agents are not one line");
+  else ok("the agents: one line");
   const start = p.getByRole("button", { name: "Start the factory" });
   if ((await start.getAttribute("aria-disabled")) !== "true") fail("Start the factory does not wait for the agreement");
   else ok("Start the factory waits for the agreement");

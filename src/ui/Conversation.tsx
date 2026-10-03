@@ -145,14 +145,14 @@ function MessageItem({ state, message: m, leadModel, blocked }: { state: State; 
               </li>
             ))}
           </ol>
-          {state.project.stage === "shaping" && M.latestQuestions(state)?.message.id === m.id && <p className="muted small no-margin">Answer them inline in “The vision” on Home, or reply here.</p>}
+          {state.project.stage === "shaping" && M.latestQuestions(state)?.message.id === m.id && <p className="muted small no-margin">Answer them in Vision, under “The lead’s questions”, or reply here.</p>}
         </div>
       )}
       {draft && (
         <p className="msg-extra muted no-margin" role="note">
           {draft.status === "open" ? (
             <>
-              This reply drafted the vision. It needs you on <a href="#/overview">Home</a>: accept, edit or dismiss it; the vision changes only if you accept.
+              This reply drafted the vision. It needs you in <a href="#/vision">Vision</a>: accept, edit or dismiss it; the vision changes only if you accept.
             </>
           ) : draft.status === "accepted" ? (
             `You accepted this vision draft (vision revision ${draft.visionRev}).`

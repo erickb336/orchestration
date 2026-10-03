@@ -1,41 +1,27 @@
-// Home. While in Vision, the shaping panel leads (the studio is Vision, in the main navigation), then Needs you, with
-// the simple decisions taken in place, and Progress by area beside New results and the lead's latest reply. After the
-// start, Home is the factory floor (floor/FactoryFloor.tsx): Needs you first, then the budgets, one line per area and
-// the PE's calls; New results and the lead's latest reply under it; the Focus card last, with the vision text, its
-// revisions and its documents behind "Vision and history". Usage and the service's details live in Settings
-// (Diagnostics.tsx); the lead conversation opens from the header.
+// Home. While in Vision: one line of the vision (studio/VisionCard.tsx, VisionLine: the text and its history are in
+// Vision), then Needs you, with the simple decisions taken in place, and Progress by area beside New results and the
+// lead's latest reply. After the start, Home is the factory floor (floor/FactoryFloor.tsx): the vision's line, Needs
+// you, then the budgets, one line per area and the PE's calls; New results and the lead's latest reply under it; the
+// Focus card last. Usage and the service's details live in Settings (Diagnostics.tsx); the lead conversation opens
+// from the header.
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import * as D from "../domain/delivery";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
-import { diffLines } from "../domain/diff";
 import { useStore } from "./store";
-import { ProviderMark, fmtTime, involvementOf, relTime } from "./common";
+import { ProviderMark, involvementOf, relTime } from "./common";
 import { FactoryFloor } from "./floor/FactoryFloor";
 import { useLeadContext } from "./LeadDrawer";
 import { Onboarding } from "./Onboarding";
 import { foldSummary, messageStatusText } from "./notes";
 import { landedVerdict, latestLeadReply, liveText, needsYouItems, optionsLine, progressByArea, replyExcerpt, type AreaProgress, type NeedsYouEntry } from "./progress";
-import { historyRequested } from "./route";
-import { OpenDraft, ShapingPanel } from "./Shaping";
-import { RevisionDocs, VisionDocsList } from "./VisionDocs";
-import { Banner, Button, ButtonLink, Card, Chip, Disclosure, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, Textarea, useConfirm } from "./kit";
+import { VisionLine } from "./studio/VisionCard";
+import { Button, ButtonLink, Card, Chip, EmptyState, Field, Input, NeedsYouItem, Row, Rows, SimulatedChip, useConfirm } from "./kit";
 import type { FindingDecision, PrDelivery, SpecOption, State, Task, VisionRevision } from "../domain/types";
 
 /** The one name for each involvement setting, wherever it is shown. */
 export const INVOLVEMENT_NAME: Record<ReturnType<typeof involvementOf>, string> = { autopilot: "Autopilot", checkin: "Check-in", manual: "Manual", custom: "Custom" };
-
-/** Who made a vision revision and from what, in a few words (the history list). */
-export function revisionSource(v: VisionRevision): string {
-  if (v.source?.undoOf) return `${v.author} · undo of the lead's change`;
-  if (v.source?.draftId) return `${v.author} · accepted the lead's draft`;
-  if (v.source?.docsAdded) return `${v.author} · attached ${v.source.docsAdded.length} document${v.source.docsAdded.length === 1 ? "" : "s"}${v.source.docsRemoved?.length ? " (replacing earlier copies)" : ""}`;
-  if (v.source?.docAdded) return `${v.author} · ${v.source.docRemoved ? "replaced a document" : "attached a document"}`;
-  if (v.source?.docRemoved) return `${v.author} · removed a document`;
-  if (v.source?.changeSetId) return v.author === "lead" ? "lead · from your message" : `${v.author} · applied the lead's suggestion`;
-  return v.author;
-}
 
 /** The Focus card's one line about where the focus came from: "Set by the lead from your message", "Set by you", … */
 export function focusProvenance(v: VisionRevision): string {
@@ -48,14 +34,14 @@ export function focusProvenance(v: VisionRevision): string {
 
 export function Overview() {
   const { state } = useStore();
-  // While shaping, the shaping panel leads and stands in for the Focus card (it holds the vision and its editor).
+  // While shaping, the vision's line stands in for the Focus card: the vision and its editor are in Vision.
   const shaping = state.project.stage === "shaping";
   if (!shaping) return <FactoryHome state={state} />;
   return (
     <div className="k-stack home">
       <h1 className="no-margin">Home</h1>
       <Onboarding />
-      <ShapingPanel />
+      <VisionLine />
       <div data-tour="needs-you">
         <NeedsYouCard state={state} />
       </div>
@@ -75,13 +61,14 @@ export function Overview() {
 /**
  * Home after the start: the factory floor (ORC-029 pass 6). Needs you first; then the floor (the change orders the lead
  * is answering, the two budgets, one line per area, the PE's calls); then what landed, the lead's latest reply, and the
- * Focus card with the vision and its draft.
+ * Focus card. The vision is one line at the top; its text and history are in Vision.
  */
 function FactoryHome({ state }: { state: State }) {
   return (
     <div className="k-stack home">
       <h1 className="no-margin">Home</h1>
       <Onboarding />
+      <VisionLine />
       <div data-tour="needs-you">
         <NeedsYouCard state={state} />
       </div>
@@ -527,17 +514,14 @@ function LatestFromLead({ state }: { state: State }) {
 
 // ---------- Focus ----------
 
-/** The focus first; where it came from, with Undo for a lead change; the vision text, its revisions, diff and documents behind "Vision and history". */
+/** The focus; where it came from, with Undo for a lead change. The vision text and its history are in Vision (ORC-030 C1). */
 function FocusCard({ state }: { state: State }) {
   const { send, disabled } = useStore();
   const vision = M.currentVision(state);
   const change = M.currentFocusChange(state);
   const [busy, setBusy] = useState(false);
-  // The Focus banner's History link arrives as `#/overview?history=1` and opens the history.
-  const [open, setOpen] = useState(() => typeof location !== "undefined" && historyRequested(location.hash));
   return (
     <Card title="Focus">
-      <OpenDraft />
       <p className="focus-line">{vision.focus || <span className="muted">No focus set.</span>}</p>
       <div className="focus-foot small muted">
         <span>
@@ -561,197 +545,7 @@ function FocusCard({ state }: { state: State }) {
             </Button>
           </>
         )}
-        <span aria-hidden="true">·</span>
-        <Disclosure label="Vision and history" count={state.project.visions.length} open={open} onToggle={setOpen}>
-          <VisionDetails state={state} scrollToHistory={open && typeof location !== "undefined" && historyRequested(location.hash)} />
-        </Disclosure>
       </div>
     </Card>
-  );
-}
-
-/** The editor's hint while the factory runs: where an edit of the text goes, and where the focus goes. */
-export const VISION_DRAFT_HINT = "The factory runs, so your edit of the text goes into the draft, not into force. It goes into force with your next Lock in. A new focus applies at once.";
-
-/**
- * The vision text the editor works on (the draft's while building, `draftVisionText`), and, when an edit of it waits
- * in the draft, why and until when.
- */
-export function visionDraftWords(s: State): { building: boolean; text: string; waiting?: string } {
-  const building = s.project.stage === "building";
-  const dv = s.blueprint.draft.vision;
-  return { building, text: M.draftVisionText(s), ...(building && dv ? { waiting: `"${dv.reason}". It goes into force with your next Lock in. Until then the factory builds from the text in force.` } : {}) };
-}
-
-/**
- * Inside "Vision and history": the text with its editor, what changed from the previous revision, every revision, and
- * the documents. While the factory runs, the editor works on the draft's text (ORC-029 pass 5): the factory builds
- * from the text in force until the owner's next Lock in, and both texts show while they differ.
- */
-function VisionDetails({ state, scrollToHistory }: { state: State; scrollToHistory: boolean }) {
-  const { send, disabled } = useStore();
-  const vision = M.currentVision(state);
-  const draft = visionDraftWords(state);
-  const visions = state.project.visions;
-  const prev = visions.length > 1 ? visions[visions.length - 2] : undefined;
-  const diff = prev ? diffLines([`Focus: ${prev.focus}`, ...prev.text.split("\n")], [`Focus: ${vision.focus}`, ...vision.text.split("\n")]).filter((d) => d.kind !== "same") : [];
-  const historyRef = useRef<HTMLUListElement>(null);
-  useEffect(() => {
-    if (scrollToHistory) historyRef.current?.scrollIntoView({ block: "start" });
-  }, [scrollToHistory]);
-
-  const [editing, setEditing] = useState(false);
-  const [saving, setSaving] = useState(false);
-  // The vision revision the edit started from; saving against it lets the service reject a stale edit. While building,
-  // the text it started from is the draft's: a change to the draft's text meanwhile (another tab, the lead's draft you
-  // accepted) is stale too.
-  const [baseRev, setBaseRev] = useState(vision.rev);
-  const [baseText, setBaseText] = useState(draft.text);
-  const staleRev = editing && !saving && vision.rev !== baseRev;
-  const staleText = editing && !saving && !staleRev && draft.building && draft.text !== baseText;
-  const staleDraft = staleRev || staleText;
-  const [text, setText] = useState(draft.text);
-  const [focus, setFocus] = useState(vision.focus);
-  const [reason, setReason] = useState("");
-  const load = () => {
-    setText(draft.text);
-    setFocus(vision.focus);
-    setBaseRev(vision.rev);
-    setBaseText(draft.text);
-  };
-
-  return (
-    <div className="k-stack k-stack--tight vision-details">
-      {editing ? (
-        <form
-          className="k-stack k-stack--tight"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            if (saving) return;
-            setSaving(true);
-            // A 409 keeps the form open with the draft; the notice explains the conflict.
-            const r = await send("editVision", { expectedRev: baseRev, text, focus, reason });
-            setSaving(false);
-            if (r.ok) {
-              setEditing(false);
-              setReason("");
-            }
-          }}
-        >
-          {staleRev && (
-            <Banner
-              tone="fail"
-              title={`The vision changed to r${vision.rev} while you were editing`}
-              actions={
-                <>
-                  <Button size="small" onClick={() => (setBaseRev(vision.rev), setBaseText(draft.text))}>
-                    Save over r{vision.rev} anyway
-                  </Button>
-                  <Button size="small" onClick={load}>
-                    Discard draft and load r{vision.rev}
-                  </Button>
-                </>
-              }
-            >
-              {vision.author}: {vision.reason}. Your draft is kept.
-            </Banner>
-          )}
-          {staleText && (
-            <Banner
-              tone="fail"
-              title="The vision text in the draft changed while you were editing"
-              actions={
-                <>
-                  <Button size="small" onClick={() => setBaseText(draft.text)}>
-                    Save over it anyway
-                  </Button>
-                  <Button size="small" onClick={load}>
-                    Discard my edit and load it
-                  </Button>
-                </>
-              }
-            >
-              Your edit is kept.
-            </Banner>
-          )}
-          <Field label={draft.building ? "Vision (the draft's text)" : "Vision"} hint={draft.building ? VISION_DRAFT_HINT : undefined}>
-            <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} />
-          </Field>
-          <Field label="Current focus">
-            <Input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} />
-          </Field>
-          <Field label="Reason for change (recorded)">
-            <Input type="text" value={reason} onChange={(e) => setReason(e.target.value)} required />
-          </Field>
-          <div className="k-actions">
-            <Button type="submit" variant="primary" disabled={disabled || saving || staleDraft} loading={saving}>
-              {saving ? "Saving…" : draft.building && text !== draft.text ? "Save to the draft" : `Save as r${vision.rev + 1}`}
-            </Button>
-            <Button variant="quiet" onClick={() => setEditing(false)}>
-              Cancel
-            </Button>
-          </div>
-        </form>
-      ) : (
-        <>
-          {draft.waiting ? (
-            <>
-              <Banner
-                tone="you"
-                title="Your edit of the vision text waits in the draft."
-                actions={
-                  <ButtonLink size="small" href="#/vision/lock-in">
-                    Review and lock in
-                  </ButtonLink>
-                }
-              >
-                {draft.waiting}
-              </Banner>
-              <p className="small muted no-margin">In the draft:</p>
-              <p className="vision-text">{draft.text}</p>
-              <p className="small muted no-margin">In force (r{vision.rev}), what the factory builds from:</p>
-              <p className="vision-text muted">{vision.text}</p>
-            </>
-          ) : (
-            <p className="vision-text">{vision.text || <span className="muted">No vision written yet.</span>}</p>
-          )}
-          <div className="k-actions">
-            <Button
-              size="small"
-              onClick={() => {
-                load();
-                setEditing(true);
-              }}
-            >
-              {draft.waiting ? "Edit the draft's text" : "Edit vision"}
-            </Button>
-          </div>
-        </>
-      )}
-      {prev && diff.length > 0 && (
-        <Disclosure label={`What changed from r${prev.rev}: ${vision.reason}`}>
-          <div className="diff" aria-label={`Differences between r${prev.rev} and r${vision.rev}`}>
-            {diff.map((d, i) => (
-              <div key={i} className={d.kind}>
-                {d.text}
-              </div>
-            ))}
-          </div>
-        </Disclosure>
-      )}
-      <h3 className="no-margin">Revisions</h3>
-      <ul className="events" ref={historyRef} id="vision-history" aria-label="Vision history">
-        {[...visions].reverse().map((r) => (
-          <li key={r.rev}>
-            <span className="mono">r{r.rev}</span>
-            <span className="actor">{revisionSource(r)}</span>
-            <span>
-              {r.reason} <span className="muted">· focus: “{r.focus}” · {fmtTime(r.at)}</span> <RevisionDocs state={state} rev={r} />
-            </span>
-          </li>
-        ))}
-      </ul>
-      <VisionDocsList />
-    </div>
   );
 }

@@ -1,18 +1,20 @@
 // The pre-flight (ORC-029 pass 6, screen 7 of the pass 1 prototype), `#/vision/pre-flight`: the one way the factory
-// starts, on the owner's explicit agreement. One screen shows the blueprint (by focus, with PE review on each approved
-// item, and what is still open), the first Lock in's summary (the Lock in screen's own parts), what the factory will
-// do, and how it runs, which the owner sets here. Start the factory sends `startFactory` with the revisions and the
-// open items this screen showed; when they change while the owner reads, the screen says so, shows the new pre-flight
-// and clears the agreement. After the start, it says what was recorded and links to the factory floor (Home).
-// The words are in preflightView.ts.
+// starts, on the owner's explicit agreement. One screen shows the blueprint as one list (ORC-030 C1: each part with its
+// focus, new or changed, the PE's verdict and estimate; Start the factory is the first Lock in, so this is also what
+// it changes), what is still open, what the factory will do (the tasks, the agents in one line, the two budgets as
+// fields beside the PE's estimate), and how it runs, which the owner sets here. Start the factory sends `startFactory`
+// with the revisions and the open items this screen showed; when they change while the owner reads, the screen says
+// so, shows the new pre-flight and clears the agreement (not when the owner saved the budgets here). After the start,
+// it says what was recorded and links to the factory floor (Home). The words are in preflightView.ts.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as M from "../../domain/model";
 import type { FactorySettings, State } from "../../domain/types";
-import { Banner, Button, ButtonLink, Card, Checkbox, Chip, Row, Rows, SegmentedControl, SimulatedChip } from "../kit";
+import { Banner, Button, ButtonLink, Card, Checkbox, Chip, Field, Input, Row, Rows, SegmentedControl, SimulatedChip } from "../kit";
+import { budgetAmount, budgetProblem, liveBudgets, type BudgetsDraft } from "../settings/budgets";
 import { cardHref } from "../settings/sections";
 import { useStore } from "../store";
-import { LockInBudgets, LockInChanges, LockInNewWork, LockInTasks } from "../studio/LockIn";
+import { LockInTasks } from "../studio/LockIn";
 import { lockInWords } from "../studio/lockInView";
 import * as V from "./preflightView";
 import "../studio/studio.css";
@@ -27,15 +29,23 @@ export function PreflightPage() {
   const [agreed, setAgreed] = useState(false);
   const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
+  /** The budgets the owner saves on this screen, until the state shows them. */
+  const ownBudgets = useRef<State["project"]["budgets"] | null>(null);
   const building = state.project.stage === "building";
   // The draft, the vision, the summary or what is open changed under the screen (another tab, the lead, a probe, a
-  // budget, a refused stale start): show the new pre-flight, and ask for the agreement again.
+  // budget, a refused stale start): show the new pre-flight, and ask for the agreement again. The budgets the owner
+  // saves here change the summary too: the screen shows them at once, with no stale banner.
   useEffect(() => {
     if (building || busy || V.sameSeen(now, seen)) return;
+    if (V.ownBudgetsSaved(now, seen, state.project.budgets, ownBudgets.current)) {
+      ownBudgets.current = null;
+      setSeen(now);
+      return;
+    }
     setSeen(now);
     setAgreed(false);
     setStale(true);
-  }, [building, busy, now, seen]);
+  }, [building, busy, now, seen, state.project.budgets]);
 
   const start = async () => {
     if (V.startGate(state, agreed, disabled) || !V.sameSeen(now, seen)) return;
@@ -57,6 +67,7 @@ export function PreflightPage() {
       onSettings={setSettings}
       onAgree={(v) => (setAgreed(v), setStale(false))}
       onStart={() => void start()}
+      onBudgetsSaving={(b) => (ownBudgets.current = b)}
     />
   );
 }
@@ -72,6 +83,8 @@ export interface PreflightProps {
   onSettings: (x: FactorySettings) => void;
   onAgree: (v: boolean) => void;
   onStart: () => void;
+  /** The owner saves the budgets on the screen (the budgets), or the save failed (null). */
+  onBudgetsSaving?: (saved: State["project"]["budgets"] | null) => void;
 }
 
 /** The pre-flight as it stands: what the owner reads, the settings they chose, and their agreement. */
@@ -80,7 +93,6 @@ export function Preflight(p: PreflightProps) {
   const started = V.startedWords(s);
   const blocker = M.startFactoryBlocker(s);
   const open = V.openLines(s);
-  const w = lockInWords(s);
   const gate = V.startGate(s, p.agreed, p.offline);
   return (
     <div className="k-stack pf-page">
@@ -101,7 +113,7 @@ export function Preflight(p: PreflightProps) {
       ) : (
         <>
           {blocker && (
-            <Banner tone="fail" title="The factory cannot start yet." actions={<ButtonLink size="small" href="#/overview">Write the vision</ButtonLink>}>
+            <Banner tone="fail" title="The factory cannot start yet." actions={<ButtonLink size="small" href="#/vision">Write the vision</ButtonLink>}>
               {blocker}
             </Banner>
           )}
@@ -112,21 +124,8 @@ export function Preflight(p: PreflightProps) {
           )}
           <div className="k-grid-2 pf-grid">
             <BlueprintCard state={s} open={open} />
-            <FactoryCard state={s} settings={p.settings} />
+            <FactoryCard state={s} settings={p.settings} onBudgetsSaving={p.onBudgetsSaving} />
           </div>
-          <Card title="Your first Lock in" className="pf-card">
-            <p className="small no-margin">
-              Start the factory is your first Lock in.{" "}
-              {w.changes ? `It puts the draft into force as Lock in ${w.rev}, and records this summary with your agreement. The open items stay in the draft.` : "The draft approves nothing yet, so nothing goes into force. The factory starts from the vision text."}
-            </p>
-            {w.changes > 0 && (
-              <>
-                <LockInChanges w={w} />
-                <LockInTasks w={w} />
-                <LockInNewWork w={w} />
-              </>
-            )}
-          </Card>
           <HowItRuns state={s} settings={p.settings} onSettings={p.onSettings} />
           <Card title="Your agreement" className="pf-card">
             <Checkbox label={V.agreementWords(open.length)} checked={p.agreed} onChange={(e) => p.onAgree(e.target.checked)} disabled={!!blocker || p.offline} />
@@ -146,32 +145,48 @@ export function Preflight(p: PreflightProps) {
   );
 }
 
-/** What the draft approves by focus, with PE review on each item, and what is still open. */
+/**
+ * The blueprint as one list (ORC-030 a-pre-one-list): each part the start puts into force, with its focus, new or
+ * changed, the PE's verdict and its estimate; the tasks it touches and the new work, when there are any; then what is
+ * still open. Start the factory is the first Lock in, so this is also its summary of what changes.
+ */
 function BlueprintCard({ state, open }: { state: State; open: V.OpenLine[] }) {
-  const groups = V.blueprintByFocus(state);
+  const parts = V.partLines(state);
+  const w = lockInWords(state);
+  const newWork = V.newWorkLine(state);
   return (
-    <Card title="The blueprint" className="pf-card">
-      {groups.length ? (
-        groups.map((g) => (
-          <section key={g.focus} aria-label={g.focus}>
-            <h3>
-              {g.focus} · {g.items.length} approved
-            </h3>
-            <ul className="pf-items">
-              {g.items.map((i) => (
-                <li key={i.itemId}>
-                  <span>{i.name}</span>
-                  <Chip tone={i.pe.tone} title={i.pe.why}>
-                    {i.pe.word}
-                  </Chip>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))
-      ) : (
-        <p className="small muted no-margin">Nothing is approved yet. The factory builds from the vision text alone.</p>
+    <Card title="The blueprint" count={parts.length || undefined} className="pf-card">
+      <p className="small no-margin">
+        {w.changes
+          ? `Start the factory is your first Lock in: it puts ${parts.length === 1 ? "this part" : `these ${parts.length} parts`} into force as Lock in ${w.rev}, and records this summary with your agreement.`
+          : "Nothing is approved yet. The factory builds from the vision text alone."}
+      </p>
+      {parts.length > 0 && (
+        <Rows label="The parts">
+          {parts.map((part) => (
+            <Row
+              as="li"
+              key={part.itemId}
+              title={part.name}
+              meta={
+                <>
+                  <span>{part.focus}</span>
+                  <span aria-hidden="true">·</span>
+                  <Chip tone={part.change === "dropped" ? "fail" : part.change === "changed" ? "work" : "neutral"}>{part.change}</Chip>
+                  {part.pe && (
+                    <Chip tone={part.pe.tone} title={part.pe.why}>
+                      {part.pe.word}
+                    </Chip>
+                  )}
+                  {part.estimate && <span>{part.estimate === "no estimate" ? "No estimate" : `Estimate: ${part.estimate}`}</span>}
+                </>
+              }
+            />
+          ))}
+        </Rows>
       )}
+      {w.tasks.length > 0 && <LockInTasks w={w} />}
+      {newWork && <p className="small muted no-margin">{newWork}</p>}
       <section aria-label="Still open">
         <h3>Still open</h3>
         {open.length ? (
@@ -194,8 +209,8 @@ function BlueprintCard({ state, open }: { state: State; open: V.OpenLine[] }) {
   );
 }
 
-/** The tasks planned from the blueprint, the agents and their limits, and the budgets beside the PE's estimate. */
-function FactoryCard({ state, settings }: { state: State; settings: FactorySettings }) {
+/** The tasks planned from the blueprint, the agents in one line, and the budgets beside the PE's estimate. */
+function FactoryCard({ state, settings, onBudgetsSaving }: { state: State; settings: FactorySettings; onBudgetsSaving?: (saved: Budgets | null) => void }) {
   const plan = V.plannedTasks(state, settings);
   return (
     <Card title="What the factory will do" className="pf-card">
@@ -224,20 +239,68 @@ function FactoryCard({ state, settings }: { state: State; settings: FactorySetti
       </section>
       <section aria-label="The agents">
         <h3>The agents</h3>
-        <ul className="st-lockin__list small">
-          {[...V.roleLines(state), ...V.limitLines(state)].map((l) => (
-            <li key={l}>{l}</li>
-          ))}
-        </ul>
         <p className="small no-margin">
-          <a href="#/settings/agents">Change them in Settings › Agents</a>
+          {V.agentsLine(state)} <a href="#/settings/agents">Change in Settings</a>
         </p>
       </section>
-      <LockInBudgets w={lockInWords(state)} title="The budgets and the PE's estimate" />
-      <p className="small no-margin">
-        <a href={cardHref("budgets")}>{state.project.budgets.buildingUsd === null && state.project.budgets.maintenanceUsdPerMonth === null ? "Set the budgets in Settings › Project › Budgets" : "Change them in Settings › Project › Budgets"}</a>
-      </p>
+      <PreflightBudgets state={state} onSaving={onBudgetsSaving} />
     </Card>
+  );
+}
+
+type Budgets = State["project"]["budgets"];
+
+/**
+ * The two budgets on the pre-flight (ORC-030 a-pre-budgets): the fields hold the project's budgets (the same setting as
+ * Settings › Project › Budgets, through the same `setBudgets`), each beside the spend and the PE's estimate. Until you
+ * type, they follow the setting; Save sends both, and Cancel puts the setting back in the fields.
+ */
+function PreflightBudgets({ state, onSaving }: { state: State; onSaving?: (saved: Budgets | null) => void }) {
+  const { send, disabled } = useStore();
+  const live = liveBudgets(state);
+  const [edit, setEdit] = useState<BudgetsDraft | null>(null);
+  const [saving, setSaving] = useState(false);
+  const v = edit ?? live;
+  const changed = !!edit && (edit.buildingUsd !== live.buildingUsd || edit.maintenanceUsd !== live.maintenanceUsd);
+  const problem = budgetProblem(v.buildingUsd) ?? budgetProblem(v.maintenanceUsd);
+  const beside = V.budgetsBeside(state, budgetAmount(v.buildingUsd) != null);
+  const set = (p: Partial<BudgetsDraft>) => setEdit({ ...v, ...p });
+  const save = async () => {
+    if (!changed || problem || saving) return;
+    const saved = { buildingUsd: budgetAmount(v.buildingUsd) ?? null, maintenanceUsdPerMonth: budgetAmount(v.maintenanceUsd) ?? null };
+    // Said before the command: the state it brings may arrive before the command's answer.
+    onSaving?.(saved);
+    setSaving(true);
+    const r = await send("setBudgets", saved);
+    setSaving(false);
+    if (r.ok) setEdit(null);
+    else onSaving?.(null);
+  };
+  return (
+    <section aria-label="The budgets" className="k-stack k-stack--tight">
+      <h3>The budgets</h3>
+      <div className="pf-budgets">
+        <Field label="Building budget (dollars)" hint={beside.building} error={budgetProblem(v.buildingUsd)}>
+          <Input type="text" inputMode="decimal" value={v.buildingUsd} placeholder="Not set" onChange={(e) => set({ buildingUsd: e.target.value })} />
+        </Field>
+        <Field label="Maintenance budget (dollars a month)" hint={beside.maintenance} error={budgetProblem(v.maintenanceUsd)}>
+          <Input type="text" inputMode="decimal" value={v.maintenanceUsd} placeholder="Not set" onChange={(e) => set({ maintenanceUsd: e.target.value })} />
+        </Field>
+      </div>
+      {changed && (
+        <div className="k-actions">
+          <Button size="small" variant="primary" disabled={disabled || !!problem} disabledReason={disabled ? "The service is offline." : problem} loading={saving} onClick={() => void save()}>
+            {saving ? "Saving…" : "Save the budgets"}
+          </Button>
+          <Button size="small" variant="quiet" onClick={() => setEdit(null)}>
+            Cancel
+          </Button>
+        </div>
+      )}
+      <p className="micro muted no-margin">
+        The same budgets as in <a href={cardHref("budgets")}>Settings › Project › Budgets</a>. Each is an estimate at the providers' published prices, not a bill.
+      </p>
+    </section>
   );
 }
 
