@@ -66,7 +66,7 @@ let archiveThreads: ((ids: string[]) => Promise<Map<string, ArchiveOutcome>>) | 
 const dataDir = dirname(dbPath);
 if (mode === "real") {
   // Loaded only in real mode, so the simulated service never loads provider SDKs.
-  const [{ ClaudeAdapter }, { CodexAdapter }, { CheckRunners, CodexSandboxChecks, DirectChecks }] = await Promise.all([import("./runtimes/claude"), import("./runtimes/codex"), import("./checks")]);
+  const [{ ClaudeAdapter }, { CodexAdapter }, { CheckRunners, CodexSandboxChecks, DirectChecks }, { EnvironmentChecks }] = await Promise.all([import("./runtimes/claude"), import("./runtimes/codex"), import("./checks"), import("./environment/runner")]);
   const claude = new ClaudeAdapter({ log });
   const codex = new CodexAdapter({ log });
   adapters = { claude, codex };
@@ -74,7 +74,11 @@ if (mode === "real") {
   workerShell = claude.allowShell;
   workspaces = new WorkspaceManager(join(dataDir, "worktrees"));
   // A private, never signed-in CODEX_HOME for the check app-servers: the user's Codex configuration does not apply to them.
-  checks = new CheckRunners(new CodexSandboxChecks({ home: join(dataDir, "checks-codex-home"), log }), new DirectChecks({ log }));
+  const codexChecks = new CodexSandboxChecks({ home: join(dataDir, "checks-codex-home"), log });
+  const directChecks = new DirectChecks({ log });
+  // A project with an environment runs its checks in its containers when Docker is there; else in the host sandbox, with the reason.
+  const environmentChecks = new EnvironmentChecks({ log, fallback: (a) => (a.sandbox === "codex" ? codexChecks : directChecks) });
+  checks = new CheckRunners(codexChecks, directChecks, environmentChecks);
   evidence = new ContainerEvidence({ log });
   // Pull-request delivery uses the user's own gh sign-in, from an empty directory the service owns.
   // Nothing is contacted until the user switches the delivery mode to pull requests.

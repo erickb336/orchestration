@@ -1,5 +1,6 @@
 // Core domain types. Pure data: no UI, storage, or runtime dependencies.
 
+import type { EnvironmentRunRecord, EnvironmentSetting } from "./environment";
 import type { EvidenceRun, EvidenceSnapshot, PreviewSetting } from "./studio/evidence";
 import type { AskCheck, Blueprint, BudgetEstimate, ChangeOrderLineKind, OpenCase, Studio, Verdict } from "./studio/types";
 
@@ -402,6 +403,12 @@ export interface Project {
    */
   preview?: PreviewSetting;
   /**
+   * The project's environment (docs/design/project-environment.md): the base image the owner confirmed, the prepare
+   * commands and the hosts added to the registries. Optional; the repository's dev container comes first. Only the
+   * owner's `setEnvironment` writes it.
+   */
+  environment?: EnvironmentSetting;
+  /**
    * Who decides `ask-user` findings: the lead (Autopilot's default), the PE, or the user. Until the PE runs its
    * own decisions (ORC-029), a decision routed to the PE goes to the lead's decision runs.
    */
@@ -640,6 +647,8 @@ export interface CheckRunRecord {
   durationMs: number;
   /** The run's test results, read from its JUnit report (ChecksConfig.testReport). Absent when the settings name no report. */
   tests?: TestReport;
+  /** How the run used the project's environment: in its container, or on this computer and why. Absent before the environment existed. */
+  environment?: EnvironmentRunRecord;
 }
 
 /** One test case of a check run, from its JUnit report (ORC-029 pass 5). */

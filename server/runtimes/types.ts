@@ -2,6 +2,7 @@
 // owns dispatch and state, adapters own processes. Adapters never touch the store: they emit events,
 // which the scheduler applies inside lease-checked transactions.
 
+import type { EnvironmentRunRecord } from "../../src/domain/environment";
 import type { EvidenceRun } from "../../src/domain/studio/evidence";
 import type { CatalogModel, CheckResult, OutputDef, ProviderId, RoleId, TestReport } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
@@ -16,6 +17,8 @@ export interface CheckRunReport {
   simulated?: true;
   /** What the run read from its JUnit report, when the settings name one (server/testReport.ts). */
   tests?: TestReport;
+  /** How the run used the project's environment (server/environment/runner.ts). */
+  environment?: EnvironmentRunRecord;
 }
 
 interface AssignmentLimits {

@@ -6,8 +6,9 @@
 import { createReadStream, existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join, resolve, sep } from "node:path";
-import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
+import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type EnvironmentFound, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
 import { suggestChecks, type RepoFile } from "../src/domain/checks";
+import { DEVCONTAINER_FILES, PROPOSAL_MARKERS, parseDevcontainer, proposeImage } from "../src/domain/environment";
 import { SERVICE_COMMANDS } from "../src/domain/commands";
 import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
@@ -192,6 +193,31 @@ export function createHttpServer(opts: HttpOptions): Server {
     return send(res, 200, { commands, ref, ...(commands.length ? {} : { reason: `No package.json scripts, lockfile, Cargo.toml, go.mod or pyproject.toml with pytest at ${ref}.` }) } satisfies CheckSuggestions);
   };
 
+  /** The repository's dev container and the proposed image (docs/design/project-environment.md), read at the trusted base. Nothing is saved. */
+  const environmentFound = (res: ServerResponse) => {
+    const { state } = store.read();
+    if (!real || !opts.workspaces) return send(res, 200, { ref: "", reason: "The simulated runtime reads no repository." } satisfies EnvironmentFound);
+    if (state.project.sample || !state.project.repoPath) return send(res, 200, { ref: "", reason: "This is the sample project; start a project of your own to read its repository." } satisfies EnvironmentFound);
+    const ref = trustedBaseRef(state);
+    const read = (path: string, maxBytes: number) => {
+      try {
+        return opts.workspaces!.readFileAt({ repoPath: state.project.repoPath, ref, path, maxBytes });
+      } catch {
+        return undefined;
+      }
+    };
+    let devcontainer: EnvironmentFound["devcontainer"];
+    for (const file of DEVCONTAINER_FILES) {
+      const r = read(file, 256 * 1024);
+      if (!r) continue;
+      const p = r.truncated ? { refused: `${file} is larger than 256 KB` } : parseDevcontainer(r.text, file);
+      devcontainer = { file, ...("refused" in p ? { refused: p.refused } : "image" in p ? { image: p.image } : { dockerfile: p.build.dockerfile, context: p.build.context }) };
+      break;
+    }
+    const proposal = proposeImage(PROPOSAL_MARKERS.filter((m) => read(m, 1)));
+    return send(res, 200, { ref, ...(devcontainer ? { devcontainer } : {}), ...(proposal ? { proposal } : {}) } satisfies EnvironmentFound);
+  };
+
   /** The full (redacted) log of one check of one run, from the service's own directory. Ids are validated; nothing else is served. */
   const checkLog = (res: ServerResponse, run: string, check: string) => {
     const ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/;
@@ -319,6 +345,7 @@ export function createHttpServer(opts: HttpOptions): Server {
         }
         if (path === "/api/change") return change(res, url.searchParams.get("task") ?? "");
         if (path === "/api/checks/suggest") return suggest(res);
+        if (path === "/api/environment/found") return environmentFound(res);
         if (path === "/api/checks/log") return checkLog(res, url.searchParams.get("run") ?? "", url.searchParams.get("check") ?? "");
         if (path === "/api/studio/file") return studioFile(res, url.searchParams);
         return fail(res, 404, "invalid", "Not found");

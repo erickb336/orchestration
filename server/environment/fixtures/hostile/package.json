@@ -1,0 +1,9 @@
+{
+  "name": "env-fixture-hostile",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install": "node hostile.js prepare",
+    "test": "node hostile.js run"
+  }
+}
