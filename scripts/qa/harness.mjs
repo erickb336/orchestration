@@ -44,9 +44,12 @@ const log = (m) => console.log(m);
 // ---------- the built UI ----------
 
 /** The built UI: QA_DIST when the runner built it once, else a fresh production build in a temp folder. */
+let madeDist;
 export async function buildApp() {
   if (process.env.QA_DIST && existsSync(join(process.env.QA_DIST, "index.html"))) return process.env.QA_DIST;
+  if (madeDist) return madeDist;
   const dist = mkdtempSync(join(tmpdir(), "orc-qa-dist-"));
+  madeDist = dist;
   process.env.NODE_ENV = "production";
   await build({ root: ROOT, configFile: join(ROOT, "vite.config.ts"), mode: "production", logLevel: "silent", build: { outDir: dist, emptyOutDir: true } });
   return dist;
@@ -350,6 +353,8 @@ export async function runJourney(name, makeState, body, o = {}) {
     }
   }
   await browser.close();
+  if (madeDist) rmSync(madeDist, { recursive: true, force: true });
+  madeDist = undefined;
   return j.finish();
 }
 
