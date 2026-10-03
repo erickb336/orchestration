@@ -185,6 +185,15 @@ describe("the Tasks page", () => {
     for (const kept of [">Area<", ">Status<", ">Sort<"]) expect(markup).toContain(kept);
   });
 
+  it("Done is one line with its count that opens on click; the Done filter opens it (ORC-030 a-tasks-done)", () => {
+    const done = demo.tasks.filter((t) => t.lifecycle === "done").length;
+    expect(done).toBeGreaterThan(1);
+    const section = markup.slice(markup.indexOf('class="tl-group tl-group--done"'));
+    expect(section).toMatch(new RegExp(`^[^]*?<details class="k-disc"><summary class="k-disc__summary"><h2 id="g-done" class="tl-group__title">Done</h2><span class="k-count">${done}</span></summary>`));
+    // Closed: the cards are in the page but behind the line.
+    expect(section.slice(0, section.indexOf("</details>"))).toContain('class="tl-card"');
+  });
+
   it("shows one plain line per card and no raw event text", () => {
     expect(markup).toContain("Waiting for your decision");
     expect(markup).toContain("Waiting for you to choose an approach");

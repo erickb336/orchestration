@@ -19,6 +19,9 @@
 .tl-group__head { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); }
 .tl-group__head h2 { margin: 0; font-size: var(--fs-body); }
 .tl-group--you .tl-group__head h2 { color: var(--st-you); }
+/* Done: one line with its count; the cards open under it. */
+.tl-group--done > .k-disc > .k-disc__summary { color: var(--text); }
+.tl-group__title { margin: 0; font-size: var(--fs-body); font-weight: inherit; color: inherit; }
 
 /* ---------- the card ---------- */
 .tl-card {

@@ -4,9 +4,24 @@
 
 import * as D from "../domain/delivery";
 import * as M from "../domain/model";
+import { currentBlueprint } from "../domain/studio/blueprint";
 import type { Landed, ProviderId, RoleId, State, Task } from "../domain/types";
 import { prsNeedingYou } from "./progress";
 import { stepName } from "./task/stepWords";
+
+// ---------- the two tabs ----------
+
+/**
+ * Design and reality comes first once anything is locked in (ORC-030 a-results-order): it is how you check the built
+ * product without code. Before that it has nothing to show, so Delivered work comes first. `#/results` stays the
+ * delivered work's address (every "All results" and merge link means it); the header's Results opens the first tab.
+ */
+export function designFirst(s: State): boolean {
+  return !!currentBlueprint(s);
+}
+
+/** Where the header's Results opens: the first tab. */
+export const resultsHref = (s: State) => (designFirst(s) ? "#/results/design" : "#/results");
 
 // ---------- pull requests ----------
 

@@ -11,6 +11,7 @@ import { isCapturedKind, type CaptureDevice, type ItemEvidence } from "../../dom
 import { blueprintFactoryStatus, screenDevices, type ItemFactoryView, type UxReviewOfItem } from "../../domain/studio/itemStatus";
 import type { StudioArtifact } from "../../domain/studio/types";
 import { Card, Chip, EmptyState, StatePill, Tabs } from "../kit";
+import { designFirst } from "../resultsView";
 import { useStore } from "../store";
 import { ScaledBox, TerminalRecording, TerminalText, TerminalWindow, useServiceText } from "./Frames";
 import { ArtifactPreview, TermsTable } from "./Preview";
@@ -19,8 +20,11 @@ import { NO_EVIDENCE_CLAUSE, STATUS_TONE, STATUS_WORDS, differenceState, evidenc
 import { DEVICE_LABEL, DEVICE_SIZE, serviceFileUrl, showKind, variantDemo } from "./studioView";
 import "./studio.css";
 
-/** The two views of Results: the delivered work, and Design and reality. Each is its own address. */
+/** The two views of Results: the delivered work, and Design and reality. Each is its own address. Design and reality is first once anything is locked in (resultsView.ts). */
 export function ResultsTabs({ value }: { value: "work" | "design" }) {
+  const { state } = useStore();
+  const work = { id: "work", label: "Delivered work" };
+  const design = { id: "design", label: "Design and reality" };
   return (
     <Tabs
       label="Results"
@@ -28,10 +32,7 @@ export function ResultsTabs({ value }: { value: "work" | "design" }) {
       onChange={(id) => {
         location.hash = id === "design" ? "#/results/design" : "#/results";
       }}
-      tabs={[
-        { id: "work", label: "Delivered work" },
-        { id: "design", label: "Design and reality" },
-      ]}
+      tabs={designFirst(state) ? [design, work] : [work, design]}
     />
   );
 }

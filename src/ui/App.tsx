@@ -19,6 +19,7 @@ import { messageStatusText } from "./notes";
 import { useBrowserNotifications } from "./notifications";
 import { agentsStopping, agentsWorking, liveIndicatorText, prsNeedingYou, unreadLeadReplies } from "./progress";
 import { factoryPlaceWords, visionPlaceWords } from "./placesView";
+import { resultsHref } from "./resultsView";
 import { parseRoute, tabOf } from "./route";
 import { ShapingBanner } from "./Shaping";
 import { SIM_MENU_BUTTON_ID, TourButton, useFirstRunTour } from "./Tour";
@@ -107,7 +108,7 @@ function Gate() {
 
 function Shell() {
   const route = useRoute();
-  const { notice, setNotice, service } = useStore();
+  const { state, notice, setNotice, service } = useStore();
   // A task page belongs to Tasks.
   const tab = tabOf(route);
   const demo = service.runtime === "fake";
@@ -146,7 +147,7 @@ function Shell() {
         </div>
         <nav className="tabs" aria-label="Main">
           {TABS.map((t) => (
-            <a key={t.page} href={t.href} aria-current={tab === t.page ? "page" : undefined} data-tour={"tour" in t ? t.tour : undefined}>
+            <a key={t.page} href={t.page === "review" ? resultsHref(state) : t.href} aria-current={tab === t.page ? "page" : undefined} data-tour={"tour" in t ? t.tour : undefined}>
               {t.label}
               {t.page === "review" && <ResultsBadge />}
               {t.page === "vision" && <VisionBadge />}
