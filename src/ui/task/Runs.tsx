@@ -2,7 +2,7 @@
 // usage; Rerun on the last completed run of a finished step. This is where run ids and revision numbers live.
 
 import * as M from "../../domain/model";
-import type { Attempt, State, Task } from "../../domain/types";
+import type { Attempt, PausedWork, State, Task } from "../../domain/types";
 import { checkLogUrl } from "../../api";
 import { fmtTime, selectionText } from "../common";
 import { principlesText } from "../flowView";
@@ -16,6 +16,14 @@ import { RunHelpers } from "./Helpers";
 import { helpersUnseen } from "../helpersView";
 
 const OUTCOME_WORD: Partial<Record<Attempt["outcome"], string>> = { stopped: "stopped (checkpointed)" };
+
+/** Where a run that resumed paused work started (ORC-030 C4): the paused run, and the files its changes touch. */
+function startedFromText(w: PausedWork): string {
+  const head = `the changes of the paused run ${w.attemptId}`;
+  if (w.simulated) return `${head} (simulated: no file changed)`;
+  const more = w.total > w.files.length ? `, and ${w.total - w.files.length} more` : "";
+  return `${head}: ${w.total} file${w.total === 1 ? "" : "s"} (${w.files.join(", ")}${more})`;
+}
 
 export function RunsSection({ state, task }: { state: State; task: Task }) {
   const { service, send, disabled } = useStore();
@@ -36,6 +44,7 @@ export function RunsSection({ state, task }: { state: State; task: Task }) {
             label={
               <>
                 {a.stepId} {st ? stepName(st) : ""} · {selectionText(a.snapshot)} · <strong>{OUTCOME_WORD[a.outcome] ?? a.outcome}</strong>
+                {a.snapshot.startedFrom && ` · started from the paused run's changes${a.snapshot.startedFrom.simulated ? " (simulated)" : ""}`}
                 {notes.length > 0 && <Chip title="Notes sent to this run; listed inside">{`${notes.length} note${notes.length === 1 ? "" : "s"}`}</Chip>}
                 {(a.subagents?.count ?? 0) > 0 && (
                   <Chip tone={helpersUnseen(a) ? "you" : undefined} title="Helper agents (the provider's own subagents) this run started; listed inside">{`${a.subagents!.count} helper${a.subagents!.count === 1 ? "" : "s"}`}</Chip>
@@ -63,6 +72,12 @@ export function RunsSection({ state, task }: { state: State; task: Task }) {
                   ? a.snapshot.inputs.map((i) => `${i.step}.${i.output} v${i.version}${state.artifacts.find((x) => x.id === i.artifactId)?.author === "user" ? " (your edit)" : ""}`).join(", ")
                   : "none"}
               </dd>
+              {a.snapshot.startedFrom && (
+                <>
+                  <dt>Started from</dt>
+                  <dd>{startedFromText(a.snapshot.startedFrom)}</dd>
+                </>
+              )}
               <dt>Produced</dt>
               <dd>
                 {state.artifacts
