@@ -122,8 +122,15 @@ async function capture(service, state, route, width, strictErrors) {
     // keyboard hint.
     row.header = await page.evaluate(() => {
       const h = document.querySelector("header.top");
-      const rows = new Set([...h.querySelectorAll(".brand, nav.tabs, .right")].map((e) => Math.round(e.getBoundingClientRect().top)));
-      return { pills: h.querySelectorAll(".k-pill, nav.places").length, rows: rows.size, height: Math.round(h.getBoundingClientRect().height) };
+      // A row is a run of parts whose boxes overlap vertically; the next row starts below the last one's bottom.
+      const boxes = [...h.querySelectorAll(".brand, nav.tabs, .right")].map((e) => e.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+      let rows = 0;
+      let bottom = -Infinity;
+      for (const b of boxes) {
+        if (b.top >= bottom - 1) rows++;
+        bottom = Math.max(bottom, b.bottom);
+      }
+      return { pills: h.querySelectorAll(".k-pill, nav.places").length, rows, height: Math.round(h.getBoundingClientRect().height) };
     });
     if (row.header.pills || row.header.rows !== (width < 600 ? 2 : 1)) row.error = `the header: ${JSON.stringify(row.header)}`;
     if (touch) {
