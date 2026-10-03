@@ -472,6 +472,8 @@ export class EnvironmentChecks extends BaseChecks {
     // The repair (and the owner) see what the proxy refused, next to the command that failed.
     const failed = run.results.find((r) => r.kind === "prepare" && r.status !== "passed" && r.status !== "not-run");
     if (failed && refused.length) failed.excerpt = `[The proxy refused: ${refused.join("; ")}. Add a host in Settings › Project › Environment if it is a registry.]\n${failed.excerpt}`;
+    // A prepare that did not finish leaves no image behind (each command's commit builds on the one before).
+    if ((!ok || run.stopRequested) && imageId !== baseImage) await runDocker(docker, ["image", "rm", imageId], { env: this.denv, timeoutMs: 60_000 });
     return { ok: ok && !run.stopRequested, refused, ...(ok ? { imageId } : {}) };
   }
 
