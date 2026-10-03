@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { CheckRunners, DirectChecks, type CheckAssignment, type CheckRunner } from "../checks";
 import type { AdapterEvent } from "../runtimes/types";
 import { EnvironmentChecks } from "./runner";
-import { PROBE_PRIVATE_HOST, PreparedEnvironments, judgeEnvProbe } from "./prepared";
+import { PROBE_PRIVATE_HOST, PreparedEnvironments, judgeEnvProbe, scratchFolders } from "./prepared";
 import { removeTree } from "./copy";
 import { phaseArgs } from "./docker";
 import { runDocker } from "../studio/container";
@@ -125,10 +125,12 @@ describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", { timeou
 
   for (const how of ["killed", "past its time limit"] as const) {
     it(`a run ${how}: its copy goes only after the container that mounts it is gone (review finding 4)`, async () => {
-      const { dir, ws, runner, stage, plan: p } = setup();
+      const { dir, ws, root, runner, stage, plan: p } = setup();
       const a = assignment(ws, { commands: [{ id: "test", label: "beat", kind: "check", argv: ["fake-beat"], timeoutMs: 60_000 }], runTimeoutMs: how === "killed" ? 60_000 : 1500, environment: { plan: p, project: "p1" } });
       runner.start(a);
       await until(() => existsSync(join(stage(a), "work", "beat")));
+      // The run's folder is one housekeeping knows to look for, should this service stop now (B-04).
+      expect(scratchFolders(root)).toContain(stage(a));
       if (how === "killed") runner.kill(a.attemptId);
       // The stand-in's container beats into the copy for 500 ms after its kill, making the folder again if it is gone.
       await until(() => !existsSync(stage(a)));

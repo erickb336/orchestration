@@ -147,7 +147,10 @@ export function containerArgs(s: ContainerSpec): string[] {
   ];
 }
 
-export const containerName = (what: "rec" | "probe" | "ev") => `orc-${what}-${process.pid}-${randomBytes(6).toString("hex")}`;
+/** Every kind of container the recorder names. Housekeeping's test covers each, so a new kind is swept too. */
+export const RECORDER_KINDS = ["rec", "probe", "ev"] as const;
+/** A unique name for a recorder's container: its kind, this service's pid (housekeeping reads it), and 12 hex digits. */
+export const containerName = (what: (typeof RECORDER_KINDS)[number]) => `orc-${what}-${process.pid}-${randomBytes(6).toString("hex")}`;
 
 // ---------- running docker ----------
 

@@ -3,20 +3,22 @@
 // again, no link is followed, two sweeps never overlap, and the setting turns the owner's-app part off. The Claude
 // CLI's folder names are checked against the Claude Agent SDK itself, which finds a session only under that name.
 
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, lutimesSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AddressInfo } from "node:net";
 import { CLIENT_HEADER, type StatePayload, type SweepReport } from "../src/api";
-import { Housekeeping, MIN_AGE_MS, claudeProjectName, dockerTime, orphanContainer, sweepMessage, transcriptCwd, type DockerOps, type HousekeepingOptions } from "./housekeeping";
+import { ENV_KINDS, envName } from "./environment/docker";
+import { LEFTOVER_AGE_MS } from "./environment/prepared";
+import { Housekeeping, MIN_AGE_MS, claudeProjectName, dockerTime, leftover, orphanContainer, sweepMessage, transcriptCwd, type DockerOps, type DockerThing, type HousekeepingOptions } from "./housekeeping";
 import { createHttpServer } from "./http";
 import type { ArchiveOutcome } from "./runtimes/codex";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
-import { STAGE_SWEEP_AGE_MS } from "./studio/container";
+import { RECORDER_KINDS, STAGE_SWEEP_AGE_MS, containerName } from "./studio/container";
 
 const NOW = Date.parse("2026-10-03T12:00:00Z");
 const OLD = NOW - 2 * MIN_AGE_MS;
@@ -275,7 +277,7 @@ describe("a sweep", () => {
     codexThread(1, "orchestration");
     claudeFolder(join(data, "worktrees", "x", "run-1"), { memoryOnly: true });
     const removed: string[] = [];
-    const docker: DockerOps = { list: async () => [{ name: "orc-rec-999999-0123456789ab", createdMs: NOW }], remove: async (n) => void removed.push(n) };
+    const docker: DockerOps = { list: async () => [{ kind: "container", name: "orc-rec-999999-0123456789ab", createdMs: NOW }], remove: async (t) => void removed.push(t.name) };
     const calls: string[][] = [];
     for (const o of [{ ownerApps: () => false }, { ownerAppsAllowed: false }]) {
       removed.length = 0;
@@ -283,7 +285,7 @@ describe("a sweep", () => {
       const r = await hk.sweep("timer");
       expect(r).toMatchObject({ ownerApps: false, archived: 0, trashed: 0, containers: 1 });
       expect(removed).toEqual(["orc-rec-999999-0123456789ab"]);
-      expect(events).toEqual(["Removed 1 recorder container that Orchestrator's runs left"]);
+      expect(events).toEqual(["Removed 1 container that Orchestrator's runs left"]);
     }
     expect(calls).toEqual([]);
     expect(trashed()).toEqual([]);
@@ -332,6 +334,106 @@ describe("the recorder's containers", () => {
   it("reads Docker's creation time", () => {
     expect(dockerTime("2026-10-02 19:48:03 -0700 PDT")).toBe(Date.parse("2026-10-03T02:48:03Z"));
     expect(dockerTime("about an hour ago")).toBeNaN();
+  });
+});
+
+describe("the project environment's leftovers (B-04)", () => {
+  const root = () => join(home, ".cache", "orchestrator", "environment");
+  /** A folder under the environment's root, with a file in it, last changed at `mtime`. */
+  const folder = (rel: string, mtime: number) => {
+    const p = join(root(), rel);
+    mkdirSync(join(p, "work"), { recursive: true });
+    writeFileSync(join(p, "work", "f.txt"), "x");
+    setTime(join(p, "work"), mtime);
+    setTime(p, mtime);
+    return p;
+  };
+  const thing = (kind: DockerThing["kind"], name: string, environment?: string, createdMs = NOW): DockerThing => ({ kind, name, createdMs, ...(environment ? { environment } : {}) });
+  /** Docker as a list that removals change. */
+  function docker(things: DockerThing[]) {
+    const removed: string[] = [];
+    const ops: DockerOps = { list: async () => things.filter((t) => !removed.includes(t.name)), remove: async (t) => void removed.push(t.name) };
+    return { removed, ops };
+  }
+  const OLDER = NOW - LEFTOVER_AGE_MS;
+
+  it("removes what a stopped service left, found by the environment's label: containers, then networks, then old work folders", async () => {
+    const left = [folder("p1/runs/run-1", OLDER), folder(".probe/0a1b2c3d", OLDER), folder("p1/prepared/.tmp-0123456789abcdef-0a1b2c3d", OLDER)];
+    // A step may still use a young folder; the prepared copies and the cache are kept on purpose.
+    const kept = [folder("p1/runs/run-2", NOW - 60_000), folder("p1/prepared/0123456789abcdef", OLDER), folder("p1/cache", OLDER)];
+    const d = docker([
+      thing("network", "orc-env-net-999999-0123456789", "private"),
+      thing("container", "orc-env-run-999999-0123456789", "run"),
+      thing("network", "orc-env-out-999999-0123456789", "egress"),
+      thing("container", "orc-env-proxy-999999-0123456789", "proxy"),
+      // The name alone proves nothing: without the label, it is not the environment's.
+      thing("container", "orc-env-run-999999-abcdefabcd"),
+      thing("container", "postgres", undefined, OLD),
+    ]);
+    const { hk, events } = keeper({ docker: d.ops, environmentRoot: root(), alive: () => false });
+    const r = await hk.sweep("timer");
+    expect(d.removed).toEqual(["orc-env-run-999999-0123456789", "orc-env-proxy-999999-0123456789", "orc-env-net-999999-0123456789", "orc-env-out-999999-0123456789"]);
+    expect(r).toMatchObject({ containers: 2, networks: 2, stages: 3, notes: [] });
+    expect(left.map((p) => existsSync(p))).toEqual([false, false, false]);
+    expect(kept.map((p) => existsSync(p))).toEqual([true, true, true]);
+    expect(events).toEqual(["Removed 2 containers, removed 2 Docker networks and removed 3 work folders that Orchestrator's runs left"]);
+  });
+
+  it("leaves a live service's young containers, and every work folder while a container of the environment may still mount it", async () => {
+    const run = folder("p1/runs/run-1", OLDER);
+    const d = docker([thing("container", "orc-env-preview-200-0123456789", "preview", NOW - 60_000)]);
+    const r = await keeper({ docker: d.ops, environmentRoot: root(), alive: (pid) => pid === 200 }).hk.sweep("timer");
+    expect(d.removed).toEqual([]);
+    expect(r.stages).toBe(0);
+    expect(r.notes).toEqual(["1 work folder of the project environment left: a container of the environment may still use it"]);
+    expect(existsSync(run)).toBe(true);
+    // Docker does not answer: nothing proves that no container mounts the folder.
+    const silent = await keeper({ docker: { list: async () => ({ unavailable: "Docker did not answer, so its containers were not checked" }), remove: async () => undefined }, environmentRoot: root() }).hk.sweep("timer");
+    expect(silent.stages).toBe(0);
+    expect(existsSync(run)).toBe(true);
+    // Without Docker on this computer, no container can mount it.
+    expect((await keeper({ environmentRoot: root() }).hk.sweep("timer")).stages).toBe(1);
+    expect(existsSync(run)).toBe(false);
+  });
+
+  it("never follows a link out of the environment's root", async () => {
+    const mine = join(home, "elsewhere", "keep-me");
+    mkdirSync(mine, { recursive: true });
+    writeFileSync(join(mine, "notes.md"), "mine");
+    mkdirSync(join(root(), "p1", "runs"), { recursive: true });
+    symlinkSync(mine, join(root(), "p1", "runs", "run-9"));
+    mkdirSync(join(home, "elsewhere", "runs", "run-1"), { recursive: true });
+    symlinkSync(join(home, "elsewhere"), join(root(), "p2"));
+    // Old enough to go, by the links' own times and the folders'.
+    for (const p of [join(root(), "p1", "runs", "run-9"), join(root(), "p2")]) lutimesSync(p, OLDER / 1000, OLDER / 1000);
+    for (const p of [mine, join(home, "elsewhere", "runs", "run-1")]) setTime(p, OLDER);
+    const r = await keeper({ environmentRoot: root() }).hk.sweep("timer");
+    expect(r.stages).toBe(0);
+    expect(existsSync(join(mine, "notes.md"))).toBe(true);
+    expect(existsSync(join(home, "elsewhere", "runs", "run-1"))).toBe(true);
+    expect(lstatSync(join(root(), "p1", "runs", "run-9")).isSymbolicLink()).toBe(true);
+  });
+
+  it("finds every kind of container and network the service names, by the name the service gives it", () => {
+    // Its service has gone: each one is a leftover. A new kind added to the list is covered here at once.
+    const gone = { pid: 1, alive: () => false, now: NOW };
+    for (const kind of ENV_KINDS) expect(leftover(thing(kind === "net" || kind === "out" ? "network" : "container", envName(kind), "x"), gone)).toBe(true);
+    for (const kind of RECORDER_KINDS) expect(leftover(thing("container", containerName(kind)), gone)).toBe(true);
+    // This service's own are never touched; a live service's are left until they are older than any step.
+    const mine = { pid: process.pid, alive: () => true, now: NOW + 10 * LEFTOVER_AGE_MS };
+    const live = { pid: 1, alive: () => true, now: NOW };
+    for (const kind of ENV_KINDS) {
+      expect(leftover(thing("container", envName(kind), "x", NOW), mine)).toBe(false);
+      expect(leftover(thing("container", envName(kind), "x", NOW - 60_000), live)).toBe(false);
+      expect(leftover(thing("container", envName(kind), "x", NOW - LEFTOVER_AGE_MS), live)).toBe(true);
+    }
+    // A labelled object with a name the service did not make: only its age decides.
+    expect(leftover(thing("container", "orc-env-preview-1-abc", "preview", NOW - 60_000), gone)).toBe(false);
+    expect(leftover(thing("container", "orc-env-preview-1-abc", "preview", NOW - LEFTOVER_AGE_MS), gone)).toBe(true);
+  });
+
+  it("reads a network's creation time, which Docker gives with fractions of a second", () => {
+    expect(dockerTime("2026-10-02 04:56:42.047790209 -0700 PDT")).toBe(Date.parse("2026-10-02T11:56:42.047Z"));
   });
 });
 
@@ -394,11 +496,11 @@ describe("the setting", () => {
 });
 
 describe("the Activity event", () => {
-  const base: SweepReport = { at: "", trigger: "timer", ownerApps: true, archived: 0, trashed: 0, containers: 0, stages: 0, held: 0, recent: 0, notes: [] };
+  const base: SweepReport = { at: "", trigger: "timer", ownerApps: true, archived: 0, trashed: 0, containers: 0, networks: 0, stages: 0, held: 0, recent: 0, notes: [] };
   it("says what changed, in the owner's words", () => {
     expect(sweepMessage({ ...base, archived: 2, trashed: 1, held: 1 })).toBe("Archived 2 Codex threads and moved 1 Claude session folder to the Trash that Orchestrator's runs left; 1 thread is held open by another app");
-    expect(sweepMessage({ ...base, archived: 1, containers: 2, stages: 1, held: 2 })).toBe(
-      "Archived 1 Codex thread, removed 2 recorder containers and removed 1 recorder stage folder that Orchestrator's runs left; 2 threads are held open by other apps",
+    expect(sweepMessage({ ...base, archived: 1, containers: 2, networks: 1, stages: 1, held: 2 })).toBe(
+      "Archived 1 Codex thread, removed 2 containers, removed 1 Docker network and removed 1 work folder that Orchestrator's runs left; 2 threads are held open by other apps",
     );
   });
   it("is not recorded for a sweep that changed nothing", () => {

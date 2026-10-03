@@ -26,6 +26,7 @@ import { valeChecker } from "./prose/vale";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
 import { defaultRecorderRoot } from "./studio/container";
+import { defaultEnvironmentRoot } from "./environment/prepared";
 import { ContainerEvidence, type EvidenceRunner } from "./studio/evidence";
 import { systemMedia } from "./studio/media";
 import { createPrototypeServer, projectStudioDir } from "./studio/serve";
@@ -137,8 +138,9 @@ const pruneLogs = () => {
 pruneLogs();
 setInterval(pruneLogs, 24 * 60 * 60_000).unref();
 // Housekeeping (server/housekeeping.ts): what runs leave on this computer, cleaned once the service listens, every six
-// hours, and when the owner asks in Settings. The recorder's containers and stage folders always; the Codex threads and
-// Claude session folders runs left only in real mode, and only while the owner's setting allows it.
+// hours, and when the owner asks in Settings. The containers, networks and work folders of the recorder and the project
+// environment always; the Codex threads and Claude session folders runs left only in real mode, and only while the
+// owner's setting allows it.
 const housekeeping = new Housekeeping({
   home: homedir(),
   env: process.env,
@@ -150,6 +152,7 @@ const housekeeping = new Housekeeping({
   archive: archiveThreads,
   docker: systemDocker(process.env),
   recorderRoot: defaultRecorderRoot(),
+  environmentRoot: defaultEnvironmentRoot(),
   record: (message) => {
     const now = new Date().toISOString();
     store.update((s) => {

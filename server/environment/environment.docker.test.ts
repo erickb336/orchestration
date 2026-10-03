@@ -4,7 +4,7 @@
 // skipped, with the reason, when it is not running. Pulls official images by digest the first time.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,9 +15,10 @@ import type { CheckRunReport } from "../checks";
 import type { AdapterEvent } from "../runtimes/types";
 import { dockerEnv, findDocker, runDocker } from "../studio/container";
 import { removeTree } from "./copy";
-import { PROXY_IMAGE } from "./docker";
+import { LABEL, PROXY_IMAGE, networkArgs } from "./docker";
 import { EnvironmentChecks } from "./runner";
-import { PreparedEnvironments } from "./prepared";
+import { LEFTOVER_AGE_MS, PreparedEnvironments } from "./prepared";
+import { Housekeeping, systemDocker, type DockerOps } from "../housekeeping";
 
 const FIXTURES = new URL("./fixtures/", import.meta.url).pathname;
 const docker = findDocker(process.env);
@@ -189,4 +190,62 @@ describe(`the project environment, in Docker${skipReason}`, () => {
       expect(hits).toBe(0);
     }, 600_000);
   });
+});
+
+// Housekeeping, for real (B-04): what a service that stopped mid-step leaves in Docker, found by the environment's
+// label and removed; the owner's own container stays. The sweep sees only this test's objects, so it never touches
+// another run's containers on this Docker.
+describe(`housekeeping of the environment, in Docker${skipReason}`, () => {
+  it.skipIf(!ready)("removes a labelled container and network whose service has gone, then its old work folder; leaves the owner's container", async () => {
+    const env = dockerEnv(process.env);
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    let dead = 99_999;
+    while (alive(dead)) dead--;
+    const hex = Math.random().toString(16).slice(2, 12).padEnd(10, "0");
+    const net = `orc-env-net-${dead}-${hex}`;
+    const box = `orc-env-run-${dead}-${hex}`;
+    const owner = `s2-owner-${hex}`;
+    const mine = (name: string) => name.includes(hex);
+    const home = mkdtempSync(join(scratch, "home-"));
+    const envRoot = join(scratch, `hk-${hex}`);
+    const folder = join(envRoot, "p1", "runs", "run-1");
+    mkdirSync(join(folder, "work"), { recursive: true });
+    writeFileSync(join(folder, "work", "f.txt"), "left by a stopped service");
+    const old = (Date.now() - LEFTOVER_AGE_MS - 60_000) / 1000;
+    utimesSync(folder, old, old);
+    try {
+      expect((await runDocker(docker!, networkArgs(net, "private"), { env, timeoutMs: 30_000 })).code).toBe(0);
+      expect((await runDocker(docker!, ["create", "--name", box, "--label", `${LABEL}=run`, "--network", net, "--entrypoint", "/bin/true", PROXY_IMAGE], { env, timeoutMs: 30_000 })).code).toBe(0);
+      expect((await runDocker(docker!, ["create", "--name", owner, "--entrypoint", "/bin/true", PROXY_IMAGE], { env, timeoutMs: 30_000 })).code).toBe(0);
+      const real = systemDocker(process.env)!;
+      const listed = await real.list();
+      if ("unavailable" in listed) throw new Error(listed.unavailable);
+      // Docker's own words, read: the label, and a time for each (a network's comes with fractions of a second).
+      expect(listed.filter((t) => mine(t.name)).map((t) => [t.kind, t.name, t.environment])).toEqual([["container", box, "run"], ["network", net, "private"]]);
+      for (const t of listed.filter((x) => mine(x.name))) expect(Math.abs(Date.now() - t.createdMs)).toBeLessThan(5 * 60_000);
+      const only: DockerOps = {
+        list: async () => {
+          const l = await real.list();
+          return "unavailable" in l ? l : l.filter((t) => mine(t.name));
+        },
+        remove: (t) => real.remove(t),
+      };
+      const r = await new Housekeeping({ home, env: {}, ownedFolders: [], ownerApps: () => false, ownerAppsAllowed: false, docker: only, environmentRoot: envRoot }).sweep("owner");
+      expect(r).toMatchObject({ containers: 1, networks: 1, stages: 1, notes: [] });
+      const after = await runDocker(docker!, ["ps", "--all", "--format", "{{.Names}}"], { env, timeoutMs: 30_000 });
+      expect(after.stdout.split("\n").filter(mine)).toEqual([owner]);
+      expect((await runDocker(docker!, ["network", "ls", "--format", "{{.Name}}"], { env, timeoutMs: 30_000 })).stdout.split("\n").filter(mine)).toEqual([]);
+      expect(existsSync(folder)).toBe(false);
+    } finally {
+      await runDocker(docker!, ["rm", "--force", owner, box], { env, timeoutMs: 30_000 });
+      await runDocker(docker!, ["network", "rm", net], { env, timeoutMs: 30_000 });
+    }
+  }, 120_000);
 });
