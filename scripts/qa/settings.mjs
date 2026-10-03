@@ -163,6 +163,7 @@ async function body(j, page, service, width) {
       await page.waitForTimeout(800);
       const words = await card.innerText();
       j.check(!/This is the sample project/.test(words), "with no repository yet, the card does not call a new project the sample project", words.split("\n").find((l) => /sample|repository/i.test(l)));
+      j.check(words.includes("No repository is set yet: give its path above."), "with no repository yet, the card says to give its path above", words.split("\n").find((l) => /repository/i.test(l)));
       await j.shot("6-environment-no-repo", { locator: card });
     });
     await j.step("set the repository path", async () => {
