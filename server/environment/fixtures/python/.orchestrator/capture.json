@@ -1,0 +1,5 @@
+{
+  "$comment": "The fixture's capture plan (unit E2): its page, and its CLI's tape.",
+  "screens": [{ "item": "bi-1", "path": "/", "devices": ["desktop"] }],
+  "terminals": [{ "item": "bi-2", "tape": "demo.tape" }]
+}

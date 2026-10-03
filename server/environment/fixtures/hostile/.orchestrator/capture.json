@@ -1,0 +1,5 @@
+{
+  "$comment": "The hostile fixture's capture plan (unit E2): its page and its CLI, each of which tries to leave the container.",
+  "screens": [{ "item": "bi-1", "path": "/", "devices": ["desktop"] }],
+  "terminals": [{ "item": "bi-2", "tape": "hostile.tape" }]
+}
