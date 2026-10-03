@@ -44,3 +44,14 @@ Across the app, the README and the docs: **Vision** (not Shaping), **the factory
 | 6a | The pre-flight screen, and the settings it sets |
 | 6b | The factory floor (Home after the start), and PE trade-off Reverse |
 | 6c | Budgets, devices and overrule settings; the words across the app, the README and the docs; the real-run scenario's studio round |
+
+## The independent review of pass 6, the environment and the fix round (2026-10-03)
+
+The diff `c969f24..219b463`, read by a reviewer that did not write it: **3 high, 6 medium and 4 low findings.** The real trials had passed (the factory trial 12 of 12, the real-run scenario 17 of 17), so these are defects the trials did not reach.
+
+- **High:** a tape's `Wait` pattern could freeze the service (measured: 79 s for one match); a CLI's output could use up the service's memory (measured: 16 KB of output grew the heap by 624 MB); an agent's merged dev container could replace the owner's confirmed image, because the dev container file was not protected and wins unconfirmed.
+- **Medium:** clean-up ran while the container was alive and could follow a planted link onto the Mac; the setup probe never tried the Docker VM's own address and counted "connection refused" as unreachable; the owner's chosen option was kept by its id only; a new project inherited the old environment; a dev container without prepare commands broke the checks and reported "prepared"; the claim that pass 5 finding 8 is closed was too broad.
+- **Low:** the safety notes did not describe E2; no disk limit on the mounted folders; some IPv6 forms of local addresses passed the proxy's check; the prepare step faked a check assignment, and a JVM-specific environment variable was a language code path.
+
+**The fix round:** F2 fixes the environment findings (3, 4, 5, 8, 10, 11, 12, 13); F1 fixes the terminal session and the domain (1, 2, 6, 7, 9). The ORC-029 pull request follows the fixes.
+
