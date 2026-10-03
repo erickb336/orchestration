@@ -72,7 +72,7 @@ const inventory = (page) =>
     const name = (e) => (e.getAttribute("aria-label") || e.innerText || e.value || e.getAttribute("placeholder") || e.getAttribute("title") || "").replace(/\s+/g, " ").trim().slice(0, 80);
     const scope = document.querySelector("aside.lead-drawer") ?? document.querySelector("main") ?? document.body;
     const h1 = scope.querySelector("h1")?.innerText.trim() ?? document.querySelector("main h1")?.innerText.trim() ?? "";
-    const headings = [...scope.querySelectorAll("h1, h2, h3")].map((h) => h.innerText.replace(/\s+/g, " ").trim()).filter(Boolean);
+    const headings = [...scope.querySelectorAll("h1, h2, h3")].filter((h) => h.getClientRects().length).map((h) => h.innerText.replace(/\s+/g, " ").trim()).filter(Boolean);
     const seen = new Set();
     const controls = [];
     for (const e of scope.querySelectorAll("button, a[href], input, select, textarea, summary, [role=radio], [role=checkbox], [role=tab]")) {
