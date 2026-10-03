@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as D from "../src/domain/delivery";
 import { DEMO_DOC_HASH, DEMO_DOC_TEXT, buildDemo } from "../src/domain/demo";
 import * as M from "../src/domain/model";
+import { budgetStop, buildingSpend } from "../src/domain/spend";
 import type { State } from "../src/domain/types";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
@@ -133,6 +134,28 @@ describe("the demo in the fake service", () => {
     expect(v).toMatchObject({ rev: 3, author: "lead", focus: "Focus on offline maps", simulated: true });
     expect(M.currentFocusChange(s)?.set.id).toBe(set.id);
     expect(s.conversation[s.conversation.length - 1].text).not.toMatch(/\(Simulated/);
+  });
+
+  it("simulated work never counts toward a building budget: the lead's replies, and runs the service lost at a restart (ORC-030 QA, Q-12 and Q-23)", async () => {
+    const store = openDemo();
+    store.command("setBudgets", { buildingUsd: 0.01, maintenanceUsdPerMonth: null }, "k-budget", iso(T0));
+    const adapters = () => ({ claude: new FakeAdapter("claude", defaultFakeConfig()), codex: new FakeAdapter("codex", defaultFakeConfig()) });
+    const first = new Scheduler(store, adapters(), { leaseMs: 5000, ackTimeoutMs: 6000 });
+    let now = T0 + 1000;
+    first.tick(now);
+    store.command("postMessage", { text: "What needs me?" }, "k-msg", iso(now));
+    for (let i = 0; i < 40 && !store.read().state.leadRuns.some((r) => r.outcome === "completed" && r.messageIds.length); i++) first.tick((now += 1000));
+    expect(store.read().state.leadRuns.at(-1)).toMatchObject({ outcome: "completed", simulated: true });
+    expect(M.activeAgentAttempts(store.read().state).length).toBeGreaterThan(0);
+    await first.stop();
+    // The service starts again: its fake runtime has no process for the runs in flight, so they are lost.
+    const second = new Scheduler(store, adapters(), { leaseMs: 5000, ackTimeoutMs: 6000 });
+    opened.push({ close: () => second.stop() });
+    second.tick((now += 6000));
+    const s = store.read().state;
+    expect(s.attempts.filter((a) => a.outcome === "lost").length).toBeGreaterThan(0);
+    expect(buildingSpend(s)).toMatchObject({ usd: 0, unknown: [] });
+    expect(budgetStop(s)).toBeUndefined();
   });
 
   it("a scripted (real) lead's steering carries no simulated flag", async () => {

@@ -19,6 +19,7 @@ import { StatePill } from "./StatePill";
 import { STEP_MARK, STEP_WORD, StepList } from "./StepList";
 import { SegmentedControl, Tabs } from "./Tabs";
 import { Toast } from "./Toast";
+import { shiftIntoWindow } from "./inWindow";
 
 const html = (node: React.ReactElement) => renderToStaticMarkup(node);
 const attr = (markup: string, name: string) => [...markup.matchAll(new RegExp(`\\s${name}="([^"]*)"`, "g"))].map((m) => m[1]);
@@ -445,5 +446,18 @@ describe("EmptyState and Toast", () => {
     const f = html(<Toast tone="fail">The service did not answer.</Toast>);
     expect(f).toContain('<div role="alert"><div class="k-toast k-toast--fail k-toast--inline"><span class="k-toast__mark" aria-hidden="true">!</span>');
     expect(html(<Toast tone="done">Seen.</Toast>)).toContain('<span class="k-toast__mark" aria-hidden="true">✓</span>');
+  });
+});
+
+describe("a menu's list stays inside the window (Q-02)", () => {
+  it("moves right off the left edge: the Project menu at 375 wide, beside the Paused pill, sat at -136 px", () => {
+    expect(shiftIntoWindow({ left: -136, right: 104 }, 375)).toBe(144);
+    expect(shiftIntoWindow({ left: 8, right: 248 }, 375)).toBe(0);
+  });
+
+  it("moves left off the right edge, never past the left one", () => {
+    expect(shiftIntoWindow({ left: 200, right: 440 }, 375)).toBe(-73);
+    // Wider than the room: its left edge stays in.
+    expect(shiftIntoWindow({ left: 40, right: 420 }, 375)).toBe(-32);
   });
 });

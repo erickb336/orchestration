@@ -188,10 +188,11 @@ export function getLeadRun(s: State, id: string): LeadRun | undefined {
   return s.leadRuns.find((r) => r.id === id);
 }
 
-export function reportLeadStarted(state: State, runId: string, info: { sessionId?: string; actualModel?: string }): State {
+/** The runtime accepted the run. `simulated`: the fake runtime runs it (a known $0 however it ends, lost included). */
+export function reportLeadStarted(state: State, runId: string, info: { sessionId?: string; actualModel?: string; simulated?: true }): State {
   const s = draft(state);
   const r = getLeadRun(s, runId);
-  if (r && (r.outcome === "running" || r.outcome === "stopping")) Object.assign(r, info.sessionId ? { sessionId: info.sessionId } : {}, info.actualModel ? { actualModel: info.actualModel } : {});
+  if (r && (r.outcome === "running" || r.outcome === "stopping")) Object.assign(r, info.sessionId ? { sessionId: info.sessionId } : {}, info.actualModel ? { actualModel: info.actualModel } : {}, info.simulated ? { simulated: true } : {});
   return s;
 }
 

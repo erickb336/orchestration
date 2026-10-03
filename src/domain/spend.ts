@@ -26,10 +26,11 @@ export interface ModelPrice {
 export const PRICES: readonly ModelPrice[] = pricesJson as ModelPrice[];
 
 /**
- * Why a run has no full record of its cost: its model has no price; no usage was recorded for it; or it ended with a
- * model request open, whose usage the provider never reported (Codex reports a request's usage when it completes).
+ * Why a run has no full record of its cost: its model has no price; no usage was recorded for it; it ended with a
+ * model request open, whose usage the provider never reported (Codex reports a request's usage when it completes); or
+ * the service lost it (its process was gone when the service started again), so nothing reported anything.
  */
-export type NoCostReason = "no-price" | "no-usage" | "open-request";
+export type NoCostReason = "no-price" | "no-usage" | "open-request" | "lost";
 
 /**
  * One run's cost. Every figure is an estimate: a cost the runtime reports (Claude) is computed by the
@@ -87,6 +88,7 @@ export function estimateUsd(run: Run, prices: readonly ModelPrice[]): RunCost {
   if ("simulated" in run && run.simulated) return { basis: "simulated", usd: 0, estimated: true };
   const { provider, model } = ranOn(run);
   const c = priced(provider, model, u, prices);
+  if (c.basis === "unknown" && c.reason === "no-usage" && outcomeOf(run) === "lost") return { ...c, reason: "lost" };
   return c.basis === "priced" && u?.openRequest ? { basis: "unknown", usd: null, estimated: true, reason: "open-request", recordedUsd: c.usd } : c;
 }
 
@@ -118,7 +120,9 @@ export function subagentUsd(parent: Run, sub: Subagent, prices: readonly ModelPr
   if ("simulated" in parent && parent.simulated) return { basis: "simulated", usd: 0, estimated: true };
   if (sub.usage?.costUsd !== undefined) return { basis: "reported", usd: sub.usage.costUsd, estimated: true };
   const on = ranOn(parent);
-  return priced(on.provider, sub.model ?? on.model, sub.usage, prices);
+  const c = priced(on.provider, sub.model ?? on.model, sub.usage, prices);
+  // A helper of a run the service lost was lost with it.
+  return c.basis === "unknown" && c.reason === "no-usage" && outcomeOf(parent) === "lost" ? { ...c, reason: "lost" } : c;
 }
 
 /** What a run's subagents cost, as its page shows it. */
@@ -156,6 +160,9 @@ export function subagentsCost(r: Run, prices: readonly ModelPrice[] = PRICES): S
  * (`countedUsd`): an estimate, or null when nothing bounds it. Unknown, never zero.
  * - open-request: one model request the provider never reported, at the dearest finished run on the same model so far
  *   (a run has at least one whole request), or at the run limit before there is one;
+ * - lost: a whole run nothing reported (the service lost it at a restart), counted the same way: at the dearest
+ *   finished run on its model, or at the run limit before there is one (ORC-030 QA, Q-15). It no longer holds new
+ *   work far below the budget, and an estimate is never $0;
  * - no-price: the run's tokens at the dearest price its provider has in the list; null if it has none;
  * - no-usage: a Claude run at its run limit, its spend cap (a run does not record its own, so one started under
  *   another limit counts at today's); null for a Codex run, which has no spend cap.
@@ -197,7 +204,7 @@ export function buildingSpend(s: State, prices: readonly ModelPrice[] = PRICES):
   /** What the budgets count for a cost with no full record (`UnknownCost`). */
   const count = (reason: NoCostReason, on: { provider: Runner; model: string }, u: Usage | undefined): number | null => {
     const openRequest = dearest.get(modelKey(on)) || s.project.runLimits.maxBudgetUsd;
-    if (reason === "open-request") return openRequest;
+    if (reason === "open-request" || reason === "lost") return openRequest;
     if (reason === "no-price") {
       const tokens = atDearestPrice(on.provider, u, prices);
       return tokens !== null && u?.openRequest ? tokens + openRequest : tokens;
@@ -305,8 +312,10 @@ function whyUnrecorded(unknown: UnknownCost[]): string {
   const open = unknown.filter((u) => u.reason === "open-request").length;
   const models = [...new Set(unknown.filter((u) => u.reason === "no-price").map((u) => u.model))];
   const noUsage = unknown.filter((u) => u.reason === "no-usage").length;
+  const lost = unknown.filter((u) => u.reason === "lost").length;
   return [
     ...(open ? [`${open === 1 ? "a model request" : `${open} model requests`} the provider did not report, each at the dearest run on its model`] : []),
+    ...(lost ? [`${runs(lost)} lost when the service stopped, each at the dearest run on its model (or the run limit before one finished)`] : []),
     ...(models.length ? [`${models.length === 1 ? "model" : "models"} ${models.join(", ")} ${models.length === 1 ? "has" : "have"} no price, so the dearest price of its provider applies`] : []),
     ...(noUsage ? [`${runs(noUsage)} with no usage, each at the run limit`] : []),
   ].join("; ");

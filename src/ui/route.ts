@@ -33,8 +33,9 @@ export function parseRoute(hash: string): Route {
   if (page === "vision" && sub === "pre-flight") return { page: "preflight" };
   // Vision, the studio (ORC-029): a main navigation item, in Vision and in Factory.
   if (page === "vision") return { page: "vision" };
-  if (page === "overview" || page === "activity" || page === "settings") return { page };
-  return { page: "tasks" };
+  if (page === "tasks" || page === "activity" || page === "settings") return { page };
+  // Home: the bare address (where every new project's Get started list is, and the demo's tour), and any page we do not know.
+  return { page: "overview" };
 }
 
 /** The Focus banner's History link opens the Overview with the vision history shown: `#/overview?history=1`. */

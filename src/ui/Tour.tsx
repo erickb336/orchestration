@@ -8,7 +8,8 @@ import { driver, type Driver } from "driver.js";
 import "driver.js/dist/driver.css";
 import { useCallback, useEffect } from "react";
 import { Button } from "./kit";
-import { TOUR_STOPS, browserStore, createTourGate, demoLandingRedirect, tourNeedsNavigation } from "./tourState";
+import { parseRoute } from "./route";
+import { TOUR_STOPS, browserStore, createTourGate, tourNeedsNavigation } from "./tourState";
 
 /** The Simulation menu's own button, where focus returns when the tour ends. */
 export const SIM_MENU_BUTTON_ID = "sim-menu-button";
@@ -98,11 +99,7 @@ export function startTour(onEnd?: () => void) {
  * waits a moment so Home's anchors exist. Focus lands on the Simulation menu's button when the tour ends.
  */
 export function useFirstRunTour(demo: boolean, onHome: boolean) {
-  // In the demo the bare address opens Home, where Progress by area and the tour live; a link to any page is left alone.
-  useEffect(() => {
-    const to = demoLandingRedirect(demo, location.hash);
-    if (to) location.replace(to);
-  }, [demo]);
+  // The bare address opens Home (route.ts), where Progress by area and the tour live.
   useEffect(() => {
     if (!demo || !onHome || !gate.shouldAutoStart(demo)) return;
     const id = window.setTimeout(() => startTour(focusSimMenu), 400);
@@ -118,7 +115,7 @@ export function useFirstRunTour(demo: boolean, onHome: boolean) {
 export function TourButton({ onStart }: { onStart?: () => void }) {
   const start = useCallback(() => {
     onStart?.();
-    const onHome = location.hash.replace(/^#\/?/, "").split(/[/?]/)[0] === "overview";
+    const onHome = parseRoute(location.hash).page === "overview";
     if (!onHome) location.hash = HOME;
     // After a navigation Home needs a frame to render its anchors; driver.js also waits for them.
     window.setTimeout(() => startTour(focusSimMenu), onHome ? 0 : 120);

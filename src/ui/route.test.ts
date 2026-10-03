@@ -19,7 +19,11 @@ describe("routes", () => {
     expect(parseRoute("#/settings")).toEqual({ page: "settings" });
     expect(parseRoute("#/task/WT-004.3")).toEqual({ page: "task", id: "WT-004.3" });
     expect(parseRoute("#/task/WT%2D1")).toEqual({ page: "task", id: "WT-1" });
-    for (const h of ["", "#", "#/", "#/tasks", "#/nope"]) expect(parseRoute(h)).toEqual({ page: "tasks" });
+    expect(parseRoute("#/tasks")).toEqual({ page: "tasks" });
+  });
+
+  it("the bare address opens Home, in real mode as in the demo: a new project's Get started list is there (Q-03); so does a page we do not know", () => {
+    for (const h of ["", "#", "#/", "#/nope"]) expect(parseRoute(h), h).toEqual({ page: "overview" });
   });
 
   it("the Lock in summary and the pre-flight are under Vision and Design and reality under Results; each lights its tab", () => {

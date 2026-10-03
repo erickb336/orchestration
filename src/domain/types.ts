@@ -1429,6 +1429,8 @@ export interface LeadRun {
   sessionId?: string;
   actualModel?: string;
   usage?: Attempt["usage"];
+  /** The fake runtime ran it: no agent ran, so it spent a known $0 (src/domain/spend.ts), as a simulated task run. */
+  simulated?: true;
   note?: string;
   /**
    * The lead's final text as the runtime returned it, kept when the answer could not be used as sent (no JSON, JSON

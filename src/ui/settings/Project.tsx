@@ -165,9 +165,15 @@ function StageCard() {
   );
 }
 
-/** Real mode: replace the board with an empty project. Its own form and button; not part of the section's Save. */
+/** What the page says once a new project started, as it opens Vision. */
+const projectStartedNotice = (name: string) => `"${name}" is ready. Every project begins in Vision: design it there with the lead.`;
+
+/**
+ * Real mode: replace the board with an empty project. Its own form and button; not part of the section's Save. Once
+ * it started, the page says so and opens Vision, where every project begins.
+ */
 function NewProjectCard({ openByDefault }: { openByDefault: boolean }) {
-  const { state, send, disabled } = useStore();
+  const { state, send, disabled, setNotice } = useStore();
   const confirm = useConfirm();
   const [name, setName] = useState("");
   const [repo, setRepo] = useState("");
@@ -182,7 +188,10 @@ function NewProjectCard({ openByDefault }: { openByDefault: boolean }) {
           onSubmit={async (e) => {
             e.preventDefault();
             if (!(await confirm(confirmNewProject(name, initProjectConfirm(name, docCount))))) return;
-            await send("initProject", { name, repoPath: repo, vision, focus });
+            if (!(await send("initProject", { name, repoPath: repo, vision, focus })).ok) return;
+            // Every project begins in Vision: say that it started, and go there.
+            setNotice({ kind: "info", message: projectStartedNotice(name) });
+            location.hash = "#/vision";
           }}
         >
           <div className="s-fields s-fields--wide">

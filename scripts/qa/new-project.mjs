@@ -10,7 +10,8 @@
 // 2. Home: the first-run checklist, and its way to the repository.
 // 3. Settings › Project: the "Start a new project" form, open because no repository is set. Name the project, give the
 //    repository and a vision, Start project, and confirm.
-// 4. The header names the project; the repository is ready; Home's checklist moves on.
+// 4. The page says the project started and opens Vision; the header names the project; in Settings the repository
+//    is ready; Home's checklist moves on.
 // 5. Vision opens: the studio, in Vision, with the way to ask the lead for a first round.
 //
 // Run: ORCHESTRATION_TEST_PORT=5950 node --import tsx scripts/qa/new-project.mjs
@@ -80,12 +81,14 @@ await runJourney(
       const s = service.state();
       j.check(s.project.name === NAME && s.project.stage === "shaping" && s.project.repoPath === service.repo, "the record: the project is in Vision, with its repository");
       await page.waitForTimeout(800);
-      const words = await text(page);
       const where = page.url().replace(service.origin, "");
       const toast = (await page.locator(".k-toast-region").innerText().catch(() => "")).trim();
-      j.check(/#\/(vision|overview)/.test(where) || toast.length > 0, "after Start project, the page says it started and what comes next (Vision)", `the page stays on ${where}; no message${toast ? `: ${toast}` : ""}`);
-      await page.evaluate(() => window.scrollTo(0, 0));
+      j.check(/#\/vision$/.test(where) && toast.includes(NAME) && /Vision/.test(toast), "after Start project, the page says it started and opens Vision, where it begins", { where, toast });
       await j.shot("4-after-start-top", { full: false });
+      // Settings › Project: the repository and the form.
+      await page.goto(`${service.origin}/#/settings/project`);
+      await page.getByRole("heading", { name: "Start a new project" }).waitFor();
+      const words = await text(page);
       j.check(/Ready/.test(await page.getByText(/^Ready|^Not usable/).first().innerText().catch(() => "")), "Settings: the repository shows Ready", words.match(/(Ready[^\n]*|Not usable[^\n]*)/)?.[0]);
       j.check(!/New project form/.test(words) || !(await page.getByLabel("Name", { exact: true }).isVisible()), "the new project form closes once the repository is ready");
       await j.shot("4-after-start");
