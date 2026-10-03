@@ -98,11 +98,6 @@
 .k-pill--neutral { color: var(--muted); }
 .k-pill--pulse .k-pill__dot { animation: k-pulse 1.4s ease-in-out infinite; }
 @keyframes k-pulse { 50% { opacity: 0.25; } }
-/* A pill that opens the place it describes: the words in ink, the state in the dot and the border. */
-.k-pill--link { text-decoration: none; padding: 0.15rem 0.7rem 0.15rem 0.55rem; transition: background-color var(--ease); }
-.k-pill--link .k-pill__text { color: var(--text); white-space: normal; }
-.k-pill--link:hover { background: color-mix(in srgb, currentColor 16%, var(--surface)); }
-.k-pill--link:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* ---------- Count badge (cards, tabs, disclosures) ---------- */
 .k-count {

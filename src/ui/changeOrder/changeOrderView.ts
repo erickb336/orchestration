@@ -286,13 +286,3 @@ export function changeOrderLine(s: State, co: ChangeOrder): { title: string; tex
 
 /** The change orders the Tasks page names: every open one, newest first. */
 export const openChangeOrdersNewestFirst = (s: State) => s.blueprint.changeOrders.filter((c) => c.status === "open").sort((a, b) => b.rev - a.rev);
-
-/**
- * Where the header's Factory place leads: the newest open change order, if any, else the tasks. `title` is the place's
- * own title ("1 agent working. Open the tasks."); with a change order open, its last sentence names the change order.
- */
-export function factoryPlaceLink(s: State, title: string): { href: string; title: string } {
-  const co = openChangeOrdersNewestFirst(s)[0];
-  if (!co) return { href: "#/tasks", title };
-  return { href: changeOrderHref(co.rev), title: `${title.replace(/\s*Open the tasks\.$/, "")} Open change order ${co.rev}.`.trim() };
-}

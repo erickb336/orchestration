@@ -232,20 +232,19 @@ describe("The shell", () => {
     expect(markup).not.toContain("suggestion");
   });
 
-  it("the Project menu pauses and resumes, and the header says Pausing… until every run acknowledged, then Paused", () => {
+  it("the project's menu is named by the project, pauses and resumes, and says Pausing… until every run acknowledged, then Project paused (Home's state says the same: places.test.tsx)", () => {
     const running = buildSeed(T0);
     expect(render(<ProjectMenu />, store(running))).toContain(">Pause project<");
+    expect(render(<ProjectMenu />, store(running))).toContain(`<span class="menu__label">${running.project.name}</span>`);
     expect(render(<ProjectMenu />, store(running))).not.toContain("k-pill");
     const pausing = M.pauseProject(running, at(1));
     const mid = render(<ProjectMenu />, store(pausing));
-    expect(mid).toContain("Pausing…");
-    expect(mid).toContain("2 runs still stopping");
+    expect(mid).toContain("Pausing… 2 runs still stopping");
     expect(mid).toContain(">Resume project<");
-    expect(mid).not.toContain(">Paused<");
+    expect(mid).not.toContain("Project paused");
     const acknowledged = structuredClone(pausing);
     acknowledged.attempts = [];
     const done = render(<ProjectMenu />, store(acknowledged));
-    expect(done).toContain(">Paused<");
     expect(done).toContain("Project paused");
     expect(done).toContain(">Resume project<");
   });
