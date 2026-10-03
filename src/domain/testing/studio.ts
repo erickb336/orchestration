@@ -2,6 +2,7 @@
 // owner's. Not used by the application.
 
 import { runCommand } from "../commands";
+import { startFactoryAsOwner } from "./factory";
 import * as S from "../studio/studio";
 import type { State } from "../types";
 
@@ -54,4 +55,13 @@ export function peAgrees(s: State, artifactId: string, version: number, variants
 /** The owner's feedback on one artifact version. */
 export function feedback(s: State, artifactId: string, version: number, entry: Record<string, unknown>, now: string): State {
   return run(s, "sendFeedback", { entries: [{ artifactId, version, mark: null, pins: [], note: "", ...entry }] }, now).state;
+}
+
+/**
+ * The owner puts the draft into force, as they do (pass 5): in Vision by Start the factory (the first Lock in, with
+ * the project's settings as they stand), in the factory by Lock in, naming the draft revision they saw.
+ */
+export function lockInAsOwner(s: State, now: string): State {
+  if (s.project.stage === "shaping") return startFactoryAsOwner(s, now);
+  return runCommand(s, "lockIn", { draftRev: s.blueprint.draft.rev }, now).state;
 }

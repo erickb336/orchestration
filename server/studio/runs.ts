@@ -133,7 +133,7 @@ export function designerEnvelope(state: State, run: StudioRun, where: { staging:
     ...(round.n === 0 ? asIsSection(state, run, where.checkout) : []),
     ...studioPrinciplesLines(run),
     ...studioFeedbackLines(state, run),
-    ...projectWordsLines(state),
+    ...projectWordsLines(state, "draft"),
     ...(round.focus === "flows" ? [...flowRulesLines(), ""] : []),
     "## What to hand in",
     "",

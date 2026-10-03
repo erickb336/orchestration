@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import * as M from "../model";
 import { buildSeed } from "../seed";
-import { DESIGNER, addScreen, openRound, peAgrees, run, sha } from "../testing/studio";
+import { DESIGNER, addScreen, lockInAsOwner, openRound, peAgrees, run, sha } from "../testing/studio";
 import { reviewedChange } from "../testing/reviewed";
 import type { State, TestCaseResult, TestReport } from "../types";
 import * as R from "./ruleResults";
@@ -23,7 +23,7 @@ const RULES = [
 ];
 const EXAMPLES = [{ id: "E1", text: "Given a full trip, when a friend opens the link, then the page says the trip is full." }];
 
-/** The Join flow, with its rules, approved into the blueprint (`artifactId`: a new version of it, in a new round). */
+/** The Join flow, with its rules, approved and locked in (`artifactId`: a new version of it, in a new round). */
 function approvedFlow(s: State, sec: number, rules = RULES, artifactId?: string): { s: State; itemId: string; artifactId: string } {
   const r = openRound(artifactId ? run(s, "closeRound", { round: s.studio.rounds.at(-1)!.n }, at(sec)).state : s, "flows", at(sec));
   const a = addScreen(r.state, r.n, at(sec + 1), {
@@ -40,7 +40,7 @@ function approvedFlow(s: State, sec: number, rules = RULES, artifactId?: string)
     ...(artifactId ? { artifactId } : {}),
   });
   const agreed = peAgrees(a.state, a.id, a.version, [], at(sec + 2));
-  const approved = run(agreed, "approveArtifact", { artifactId: a.id, version: a.version }, at(sec + 3)).state;
+  const approved = lockInAsOwner(run(agreed, "approveArtifact", { artifactId: a.id, version: a.version }, at(sec + 3)).state, at(sec + 3));
   const item = approved.blueprint.revisions.at(-1)!.items.find((i) => i.artifactId === a.id)!;
   return { s: approved, itemId: item.id, artifactId: a.id };
 }
@@ -231,8 +231,11 @@ describe("rule results per blueprint item", () => {
   it("only flows and contracts with rules have rule results; other items and unknown ids have none", () => {
     const f = approvedFlow(fresh(), 1);
     const screen = addScreen(f.s, f.s.studio.rounds.at(-1)!.n, at(10), { title: "Trip plan", variants: [] });
-    const s = run(peAgrees(screen.state, screen.id, 1, [], at(11)), "approveArtifact", { artifactId: screen.id, version: 1 }, at(12)).state;
+    const s = lockInAsOwner(run(peAgrees(screen.state, screen.id, 1, [], at(11)), "approveArtifact", { artifactId: screen.id, version: 1 }, at(12)).state, at(12));
     expect(R.blueprintRuleResults(s).map((x) => x.title)).toEqual(["Join flow"]);
+    // A dropped flow has no rules to prove once the drop is locked in.
+    const dropped = lockInAsOwner(run(s, "dropBlueprintItem", { itemId: f.itemId }, at(13)).state, at(13));
+    expect(R.blueprintRuleResults(dropped)).toEqual([]);
     const screenItem = s.blueprint.revisions.at(-1)!.items.find((i) => i.artifactId === screen.id)!;
     expect(R.ruleResults(s, screenItem.id)).toBeUndefined();
     expect(R.ruleResults(s, "bi-999")).toBeUndefined();

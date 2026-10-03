@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as D from "../src/domain/delivery";
 import * as M from "../src/domain/model";
-import { startFactoryArgs, startFactoryAsOwner } from "../src/domain/testing/factory";
+import { inVision, startFactoryArgs, startFactoryAsOwner } from "../src/domain/testing/factory";
 import type { State, StepDef } from "../src/domain/types";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import { Scheduler } from "./scheduler";
@@ -64,7 +64,8 @@ describe("no delivery work while shaping (simulated GitHub)", () => {
     for (let i = 0; i < 20 && !M.activeAttempts(st(), second).length; i++) await tick();
     expect(M.activeAttempts(st(), second)).toHaveLength(1);
 
-    cmd("startVision");
+    // The project in Vision (a fixture: an upgraded project that went back before pass 5, with its work in flight).
+    store.update((s) => inVision(s, iso()), iso());
     const pr = task(first).integration!.pr!;
     cmd("requestPrReview", { taskId: first });
     cmd("requestPrMerge", { taskId: first, headSha: pr.headSha });
@@ -113,8 +114,8 @@ describe("no delivery work while shaping (simulated GitHub)", () => {
     let s = M.setAutonomy(st(), { ...st().project.autonomy, autoDeliver: { enabled: true, branch: "main" } }, iso());
     s = { ...s, project: { ...s.project, delivery: { pending: true } } };
     expect(M.deliveryDue(s, now)).toBe(true);
-    expect(M.deliveryDue(M.startVision(s, iso()), now)).toBe(false);
-    expect(M.deliveryDue(startFactoryAsOwner(M.startVision(s, iso()), iso()), now)).toBe(true);
+    expect(M.deliveryDue(inVision(s, iso()), now)).toBe(false);
+    expect(M.deliveryDue(startFactoryAsOwner(inVision(s, iso()), iso()), now)).toBe(true);
   });
 });
 

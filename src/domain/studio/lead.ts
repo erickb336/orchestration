@@ -98,7 +98,6 @@ function designerAsk(s: State, r: LeadRun, raw: unknown): DesignerAsk | string {
 export function applyStudioBlock(state: State, r: LeadRun, raw: unknown, now: string): StudioBlockResult {
   const none = (note: string): StudioBlockResult => ({ state, notes: [note], questions: [], runs: [] });
   if (r.messageIds.length === 0) return none("only a reply to your messages runs the studio; nothing was changed");
-  if (state.project.stage !== "shaping") return none("the studio runs in Vision; nothing was changed");
   if (!isObj(raw)) return none("the studio block was not an object; nothing was changed");
   const notes: string[] = [];
   const ignored = Object.keys(raw).filter((k) => !BLOCK_FIELDS.includes(k));

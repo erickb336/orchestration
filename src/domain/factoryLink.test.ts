@@ -41,9 +41,12 @@ function building(): { s: State; screen: string; flow: string; contract: string;
   s = peAgrees(open.state, open.id, 1, [], at(5));
   s = runCommand(s, "sendFeedback", { entries: [{ artifactId: open.id, version: 1, mark: "change", pins: [], note: "later" }] }, at(6)).state;
   s = runCommand(s, "approveRound", { round: r.n }, at(7)).state;
-  const item = (artifactId: string) => B.blueprintItems(s).find((i) => i.artifactId === artifactId)!.id;
+  // The approvals are in the draft; Start the factory is the first Lock in, which puts them into force.
   s = startFactoryAsOwner(s, at(8), MANUAL);
-  return { s, screen: item(screen.id), flow: item(flow.result.artifactId), contract: item(contract.result.artifactId), open: item(open.id) };
+  const item = (artifactId: string) => B.blueprintItems(s).find((i) => i.artifactId === artifactId)!.id;
+  // An open item stays in the draft: it never goes into force (r14).
+  const openItem = B.draftItems(s).find((i) => i.artifactId === open.id)!.id;
+  return { s, screen: item(screen.id), flow: item(flow.result.artifactId), contract: item(contract.result.artifactId), open: openItem };
 }
 
 const proposal = (title: string, over: Record<string, unknown> = {}) => ({
@@ -97,9 +100,10 @@ describe("the lead's specs cite the blueprint items they build", () => {
   it("the domain refuses an id that is not in the blueprint, and an item still open, and creates nothing", () => {
     const b = building();
     const unknown = lead(b.s, [proposal("Join a trip", { blueprintRefs: [b.screen, "bi-404"] })]);
-    expect([unknown.created, unknown.rejected]).toEqual([[], ['"Join a trip": not in the blueprint: bi-404']]);
+    expect([unknown.created, unknown.rejected]).toEqual([[], ['"Join a trip": bi-404: not in the blueprint; cite only items approved in the blueprint in force']]);
     const open = lead(b.s, [proposal("Settings page", { blueprintRefs: [b.open] })]);
-    expect([open.created, open.rejected]).toEqual([[], [`"Settings page": ${b.open} is still open in the blueprint, not approved; cite only approved items`]]);
+    // An open item stays in the draft (r14): it is not in force, and the lead is told where it is.
+    expect([open.created, open.rejected]).toEqual([[], [`"Settings page": ${b.open}: only in the draft: the owner has not locked it in yet; cite only items approved in the blueprint in force`]]);
     const shape = lead(b.s, [proposal("Join a trip", { blueprintRefs: b.screen })]);
     expect(shape.rejected).toEqual(['"Join a trip": "blueprintRefs" must be a list of blueprint item ids']);
   });

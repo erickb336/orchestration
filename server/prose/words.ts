@@ -1,5 +1,5 @@
 // The project's words as a Vale style (ORC-029 pass 4d, decision 6). The dictionary the owner approved into the
-// blueprint says which words to avoid; this module turns it into Vale substitution rules, so the prose check reports
+// blueprint's draft (the studio's words: this checks the lead's, the PE's and the designer's text) says which words to avoid; this module turns it into Vale substitution rules, so the prose check reports
 // "Use '<term>', not '<word>'." as an error. The style is generated into the service's data folder, never into the
 // repository: <dataDir>/vale/<projectId>/ holds a copy of the repository's STE80 style, the generated Project style and
 // a configuration that uses both. Without a dictionary in force (or with no avoided words), nothing is generated and
@@ -7,7 +7,7 @@
 
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { dictionaryInForce } from "../../src/domain/studio/blueprint";
+import { dictionaryInDraft } from "../../src/domain/studio/blueprint";
 import type { DictionaryEntry } from "../../src/domain/studio/types";
 import type { State } from "../../src/domain/types";
 import { VALE_CONFIG } from "./vale";
@@ -71,11 +71,11 @@ function put(path: string, text: string) {
 
 /**
  * The Vale configuration that checks with the project's words: written into `<dataDir>/vale/<projectId>/` from the
- * dictionary in force, and its path returned. Undefined when no dictionary is in force or it avoids no word: then the
+ * draft's dictionary, and its path returned. Undefined when the draft has no dictionary or it avoids no word: then the
  * repository's configuration applies. Rules of terms no longer in the dictionary are removed.
  */
 export function projectValeConfig(dataDir: string, state: State): string | undefined {
-  const words = dictionaryInForce(state);
+  const words = dictionaryInDraft(state);
   const rules = words ? wordRules(words.entries) : [];
   const id = state.project.id;
   if (!/^[A-Za-z0-9._-]+$/.test(id) || id === "." || id === "..") throw new Error(`"${id}" cannot name a folder.`);

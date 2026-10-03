@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
 import { buildSeed } from "./seed";
+import { inVision } from "./testing/factory";
 import { ControlError, type State } from "./types";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -171,7 +172,7 @@ describe("V4 removal and history", () => {
     expect(M.currentVision(s)).toMatchObject({ rev: 4, author: "lead", focus: "Speed", docIds: ids });
     s = M.undoSteering(s, s.steering[0].id, undefined, at(6)).state;
     expect(M.currentVision(s)).toMatchObject({ rev: 5, focus: "New focus", docIds: ids });
-    s = M.startVision(s, at(7));
+    s = inVision(s, at(7));
     s = M.postMessage(s, "draft it", at(8));
     const r2 = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "message" }, at(9));
     s = M.completeLeadRun(r2.state, r2.runId, { reply: "ok", proposals: [], vision: { text: "Drafted", focus: "Drafted focus" } }, at(10));

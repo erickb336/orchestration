@@ -161,14 +161,15 @@ async function main() {
   s = await state();
   const createdInVision = s.state.project.stage === "shaping" && s.state.project.factoryStarts.length === 0;
   const settings = { autonomy: "manual", delivery: { mode: "off", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } };
-  // The owner's agreement as the pre-flight shows it (the blueprint and vision revisions, every open item), with these settings.
+  // The owner's agreement as the pre-flight shows it (the blueprint draft's and the vision's revisions, every open item),
+  // with these settings. Start the factory is the first Lock in: the start names the blueprint revision then in force.
   const agreement = { ...M.startFactoryRequest(s.state), settings };
   await cmd("startFactory", agreement);
   s = await state();
   const starts = s.state.project.factoryStarts;
   check(
     "the factory started only from the owner's startFactory, with its record",
-    createdInVision && s.state.project.stage === "building" && starts.length === 1 && starts[0].by === "user" && starts[0].blueprintRev === agreement.blueprintRev && starts[0].visionRev === agreement.visionRev && JSON.stringify(starts[0].settings) === JSON.stringify(settings) && JSON.stringify(starts[0].openItems) === JSON.stringify(agreement.acceptOpen),
+    createdInVision && s.state.project.stage === "building" && starts.length === 1 && starts[0].by === "user" && starts[0].blueprintRev === (s.state.blueprint.revisions.at(-1)?.rev ?? 0) && starts[0].visionRev === agreement.visionRev && JSON.stringify(starts[0].settings) === JSON.stringify(settings) && JSON.stringify(starts[0].openItems) === JSON.stringify(agreement.acceptOpen),
     { createdIn: createdInVision ? "shaping" : s.state.project.stage, start: starts[0] ?? null },
   );
   await cmd("setRunLimits", { maxTurns: 12, timeoutMinutes: 5, maxBudgetUsd: 0.5 });

@@ -54,7 +54,7 @@ export {
 export {
   acceptVisionDraft, answersMessage, coverageOf, dismissVisionDraft, latestQuestions, openAreas, openVisionDraft, roadmapTasks, SHAPING_LABEL,
   currentFactorySettings, type FactoryRequest, preflightOpenItems, setChangeOrders, setDevices, startFactory, startFactoryBlocker, startFactoryPlan,
-  startFactoryRequest, startVision,
+  startFactoryRequest,
   validateCoverage, validateQuestions, validateVisionDraft,
 } from "./model/shaping";
 export {

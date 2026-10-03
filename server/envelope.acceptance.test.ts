@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
-import { DESIGNER, addScreen, openRound, peAgrees, run, sha } from "../src/domain/testing/studio";
+import { DESIGNER, addScreen, lockInAsOwner, openRound, peAgrees, run, sha } from "../src/domain/testing/studio";
 import type { SpecContent, State } from "../src/domain/types";
 import { ACCEPTANCE_TESTS_HEADER, buildEnvelope } from "./envelope";
 
@@ -18,7 +18,7 @@ const RULES = [
 ];
 const EXAMPLES = [{ id: "E1", text: "Given a full trip, when a friend opens the link, then the page says the trip is full." }];
 
-/** Approve one artifact into the blueprint in the open round (a flow with rules, unless `over` says otherwise); its item id. */
+/** Approve one artifact in the open round (a flow with rules, unless `over` says otherwise) and lock it in, as the owner does; its item id. */
 function approve(s: State, sec: number, over: Record<string, unknown> = {}): { s: State; itemId: string } {
   const round = s.studio.rounds.at(-1)!.n;
   const a = addScreen(s, round, at(sec), {
@@ -31,7 +31,7 @@ function approve(s: State, sec: number, over: Record<string, unknown> = {}): { s
     rules: [{ variant: "A", path: "join/rules.json", rules: RULES, examples: EXAMPLES }],
     ...over,
   });
-  const done = run(peAgrees(a.state, a.id, 1, [], at(sec + 1)), "approveArtifact", { artifactId: a.id, version: 1 }, at(sec + 2)).state;
+  const done = lockInAsOwner(run(peAgrees(a.state, a.id, 1, [], at(sec + 1)), "approveArtifact", { artifactId: a.id, version: 1 }, at(sec + 2)).state, at(sec + 2));
   return { s: done, itemId: done.blueprint.revisions.at(-1)!.items.find((i) => i.artifactId === a.id)!.id };
 }
 

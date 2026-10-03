@@ -116,11 +116,10 @@ function makerSelection(s: State, a: StudioArtifact): ModelSelection | undefined
  * Ask for a designer run revising every version the PE sent back (the service, on each cycle, after the PE's verdicts
  * are recorded): in the version's round, with the revision brief, on the designer's provider and model that made it,
  * else the designer's default. When no enabled provider can run it, review of the version ends there (`no-provider`,
- * with the reason), and it goes to the owner with what the PE asks for. Queued: dispatch starts it in Vision, never
- * while paused or past the building budget.
+ * with the reason), and it goes to the owner with what the PE asks for. Queued: dispatch starts it in Vision or while
+ * the factory runs, never while paused or past the building budget.
  */
 export function askForRevisions(state: State, now: string): State {
-  if (state.project.stage !== "shaping") return state;
   let s = state;
   for (const a of S.latestArtifacts(state)) {
     if (!S.revisionDue(s, a)) continue;

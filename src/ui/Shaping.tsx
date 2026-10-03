@@ -344,7 +344,7 @@ export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonV
           if (request.acceptOpen.length) {
             const ok = await confirm({
               title: "Start building with areas still open?",
-              text: `${stillOpen}${outcome ? `\n\n${outcome}` : ""}\n\n${runs} Change these in Settings before you start.\n\nThe lead keeps answering you, and you can come back to shaping at any time.`,
+              text: `${stillOpen}${outcome ? `\n\n${outcome}` : ""}\n\n${runs} Change these in Settings before you start.\n\nThe lead keeps answering you, and Vision stays open while the factory runs.`,
               primaryLabel: "Start building",
             });
             if (!ok) return;

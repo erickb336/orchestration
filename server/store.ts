@@ -337,10 +337,12 @@ const MIGRATIONS: Record<number, (doc: Record<string, unknown>) => Record<string
 };
 
 /**
- * Format 19's fields, added where a document lacks them. Format 19 is unreleased, and early builds of ORC-029 pass 2
- * wrote it before all of its fields existed, so this runs on every load of a format-19 database as well as in the
- * 18 → 19 upgrade. Idempotent. A change order without a handler takes the project's setting. Start records are
- * history and are never rewritten: an early start's settings carry `merge` where later ones carry `delivery`.
+ * Format 19's fields, added where a document lacks them. Format 19 is unreleased, and early builds of ORC-029 passes
+ * 2 to 4 wrote it before all of its fields existed, so this runs on every load of a format-19 database as well as in
+ * the 18 → 19 upgrade. Idempotent. A change order without a handler takes the project's setting. The blueprint's draft
+ * (pass 5) starts as a copy of the version in force, so the revisions stay in force and the draft holds no change.
+ * Start records are history and are never rewritten: an early start's settings carry `merge` where later ones carry
+ * `delivery`.
  */
 function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   const project = doc.project as Record<string, unknown>;
@@ -357,8 +359,18 @@ function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   // Studio runs (pass 3a) came after the first format-19 builds: none were recorded before them.
   (doc.studio as { runs?: unknown[] }).runs ??= [];
   doc.blueprint ??= emptyBlueprint();
-  const blueprint = doc.blueprint as { changeOrders?: Record<string, unknown>[] };
-  for (const co of (blueprint.changeOrders ??= [])) co.handler ??= project.changeOrders;
+  const blueprint = doc.blueprint as { revisions?: { items: unknown[] }[]; draft?: unknown; changeOrders?: Record<string, unknown>[] };
+  // The draft (pass 5): the revisions stay in force, and the draft starts as a copy of the version in force, so it
+  // holds no change. Its revision starts at 0.
+  blueprint.draft ??= { rev: 0, items: structuredClone(blueprint.revisions?.at(-1)?.items ?? []) };
+  for (const co of (blueprint.changeOrders ??= [])) {
+    co.handler ??= project.changeOrders;
+    // Change orders from before pass 5 listed the tasks it touched, which the lead was to update, and dropped nothing.
+    if (co.tasks === undefined) co.tasks = ((co.affectedTasks ?? []) as string[]).map((taskId) => ({ taskId, handling: "update-spec" }));
+    delete co.affectedTasks;
+    co.droppedItems ??= [];
+    co.newWork ??= [];
+  }
   endPass3Reviews(doc.studio as { artifacts: Record<string, unknown>[]; verdicts: Record<string, unknown>[] });
   return doc;
 }
@@ -417,6 +429,29 @@ function stageRefusal(prev: State, next: State, command: string | undefined): st
   if (command === "resetSampleData" && next.project.sample) return undefined;
   const by = command === "startFactory" ? `the startFactory command recorded ${recorded} starts, not 1` : `${command ? `the ${command} command` : "an internal update"} tried to`;
   return `Refused: only the owner's Start the factory moves the project from Vision to the factory; ${by}. Nothing was written.`;
+}
+
+/**
+ * The owner-only Lock in, enforced where state is written (ORC-029 pass 5): what is in force (the blueprint's
+ * revisions) changes only by the owner's `lockIn` command, which adds exactly one revision, or by `startFactory` (the
+ * first Lock in), which adds at most one. No write may change or remove a revision in force. Any other write that
+ * would (another command, the scheduler, a runtime report, a lead run's result) is refused before anything is stored.
+ * Replacing everything with the sample project (`resetSampleData`) or with a new project (`initProject`) starts a new
+ * blueprint, not a Lock in. Returns why a write is refused, or undefined.
+ */
+function blueprintRefusal(prev: State, next: State, command: string | undefined): string | undefined {
+  const before = prev.blueprint.revisions;
+  const after = next.blueprint.revisions;
+  if (after === before) return undefined;
+  if (command === "resetSampleData" && next.project.sample) return undefined;
+  if (command === "initProject" && after.length === 0) return undefined;
+  const kept = after.length >= before.length && before.every((r, i) => JSON.stringify(r) === JSON.stringify(after[i]));
+  const added = after.length - before.length;
+  if (kept && added === 0) return undefined;
+  if (kept && command === "lockIn" && added === 1) return undefined;
+  if (kept && command === "startFactory" && added <= 1) return undefined;
+  const what = !kept ? "changed or removed a revision in force" : `${command === "lockIn" || command === "startFactory" ? `made ${added} revisions` : "made a revision"}`;
+  return `Refused: only the owner's Lock in puts the blueprint into force; ${command ? `the ${command} command` : "an internal update"} ${what}. Nothing was written.`;
 }
 
 export class LeaseLostError extends Error {
@@ -543,9 +578,12 @@ export class Store {
     return { version: row.version, state: JSON.parse(row.json) as State, json: row.json };
   }
 
-  /** Refuse, and log, a write that would start the factory other than by the owner's command (`stageRefusal`). */
+  /**
+   * Refuse, and log, a write that would start the factory other than by the owner's command (`stageRefusal`), or
+   * change what is in force other than by the owner's Lock in (`blueprintRefusal`).
+   */
   private guardStage(prev: State, next: State, command: string | undefined) {
-    const refusal = stageRefusal(prev, next, command);
+    const refusal = stageRefusal(prev, next, command) ?? blueprintRefusal(prev, next, command);
     if (!refusal) return;
     console.error(`[orchestrator] ${refusal}`);
     throw new ControlError(refusal);

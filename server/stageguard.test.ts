@@ -1,13 +1,17 @@
-// ORC-029 pass 2b, where state is written: the owner-only start is structural. The store accepts a move from
-// shaping to building only from the owner's startFactory command, and only when it recorded exactly one more
-// start. A command with a bug, the scheduler or a runtime report that tries it is refused as a control error,
+// ORC-029 pass 2b and pass 5, where state is written: the owner-only start and the owner-only Lock in are structural.
+// The store accepts a move from shaping to building only from the owner's startFactory command, and only when it
+// recorded exactly one more start. It accepts a new blueprint revision (what the factory builds from) only from the
+// owner's lockIn command (exactly one) or startFactory (at most one), and no write may change or remove a revision in
+// force. A command with a bug, the scheduler or a runtime report that tries either is refused as a control error,
 // logged, and nothing is written. The bugs are injected around the real command table.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as B from "../src/domain/studio/blueprint";
 import { startFactoryArgs } from "../src/domain/testing/factory";
+import { addScreen, openRound, peAgrees } from "../src/domain/testing/studio";
 import { ControlError, type State } from "../src/domain/types";
 import { CommandFailure, Store } from "./store";
 
@@ -104,18 +108,122 @@ describe("the owner-only start, where state is written", () => {
     );
   });
 
-  it("the owner's startFactory is accepted with its one record; leaving the factory, a reset to the sample, and every other write are untouched", () => {
+  it("the owner's startFactory is accepted with its one record; a reset to the sample, and every other write are untouched", () => {
     cmd("startFactory", startFactoryArgs(store.read().state));
     expect(stage()).toBe("building");
     expect(store.read().state.project.factoryStarts).toHaveLength(1);
-    // Building to shaping, and writes within a stage, are not the guard's.
-    cmd("startVision");
-    expect(stage()).toBe("shaping");
+    // Writes within a stage are not the guard's.
     store.update((s) => ({ ...s, project: { ...s.project, name: "Renamed" } }), iso());
     expect(store.read().state.project.name).toBe("Renamed");
     // Replacing everything with the sample project (fake runtime only) is a new project, not a start.
     cmd("resetSampleData");
     expect(store.read().state.project).toMatchObject({ sample: true, stage: "building" });
+    expect(logged).not.toHaveBeenCalled();
+  });
+});
+
+describe("the owner-only Lock in, where state is written (pass 5)", () => {
+  /** A screen the PE agreed to, ready for the owner's approval (the studio's work, written as the service writes it). */
+  function agreed(title: string): string {
+    let id = "";
+    store.update((s) => {
+      const open = s.studio.rounds.find((r) => !r.closedAt) ? { state: s, n: s.studio.rounds.at(-1)!.n } : openRound(s, "experience", iso());
+      const a = addScreen(open.state, open.n, iso(), { title, variants: [] });
+      id = a.id;
+      return peAgrees(a.state, a.id, 1, [], iso());
+    }, iso());
+    return id;
+  }
+  /** The owner approves it into the draft. */
+  const approved = (title: string) => cmd("approveArtifact", { artifactId: agreed(title), version: 1 });
+  const blueprint = () => store.read().state.blueprint;
+  /** The write is refused as a control error, logged, and the stored state is exactly as it was. */
+  function expectRefusedRevision(run: () => unknown, by: RegExp) {
+    const before = store.read();
+    let thrown: unknown;
+    try {
+      run();
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown instanceof CommandFailure ? thrown.kind : thrown instanceof ControlError ? "control" : thrown).toBe("control");
+    expect((thrown as Error).message).toMatch(/^Refused: only the owner's Lock in puts the blueprint into force/);
+    expect((thrown as Error).message).toMatch(by);
+    expect(logged).toHaveBeenCalledWith(expect.stringContaining((thrown as Error).message));
+    expect(store.read()).toEqual(before);
+  }
+  /** A revision as a buggy write would add it: the draft as it stands, put into force. */
+  const sneak = (s: State) => void s.blueprint.revisions.push({ rev: B.blueprintRev(s) + 1, at: iso(), visionRev: 1, reason: "sneaked in", items: structuredClone(s.blueprint.draft.items) });
+
+  it("Start the factory locks the draft in (one revision), and the owner's lockIn adds exactly one more", () => {
+    approved("Trail search");
+    cmd("startFactory", startFactoryArgs(store.read().state));
+    expect(blueprint().revisions.map((r) => r.rev)).toEqual([1]);
+    approved("Packing list");
+    expect(blueprint().revisions).toHaveLength(1); // an approval changes only the draft
+    cmd("lockIn", { draftRev: blueprint().draft.rev });
+    expect(blueprint().revisions.map((r) => r.rev)).toEqual([1, 2]);
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("another command, a command of the owner's included, that makes a revision is refused, logged, and nothing is written", () => {
+    approved("Trail search");
+    cmd("startFactory", startFactoryArgs(store.read().state));
+    approved("Packing list");
+    const group = agreed("Group page");
+    bug.current = { command: "approveArtifact", apply: sneak };
+    expectRefusedRevision(() => cmd("approveArtifact", { artifactId: group, version: 1 }), /the approveArtifact command made a revision/);
+    bug.current = { command: "markVisited", apply: sneak };
+    expectRefusedRevision(() => cmd("markVisited"), /the markVisited command made a revision/);
+    bug.current = { command: "discardDraft", apply: sneak };
+    expectRefusedRevision(() => cmd("discardDraft", { draftRev: blueprint().draft.rev }), /the discardDraft command made a revision/);
+  });
+
+  it("lockIn may add exactly one revision, and startFactory at most one", () => {
+    approved("Trail search");
+    bug.current = { command: "startFactory", apply: sneak };
+    expectRefusedRevision(() => cmd("startFactory", startFactoryArgs(store.read().state)), /the startFactory command made 2 revisions/);
+    bug.current = undefined;
+    cmd("startFactory", startFactoryArgs(store.read().state));
+    approved("Packing list");
+    bug.current = { command: "lockIn", apply: sneak };
+    expectRefusedRevision(() => cmd("lockIn", { draftRev: blueprint().draft.rev }), /the lockIn command made 2 revisions/);
+  });
+
+  it("no write may change or remove a revision in force: not the owner's lockIn, not an internal update", () => {
+    approved("Trail search");
+    cmd("startFactory", startFactoryArgs(store.read().state));
+    approved("Packing list");
+    bug.current = { command: "lockIn", apply: (s) => void (s.blueprint.revisions[0].items = []) };
+    expectRefusedRevision(() => cmd("lockIn", { draftRev: blueprint().draft.rev }), /the lockIn command changed or removed a revision in force/);
+    expectRefusedRevision(
+      () =>
+        store.update((s) => {
+          const next = structuredClone(s);
+          next.blueprint.revisions.pop();
+          return next;
+        }, iso()),
+      /an internal update changed or removed a revision in force/,
+    );
+    // An internal update (the scheduler, a runtime report, a lead run's result) that adds one is refused too.
+    expectRefusedRevision(
+      () =>
+        store.update((s) => {
+          const next = structuredClone(s);
+          sneak(next);
+          return next;
+        }, iso()),
+      /an internal update made a revision/,
+    );
+    expect(blueprint().revisions).toHaveLength(1);
+  });
+
+  it("a new project and a reset to the sample start a new blueprint: not a Lock in", () => {
+    approved("Trail search");
+    cmd("startFactory", startFactoryArgs(store.read().state));
+    expect(blueprint().revisions).toHaveLength(1);
+    cmd("initProject", { name: "Q", repoPath: join(dir, "repo2"), vision: "Another planner.", focus: "" });
+    expect(blueprint().revisions).toEqual([]);
     expect(logged).not.toHaveBeenCalled();
   });
 });

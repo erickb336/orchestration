@@ -168,7 +168,7 @@ export function Studio() {
         </p>
       </header>
       {state.project.stage !== "shaping" && (
-        <Banner tone="info">The factory has started. Looking at Vision changes nothing in it. You can mark artifacts and message the lead here; designer and PE runs wait until the project is back in Vision (Back to shaping, in Settings › Project).</Banner>
+        <Banner tone="info">The factory has started. Vision stays open: the designer and the PE go on working here, and what you approve goes into the draft. The factory builds from the version you locked in, never from the draft.</Banner>
       )}
       <DomainPrompt />
       {state.studio.rounds.length === 0 ? (

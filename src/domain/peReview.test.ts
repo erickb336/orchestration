@@ -14,7 +14,7 @@ import { needsYouItems, needsYouOf } from "./needsYou";
 import * as P from "./peReview";
 import { buildSeed } from "./seed";
 import * as R from "./studio/runs";
-import { startFactoryArgs } from "./testing/factory";
+import { inVision, startFactoryArgs } from "./testing/factory";
 import { ControlError, StaleWriteError, type State } from "./types";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
@@ -377,8 +377,8 @@ describe("the PE's runs on new work", () => {
     expect(P.askForNewWorkReviews(s, at(6))).toBe(s); // one under way: nothing more
     s = R.dispatchStudioRuns(s, at(7)).state;
     expect(s.studio.runs.find((r) => r.review)!.status).toBe("running");
-    // In Vision a queued PE run on new work waits; nothing is asked.
-    const vision = M.startVision(planned, at(8));
+    // Before the factory starts, nothing is asked for new work.
+    const vision = inVision(planned, at(8));
     expect(P.askForNewWorkReviews(vision, at(9))).toBe(vision);
   });
 
@@ -514,7 +514,7 @@ describe("code changes are never PE-reviewed", () => {
   });
 
   it("the roadmap planned in Vision is not held for PE review when the factory starts", () => {
-    let s = M.startVision(factory(), at(1));
+    let s = inVision(factory(), at(1));
     s = leadPlans(M.postMessage(s, "plan it", at(2)), { proposals: [proposal("First step")] }, 3).s;
     const [planned] = M.roadmapTasks(s);
     expect(planned.peReview).toBeUndefined();

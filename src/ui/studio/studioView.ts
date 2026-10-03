@@ -304,11 +304,11 @@ export function variantRules(a: StudioArtifact, variantId: string | undefined): 
 }
 
 /**
- * Where a dictionary version stands: the project's words (approved, in force), or not yet, and why. The dictionary
- * in force is the version the owner approved into the blueprint (domain/studio/blueprint.ts).
+ * Where a dictionary version stands: the project's words (approved into the draft, which the studio works with), or
+ * not yet, and why (domain/studio/blueprint.ts). Locking it in for the factory is the next UI unit's to show.
  */
 export function dictionaryStanding(s: State, a: StudioArtifact): { inForce: boolean; text: string } {
-  const force = B.dictionaryInForce(s);
+  const force = B.dictionaryInDraft(s);
   if (force && force.artifact.id === a.id && force.artifact.version === a.version) return { inForce: true, text: "These are the project's words. Every agent gets them, and the writing check reports a word to avoid." };
   if (force) return { inForce: false, text: `Not in force. ${force.artifact.title} v${force.artifact.version} is the project's dictionary until you approve this version.` };
   return { inForce: false, text: "Not in force yet. Approve it into the blueprint to make these the project's words." };
@@ -488,11 +488,11 @@ function revisingText(a: StudioArtifact, r: Extract<S.PeReview, { status: "revis
 
 /**
  * Why a queued studio run does not start yet, as a sentence about `who`, or undefined when nothing holds it: a pause,
- * the factory stage, or the budget stop with its reason (the order dispatchStudioRuns checks them in).
+ * or the budget stop with its reason (the order dispatchStudioRuns checks them in). Studio runs go on while the
+ * factory runs (pass 5).
  */
 export function heldBecause(s: State, who = "It"): string | undefined {
   if (s.project.hold) return `${who} waits until you resume the project.`;
-  if (s.project.stage !== "shaping") return `${who} waits until the project is back in Vision.`;
   const stop = budgetStop(s);
   return stop ? `${who} waits at the budget stop. ${stop.why}.` : undefined;
 }
@@ -624,14 +624,13 @@ export function peView(s: State, a: StudioArtifact, providerLabel: (p: "claude" 
   if (a.shots?.status === "pending" || a.demo?.status === "pending") return view("neutral", "Waiting", `The PE reviews it once the ${a.shots?.status === "pending" ? "screenshots are taken" : "recording is made"}.`);
   if (run && R.isActiveStudioRun(run)) return view("work", "Reviewing", asIs ? "The PE is checking it against the code." : "The PE is reading this version: its files, screenshots and recordings.");
   if (run?.status === "queued") return view("neutral", "Queued", heldBecause(s, "The PE's run") ?? "Waiting to start.");
-  const later = s.project.stage === "shaping" ? "" : " The PE reviews it when the project is back in Vision.";
   if (run && S.endedWithoutResult([run])) {
     const why = run.note ?? `its run was ${run.status}`;
     return R.peRunDue(s, a)
       ? view("work", "Asking again", `The PE's run ended without a verdict (${why}). The service asks the PE again.`)
-      : view("neutral", "No verdict", `The PE's run ended without a verdict (${why}).${later}`);
+      : view("neutral", "No verdict", `The PE's run ended without a verdict (${why}).`);
   }
-  return view("neutral", "Waiting", r.passes ? `The designer revised it. The PE reviews it next, on pass ${r.passes + 1} of ${S.MAX_PE_PASSES}.${later}` : `Waiting for PE review.${later}`);
+  return view("neutral", "Waiting", r.passes ? `The designer revised it. The PE reviews it next, on pass ${r.passes + 1} of ${S.MAX_PE_PASSES}.` : "Waiting for PE review.");
 }
 
 // ---------- an artifact's versions (the PE loop, pass 4c) ----------

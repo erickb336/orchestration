@@ -1,7 +1,8 @@
 // ORC-029 pass 2b, domain level: the stage boundary. Every project begins in Vision (shaping); the device scope is
 // chosen there; only the owner's Start the factory moves a project to building, with their agreement recorded and
-// the factory's settings applied through the usual setters; Back to vision stops nothing. Nothing else starts the
-// factory: no steering change, no field of the lead's output, no planning or dispatch, however long Autopilot runs.
+// the factory's settings applied through the usual setters. There is no way back (pass 5): Vision stays open while the
+// factory runs. Nothing else starts the factory: no steering change, no field of the lead's output, no planning or
+// dispatch, however long Autopilot runs.
 
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
@@ -9,7 +10,7 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
 import { buildSeed } from "./seed";
-import { startFactoryArgs, startFactoryAsOwner } from "./testing/factory";
+import { inVision, startFactoryArgs, startFactoryAsOwner } from "./testing/factory";
 import { ControlError, StaleWriteError, type FactorySettings, type State } from "./types";
 
 const T0 = Date.parse("2026-10-01T12:00:00Z");
@@ -34,10 +35,10 @@ describe("one way in: every project begins in Vision", () => {
     expect(s.project.devices).toEqual(["desktop", "mobile"]);
     expect(s.project.factoryStarts).toEqual([]);
     expect(s.studio).toEqual({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
-    expect(s.blueprint).toEqual({ revisions: [], changeOrders: [] });
+    expect(s.blueprint).toEqual({ revisions: [], draft: { rev: 0, items: [] }, changeOrders: [] });
   });
 
-  it("the device scope is chosen in Vision: at least one, each once, in a fixed order; refused once building", () => {
+  it("the device scope is chosen in Vision: at least one, each once, in a fixed order; Vision stays open, so it changes while building too", () => {
     const s = runCommand(fresh(), "setDevices", { devices: ["terminal", "desktop", "terminal"] }, at(1)).state;
     expect(s.project.devices).toEqual(["desktop", "terminal"]);
     expect(s.events.at(-1)).toMatchObject({ actor: "user", kind: "vision", message: "Device scope: desktop, terminal" });
@@ -45,8 +46,7 @@ describe("one way in: every project begins in Vision", () => {
     expect(() => runCommand(s, "setDevices", { devices: ["tablet"] }, at(2))).toThrow(/unknown device tablet/);
     expect(() => runCommand(s, "setDevices", { devices: "desktop" }, at(2))).toThrow(/devices must be an array/);
     const building = startFactoryAsOwner(s, at(3), MANUAL);
-    expect(() => runCommand(building, "setDevices", { devices: ["mobile"] }, at(4))).toThrow(/chosen in Vision/);
-    expect(runCommand(M.startVision(building, at(5)), "setDevices", { devices: ["mobile"] }, at(6)).state.project.devices).toEqual(["mobile"]);
+    expect(runCommand(building, "setDevices", { devices: ["mobile"] }, at(4)).state.project).toMatchObject({ stage: "building", devices: ["mobile"] });
   });
 });
 
@@ -55,8 +55,8 @@ describe("Start the factory: the owner's command", () => {
     const s = fresh();
     const open = M.openAreas(s);
     expect(open).toHaveLength(9); // no coverage reported yet: every area is open
-    // Nothing approved yet: blueprint r0, on vision r1.
-    const args = { agreed: true, blueprintRev: 0, visionRev: 1, settings: MANUAL, acceptOpen: open };
+    // Nothing approved yet: draft r0, on vision r1.
+    const args = { agreed: true, draftRev: 0, visionRev: 1, settings: MANUAL, acceptOpen: open };
     const started = runCommand(s, "startFactory", args, at(5)).state;
     expect(started.project.stage).toBe("building");
     expect(started.project.factoryStarts).toEqual([{ at: at(5), by: "user", blueprintRev: 0, visionRev: 1, settings: MANUAL, openItems: open }]);
@@ -74,7 +74,8 @@ describe("Start the factory: the owner's command", () => {
     const edited = M.editVision(s, 1, "Weekend trips, and day hikes too.", "", "by hand", at(1));
     expect(failure(() => runCommand(edited, "startFactory", args, at(2)))).toBeInstanceOf(StaleWriteError);
     expect(runCommand(edited, "startFactory", { ...args, visionRev: 2 }, at(2)).state.project.factoryStarts[0].visionRev).toBe(2);
-    expect(failure(() => runCommand(s, "startFactory", { ...args, blueprintRev: 1 }, at(2)))).toBeInstanceOf(StaleWriteError);
+    expect(failure(() => runCommand(s, "startFactory", { ...args, draftRev: 1 }, at(2)))).toBeInstanceOf(StaleWriteError);
+    expect(() => runCommand(s, "startFactory", { ...args, draftRev: "0" }, at(2))).toThrow(/draftRev must be a number/);
     // No vision to build from.
     const empty = M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(0));
     expect(() => runCommand(empty, "startFactory", startFactoryArgs(empty, MANUAL), at(1))).toThrow(/Write or accept a vision first/);
@@ -200,12 +201,12 @@ describe("Start the factory: the owner's command", () => {
   it("the settings as they stand: what the Start building button sends today", () => {
     const s = M.setAutonomy(fresh(), { ...fresh().project.autonomy, enabled: true, holdLeadProposals: true }, at(0));
     expect(M.currentFactorySettings(s)).toEqual({ autonomy: "checkin", delivery: { mode: "off", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: true } });
-    expect(M.startFactoryRequest(s)).toEqual({ agreed: true, blueprintRev: 0, visionRev: 1, settings: M.currentFactorySettings(s), acceptOpen: M.openAreas(s) });
+    expect(M.startFactoryRequest(s)).toEqual({ agreed: true, draftRev: 0, visionRev: 1, settings: M.currentFactorySettings(s), acceptOpen: M.openAreas(s) });
     // The change-order choice is the project's setting: the start sets it, and a later start keeps it.
     const started = startFactoryAsOwner(s, at(1), { pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } });
     expect(started.project.changeOrders).toBe("user");
     expect(started.events.map((e) => e.message)).toContain("Change orders: the lead asks you before it updates tasks");
-    expect(M.currentFactorySettings(M.startVision(started, at(2))).pausePoints.changeOrders).toBe("user");
+    expect(M.currentFactorySettings(started).pausePoints.changeOrders).toBe("user");
   });
 
   it("releases the roadmap on Autopilot; with each task waiting for your go-ahead it keeps waiting", () => {
@@ -222,26 +223,22 @@ describe("Start the factory: the owner's command", () => {
   });
 });
 
-describe("Back to vision", () => {
-  it("stops nothing that is running and starts nothing new; the next start is recorded beside the first", () => {
+describe("no way back from the factory (pass 5)", () => {
+  it("there is no Back to vision command: the factory keeps building, and only Pause stops new work", () => {
     const seed = buildSeed(T0); // building, with two runs in flight
     const running = M.activeAttempts(seed).map((a) => a.id);
-    const back = runCommand(M.startHeldTask(seed, "EX-004", at(0)), "startVision", {}, at(1)).state;
-    expect(back.project.stage).toBe("shaping");
-    expect(M.activeAttempts(back).map((a) => a.id)).toEqual(running);
-    expect(back.attempts.filter((a) => a.outcome === "stopping")).toHaveLength(0);
-    expect(M.activeAttempts(M.dispatchEligible(back, at(2)), "EX-004")).toHaveLength(0);
-    expect(() => runCommand(back, "startVision", {}, at(2))).toThrow(/Already shaping/);
-    const again = startFactoryAsOwner(back, at(3), MANUAL);
-    const twice = startFactoryAsOwner(M.startVision(again, at(4)), at(5), MANUAL);
-    expect(twice.project.factoryStarts.map((f) => f.at)).toEqual([at(3), at(5)]);
+    expect(() => runCommand(seed, "startVision", {}, at(1))).toThrow("Unknown command startVision");
+    const paused = runCommand(M.startHeldTask(seed, "EX-004", at(0)), "pauseProject", {}, at(1)).state;
+    expect(paused.project).toMatchObject({ stage: "building", hold: true });
+    expect(M.activeAttempts(M.dispatchEligible(paused, at(2)), "EX-004")).toHaveLength(0);
+    expect(M.activeAttempts(seed).map((a) => a.id)).toEqual(running);
   });
 });
 
 describe("nothing but the owner's command starts the factory", () => {
   /** A shaping project on Autopilot whose board holds the lead's own proposals and a task of the user's. */
   const shapingOnAutopilot = () => {
-    let s = M.applyAutopilot(M.startVision(buildSeed(T0, { inFlightRuns: false }), at(0)), "main", at(0));
+    let s = M.applyAutopilot(inVision(buildSeed(T0, { inFlightRuns: false }), at(0)), "main", at(0));
     s = M.setAutonomy(s, { ...s.project.autonomy, maxOpenProposals: 50 }, at(0));
     return M.startHeldTask(s, "EX-004", at(0));
   };

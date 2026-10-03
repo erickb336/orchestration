@@ -5,13 +5,14 @@
 import { describe, expect, it } from "vitest";
 import * as M from "./model";
 import { buildSeed } from "./seed";
+import { inVision } from "./testing/factory";
 
 const T0 = Date.parse("2026-10-01T12:00:00Z");
 const at = (s: number) => new Date(T0 + s * 1000).toISOString();
 
 function messageRun(simulated: boolean, out: Parameters<typeof M.completeLeadRun>[2], shaping = false) {
   let s = buildSeed(T0, { inFlightRuns: false });
-  if (shaping) s = M.startVision(s, at(0));
+  if (shaping) s = inVision(s, at(0));
   s = M.postMessage(s, "Build a notes app that syncs offline", at(1));
   const r = M.startLeadRun(s, { provider: "claude", model: "claude-sample-large", trigger: "message" }, at(2));
   return M.completeLeadRun(r.state, r.runId, out, at(3), simulated ? { simulated: true } : {});

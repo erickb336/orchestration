@@ -9,6 +9,7 @@ import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { buildDemo } from "../domain/demo";
 import { buildSeed } from "../domain/seed";
+import { inVision } from "../domain/testing/factory";
 import { reviewedChange } from "../domain/testing/reviewed";
 import type { PrDelivery, State, SteeringChange } from "../domain/types";
 import { LeadButton, ProjectMenu, ResultsBadge, SimBanner, TABS } from "./App";
@@ -266,7 +267,7 @@ describe("Home's latest reply, in the conversation's words", () => {
 
 describe("the shaping panel", () => {
   const shaping = (vision: string) => {
-    const s = structuredClone(M.startVision(buildSeed(T0, { inFlightRuns: false }), at(1)));
+    const s = inVision(buildSeed(T0, { inFlightRuns: false }), at(1));
     s.project.visions[s.project.visions.length - 1].text = vision;
     return s;
   };
