@@ -14,6 +14,7 @@ import { SERVICE_COMMANDS } from "../src/domain/commands";
 import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import type { Housekeeping } from "./housekeeping";
+import type { KeepAwake } from "./keepAwake";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
 import { evidenceFileKnown } from "../src/domain/studio/evidence";
@@ -48,6 +49,8 @@ interface HttpOptions {
   prototypeServer?: Server;
   /** Housekeeping of what runs leave behind: its status is in the service payload, and POST /api/maintenance/housekeeping sweeps now. */
   housekeeping?: Pick<Housekeeping, "status" | "sweep">;
+  /** Keeping the Mac awake while runs are active (server/keepAwake.ts): its status is in the service payload where it applies. */
+  keepAwake?: Pick<KeepAwake, "status">;
   log?: (msg: string) => void;
 }
 
@@ -132,6 +135,8 @@ export function createHttpServer(opts: HttpOptions): Server {
     const proto = opts.prototypeServer?.listening ? opts.prototypeServer.address() : null;
     if (proto && typeof proto === "object") out.prototypePort = proto.port;
     if (opts.housekeeping) out.housekeeping = opts.housekeeping.status();
+    const awake = opts.keepAwake?.status();
+    if (awake) out.keepAwake = awake;
     if (real && opts.workspaces) {
       const project = store.read().state.project;
       if (project.sample) out.repo = { ok: false, reason: "This is the sample project; real runs are disabled for it. Start a new project below." };
