@@ -1,16 +1,22 @@
 // Design and reality (ORC-029 pass 5, screen 5; the owner chose the list with evidence), `#/results/design`: one row
-// per blueprint item in force, with its name, kind, version, factory status, tasks and rule results. Beside the list,
-// the chosen item side by side: the approved design in the studio's frames, and what the factory built (its captured
-// evidence, or a slot that says there is none yet), or each rule of a flow with its test result.
+// per blueprint item in force, with its name, kind, version, factory status, tasks, rule results and evidence
+// thumbnails. Beside the list, the chosen item side by side: for a screen, the approved design in the studio's frames
+// beside the built screenshot on each device; for a terminal demo, the demo beside the built recording; for a flow or a
+// contract, each rule with its test result. The built side comes from the evidence record (its commit, design version
+// and time), or says why there is none, with the log excerpt.
 
 import { useRef, useState } from "react";
 import * as B from "../../domain/studio/blueprint";
-import { blueprintFactoryStatus, type ItemFactoryView } from "../../domain/studio/itemStatus";
+import { isCapturedKind, type CaptureDevice, type ItemEvidence } from "../../domain/studio/evidence";
+import { blueprintFactoryStatus, screenDevices, type ItemFactoryView, type UxReviewOfItem } from "../../domain/studio/itemStatus";
+import type { StudioArtifact } from "../../domain/studio/types";
 import { Card, Chip, EmptyState, StatePill, Tabs } from "../kit";
 import { useStore } from "../store";
+import { ScaledBox, TerminalRecording, TerminalText, TerminalWindow, useServiceText } from "./Frames";
 import { ArtifactPreview, TermsTable } from "./Preview";
-import { NO_EVIDENCE, STATUS_TONE, STATUS_WORDS, builtEvidence, ruleCell, rulesLine, statusWhy, taskState, taskWords, type BuiltEvidence } from "./realityView";
-import { deviceOptions, showKind, type ScreenDevice } from "./studioView";
+import { renderAnsi } from "./ansi";
+import { STATUS_TONE, STATUS_WORDS, differenceState, evidenceCaption, evidenceFileUrl, noEvidenceWords, recordingOf, ruleCell, rulesLine, shortSha, shotOf, statusWhy, taskState, taskWords } from "./realityView";
+import { DEVICE_LABEL, DEVICE_SIZE, serviceFileUrl, showKind, variantDemo } from "./studioView";
 import "./studio.css";
 
 /** The two views of Results: the delivered work, and Design and reality. Each is its own address. */
@@ -74,7 +80,7 @@ export function Reality() {
   );
 }
 
-/** One part of the design: its name, version and kind, its status, its tasks, and its rule results. */
+/** One part of the design: its name, version and kind, its status, its tasks, its rule results, and its evidence thumbnails. */
 function ItemRow({ view: v, current, onClick }: { view: ItemFactoryView; current: boolean; onClick: () => void }) {
   const rules = rulesLine(v);
   return (
@@ -88,16 +94,56 @@ function ItemRow({ view: v, current, onClick }: { view: ItemFactoryView; current
       </StatePill>
       <span className="st-bprow__tasks">{v.tasks.length ? v.tasks.map((t) => taskWords(t, v.item.version)).join(" · ") : "no task yet"}</span>
       {rules && <span className="st-bprow__rules">Tests: {rules}</span>}
+      <Thumbs view={v} />
     </button>
   );
 }
 
+/** The row's thumbnails, as in the prototype: the design, and what was built when the factory captured it. */
+function Thumbs({ view: v }: { view: ItemFactoryView }) {
+  const { state } = useStore();
+  if (!isCapturedKind(v.item.kind)) return null;
+  const a = B.citedArtifact(state, v.item);
+  const terminal = v.item.kind !== "screen";
+  const variant = v.item.variant ?? a?.variants[0]?.id;
+  const design = a && (terminal ? designGif(a, variant) : designShot(a, variant));
+  const e = v.evidence?.status === "captured" ? v.evidence : undefined;
+  const builtFile = e && (terminal ? recordingOf(e).gif : (shotOf(e, "desktop") ?? shotOf(e, "mobile")));
+  return (
+    <span className="st-thumbs" aria-hidden="true">
+      <Thumb label="design" src={design} terminal={terminal} />
+      {e && <Thumb label="built" src={builtFile && evidenceFileUrl(e, builtFile)} terminal={terminal} />}
+    </span>
+  );
+}
+
+function Thumb({ label, src, terminal }: { label: string; src: string | undefined; terminal: boolean }) {
+  return (
+    <span className={`st-thumb${terminal ? " st-thumb--term" : ""}`}>
+      {src ? <img src={src} alt="" loading="lazy" /> : <i />}
+      <span className="st-thumb__label">{label}</span>
+    </span>
+  );
+}
+
+/** The approved design's own screenshot on desktop (else its first device), when the studio took one. */
+function designShot(a: StudioArtifact, variant: string | undefined): string | undefined {
+  if (a.shots?.status !== "taken" || variant === undefined) return undefined;
+  const shot = a.shots.shots.find((x) => x.variant === variant && x.device === "desktop") ?? a.shots.shots.find((x) => x.variant === variant);
+  return shot && serviceFileUrl(a, shot.path);
+}
+
+/** The approved demo's GIF, when the service recorded one. */
+function designGif(a: StudioArtifact, variant: string | undefined): string | undefined {
+  const d = variantDemo(a, variant);
+  return d.status === "recorded" && d.gif ? serviceFileUrl(a, d.gif) : undefined;
+}
+
 /** The chosen part, side by side: the approved design and what the factory built, or each rule with its test. */
 export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
-  const { state, service } = useStore();
+  const { state } = useStore();
   const artifact = B.citedArtifact(state, v.item);
   const kind = artifact ? showKind(artifact) : undefined;
-  const built = builtEvidence(state, v.item.id);
   return (
     <Card
       title={
@@ -114,28 +160,19 @@ export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
         <RuleTable view={v} />
       ) : kind === "dictionary" && artifact ? (
         <TermsTable artifact={artifact} />
+      ) : v.item.kind === "screen" ? (
+        <ScreenBeside view={v} artifact={artifact} />
+      ) : isCapturedKind(v.item.kind) ? (
+        <DemoBeside view={v} artifact={artifact} />
       ) : (
-        <div className="st-beside">
-          <section className="st-beside__pane" aria-label="The approved design">
-            <p className="st-beside__cap">
-              <span>Design · v{v.item.version}, approved</span>
-            </p>
-            <div className="st-stage">
-              {artifact ? (
-                <ArtifactPreview artifact={artifact} variant={v.item.variant} device={previewDevice(deviceOptions(state.project.devices, artifact))} port={service.prototypePort} />
-              ) : (
-                <EmptyState title="The design is not here.">The studio has no version {v.item.version} of it.</EmptyState>
-              )}
-            </div>
-          </section>
-          <section className="st-beside__pane" aria-label="What the factory built">
-            <p className="st-beside__cap">
-              <span>Built</span>
-            </p>
-            <BuiltSlot evidence={built} title={v.item.title} />
-          </section>
-        </div>
+        <section className="st-beside__pane" aria-label="The approved design">
+          <p className="st-beside__cap">
+            <span>Design · v{v.item.version}, approved</span>
+          </p>
+          <DesignStage view={v} artifact={artifact} device="desktop" />
+        </section>
       )}
+      {v.uxReview && <UxReview review={v.uxReview} />}
       {v.tasks.length > 0 && (
         <section aria-label="Its tasks">
           <h3 className="st-label">Its tasks</h3>
@@ -152,25 +189,197 @@ export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
   );
 }
 
-/** The device to show a design on: Mobile in a phone-sized window when the design has it, as the studio does; else its first. */
-function previewDevice(options: ScreenDevice[]): ScreenDevice {
-  const narrow = typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 600px)").matches;
-  return narrow && options.includes("mobile") ? "mobile" : (options[0] ?? "desktop");
+/** The approved design in the studio's frames, read-only. */
+function DesignStage({ view: v, artifact, device }: { view: ItemFactoryView; artifact: StudioArtifact | undefined; device: CaptureDevice }) {
+  const { service } = useStore();
+  return (
+    <div className="st-stage">
+      {artifact ? (
+        <ArtifactPreview artifact={artifact} variant={v.item.variant} device={device} port={service.prototypePort} />
+      ) : (
+        <EmptyState title="The design is not here.">The studio has no version {v.item.version} of it.</EmptyState>
+      )}
+    </div>
+  );
 }
 
-/** What the factory captured of the built part, or the slot that says it has captured nothing yet. */
-function BuiltSlot({ evidence, title }: { evidence: BuiltEvidence | undefined; title: string }) {
-  if (!evidence) {
+/** A screen: on each device of the design, the approved prototype beside the built screenshot. */
+function ScreenBeside({ view: v, artifact }: { view: ItemFactoryView; artifact: StudioArtifact | undefined }) {
+  const { state } = useStore();
+  const devices = screenDevices(state, v.item);
+  const e = v.evidence && v.evidence.status !== "no-run" ? v.evidence : undefined;
+  return (
+    <div className="k-stack">
+      {(devices.length ? devices : (["desktop"] as const)).map((device) => (
+        <section key={device} className="st-reality__device" aria-label={`${DEVICE_LABEL[device]}: the design beside what was built`}>
+          <h3 className="st-label">{DEVICE_LABEL[device]}</h3>
+          <div className="st-beside">
+            <section className="st-beside__pane" aria-label="The approved design">
+              <p className="st-beside__cap">
+                <span>Design · v{v.item.version}, approved</span>
+              </p>
+              <DesignStage view={v} artifact={artifact} device={device} />
+            </section>
+            <section className="st-beside__pane" aria-label="What the factory built">
+              <BuiltCaption view={v} evidence={e} />
+              {e?.status === "captured" ? <BuiltShot evidence={e} device={device} title={v.item.title} /> : <NoEvidence view={v} />}
+            </section>
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/** A terminal demo or TUI: the approved demo beside the built recording. */
+function DemoBeside({ view: v, artifact }: { view: ItemFactoryView; artifact: StudioArtifact | undefined }) {
+  const e = v.evidence && v.evidence.status !== "no-run" ? v.evidence : undefined;
+  return (
+    <div className="st-beside">
+      <section className="st-beside__pane" aria-label="The approved demo">
+        <p className="st-beside__cap">
+          <span>Demo · v{v.item.version}, approved</span>
+        </p>
+        <DesignStage view={v} artifact={artifact} device="desktop" />
+      </section>
+      <section className="st-beside__pane" aria-label="What the factory built">
+        <BuiltCaption view={v} evidence={e} />
+        {e?.status === "captured" ? <BuiltRecording evidence={e} title={v.item.title} /> : <NoEvidence view={v} />}
+      </section>
+    </div>
+  );
+}
+
+/** "Built · commit 1a2b3c4 · design v2 · Oct 2, 9:11 AM", "not the current design version", and what the UX review says. */
+function BuiltCaption({ view: v, evidence: e }: { view: ItemFactoryView; evidence: ItemEvidence | undefined }) {
+  if (!e) {
+    return (
+      <p className="st-beside__cap">
+        <span>Built</span>
+      </p>
+    );
+  }
+  const cap = evidenceCaption(e, v.item.version);
+  const open = v.uxReview?.differences.filter((d) => d.state === "open").length ?? 0;
+  return (
+    <p className="st-beside__cap">
+      <span>{cap.text}</span>
+      {cap.older && <Chip tone="you">{cap.older}</Chip>}
+      {v.uxReview ? open ? <Chip tone="fail">differs: {open} open</Chip> : <Chip tone="done">matches the design</Chip> : e.status === "captured" && v.item.kind === "screen" ? <Chip>not compared yet</Chip> : null}
+    </p>
+  );
+}
+
+/** A built screenshot in the same frame as the design beside it: a browser window, or a phone. */
+function BuiltShot({ evidence: e, device, title }: { evidence: Extract<ItemEvidence, { status: "captured" }>; device: CaptureDevice; title: string }) {
+  const f = shotOf(e, device);
+  if (!f) {
+    const why = e.warnings?.find((w) => w.includes(device));
     return (
       <div className="st-reality__slot" role="note">
-        {NO_EVIDENCE}
+        No screenshot on {device}{why ? `: ${why}` : "."}
       </div>
     );
   }
-  return evidence.kind === "screenshot" ? (
-    <img className="st-reality__shot" src={evidence.url} alt={`${title} as built, captured on commit ${evidence.commit.slice(0, 12)}`} />
-  ) : (
-    <video className="st-reality__shot" src={evidence.url} controls muted aria-label={`${title} as built, recorded on commit ${evidence.commit.slice(0, 12)}`} />
+  const size = DEVICE_SIZE[device];
+  const img = <img className="st-viewport__frame st-reality__img" src={evidenceFileUrl(e, f)} alt={`${title} as built, ${device}, commit ${shortSha(e.commit)}`} />;
+  if (device === "mobile") {
+    return (
+      <ScaledBox width={size.width + 24} height={size.height + 24} label={`${title} as built, in a phone frame`}>
+        <div className="st-phone">
+          <div className="st-viewport">{img}</div>
+        </div>
+      </ScaledBox>
+    );
+  }
+  return (
+    <ScaledBox width={size.width} height={size.height + 32} label={`${title} as built, in a browser window`}>
+      <div className="st-browser">
+        <div className="st-browser__bar" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+          <span className="st-browser__url">built · {shortSha(e.commit)}</span>
+        </div>
+        <div className="st-viewport">{img}</div>
+      </div>
+    </ScaledBox>
+  );
+}
+
+/** The built recording of a terminal demo or TUI: its video or GIF, else its transcript. */
+function BuiltRecording({ evidence: e, title }: { evidence: Extract<ItemEvidence, { status: "captured" }>; title: string }) {
+  const r = recordingOf(e);
+  if (r.video || r.gif) return <TerminalRecording title={`${title} as built`} video={r.video && evidenceFileUrl(e, r.video)} gif={r.gif && evidenceFileUrl(e, r.gif)} />;
+  if (r.transcript) return <BuiltTranscript url={evidenceFileUrl(e, r.transcript)} title={title} />;
+  return (
+    <div className="st-reality__slot" role="note">
+      The capture kept no recording.
+    </div>
+  );
+}
+
+function BuiltTranscript({ url, title }: { url: string; title: string }) {
+  const loaded = useServiceText(url);
+  if (loaded.status !== "ok") return <p className="small muted">{loaded.status === "loading" ? "Reading the transcript…" : `The transcript cannot be read: ${loaded.message}.`}</p>;
+  return (
+    <TerminalWindow title={`${title} as built — transcript`}>
+      <TerminalText lines={renderAnsi(loaded.text, { cols: 100, rows: 30 })} cols={100} rows={1} label={`Transcript of ${title} as built`} />
+    </TerminalWindow>
+  );
+}
+
+/** Without evidence: why, from the record (with its log excerpt), or that no capture has run. */
+function NoEvidence({ view: v }: { view: ItemFactoryView }) {
+  const e = v.evidence;
+  if (!e || e.status === "no-run") {
+    const started = v.tasks.some((t) => t.state !== "queued");
+    return (
+      <div className="st-reality__slot" role="note">
+        {started ? `No evidence yet: ${noEvidenceWords("no-run")}.` : "Not built yet."}
+      </div>
+    );
+  }
+  if (e.status !== "none") return null;
+  return (
+    <div className="st-reality__slot st-reality__slot--why" role="note">
+      <p>
+        <b>No evidence yet: {noEvidenceWords(e.reason)}.</b> {e.detail}
+      </p>
+      {e.log && (
+        <pre className="st-reality__log" aria-label="The end of the capture's log">
+          {e.log}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/** What the UX review found when it compared the built part with the approved design. */
+function UxReview({ review: r }: { review: UxReviewOfItem }) {
+  return (
+    <section className="st-reality__ux" aria-label="The UX review">
+      <h3 className="st-label">The UX review ({r.taskId})</h3>
+      {r.differences.length === 0 ? (
+        <p className="small no-margin">It found no difference from the approved design.</p>
+      ) : (
+        <ul className="st-reality__diffs">
+          {r.differences.map((d) => (
+            <li key={d.findingId || d.title}>
+              <Chip tone={d.state === "open" ? "fail" : "done"}>{d.state === "open" ? "differs" : "accepted"}</Chip>{" "}
+              <b>
+                {d.findingId && `${d.findingId} `}
+                {d.title}
+              </b>
+              {d.detail !== d.title && <p className="small no-margin">{d.detail}</p>}
+              <p className="micro muted no-margin">{differenceState(d)}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {r.notes.length > 0 && <p className="micro muted no-margin">Notes, not differences: {r.notes.map((n) => `${n.findingId} ${n.title}`).join(" · ")}</p>}
+      {!r.ofLandedWork && <p className="micro muted no-margin">It compared work that has not landed, or an earlier commit: its differences do not decide the status.</p>}
+    </section>
   );
 }
 
