@@ -316,7 +316,7 @@ async function blueprintInDraft() {
  */
 async function fixtureCheck(flowItem) {
   mkdirSync(join(repo, "test"), { recursive: true });
-  writeFileSync(join(repo, "test", "rules-r3.test.js"), renderR3Test(readFileSync(join(FIXTURE, "r3.test.js"), "utf8"), flowItem));
+  writeFileSync(join(repo, "test", "rules-r3.test.js"), renderR3Test(readFileSync(join(FIXTURE, "r3-test.template.js"), "utf8"), flowItem));
   git("add", "-A");
   commit(`R3's test, deliberately left failing for the factory trial (${flowItem})`);
   const run = spawnSync("npm", ["test"], { cwd: repo, encoding: "utf8", timeout: 120_000 });

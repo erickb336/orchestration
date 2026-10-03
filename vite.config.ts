@@ -28,12 +28,12 @@ export default defineConfig({
   },
   preview: { host: "127.0.0.1", port: 5318 },
   test: {
-    // Agent worktrees live under .claude/worktrees and carry their own copies of every test.
-    exclude: [...configDefaults.exclude, ".claude/**"],
+    // Agent worktrees live under .claude/worktrees and carry their own copies of every test; evidence/ holds the trials' throwaway projects.
+    exclude: [...configDefaults.exclude, ".claude/**", "evidence/**"],
     projects: [
       // Half the cores: many unit tests start git and service processes of their own, and one worker per core
       // oversubscribed the machine (load 14 on 10 cores) until timing tests missed their 5 s limit.
-      { extends: true, test: { name: "unit", exclude: [...configDefaults.exclude, ".claude/**", ...HEAVY_TESTS], maxWorkers: "50%" } },
+      { extends: true, test: { name: "unit", exclude: [...configDefaults.exclude, ".claude/**", "evidence/**", ...HEAVY_TESTS], maxWorkers: "50%" } },
       // After the unit tests, one file at a time, so they never starve the unit tests' 5 s limits (or each other).
       { extends: true, test: { name: "heavy", include: HEAVY_TESTS, fileParallelism: false, sequence: { groupOrder: 1 } } },
     ],

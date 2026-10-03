@@ -11,7 +11,7 @@ export const PLANNED_RULES = { R1: "passed", R2: "passed", R3: "failed", E1: "pa
 /** The factory status each kind of cited item must reach once the task landed. */
 export const PLANNED_STATUSES = { screen: "built-and-verified", "terminal-demo": "built-and-verified", flow: "fails-a-check" };
 
-/** The placeholder for the flow's blueprint item id in the fixture's R3 test (scripts/fixtures/factory-trial/r3.test.js). */
+/** The placeholder for the flow's blueprint item id in the fixture's R3 test (scripts/fixtures/factory-trial/r3-test.template.js). */
 export const FLOW_ITEM_PLACEHOLDER = "{{FLOW_ITEM}}";
 
 /** The fixture's R3 test with the flow's item id in its tag. */

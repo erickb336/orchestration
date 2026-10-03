@@ -33,7 +33,7 @@ describe("R3 fails on purpose", () => {
   });
 
   it("the fixture's template becomes the test with the flow's tag", () => {
-    const template = readFileSync(join(import.meta.dirname, "fixtures", "factory-trial", "r3.test.js"), "utf8");
+    const template = readFileSync(join(import.meta.dirname, "fixtures", "factory-trial", "r3-test.template.js"), "utf8");
     const test = renderR3Test(template, "bi-12");
     expect(test).toContain('test("[bi-12 R3] ');
     expect(test).toContain("todo:");
