@@ -3,7 +3,8 @@
 // - Every step of a task that cites blueprint items gets them listed. The design step starts from the approved
 //   prototype of each cited screen, terminal demo or TUI: its brief names the version and gives a read-only path to
 //   its files (the scheduler passes the same folders as read roots). The UX review step gets the approved
-//   prototype's screenshots, to compare the built screens with. The built screens' own screenshots come later (U2).
+//   prototype's screenshots, to compare with the built screens' screenshots in its evidence input (U2), and tags each
+//   difference with the item's id, which the item's status reads (src/domain/studio/itemStatus.ts).
 // - A step that runs again because the PE sent its breakdown or design back gets the PE's change.
 // - The lead's brief lists the approved items to cite, the work the PE sent back for revision, and the PE's open
 //   cases, which are product questions for the user.
@@ -93,7 +94,7 @@ ${cited.length > protos.length ? `Also cited: ${cited.filter((c) => !protos.incl
       return `- ${itemLine(c)}: ${shots.map((x) => `${where}/${x.path} (${x.device})`).join(", ")}.`;
     });
     return `## The approved prototype's screenshots
-The user approved these screens in Vision. Compare the built experience with them, and report each difference that the design does not explain as a finding. Screenshots of the built screens are not part of this run yet: judge the change against these and the design.
+The user approved these screens in Vision. Compare the built screens with them: the factory's screenshots of the built screens are in your evidence input, when it captured them. Report each difference that the design does not explain as a finding, and start it with the screen's id in brackets, for example "[bi-3] The map is above the days; the design puts it below.". Without screenshots of the built screens, judge the change against these and the design, and say so.
 ${lines.join("\n")}
 
 `;

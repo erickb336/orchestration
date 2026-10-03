@@ -88,6 +88,8 @@ describe("the factory link in the briefs", () => {
     const t = s.tasks.find((x) => x.id === id)!;
     const ux = buildEnvelope({ state: s, task: t, step: t.steps.find((x) => x.role === "ux_reviewer")!, attemptId: "run-u", access: "read", studioDir: STUDIO });
     expect(ux).toContain(`## The approved prototype's screenshots\n`);
+    // Each difference names its screen, which the screen's status reads (itemStatus.ts).
+    expect(ux).toContain('start it with the screen\'s id in brackets, for example "[bi-3] ');
     expect(ux).toContain(`- ${item} screen "Trip home" v1 (variant B, "Timeline"): ${STUDIO}/artifacts/${artifactId}/v1/shots/B-desktop.png (desktop), ${STUDIO}/artifacts/${artifactId}/v1/shots/B-mobile.png (mobile).`);
     expect(ux).not.toContain("A-desktop.png");
   });

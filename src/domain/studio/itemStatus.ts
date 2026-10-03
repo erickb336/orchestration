@@ -39,7 +39,7 @@ import { sameSha } from "../checks";
 import { decisionFor, isBlocking } from "../findings";
 import { currentSpec } from "../model/core";
 import type { Artifact, Finding, FindingDecision, State, Task } from "../types";
-import { blueprintItems, citedArtifact, draftChanges } from "./blueprint";
+import { blueprintItems, citedArtifact, draftChanges, itemIdsIn } from "./blueprint";
 import { CAPTURE_DEVICES, isCapturedKind, itemEvidence, type CaptureDevice, type ItemEvidence, type NoEvidence, type NoRunYet } from "./evidence";
 import { landedChangeSha, ruleResults, TESTED_KINDS, type ItemRuleResults } from "./ruleResults";
 import type { BlueprintItem } from "./types";
@@ -169,8 +169,6 @@ function citingTasks(s: State, item: BlueprintItem, since: string): CitingTask[]
 
 // ---------- the UX review of an evidence record ----------
 
-const ITEM_ID_RE = /\bbi-\d{1,9}\b/g;
-
 /** The evidence artifact a review artifact's run took as its input; a person's edit keeps the one of the version it edits. */
 function reviewedEvidence(s: State, art: Artifact, depth = 0): string | undefined {
   if (art.author === "user") {
@@ -205,7 +203,7 @@ function ownerAccepted(s: State, d: FindingDecision | undefined): boolean {
 /** The blueprint items a finding names by id; none means it is about every item the evidence captured. */
 function namedItems(s: State, f: Finding): Set<string> {
   const known = new Set(blueprintItems(s).map((i) => i.id));
-  return new Set([...`${f.title}\n${f.detail}`.matchAll(ITEM_ID_RE)].map((m) => m[0]).filter((id) => known.has(id)));
+  return new Set(itemIdsIn(`${f.title}\n${f.detail}`).filter((id) => known.has(id)));
 }
 
 function uxReviewOf(s: State, ev: ItemEvidence, ofLandedWork: boolean): UxReviewOfItem | undefined {

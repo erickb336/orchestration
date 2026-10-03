@@ -16,7 +16,7 @@ import { buildingSpend, maintenanceEstimate } from "../spend";
 import { currentSpec, currentVision, draft, event, nextId } from "../model/core";
 import { pushVision } from "../model/vision";
 import { newWorkReview } from "../peReview";
-import { ControlError, StaleWriteError, type State, type Task } from "../types";
+import { ControlError, StaleWriteError, type Finding, type State, type Task } from "../types";
 import { artifactName, covers, currentFeedback, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
 import type { BlueprintItem, BlueprintRevision, ChangeOrder, DictionaryEntry, DraftVision, ItemEstimate, LockInSummary, StudioArtifact, TaskHandling, TouchedTask, TouchedTaskState, UsdRange } from "./types";
 
@@ -496,6 +496,22 @@ export function leadRefsProblem(s: State, refs: unknown): string | undefined {
 /** A cited item's version as approved: the artifact it stands for, at the approved version. */
 export function citedArtifact(s: State, item: BlueprintItem): StudioArtifact | undefined {
   return versionsOf(s, item.artifactId).find((a) => a.version === item.version);
+}
+
+/** The blueprint item ids a text names, for example a review finding's "[bi-3] …" (pass 5): one reader for them all. */
+export function itemIdsIn(text: string): string[] {
+  return [...new Set([...text.matchAll(/\bbi-\d{1,9}\b/g)].map((m) => m[0]))];
+}
+
+/**
+ * The items a fix for a review finding on `task` cites, so the fix counts for those items when it lands: the task's
+ * approved items that the finding names, or all of them when it names none.
+ */
+export function followUpRefs(s: State, task: Task, finding: Pick<Finding, "title" | "detail">): string[] {
+  const approved = new Set(blueprintItems(s).filter((i) => i.status === "approved").map((i) => i.id));
+  const cited = (currentSpec(task).content.blueprintRefs ?? []).filter((r) => approved.has(r));
+  const named = itemIdsIn(`${finding.title}\n${finding.detail}`).filter((id) => cited.includes(id));
+  return named.length ? named : cited;
 }
 
 /** The tag a test carries for one rule or example of a blueprint item: "[bi-12 R3]" (one name for it everywhere). */

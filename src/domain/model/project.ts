@@ -4,6 +4,7 @@
 import * as C from "../checks";
 import { flowRef } from "../flows";
 import { instantiate, toDef, validatePipeline } from "../pipeline";
+import { validateBlueprintRefs } from "../studio/blueprint";
 import { activeStudioRuns } from "../studio/runs";
 import { emptyBlueprint, emptyStudio } from "../studio/types";
 import {
@@ -159,6 +160,8 @@ export interface NewTask {
   chosenBy?: ChosenBy;
   /** The user chose the priority (not the form's default): the lead may not reorder it. */
   priorityPinned?: boolean;
+  /** The blueprint items the task builds (ORC-029 pass 5), for example a review finding's fix; checked like a spec edit. */
+  blueprintRefs?: string[];
 }
 
 /**
@@ -198,6 +201,7 @@ export function createTask(state: State, t: NewTask, now: string): { state: Stat
     validationPlan: "",
     rollback: "Discard the orchestration branch.",
     effort: "small",
+    ...(t.blueprintRefs?.length ? { blueprintRefs: validateBlueprintRefs(state, t.blueprintRefs) } : {}),
   };
   const defs = structuredClone(flow.steps).map(toDef);
   const ref = flowRef(flow, t.chosenBy ?? "user");
