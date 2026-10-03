@@ -24,7 +24,7 @@ The screens come first, with sample data, before any backend work (the owner's r
 2. Lock in the whole draft at once (recommended), or choose which changes to lock in.
 3. "Built and verified" means: the rule tests pass and the UX review matches the prototype (recommended), or that and the owner confirms each side-by-side.
 
-The units and the domain design follow the owner's marks.
+**The owner's answers (r14, 2026-10-03), all four as recommended:** a running task finishes, then the lead revises it; Lock in takes the whole draft; the checks decide "built and verified"; and "Design and reality" is a list with evidence. No change was asked to the five screens.
 
 ## Evidence of what the factory built (the lead's design, 2026-10-02)
 
