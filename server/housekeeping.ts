@@ -242,7 +242,11 @@ export class Housekeeping {
     const message = sweepMessage(r);
     if (message) {
       this.o.log?.(`Housekeeping: ${message}`);
-      this.o.record?.(message);
+      try {
+        this.o.record?.(message);
+      } catch (e) {
+        r.notes.push(`The Activity event was not recorded: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
     for (const n of r.notes) this.o.log?.(`Housekeeping: ${n}`);
     return r;
