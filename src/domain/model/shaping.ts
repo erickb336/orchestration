@@ -40,7 +40,7 @@ const MAX_VISION_FOCUS = 300;
 const MAX_VISION_DRAFTS = 50;
 
 /** The one line shown wherever new work would otherwise be expected to start. Never "Paused". */
-export const SHAPING_LABEL = "Shaping: new work waits until you start building";
+export const SHAPING_LABEL = "Vision: new work waits until you start the factory";
 
 /** Why Start the factory is refused, or undefined when it is allowed. */
 export function startFactoryBlocker(s: State): string | undefined {

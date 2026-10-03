@@ -150,7 +150,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     const s = shaping(M.startHeldTask(seed(), "EX-004", at(0)));
     for (const t of s.tasks) if (!t.hold) expect(M.stateLabel(s, t)).not.toMatch(/Paused/);
     expect(M.stateLabel(s, task(s, "EX-005"))).toBe("Paused"); // the user's own hold still reads as it is
-    expect(M.SHAPING_LABEL).toBe("Shaping: new work waits until you start building");
+    expect(M.SHAPING_LABEL).toBe("Vision: new work waits until you start the factory");
     expect(s.project.hold).toBe(false);
   });
 
