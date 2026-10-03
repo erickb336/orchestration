@@ -7,7 +7,8 @@
 // named in a note under the reply and on the change order.
 //
 // Each accepted update is one line of the change order and one row of the run's steering change set (ORC-009), so the
-// owner undoes each line alone, or all of them, with steering's Undo:
+// owner undoes each line alone, or all of them, with steering's Undo. The line keeps its own status and what Undo needs,
+// so it works after the steering log (the newest 200 sets) drops its set:
 // - update-spec: a queued task's spec, revised by the lead to build the versions in force. A PE objection or an
 //   unfinished review that waits for the owner refuses it. Undo writes the spec before back, with its PE review as it was.
 // - revise: a new task that revises a running or landed task and waits for it to land (r14: the running task keeps
@@ -17,7 +18,8 @@
 //   only suggested. Undo reopens it.
 // - new-task: a new task for the new work. Undo cancels it while it has not started.
 // The change order's handler says who gives the go-ahead: "lead", each update applies at once; "user" ("ask me
-// first"), each waits as a suggestion until the owner applies it (steering's Apply) or dismisses it. With PE review of
+// first"), each waits as a suggestion until the owner applies it (steering's Apply) or dismisses it. What only the
+// owner may do waits as a suggestion under either handler (`ownersCall`). With PE review of
 // new work on, an updated spec, a revision task and a new task wait for the PE before they start, as all new work does
 // (src/domain/peReview.ts); a retirement starts nothing.
 //
