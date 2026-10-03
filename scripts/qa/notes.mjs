@@ -8,8 +8,11 @@
 // It also checks for a horizontal scroll and for console errors on each view, and takes a screenshot of each stage.
 //
 // Sample data: the demo project (src/domain/demo.ts, "Weekend Trips (sample)"). The runtime is the fake one: no model
-// runs, and every run and reply is simulated. The scheduler runs (one tick a second, one percent a tick), so a step
-// stays running long enough to take a note.
+// runs, and every run and reply is simulated. The scheduler runs at the demo's own speed (one tick a second, a step in
+// about twelve), and nothing holds a run back: the simulated lead answers in about two ticks (Q-14).
+//
+// Which coder: each note goes to a coder that has just started, so the try checks the screens, not the clock. How often
+// a note through the lead reaches its coder, from every point of a step, is server/notes.test.ts ("in most tries").
 //
 // Run: ORCHESTRATION_TEST_PORT=5994 node --import tsx scripts/qa/notes.mjs
 
@@ -19,30 +22,15 @@ import { runJourney, text } from "./harness.mjs";
 const DIRECT = "Keep the download size above the button, so people see it before they tap.";
 const VIA_LEAD = "show the size of each download in megabytes";
 
-/** The first open task with a running coder step: its id and step id (the fixture's knowledge, to choose the page). */
-function runningCoder(s) {
+/** An open task's coder step that has just started (at most `upTo` percent done): its ids (the fixture's knowledge, to choose the page). */
+function freshCoder(s, upTo = 25) {
   for (const a of s.attempts) {
-    if (a.outcome !== "running") continue;
+    if (a.outcome !== "running" || a.progress > upTo) continue;
     const t = s.tasks.find((x) => x.id === a.taskId);
     const st = t?.steps.find((x) => x.id === a.stepId);
     if (t && st?.role === "coder" && !["done", "cancelled"].includes(t.lifecycle)) return { taskId: t.id, stepId: st.id, attemptId: a.id };
   }
   return undefined;
-}
-
-/**
- * A helper of this script (the fake runtime has no knob for it): hold one simulated run below half done, so it still
- * runs when a note arrives. A simulated lead run takes about as long as a whole step, so without it the lead's note
- * often reaches a coder that has just finished. Returns the function that lets the run go on.
- */
-function holdRunning(service, attemptId) {
-  const timer = setInterval(() => {
-    for (const a of Object.values(service.adapters)) {
-      const p = (a.inner ?? a).procs?.get(attemptId);
-      if (p && p.progress > 40) p.progress = 40;
-    }
-  }, 100);
-  return () => clearInterval(timer);
 }
 
 /** Wait until the page's text matches `re`, or fail after `ms`. */
@@ -59,9 +47,8 @@ await runJourney(
   "notes",
   () => buildDemo(Date.now()),
   async (j, page, service, width) => {
-    const target = await service.until("a running coder step", runningCoder, 30_000);
+    const target = await service.until("a coder step that has just started", (s) => freshCoder(s), 90_000);
     const { taskId, stepId } = target;
-    const releaseFirst = holdRunning(service, target.attemptId);
     j.note(`The note goes to ${taskId} ${stepId} (a running coder in the demo).`);
 
     // ---------- 1. A note to the running step, from the task page ----------
@@ -105,12 +92,9 @@ await runJourney(
       await j.shot("3-note-delivered", { full: false });
     });
 
-    releaseFirst();
-
     // ---------- 2. A note through the lead ----------
-    // The coder may have finished meanwhile: the message names a coder that runs now.
-    const lead = await service.until("a running coder step for the lead's note", runningCoder, 60_000);
-    const release = holdRunning(service, lead.attemptId);
+    // The coder may have finished meanwhile: the message names a coder that has just started.
+    const lead = await service.until("a coder step that has just started, for the lead's note", (s) => freshCoder(s), 90_000);
     const message = `Tell the coder on ${lead.taskId} to ${VIA_LEAD}.`;
     const panel = page.getByRole(width < 768 ? "dialog" : "complementary", { name: "Lead" });
     const replies = panel.locator("li.msg.lead");
@@ -150,7 +134,10 @@ await runJourney(
       j.check(/no Undo: a sent note cannot be unsent/.test(rows), "the note row says a sent note has no Undo");
       const n = service.state().notes.find((x) => x.text.toLowerCase().includes(VIA_LEAD));
       j.check(n?.status === "delivered" && n.from.by === "lead" && n.taskId === lead.taskId, "the record: the lead's note is delivered to that task", n && { status: n.status, by: n.from.by, task: n.taskId, step: n.stepId, reason: n.reason, via: n.via });
-      release();
+      // The simulated lead answers in a moment, not at a step's pace (Q-14): its run took a few ticks.
+      const run = service.state().leadRuns.find((r) => r.id === n?.from.leadRunId);
+      const secs = run?.endedAt ? (Date.parse(run.endedAt) - Date.parse(run.startedAt)) / 1000 : NaN;
+      j.check(secs <= 4, "the simulated lead's run took a few seconds, not a whole step", { seconds: secs });
       await reply.scrollIntoViewIfNeeded();
       await j.pageChecks("the conversation after the lead's reply");
       await j.shot("6-lead-note-delivered", { full: false });
@@ -164,5 +151,5 @@ await runJourney(
       await j.shot("7-task-lead-note", { full: false });
     });
   },
-  { service: { run: true, progressPerTick: 1 }, ...(process.env.QA_WIDTH ? { widths: [Number(process.env.QA_WIDTH)] } : {}) },
+  { service: { run: true }, ...(process.env.QA_WIDTH ? { widths: [Number(process.env.QA_WIDTH)] } : {}) },
 );

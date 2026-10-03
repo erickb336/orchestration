@@ -12,7 +12,7 @@ import type { AckMode } from "../../src/api";
 import { schemaMismatch, withNulls, type JsonSchema } from "../../src/domain/model/leadReplySchema";
 import { DOCUMENT_KINDS, type StudioArtifactKind } from "../../src/domain/studio/types";
 import { NEUTRAL_FINDING, PLANNING_IDEAS, breakdownItems, neutralSummary, scriptedFinding, scriptedSummary } from "../../src/domain/demoScript";
-import type { CatalogModel, LeadTrigger, OutputDef, ProviderId, State } from "../../src/domain/types";
+import { DEVICES, type CatalogModel, type Device, type LeadTrigger, type OutputDef, type ProviderId, type State } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 import { TERMINAL_BRIEF, addDictionarySample, addFlowRules, askedKinds, asksForRules, designerAsk, fakePeAnswer, reviseSample, variantsToRevise, writeSamplePrototype, writeTerminalSample } from "../studio/sample";
 import { statusAnswer, statusQuestion } from "./fakeStatus";
@@ -51,6 +51,12 @@ interface Proc {
 
 /** ORC-022: how many ticks a simulated run takes to acknowledge a note (about two seconds in the service). */
 export const NOTE_ACK_TICKS = 2;
+
+/**
+ * How many ticks a simulated lead run takes, whatever the steps' pace: a reply, not a step of work. At a step's pace a
+ * note the owner sent through the lead reached a coder that had just finished, in most tries (ORC-030 QA, Q-14).
+ */
+export const LEAD_TICKS = 2;
 
 /** Words that make the simulated lead treat a message as a change of direction. */
 const DIRECTION_RE = /\bfocus\b| vs |\binstead\b|rather than/i;
@@ -256,6 +262,51 @@ export function fakeStudio(prompt: string): Record<string, unknown> | undefined 
   return { openRound: { focus, summary }, designerRuns: [run], questions: [question] };
 }
 
+/** One of the owner's marks the lead's studio brief lists since its last reply. */
+interface StudioMark {
+  id: string;
+  title: string;
+  version: number;
+  /** "change", "keep", "drop" or "no mark". */
+  mark: string;
+  note?: string;
+}
+
+/** The owner's marks, picks and notes since the lead's last reply: "- art-1 "Trip plan" v2: change; picked a; note: "…"". */
+function studioMarks(prompt: string): StudioMark[] {
+  const section = /^The user's marks, picks, pins and notes since your last reply[^\n]*\n([\s\S]*?)\n\n/m.exec(prompt)?.[1] ?? "";
+  return [...section.matchAll(/^- (\S+) "([^"\n]*)" v(\d+): ([^;\n]+)(.*)$/gm)].map(([, id, title, version, mark, rest]) => {
+    const note = /note: "(.*)"$/.exec(rest)?.[1];
+    return { id, title, version: Number(version), mark, ...(note ? { note } : {}) };
+  });
+}
+
+/**
+ * ORC-030 QA (Q-07): the simulated lead answers the owner's marks, as the README's loop has it. Each part marked Change
+ * gets one designer run that makes its next version (`revises`), briefed with the owner's note; Keep and Drop need
+ * nothing from the designer. Only in an open round, where designer runs go. Read only from the envelope.
+ */
+function fakeMarksAnswer(prompt: string, marks: StudioMark[]): { text: string; studio?: Record<string, unknown> } {
+  const open = /^- Round \d+ \([^)]*\), open:/m.test(prompt);
+  const scope = (/^Devices \(the user's scope\): ([^\n]*)\.$/m.exec(prompt)?.[1] ?? "").split(", ");
+  const changed = open ? marks.filter((m) => m.mark === "change").slice(0, 3) : [];
+  const designerRuns = changed.map((m) => {
+    // The part's line under the open round: "  - art-1 "Trip plan" v2 · screen · 2 variants: a …, b … · desktop, mobile · PE agreed".
+    const parts = (new RegExp(`^ {2}- ${m.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} "[^"\\n]*" v\\d+ · (.*)$`, "m").exec(prompt)?.[1] ?? "").split(" · ");
+    const variants = Number(/^(\d+) variants:/.exec(parts.find((p) => /^\d+ variants:/.test(p)) ?? "")?.[1] ?? 1);
+    const devices = (parts.find((p) => p.split(", ").every((d) => DEVICES.includes(d as Device))) ?? "").split(", ").filter((d) => scope.includes(d));
+    const why = m.note ? ` The owner's note: ${m.note}` : "";
+    return { brief: `Simulated lead: make the next version of ${m.title}, as the owner marked it Change.${why}`, revises: m.id, variants: Math.min(Math.max(variants, 1), 3), devices: DOCUMENT_KINDS.includes(parts[0] as StudioArtifactKind) ? [] : devices };
+  });
+  const others = marks.filter((m) => !changed.includes(m) && m.mark !== "no mark");
+  const word = (m: StudioMark) => (m.mark === "keep" ? "stays as it is" : m.mark === "drop" ? "is dropped" : "waits for a round to change it in");
+  const text = [
+    ...changed.map((m) => `I asked the designer for the next version of ${m.title}${m.note ? ", with your note" : ""}.`),
+    ...(others.length ? [`Noted your marks: ${others.map((m) => `${m.title} ${word(m)}`).join("; ")}.`] : []),
+  ].join(" ");
+  return { text: text || "Noted your feedback.", ...(designerRuns.length ? { studio: { designerRuns } } : {}) };
+}
+
 /**
  * The one task a simulated planning run proposes: the first idea of the story that is not on the board the
  * envelope shows, else a plain "Small improvement" numbered after the ones already there. Never a run id.
@@ -423,10 +474,13 @@ export function fakeLeadReply(attemptId: string, trigger: LeadTrigger, prompt = 
   // ORC-029 pass 5: the work the PE sent back, which the run was shown whatever started it, revised as asked.
   const revisions = fakeRevisions(prompt);
   const proposals = [...(trigger === "planning" ? [fakePlanningProposal(prompt)] : []), ...revisions];
-  const steer = trigger === "message" ? fakeSteer(prompt) : undefined;
-  const vision = trigger === "message" ? fakeVision(prompt) : undefined;
-  const shaping = trigger === "message" ? fakeShaping(prompt) : undefined;
-  const studio = trigger === "message" ? fakeStudio(prompt) : undefined;
+  // A message that carries the owner's marks is answered by them (Q-07): no steer, vision draft or questions from it.
+  const marks = trigger === "message" ? studioMarks(prompt) : [];
+  const answer = marks.length ? fakeMarksAnswer(prompt, marks) : undefined;
+  const steer = trigger === "message" && !answer ? fakeSteer(prompt) : undefined;
+  const vision = trigger === "message" && !answer ? fakeVision(prompt) : undefined;
+  const shaping = trigger === "message" && !answer ? fakeShaping(prompt) : undefined;
+  const studio = trigger === "message" ? (answer?.studio ?? fakeStudio(prompt)) : undefined;
   // ORC-029 pass 5 (5b): a run started for a change order answers it with an update per touched task.
   const changeOrder = trigger === "change-order" ? fakeChangeOrder(prompt) : undefined;
   // ORC-013: the simulated lead accepts every finding routed to it; a real lead weighs each one.
@@ -455,6 +509,8 @@ export function fakeLeadReply(attemptId: string, trigger: LeadTrigger, prompt = 
       ? `I revised ${revisions.length === 1 ? "the task" : `the ${revisions.length} tasks`} the PE sent back, making the change it asked for; the PE reviews ${revisions.length === 1 ? "it" : "them"} again.`
       : trigger === "planning"
       ? "I reviewed the board and proposed one small task."
+      : answer
+        ? answer.text
       : vision
         ? `Here is what I understand: ${newestMessage(prompt) ?? "your message"} (assumption: that is the whole problem). I drafted a vision from your words with the assumptions marked, and three questions with suggested answers. Accept, edit or dismiss the draft, and answer what you can.`
         : // The envelope's rule for every lead: never claim a change in the reply; the service's list under it says what happened.
@@ -750,7 +806,7 @@ export class FakeAdapter implements RuntimeAdapter {
         p.notes = p.notes!.filter((x) => x.id !== n.id);
         this.emit({ type: "note", attemptId: id, noteId: n.id, outcome: "delivered" });
       }
-      p.progress = Math.min(100, p.progress + this.config.progressPerTick + jitter(id));
+      p.progress = Math.min(100, p.progress + (p.lead ? Math.ceil(100 / LEAD_TICKS) : this.config.progressPerTick + jitter(id)));
       if (p.progress >= 100) {
         this.dropNotes(id, p, "the run ended first");
         this.procs.delete(id);
