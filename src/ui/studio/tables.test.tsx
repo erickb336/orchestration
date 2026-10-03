@@ -81,7 +81,7 @@ describe("the dictionary as a table", () => {
     expect(text).toContain("Term Meaning Words to avoid Your mark");
     expect(text).toContain("trip A weekend away that a group plans together. journey, outing Keep Change Drop");
     expect(text).toContain("member A person who said they are in. none Keep Change Drop");
-    expect(text).toContain("Not in force Not in force yet. Approve it into the blueprint to make these the project's words.");
+    expect(text).toContain("Not in force Not in force yet. Mark it Keep and send to put these words in the draft.");
     expect(html).toContain('aria-label="Your mark on &quot;waiting list&quot;"');
     expect(text).toContain("0 of 3 terms marked.");
     expect(text).toContain("Keep the other 3 terms");
@@ -121,11 +121,11 @@ describe("the dictionary as a table", () => {
     const a = S.getArtifact(s, id, 1);
     const d = toggleRow(toggleRow(draftFrom(undefined), "trip", undefined, "keep"), "member", undefined, "change");
     let state = s;
-    const send = async (name: "sendFeedback" | "postMessage", args: object) => {
+    const send = async (name: string, args: object) => {
       state = runCommand(state, name, args, at(20)).state;
       return { ok: true };
     };
-    expect(await sendAnswer(send, s, { [draftKey(a)]: d }, { round: 1, questions: [], answers: [], message: "" })).toEqual({ recorded: [draftKey(a)], posted: true });
+    expect(await sendAnswer(send, s, { [draftKey(a)]: d }, { round: 1, questions: [], answers: [], message: "" })).toEqual({ recorded: [draftKey(a)], draft: [], posted: true });
     expect(S.currentFeedback(state, id, 1)?.rows).toEqual([
       { row: "trip", mark: "keep" },
       { row: "member", mark: "change" },

@@ -11,7 +11,7 @@ import { buildSeed } from "../../domain/seed";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DESIGNER, addScreen, feedback, openRound, peAgrees, pePass, run, sha } from "../../domain/testing/studio";
-import type { RoundLead } from "../../domain/studio/types";
+import type { RoundLead, StudioRun } from "../../domain/studio/types";
 import type { State } from "../../domain/types";
 import { TABS, VisionBadge } from "../App";
 import { ConfirmProvider } from "../kit";
@@ -40,6 +40,7 @@ import {
   resolveInVersion,
   roundLabel,
   roundLead,
+  runLine,
   sendAnswer,
   serviceFileUrl,
   showKind,
@@ -347,7 +348,7 @@ describe("Send to the lead: your marks, answers and message as one message", () 
   function service2(start: State) {
     const calls: { name: string; args: object }[] = [];
     let state = start;
-    const send = async (name: "sendFeedback" | "postMessage", args: object) => {
+    const send = async (name: string, args: object) => {
       calls.push({ name, args });
       state = runCommand(state, name, args, at(20 + calls.length)).state;
       return { ok: true };
@@ -364,7 +365,7 @@ describe("Send to the lead: your marks, answers and message as one message", () 
     const svc = service2(s);
     const before = s.conversation.length;
     const r = await sendAnswer(svc.send, s, { [draftKey(a)]: draft }, { round: n, questions, answers: ["Yes, cache the plan", ""], message: "Keep A's map header on desktop." });
-    expect(r).toEqual({ recorded: [draftKey(a)], posted: true });
+    expect(r).toEqual({ recorded: [draftKey(a)], draft: [], posted: true });
     expect(svc.calls.map((c) => c.name)).toEqual(["sendFeedback", "postMessage"]);
     // The marks are recorded on the version, pins with their element.
     const after = svc.after();
@@ -390,7 +391,7 @@ describe("Send to the lead: your marks, answers and message as one message", () 
   it("answers or a message alone are one postMessage, and a message alone is exactly what you wrote", async () => {
     const { s, n } = withSample();
     const answersOnly = service2(s);
-    expect(await sendAnswer(answersOnly.send, s, {}, { round: n, questions, answers: ["", "Kilometres"], message: "" })).toEqual({ recorded: [], posted: true });
+    expect(await sendAnswer(answersOnly.send, s, {}, { round: n, questions, answers: ["", "Kilometres"], message: "" })).toEqual({ recorded: [], draft: [], posted: true });
     expect(answersOnly.calls.map((c) => c.name)).toEqual(["postMessage"]);
     expect(answersOnly.calls[0].args).toEqual({ text: `My answers to round ${n}:\n\nQ: Distances in miles or kilometres?\nA: Kilometres` });
     const messageOnly = service2(s);
@@ -414,12 +415,12 @@ describe("Send to the lead: your marks, answers and message as one message", () 
     expect(answerBlocker({ ...empty, message: "x".repeat(MAX_MESSAGE + 1), changed: [] })).toBe(`Together this is over ${MAX_MESSAGE} characters; shorten your message or your answers.`);
     // The service refuses the marks (the version moved, say): the message is not posted, so it never speaks of marks that were not recorded.
     const names: string[] = [];
-    const refuse = async (name: "sendFeedback" | "postMessage") => (names.push(name), { ok: false });
+    const refuse = async (name: string) => (names.push(name), { ok: false });
     expect(await sendAnswer(refuse, agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, { ...empty, message: "Hi" })).toBeNull();
     expect(names).toEqual(["sendFeedback"]);
     // The marks recorded but the message refused: the drafts can clear, and the message stays to send again.
-    const half = async (name: "sendFeedback" | "postMessage") => ({ ok: name === "sendFeedback" });
-    expect(await sendAnswer(half, agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, { ...empty, message: "Hi" })).toEqual({ recorded: [draftKey(a)], posted: false });
+    const half = async (name: string) => ({ ok: name === "sendFeedback" });
+    expect(await sendAnswer(half, agreed, { [draftKey(a)]: { ...draftFrom(undefined), mark: "keep" } }, { ...empty, message: "Hi" })).toEqual({ recorded: [draftKey(a)], draft: ["Trip plan (simulated sample) v1 is not in the draft: your pick between its variants is open."], posted: false });
   });
 });
 
@@ -1162,5 +1163,17 @@ describe("terminal artifacts", () => {
     const t = readCast(cast);
     expect(t).toEqual({ ok: true, cols: 80, rows: 24, title: "trips plan", output: "$ trips plan\r\n\x1b[32m✓\x1b[0m Lake weekend\r\n", markers: ["Plan"] });
     expect(readCast("not json")).toEqual({ ok: false, error: "its first line is not an asciicast header" });
+  });
+});
+
+describe("a studio run's line in the left column (ORC-030 Q-20)", () => {
+  it("says what that run does when the run reports no activity: the PE reviews, it does not make the artifacts", () => {
+    const run = (kind: StudioRun["kind"]): StudioRun => ({ id: `${kind}-1`, kind, round: 1, provider: "codex", model: "gpt-sample", status: "running", brief: "", askedAt: at(1), startedAt: at(2), workspace: "runs/x" });
+    const text = (kind: StudioRun["kind"]) => runLine(vision(), run(kind), M.providerLabel).text;
+    expect(text("pe")).toBe("The PE is reviewing this round's artifacts.");
+    expect(text("designer")).toBe("The designer is making this round's artifacts.");
+    expect(text("probe")).toBe("The probe is gathering the evidence the PE asked for.");
+    // What a run reports of itself comes first.
+    expect(runLine(vision(), { ...run("pe"), activity: "Reading the screenshots." }, M.providerLabel).text).toBe("Reading the screenshots.");
   });
 });

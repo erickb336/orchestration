@@ -7,28 +7,29 @@
 // 2. The Lock in summary (#/vision/lock-in) in Vision: what it shows, and its way to the pre-flight.
 // 3. The first Lock in: Check-in, the agreement, and Start the factory. The draft clears, the parts are in force,
 //    and Results › Design and reality shows Lock in 1.
-// 4. The studio goes on (sample data, through commands): Words v2 replaces v1, and the owner drops Trip plan.
+// 4. The studio goes on: the designer's Words v2 (sample data, through the service's command), which the owner marks
+//    Keep, and Trip plan, which the owner marks Drop, in the studio. Before Send the feedback says what each does to
+//    the draft; Send does it (ORC-030 Q-01).
 // 5. The draft bar, Review and lock in, the summary, a summary that changes while the owner reads it, the agreement,
 //    and Lock in. The draft clears, and Design and reality shows Lock in 2.
 //
 // Sample data: a new Weekend Trips project in Vision, built through the real commands: round 1 (the experience) with
-// Trip plan, which the PE agreed on, and round 2 (inputs and outputs) with Words, the word list. Both are approved, as
-// the owner would approve them (the studio has no Approve control: see the report). The runtime is the fake one, and
-// no scheduler tick runs.
+// Trip plan, which the PE agreed on, and round 2 (inputs and outputs) with Words, the word list. The owner marked both
+// Keep, and both are in the draft, as Send puts them there. The runtime is the fake one, and no scheduler tick runs.
 //
 // Run: ORCHESTRATION_TEST_PORT=5960 node --import tsx scripts/qa/lock-in.mjs
 
 import { runJourney, text } from "./harness.mjs";
 import * as M from "../../src/domain/model.ts";
 import { buildSeed } from "../../src/domain/seed.ts";
-import { DESIGNER, openRound, peAgrees, run, sha } from "../../src/domain/testing/studio.ts";
+import { DESIGNER, feedback, openRound, peAgrees, run, sha } from "../../src/domain/testing/studio.ts";
 
 const WORDS = [
   { term: "trip", meaning: "A weekend away that a group plans together.", avoid: ["journey"] },
   { term: "friend", meaning: "A person in the group, who joins by link.", avoid: ["member", "user"] },
 ];
 
-/** Weekend Trips in Vision with two approved parts: Trip plan (round 1, closed) and Words (round 2, open). */
+/** Weekend Trips in Vision with two parts the owner kept: Trip plan (round 1, closed) and Words (round 2, open). */
 function visionWithDraft() {
   const at = (sec) => new Date(Date.now() - 3_600_000 + sec * 1000).toISOString();
   let s = M.initProject(buildSeed(Date.now(), { inFlightRuns: false }), { name: "Weekend Trips", repoPath: "/tmp/weekend-trips", vision: "Weekend trips for a small group of friends.", focus: "Plan a trip together" }, at(0));
@@ -37,11 +38,11 @@ function visionWithDraft() {
   let r = openRound(s, "experience", at(10));
   const plan = run(r.state, "addStudioArtifact", { round: r.n, kind: "screen", title: "Trip plan", variants: [{ id: "A", label: "Map first", entry: "trip-plan/index.html" }], files: [{ path: "trip-plan/index.html", sha256: sha("a") }], devices: ["desktop", "mobile"], madeBy: DESIGNER }, at(11));
   s = peAgrees(plan.state, plan.result.artifactId, 1, [], at(12));
-  s = run(s, "approveArtifact", { artifactId: plan.result.artifactId, version: 1 }, at(13)).state;
+  s = run(feedback(s, plan.result.artifactId, 1, { mark: "keep" }, at(13)), "approveArtifact", { artifactId: plan.result.artifactId, version: 1 }, at(13)).state;
   s = run(s, "closeRound", { round: r.n }, at(14)).state;
   r = openRound(s, "data", at(20));
   const words = run(r.state, "addStudioArtifact", { round: r.n, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("e") }], devices: [], dictionary: WORDS, madeBy: DESIGNER }, at(21));
-  return run(words.state, "approveArtifact", { artifactId: words.result.artifactId, version: 1 }, at(22)).state;
+  return run(feedback(words.state, words.result.artifactId, 1, { mark: "keep" }, at(22)), "approveArtifact", { artifactId: words.result.artifactId, version: 1 }, at(22)).state;
 }
 
 /**
@@ -116,14 +117,30 @@ await runJourney("lock-in", visionWithDraft, async (j, page, service) => {
     await j.shot("reality-1");
   });
 
-  await j.step("The studio goes on: a new draft", async () => {
-    // Sample data, as the designer and the owner would make it: Words v2 replaces v1; the owner drops Trip plan.
-    const st = service.state();
-    const words = st.studio.artifacts.find((a) => a.title === "Words");
-    const v2 = service.command("addStudioArtifact", { round: words.round, artifactId: words.id, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("f") }], devices: [], dictionary: [...WORDS, { term: "cost each", meaning: "What the trip costs, divided by the friends who go.", avoid: ["price per person"] }], madeBy: DESIGNER });
-    service.command("approveArtifact", { artifactId: words.id, version: v2.result.version });
-    service.command("dropBlueprintItem", { itemId: st.blueprint.draft.items.find((i) => i.title === "Trip plan").id });
+  await j.step("The studio goes on: Keep Words v2, Drop Trip plan", async () => {
+    // Sample data, as the designer would make it: Words v2, with a new term.
+    const words = service.state().studio.artifacts.find((a) => a.title === "Words");
+    service.command("addStudioArtifact", { round: words.round, artifactId: words.id, kind: "dictionary", title: "Words", variants: [{ id: "a", label: "As drafted", entry: "dictionary.json" }], files: [{ path: "dictionary.json", sha256: sha("f") }], devices: [], dictionary: [...WORDS, { term: "cost each", meaning: "What the trip costs, divided by the friends who go.", avoid: ["price per person"] }], madeBy: DESIGNER });
     await vision();
+    const marks = page.getByRole("group", { name: "Your mark", exact: true });
+    const pick = async (round, title) => {
+      await page.getByRole("list", { name: "Rounds" }).getByRole("button", { name: new RegExp(`^${round} ·`) }).click();
+      await page.getByRole("list", { name: `Artifacts of round ${round}` }).getByRole("button", { name: new RegExp(`^${title}`) }).click();
+      await page.getByRole("heading", { name: title, level: 2, exact: true }).waitFor({ timeout: 10_000 });
+    };
+    await pick(2, "Words");
+    await marks.getByRole("button", { name: "Keep" }).click();
+    await pick(1, "Trip plan");
+    await marks.getByRole("button", { name: "Drop" }).click();
+    const notSent = flat(await page.getByRole("list", { name: "Not sent yet" }).innerText());
+    j.check(notSent.includes("Keep puts Words v2 in the draft, in place of Words v1.") && notSent.includes("Drop takes Trip plan out of the draft: it leaves the design at your next Lock in."), "before Send, your feedback says what Keep and Drop do to the draft", notSent);
+    await page.waitForTimeout(400);
+    await j.shot("keep-drop-before-send");
+    await page.getByRole("button", { name: "Send to the lead" }).click();
+    await page.getByText("Sent to the lead as one message.").waitFor({ timeout: 10_000 });
+    const after = flat(await page.getByRole("list", { name: "The draft after Send" }).innerText());
+    j.check(after.includes("Words v2 is in the draft.") && after.includes("Trip plan is dropped in the draft: it leaves the design at your next Lock in."), "after Send, it says what Send did to the draft", after);
+    await pick(2, "Words");
     const frames = await page.evaluate(() => [...document.querySelectorAll("iframe")].map((f) => f.src));
     if (frames.some((u) => u.includes("trip-plan"))) j.note(`Vision loads the dropped Trip plan's prototype in a frame: ${frames.join(", ")}`);
     const bar = flat(await draftBar.innerText());

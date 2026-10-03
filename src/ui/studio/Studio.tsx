@@ -44,6 +44,7 @@ import {
   DOMAIN_CHOICES,
   addPin,
   answerBlocker,
+  answerEffects,
   answerParts,
   artifactLine,
   changedDrafts,
@@ -54,6 +55,7 @@ import {
   draftKey,
   draftSummary,
   keepUnmarked,
+  keptNotInDraft,
   madeByLine,
   peView,
   prototypeUrl,
@@ -106,8 +108,9 @@ export function Studio() {
   const [answers, setAnswers] = useState<Record<number, string[]>>({});
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
-  /** What the last Send did, in words, until you change something. */
+  /** What the last Send did, in words, until you change something: to the lead, then to the draft, part by part. */
   const [sent, setSent] = useState<string | null>(null);
+  const [sentDraft, setSentDraft] = useState<string[]>([]);
 
   // Until you choose one, the open round (or the newest) is shown, so a round that opens meanwhile comes into view.
   const n = roundChoice !== undefined && state.studio.rounds.some((r) => r.n === roundChoice) ? roundChoice : defaultRound(state);
@@ -121,6 +124,7 @@ export function Studio() {
   const update = useCallback(
     (a: StudioArtifact, change: (d: Draft) => Draft) => {
       setSent(null);
+      setSentDraft([]);
       setDrafts((all) => ({ ...all, [draftKey(a)]: change(all[draftKey(a)] ?? draftFrom(S.currentFeedback(state, a.id, a.version))) }));
     },
     [state],
@@ -136,6 +140,19 @@ export function Studio() {
   };
   const answer = { round: n, questions, answers: roundAnswers, message };
   const changed = changedDrafts(state, drafts);
+  const effects = new Map(answerEffects(state, changed).map((e) => [e.key, e]));
+  /**
+   * Under a version's mark: what Send does to the draft for it (Keep puts it in, Drop takes it out, or why Keep cannot),
+   * or, when your answer has nothing on it, why a version you kept is not in the draft.
+   */
+  const effectLine = (a: StudioArtifact): { text: string; needsYou: boolean } | undefined => {
+    if (standing(state, a).kind !== "open") return undefined;
+    const e = effects.get(draftKey(a));
+    if (e) return { text: e.will, needsYou: !!e.refused };
+    if (changed.some((c) => draftKey(c.artifact) === draftKey(a))) return undefined;
+    const kept = keptNotInDraft(state, a);
+    return kept ? { text: kept, needsYou: true } : undefined;
+  };
   const parts = answerParts({ ...answer, changed });
   const blocker = disabled ? "The service is offline. What you marked and wrote stays here until it reconnects." : answerBlocker({ ...answer, changed });
   const sendAll = async () => {
@@ -150,6 +167,7 @@ export function Studio() {
       return next;
     });
     setPinMode(false);
+    setSentDraft(r.draft);
     if (!r.posted) {
       // The marks are recorded; your answers and message stay here to send again.
       setSent(r.recorded.length ? "Your marks are recorded on each version, but the message did not reach the lead. Send again." : null);
@@ -177,10 +195,10 @@ export function Studio() {
         <DraftBar />
       ) : state.project.stage === "shaping" ? (
         <Banner tone="info" actions={<StartFactoryLink size="small" />}>
-          Nothing is in the draft yet. What you approve goes into the draft, and Start the factory is your first Lock in.
+          Nothing is in the draft yet. A part you mark Keep goes into the draft when you send it, and Start the factory is your first Lock in.
         </Banner>
       ) : (
-        <Banner tone="info">The factory has started. Vision stays open: the designer and the PE go on working here, and what you approve goes into the draft. The factory builds from the version you locked in, never from the draft.</Banner>
+        <Banner tone="info">The factory has started. Vision stays open: the designer and the PE go on working here, and a part you mark Keep goes into the draft when you send it. The factory builds from the version you locked in, never from the draft.</Banner>
       )}
       <DomainPrompt />
       {state.studio.rounds.length === 0 ? (
@@ -244,6 +262,7 @@ export function Studio() {
                 pinMode={pinMode}
                 setPinMode={setPinMode}
                 port={service.prototypePort}
+                effectLine={effectLine(artifact)}
               />
             ) : round ? (
               <NoArtifacts n={round.n} />
@@ -261,6 +280,7 @@ export function Studio() {
                     <li key={draftKey(a)}>
                       <b>{a.title}</b>
                       {a.version > 1 ? ` v${a.version}` : ""}: {draftSummary(a, draft) || "cleared"}
+                      {effects.get(draftKey(a)) && <span className={cx("st-effect", effects.get(draftKey(a))!.refused && "st-effect--refused")}>{effects.get(draftKey(a))!.will}</span>}
                     </li>
                   ))}
                   {parts.map((p) => (
@@ -275,6 +295,13 @@ export function Studio() {
                   {sent}
                 </p>
               )}
+              {sentDraft.length > 0 && (
+                <ul className="st-sum" aria-label="The draft after Send">
+                  {sentDraft.map((l) => (
+                    <li key={l}>{l}</li>
+                  ))}
+                </ul>
+              )}
               {artifact && standing(state, artifact).kind === "open" && (
                 <Field label={`Note on ${artifact.title}`} hint="Anything the marks and pins do not say.">
                   <Textarea value={draftOf(artifact).note} disabled={disabled} rows={3} onChange={(e) => update(artifact, (d) => ({ ...d, note: e.target.value }))} />
@@ -285,7 +312,7 @@ export function Studio() {
                   {sending ? "Sending…" : "Send to the lead"}
                 </Button>
               </div>
-              <p className="micro muted">Your marks, answers and message go together, as one message to the lead.</p>
+              <p className="micro muted">Your marks, answers and message go together, as one message to the lead. Send puts each part you mark Keep in the draft, and takes each part you mark Drop out of it.</p>
             </section>
           </aside>
         </div>
@@ -436,10 +463,12 @@ interface ArtifactViewProps {
   pinMode: boolean;
   setPinMode: (on: boolean) => void;
   port: number | undefined;
+  /** What Send does to the draft for this version, or why a version you kept is not in it (the Studio's `effectLine`). */
+  effectLine: { text: string; needsYou: boolean } | undefined;
 }
 
 /** The centre: the artifact's toolbar, the stage (a device frame, a terminal window or a plain frame), the variants, your mark, and the pins. */
-function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, onDevice, pinMode, setPinMode, port }: ArtifactViewProps) {
+function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, onDevice, pinMode, setPinMode, port, effectLine }: ArtifactViewProps) {
   const { state, disabled } = useStore();
   const kind = showKind(a);
   const st = standing(state, a);
@@ -549,6 +578,7 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
         </div>
       </div>
 
+      {effectLine && <p className={cx("small", effectLine.needsYou ? "st-hint" : "muted")}>{effectLine.text}</p>}
       {draft.pins.length > 0 && <PinList artifact={a} draft={draft} update={update} locked={locked} />}
       <p className="micro muted">Artifacts stay on this computer: the studio shows the files the designer wrote, whichever provider wrote them.</p>
     </div>
@@ -605,7 +635,7 @@ function TableFoot({ artifact: a, draft, update, locked, rows, what }: TableProp
     <div className="st-tablefoot">
       <span className="small muted">
         {rows.length - open} of {plural(rows.length, what)} marked.{" "}
-        {open ? `Mark each one, or keep the rest. A ${what} marked Change or Drop waits for the next version before you can approve.` : `Every ${what} has your mark.`}
+        {open ? `Mark each one, or keep the rest. A ${what} marked Change or Drop waits for the next version before Keep can put it in the draft.` : `Every ${what} has your mark.`}
       </span>
       {open > 0 && (
         <Button size="small" variant="quiet" disabled={!!locked} disabledReason={locked} onClick={() => update(a, (d) => keepUnmarked(d, rows))}>

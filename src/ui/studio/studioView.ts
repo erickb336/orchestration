@@ -80,10 +80,17 @@ export function roundArtifacts(s: State, n: number): StudioArtifact[] {
 /**
  * The artifacts waiting for your mark: the newest version of each artifact whose kind asks for your mark
  * (`KIND_RULES`), once it reaches you (the PE agreed, its review ended, or the PE does not review the kind), with no
- * mark from you yet. What you brought and a probe's evidence are not counted.
+ * mark from you yet. What you brought and a probe's evidence are not counted, nor a part the blueprint settled: this
+ * version in the draft or in force, or the part dropped.
  */
 export function waitingForYourMark(s: State): StudioArtifact[] {
-  return S.latestArtifacts(s).filter((a) => KIND_RULES[a.kind].ownerMark === "asked" && S.readyForOwner(s, a) && !answered(a, S.currentFeedback(s, a.id, a.version)));
+  return S.latestArtifacts(s).filter((a) => KIND_RULES[a.kind].ownerMark === "asked" && S.readyForOwner(s, a) && !answered(a, S.currentFeedback(s, a.id, a.version)) && !settled(s, a));
+}
+
+/** Whether the blueprint settled this version: the draft holds it approved, or drops its part. */
+function settled(s: State, a: StudioArtifact): boolean {
+  const item = B.draftItems(s).find((i) => i.artifactId === a.id) ?? (a.supersedes ? B.draftItems(s).find((i) => i.artifactId === a.supersedes) : undefined);
+  return !!item && (item.status === "dropped" || (item.status === "approved" && item.artifactId === a.id && item.version === a.version));
 }
 
 /** Whether the owner answered a version: a mark on it, or (a dictionary, a flow with rules) a mark on every row. */
@@ -314,19 +321,90 @@ export function dictionaryStanding(s: State, a: StudioArtifact): { place: "in fo
   const drafted = B.dictionaryInDraft(s);
   if (is(force)) return { place: "in force", text: "These are the project's words. Every agent gets them, and the writing check reports a word to avoid." };
   if (is(drafted)) return { place: "in the draft", text: `The studio uses these words now. The factory's agents get them at your next Lock in${force ? `; until then they keep ${force.artifact.title} v${force.artifact.version}` : ""}.` };
-  if (drafted) return { place: "not in force", text: `Not in force. ${drafted.artifact.title} v${drafted.artifact.version} is the project's dictionary until you approve this version.` };
-  return { place: "not in force", text: "Not in force yet. Approve it into the blueprint to make these the project's words." };
+  if (drafted) return { place: "not in force", text: `Not in force. ${drafted.artifact.title} v${drafted.artifact.version} is the project's dictionary until you keep this version: mark it Keep and send.` };
+  return { place: "not in force", text: "Not in force yet. Mark it Keep and send to put these words in the draft." };
 }
 
-/** The versions whose draft differs from the owner's current feedback: the marks Send sends. Only versions the owner can answer (theirs, newest). */
+/**
+ * The parts of your answer: each version you worked on whose draft differs from your current feedback, or whose Keep
+ * or Drop the blueprint's draft does not show yet (you marked it again after a refusal or a Discard). Only versions
+ * the owner can answer (theirs, newest).
+ */
 export function changedDrafts(s: State, drafts: Readonly<Record<string, Draft>>): { artifact: StudioArtifact; draft: Draft }[] {
   const out: { artifact: StudioArtifact; draft: Draft }[] = [];
   for (const a of S.latestArtifacts(s)) {
     const d = drafts[draftKey(a)];
     if (!d || standing(s, a).kind !== "open") continue;
-    if (!sameDraft(d, draftFrom(S.currentFeedback(s, a.id, a.version)))) out.push({ artifact: a, draft: d });
+    if (!sameDraft(d, draftFrom(S.currentFeedback(s, a.id, a.version))) || draftEffect(s, a, d)?.command) out.push({ artifact: a, draft: d });
   }
   return out;
+}
+
+// ---------- what Send does to the blueprint's draft (ORC-030 Q-01) ----------
+
+/**
+ * What Send does to the draft for one part of your answer (the owner's agreed pass 1 screens showed Keep as "approved
+ * by you"): Keep puts the version into the draft (`approveArtifact`, with your pick when it has several variants), and
+ * Drop takes the part out when the draft holds it (`dropBlueprintItem`). When `approveArtifact` would refuse the Keep,
+ * `refused` says why and Send does not ask. Undefined when Send leaves the draft as it is.
+ */
+export interface DraftEffect {
+  key: string;
+  command?: { name: "approveArtifact" | "dropBlueprintItem"; args: Record<string, unknown> };
+  /** Before Send: what Send will do, or why Keep cannot. */
+  will: string;
+  /** After Send: what it did, or (`failed`) that the service refused it. */
+  did: string;
+  failed: string;
+  refused?: string;
+}
+
+export function draftEffect(s: State, a: StudioArtifact, d: Draft): DraftEffect | undefined {
+  const key = draftKey(a);
+  const part = S.artifactName(a);
+  if (d.mark === "keep") {
+    if (B.inDraftAsIs(s, a, d.pickedVariant)) return undefined;
+    const refused = B.approvalRefusal(s, a, d);
+    if (refused) return { key, will: `Keep cannot put ${part} in the draft yet: ${refused}.`, did: `${part} is not in the draft: ${refused}.`, failed: "", refused };
+    const labelOf = (id: string | undefined) => (id === undefined ? undefined : (a.variants.find((v) => v.id === id)?.label ?? id));
+    const label = a.variants.length > 1 ? labelOf(d.pickedVariant) : undefined;
+    const name = label ? `${part} (${label})` : part;
+    // What the draft holds for this part now, which the Keep replaces: another version, or another pick of this one.
+    const before = B.droppableItem(s, a);
+    const replaces = before?.status !== "approved" ? "" : before.artifactId === a.id && before.version === a.version ? `, in place of ${labelOf(before.variant)}` : `, in place of ${before.title} v${before.version}`;
+    return {
+      key,
+      command: { name: "approveArtifact", args: { artifactId: a.id, version: a.version, ...(label ? { variant: d.pickedVariant } : {}) } },
+      will: `Keep puts ${name} in the draft${replaces}.`,
+      did: `${name} is in the draft.`,
+      failed: `${name} is not in the draft: the service refused it (the notice at the top says why).`,
+    };
+  }
+  if (d.mark === "drop") {
+    const item = B.droppableItem(s, a);
+    if (!item) return undefined;
+    const inForce = B.blueprintItems(s).some((i) => i.id === item.id && i.status !== "dropped");
+    const name = `${item.title} v${item.version}`;
+    return {
+      key,
+      command: { name: "dropBlueprintItem", args: { itemId: item.id } },
+      will: inForce ? `Drop takes ${item.title} out of the draft: it leaves the design at your next Lock in.` : `Drop takes ${name} out of the draft.`,
+      did: inForce ? `${item.title} is dropped in the draft: it leaves the design at your next Lock in.` : `${name} is out of the draft.`,
+      failed: `${item.title} is still in the draft: the service refused the Drop (the notice at the top says why).`,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Where a version you marked Keep stands when the draft does not hold it and your answer has no change on it: why
+ * Keep did not put it in, and how to. Undefined when the draft holds it, or it has no Keep.
+ */
+export function keptNotInDraft(s: State, a: StudioArtifact): string | undefined {
+  const f = S.currentFeedback(s, a.id, a.version);
+  if (f?.mark !== "keep" || standing(s, a).kind !== "open" || B.inDraftAsIs(s, a, f.pickedVariant)) return undefined;
+  const refused = B.approvalRefusal(s, a, f);
+  return refused ? `You marked it Keep, but it is not in the draft: ${refused}.` : "You marked it Keep, but it is not in the draft. To put it in, mark it Keep again and send.";
 }
 
 /** The `sendFeedback` entries for the changed drafts. A pin carries the element it is on, when the prototype said. */
@@ -400,20 +478,28 @@ export function answerBlocker(x: Answer): string | undefined {
   return undefined;
 }
 
-type Send = (name: "sendFeedback" | "postMessage", args: object) => Promise<{ ok: boolean }>;
+type Send = (name: "sendFeedback" | "postMessage" | "approveArtifact" | "dropBlueprintItem", args: object) => Promise<{ ok: boolean }>;
+
+/** What Send does to the draft for your answer, part by part, as `draftEffect` says. */
+export const answerEffects = (s: State, changed: Answer["changed"]): DraftEffect[] => changed.flatMap(({ artifact, draft }) => draftEffect(s, artifact, draft) ?? []);
 
 /**
  * Send to the lead: your changed marks as one `sendFeedback`, recorded on each version (compare-and-set on the
- * version you saw), then everything as one `postMessage`, the one message the lead answers. The marks go first, so
- * the message never speaks of marks the service refused. Returns the drafts recorded (their keys, to clear) and
- * whether the message was posted, or null when nothing was sent (blocked, or the marks were refused).
+ * version you saw); then the draft: each Keep approved and each Drop dropped, as `answerEffects` showed before Send
+ * (a Keep it would refuse is not asked); then everything as one `postMessage`, the one message the lead answers. The
+ * marks go first, so the message never speaks of marks the service refused. Returns the drafts recorded (their keys,
+ * to clear), what happened to the draft, part by part, and whether the message was posted, or null when nothing was
+ * sent (blocked, or the marks were refused).
  */
-export async function sendAnswer(send: Send, s: State, drafts: Readonly<Record<string, Draft>>, x: Omit<Answer, "changed">): Promise<{ recorded: string[]; posted: boolean } | null> {
+export async function sendAnswer(send: Send, s: State, drafts: Readonly<Record<string, Draft>>, x: Omit<Answer, "changed">): Promise<{ recorded: string[]; draft: string[]; posted: boolean } | null> {
   const answer = { ...x, changed: changedDrafts(s, drafts) };
   if (answerBlocker(answer)) return null;
+  const effects = answerEffects(s, answer.changed);
   if (answer.changed.length && !(await send("sendFeedback", { entries: feedbackEntries(answer.changed) })).ok) return null;
+  const draft: string[] = [];
+  for (const e of effects) draft.push(!e.command ? e.did : (await send(e.command.name, e.command.args)).ok ? e.did : e.failed);
   const posted = (await send("postMessage", { text: answerMessage(answer) })).ok;
-  return { recorded: answer.changed.map((c) => draftKey(c.artifact)), posted };
+  return { recorded: answer.changed.map((c) => draftKey(c.artifact)), draft, posted };
 }
 
 // ---------- terminal artifacts ----------
@@ -709,13 +795,20 @@ export function roundRuns(s: State, n: number): StudioRun[] {
   return last && last.status !== "completed" ? [...live, last] : live;
 }
 
+/** What a running studio run does, when it reports no activity of its own: each kind says what it does. */
+const RUN_WORK: Record<StudioRun["kind"], string> = {
+  designer: "The designer is making this round's artifacts.",
+  pe: "The PE is reviewing this round's artifacts.",
+  probe: "The probe is gathering the evidence the PE asked for.",
+};
+
 export function runLine(s: State, r: StudioRun, providerLabel: (p: "claude" | "codex") => string): RunLine {
   const who = `${r.kind === "pe" ? "PE" : r.kind === "probe" ? "Probe" : "Designer"} · ${providerLabel(r.provider)} · ${r.model}${r.simulated ? " (simulated)" : ""}`;
   switch (r.status) {
     case "queued":
       return { id: r.id, tone: "neutral", title: `${who}: queued`, text: heldBecause(s) ?? "Waiting to start." };
     case "running":
-      return { id: r.id, tone: "work", title: `${who}: working`, text: r.activity ?? "The designer is making this round's artifacts." };
+      return { id: r.id, tone: "work", title: `${who}: working`, text: r.activity ?? RUN_WORK[r.kind] };
     case "stopping":
       return { id: r.id, tone: "work", title: `${who}: stopping`, text: r.note ?? "Asked to stop; waiting for the runtime to confirm." };
     case "failed":

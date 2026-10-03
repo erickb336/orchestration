@@ -50,7 +50,7 @@ export function LockInPage() {
         <p className="small muted no-margin">
           <a href="#/vision">Vision</a> › Review and lock in
         </p>
-        <h1 className="no-margin">{done !== null ? `Lock in ${done}` : `Lock in ${w.rev} · the summary`}</h1>
+        <h1 className="no-margin">{done !== null ? `Lock in ${done}` : w.title}</h1>
       </header>
       {done !== null ? (
         <Done rev={done} />

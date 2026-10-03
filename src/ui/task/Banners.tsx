@@ -10,8 +10,11 @@ import * as F from "../../domain/findings";
 import * as M from "../../domain/model";
 import type { State, Task } from "../../domain/types";
 import { relTime } from "../common";
-import { Banner, Button } from "../kit";
+import { heldByBudget } from "../../domain/model/presentation";
+import { budgetStop } from "../../domain/spend";
+import { Banner, Button, ButtonLink } from "../kit";
 import { useStore } from "../store";
+import { droppedPartsWords } from "../studio/draftView";
 import { isOpenTask, leadDecisions } from "./needsYouItems";
 
 export function StatusBanners({ state, task, onEdit }: { state: State; task: Task; onEdit?: () => void }) {
@@ -137,6 +140,31 @@ export function StatusBanners({ state, task, onEdit }: { state: State; task: Tas
       <Banner key="hfs">
         Planned in Vision: it waits until you start the factory{M.waitingOn(state, task) ? ` and on ${M.waitingOn(state, task)}` : ""}, then {M.startFactoryPlan(state).release ? "starts on Autopilot" : "waits for your go-ahead"} (your involvement setting at the moment you start the factory decides). Changing "Wait for my go-ahead" under More takes it out of the roadmap's wait.{" "}
         <a href="#/overview">Work on the vision</a>
+      </Banner>,
+    );
+  // Only the building budget holds it: say why, and where to raise the budget or continue past it (ORC-030 Q-24).
+  const stop = heldByBudget(state, task) ? budgetStop(state) : undefined;
+  if (stop)
+    out.push(
+      <Banner
+        key="budget"
+        tone="you"
+        title="The building budget holds it."
+        actions={
+          <ButtonLink size="small" href="#/settings/project/budgets">
+            Budgets
+          </ButtonLink>
+        }
+      >
+        {stop.why}. Nothing new starts until you raise the budget or continue past it.
+      </Banner>,
+    );
+  // A task that builds a part you dropped (a retirement you undid, say): nothing stops it, so say so (ORC-030 Q-13).
+  const dropped = open ? droppedPartsWords(state, task) : undefined;
+  if (dropped)
+    out.push(
+      <Banner key="dropped" tone="you" title="It builds a part you dropped.">
+        {dropped.names} left the design{dropped.at}. If it should not be built, cancel this task under More, or edit its spec.
       </Banner>,
     );
   // A deferral is not a pause. The running step finishes and its result is kept; then nothing new starts.

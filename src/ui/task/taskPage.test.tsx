@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import { buildDemo } from "../../domain/demo";
 import * as M from "../../domain/model";
 import { buildSeed } from "../../domain/seed";
+import { runCommand } from "../../domain/commands";
+import { blueprintScene } from "../../domain/testing/blueprintScene";
 import type { State } from "../../domain/types";
 import type { ServiceInfo } from "../../api";
 import { decisionState } from "../Findings";
@@ -211,5 +213,22 @@ describe("the task page", () => {
     expect(html).toContain(">Send a note<");
     expect(text(html)).toContain("Running");
     expect(text(page(s, "NOPE"))).toContain("No task NOPE.");
+  });
+});
+
+describe("a task the building budget holds (ORC-030 Q-24)", () => {
+  it("says the budget holds it, why, and links to Budgets; within the budget it is Ready", () => {
+    const { s, tasks, at } = blueprintScene();
+    // You give the go-ahead (Start): within the budget the task is ready to start.
+    const go = runCommand(s, "setHoldBeforeStart", { taskId: tasks.reminders, value: false }, at(400)).state;
+    expect(M.stateLabel(go, task(go, tasks.reminders))).toBe("Ready");
+    expect(text(page(go, tasks.reminders))).not.toContain("building budget holds");
+    // The budget is below what was spent: the factory stops, and nothing new starts on this task.
+    const held = runCommand(go, "setBudgets", { buildingUsd: 5, maintenanceUsdPerMonth: 10 }, at(401)).state;
+    expect(M.dispatchEligible(held, at(402)).tasks.find((t) => t.id === tasks.reminders)!.lifecycle).toBe(task(held, tasks.reminders).lifecycle);
+    expect(M.stateLabel(held, task(held, tasks.reminders))).toBe("Held at the building budget");
+    const html = page(held, tasks.reminders);
+    expect(text(html)).toContain("The building budget holds it. The building budget is reached: $9.90 of $5.00. Nothing new starts until you raise the budget or continue past it. Budgets");
+    expect(html).toContain('href="#/settings/project/budgets"');
   });
 });

@@ -6,9 +6,10 @@
 //    the PE agrees. The journey waits for each stage on the screen and takes a screenshot.
 // 3. The owner marks the part Change, picks a variant, writes a note and sends it to the lead.
 //    The journey reads the lead's reply and waits for a revision.
-// 4. The owner looks for an Approve control. The studio has none, so the journey approves the part with the command
-//    that such a control would send (a stand-in), and checks the draft bar.
-// 5. The owner marks the approved part Drop and sends it. The journey checks the draft bar again.
+// 4. The owner marks the part Keep. Before Send, the feedback says that Keep puts it in the draft; Send does it, and the
+//    draft bar lists it (ORC-030 Q-01: Keep is the approval, as the owner's pass 1 screens showed).
+// 5. The owner marks the part Drop. Before Send, the feedback says that Drop takes it out of the draft; Send does it,
+//    and the draft bar no longer lists it.
 //
 // Sample data: a new Weekend Trips project in Vision, made with the real commands (the kind of product, "screen
 // product", is set by a command as the tests do). The runtime is the fake one: the lead, the designer and the PE are
@@ -152,19 +153,32 @@ await runJourney(
       await j.shot("after-change");
     });
 
-    await j.step("Approve and the draft", async () => {
-      const approve = page.getByRole("button", { name: /^Approve/ });
-      j.check((await approve.count()) > 0, "the studio has an Approve control for a part the PE agreed on");
-      // Stand-in for the missing control: the owner's Keep from the UI, then the command an Approve control would send.
-      await marks.getByRole("button", { name: "Keep" }).click();
+    const notSent = page.getByRole("list", { name: "Not sent yet" });
+    const partItem = () => page.getByRole("list", { name: "Artifacts of round 1" }).getByRole("button", { name: new RegExp(PART.replace(/[()]/g, "\\$&")) });
+    await j.step("Keep, Send, and the draft", async () => {
+      // The newest version of the part, once it is yours to mark (a revision after the Change may still be with the PE).
+      await partItem().click();
+      const keep = marks.getByRole("button", { name: "Keep" });
+      for (let i = 0; i < 60 && ((await keep.isDisabled()) || (await keep.getAttribute("aria-disabled")) === "true"); i++) await page.waitForTimeout(500);
+      await keep.click();
+      if ((await page.getByRole("button", { name: "Pick this variant" }).count()) && !(await page.getByRole("button", { name: "Picked" }).count())) await page.getByRole("button", { name: "Pick this variant" }).click();
+      const v = artifact().version;
+      const before = await notSent.innerText();
+      j.check(before.includes(`Keep puts ${PART} v${v} (A · Map first) in the draft.`), "before Send, your feedback says that Keep puts the part in the draft", before.replace(/\s+/g, " "));
+      j.check((await page.getByRole("button", { name: /^Approve/ }).count()) === 0, "there is no separate Approve button: Keep and Send approve");
+      await page.waitForTimeout(400); // the marks fade in their colours (0.15 s): let them settle before the screenshot
+      await j.shot("keep-before-send");
       await sendFeedback.click();
       await page.getByText("Sent to the lead as one message.").waitFor({ timeout: 10_000 });
-      service.command("approveArtifact", { artifactId: artifact().id, version: artifact().version, variant: "a" });
+      const after = await page.getByRole("list", { name: "The draft after Send" }).innerText();
+      j.check(after.includes(`${PART} v${v} (A · Map first) is in the draft.`), "after Send, it says the part is in the draft", after);
       await draftBar.waitFor({ timeout: 10_000 });
       const bar = await draftBar.innerText();
-      j.check(/Added\s*Trip plan \(simulated sample\) v2/.test(bar), "the draft bar lists the approved part as Added", bar.replace(/\s+/g, " "));
+      j.check(new RegExp(`Added\\s*Trip plan \\(simulated sample\\) v${v}`).test(bar), "the draft bar lists the kept part as Added", bar.replace(/\s+/g, " "));
       j.check(bar.includes("Start the factory…"), "in Vision, the draft bar leads to Start the factory…");
       j.check((await page.getByRole("list", { name: "Artifacts of round 1" }).innerText()).includes("in the draft"), "the part says in the draft");
+      const item = service.state().blueprint.draft.items.find((i) => i.title === PART);
+      j.check(item?.status === "approved" && item.version === v && item.variant === "a", "the record: the draft holds the part, with the pick", item && { status: item.status, version: item.version, variant: item.variant });
       j.check(await frameShows(page), "in the draft, the prototype still shows the designer's page");
       await j.shot("draft");
       dropNoise(page);
@@ -178,13 +192,17 @@ await runJourney(
         return;
       }
       await drop.click();
+      const before = await notSent.innerText();
+      j.check(before.includes(`Drop takes ${PART} v${artifact().version} out of the draft.`), "before Send, your feedback says that Drop takes the part out of the draft", before.replace(/\s+/g, " "));
       await sendFeedback.click();
       await page.getByText("Sent to the lead as one message.").waitFor({ timeout: 10_000 });
       await page.waitForTimeout(1500);
       const bar = (await draftBar.count()) ? await draftBar.innerText() : "";
       j.check(!/Added\s*Trip plan/.test(bar), "a Drop removes the part from the draft (the draft bar no longer lists it as Added)", bar.replace(/\s+/g, " "));
       const item = service.state().blueprint.draft.items.find((i) => i.title === PART);
-      j.check(item?.status !== "approved", "the record: the draft item is no longer approved", item && { status: item.status });
+      j.check(item?.status === "dropped", "the record: the draft item is dropped", item && { status: item.status });
+      const chips = await partItem().innerText();
+      j.check(/drop/.test(chips) && !chips.includes("in the draft"), "the part says drop, and no longer in the draft (the screen agrees)", chips.replace(/\s+/g, " "));
       await j.shot("dropped");
       dropNoise(page);
       await j.pageChecks("Vision after Drop");
