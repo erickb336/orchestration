@@ -188,6 +188,9 @@ main.st-wide { max-width: 1600px; }
 .st-kinds .k-btn[aria-pressed="true"]::before { content: "✓"; margin-right: 0.35em; }
 .st-kinds .k-btn[aria-pressed="true"][aria-disabled="true"] { opacity: 1; cursor: default; }
 .st-sum { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); font-size: var(--fs-small); overflow-wrap: anywhere; }
+/* Under a part of your answer: what Send does to the draft; a Keep that cannot go in is in the colour of what needs you. */
+.st-effect { display: block; color: var(--muted); }
+.st-effect--refused { color: var(--st-you); }
 /* PE review: one verdict per variant, each with its reasons, its change and its budget effect. */
 .st-verdicts { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
 .st-verdict { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; padding-top: var(--space-2); border-top: 1px solid var(--border); }
