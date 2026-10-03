@@ -59,7 +59,7 @@ The Node script is chosen: it is the only option that refuses a listed name reso
 
 **Where the dev container is read.** At the trusted base, as the project conventions and the check suggestions are, so a change cannot choose the image its own checks run in. That was not enough: an agent's change reaches the trusted base by automatic merging, so the owner now confirms the dev container by its digest (review fixes, 3). A `build.dockerfile`'s text comes from the trusted base too; the build context is the checked copy, and `RUN` steps have no network.
 
-**Not done in E1:** a sweep of what a crashed service leaves (labelled networks, containers and `runs/` folders under `~/.cache/orchestrator/environment`); the held state of checks still follows the host sandbox's probe; Rust, Ruby and Java rows of the table are proposed but not run.
+**Not done in E1:** Rust, Ruby and Java rows of the table are proposed but not run. (Done in ORC-030 S2: housekeeping sweeps what a crashed service leaves, by the `orchestrator.environment` label, and the hold of checks follows where they run; see `ORC-030-S2.md`.)
 
 Both replace what they supersede: the Node-only evidence path and the npm-only network rule, when Docker is present.
 
@@ -95,7 +95,7 @@ The shell is bash with VHS's prompt (`> `), so the failure scan skips typed comm
 
 **Real tests** (2026-10-03, Colima with 2 CPUs and 2 GB, each with a fresh prepare, in two runs): Node from its dev container 26–27 s, Python 28 s, Go 44–59 s (it compiles its preview and builds its CLI in the recording), the hostile fixture 31 s. Each page and CLI uses its dependency with no network. After E1's checks of the same project, a capture reused their prepare by its key, and its preview, which ended at once, was reported in 1.2 s with its log. The hostile preview and CLI tried 1.1.1.1, 192.168.5.2 (the Mac through Colima), 172.17.0.1, `host.docker.internal`, `host.lima.internal`, their own loopback and an outside name: all refused (`ENETUNREACH`, `EAI_AGAIN`, `ECONNREFUSED`). Its page tried the same from the browser, and WebRTC: all blocked. The canary on the Mac's loopback saw no connection; a control container on Docker's ordinary network did reach it.
 
-**Not done in E2:** images without bash; zsh tapes (the recorder refuses them too); a daemon reached by `tcp://` or `ssh://` (a CLI then says it needs the local socket); mobile shots in the real tests (the browser code is the recorder's, unchanged); a sweep of preview and session containers a crashed service leaves (they are labelled `orchestrator.environment=preview` and `=session`).
+**Not done in E2:** images without bash; zsh tapes (the recorder refuses them too); a daemon reached by `tcp://` or `ssh://` (a CLI then says it needs the local socket); mobile shots in the real tests (the browser code is the recorder's, unchanged). (The sweep of preview and session containers is done in ORC-030 S2.)
 
 **Removing the recorder's path.** When the projects that capture evidence have environments (the lead proposes an image from the table; the owner confirms it), migrate, then delete:
 1. Propose an environment for each project that still captures on the recorder's path (the record's `via: "recorder"` finds them).
