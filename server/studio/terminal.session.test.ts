@@ -5,7 +5,7 @@
 
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import { CastRecorder, SESSION_PROMPT, recordSession, refusedEscape, sanitizeOutput, tapeSession, transcriptError, validateCast, validateTape, waitPatternRefusal, type SessionStream, type TapeSession } from "./terminal";
+import { CastRecorder, SESSION_PROMPT, WaitMatcher, recordSession, refusedEscape, sanitizeOutput, tapeSession, transcriptError, validateCast, validateTape, waitPatternRefusal, type SessionStream, type TapeSession } from "./terminal";
 
 const SIZE = "Set Columns 80\nSet Rows 24\n";
 
@@ -41,13 +41,13 @@ describe("a tape's steps in a session", () => {
     expect(tapeSession(`Output demo.gif\nSource missing.tape\n${SIZE}`).ok).toBe(false);
   });
 
-  it("refuses what a session cannot do as VHS does, and Wait patterns that could backtrack for long", () => {
+  it("refuses what a session cannot do as VHS does, and a Wait pattern that is too long or not a regular expression", () => {
     const errors = (body: string) => {
       const r = tapeSession(`Output demo.gif\n${SIZE}${body}`);
       return r.ok ? "" : r.errors.join("\n");
     };
-    expect(errors("Wait /(a+)+b/\n")).toMatch(/groups are not allowed/);
-    expect(errors("Set WaitPattern /a*b*c*d*/\n")).toMatch(/more than three repeats/);
+    expect(errors("Wait /[a-/\n")).toMatch(/not a regular expression/);
+    expect(errors(`Set WaitPattern /${"a".repeat(101)}/\n`)).toMatch(/longer than 100 characters/);
     expect(errors("Wait+Somewhere /x/\n")).toMatch(/Wait takes \+Screen or \+Line/);
     expect(errors("Ctrl+Shift+Left\n")).toMatch(/cannot be typed in a session/);
     expect(errors("Enter 1000\n")).toMatch(/a count from 1 to 100/);
@@ -56,7 +56,8 @@ describe("a tape's steps in a session", () => {
     expect(tapeSession('Output demo.gif\nType "x"\n').ok).toBe(false);
     expect(waitPatternRefusal(">$")).toBeUndefined();
     expect(waitPatternRefusal("\\$ $")).toBeUndefined();
-    expect(waitPatternRefusal("(.)\\1")).toBeDefined();
+    // A pattern that backtracks for long is not refused by its text: the time of each test is bounded (WaitMatcher).
+    expect(waitPatternRefusal("(a+)+b")).toBeUndefined();
   });
 
   it("every tape the tape rules accept for the recorder's fixtures is one a session can type", () => {
@@ -183,6 +184,7 @@ class FakeShell extends EventEmitter implements SessionStream {
       this.emit("data", Buffer.from("\r\n\x1b[?2004l\r"));
       if (cmd === "exit") return this.emit("end");
       if (cmd === "slow") setTimeout(() => this.emit("data", Buffer.from(`Done\r\n${SESSION_PROMPT}`)), 100);
+      else if (cmd === "wide") this.emit("data", Buffer.from(`${`${"a".repeat(79)}\r\n`.repeat(8)}${SESSION_PROMPT}`));
       else this.emit("data", Buffer.from(`ran ${cmd}\r\n${SESSION_PROMPT}`));
     });
     return true;
@@ -222,5 +224,51 @@ describe("a session against a stand-in shell", () => {
     setTimeout(() => abort.abort(), 50);
     const r = await recordSession({ stream: new FakeShell(), session: session("Sleep 10s\n"), timeoutMs: 5000, signal: abort.signal });
     expect(r).toMatchObject({ status: "failed", error: "the capture was stopped" });
+  });
+});
+
+/** What `f` gives, how long it took, and the longest time the event loop was blocked meanwhile (from a 10 ms timer). */
+async function blocking<T>(f: () => Promise<T>): Promise<{ result: T; ms: number; blockedMs: number }> {
+  const t0 = performance.now();
+  let last = t0;
+  let blockedMs = 0;
+  const tick = setInterval(() => {
+    const t = performance.now();
+    blockedMs = Math.max(blockedMs, t - last - 10);
+    last = t;
+  }, 10);
+  try {
+    const result = await f();
+    return { result, ms: performance.now() - t0, blockedMs: Math.max(blockedMs, performance.now() - last - 10) };
+  } finally {
+    clearInterval(tick);
+  }
+}
+
+describe("a Wait pattern that backtracks for long (pass 6 review finding 1)", () => {
+  it("is tested off the main thread: the review's /\\s*\\s*\\s*!/ over 1,000 spaces answers slow within its time limit", async () => {
+    const m = new WaitMatcher();
+    try {
+      // On the main thread, this one test took 79 s in the review.
+      const r = await blocking(() => m.test("\\s*\\s*\\s*!", " ".repeat(1000)));
+      expect(r.result).toBe("slow");
+      expect(r.ms).toBeLessThan(1500);
+      expect(r.blockedMs).toBeLessThan(200);
+      // The next test starts a new worker; a pattern that throws matches nothing.
+      expect(await m.test("done$", "all done")).toBe(true);
+      expect(await m.test(">$", "> x")).toBe(false);
+      expect(await m.test("(?<=", "x")).toBe(false);
+    } finally {
+      m.close();
+    }
+  });
+
+  it("fails its Wait within a small bound, and the service's event loop keeps running meanwhile", async () => {
+    // About 660 characters on the screen. Before the fix this session took 45 s here, with the event loop blocked.
+    const tape = 'Type@1ms "wide"\nEnter\nWait+Screen@10s /[\\s\\S]*[\\s\\S]*[\\s\\S]*!/\n';
+    const r = await blocking(() => recordSession({ stream: new FakeShell(), session: session(tape), timeoutMs: 20_000, settleMs: 10 }));
+    expect(r.result).toMatchObject({ status: "failed", error: expect.stringMatching(/took longer than 0\.25 s to test the output/) });
+    expect(r.ms).toBeLessThan(3000);
+    expect(r.blockedMs).toBeLessThan(200);
   });
 });
