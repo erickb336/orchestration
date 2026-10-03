@@ -124,7 +124,7 @@ describe("a lead proposal waits for PE review", () => {
     expect(needsYouOf(checkin.s, task(checkin.s, id))).toBeUndefined(); // PE review first, then your go-ahead
     let s = go(pe(checkin.s, { taskId: id }, "feasible", 10), 11);
     expect(running(s, id)).toBe(0);
-    expect(M.stateLabel(s, task(s, id))).toBe("Waiting for your go-ahead");
+    expect(M.stateLabel(s, task(s, id))).toBe("Waits for you");
     expect(needsYouOf(s, task(s, id))?.what).toBe("choose an option");
     s = go(M.startHeldTask(s, id, at(12)), 13);
     expect(running(s, id)).toBe(1);

@@ -260,7 +260,7 @@ function PillsSection() {
         <div className="k-tones">
           <StatePill tone="neutral">Proposed</StatePill>
           <StatePill tone="neutral">Ready</StatePill>
-          <StatePill tone="neutral">Waiting for your go-ahead</StatePill>
+          <StatePill tone="neutral">Waits for you</StatePill>
           <StatePill tone="work" pulse>
             Running
           </StatePill>
