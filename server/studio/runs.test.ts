@@ -366,19 +366,19 @@ describe("a designer run at the service", () => {
     expect(S.latestArtifacts(state())).toEqual([]);
   });
 
-  it("runs only in Vision: a run asked for before the factory started waits until the project is back in Vision", async () => {
+  it("runs while the factory runs (pass 5): a run asked for before the factory started waits only for the pause, then runs", async () => {
     await service();
     cmd("pauseProject");
     const id = startDesignerRun(store, { round: 1, brief: "Make the trip plan." }, iso());
     cmd("startFactory", startFactoryArgs(state()));
-    cmd("resumeProject");
-    tick();
     tick();
     expect(runOf(id).status).toBe("queued");
     expect(claude.started).toEqual([]);
-    cmd("startVision");
+    cmd("resumeProject");
     tick();
+    expect(state().project.stage).toBe("building");
     expect(runOf(id).status).toBe("running");
+    expect(claude.started.map((r) => r.attemptId)).toEqual([id]);
   });
 
   it("the store's stage guard holds for studio writes: an update that completes a studio run and moves the project to building is refused, and nothing is written", async () => {

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { startFactoryArgs } from "../src/domain/testing/factory";
+import { inVision, startFactoryArgs } from "../src/domain/testing/factory";
 import { CLIENT_HEADER } from "../src/api";
 import { createHttpServer } from "./http";
 import * as D from "../src/domain/delivery";
@@ -818,7 +818,7 @@ describe("sample projects never contact GitHub", () => {
     const sample = new Store(join(dir, "sample-start.sqlite")); // seeded with the sample project
     const s2 = new Scheduler(sample, { claude, codex }, { workspaces, github: fake, leaseMs: 120_000 });
     extra.push(s2);
-    sample.command("startVision", {}, "vision", iso());
+    sample.update((s) => inVision(s, iso()), iso());
     expect(sample.read().state.project).toMatchObject({ sample: true, stage: "shaping" });
     const probe = createHttpServer({ store: sample, scheduler: s2, workspaces, startedAt: iso(), allowedHosts: [] });
     await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
