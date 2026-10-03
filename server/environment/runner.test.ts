@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { CheckRunners, DirectChecks, type CheckAssignment, type CheckRunner } from "../checks";
 import type { AdapterEvent } from "../runtimes/types";
 import { EnvironmentChecks } from "./runner";
-import { PreparedEnvironments, judgeEnvProbe } from "./prepared";
+import { PROBE_PRIVATE_HOST, PreparedEnvironments, judgeEnvProbe } from "./prepared";
 import { removeTree } from "./copy";
 import { phaseArgs } from "./docker";
 import { runDocker } from "../studio/container";
@@ -70,15 +70,33 @@ describe("without Docker", () => {
 });
 
 describe("the setup probe's judgement", () => {
-  const good = { outside: "ENETUNREACH", host: "ENETUNREACH", dns: "EAI_AGAIN", proxyOutside: "HTTP/1.1 403 Forbidden", proxyLoopback: "HTTP/1.1 403 Forbidden", proxyHost: "HTTP/1.1 403 Forbidden" };
+  const good = { outside: "ENETUNREACH", host: "ENETUNREACH", dns: "EAI_AGAIN", vm: { "172.17.0.1": "ENETUNREACH", "172.30.0.1": "EHOSTUNREACH" }, proxyOutside: "HTTP/1.1 403 Forbidden", proxyLoopback: "HTTP/1.1 403 Forbidden", proxyHost: "HTTP/1.1 403 Forbidden", proxyPrivate: "HTTP/1.1 403 Forbidden" };
+  const decided = [{ orchestratorProxy: 1 as const, host: PROBE_PRIVATE_HOST, port: 443, allowed: false, reason: "resolves to a local or private address (192.168.5.2)" }];
   it("passes only when nothing but the proxy is reachable and the proxy refuses", () => {
-    expect(judgeEnvProbe(good, 0)).toBeUndefined();
-    expect(judgeEnvProbe({ ...good, outside: "CONNECTED" }, 0)).toMatch(/reached the internet directly/);
-    expect(judgeEnvProbe({ ...good, outside: "TIMEOUT" }, 0)).toMatch(/reached the internet directly/);
-    expect(judgeEnvProbe({ ...good, host: "CONNECTED" }, 0)).toMatch(/reached this computer/);
-    expect(judgeEnvProbe(good, 1)).toMatch(/1 connection\(s\) to the canary/);
-    expect(judgeEnvProbe({ ...good, dns: "RESOLVED 93.184.215.14" }, 0)).toMatch(/resolved an outside name/);
-    expect(judgeEnvProbe({ ...good, proxyLoopback: "HTTP/1.1 200 Connection Established" }, 0)).toMatch(/did not refuse this computer's loopback/);
+    expect(judgeEnvProbe(good, 0, decided)).toBeUndefined();
+    expect(judgeEnvProbe({ ...good, outside: "TIMEOUT" }, 0, decided)).toBeUndefined();
+    expect(judgeEnvProbe({ ...good, outside: "CONNECTED" }, 0, decided)).toMatch(/reached the internet directly/);
+    expect(judgeEnvProbe({ ...good, host: "CONNECTED" }, 0, decided)).toMatch(/reached this computer/);
+    expect(judgeEnvProbe(good, 1, decided)).toMatch(/1 connection\(s\) to the canary/);
+    expect(judgeEnvProbe({ ...good, dns: "RESOLVED 93.184.215.14" }, 0, decided)).toMatch(/resolved an outside name/);
+    expect(judgeEnvProbe({ ...good, proxyLoopback: "HTTP/1.1 200 Connection Established" }, 0, decided)).toMatch(/did not refuse this computer's loopback/);
+  });
+
+  it("a refused connection means a host answered; the Docker VM must not answer on any of its addresses (review finding 5)", () => {
+    // ECONNREFUSED is an answer: the host is reachable, only the port is closed.
+    expect(judgeEnvProbe({ ...good, outside: "ECONNREFUSED" }, 0, decided)).toMatch(/reached the internet directly/);
+    expect(judgeEnvProbe({ ...good, host: "ECONNREFUSED" }, 0, decided)).toMatch(/reached this computer/);
+    // The private network's own gateway (an engine that ignores the isolated mode) answers on the VM's SSH port.
+    expect(judgeEnvProbe({ ...good, vm: { ...good.vm, "172.18.0.1": "CONNECTED" } }, 0, decided)).toMatch(/reached the Docker VM at 172\.18\.0\.1:22 \(CONNECTED\)/);
+    expect(judgeEnvProbe({ ...good, vm: { "172.17.0.1": "ECONNREFUSED" } }, 0, decided)).toMatch(/reached the Docker VM at 172\.17\.0\.1:22/);
+    expect(judgeEnvProbe({ ...good, vm: {} }, 0, decided)).toMatch(/no address of the Docker VM to try/);
+  });
+
+  it("the proxy's private-address rule must be the one that refused the listed name that resolves to the host (review finding 5)", () => {
+    expect(judgeEnvProbe({ ...good, proxyPrivate: "HTTP/1.1 502 Bad Gateway" }, 0, decided)).toMatch(/did not refuse a listed name that resolves to this computer/);
+    // A 403 for another reason (the list, the port) does not show the rule works.
+    expect(judgeEnvProbe(good, 0, [{ ...decided[0], reason: "not on the list of registries" }])).toMatch(/private-address rule did not refuse/);
+    expect(judgeEnvProbe(good, 0, [])).toMatch(/private-address rule did not refuse/);
   });
 });
 

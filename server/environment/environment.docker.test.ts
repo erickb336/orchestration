@@ -143,11 +143,16 @@ describe(`the project environment, in Docker${skipReason}`, () => {
 
     it.skipIf(!ready)("cannot reach a host that is not a registry, the Docker host or this computer, in either phase; the canary sees nothing", async () => {
       const port = (canary.address() as { port: number }).port;
-      // The control: a container on Docker's ordinary network does reach the canary, so a leak would show.
-      const control = await runDocker(docker!, ["run", "--rm", "--add-host", "orchestrator-host:host-gateway", "--user", "10001:10001", "--entrypoint", "node", PROXY_IMAGE, "-e", `require("node:net").connect(${port}, "orchestrator-host").on("connect", () => { console.log("CONNECTED"); process.exit(0) }).on("error", (e) => console.log(e.code))`], { env: dockerEnv(process.env), timeoutMs: 60_000 });
-      expect(control.stdout.trim()).toBe("CONNECTED");
-      expect(hits).toBe(1);
+      // The control: a container on Docker's ordinary network does reach the canary (through the host gateway and at
+      // the Mac's address) and the Docker VM's SSH port, so a leak to any of the hostile targets would show.
+      const reach = (host: string, p: number) => `new Promise((r) => require("node:net").connect(${p}, "${host}").on("connect", function () { this.destroy(); r("CONNECTED") }).on("error", (e) => r(e.code)))`;
+      const control = await runDocker(docker!, ["run", "--rm", "--add-host", "orchestrator-host:host-gateway", "--user", "10001:10001", "--entrypoint", "node", PROXY_IMAGE, "-e", `Promise.all([${reach("orchestrator-host", port)}, ${reach("192.168.5.2", port)}, ${reach("172.17.0.1", 22)}]).then((x) => console.log(x.join(" ")))`], { env: dockerEnv(process.env), timeoutMs: 60_000 });
+      expect(control.stdout.trim()).toBe("CONNECTED CONNECTED CONNECTED");
+      expect(hits).toBe(2);
       hits = 0;
+      // No route or no answer: a refusal (ECONNREFUSED) would mean a host answered.
+      const unreachable = /^(ENETUNREACH|EHOSTUNREACH|TIMEOUT)$/;
+      const unresolved = /^(EAI_AGAIN|ENOTFOUND)$/;
 
       // The change carries a report full of passes, and its install script plants another: neither may be read.
       const plant = (dir: string) => {
@@ -166,13 +171,13 @@ describe(`the project environment, in Docker${skipReason}`, () => {
       const prep = line("prepare");
       console.log(`hostile prepare: ${JSON.stringify(prep)}`);
       for (const k of ["proxyNotRegistry", "proxyLoopback", "proxyLocalhost", "proxyHostGateway", "proxyHostAddress", "proxyRegistryPlainPort"]) expect(prep[k], k).toMatch(/^HTTP\/1\.1 403 /);
-      for (const k of ["directOutside", "directHostAddress", "directDockerBridge", "directHostGateway"]) expect(prep[k], k).toMatch(/^(ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|EAI_AGAIN|ENOTFOUND)$/);
-      expect(prep.dnsOutside).toMatch(/^(EAI_AGAIN|ENOTFOUND)$/);
+      for (const k of ["directOutside", "directHostAddress", "directDockerBridge"]) expect(prep[k], k).toMatch(unreachable);
+      for (const k of ["directHostGateway", "dnsOutside"]) expect(prep[k], k).toMatch(unresolved);
       const runPhase = line("run");
       console.log(`hostile run: ${JSON.stringify(runPhase)}`);
-      for (const k of ["directOutside", "directHostAddress", "directDockerBridge", "directHostGateway"]) expect(runPhase[k], k).toMatch(/^(ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|EAI_AGAIN|ENOTFOUND)$/);
+      for (const k of ["directOutside", "directHostAddress", "directDockerBridge"]) expect(runPhase[k], k).toMatch(unreachable);
+      for (const k of ["directHostGateway", "dnsOutside"]) expect(runPhase[k], k).toMatch(unresolved);
       expect(runPhase.proxyNotRegistry).toBe("NO PROXY");
-      expect(runPhase.dnsOutside).toMatch(/^(EAI_AGAIN|ENOTFOUND)$/);
       expect(r.env.refused?.join(" ")).toMatch(/example\.com \(not on the list of registries\)/);
       expect(r.env.refused?.join(" ")).toMatch(/127\.0\.0\.1 \(an IP address/);
       expect(hits).toBe(0);

@@ -94,8 +94,10 @@ function hardened(limits: typeof ENV_LIMITS, readOnly: boolean): string[] {
 }
 
 /** The proxy's container: detached, on the private network and the egress network, the script passed as an argument. */
-export function proxyArgs(o: { name: string; privateNet: string; egressNet: string; hosts: string[]; script: string }): string[] {
+export function proxyArgs(o: { name: string; privateNet: string; egressNet: string; hosts: string[]; script: string; addHosts?: string[] }): string[] {
   for (const n of [o.name, o.privateNet, o.egressNet]) need(NAME.test(n), `not a name: ${JSON.stringify(n)}`);
+  // The setup probe's own hosts entries only: a name mapped to the host gateway, to exercise the private-address rule.
+  for (const h of o.addHosts ?? []) need(/^[a-z0-9.-]+\.invalid:host-gateway$/.test(h), `not a probe's hosts entry: ${JSON.stringify(h)}`);
   return [
     "run",
     "--detach",
@@ -109,6 +111,7 @@ export function proxyArgs(o: { name: string; privateNet: string; egressNet: stri
     "--network",
     o.egressNet,
     ...hardened(PROXY_LIMITS, true),
+    ...(o.addHosts ?? []).flatMap((h) => ["--add-host", h]),
     "--label",
     `${LABEL}=proxy`,
     "--env",

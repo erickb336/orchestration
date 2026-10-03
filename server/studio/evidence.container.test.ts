@@ -357,11 +357,13 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
       });
       try {
         const port = (canary.address() as { port: number }).port;
-        // The control: a container on Docker's ordinary network does reach the canary, so a leak would show.
-        const control = `const s=require("node:net").connect(${port},"host.lima.internal");s.on("connect",()=>{console.log("CONNECTED");s.destroy()});s.on("error",(e)=>console.log(e.code))`;
+        // The control: a container on Docker's ordinary network does reach the canary and the Docker VM's SSH port
+        // (172.17.0.1:22), so a leak to the hostile targets would show.
+        const reach = (host: string, p: number) => `new Promise((r) => require("node:net").connect(${p}, "${host}").on("connect", function () { this.destroy(); r("CONNECTED") }).on("error", (e) => r(e.code)))`;
+        const control = `Promise.all([${reach("host.lima.internal", port)}, ${reach("172.17.0.1", 22)}]).then((x) => console.log(x.join(" ")))`;
         const reached = execFileSync(ready.ok ? ready.docker : "docker", ["run", "--rm", "--pull", "never", "--network", "bridge", "--user", "10001:10001", RECORDER_IMAGE, "/usr/local/bin/node", "-e", control], { encoding: "utf8", timeout: 60_000 }).trim();
         await new Promise((r) => setTimeout(r, 200));
-        expect({ reached, hits }).toEqual({ reached: "CONNECTED", hits: 1 });
+        expect({ reached, hits }).toEqual({ reached: "CONNECTED CONNECTED", hits: 1 });
         hits = 0;
 
         const c = await capture("hostile", settingPlan("Node", [["npm", "ci"]]), ["node", "hostile.js", "preview"], { extra: { "canary.json": JSON.stringify({ canary: port }) }, settleMs: 5000 });
@@ -374,7 +376,10 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
         for (const url of ["http://1.1.1.1/", `http://192.168.5.2:${port}/`, `http://host.lima.internal:${port}/`, `http://host.docker.internal:${port}/`, `http://127.0.0.1:${port}/`]) expect(probes).toContain(`${url} blocked`);
         expect(probes).toMatch(/webrtc no srflx/);
         expect(probes).not.toMatch(/REACHED/);
-        const refused = /^(ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|EAI_AGAIN|ENOTFOUND)$/;
+        // No route or no answer: a refusal (ECONNREFUSED) would mean a host answered, except on the container's own
+        // loopback, where nothing listens on the canary's port.
+        const unreachable = /^(ENETUNREACH|EHOSTUNREACH|TIMEOUT)$/;
+        const unresolved = /^(EAI_AGAIN|ENOTFOUND)$/;
         const preview = JSON.parse(/HOSTILE (\{.*\})/.exec(warning("HOSTILE"))![1]) as Record<string, string>;
         console.log(`hostile preview: ${JSON.stringify(preview)}`);
         const cliText = readFileSync(join(c.out, "bi-2/hostile.txt"), "utf8");
@@ -382,7 +387,9 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
         console.log(`hostile CLI: ${JSON.stringify(cli)}`);
         for (const [what, r] of [["preview", preview], ["cli", cli]] as const) {
           expect(r.phase, what).toBe(what);
-          for (const k of ["directOutside", "directHostAddress", "directDockerBridge", "directHostGateway", "directLima", "ownLoopback", "dnsOutside"]) expect(r[k], `${what} ${k}`).toMatch(refused);
+          for (const k of ["directOutside", "directHostAddress", "directDockerBridge"]) expect(r[k], `${what} ${k}`).toMatch(unreachable);
+          for (const k of ["directHostGateway", "directLima", "dnsOutside"]) expect(r[k], `${what} ${k}`).toMatch(unresolved);
+          expect(r.ownLoopback, `${what} ownLoopback`).toBe("ECONNREFUSED");
         }
         expect(cli.terminal).toBe("a terminal");
         expect(captured(c.r.items[1]).files.map((f) => f.path)).toEqual(["bi-2/hostile.cast", "bi-2/hostile.txt"]);

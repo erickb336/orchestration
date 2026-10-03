@@ -78,11 +78,21 @@ async function main() {
   if (cmd === "__container") return container(argv[1], argv[2], argv[3], argv[4]);
   log("");
   if (cmd === "version") return out("29.0.0-fake");
+  if (cmd === "network" && sub === "inspect") {
+    // Docker's default bridge and the proxy's network have a gateway (the Docker VM); the isolated private one has none.
+    const net = argv.at(-1);
+    return out(JSON.stringify(net === "bridge" ? [{ Subnet: "172.17.0.0/16", Gateway: "172.17.0.1" }] : net.startsWith("orc-env-out-") ? [{ Subnet: "172.30.0.0/16", Gateway: "172.30.0.1" }] : [{ Subnet: "172.31.0.0/16" }]));
+  }
   if (cmd === "network") return sub === "create" ? out(hex(argv.at(-1)).slice(0, 64)) : undefined;
   if (cmd === "image" && sub === "inspect") return out(argv.includes("{{json .Config.Env}}") ? JSON.stringify(["PATH=/usr/local/bin:/usr/bin:/bin"]) : `sha256:${hex(argv.at(-1)).slice(0, 64)}`);
   if (cmd === "pull" || cmd === "tag" || (cmd === "image" && sub === "rm")) return;
   if (cmd === "commit") return out(`sha256:${hex(`commit-${argv.at(-1)}`).slice(0, 64)}`);
-  if (cmd === "logs") return out('{"orchestratorProxy":1,"listening":3128}');
+  if (cmd === "logs") {
+    // The probe's proxy (its hosts entry maps the probe's name to the host gateway) refuses that name as private.
+    out('{"orchestratorProxy":1,"listening":3128}');
+    if (read(argv[1])?.probe) out('{"orchestratorProxy":1,"host":"registry.probe.invalid","port":443,"allowed":false,"reason":"resolves to a local or private address (192.168.5.2)"}');
+    return;
+  }
   if (cmd === "kill") return void stop(argv[1], false);
   if (cmd === "rm") {
     for (const n of argv.slice(1).filter((a) => !a.startsWith("-"))) if (!stop(n, true)) process.stderr.write(`Error response from daemon: No such container: ${n}\n`);
@@ -102,12 +112,15 @@ async function main() {
     const start = () => spawn(process.execPath, [new URL(import.meta.url).pathname, "__container", name, work, entry, args[0] ?? ""], { detached: true, stdio: "ignore", env: process.env }).unref();
     if (argv.includes("--detach")) {
       if (entry === "fake-beat" || entry === "fake-fill") start();
-      else write(name, { status: "running", pid: 0 });
+      else write(name, { status: "running", pid: 0, probe: argv.includes("registry.probe.invalid:host-gateway") });
       return;
     }
     if (entry === "node" && args[0] === "-e") {
+      // The setup probe's client, on a machine whose private network reaches nothing.
       write(name, { status: "exited", code: 0 });
-      return out(JSON.stringify({ orchestratorEnvProbe: 1, outside: "ENETUNREACH", host: "ENETUNREACH", dns: "EAI_AGAIN", proxyOutside: "HTTP/1.1 403 Forbidden", proxyLoopback: "HTTP/1.1 403 Forbidden", proxyHost: "HTTP/1.1 403 Forbidden" }));
+      const input = JSON.parse(args[2]);
+      const forbidden = "HTTP/1.1 403 Forbidden";
+      return out(JSON.stringify({ orchestratorEnvProbe: 1, outside: "ENETUNREACH", host: "ENETUNREACH", dns: "EAI_AGAIN", vm: Object.fromEntries(input.vm.map((a) => [a, "ENETUNREACH"])), proxyOutside: forbidden, proxyLoopback: forbidden, proxyHost: forbidden, proxyPrivate: forbidden }));
     }
     if (entry === "fake-exit") {
       const code = Number(args[0] ?? 0);

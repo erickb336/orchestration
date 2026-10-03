@@ -180,10 +180,21 @@ export interface EnvProbeFacts {
   outside: string;
   host: string;
   dns: string;
+  /** Each address of the Docker VM (the gateways of its networks), tried on its SSH port, 22. */
+  vm: Record<string, string>;
   proxyOutside: string;
   proxyLoopback: string;
   proxyHost: string;
+  /** A name on the probe's list that resolves to the host gateway, through the proxy, on port 443. */
+  proxyPrivate: string;
 }
+
+/**
+ * A name only the probe's proxy allows, and resolves (by a hosts entry in the probe's proxy only) to the host gateway:
+ * the proxy must refuse it by its private-address rule, the guard that matters when a registry's name resolves to a
+ * private address. `.invalid` never resolves in public DNS.
+ */
+export const PROBE_PRIVATE_HOST = "registry.probe.invalid";
 
 /** Run inside the probe's client container (on the private network) by the Node image's node; it only looks. */
 const PROBE_CLIENT = `"use strict";
@@ -193,22 +204,49 @@ const tcp = (h, p) => new Promise((r) => { const s = net.connect(p, h); const t 
 const via = (target) => new Promise((r) => { const s = net.connect(input.port, input.proxy); let b = ""; const t = setTimeout(() => { s.destroy(); r("TIMEOUT"); }, 6000); s.on("connect", () => s.write("CONNECT " + target + " HTTP/1.1\\r\\n\\r\\n")); s.on("data", (d) => { b += d; const i = b.indexOf("\\r\\n"); if (i >= 0) { clearTimeout(t); s.destroy(); r(b.slice(0, i)); } }); s.on("error", (e) => { clearTimeout(t); r(e.code || "ERROR"); }); });
 const lookup = (h) => new Promise((r) => dns.lookup(h, (e, a) => r(e ? e.code : "RESOLVED " + a)));
 (async () => {
-  const f = { outside: await tcp("1.1.1.1", 443), host: await tcp("orchestrator-host", input.canary), dns: await lookup("example.com"), proxyOutside: await via("example.com:443"), proxyLoopback: await via("127.0.0.1:" + input.canary), proxyHost: await via("orchestrator-host:" + input.canary) };
+  const vm = {};
+  for (const a of input.vm) vm[a] = await tcp(a, 22);
+  const f = { outside: await tcp("1.1.1.1", 443), host: await tcp("orchestrator-host", input.canary), dns: await lookup("example.com"), vm, proxyOutside: await via("example.com:443"), proxyLoopback: await via("127.0.0.1:" + input.canary), proxyHost: await via("orchestrator-host:" + input.canary), proxyPrivate: await via(input.privateHost + ":443") };
   console.log(JSON.stringify({ orchestratorEnvProbe: 1, ...f }));
 })();
 `;
 
-const REFUSED = new Set(["ENETUNREACH", "EHOSTUNREACH", "ECONNREFUSED", "EACCES", "EPERM", "EADDRNOTAVAIL", "ENOTFOUND", "EAI_AGAIN"]);
+/**
+ * What counts as out of reach: no route, or no answer at all. ECONNREFUSED is an answer: a host was reached and only
+ * its port was closed.
+ */
+const UNREACHABLE = new Set(["ENETUNREACH", "EHOSTUNREACH", "TIMEOUT"]);
+const NOT_RESOLVED = new Set(["EAI_AGAIN", "ENOTFOUND"]);
 
-/** Judge the probe: the private network reaches nothing but the proxy, and the proxy refuses what is not a registry. */
-export function judgeEnvProbe(f: EnvProbeFacts, canaryHits: number): string | undefined {
-  if (!REFUSED.has(f.outside)) return `a container on the private network reached the internet directly (1.1.1.1:443 ${f.outside})`;
-  if (!REFUSED.has(f.host) || canaryHits > 0) return `a container on the private network reached this computer (the host gateway: ${f.host}; ${canaryHits} connection(s) to the canary)`;
-  if (f.dns.startsWith("RESOLVED")) return `a container on the private network resolved an outside name (${f.dns})`;
-  for (const [what, v] of [["example.com", f.proxyOutside], ["this computer's loopback", f.proxyLoopback], ["the host gateway", f.proxyHost]] as const) {
+/** One decision of the proxy, as it logs it (egress-proxy.mjs). */
+export interface ProxyDecision {
+  host: string;
+  allowed: boolean;
+  reason?: string;
+}
+
+/**
+ * Judge the probe: the private network reaches nothing but the proxy (not the internet, this computer or any address
+ * of the Docker VM), and the proxy refuses what is not a registry, including, by its private-address rule, a listed
+ * name that resolves to this computer.
+ */
+export function judgeEnvProbe(f: EnvProbeFacts, canaryHits: number, decisions: readonly ProxyDecision[]): string | undefined {
+  if (!UNREACHABLE.has(f.outside)) return `a container on the private network reached the internet directly (1.1.1.1:443 ${f.outside})`;
+  if (!UNREACHABLE.has(f.host) || canaryHits > 0) return `a container on the private network reached this computer (the host gateway: ${f.host}; ${canaryHits} connection(s) to the canary)`;
+  if (!Object.keys(f.vm).length) return "the probe had no address of the Docker VM to try";
+  for (const [addr, v] of Object.entries(f.vm)) if (!UNREACHABLE.has(v)) return `a container on the private network reached the Docker VM at ${addr}:22 (${v})`;
+  if (!NOT_RESOLVED.has(f.dns)) return `a container on the private network resolved an outside name (${f.dns})`;
+  for (const [what, v] of [["example.com", f.proxyOutside], ["this computer's loopback", f.proxyLoopback], ["the host gateway", f.proxyHost], ["a listed name that resolves to this computer", f.proxyPrivate]] as const) {
     if (!v.startsWith("HTTP/1.1 403")) return `the proxy did not refuse ${what} (${v})`;
   }
+  if (!decisions.some((d) => d.host === PROBE_PRIVATE_HOST && !d.allowed && d.reason?.startsWith("resolves to a local or private address"))) return `the proxy's private-address rule did not refuse ${PROBE_PRIVATE_HOST}, a listed name that resolves to this computer`;
   return undefined;
+}
+
+/** The gateways of a network, from `docker network inspect --format '{{json .IPAM.Config}}'`. */
+export function gatewaysOf(ipamConfig: unknown): string[] {
+  if (!Array.isArray(ipamConfig)) return [];
+  return ipamConfig.flatMap((c) => (c && typeof c === "object" && typeof (c as { Gateway?: unknown }).Gateway === "string" && (c as { Gateway: string }).Gateway ? [(c as { Gateway: string }).Gateway] : []));
 }
 
 /** The base image's own values of the proxy variables (absent when it sets none), from `docker image inspect`. */
@@ -571,8 +609,11 @@ export class PreparedEnvironments {
     }
   }
 
-  /** The networks and the proxy of one prepare phase (or the probe); `stop` removes all of them and returns the proxy's decisions. */
-  private async startEgress(docker: string, hosts: string[]): Promise<{ privateNet: string; proxy: string; stop: () => Promise<string[]> } | { error: string }> {
+  /**
+   * The networks and the proxy of one prepare phase (or the probe); `stop` removes all of them and returns the proxy's
+   * decisions. `addHosts`: the probe's own hosts entries for the proxy (PROBE_PRIVATE_HOST), never a prepare's.
+   */
+  private async startEgress(docker: string, hosts: string[], addHosts: string[] = []): Promise<{ privateNet: string; egressNet: string; proxy: string; stop: () => Promise<string[]> } | { error: string }> {
     const privateNet = envName("net");
     const egressNet = envName("out");
     const proxy = envName("proxy");
@@ -604,14 +645,14 @@ export class PreparedEnvironments {
       return { error: `the proxy's image could not be pulled: ${img.error}` };
     }
     remember(proxy, docker, this.denv, "container");
-    const started = await runDocker(docker, proxyArgs({ name: proxy, privateNet, egressNet, hosts, script: PROXY_SCRIPT }), { env: this.denv, timeoutMs: 60_000 });
+    const started = await runDocker(docker, proxyArgs({ name: proxy, privateNet, egressNet, hosts, script: PROXY_SCRIPT, addHosts }), { env: this.denv, timeoutMs: 60_000 });
     if (started.code !== 0) {
       await stop();
       return { error: `the proxy did not start: ${started.stderr.trim().split("\n").pop()?.slice(0, 160) ?? ""}` };
     }
     for (let i = 0; i < 75; i++) {
       const logs = await runDocker(docker, ["logs", proxy], { env: this.denv, timeoutMs: 10_000 });
-      if (logs.stdout.includes('"listening"')) return { privateNet, proxy, stop };
+      if (logs.stdout.includes('"listening"')) return { privateNet, egressNet, proxy, stop };
       await new Promise((r) => setTimeout(r, 200));
     }
     await stop();
@@ -675,9 +716,12 @@ export class PreparedEnvironments {
 
   /**
    * The setup probe: the private network and the proxy, made as a prepare's are, with a client container in the
-   * proxy's own image. It must reach nothing directly (the internet, the host gateway, a name outside), and the proxy
-   * must refuse a host off the list, this computer's loopback and the host gateway. A canary on this computer's
-   * loopback must see no connection. Undefined when all hold, else the first that does not.
+   * proxy's own image. It must reach nothing directly: not the internet, not the host gateway, not a name outside, and
+   * not the Docker VM on its SSH port at any of its addresses (the gateways of the private network, the proxy's
+   * network and Docker's default bridge, from `docker network inspect`). Only no route or no answer counts. The proxy
+   * must refuse a host off the list, this computer's loopback, the host gateway, and, by its private-address rule, a
+   * listed name that resolves to the host gateway. A canary on this computer's loopback must see no connection.
+   * Undefined when all hold, else the first that does not.
    */
   async probeSetup(docker: string): Promise<string | undefined> {
     let hits = 0;
@@ -689,29 +733,49 @@ export class PreparedEnvironments {
       srv.once("error", rej);
       srv.listen(0, "127.0.0.1", () => res(srv));
     });
-    const egress = await this.startEgress(docker, ["registry.npmjs.org"]);
+    const egress = await this.startEgress(docker, ["registry.npmjs.org", PROBE_PRIVATE_HOST], [`${PROBE_PRIVATE_HOST}:host-gateway`]);
     if ("error" in egress) {
       canary.close();
       return egress.error;
     }
+    const gateways = async (net: string) => {
+      const r = await runDocker(docker, ["network", "inspect", "--format", "{{json .IPAM.Config}}", net], { env: this.denv, timeoutMs: 30_000 });
+      try {
+        return gatewaysOf(JSON.parse(r.stdout));
+      } catch {
+        return [];
+      }
+    };
     const tmp = join(this.root, ".probe", randomBytes(4).toString("hex"));
+    let printed: { code: number | null; output: string };
+    let decisions: string[] = [];
     try {
       mkdirSync(join(tmp, "work"), { recursive: true, mode: 0o700 });
       mkdirSync(join(tmp, "cache"), { recursive: true, mode: 0o700 });
+      const vm = [...new Set([...(await gateways(egress.privateNet)), ...(await gateways(egress.egressNet)), ...(await gateways("bridge"))])];
       const name = envName("probe");
-      const args = phaseArgs({ name, image: PROXY_IMAGE, work: join(tmp, "work"), cache: join(tmp, "cache"), argv: ["node", "-e", PROBE_CLIENT, JSON.stringify({ proxy: egress.proxy, port: PROXY_PORT, canary: (canary.address() as { port: number }).port })], phase: { kind: "prepare", privateNet: egress.privateNet, proxy: egress.proxy } });
+      const input = { proxy: egress.proxy, port: PROXY_PORT, canary: (canary.address() as { port: number }).port, vm, privateHost: PROBE_PRIVATE_HOST };
+      const args = phaseArgs({ name, image: PROXY_IMAGE, work: join(tmp, "work"), cache: join(tmp, "cache"), argv: ["node", "-e", PROBE_CLIENT, JSON.stringify(input)], phase: { kind: "prepare", privateNet: egress.privateNet, proxy: egress.proxy } });
       // Only the probe: a hosts entry for the host gateway, so it can show the host is out of reach.
       args.splice(args.indexOf("--workdir"), 0, "--add-host", "orchestrator-host:host-gateway");
-      const r = await startContainer(docker, args, { env: this.denv, name, cap: 16_000 }).done;
+      printed = await startContainer(docker, args, { env: this.denv, name, cap: 16_000 }).done;
       await runDocker(docker, ["rm", "--force", name], { env: this.denv, timeoutMs: 30_000 });
-      const line = r.output.split("\n").reverse().find((l) => l.trim().startsWith('{"orchestratorEnvProbe":1'));
-      if (!line) return `the probe printed no result (exit ${r.code ?? "?"}): ${r.output.trim().slice(-200)}`;
-      return judgeEnvProbe(JSON.parse(line) as EnvProbeFacts, hits);
     } finally {
-      await egress.stop();
+      decisions = await egress.stop();
       canary.close();
       removeTree(tmp);
     }
+    const line = printed.output.split("\n").reverse().find((l) => l.trim().startsWith('{"orchestratorEnvProbe":1'));
+    if (!line) return `the probe printed no result (exit ${printed.code ?? "?"}): ${printed.output.trim().slice(-200)}`;
+    this.log(`environment: the setup probe saw ${line.trim()}`);
+    const decided = decisions.flatMap((l): ProxyDecision[] => {
+      try {
+        return [JSON.parse(l) as ProxyDecision];
+      } catch {
+        return [];
+      }
+    });
+    return judgeEnvProbe(JSON.parse(line) as EnvProbeFacts, hits, decided);
   }
 }
 

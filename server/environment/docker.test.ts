@@ -122,6 +122,13 @@ describe("the argument lists", () => {
     expect(args.slice(args.indexOf(PROXY_IMAGE))).toEqual([PROXY_IMAGE, "--input-type=module", "--eval", "/* proxy */"]);
     expect(values(args, "--user")).toEqual([ENV_USER]);
     expect(args).not.toContain("--mount");
+    expect(args).not.toContain("--add-host");
+  });
+
+  it("only the setup probe's proxy gets a hosts entry: a reserved .invalid name mapped to the host gateway (review finding 5)", () => {
+    const base = { name: "orc-env-proxy-1-abc", privateNet: "orc-env-net-1-abc", egressNet: "orc-env-out-1-abc", hosts: ["registry.probe.invalid"], script: "/* proxy */" };
+    expect(values(proxyArgs({ ...base, addHosts: ["registry.probe.invalid:host-gateway"] }), "--add-host")).toEqual(["registry.probe.invalid:host-gateway"]);
+    for (const h of ["pypi.org:10.0.0.1", "registry.npmjs.org:host-gateway", "x.invalid:1.2.3.4"]) expect(() => proxyArgs({ ...base, addHosts: [h] }), h).toThrow(/not a probe's hosts entry/);
   });
 
   it("a dev container's Dockerfile builds with no network for its RUN steps", () => {
