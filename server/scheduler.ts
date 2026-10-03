@@ -20,7 +20,8 @@ import { evidenceSummary } from "../src/domain/studio/evidence";
 import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
 import { REVIEW_ROLES, isProvider, type Artifact, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
-import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner } from "./checks";
+import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner, type EnvironmentAssignment } from "./checks";
+import { DEVCONTAINER_FILES, environmentPlan, environmentSource, parseDevcontainer, type DevcontainerFound } from "../src/domain/environment";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
 import { prototypeFolders, readsPrototypes } from "./factoryLink";
 import { SimulatedGitHub, type GitHubHost } from "./github";
@@ -1313,6 +1314,7 @@ export class Scheduler {
         cacheDir: cache,
         logDir,
         ...(cfg.testReport ? { testReport: cfg.testReport } : {}),
+        ...(runner.simulated ? {} : this.environmentFor(state)),
       };
       this.launched.set(attemptId, { provider: "service", access: "read", workspace, stepId: step.id, taskId: task.id, touchedInputs: touched });
       runner.start(assignment);
@@ -1321,6 +1323,35 @@ export class Scheduler {
       this.launched.delete(attemptId);
       return `Could not start the check run: ${e instanceof Error ? e.message : String(e)}`;
     }
+  }
+
+  /**
+   * The project's environment for a check run (docs/design/project-environment.md): the dev container at the trusted
+   * base (never the change's), else the image the owner confirmed. Nothing when the project has neither; the runner
+   * then runs the checks in the host sandbox as before.
+   */
+  private environmentFor(state: State): { environment: EnvironmentAssignment } | Record<string, never> {
+    if (!this.workspaces || state.project.sample || !state.project.repoPath) return {};
+    const ref = M.trustedBaseRef(state);
+    const read = (path: string) => {
+      try {
+        return this.workspaces!.readFileAt({ repoPath: state.project.repoPath, ref, path, maxBytes: 256 * 1024 });
+      } catch {
+        return undefined;
+      }
+    };
+    let found: DevcontainerFound | undefined;
+    for (const file of DEVCONTAINER_FILES) {
+      const r = read(file);
+      if (r) {
+        found = { file, parsed: r.truncated ? { refused: `${file} is larger than 256 KB` } : parseDevcontainer(r.text, file) };
+        break;
+      }
+    }
+    const { source } = environmentSource(found, state.project.environment);
+    if (!source) return {};
+    const dockerfile = "build" in source ? read(source.build.dockerfile) : undefined;
+    return { environment: { plan: environmentPlan(source, state.project.environment), project: state.project.id, ...(dockerfile && !dockerfile.truncated ? { dockerfile: dockerfile.text } : {}) } };
   }
 
   /**
