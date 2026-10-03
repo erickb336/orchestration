@@ -1,13 +1,14 @@
 // Evidence of what the factory built (ORC-029 pass 5, docs/design/ORC-029-pass5-design.md, "Evidence of what the
 // factory built"): each screen, terminal demo and TUI of the blueprint beside what the built code shows. A builder's
 // own pictures are a claim, so the service captures them (the "Capture evidence" step, server/studio/evidence.ts):
-// it runs the project's preview in the recorder's container, on a copy of the task's change at its commit, and takes
-// the screenshots and recordings the coder's capture plan names. Pure, from state only: this module holds the
-// project's preview setting, what a capture run captures, its record, and the record per blueprint item that "Design
-// and reality" and the lead's brief read.
+// it runs the project's preview on a copy of the task's change at its commit, in the project's environment when it
+// has one (docs/design/project-environment.md, unit E2) or else in the recorder's container, and takes the
+// screenshots and recordings the coder's capture plan names. Pure, from state only: this module holds the project's
+// preview setting, what a capture run captures, its record, and the record per blueprint item that "Design and
+// reality" and the lead's brief read.
 //
-// The record per item names the commit and the design version it shows, the evidence files (served by the app's file
-// route, server/studio/files.ts), and when; or why there is none, with a short log excerpt.
+// The record per item names the path it ran by, the commit and the design version it shows, the evidence files
+// (served by the app's file route, server/studio/files.ts), and when; or why there is none, with a short log excerpt.
 
 import { isInstall, networkRefusal, validateCommand } from "../checks";
 import { currentSpec, draft, event } from "../model/core";
@@ -59,12 +60,15 @@ export function captureItems(s: State, t: Task): CaptureItem[] {
 export interface PreviewSetting {
   /** Bumps on each change. */
   rev: number;
-  /** The dependency download, run with the network and every install hook off (npm, pnpm or yarn). Empty: no install. */
+  /**
+   * The dependency download in the recorder's image, run with the network and every install hook off (npm, pnpm or
+   * yarn). Empty: no install. Not run for a project with an environment: its prepare commands run instead.
+   */
   install: string[];
   /** What serves the built screens inside the container, on `port`. Absent for a product with no screens. */
   preview?: string[];
   port?: number;
-  /** The CLI's entry file in the repository (`bin/trips.js`): the tape in the capture plan runs it with node. */
+  /** The CLI's entry file in the repository (`bin/trips.js`): a tape in the capture plan must type it, so it records the real command. */
   cliEntry?: string;
 }
 
@@ -176,10 +180,28 @@ export const NO_EVIDENCE_WORDS: Record<NoEvidence, string> = {
   simulated: "simulated: nothing ran",
 };
 
+/**
+ * Which way a capture ran (docs/design/project-environment.md, unit E2):
+ * - environment: in the project's own environment, prepared as its checks are (the image, the prepare or its reuse by
+ *   key); the screenshots come from the recorder's browser beside it, and the CLIs are recorded as asciicasts;
+ * - recorder: in the recorder's image, for a project without an environment (Node only: npm, pnpm or yarn).
+ */
+export type EvidencePath =
+  | { via: "environment"; from: "devcontainer" | "setting"; image: string; imageId?: string; prepare?: "ran" | "reused" | "failed"; key?: string }
+  | { via: "recorder"; image: string };
+
+/** The path in a few words, for summaries. */
+export function evidencePathWords(p: EvidencePath): string {
+  if (p.via === "recorder") return `in the recorder's image ${p.image}`;
+  const prep = p.prepare === "reused" ? ", its prepare reused" : p.prepare === "failed" ? ", its prepare failed" : "";
+  return `in the project's environment (${p.from === "devcontainer" ? "its dev container" : "the confirmed image"} ${p.image.replace(/@sha256:([0-9a-f]{12})[0-9a-f]+$/, "@sha256:$1…")}${prep})`;
+}
+
 /** One file the service captured, relative to the run's evidence folder (`<itemId>/<name>`). */
 export interface EvidenceFile {
   path: string;
-  type: "png" | "gif" | "webm" | "txt";
+  /** cast: an asciicast v2 recording of a CLI, made by the service in the project's environment (unit E2). */
+  type: "png" | "gif" | "webm" | "txt" | "cast";
   /** A screenshot's device. */
   device?: CaptureDevice;
   bytes: number;
@@ -199,6 +221,11 @@ export interface EvidenceRun {
   durationMs: number;
   /** The preview setting's revision the run used; absent when it was not set up. */
   previewRev?: number;
+  /**
+   * Which way it ran (or tried to): the project's environment or the recorder's image. Absent when there was nothing to
+   * run (no plan, not set up), in simulated runs, and in records before E2.
+   */
+  path?: EvidencePath;
   simulated?: true;
   items: ItemCapture[];
   /** What the run noted that belongs to no item (an entry of the plan for an item the task does not cite, say). */
@@ -248,7 +275,7 @@ export function evidenceSummary(run: EvidenceRun): string {
     return `- ${what}: no evidence, ${NO_EVIDENCE_WORDS[i.reason]}. ${i.detail}`;
   });
   const captured = run.items.filter((i) => i.status === "captured").length;
-  return `${run.simulated ? "(simulated) " : ""}Evidence of ${run.sha.slice(0, 12)}: ${captured} of ${run.items.length} item${run.items.length === 1 ? "" : "s"} captured.\n${lines.join("\n")}${run.notes?.length ? `\n${run.notes.map((n) => `- Note: ${n}`).join("\n")}` : ""}`;
+  return `${run.simulated ? "(simulated) " : ""}Evidence of ${run.sha.slice(0, 12)}: ${captured} of ${run.items.length} item${run.items.length === 1 ? "" : "s"} captured${run.path ? ` ${evidencePathWords(run.path)}` : ""}.\n${lines.join("\n")}${run.notes?.length ? `\n${run.notes.map((n) => `- Note: ${n}`).join("\n")}` : ""}`;
 }
 
 // ---------- the record per blueprint item ----------
@@ -267,6 +294,8 @@ export type ItemEvidence = {
   /** The commit captured, in full. */
   commit: string;
   at: string;
+  /** Which way the run that made it ran (absent in records before E2). */
+  path?: EvidencePath;
   from: { taskId: string; attemptId: string; artifactId: string; landed: boolean; simulated?: true };
 } & ({ status: "captured"; files: EvidenceFile[]; warnings?: string[] } | { status: "none"; reason: NoEvidence; detail: string; log?: string });
 
@@ -303,6 +332,7 @@ function recordOf(item: BlueprintItem, hit: { art: Artifact; run: EvidenceRun; t
     current: cap.artifactId === item.artifactId && cap.version === item.version && cap.variant === item.variant,
     commit: hit.run.sha,
     at: hit.run.at,
+    ...(hit.run.path ? { path: hit.run.path } : {}),
     from: { taskId: hit.task.id, attemptId: hit.art.attemptId, artifactId: hit.art.id, landed: !!hit.task.integration?.landed, ...(hit.run.simulated ? { simulated: true as const } : {}) },
   };
   return cap.status === "captured"

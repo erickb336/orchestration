@@ -11,6 +11,12 @@
 //                    XDG_CACHE_HOME points). Not removed when it ends: the service commits what it wrote outside the
 //                    mounts (a toolchain's own folders, HOME) as the prepared image, then removes it.
 //   run              the checks' commands, `--network none`, on the prepared image, with one mount: the copy (/work).
+//   preview          the capture of evidence's preview (unit E2), as run but detached, with PORT set. Its network is
+//                    `none` too: the recorder's browser joins this container's network, so the two share one
+//                    loopback and nothing else (the app may listen on 127.0.0.1, as many dev servers do).
+//   session          a CLI's recording (unit E2), as run but made with `docker create --tty --interactive`: the
+//                    service attaches to its terminal, types the tape and records it. A terminal's variables (TERM,
+//                    VHS's prompt) instead of CI and NO_COLOR.
 //
 // Every container: a non-root user, no capabilities, no new privileges, a private /tmp, limits on processes, memory and
 // CPU, its own name (so the service can kill it), and the image's entrypoint replaced by the program itself. The image's
@@ -60,7 +66,7 @@ export const MOUNTABLE = /^\/[^,"\u0000-\u001f\u007f]*$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 /** A unique name for a container or a network of the environment. */
-export const envName = (what: "net" | "out" | "proxy" | "prep" | "run" | "probe") => `orc-env-${what}-${process.pid}-${randomBytes(5).toString("hex")}`;
+export const envName = (what: "net" | "out" | "proxy" | "prep" | "run" | "probe" | "preview" | "session") => `orc-env-${what}-${process.pid}-${randomBytes(5).toString("hex")}`;
 
 function need(ok: boolean, what: string) {
   if (!ok) throw new Error(what);
@@ -134,9 +140,15 @@ export interface PhaseSpec {
   cache?: string;
   /** The command, each argument as is. argv[0] replaces the image's entrypoint. */
   argv: string[];
-  /** prepare: on the private network, through the proxy (by its container name). run: no network. */
-  phase: { kind: "prepare"; privateNet: string; proxy: string } | { kind: "run" };
+  /**
+   * prepare: on the private network, through the proxy (by its container name). run: no network. preview: no network,
+   * detached, serving on `port` (unit E2). session: no network, made with a terminal for the service to attach to.
+   */
+  phase: { kind: "prepare"; privateNet: string; proxy: string } | { kind: "run" } | { kind: "preview"; port: number } | { kind: "session" };
 }
+
+/** A session's terminal: VHS's terminal type and prompt, and CI and NO_COLOR emptied (the prepared image keeps its prepare's). */
+const SESSION_ENV = { TERM: "xterm-256color", PS1: "> ", CI: "", NO_COLOR: "" };
 
 /** `docker run`'s arguments for one command of a phase. Throws on a name, a path or an argument it cannot pass safely. */
 export function phaseArgs(s: PhaseSpec): string[] {
@@ -146,21 +158,26 @@ export function phaseArgs(s: PhaseSpec): string[] {
   for (const p of [s.work, ...(prepare ? [s.cache!] : [])]) need(MOUNTABLE.test(p), `Docker cannot mount ${JSON.stringify(p)} (a comma, a quote or a control character)`);
   need(!s.image.startsWith("-") && s.image.length > 0, `not an image: ${JSON.stringify(s.image)}`);
   need(s.argv.length > 0 && !s.argv[0].startsWith("-") && s.argv.every((a) => !/[\0]/.test(a)), "not a command");
+  if (s.phase.kind === "preview") need(Number.isInteger(s.phase.port) && s.phase.port >= 1024 && s.phase.port <= 65535, `not a port: ${s.phase.port}`);
   const env: Record<string, string> = {
     HOME,
     TMPDIR: "/tmp",
     LANG: "C.UTF-8",
     CI: "1",
     NO_COLOR: "1",
-    // prepare: through the proxy, with a download cache shared by the project's prepares. run: the proxy variables
-    // are emptied, because the prepared image keeps the variables its prepare container had.
+    // prepare: through the proxy, with a download cache shared by the project's prepares. The others: the proxy
+    // variables are emptied, because the prepared image keeps the variables its prepare container had.
     ...(s.phase.kind === "prepare" ? { ...proxyEnv(s.phase.proxy), XDG_CACHE_HOME: `${CACHE}/xdg` } : { ...Object.fromEntries(Object.keys(proxyEnv("x")).map((k) => [k, ""])), XDG_CACHE_HOME: `${HOME}/.cache` }),
+    ...(s.phase.kind === "preview" ? { PORT: String(s.phase.port), BROWSER: "none" } : {}),
+    ...(s.phase.kind === "session" ? SESSION_ENV : {}),
   };
   for (const k of Object.keys(env)) need(ENV_NAME.test(k), `not a variable: ${k}`);
   if (s.phase.kind === "prepare") need(NAME.test(s.phase.privateNet) && NAME.test(s.phase.proxy), "not a network or proxy name");
+  // prepare: kept for its commit. run: removed when it ends. preview: detached, its log read before the service
+  // removes it. session: created with a terminal, started once the service is attached; the service removes it.
+  const start = { prepare: ["run"], run: ["run", "--rm"], preview: ["run", "--detach"], session: ["create", "--tty", "--interactive"] }[s.phase.kind];
   return [
-    "run",
-    ...(prepare ? [] : ["--rm"]),
+    ...start,
     "--name",
     s.name,
     "--pull",

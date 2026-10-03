@@ -106,6 +106,16 @@ describe("Design and reality", () => {
     expect(html).toContain(encodeURIComponent(`${sc.items.cli}/demo.gif`));
   });
 
+  it("a terminal demo recorded in the project's environment: its asciicast is drawn, not its plain transcript (unit E2)", () => {
+    const sc = realityScene();
+    const cli = sc.items.cli;
+    const files = [{ path: `${cli}/demo.cast`, type: "cast" as const, bytes: 400, sha256: "c".repeat(64) }, { path: `${cli}/demo.txt`, type: "txt" as const, bytes: 80, sha256: "d".repeat(64) }];
+    const { s } = captured(sc.s, sc.built.cli, [capturedAs(sc.s, cli, files)], sc.at(800));
+    const html = visible(detailHtml(s, cli));
+    expect(html).toContain("Reading the recording…");
+    expect(html).not.toContain("Reading the transcript…");
+  });
+
   it("a flow: each rule and example with its test result, a failing test's message, and why a line has no test", () => {
     const sc = blueprintScene();
     const t = detail(sc.s, sc.items.join);

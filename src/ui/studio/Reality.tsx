@@ -14,7 +14,7 @@ import { Card, Chip, EmptyState, StatePill, Tabs } from "../kit";
 import { useStore } from "../store";
 import { ScaledBox, TerminalRecording, TerminalText, TerminalWindow, useServiceText } from "./Frames";
 import { ArtifactPreview, TermsTable } from "./Preview";
-import { renderAnsi } from "./ansi";
+import { readCast, renderAnsi } from "./ansi";
 import { NO_EVIDENCE_CLAUSE, STATUS_TONE, STATUS_WORDS, differenceState, evidenceCaption, evidenceFileUrl, recordingOf, ruleCell, rulesLine, shortSha, shotOf, statusWhy, taskState, taskWords } from "./realityView";
 import { DEVICE_LABEL, DEVICE_SIZE, serviceFileUrl, showKind, variantDemo } from "./studioView";
 import "./studio.css";
@@ -325,11 +325,25 @@ function BuiltShot({ evidence: e, device, title }: { evidence: Extract<ItemEvide
 function BuiltRecording({ evidence: e, title }: { evidence: Extract<ItemEvidence, { status: "captured" }>; title: string }) {
   const r = recordingOf(e);
   if (r.video || r.gif) return <TerminalRecording title={`${title} as built`} video={r.video && evidenceFileUrl(e, r.video)} gif={r.gif && evidenceFileUrl(e, r.gif)} />;
+  if (r.cast) return <BuiltCast url={evidenceFileUrl(e, r.cast)} title={title} />;
   if (r.transcript) return <BuiltTranscript url={evidenceFileUrl(e, r.transcript)} title={title} />;
   return (
     <div className="st-reality__slot" role="note">
       The capture kept no recording.
     </div>
+  );
+}
+
+/** An asciicast the service recorded in the project's environment (unit E2), drawn as the studio draws a .cast file. */
+function BuiltCast({ url, title }: { url: string; title: string }) {
+  const loaded = useServiceText(url);
+  if (loaded.status !== "ok") return <p className="small muted">{loaded.status === "loading" ? "Reading the recording…" : `The recording cannot be read: ${loaded.message}.`}</p>;
+  const cast = readCast(loaded.text);
+  if (!cast.ok) return <p className="small muted">The recording cannot be read: {cast.error}.</p>;
+  return (
+    <TerminalWindow title={`${title} as built — ${cast.cols}×${cast.rows}`}>
+      <TerminalText lines={renderAnsi(cast.output, cast)} cols={cast.cols} rows={cast.rows} label={`Recording of ${title} as built`} />
+    </TerminalWindow>
   );
 }
 

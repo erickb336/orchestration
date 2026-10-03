@@ -7,8 +7,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CaptureItem } from "../../src/domain/studio/evidence";
-import { RECORDER_IMAGE, containerArgs } from "./container";
-import { CAPTURE_PLAN, CAPTURE_SCRIPT, MAX_PLANNED_SCREENS, captureArgs, checkCapturePlan, collectCapture, installArgs, parseCaptureOutput, readCapturePlan, readPlainFile } from "./evidence";
+import type { EnvironmentAssignment } from "../checks";
+import type { PreparedOutcome } from "../environment/runner";
+import { RECORDER_IMAGE, containerArgs, dockerSocket } from "./container";
+import { CAPTURE_PLAN, CAPTURE_SCRIPT, MAX_PLANNED_SCREENS, captureArgs, captureEvidence, checkCapturePlan, collectCapture, installArgs, parseCaptureOutput, readCapturePlan, readPlainFile, type CaptureJob, type EnvironmentLender } from "./evidence";
 
 const SCREEN: CaptureItem = { itemId: "bi-1", kind: "screen", title: "Trip board", artifactId: "sa-1", version: 2, variant: "B" };
 const CLI: CaptureItem = { itemId: "bi-3", kind: "terminal-demo", title: "trips CLI", artifactId: "sa-3", version: 1 };
@@ -141,7 +143,7 @@ describe("what comes back from a capture", () => {
     writeFileSync(join(out, rel), data);
   };
   const screen = (devices: ("desktop" | "mobile")[] = ["desktop", "mobile"]) => ({ itemId: "bi-1", path: "/", devices });
-  const terminal = { itemId: "bi-3", tape: "demo/trips.tape", folder: "demo", normalized: "", outputs: { gif: "demo.gif", txt: "demo.txt" } };
+  const terminal = { itemId: "bi-3", tape: "demo/trips.tape", folder: "demo", normalized: "", outputs: { gif: "demo.gif", txt: "demo.txt" }, session: { actions: [], size: { cols: 80, rows: 24 } } };
   const listed = (d: string): string[] => readdirSync(d, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name).slice(d.length + 1)).sort();
 
   it("a preview that does not start: every screen says so, with the end of its log", () => {
@@ -244,5 +246,116 @@ describe("reading the plan from the copy of the change", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe("which path a capture takes (unit E2)", () => {
+  const ENV: EnvironmentAssignment = { project: "p-env", plan: { source: { from: "setting", image: `python:3.13-slim@sha256:${"a".repeat(64)}` }, prepare: [["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"]], hosts: ["pypi.org"] } };
+  const RECORD = { ran: "container" as const, from: "setting" as const, image: ENV.plan.source.from === "setting" ? (ENV.plan.source as { image: string }).image : "", imageId: `sha256:${"c".repeat(64)}`, prepare: "reused" as const, key: "0123456789abcdef", prepareMs: 0 };
+  /** A change with a plan for a screen and a CLI. */
+  const change = (tape = TAPE) => {
+    const src = join(dir, "change");
+    mkdirSync(join(src, ".orchestrator"), { recursive: true });
+    mkdirSync(join(src, "demo"), { recursive: true });
+    writeFileSync(join(src, CAPTURE_PLAN), JSON.stringify({ screens: [{ item: "bi-1", path: "/", devices: ["desktop"] }], terminals: [{ item: "bi-3", tape: "demo/trips.tape" }] }));
+    writeFileSync(join(src, "demo/trips.tape"), tape);
+    return src;
+  };
+  /** A lender that records what it was asked, and answers `answer` (or lends a copy with a docker that is not there). */
+  const lender = (answer?: PreparedOutcome<void>) => {
+    const calls: { workspace: string; sha: string; environment: EnvironmentAssignment; files: string[] }[] = [];
+    const l: EnvironmentLender = {
+      async withPrepared(o, use) {
+        calls.push({ workspace: o.workspace, sha: o.sha, environment: o.environment, files: readdirSync(o.workspace, { recursive: true }).map(String).sort() });
+        if (answer) return answer as never;
+        const value = await use({ docker: "/nonexistent/docker", denv: { DOCKER_HOST: "tcp://127.0.0.1:2375" }, work: o.workspace, image: RECORD.imageId, record: RECORD, track: () => {}, untrack: () => {} });
+        return { ok: true, value, record: RECORD };
+      },
+    };
+    return { l, calls };
+  };
+  const job = (o: Partial<CaptureJob>): CaptureJob => ({ source: o.source ?? change(), sha: "f".repeat(40), items: [SCREEN, CLI], preview: { rev: 3, install: ["npm", "ci", "--ignore-scripts"], preview: ["python3", "serve.py"], port: 8000 }, outDir: join(dir, "out"), root: join(dir, "root"), docker: "/nonexistent/docker", env: { PATH: "/nonexistent" }, ...o });
+
+  it("with an environment: prepared there from a copy of the change, and the recorder's install never runs", async () => {
+    const { l, calls } = lender({ ok: false, reason: "prepare-failed", detail: "The prepare failed (Prepare: python3 -m pip install: failed, exit 1).", log: "ERROR: No matching distribution", record: { ...RECORD, prepare: "failed" } });
+    const r = await captureEvidence(job({ environment: ENV, lender: l }));
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ sha: "f".repeat(40), environment: ENV });
+    expect(calls[0].files).toEqual([".orchestrator", ".orchestrator/capture.json", "demo", "demo/trips.tape"]);
+    expect(r.path).toEqual({ via: "environment", from: "setting", image: RECORD.image, imageId: RECORD.imageId, prepare: "failed", key: RECORD.key });
+    expect(r.items.map((i) => (i.status === "none" ? [i.reason, i.detail, i.log] : i.status))).toEqual([
+      ["install-failed", "The prepare failed (Prepare: python3 -m pip install: failed, exit 1).", "ERROR: No matching distribution"],
+      ["install-failed", "The prepare failed (Prepare: python3 -m pip install: failed, exit 1).", "ERROR: No matching distribution"],
+    ]);
+    expect(r.notes).toEqual(["The project's environment prepared the copy with its own prepare commands; the preview setting's install (npm ci --ignore-scripts) did not run."]);
+    // Nothing of the stage stays.
+    expect(readdirSync(join(dir, "root"))).toEqual([]);
+  });
+
+  it("with an environment that is prepared: the screens wait for the recorder's browser, and a CLI needs the daemon's local socket", async () => {
+    const { l } = lender();
+    const r = await captureEvidence(job({ environment: ENV, lender: l }));
+    expect(r.path).toMatchObject({ via: "environment", prepare: "reused", imageId: RECORD.imageId });
+    expect(r.items.map((i) => (i.status === "none" ? [i.itemId, i.reason, i.detail.slice(0, 60)] : i.status))).toEqual([
+      ["bi-1", "unavailable", "The recorder's browser is not available: Docker is not insta"],
+      ["bi-3", "unavailable", "Recording a CLI in the project's environment needs the Docke"],
+    ]);
+  });
+
+  it("with an environment that cannot run: every item says why, and the recorder is not tried instead", async () => {
+    const { l } = lender({ ok: false, reason: "unavailable", detail: "Docker is not running" });
+    const r = await captureEvidence(job({ environment: ENV, lender: l }));
+    expect(r.path).toEqual({ via: "environment", from: "setting", image: RECORD.image });
+    expect(r.items.map((i) => (i.status === "none" ? [i.reason, i.detail] : i.status))).toEqual([
+      ["unavailable", "The project's environment could not run: Docker is not running"],
+      ["unavailable", "The project's environment could not run: Docker is not running"],
+    ]);
+  });
+
+  it("a tape a session cannot type is refused for its item only, in the environment; the recorder's VHS still takes it", async () => {
+    const tape = `${TAPE}Ctrl+Shift+Left\n`;
+    const env = await captureEvidence(job({ source: change(tape), environment: ENV, lender: lender({ ok: false, reason: "unavailable", detail: "x" }).l }));
+    expect(env.items.map((i) => (i.status === "none" ? [i.itemId, i.reason] : i.status))).toEqual([
+      ["bi-1", "unavailable"],
+      ["bi-3", "invalid-plan"],
+    ]);
+    expect(env.items[1]).toMatchObject({ detail: expect.stringMatching(/^demo\/trips\.tape: demo\/trips\.tape:\d+: Ctrl\+Shift\+Left cannot be typed in a session/) });
+    rmSync(join(dir, "change"), { recursive: true });
+    const rec = await captureEvidence(job({ source: change(tape) }));
+    expect(rec.items.map((i) => (i.status === "none" ? i.reason : i.status))).toEqual(["unavailable", "unavailable"]);
+  });
+
+  it("without an environment: the recorder's image, as before; the lender is never asked", async () => {
+    const { l, calls } = lender();
+    const r = await captureEvidence(job({ lender: l }));
+    expect(calls).toEqual([]);
+    expect(r.path).toEqual({ via: "recorder", image: RECORDER_IMAGE });
+    expect(r.items.map((i) => (i.status === "none" ? [i.reason, i.detail.slice(0, 40)] : i.status))).toEqual([
+      ["unavailable", "Nothing ran: Docker is not installed (/n"],
+      ["unavailable", "Nothing ran: Docker is not installed (/n"],
+    ]);
+    expect(r.notes).toBeUndefined();
+  });
+
+  it("with nothing to capture, no path is recorded", async () => {
+    const r = await captureEvidence(job({ items: [TUI], environment: ENV, lender: lender().l }));
+    expect(r.path).toBeUndefined();
+    expect(r.items).toMatchObject([{ itemId: "bi-4", status: "none", reason: "not-in-plan" }]);
+  });
+
+  it("the browser beside a preview shares the preview's network and nothing else, with the same isolation", () => {
+    const at = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
+    const args = captureArgs({ name: "orc-ev-1-def", work: "/stage/browser", out: "/stage/out", timeoutMs: 100_000, network: { container: "orc-env-preview-1-abc" } });
+    expect(args.filter((a) => a === "--network")).toHaveLength(1);
+    expect(at(args, "--network")).toBe("container:orc-env-preview-1-abc");
+    expect(args).toEqual(expect.arrayContaining(["--interactive", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "10001:10001", "--pull", "never"]));
+    expect(args).not.toContain("--add-host");
+    expect(() => containerArgs({ name: "orc-ev-1", work: "/w", out: "/o", workdir: "/work", command: ["true"], network: { container: "--privileged" } })).toThrow(/not a container to share a network with/);
+    expect(() => containerArgs({ name: "orc-ev-1", work: "/w", out: "/o", workdir: "/work", command: ["true"], network: { container: "orc-x" }, hostGateway: true })).toThrow(/not a container to share a network with/);
+  });
+
+  it("finds the daemon's local socket from DOCKER_HOST; another kind of address has none", async () => {
+    expect(await dockerSocket("/nonexistent/docker", { DOCKER_HOST: "unix:///Users/me/.colima/default/docker.sock" })).toBe("/Users/me/.colima/default/docker.sock");
+    expect(await dockerSocket("/nonexistent/docker", { DOCKER_HOST: "tcp://127.0.0.1:2375" })).toBeUndefined();
   });
 });
