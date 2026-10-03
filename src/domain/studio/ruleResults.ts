@@ -106,7 +106,7 @@ export interface LandedTestRun {
 }
 
 /** The commit a landed task's checks are judged on: the pull request's change, else the task's final change (as recordLanded does). */
-function landedChangeSha(s: State, t: Task): string | undefined {
+export function landedChangeSha(s: State, t: Task): string | undefined {
   return t.integration?.pr?.changeSha ?? M.finalChange(s, t)?.ref?.split(" ")[0];
 }
 
