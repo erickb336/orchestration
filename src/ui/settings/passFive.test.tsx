@@ -149,9 +149,11 @@ describe("Settings › How your project runs: one card for the environment and t
     const { s } = blueprintScene();
     expect(evidenceStatus(s)).toEqual({ tone: "neutral", label: "Not set up", text: 'Give the preview command and its port for screens, or the CLI entry for terminal demos. Evidence also needs an environment above. Until then, each capture records "not set up".' });
     const preview = runCommand(s, "setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } }, T).state;
-    expect(card(preview)).toContain("Not captured Preview `npm run preview` on port 4173. Nothing is captured until the project has an environment: set an image above, or confirm the repository's dev container.");
+    expect(card(preview)).toContain('Not captured It would capture screens from "npm run preview" on port 4173, but nothing is captured until the project has an environment: set an image above, or confirm the repository\'s dev container.');
     const both = runCommand(preview, "setEnvironment", { environment: { image: NODE, prepare: [["npm", "ci"]] } }, T).state;
-    expect(card(both)).toContain("Set up (r1) Preview `npm run preview` on port 4173, in this environment with no network.");
+    expect(card(both)).toContain('Set up (r1) It captures screens from "npm run preview" on port 4173, in this environment with no network.');
+    const cli = runCommand(both, "setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/trips.js" } }, T).state;
+    expect(evidenceStatus(cli).text).toBe('It captures screens from "npm run preview" on port 4173 and terminal demos that type bin/trips.js, in this environment with no network.');
   });
 
   it("saves through setEnvironment and setPreview: the commands as argument lists, the port and the CLI entry", async () => {

@@ -120,7 +120,7 @@ const CHECKS = {
   finished: "the task finished: each step done or skipped, and its work integrated",
   landed: "the task's work landed on main (local delivery)",
   evidenceStep: "the Capture evidence step ran after the checks and recorded the screen and the CLI",
-  evidenceFiles: "the evidence of the landed commit: a PNG of the built page on desktop and on mobile, and a GIF of the CLI, served by the app",
+  evidenceFiles: "the evidence of the landed commit: a PNG of the built page on desktop and on mobile, and an asciicast of the CLI recorded in the project's environment, served by the app",
   rules: "the rule results from the landed work's checks: R1, R2 and E1 pass, and R3 fails",
   statuses: "the item statuses: the screen and the CLI built and verified, the flow failing a check",
   cap: "the estimated Claude spend stayed under the cap, each run with no recorded cost counted at its run limit",
@@ -581,7 +581,7 @@ async function judge(st, id, items) {
   if (Object.keys(evidence.checks).length !== EXPECTED_CHECKS) log(`✗ ${Object.keys(evidence.checks).length} checks ran; PASSED needs exactly ${EXPECTED_CHECKS}`);
 }
 
-/** The PNGs and the GIF of the landed commit, each as the app's file route serves it (real runs only). */
+/** The PNGs and the asciicast of the landed commit, each as the app's file route serves it (real runs only). */
 async function evidenceFiles(st, items, landedSha) {
   const served = async (ev, file) => {
     const res = await fetch(`${svc.base}/api/studio/file?evidence=${encodeURIComponent(ev.from.attemptId)}&path=${encodeURIComponent(file.path)}`);
@@ -592,17 +592,18 @@ async function evidenceFiles(st, items, landedSha) {
   const cli = E.itemEvidence(st, items.cli);
   const files = async (ev, type) => (ev?.status === "captured" ? await Promise.all(ev.files.filter((f) => f.type === type).map(async (f) => ({ path: f.path, device: f.device ?? null, bytes: f.bytes, servedAs: await served(ev, f) }))) : []);
   const pngs = await files(screen, "png");
-  const gifs = await files(cli, "gif");
+  // The project's environment records a CLI as an asciicast v2 file (unit E2), named after the tape's GIF output.
+  const casts = await files(cli, "cast");
   const atLanded = (ev) => !!ev && "commit" in ev && !!landedSha && C.sameSha(ev.commit, landedSha);
   const detail = {
     landedChange: landedSha ?? null,
     screen: screen ? { status: screen.status, commit: screen.commit ?? null, landed: screen.from?.landed ?? null, files: pngs, ...(screen.status === "none" ? { reason: screen.reason, why: screen.detail } : {}) } : null,
-    cli: cli ? { status: cli.status, commit: cli.commit ?? null, landed: cli.from?.landed ?? null, files: gifs, ...(cli.status === "none" ? { reason: cli.reason, why: cli.detail } : {}) } : null,
+    cli: cli ? { status: cli.status, commit: cli.commit ?? null, landed: cli.from?.landed ?? null, files: casts, ...(cli.status === "none" ? { reason: cli.reason, why: cli.detail } : {}) } : null,
   };
   evidence.evidenceFiles = detail;
   check(
     "evidenceFiles",
-    atLanded(screen) && atLanded(cli) && screen.from.landed && ["desktop", "mobile"].every((d) => pngs.some((f) => f.device === d && f.servedAs === "image/png")) && gifs.some((f) => f.servedAs === "image/gif"),
+    atLanded(screen) && atLanded(cli) && screen.from.landed && ["desktop", "mobile"].every((d) => pngs.some((f) => f.device === d && f.servedAs === "image/png")) && casts.some((f) => f.servedAs?.startsWith("text/plain")),
     detail,
   );
 }

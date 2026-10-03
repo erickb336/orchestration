@@ -94,7 +94,7 @@ export function sourceLine(found: EnvironmentFound | null, saved: EnvironmentSet
   const confirmed = !!dc?.sha256 && saved?.devcontainer?.file === dc.file && saved.devcontainer.sha256 === dc.sha256;
   if (dc && !dc.refused && confirmed) return { tone: "done", label: "Dev container", text: `${what}, confirmed by you. It comes first; the image below is used only without it.` };
   const otherwise = saved?.image ? `The checks use ${shortImage(saved.image)}.` : "Checks run on this computer as before: only npm, pnpm and yarn installs get the network there.";
-  if (dc && !dc.refused) return { tone: "fail", label: "Dev container not confirmed", text: `${what}${saved?.devcontainer ? ", changed since you confirmed it" : ""}. It chooses the image the checks run in, so it is not used until you confirm it. ${otherwise}` };
+  if (dc && !dc.refused) return { tone: "fail", label: "Dev container not confirmed", text: `${what}${saved?.devcontainer ? ", changed since you confirmed it" : ""}. It chooses the image the checks and the evidence run in, so it is not used until you confirm it. ${otherwise}` };
   const why = dc?.refused ? `${dc.refused} ` : "";
   if (saved?.image) return { tone: dc?.refused ? "fail" : "done", label: "Confirmed image", text: `${why}${otherwise}` };
   return { tone: dc?.refused ? "fail" : "neutral", label: "Not set up", text: `${why}${otherwise}` };

@@ -24,6 +24,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildDemo } from "../../src/domain/demo.ts";
+import { devcontainerDigest } from "../../src/domain/environment.ts";
 import { buildEmptyProject } from "../../src/domain/seed.ts";
 import { CARD_SECTION, SECTIONS } from "../../src/ui/settings/sections.ts";
 import { PORT, buildApp, runJourney, startService, text } from "./harness.mjs";
@@ -101,7 +102,8 @@ async function body(j, page, service, width) {
   await j.step("Budgets: a building budget, Save", async () => {
     await open("budgets", "Budgets");
     await page.getByLabel("Building budget (dollars)").fill("40");
-    j.check((await status("project").innerText()).trim() === "No unsaved changes", "the change is Budgets', not Project's");
+    const menu = page.getByRole("navigation", { name: "Settings sections" });
+    j.check((await menu.getByRole("link", { name: /^Budgets \(unsaved changes\)/ }).count()) === 1 && (await menu.getByRole("link", { name: /^Project \(unsaved changes\)/ }).count()) === 0, "the side menu marks Budgets as unsaved, not Project");
     j.check((await save("budgets")) === "Saved", 'Save: the bar says "Saved"');
     j.check(service.state().project.budgets.buildingUsd === 40, "the record: the building budget is $40", service.state().project.budgets);
     await page.locator('[id="budgets"]').scrollIntoViewIfNeeded();
@@ -177,7 +179,10 @@ async function body(j, page, service, width) {
   const real = await startService(() => buildEmptyProject(Date.now()), { dist: await buildApp(), realLooking: true, port: PORT + 2 });
   try {
     mkdirSync(join(real.repo, ".devcontainer"));
-    writeFileSync(join(real.repo, ".devcontainer", "devcontainer.json"), JSON.stringify({ name: "Trips", image: "node:22-bookworm" }, null, 2));
+    const dcText = JSON.stringify({ name: "Trips", image: "node:22-bookworm" }, null, 2);
+    writeFileSync(join(real.repo, ".devcontainer", "devcontainer.json"), dcText);
+    /** The digest the owner confirms: it goes into the record, never onto the screen. */
+    const digest = devcontainerDigest(dcText);
     const git = (...a) => execFileSync("git", ["-C", real.repo, ...a], { encoding: "utf8" });
     git("add", "-A");
     git("-c", "user.name=QA", "-c", "user.email=qa@localhost", "commit", "-q", "-m", "Add a dev container");
@@ -207,7 +212,8 @@ async function body(j, page, service, width) {
       j.check(/Dev container not confirmed/.test(words) && /\.devcontainer\/devcontainer\.json/.test(words), "the card finds .devcontainer/devcontainer.json, not confirmed yet", words.slice(0, 300));
       const facts = await card.locator(".s-facts").innerText();
       j.check(/Image\s+node:22-bookworm/.test(facts) && /Prepare commands\s+none: nothing is installed/.test(facts) && /Installs may reach\s+the 13 package registries, through a proxy/.test(facts), "it says what it sets: the image, the prepare commands, what installs may reach", facts.replace(/\s+/g, " "));
-      j.check(!/sha256|[0-9a-f]{12}/.test(words), "no digest on the screen (a-settings-devcontainer)", (words.match(/sha256|[0-9a-f]{12}/) ?? [])[0]);
+      const confirmText = await card.locator(".s-confirm").innerText();
+      j.check(!words.includes(digest.slice(0, 8)) && !/sha256/.test(confirmText), "no digest on the screen: neither the dev container's digest nor a sha256 in the confirmation (a-settings-devcontainer)", confirmText.replace(/\s+/g, " "));
       await card.scrollIntoViewIfNeeded();
       await j.shot("7-environment-found", { locator: card });
       await button.click();

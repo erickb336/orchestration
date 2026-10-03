@@ -5,7 +5,7 @@
 // spaces whole.
 
 import { environmentIsSet } from "../../domain/environment";
-import { normalizePreview, previewWords, type PreviewInput } from "../../domain/studio/evidence";
+import { normalizePreview, type PreviewInput, type PreviewSetting } from "../../domain/studio/evidence";
 import type { State } from "../../domain/types";
 import type { SendResult } from "../store";
 
@@ -77,9 +77,12 @@ export function previewSteps(v: PreviewDraft, changed: ReadonlySet<string>, send
 export function evidenceStatus(s: State): { tone: "done" | "neutral" | "fail"; label: string; text: string } {
   const p = s.project.preview;
   const env = environmentIsSet(s.project.environment);
-  if (p && env) return { tone: "done", label: `Set up (r${p.rev})`, text: `${capital(previewWords(p))}, in this environment with no network.` };
-  if (p) return { tone: "fail", label: "Not captured", text: `${capital(previewWords(p))}. Nothing is captured until the project has an environment: set an image above, or confirm the repository's dev container.` };
+  if (p && env) return { tone: "done", label: `Set up (r${p.rev})`, text: `It captures ${whatCaptured(p)}, in this environment with no network.` };
+  if (p) return { tone: "fail", label: "Not captured", text: `It would capture ${whatCaptured(p)}, but nothing is captured until the project has an environment: set an image above, or confirm the repository's dev container.` };
   return { tone: "neutral", label: "Not set up", text: `Give the preview command and its port for screens, or the CLI entry for terminal demos.${env ? "" : " Evidence also needs an environment above."} Until then, each capture records "not set up".` };
 }
 
-const capital = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+/** "screens from "npm run preview" on port 4173 and terminal demos that type bin/trips.js", in plain words. */
+function whatCaptured(p: PreviewSetting): string {
+  return [p.preview ? `screens from "${argvLine(p.preview)}" on port ${p.port}` : "", p.cliEntry ? `terminal demos that type ${p.cliEntry}` : ""].filter(Boolean).join(" and ");
+}
