@@ -201,6 +201,7 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
   a.artifacts.push(...artifacts);
   if (run.usage) a.usage = run.usage;
   if (run.actualModel) a.actualModel = run.actualModel;
+  if (run.simulated) a.simulated = true;
 
   // A run started before the task's flow changed reports nothing to the new steps, whatever its step id
   // now means. Checked before the stale-revision check below, so the note names the cause.

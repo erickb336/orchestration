@@ -234,6 +234,15 @@ describe("runs with no recorded cost, while a building budget is set", () => {
     expect(single).toMatchObject({ what: "1 run has no recorded cost (no usage was recorded)" });
   });
 
+  it("a task run of the fake runtime is a known $0: it never holds new work, however small the budget", () => {
+    const sim: Attempt = { ...codexRun("run-s", "codex-sample-large"), simulated: true };
+    const s = M.setBudgets(withRuns([sim, { ...sim, id: "run-t" }]), { buildingUsd: 0.01, maintenanceUsdPerMonth: null }, at(1));
+    expect(budgetStop(s)).toBeUndefined();
+    expect(item(s)).toBeUndefined();
+    // The same runs without the mark have no recorded cost: the stop holds new work.
+    expect(budgetStop(M.setBudgets(withRuns([codexRun("run-s", "codex-sample-large")]), { buildingUsd: 0.01, maintenanceUsdPerMonth: null }, at(1)))).toBeDefined();
+  });
+
   it("at the stop, both are asked: the stop first, then the runs it cannot count", () => {
     const s = withRuns([codexRun("run-a", "gpt-x", tokens), codexRun("run-d", "gpt-6.1-sol", { inputTokens: 1_000_000, outputTokens: 0 })]);
     const keys = needsYouItems(M.setBudgets(s, { buildingUsd: 2, maintenanceUsdPerMonth: null }, at(1)), T0).map((i) => i.key);

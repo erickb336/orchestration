@@ -253,6 +253,7 @@ describe("scheduler with fake runtime", () => {
   it("drives tasks to completion with artifacts and never exceeds the worker limit", () => {
     const store = open();
     const { scheduler } = make(store, { progressPerTick: 40 });
+    const sample = new Set(store.read().state.attempts.map((a) => a.id));
     store.command("startHeldTask", { taskId: "EX-004" }, k(), iso(T0));
     for (let t = 0; t < 80; t++) {
       scheduler.tick(T0 + t * 1000);
@@ -263,6 +264,11 @@ describe("scheduler with fake runtime", () => {
     const s = store.read().state;
     expect(task(s, "EX-001").lifecycle).toBe("done");
     expect(s.artifacts.some((a) => a.taskId === "EX-001" && a.stepId === "S6" && a.kind === "verification")).toBe(true);
+    // Each run the fake runtime completed here is recorded as simulated, so it counts as a known $0 against a budget
+    // (the sample project's own history is not this test's).
+    const completed = s.attempts.filter((a) => !sample.has(a.id) && a.outcome === "completed");
+    expect(completed.length).toBeGreaterThan(0);
+    expect(completed.filter((a) => !a.simulated).map((a) => a.id)).toEqual([]);
   });
 });
 

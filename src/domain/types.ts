@@ -1115,6 +1115,8 @@ export interface Attempt {
   activity?: string;
   /** `cachedInputTokens`: of `inputTokens`, those read from the provider's prompt cache (Codex reports them). */
   usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
+  /** The fake runtime ran it: no agent ran, so it spent a known $0 (src/domain/spend.ts), as a simulated studio run. */
+  simulated?: true;
   /**
    * The changed-path set of the change a review run was shown, recorded by the service before
    * the run could report anything. `paths` holds at most 500; `total` is the real count.

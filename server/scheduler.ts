@@ -1462,7 +1462,7 @@ export class Scheduler {
         return M.reportRunFailed(s, e.attemptId, e.message, now, { usage: e.usage });
       case "completed": {
         const c = completions.get(e.attemptId) ?? { outputs: [], problems: [] };
-        let next = M.reportCompletion(s, e.attemptId, [], now, c.outputs, { usage: e.usage, actualModel: e.model });
+        let next = M.reportCompletion(s, e.attemptId, [], now, c.outputs, { usage: e.usage, actualModel: e.model, simulated: this.simulatedRun(s, e.attemptId) });
         if (c.problems.length) next = noteProblems(next, e.attemptId, c.problems);
         return next;
       }
