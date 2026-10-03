@@ -6,7 +6,7 @@
 import * as B from "../../domain/studio/blueprint";
 import * as S from "../../domain/studio/studio";
 import type { BlueprintItem, StudioArtifact } from "../../domain/studio/types";
-import type { State } from "../../domain/types";
+import type { State, Task } from "../../domain/types";
 import type { Tone } from "../kit";
 import { fmtTime } from "../common";
 
@@ -103,6 +103,18 @@ export function lockInBlocker(s: State): string | undefined {
   const c = B.draftChanges(s);
   if (draftChangeCount(s) === 0) return c.open.length ? "There is nothing to lock in: the draft holds only open items, which stay in the draft." : "There is nothing to lock in: the draft is the version in force.";
   return undefined;
+}
+
+/**
+ * The dropped parts a task builds (`droppedRefs`), in words: "Reminders v1" and when they left the design, " at Lock
+ * in 2" (nothing when they left at different Lock ins). Undefined when it builds none.
+ */
+export function droppedPartsWords(s: State, t: Task): { names: string; at: string } | undefined {
+  const dropped = B.droppedRefs(s, t);
+  if (!dropped.length) return undefined;
+  const names = dropped.map((d) => `${d.item.title} v${d.item.version}`);
+  const revs = new Set(dropped.map((d) => d.rev));
+  return { names: names.length < 2 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`, at: revs.size === 1 ? ` at Lock in ${dropped[0].rev}` : "" };
 }
 
 /** The item that stands for an artifact: its own, or the one of the artifact it replaces. */

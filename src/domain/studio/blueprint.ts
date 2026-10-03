@@ -101,6 +101,20 @@ export function droppableItem(s: State, a: StudioArtifact): BlueprintItem | unde
   return item && item.status !== "dropped" ? item : undefined;
 }
 
+/**
+ * The parts a task builds that the owner dropped: the items its current spec cites that are dropped in the version in
+ * force, each with the Lock in that dropped it. A task the lead retired for them and the owner brought back with Undo
+ * still builds them, and its page and its change-order line say so (ORC-030 Q-13).
+ */
+export function droppedRefs(s: State, t: Task): { item: BlueprintItem; rev: number }[] {
+  return (currentSpec(t).content.blueprintRefs ?? []).flatMap((id) => {
+    const item = blueprintItems(s).find((i) => i.id === id);
+    if (item?.status !== "dropped") return [];
+    const rev = s.blueprint.revisions.find((r) => r.items.some((i) => i.id === id && i.status === "dropped"))?.rev ?? blueprintRev(s);
+    return [{ item, rev }];
+  });
+}
+
 /** The item that stands for this artifact: its own, or the one of the artifact it replaces. */
 function itemOf(items: BlueprintItem[], a: StudioArtifact): BlueprintItem | undefined {
   return items.find((i) => i.artifactId === a.id) ?? (a.supersedes ? items.find((i) => i.artifactId === a.supersedes) : undefined);
