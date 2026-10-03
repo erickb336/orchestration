@@ -106,7 +106,7 @@ describe("A. shaping end to end", () => {
     expect(r.trigger).toBe("message");
     const prompt = claude.runs.get(r.id)!.prompt;
     expect(prompt).toContain("Project stage: shaping");
-    expect(prompt).toContain("## Shaping the vision");
+    expect(prompt).toContain("## Draft the vision with the user");
     expect(prompt).toContain('"vision": {');
     expect(prompt).toContain("(not written yet)");
     claude.reply(r.id, "Here is a first draft and one planned task.", [proposal({ title: "One-command local dev", priority: 1 })], undefined, visionDraft());
@@ -339,7 +339,7 @@ describe("F. coverage and questions", () => {
   it("a shaping reply with a draft, questions and coverage is stored and survives a reopen of the store; the answers arrive as one message", () => {
     init("shaping");
     const r = ask("I want fast note capture on my phone.");
-    expect(claude.runs.get(r.id)!.prompt).toContain("## Shaping the vision");
+    expect(claude.runs.get(r.id)!.prompt).toContain("## Draft the vision with the user");
     expect(claude.runs.get(r.id)!.prompt).toContain('"coverage": {');
     expect(claude.runs.get(r.id)!.prompt).toContain('"questions": [');
     expect(claude.runs.get(r.id)!.prompt).toContain("- intent: Intent and why now — open (not reported yet)");
