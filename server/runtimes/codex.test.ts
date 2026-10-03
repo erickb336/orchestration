@@ -334,6 +334,101 @@ describe("CodexAdapter runs", () => {
   });
 });
 
+describe("sub-agents (ORC-031)", () => {
+  const research = (id: string, over: Partial<Assignment> = {}) =>
+    assignment(id, { workspace: { path: dir, access: "read" }, outputs: [{ name: "report", kind: "report" }], allowSubagents: { cap: 3 }, ...over });
+  const subEvents = (events: AdapterEvent[]) => events.filter((e): e is Extract<AdapterEvent, { type: "subagent" }> => e.type === "subagent").map((e) => e.subagent);
+  const recvOf = (stubLog: ReturnType<typeof make>["stubLog"], method: string) => stubLog().filter((l) => l.recv?.method === method).map((l) => l.recv);
+
+  it("only a read-only run that allows helpers drops the switches, caps them at Codex's own limit, and keeps its thread", async () => {
+    const { adapter, events, stubLog } = make("complete");
+    // One at a time, so each app-server's argv and its thread/start line up in the stub's log.
+    const runs: Assignment[] = [
+      research("r"),
+      research("w", { workspace: { path: dir, access: "write" } }), // never sent by the service; refused anyway
+      assignment("plain", { workspace: { path: dir, access: "read" } }),
+    ];
+    for (const [i, a] of runs.entries()) {
+      adapter.start(a);
+      await waitFor(() => terminals(events).length === i + 1);
+    }
+    // The runs' own app-servers (local mode), not the isolated one that archives the research run's thread.
+    const argvs = stubLog().filter((l) => l.argv?.[0] === "app-server" && !l.argv.includes("plugins")).map((l) => l.argv as string[]);
+    const threads = recvOf(stubLog, "thread/start").map((m) => m.params);
+    expect(argvs[0]).toEqual(["app-server", "-c", "project_doc_max_bytes=0", "-c", "agents.max_threads=3", "-c", "agents.max_depth=1"]);
+    // Codex forks a sub-agent from its parent's session file: on an ephemeral thread every spawn fails (real run).
+    expect(threads[0]).toMatchObject({ sandbox: "read-only", ephemeral: false });
+    for (const i of [1, 2]) {
+      expect(argvs[i]).toEqual([...APP_SERVER_ARGS]);
+      expect(argvs[i].slice(1, 5)).toEqual(["-c", "agents.enabled=false", "--disable", "multi_agent"]);
+      expect(threads[i].ephemeral).toBe(true);
+    }
+  });
+
+  it("counts each sub-agent from its spawn and its own thread, with its model and its usage apart from the parent's", async () => {
+    const { adapter, events, stubLog } = make("subagents");
+    adapter.start(research("att-s"));
+    await waitFor(() => terminals(events).length > 0);
+    expect(subEvents(events)).toEqual([
+      { phase: "started", id: "thr_sub_a", asked: "Codex sub-agent /root/a", usageInParent: false },
+      // Its model from thread/read; its usage from its own thread's totals.
+      { phase: "ended", id: "thr_sub_a", how: "completed", model: "stub-sub-model", usage: { inputTokens: 1000, cachedInputTokens: 200, outputTokens: 50 } },
+      { phase: "started", id: "thr_sub_b", asked: "Survey b.txt", model: "stub-sub-b", usageInParent: false },
+      // Still running when the parent's turn completes: its app-server exits with the run.
+      { phase: "ended", id: "thr_sub_b", how: "stopped", model: "stub-sub-b", usage: { inputTokens: 500, cachedInputTokens: 0, outputTokens: 10 } },
+    ]);
+    // The refused spawn (no thread) is not a sub-agent; the sub-thread's error never failed the parent.
+    const done = terminals(events);
+    expect(done).toHaveLength(1);
+    expect(done[0].type).toBe("completed");
+    // The parent's own totals, plus A's follow-up turn after its end (1300-1000 in, 70-50 out), so no token is missed.
+    expect((done[0] as { usage?: unknown }).usage).toEqual({ inputTokens: 420, cachedInputTokens: 80, outputTokens: 50 });
+    expect(events.some((e) => e.type === "activity" && /ran again after it ended/.test(e.note))).toBe(true);
+    // Every sub-agent event comes before the terminal one.
+    expect(events.findIndex((e) => e.type === "completed")).toBe(events.length - 1);
+    expect(recvOf(stubLog, "thread/read").map((m) => m.params)).toEqual([{ threadId: "thr_sub_a", includeTurns: false }]);
+    // The kept threads leave Codex's history once the run's app-server has exited: archived, the parent's first.
+    await waitFor(() => recvOf(stubLog, "thread/archive").length === 3);
+    expect(recvOf(stubLog, "thread/archive").map((m) => m.params.threadId)).toEqual(["thr_stub_1", "thr_sub_a", "thr_sub_b"]);
+  });
+
+  it("an ephemeral run archives nothing", async () => {
+    const { adapter, events, stubLog } = make("subagents");
+    adapter.start(assignment("att-e", { workspace: { path: dir, access: "read" } }));
+    await waitFor(() => terminals(events).length > 0);
+    await settle(400);
+    expect(recvOf(stubLog, "thread/archive")).toEqual([]);
+  });
+
+  it("a sub-agent that slips through where none is allowed is still reported", async () => {
+    const { adapter, events } = make("subagents");
+    adapter.start(assignment("att-x", { workspace: { path: dir, access: "read" } }));
+    await waitFor(() => terminals(events).length > 0);
+    expect(subEvents(events).filter((s) => s.phase === "started").map((s) => s.id)).toEqual(["thr_sub_a", "thr_sub_b"]);
+  });
+
+  // Codex's turn/interrupt ends only the parent's turn (real run): the sub-agents stop because the run's app-server exits.
+  it("an interrupt of the parent stops its sub-agents with the run's app-server: their end is reported, then the run's", async () => {
+    const { adapter, events, stubLog } = make("subagents-interrupt");
+    adapter.start(research("att-i"));
+    await waitFor(() => subEvents(events).length === 1);
+    await settle(50);
+    adapter.interrupt("att-i");
+    await waitFor(() => terminals(events).length > 0);
+    expect(subEvents(events)).toEqual([
+      { phase: "started", id: "thr_sub_a", asked: "Codex sub-agent /root/a", usageInParent: false },
+      { phase: "ended", id: "thr_sub_a", how: "stopped", model: "stub-sub-model", usage: { inputTokens: 700, cachedInputTokens: 0, outputTokens: 5 } },
+    ]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-i", how: "interrupted", usage: undefined }]);
+    // One interrupt, of the parent's turn.
+    expect(recvOf(stubLog, "turn/interrupt").map((m) => m.params)).toEqual([{ threadId: "thr_stub_1", turnId: "turn_stub_1" }]);
+  });
+
+  it("publishes no tracking until real runs prove it", () => {
+    expect(new CodexAdapter({ codexPath: STUB }).capabilities.childAgentTracking).toBe("unsupported");
+  });
+});
+
 describe("notes", () => {
   const NOTE = "Note from the lead, relaying the user (mid-run, 10:00): skip the README; the owner will write it.";
   /** Start a run in `mode` and wait until its turn is live (the adapter knows the turn id). */

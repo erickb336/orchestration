@@ -1,0 +1,407 @@
+{
+  "scenario": "ORC-031 31c: Codex sub-agents in read-only research runs",
+  "mode": "real",
+  "startedAt": "2026-10-03T08:34:11.166Z",
+  "orchestrator": {
+    "commit": "97c6fb282732",
+    "uncommittedChanges": false
+  },
+  "model": "gpt-6.1-sol",
+  "runs": [
+    {
+      "label": "research",
+      "cap": 2,
+      "provider": "codex",
+      "actualModel": "gpt-6.1-sol",
+      "terminal": {
+        "type": "stopped",
+        "how": "interrupted",
+        "usage": {
+          "inputTokens": 64408,
+          "cachedInputTokens": 57600,
+          "outputTokens": 435
+        }
+      },
+      "subagents": [
+        {
+          "id": "01a100e6-67e3-7943-bf70-14141622d597",
+          "asked": "Codex sub-agent /root/p",
+          "model": "gpt-6.1-sol",
+          "usageInParent": false,
+          "how": "completed",
+          "usage": {
+            "inputTokens": 51224,
+            "cachedInputTokens": 46336,
+            "outputTokens": 518
+          },
+          "startedMs": 10225,
+          "endedMs": 38774
+        },
+        {
+          "id": "01a100e6-7a62-79d3-890e-bc8eeebafcf9",
+          "asked": "Codex sub-agent /root/q",
+          "model": "gpt-6.1-sol",
+          "usageInParent": false,
+          "how": "stopped",
+          "usage": {
+            "inputTokens": 12446,
+            "cachedInputTokens": 11520,
+            "outputTokens": 81
+          },
+          "startedMs": 14965,
+          "endedMs": 40105
+        }
+      ],
+      "finalText": ""
+    },
+    {
+      "label": "over-cap",
+      "cap": 1,
+      "provider": "codex",
+      "actualModel": "gpt-6.1-sol",
+      "terminal": {
+        "type": "completed",
+        "usage": {
+          "inputTokens": 75644,
+          "cachedInputTokens": 70656,
+          "outputTokens": 283
+        }
+      },
+      "subagents": [
+        {
+          "id": "01a100e7-0d56-7b73-aa80-010e89c92240",
+          "asked": "Codex sub-agent /root/read_a",
+          "model": "gpt-6.1-sol",
+          "usageInParent": false,
+          "how": "completed",
+          "usage": {
+            "inputTokens": 24604,
+            "cachedInputTokens": 12032,
+            "outputTokens": 106
+          },
+          "startedMs": 7324,
+          "endedMs": 16624
+        },
+        {
+          "id": "01a100e7-54d1-7932-af26-ca5c282bf553",
+          "asked": "",
+          "model": "gpt-6.1-sol",
+          "usageInParent": false,
+          "how": "completed",
+          "usage": {
+            "inputTokens": 24587,
+            "cachedInputTokens": 12032,
+            "outputTokens": 89
+          },
+          "startedMs": 25632,
+          "endedMs": 35182
+        }
+      ],
+      "finalText": "- First sub-agent: `alpha line one`\n- Second sub-agent: `bravo line one`\n\nBoth spawns succeeded. I interrupted the first after it finished, before starting the second."
+    }
+  ],
+  "checks": {
+    "Codex is installed, signed in with its own sign-in, and isolation is known": {
+      "ok": true,
+      "detail": "Codex CLI 0.159.2 is signed in (ChatGPT login)."
+    },
+    "(switch) the research run starts Codex with sub-agents on and its cap: agents.max_threads=2 and agents.max_depth=1, without agents.enabled=false or --disable multi_agent": {
+      "ok": true,
+      "detail": {
+        "argv": [
+          "project_doc_max_bytes=0",
+          "agents.max_threads=2",
+          "agents.max_depth=1"
+        ]
+      }
+    },
+    "(count) both sub-agents were reported as they started, each with its own thread, and each one's end": {
+      "ok": true,
+      "detail": {
+        "subagents": [
+          {
+            "id": "01a100e6-67e3-7943-bf70-14141622d597",
+            "asked": "Codex sub-agent /root/p",
+            "model": "gpt-6.1-sol",
+            "usageInParent": false,
+            "how": "completed",
+            "usage": {
+              "inputTokens": 51224,
+              "cachedInputTokens": 46336,
+              "outputTokens": 518
+            },
+            "startedMs": 10225,
+            "endedMs": 38774
+          },
+          {
+            "id": "01a100e6-7a62-79d3-890e-bc8eeebafcf9",
+            "asked": "Codex sub-agent /root/q",
+            "model": "gpt-6.1-sol",
+            "usageInParent": false,
+            "how": "stopped",
+            "usage": {
+              "inputTokens": 12446,
+              "cachedInputTokens": 11520,
+              "outputTokens": 81
+            },
+            "startedMs": 14965,
+            "endedMs": 40105
+          }
+        ]
+      }
+    },
+    "(cost) each sub-agent's tokens come apart from the parent's: every rise of the parent's total is its own call, the run reports the parent's total, and each sub-agent's report holds its own thread's total": {
+      "ok": true,
+      "detail": {
+        "parent": {
+          "total": {
+            "inputTokens": 64408,
+            "cachedInputTokens": 57600,
+            "outputTokens": 435
+          },
+          "updates": 6,
+          "rises": 5,
+          "onlyOwnCalls": true
+        },
+        "subThreads": {
+          "01a100e6-67e3-7943-bf70-14141622d597": {
+            "total": {
+              "inputTokens": 51224,
+              "cachedInputTokens": 46336,
+              "outputTokens": 518
+            },
+            "updates": 4,
+            "rises": 4,
+            "onlyOwnCalls": true
+          },
+          "01a100e6-7a62-79d3-890e-bc8eeebafcf9": {
+            "total": {
+              "inputTokens": 12446,
+              "cachedInputTokens": 11520,
+              "outputTokens": 81
+            },
+            "updates": 1,
+            "rises": 1,
+            "onlyOwnCalls": true
+          }
+        },
+        "runUsage": {
+          "inputTokens": 64408,
+          "cachedInputTokens": 57600,
+          "outputTokens": 435
+        },
+        "subagentsPricedUsd": 0.0234,
+        "subagentsUnknownCost": 0,
+        "note": "Priced at the published API price (src/domain/prices.json); a sub-agent with no usage yet (stopped before its first report) is unknown, never zero, in the budgets."
+      }
+    },
+    "(pause) the run was paused while a sub-agent's command ran: the run stopped as interrupted, that sub-agent was reported stopped, and its command was gone within 3.5 s (the adapter kills the app-server's process group at 3 s at the latest)": {
+      "ok": true,
+      "detail": {
+        "sent": true,
+        "sleepersBefore": 2,
+        "stoppedMs": 7,
+        "sleepersAfter": [
+          {
+            "ms": 510,
+            "running": 0
+          },
+          {
+            "ms": 1023,
+            "running": 0
+          },
+          {
+            "ms": 1536,
+            "running": 0
+          },
+          {
+            "ms": 2050,
+            "running": 0
+          },
+          {
+            "ms": 2563,
+            "running": 0
+          },
+          {
+            "ms": 3077,
+            "running": 0
+          },
+          {
+            "ms": 3598,
+            "running": 0
+          },
+          {
+            "ms": 4114,
+            "running": 0
+          },
+          {
+            "ms": 4627,
+            "running": 0
+          },
+          {
+            "ms": 5140,
+            "running": 0
+          }
+        ],
+        "goneMs": 510,
+        "terminal": {
+          "type": "stopped",
+          "how": "interrupted"
+        },
+        "stoppedSubagent": "01a100e6-7a62-79d3-890e-bc8eeebafcf9"
+      }
+    },
+    "(cap) with a cap of 1, Codex started one sub-agent and refused the second after the first had finished: the cap counts every sub-agent of the run, not only those at once": {
+      "ok": false,
+      "detail": {
+        "subagents": [
+          {
+            "id": "01a100e7-0d56-7b73-aa80-010e89c92240",
+            "asked": "Codex sub-agent /root/read_a",
+            "model": "gpt-6.1-sol",
+            "usageInParent": false,
+            "how": "completed",
+            "usage": {
+              "inputTokens": 24604,
+              "cachedInputTokens": 12032,
+              "outputTokens": 106
+            },
+            "startedMs": 7324,
+            "endedMs": 16624
+          },
+          {
+            "id": "01a100e7-54d1-7932-af26-ca5c282bf553",
+            "asked": "",
+            "model": "gpt-6.1-sol",
+            "usageInParent": false,
+            "how": "completed",
+            "usage": {
+              "inputTokens": 24587,
+              "cachedInputTokens": 12032,
+              "outputTokens": 89
+            },
+            "startedMs": 25632,
+            "endedMs": 35182
+          }
+        ],
+        "finalText": "- First sub-agent: `alpha line one`\n- Second sub-agent: `bravo line one`\n\nBoth spawns succeeded. I interrupted the first after it finished, before starting the second."
+      }
+    },
+    "(Codex alone) turn/interrupt on the parent ends its turn, and the sub-agents' commands run on until the app-server exits; the adapter's pause relies on ending the app-server": {
+      "ok": true,
+      "detail": {
+        "parent": "01a100e7-89ac-78d1-ad5c-b1d501038901",
+        "subs": [
+          "01a100e7-a6a6-7370-8872-c603a5977b60",
+          "01a100e7-bb92-7f93-ac21-a6a1ad7febab"
+        ],
+        "sleepersBefore": 2,
+        "parentTurn": "interrupted",
+        "parentEndedMs": 3,
+        "subTurnEndsAfterInterrupt": [],
+        "runningAfterInterrupt": [
+          {
+            "s": 1,
+            "running": 2
+          },
+          {
+            "s": 2,
+            "running": 4
+          },
+          {
+            "s": 3,
+            "running": 4
+          },
+          {
+            "s": 4,
+            "running": 4
+          },
+          {
+            "s": 5,
+            "running": 4
+          },
+          {
+            "s": 6,
+            "running": 4
+          },
+          {
+            "s": 7,
+            "running": 4
+          },
+          {
+            "s": 8,
+            "running": 4
+          },
+          {
+            "s": 9,
+            "running": 4
+          },
+          {
+            "s": 10,
+            "running": 4
+          }
+        ],
+        "runningAfterExit": 0
+      }
+    },
+    "every kept thread (parents and sub-agents) was archived: none is left in Codex's sessions folder (read-only listing)": {
+      "ok": true,
+      "detail": {
+        "threads": 9,
+        "leftInSessions": 0,
+        "codexAloneArchive": {
+          "038901": "archived",
+          "977b60": {
+            "error": "no rollout found for thread id 01a100e7-a6a6-7370-8872-c603a5977b60"
+          },
+          "7febab": {
+            "error": "no rollout found for thread id 01a100e7-bb92-7f93-ac21-a6a1ad7febab"
+          }
+        }
+      }
+    },
+    "(safety) a sub-agent's writes inside and outside the workspace were refused by the read-only sandbox, and neither file exists": {
+      "ok": true,
+      "detail": {
+        "attempts": [
+          {
+            "cmd": "touch /private<work>/repo/written-by-helper.txt",
+            "exitCode": 1,
+            "output": "touch: /private<work>/repo/written-by-helper.txt: Operation not permitted\n",
+            "refused": true
+          },
+          {
+            "cmd": "touch /private<work>/outside/written-by-helper.txt",
+            "exitCode": 1,
+            "output": "touch: /private<work>/outside/written-by-helper.txt: Operation not permitted\n",
+            "refused": true
+          }
+        ],
+        "filesExist": {
+          "inside": false,
+          "outside": false
+        },
+        "itemsReported": [
+          {
+            "thread": "01a100e6-67e3-7943-bf70-14141622d597",
+            "command": "/bin/zsh -lc 'head -n 1 /private<work>/repo/a.txt'",
+            "exitCode": 0,
+            "output": "alpha line one\n"
+          }
+        ],
+        "source": "each sub-agent's own Codex session file (its tool calls and their output), read only"
+      }
+    },
+    "(cap at once) with a cap of 2, the third sub-agent asked for at once was refused by Codex (\"agent thread limit reached\" in the parent's session file), and only 2 started": {
+      "ok": true,
+      "detail": {
+        "started": 2,
+        "subThreadsWithUsage": 2,
+        "refusalsInParentSession": 1
+      }
+    }
+  },
+  "ok": false,
+  "codex": "Codex CLI 0.159.2 is signed in (ChatGPT login).",
+  "finishedAt": "2026-10-03T08:36:04.492Z"
+}
