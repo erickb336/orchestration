@@ -529,8 +529,9 @@ type StagePrefix = "orc-rec-" | "orc-ev-" | "orc-probe-";
 const STAGE_NAME = /^orc-(?:rec|ev|probe)-[A-Za-z0-9]{6}$/;
 /**
  * How old a stage folder must be before the sweep removes it. A recording ends within its limit (120 s, and the
- * container's own timeout 15 s after it) and the probe within 60 s, so a folder this old has no live recording; a
- * second service on the same machine records in it only while it is new.
+ * container's own timeout 15 s after it), the probe within 60 s, and a capture of evidence within its limits
+ * (evidence.ts: the install's 10 minutes and the capture's, under 40 minutes for the largest plan), so a folder this
+ * old has no live run; a second service on the same machine records in it only while it is new.
  */
 export const STAGE_SWEEP_AGE_MS = 60 * 60_000;
 
