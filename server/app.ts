@@ -23,6 +23,7 @@ import { valeChecker } from "./prose/vale";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
 import { defaultRecorderRoot, sweepStages } from "./studio/container";
+import { ContainerEvidence, type EvidenceRunner } from "./studio/evidence";
 import { systemMedia } from "./studio/media";
 import { createPrototypeServer, projectStudioDir } from "./studio/serve";
 import { VisionDocStore } from "./visiondocs";
@@ -54,6 +55,8 @@ let workspaces: WorkspaceManager | undefined;
 let github: GitHubHost | undefined;
 /** The project's checks, run by the service: the Codex sandbox by default, direct only when the user chose "no sandbox". Fake mode simulates them. */
 let checks: CheckRunner | undefined;
+/** The Capture evidence step (ORC-029 pass 5): the recorder's container in real mode. Fake mode simulates it (the scheduler's default). */
+let evidence: EvidenceRunner | undefined;
 /** True when Claude workers run with shell access: the app then cannot claim that only the service reaches GitHub. */
 let workerShell = false;
 const dataDir = dirname(dbPath);
@@ -66,6 +69,7 @@ if (mode === "real") {
   workspaces = new WorkspaceManager(join(dataDir, "worktrees"));
   // A private, never signed-in CODEX_HOME for the check app-servers: the user's Codex configuration does not apply to them.
   checks = new CheckRunners(new CodexSandboxChecks({ home: join(dataDir, "checks-codex-home"), log }), new DirectChecks({ log }));
+  evidence = new ContainerEvidence({ log });
   // Pull-request delivery uses the user's own gh sign-in, from an empty directory the service owns.
   // Nothing is contacted until the user switches the delivery mode to pull requests.
   const { GhCliHost } = await import("./github");
@@ -106,7 +110,7 @@ if (mode === "fake") {
 // Fake runtime: no `github` is passed, so the scheduler uses its simulated host and contacts nothing.
 // Studio versions get screenshots (the system Chrome) and terminal recordings (VHS, sandboxed or not at all), in both modes.
 // The lead's replies are checked against the controlled-English style with Vale, when it is installed (else "not checked").
-const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, dataDir, studioMedia: systemMedia(log), prose: valeChecker() });
+const scheduler = new Scheduler(store, adapters, { log, workspaces, github, workerShell, visionDocs, checks, evidence, dataDir, studioMedia: systemMedia(log), prose: valeChecker() });
 // Check logs are pruned at start and once a day (older than 14 days, or beyond 200 MiB in all).
 const pruneLogs = () => {
   try {

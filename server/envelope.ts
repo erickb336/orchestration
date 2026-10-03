@@ -104,6 +104,11 @@ interface EnvelopeInput {
   conventions?: ConventionsFile[];
   /** Reads the stored copies of the vision documents; without it their text cannot be shown. */
   docs?: VisionDocReader;
+  /**
+   * For an evidence input (ORC-029 pass 5, the UX review): its lines, with the built files beside the approved design's
+   * own pictures as paths the run may read (server/studio/evidence.ts). Without it the input shows its summary only.
+   */
+  evidenceFiles?: (art: Artifact) => string;
 }
 
 /** The caps on the conventions section, per file and in total. */
@@ -376,7 +381,7 @@ ${settled.map((d) => `- ${d.findingId} "${d.finding.title}"${d.finding.file ? ` 
 `;
 }
 
-export function buildEnvelope({ state, task, step, attemptId, access, seed, changeUnderReview, changedPaths, coverageGap, conventions, docs }: EnvelopeInput): string {
+export function buildEnvelope({ state, task, step, attemptId, access, seed, changeUnderReview, changedPaths, coverageGap, conventions, docs, evidenceFiles }: EnvelopeInput): string {
   const vision = M.currentVision(state);
   const spec = M.currentSpec(task);
   const c = spec.content;
@@ -392,7 +397,7 @@ export function buildEnvelope({ state, task, step, attemptId, access, seed, chan
           const ref = art.ref ? ` [ref: ${art.ref}]` : "";
           const findings = art.openFindings !== undefined ? ` (${art.openFindings} open findings)` : "";
           const edited = art.author === "user" ? ` [edited by the user: ${art.editReason ?? "no reason given"}; follow this version]` : "";
-          return `- ${i.step}.${i.output} v${art.version} (${art.kind})${findings}${ref}${edited}:\n  ${art.summary.replace(/\n/g, "\n  ")}${findingsInput(state, art)}${checkOutputInput(art)}`;
+          return `- ${i.step}.${i.output} v${art.version} (${art.kind})${findings}${ref}${edited}:\n  ${art.summary.replace(/\n/g, "\n  ")}${findingsInput(state, art)}${checkOutputInput(art)}${art.kind === "evidence" && evidenceFiles ? evidenceFiles(art) : ""}`;
         })
         .join("\n")
     : "- No upstream artifacts. Work from the specification.";
