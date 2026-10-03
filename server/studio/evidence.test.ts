@@ -2,12 +2,13 @@
 // manifests and tapes. A whole plan of the wrong shape is refused; a refused entry costs only its item; an entry for
 // an item the task does not cite is noted and skipped; nothing is read through a link.
 
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { CaptureItem } from "../../src/domain/studio/evidence";
-import { CAPTURE_PLAN, MAX_PLANNED_SCREENS, checkCapturePlan, readCapturePlan, readPlainFile } from "./evidence";
+import { RECORDER_IMAGE, containerArgs } from "./container";
+import { CAPTURE_PLAN, CAPTURE_SCRIPT, MAX_PLANNED_SCREENS, captureArgs, checkCapturePlan, collectCapture, installArgs, parseCaptureOutput, readCapturePlan, readPlainFile } from "./evidence";
 
 const SCREEN: CaptureItem = { itemId: "bi-1", kind: "screen", title: "Trip board", artifactId: "sa-1", version: 2, variant: "B" };
 const CLI: CaptureItem = { itemId: "bi-3", kind: "terminal-demo", title: "trips CLI", artifactId: "sa-3", version: 1 };
@@ -88,6 +89,124 @@ describe("the capture plan", () => {
     // A Source is read beside the tape, in the change.
     expect(one("demo/t.tape", { "demo/t.tape": `Source common.tape\n${TAPE}`, "demo/common.tape": "Set FontSize 14\n" })).toBe("");
     expect(one("demo/t.tape", { "demo/t.tape": `Source common.tape\n${TAPE}` })).toMatch(/Source common\.tape was not found/);
+  });
+});
+
+describe("the two container runs", () => {
+  const at = (args: string[], flag: string) => args[args.indexOf(flag) + 1];
+  const envs = (args: string[]) => args.flatMap((a, i) => (args[i - 1] === "--env" ? [a] : []));
+
+  it("the install gets Docker's network, with every install hook off and its caches in its own folder", () => {
+    const args = installArgs({ name: "orc-ev-1-abc", work: "/stage/work", cache: "/stage/cache", argv: ["npm", "ci", "--no-ignore-scripts"], timeoutMs: 600_000 });
+    expect(at(args, "--network")).toBe("bridge");
+    expect(envs(args)).toEqual(expect.arrayContaining(["npm_config_ignore_scripts=true", "YARN_ENABLE_SCRIPTS=0", "YARN_IGNORE_PATH=1", "npm_config_cache=/out/npm-cache", "npm_config_git=/bin/false"]));
+    // The contradicting flag is dropped and --ignore-scripts added, whatever the setting says.
+    expect(args.slice(args.indexOf(RECORDER_IMAGE) + 1)).toEqual(["/usr/bin/timeout", "--kill-after=5", "615", "npm", "ci", "--ignore-scripts"]);
+    expect(args).toEqual(expect.arrayContaining(["--read-only", "--cap-drop", "ALL", "--user", "10001:10001", "--mount", "type=bind,source=/stage/work,target=/work", "--mount", "type=bind,source=/stage/cache,target=/out"]));
+    expect(args).not.toContain("--interactive");
+  });
+
+  it("the capture has no network, the same isolation, and reads its job on stdin", () => {
+    const args = captureArgs({ name: "orc-ev-1-def", work: "/stage/work", out: "/stage/out", timeoutMs: 100_000 });
+    expect(at(args, "--network")).toBe("none");
+    expect(args.filter((a) => a === "--network")).toHaveLength(1);
+    expect(args).toEqual(expect.arrayContaining(["--interactive", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "10001:10001", "--pull", "never"]));
+    expect(envs(args)).toEqual(["HOME=/home/recorder", "LANG=C.UTF-8", "TMPDIR=/tmp"]);
+    expect(args.slice(args.indexOf(RECORDER_IMAGE) + 1)).toEqual(["/usr/bin/timeout", "--kill-after=5", "115", "/usr/local/bin/node", "-e", CAPTURE_SCRIPT]);
+    // The browser's hardening, as for the studio's screenshot Chrome (shots.ts).
+    expect(CAPTURE_SCRIPT).toContain('"--webrtc-ip-handling-policy=disable_non_proxied_udp", "--proxy-server=http://127.0.0.1:" + proxy.address().port, "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE *.localhost"');
+  });
+
+  it("refuses an environment variable it could not pass safely", () => {
+    expect(() => containerArgs({ name: "orc-ev-1", work: "/w", out: "/o", workdir: "/work", command: ["true"], env: { HOME: "/root" } })).toThrow(/not a container variable/);
+    expect(() => containerArgs({ name: "orc-ev-1", work: "/w", out: "/o", workdir: "/work", command: ["true"], env: { "A B": "x" } })).toThrow(/not a container variable/);
+    expect(() => containerArgs({ name: "orc-ev-1", work: "/w", out: "/o", workdir: "/work", command: ["true"], env: { A: "x\ny" } })).toThrow(/not a container variable/);
+  });
+});
+
+describe("what comes back from a capture", () => {
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]);
+  const GIF = Buffer.concat([Buffer.from("GIF89a"), Buffer.alloc(32)]);
+  const LIMITS = { startMs: 60_000, maxFileBytes: 1024 * 1024 };
+  let out: string;
+  let back: string;
+  beforeEach(() => {
+    out = join(dir, "stage-out");
+    back = join(dir, "evidence");
+    mkdirSync(out);
+    mkdirSync(back);
+  });
+  const put = (rel: string, data: Buffer | string) => {
+    mkdirSync(dirname(join(out, rel)), { recursive: true });
+    writeFileSync(join(out, rel), data);
+  };
+  const screen = (devices: ("desktop" | "mobile")[] = ["desktop", "mobile"]) => ({ itemId: "bi-1", path: "/", devices });
+  const terminal = { itemId: "bi-3", tape: "demo/trips.tape", folder: "demo", normalized: "", outputs: { gif: "demo.gif", txt: "demo.txt" } };
+  const listed = (d: string): string[] => readdirSync(d, { recursive: true, withFileTypes: true }).filter((e) => e.isFile()).map((e) => join(e.parentPath, e.name).slice(d.length + 1)).sort();
+
+  it("a preview that does not start: every screen says so, with the end of its log", () => {
+    const r = collectCapture({ stageOut: out, outDir: back, items: ITEMS, screens: [screen()], terminals: [], out: { preview: { started: false, log: "Error: Cannot find module 'vite'\n", exit: "exit 1" }, screens: [], terminals: [] }, port: 4173, limits: LIMITS });
+    expect(r).toEqual([{ ...SCREEN, status: "none", reason: "preview-did-not-start", detail: "The preview command ended (exit 1) before port 4173 opened.", log: "Error: Cannot find module 'vite'" }]);
+    expect(collectCapture({ stageOut: out, outDir: back, items: ITEMS, screens: [screen()], terminals: [], out: { preview: { started: false, log: "" }, screens: [], terminals: [] }, port: 4173, limits: LIMITS })[0]).toMatchObject({ reason: "preview-did-not-start", detail: "Port 4173 did not open within 60 s." });
+  });
+
+  it("only the files the plan names come back, each checked by its first bytes; the page's errors are warnings", () => {
+    put("bi-1/desktop.png", PNG);
+    put("bi-1/mobile.png", "not a png");
+    put("bi-1/extra.png", PNG);
+    put("bi-9/planted.png", PNG);
+    put("planted.txt", "hello");
+    put("bi-3/demo.gif", GIF);
+    put("bi-3/demo.txt", "> node bin/trips.js list\nTypeError: x is not a function\n");
+    put("bi-3/notes.txt", "not declared");
+    const r = collectCapture({
+      stageOut: out,
+      outDir: back,
+      items: ITEMS,
+      screens: [screen()],
+      terminals: [terminal],
+      out: { preview: { started: true, log: "" }, screens: [{ item: "bi-1", device: "desktop", status: "shot", errors: ["Uncaught ReferenceError: x is not defined"] }, { item: "bi-1", device: "mobile", status: "shot", errors: [] }], terminals: [{ item: "bi-3", status: "recorded" }] },
+      port: 4173,
+      limits: LIMITS,
+    });
+    expect(listed(back)).toEqual(["bi-1/desktop.png", "bi-3/demo.gif", "bi-3/demo.txt"]);
+    expect(r[0]).toMatchObject({ itemId: "bi-1", status: "captured", files: [{ path: "bi-1/desktop.png", type: "png", device: "desktop", bytes: PNG.length }], warnings: ["Not captured on mobile: bi-1/mobile.png is not a PNG file", "Uncaught ReferenceError: x is not defined"] });
+    expect(r[1]).toMatchObject({ itemId: "bi-3", status: "captured", files: [{ path: "bi-3/demo.gif", type: "gif" }, { path: "bi-3/demo.txt", type: "txt" }], warnings: ["The recording shows a failure: TypeError: x is not a function"] });
+  });
+
+  it("never follows a link: a screenshot that is a link, or an output folder that is one, comes back as nothing", () => {
+    const outside = mkdtempSync(join(tmpdir(), "orc-evidence-outside-"));
+    try {
+      writeFileSync(join(outside, "secret.png"), PNG);
+      writeFileSync(join(outside, "demo.gif"), GIF);
+      writeFileSync(join(outside, "demo.txt"), "fine");
+      put("bi-1/desktop.png", PNG);
+      symlinkSync(join(outside, "secret.png"), join(out, "bi-1", "mobile.png"));
+      symlinkSync(outside, join(out, "bi-3"));
+      const r = collectCapture({ stageOut: out, outDir: back, items: ITEMS, screens: [screen()], terminals: [terminal], out: { preview: { started: true, log: "" }, screens: [{ item: "bi-1", device: "desktop", status: "shot", errors: [] }, { item: "bi-1", device: "mobile", status: "shot", errors: [] }], terminals: [{ item: "bi-3", status: "recorded" }] }, port: 4173, limits: LIMITS });
+      expect(listed(back)).toEqual(["bi-1/desktop.png"]);
+      expect(r[0]).toMatchObject({ status: "captured", warnings: [expect.stringMatching(/Not captured on mobile: bi-1\/mobile\.png was not written, or is not a regular file .* reached through no link/)] });
+      expect(r[1]).toMatchObject({ itemId: "bi-3", status: "none", reason: "capture-failed", detail: expect.stringMatching(/bi-3\/demo\.gif was not written/) });
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("a page that does not load has page errors and no files; a tape that failed keeps nothing", () => {
+    const r = collectCapture({ stageOut: out, outDir: back, items: ITEMS, screens: [screen(["desktop"])], terminals: [terminal], out: { preview: { started: true, log: "" }, screens: [{ item: "bi-1", device: "desktop", status: "http", error: "HTTP 404 for /", errors: ["console.error: Failed to load resource: the server responded with a status of 404"] }], terminals: [{ item: "bi-3", status: "timeout", error: "VHS did not finish within 120 s", log: "…" }] }, port: 4173, limits: LIMITS });
+    expect(r).toEqual([
+      { ...SCREEN, status: "none", reason: "page-errors", detail: "The page / did not load: desktop: HTTP 404 for /.", log: "console.error: Failed to load resource: the server responded with a status of 404" },
+      { ...CLI, status: "none", reason: "capture-failed", detail: "VHS did not finish within 120 s", log: "…" },
+    ]);
+    expect(listed(back)).toEqual([]);
+  });
+
+  it("reads the script's result line, and only planned items, devices and statuses from it", () => {
+    const job = { screens: [{ item: "bi-1", path: "/", devices: ["desktop" as const] }], terminals: [{ item: "bi-3", folder: ".", tape: "", dirs: [] }] };
+    const line = JSON.stringify({ orchestratorCapture: 1, preview: { started: true, log: "x".repeat(5000) }, screens: [{ item: "bi-1", device: "desktop", status: "shot", errors: ["a", 5] }, { item: "bi-1", device: "mobile", status: "shot" }, { item: "bi-2", device: "desktop", status: "shot" }, { item: "bi-1", device: "desktop", status: "failed" }], terminals: [{ item: "bi-3", status: "recorded" }, { item: "bi-4", status: "recorded" }, { item: "bi-3", status: "weird" }], refused: 2 });
+    const r = parseCaptureOutput(`noise\n{"orchestratorCapture":1,"screens":[]}\n${line}\n`, job);
+    expect(r).toEqual({ preview: { started: true, log: "x".repeat(1500) }, refused: 2, screens: [{ item: "bi-1", device: "desktop", status: "shot", errors: ["a"] }], terminals: [{ item: "bi-3", status: "recorded" }] });
+    expect(parseCaptureOutput("no result here", job)).toBe("the capture printed no result");
   });
 });
 

@@ -155,12 +155,12 @@ export function setPreview(state: State, input: PreviewInput | null, now: string
  * - not-set-up: the project has no preview setting (or none for screens);
  * - no-plan / not-in-plan / invalid-plan: the coder's capture plan is missing, does not name the item, or was refused;
  * - unavailable: Docker, the recorder's image or its probe is not there;
- * - install-failed, preview-did-not-start, page-errors, recording-failed: the run itself;
+ * - install-failed, preview-did-not-start, page-errors, capture-failed: the run itself (a page that did not load, a recording that failed);
  * - stopped: the run was stopped (a time limit);
  * - simulated: the fake runtime ran nothing.
  */
-export type NoEvidence = "not-set-up" | "no-plan" | "not-in-plan" | "invalid-plan" | "unavailable" | "install-failed" | "preview-did-not-start" | "page-errors" | "recording-failed" | "stopped" | "simulated";
-export const NO_EVIDENCE: readonly NoEvidence[] = ["not-set-up", "no-plan", "not-in-plan", "invalid-plan", "unavailable", "install-failed", "preview-did-not-start", "page-errors", "recording-failed", "stopped", "simulated"];
+export type NoEvidence = "not-set-up" | "no-plan" | "not-in-plan" | "invalid-plan" | "unavailable" | "install-failed" | "preview-did-not-start" | "page-errors" | "capture-failed" | "stopped" | "simulated";
+export const NO_EVIDENCE: readonly NoEvidence[] = ["not-set-up", "no-plan", "not-in-plan", "invalid-plan", "unavailable", "install-failed", "preview-did-not-start", "page-errors", "capture-failed", "stopped", "simulated"];
 
 export const NO_EVIDENCE_WORDS: Record<NoEvidence, string> = {
   "not-set-up": "not set up",
@@ -171,7 +171,7 @@ export const NO_EVIDENCE_WORDS: Record<NoEvidence, string> = {
   "install-failed": "the install failed",
   "preview-did-not-start": "the preview did not start",
   "page-errors": "page errors",
-  "recording-failed": "the recording failed",
+  "capture-failed": "the capture failed",
   stopped: "stopped",
   simulated: "simulated: nothing ran",
 };

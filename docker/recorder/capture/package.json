@@ -1,0 +1,8 @@
+{
+  "name": "orchestrator-capture",
+  "private": true,
+  "description": "The browser library of the recorder's capture of evidence (server/studio/evidence.ts). Pinned by its lockfile.",
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

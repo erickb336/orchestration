@@ -137,7 +137,7 @@ describe("what a capture run captures", () => {
 describe("the record per blueprint item", () => {
   it("names the commit and the design version it shows, and serves only the files it recorded", () => {
     const t = taskCiting(withBlueprint(fresh()), ["bi-1", "bi-3"], 10);
-    const s = capture(t.s, t.id, { sha: SHA, at: at(30), durationMs: 9000, previewRev: 1, items: [{ ...item("bi-1"), status: "captured", files: [png("bi-1", "desktop"), png("bi-1", "mobile")] }, E.noCapture(item("bi-3"), "recording-failed", "VHS failed", "panic: boom\n")] }, 30);
+    const s = capture(t.s, t.id, { sha: SHA, at: at(30), durationMs: 9000, previewRev: 1, items: [{ ...item("bi-1"), status: "captured", files: [png("bi-1", "desktop"), png("bi-1", "mobile")] }, E.noCapture(item("bi-3"), "capture-failed", "VHS failed", "panic: boom\n")] }, 30);
     expect(E.itemEvidence(s, "bi-1")).toEqual({
       itemId: "bi-1",
       title: "Trip board",
@@ -150,7 +150,7 @@ describe("the record per blueprint item", () => {
       status: "captured",
       files: [png("bi-1", "desktop"), png("bi-1", "mobile")],
     });
-    expect(E.itemEvidence(s, "bi-3")).toMatchObject({ status: "none", reason: "recording-failed", detail: "VHS failed", log: "panic: boom", commit: SHA, design: { artifactId: "sa-3", version: 1 } });
+    expect(E.itemEvidence(s, "bi-3")).toMatchObject({ status: "none", reason: "capture-failed", detail: "VHS failed", log: "panic: boom", commit: SHA, design: { artifactId: "sa-3", version: 1 } });
     expect(E.itemEvidence(s, "bi-4")).toEqual({ itemId: "bi-4", title: "Packing TUI", kind: "tui", status: "no-run" });
     expect(E.itemEvidence(s, "bi-2")).toBeUndefined();
     const runId = `run-ev-${s.artifacts.length}`;

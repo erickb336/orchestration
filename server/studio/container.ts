@@ -4,6 +4,8 @@
 // One `docker run` per tape, with a fixed argument list (containerArgs; never a shell string):
 //
 //   no network       --network none: the container has only its own loopback, where VHS, ttyd and Chromium talk.
+//                    One exception: the capture of evidence's dependency download (evidence.ts), which runs npm,
+//                    pnpm or yarn with every install hook off, gets Docker's bridge network; nothing else does.
 //   no host files    two bind mounts and nothing else: a fresh copy of the artifact (/work) and an empty output folder
 //                    (/out), both inside a stage folder the service makes for this one recording. No Docker socket.
 //   read-only root   --read-only, with small tmpfs folders for /tmp and HOME. The VHS image's own volume (/vhs) is
@@ -29,7 +31,7 @@ import { delimiter, join } from "node:path";
 import { killGroup, trackLive } from "../processes";
 
 /** The recorder's image. `npm run recorder:build` tags it; bump both when docker/recorder changes. */
-export const RECORDER_IMAGE = "orchestrator-recorder:1";
+export const RECORDER_IMAGE = "orchestrator-recorder:2";
 /** The image's user (docker/recorder/Dockerfile). Every container runs as it, never as root. */
 export const RECORDER_USER = "10001:10001";
 export const CONTAINER_HOME = "/home/recorder";
@@ -64,7 +66,19 @@ export interface ContainerSpec {
   stdin?: boolean;
   /** Only for the probe: a hosts entry for the host gateway, so it can show the host is out of reach. */
   hostGateway?: boolean;
+  /**
+   * "none" (the default): only the container's own loopback. "bridge": Docker's network, for the capture of evidence's
+   * dependency download alone (evidence.ts: an allowlisted install with every install hook off). Never for anything
+   * that runs repository code.
+   */
+  network?: "none" | "bridge";
+  /** More environment variables, after the image's own (HOME, LANG, TMPDIR stay the service's). */
+  env?: Record<string, string>;
 }
+
+/** An environment variable a container may be given: a plain name, and a value with no NUL or newline. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const RESERVED_ENV = new Set(["HOME", "LANG", "TMPDIR"]);
 
 /** A host path a `--mount` can name: absolute, with no comma (the option's separator), quote or control character. */
 const MOUNTABLE = /^\/[^,"\u0000-\u001f\u007f]*$/;
@@ -75,6 +89,7 @@ export function containerArgs(s: ContainerSpec): string[] {
   if (!CONTAINER_NAME.test(s.name)) throw new Error(`not a container name: ${JSON.stringify(s.name)}`);
   for (const p of [s.work, s.out]) if (!MOUNTABLE.test(p)) throw new Error(`Docker cannot mount ${JSON.stringify(p)} (a comma, a quote or a control character)`);
   if (s.workdir !== WORK && !s.workdir.startsWith(`${WORK}/`)) throw new Error(`the working directory must be under ${WORK}`);
+  for (const [k, v] of Object.entries(s.env ?? {})) if (!ENV_NAME.test(k) || RESERVED_ENV.has(k) || /[\0\n\r]/.test(v)) throw new Error(`not a container variable: ${JSON.stringify(k)}`);
   const L = RECORDER_LIMITS;
   return [
     "run",
@@ -85,7 +100,7 @@ export function containerArgs(s: ContainerSpec): string[] {
     "--pull",
     "never",
     "--network",
-    "none",
+    s.network ?? "none",
     ...(s.hostGateway ? ["--add-host", `${HOST_ALIAS}:host-gateway`] : []),
     "--read-only",
     "--tmpfs",
@@ -114,6 +129,7 @@ export function containerArgs(s: ContainerSpec): string[] {
     "LANG=C.UTF-8",
     "--env",
     "TMPDIR=/tmp",
+    ...Object.entries(s.env ?? {}).flatMap(([k, v]) => ["--env", `${k}=${v}`]),
     "--mount",
     `type=bind,source=${s.work},target=${WORK}`,
     "--mount",
@@ -125,7 +141,7 @@ export function containerArgs(s: ContainerSpec): string[] {
   ];
 }
 
-export const containerName = (what: "rec" | "probe") => `orc-${what}-${process.pid}-${randomBytes(6).toString("hex")}`;
+export const containerName = (what: "rec" | "probe" | "ev") => `orc-${what}-${process.pid}-${randomBytes(6).toString("hex")}`;
 
 // ---------- running docker ----------
 
@@ -507,10 +523,10 @@ export function probeRecorder(o: { docker?: string; env?: NodeJS.ProcessEnv; ima
   })();
 }
 
-/** The prefixes of the stage folders: a recording's (terminal.ts) and the probe's. makeStage takes no other. */
-type StagePrefix = "orc-rec-" | "orc-probe-";
+/** The prefixes of the stage folders: a recording's (terminal.ts), a capture of evidence's (evidence.ts) and the probe's. makeStage takes no other. */
+type StagePrefix = "orc-rec-" | "orc-ev-" | "orc-probe-";
 /** A stage folder's name: a StagePrefix and the six characters mkdtemp adds. Any other name under the root is not ours. */
-const STAGE_NAME = /^orc-(?:rec|probe)-[A-Za-z0-9]{6}$/;
+const STAGE_NAME = /^orc-(?:rec|ev|probe)-[A-Za-z0-9]{6}$/;
 /**
  * How old a stage folder must be before the sweep removes it. A recording ends within its limit (120 s, and the
  * container's own timeout 15 s after it) and the probe within 60 s, so a folder this old has no live recording; a
