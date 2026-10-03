@@ -15,6 +15,7 @@ import * as F from "../src/domain/findings";
 import * as M from "../src/domain/model";
 import { LEAD_REPLY_SCHEMA } from "../src/domain/model/leadReplySchema";
 import * as P from "../src/domain/peReview";
+import { stepAccess } from "../src/domain/pipeline";
 import * as R from "../src/domain/studio/runs";
 import { evidenceSummary } from "../src/domain/studio/evidence";
 import * as S from "../src/domain/studio/studio";
@@ -85,8 +86,6 @@ interface SchedulerOptions {
   prose?: ProseChecker;
 }
 
-/** Roles whose work is a code change in the workspace. Everyone else runs read-only. */
-const WRITER_ROLES = new Set(["coder"]);
 /** The repository instruction files read from the trusted base as project conventions. */
 const CONVENTION_FILES = ["AGENTS.md", "CLAUDE.md"];
 
@@ -1158,7 +1157,8 @@ export class Scheduler {
     if (a.snapshot.provider === "service") return a.snapshot.evidence ? this.launchEvidence(state, a.id, task, step) : this.launchChecks(state, a.id, task, step);
     const adapter = this.runnerFor(a);
     if (!adapter) return "This version has no runner for this run";
-    const access: "write" | "read" = WRITER_ROLES.has(step.role) ? "write" : "read";
+    // The domain decides: a writer's role writes, unless the step is read-only research (ORC-031).
+    const access = stepAccess(step);
     const limits = state.project.runLimits;
     try {
       let workspace: PreparedWorkspace | undefined;

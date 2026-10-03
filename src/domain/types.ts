@@ -923,6 +923,13 @@ export interface StepDef {
    */
   checks?: { onFail: "findings" | "block"; only?: string[] };
   /**
+   * Read-only research (ORC-031): the step's agent gathers evidence and writes no file, whatever its role, so its
+   * workspace is read-only (`stepAccess`). Only a research step may start the provider's own subagents, and only when
+   * the owner allows it (`project.researchHelpers`). Never on a step that writes: the graph rules refuse it on a step
+   * that outputs a code change, on a service step, and on a step whose findings condition a repair that writes code.
+   */
+  research?: boolean;
+  /**
    * The working principles the step's agent receives, by id (files in principles/), added to its
    * instructions under "Principles for this step". Absent on steps copied before principles existed and
    * on steps that get none (checks steps, for example).

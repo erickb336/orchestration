@@ -28,6 +28,8 @@ interface RawStep {
   waitForChildren?: true;
   independentOf?: "writer";
   checks?: { onFail: "findings" | "block" };
+  /** Read-only research (ORC-031): the only steps that may start the provider's own subagents. */
+  research?: true;
   /** Ids of files in principles/, the ones that fit the step's job. */
   principles?: string[];
 }
@@ -210,6 +212,7 @@ export function stepMarkers(st: StepDef): string {
   if (st.waitForChildren) m.push("waits for child tasks");
   if (st.outputs.some((o) => o.kind === "breakdown")) m.push("breakdown");
   if (st.independentOf) m.push("reviewed by the other provider");
+  if (st.research) m.push("read-only research");
   if (isServiceRole(st.role)) m.push("run by the service");
   return m.length ? ` (${m.join(", ")})` : "";
 }

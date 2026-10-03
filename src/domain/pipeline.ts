@@ -1,7 +1,7 @@
 // Pure pipeline helpers: validation, instantiation, and structural comparison.
 
 import { isPrincipleId, orderPrinciples } from "./principles";
-import { REVIEW_ROLES, STEP_ROLES, type InputRef, type Step, type StepDef } from "./types";
+import { REVIEW_ROLES, STEP_ROLES, type InputRef, type RoleId, type Step, type StepDef } from "./types";
 
 export function instantiate(defs: StepDef[]): Step[] {
   return structuredClone(defs).map((d) => ({ ...d, selection: null, revision: 1, state: "pending" as const }));
@@ -15,6 +15,7 @@ export function toDef(st: StepDef): StepDef {
   if (st.independentOf) d.independentOf = st.independentOf;
   if (st.iteration && st.iteration > 1) d.iteration = st.iteration;
   if (st.checks) d.checks = { onFail: st.checks.onFail, ...(st.checks.only?.length ? { only: [...st.checks.only] } : {}) };
+  if (st.research) d.research = true;
   // Part of what the agent receives, so part of the definition and of the flow hash; table order, no duplicates.
   if (st.principles?.length) d.principles = orderPrinciples(st.principles);
   return d;
@@ -34,8 +35,20 @@ export function structuralKey(st: StepDef): string {
     waitForChildren: !!st.waitForChildren,
     ...(st.independentOf ? { independentOf: st.independentOf } : {}),
     ...(st.checks ? { checks: { onFail: st.checks.onFail, only: [...(st.checks.only ?? [])].sort() } } : {}),
+    ...(st.research ? { research: true } : {}),
     ...(st.principles?.length ? { principles: orderPrinciples(st.principles) } : {}),
   });
+}
+
+/** Roles whose agent edits files in its worktree. */
+const WRITER_ROLES: readonly RoleId[] = ["coder"];
+
+/**
+ * The workspace a step's agent gets: "write" for a writer's role, else "read". A research step (ORC-031) is read-only
+ * whatever its role, so its agent, and any subagent it starts, cannot write.
+ */
+export function stepAccess(st: Pick<StepDef, "role" | "research">): "write" | "read" {
+  return !st.research && WRITER_ROLES.includes(st.role) ? "write" : "read";
 }
 
 /** Steps reachable upstream from `id` through dependencies. */
@@ -171,6 +184,13 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
       if (d.outputs.length !== 1 || d.outputs[0].kind !== "evidence") err(d.id, `${d.id} captures evidence, so it produces exactly one output of kind evidence.`);
       if (!d.inputs.some((r) => defs.find((x) => x.id === r.step)?.outputs.find((o) => o.name === r.output)?.kind === "code-change")) err(d.id, `${d.id} captures evidence, so it must read a code change to capture.`);
       if (d.independentOf || d.iterate || d.runIf?.length || d.checks) err(d.id, `${d.id} captures evidence, which cannot require independence, end a loop, run on findings or carry check settings.`);
+    }
+    // A research step (ORC-031) reads and reports, and its workspace is read-only: a step that writes is never research.
+    if (d.research) {
+      if (d.role === "checks" || d.role === "evidence") err(d.id, `${d.id} is run by the service, so it cannot be a research step.`);
+      if (d.outputs.some((o) => o.kind === "code-change")) err(d.id, `${d.id} outputs a code change, so it cannot be a research step: research is read-only.`);
+      const repairs = defs.filter((x) => x.outputs.some((o) => o.kind === "code-change") && x.runIf?.some((r) => r.step === d.id)).map((x) => x.id);
+      if (repairs.length) err(d.id, `${d.id}'s findings start ${repairs.join(", ")}, which change${repairs.length === 1 ? "s" : ""} code, so ${d.id} cannot be a research step.`);
     }
     if (REVIEW_ROLES.includes(d.role) && d.inputs.length === 0 && !opts.reviewTarget) issues.push({ step: d.id, severity: "warning", message: `${d.id} is a review with no inputs, so it has nothing specific to review.` });
     if (d.outputs.length === 0) issues.push({ step: d.id, severity: "warning", message: `${d.id} produces no artifacts, so later steps cannot use its work.` });
