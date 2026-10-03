@@ -23,6 +23,8 @@ import { parseRoute, tabOf } from "./route";
 import { ShapingBanner } from "./Shaping";
 import { SIM_MENU_BUTTON_ID, TourButton, useFirstRunTour } from "./Tour";
 import { Gallery } from "./kit/Gallery";
+import { ChangeOrderPage } from "./changeOrder/ChangeOrder";
+import { factoryPlaceLink } from "./changeOrder/changeOrderView";
 import { LockInPage } from "./studio/LockIn";
 import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
@@ -173,6 +175,7 @@ function Shell() {
         {route.page === "vision" && <Studio />}
         {route.page === "lock-in" && <LockInPage />}
         {route.page === "reality" && <Reality />}
+        {route.page === "change-order" && <ChangeOrderPage key={route.rev} rev={route.rev} />}
       </main>
       {leadOpen && <LeadDrawer onClose={closeLead} />}
       <ToastRegion toast={notice ? { tone: notice.kind === "error" ? "fail" : "neutral", onDismiss: () => setNotice(null), children: notice.message } : null} />
@@ -342,7 +345,8 @@ export function SimBanner() {
 /**
  * The two places, side by side on every screen (ORC-029 pass 5, screen 1): Vision says whether a draft waits for your
  * Lock in, and the Factory whether it runs and how many agents work. Each is a link: Vision opens the studio, the
- * Factory opens the tasks. The Factory's title keeps the live count of runs working and stopping.
+ * Factory opens the tasks, or the change order while one is open. The Factory's title keeps the live count of runs
+ * working and stopping.
  */
 export function Places() {
   const { state } = useStore();
@@ -350,12 +354,13 @@ export function Places() {
   const vision = visionPlaceWords(visionPlace(state), now);
   const factory = factoryPlace(state);
   const words = factoryPlaceWords(factory, liveIndicatorText(agentsWorking(state), agentsStopping(state)));
+  const link = factoryPlaceLink(state, words.title);
   return (
     <nav className="places" aria-label="Vision and the factory">
       <StatePill tone={vision.tone} href="#/vision" title={vision.title}>
         {vision.text}
       </StatePill>
-      <StatePill tone={words.tone} pulse={words.tone === "work"} paused={factory.state === "paused"} href="#/tasks" title={words.title}>
+      <StatePill tone={words.tone} pulse={words.tone === "work"} paused={factory.state === "paused"} href={link.href} title={link.title}>
         {words.text}
       </StatePill>
     </nav>

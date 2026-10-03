@@ -117,10 +117,10 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
   if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project" });
   // A change order the lead answered that still waits for you: its updates for your go-ahead ("ask me first"), or what
-  // the lead left (pass 5). The Tasks page lists the affected tasks until the change order has its own screen.
+  // the lead left (pass 5). "Open" goes to the change order's screen (#/tasks/change-order/<rev>).
   for (const co of openChangeOrders(state)) {
     const needs = changeOrderNeeds(state, co);
-    if (needs) items.push({ kind: "open", key: `change-order-${co.rev}`, what: `Change order: blueprint r${co.rev}`, detail: changeOrderDetail(state, co, needs.words), action: "Open", href: "#/tasks" });
+    if (needs) items.push({ kind: "open", key: `change-order-${co.rev}`, what: `Change order: blueprint r${co.rev}`, detail: changeOrderDetail(state, co, needs.words), action: "Open", href: `#/tasks/change-order/${co.rev}` });
   }
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
