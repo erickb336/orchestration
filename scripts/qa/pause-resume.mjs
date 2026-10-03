@@ -73,6 +73,13 @@ await runJourney(
       await waitFor("the task to run", async () => /Running/.test(await pill()), 10_000);
       j.check(active(id).length > 0, "the task page says Running, and the record has a run", await pill());
       await j.shot("02-task-running");
+      // The task's More menu hangs from its button too; on a phone the button wraps to the left (Q-02).
+      await page.getByRole("button", { name: /^More/ }).click();
+      const more = await page.getByRole("menu").boundingBox();
+      const vw = page.viewportSize().width;
+      j.check(more && more.x >= 0 && more.x + more.width <= vw, "the task's More menu opens inside the window", { left: Math.round(more?.x ?? NaN), right: Math.round((more?.x ?? NaN) + (more?.width ?? 0)), window: vw });
+      await j.shot("02a-more-menu", { full: false });
+      await page.keyboard.press("Escape");
     });
     if (!id) return;
 

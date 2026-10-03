@@ -30,7 +30,7 @@ import { LockInPage } from "./studio/LockIn";
 import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
 import { waitingForYourMark } from "./studio/studioView";
-import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm } from "./kit";
+import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm, useInWindow } from "./kit";
 import { cx } from "./kit/cx";
 
 /**
@@ -187,10 +187,13 @@ function Shell() {
 
 /**
  * A small menu on a button: a native details/summary, so it is keyboard-operable as is. It closes on a click
- * outside, on Escape (focus returns to the button), and when an item calls `close`.
+ * outside, on Escape (focus returns to the button), and when an item calls `close`. Its list stays inside the window.
  */
 function Menu({ label, id, className, children }: { label: string; id?: string; className?: string; children: (close: () => void) => ReactNode }) {
   const ref = useRef<HTMLDetailsElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  useInWindow(pop, open);
   const close = useCallback(() => {
     if (ref.current) ref.current.open = false;
   }, []);
@@ -213,12 +216,12 @@ function Menu({ label, id, className, children }: { label: string; id?: string; 
     };
   }, []);
   return (
-    <details ref={ref} className={cx("menu", className)}>
+    <details ref={ref} className={cx("menu", className)} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary id={id} className="menu__btn">
         {label}
         <span className="menu__caret" aria-hidden="true" />
       </summary>
-      <div className="menu__pop" role="group" aria-label={label}>
+      <div ref={pop} className="menu__pop" role="group" aria-label={label}>
         {children(close)}
       </div>
     </details>
