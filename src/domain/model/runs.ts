@@ -171,6 +171,8 @@ export interface OutputReport {
   reviewedPaths?: string[];
   /** A service check run. */
   checkRun?: Artifact["checkRun"];
+  /** A service capture of evidence (ORC-029 pass 5). */
+  evidence?: Artifact["evidence"];
   /** Breakdown outputs: the work items that become child tasks. */
   items?: unknown[];
   /** Durable reference, e.g. "<sha> on orchestration/run-12". */
@@ -299,6 +301,7 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
         ...(def.kind === "review-findings" ? { openFindings: findings ? F.blockingCount(findings) : (rep.openFindings ?? 0), ...(findings ? { findings } : {}), pathCoverage: reviewCoverage.get(def.name) ?? notRequired() } : {}),
         ...(def.kind === "check-results" && rep.checkRun ? { checkRun: structuredClone(rep.checkRun), ...(rep.findings ? { findings: structuredClone(rep.findings), openFindings: F.blockingCount(rep.findings) } : {}) } : {}),
         ...(def.kind === "breakdown" ? { items: structuredClone(rep.items ?? []) } : {}),
+        ...(def.kind === "evidence" && rep.evidence ? { evidence: structuredClone(rep.evidence) } : {}),
       };
       // Open decisions on the version this run replaces cannot be acted on any more; decided ones are the record (and carry forward).
       for (const old of s.artifacts) if (old.taskId === t.id && old.stepId === st.id && old.name === def.name) F.supersedeDecisions(s, t.id, now, { artifactId: old.id, reason: `${st.id} ran again and produced ${def.name} v${version}` });

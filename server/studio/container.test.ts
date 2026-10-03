@@ -221,9 +221,9 @@ describe("when recording is unavailable, and why", () => {
     expect(await dockerReady({ docker: join(dir, "no-docker") })).toEqual({ ok: false, reason: `Docker is not installed (${join(dir, "no-docker")} was not found)` });
     const down = standIn("down", { version: 'echo "Cannot connect to the Docker daemon at unix:///x/docker.sock. Is the docker daemon running?" >&2; exit 1' });
     expect(await dockerReady({ docker: down.file })).toEqual({ ok: false, reason: "Docker is not running (start it, for example with colima start): Cannot connect to the Docker daemon at unix:///x/docker.sock. Is the docker daemon running?" });
-    const bare = standIn("bare", { image: 'echo "Error: No such image: orchestrator-recorder:1" >&2; exit 1' });
-    expect(await dockerReady({ docker: bare.file })).toEqual({ ok: false, reason: "the recorder image orchestrator-recorder:1 is missing: run npm run recorder:build" });
-    expect(bare.calls()).toEqual(["version --format {{.Server.Version}}", "image inspect --format {{.Id}} orchestrator-recorder:1"]);
+    const bare = standIn("bare", { image: 'echo "Error: No such image: orchestrator-recorder:2" >&2; exit 1' });
+    expect(await dockerReady({ docker: bare.file })).toEqual({ ok: false, reason: "the recorder image orchestrator-recorder:2 is missing: run npm run recorder:build" });
+    expect(bare.calls()).toEqual(["version --format {{.Server.Version}}", "image inspect --format {{.Id}} orchestrator-recorder:2"]);
     // The service never builds or pulls: nothing but those two questions was asked.
     expect(bare.calls().some((c) => /^(build|pull|run)/.test(c))).toBe(false);
   });

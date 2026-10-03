@@ -27,6 +27,7 @@ import {
   SEVERITIES,
   SHAPING_AREAS,
   SHAPING_AREA_LABEL,
+  isServiceRole,
   type Artifact,
   type Finding,
   type FindingAction,
@@ -882,7 +883,7 @@ function stepsLine(state: State, t: Task): string {
   if (!shown.length) return "";
   const parts = shown.map((st) => {
     const run = M.activeAttempts(state, t.id).find((a) => a.stepId === st.id);
-    const provider = run ? `${M.providerLabel(run.snapshot.provider)}, ${run.id}` : st.role === "checks" ? "the service" : (() => {
+    const provider = run ? `${M.providerLabel(run.snapshot.provider)}, ${run.id}` : isServiceRole(st.role) ? "the service" : (() => {
       const r = M.resolveStep(state, t, st);
       return r.ok ? M.providerLabel(r.selection.provider) : "unresolved";
     })();

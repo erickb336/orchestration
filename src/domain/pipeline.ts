@@ -111,6 +111,7 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
     // A principle is one of the files in principles/; a checks step is run by the service and gets none.
     for (const p of d.principles ?? []) if (!isPrincipleId(p)) err(d.id, `${d.id} names a principle that does not exist: "${String(p)}".`);
     if (d.role === "checks" && d.principles?.length) err(d.id, `${d.id} is a Checks step, run by the service; it takes no principles.`);
+    if (d.role === "evidence" && d.principles?.length) err(d.id, `${d.id} captures evidence, run by the service; it takes no principles.`);
     const earlier = new Set(defs.slice(0, i).map((x) => x.id));
     for (const dep of d.dependsOn) {
       if (dep === d.id) err(d.id, `${d.id} cannot depend on itself.`);
@@ -122,6 +123,7 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
       if (names.has(o.name)) err(d.id, `${d.id} has two outputs named ${o.name}.`);
       names.add(o.name);
       if (o.kind === "check-results" && d.role !== "checks") err(d.id, `${d.id} produces check results, which only a Checks step (run by the service) can produce.`);
+      if (o.kind === "evidence" && d.role !== "evidence") err(d.id, `${d.id} produces evidence, which only a Capture evidence step (run by the service) can produce.`);
     }
     const up = upstreamOf(defs.slice(0, i + 1), d.id);
     const checkRef = (r: InputRef, what: string) => {
@@ -163,6 +165,12 @@ export function validatePipeline(defs: StepDef[], opts: { reviewTarget?: boolean
         if (unknown.length) err(d.id, `${d.id} names checks that do not exist: ${unknown.join(", ")}. The configured checks are ${opts.checkIds.join(", ") || "none"} (Settings → Checks).`);
       }
       if (d.checks?.onFail === "block" && inLoop.has(d.id)) err(d.id, `${d.id} stops the task when checks fail, so it cannot be inside a loop; use "findings" there.`);
+    }
+    // A Capture evidence step is run by the service on a code change (ORC-029 pass 5); it produces evidence and nothing else.
+    if (d.role === "evidence") {
+      if (d.outputs.length !== 1 || d.outputs[0].kind !== "evidence") err(d.id, `${d.id} captures evidence, so it produces exactly one output of kind evidence.`);
+      if (!d.inputs.some((r) => defs.find((x) => x.id === r.step)?.outputs.find((o) => o.name === r.output)?.kind === "code-change")) err(d.id, `${d.id} captures evidence, so it must read a code change to capture.`);
+      if (d.independentOf || d.iterate || d.runIf?.length || d.checks) err(d.id, `${d.id} captures evidence, which cannot require independence, end a loop, run on findings or carry check settings.`);
     }
     if (REVIEW_ROLES.includes(d.role) && d.inputs.length === 0 && !opts.reviewTarget) issues.push({ step: d.id, severity: "warning", message: `${d.id} is a review with no inputs, so it has nothing specific to review.` });
     if (d.outputs.length === 0) issues.push({ step: d.id, severity: "warning", message: `${d.id} produces no artifacts, so later steps cannot use its work.` });

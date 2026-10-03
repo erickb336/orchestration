@@ -488,6 +488,15 @@ class DemoBuilder {
     this.event(m, "lead", "dispatch", `Skipped ${stepId}: nothing to fix in ${st.runIf.map((r) => `${r.step}.${r.output}`).join(", ")}`, id);
   }
 
+  /** A Capture evidence step whose task cites no screen, demo or TUI of the blueprint settles by skipping, as dispatch records it. */
+  private nothingToCapture(id: string, stepId: string, m: number) {
+    const st = this.step(id, stepId);
+    if (st.state !== "pending" || st.role !== "evidence") throw new Error(`demo: ${id} ${stepId} is not a pending Capture evidence step`);
+    st.state = "skipped";
+    this.task(id).updatedAt = this.at(m);
+    this.event(m, "lead", "dispatch", `Skipped ${stepId}: nothing to capture: the task's spec cites no screen, terminal demo or TUI of the blueprint`, id);
+  }
+
   /** A coder step: the change (named by its commit and branch, as the service records it) and, when the step has one, the handoff. */
   private change(id: string, stepId: string, startM: number, endM: number, change: CodeChange, summary: string, handoff?: string): CodeChange {
     return this.finishChange(id, stepId, this.dispatch(id, stepId, startM), endM, change, summary, handoff);
@@ -1086,6 +1095,7 @@ class DemoBuilder {
     this.output(id, "S1", 400, 350, DEMO_SCRIPT[id].outputs!.design);
     this.change(id, "S2", 349, 260, { sha: fakeSha("WT-007 S2"), paths: ["src/map/Pins.tsx", "src/map/MapView.tsx", "src/map/a11y.ts", "src/map/a11y.test.ts", "src/map/WaypointRotor.tsx", "src/trail/distance.ts"], files: 6, additions: 142, deletions: 11 }, DEMO_SCRIPT[id].outputs!["S2.change"], DEMO_SCRIPT[id].outputs!["S2.handoff"]);
     this.checks(id, "C1", 259, 257);
+    this.nothingToCapture(id, "E1", 256.5);
     this.review(id, "S4", 256, 230, undefined, "1 finding for you to decide: the unit distances are read in.", [
       finding("F1", {
         severity: "warning",

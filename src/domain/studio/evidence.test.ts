@@ -134,6 +134,60 @@ describe("what a capture run captures", () => {
   });
 });
 
+describe("the Capture evidence step of the Feature flow", () => {
+  const running = (s: State, id: string) => M.activeAttempts(s, id);
+  const step = (s: State, id: string, stepId: string) => s.tasks.find((t) => t.id === id)!.steps.find((x) => x.id === stepId)!;
+  /** A Feature task citing `refs`, on a building project with checks off, run through design and implementation at SHA. */
+  function implemented(refs: string[], preview?: E.PreviewInput) {
+    let s = buildSeed(T0, { inFlightRuns: false });
+    for (const t of s.tasks) t.hold = true;
+    if (preview) s = runCommand(s, "setPreview", { preview }, at(1)).state;
+    const c = taskCiting(withBlueprint(s), refs, 2);
+    s = runCommand(c.s, "startHeldTask", { taskId: c.id }, at(3)).state;
+    s = M.dispatchEligible(M.leadPromoteProposals(s, at(4)), at(4));
+    s = M.reportCompletion(s, running(s, c.id)[0].id, [], at(5), [{ name: "design", summary: "the design" }]);
+    s = M.dispatchEligible(s, at(6));
+    s = M.reportCompletion(s, running(s, c.id)[0].id, [], at(7), [{ name: "change", summary: "done", ref: `${SHA.slice(0, 12)} on b` }, { name: "handoff", summary: "h" }]);
+    return { s: M.dispatchEligible(s, at(8)), id: c.id };
+  }
+
+  it("is skipped, with the reason, when the task's spec cites no screen, terminal demo or TUI; the UX review still runs", () => {
+    const { s, id } = implemented(["bi-2"]);
+    expect(step(s, id, "C1").state).toBe("skipped");
+    expect(step(s, id, "E1").state).toBe("skipped");
+    expect(s.events.some((e) => e.taskId === id && e.message === "Skipped E1: nothing to capture: the task's spec cites no screen, terminal demo or TUI of the blueprint")).toBe(true);
+    expect(running(s, id).map((a) => a.stepId).sort()).toEqual(["S3", "S4", "SR1"]);
+  });
+
+  it("without a preview setting, records every cited item as not set up at once, and the UX review reads that record", () => {
+    let { s, id } = implemented(["bi-1", "bi-2", "bi-3"]);
+    const art = s.artifacts.find((a) => a.taskId === id && a.stepId === "E1")!;
+    expect(art.kind).toBe("evidence");
+    expect(art.evidence).toMatchObject({ sha: SHA.slice(0, 12), durationMs: 0, items: [{ itemId: "bi-1", status: "none", reason: "not-set-up" }, { itemId: "bi-3", status: "none", reason: "not-set-up" }] });
+    expect(step(s, id, "E1").state).toBe("done");
+    expect(s.attempts.find((a) => a.id === art.attemptId)).toMatchObject({ outcome: "completed", snapshot: { provider: "service", model: "evidence", role: "evidence", evidence: { target: { ref: SHA.slice(0, 12) }, items: [item("bi-1"), item("bi-3")] } } });
+    s = M.dispatchEligible(s, at(9));
+    const ux = running(s, id).find((a) => a.stepId === "S4")!;
+    expect(ux.snapshot.inputs.map((i) => `${i.step}.${i.output}`)).toEqual(["S1.design", "S2.change", "E1.evidence"]);
+    expect(E.itemEvidence(s, "bi-1")).toMatchObject({ status: "none", reason: "not-set-up", commit: SHA.slice(0, 12), from: { taskId: id } });
+  });
+
+  it("with a preview setting, starts one service capture with its snapshot; it is not a check run, and its report becomes the artifact's record", () => {
+    let { s, id } = implemented(["bi-1"], { preview: ["npm", "run", "preview"], port: 4173 });
+    const cap = running(s, id).find((a) => a.stepId === "E1")!;
+    expect(cap.snapshot).toMatchObject({ provider: "service", model: "evidence", evidence: { target: { ref: SHA.slice(0, 12) }, items: [item("bi-1")], preview: { rev: 1, install: E.DEFAULT_INSTALL, preview: ["npm", "run", "preview"], port: 4173 } } });
+    expect(M.activeServiceAttempts(s)).toEqual([]);
+    // The UX review waits for the evidence.
+    expect(step(s, id, "S4").state).toBe("pending");
+    const run: E.EvidenceRun = { sha: SHA, at: at(9), durationMs: 20_000, previewRev: 1, items: [{ ...item("bi-1"), status: "captured", files: [png("bi-1", "desktop")] }] };
+    s = M.reportCompletion(s, cap.id, [], at(9), [{ name: "evidence", summary: E.evidenceSummary(run), evidence: run }]);
+    expect(s.artifacts.find((a) => a.attemptId === cap.id)?.evidence).toEqual(run);
+    expect(E.itemEvidence(s, "bi-1")).toMatchObject({ status: "captured", commit: SHA, files: [png("bi-1", "desktop")] });
+    s = M.dispatchEligible(s, at(10));
+    expect(running(s, id).some((a) => a.stepId === "S4")).toBe(true);
+  });
+});
+
 describe("the record per blueprint item", () => {
   it("names the commit and the design version it shows, and serves only the files it recorded", () => {
     const t = taskCiting(withBlueprint(fresh()), ["bi-1", "bi-3"], 10);

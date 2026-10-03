@@ -328,7 +328,8 @@ describe("the demo state", () => {
     // WT-007: the UX review raised a finding that needs you; the code review is the next step.
     const vo = task(s, "WT-007");
     expect(vo.flow.id).toBe("feature");
-    expect(vo.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:pending", "S2:pending", "C1:pending", "S3:pending", "SR1:pending", "S4:pending", "S5:pending", "C2:pending", "S6:pending"].map((x) => (x.startsWith("S1:") || x.startsWith("S2:") || x.startsWith("C1:") || x.startsWith("S4:") ? x.replace("pending", "done") : x)));
+    // It cites no screen of the blueprint, so there is nothing to capture (E1, ORC-029 pass 5).
+    expect(vo.steps.map((x) => `${x.id}:${x.state}`)).toEqual(["S1:pending", "S2:pending", "C1:pending", "E1:skipped", "S3:pending", "SR1:pending", "S4:pending", "S5:pending", "C2:pending", "S6:pending"].map((x) => (x.startsWith("S1:") || x.startsWith("S2:") || x.startsWith("C1:") || x.startsWith("S4:") ? x.replace("pending", "done") : x)));
     const decision = s.decisions.find((d) => d.taskId === "WT-007");
     expect(s.decisions).toHaveLength(1);
     expect(decision).toMatchObject({ status: "open", routedTo: "user", finding: { title: "Read distances in miles or kilometres?" } });

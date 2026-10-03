@@ -410,7 +410,7 @@ describe("the envelopes", () => {
     const run = M.startLeadRun(M.postMessage(s, "hi", iso(T0)), { provider: "claude", model: "m", trigger: "message" }, iso(T0 + 1000));
     const lead = buildLeadEnvelope(run.state, run.state.leadRuns.find((r) => r.id === run.runId)!, "read");
     expect(lead).toContain("## Notes to running steps (last 24 hours; yours and the user's)\n- None in the last 24 hours.");
-    expect(lead).toMatch(/- EX-001 \[.*\] P1 .* · steps: S2 coder running \(Codex, run-\d+\), C1 checks pending \(the service\), S3 code_reviewer pending \(Claude\)/);
+    expect(lead).toMatch(/- EX-001 \[.*\] P1 .* · steps: S2 coder running \(Codex, run-\d+\), C1 checks pending \(the service\), E1 evidence pending \(the service\), S3 code_reviewer pending \(Claude\)/);
   });
 
   it("a note settled before it reached any run is listed to the lead as recorded, not sent", () => {

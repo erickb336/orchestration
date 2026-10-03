@@ -10,7 +10,7 @@ import { BUILT_IN_FILES } from "./builtInFlows";
 import { INTERNAL_FLOWS, internalFlow, isInternalFlowId, type InternalFlow } from "./internalFlows";
 import { downstreamOf, toDef, validatePipeline } from "./pipeline";
 import { isPrincipleId } from "./principles";
-import type { ChosenBy, Flow, FlowRef, InputRef, OutputDef, RoleId, State, StepDef } from "./types";
+import { isServiceRole, type ChosenBy, type Flow, type FlowRef, type InputRef, type OutputDef, type RoleId, type State, type StepDef } from "./types";
 
 // ---------- the file format ----------
 
@@ -210,7 +210,7 @@ export function stepMarkers(st: StepDef): string {
   if (st.waitForChildren) m.push("waits for child tasks");
   if (st.outputs.some((o) => o.kind === "breakdown")) m.push("breakdown");
   if (st.independentOf) m.push("reviewed by the other provider");
-  if (st.role === "checks") m.push("run by the service");
+  if (isServiceRole(st.role)) m.push("run by the service");
   return m.length ? ` (${m.join(", ")})` : "";
 }
 

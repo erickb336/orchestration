@@ -17,8 +17,8 @@
   "$defs": {
     "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$" },
     "stepId": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9-]{0,31}$" },
-    "role": { "enum": ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer", "checks"] },
-    "kind": { "enum": ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results"] },
+    "role": { "enum": ["lead", "designer", "coder", "code_reviewer", "security_reviewer", "ux_reviewer", "checks", "evidence"], "description": "checks and evidence steps are run by the service, never by an agent: evidence captures the built screens and CLIs (ORC-029 pass 5)." },
+    "kind": { "enum": ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results", "evidence"] },
     "principle": {
       "enum": [
         "contextualize-and-write-for-the-reader",
