@@ -100,6 +100,20 @@ describe("a research step's run", () => {
     expect(id).toBeTruthy();
   });
 
+  it("is told it is research, and how many helpers it may start; a run with none allowed is told to start none", async () => {
+    const f = await service(["codex"]);
+    const plain = f.create("investigation");
+    const first = f.codex.started.find((x) => x.attemptId === plain.run.id)!.prompt;
+    expect(first).toContain("This step is read-only research: gather evidence and report what you find. Change no file, whatever the brief above says.");
+    expect(first).toContain("Do not start sub-agents or delegate");
+    f.cmd("setResearchHelpers", { step: "investigation/S1", cap: 2 });
+    const allowed = f.create("investigation");
+    const second = f.codex.started.find((x) => x.attemptId === allowed.run.id)!.prompt;
+    expect(second).toContain("You may start at most 2 helper agents (your provider's own subagents) for read-only searches; they cannot write either.");
+    expect(second).toContain("Notes reach you, not them.");
+    expect(second).not.toContain("Do not start sub-agents");
+  });
+
   it("gets none on a provider that does not track subagents, and the setting cannot be turned on", async () => {
     const f = await service([]);
     expect(() => f.cmd("setResearchHelpers", { step: "investigation/S1", cap: 2 })).toThrow("No provider tracks helper agents yet");

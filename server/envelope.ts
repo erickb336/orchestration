@@ -434,10 +434,17 @@ export function buildEnvelope({ state, task, step, attemptId, access, seed, chan
         .map((p) => `${p.id} (${p.name})`)
         .join(", ")}. Leave it out for the default (${childDefault(state).id}). Child tasks cannot break down again.\n`
     : "";
+  // Read-only research (ORC-031): whatever the role's brief says, the step reports and writes no file. Its run may start
+  // helpers only where its snapshot allows them.
+  const helpers = state.attempts.find((x) => x.id === attemptId)?.snapshot.allowSubagents;
+  const researchNote = step.research ? `\nThis step is read-only research: gather evidence and report what you find. Change no file, whatever the brief above says.\n` : "";
+  const delegation = helpers
+    ? `You may start at most ${helpers.cap} helper agent${helpers.cap === 1 ? "" : "s"} (your provider's own subagents) for read-only searches; they cannot write either. Give each one the principles in this assignment that fit its job. Notes reach you, not them. Start no other agents.`
+    : "Do not start sub-agents or delegate; this run is tracked and bounded by the orchestration service.";
   return `# Assignment ${attemptId}: ${task.id} ${step.id}
 
 ${ROLE_BRIEFS[step.role]}
-
+${researchNote}
 ## Your step
 ${step.purpose}
 
@@ -462,7 +469,7 @@ ${inputText}
 ${notesReceivedSections(state, inputs)}${repairSections(state, task, step, inputs)}${reviewNote(changeUnderReview)}${changedFilesSection(changedPaths, coverageGap, step.role)}${settledSection(state, task, step.role)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
 - Your working directory is an isolated git worktree created for this run. ${access === "write" ? "Edit files only inside it." : "It is read-only for you: do not create, modify, or delete any file."}
 - Do not commit, push, create branches, or change git configuration; the orchestration service records your work.
-- Do not start sub-agents or delegate; this run is tracked and bounded by the orchestration service.
+- ${delegation}
 - Stop when the step is complete. If you cannot complete it, say why in the output block.
 
 ## Required final output
