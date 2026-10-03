@@ -1,0 +1,5 @@
+{
+  "$comment": "The coder's capture plan: the Trip board on both devices, and the trips CLI.",
+  "screens": [{ "item": "bi-1", "path": "/", "devices": ["desktop", "mobile"] }],
+  "terminals": [{ "item": "bi-3", "tape": ".orchestrator/trips.tape" }]
+}
