@@ -191,11 +191,11 @@ export function cardLine(state: State, task: Task, nowMs = Date.now()): CardLine
     if (awaiting?.lead) return { text: `The lead is deciding ${plural(awaiting.lead, "finding")}`, tone: "neutral" };
     if (awaiting?.pe) return { text: `The PE is deciding ${plural(awaiting.pe, "finding")}`, tone: "neutral" };
     if (M.stateLabel(state, task) === C.HELD_LABEL) return { text: "Waiting for the checks sandbox (Settings → Checks)", tone: "neutral" };
-    if (state.project.stage === "shaping") return { text: "Waits until you start building", tone: "neutral" };
+    if (state.project.stage === "shaping") return { text: "Waits until you start the factory", tone: "neutral" };
     return { text: where ? `Up next: ${where}` : "Up next", tone: "neutral" };
   }
   const dep = M.waitingOn(state, task);
   if (dep) return { text: M.waitingDetail(state, dep) ?? `Waiting for ${dep}`, tone: "neutral" };
-  if (task.heldForShaping) return { text: "Planned: starts after you start building", tone: "neutral" };
+  if (task.heldForShaping) return { text: "Planned: starts after you start the factory", tone: "neutral" };
   return { text: `Not started · ${plural(task.steps.length, "step")}`, tone: "neutral" };
 }

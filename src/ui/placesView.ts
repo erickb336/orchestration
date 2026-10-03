@@ -27,7 +27,7 @@ export function visionPlaceWords(p: VisionPlace, now = Date.now()): PlaceWords {
     return { text: `Vision · draft, ${what}`, tone: p.changes ? "you" : "neutral", title: `${title} The factory builds from the version in force.` };
   }
   if (p.state === "locked-in") return { text: `Vision · locked in ${relTime(p.at, now)}`, tone: "neutral", title: `No draft. The factory builds from Lock in ${p.rev}.` };
-  return { text: "Vision · no draft", tone: "neutral", title: "Nothing is approved yet. Open Vision to shape the product with the lead." };
+  return { text: "Vision · no draft", tone: "neutral", title: "Nothing is approved yet. Open Vision to design the product with the lead." };
 }
 
 /** "Factory not started", "Factory running · 4 agents", "Factory paused · by you" or "Factory stopped at the budget · needs you". */

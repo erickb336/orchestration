@@ -75,7 +75,7 @@ export function Onboarding() {
     },
     {
       id: "vision",
-      label: shaping ? "Shape the vision with the lead, then accept a draft" : "Write your vision",
+      label: shaping ? "Draft the vision with the lead, then accept it" : "Write your vision",
       done: vision.text.trim().length > 0,
       action: (
         <Button size="small" variant="quiet" onClick={() => scrollToHeading(shaping ? "shape-h" : "vision-history")}>

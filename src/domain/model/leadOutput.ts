@@ -487,6 +487,6 @@ export function proposeTask(s: State, p: LeadProposal, now: string, hold: boolea
     flow: ref,
     flowSince: 1,
   });
-  event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})${fromShaping ? "; planned while shaping, waits for Start building" : ""}${peReview ? `; ${PE_REVIEW_HOLD}` : ""}`, id);
+  event(s, now, "lead", "decision", `Proposed ${id}: ${content.title} (selected option ${content.selectedOptionId})${fromShaping ? "; planned in Vision, waits for Start the factory" : ""}${peReview ? `; ${PE_REVIEW_HOLD}` : ""}`, id);
   return id;
 }

@@ -112,7 +112,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     expect(running(M.dispatchEligible(ready, at(1)), "EX-004")).toHaveLength(1); // baseline
     let s = M.dispatchEligible(shaping(ready), at(1));
     expect(running(s, "EX-004")).toHaveLength(0);
-    expect(M.stateLabel(s, task(s, "EX-004"))).toBe("Ready (shaping)");
+    expect(M.stateLabel(s, task(s, "EX-004"))).toBe("Ready (in Vision)");
     s = M.dispatchEligible(startFactoryAsOwner(s, at(2)), at(3));
     expect(running(s, "EX-004")).toHaveLength(1);
   });
@@ -130,7 +130,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
     expect(task(s, "EX-001").hold).toBe(false);
     s = M.dispatchEligible(s, at(3));
     expect(running(s, "EX-001")).toHaveLength(0);
-    expect(M.stateLabel(s, task(s, "EX-001"))).toBe("Next step waits (shaping)");
+    expect(M.stateLabel(s, task(s, "EX-001"))).toBe("Next step waits (in Vision)");
     s = M.dispatchEligible(startFactoryAsOwner(s, at(4)), at(5));
     expect(running(s, "EX-001").length).toBeGreaterThan(0);
   });
@@ -285,7 +285,7 @@ describe("S6 the roadmap and Start building", () => {
     expect(t).toMatchObject({ heldForShaping: true, holdBeforeStart: false, fromShaping: true, lifecycle: "proposed" });
     const promoted = M.dispatchEligible(M.leadPromoteProposals(s, at(4)), at(4));
     expect(task(promoted, t.id).lifecycle).toBe("ready");
-    expect(M.stateLabel(promoted, task(promoted, t.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
+    expect(M.stateLabel(promoted, task(promoted, t.id))).toBe("Planned; waits until you start the factory, then starts on Autopilot");
     expect(running(promoted, t.id)).toHaveLength(0);
     // Even while building, a task still under the roadmap hold never dispatches: only Start building lifts it.
     const forced = { ...promoted, project: { ...promoted.project, stage: "building" as const } };
@@ -340,7 +340,7 @@ describe("S6 the roadmap and Start building", () => {
     const released = M.dispatchEligible(M.leadPromoteProposals(M.startHeldTask(s, id, at(4)), at(4)), at(4));
     expect(task(released, id).holdBeforeStart).toBe(false);
     expect(running(released, id)).toHaveLength(0);
-    expect(M.stateLabel(released, task(released, id))).toBe("Ready (shaping)");
+    expect(M.stateLabel(released, task(released, id))).toBe("Ready (in Vision)");
   });
 });
 

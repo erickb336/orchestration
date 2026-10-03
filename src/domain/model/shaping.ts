@@ -222,8 +222,8 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
     touch(t, now);
     if (release) {
       released.push(t.id);
-      event(s, now, "user", "control", "Released from the roadmap: building started on Autopilot", t.id);
-    } else event(s, now, "user", "control", "Building started; this planned task waits for your go-ahead (your involvement setting)", t.id);
+      event(s, now, "user", "control", "Released from the roadmap: the factory started on Autopilot", t.id);
+    } else event(s, now, "user", "control", "The factory started; this planned task waits for your go-ahead (your involvement setting)", t.id);
   }
   const waiting = roadmapTasks(s).filter((t) => t.holdBeforeStart).length;
   const confirmed = [
@@ -232,7 +232,7 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
     probes.length ? `${probes.length} unfinished probe${probes.length === 1 ? "" : "s"} confirmed (${probes.map((p) => p.question).join("; ")})` : "",
   ].filter(Boolean);
   const agreed = `you agreed to vision r${rev}${bp ? ` and blueprint r${bp}` : ""}${confirmed.length ? ` with ${confirmed.join(" and ")}` : ""}`;
-  event(s, now, "user", "config", `Building started: ${agreed}${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
+  event(s, now, "user", "config", `The factory started: ${agreed}${released.length ? `; roadmap released: ${released.join(", ")}` : waiting ? `; ${waiting} planned task${waiting === 1 ? "" : "s"} wait${waiting === 1 ? "s" : ""} for your go-ahead` : ""}`);
   return s;
 }
 

@@ -121,7 +121,7 @@ describe("A. shaping end to end", () => {
     tick();
     tick();
     expect(M.activeAttempts(state())).toHaveLength(0); // still nothing runs, the user task included
-    expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start building, then starts on Autopilot");
+    expect(M.stateLabel(state(), task(planned.id))).toBe("Planned; waits until you start the factory, then starts on Autopilot");
     expect(state().leadRuns.filter((x) => x.trigger === "planning")).toHaveLength(0);
 
     const refused = failure(() => cmd("startFactory", startFactoryArgs(state())));
@@ -242,7 +242,7 @@ describe("C. a project in Vision with a run in flight stops nothing", () => {
     expect(state().artifacts.some((x) => x.attemptId === a.id)).toBe(true);
     for (let i = 0; i < 3; i++) tick();
     expect(M.activeAttempts(state())).toHaveLength(0);
-    expect(M.stateLabel(state(), task(id))).toBe("Next step waits (shaping)");
+    expect(M.stateLabel(state(), task(id))).toBe("Next step waits (in Vision)");
     expect(M.stateLabel(state(), task(id))).not.toMatch(/Paused/);
     cmd("startFactory", startFactoryArgs(state()));
     tick();

@@ -424,7 +424,7 @@ describe("Start the factory: the first Lock in", () => {
     expect(B.blueprintItems(s).map((i) => i.title)).toEqual(["Trail search"]);
     expect(B.draftChanges(s).open.map((i) => i.id)).toEqual([open.id]);
     expect(s.blueprint.changeOrders).toEqual([]);
-    expect(s.events.at(-1)?.message).toBe(`Building started: you agreed to vision r1 and blueprint r1 with 9 open areas confirmed (${areas.join(", ")}) and 1 open blueprint item confirmed (Trip plan)`);
+    expect(s.events.at(-1)?.message).toBe(`The factory started: you agreed to vision r1 and blueprint r1 with 9 open areas confirmed (${areas.join(", ")}) and 1 open blueprint item confirmed (Trip plan)`);
   });
 
   it("with nothing approved, starts with nothing in force: no revision", () => {

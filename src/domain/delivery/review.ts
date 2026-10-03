@@ -233,7 +233,7 @@ function finishedReview(s: State, pr: PrDelivery, rv: Task): ReviewView {
       return { state: "blocked", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is deferred${deferred.task.id !== rv.id ? ` with ${deferred.task.id}` : ""}, so it does not run. Run it now to continue, or merge it yourself.`) };
     }
     // While shaping the review, like any other work, waits for Start building; it is not queued.
-    const how = M.activeAttempts(s, rv.id).length ? "running" : rv.hold || rv.holdBeforeStart ? "paused" : s.project.stage === "shaping" ? "held: it waits until you start building (shaping)" : "queued";
+    const how = M.activeAttempts(s, rv.id).length ? "running" : rv.hold || rv.holdBeforeStart ? "paused" : s.project.stage === "shaping" ? "held: it waits until you start the factory" : "queued";
     return { state: "pending", reviewTaskId: rv.id, evidence: noReview(pr, `The independent review ${rv.id} of ${h} is ${how}.`) };
   }
   // A dedicated review counts only when its run read a worktree detached at exactly this commit, and

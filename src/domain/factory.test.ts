@@ -61,7 +61,7 @@ describe("Start the factory: the owner's command", () => {
     const started = runCommand(s, "startFactory", args, at(5)).state;
     expect(started.project.stage).toBe("building");
     expect(started.project.factoryStarts).toEqual([{ at: at(5), by: "user", blueprintRev: 0, visionRev: 1, settings: MANUAL, openItems: open }]);
-    expect(started.events.at(-1)?.message).toBe(`Building started: you agreed to vision r1 with 9 open areas confirmed (${open.join(", ")})`);
+    expect(started.events.at(-1)?.message).toBe(`The factory started: you agreed to vision r1 with 9 open areas confirmed (${open.join(", ")})`);
   });
 
   it("is refused without the owner's explicit agreement, on a revision that moved, without a vision, or while building", () => {
@@ -120,7 +120,7 @@ describe("Start the factory: the owner's command", () => {
     const config = started.events.filter((e) => e.kind === "config").map((e) => e.message);
     expect(config.some((m) => m.startsWith("Autonomy on"))).toBe(true);
     expect(config).toContain("Findings that need a decision now go to the PE (the lead decides for it until the PE runs its own decisions); open decisions stay where they are");
-    expect(config.at(-1)).toMatch(/^Building started: you agreed to vision r1/);
+    expect(config.at(-1)).toMatch(/^The factory started: you agreed to vision r1/);
   });
 
   it("applies Check-in and Manual too, and trade-offs to you; a setting already in place is left alone", () => {

@@ -56,7 +56,7 @@ export function editVision(state: State, expectedRev: number, text: string, focu
   if (v.rev !== expectedRev) throw new StaleWriteError(expectedRev, v.rev);
   if (s.project.stage === "building") {
     // A project never builds without a vision. Clearing it is possible while shaping.
-    if (!text.trim()) throw new ControlError("The vision cannot be empty while building.");
+    if (!text.trim()) throw new ControlError("The vision cannot be empty while the factory runs.");
     const textChanged = text !== draftVisionText(s);
     const focusChanged = focus !== v.focus;
     if (!textChanged && !focusChanged) throw new ControlError("Nothing changed: the text is the draft's, and the focus is the one in force.");

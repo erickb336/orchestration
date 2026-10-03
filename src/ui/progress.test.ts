@@ -110,7 +110,7 @@ describe("progressByArea", () => {
     expect(liveIndicatorText(3, 1)).toBe("3 agents working, 1 stopping");
     expect(liveIndicatorText(1, 0)).toBe("1 agent working");
     expect(liveIndicatorText(0, 0)).toBe("Idle");
-    expect(liveIndicatorText(2, 0, true)).toBe("2 agents working (finishing; shaping)");
+    expect(liveIndicatorText(2, 0, true)).toBe("2 agents working (finishing; in Vision)");
     expect(liveIndicatorText(0, 2, true)).toBe("2 agents stopping");
     // The text says nothing about the simulation: the demo bar says it once.
     expect(liveIndicatorText(3, 0)).not.toMatch(/simulated/);
