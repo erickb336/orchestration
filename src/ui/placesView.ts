@@ -30,9 +30,13 @@ export function visionPlaceWords(p: VisionPlace, now = Date.now()): PlaceWords {
   return { text: "Vision · no draft", tone: "neutral", title: "Nothing is approved yet. Open Vision to design the product with the lead." };
 }
 
-/** "Factory not started", "Factory running · 4 agents", "Factory paused · by you" or "Factory stopped at the budget · needs you". */
+/** "Factory not started", "Factory running · 4 agents", "Factory pausing · 3 runs stopping", "Factory paused · by you" or "Factory stopped at the budget · needs you". */
 export function factoryPlaceWords(p: FactoryPlace, live: string): PlaceWords {
   if (p.state === "not-started") return { text: "Factory not started", tone: "neutral", title: "Start the factory on Home. It is your first Lock in." };
+  if (p.state === "pausing") {
+    const runs = count(p.stopping, "run");
+    return { text: `Factory pausing · ${runs} stopping`, tone: "work", title: `You paused the project. ${runs} ${p.stopping === 1 ? "is" : "are"} still stopping; it says paused once ${p.stopping === 1 ? "it confirms" : "they confirm"} the stop.` };
+  }
   if (p.state === "paused") return { text: "Factory paused · by you", tone: "neutral", title: `You paused the project. Nothing starts until you resume it. ${live}.` };
   if (p.state === "budget-stop") return { text: "Factory stopped at the budget · needs you", tone: "you", title: p.why };
   return { text: `Factory running · ${p.agents ? count(p.agents, "agent") : "idle"}`, tone: p.agents ? "work" : "neutral", title: `${live}. Open the tasks.` };

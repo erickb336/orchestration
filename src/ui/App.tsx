@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as M from "../domain/model";
-import { factoryPlace, visionPlace } from "../domain/places";
+import { factoryPlace, projectPause, visionPlace } from "../domain/places";
 import { StoreContext, useServiceContext, useServiceStore, useStore } from "./store";
 import { Board } from "./Board";
 import { TaskDetail } from "./TaskDetail";
@@ -407,9 +407,10 @@ function ConnectionBanner() {
 export function ProjectMenu() {
   const { state, send, disabled } = useStore();
   const hold = state.project.hold;
-  // A stopping lead run counts too: the pause is not confirmed until the lead acknowledges as well.
-  const stopping = M.activeAttempts(state).filter((a) => a.outcome === "stopping").length + (M.activeLeadRun(state)?.outcome === "stopping" ? 1 : 0);
-  const status = hold ? (stopping ? `Pausing… ${stopping} run${stopping === 1 ? "" : "s"} still stopping` : "Project paused") : undefined;
+  // Every run the pause stopped counts (the lead's and the studio's too): the Factory place reads the same fact.
+  const pause = projectPause(state);
+  const stopping = pause?.state === "pausing" ? pause.stopping : 0;
+  const status = pause ? (stopping ? `Pausing… ${stopping} run${stopping === 1 ? "" : "s"} still stopping` : "Project paused") : undefined;
   return (
     <>
       <span aria-live="polite">
