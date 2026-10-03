@@ -11,6 +11,11 @@ const sources: Record<string, string> = Object.fromEntries(
   Object.entries(import.meta.glob<string>(["./**/*.ts", "./**/*.tsx", "!./**/*.test.ts", "!./**/*.test.tsx", "!./testStore.tsx"], { query: "?raw", import: "default", eager: true })).map(([path, text]) => [path.replace(/^\.\//, ""), text]),
 );
 
+/** The shell's stylesheet, as text: read with Node's fs, as vitest serves a stylesheet as an empty module (kit/disabledHover.test.ts). */
+const FS = "node:fs";
+const { readFileSync } = (await import(/* @vite-ignore */ FS)) as { readFileSync(p: URL, encoding: "utf8"): string };
+const styles = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+
 /**
  * Files with old words left on purpose, by path under src/ui, each with the reason. None today: Home (Overview.tsx,
  * Board.tsx) shows none either, though another unit rebuilds it.
@@ -41,6 +46,16 @@ describe("the words across the app (ORC-029 pass 6)", () => {
     const files = Object.keys(sources).filter((f) => !Object.hasOwn(EXCEPTIONS, f));
     expect(files.length).toBeGreaterThan(50);
     expect(files.flatMap((f) => oldWords(shownText(sources[f])).map((x) => `${f}: ${x}`))).toEqual([]);
+  });
+
+  it("a keyboard hint (⌘/Ctrl + Enter) sits in a keys-hint element, which a touch screen hides (ORC-030 a-words-phone-hint)", () => {
+    const hints = Object.entries(sources).flatMap(([f, src]) => {
+      const text = withoutComments(src);
+      return [...text.matchAll(/⌘\/Ctrl \+|⌘|Ctrl \+/g)].map((m) => ({ f, before: text.slice(Math.max(0, m.index! - 40), m.index) }));
+    });
+    expect(hints.length).toBeGreaterThan(0);
+    expect(hints.filter((h) => !h.before.endsWith('className="keys-hint">')).map((h) => h.f)).toEqual([]);
+    expect(styles.replace(/\s+/g, " ")).toContain("@media (hover: none) and (pointer: coarse) { .keys-hint { display: none; } }");
   });
 
   it("finds an old word in a string or in JSX text, never in code, a comment, a class name or the quoted stage value", () => {

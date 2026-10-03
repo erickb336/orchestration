@@ -290,7 +290,7 @@ function Composer({ disabled, placeholder, focusOnMount, onSend }: { disabled: b
       />
       <div className="composer-foot">
         <span id={`${id}-hint`} className={`small ${tooLong ? "composer-error" : "muted"}`}>
-          {tooLong ? `Messages are limited to ${MAX_LENGTH} characters.` : disabled ? "Offline: messages cannot be sent." : "⌘/Ctrl + Enter to send"}
+          {tooLong ? `Messages are limited to ${MAX_LENGTH} characters.` : disabled ? "Offline: messages cannot be sent." : <span className="keys-hint">⌘/Ctrl + Enter to send</span>}
         </span>
         <Button type="submit" variant="primary" disabled={blocked} loading={sending}>
           {sending ? "Sending…" : "Send"}

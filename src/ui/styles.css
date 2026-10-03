@@ -476,9 +476,10 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 
 /* ---------- the lead conversation: a chat; what a reply changed folds into one line under it ---------- */
 .lead-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: var(--space-2); }
-.lead-head { display: flex; align-items: center; gap: var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid var(--border); min-width: 0; }
+.lead-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); padding-bottom: var(--space-2); border-bottom: 1px solid var(--border); min-width: 0; }
 .lead-title { margin: 0; font-size: var(--fs-h3); flex: none; }
-.lead-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The model name wraps, never cut (ORC-030 a-words-phone-hint). */
+.lead-who { min-width: 0; flex: 1 1 8rem; overflow-wrap: anywhere; }
 .lead-head .k-chip { flex: none; }
 .lead-close { margin-left: auto; flex: none; }
 .convo {
@@ -514,6 +515,8 @@ legend { max-width: 100%; overflow-wrap: anywhere; }
 .composer { display: grid; gap: var(--space-2); border-top: 1px solid var(--border); padding-top: var(--space-2); }
 .composer textarea { min-height: 3.5rem; width: 100%; resize: vertical; }
 .composer-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+/* A keyboard hint is for a keyboard: none on a touch screen (ORC-030 a-words-phone-hint). */
+@media (hover: none) and (pointer: coarse) { .keys-hint { display: none; } }
 /* The fold line under a reply: "2 changes, 1 note · Undo all"; it opens to the change list. */
 .fold { margin-top: var(--space-2); font-size: var(--fs-small); }
 .fold-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); margin: 0; }
