@@ -264,6 +264,8 @@ describe("the cost of subagents and the budget", () => {
   it("counts each unlisted subagent as unknown", () => {
     const s = finished("claude", { count: 3, mostAtOnce: 1, items: [item({ usageInParent: true, usage: { costUsd: 0.1 } })], unlisted: 2 });
     expect(buildingSpend(s, LIST).unknown.map((u) => u.runId)).toEqual(["run-x unlisted helper 1", "run-x unlisted helper 2"]);
+    // A Claude helper counts at the run limit, as a Claude run with no recorded cost does.
+    expect(buildingSpend(s, LIST).unknown.map((u) => u.countedUsd)).toEqual([2, 2]);
     expect(subagentsCost(s.attempts[0], LIST).unknown).toBe(2);
   });
 

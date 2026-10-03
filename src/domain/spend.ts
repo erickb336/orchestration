@@ -194,19 +194,25 @@ export function buildingSpend(s: State, prices: readonly ModelPrice[] = PRICES):
     const key = modelKey(ranOn(r));
     if (c.basis === "reported" || c.basis === "priced") dearest.set(key, Math.max(dearest.get(key) ?? 0, c.usd));
   });
-  const openRequestUsd = (r: Run) => dearest.get(modelKey(ranOn(r))) || s.project.runLimits.maxBudgetUsd;
+  /** What the budgets count for a cost with no full record (`UnknownCost`). */
+  const count = (reason: NoCostReason, on: { provider: Runner; model: string }, u: Usage | undefined): number | null => {
+    const openRequest = dearest.get(modelKey(on)) || s.project.runLimits.maxBudgetUsd;
+    if (reason === "open-request") return openRequest;
+    if (reason === "no-price") {
+      const tokens = atDearestPrice(on.provider, u, prices);
+      return tokens !== null && u?.openRequest ? tokens + openRequest : tokens;
+    }
+    return on.provider === "claude" ? s.project.runLimits.maxBudgetUsd : null;
+  };
   finished.forEach((r, i) => {
     out.runs++;
     const c = costs[i];
     if (c.basis !== "unknown") out.usd += c.usd;
     else {
       out.usd += c.recordedUsd ?? 0;
-      const on = ranOn(r);
-      const counted =
-        c.reason === "open-request" ? openRequestUsd(r) : c.reason === "no-price" ? atDearestPrice(on.provider, r.usage, prices) : on.provider === "claude" ? s.project.runLimits.maxBudgetUsd : null;
-      out.unknown.push({ runId: r.id, ...on, reason: c.reason, countedUsd: counted !== null && c.reason === "no-price" && r.usage?.openRequest ? counted + openRequestUsd(r) : counted });
+      out.unknown.push({ runId: r.id, ...ranOn(r), reason: c.reason, countedUsd: count(c.reason, ranOn(r), r.usage) });
     }
-    addSubagents(out, r, prices);
+    addSubagents(out, r, prices, count);
   });
   return out;
 }
@@ -224,19 +230,20 @@ function atDearestPrice(provider: Runner, u: Usage | undefined, prices: readonly
 /**
  * A finished run's subagents (ORC-031) count apart from it where its own usage does not include theirs (Codex's
  * sub-threads may report apart); where it does (Claude's session total), they are already in the run's cost. One with
- * no recorded cost is unknown, like a run; so is each unlisted one, whose usage was not kept. Neither has an estimate.
+ * no recorded cost is unknown, like a run, and counts as one; so is each unlisted one, whose usage was not kept.
  */
-function addSubagents(out: Spend, r: Run, prices: readonly ModelPrice[]) {
+function addSubagents(out: Spend, r: Run, prices: readonly ModelPrice[], count: (reason: NoCostReason, on: { provider: Runner; model: string }, u: Usage | undefined) => number | null) {
   const rec = r.subagents;
   if (!rec) return;
   const on = ranOn(r);
   for (const sub of rec.items) {
     if (sub.usageInParent) continue;
     const c = subagentUsd(r, sub, prices);
-    if (c.basis === "unknown") out.unknown.push({ runId: `${r.id} helper ${sub.id}`, provider: on.provider, model: sub.model ?? on.model, reason: c.reason, countedUsd: null });
+    const model = sub.model ?? on.model;
+    if (c.basis === "unknown") out.unknown.push({ runId: `${r.id} helper ${sub.id}`, provider: on.provider, model, reason: c.reason, countedUsd: count(c.reason, { provider: on.provider, model }, sub.usage) });
     else out.usd += c.usd;
   }
-  for (let i = 0; i < (rec.unlisted ?? 0); i++) out.unknown.push({ runId: `${r.id} unlisted helper ${i + 1}`, provider: on.provider, model: on.model, reason: "no-usage", countedUsd: null });
+  for (let i = 0; i < (rec.unlisted ?? 0); i++) out.unknown.push({ runId: `${r.id} unlisted helper ${i + 1}`, ...on, reason: "no-usage", countedUsd: count("no-usage", on, undefined) });
 }
 
 /** The spend the budgets count: the recorded spend and each cost with no full record at its estimate; null when one has none. */
