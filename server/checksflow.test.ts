@@ -438,3 +438,28 @@ describe("leftover check worktrees", () => {
     expect(git("worktree", "list")).not.toContain(a.workspace);
   });
 });
+
+describe("the test report (ORC-029 pass 5)", () => {
+  it("the runner is told the report path from the settings, and what it read becomes the check run's record; without the setting, neither", async () => {
+    checksOn({ testReport: "reports/junit.xml" });
+    await probed();
+    const id = newTask("Reported");
+    tick();
+    codex.finish(runOf(id, "S1").id, { write: ["a.txt", "hello\n"] });
+    settle();
+    const run = runOf(id, "C1");
+    expect(checks.started.at(-1)).toMatchObject({ attemptId: run.id, testReport: "reports/junit.xml" });
+    const tests = { status: "read" as const, path: "reports/junit.xml", cases: [{ name: "[bi-1 R1] joins", suite: "join", status: "failed" as const, message: "expected Ana in the list" }], counts: { passed: 0, failed: 1, skipped: 0, error: 0 }, truncated: false };
+    checks.finish(run.id, { fail: ["test"], tests });
+    settle();
+    expect(M.acceptedOutput(st(), task(id), "C1", "checks")!.checkRun!.tests).toEqual(tests);
+    // Off again: the next run is not told of a report.
+    checksOn();
+    const other = newTask("Unreported");
+    tick();
+    codex.finish(runOf(other, "S1").id, { write: ["b.txt", "hi\n"] });
+    settle();
+    expect(checks.started.at(-1)).toMatchObject({ attemptId: runOf(other, "C1").id });
+    expect(checks.started.at(-1)).not.toHaveProperty("testReport");
+  });
+});

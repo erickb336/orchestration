@@ -1237,6 +1237,7 @@ export class Scheduler {
         tmpDir: tmp,
         cacheDir: cache,
         logDir,
+        ...(cfg.testReport ? { testReport: cfg.testReport } : {}),
       };
       this.launched.set(attemptId, { provider: "service", access: "read", workspace, stepId: step.id, taskId: task.id, touchedInputs: touched });
       runner.start(assignment);
@@ -1279,7 +1280,7 @@ export class Scheduler {
     // A check run's report is never parsed from text; it becomes the step's one output.
     if (a.snapshot.provider === "service") {
       if (!e.checks || !step.outputs[0]) return { outputs: [], problems: ["The check run ended without a report."] };
-      const record = { sha: e.checks.sha, configRev: a.snapshot.checks?.configRev ?? state.project.checks.rev, sandbox: e.checks.sandbox, ...(e.checks.simulated ? { simulated: true as const } : {}), touchedInputs: info?.touchedInputs ?? [], results: e.checks.results, durationMs: e.checks.durationMs };
+      const record = { sha: e.checks.sha, configRev: a.snapshot.checks?.configRev ?? state.project.checks.rev, sandbox: e.checks.sandbox, ...(e.checks.simulated ? { simulated: true as const } : {}), touchedInputs: info?.touchedInputs ?? [], results: e.checks.results, durationMs: e.checks.durationMs, ...(e.checks.tests ? { tests: e.checks.tests } : {}) };
       const findings = C.findingsFromRun(record, a.snapshot.checks?.commands ?? []);
       return { outputs: [{ name: step.outputs[0].name, summary: C.runSummary(record), checkRun: record, findings }], problems: [] };
     }

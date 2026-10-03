@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><!-- Hand-written in pytest 8's junit_family=xunit2 shape (pytest --junitxml); no pytest was run. A tag rides in a parametrize id. --><testsuite name="pytest" errors="1" failures="1" skipped="1" tests="5" time="0.051" timestamp="2026-10-02T12:00:00.000000+00:00" hostname="host.local"><testcase classname="tests.test_join" name="test_open_link[bi-12 R1]" time="0.001" /><testcase classname="tests.test_join" name="test_expired_link[bi-12 R4]" time="0.002"><failure message="AssertionError: assert 'an empty page' == 'Ask the organizer for a new link'&#10;  - Ask the organizer for a new link&#10;  + an empty page">tag = 'bi-12 R4'
+
+    @pytest.mark.parametrize("tag", ["bi-12 R4"], ids=str)
+    def test_expired_link(tag):
+&gt;       assert render_expired() == "Ask the organizer for a new link"
+E       AssertionError: assert 'an empty page' == 'Ask the organizer for a new link'
+
+tests/test_join.py:14: AssertionError</failure></testcase><testcase classname="tests.test_join" name="test_other_trips[bi-12 R5]" time="0.000"><skipped type="pytest.skip" message="not built yet">/Users/someone/trips/tests/test_join.py:18: not built yet</skipped></testcase><testcase classname="tests.test_join" name="test_full_trip[bi-12 E1]" time="0.001"><error message="failed on setup with &quot;KeyError: 'trip'&quot;">@pytest.fixture
+    def trip():
+&gt;       return TRIPS["trip"]
+E       KeyError: 'trip'
+
+/Users/someone/trips/tests/conftest.py:7: KeyError</error></testcase><testcase classname="tests.test_dates" name="test_format" time="0.001" /></testsuite></testsuites>

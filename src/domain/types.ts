@@ -616,7 +616,33 @@ export interface CheckRunRecord {
   touchedInputs: string[];
   results: CheckResult[];
   durationMs: number;
+  /** The run's test results, read from its JUnit report (ChecksConfig.testReport). Absent when the settings name no report. */
+  tests?: TestReport;
 }
+
+/** One test case of a check run, from its JUnit report (ORC-029 pass 5). */
+export interface TestCaseResult {
+  /** The test's name (≤300 characters). A rule's acceptance test carries the rule's tag in it (studio/ruleResults.ts). */
+  name: string;
+  /** Its class name, else its suite's name (≤200); "" when the report gives neither. */
+  suite: string;
+  /** "error": the test could not run to its end (JUnit's <error>); "failed": an assertion failed (<failure>). */
+  status: "passed" | "failed" | "skipped" | "error";
+  /** failed, error and skipped: the report's message, one line, redacted, with no local paths (≤300). */
+  message?: string;
+}
+
+/**
+ * What the service read from a check run's JUnit report, after the commands ran in the throwaway copy.
+ * - read: the test cases (at most 400: the tagged ones first, then the failing ones; `truncated` when more were in the
+ *   report) and the counts of every case in the report;
+ * - missing: the commands wrote no report at the path;
+ * - refused: the file is not one the service reads (too large, a DTD or an entity declaration, nested too deep, not
+ *   well-formed XML, or a path that leaves the copy), and why.
+ */
+export type TestReport =
+  | { status: "read"; path: string; cases: TestCaseResult[]; counts: Record<TestCaseResult["status"], number>; truncated: boolean }
+  | { status: "missing" | "refused"; path: string; reason: string };
 
 /**
  * A decision someone has to take on an `ask-user` finding (or on failing final checks). Routed to the
@@ -733,6 +759,12 @@ export interface ChecksConfig {
   protectedInputs: string[];
   /** ≤20 variable names passed through to commands, none secret-named */
   passEnv: string[];
+  /**
+   * The JUnit XML report the check commands write, relative to the repository's root (for example
+   * "reports/junit.xml"): the service reads one result per test from it after the commands ran. Absent: no report
+   * is read, as before pass 5.
+   */
+  testReport?: string;
 }
 
 export const DEFAULT_CHECKS: ChecksConfig = {

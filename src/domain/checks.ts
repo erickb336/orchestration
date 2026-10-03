@@ -205,6 +205,20 @@ export function validateCommand(c: CheckCommand, o: { networked?: boolean } = {}
   return undefined;
 }
 
+/** A test report's path: relative segments of letters, digits, ".", "_" and "-", ending in ".xml". */
+const REPORT_PATH_RE = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*\.xml$/;
+const MAX_REPORT_PATH = 200;
+
+/**
+ * Why a test report path is refused, or undefined. The service reads the file from the run's throwaway copy and
+ * removes it there before the commands run, so the path stays inside the copy: relative, no "..", nothing in .git.
+ */
+export function validateTestReport(path: unknown): string | undefined {
+  if (typeof path !== "string" || !path || path.length > MAX_REPORT_PATH) return `The test report is a path of 1–${MAX_REPORT_PATH} characters.`;
+  if (!REPORT_PATH_RE.test(path) || path.split("/").some((seg) => seg === ".." || seg === "." || seg === ".git")) return `The test report "${path.slice(0, 60)}" is not a path inside the repository: use letters, digits, ".", "_", "-" and "/", no "..", no .git, ending in ".xml" (for example "reports/junit.xml").`;
+  return undefined;
+}
+
 /** Why a whole configuration is refused, or undefined. `acknowledged`: the user confirmed "no sandbox" for this save or earlier. */
 export function validateChecks(cfg: ChecksConfig, opts: { acknowledged?: boolean } = {}): string | undefined {
   if (!Array.isArray(cfg.commands)) return "Commands must be a list.";
@@ -239,6 +253,7 @@ export function validateChecks(cfg: ChecksConfig, opts: { acknowledged?: boolean
     // Package-manager configuration (NPM_CONFIG_*, YARN_*, PNPM_*) could switch install scripts back on, whatever the case of the name.
     if (blockedEnvName(n)) return `${n} configures a package manager and cannot be passed through.`;
   }
+  if (cfg.testReport !== undefined) return validateTestReport(cfg.testReport);
   return undefined;
 }
 
@@ -692,6 +707,8 @@ export function setChecks(state: State, input: ChecksInput, acknowledgeUnsandbox
     maxConcurrent: input.maxConcurrent,
     protectedInputs: [...input.protectedInputs],
     passEnv: [...input.passEnv],
+    // Absent (or empty) reads no report; a project from before pass 5 has none.
+    ...(input.testReport ? { testReport: input.testReport } : {}),
   };
   const why = validateChecks(next, { acknowledged: acknowledgeUnsandboxed || prev.sandbox === "none" });
   if (why) throw new ControlError(why);
@@ -699,7 +716,7 @@ export function setChecks(state: State, input: ChecksInput, acknowledgeUnsandbox
   const s = structuredClone(state);
   next.rev = prev.rev + 1;
   s.project.checks = next;
-  const runsChanged = ["commands", "sandbox", "prepareNetwork", "commandTimeoutMinutes", "runTimeoutMinutes", "protectedInputs", "passEnv"].some((k) => JSON.stringify(prev[k as keyof ChecksConfig]) !== JSON.stringify(next[k as keyof ChecksConfig]));
+  const runsChanged = ["commands", "sandbox", "prepareNetwork", "commandTimeoutMinutes", "runTimeoutMinutes", "protectedInputs", "passEnv", "testReport"].some((k) => JSON.stringify(prev[k as keyof ChecksConfig]) !== JSON.stringify(next[k as keyof ChecksConfig]));
   if ((next.enabled && !prev.enabled) || next.sandbox !== prev.sandbox) {
     s.project.checksHealth = { sandbox: next.sandbox, status: "unverified", detail: "The sandbox has not been checked with these settings yet.", checkedAt: now, ...(s.project.checksHealth?.sandbox === next.sandbox ? s.project.checksHealth : {}), recheck: true, requestedAt: now };
   }
