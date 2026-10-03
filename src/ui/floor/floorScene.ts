@@ -9,7 +9,7 @@
 // - CLI: "trips plan and share" finished its first step and waits at the checks;
 // - Offline: "Offline maps" waits for the owner's go-ahead.
 // Budgets: building $40, maintenance $50 a month; the PE's pre-flight estimate (a fixture: nothing writes it yet) is
-// $9–$16 to build and $25–$35 a month. Each finished run costs $1.10.
+// $9–$16 to build and $25–$35 a month. Each finished task run costs $1.10, the PE's decision run $0.40.
 
 import * as F from "../../domain/findings";
 import * as M from "../../domain/model";

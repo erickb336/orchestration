@@ -86,7 +86,7 @@ export interface AreaLine {
 }
 
 /** At most this many tasks show on one line; the rest are one link to the task list. */
-export const MAX_ON_LINE = 12;
+const MAX_ON_LINE = 12;
 
 /**
  * One line per area, in the order of each area's first task (priority, then id), so the lines stay in place while the

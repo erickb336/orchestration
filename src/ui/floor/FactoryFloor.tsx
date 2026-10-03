@@ -205,11 +205,9 @@ function PeCallRow({ call: c }: { call: V.PeCallWords }) {
         </>
       }
       actions={
-        <>
-          <Button size="small" disabled={disabled || busy || !!c.locked} aria-pressed={reversing ? true : undefined} title={c.locked ?? "Open the decision again: it comes to you under Needs you"} onClick={() => setReversing(true)}>
-            Reverse
-          </Button>
-        </>
+        <Button size="small" disabled={disabled || busy || !!c.locked} aria-pressed={reversing ? true : undefined} title={c.locked ?? "Open the decision again: it comes to you under Needs you"} onClick={() => setReversing(true)}>
+          Reverse
+        </Button>
       }
     >
       <Disclosure label="See the reasons" className="ff-reasons">
