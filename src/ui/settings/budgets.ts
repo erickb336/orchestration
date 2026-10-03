@@ -61,7 +61,7 @@ export function budgetWords(s: State): BudgetWords {
   const c = s.project.budgetContinued;
   return {
     spent: `Spent so far: ${fmtUsd(spend.usd)}${b.buildingUsd === null ? "" : ` of ${fmtUsd(b.buildingUsd)}`} in ${runs(spend.runs)}.${unrecorded ? ` ${unrecorded}` : ""}`,
-    maintenance: m.startUsd === null ? "Maintenance estimate: none yet. Until there is one, a PE call that adds a monthly cost comes to you." : `Maintenance estimate: up to ${fmtUsd(m.startUsd + m.callsUsd)} a month.`,
+    maintenance: m.partsUsd === null ? "Maintenance estimate: none yet. Until there is one, a PE call that adds a monthly cost comes to you." : `Maintenance estimate: up to ${fmtUsd(m.partsUsd + m.callsUsd)} a month.`,
     ...(stop ? { stop: { title: `${stop.why}.`, text: "Nothing new starts: no task step and no studio run. Raise the building budget and save, or continue past it." } } : {}),
     ...(c && c.buildingUsd === b.buildingUsd ? { continued: `You continued past the ${fmtUsd(c.buildingUsd)} budget at ${fmtUsd(c.spentUsd)} spent. New work starts until you change the building budget.` } : {}),
   };

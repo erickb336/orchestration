@@ -8,9 +8,11 @@ import { runCommand } from "./commands";
 import * as M from "./model";
 import { needsYouItems } from "./needsYou";
 import { buildSeed } from "./seed";
-import { budgetStop, buildingSpend, estimateUsd, pastBudget, PRICES, unrecordedWords, type ModelPrice } from "./spend";
+import { budgetStop, buildingSpend, estimateUsd, maintenanceEstimate, pastBudget, PRICES, unrecordedWords, type ModelPrice } from "./spend";
+import * as B from "./studio/blueprint";
 import * as R from "./studio/runs";
-import type { StudioRun } from "./studio/types";
+import type { BudgetEstimate, StudioRun } from "./studio/types";
+import { blueprintScene } from "./testing/blueprintScene";
 import type { Attempt, LeadRun, State } from "./types";
 
 const T0 = Date.parse("2026-10-01T12:00:00Z");
@@ -461,5 +463,48 @@ describe("the budget stop", () => {
     const price = PRICES.find((p) => p.provider === "codex" && p.model === "gpt-6.1-sol")!;
     // The sample's seven finished runs at 1 cent each (spentProject), and the Codex run at the pinned price.
     expect(buildingSpend(s).usd).toBeCloseTo(0.07 + (35_118 * price.inputPerMTok + 330 * price.outputPerMTok) / 1_000_000, 10);
+  });
+});
+
+describe("the PE's estimates of the approved parts (B-03)", () => {
+  /** The blueprint scene with the PE's estimate on the newest verdict of each named part in force (a verdict is added where it has none). */
+  function estimated(s0: State, byTitle: Record<string, BudgetEstimate>): State {
+    const s = structuredClone(s0);
+    for (const item of B.blueprintItems(s)) {
+      const budget = byTitle[item.title];
+      if (!budget) continue;
+      const v = s.studio.verdicts.filter((x) => x.artifactId === item.artifactId && x.version === item.version).at(-1);
+      if (v) v.budget = budget;
+      else s.studio.verdicts.push({ id: `pv-${item.id}`, artifactId: item.artifactId, version: item.version, pass: 1, verdict: "feasible", reasons: "Fits.", budget, at: at(1) });
+    }
+    return s;
+  }
+  const est = (build: [number, number], month?: [number, number]): BudgetEstimate => ({ buildUsd: build, ...(month ? { maintenanceUsdPerMonth: month } : {}), basis: "Similar screens" });
+  const ALL = { "Trip plan": est([4, 7], [5, 10]), "Trip data": est([1, 2], [3, 4]), "Join flow": est([2, 3], [0, 1]), "Share costs": est([1, 1], [0, 0]), Reminders: est([2, 3], [1, 2]) };
+
+  it("the maintenance estimate is the sum of the PE's monthly estimates for the approved parts in force (high ends), plus its calls; a word list has none", () => {
+    const { s } = blueprintScene();
+    // In force: Trip plan, Trip data, Join flow, Share costs and Reminders (the PE reviews them), and Words (a word list it does not).
+    expect(maintenanceEstimate(estimated(s, ALL))).toEqual({ partsUsd: 17, parts: 5, missing: 0, callsUsd: 0 });
+  });
+
+  it("is not estimated while a part has no monthly figure from the PE, or while nothing is approved: unknown, never $0", () => {
+    const { s } = blueprintScene();
+    expect(maintenanceEstimate(estimated(s, { ...ALL, Reminders: est([2, 3]) }))).toEqual({ partsUsd: null, parts: 5, missing: 1, callsUsd: 0 });
+    expect(maintenanceEstimate(s)).toMatchObject({ partsUsd: null, parts: 5, missing: 5 });
+    expect(maintenanceEstimate(buildSeed(T0, { inFlightRuns: false }))).toEqual({ partsUsd: null, parts: 0, missing: 0, callsUsd: 0 });
+  });
+
+  it("a reproduction of the code as it is today is not a part the factory builds: it needs no estimate", () => {
+    const { s, artifacts } = blueprintScene();
+    const asIs = estimated(s, { ...ALL, "Trip plan": est([4, 7]) });
+    asIs.studio.artifacts.find((a) => a.id === artifacts.plan && a.version === 1)!.provenance = { asIs: true, files: ["src/TripPlan.tsx"] };
+    expect(maintenanceEstimate(asIs)).toEqual({ partsUsd: 7, parts: 4, missing: 0, callsUsd: 0 });
+  });
+
+  it("a PE call that adds a monthly cost is checked against it: within the budget it stays the PE's, past it the owner's", () => {
+    const s = M.setBudgets(estimated(blueprintScene().s, ALL), { buildingUsd: null, maintenanceUsdPerMonth: 20 }, at(1));
+    expect(pastBudget(s, { maintenanceUsdPerMonth: [1, 3], basis: "A small index" })).toBeUndefined();
+    expect(pastBudget(s, { maintenanceUsdPerMonth: [2, 4], basis: "A bigger index" })).toBe("up to $4.00 more a month would take the maintenance estimate to $21.00, past the $20.00 budget");
   });
 });

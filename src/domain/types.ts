@@ -167,11 +167,6 @@ export interface FactoryStart {
   settings: FactorySettings;
   /** What was still open, named to the owner and confirmed: the vision's open areas, then the blueprint's open items and the unfinished probes (by id). */
   openItems: string[];
-  /**
-   * The pre-flight's budget estimates. Nothing writes it yet: the PE's pre-flight (ORC-029 pass 6) fills it. While it is
-   * absent the project's maintenance is not yet estimated (unknown, never $0; see `maintenanceEstimate`).
-   */
-  estimate?: { buildUsd?: [number, number]; maintenanceUsdPerMonth?: [number, number]; basis: string };
 }
 
 /** The areas a vision needs to cover; the lead reports how clear each is and asks about the open ones. */

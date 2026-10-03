@@ -3,7 +3,8 @@
 // budgets. Pure: derived from state only.
 
 import pricesJson from "./prices.json";
-import type { BudgetEstimate, StudioRun } from "./studio/types";
+import { covers } from "./studio/studio";
+import { type BlueprintItem, type BudgetEstimate, type ItemEstimate, type StudioRun, type UsdRange, KIND_RULES } from "./studio/types";
 import { type Attempt, type FindingDecision, type LeadRun, type PeCall, type ProviderId, type Runner, type State, type Subagent, isProvider } from "./types";
 
 /** One model's published API price, in dollars per million tokens, with where and when it was read. */
@@ -315,19 +316,62 @@ function standingPeCalls(s: State): (FindingDecision & { pe: PeCall })[] {
   return s.decisions.filter((d): d is FindingDecision & { pe: PeCall } => !!d.pe && d.status === d.pe.decision);
 }
 
+// ---------- the PE's estimates of the approved parts (B-03) ----------
+
+/** The PE's newest estimate on the item's version (and variant), from its review of that version; null: no estimate (never $0). */
+export function itemEstimate(s: State, item: BlueprintItem): ItemEstimate {
+  const v = s.studio.verdicts.filter((x) => x.artifactId === item.artifactId && x.version === item.version && covers(x, item.variant) && x.budget).at(-1);
+  return { itemId: item.id, estimate: v?.budget ? structuredClone(v.budget) : null };
+}
+
+/**
+ * The parts the factory builds and the PE estimates: the approved items in force, but not a word list (the PE does not
+ * review one) and not a reproduction of the code as it is today (it exists already).
+ */
+export function estimatedParts(s: State): BlueprintItem[] {
+  const asIs = (i: BlueprintItem) => s.studio.artifacts.some((a) => a.id === i.artifactId && a.version === i.version && a.provenance);
+  return (s.blueprint.revisions.at(-1)?.items ?? []).filter((i) => i.status === "approved" && KIND_RULES[i.kind].peReviews && !asIs(i));
+}
+
+/** One range of the PE's estimates summed over some parts: null while a part has no figure for it (`missing`). */
+export interface PartsSum {
+  usd: UsdRange | null;
+  parts: number;
+  missing: number;
+}
+
+export function sumOfParts(s: State, parts: BlueprintItem[], pick: (e: BudgetEstimate) => UsdRange | undefined): PartsSum {
+  let lo = 0;
+  let hi = 0;
+  let missing = 0;
+  for (const part of parts) {
+    const e = itemEstimate(s, part).estimate;
+    const r = e ? pick(e) : undefined;
+    if (!r) missing++;
+    else [lo, hi] = [lo + r[0], hi + r[1]];
+  }
+  return { usd: missing ? null : [lo, hi], parts: parts.length, missing };
+}
+
 /** The project's estimated maintenance, in dollars a month (the high ends). */
 export interface MaintenanceEstimate {
-  /** The newest factory start's estimate (the PE's pre-flight, pass 6); null while none was made: not yet estimated, never $0. */
-  startUsd: number | null;
+  /**
+   * The PE's monthly estimates summed over the approved parts (`estimatedParts`); null while no part is approved or one
+   * has no monthly figure (`missing` of `parts`): not estimated, never $0.
+   */
+  partsUsd: number | null;
+  parts: number;
+  missing: number;
   /** What the PE calls that stand add. */
   callsUsd: number;
 }
 
-/** The newest factory start's maintenance estimate, and what each PE call that stands adds to it. */
+/** The PE's monthly estimates of the approved parts, and what each PE call that stands adds to them. */
 export function maintenanceEstimate(s: State): MaintenanceEstimate {
   let callsUsd = 0;
   for (const d of standingPeCalls(s)) callsUsd += d.pe.cost?.maintenanceUsdPerMonth?.[1] ?? 0;
-  return { startUsd: s.project.factoryStarts.at(-1)?.estimate?.maintenanceUsdPerMonth?.[1] ?? null, callsUsd };
+  const sum = sumOfParts(s, estimatedParts(s), (e) => e.maintenanceUsdPerMonth);
+  return { partsUsd: sum.parts && sum.usd ? sum.usd[1] : null, parts: sum.parts, missing: sum.missing, callsUsd };
 }
 
 /**
@@ -356,8 +400,9 @@ export function committedBuildUsd(s: State): number {
  * - Building: the counted spend (each cost with no full record at its estimate), plus what the PE calls that stand
  *   commit before their work has run, plus this call. A cost with nothing to count it at makes the spend unknown, so a
  *   call that adds any building cost goes to the owner.
- * - Maintenance: the pre-flight's estimate, plus the PE calls that stand, plus this call. While the pre-flight has made no
- *   estimate, the maintenance is unknown, so a call that adds any maintenance cost goes to the owner.
+ * - Maintenance: the PE's monthly estimates of the approved parts, plus the PE calls that stand, plus this call. While
+ *   they make no estimate (no part, or a part with no figure), the maintenance is unknown, so a call that adds any
+ *   maintenance cost goes to the owner.
  * - A call that adds nothing passes even when the spend is already past the budget (the owner continued past it).
  */
 export function pastBudget(s: State, cost: BudgetEstimate | undefined, prices: readonly ModelPrice[] = PRICES): string | undefined {
@@ -381,9 +426,9 @@ export function pastBudget(s: State, cost: BudgetEstimate | undefined, prices: r
     const more = cost?.maintenanceUsdPerMonth?.[1];
     const m = maintenanceEstimate(s);
     if (more === undefined) why.push(`it states no maintenance cost, and the maintenance budget is ${fmtUsd(b.maintenanceUsdPerMonth)} a month`);
-    else if (more > 0 && m.startUsd === null) why.push(`the project's maintenance is not yet estimated, so up to ${fmtUsd(more)} more a month cannot be checked against the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
-    else if (more > 0 && m.startUsd! + m.callsUsd + more > b.maintenanceUsdPerMonth)
-      why.push(`up to ${fmtUsd(more)} more a month would take the maintenance estimate to ${fmtUsd(m.startUsd! + m.callsUsd + more)}, past the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
+    else if (more > 0 && m.partsUsd === null) why.push(`the project's maintenance is not yet estimated, so up to ${fmtUsd(more)} more a month cannot be checked against the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
+    else if (more > 0 && m.partsUsd! + m.callsUsd + more > b.maintenanceUsdPerMonth)
+      why.push(`up to ${fmtUsd(more)} more a month would take the maintenance estimate to ${fmtUsd(m.partsUsd! + m.callsUsd + more)}, past the ${fmtUsd(b.maintenanceUsdPerMonth)} budget`);
   }
   return why.length ? why.join("; ") : undefined;
 }
