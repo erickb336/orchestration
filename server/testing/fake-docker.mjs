@@ -7,7 +7,8 @@
 //   - the setup probe passes: networks, the proxy (detached, "listening"), and the probe's client printing good facts;
 //   - images: every reference exists, with an id made from its name, and no proxy variables of its own;
 //   - an attached `run` starts a "container": a separate, detached process that outlives the docker command when that
-//     command is killed, as a real container does. Its program (the entrypoint) is one of:
+//     command is killed, as a real container does. It never outlives the test process that ran the docker command (the
+//     command's parent): it ends, as if killed, once that process has gone. Its program (the entrypoint) is one of:
 //       fake-exit <code>       ends at once with that code;
 //       fake-beat              writes <work>/beat every 20 ms (making the folder again if it is gone) until stopped;
 //       fake-fill <bytes>      writes <work>/fill of that size, then beats;
@@ -33,15 +34,31 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const hex = (s) => [...Buffer.from(s)].reduce((h, b) => ((h * 33) ^ b) >>> 0, 5381).toString(16).padStart(8, "0").repeat(8);
 const log = (line) => appendFileSync(join(state, "calls.log"), `${JSON.stringify(argv.slice(0, 3))} ${line}\n`);
 const out = (s) => process.stdout.write(`${s}\n`);
+/** Whether a process exists (EPERM: it does, under another user). */
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+};
 
-/** The container process: does its program's work until a stop marker is due, then records its end. */
-async function container(name, work, program, arg) {
+/**
+ * The container process: does its program's work until a stop marker is due, then records its end. `owner` is the test
+ * process that ran the docker command: once it has gone, the container ends as if killed.
+ */
+async function container(name, work, program, arg, owner) {
   write(name, { status: "running", pid: process.pid });
   if (program === "fake-fill") {
     mkdirSync(work, { recursive: true });
     writeFileSync(join(work, "fill"), Buffer.alloc(Number(arg)));
   }
   for (;;) {
+    if (!alive(owner)) {
+      if (existsSync(state)) write(name, { status: "exited", code: 137 });
+      process.exit(0);
+    }
     const stop = existsSync(join(state, `${name}.stop`)) ? JSON.parse(readFileSync(join(state, `${name}.stop`), "utf8")) : undefined;
     if (stop && Date.now() >= stop.at) {
       if (stop.remove) rmSync(file(name), { force: true });
@@ -75,7 +92,7 @@ const flag = (f) => {
 
 async function main() {
   const [cmd, sub] = argv;
-  if (cmd === "__container") return container(argv[1], argv[2], argv[3], argv[4]);
+  if (cmd === "__container") return container(argv[1], argv[2], argv[3], argv[4], Number(argv[5]));
   log("");
   if (cmd === "version") return out("29.0.0-fake");
   if (cmd === "network" && sub === "inspect") {
@@ -109,7 +126,8 @@ async function main() {
     const e = argv.indexOf("--entrypoint");
     const entry = argv[e + 1];
     const args = argv.slice(e + 3);
-    const start = () => spawn(process.execPath, [new URL(import.meta.url).pathname, "__container", name, work, entry, args[0] ?? ""], { detached: true, stdio: "ignore", env: process.env }).unref();
+    // The container's owner is this command's parent: the test process.
+    const start = () => spawn(process.execPath, [new URL(import.meta.url).pathname, "__container", name, work, entry, args[0] ?? "", String(process.ppid)], { detached: true, stdio: "ignore", env: process.env }).unref();
     if (argv.includes("--detach")) {
       if (entry === "fake-beat" || entry === "fake-fill") start();
       else write(name, { status: "running", pid: 0, probe: argv.includes("registry.probe.invalid:host-gateway") });
@@ -133,6 +151,8 @@ async function main() {
     start();
     for (;;) {
       await sleep(20);
+      // Its test process has gone: nothing waits for this command any more, and the container ends by itself.
+      if (!alive(process.ppid)) process.exit(137);
       const s = read(name);
       if (s && s.status === "exited") process.exit(s.code);
       if (!s && existsSync(join(state, `${name}.seen`))) process.exit(137);
