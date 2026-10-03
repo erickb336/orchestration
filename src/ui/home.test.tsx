@@ -10,6 +10,8 @@ import * as D from "../domain/delivery";
 import * as M from "../domain/model";
 import { buildDemo } from "../domain/demo";
 import { buildSeed } from "../domain/seed";
+import { clockTime, runWords } from "../domain/needsYou";
+import { reportSubagent } from "../domain/subagents";
 import { answerChangeOrder, changeOrdered, fullAnswer } from "../domain/testing/changeOrders";
 import { inVision } from "../domain/testing/factory";
 import { reviewedChange } from "../domain/testing/reviewed";
@@ -385,6 +387,35 @@ describe("the factory floor", () => {
     const back = render(<Overview />, store(after));
     expect(back).not.toContain(">Decided by the PE<");
     expect(visible(back)).toContain("Decide a finding: Invite links never expire");
+  });
+});
+
+describe("no internal run id where the owner reads (ORC-030 a-words-ids)", () => {
+  const RUN_ID = /\b(?:lead|run|studio)-\d+\b/;
+
+  it("names a run by what ran: a task's step, the lead's reply and its time, a Vision run by its kind", () => {
+    const s = buildDemo(T0);
+    const reply = s.conversation.find((m) => m.author === "lead" && m.leadRunId)!;
+    expect(runWords(s, reply.leadRunId!)).toBe(`the lead's reply at ${clockTime(reply.at)}`);
+    const silent = structuredClone(s);
+    silent.conversation = silent.conversation.filter((m) => m.leadRunId !== reply.leadRunId);
+    const r = silent.leadRuns.find((x) => x.id === reply.leadRunId)!;
+    expect(runWords(silent, r.id)).toBe(`the lead's run at ${clockTime(r.startedAt)}`);
+    const a = s.attempts[0];
+    expect(runWords(s, a.id)).toBe(`${a.taskId} ${a.stepId}`);
+    expect(runWords(s, `${a.id} helper x`)).toBe(`a helper of ${a.taskId} ${a.stepId}`);
+    expect(runWords(s, "lead-404")).toBe("a lead run");
+    expect(clockTime("2026-10-03T08:05:00")).toBe("08:05");
+  });
+
+  it("a lead reply that started a helper is named by its reply on Home's Needs you, not by its id", () => {
+    const s = buildDemo(T0);
+    const reply = s.conversation.find((m) => m.author === "lead" && m.leadRunId)!;
+    const helped = reportSubagent(s, reply.leadRunId!, { phase: "started", id: "x", asked: "Look around", usageInParent: false }, at(10));
+    const v = visible(render(<Overview />, store(helped)));
+    expect(v).toContain(`The lead's reply at ${clockTime(reply.at)} started a helper agent.`);
+    // Home up to the vision's history (worker C1 moves that to Vision; its revision reasons are records).
+    expect(v.slice(0, v.indexOf("Vision and history"))).not.toMatch(RUN_ID);
   });
 });
 

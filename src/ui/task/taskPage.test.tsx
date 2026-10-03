@@ -19,6 +19,7 @@ import { ModelsSection } from "./Models";
 import { OutputsSection } from "./Outputs";
 import { openCleanPr } from "./needsYouItems.test";
 import { outputLine } from "./Result";
+import { controlFailureWords } from "./Banners";
 
 // The page reads the clock (Date.now()) for what is ready and how old things are, so the demo is built at the clock too.
 const T0 = Date.now();
@@ -239,6 +240,18 @@ describe("the task page's words (ORC-030 pass C2)", () => {
     expect(page(s, "WT-007")).toContain(">Pause<");
     expect(task(s, "WT-003").lifecycle).not.toBe("active");
     expect(page(s, "WT-003")).not.toContain(">Pause<");
+  });
+
+  it("a stop the runtime did not confirm names the step, never the run's id (a-words-ids)", () => {
+    const s = buildSeed(T0);
+    const a = M.activeAttempts(s)[0];
+    const t = task(s, a.taskId);
+    const timedOut = M.reportStopTimeout(M.pauseTask(s, t.id, new Date(T0 + 1000).toISOString()), a.id, new Date(T0 + 2000).toISOString());
+    expect(task(timedOut, t.id).controlFailure?.message).toContain(a.id); // the record keeps the id
+    const banner = text(page(timedOut, t.id));
+    expect(banner).toContain(`Control failure. ${t.id} ${a.stepId} did not confirm the stop. Nothing merges until it does; the agent may still be working.`);
+    expect(banner).not.toContain(a.id);
+    expect(controlFailureWords(t, [])).toBe("The run did not confirm the stop. Nothing merges until it does; the agent may still be working.");
   });
 
   it("an output says each thing once: no 'Verified: Verified …' on any finished task", () => {

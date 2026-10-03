@@ -9,6 +9,7 @@ import { checkLogUrl } from "../api";
 import { coverageLabel } from "../domain/coverage";
 import * as F from "../domain/findings";
 import * as M from "../domain/model";
+import { runWords } from "../domain/needsYou";
 import type { Artifact, CheckRunRecord, Finding, FindingDecision, PathCoverage, State } from "../domain/types";
 import { relTime } from "./common";
 import { Button, Chip, Input, SimulatedChip, useConfirm, type Tone } from "./kit";
@@ -31,18 +32,24 @@ export function FindingChips({ finding }: { finding: Finding }) {
   );
 }
 
-/** Where a decision stands, in one line. */
-export function decisionState(d: FindingDecision): string {
+/** Where a decision stands, in one line. A PE call names the lead's run in words ("the lead's reply at 10:42"), never by its id. */
+export function decisionState(d: FindingDecision, s?: State): string {
   // An earlier PE call stays on the record (`pe`); only the current one is the PE's word here.
   const call = F.currentPeCall(d);
   if (d.suggestion && d.status === "open") return `${call ? "The PE" : "The lead"} suggests: fix — ${d.suggestion.why}`;
   // A PE call past a budget is yours: what the PE would do, and why it did not.
   if (d.status === "open" && d.routedTo === "user" && call?.pastBudget) return `Needs you: decide. The PE would ${call.decision === "follow-up" ? "follow up" : call.decision}, but ${call.pastBudget}`;
   if (d.status === "open") return d.routedTo === "lead" ? "The lead decides" : d.routedTo === "pe" ? "The PE decides, within budget (the lead's decision runs decide for it, with the PE's brief)" : "Needs you: decide";
-  const by = d.decidedBy === "carried" ? `same as ${d.carriedFrom ?? "an earlier round"}` : d.decidedBy === "lead" ? "by the lead" : d.decidedBy === "pe" ? `by the PE, through the lead's run ${d.pe?.leadRunId ?? d.leadRunId ?? ""} with the PE's brief; ${F.costLine(d.pe?.cost)}` : "by you";
+  const by = d.decidedBy === "carried" ? `same as ${d.carriedFrom ?? "an earlier round"}` : d.decidedBy === "lead" ? "by the lead" : d.decidedBy === "pe" ? `by the PE, through ${peRun(d, s)}, with the PE's brief; ${F.costLine(d.pe?.cost)}` : "by you";
   if (d.status === "superseded") return `No longer open${d.why ? `: ${d.why}` : ""}`;
   const what = d.status === "fix" ? (d.kind === "final-checks" ? "Fix round added" : "Fix") : d.status === "accept" ? (d.kind === "final-checks" ? "Failing checks accepted" : "Accepted as is") : `Followed up as ${d.followUpTaskId ?? "a separate task"}`;
   return `${what} (${by}${d.decidedAt ? `, ${relTime(d.decidedAt)}` : ""})${d.why ? `: ${d.why}` : ""}`;
+}
+
+/** The lead run that made the PE's call, in words. */
+function peRun(d: FindingDecision, s?: State): string {
+  const id = d.pe?.leadRunId ?? d.leadRunId;
+  return s && id ? runWords(s, id) : "a lead run";
 }
 
 /** The decision controls for one finding. Every button is one command; a note is optional. */
@@ -139,7 +146,7 @@ export function FindingsList({ state, artifact, controls = true, decideAbove }: 
             <FindingText finding={f} showId />
             {d && (
               <p className="t-decision__state">
-                {decisionState(d)}
+                {decisionState(d, state)}
                 {above && (
                   <>
                     {" "}

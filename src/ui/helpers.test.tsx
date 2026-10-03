@@ -57,7 +57,8 @@ describe("the run's helpers", () => {
     state = reportSubagent(state, runId, { phase: "started", id: "x", asked: "Look around", usageInParent: false }, at(10));
     const t = visible(renderScreen(<Overview />, state));
     expect(t).toContain("A helper agent started where none is allowed:");
-    expect(t).toContain(`${run(state, runId).taskId} S1's run ${runId} started a helper agent.`);
+    expect(t).toContain(`${run(state, runId).taskId} S1 started a helper agent.`);
+    expect(t).not.toContain(runId);
     expect(t).toContain("Mark as seen");
   });
 });
