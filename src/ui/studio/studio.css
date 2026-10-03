@@ -280,3 +280,17 @@ h6.st-doc__h { font-size: var(--fs-meta); color: var(--muted); }
 .st-doc__source .st-doc__code { margin: var(--space-2) 0 0; }
 /* The frame Mermaid draws in (diagrams.ts): laid out, so Mermaid can measure text, but off the screen and never shown. */
 .st-diagram-frame { position: fixed; left: -10000px; top: 0; width: 1200px; height: 900px; border: 0; visibility: hidden; pointer-events: none; }
+
+/* ---------- the draft (ORC-029 pass 5, screen 2) ---------- */
+/* The draft bar: its changes since the last Lock in, one per line, each with its tag. */
+.st-draftbar .k-banner__text p { margin: 0 0 var(--space-2); }
+.st-changes { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); font-size: var(--fs-small); }
+.st-changes li { display: grid; grid-template-columns: 5.2rem minmax(0, 1fr); gap: var(--space-2); align-items: baseline; min-width: 0; overflow-wrap: anywhere; }
+.st-changes .k-chip { justify-self: start; }
+/* A changed version beside the version in force: two panes, each a stage; one above the other on a narrow screen. */
+.st-beside { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-3); min-width: 0; }
+.st-beside__pane { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2); align-content: start; min-width: 0; }
+.st-beside__cap { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; margin: 0; font-size: var(--fs-small); color: var(--muted); }
+.st-beside__cap .k-chip { white-space: normal; }
+.st-beside .st-stage { padding: var(--space-2); }
+@media (max-width: 900px) { .st-beside { grid-template-columns: minmax(0, 1fr); } }

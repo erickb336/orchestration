@@ -1,7 +1,10 @@
 // Vision, the studio (ORC-029 passes 3d and 4a): the studio screen approved in pass 1 (the canvas). `#/vision`, in
 // the main navigation.
 //
-// Left: the rounds, then the chosen round's artifacts with your mark, and the designer's runs of that round.
+// At the top, while there is a draft (pass 5): the draft bar, with its changes since the last Lock in (Draft.tsx).
+//
+// Left: the rounds, then the chosen round's artifacts with your mark and where each stands in the blueprint ("in the
+// draft" or "in force"), and the designer's runs of that round. A changed artifact shows its version in force beside it.
 // Centre: the artifact, on Desktop or Mobile (only the project's devices), with its variants, Keep, Change or Drop,
 // and Pin a comment; terminal demos and TUIs in a terminal window; interfaces, algorithms, topologies, contracts and
 // flows as documents. Right: the lead's panel (its message for the round, its questions with suggested answers, and
@@ -12,8 +15,9 @@
 // message to the lead (the marks are also recorded on each version). You can mark a version once the PE agreed, or
 // once its review ended, and then overrule an objection that stands, with your reason; until then you can look.
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import * as M from "../../domain/model";
+import * as B from "../../domain/studio/blueprint";
 import * as R from "../../domain/studio/runs";
 import * as S from "../../domain/studio/studio";
 import { DOMAIN_WORDS } from "../../domain/studio/domains";
@@ -27,8 +31,11 @@ import { cx } from "../kit/cx";
 import { useLeadContext } from "../LeadDrawer";
 import { useStore } from "../store";
 import { DocumentArtifact } from "./Document";
-import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback, TerminalFile, TerminalRecording } from "./Frames";
+import { DraftBar, InForcePane } from "./Draft";
+import { BLUEPRINT_PLACE_TITLE, PLACE_TONE, blueprintPlace, inForceBeside } from "./draftView";
+import { DeviceFrame, NoPrototypeServer, PlainFrame, ScreenshotFallback } from "./Frames";
 import { PeQuestions } from "./PeQuestions";
+import { TerminalArtifact } from "./Preview";
 import {
   AS_IS_FILES_SHOWN,
   AS_IS_LABEL,
@@ -57,7 +64,6 @@ import {
   rowMark,
   runLine,
   sendAnswer,
-  serviceFileUrl,
   showKind,
   standing,
   tableRows,
@@ -65,7 +71,6 @@ import {
   toggleRow,
   versionHistory,
   usdRange,
-  variantDemo,
   variantEntry,
   variantRules,
   type Draft,
@@ -167,8 +172,12 @@ export function Studio() {
           {round ? `The studio · round ${round.n}${round.closedAt ? " (closed)" : ""}. ` : "The studio. "}The factory builds exactly what the blueprint shows, with many agents at once. Changing the blueprint now takes minutes; changing built work takes runs.
         </p>
       </header>
-      {state.project.stage !== "shaping" && (
-        <Banner tone="info">The factory has started. Vision stays open: the designer and the PE go on working here, and what you approve goes into the draft. The factory builds from the version you locked in, never from the draft.</Banner>
+      {B.hasDraft(state) ? (
+        <DraftBar />
+      ) : (
+        state.project.stage !== "shaping" && (
+          <Banner tone="info">The factory has started. Vision stays open: the designer and the PE go on working here, and what you approve goes into the draft. The factory builds from the version you locked in, never from the draft.</Banner>
+        )
       )}
       <DomainPrompt />
       {state.studio.rounds.length === 0 ? (
@@ -335,11 +344,20 @@ function ArtifactItem({ artifact: a, draft, current, onClick }: { artifact: Stud
   const st = standing(state, a);
   // An objection waiting for you is flagged in the list too, not only when the artifact is open.
   const objects = st.kind === "open" && S.openObjections(state, a).length > 0;
+  // Where this version stands in the blueprint (pass 5): in the draft, or in force.
+  const place = blueprintPlace(state, a);
   return (
     <button type="button" className="st-item st-item--artifact" aria-current={current ? "true" : undefined} onClick={onClick}>
       <span className="st-item__title">{a.title}</span>
       <span className="st-item__line">{artifactLine(a)}</span>
       <span className="st-item__mark">
+        {place && (
+          <>
+            <Chip tone={PLACE_TONE[place]} strong={place === "in force"} title={BLUEPRINT_PLACE_TITLE[place]}>
+              {place}
+            </Chip>{" "}
+          </>
+        )}
         {objects && (
           <>
             <Chip tone="you">PE objects</Chip>{" "}
@@ -467,27 +485,29 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
       {locked && st.kind !== "open" && <p className="small muted">{locked}</p>}
       {kind === "screen" && shots && <p className="small muted">{shots}</p>}
 
-      <div className={cx("st-stage", pinMode && "st-stage--pinning", kind === "terminal" && "st-stage--terminal", kind === "document" && "st-stage--doc")}>
-        {kind === "screen" ? (
-          !entry ? (
-            <EmptyState title="No entry file">The designer named no entry file for this variant, so there is no page to show.</EmptyState>
+      <Beside artifact={a} device={shownDevice} port={port}>
+        <div className={cx("st-stage", pinMode && "st-stage--pinning", kind === "terminal" && "st-stage--terminal", kind === "document" && "st-stage--doc")}>
+          {kind === "screen" ? (
+            !entry ? (
+              <EmptyState title="No entry file">The designer named no entry file for this variant, so there is no page to show.</EmptyState>
+            ) : src ? (
+              <DeviceFrame src={src} title={`${frameTitle}, ${DEVICE_LABEL[shownDevice].toLowerCase()}`} device={shownDevice} pins={shownPins} pinMode={pinMode} onPin={onPin} />
+            ) : (
+              <ScreenshotFallback key={`${variant}-${shownDevice}`} artifact={a} variant={variant} device={shownDevice} />
+            )
+          ) : kind === "terminal" ? (
+            <TerminalArtifact key={variant} artifact={a} variant={variant} />
+          ) : kind === "document" ? (
+            <DocumentArtifact key={variant} artifact={a} variant={variant} />
+          ) : kind === "dictionary" ? (
+            <DictionaryTable artifact={a} draft={draft} update={update} locked={locked} />
           ) : src ? (
-            <DeviceFrame src={src} title={`${frameTitle}, ${DEVICE_LABEL[shownDevice].toLowerCase()}`} device={shownDevice} pins={shownPins} pinMode={pinMode} onPin={onPin} />
+            <PlainFrame src={src} title={frameTitle} />
           ) : (
-            <ScreenshotFallback key={`${variant}-${shownDevice}`} artifact={a} variant={variant} device={shownDevice} />
-          )
-        ) : kind === "terminal" ? (
-          <TerminalArtifact key={variant} artifact={a} variant={variant} />
-        ) : kind === "document" ? (
-          <DocumentArtifact key={variant} artifact={a} variant={variant} />
-        ) : kind === "dictionary" ? (
-          <DictionaryTable artifact={a} draft={draft} update={update} locked={locked} />
-        ) : src ? (
-          <PlainFrame src={src} title={frameTitle} />
-        ) : (
-          <NoPrototypeServer />
-        )}
-      </div>
+            <NoPrototypeServer />
+          )}
+        </div>
+      </Beside>
       {/* Under the stage, so entering Pin mode does not move the prototype under your pointer. */}
       <p className={cx("small", pinMode ? "st-hint" : "sr-only")} role="status">
         {pinMode ? "Pin mode: click a spot in the prototype to pin a comment there. Clicks still work inside the prototype." : ""}
@@ -528,6 +548,27 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
 
       {draft.pins.length > 0 && <PinList artifact={a} draft={draft} update={update} locked={locked} />}
       <p className="micro muted">Artifacts stay on this computer: the studio shows the files the designer wrote, whichever provider wrote them.</p>
+    </div>
+  );
+}
+
+/**
+ * The stage, and beside it the version in force when this version is the draft's change to it (pass 5, screen 2): so
+ * you see what your Lock in changes. Any other version: the stage alone.
+ */
+function Beside({ artifact: a, device, port, children }: { artifact: StudioArtifact; device: ScreenDevice; port: number | undefined; children: ReactNode }) {
+  const { state } = useStore();
+  const beside = inForceBeside(state, a);
+  if (!beside) return <>{children}</>;
+  return (
+    <div className="st-beside">
+      <section className="st-beside__pane" aria-label={`v${a.version}, in the draft`}>
+        <p className="st-beside__cap">
+          <span>v{a.version} · in the draft</span>
+        </p>
+        {children}
+      </section>
+      <InForcePane item={beside.item} artifact={beside.artifact} rev={beside.rev} device={device} port={port} />
     </div>
   );
 }
@@ -574,7 +615,7 @@ function TableFoot({ artifact: a, draft, update, locked, rows, what }: TableProp
 
 /**
  * The project's dictionary as a table: each term, its one meaning and the words it replaces, with your mark on each.
- * It says whether this version is the project's words: only the version you approved into the blueprint is.
+ * It says whether this version is in force (locked in: the factory's agents get it), in the draft, or neither.
  */
 function DictionaryTable({ artifact: a, draft, update, locked }: TableProps) {
   const { state } = useStore();
@@ -583,8 +624,8 @@ function DictionaryTable({ artifact: a, draft, update, locked }: TableProps) {
   return (
     <section className="st-table-wrap" aria-label="The project's dictionary">
       <p className="small">
-        <Chip tone={standing.inForce ? "done" : "neutral"} strong={standing.inForce}>
-          {standing.inForce ? "In force" : "Not in force"}
+        <Chip tone={standing.place === "in force" ? "done" : standing.place === "in the draft" ? "you" : "neutral"} strong={standing.place === "in force"}>
+          {standing.place === "in force" ? "In force" : standing.place === "in the draft" ? "In the draft" : "Not in force"}
         </Chip>{" "}
         {standing.text}
       </p>
@@ -743,40 +784,6 @@ function PinList({ artifact: a, draft, update, locked }: { artifact: StudioArtif
       ))}
     </ol>
   );
-}
-
-/**
- * One variant of a terminal demo or TUI: its recording, its hand-written frames, or why there is nothing to play,
- * in the studio's words (demoNote). Everything is read through the app's own service (GET /api/studio/file), so it
- * shows while the prototype server is down too.
- */
-function TerminalArtifact({ artifact: a, variant }: { artifact: StudioArtifact; variant: string | undefined }) {
-  const demo = variantDemo(a, variant);
-  const note = variant === undefined ? undefined : S.demoNote(a, variant);
-  if (demo.status === "pending") return <EmptyState title="Recording…">The service is recording the designer's tape in the sandbox, with no network. It shows here when it is done.</EmptyState>;
-  if (demo.status === "recorded") {
-    return (
-      <div className="st-stack">
-        {demo.error && <Banner tone="fail">{note ? `${note}.` : `Recorded with errors: ${demo.error}`}</Banner>}
-        {demo.video || demo.gif ? (
-          <TerminalRecording title={a.title} video={demo.video && serviceFileUrl(a, demo.video)} gif={demo.gif && serviceFileUrl(a, demo.gif)} />
-        ) : (
-          demo.transcript && <TerminalFile artifact={a} path={demo.transcript} kind="transcript" />
-        )}
-        <p className="small muted">Recorded with VHS from the designer's tape, in the sandbox with no network.</p>
-      </div>
-    );
-  }
-  if (demo.status === "hand-written") {
-    return (
-      <div className="st-stack">
-        {note && <p className="small muted">{note}.</p>}
-        {demo.frame && <TerminalFile artifact={a} path={demo.frame} kind="frame" />}
-        {demo.cast && <TerminalFile artifact={a} path={demo.cast} kind="cast" />}
-      </div>
-    );
-  }
-  return <EmptyState title="Not recorded.">{note ? `${note}.` : demo.reason}</EmptyState>;
 }
 
 /**

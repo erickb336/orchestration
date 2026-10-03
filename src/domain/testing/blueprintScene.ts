@@ -81,6 +81,7 @@ export function blueprintScene(t0 = Date.parse("2026-10-02T09:00:00Z")): Bluepri
   const at = (sec: number) => new Date(t0 + sec * 1000).toISOString();
   let s = M.initProject(buildSeed(t0, { inFlightRuns: false }), { name: "Weekend Trips", repoPath: "/tmp/weekend-trips", vision: "Weekend trips for a small group of friends.", focus: "" }, at(0));
   s = run(s, "setBudgets", { buildingUsd: 40, maintenanceUsdPerMonth: 10 }, at(1)).state;
+  s = run(s, "setDomains", { domains: ["screen"] }, at(1)).state;
 
   const add = (round: number, sec: number, args: Record<string, unknown>) => run<{ artifactId: string; version: number }>(s, "addStudioArtifact", { round, devices: [], madeBy: DESIGNER, ...args }, at(sec));
   const agreeAndApprove = (id: string, version: number, sec: number, pe = true) => {
