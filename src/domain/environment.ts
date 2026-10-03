@@ -9,6 +9,8 @@
 //
 // No language is a code path here or in the runner (server/environment/): languages appear only as rows of data.
 
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import { draft, event } from "./model/core";
 import { ControlError, type ChecksConfig, type State } from "./types";
 
@@ -300,6 +302,31 @@ export type EnvironmentSource =
 export interface DevcontainerFound {
   file: string;
   parsed: DevcontainerSource | { refused: string };
+  /** The digest the owner confirms (devcontainerDigest), for a dev container that is not refused. */
+  sha256?: string;
+}
+
+/**
+ * The digest of a dev container: the text of its file and, for a build, the Dockerfile's path and text. The owner
+ * confirms this digest; a change to either file gives another one.
+ */
+export function devcontainerDigest(fileText: string, dockerfile?: { path: string; text: string }): string {
+  return bytesToHex(sha256(utf8ToBytes(JSON.stringify([fileText, dockerfile?.path ?? null, dockerfile?.text ?? null]))));
+}
+
+/**
+ * Why a dev container's Dockerfile is refused, or undefined. Two BuildKit features reach past the build's `--network
+ * none`: a `# syntax=` line makes the builder fetch a frontend image and run it, and a cache mount is shared by every
+ * build on the daemon, so one project's build could plant files in another's. The legacy builder ignores the first
+ * and refuses the second; BuildKit, the default where buildx is installed, does both. Both are refused here, whichever
+ * builder runs.
+ */
+export function dockerfileRefusal(text: string, path: string): string | undefined {
+  if (/^[ \t]*#[ \t]*syntax[ \t]*=/im.test(text)) return `${path}: a "# syntax=" line chooses a BuildKit frontend, which the builder fetches and runs; the environment builds with the default frontend only.`;
+  // Instructions continue over lines that end with a backslash.
+  const logical = text.replace(/\\\r?\n/g, " ");
+  if (/^[ \t]*RUN\b[^\n]*--mount[=\s]\S*\btype=cache\b/im.test(logical)) return `${path}: a cache mount (RUN --mount=type=cache) is shared by every build on the Docker daemon, across projects; the environment refuses it.`;
+  return undefined;
 }
 
 /**

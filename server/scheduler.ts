@@ -21,7 +21,8 @@ import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
 import { REVIEW_ROLES, isProvider, type Artifact, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner, type EnvironmentAssignment } from "./checks";
-import { DEVCONTAINER_FILES, checksPrepareCommands, environmentPlan, environmentSource, parseDevcontainer, type DevcontainerFound } from "../src/domain/environment";
+import { checksPrepareCommands, environmentPlan, environmentSource } from "../src/domain/environment";
+import { readDevcontainer } from "./environment/devcontainer";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
 import { prototypeFolders, readsPrototypes } from "./factoryLink";
 import { SimulatedGitHub, type GitHubHost } from "./github";
@@ -1333,25 +1334,16 @@ export class Scheduler {
   private environmentFor(state: State): { environment: EnvironmentAssignment } | Record<string, never> {
     if (!this.workspaces || state.project.sample || !state.project.repoPath) return {};
     const ref = M.trustedBaseRef(state);
-    const read = (path: string) => {
+    const found = readDevcontainer((path, maxBytes) => {
       try {
-        return this.workspaces!.readFileAt({ repoPath: state.project.repoPath, ref, path, maxBytes: 256 * 1024 });
+        return this.workspaces!.readFileAt({ repoPath: state.project.repoPath, ref, path, maxBytes });
       } catch {
         return undefined;
       }
-    };
-    let found: DevcontainerFound | undefined;
-    for (const file of DEVCONTAINER_FILES) {
-      const r = read(file);
-      if (r) {
-        found = { file, parsed: r.truncated ? { refused: `${file} is larger than 256 KB` } : parseDevcontainer(r.text, file) };
-        break;
-      }
-    }
+    });
     const { source } = environmentSource(found, state.project.environment);
     if (!source) return {};
-    const dockerfile = "build" in source ? read(source.build.dockerfile) : undefined;
-    return { environment: { plan: environmentPlan(source, state.project.environment, checksPrepareCommands(state.project.checks)), project: state.project.id, ...(dockerfile && !dockerfile.truncated ? { dockerfile: dockerfile.text } : {}) } };
+    return { environment: { plan: environmentPlan(source, state.project.environment, checksPrepareCommands(state.project.checks)), project: state.project.id, ...("build" in source && found?.dockerfile !== undefined ? { dockerfile: found.dockerfile } : {}) } };
   }
 
   /**

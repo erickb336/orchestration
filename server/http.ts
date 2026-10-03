@@ -8,7 +8,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join, resolve, sep } from "node:path";
 import { CLIENT_HEADER, type AckMode, type ChangeError, type ChangeResponse, type CheckSuggestions, type CommandError, type EnvironmentFound, type ServiceInfo, type StatePayload, type VisionDocUploadOk } from "../src/api";
 import { suggestChecks, type RepoFile } from "../src/domain/checks";
-import { DEVCONTAINER_FILES, PROPOSAL_MARKERS, parseDevcontainer, proposeImage } from "../src/domain/environment";
+import { PROPOSAL_MARKERS, proposeImage } from "../src/domain/environment";
+import { readDevcontainer } from "./environment/devcontainer";
 import { SERVICE_COMMANDS } from "../src/domain/commands";
 import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
@@ -206,14 +207,9 @@ export function createHttpServer(opts: HttpOptions): Server {
         return undefined;
       }
     };
-    let devcontainer: EnvironmentFound["devcontainer"];
-    for (const file of DEVCONTAINER_FILES) {
-      const r = read(file, 256 * 1024);
-      if (!r) continue;
-      const p = r.truncated ? { refused: `${file} is larger than 256 KB` } : parseDevcontainer(r.text, file);
-      devcontainer = { file, ...("refused" in p ? { refused: p.refused } : "image" in p ? { image: p.image } : { dockerfile: p.build.dockerfile, context: p.build.context }) };
-      break;
-    }
+    const found = readDevcontainer(read);
+    const p = found?.parsed;
+    const devcontainer: EnvironmentFound["devcontainer"] = found && p ? { file: found.file, ...("refused" in p ? { refused: p.refused } : "image" in p ? { image: p.image } : { dockerfile: p.build.dockerfile, context: p.build.context }), ...(found.sha256 ? { sha256: found.sha256 } : {}) } : undefined;
     const proposal = proposeImage(PROPOSAL_MARKERS.filter((m) => read(m, 1)));
     return send(res, 200, { ref, ...(devcontainer ? { devcontainer } : {}), ...(proposal ? { proposal } : {}) } satisfies EnvironmentFound);
   };
