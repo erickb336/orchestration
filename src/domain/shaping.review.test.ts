@@ -67,7 +67,7 @@ describe("the roadmap hold is its own flag", () => {
     expect(task(held, a.id).heldForShaping).toBeUndefined();
     expect(held.events.at(-2)!.message).toMatch(/No longer held by the roadmap/);
     const p = promote(held);
-    expect(M.stateLabel(p, task(p, a.id))).toBe("Waiting for your go-ahead");
+    expect(M.stateLabel(p, task(p, a.id))).toBe("Waits for you");
     expect(M.stateLabel(p, task(p, b.id))).toBe("Planned; waits until you start the factory, then starts on Autopilot");
     const built = startFactoryAsOwner(p, at(5));
     expect(task(built, a.id).holdBeforeStart).toBe(true); // never overridden
@@ -76,7 +76,7 @@ describe("the roadmap hold is its own flag", () => {
     const ran = promote(built, 6);
     expect(running(ran).map((x) => x.taskId)).toContain(b.id);
     expect(running(ran, a.id)).toHaveLength(0);
-    expect(M.stateLabel(ran, task(ran, a.id))).toBe("Waiting for your go-ahead");
+    expect(M.stateLabel(ran, task(ran, a.id))).toBe("Waits for you");
   });
 
   it("with check-in the roadmap carries both holds and says so; releasing by hand takes it out of the roadmap hold and still waits for Start building", () => {

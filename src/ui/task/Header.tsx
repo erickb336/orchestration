@@ -115,16 +115,18 @@ export function TaskHeader({ state, task, editing, onEdit }: { state: State; tas
           {M.stateLabel(state, task)}
         </StatePill>
         <div className="t-head__actions">
-          {open &&
-            (task.hold ? (
-              <Button variant="primary" disabled={disabled || pausing} disabledReason={pausing ? "Waiting for the agent to acknowledge the stop" : undefined} onClick={() => void send("resumeTask", { taskId: task.id })}>
-                Resume
-              </Button>
-            ) : (
-              <Button disabled={disabled} onClick={() => void send("pauseTask", { taskId: task.id })}>
-                Pause
-              </Button>
-            ))}
+          {/* Resume while held; Pause only once the task has started (a step runs or comes next), never on one that
+              waits to start: "Wait for my go-ahead" holds that (ORC-030 a-words-proposed). */}
+          {open && task.hold && (
+            <Button variant="primary" disabled={disabled || pausing} disabledReason={pausing ? "Waiting for the agent to acknowledge the stop" : undefined} onClick={() => void send("resumeTask", { taskId: task.id })}>
+              Resume
+            </Button>
+          )}
+          {open && !task.hold && task.lifecycle === "active" && (
+            <Button disabled={disabled} onClick={() => void send("pauseTask", { taskId: task.id })}>
+              Pause
+            </Button>
+          )}
           <Button onClick={() => lead.openLead({ taskId: task.id })} title="Your message carries this task as context">
             Message the lead about this task
           </Button>

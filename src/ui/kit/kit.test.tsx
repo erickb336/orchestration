@@ -13,6 +13,7 @@ import { Disclosure } from "./Disclosure";
 import { EmptyState } from "./EmptyState";
 import { Checkbox, Field, Input, Select, Textarea } from "./Field";
 import { moveIndex, trapTabIndex } from "./keys";
+import { Meter } from "./Meter";
 import { NeedsYouItem, Row, Rows } from "./Row";
 import { SideNav } from "./SideNav";
 import { StatePill } from "./StatePill";
@@ -103,15 +104,20 @@ describe("Chip and StatePill", () => {
     expect(paused).toContain(">Paused</span>");
   });
 
-  it("with an href the pill is a link to the place it describes; without one it is not", () => {
-    expect(
-      html(
-        <StatePill tone="work" pulse href="#/tasks" title="3 agents working">
-          Factory running · 3 agents
-        </StatePill>,
-      ),
-    ).toBe('<a class="k-pill k-pill--work k-pill--pulse k-pill--link" href="#/tasks" title="3 agents working"><span class="k-pill__dot" aria-hidden="true"></span><span class="k-pill__text">Factory running · 3 agents</span></a>');
+  it("is a span with its dot and words; the header's places say their state in their menu items, not as pill links (ORC-030)", () => {
     expect(html(<StatePill tone="done">Done</StatePill>)).toBe('<span class="k-pill k-pill--done"><span class="k-pill__dot" aria-hidden="true"></span>Done</span>');
+  });
+});
+
+describe("Meter", () => {
+  it("draws the used share and, hatched, the expected share on top, never past the whole; named in words or hidden", () => {
+    expect(html(<Meter used={0.25} more={0.5} label="$10 of $40 spent" />)).toBe(
+      '<span class="k-meter" role="img" aria-label="$10 of $40 spent"><span class="k-meter__used k-meter__used--work" style="width:25%"></span><span class="k-meter__more" style="width:50%"></span></span>',
+    );
+    // Past the whole: the used share is full and nothing more fits; the figure beside it says the same, so the bar is hidden.
+    expect(html(<Meter used={1.4} more={0.3} tone="you" />)).toBe('<span class="k-meter" aria-hidden="true"><span class="k-meter__used k-meter__used--you" style="width:100%"></span></span>');
+    expect(html(<Meter used={0.8} more={0.5} />)).toContain('class="k-meter__more" style="width:20%"');
+    expect(html(<Meter used={Number.NaN} />)).toBe('<span class="k-meter" aria-hidden="true"></span>');
   });
 });
 

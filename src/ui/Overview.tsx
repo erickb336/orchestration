@@ -1,9 +1,9 @@
 // Home. While in Vision: one line of the vision (studio/VisionCard.tsx, VisionLine: the text and its history are in
 // Vision), then Needs you, with the simple decisions taken in place, and Progress by area beside New results and the
 // lead's latest reply. After the start, Home is the factory floor (floor/FactoryFloor.tsx): the vision's line, Needs
-// you, then the budgets, one line per area and the PE's calls; New results and the lead's latest reply under it; the
-// Focus card last. Usage and the service's details live in Settings (Diagnostics.tsx); the lead conversation opens
-// from the header.
+// you, then the budgets, one line per area and the PE's calls; New results and the lead's latest reply under it, the
+// focus as that reply's first line (ORC-030 a-home-focus). Usage and the service's details live in Settings
+// (Diagnostics.tsx); the lead conversation opens from the header.
 
 import { useState } from "react";
 import * as D from "../domain/delivery";
@@ -34,7 +34,7 @@ export function focusProvenance(v: VisionRevision): string {
 
 export function Overview() {
   const { state } = useStore();
-  // While shaping, the vision's line stands in for the Focus card: the vision and its editor are in Vision.
+  // While shaping and after the start, the vision is one line here: its text, focus and editor are in Vision.
   const shaping = state.project.stage === "shaping";
   if (!shaping) return <FactoryHome state={state} />;
   return (
@@ -60,8 +60,8 @@ export function Overview() {
 
 /**
  * Home after the start: the factory floor (ORC-029 pass 6). Needs you first; then the floor (the change orders the lead
- * is answering, the two budgets, one line per area, the PE's calls); then what landed, the lead's latest reply, and the
- * Focus card. The vision is one line at the top; its text and history are in Vision.
+ * is answering, the budgets, one line per area, the PE's calls); then what landed and the lead's latest reply with the
+ * focus first. The vision is one line at the top; its text and history are in Vision.
  */
 function FactoryHome({ state }: { state: State }) {
   return (
@@ -77,9 +77,8 @@ function FactoryHome({ state }: { state: State }) {
       </div>
       <div className="k-grid-2">
         <NewResultsCard state={state} />
-        <LatestFromLead state={state} />
+        <LatestFromLead state={state} withFocus />
       </div>
-      <FocusCard state={state} />
     </div>
   );
 }
@@ -473,8 +472,9 @@ function NewResultsCard({ state }: { state: State }) {
 /**
  * The lead's newest reply, its first lines and what it changed, in the conversation's words: the fold line under a
  * reply ("2 changes, 1 note") and where your newest message stands. The conversation itself opens from the header.
+ * After the start the focus is its first line (`withFocus`); before it, the focus is with the vision, in Vision.
  */
-function LatestFromLead({ state }: { state: State }) {
+function LatestFromLead({ state, withFocus = false }: { state: State; withFocus?: boolean }) {
   const { service } = useStore();
   const lead = useLeadContext();
   const latest = latestLeadReply(state);
@@ -489,6 +489,7 @@ function LatestFromLead({ state }: { state: State }) {
         </Button>
       }
     >
+      {withFocus && <FocusLine state={state} />}
       {!latest ? (
         <EmptyState title="No reply from the lead yet.">Message the lead; it answers in its next run.</EmptyState>
       ) : (
@@ -512,18 +513,24 @@ function LatestFromLead({ state }: { state: State }) {
   );
 }
 
-// ---------- Focus ----------
+// ---------- the focus, first in Latest from the lead ----------
 
-/** The focus; where it came from, with Undo for a lead change. The vision text and its history are in Vision (ORC-030 C1). */
-function FocusCard({ state }: { state: State }) {
+/**
+ * The focus as the first line of "Latest from the lead" (ORC-030 a-home-focus): the lead sets it, so it sits with the
+ * lead's reply. Who set it and when, and Undo for the lead's change. Nothing when no focus is set.
+ */
+function FocusLine({ state }: { state: State }) {
   const { send, disabled } = useStore();
   const vision = M.currentVision(state);
   const change = M.currentFocusChange(state);
   const [busy, setBusy] = useState(false);
+  if (!vision.focus) return null;
   return (
-    <Card title="Focus">
-      <p className="focus-line">{vision.focus || <span className="muted">No focus set.</span>}</p>
-      <div className="focus-foot small muted">
+    <div className="lead-focus">
+      <p className="lead-focus__line">
+        <span className="muted">Focus:</span> {vision.focus}
+      </p>
+      <p className="focus-foot small muted">
         <span>
           {focusProvenance(vision)}, {relTime(vision.at)}
         </span>
@@ -545,7 +552,7 @@ function FocusCard({ state }: { state: State }) {
             </Button>
           </>
         )}
-      </div>
-    </Card>
+      </p>
+    </div>
   );
 }

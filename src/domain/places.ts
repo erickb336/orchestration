@@ -1,6 +1,6 @@
-// The two places in the header (ORC-029 pass 5, screen 1): Vision and the Factory last for the project's life, side
-// by side, and each says where it stands. These are the facts; the header words them ("Vision · draft, 3 changes",
-// "Factory running · 4 agents"). Pure, from the state only.
+// The two places in the header (ORC-029 pass 5, screen 1): Vision and the Factory last for the project's life, and each
+// says where it stands, in its menu item (ORC-030 a-header-phone: "Vision · draft · 3 changes", "Home · factory
+// running · 4 agents"). These are the facts; src/ui/placesView.ts words them. Pure, from the state only.
 
 import { activeAgentAttempts, activeAttempts } from "./model/core";
 import { activeLeadRun } from "./model/lead";
@@ -19,19 +19,20 @@ export type VisionPlace = { state: "draft"; changes: number; openItems: number }
 
 /**
  * Where the Factory stands:
+ * - pausing, then paused: the owner paused the project (see `projectPause`), in Vision or after the start: the header
+ *   has no other place that says so (ORC-030: the pill beside the Project menu went with the row of pills);
  * - not-started: the project is in Vision, before Start the factory;
- * - pausing, then paused: the owner paused the project (see `projectPause`);
  * - budget-stop: nothing new starts at the building budget (`why`, in one line), until the owner raises it or
  *   continues past it;
  * - running: it builds, with `agents` task runs on a provider under way (the studio's runs are Vision's work).
- * A pause is named before the budget stop: the owner's own pause is what holds the factory then.
+ * A pause is named first: the owner's own pause is what holds the project then.
  */
 export type FactoryPlace = { state: "not-started" } | ProjectPause | { state: "budget-stop"; why: string } | { state: "running"; agents: number };
 
 /**
  * The owner's pause of the project: pausing while a run it asked to stop has not confirmed the stop (`stopping`: task
  * and check runs, the lead's run and the studio's runs), then paused. Undefined while the project is not paused. The
- * header's pill and the Factory place both read it, so neither says paused before the runs stopped.
+ * Factory place and the Project menu both read it, so neither says paused before the runs stopped.
  */
 export type ProjectPause = { state: "pausing"; stopping: number } | { state: "paused" };
 
@@ -51,9 +52,9 @@ export function visionPlace(s: State): VisionPlace {
 }
 
 export function factoryPlace(s: State): FactoryPlace {
-  if (s.project.stage === "shaping") return { state: "not-started" };
   const pause = projectPause(s);
   if (pause) return pause;
+  if (s.project.stage === "shaping") return { state: "not-started" };
   const stop = budgetStop(s);
   if (stop) return { state: "budget-stop", why: stop.why };
   return { state: "running", agents: activeAgentAttempts(s).length };

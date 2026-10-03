@@ -47,6 +47,8 @@ describe("the Factory place", () => {
   it("not started in Vision; running with its agents; pausing until every run confirms, then paused by the owner; stopped at the budget", () => {
     let s = fresh();
     expect(factoryPlace(s)).toEqual({ state: "not-started" });
+    // A pause is named first, in Vision too: the header has no other place that says so (ORC-030 a-header-phone).
+    expect(factoryPlace(M.pauseProject(s, at(1)))).toEqual({ state: "paused" });
     s = startFactoryAsOwner(s, at(1), MANUAL);
     expect(factoryPlace(s)).toEqual({ state: "running", agents: 0 });
     const c = run<{ newId: string }>(s, "createTask", { title: "Plan a trip", area: "", outcome: "x", benefit: "", whyNow: "", approach: "y", acceptance: ["ok"], priority: 1, holdBeforeStart: true, flowId: "change" }, at(2));

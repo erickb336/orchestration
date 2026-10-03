@@ -14,7 +14,9 @@
 // The scheduler dispatches once and then its simulated clock stays paused: nothing moves while the screens are taken.
 //
 // Output: evidence/qa/screens/<route>-<width>.png and evidence/qa/screens/index.json (route, state, title, headings,
-// main controls, horizontal scroll, errors). Exits 1 when a page scrolls sideways or logs an error.
+// main controls, horizontal scroll, errors). Exits 1 when a page scrolls sideways or logs an error, when the header
+// shows a pill or is not one row on a desktop and two on a phone, or when the phone's lead drawer (on a touch screen)
+// shows a keyboard hint (ORC-030 pass C2).
 //
 // Run: ORCHESTRATION_TEST_PORT=5950 node --import tsx scripts/qa/screens.mjs
 
@@ -93,7 +95,9 @@ const index = [];
 let failures = 0;
 
 async function capture(service, state, route, width, strictErrors) {
-  const page = await openPage(browser, width);
+  // The lead drawer on a phone is opened on a touch screen, where no keyboard hint shows (ORC-030 a-words-phone-hint).
+  const touch = route === "overlay:lead-drawer" && width < 600;
+  const page = await openPage(browser, width, { touch });
   const file = join(OUT, `${state === "sample" ? "" : `${state}--`}${slug(route.replace(/^(overlay|board-view):/, "$1-"))}-${width}.png`);
   const row = { route, state, width, file };
   try {
@@ -114,6 +118,25 @@ async function capture(service, state, route, width, strictErrors) {
     }
     await page.waitForTimeout(400);
     Object.assign(row, await inventory(page));
+    // ORC-030 C2: the header has no row of pills and is one row on a desktop, two on a phone; a touch screen shows no
+    // keyboard hint.
+    row.header = await page.evaluate(() => {
+      const h = document.querySelector("header.top");
+      // A row is a run of parts whose boxes overlap vertically; the next row starts below the last one's bottom.
+      const boxes = [...h.querySelectorAll(".brand, nav.tabs, .right")].map((e) => e.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+      let rows = 0;
+      let bottom = -Infinity;
+      for (const b of boxes) {
+        if (b.top >= bottom - 1) rows++;
+        bottom = Math.max(bottom, b.bottom);
+      }
+      return { pills: h.querySelectorAll(".k-pill, nav.places").length, rows, height: Math.round(h.getBoundingClientRect().height) };
+    });
+    if (row.header.pills || row.header.rows !== (width < 600 ? 2 : 1)) row.error = `the header: ${JSON.stringify(row.header)}`;
+    if (touch) {
+      row.keysHint = await page.evaluate(() => [...document.querySelectorAll(".keys-hint")].some((e) => e.getClientRects().length > 0));
+      if (row.keysHint) row.error = "a keyboard hint shows on a touch screen";
+    }
     const m = await horizontalScroll(page);
     row.horizontalScroll = m.scroll > m.client ? { scroll: m.scroll, client: m.client, wider: await widest(page) } : false;
     await page.screenshot({ path: file, fullPage: !route.startsWith("overlay:") });

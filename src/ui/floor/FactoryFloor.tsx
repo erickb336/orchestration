@@ -1,10 +1,11 @@
 // The factory floor (ORC-029 pass 6, screen 8 of the pass 1 prototype): Home after the start, under Needs you. The open
-// change orders the lead is answering, the two budgets, one line per area with each task at its station, and the
-// trade-off calls the PE made within budget, each with Reverse and its reasons. The words are floorView.ts's.
+// change orders the lead is answering, the Budgets card (one line each, ORC-030), one line per area with each task at
+// its station (one row per area on a phone), and the trade-off calls the PE made within budget, each with Reverse and
+// its reasons. The words are floorView.ts's.
 
 import { useState } from "react";
 import { changeOrderHref, changeOrderLine } from "../changeOrder/changeOrderView";
-import { Banner, Button, ButtonLink, Card, Chip, Disclosure, EmptyState, Field, Input, Row, Rows, StatePill } from "../kit";
+import { Banner, Button, ButtonLink, Card, Chip, Disclosure, EmptyState, Field, Input, Meter, Row, Rows, StatePill } from "../kit";
 import { cx } from "../kit/cx";
 import { useStore } from "../store";
 import * as V from "./floorView";
@@ -51,35 +52,53 @@ function ChangeOrdersInMotion({ state }: { state: State }) {
   );
 }
 
-// ---------- the two budgets ----------
+// ---------- the budgets ----------
 
+/** One Budgets card, two lines: each a figure and a bar; the reasons open on click (ORC-030 a-home-budgets). */
 function Budgets({ state }: { state: State }) {
   const w = V.budgetWords(state);
-  const b = w.building;
   return (
-    <div className="k-grid-2 ff-budgets">
-      <Card
-        title="Building budget"
-        actions={
-          <ButtonLink size="small" variant="quiet" href="#/settings/project">
-            Change
-          </ButtonLink>
+    <Card
+      title="Budgets"
+      className="ff-budgets"
+      actions={
+        <ButtonLink size="small" variant="quiet" href="#/settings/project/budgets">
+          Change
+        </ButtonLink>
+      }
+    >
+      <ul className="ff-budget-lines" aria-label="Budgets">
+        <BudgetLineItem line={w.building} />
+        <BudgetLineItem line={w.maintenance} />
+      </ul>
+    </Card>
+  );
+}
+
+function BudgetLineItem({ line: l }: { line: V.BudgetLine }) {
+  return (
+    <li className="ff-budget">
+      <Disclosure
+        className="ff-budget__line"
+        label={
+          <span className="ff-budget__sum">
+            <span className="ff-budget__head">
+              <span className="ff-budget__figure">
+                <b>{l.name}</b> · {l.figure}
+              </span>
+              {l.state && <StatePill tone={l.state.tone}>{l.state.word}</StatePill>}
+            </span>
+            {l.bar && <Meter used={l.bar.used} more={l.bar.more} tone={l.state?.tone === "you" ? "you" : "work"} />}
+          </span>
         }
       >
-        <p className="ff-figure">{b.spent}</p>
-        {b.unknown && <p className="small no-margin">{b.unknown}</p>}
-        <p className="small no-margin">{b.estimate}</p>
-        {b.committed && <p className="small muted no-margin">{b.committed}</p>}
-        <p className="ff-stop small">
-          <StatePill tone={b.stop.tone}>{b.stop.word}</StatePill>
-          <span className="muted">{b.stop.text}</span>
-        </p>
-      </Card>
-      <Card title="Maintenance budget, estimated">
-        <p className="ff-figure">{w.maintenance.estimate}</p>
-        <p className="small muted no-margin">{w.maintenance.basis}</p>
-      </Card>
-    </div>
+        <ul className="ff-budget__reasons small muted">
+          {l.reasons.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
+      </Disclosure>
+    </li>
   );
 }
 
@@ -106,6 +125,15 @@ function Lines({ state }: { state: State }) {
           <ul className="ff-lines">
             {lines.map((l) => (
               <li key={l.area} className="ff-line">
+                {/* On a phone the line is one row: the area, its counts and "needs you"; a tap opens its tasks (ORC-030 a-home-phone). */}
+                <a className="ff-line__row" href={l.href} title={`Open the tasks of ${l.area}`}>
+                  <span className="ff-line__row-text">
+                    <b>{l.area}</b>
+                    <span className="small muted">{l.summary.counts}</span>
+                  </span>
+                  {l.summary.needsYou > 0 && <Chip tone="you">{l.summary.needsYou === 1 ? "needs you" : `${l.summary.needsYou} need you`}</Chip>}
+                  <span className="ff-line__go" aria-hidden="true" />
+                </a>
                 <a className="ff-line__area" href={l.href} title={`Open the tasks of ${l.area}`}>
                   <b>{l.area}</b>
                   <span className="small muted">{l.counts}</span>

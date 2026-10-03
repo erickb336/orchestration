@@ -203,7 +203,8 @@ export async function chrome() {
  * `page.qaErrors`. The demo's first-run tour is marked done unless o.tour.
  */
 export async function openPage(browser, width, o = {}) {
-  const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 812 : 900 }, deviceScaleFactor: 1 });
+  // o.touch: a touch screen (pointer: coarse, hover: none), as a phone is: keyboard hints hide there (ORC-030).
+  const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 812 : 900 }, deviceScaleFactor: 1, ...(o.touch ? { hasTouch: true } : {}) });
   // Only in the app's own window: a studio prototype's frame is sandboxed and has no storage.
   if (!o.tour)
     await ctx.addInitScript(() => {

@@ -1,23 +1,18 @@
 // The task's steps as a plain list: name, who works on it, and the state in words. The running step keeps
 // "Send a note" and its notes; a blocked step keeps Retry. Models, run ids and
-// context sit under Details.
+// context sit under Details. The flow is named in the line above the title, and More holds Change flow… (ORC-030
+// a-task-flow-chip), so the card has no chip of its own.
 
 import { useState } from "react";
 import * as M from "../../domain/model";
 import { MAX_NOTE_LENGTH, type Note, type State, type Step, type Task } from "../../domain/types";
 import { ROLE_LABEL, fmtTime, relTime } from "../common";
-import { flowLineText } from "../flowView";
 import { Actions, Button, Card, Chip, Field, SimulatedChip, StatePill, StepList, Textarea, type StepItem } from "../kit";
 import { canSendNote, noteSourceLabel, noteStatusLabel, noteTone } from "../notes";
 import { NOTES_TO_PARENT_ONLY, notesReachParentOnly } from "../helpersView";
 import { useStore } from "../store";
 import { stepWords } from "./stepWords";
 import { isOpenTask } from "./needsYouItems";
-
-/** "Feature flow" for one of the six flows; the longer line for a pipeline from before flows or a custom one. */
-export function flowChip(ref: Task["flow"]): string {
-  return ref.source === "built-in" ? `${ref.name} flow` : flowLineText(ref);
-}
 
 export function StepsCard({ state, task }: { state: State; task: Task }) {
   const open = isOpenTask(task);
@@ -44,7 +39,7 @@ export function StepsCard({ state, task }: { state: State; task: Task }) {
     };
   });
   return (
-    <Card title="Steps" className="t-steps" actions={<Chip strong>{flowChip(task.flow)}</Chip>}>
+    <Card title="Steps" className="t-steps">
       <StepList label={`Steps of ${task.id}`} steps={steps} />
     </Card>
   );

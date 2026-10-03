@@ -120,9 +120,11 @@ await runJourney(
       dropNoise(page);
       await j.pageChecks("Home after the start");
       const t = await text(page);
-      j.check(t.includes("Factory running"), "Home: the header says the factory runs");
+      // ORC-030 C2: the factory's state is in Home's menu item; the budgets are one card, a line each.
+      const home = (await page.getByRole("navigation", { name: "Main" }).getByRole("link").first().innerText()).replace(/\s+/g, " ");
+      j.check(/running/.test(home), "Home: its menu item says the factory runs", home);
       j.check(t.includes("The factory") && t.includes("Packing list") && t.includes("Join by link"), "Home: the factory floor lists the two tasks");
-      j.check(t.includes("$0.00 of $40.00 spent"), "Home: the building budget, $0.00 of $40.00");
+      j.check(/Building · \$0 of \$40/.test(t), "Home: the building budget, $0 of $40");
       j.check(!(await page.getByRole("link", { name: "Start the factory…" }).count()), "Home: no Start the factory… link after the start");
       if (t.includes("The PE estimates it before the factory starts")) j.note("Home after the start: 'The PE estimates it before the factory starts' is false now (backlog B-03).");
     });

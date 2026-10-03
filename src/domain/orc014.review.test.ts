@@ -270,7 +270,7 @@ describe("Start building's labels tell the truth", () => {
     const { state, id } = roadmap();
     const held = M.setHoldBeforeStart(autopilot(state), id, true, at(3));
     expect(M.startFactoryPlan(held)).toMatchObject({ release: true, roadmap: [], userHeld: [expect.objectContaining({ id })] });
-    expect(M.stateLabel(held, held.tasks.find((t) => t.id === id)!)).toBe("Waiting for your go-ahead");
+    expect(M.stateLabel(held, held.tasks.find((t) => t.id === id)!)).toBe("Waits for you");
     const started = startFactoryAsOwner(held, at(4));
     expect(started.tasks.find((t) => t.id === id)).toMatchObject({ holdBeforeStart: true });
   });

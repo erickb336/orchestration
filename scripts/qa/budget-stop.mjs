@@ -3,8 +3,8 @@
 // What it drives, at 1280 and 375 wide:
 // 1. Settings › Budgets: the owner sets a building budget $1 above the spend and saves it. Nothing stops.
 // 2. Message the lead: one simulated lead run, a known $0 (Q-23). The spend stays as it was, and nothing stops.
-// 3. Settings › Budgets: the owner lowers the budget below the spend. The factory stops. Home, the Factory pill and
-//    Needs you say so, and Needs you names no internal run id.
+// 3. Settings › Budgets: the owner lowers the budget below the spend. The factory stops. Home's Budgets card, Home's
+//    menu item (ORC-030: the place's state is in its item) and Needs you say so, and Needs you names no internal run id.
 // 4. At the stop, the owner starts a task that waits for the go-ahead; nothing starts.
 // 5. Settings › Budgets: Continue past the budget, confirm. The task runs.
 // 6. The demo (a second service): the owner sets a $50 budget. The factory must not stop at $0.00 spent (Q-12).
@@ -56,20 +56,33 @@ async function waitFor(what, fn, ms) {
   }
 }
 const flat = (t) => t.replace(/\s*\n+\s*/g, " · ");
+/** Home's menu item, as the owner reads it: "Home · factory running · 3 agents" wide, "Home running" on a phone. */
+const homeItem = async (p) => (await p.getByRole("navigation", { name: "Main" }).getByRole("link").first().innerText()).replace(/\s+/g, " ");
+/** Home's Budgets card, its Building line opened so its reasons show. */
+async function buildingLine(p) {
+  const card = p.getByRole("region", { name: "Budgets" });
+  await card.waitFor();
+  const line = card.locator("details").first();
+  if (!(await line.evaluate((d) => d.open))) await line.locator("summary").click();
+  return flat(await line.innerText());
+}
 
 await runJourney(
   "budget-stop",
   makeState,
   async (j, page, sv, width) => {
-    const places = () => page.getByRole("navigation", { name: "Vision and the factory" }).innerText();
+    const places = () => homeItem(page);
+    /** Stopped at the budget, as Home's item says it: in full where there is room, "stopped" on a phone. */
+    const STOPPED = width < 600 ? /\bstopped\b/ : /factory stopped at the budget/;
     const region = (name) => page.getByRole("region", { name });
     let budget;
     let goId;
 
     await j.step("Settings › Budgets: set a small building budget", async () => {
       await page.goto(`${sv.origin}/#/overview`);
-      await region(/^Building budget/).waitFor();
-      j.check(/of \$40\.00/.test(await region(/^Building budget/).innerText()), "Home: the building budget card shows the spend of $40.00", flat(await region(/^Building budget/).innerText()));
+      const line = await buildingLine(page);
+      j.check(/^Building · \$[\d.]+ of \$40 · about \$[\d.]+–\$[\d.]+ more \(the PE\)/.test(line), "Home: the Budgets card's Building line shows the spend of $40 and the PE's estimate for the rest", line);
+      j.check((await region("Budgets").locator(".k-meter").count()) === 2, "Home: each budget line has its bar");
       await j.shot("01-home-before");
       await page.goto(`${sv.origin}/#/settings/budgets`);
       const field = page.getByLabel("Building budget (dollars)");
@@ -100,7 +113,7 @@ await runJourney(
       j.check(counted(sv.state()) === before, "the counted spend is what it was before the lead's run", { before, after: counted(sv.state()) });
       j.check(!budgetStop(sv.state()), "the factory does not stop for a simulated lead run", budgetStop(sv.state())?.why);
       await page.getByRole("button", { name: "Close the lead panel" }).click();
-      j.check(/Factory running/.test(await places()), "the Factory pill still says it runs", flat(await places()));
+      j.check(/running/.test(await places()), "Home's item still says the factory runs", await places());
     });
 
     await j.step("the owner lowers the budget below the spend: the factory stops and asks", async () => {
@@ -111,11 +124,12 @@ await runJourney(
       await field.fill(String(budget));
       await page.getByRole("group", { name: "Save Budgets" }).getByRole("button", { name: "Save" }).click();
       await page.getByRole("group", { name: "Save Budgets" }).getByText("Saved").waitFor({ timeout: 5_000 });
-      await waitFor("the Factory pill to say stopped at the budget", async () => /stopped at the budget/.test(await places()), 10_000);
-      j.check(/Factory stopped at the budget · needs you/.test(await places()), "the Factory pill says it stopped at the budget and needs you", flat(await places()));
+      await waitFor("Home's item to say stopped at the budget", async () => STOPPED.test(await places()), 10_000);
+      j.check(STOPPED.test(await places()), "Home's item says the factory stopped at the budget", await places());
+      j.check((await page.getByRole("navigation", { name: "Main" }).locator(".tab-state--you").count()) === 1, "the stop is in the amber of what waits for you", await places());
       await page.goto(`${sv.origin}/#/overview`);
-      const card = flat(await region(/^Building budget/).innerText());
-      j.check(/Stopped/.test(card) && /budget is reached/.test(card), "Home: the building budget card says Stopped, and why", card);
+      const card = await buildingLine(page);
+      j.check(/\bstopped\b/.test(card) && /budget is reached/.test(card), "Home: the Budgets card's Building line says stopped, and its reasons say why", card);
       const needs = flat(await region(/^Needs you/).innerText());
       j.check(/budget is reached/.test(needs), "Home: Needs you lists the budget stop", needs.slice(0, 300));
       j.check(!RUN_ID.test(needs), "Home: Needs you names no internal run id", needs.match(RUN_ID)?.[0]);
@@ -152,8 +166,8 @@ await runJourney(
       await dialog.getByRole("button", { name: "Continue past the budget" }).click();
       await waitFor("the stop banner to go", async () => !(await card.getByRole("button", { name: "Continue past the budget" }).count()), 5_000);
       j.check(/You continued past the \$\d+\.00 budget/.test(await card.innerText()), "the Budgets card says you continued past the budget", flat(await card.innerText()).slice(-220));
-      await waitFor("the Factory pill to say running", async () => /Factory running/.test(await places()), 10_000);
-      j.check(true, "the Factory pill says the factory runs again", flat(await places()));
+      await waitFor("Home's item to say running", async () => /running/.test(await places()), 10_000);
+      j.check(true, "Home's item says the factory runs again", await places());
       await j.shot("06-continued");
       if (goId) {
         await page.goto(`${sv.origin}/#/task/${encodeURIComponent(goId)}`);
@@ -174,9 +188,9 @@ await runJourney(
         await p.getByRole("group", { name: "Save Budgets" }).getByRole("button", { name: "Save" }).click();
         await p.getByRole("group", { name: "Save Budgets" }).getByText("Saved").waitFor({ timeout: 5_000 });
         await sleep(800);
-        const pill = flat(await p.getByRole("navigation", { name: "Vision and the factory" }).innerText());
+        const pill = await homeItem(p);
         const note = flat(await p.getByRole("region", { name: "Budgets" }).innerText());
-        j.check(!/stopped at the budget/.test(pill), "the demo: after a $50 budget, the factory still runs (its simulated runs cost $0.00)", { pill, budgets: note.slice(0, 400) });
+        j.check(!/stopped/.test(pill) && /running/.test(pill), "the demo: after a $50 budget, the factory still runs (its simulated runs cost $0.00)", { pill, budgets: note.slice(0, 400) });
         j.check(/\$0\.00 of \$50\.00/.test(note), "the demo: the Budgets card says $0.00 of $50.00 spent", note.slice(0, 400));
         await p.screenshot({ path: `${j.dir}/${width}-08-demo-budget.png`, fullPage: true });
         j.check(p.qaErrors.length === 0, "the demo: no console error, page error or failed request", p.qaErrors.slice(0, 5));
@@ -197,11 +211,10 @@ await runJourney(
         j.check(lost.length > 0 && lost.every((u) => u.countedUsd !== null), "the record: each lost run counts at an estimate (the dearest run on its model)", lost);
         j.check(!budgetStop(s), "the factory does not stop: the spend and the lost runs' estimate stay below the $40.00 budget", { why: budgetStop(s)?.why, counted: counted(s) });
         await p.goto(`${floor.origin}/#/overview`);
-        await p.getByRole("region", { name: /^Building budget/ }).waitFor();
-        const pill = flat(await p.getByRole("navigation", { name: "Vision and the factory" }).innerText());
-        j.check(!/stopped at the budget/.test(pill), "the Factory pill does not say stopped at the budget", pill);
-        const card = flat(await p.getByRole("region", { name: /^Building budget/ }).innerText());
-        j.check(/lost when the service stopped/.test(card), "Home: the building budget card says what the estimate is for", card.slice(0, 400));
+        const card = await buildingLine(p);
+        const pill = await homeItem(p);
+        j.check(!/stopped/.test(pill), "Home's item does not say stopped at the budget", pill);
+        j.check(/lost when the service stopped/.test(card), "Home: the Building line's reasons say what the estimate is for", card.slice(0, 400));
         await p.screenshot({ path: `${j.dir}/${width}-09-floor-lost-runs.png`, fullPage: true });
         j.check(p.qaErrors.length === 0, "the floor fixture: no console error, page error or failed request", p.qaErrors.slice(0, 5));
       } finally {
