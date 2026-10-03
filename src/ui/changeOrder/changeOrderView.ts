@@ -89,7 +89,8 @@ function lineWords(s: State, co: ChangeOrder, v: M.ChangeOrderLineView): LineWor
       if (line.kind !== "retire") state = peReviewWords(v.review);
       break;
     case "suggested":
-      when = co.status === "open" ? "It waits for your go-ahead: nothing changed yet." : "Not applied: you closed the change order as it stood.";
+      // The pill says it waits, or that it was not applied; this says what that means.
+      when = co.status === "open" ? "Nothing changed yet." : "You closed the change order as it stood.";
       state = { word: co.status === "open" ? "Waits for your go-ahead" : "Not applied", tone: co.status === "open" ? "you" : "neutral" };
       break;
     case "undone":
@@ -267,10 +268,10 @@ export function changeOrderWords(s: State, co: ChangeOrder): ChangeOrderWords {
   };
 }
 
-/** An open change order in one line, for the Tasks page: its updates so far, and what waits for you. */
+/** An open change order in one line, for the Tasks page: what waits for you, or else its updates so far. */
 export function changeOrderLine(s: State, co: ChangeOrder): { title: string; text: string; tone: "you" | "info" } {
   const w = changeOrderWords(s, co);
-  return { title: w.heading, text: `${w.summary}.${w.waits ? ` ${w.waits.words}` : ""}`, tone: w.waits ? "you" : "info" };
+  return { title: w.heading, text: w.waits ? w.waits.words : `${w.summary}.`, tone: w.waits ? "you" : "info" };
 }
 
 /** The change orders the Tasks page names: every open one, newest first. */

@@ -90,8 +90,8 @@ describe("the change order screen", () => {
     const before = page(a.s);
     expect(before.text).toContain("It waits for you. 5 of the lead's updates wait for your go-ahead. Apply or dismiss each update below, or close it as it stands.");
     expect(before.text).toContain("5 updates: 5 waiting for your go-ahead Waits for you");
-    expect(before.rows[0]).toBe("Updated T-002 → builds Trip plan v2 Waits for your go-ahead T-002 Trip list screen It waits for your go-ahead: nothing changed yet. The lead: “Day list first, the map below it.” Apply Dismiss");
-    expect(before.rows[4]).toBe("New A new task → builds Packing list v1 Waits for your go-ahead It waits for your go-ahead: nothing changed yet. The lead: “One shared list per trip.” Apply Dismiss");
+    expect(before.rows[0]).toBe("Updated T-002 → builds Trip plan v2 Waits for your go-ahead T-002 Trip list screen Nothing changed yet. The lead: “Day list first, the map below it.” Apply Dismiss");
+    expect(before.rows[4]).toBe("New A new task → builds Packing list v1 Waits for your go-ahead Nothing changed yet. The lead: “One shared list per trip.” Apply Dismiss");
     expect([count(before.text, "Apply Dismiss"), count(before.text, "Undo")]).toEqual([5, 0]);
     // Your go-ahead on the spec update: it applies, and waits for the PE.
     const lines = order(a.s).lines!;
@@ -101,7 +101,7 @@ describe("the change order screen", () => {
     // You dismiss one and close the rest as it stands: they are not applied, and nothing is left to do on them.
     const dismissed = M.dismissSteering(applied, a.setId, lines[4].changeId, at(31)).state;
     const closed = page(runCommand(dismissed, "closeChangeOrder", { rev: 2 }, at(32)).state);
-    expect(closed.rows[1]).toBe("Revision A new task revises T-001 once it lands → builds Trip plan v2 Not applied Not applied: you closed the change order as it stood. The lead: “The map moves below the days.”");
+    expect(closed.rows[1]).toBe("Revision A new task revises T-001 once it lands → builds Trip plan v2 Not applied You closed the change order as it stood. The lead: “The map moves below the days.”");
     expect(closed.rows[4]).toBe(`New A new task → builds Packing list v1 Dismissed Dismissed by you, ${t(31)}. The lead: “One shared list per trip.”`);
     expect(count(closed.text, "Apply")).toBe(0);
     expect(closed.text).toContain("5 updates: 1 waiting for PE review, 3 not applied, 1 dismissed Closed");
@@ -148,7 +148,7 @@ describe("the ways to a change order", () => {
     const s = answerChangeOrder(f.s, { rev: 2, updates: [] }, 20).s;
     expect(needsYouItems(s, T0).find((i) => i.key === "change-order-2")).toMatchObject({ action: "Open", href: "#/tasks/change-order/2" });
     const board = renderScreen(<Board />, s);
-    expect(visible(board)).toContain("Change order 2 · from Lock in 2 No updates: the lead's answer gave none. Not handled: T-001, T-002, T-003, T-004 and Packing list v1 (no task yet). Open it");
+    expect(visible(board)).toContain("Change order 2 · from Lock in 2 Not handled: T-001, T-002, T-003, T-004 and Packing list v1 (no task yet). Open it");
     expect(board).toContain('href="#/tasks/change-order/2"');
     // Closed, it leaves the Tasks page.
     expect(visible(renderScreen(<Board />, runCommand(s, "closeChangeOrder", { rev: 2 }, at(30)).state))).not.toContain("Change order 2");
