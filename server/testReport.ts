@@ -4,9 +4,10 @@
 //
 // Repository code writes the file, so it is hostile input:
 // - Its path stays inside the copy. A report the change itself carries is removed before the commands run
-//   (`clearReport`), so only this run's report counts. The folder is resolved and must stay inside the copy (no
-//   symbolic link out), the file is opened without following a link and without blocking (a named pipe), and only a
-//   regular file is read.
+//   (`clearReport`), so only a report this run writes is read. The change's own test script writes it, so this stops
+//   a stale or committed file, not a false result: the code review judges the tests. The folder is resolved and must
+//   stay inside the copy (no symbolic link out), the file is opened without following a link and without blocking (a
+//   named pipe), and only a regular file is read.
 // - At most 4 MiB.
 // - No markup declaration at all: a DOCTYPE, ENTITY or any other "<!" outside a CDATA section, a comment, a processing
 //   instruction or a quoted value in a tag is refused before parsing, so no entity beyond XML's own five is expanded
