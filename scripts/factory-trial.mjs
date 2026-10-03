@@ -449,29 +449,52 @@ function stuck(st, t, answered) {
 /**
  * Wait until the task landed (the fake runtime: finished and integrated), answering each decision put to the owner
  * with "fix", as an owner who wants the work right would, and recording the answer. Stops early when the trial paused
- * at the cap, or the task cannot go on by itself.
+ * at the cap, or the task cannot go on by itself; then, as after a time-out, the checks still run on the state as it
+ * is, so the record shows how far the task got and what it cost.
  */
 async function build(id) {
   const answers = [];
-  const { s } = await until(
-    "the task to land",
-    async (x) => {
-      const t = x.state.tasks.find((y) => y.id === id);
-      if (capPause) return true;
-      for (const d of x.state.decisions.filter((y) => y.taskId === id && y.status === "open" && y.routedTo === "user")) {
-        if (answers.length >= MAX_ANSWERS) break;
-        await cmd("decideFinding", { decisionId: d.id, decision: "fix", note: "Answered by the factory trial, as the owner: fix it. Keep public/split.js and test/rules-r3.test.js as they are." });
-        answers.push({ decision: d.id, kind: d.kind, finding: d.finding.title });
-        record("decision answered for the owner: fix", { decision: d.id, kind: d.kind, finding: d.finding.title });
-      }
-      const why = stuck(x.state, t, answers.length);
-      if (why) throw new Error(`The task cannot go on by itself: ${why}`);
-      return FAKE ? t.lifecycle === "done" && t.integration?.status === "integrated" : !!t.integration?.landed;
-    },
-    minutes(TIMEOUT_MIN),
-  );
-  evidence.decisionsAnswered = answers;
-  return s.state;
+  try {
+    const { s, waitedMs } = await until(
+      "the task to land",
+      async (x) => {
+        const t = x.state.tasks.find((y) => y.id === id);
+        if (capPause) return true;
+        for (const d of x.state.decisions.filter((y) => y.taskId === id && y.status === "open" && y.routedTo === "user")) {
+          if (answers.length >= MAX_ANSWERS) break;
+          await cmd("decideFinding", { decisionId: d.id, decision: "fix", note: "Answered by the factory trial, as the owner: fix it. Keep public/split.js and test/rules-r3.test.js as they are." });
+          answers.push({ decision: d.id, kind: d.kind, finding: d.finding.title });
+          record("decision answered for the owner: fix", { decision: d.id, kind: d.kind, finding: d.finding.title });
+        }
+        const why = stuck(x.state, t, answers.length);
+        if (why) throw new Error(`The task cannot go on by itself: ${why}`);
+        return FAKE ? t.lifecycle === "done" && t.integration?.status === "integrated" : !!t.integration?.landed;
+      },
+      minutes(TIMEOUT_MIN),
+    );
+    record(capPause ? "stopped waiting: paused at the cap" : FAKE ? "task finished and integrated" : "task landed", { tookMs: waitedMs });
+    return capPause ? await stopRuns() : s.state;
+  } catch (e) {
+    evidence.error = e instanceof Error ? e.message : String(e);
+    record("stopped waiting", { why: evidence.error });
+    return await stopRuns();
+  } finally {
+    evidence.decisionsAnswered = answers;
+  }
+}
+
+/** The trial stopped waiting early: pause the project, so nothing more runs or spends, and wait for the runs to stop. */
+async function stopRuns() {
+  const busy = (x) => x.attempts.some((a) => a.outcome === "running" || a.outcome === "stopping") || x.leadRuns.some((r) => r.outcome === "running" || r.outcome === "stopping") || x.studio.runs.some((r) => r.status === "running" || r.status === "stopping");
+  try {
+    if (!(await state()).state.project.hold) await cmd("pauseProject");
+    const { s } = await svc.until("the runs to stop", (x) => !busy(x.state), { timeoutMs: minutes(3), pollMs: 1000 });
+    record("project paused and its runs stopped");
+    return s.state;
+  } catch (e) {
+    record("the runs did not all stop", { why: e instanceof Error ? e.message : String(e) });
+    return (await state()).state;
+  }
 }
 
 /** The checks of what the factory recorded, and the record's details. */
@@ -547,7 +570,7 @@ async function judge(st, id, items) {
 
   const spend = claudeSpend(st, spendOpts);
   evidence.spend = { claudeUsd: Number(spend.usd.toFixed(4)), claudeRunsWithoutCost: spend.unknown.length, buildingUsd: Number(Spend.buildingSpend(st).usd.toFixed(4)) };
-  check("cap", spend.usd <= CAP_USD && !capPause, { claude: money(spend.usd), cap: money(CAP_USD), withoutCost: spend.unknown.map((u) => `${u.id} at ${money(u.countedUsd)}`), ...(capPause ? { pausedAtCap: capPause } : {}), ...(FAKE ? { note: "simulated runs record no usage and spend nothing" } : {}) });
+  check("cap", spend.usd <= CAP_USD, { claude: money(spend.usd), cap: money(CAP_USD), withoutCost: spend.unknown.map((u) => `${u.id} at ${money(u.countedUsd)}`), ...(capPause ? { pausedAtCap: capPause } : {}), ...(FAKE ? { note: "simulated runs record no usage and spend nothing" } : {}) });
 
   evidence.ok = Object.keys(evidence.checks).length === EXPECTED_CHECKS && Object.values(evidence.checks).every((c) => c.ok);
   if (Object.keys(evidence.checks).length !== EXPECTED_CHECKS) log(`✗ ${Object.keys(evidence.checks).length} checks ran; PASSED needs exactly ${EXPECTED_CHECKS}`);
