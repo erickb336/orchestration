@@ -12,8 +12,10 @@ import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { IMAGE_TABLE, environmentPlan, environmentSource, parseDevcontainer, type EnvironmentPlan } from "../../src/domain/environment";
 import { DEFAULT_INSTALL, type CaptureItem, type ItemCapture } from "../../src/domain/studio/evidence";
+import type { CheckRunReport } from "../checks";
 import { removeTree } from "../environment/copy";
 import { EnvironmentChecks } from "../environment/runner";
+import type { AdapterEvent } from "../runtimes/types";
 import { RECORDER_IMAGE, defaultRecorderRoot, dockerEnv, dockerReady, runDocker } from "./container";
 import { captureEvidence } from "./evidence";
 import { validateCast } from "./terminal";
@@ -277,6 +279,39 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
       const events = got.castText.trim().split("\n").slice(1).map((l) => JSON.parse(l) as [number, string, string]);
       expect(events.length).toBeGreaterThan(5);
       expect(events.at(-1)![0]).toBeGreaterThan(0.5);
+    },
+    900_000,
+  );
+
+  it.skipIf(!ready.ok)(
+    "reuses what the checks prepared, by its key; a preview that ends says so at once, with its log",
+    async () => {
+      // E1's checks first, on the same project and the same prepare inputs.
+      const plan = settingPlan("Node", [["npm", "ci"]]);
+      const project = `${TEST_ID}-reuse`;
+      const workspace = change(join(ENV_FIXTURES, "node"));
+      const id = "chk-reuse";
+      const checks = await new Promise<AdapterEvent>((res) => {
+        const off = lender.onEvent((e) => {
+          if (e.attemptId !== id || (e.type !== "completed" && e.type !== "failed" && e.type !== "stopped")) return;
+          off();
+          res(e);
+        });
+        lender.start({ attemptId: id, taskId: "T1", stepId: "C1", workspace, target: SHA, commands: [{ id: "test", label: "npm test", kind: "check", argv: ["npm", "test"], timeoutMs: 600_000 }], runTimeoutMs: 1_500_000, sandbox: "none", prepareNetwork: true, env: {}, tmpDir: join(dir, "chk.tmp"), cacheDir: join(dir, "chk.cache"), logDir: join(dir, "chk.logs"), environment: { plan, project } });
+      });
+      if (checks.type !== "completed") throw new Error(JSON.stringify(checks).slice(0, 400));
+      const record = (checks.checks as CheckRunReport).environment as { prepare: string; key: string };
+      expect(record.prepare).toBe("ran");
+
+      const out = join(dir, "evidence");
+      const t0 = Date.now();
+      const r = await captureEvidence({ source: workspace, sha: SHA, items: [PAGE], preview: { rev: 1, install: [], preview: ["node", "missing-server.js"], port: 8000 }, outDir: out, root: ROOT, environment: { plan, project }, lender, attemptId: "ev-reuse" });
+      timings.push(`a preview that ends, in its environment ${((Date.now() - t0) / 1000).toFixed(1)} s (prepare reused)`);
+      expect(r.path).toMatchObject({ via: "environment", prepare: "reused", key: record.key });
+      expect(r.items).toEqual([{ ...PAGE, status: "none", reason: "preview-did-not-start", detail: "The preview command ended (exit 1) before port 8000 opened.", log: expect.stringMatching(/Cannot find module '\/work\/missing-server\.js'/) }]);
+      // Well within the 60 s wait for the port.
+      expect(Date.now() - t0).toBeLessThan(45_000);
+      expect(listed(out)).toEqual([]);
     },
     900_000,
   );

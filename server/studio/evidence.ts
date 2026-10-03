@@ -814,8 +814,21 @@ async function screensInEnvironment(c: EnvironmentCapture, p: PreparedCopy): Pro
       tooLarge = true;
       void run.stop();
     }, 1000);
+    // The browser cannot see the preview's process: when the preview ends, the service stops the browser, so a preview
+    // that crashes costs a second, not the whole wait for its port.
+    let browserDone = false;
+    const previewWatch = (async () => {
+      while (!browserDone) {
+        await new Promise((res) => setTimeout(res, 1000));
+        if (browserDone) return;
+        const st = await runDocker(p.docker, ["inspect", "--format", "{{.State.Running}}", app], { env: p.denv, timeoutMs: 15_000 });
+        if (st.code === 0 && st.stdout.trim() === "false") return void run.stop();
+      }
+    })();
     const r = await run.done;
+    browserDone = true;
     clearInterval(watch);
+    await previewWatch;
     const removed = await run.remove();
     if (!removed.gone) c.log(`evidence: ${removed.reason}`);
     c.setRunning(undefined);
