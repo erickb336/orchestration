@@ -52,6 +52,39 @@ describe("the argument lists", () => {
     expect(values(args, "--cap-drop")).toEqual(["ALL"]);
   });
 
+  it("preview (unit E2): --network none, detached, PORT set, the run's hardening and its one mount", () => {
+    const args = phaseArgs({ ...base, name: "orc-env-preview-1-abc", cache: undefined, argv: ["python3", "serve.py"], phase: { kind: "preview", port: 8000 } });
+    expect(args.slice(0, 2)).toEqual(["run", "--detach"]);
+    expect(args).not.toContain("--rm");
+    expect(values(args, "--network")).toEqual(["none"]);
+    expect(values(args, "--env")).toEqual(expect.arrayContaining(["PORT=8000", "BROWSER=none", "HTTPS_PROXY=", "HTTP_PROXY="]));
+    expect(values(args, "--env").filter((e) => /PROXY=./i.test(e))).toEqual([]);
+    expect(values(args, "--mount")).toEqual([`type=bind,source=${base.work},target=${WORK}`]);
+    expect(values(args, "--user")).toEqual([ENV_USER]);
+    expect(values(args, "--cap-drop")).toEqual(["ALL"]);
+    expect(values(args, "--security-opt")).toEqual(["no-new-privileges"]);
+    expect(values(args, "--label")).toEqual(["orchestrator.environment=preview"]);
+    expect(args).not.toContain("--add-host");
+    expect(args).not.toContain("--publish");
+    expect(() => phaseArgs({ ...base, cache: undefined, phase: { kind: "preview", port: 80 } })).toThrow(/not a port/);
+  });
+
+  it("session (unit E2): created with a terminal, --network none, a terminal's variables instead of CI and NO_COLOR", () => {
+    const args = phaseArgs({ ...base, name: "orc-env-session-1-abc", cache: undefined, argv: ["bash", "--noprofile", "--norc", "-i"], phase: { kind: "session" } });
+    expect(args.slice(0, 3)).toEqual(["create", "--tty", "--interactive"]);
+    expect(args).not.toContain("--rm");
+    expect(values(args, "--network")).toEqual(["none"]);
+    const env = values(args, "--env");
+    expect(env).toEqual(expect.arrayContaining(["TERM=xterm-256color", "PS1=> ", "CI=", "NO_COLOR=", "HTTPS_PROXY="]));
+    expect(env).not.toContain("CI=1");
+    expect(env).not.toContain("NO_COLOR=1");
+    expect(values(args, "--mount")).toEqual([`type=bind,source=${base.work},target=${WORK}`]);
+    expect(values(args, "--user")).toEqual([ENV_USER]);
+    expect(values(args, "--cap-drop")).toEqual(["ALL"]);
+    expect(values(args, "--entrypoint")).toEqual(["bash"]);
+    expect(args.slice(args.indexOf(base.image) + 1)).toEqual(["--noprofile", "--norc", "-i"]);
+  });
+
   it("an ended prepare container becomes the next image", () => {
     expect(commitArgs("orc-env-prep-1-abc")).toEqual(["commit", "--change", "LABEL orchestrator.environment=prepared", "orc-env-prep-1-abc"]);
     expect(() => commitArgs("-x")).toThrow(/not a container name/);
