@@ -3,6 +3,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 
 /** Tests that start a real Chrome, a Docker recording or a capture of evidence: slow, and heavy on CPU and memory (Colima has 2 CPUs and 2 GB). */
 const HEAVY_TESTS = [
+  "server/environment/environment.docker.test.ts",
   "server/http.browser.test.ts",
   "server/studio/container.test.ts",
   "server/studio/escape.test.ts",
