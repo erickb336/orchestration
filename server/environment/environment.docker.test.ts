@@ -150,8 +150,11 @@ describe(`the project environment, in Docker${skipReason}`, () => {
       // the Mac's address) and the Docker VM's SSH port, so a leak to any of the hostile targets would show.
       const reach = (host: string, p: number) => `new Promise((r) => require("node:net").connect(${p}, "${host}").on("connect", function () { this.destroy(); r("CONNECTED") }).on("error", (e) => r(e.code)))`;
       const control = await runDocker(docker!, ["run", "--rm", "--add-host", "orchestrator-host:host-gateway", "--user", "10001:10001", "--entrypoint", "node", PROXY_IMAGE, "-e", `Promise.all([${reach("orchestrator-host", port)}, ${reach("192.168.5.2", port)}, ${reach("172.17.0.1", 22)}]).then((x) => console.log(x.join(" ")))`], { env: dockerEnv(process.env), timeoutMs: 60_000 });
-      expect(control.stdout.trim()).toBe("CONNECTED CONNECTED CONNECTED");
-      expect(hits).toBe(2);
+      // The host gateway reaches the canary on every Docker. The Mac's address (192.168.5.2) and the VM's SSH port exist
+      // only under Colima; on a Linux host 172.17.0.1 is the host itself, and its SSH port may be closed.
+      const reached = control.stdout.trim().split(" ");
+      expect(reached[0], control.stdout).toBe("CONNECTED");
+      expect(hits).toBe(reached.slice(0, 2).filter((x) => x === "CONNECTED").length);
       hits = 0;
       // No route or no answer: a refusal (ECONNREFUSED) would mean a host answered.
       const unreachable = /^(ENETUNREACH|EHOSTUNREACH|TIMEOUT)$/;

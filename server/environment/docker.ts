@@ -28,8 +28,17 @@ import { randomBytes } from "node:crypto";
 /** The official Node image the recorder's Dockerfile also pins: the proxy runs in it. */
 export const PROXY_IMAGE = "node:22-trixie-slim@sha256:b26b04c123d9ff8ab646ceb18b9d75a1173acf64b9a401094b906d27b29338d4";
 export const PROXY_PORT = 3128;
-/** Every container of the environment runs as this user, never as root. */
-export const ENV_USER = "10001:10001";
+/**
+ * Every container of the environment runs as this computer's own user, never as root. On a Linux host a bind mount keeps
+ * the folder's owner, so only that user can write the mounted copy and cache (0700), and the service can then remove what
+ * the container wrote. Docker Desktop and Colima map every user, so the same user works there. A service that runs as
+ * root (or with no user ids, on Windows) uses a fixed unprivileged user instead.
+ */
+export const ENV_USER = envUser(process.getuid?.(), process.getgid?.());
+
+export function envUser(uid: number | undefined, gid: number | undefined): string {
+  return uid && gid !== undefined ? `${uid}:${gid}` : "10001:10001";
+}
 export const WORK = "/work";
 export const CACHE = "/cache";
 /** HOME inside the container's own file system (/var/tmp is writable by every user in the official images). */

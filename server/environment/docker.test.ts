@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, readlinkSync, symlinkSync, writeFileSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CACHE, ENV_USER, PROXY_IMAGE, WORK, buildArgs, commitArgs, networkArgs, phaseArgs, proxyArgs } from "./docker";
+import { CACHE, ENV_USER, PROXY_IMAGE, WORK, buildArgs, commitArgs, envUser, networkArgs, phaseArgs, proxyArgs } from "./docker";
 import { addedEntries, cloneEntries, copyWorktree, listTree, prepareInputs, prepareKey, removeTree } from "./copy";
 
 /** The value after each occurrence of a flag, among docker's own options (before the image). */
@@ -13,6 +13,16 @@ const values = (args: string[], flag: string) => {
   const opts = args.findIndex((a) => IMAGES.test(a));
   return args.slice(0, opts < 0 ? undefined : opts).flatMap((a, i, xs) => (a === flag ? [xs[i + 1]] : []));
 };
+
+describe("the containers' user", () => {
+  it("is this computer's user, so a Linux host's mounted folders stay writable; never root", () => {
+    expect(envUser(1001, 118)).toBe("1001:118");
+    expect(envUser(501, 20)).toBe("501:20");
+    expect(envUser(0, 0)).toBe("10001:10001");
+    expect(envUser(undefined, undefined)).toBe("10001:10001");
+    expect(ENV_USER).not.toMatch(/^0:/);
+  });
+});
 
 describe("the argument lists", () => {
   const base = { name: "orc-env-prep-1-abc", image: "python:3.13@sha256:" + "a".repeat(64), work: "/Users/me/.cache/orchestrator/environment/p/runs/a1/work", cache: "/Users/me/.cache/orchestrator/environment/p/cache", argv: ["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"] };
