@@ -1,0 +1,40 @@
+/* The factory floor (ORC-029 pass 6): Home after the start. */
+
+/* The two budgets side by side, as equals; stacked when narrow (the kit's grid rule). */
+.ff-budgets { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 860px) { .ff-budgets { grid-template-columns: minmax(0, 1fr); } }
+.ff-budgets .k-card__body { display: grid; gap: var(--space-1); align-content: start; }
+.ff-figure { margin: 0; font-size: var(--fs-h3); font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.ff-stop { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); margin: var(--space-1) 0 0; }
+
+/* One line per area: the area on the left, its tasks on a belt to the right; the area above its belt when narrow. */
+.ff-lines { list-style: none; margin: var(--space-2) 0 0; padding: 0; display: grid; gap: var(--space-3); }
+.ff-line { display: grid; grid-template-columns: minmax(8rem, 11rem) minmax(0, 1fr); gap: var(--space-3); align-items: center; }
+@media (max-width: 860px) { .ff-line { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); } }
+.ff-line__area { display: grid; gap: 2px; color: var(--text); text-decoration: none; min-width: 0; overflow-wrap: anywhere; }
+.ff-line__area:hover b { text-decoration: underline; }
+
+.ff-belt {
+  list-style: none; margin: 0; padding: var(--space-2); display: flex; flex-wrap: wrap; gap: var(--space-2);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-control); min-width: 0;
+  border-bottom: 2px dashed var(--border-strong);
+}
+.ff-belt > li { min-width: 0; max-width: 100%; }
+
+/* One task on the belt: its station, then its id and title, then what is marked on it. */
+.ff-job {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); max-width: 100%;
+  padding: 4px var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-chip);
+  background: var(--surface); color: var(--text); text-decoration: none; font-size: var(--fs-small);
+}
+.ff-job:hover { border-color: var(--border-strong); }
+.ff-job:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ff-job--moving { border-color: color-mix(in srgb, var(--st-work) 45%, var(--border)); }
+.ff-job--you { border-color: color-mix(in srgb, var(--st-you) 45%, var(--border)); }
+.ff-job--landed .ff-job__name { color: var(--muted); }
+.ff-job--more { color: var(--muted); }
+.ff-job__name { min-width: 0; overflow-wrap: anywhere; }
+
+/* Decided by the PE: the reasons under the call. */
+.ff-reasons { margin-top: var(--space-1); }
+.ff-reasons .k-disc__body { display: grid; gap: var(--space-1); }
