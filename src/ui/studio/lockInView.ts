@@ -40,6 +40,8 @@ export interface TouchedTaskLine {
 export interface LockInWords {
   /** The draft revision this summary describes: Lock in names it. */
   draftRev: number;
+  /** The digest of this summary (`summaryDigest`): Lock in names it, so a summary that changed is refused. */
+  summaryDigest: string;
   /** The revision the Lock in makes. */
   rev: number;
   /** How many changes go into force (added, changed and dropped). */
@@ -109,6 +111,7 @@ export function lockInWords(s: State): LockInWords {
   const changesWord = count(changes, "change");
   return {
     draftRev: sum.draftRev,
+    summaryDigest: B.summaryDigest(sum),
     rev: sum.inForceRev + 1,
     changes,
     heading: `${changesWord} ${changes === 1 ? "goes" : "go"} into force`,
@@ -125,8 +128,8 @@ export function lockInWords(s: State): LockInWords {
   };
 }
 
-/** The `lockIn` command for the summary the screen showed: it names that draft revision, so a changed draft is refused. */
-export const lockInRequest = (shownDraftRev: number) => ({ name: "lockIn" as const, args: { draftRev: shownDraftRev } });
+/** The `lockIn` command for the summary the screen showed: it names its draft revision and digest, so a changed summary is refused. */
+export const lockInRequest = (shown: B.SummarySeen) => ({ name: "lockIn" as const, args: { draftRev: shown.draftRev, summaryDigest: shown.summaryDigest } });
 
 /** Who acts after the Lock in, from the project's settings. */
 export function whoActsNext(s: State): string[] {

@@ -27,8 +27,8 @@ export function PreflightPage() {
   const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
   const building = state.project.stage === "building";
-  // The draft, the vision or what is open changed under the screen (another tab, the lead, a probe, a refused stale
-  // start): show the new pre-flight, and ask for the agreement again.
+  // The draft, the vision, the summary or what is open changed under the screen (another tab, the lead, a probe, a
+  // budget, a refused stale start): show the new pre-flight, and ask for the agreement again.
   useEffect(() => {
     if (building || busy || V.sameSeen(now, seen)) return;
     setSeen(now);
@@ -105,7 +105,7 @@ export function Preflight(p: PreflightProps) {
             </Banner>
           )}
           {p.stale && (
-            <Banner tone="you" title="The draft, the vision or what is open changed while you read.">
+            <Banner tone="you" title="The draft, the vision, the summary or what is open changed while you read.">
               This is the new pre-flight. Read it again, and agree again to start the factory.
             </Banner>
           )}

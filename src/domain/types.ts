@@ -1742,8 +1742,9 @@ export interface Landed {
 export class StaleWriteError extends Error {
   expected: number;
   actual: number;
-  constructor(expected: number, actual: number) {
-    super(`Stale write: edited revision ${expected}, current is ${actual}. Reload and reconcile.`);
+  /** `message`: what changed, when it is not the revision alone (the revisions may then be equal). */
+  constructor(expected: number, actual: number, message?: string) {
+    super(message ?? `Stale write: edited revision ${expected}, current is ${actual}. Reload and reconcile.`);
     this.name = "StaleWriteError";
     this.expected = expected;
     this.actual = actual;

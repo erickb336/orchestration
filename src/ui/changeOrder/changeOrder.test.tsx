@@ -9,7 +9,7 @@ import * as M from "../../domain/model";
 import { needsYouItems } from "../../domain/needsYou";
 import { blueprintScene } from "../../domain/testing/blueprintScene";
 import { answerChangeOrder, at, changeOrdered, fullAnswer, leadProposal, T0 } from "../../domain/testing/changeOrders";
-import { run } from "../../domain/testing/studio";
+import { lockInArgs, run } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
 import { Places } from "../App";
 import { Board } from "../Board";
@@ -119,7 +119,7 @@ describe("the change order screen", () => {
 
   it("names the tasks it did not touch in one line", () => {
     const sc = blueprintScene();
-    const s = runCommand(sc.s, "lockIn", { draftRev: sc.s.blueprint.draft.rev }, sc.at(400)).state;
+    const s = runCommand(sc.s, "lockIn", lockInArgs(sc.s), sc.at(400)).state;
     expect(page(s).text).toContain(`Not changed: ${sc.tasks.join} Join by link, ${sc.tasks.costs} Share costs, ${sc.tasks.data} Trip data API. They cite nothing that changed.`);
   });
 

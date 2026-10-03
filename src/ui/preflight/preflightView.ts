@@ -27,23 +27,27 @@ const list = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1)
 
 // ---------- what the owner saw (compare-and-set) ----------
 
-/** What the start names: the draft and vision revisions the owner saw, and the open items they confirm. */
+/**
+ * What the start names: the draft and vision revisions the owner saw, the digest of the Lock in summary the screen
+ * showed (the start records that summary), and the open items they confirm.
+ */
 export interface Seen {
   draftRev: number;
+  summaryDigest: string;
   visionRev: number;
   open: string[];
 }
 
 export function seenNow(s: State): Seen {
   const r = M.startFactoryRequest(s);
-  return { draftRev: r.draftRev, visionRev: r.visionRev, open: r.acceptOpen };
+  return { draftRev: r.draftRev, summaryDigest: r.summaryDigest, visionRev: r.visionRev, open: r.acceptOpen };
 }
 
-export const sameSeen = (a: Seen, b: Seen) => a.draftRev === b.draftRev && a.visionRev === b.visionRev && a.open.join("\n") === b.open.join("\n");
+export const sameSeen = (a: Seen, b: Seen) => a.draftRev === b.draftRev && a.summaryDigest === b.summaryDigest && a.visionRev === b.visionRev && a.open.join("\n") === b.open.join("\n");
 
-/** The `startFactory` command for what the screen showed and the settings chosen on it. A changed draft or vision is refused. */
+/** The `startFactory` command for what the screen showed and the settings chosen on it. A changed draft, summary or vision is refused. */
 export function startFactoryCommand(seen: Seen, settings: FactorySettings) {
-  return { name: "startFactory" as const, args: { agreed: true as const, draftRev: seen.draftRev, visionRev: seen.visionRev, settings, acceptOpen: seen.open } };
+  return { name: "startFactory" as const, args: { agreed: true as const, draftRev: seen.draftRev, summaryDigest: seen.summaryDigest, visionRev: seen.visionRev, settings, acceptOpen: seen.open } };
 }
 
 // ---------- the blueprint ----------

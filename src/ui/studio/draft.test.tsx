@@ -9,7 +9,7 @@ import * as M from "../../domain/model";
 import { buildSeed } from "../../domain/seed";
 import * as S from "../../domain/studio/studio";
 import { blueprintScene } from "../../domain/testing/blueprintScene";
-import { addScreen, openRound, peAgrees, run } from "../../domain/testing/studio";
+import { addScreen, lockInArgs, openRound, peAgrees, run } from "../../domain/testing/studio";
 import type { State } from "../../domain/types";
 import { renderScreen, testService, visible } from "../testStore";
 import { blueprintPlace, discardConfirm, draftHeading, draftLines, lockInBlocker } from "./draftView";
@@ -67,7 +67,7 @@ describe("the draft bar", () => {
     const { s, at } = blueprintScene();
     expect(discardConfirm(s)).toEqual({ title: "Discard the draft?", text: "Your 3 changes and 1 open item since Lock in 1 go. The draft becomes Lock in 1 again. The artifacts, your marks and your notes stay.", primaryLabel: "Discard the draft", danger: true });
     expect(lockInBlocker(s)).toBeUndefined();
-    const locked = runCommand(s, "lockIn", { draftRev: s.blueprint.draft.rev }, at(400)).state;
+    const locked = runCommand(s, "lockIn", lockInArgs(s), at(400)).state;
     expect(draftHeading(locked).title).toBe("Draft · 1 open item");
     expect(lockInBlocker(locked)).toBe("There is nothing to lock in: the draft holds only open items, which stay in the draft.");
   });
@@ -110,7 +110,7 @@ describe("the artifacts in the draft and in force", () => {
     expect(text).toContain(`v1 · in force (Lock in 1) ${tasks.plan} running`);
     // Both versions are framed: the draft's to mark, the one in force to look at.
     expect(html.match(/<iframe /g)).toHaveLength(2);
-    const after = runCommand(s, "lockIn", { draftRev: s.blueprint.draft.rev }, "2026-10-02T10:00:00.000Z").state;
+    const after = runCommand(s, "lockIn", lockInArgs(s), "2026-10-02T10:00:00.000Z").state;
     expect(studio(after).html).not.toContain('aria-label="v1, in force"');
   });
 });

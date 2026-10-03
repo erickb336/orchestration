@@ -15,7 +15,7 @@ import { buildSeed } from "../src/domain/seed";
 import * as B from "../src/domain/studio/blueprint";
 import * as R from "../src/domain/studio/runs";
 import * as S from "../src/domain/studio/studio";
-import { addScreen, openRound } from "../src/domain/testing/studio";
+import { addScreen, lockInArgs, openRound } from "../src/domain/testing/studio";
 import { startFactoryArgs } from "../src/domain/testing/factory";
 import type { State } from "../src/domain/types";
 import { Scheduler } from "./scheduler";
@@ -79,7 +79,7 @@ describe("the format 18 → 19 migration", () => {
     // The upgraded project works: a budget can be set, and the owner's Lock in is there (with nothing to lock in yet).
     upgraded.command("setBudgets", { buildingUsd: 25, maintenanceUsdPerMonth: 10 }, "b1", new Date().toISOString());
     expect(upgraded.read().state.project.budgets).toEqual({ buildingUsd: 25, maintenanceUsdPerMonth: 10 });
-    expect(() => upgraded.command("lockIn", { draftRev: 0 }, "l1", new Date().toISOString())).toThrow("There is nothing to lock in: the draft is the version in force.");
+    expect(() => upgraded.command("lockIn", lockInArgs(upgraded.read().state), "l1", new Date().toISOString())).toThrow("There is nothing to lock in: the draft is the version in force.");
     const check = new DatabaseSync(path);
     expect((check.prepare("SELECT format FROM state WHERE id = 1").get() as { format: number }).format).toBe(19);
     expect(check.prepare("SELECT value FROM meta WHERE key LIKE 'backup_format_18_%'").get()).toBeDefined();

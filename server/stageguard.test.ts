@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as B from "../src/domain/studio/blueprint";
 import { startFactoryArgs } from "../src/domain/testing/factory";
-import { addScreen, openRound, peAgrees } from "../src/domain/testing/studio";
+import { addScreen, lockInArgs, openRound, peAgrees } from "../src/domain/testing/studio";
 import { ControlError, type State } from "../src/domain/types";
 import { CommandFailure, Store } from "./store";
 
@@ -173,7 +173,7 @@ describe("the owner-only Lock in, where state is written (pass 5)", () => {
     expect(blueprint().revisions.map((r) => r.rev)).toEqual([1]);
     approved("Packing list");
     expect(blueprint().revisions).toHaveLength(1); // an approval changes only the draft
-    cmd("lockIn", { draftRev: blueprint().draft.rev });
+    cmd("lockIn", lockInArgs(store.read().state));
     expect(blueprint().revisions.map((r) => r.rev)).toEqual([1, 2]);
     expect(logged).not.toHaveBeenCalled();
   });
@@ -199,7 +199,7 @@ describe("the owner-only Lock in, where state is written (pass 5)", () => {
     cmd("startFactory", startFactoryArgs(store.read().state));
     approved("Packing list");
     bug.current = { command: "lockIn", apply: sneak };
-    expectRefusedRevision(() => cmd("lockIn", { draftRev: blueprint().draft.rev }), /the lockIn command made 2 revisions/);
+    expectRefusedRevision(() => cmd("lockIn", lockInArgs(store.read().state)), /the lockIn command made 2 revisions/);
   });
 
   it("no write may change or remove a revision in force: not the owner's lockIn, not an internal update", () => {
@@ -207,7 +207,7 @@ describe("the owner-only Lock in, where state is written (pass 5)", () => {
     cmd("startFactory", startFactoryArgs(store.read().state));
     approved("Packing list");
     bug.current = { command: "lockIn", apply: (s) => void (s.blueprint.revisions[0].items = []) };
-    expectRefusedRevision(() => cmd("lockIn", { draftRev: blueprint().draft.rev }), /the lockIn command changed or removed a revision in force/);
+    expectRefusedRevision(() => cmd("lockIn", lockInArgs(store.read().state)), /the lockIn command changed or removed a revision in force/);
     expectRefusedRevision(
       () =>
         store.update((s) => {

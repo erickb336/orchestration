@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CLIENT_HEADER } from "../src/api";
 import { SERVICE_COMMANDS } from "../src/domain/commands";
 import { startFactoryArgs } from "../src/domain/testing/factory";
-import { ABC, DESIGNER, sha } from "../src/domain/testing/studio";
+import { ABC, DESIGNER, lockInArgs, sha } from "../src/domain/testing/studio";
 import type { State } from "../src/domain/types";
 import { createHttpServer } from "./http";
 import { Scheduler } from "./scheduler";
@@ -93,7 +93,7 @@ describe("the studio's service commands at the HTTP boundary", () => {
     expect((await post({ name: "dropBlueprintItem", args: { itemId }, idempotencyKey: "owner-4" })).status).toBe(200);
     expect((await post({ name: "discardDraft", args: { draftRev: state().blueprint.draft.rev }, idempotencyKey: "owner-5" })).status).toBe(200);
     expect((await post({ name: "dropBlueprintItem", args: { itemId }, idempotencyKey: "owner-6" })).status).toBe(200);
-    expect((await post({ name: "lockIn", args: { draftRev: state().blueprint.draft.rev }, idempotencyKey: "owner-7" })).status).toBe(200);
+    expect((await post({ name: "lockIn", args: lockInArgs(state()), idempotencyKey: "owner-7" })).status).toBe(200);
     expect(state().blueprint.revisions.map((r) => r.items.map((i) => [i.title, i.status]))).toEqual([[["Trip plan", "approved"]], [["Trip plan", "dropped"]]]);
   });
 });

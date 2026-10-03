@@ -234,7 +234,7 @@ export const COMMANDS = {
    */
   startFactory: same((s, now, a) => {
     if (a.agreed !== true) throw new InvalidCommandError("agreed must be true: the factory starts only on your agreement");
-    return M.startFactory(s, { agreed: true, draftRev: int(a, "draftRev"), visionRev: num(a, "visionRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
+    return M.startFactory(s, { agreed: true, draftRev: int(a, "draftRev"), summaryDigest: str(a, "summaryDigest"), visionRev: num(a, "visionRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
   }),
   /** The device scope: at least one of desktop, mobile and terminal. Chosen in Vision, which stays open while the factory runs. */
   setDevices: same((s, now, a) =>
@@ -284,7 +284,7 @@ export const COMMANDS = {
    * agreement. `draftRev` is the draft revision the summary showed (compare-and-set). While building only: in Vision,
    * Start the factory is the first Lock in. Never the lead's, a setting's or Autopilot's.
    */
-  lockIn: same((s, now, a) => B.lockIn(s, int(a, "draftRev"), now)),
+  lockIn: same((s, now, a) => B.lockIn(s, { draftRev: int(a, "draftRev"), summaryDigest: str(a, "summaryDigest") }, now)),
   /**
    * Close a change order as it stands (pass 5): what the lead's updates left is recorded as not handled. Refused while
    * the lead is answering it. Each line keeps its own Undo, Apply and Dismiss (the steering commands). Never the lead's.

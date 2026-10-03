@@ -7,6 +7,7 @@ import { runCommand } from "../domain/commands";
 import * as M from "../domain/model";
 import { blueprintScene } from "../domain/testing/blueprintScene";
 import { inVision } from "../domain/testing/factory";
+import { lockInArgs } from "../domain/testing/studio";
 import type { State } from "../domain/types";
 import { Overview, visionDraftWords } from "./Overview";
 import { renderScreen, visible } from "./testStore";
@@ -36,7 +37,7 @@ describe("the vision editor while the factory runs", () => {
     );
     expect(renderScreen(<Overview />, saved)).toContain('href="#/vision/lock-in"');
     // After the Lock in, the text is in force and the draft holds none.
-    const locked = runCommand(saved, "lockIn", { draftRev: saved.blueprint.draft.rev }, at(401)).state;
+    const locked = runCommand(saved, "lockIn", lockInArgs(saved), at(401)).state;
     expect(visionDraftWords(locked)).toEqual({ building: true, text: "Weekend trips for friends, with one shared packing list." });
     expect(details(locked)).toContain(`Weekend trips for friends, with one shared packing list. Edit vision What changed from r${v.rev}: Locked in: Packing is shared`);
     expect(details(locked)).not.toContain("waits in the draft");
