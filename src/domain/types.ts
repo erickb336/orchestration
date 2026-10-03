@@ -1230,8 +1230,11 @@ export interface Message {
   taskId?: string;
 }
 
-/** "decisions": a run started because findings routed to the lead wait for its decision. */
-export type LeadTrigger = "message" | "planning" | "decisions";
+/**
+ * "decisions": a run started because findings routed to the lead wait for its decision. "pe-review": a run started
+ * because the PE sent new work back for the lead's revision (ORC-029 pass 5).
+ */
+export type LeadTrigger = "message" | "planning" | "decisions" | "pe-review";
 
 /** A run of the lead agent. Separate from task attempts: at most one is active at a time. */
 export interface LeadRun {
