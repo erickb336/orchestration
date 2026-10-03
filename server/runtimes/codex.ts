@@ -22,6 +22,7 @@ import type { GetAccountResponse } from "./codex-protocol/v2/GetAccountResponse"
 import type { ModelListResponse } from "./codex-protocol/v2/ModelListResponse";
 import type { SandboxPolicy } from "./codex-protocol/v2/SandboxPolicy";
 import type { ThreadItem } from "./codex-protocol/v2/ThreadItem";
+import type { ThreadReadResponse } from "./codex-protocol/v2/ThreadReadResponse";
 import type { ThreadStartParams } from "./codex-protocol/v2/ThreadStartParams";
 import type { TurnError } from "./codex-protocol/v2/TurnError";
 import type { TurnStartParams } from "./codex-protocol/v2/TurnStartParams";
@@ -41,12 +42,6 @@ const PINNED_CODEX_VERSION = "0.159.2";
  */
 export const CODEX_CLIENT_NAME = "orchestration";
 
-/**
- * Extra CLI arguments for every app-server we start. Both verified against 0.159.2:
- * `agents.enabled` is a typed boolean config field (rejected with "expected a boolean" for a string
- * under --strict-config), and `multi_agent` is a known feature flag (`codex features list` shows it
- * false with `--disable multi_agent`). Together they keep native subagents off.
- */
 /**
  * A run's private temp directory: a sibling of its worktree (never inside it, so nothing is committed). A designer's
  * studio run's is inside its staging folder, the one place it writes; only the files its manifest lists are
@@ -70,7 +65,27 @@ const isolated = (a: Assignment) => a.environment !== "local" || a.studio === tr
  * the service passes the trusted base's copy in the envelope as labelled project conventions instead.
  */
 export const PROJECT_DOC_ARGS = ["-c", "project_doc_max_bytes=0"];
-export const APP_SERVER_ARGS = ["app-server", "-c", "agents.enabled=false", "--disable", "multi_agent", ...PROJECT_DOC_ARGS];
+/**
+ * Native sub-agents off: every app-server we start but a research run's that allows them. Both verified against
+ * 0.159.2: `agents.enabled` is a typed boolean config field (rejected with "expected a boolean" for a string under
+ * --strict-config), and `multi_agent` is a known feature flag (`codex features list` shows it false with
+ * `--disable multi_agent`).
+ */
+export const SUBAGENTS_OFF_ARGS = ["-c", "agents.enabled=false", "--disable", "multi_agent"];
+export const APP_SERVER_ARGS = ["app-server", ...SUBAGENTS_OFF_ARGS, ...PROJECT_DOC_ARGS];
+
+/**
+ * A research run whose owner allows helpers (ORC-031): native sub-agents stay on (Codex's default), capped by Codex's
+ * own limit. Verified against 0.159.2: `agents.max_threads` is a typed alias of
+ * `agents.max_concurrent_threads_per_session` (a string is rejected with "expected usize"), and `agents.max_depth=1`
+ * keeps a sub-agent from starting its own.
+ */
+export function subagentArgs(cap: number): string[] {
+  return ["-c", `agents.max_threads=${Math.max(1, Math.floor(cap))}`, "-c", "agents.max_depth=1"];
+}
+
+/** Whether this run may start Codex's sub-agents: only a read-only run that the service allows helpers (31a). */
+const allowsSubagents = (a: Assignment) => !!a.allowSubagents && a.workspace.access === "read";
 
 /**
  * Worker isolation, parity with the Claude adapter (no settings, no MCP, no sub-agents, no web):
@@ -112,7 +127,9 @@ const CAPABILITIES: CapabilityMap = {
   // thread/resume exists; threads are persisted by Codex, but resume is not wired or tested.
   resume: "unverified",
   usageReporting: "supported",
-  // Native subagents are disabled at spawn; any that appear anyway are reported as activity only.
+  // Native sub-agents are off at every start but a read-only research run that allows them (ORC-031), and each one
+  // that starts is reported as `subagent` events. "supported" only with real runs that prove pause, cost, safety and
+  // the cap (docs/real-runs).
   childAgentTracking: "unsupported",
 };
 
@@ -166,6 +183,20 @@ interface Run {
   heldNotes: { id: string; text: string }[];
   /** Ids of every note that was held, so each outcome, whenever it comes, says so (`heldForTurn`). */
   heldIds: Set<string>;
+  /** The sub-agents its agent started (ORC-031), by sub-thread id. */
+  subs: Map<string, SubThread>;
+}
+
+/**
+ * One Codex sub-agent: a sub-thread of the run's thread, on the same app-server. Its notifications arrive on the run's
+ * connection with its own thread id, and its token totals come apart from the parent's (real run, ORC-031 31c).
+ */
+interface SubThread {
+  usage?: Usage;
+  /** Codex reports it on the thread (`thread/read`), not on the spawn. */
+  model?: string;
+  /** Its usage when its end was reported. A later turn (the parent's follow-up) counts in the parent's usage. */
+  usageAtEnd?: Usage;
 }
 
 /** The Codex CLI this project installs, or `codex` from the PATH. Shared with the check runner. */
@@ -192,6 +223,27 @@ function describeTurnError(err: TurnError | null | undefined): string | undefine
   if (info === "rateLimitExceeded" || info === "serverOverloaded") return `Codex is rate limited or overloaded; retry later. (${msg})`;
   if (info === "contextWindowExceeded") return `The Codex context window was exceeded. (${msg})`;
   return `Codex turn failed: ${msg}`;
+}
+
+/** A thread's token totals. `cachedInputTokens` is part of `inputTokens`; kept apart for its own price. */
+function totals(t: { inputTokens: number; cachedInputTokens: number; outputTokens: number }): Usage {
+  return { inputTokens: t.inputTokens, cachedInputTokens: t.cachedInputTokens, outputTokens: t.outputTokens };
+}
+
+const USAGE_KEYS = ["inputTokens", "cachedInputTokens", "outputTokens"] as const;
+
+function plus(a: Usage | undefined, b: Usage): Usage {
+  const out: Usage = { ...a };
+  for (const k of USAGE_KEYS) if (b[k] !== undefined) out[k] = (a?.[k] ?? 0) + b[k]!;
+  return out;
+}
+
+/** What `now` adds to `before`, or undefined when nothing grew. */
+function minus(now: Usage | undefined, before: Usage): Usage | undefined {
+  if (!now) return undefined;
+  const out: Usage = {};
+  for (const k of USAGE_KEYS) if ((now[k] ?? 0) > (before[k] ?? 0)) out[k] = now[k]! - (before[k] ?? 0);
+  return Object.keys(out).length ? out : undefined;
 }
 
 export class CodexAdapter implements RuntimeAdapter {
@@ -276,7 +328,7 @@ export class CodexAdapter implements RuntimeAdapter {
       child = this.spawnProcess(this.appServerArgs(a), false, { TMPDIR: runTmpDir(a), TMP: runTmpDir(a), TEMP: runTmpDir(a) });
     } catch (e) {
       // Keep the contract asynchronous: register, then fail on the next tick.
-      const placeholder = { a, done: false, timers: new Set(), notes: new Set(), heldNotes: [], heldIds: new Set() } as unknown as Run;
+      const placeholder = { a, done: false, timers: new Set(), notes: new Set(), heldNotes: [], heldIds: new Set(), subs: new Map() } as unknown as Run;
       this.runs.set(a.attemptId, placeholder);
       setImmediate(() => this.finish(placeholder, { type: "failed", attemptId: a.attemptId, message: this.spawnFailure(e) }));
       return;
@@ -292,6 +344,7 @@ export class CodexAdapter implements RuntimeAdapter {
       notes: new Set(),
       heldNotes: [],
       heldIds: new Set(),
+      subs: new Map(),
     };
     run.rpc = new JsonRpcConnection(child.stdout!, child.stdin!, {
       onNotification: (n) => this.onNotification(run, n),
@@ -342,8 +395,10 @@ export class CodexAdapter implements RuntimeAdapter {
         approvalPolicy: "never",
         sandbox: a.workspace.access === "write" ? "workspace-write" : "read-only",
         // Never written to ~/.codex/sessions, so no run shows up in the user's own Codex history. The adapter never
-        // resumes a thread; the run's record is the service's.
-        ephemeral: true,
+        // resumes a thread; the run's record is the service's. Except a run that may start sub-agents: Codex 0.159.2
+        // forks a sub-agent from its parent's session file, and on an ephemeral thread every spawn fails ("no rollout
+        // found for thread id"; real run, ORC-031 31c). Such a thread is archived when its run ends (`archiveOwn`).
+        ephemeral: !allowsSubagents(a),
       };
       const thread = await rpc.request("thread/start", threadParams);
       if (run.done) return;
@@ -518,6 +573,8 @@ export class CodexAdapter implements RuntimeAdapter {
     run.done = true;
     this.clearTimers(run);
     if (this.runs.get(run.a.attemptId) === run) this.runs.delete(run.a.attemptId);
+    // Sub-agents end with their parent: the app-server that runs them exits now.
+    e = this.endSubagents(run, e);
     // Notes the app-server has not answered settle first: the run is over, so they were not delivered.
     this.settleNotes(run, e.type === "completed" ? "the turn completed before Codex answered" : e.type === "stopped" ? "the run was stopped first" : "the run failed first");
     this.remember(run.a.attemptId);
@@ -539,6 +596,9 @@ export class CodexAdapter implements RuntimeAdapter {
   private onNotification(run: Run, n: ServerNotification) {
     if (run.done) return;
     const id = run.a.attemptId;
+    // A sub-agent's notifications carry its own thread id: they never decide the parent's turn, usage or failure.
+    const thread = (n.params as { threadId?: unknown } | undefined)?.threadId;
+    if (typeof thread === "string" && run.threadId && thread !== run.threadId) return this.onSubThread(run, thread, n);
     switch (n.method) {
       case "turn/started":
         if (!run.threadId || n.params.threadId === run.threadId) run.turnId ??= n.params.turn.id;
@@ -550,10 +610,8 @@ export class CodexAdapter implements RuntimeAdapter {
         return;
       }
       case "thread/tokenUsage/updated": {
-        // The thread's totals. `cachedInputTokens` is part of `inputTokens` (Codex derives its non-cached input as the
-        // difference); kept apart so it is priced at the cached-input price.
-        const t = n.params.tokenUsage.total;
-        run.usage = { inputTokens: t.inputTokens, cachedInputTokens: t.cachedInputTokens, outputTokens: t.outputTokens };
+        // The parent thread's own totals; each sub-agent's come apart, with its thread id (real run, ORC-031 31c).
+        run.usage = totals(n.params.tokenUsage.total);
         return;
       }
       case "model/rerouted":
@@ -622,13 +680,84 @@ export class CodexAdapter implements RuntimeAdapter {
       case "webSearch":
         note("Web search");
         return;
-      case "collabAgentToolCall":
       case "subAgentActivity":
-        note("Native Codex subagent activity observed (not tracked by Orchestrator)");
+        // Codex 0.159.2 reports a spawn this way (real run, ORC-031 31c), with no ask: its task path stands in.
+        if (item.kind === "started") this.subStarted(run, item.agentThreadId, `Codex sub-agent ${item.agentPath}`);
+        return;
+      case "collabAgentToolCall":
+        // The other form of a spawn, with the ask and the model. A spawn Codex refuses (over `agents.max_threads`)
+        // never ran and names no thread.
+        if (item.tool === "spawnAgent" && item.status !== "failed") for (const t of item.receiverThreadIds) this.subStarted(run, t, item.prompt ?? "", item.model ?? undefined);
         return;
       default:
         return;
     }
+  }
+
+  // ---------------------------------------------------------------- sub-agents (ORC-031)
+
+  /** Report a sub-agent's start once, and ask Codex for its model. Its usage never counts in the parent's. */
+  private subStarted(run: Run, threadId: string, asked: string, model?: string) {
+    if (run.subs.has(threadId)) return;
+    const sub: SubThread = { model };
+    run.subs.set(threadId, sub);
+    this.emit({ type: "subagent", attemptId: run.a.attemptId, subagent: { phase: "started", id: threadId, asked, ...(model ? { model } : {}), usageInParent: false } });
+    if (model) return;
+    run.rpc.request("thread/read", { threadId, includeTurns: false }).then(
+      (r) => {
+        sub.model ??= (r as ThreadReadResponse | undefined)?.thread?.model ?? undefined;
+      },
+      () => {
+        /* unknown: the service prices it at the parent's model */
+      },
+    );
+  }
+
+  /** A sub-thread's notification: its usage, and its end when its turn ends. Nothing else of it reaches the run. */
+  private onSubThread(run: Run, threadId: string, n: ServerNotification) {
+    switch (n.method) {
+      case "thread/tokenUsage/updated":
+        this.subStarted(run, threadId, ""); // one whose spawn was not seen still counts
+        run.subs.get(threadId)!.usage = totals(n.params.tokenUsage.total);
+        return;
+      case "turn/started": {
+        const sub = run.subs.get(threadId);
+        if (!sub) return this.subStarted(run, threadId, "");
+        if (sub.usageAtEnd) this.emit({ type: "activity", attemptId: run.a.attemptId, note: "A helper ran again after it ended: its further usage counts in this run's own" });
+        return;
+      }
+      case "turn/completed": {
+        const sub = run.subs.get(threadId);
+        if (!sub || sub.usageAtEnd) return;
+        const status = n.params.turn.status;
+        this.subEnded(run, threadId, sub, status === "completed" ? "completed" : status === "interrupted" ? "stopped" : "failed");
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  private subEnded(run: Run, threadId: string, sub: SubThread, how: "completed" | "failed" | "stopped") {
+    sub.usageAtEnd = sub.usage ?? {};
+    this.emit({ type: "subagent", attemptId: run.a.attemptId, subagent: { phase: "ended", id: threadId, how, ...(sub.model ? { model: sub.model } : {}), ...(sub.usage ? { usage: { ...sub.usage } } : {}) } });
+  }
+
+  /**
+   * As the run ends: a sub-agent still running is stopped (its app-server exits), and the usage of a sub-agent's turns
+   * after its reported end (the parent's follow-ups) is added to the run's own, so no token goes uncounted.
+   */
+  private endSubagents(run: Run, e: AdapterEvent): AdapterEvent {
+    let extra: Usage | undefined;
+    for (const [threadId, sub] of run.subs) {
+      if (!sub.usageAtEnd) this.subEnded(run, threadId, sub, "stopped");
+      else {
+        const more = minus(sub.usage, sub.usageAtEnd);
+        if (more) extra = plus(extra, more);
+      }
+    }
+    if (!extra || !(e.type === "completed" || e.type === "stopped" || e.type === "failed")) return e;
+    return { ...e, usage: plus(e.usage, extra) };
   }
 
   /** Approvals should not arrive with approval policy "never"; decline anything that does. */
@@ -852,10 +981,11 @@ export class CodexAdapter implements RuntimeAdapter {
    * run's allowed connections is disabled. Local: the user's own Codex setup applies.
    */
   private appServerArgs(a?: Assignment): string[] {
-    if (a && !isolated(a)) return [...APP_SERVER_ARGS];
+    const base = a && allowsSubagents(a) ? ["app-server", ...PROJECT_DOC_ARGS, ...subagentArgs(a.allowSubagents!.cap)] : APP_SERVER_ARGS;
+    if (a && !isolated(a)) return [...base];
     const allowed = new Set(a?.studio ? [] : (a?.connections ?? []));
     const disable = (this.configuredMcp ?? []).filter((c) => c.enabled && !allowed.has(c.name)).map((c) => c.name);
-    return [...APP_SERVER_ARGS, ...ISOLATION_FEATURE_ARGS, ...ISOLATION_CONFIG_ARGS, ...mcpDisableArgs(disable)];
+    return [...base, ...ISOLATION_FEATURE_ARGS, ...ISOLATION_CONFIG_ARGS, ...mcpDisableArgs(disable)];
   }
 
   /** MCP servers configured for Codex (plugin-provided servers excluded: plugins stay off when isolated). */

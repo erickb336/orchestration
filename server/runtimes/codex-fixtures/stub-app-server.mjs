@@ -77,6 +77,13 @@ const completeTurn = (status, error = null) => {
   notify("turn/completed", { threadId: THREAD, turn: turnObj(status, error) });
 };
 const agentMessage = (id, text, phase) => ({ type: "agentMessage", id, text, phase, memoryCitation: null, delivery: null, questions: null });
+/** Sub-agents' threads (ORC-031): their notifications carry their own thread id, on the parent's connection. */
+const SUB_A = "thr_sub_a";
+const SUB_B = "thr_sub_b";
+const usage = (threadId, turnId, inputTokens, cachedInputTokens, outputTokens) => {
+  const t = { totalTokens: inputTokens + outputTokens, inputTokens, cachedInputTokens, cacheWriteInputTokens: 0, outputTokens, reasoningOutputTokens: 0 };
+  notify("thread/tokenUsage/updated", { threadId, turnId, tokenUsage: { total: t, last: t, modelContextWindow: null } });
+};
 
 const FINAL = [
   "All done.",
@@ -110,6 +117,41 @@ function runTurn() {
         });
         item({ type: "agentMessage", id: "i4", text: outputSchema ? STRUCTURED_FINAL : FINAL, phase: "final_answer", memoryCitation: null, delivery: null, questions: null });
         completeTurn("completed");
+      });
+      return;
+    case "subagents":
+      // ORC-031: sub-agent A in Codex 0.159.2's form (subAgentActivity; its model only from thread/read), then B in
+      // the collab form (ask and model), a refused spawn, a sub-thread error, a sub-thread usage after the parent's,
+      // and a follow-up turn of A after its end. B is still running when the parent's turn completes.
+      later(10, () => {
+        item({ type: "subAgentActivity", id: "call_a", kind: "started", agentThreadId: SUB_A, agentPath: "/root/a" });
+        notify("turn/started", { threadId: SUB_A, turn: { ...turnObj("inProgress"), id: "turn_sub_a" } });
+      });
+      later(60, () => {
+        usage(SUB_A, "turn_sub_a", 1000, 200, 50);
+        notify("error", { error: { message: "a sub-thread's own error", codexErrorInfo: null, additionalDetails: null, misalignment: null }, willRetry: false, threadId: SUB_A, turnId: "turn_sub_a" });
+        notify("turn/completed", { threadId: SUB_A, turn: { ...turnObj("completed"), id: "turn_sub_a" } });
+        item({ type: "subAgentActivity", id: "done_a", kind: "completed", agentThreadId: SUB_A, agentPath: "/root/a" });
+        const collab = (id, status, receiverThreadIds, prompt, model) => ({ type: "collabAgentToolCall", id, tool: "spawnAgent", status, senderThreadId: THREAD, receiverThreadIds, prompt, model, reasoningEffort: null, agentsStates: {} });
+        item(collab("call_b", "completed", [SUB_B], "Survey b.txt", "stub-sub-b"));
+        item(collab("call_c", "failed", [], "Survey c.txt", null));
+        notify("turn/started", { threadId: SUB_B, turn: { ...turnObj("inProgress"), id: "turn_sub_b" } });
+        usage(THREAD, TURN, 120, 80, 30);
+        usage(SUB_B, "turn_sub_b", 500, 0, 10);
+        notify("turn/started", { threadId: SUB_A, turn: { ...turnObj("inProgress"), id: "turn_sub_a2" } });
+        usage(SUB_A, "turn_sub_a2", 1300, 200, 70);
+        notify("turn/completed", { threadId: SUB_A, turn: { ...turnObj("completed"), id: "turn_sub_a2" } });
+        item(agentMessage("i4", FINAL, "final_answer"));
+        completeTurn("completed");
+      });
+      return;
+    case "subagents-interrupt":
+      // ORC-031: a sub-agent is running when the parent is interrupted. Like Codex 0.159.2 (real run), the interrupt
+      // ends only the parent's turn: the sub-agent runs on, and stops only when the app-server exits.
+      later(10, () => {
+        item({ type: "subAgentActivity", id: "call_a", kind: "started", agentThreadId: SUB_A, agentPath: "/root/a" });
+        notify("turn/started", { threadId: SUB_A, turn: { ...turnObj("inProgress"), id: "turn_sub_a" } });
+        usage(SUB_A, "turn_sub_a", 700, 0, 5);
       });
       return;
     case "interrupt-honoured":
@@ -210,6 +252,11 @@ function handle(msg) {
     case "turn/interrupt":
       send({ id, result: {} });
       if (mode === "interrupt-honoured" || STEER_MODES.has(mode)) later(20, () => completeTurn("interrupted"));
+      if (mode === "subagents-interrupt") later(20, () => completeTurn("interrupted"));
+      return;
+    case "thread/read":
+      // A sub-agent's model is on its thread (ORC-031).
+      send({ id, result: { thread: { ...threadObj("stub-sub-model"), id: params?.threadId, parentThreadId: THREAD } } });
       return;
     case "turn/steer": {
       if (process.env.CODEX_STUB_STEER_SILENT === "1") return;
