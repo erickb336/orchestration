@@ -1,5 +1,6 @@
 // Core domain types. Pure data: no UI, storage, or runtime dependencies.
 
+import type { EvidenceRun, EvidenceSnapshot, PreviewSetting } from "./studio/evidence";
 import type { Blueprint, BudgetEstimate, Studio } from "./studio/types";
 
 export type ProviderId = "claude" | "codex";
@@ -8,12 +9,15 @@ export const PROVIDERS: ProviderId[] = ["claude", "codex"];
 /**
  * `security_reviewer` reviews a change for security beside the code review; its findings count like the code review's.
  * `pe` is the principal engineer of the vision studio (ORC-029): it reviews the designer's options before the owner sees them.
+ * `evidence` is the service's "Capture evidence" step (ORC-029 pass 5): screenshots and recordings of the built code.
  */
-export type RoleId = "lead" | "designer" | "pe" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks";
+export type RoleId = "lead" | "designer" | "pe" | "coder" | "code_reviewer" | "security_reviewer" | "ux_reviewer" | "checks" | "evidence";
 /** Agent roles: they have role defaults, task role overrides and a resolved provider. */
 export const ROLES: RoleId[] = ["lead", "designer", "pe", "coder", "code_reviewer", "security_reviewer", "ux_reviewer"];
 /** Roles the service runs itself; never resolved to a provider. */
-const SERVICE_ROLES: RoleId[] = ["checks"];
+const SERVICE_ROLES: RoleId[] = ["checks", "evidence"];
+/** Is this step run by the service (checks, the capture of evidence), never by an agent? */
+export const isServiceRole = (r: RoleId) => SERVICE_ROLES.includes(r);
 /** Roles that run only in the vision studio: no flow step uses the PE until it reviews new work in the factory (ORC-029 pass 5). */
 const STUDIO_ROLES: RoleId[] = ["pe"];
 /** What a step definition may use. */
@@ -387,6 +391,11 @@ export interface Project {
   /** The checks sandbox as last probed. Observed; written only by the service. */
   checksHealth?: ChecksHealth;
   /**
+   * How the service runs the built product to capture evidence of it (ORC-029 pass 5): the install, the preview and
+   * its port, the CLI's entry. Optional; absent, capture runs record "not set up". Only the owner's `setPreview` writes it.
+   */
+  preview?: PreviewSetting;
+  /**
    * Who decides `ask-user` findings: the lead (Autopilot's default), the PE, or the user. Until the PE runs its
    * own decisions (ORC-029), a decision routed to the PE goes to the lead's decision runs.
    */
@@ -533,8 +542,8 @@ type StepState =
   | "blocked"
   | "pipeline";
 
-export type ArtifactKind = "brief" | "design" | "plan" | "code-change" | "review-findings" | "verification" | "report" | "handoff" | "breakdown" | "check-results";
-export const ARTIFACT_KINDS: ArtifactKind[] = ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results"];
+export type ArtifactKind = "brief" | "design" | "plan" | "code-change" | "review-findings" | "verification" | "report" | "handoff" | "breakdown" | "check-results" | "evidence";
+export const ARTIFACT_KINDS: ArtifactKind[] = ["brief", "design", "plan", "breakdown", "code-change", "review-findings", "verification", "report", "handoff", "check-results", "evidence"];
 
 // ---------- structured findings, coverage and service checks ----------
 
@@ -949,6 +958,8 @@ export interface Artifact {
   pathCoverage?: PathCoverage;
   /** Check-results artifacts. */
   checkRun?: CheckRunRecord;
+  /** Evidence artifacts (ORC-029 pass 5): what the service captured of the built code, per blueprint item. */
+  evidence?: EvidenceRun;
   /** A durable reference, e.g. the commit SHA and branch holding a code change. */
   ref?: string;
   createdAt: string;
@@ -1028,6 +1039,8 @@ export interface RunSnapshot {
     commands: { id: string; label: string; kind: "prepare" | "check"; argv: string[]; timeoutMs: number; offline?: true }[];
     reusedFrom?: string;
   };
+  /** A service capture run (ORC-029 pass 5): the commit, the blueprint items and the preview setting it was started with. */
+  evidence?: EvidenceSnapshot;
 }
 
 type AttemptOutcome =

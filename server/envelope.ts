@@ -67,6 +67,8 @@ const ROLE_BRIEFS: Record<RoleId, string> = {
   pe: "You are the PE: a rigid principal engineer. Judge feasibility, scale, longevity and budget. Do not change files.",
   // Never sent: a Checks step is run by the service, not by an agent.
   checks: "This step is run by the service.",
+  // Never sent: the Capture evidence step is run by the service, not by an agent (server/studio/evidence.ts).
+  evidence: "This step is run by the service.",
 };
 
 /** One repository instruction file, as read from the trusted base and capped for an envelope. */

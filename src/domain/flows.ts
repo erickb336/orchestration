@@ -85,7 +85,7 @@ function kindOf(steps: StepDef[], r: InputRef) {
 
 /** Roles that read, judge, plan or design: a code change from one of them has no independent review by construction. */
 const NON_CODING_ROLES: readonly RoleId[] = ["code_reviewer", "security_reviewer", "ux_reviewer", "lead", "designer"];
-const ROLE_WORD: Record<RoleId, string> = { lead: "lead", designer: "designer", pe: "PE", coder: "coder", code_reviewer: "code reviewer", security_reviewer: "security reviewer", ux_reviewer: "UX reviewer", checks: "checks" };
+const ROLE_WORD: Record<RoleId, string> = { lead: "lead", designer: "designer", pe: "PE", coder: "coder", code_reviewer: "code reviewer", security_reviewer: "security reviewer", ux_reviewer: "UX reviewer", checks: "checks", evidence: "evidence capture" };
 
 /**
  * Why a flow has no effective independent code review, one line per offending step; empty when every

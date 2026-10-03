@@ -11,6 +11,7 @@ export const ROLE_LABEL: Record<RoleId, string> = {
   security_reviewer: "Security reviewer",
   ux_reviewer: "UX reviewer",
   checks: "Checks",
+  evidence: "Evidence",
 };
 
 export const COLUMN_LABEL: Record<M.Column, string> = {
