@@ -37,24 +37,26 @@ export function ArtifactPreview({ artifact: a, variant, device, port }: { artifa
 /** A dictionary's terms, read-only: each term, its one meaning and the words it replaces. */
 export function TermsTable({ artifact: a }: { artifact: StudioArtifact }) {
   return (
-    <table className="st-table">
-      <thead>
-        <tr>
-          <th scope="col">Term</th>
-          <th scope="col">Meaning</th>
-          <th scope="col">Words to avoid</th>
-        </tr>
-      </thead>
-      <tbody>
-        {(a.dictionary ?? []).map((e) => (
-          <tr key={e.term}>
-            <th scope="row">{e.term}</th>
-            <td data-label="Meaning">{e.meaning}</td>
-            <td data-label="Avoid">{e.avoid.length ? e.avoid.join(", ") : <span className="muted">none</span>}</td>
+    <div className="st-table-wrap">
+      <table className="st-table">
+        <thead>
+          <tr>
+            <th scope="col">Term</th>
+            <th scope="col">Meaning</th>
+            <th scope="col">Words to avoid</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {(a.dictionary ?? []).map((e) => (
+            <tr key={e.term}>
+              <th scope="row">{e.term}</th>
+              <td data-label="Meaning">{e.meaning}</td>
+              <td data-label="Avoid">{e.avoid.length ? e.avoid.join(", ") : <span className="muted">none</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

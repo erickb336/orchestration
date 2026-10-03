@@ -1168,7 +1168,7 @@ describe("terminal artifacts", () => {
 
 describe("a studio run's line in the left column (ORC-030 Q-20)", () => {
   it("says what that run does when the run reports no activity: the PE reviews, it does not make the artifacts", () => {
-    const run = (kind: StudioRun["kind"]): StudioRun => ({ id: `${kind}-1`, kind, round: 1, provider: "codex", model: "gpt-sample", status: "running", brief: "", askedAt: at(1), startedAt: at(2) });
+    const run = (kind: StudioRun["kind"]): StudioRun => ({ id: `${kind}-1`, kind, round: 1, provider: "codex", model: "gpt-sample", status: "running", brief: "", askedAt: at(1), startedAt: at(2), workspace: "runs/x" });
     const text = (kind: StudioRun["kind"]) => runLine(vision(), run(kind), M.providerLabel).text;
     expect(text("pe")).toBe("The PE is reviewing this round's artifacts.");
     expect(text("designer")).toBe("The designer is making this round's artifacts.");

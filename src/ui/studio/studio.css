@@ -202,7 +202,8 @@ main.st-wide { max-width: 1600px; }
 
 /* ---------- tables: the project's dictionary and a flow's rules (pass 4d) ---------- */
 /* One row per term or rule, your mark at the end of it. A row you marked Change or Drop keeps a bar in its colour. */
-.st-table-wrap { display: grid; gap: var(--space-3); min-width: 0; width: 100%; max-width: 60rem; justify-self: center; }
+/* A container: its table becomes cards when the table has little room (a phone, or a pane beside the version in force). */
+.st-table-wrap { display: grid; gap: var(--space-3); min-width: 0; width: 100%; max-width: 60rem; justify-self: center; container-type: inline-size; }
 .st-table-wrap > p, .st-table-wrap > h3 { margin: 0; }
 .st-table { font-size: var(--fs-small); }
 /* A long word wraps only when it cannot fit its column, so a term is never split mid-word. */
@@ -219,8 +220,8 @@ main.st-wide { max-width: 1600px; }
 .st-tablefoot { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; }
 .st-examples { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-2); font-size: var(--fs-small); overflow-wrap: anywhere; }
 .st-rules { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
-/* On a phone each row is a card: the term or rule first, then each cell under it with its name, then the marks. */
-@media (max-width: 640px) {
+/* With little room each row is a card: the term or rule first, then each cell under it with its name, then the marks. */
+@container (max-width: 32rem) {
   .st-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   .st-table, .st-table tbody, .st-table tr, .st-table th, .st-table td { display: block; width: auto; }
   .st-table tr { padding: var(--space-2) 0 var(--space-2) var(--space-2); border-bottom: 1px solid var(--border); }
