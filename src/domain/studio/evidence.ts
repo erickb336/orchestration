@@ -232,7 +232,7 @@ export function notSetUpRun(snap: EvidenceSnapshot, now: string): EvidenceRun {
     sha: snap.target.ref,
     at: now,
     durationMs: 0,
-    items: snap.items.map((i) => noCapture(i, "not-set-up", "The project has no preview setting, so nothing ran. The owner sets one in Settings → Preview.")),
+    items: snap.items.map((i) => noCapture(i, "not-set-up", "The project has no preview setting, so nothing ran. Only the owner sets one.")),
   };
 }
 

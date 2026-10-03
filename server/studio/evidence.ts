@@ -735,7 +735,7 @@ export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun
     none(open().filter((i) => !planned.has(i.itemId)), "not-in-plan", `The capture plan (${CAPTURE_PLAN}) does not name this item.`);
     let screens = plan.screens;
     if (screens.length && !job.preview.preview) {
-      none(job.items.filter((i) => screens.some((s) => s.itemId === i.itemId)), "not-set-up", "The preview setting has no preview command and port, so no screen was captured. The owner sets them in Settings → Preview.");
+      none(job.items.filter((i) => screens.some((s) => s.itemId === i.itemId)), "not-set-up", "The preview setting has no preview command and port, so no screen was captured. Only the owner sets them.");
       screens = [];
     }
     const terminals = plan.terminals;
