@@ -80,9 +80,9 @@ describe("Start the factory: the owner's command", () => {
     // No vision to build from.
     const empty = M.initProject(quiet(), { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(0));
     expect(() => runCommand(empty, "startFactory", startFactoryArgs(empty, MANUAL), at(1))).toThrow(/Write or accept a vision first/);
-    // Already building.
+    // The factory is already running.
     const building = runCommand(s, "startFactory", args, at(3)).state;
-    expect(() => runCommand(building, "startFactory", args, at(4))).toThrow(/Already building/);
+    expect(() => runCommand(building, "startFactory", args, at(4))).toThrow(/The factory is already running/);
     expect(building.project.factoryStarts).toHaveLength(1);
   });
 

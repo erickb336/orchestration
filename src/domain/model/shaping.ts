@@ -44,7 +44,7 @@ export const SHAPING_LABEL = "Vision: new work waits until you start the factory
 
 /** Why Start the factory is refused, or undefined when it is allowed. */
 export function startFactoryBlocker(s: State): string | undefined {
-  if (s.project.stage === "building") return "Already building.";
+  if (s.project.stage === "building") return "The factory is already running.";
   if (!currentVision(s).text.trim()) return "Write or accept a vision first.";
   return undefined;
 }
@@ -129,8 +129,8 @@ export function preflightOpenItems(s: State): string[] {
 
 /**
  * The request as the project stands: agreement on the current revisions, the current settings, and every open
- * item confirmed. Only data: the owner's own action sends it (today the Start building button, after its
- * confirmation lists the open items; the pre-flight screen later).
+ * item confirmed. Only data: the owner's own action sends it (the pre-flight's Start the factory, which builds the
+ * same request from what it showed).
  */
 export function startFactoryRequest(s: State): FactoryRequest {
   return { agreed: true, draftRev: draftRev(s), summaryDigest: summaryDigest(lockInSummary(s)), visionRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: preflightOpenItems(s) };

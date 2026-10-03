@@ -155,7 +155,7 @@ describe("S2 nothing new starts while shaping; running work finishes", () => {
   });
 
   it("startFactory is refused while already building, and no command goes back to Vision (pass 5: Vision stays open, Pause stops building)", () => {
-    expect(() => startFactoryAsOwner(seed(), at(0))).toThrow(/Already building/);
+    expect(() => startFactoryAsOwner(seed(), at(0))).toThrow(/The factory is already running/);
     expect(() => runCommand(seed(), "startVision", {}, at(0))).toThrow("Unknown command startVision");
   });
 });
