@@ -4,16 +4,17 @@
 //   (d) the cap holds: the parent asks for three helpers with a cap of 2; two start, the third is refused;
 //   (c) safety: a helper asked to write a file and to read one outside the folder is refused by the same hook and
 //       guard as its parent, and nothing is written;
-//   (b) cost: the session's reported total and its per-model breakdown, and whether the helpers' usage is in it
-//       (the session's per-model total against the parent's own main-loop usage and the helpers' reported usage);
+//   (b) cost: the session's reported total and its per-model breakdown; the helpers' work is inside it when the
+//       per-model total exceeds the parent's own main loop while helpers ran; per-helper usage stays unknown;
 //   (a) pause: interrupting the parent while both helpers work stops them, and no tool call follows the stop.
 // The script changes no Orchestrator code or setting: it reports the four points, and a person sets the capability.
 //
-//   node --import tsx scripts/helpers-real-claude.mjs [--model haiku]
+//   node --import tsx scripts/helpers-real-claude.mjs [--model sonnet]
 //
 // Claude on the owner's subscription: run it in an interactive shell with ORCHESTRATION_CLAUDE_AUTH=subscription.
-// Limits: haiku (the smallest model in the catalog) for the parent, and the helpers inherit it; 8 turns, 3 minutes
-// and $0.15 for the first run, $0.10 for the second. Nothing is printed except the checks and the cost; the record
+// Limits: sonnet for the parent, and the helpers inherit it (in the lead's first run, on haiku, the parent answered in
+// one turn and started no helper); 8 turns, 3 minutes and $0.15 for the first run, $0.10 for the second. The lead's
+// sonnet run (docs/real-runs/2026-10-03T08-25-56-353Z.json) spent an estimated $0.075 in all. Nothing is printed except the checks and the cost; the record
 // holds no file contents and no answers, only tool names, decisions, usage and cost.
 
 import { execFileSync } from "node:child_process";
@@ -30,7 +31,7 @@ const option = (name, fallback) => {
   const i = process.argv.indexOf(name);
   return i > 0 ? process.argv[i + 1] : fallback;
 };
-const MODEL = option("--model", "haiku");
+const MODEL = option("--model", "sonnet");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now();
 const ms = () => Date.now() - t0;
@@ -192,12 +193,15 @@ try {
   const sessionTokens = perModel.reduce((a, m) => a + m.tokens, 0);
   const mu = r.mainLoopUsage ?? {};
   const mainLoopTokens = (mu.input_tokens ?? 0) + (mu.cache_read_input_tokens ?? 0) + (mu.cache_creation_input_tokens ?? 0) + (mu.output_tokens ?? 0);
-  const helperTokens = ended.reduce((a, s) => a + (s.usage ? (s.usage.inputTokens ?? 0) + (s.usage.outputTokens ?? 0) : 0), 0);
-  evidence.cost = { sessionTotalUsd: r.totalCostUsd, perModel, sessionTokens, parentMainLoopTokens: mainLoopTokens, helpersReportedTokens: helperTokens, outsideMainLoopTokens: sessionTokens - mainLoopTokens };
+  // What the budget needs: the helpers' work is inside the parent's total (the per-model total exceeds the parent's main
+  // loop while helpers ran), and no helper claims a usage of its own (the SDK reports none for all its calls): unknown,
+  // never 0.
+  const withUsage = ended.filter((s) => s.usage !== undefined);
+  evidence.cost = { sessionTotalUsd: r.totalCostUsd, perModel, sessionTokens, parentMainLoopTokens: mainLoopTokens, outsideMainLoopTokens: sessionTokens - mainLoopTokens, perHelperUsage: withUsage.length ? "reported" : "unknown" };
   check(
-    "(b) the session's total includes the helpers' usage",
-    typeof r.totalCostUsd === "number" && r.totalCostUsd > 0 && helperTokens > 0 && sessionTokens - mainLoopTokens >= helperTokens,
-    `total $${r.totalCostUsd?.toFixed(4)}; ${sessionTokens} tokens in the per-model total, ${mainLoopTokens} in the parent's main loop, ${sessionTokens - mainLoopTokens} outside it; the helpers reported ${helperTokens}`,
+    "(b) the helpers' work is inside the session's total, and per-helper usage is unknown",
+    typeof r.totalCostUsd === "number" && r.totalCostUsd > 0 && started.length > 0 && sessionTokens > mainLoopTokens && withUsage.length === 0,
+    `total $${r.totalCostUsd?.toFixed(4)}; ${sessionTokens} tokens in the per-model total, ${mainLoopTokens} in the parent's main loop, ${sessionTokens - mainLoopTokens} outside it, while ${started.length} helpers ran; helpers with a usage of their own: ${withUsage.length}`,
   );
 
   // Run 2: pause. Interrupt once both helpers have made a tool call of their own.
