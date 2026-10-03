@@ -767,8 +767,13 @@ describe("PE review in the right column", () => {
     s = R.dispatchStudioRuns(R.askForPeReviews(s, at(9)), at(10)).state;
     s = R.reportStudioRunStopped(s, s.studio.runs.filter((r) => r.kind === "pe")[1].id, at(11), { lost: true });
     const html = render(<Studio />, s);
-    expect(peText(s)).toContain("The PE did not review it. PE review ended: the PE's runs on it ended 2 times without a verdict. Mark it Keep, Change or Drop, and pick a variant.");
+    expect(peText(s)).toContain("The PE did not review it. PE review ended: the PE's runs on it ended 2 times without a verdict. You can ask the PE again. Mark it Keep, Change or Drop, and pick a variant.");
     expect(html).not.toMatch(/aria-disabled="true"[^>]*>Keep</);
+    // B-06: the owner asks the PE again, and the version waits for the PE's review once more.
+    expect(html).toContain(">Ask the PE again<");
+    const asked = run(s, "askPeAgain", { artifactId: first.artifactId, version: 1 }, at(12)).state;
+    expect(peText(asked)).toMatch(/PE review Asking again The PE's run ended without a verdict \(.*\)\. The service asks the PE again\./);
+    expect(render(<Studio />, asked)).not.toContain(">Ask the PE again<");
   });
 
   it("every way PE review ends says why, and what you can do now", () => {
@@ -802,7 +807,7 @@ describe("PE review in the right column", () => {
           return s;
         },
         "The PE did not review it.",
-        "PE review ended: the PE's runs on it ended 2 times without a verdict. Mark it Keep, Change or Drop, and pick a variant.",
+        "PE review ended: the PE's runs on it ended 2 times without a verdict. You can ask the PE again. Mark it Keep, Change or Drop, and pick a variant.",
       ],
       [
         "no provider",
@@ -811,7 +816,7 @@ describe("PE review in the right column", () => {
           return S.endReview(s, id, 1, "the PE cannot run: Codex is not enabled.", at(7));
         },
         "The PE did not review it.",
-        "PE review ended: no enabled provider could run the next step (the PE cannot run: Codex is not enabled). Mark it Keep, Change or Drop, and pick a variant.",
+        "PE review ended: no enabled provider could run the next step (the PE cannot run: Codex is not enabled). You can ask the PE again. Mark it Keep, Change or Drop, and pick a variant.",
       ],
       [
         "the earlier rule",

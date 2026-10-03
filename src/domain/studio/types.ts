@@ -160,6 +160,11 @@ export interface StudioArtifact {
    * Every other end is read from the verdicts, the runs and the round (studio.ts, `peReview`).
    */
   reviewEnd?: { reason: RecordedEnd; at: string; note?: string };
+  /**
+   * The owner asked the PE again (`askPeAgain`, B-06) after its review of this version ended with no verdict: the PE's
+   * runs on it before then (the first `runsBefore`) no longer end its review.
+   */
+  askedAgain?: { at: string; runsBefore: number };
 }
 
 /**
