@@ -1,7 +1,8 @@
-// ORC-029 pass 6's settings forms: the budgets and the device scope (Settings › Project). Each saves through its
-// owner's command and shows the domain's refusal, in the domain's words, before Save. At the budget stop, Continue past
-// the budget sends its command at once. Rendered statically (there is no DOM test environment): a form's fields are
-// given, and its save is run against the domain.
+// ORC-029 pass 6's settings forms: the budgets and the device scope (Settings › Project), and the overrule of a PE
+// objection in the factory (Settings › Quality › Overrules, and the task page's Needs you). Each saves through its
+// owner's command and shows the domain's refusal, in the domain's words, before it is sent. At the budget stop,
+// Continue past the budget sends its command at once. Rendered statically (there is no DOM test environment): a form's
+// fields are given, and its save is run against the domain.
 
 import { describe, expect, it } from "vitest";
 import { runCommand } from "../../domain/commands";
@@ -15,6 +16,10 @@ import { BudgetsCard } from "./BudgetsCard";
 import { DevicesCard } from "./DevicesCard";
 import { sendInOrder } from "./draft";
 import { ProjectSection } from "./Project";
+import { QualitySection } from "./Quality";
+import { OVERRULE_OTHERWISE, overruleProblem, overruleRequest, peHolds } from "./overrules";
+import { NeedsYouCard } from "../task/NeedsYou";
+import { needsYouItems } from "../task/needsYouItems";
 
 const noop = () => {};
 const T = "2026-10-02T10:00:00.000Z";
@@ -108,5 +113,50 @@ describe("Settings › Project › Devices", () => {
     expect(devicesProblem(none)).toBe(DEVICES_REFUSED);
     expect(() => runCommand(s, "setDevices", { devices: none }, T)).toThrow(DEVICES_REFUSED);
     expect(visible(renderScreen(<DevicesCard devices={none} set={noop} />, s))).toContain(DEVICES_REFUSED);
+  });
+});
+
+describe("Overrules: a PE objection that holds work in the factory", () => {
+  /** The scene with "Outing reminders" held by the PE's objection after three rounds (as the service records it). */
+  const objected = () => {
+    const sc = blueprintScene();
+    const s = structuredClone(sc.s);
+    const t = s.tasks.find((x) => x.id === sc.tasks.reminders)!;
+    const round = { at: T, verdict: "not-feasible" as const, reasons: "Reminders need a push service the product does not have.", change: "Send the reminder by email." };
+    t.peReview = { status: "objected", rounds: [round, round, round] };
+    return { s, id: t.id };
+  };
+  const says = 'The PE objects after 3 rounds: "Reminders need a push service the product does not have. The change it asks for: Send the reminder by email."';
+
+  it("Settings › Quality › Overrules lists each hold with what the PE says; with none, it says so", () => {
+    const { s, id } = objected();
+    expect(peHolds(s)).toEqual([{ taskId: id, what: `${id} Outing reminders: its spec`, kind: "objects", says, button: "Overrule the objection" }]);
+    const text = visible(renderScreen(<QualitySection current onDirty={noop} />, s));
+    expect(text).toContain(`Overrules Where a PE objection holds work in the factory, you can overrule it, with your reason. Overrule acts at once. ${OVERRULE_OTHERWISE} ${id} Outing reminders: its spec ${says} Your reason Overrule the objection`);
+    expect(visible(renderScreen(<QualitySection current onDirty={noop} />, blueprintScene().s))).toContain("No PE objection holds work now. In Vision, overrule an objection in the studio.");
+  });
+
+  it("the task page's Needs you shows the objection with the overrule in place of the go-ahead", () => {
+    const { s, id } = objected();
+    const t = s.tasks.find((x) => x.id === id)!;
+    const items = needsYouItems(s, t, Date.parse(T));
+    expect(items.map((i) => i.kind)).toEqual(["pe"]);
+    const text = visible(renderScreen(<NeedsYouCard state={s} task={t} items={items} onCompare={noop} />, s));
+    expect(text).toContain(`Answer the PE's objection: ${id} Outing reminders: its spec ${says} Your reason Overrule the objection ${OVERRULE_OTHERWISE}`);
+  });
+
+  it("Overrule sends overrulePeReview with your reason, which is recorded and releases the work; the domain's refusals show first", () => {
+    const { s, id } = objected();
+    const [hold] = peHolds(s);
+    expect([overruleProblem("  "), overruleProblem("x".repeat(1001))]).toEqual(["Say why you overrule the objection.", "Your reason is over 1000 characters."]);
+    expect(() => runCommand(s, "overrulePeReview", overruleRequest(hold, "  ").args, T)).toThrow("Say why you overrule the objection.");
+    const r = overruleRequest(hold, " Email is enough for now. ");
+    expect(r).toEqual({ name: "overrulePeReview", args: { taskId: id, why: "Email is enough for now." } });
+    const after = runCommand(s, r.name, r.args, T).state;
+    expect(after.tasks.find((x) => x.id === id)!.peReview!.overruled).toEqual({ at: T, why: "Email is enough for now." });
+    expect(after.events.at(-1)).toMatchObject({ actor: "user", message: `You overruled the PE's objection to ${id}: Email is enough for now.` });
+    expect(peHolds(after)).toEqual([]);
+    // Released: the task waits for your choice and go-ahead again, as before the objection.
+    expect(needsYouItems(after, after.tasks.find((x) => x.id === id)!, Date.parse(T)).map((i) => i.kind)).toEqual(["choose"]);
   });
 });

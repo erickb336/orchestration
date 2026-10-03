@@ -32,6 +32,7 @@ export const CARD_SECTION = {
   "run-limits": "agents",
   checks: "quality",
   "pe-review": "quality",
+  overrules: "quality",
   flows: "quality",
   principles: "quality",
   "pull-requests": "advanced",
