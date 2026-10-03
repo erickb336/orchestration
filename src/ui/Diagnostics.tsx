@@ -238,8 +238,9 @@ function sweepSummary(r: SweepReport): string {
   const done = [
     r.archived ? `archived ${n(r.archived, "Codex thread")}` : "",
     r.trashed ? `moved ${n(r.trashed, "Claude session folder")} to the Trash` : "",
-    r.containers ? `removed ${n(r.containers, "recorder container")}` : "",
-    r.stages ? `removed ${n(r.stages, "recorder stage folder")}` : "",
+    r.containers ? `removed ${n(r.containers, "container")}` : "",
+    r.networks ? `removed ${n(r.networks, "Docker network")}` : "",
+    r.stages ? `removed ${n(r.stages, "work folder")}` : "",
   ].filter(Boolean);
   const waits = [r.held ? `${n(r.held, "thread")} held open by another app` : "", r.recent ? `${n(r.recent, "item")} changed in the last hour` : ""].filter(Boolean);
   const head = done.length ? done.join(", ") : "nothing to clean";
@@ -264,7 +265,7 @@ export function HousekeepingSection() {
       </h4>
       <p className="muted small">
         Runs leave nothing in your own apps, but a crash or a script still can. When the service starts, and every {hk.everyHours} hours, it looks for what Orchestrator's runs left and removes its own
-        recorder containers.{hk.ownerApps ? " With the setting below, it also archives their Codex threads and moves their Claude session folders to the Trash." : ""}
+        containers, Docker networks and work folders.{hk.ownerApps ? " With the setting below, it also archives their Codex threads and moves their Claude session folders to the Trash." : ""}
       </p>
       <Checkbox
         label="Clean up what runs leave in Codex and Claude"

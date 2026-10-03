@@ -865,10 +865,15 @@ export const DEFAULT_CHECKS: ChecksConfig = {
   passEnv: [],
 };
 
-/** Observed: whether the checks sandbox works on this machine. Written only by the service. */
+/** Observed: whether the checks can run where they will run. Written only by the service. */
 export interface ChecksHealth {
   sandbox: "codex" | "none";
   status: "ready" | "unavailable" | "unverified";
+  /**
+   * "environment": the checks run in the project's environment (Docker passed its setup probe), and this computer's
+   * sandbox was not probed. Absent: the probe was of this computer's sandbox (`sandbox`).
+   */
+  runsIn?: "environment";
   detail: string;
   checkedAt: string;
   recheck?: true;

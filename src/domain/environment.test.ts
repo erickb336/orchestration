@@ -2,6 +2,7 @@
 // fields, and the source of a run's environment (the dev container first, else the confirmed image).
 
 import { describe, expect, it } from "vitest";
+import * as C from "./checks";
 import { runCommand } from "./commands";
 import * as E from "./environment";
 import { buildSeed } from "./seed";
@@ -29,6 +30,29 @@ describe("the image proposal", () => {
     expect(E.isPrepareInput("requirements-dev.txt")).toBe(true);
     expect(E.isPrepareInput("src/index.ts")).toBe(false);
     expect(E.isPrepareInput("xpackage.json")).toBe(false);
+  });
+});
+
+describe("where the checks run (B-05)", () => {
+  const checksOn = () => {
+    const s = buildSeed(T0, { inFlightRuns: false });
+    return { ...s, project: { ...s.project, checks: { ...s.project.checks, enabled: true, commands: [{ id: "test", label: "test", kind: "check" as const, argv: ["npm", "test"] }] }, checksHealth: { sandbox: "codex" as const, status: "unavailable" as const, detail: "Codex is not installed", checkedAt: at(0) } } };
+  };
+
+  it("a change to the environment asks for a new probe, so the hold follows where the checks now run", () => {
+    const s0 = checksOn();
+    expect(C.probeDue(s0, T0 + 1000)).toBe(false);
+    const s1 = runCommand(s0, "setEnvironment", { environment: { image: PINNED, prepare: [], hosts: [] } }, at(1)).state;
+    expect(s1.project.checksHealth).toMatchObject({ status: "unavailable", recheck: true, requestedAt: at(1) });
+    expect(C.probeDue(s1, T0 + 2000)).toBe(true);
+    // The probe found the environment ready: the hold lifts, and Activity says where the checks run.
+    const s2 = C.reportChecksHealth(s1, { sandbox: "codex", status: "ready", runsIn: "environment", detail: "Docker passed", checkedAt: at(2) }, at(3), { startedAt: at(2) });
+    expect(C.checksHeld(s2)).toBe(false);
+    expect(C.probeDue(s2, T0 + 4000)).toBe(false);
+    expect(s2.events.at(-1)!.message).toBe("Checks: the project's environment is ready — Docker passed");
+    // Cleared: probed again, because the checks go back to this computer.
+    const s3 = runCommand(s2, "setEnvironment", { environment: null }, at(5)).state;
+    expect(C.probeDue(s3, T0 + 6000)).toBe(true);
   });
 });
 

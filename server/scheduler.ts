@@ -1321,6 +1321,7 @@ export class Scheduler {
         logDir,
         ...(cfg.testReport ? { testReport: cfg.testReport } : {}),
         ...(runner.simulated ? {} : this.environmentFor(state)),
+        ...(state.project.checksHealth?.runsIn === "environment" ? { hostUnverified: true as const } : {}),
       };
       this.launched.set(attemptId, { provider: "service", access: "read", workspace, stepId: step.id, taskId: task.id, touchedInputs: touched });
       runner.start(assignment);
@@ -1393,20 +1394,22 @@ export class Scheduler {
   }
 
   /**
-   * Probe the sandbox when checks were switched on, on request, every six hours, and after two check
-   * runs in a row failed to start. At most one probe at a time; its result is queued and applied under
-   * the lease. No probe with the simulated runner beyond its own answer.
+   * Probe where the checks run (the project's environment, as a run would get it, or the host sandbox) when checks
+   * were switched on, on request, every six hours, and after two check runs in a row failed to start. At most one
+   * probe at a time; its result is queued and applied under the lease. No probe with the simulated runner beyond its
+   * own answer.
    */
   private planProbe(state: State, nowMs: number) {
     const runner = this.checks;
     if (!runner || this.probing) return;
     if (!C.probeDue(state, nowMs) && this.failedStarts < 2) return;
+    const environment = runner.simulated ? undefined : this.environmentFor(state).environment;
     this.probing = true;
     this.failedStarts = 0;
     const sandbox = state.project.checks.sandbox;
     const startedAt = new Date(nowMs).toISOString();
     void runner
-      .probe(sandbox)
+      .probe(sandbox, environment)
       .catch((e): ChecksHealth => ({ sandbox, status: "unavailable", detail: e instanceof Error ? e.message : String(e), checkedAt: new Date().toISOString() }))
       .then((health) => {
         this.probing = false;

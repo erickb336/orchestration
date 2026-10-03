@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { CheckRunners, DirectChecks, type CheckAssignment, type CheckRunner } from "../checks";
 import type { AdapterEvent } from "../runtimes/types";
 import { EnvironmentChecks } from "./runner";
-import { PROBE_PRIVATE_HOST, PreparedEnvironments, judgeEnvProbe } from "./prepared";
+import { PROBE_PRIVATE_HOST, PreparedEnvironments, judgeEnvProbe, scratchFolders } from "./prepared";
 import { removeTree } from "./copy";
 import { phaseArgs } from "./docker";
 import { runDocker } from "../studio/container";
@@ -125,10 +125,12 @@ describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", { timeou
 
   for (const how of ["killed", "past its time limit"] as const) {
     it(`a run ${how}: its copy goes only after the container that mounts it is gone (review finding 4)`, async () => {
-      const { dir, ws, runner, stage, plan: p } = setup();
+      const { dir, ws, root, runner, stage, plan: p } = setup();
       const a = assignment(ws, { commands: [{ id: "test", label: "beat", kind: "check", argv: ["fake-beat"], timeoutMs: 60_000 }], runTimeoutMs: how === "killed" ? 60_000 : 1500, environment: { plan: p, project: "p1" } });
       runner.start(a);
       await until(() => existsSync(join(stage(a), "work", "beat")));
+      // The run's folder is one housekeeping knows to look for, should this service stop now (B-04).
+      expect(scratchFolders(root)).toContain(stage(a));
       if (how === "killed") runner.kill(a.attemptId);
       // The stand-in's container beats into the copy for 500 ms after its kill, making the folder again if it is gone.
       await until(() => !existsSync(stage(a)));
@@ -205,6 +207,25 @@ describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", { timeou
     const checks = await record([["fake-exit", "0"]], "checks");
     expect(checks.environment).toMatchObject({ ran: "container", prepare: "ran", prepareFrom: "checks" });
     expect(checks.results.map((r) => `${r.id}:${r.status}`)).toEqual(["env-prepare-1:passed", "test:passed"]);
+    removeTree(dir);
+  });
+
+  it("the probe follows where the checks run: the environment once Docker passes its probe, else this computer's sandbox, with the reason (B-05)", async () => {
+    const { dir, root } = setup();
+    const unavailable = { sandbox: "codex" as const, status: "unavailable" as const, detail: "could not start the Codex app-server (spawn codex ENOENT)", checkedAt: "2026-10-03T00:00:00.000Z" };
+    const codex = { ...stub(), probe: async () => unavailable };
+    const direct = stub();
+    const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DOCKER_CONFIG: join(dir, "docker") };
+    const facade = (docker: string) => new CheckRunners(codex, direct, new EnvironmentChecks({ environments: new PreparedEnvironments({ root, docker, env }), fallback: (a) => (a.sandbox === "codex" ? codex : direct) }));
+    const withEnv = { plan, project: "p1" };
+    // A user without Codex, with a project environment: the checks run in the environment, so nothing waits on Codex.
+    expect(await facade(FAKE).probe("codex", withEnv)).toMatchObject({ sandbox: "codex", status: "ready", runsIn: "environment" });
+    // Without an environment, this computer's sandbox decides, as before.
+    expect(await facade(FAKE).probe("codex")).toEqual(unavailable);
+    // An environment that Docker cannot take: this computer's sandbox decides, and the detail says why.
+    const noDocker = await facade(join(dir, "no-docker")).probe("codex", withEnv);
+    expect(noDocker).toMatchObject({ sandbox: "codex", status: "unavailable", detail: "The project's environment cannot run the checks (Docker is not installed (no docker command on PATH)). On this computer: could not start the Codex app-server (spawn codex ENOENT)" });
+    expect(noDocker.runsIn).toBeUndefined();
     removeTree(dir);
   });
 

@@ -1,8 +1,8 @@
 # The recorder (ORC-029; server/studio/container.ts): VHS 0.12.1 with ttyd, Chromium and ffmpeg, plus Node 22 for the
 # planned CLIs' scripts, and, for the capture of evidence (pass 5, server/studio/evidence.ts), npm (the install and the
 # preview command) and playwright-core (the screenshots, with the image's Chromium). `npm run recorder:build` builds
-# it; the service never builds or pulls an image. When this file changes, bump the tag in package.json
-# (recorder:build) and RECORDER_IMAGE in container.ts together.
+# it; the service never builds or pulls an image. When a change to this file changes the image (more than a comment),
+# bump the tag in package.json (recorder:build) and RECORDER_IMAGE in container.ts together.
 #
 # Both images are pinned by digest, and playwright-core by its lockfile's hash (capture/package-lock.json). Nothing
 # else is downloaded while building.
@@ -24,7 +24,8 @@ COPY --from=capture /opt/orchestrator/node_modules /opt/orchestrator/node_module
 # The ttyd wrapper: the tape's shell starts at the artifact's root.
 COPY ttyd /usr/local/bin/ttyd
 
-# The recorder's user. The service runs every container as this user (--user 10001:10001), never as root.
+# The recorder's user. The service runs every container as this computer's own user, and as this one (--user
+# 10001:10001) only when the service itself runs as root: never as root.
 RUN chmod 0555 /usr/local/bin/ttyd /usr/local/bin/node \
  && ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && useradd --uid 10001 --user-group --no-create-home --home-dir /home/recorder --shell /usr/sbin/nologin recorder \

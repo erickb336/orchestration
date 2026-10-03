@@ -156,6 +156,29 @@ describe("CodexSandboxChecks", () => {
   }, 20_000);
 });
 
+describe("a run meant for the project's environment that comes to this computer (B-05)", () => {
+  // The last probe found the checks run in the environment, so it did not probe this computer's sandbox.
+  const handed = () => assignment([cmd("test", [node, "-e", `require("node:fs").writeFileSync(${JSON.stringify(join(dir, "ran"))}, "")`])], { hostUnverified: true, hostReason: "Docker is not running" });
+
+  it("probes the sandbox first: one that is not ready runs no command, and the run says why", async () => {
+    // The fake app-server has no sandbox at all, so its probe fails.
+    const home = join(dir, "fakehome");
+    mkdirSync(home);
+    const r = new CodexSandboxChecks({ codexBin: FAKE, home: join(dir, "codex-home"), probeDir: join(dir, "probe"), env: { ...process.env, HOME: home } });
+    const events = await runToEnd(r, handed());
+    expect(events.at(-1)).toMatchObject({ type: "failed", message: expect.stringMatching(/^The checks cannot run: the project's environment did not take them \(Docker is not running\), and this computer's sandbox is not ready: The sandbox let a command write outside its directory/) });
+    expect(existsSync(join(dir, "ran"))).toBe(false);
+  }, 20_000);
+
+  it("runs once the probe passes", async () => {
+    const r = runner();
+    r.probe = async (sandbox) => ({ sandbox, status: "ready", detail: "verified", checkedAt: new Date().toISOString() });
+    const events = await runToEnd(r, handed());
+    expect(completed(events).checks!.results.map((x) => [x.id, x.status])).toEqual([["test", "passed"]]);
+    expect(existsSync(join(dir, "ran"))).toBe(true);
+  });
+});
+
 describe("the real sandbox on this machine (only with ORC_TEST_REAL_SANDBOX=1)", () => {
   it.skipIf(process.env.ORC_TEST_REAL_SANDBOX !== "1")("the pinned Codex app-server's command/exec refuses writes outside the run and network connections, and ends a terminated command's children", async () => {
     const r = new CodexSandboxChecks({ home: join(dir, "codex-home"), probeDir: join(dir, "probe") });

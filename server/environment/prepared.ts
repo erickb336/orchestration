@@ -35,6 +35,43 @@ const PULL_TIMEOUT_MS = 15 * 60_000;
 const BUILD_TIMEOUT_MS = 20 * 60_000;
 /** Prepared copies kept per project, newest first. */
 const KEEP_PREPARED = 3;
+/**
+ * The scratch folders under the root, each removed when its step ends: a step's stage (<project>/runs/<run>), the setup
+ * probe's (.probe/<id>), and a prepare on its way to being kept (<project>/prepared/.tmp-<key>-<id>).
+ */
+const RUNS = "runs";
+const PROBE_DIR = ".probe";
+const KEEPING = ".tmp-";
+
+/**
+ * How old a leftover of the environment must be before housekeeping removes it while its service may still run. A
+ * step ends within its limits: checks within their run time limit (at most 120 minutes, the prepare included), a
+ * capture within its prepare (at most 4 commands of 15 minutes each) and its own limits (under 40 minutes). Nothing
+ * this old belongs to a live step.
+ */
+export const LEFTOVER_AGE_MS = 3 * 60 * 60_000;
+
+/**
+ * The scratch folders under `root` (see RUNS). One that stays was left by a service that stopped mid-step, or kept
+ * because a container that mounts it did not go. Real folders only: a link is never followed, nor listed.
+ */
+export function scratchFolders(root: string): string[] {
+  const folders = (dir: string): string[] => {
+    try {
+      if (!lstatSync(dir).isDirectory()) return [];
+      return readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+    } catch {
+      return [];
+    }
+  };
+  const out = folders(join(root, PROBE_DIR)).map((n) => join(root, PROBE_DIR, n));
+  for (const project of folders(root)) {
+    if (project === PROBE_DIR) continue;
+    out.push(...folders(join(root, project, RUNS)).map((n) => join(root, project, RUNS, n)));
+    out.push(...folders(join(root, project, "prepared")).filter((n) => n.startsWith(KEEPING)).map((n) => join(root, project, "prepared", n)));
+  }
+  return out;
+}
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "project";
 
 /** Environment runs go one at a time in this process. */
@@ -387,7 +424,7 @@ export class PreparedEnvironments {
 
   private dirs(project: string, attemptId: string): Dirs {
     const p = join(this.root, project.replace(/[^A-Za-z0-9._-]/g, "_"));
-    const run = join(p, "runs", attemptId.replace(/[^A-Za-z0-9._-]/g, "_"));
+    const run = join(p, RUNS, attemptId.replace(/[^A-Za-z0-9._-]/g, "_"));
     return { project: p, cache: join(p, "cache"), prepared: join(p, "prepared"), run, work: join(run, "work") };
   }
 
@@ -586,7 +623,7 @@ export class PreparedEnvironments {
    * under the key's tag. Then keep only the newest few of both. Never fails the step.
    */
   private async savePrepared(docker: string, d: Dirs, key: string, tag: string, imageId: string, before: ReadonlySet<string>, sha: string) {
-    const tmp = join(d.prepared, `.tmp-${key}-${randomBytes(4).toString("hex")}`);
+    const tmp = join(d.prepared, `${KEEPING}${key}-${randomBytes(4).toString("hex")}`);
     try {
       const t = await runDocker(docker, ["tag", imageId, tag], { env: this.denv, timeoutMs: 30_000 });
       if (t.code !== 0) throw new Error(`docker tag: ${t.stderr.trim().slice(0, 160)}`);
@@ -751,7 +788,7 @@ export class PreparedEnvironments {
         return [];
       }
     };
-    const tmp = join(this.root, ".probe", randomBytes(4).toString("hex"));
+    const tmp = join(this.root, PROBE_DIR, randomBytes(4).toString("hex"));
     let printed: { code: number | null; output: string };
     let decisions: string[] = [];
     try {
