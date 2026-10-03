@@ -22,7 +22,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { EnvironmentRunRecord } from "../../src/domain/environment";
 import type { ChecksHealth } from "../../src/domain/types";
-import { BaseChecks, OUTPUT_CAP, notRun, resultOf, type Captured, type CheckAssignment, type CheckRunner, type PlannedCheck, type Run } from "../checks";
+import { BaseChecks, OUTPUT_CAP, notRun, resultOf, type Captured, type CheckAssignment, type CheckRunner, type EnvironmentAssignment, type PlannedCheck, type Run } from "../checks";
 import { redact } from "../redact";
 import { dockerEnv, findDocker, runDocker, startContainer } from "../studio/container";
 import { clearReport, readTestReport } from "../testReport";
@@ -63,6 +63,38 @@ function remember(name: string, docker: string, env: Record<string, string>, kin
 }
 
 type Ready = { ok: true; docker: string } | { ok: false; reason: string };
+
+/** The record of a run that ran in its environment. */
+export type ContainerRecord = Extract<EnvironmentRunRecord, { ran: "container" }>;
+
+/** A run of this runner, or one lent to another step (withPrepared): its stage folder, and the borrower's notes. */
+type Lent = Run & { stage?: string; onNote?: (note: string) => void };
+
+/** How far a run's stage got: ready to run its commands (`ok` false: the prepare failed), or why not. */
+type Staged =
+  | { kind: "prepared"; d: Dirs; runImage: string; ok: boolean; record: ContainerRecord }
+  | { kind: "handoff"; reason: string }
+  | { kind: "stopped" }
+  /** The run ended meanwhile (killed): nothing more to do. */
+  | { kind: "gone" };
+
+/** What another step gets from withPrepared: a copy of the change, prepared as the checks prepare it. */
+export interface PreparedCopy {
+  docker: string;
+  /** The docker command's environment. */
+  denv: Record<string, string>;
+  /** The copy (to mount at /work), and the image to run on: the base image plus what the prepare wrote outside the copy. */
+  work: string;
+  image: string;
+  record: ContainerRecord;
+  /** A container of the borrower's: removed if this process exits before it does. */
+  track(name: string): void;
+  untrack(name: string): void;
+}
+
+export type PreparedOutcome<T> =
+  | { ok: true; value: T; record: ContainerRecord }
+  | { ok: false; reason: "unavailable" | "prepare-failed" | "stopped"; detail: string; log?: string; record?: ContainerRecord };
 
 interface Dirs {
   /** The project's folder under the root; its cache folder (mounted at /cache) and its prepared copies. */
@@ -194,52 +226,30 @@ export class EnvironmentChecks extends BaseChecks {
     return { project: p, cache: join(p, "cache"), prepared: join(p, "prepared"), run, work: join(run, "work") };
   }
 
+  /** A note on the run's progress: an activity event, or the borrower's own notes for a lent run (withPrepared). */
+  private note(run: Run, note: string) {
+    const own = (run as Lent).onNote;
+    if (own) own(note);
+    else this.emit({ type: "activity", attemptId: run.a.attemptId, note: note.slice(0, 200) });
+  }
+
   private async inEnvironment(run: Run, docker: string): Promise<void> {
     const { a } = run;
-    const env = a.environment!;
-    const d = this.dirs(env.project, a.attemptId);
-    for (const dir of [join(d.cache, "xdg"), d.prepared, d.run]) mkdirSync(dir, { recursive: true, mode: 0o700 });
-    if (!MOUNTABLE.test(d.work) || !MOUNTABLE.test(d.cache)) return this.handOff(run, `Docker cannot mount ${JSON.stringify(d.run)}`);
-    (run as Run & { stage?: string }).stage = d.run;
-    copyWorktree(a.workspace, d.work);
-    const image = await this.image(docker, run, d);
-    if (run.done) return;
-    if ("refused" in image) return this.handOff(run, image.refused);
-    const before = listTree(d.work);
-    const key = prepareKey({ imageId: image.id, prepare: env.plan.prepare, hosts: env.plan.hosts, inputs: prepareInputs(d.work, before) });
-    const prepCmds: PlannedCheck[] = env.plan.prepare.map((argv, i) => ({ id: `env-prepare-${i + 1}`, label: `Prepare: ${argv.join(" ")}`.slice(0, 60), kind: "prepare", argv, timeoutMs: PREPARE_TIMEOUT_MS }));
-    const from = env.plan.source.from;
-    const t0 = Date.now();
-    let record: EnvironmentRunRecord;
-    // The run phase runs on the prepared image: the base image plus what the prepare wrote outside the copy.
-    let runImage = image.id;
-    const tag = `orc-env-${slug(env.project)}:${key}`;
-    const reuse = prepCmds.length ? await this.preparedOf(docker, d, key, tag) : undefined;
-    if (run.done) return;
-    if (reuse) {
-      cloneEntries(join(d.prepared, key, "copy"), d.work, reuse.added);
-      runImage = reuse.imageId;
-      for (const c of prepCmds) run.results.push({ ...notRun(c), status: "passed", excerpt: `Reused what the prepare made for ${reuse.sha.slice(0, 12)}: the same image, prepare commands, hosts and prepare inputs.` });
-      record = { ran: "container", from, image: image.ref, imageId: image.id, prepare: "reused", key, reusedFrom: reuse.sha, prepareMs: 0 };
-      this.emit({ type: "activity", attemptId: a.attemptId, note: `Reused the prepare of ${reuse.sha.slice(0, 12)} (${image.ref})`.slice(0, 200) });
-    } else {
-      const out = prepCmds.length ? await this.preparePhase(run, docker, image.id, d, prepCmds) : { ok: true, refused: [] as string[], imageId: image.id };
-      if (run.done) return;
-      if (run.stopRequested) return this.finish(run, { type: "stopped", attemptId: a.attemptId, how: "interrupted" });
-      if (out.ok && out.imageId) runImage = out.imageId;
-      if (out.ok && out.imageId && prepCmds.length) await this.savePrepared(docker, d, key, tag, out.imageId, before, a.target);
-      record = { ran: "container", from, image: image.ref, imageId: image.id, prepare: out.ok ? "ran" : "failed", key, prepareMs: Date.now() - t0, ...(out.refused.length ? { refused: out.refused } : {}) };
-      if (!out.ok) {
-        for (const c of a.commands) if (c.kind === "check") run.results.push(notRun(c));
-        return this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, environment: record } });
-      }
+    const s = await this.stage(run, docker);
+    if (s.kind === "gone") return;
+    if (s.kind === "handoff") return this.handOff(run, s.reason);
+    if (s.kind === "stopped") return this.finish(run, { type: "stopped", attemptId: a.attemptId, how: "interrupted" });
+    const { d, runImage, record } = s;
+    if (!s.ok) {
+      for (const c of a.commands) if (c.kind === "check") run.results.push(notRun(c));
+      return this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, environment: record } });
     }
     // The run phase. A report the change or its prepare left in the copy never counts: it goes before the checks run.
     const reportRefused = a.testReport ? clearReport(d.work, a.testReport) : undefined;
     for (const c of a.commands) {
       if (c.kind !== "check") continue;
       if (run.done || run.stopRequested) break;
-      this.emit({ type: "activity", attemptId: a.attemptId, note: `Running ${c.label} (${c.argv.join(" ")}) in the project's environment, with no network`.slice(0, 200) });
+      this.note(run, `Running ${c.label} (${c.argv.join(" ")}) in the project's environment, with no network`);
       const t1 = Date.now();
       const cap = await this.execIn(run, docker, phaseArgs({ name: envName("run"), image: runImage, work: d.work, argv: c.argv, phase: { kind: "run" } }), c.timeoutMs);
       if (run.done) return;
@@ -248,15 +258,97 @@ export class EnvironmentChecks extends BaseChecks {
     }
     if (run.stopRequested) return this.finish(run, { type: "stopped", attemptId: a.attemptId, how: "interrupted" });
     const tests = a.testReport ? (reportRefused ? { status: "refused" as const, path: a.testReport, reason: reportRefused } : readTestReport(a.testReport, { workspace: d.work, scratch: [], env: this.baseEnv })) : undefined;
-    if (tests) this.emit({ type: "activity", attemptId: a.attemptId, note: `Test report ${tests.path}: ${tests.status === "read" ? `${tests.counts.passed} passed, ${tests.counts.failed + tests.counts.error} failed, ${tests.counts.skipped} skipped` : tests.reason}`.slice(0, 200) });
+    if (tests) this.note(run, `Test report ${tests.path}: ${tests.status === "read" ? `${tests.counts.passed} passed, ${tests.counts.failed + tests.counts.error} failed, ${tests.counts.skipped} skipped` : tests.reason}`);
     this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(tests ? { tests } : {}), environment: record } });
+  }
+
+  /**
+   * The project's environment made ready for another step, exactly as for its checks (unit E2: the Capture evidence
+   * step): Docker and the setup probe, a copy of `workspace`, the image, and the prepare or its reuse by key. In this
+   * process's environment turn, `use` runs with the prepared copy and image; the copy goes afterwards, however it ends.
+   * Never throws for the environment's own failures: they come back as the reason nothing was used.
+   */
+  async withPrepared<T>(o: { attemptId: string; workspace: string; sha: string; environment: EnvironmentAssignment; logDir: string; signal?: AbortSignal; note?: (msg: string) => void }, use: (p: PreparedCopy) => Promise<T>): Promise<PreparedOutcome<T>> {
+    const release = await turn();
+    const run: Lent = {
+      a: { attemptId: o.attemptId, taskId: "", stepId: "", workspace: o.workspace, target: o.sha, commands: [], runTimeoutMs: 0, sandbox: "none", prepareNetwork: true, env: {}, tmpDir: "", cacheDir: "", logDir: o.logDir, environment: o.environment },
+      startedAt: Date.now(),
+      results: [],
+      done: false,
+      stopRequested: false,
+      timers: new Set(),
+      onNote: o.note ?? (() => {}),
+    };
+    const stopped = { ok: false as const, reason: "stopped" as const, detail: "The capture was stopped." };
+    const onAbort = () => {
+      run.stopRequested = true;
+      run.current?.();
+    };
+    o.signal?.addEventListener("abort", onAbort);
+    if (o.signal?.aborted) onAbort();
+    try {
+      if (run.stopRequested) return stopped;
+      const up = await this.ready();
+      if (!up.ok) return { ok: false, reason: "unavailable", detail: up.reason };
+      if (run.stopRequested) return stopped;
+      const s = await this.stage(run, up.docker);
+      if (s.kind === "handoff") return { ok: false, reason: "unavailable", detail: s.reason };
+      if (s.kind !== "prepared") return stopped;
+      if (!s.ok) {
+        const failed = run.results.find((r) => r.status !== "passed" && r.status !== "not-run");
+        return { ok: false, reason: "prepare-failed", detail: `The prepare failed${failed ? ` (${failed.label}: ${failed.status}${failed.exitCode !== undefined ? `, exit ${failed.exitCode}` : ""})` : ""}.`, ...(failed?.excerpt ? { log: failed.excerpt } : {}), record: s.record };
+      }
+      const docker = up.docker;
+      const value = await use({ docker, denv: this.denv, work: s.d.work, image: s.runImage, record: s.record, track: (name) => remember(name, docker, this.denv, "container"), untrack: (name) => void LIVE.delete(name) });
+      return { ok: true, value, record: s.record };
+    } finally {
+      o.signal?.removeEventListener("abort", onAbort);
+      run.done = true;
+      this.cleanup(run);
+      release();
+    }
+  }
+
+  /** The stage, the image and the prepare (or its reuse by key) of a run: everything before its own commands. */
+  private async stage(run: Run, docker: string): Promise<Staged> {
+    const { a } = run;
+    const env = a.environment!;
+    const d = this.dirs(env.project, a.attemptId);
+    for (const dir of [join(d.cache, "xdg"), d.prepared, d.run]) mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (!MOUNTABLE.test(d.work) || !MOUNTABLE.test(d.cache)) return { kind: "handoff", reason: `Docker cannot mount ${JSON.stringify(d.run)}` };
+    (run as Lent).stage = d.run;
+    copyWorktree(a.workspace, d.work);
+    const image = await this.image(docker, run, d);
+    if (run.done) return { kind: "gone" };
+    if ("refused" in image) return { kind: "handoff", reason: image.refused };
+    const before = listTree(d.work);
+    const key = prepareKey({ imageId: image.id, prepare: env.plan.prepare, hosts: env.plan.hosts, inputs: prepareInputs(d.work, before) });
+    const prepCmds: PlannedCheck[] = env.plan.prepare.map((argv, i) => ({ id: `env-prepare-${i + 1}`, label: `Prepare: ${argv.join(" ")}`.slice(0, 60), kind: "prepare", argv, timeoutMs: PREPARE_TIMEOUT_MS }));
+    const from = env.plan.source.from;
+    const t0 = Date.now();
+    // The run phase runs on the prepared image: the base image plus what the prepare wrote outside the copy.
+    const tag = `orc-env-${slug(env.project)}:${key}`;
+    const reuse = prepCmds.length ? await this.preparedOf(docker, d, key, tag) : undefined;
+    if (run.done) return { kind: "gone" };
+    if (reuse) {
+      cloneEntries(join(d.prepared, key, "copy"), d.work, reuse.added);
+      for (const c of prepCmds) run.results.push({ ...notRun(c), status: "passed", excerpt: `Reused what the prepare made for ${reuse.sha.slice(0, 12)}: the same image, prepare commands, hosts and prepare inputs.` });
+      this.note(run, `Reused the prepare of ${reuse.sha.slice(0, 12)} (${image.ref})`);
+      return { kind: "prepared", d, runImage: reuse.imageId, ok: true, record: { ran: "container", from, image: image.ref, imageId: image.id, prepare: "reused", key, reusedFrom: reuse.sha, prepareMs: 0 } };
+    }
+    const out = prepCmds.length ? await this.preparePhase(run, docker, image.id, d, prepCmds) : { ok: true, refused: [] as string[], imageId: image.id };
+    if (run.done) return { kind: "gone" };
+    if (run.stopRequested) return { kind: "stopped" };
+    if (out.ok && out.imageId && prepCmds.length) await this.savePrepared(docker, d, key, tag, out.imageId, before, a.target);
+    const record: ContainerRecord = { ran: "container", from, image: image.ref, imageId: image.id, prepare: out.ok ? "ran" : "failed", key, prepareMs: Date.now() - t0, ...(out.refused.length ? { refused: out.refused } : {}) };
+    return { kind: "prepared", d, runImage: out.ok && out.imageId ? out.imageId : image.id, ok: out.ok, record };
   }
 
   /** The run's stage goes when the run ends, however it ends. */
   protected cleanup(run: Run): void {
-    const stage = (run as Run & { stage?: string }).stage;
+    const stage = (run as Lent).stage;
     if (!stage) return;
-    (run as Run & { stage?: string }).stage = undefined;
+    (run as Lent).stage = undefined;
     try {
       removeTree(stage);
     } catch (e) {
@@ -303,7 +395,7 @@ export class EnvironmentChecks extends BaseChecks {
     const env = run.a.environment!;
     const src = env.plan.source;
     if ("image" in src) {
-      this.emit({ type: "activity", attemptId: run.a.attemptId, note: `Using the image ${src.image}`.slice(0, 200) });
+      this.note(run, `Using the image ${src.image}`);
       const r = await this.ensureImage(docker, src.image);
       return "id" in r ? { ref: src.image, id: r.id } : { refused: `the image ${src.image} could not be pulled: ${r.error}` };
     }
@@ -317,7 +409,7 @@ export class EnvironmentChecks extends BaseChecks {
     const file = join(d.run, "Dockerfile");
     writeFileSync(file, env.dockerfile, { mode: 0o600 });
     const tag = `orc-env-${slug(env.project)}:${createHash("sha256").update(env.dockerfile).digest("hex").slice(0, 16)}`;
-    this.emit({ type: "activity", attemptId: run.a.attemptId, note: `Building ${src.file}'s Dockerfile (no network for its RUN steps)`.slice(0, 200) });
+    this.note(run, `Building ${src.file}'s Dockerfile (no network for its RUN steps)`);
     const b = await runDocker(docker, buildArgs({ tag, dockerfile: file, context: p }), { env: this.denv, timeoutMs: BUILD_TIMEOUT_MS });
     if (b.code !== 0) return { refused: `${src.file}'s Dockerfile did not build: ${(b.stderr.trim() || b.stdout.trim()).split("\n").slice(-2).join(" ").slice(0, 240)}` };
     const r = await this.ensureImage(docker, tag);
@@ -442,7 +534,7 @@ export class EnvironmentChecks extends BaseChecks {
           run.results.push(notRun(c));
           continue;
         }
-        this.emit({ type: "activity", attemptId: a.attemptId, note: `Preparing: ${c.argv.join(" ")} (the network goes only to the registries)`.slice(0, 200) });
+        this.note(run, `Preparing: ${c.argv.join(" ")} (the network goes only to the registries)`);
         const t0 = Date.now();
         const name = envName("prep");
         const cap = await this.execIn(run, docker, phaseArgs({ name, image: imageId, work: d.work, cache: d.cache, argv: c.argv, phase: { kind: "prepare", privateNet: egress.privateNet, proxy: egress.proxy } }), c.timeoutMs);
