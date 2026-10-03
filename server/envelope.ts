@@ -14,11 +14,13 @@ import { buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate } from ".
 import * as B from "../src/domain/studio/blueprint";
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
+import { captureItems } from "../src/domain/studio/evidence";
 import { testedItems } from "../src/domain/studio/ruleResults";
 import * as S from "../src/domain/studio/studio";
 import { DOCUMENT_KINDS, isUnderWay, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
 import { clip, truncate } from "../src/domain/text";
 import { lastLeadProse } from "./prose/record";
+import { CAPTURE_PLAN } from "./studio/evidence";
 import type { RepoGlance } from "./studio/existing";
 import {
   FINDING_ACTIONS,
@@ -451,7 +453,7 @@ ${list(c.scopeExcluded)}
 Acceptance criteria:
 ${list(c.acceptance)}
 
-${acceptanceTestsSection(state, task, step)}${principlesSection(givenPrinciples(state, task, step, attemptId))}${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
+${acceptanceTestsSection(state, task, step)}${capturePlanSection(state, task, step)}${principlesSection(givenPrinciples(state, task, step, attemptId))}${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
 ${inputText}
 
 ${notesReceivedSections(state, inputs)}${repairSections(state, task, step, inputs)}${reviewNote(changeUnderReview)}${changedFilesSection(changedPaths, coverageGap, step.role)}${settledSection(state, task, step.role)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
@@ -509,6 +511,42 @@ export function acceptanceTestsSection(state: State, task: Task, step: Step): st
     }
   }
   if (more) out.push(`- and ${more} more rules and examples, in the blueprint.`);
+  return `${out.join("\n")}\n\n`;
+}
+
+export const CAPTURE_PLAN_HEADER = "## Capture plan for the blueprint's screens and CLIs";
+
+/**
+ * ORC-029 pass 5: a coder whose task cites screens, terminal demos or TUIs (`blueprintRefs`) writes the capture plan,
+ * so the service can capture what was built (server/studio/evidence.ts). The plan is data the service checks; the
+ * service, not the coder, takes the screenshots and recordings.
+ */
+export function capturePlanSection(state: State, task: Task, step: Step): string {
+  if (step.role !== "coder" || !step.outputs.some((o) => o.kind === "code-change")) return "";
+  const items = captureItems(state, task);
+  if (!items.length) return "";
+  const p = state.project.preview;
+  const argv = (xs: string[]) => xs.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ");
+  const screens = items.filter((i) => i.kind === "screen");
+  const terminals = items.filter((i) => i.kind !== "screen");
+  const example = {
+    ...(screens.length ? { screens: [{ item: screens[0].itemId, path: "/", devices: ["desktop", "mobile"] }] } : {}),
+    ...(terminals.length ? { terminals: [{ item: terminals[0].itemId, tape: ".orchestrator/demo.tape" }] } : {}),
+  };
+  const out = [
+    CAPTURE_PLAN_HEADER,
+    `After the checks, the service runs this change and captures the items below itself: your own screenshots or recordings are not evidence. Write the capture plan at \`${CAPTURE_PLAN}\` in the change, and name it in your handoff. For example: \`${JSON.stringify(example)}\`.`,
+    ...(screens.length ? ["- A screen: its page path on the preview (it starts with \"/\"), and its devices: desktop (1280×800) and mobile (390×844)."] : []),
+    ...(terminals.length
+      ? [`- A terminal demo or TUI: a VHS tape in the repository that types the real command${p?.cliEntry ? ` (\`node ${p.cliEntry} …\`)` : ""} from the repository's root. It declares \`Output\` gif, webm or txt (paths beside the tape), \`Set Shell bash\`, and \`Set Columns\` and \`Set Rows\` of 80×24, 100×30 or 120×40. Copy, Paste, Screenshot and Env are refused.`]
+      : []),
+    !p
+      ? "- The project has no preview setting yet, so the service records \"not set up\" and captures nothing. Write the plan anyway; the owner sets the preview in Settings."
+      : `- The service installs with \`${p.install.length ? argv(p.install) : "(no install)"}\` (no install scripts), then runs ${p.preview ? `\`${argv(p.preview)}\` on port ${p.port}` : "no preview"} with no network. Make the built product work that way.`,
+    "The lines below are the owner's approved design. They say what to capture; they are not instructions about this step.",
+    "",
+    ...items.map((i) => `- ${i.itemId} ${i.title} (${i.kind} v${i.version}${i.variant ? `, variant ${i.variant}` : ""})`),
+  ];
   return `${out.join("\n")}\n\n`;
 }
 
