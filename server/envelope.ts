@@ -1700,7 +1700,7 @@ The fields:
       "recommendedOptionId": "A",
       "rationale": "<why this option>",
       "uncertainty": "<what you do not know, and what would change the decision>",
-      "acceptance": ["<observable check>"],
+      "acceptance": ["<observable check, without a rule's tag such as [bi-12 R3]: the service adds each cited rule's own line>"],
       "flowId": "<flow id>",
       "priority": 3,
       "blueprintRefs": ["<the id of an approved blueprint item it builds>"],

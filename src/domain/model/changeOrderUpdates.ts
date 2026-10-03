@@ -31,7 +31,7 @@ import { CHANGE_ORDER_LINE_KINDS, type BlueprintItem, type ChangeOrder, type Cha
 import { ControlError, type LeadRun, type SteeringChange, type SteeringChangeSet, type State, type Task } from "../types";
 import { cancelInto, dropInto, openDependent, reopenDropped, started, userTouched } from "./controls";
 import { currentSpec, currentVision, draft, event, getTask, isOpen } from "./core";
-import { type LeadProposal, proposeTask, specContentOf, validateProposal } from "./leadOutput";
+import { type LeadProposal, proposeTask, refusedAcceptance, refusedAcceptanceNote, specContentOf, validateProposal } from "./leadOutput";
 import { editSpecInto } from "./specs";
 import { CONTROL_RE, oneLine } from "./textSafety";
 
@@ -369,6 +369,8 @@ export function answerChangeOrderInto(s: State, r: LeadRun, raw: unknown, set: S
     }
     set.changes.push(row);
     co.lines = [...(co.lines ?? []), line];
+    // The lead's acceptance lines its spec leaves out (a line under a rule's tag), named for the lead and the owner.
+    if (u.proposal) notes.push(...refusedAcceptance(s, withRefs(s, u.proposal, u.taskId ? getTask(s, u.taskId) : undefined)).map((l) => `${u.taskId ?? `"${String(u.proposal!.title).slice(0, 80)}"`}: ${refusedAcceptanceNote(l)}`));
   }
   // What the lead left without a line: named for the owner, who handles it.
   const left = outstanding(s, co);

@@ -260,6 +260,17 @@ describe("the owner's authority: what the lead may not do (review findings 1 and
   });
 });
 
+describe("the spec a spec update writes", () => {
+  it("a line with a rule's tag in the lead's acceptance is refused with a note; the update applies (review finding 4)", () => {
+    const f = changeOrdered();
+    const tagged = `[${f.ids.plan} R1] The map shows the days`;
+    const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), acceptance: ["The list shows each trip.", tagged] } };
+    const { s } = answer(f.s, { rev: order(f.s).rev, updates: [update] }, 20);
+    expect(M.currentSpec(task(s, f.tasks.queued)).content.acceptance).toEqual(["The list shows each trip."]);
+    expect(order(s).notes![0]).toBe(`${f.tasks.queued}: the acceptance line "${tagged}" is refused: only the blueprint's own line carries a rule's tag`);
+  });
+});
+
 describe("Undo, line by line", () => {
   it("each line can be undone alone, and the others stay", () => {
     const f = changeOrdered();

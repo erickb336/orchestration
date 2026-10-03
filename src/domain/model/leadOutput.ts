@@ -136,6 +136,7 @@ export function validateProposal(s: State, p: LeadProposal, now?: string, who: "
     const why = leadRefsProblem(s, p.blueprintRefs);
     if (why) return why;
   }
+  if (!acceptanceOf(s, p).length) return "it needs one to thirty acceptance checks; a line with a rule's tag is the blueprint's own";
   const title = (p.title as string).trim().toLowerCase();
   if (s.tasks.some((t) => t.id !== revising && t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === title)) return "a task with this title already exists";
   // Work the lead dropped when the focus changed is not proposed again for a week.
@@ -232,7 +233,10 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     if (revises !== undefined && revises !== null) {
       const why = reviseForPeInto(s, p, revises, now);
       if (why) rejected.push(`"${label(p)}": ${why}`);
-      else revised.push(String(revises));
+      else {
+        revised.push(String(revises));
+        rejected.push(...refusedAcceptance(s, p).map((line) => `"${label(p)}": ${refusedAcceptanceNote(line)}`));
+      }
       continue;
     }
     if (proposed++ >= limit) {
@@ -254,6 +258,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
         continue;
       }
       created.push(proposeTask(s, p, now, hold, undefined, shaping));
+      rejected.push(...refusedAcceptance(s, p).map((line) => `"${label(p)}": ${refusedAcceptanceNote(line)}`));
     } catch (err) {
       rejected.push(`"${label(p)}": invalid (${err instanceof Error ? err.message : String(err)})`);
     }
@@ -334,16 +339,40 @@ function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: strin
   return undefined;
 }
 
+const list = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => String(x).trim()).filter(Boolean) : []);
+const refsOf = (p: LeadProposal) => [...new Set(list(p.blueprintRefs))];
+
+/**
+ * A blueprint tag in an acceptance line: a rule's or an example's ("[bi-12 R3]", or "[bi-12_R3]" as ruleResults.ts
+ * reads a test's name) or a contract's ("[bi-12]"). Only the blueprint's own lines carry one (review finding 4): a test
+ * with the tag proves that line, so a line the lead wrote under it would let weaker text pass for the rule.
+ */
+const TAG_RE = /\[bi-\d{1,9}(?:[ _][A-Za-z0-9_-]{1,20})?\]/;
+
+/** A proposal's acceptance: the lead's own lines without a blueprint tag, then every line the cited items give. */
+function acceptanceOf(s: State, p: LeadProposal): string[] {
+  return [...list(p.acceptance).filter((x) => !TAG_RE.test(x)), ...blueprintAcceptance(s, refsOf(p))];
+}
+
+/**
+ * The lead's acceptance lines its spec leaves out, for a note under the reply: each line that carries a blueprint tag
+ * and is not the blueprint's own line (an exact copy of one goes without a note: the spec has it anyway).
+ */
+export function refusedAcceptance(s: State, p: LeadProposal): string[] {
+  const own = new Set(blueprintAcceptance(s, refsOf(p)));
+  return list(p.acceptance).filter((x) => TAG_RE.test(x) && !own.has(x));
+}
+
+/** The note for one refused acceptance line. */
+export const refusedAcceptanceNote = (line: string) => `the acceptance line "${line.length > 120 ? `${line.slice(0, 119)}…` : line}" is refused: only the blueprint's own line carries a rule's tag`;
+
 /**
  * A proposal's spec content: the lead's fields, the recommended option selected, and (pass 5) the blueprint items it
  * builds, with the acceptance their rules and examples give, after the lead's own checks.
  */
 export function specContentOf(s: State, p: LeadProposal): SpecContent {
-  const list = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => String(x).trim()).filter(Boolean) : []);
-  const refs = [...new Set(list(p.blueprintRefs))];
-  const fromBlueprint = blueprintAcceptance(s, refs);
-  // A line the lead already wrote with a rule's tag is not repeated.
-  const acceptance = [...list(p.acceptance), ...fromBlueprint.filter((line) => !list(p.acceptance).some((x) => x.startsWith(line.slice(0, line.indexOf("]") + 1))))];
+  const refs = refsOf(p);
+  const acceptance = acceptanceOf(s, p);
   return {
     title: p.title.trim().slice(0, 200),
     area: (p.area ?? "").trim().slice(0, 60) || "General",
