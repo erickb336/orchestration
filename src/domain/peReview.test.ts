@@ -235,7 +235,7 @@ describe("a lead proposal waits for PE review", () => {
     expect(() => runCommand(edited, "recordPeReview", { taskId: id, verdict: "feasible", reasons: "Fine." }, at(6))).toThrow(`A verdict on ${id} names the spec revision the PE read.`);
     expect(() => runCommand(edited, "recordPeReview", { taskId: id, verdict: "feasible", reasons: " ", specRev: 2 }, at(6))).toThrow("The verdict's reasons is empty.");
     expect(() => runCommand(edited, "recordPeReview", { taskId: id, verdict: "feasible-if", reasons: "x", specRev: 2 }, at(6))).toThrow("Feasible-if states the change that makes it feasible.");
-    expect(() => runCommand(edited, "recordPeReview", { verdict: "feasible", reasons: "x" }, at(6))).toThrow("name the work: taskId, or changeOrder");
+    expect(() => runCommand(edited, "recordPeReview", { verdict: "feasible", reasons: "x" }, at(6))).toThrow("name the work: taskId");
     expect(task(pe(edited, { taskId: id }, "feasible", 6), id).peReview!.rounds[0].specRev).toBe(2);
   });
 });

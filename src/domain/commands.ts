@@ -186,12 +186,11 @@ function verdictInput(v: unknown): S.VerdictInput {
 }
 
 /**
- * The work a PE review verdict or an overrule is about: `taskId` (a lead proposal), `taskId` with `stepId` (the
- * breakdown or the design that step made), or `changeOrder` (a blueprint revision).
+ * The work a PE review verdict or an overrule is about: `taskId` (a lead proposal, or a spec a change order updated),
+ * or `taskId` with `stepId` (the breakdown or the design that step made).
  */
 function peReviewTarget(a: Args): PeReviewTarget {
-  if ((a.taskId === undefined) === (a.changeOrder === undefined)) throw new InvalidCommandError("name the work: taskId, or changeOrder");
-  if (a.taskId === undefined) return { changeOrder: int(a, "changeOrder") };
+  if (a.taskId === undefined) throw new InvalidCommandError("name the work: taskId");
   return { taskId: str(a, "taskId"), ...(a.stepId === undefined ? {} : { stepId: str(a, "stepId") }) };
 }
 
@@ -285,6 +284,11 @@ export const COMMANDS = {
    * Start the factory is the first Lock in. Never the lead's, a setting's or Autopilot's.
    */
   lockIn: same((s, now, a) => B.lockIn(s, int(a, "draftRev"), now)),
+  /**
+   * Close a change order as it stands (pass 5): what the lead's updates left is recorded as not handled. Refused while
+   * the lead is answering it. Each line keeps its own Undo, Apply and Dismiss (the steering commands). Never the lead's.
+   */
+  closeChangeOrder: same((s, now, a) => M.closeChangeOrder(s, int(a, "rev"), now)),
 
   // the studio: the service's (SERVICE_COMMANDS), from the lead's, the designer's, the PE's and the probes' runs
   /** Returns { n }. */

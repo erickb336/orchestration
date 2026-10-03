@@ -354,12 +354,12 @@ export function putDraftInForce(s: State, now: string): void {
   // Nothing to adjust: a change order would wait for an update that never comes, so the Lock in is only recorded.
   if (!tasks.length && !summary.newWork.length) return void event(s, now, "system", "vision", `No change order for blueprint r${rev}: no task cites the changed items, and nothing new is to be built`);
   const handler = s.project.changeOrders;
-  // The lead's updates for it wait for PE review when the project has it on (2e).
-  const peReview = newWorkReview(s);
   const changedItems = [...summary.changes.added, ...summary.changes.changed.map((x) => x.item)].map((i) => i.id);
-  s.blueprint.changeOrders.push({ rev, at: now, changedItems, droppedItems: [...dropped], tasks, newWork: summary.newWork, status: "open", handler, ...(peReview ? { peReview } : {}) });
+  s.blueprint.changeOrders.push({ rev, at: now, changedItems, droppedItems: [...dropped], tasks, newWork: summary.newWork, status: "open", handler });
   const plan = [tasks.length ? `it touches ${tasks.map((t) => `${t.taskId} (${HANDLING_WORDS[t.handling]})`).join(", ")}` : "", summary.newWork.length ? `${summary.newWork.length} new item${summary.newWork.length === 1 ? "" : "s"} to plan` : ""].filter(Boolean).join("; ");
-  event(s, now, "system", "vision", `Change order for blueprint r${rev}: ${plan}; ${handler === "user" ? "it waits for you before the lead updates tasks" : "the lead updates the affected tasks"}${peReview ? ", once the PE agrees with the updates" : ""}`);
+  // With PE review of new work on, an updated spec and each new task wait for the PE before they start (2e).
+  const pe = newWorkReview(s) ? "; updated and new work waits for the PE before it starts" : "";
+  event(s, now, "system", "vision", `Change order for blueprint r${rev}: ${plan}; ${handler === "user" ? "the lead's updates wait for your go-ahead" : "the lead updates the affected tasks, and you can undo each update"}${pe}`);
 }
 
 /** What happens to a touched task, in words. */
@@ -508,7 +508,7 @@ export function blueprintAcceptance(s: State, refs: readonly string[]): string[]
   return lines;
 }
 
-/** Open change orders, oldest first; with `handler`, only those waiting for the owner or marked for the lead. */
+/** Open change orders, oldest first; with `handler`, only those whose updates wait for the owner's go-ahead or apply at once. */
 export function openChangeOrders(s: State, handler?: ChangeOrder["handler"]): ChangeOrder[] {
   return s.blueprint.changeOrders.filter((c) => c.status === "open" && (handler === undefined || c.handler === handler));
 }

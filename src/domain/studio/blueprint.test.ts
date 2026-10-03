@@ -420,11 +420,11 @@ describe("change orders: a Lock in while building", () => {
     const packingItem = itemOf(s, packing.id).id;
     s = lockIn(s, 13);
     const rev = B.blueprintRev(s);
-    // A new project has PE review of new work on (pass 5), so the lead's updates wait for the PE.
+    // A new project has PE review of new work on (pass 5), so updated and new work waits for the PE.
     expect(s.blueprint.changeOrders).toEqual([
-      { rev, at: at(13), changedItems: [packingItem, searchItem], droppedItems: [inviteItem], tasks: [{ taskId: tasks[0], handling: "update-spec" }, { taskId: tasks[1], handling: "retire" }], newWork: [packingItem], status: "open", handler: "lead", peReview: { status: "pending", rounds: [] } },
+      { rev, at: at(13), changedItems: [packingItem, searchItem], droppedItems: [inviteItem], tasks: [{ taskId: tasks[0], handling: "update-spec" }, { taskId: tasks[1], handling: "retire" }], newWork: [packingItem], status: "open", handler: "lead" },
     ]);
-    expect(s.events.at(-1)).toMatchObject({ actor: "system", message: `Change order for blueprint r${rev}: it touches ${tasks[0]} (the lead updates its spec), ${tasks[1]} (retired); 1 new item to plan; the lead updates the affected tasks, once the PE agrees with the updates` });
+    expect(s.events.at(-1)).toMatchObject({ actor: "system", message: `Change order for blueprint r${rev}: it touches ${tasks[0]} (the lead updates its spec), ${tasks[1]} (retired); 1 new item to plan; the lead updates the affected tasks, and you can undo each update; updated and new work waits for the PE before it starts` });
     expect(B.openChangeOrders(s, "lead").map((c) => c.rev)).toEqual([rev]);
     expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order"))).toEqual([]);
   });
@@ -446,8 +446,8 @@ describe("change orders: a Lock in while building", () => {
     expect(s.blueprint.changeOrders).toMatchObject([{ changedItems: [itemOf(s, packing.id).id], droppedItems: [], tasks: [], newWork: [itemOf(s, packing.id).id] }]);
   });
 
-  it("with change orders set to you, it waits under Needs you; an open one keeps the handler it was made with", () => {
-    const { s: base, search, inviteItem, tasks } = planned();
+  it("with change orders set to you, the lead's updates wait for your go-ahead; an open one keeps the handler it was made with", () => {
+    const { s: base, search, inviteItem } = planned();
     let s = reviseSearch(base, search, 10);
     const leads = B.blueprintRev(s);
     s = runCommand(s, "setChangeOrders", { who: "user" }, at(20)).state;
@@ -460,10 +460,9 @@ describe("change orders: a Lock in while building", () => {
       [leads, "lead"],
       [yours, "user"],
     ]);
-    const waiting = needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order"));
-    expect(waiting).toEqual([
-      { kind: "open", key: `change-order-${yours}`, what: `Change order: blueprint r${yours}`, detail: `You changed the blueprint: Trail search (v${v.version}); dropped Invite sheet (v1). It touches ${tasks[0]}, ${tasks[1]}. You asked to look before the lead updates tasks.`, action: "Open", href: "#/tasks" },
-    ]);
+    expect(s.events.at(-1)!.message).toMatch(/the lead's updates wait for your go-ahead; updated and new work waits for the PE before it starts$/);
+    // Nothing waits for you until the lead has answered: it prepares the updates first (changeOrderUpdates.test.ts).
+    expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order"))).toEqual([]);
     expect(() => runCommand(s, "setChangeOrders", { who: "pe" }, at(40))).toThrow(InvalidCommandError);
   });
 
@@ -476,34 +475,15 @@ describe("change orders: a Lock in while building", () => {
     expect(runCommand(yours, "setChangeOrders", { who: "user" }, at(12)).state.events).toEqual(yours.events);
   });
 
-  it("with PE review of new work on, the lead's updates wait for the PE; an objection after three rounds waits under Needs you, and your overrule is recorded (2e)", () => {
+  it("PE review is on the work each update makes, not on the change order: the event says so, and a verdict names a task (pass 5)", () => {
     const { s: base, search } = planned();
     let s = runCommand(base, "setPeReviewsNewWork", { on: false }, at(9)).state;
     s = reviseSearch(s, search, 10);
-    expect(s.blueprint.changeOrders[0].peReview).toBeUndefined(); // you turned PE review of new work off
+    expect(s.events.at(-1)!.message).toMatch(/the lead updates the affected tasks, and you can undo each update$/); // PE review of new work is off
     s = runCommand(s, "setPeReviewsNewWork", { on: true }, at(19)).state;
     s = reviseSearch(s, search, 20);
-    const rev = B.blueprintRev(s);
-    const order = () => s.blueprint.changeOrders.find((c) => c.rev === rev)!;
-    expect(order().peReview).toEqual({ status: "pending", rounds: [] });
-    expect(s.events.at(-1)!.message).toMatch(/the lead updates the affected tasks, once the PE agrees with the updates$/);
-    // Each later round checks the earlier asks first (pass 4e): the one that sends the updates back finds one not met.
-    const object = (st: State, sec: number, round: number) =>
-      runCommand(st, "recordPeReview", { changeOrder: rev, verdict: "not-feasible", reasons: "The new search breaks saved trails.", earlier: Array.from({ length: round - 1 }, (_, i) => ({ ask: `r${i + 1}`, met: false })) }, at(sec)).state;
-    s = object(s, 31, 1);
-    s = object(s, 32, 2);
-    expect(order().peReview!.status).toBe("pending");
-    expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order-pe"))).toEqual([]);
-    s = object(s, 33, 3);
-    expect(order().peReview!.status).toBe("objected");
-    expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order-pe"))).toEqual([
-      { kind: "open", key: `change-order-pe-${rev}`, what: `The PE objects to the updates for change order r${rev}`, detail: "The new search breaks saved trails.", action: "Open", href: "#/tasks" },
-    ]);
-    s = runCommand(s, "overrulePeReview", { changeOrder: rev, why: "Saved trails are migrated by hand." }, at(40)).state;
-    expect(order().peReview!.overruled).toEqual({ at: at(40), why: "Saved trails are migrated by hand." });
-    expect(s.events.at(-1)!.message).toBe(`You overruled the PE's objection to the updates for change order r${rev}: Saved trails are migrated by hand.`);
-    expect(needsYouItems(s, T0).filter((i) => i.key.startsWith("change-order-pe"))).toEqual([]);
-    expect(() => runCommand(s, "recordPeReview", { changeOrder: 99, verdict: "feasible", reasons: "x" }, at(41))).toThrow("There is no change order for blueprint r99.");
+    expect(s.events.at(-1)!.message).toMatch(/; updated and new work waits for the PE before it starts$/);
+    expect(() => runCommand(s, "recordPeReview", { changeOrder: B.blueprintRev(s), verdict: "feasible", reasons: "x" }, at(41))).toThrow("name the work: taskId");
   });
 });
 
