@@ -130,23 +130,41 @@ export function readTestReport(rel: string, ctx: ReportContext): TestReport {
 // ---------- the XML ----------
 
 /**
- * The first markup declaration ("<!DOCTYPE", "<!ENTITY", …) outside a CDATA section or a comment, or undefined. A
- * linear scan, before any parsing.
+ * The first markup declaration ("<!DOCTYPE", "<!ENTITY", …) the parser would read, or undefined. A linear scan, before
+ * any parsing, that reads the markup as fast-xml-parser 5 does: a comment, a CDATA section, a processing instruction
+ * and a tag are each skipped whole, and the "?>" or ">" that ends an instruction or a tag does not count inside a
+ * quoted value. So "<!--" inside an instruction or an attribute hides nothing after it.
  */
 export function declarationIn(xml: string): string | undefined {
-  let i = xml.indexOf("<!");
+  let i = xml.indexOf("<");
   while (i >= 0) {
-    if (xml.startsWith("<![CDATA[", i)) {
-      const end = xml.indexOf("]]>", i + 9);
-      if (end < 0) return undefined; // not well-formed: the validator refuses it
-      i = xml.indexOf("<!", end + 3);
-    } else if (xml.startsWith("<!--", i)) {
-      const end = xml.indexOf("-->", i + 4);
-      if (end < 0) return undefined;
-      i = xml.indexOf("<!", end + 3);
-    } else return (/^<![A-Za-z]*/.exec(xml.slice(i, i + 12)) ?? ["<!"])[0];
+    let end: number;
+    if (xml.startsWith("<!--", i)) end = after(xml.indexOf("-->", i + 4), 3);
+    else if (xml.startsWith("<![CDATA[", i)) end = after(xml.indexOf("]]>", i + 9), 3);
+    else if (xml.startsWith("<!", i)) return (/^<![A-Za-z]*/.exec(xml.slice(i, i + 12)) ?? ["<!"])[0];
+    else if (xml.startsWith("</", i)) end = after(xml.indexOf(">", i), 1);
+    else if (xml.startsWith("<?", i)) end = quotedEnd(xml, i + 1, "?>");
+    else end = quotedEnd(xml, i + 1, ">");
+    // Not closed: not well-formed, so the validator refuses it.
+    if (end < 0) return undefined;
+    i = xml.indexOf("<", end);
   }
   return undefined;
+}
+
+const after = (at: number, len: number) => (at < 0 ? -1 : at + len);
+
+/** The index after `close`, from `from`, outside a quoted value (as the parser reads a tag or an instruction); else -1. */
+function quotedEnd(xml: string, from: number, close: string): number {
+  let quote = "";
+  for (let j = from; j < xml.length; j++) {
+    const c = xml[j];
+    if (quote) {
+      if (c === quote) quote = "";
+    } else if (c === '"' || c === "'") quote = c;
+    else if (xml.startsWith(close, j)) return j + close.length;
+  }
+  return -1;
 }
 
 const LISTS = new Set(["testsuites", "testsuite", "testcase", "failure", "error", "skipped"]);

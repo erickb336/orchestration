@@ -149,6 +149,17 @@ describe("hostile reports are refused with a clear reason", () => {
     expect(reasonOf(read('<testsuite><!ENTITY e "x"><testcase name="a"/></testsuite>'))).toContain("declares <!ENTITY");
   });
 
+  it("a comment opener inside a processing instruction or an attribute does not hide a DOCTYPE after it", () => {
+    // The review's input (finding 9): the scan read "<!--" in the instruction and skipped to the last "-->".
+    const pi = '<?x <!-- ?><!DOCTYPE t [<!ENTITY e "X">]><testsuite><testcase name="&e;"/></testsuite><!-- -->';
+    expect(read(pi)).toEqual({ status: "refused", path: REL, reason: "reports/junit.xml declares <!DOCTYPE (a DTD, entities or another declaration); the service reads none" });
+    expect(reasonOf(read('<testsuite a="<!--"><!DOCTYPE t [<!ENTITY e "X">]><testcase name="&e;"/></testsuite><!-- -->'))).toContain("declares <!DOCTYPE");
+    expect(reasonOf(read('<?x <![CDATA[ ?><!DOCTYPE t [<!ENTITY e "X">]><testsuite><testcase name="&e;"/></testsuite>]]>'))).toContain("declares <!DOCTYPE");
+    // An instruction inside a comment is text, and a well-formed report with instructions is read.
+    const ok = read('<?xml version="1.0"?><!-- <?x <!DOCTYPE no> --><?style a="<!--"?><testsuite><testcase name="a"/></testsuite>');
+    expect(ok.status === "read" && ok.cases.map((c) => c.name)).toEqual(["a"]);
+  });
+
   it("a DOCTYPE inside a CDATA section or a comment is text, not a declaration", () => {
     const r = read('<testsuite><!-- <!DOCTYPE no> --><testcase name="html"><failure><![CDATA[expected <!DOCTYPE html> at the start]]></failure></testcase></testsuite>');
     expect(r.status === "read" && r.cases).toEqual([{ name: "html", suite: "", status: "failed", message: "expected <!DOCTYPE html> at the start" }]);
