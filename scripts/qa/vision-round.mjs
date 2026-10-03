@@ -156,7 +156,9 @@ await runJourney(
     const notSent = page.getByRole("list", { name: "Not sent yet" });
     const partItem = () => page.getByRole("list", { name: "Artifacts of round 1" }).getByRole("button", { name: new RegExp(PART.replace(/[()]/g, "\\$&")) });
     await j.step("Keep, Send, and the draft", async () => {
-      // The newest version of the part, once it is yours to mark (a revision after the Change may still be with the PE).
+      // The newest version of the part, once it is yours to mark. The Change brings a revision (v3): wait for it, so the
+      // part you keep is the one the studio shows (the PE may still review it: Keep waits for that below).
+      await service.until("the designer's revision after the Change", () => (artifact()?.version ?? 0) >= 3, 30_000);
       await partItem().click();
       const keep = marks.getByRole("button", { name: "Keep" });
       for (let i = 0; i < 60 && ((await keep.isDisabled()) || (await keep.getAttribute("aria-disabled")) === "true"); i++) await page.waitForTimeout(500);
