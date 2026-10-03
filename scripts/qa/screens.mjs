@@ -11,7 +11,7 @@
 // and the factory floor's (src/ui/floor/floorScene.ts: an open change order). Every row says which state it shows.
 // The scenes write no studio files, so their prototype frames show "Not found"; those errors (the 404s, and the page
 // error Chrome logs for a sandboxed frame's error page) are listed in index.json, not failed.
-// The scheduler does not run: nothing moves while the screens are taken.
+// The scheduler dispatches once and then its simulated clock stays paused: nothing moves while the screens are taken.
 //
 // Output: evidence/qa/screens/<route>-<width>.png and evidence/qa/screens/index.json (route, state, title, headings,
 // main controls, horizontal scroll, errors). Exits 1 when a page scrolls sideways or logs an error.
@@ -136,12 +136,12 @@ async function capture(service, state, route, width, strictErrors) {
 
 for (const width of WIDTHS) {
   console.log(`\nThe sample project at ${width} wide:`);
-  const service = await startService(() => buildDemo(Date.now()), { dist });
+  const service = await startService(() => buildDemo(Date.now()), { dist, freeze: true });
   for (const route of SAMPLE) await capture(service, "sample", route, width, true);
   await service.stop();
   for (const scene of SCENES) {
     console.log(`\nThe ${scene.name} at ${width} wide:`);
-    const s = await startService(scene.state, { dist });
+    const s = await startService(scene.state, { dist, freeze: true });
     for (const route of scene.routes) await capture(s, scene.name, route, width, false);
     await s.stop();
   }

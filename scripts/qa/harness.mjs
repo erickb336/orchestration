@@ -88,6 +88,7 @@ for (const key of Object.getOwnPropertyNames(FakeAdapter.prototype)) {
  * the HTTP server with its page policy. The flows are refreshed from flows/ as at start.
  *
  * o.run: start the scheduler's timer (o.tickMs, default 1000 ms), so the simulated agents work. Without it, nothing moves.
+ * o.freeze (instead of o.run): the scheduler holds its lease and dispatches once, then its simulated clock stays paused.
  * o.progressPerTick: how fast a simulated run goes (the service's default is 5, about 20 ticks a step).
  * o.realLooking: the service says "real"; a repository for the repository check is made under the data directory.
  */
@@ -143,6 +144,13 @@ export async function startService(state, o = {}) {
   });
   await new Promise((r) => app.listen(port, "127.0.0.1", r));
   if (o.run) scheduler.start(o.tickMs ?? 1000);
+  else if (o.freeze) {
+    // The scheduler holds its lease (so the page does not say another instance holds it) and dispatches once, then its
+    // simulated clock stays paused: nothing moves while the screens are taken.
+    scheduler.auto = false;
+    scheduler.step(Date.now());
+    scheduler.start(o.tickMs ?? 1000);
+  }
   let n = 0;
   const service = {
     store,
