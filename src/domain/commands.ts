@@ -223,17 +223,16 @@ export const COMMANDS = {
   // shaping the vision with the lead first (Vision), and the factory
   /**
    * Start the factory: the owner's agreement, and the only way from shaping to building. `agreed` must be true;
-   * `blueprintRev` and `visionRev` are the revisions the owner saw (compare-and-set); `acceptOpen` names the open
-   * items they confirm.
-   * Needs a vision; applies the settings and records the start; releases the roadmap on Autopilot.
+   * `draftRev` and `visionRev` are the revisions the owner saw in the pre-flight (compare-and-set); `acceptOpen` names
+   * the open items they confirm.
+   * Needs a vision; locks in the draft (the first Lock in), applies the settings and records the start; releases the
+   * roadmap on Autopilot.
    */
   startFactory: same((s, now, a) => {
     if (a.agreed !== true) throw new InvalidCommandError("agreed must be true: the factory starts only on your agreement");
-    return M.startFactory(s, { agreed: true, blueprintRev: num(a, "blueprintRev"), visionRev: num(a, "visionRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
+    return M.startFactory(s, { agreed: true, draftRev: int(a, "draftRev"), visionRev: num(a, "visionRev"), settings: factorySettings(a.settings), acceptOpen: strings(a.acceptOpen, "acceptOpen") }, now);
   }),
-  /** Back to vision: nothing running is stopped; nothing new starts. */
-  startVision: same((s, now) => M.startVision(s, now)),
-  /** The device scope: at least one of desktop, mobile and terminal. Chosen in Vision. */
+  /** The device scope: at least one of desktop, mobile and terminal. Chosen in Vision, which stays open while the factory runs. */
   setDevices: same((s, now, a) =>
     M.setDevices(
       s,
@@ -268,10 +267,20 @@ export const COMMANDS = {
   sendFeedback: same((s, now, a) => S.sendFeedback(s, array<unknown>(a.entries, "entries").map(feedbackEntry), now)),
   /** Overrule one of the PE's objections, with your reason (recorded). */
   overruleObjection: same((s, now, a) => S.overruleObjection(s, str(a, "verdictId"), str(a, "why"), now)),
-  /** Approve one artifact version (the one you saw) into the blueprint, with a variant when it has several. Never the lead's. */
+  /** Approve one artifact version (the one you saw) into the blueprint's draft, with a variant when it has several. Never the lead's. */
   approveArtifact: same((s, now, a) => B.approveArtifact(s, { artifactId: str(a, "artifactId"), version: int(a, "version"), ...(a.variant === undefined ? {} : { variant: str(a, "variant") }) }, now)),
-  /** Approve a whole round into the blueprint; what cannot be approved as it stands is listed as open. Never the lead's. */
+  /** Approve a whole round into the draft; what cannot be approved as it stands is listed as open. Never the lead's. */
   approveRound: same((s, now, a) => B.approveRound(s, int(a, "round"), now)),
+  /** Drop an item from the draft: its part leaves the design. The item keeps its id, with the status "dropped". Never the lead's. */
+  dropBlueprintItem: same((s, now, a) => B.dropBlueprintItem(s, str(a, "itemId"), now)),
+  /** Discard the draft: it becomes the version in force again. `draftRev` is the draft revision you saw. Never the lead's. */
+  discardDraft: same((s, now, a) => B.discardDraft(s, int(a, "draftRev"), now)),
+  /**
+   * Lock in: put the whole draft into force as a new blueprint revision, with the summary you saw recorded as your
+   * agreement. `draftRev` is the draft revision the summary showed (compare-and-set). While building only: in Vision,
+   * Start the factory is the first Lock in. Never the lead's, a setting's or Autopilot's.
+   */
+  lockIn: same((s, now, a) => B.lockIn(s, int(a, "draftRev"), now)),
 
   // the studio: the service's (SERVICE_COMMANDS), from the lead's, the designer's, the PE's and the probes' runs
   /** Returns { n }. */
@@ -618,7 +627,7 @@ export const COMMANDS = {
   // the owner's budgets
   /** Both budgets in dollars, each a positive number or null (not set). */
   setBudgets: same((s, now, a) => M.setBudgets(s, { buildingUsd: numOrNull(a, "buildingUsd"), maintenanceUsdPerMonth: numOrNull(a, "maintenanceUsdPerMonth") }, now)),
-  /** At the building budget: new work starts again without raising it, until the budget changes or the project goes back to vision. */
+  /** At the building budget: new work starts again without raising it, until the budget changes. */
   continuePastBudget: same((s, now) => M.continuePastBudget(s, now)),
   /** A new project, shaping its vision (which may be empty) until you start the factory. */
   initProject: same((s, now, a) => M.initProject(s, { name: str(a, "name"), repoPath: str(a, "repoPath"), vision: str(a, "vision"), focus: str(a, "focus") }, now)),

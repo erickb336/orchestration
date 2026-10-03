@@ -145,11 +145,17 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   return items;
 }
 
-/** What changed and what it touches: "You changed Invite sheet. It touches WT-6 and WT-7; the lead updates them after you look." */
+/** What changed and what it touches: "You changed the blueprint: Invite sheet (v2); dropped Reminders (v1). It touches WT-6 and WT-7. …" */
 function changeOrderDetail(state: State, co: ChangeOrder): string {
-  const titles = blueprintItems(state).filter((i) => co.changedItems.includes(i.id)).map((i) => `${i.title} (v${i.version}${i.status === "open" ? ", open" : ""})`);
-  const touches = co.affectedTasks.length ? `It touches ${co.affectedTasks.join(", ")}.` : "No task cites what changed.";
-  return `You changed the blueprint: ${titles.join(", ")}. ${touches} You asked to look before the lead updates tasks.`;
+  // The items as the Lock in put them into force.
+  const items = state.blueprint.revisions.find((r) => r.rev === co.rev)?.items ?? blueprintItems(state);
+  const name = (id: string) => {
+    const i = items.find((x) => x.id === id);
+    return i ? `${i.title} (v${i.version})` : id;
+  };
+  const what = [co.changedItems.map(name).join(", "), co.droppedItems.length ? `dropped ${co.droppedItems.map(name).join(", ")}` : ""].filter(Boolean).join("; ");
+  const touches = co.tasks.length ? `It touches ${co.tasks.map((t) => t.taskId).join(", ")}.` : "No task cites what changed.";
+  return `You changed the blueprint: ${what}. ${touches} You asked to look before the lead updates tasks.`;
 }
 
 /** What the budget stop means (the runs with no recorded cost have their own item). */

@@ -168,7 +168,7 @@ export function peEnvelope(state: State, run: StudioRun, where: { folder: string
     "",
     `Round ${round.n} is about ${FOCUS_WORDS[round.focus]}.${round.summary ? ` ${round.summary}` : ""}`,
     "",
-    ...projectWordsLines(state),
+    ...projectWordsLines(state, "draft"),
     ...budgets,
     ...studioPrinciplesLines(run),
     ...refusedLines(state, run, a),

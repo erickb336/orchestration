@@ -1,7 +1,7 @@
 import * as M from "../domain/model";
 import { PROVIDERS } from "../domain/types";
 import { useStore } from "./store";
-import { PREF_INVOLVEMENT_CHOSEN, PREF_ONBOARDING_DISMISSED, PREF_STAGE_CHOSEN, usePref } from "./common";
+import { PREF_INVOLVEMENT_CHOSEN, PREF_ONBOARDING_DISMISSED, usePref } from "./common";
 import { Button, Chip } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
 
@@ -19,11 +19,10 @@ interface Step {
 
 /** First-run checklist on Home. Shown only while something is missing, and hideable per browser. */
 export function Onboarding() {
-  const { state, service, send, disabled } = useStore();
+  const { state, service } = useStore();
   const lead = useLeadContext();
   const [dismissed, setDismissed] = usePref(PREF_ONBOARDING_DISMISSED);
   const [involvementChosen] = usePref(PREF_INVOLVEMENT_CHOSEN);
-  const [stageChosen, setStageChosen] = usePref(PREF_STAGE_CHOSEN);
   if (dismissed === "1") return null;
 
   const hide = (
@@ -34,26 +33,12 @@ export function Onboarding() {
   const shaping = state.project.stage === "shaping";
 
   if (service.runtime !== "real") {
-    // One line. The demo bar says what is simulated; this says how to use your own repository, and offers the shaping stage once.
+    // One line. The demo bar says what is simulated; this says how to use your own repository.
     return (
       <p className="try-shaping" aria-label="About the sample project">
         <span>
           This is the sample project. For your own repository, start the service with <code>ORCHESTRATION_RUNTIME=real npm start</code>.
         </span>
-        {!shaping && stageChosen !== "1" && (
-          <Button
-            size="small"
-            variant="quiet"
-            disabled={disabled}
-            title="Try the shaping stage: the lead asks questions and drafts the vision; nothing new starts until you start building again"
-            onClick={async () => {
-              const r = await send("startVision");
-              if (r.ok) setStageChosen("1");
-            }}
-          >
-            Shape the vision with the lead first
-          </Button>
-        )}
         {hide}
       </p>
     );

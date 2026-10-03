@@ -549,12 +549,11 @@ export function endReview(state: State, artifactId: string, version: number, not
 }
 
 /**
- * Whether the designer should revise this version for the PE now: it is the newest version, in Vision, its review is
- * revising (never so for a kind the PE does not review), and no designer run on it is under way (the loop's, or one
- * the lead asked for).
+ * Whether the designer should revise this version for the PE now: it is the newest version, its review is revising
+ * (never so for a kind the PE does not review), and no designer run on it is under way (the loop's, or one the lead
+ * asked for). In Vision or while the factory runs alike (pass 5).
  */
 export function revisionDue(s: State, a: StudioArtifact): boolean {
-  if (s.project.stage !== "shaping") return false;
   if (latestVersion(s, a.id)?.version !== a.version) return false;
   if (peReview(s, a).status !== "revising") return false;
   return !designerRunsOn(s, a).some(isUnderWay);

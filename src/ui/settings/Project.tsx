@@ -1,6 +1,6 @@
 // Settings › Project: the repository, the kind of product (its domains), the stage, and how finished work leaves
-// (the delivery mode, the remote and base, who merges). Settings wait for Save; Start building and Back to shaping are actions and
-// act at once. In real mode, Start a new project is its own form with its own button.
+// (the delivery mode, the remote and base, who merges). Settings wait for Save; Start building is an action and acts
+// at once. In real mode, Start a new project is its own form with its own button.
 
 import { useState } from "react";
 import * as M from "../../domain/model";
@@ -51,7 +51,7 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
     <SettingsSection
       id="project"
       title="Project"
-      help="Your repository, the stage, and how finished work leaves Orchestrator. Changes here wait for Save; Start building and Back to shaping act at once."
+      help="Your repository, the stage, and how finished work leaves Orchestrator. Changes here wait for Save; Start building acts at once."
       current={current}
       draft={draft}
       invalid={invalid}
@@ -109,12 +109,13 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
   );
 }
 
-/** The stage: shaping (the lead drafts the vision, nothing runs) or building. Both buttons act at once. */
+/**
+ * The stage: shaping (the lead drafts the vision, nothing runs) or building. Start building acts at once. Once
+ * building, there is no way back: Vision stays open while the factory runs (ORC-029 r12), and Pause stops building.
+ */
 function StageCard() {
-  const { state, send, disabled } = useStore();
-  const [busy, setBusy] = useState(false);
+  const { state } = useStore();
   const shaping = state.project.stage === "shaping";
-  const running = M.activeAttempts(state).length;
   return (
     <SettingsCard
       id="stage"
@@ -123,29 +124,14 @@ function StageCard() {
           Stage <Chip strong>{shaping ? "Shaping" : "Building"}</Chip>
         </>
       }
-      help={shaping ? `${M.SHAPING_LABEL}; the lead answers your messages and drafts the vision.` : "Work runs as usual. Back to shaping stops nothing that is running; nothing new starts."}
+      help={shaping ? `${M.SHAPING_LABEL}; the lead answers your messages and drafts the vision.` : "Work runs as usual. Vision stays open while the factory runs: revise it there. Pause the project to stop new work."}
     >
       {shaping ? (
         <StartBuildingButton variant="secondary" />
       ) : (
-        <div className="s-inline">
-          <Button
-            disabled={disabled || busy}
-            loading={busy}
-            onClick={async () => {
-              setBusy(true);
-              await send("startVision");
-              setBusy(false);
-            }}
-          >
-            Back to shaping
-          </Button>
-          {running > 0 && (
-            <span className="muted small">
-              {running} running step{running === 1 ? "" : "s"} would finish normally.
-            </span>
-          )}
-        </div>
+        <p className="small no-margin">
+          <a href="#/vision">Open Vision</a>
+        </p>
       )}
     </SettingsCard>
   );

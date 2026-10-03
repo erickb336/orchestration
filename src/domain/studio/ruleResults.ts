@@ -68,11 +68,11 @@ export function itemRuleLines(s: State, item: BlueprintItem): RuleLine[] {
 }
 
 /**
- * The items of the current blueprint that tests prove (flows and contracts with rules), with their lines; with
- * `ids`, only those items (a task spec's `blueprintRefs`), in that order.
+ * The items in force that tests prove (flows and contracts with rules), with their lines; with `ids`, only those
+ * items (a task spec's `blueprintRefs`), in that order. A dropped item has no rules to prove (pass 5).
  */
 export function testedItems(s: State, ids?: readonly string[]): { item: BlueprintItem; lines: RuleLine[] }[] {
-  const items = blueprintItems(s);
+  const items = blueprintItems(s).filter((i) => i.status !== "dropped");
   const chosen = ids ? ids.map((id) => items.find((i) => i.id === id)).filter((i): i is BlueprintItem => !!i) : items;
   return chosen.filter((item) => TESTED_KINDS.includes(item.kind)).map((item) => ({ item, lines: itemRuleLines(s, item) })).filter((x) => x.lines.length > 0);
 }

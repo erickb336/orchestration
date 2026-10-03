@@ -2,13 +2,14 @@
 // answers messages and may draft the vision and propose a first roadmap, but no worker step is dispatched and no
 // planning run starts. A draft is a suggestion: the vision changes only when the user accepts it. Only the owner's
 // Start the factory (`startFactory`, called from the command table alone) moves a project to building: it needs a
-// vision, records the owner's agreement (the blueprint and vision revisions they saw, the open items they confirmed)
-// and the settings the factory runs with, and releases the roadmap on Autopilot. Going back to vision stops nothing
-// that is running.
+// vision, locks in the blueprint's draft (the first Lock in), records the owner's agreement (the draft and vision
+// revisions they saw, the open items they confirmed) and the settings the factory runs with, and releases the
+// roadmap on Autopilot. A project never goes back: Vision stays open while the factory runs (ORC-029 r12), and only
+// Pause stops building.
 
 import { deliveryMode, setDeliveryMode, setPrDelivery } from "../delivery";
 import * as F from "../findings";
-import { blueprintRev, openBlueprintItems } from "../studio/blueprint";
+import { blueprintRev, draftChanges, draftRev, openBlueprintItems, putDraftInForce } from "../studio/blueprint";
 import { unfinishedProbes } from "../studio/studio";
 import {
   type Device,
@@ -29,7 +30,7 @@ import {
   SHAPING_AREAS,
   StaleWriteError,
 } from "../types";
-import { activeAttempts, currentVision, draft, event, touch } from "./core";
+import { currentVision, draft, event, touch } from "./core";
 import { autonomyMode, autopilotAutonomy, setAutonomy } from "./lead";
 import { CONTROL_RE, oneLine, stripInvisible, visibleOrEmpty } from "./textSafety";
 import { pushVision } from "./vision";
@@ -98,8 +99,11 @@ function currentDelivery(s: State): FactoryDelivery {
 /** What the owner sends to start the factory. */
 export interface FactoryRequest {
   agreed: true;
-  /** The blueprint revision the owner saw (compare-and-set); 0 while nothing is approved. */
-  blueprintRev: number;
+  /**
+   * The blueprint draft's revision the owner saw in the pre-flight (compare-and-set). The start locks the draft in, and
+   * nothing else changes what is in force, so this one revision covers both.
+   */
+  draftRev: number;
   /**
    * The vision revision the owner saw (compare-and-set). The blueprint stands on the vision, and the vision changes
    * without a blueprint revision (an edit, an accepted draft, a document), so the agreement checks both.
@@ -110,7 +114,7 @@ export interface FactoryRequest {
   acceptOpen: string[];
 }
 
-/** What is still open for the pre-flight: the vision's open areas, the blueprint's open items, and the probes whose evidence is not in yet. */
+/** What is still open for the pre-flight: the vision's open areas, the draft's open items, and the probes whose evidence is not in yet. */
 function openForPreflight(s: State) {
   return { areas: openAreas(s), items: openBlueprintItems(s).map((o) => o.item), probes: unfinishedProbes(s) };
 }
@@ -127,7 +131,7 @@ export function preflightOpenItems(s: State): string[] {
  * confirmation lists the open items; the pre-flight screen later).
  */
 export function startFactoryRequest(s: State): FactoryRequest {
-  return { agreed: true, blueprintRev: blueprintRev(s), visionRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: preflightOpenItems(s) };
+  return { agreed: true, draftRev: draftRev(s), visionRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: preflightOpenItems(s) };
 }
 
 /**
@@ -172,17 +176,19 @@ function applyFactorySettings(state: State, x: FactorySettings, now: string): St
 
 /**
  * Start the factory: the owner's command, and the only way from shaping to building. Refused without the owner's
- * agreement, without a vision, when the blueprint or the vision changed since they looked (compare-and-set), or while
- * an open item was not confirmed. It applies the settings, records the agreement (`factoryStarts`), and moves to
- * building; on Autopilot the roadmap starts, otherwise it waits for the owner as lead proposals do. Called only from
- * the command table: no steering change, lead output, scheduler path or timer reaches it.
+ * agreement, without a vision, when the draft or the vision changed since they looked (compare-and-set), or while an
+ * open item was not confirmed. Its first step is the first Lock in: the draft's changes go into force as a blueprint
+ * revision, with the summary (open items stay in the draft). Then it applies the settings, records the agreement
+ * (`factoryStarts`, naming the revision in force), and moves to building; on Autopilot the roadmap starts, otherwise
+ * it waits for the owner as lead proposals do. Called only from the command table: no steering change, lead output,
+ * scheduler path or timer reaches it.
  */
 export function startFactory(state: State, req: FactoryRequest, now: string): State {
   if (req.agreed !== true) throw new ControlError("Starting the factory needs your agreement.");
   const why = startFactoryBlocker(state);
   if (why) throw new ControlError(why);
-  const bp = blueprintRev(state);
-  if (req.blueprintRev !== bp) throw new StaleWriteError(req.blueprintRev, bp);
+  const seen = draftRev(state);
+  if (req.draftRev !== seen) throw new StaleWriteError(req.draftRev, seen);
   const rev = currentVision(state).rev;
   if (req.visionRev !== rev) throw new StaleWriteError(req.visionRev, rev);
   const { areas, items, probes } = openForPreflight(state);
@@ -191,7 +197,12 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
   if (unconfirmed.length) throw new ControlError(`Still open and not confirmed: ${unconfirmed.join(", ")}. Confirm them to start, or close them first.`);
   const problem = settingsProblem(req.settings);
   if (problem) throw new ControlError(problem);
-  const s = draft(applyFactorySettings(state, req.settings, now));
+  const c = draftChanges(state);
+  const locked = draft(state);
+  // The first Lock in, while still in Vision: no task is building yet, so it makes no change order.
+  if (c.added.length + c.changed.length + c.dropped.length) putDraftInForce(locked, now);
+  const bp = blueprintRev(locked);
+  const s = draft(applyFactorySettings(locked, req.settings, now));
   s.project.stage = "building";
   s.project.factoryStarts.push({ at: now, by: "user", blueprintRev: bp, visionRev: rev, settings: structuredClone(req.settings), openItems: open });
   const { release } = startFactoryPlan(s);
@@ -220,20 +231,6 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
   return s;
 }
 
-/** Back to vision: nothing running is stopped and nothing new starts. Available at any time. */
-export function startVision(state: State, now: string): State {
-  if (state.project.stage === "shaping") throw new ControlError("Already shaping.");
-  const s = draft(state);
-  s.project.stage = "shaping";
-  // A new shaping session; coverage the lead reported in an earlier one is not reused.
-  s.project.shapingSince = now;
-  // Continuing past the building budget lasted while building; the next start meets the budget stop again.
-  delete s.project.budgetContinued;
-  const running = activeAttempts(s).length;
-  event(s, now, "user", "config", `Shaping the vision; new work waits until you start building${running ? ` (${running} running step${running === 1 ? " finishes" : "s finish"} normally)` : ""}`);
-  return s;
-}
-
 /**
  * Who acts first on a change order: the lead updates the affected tasks, or it waits for you. It applies to change
  * orders made from now on; open ones keep theirs.
@@ -246,9 +243,12 @@ export function setChangeOrders(state: State, who: "lead" | "user", now: string)
   return s;
 }
 
-/** The device scope, chosen in Vision: at least one of desktop, mobile and terminal, each once. */
+/**
+ * The device scope, chosen in Vision: at least one of desktop, mobile and terminal, each once. Vision stays open
+ * while the factory runs, so the owner may change it at any time; it decides what the studio designs next, and the
+ * factory builds the devices each blueprint item names.
+ */
 export function setDevices(state: State, devices: Device[], now: string): State {
-  if (state.project.stage === "building") throw new ControlError("The device scope is chosen in Vision; go back to vision to change it.");
   const chosen = DEVICES.filter((d) => devices.includes(d));
   if (!chosen.length) throw new ControlError("Choose at least one device: desktop, mobile or terminal.");
   const s = draft(state);

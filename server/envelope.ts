@@ -431,7 +431,7 @@ ${step.purpose}
 ${notesForRunSection(state, attemptId)}## Project vision (r${vision.rev})
 ${vision.text}
 Current focus: ${vision.focus}
-${visionDocsSection(state, step.role, docs)}${projectWordsSection(state)}
+${visionDocsSection(state, step.role, docs)}${projectWordsSection(state, "in-force")}
 ## Task ${task.id} (spec r${spec.rev}): ${c.title}
 Outcome: ${c.outcome}
 User benefit: ${c.benefit}
@@ -1233,12 +1233,13 @@ export const PROJECT_WORDS_TERMS = 40;
 export const PROJECT_WORDS_CHARS = 4000;
 
 /**
- * "The project's words": the dictionary the owner approved into the blueprint (B.dictionaryInForce), for every agent
- * (task agents, the lead, the designer and the PE), capped at 40 terms and about 4,000 characters, the rest counted.
- * Each term with its meaning and the words it replaces. No lines until the owner approves a dictionary.
+ * "The project's words": the dictionary the owner approved, for every agent, capped at 40 terms and about 4,000
+ * characters, the rest counted. Each term with its meaning and the words it replaces. The studio's agents (the lead,
+ * the designer and the PE) get the draft's (B.dictionaryInDraft); the factory's task agents get the one in force
+ * (B.dictionaryInForce), since the factory never reads the draft (ORC-029 pass 5). No lines until there is one.
  */
-export function projectWordsLines(state: State): string[] {
-  const words = B.dictionaryInForce(state);
+export function projectWordsLines(state: State, from: "draft" | "in-force"): string[] {
+  const words = from === "draft" ? B.dictionaryInDraft(state) : B.dictionaryInForce(state);
   if (!words) return [];
   const lines: string[] = [];
   let size = 0;
@@ -1259,8 +1260,8 @@ export function projectWordsLines(state: State): string[] {
 }
 
 /** The same section for an envelope written as one text: empty, or the block with a blank line before it. */
-export function projectWordsSection(state: State): string {
-  const lines = projectWordsLines(state);
+export function projectWordsSection(state: State, from: "draft" | "in-force"): string {
+  const lines = projectWordsLines(state, from);
   return lines.length ? `\n${lines.join("\n")}` : "";
 }
 
@@ -1455,7 +1456,7 @@ ${vision.text || "(not written yet)"}
 Current focus: ${vision.focus || "(none)"}${focusLine}
 Focus history (newest first):
 ${focusHistory(state)}
-${visionDocsSection(state, "lead", docs)}${projectWordsSection(state)}${shapingBrief}${studioBrief}
+${visionDocsSection(state, "lead", docs)}${projectWordsSection(state, "draft")}${shapingBrief}${studioBrief}
 ${principlesSection(LEAD_PRINCIPLES.map((id) => ({ id })), PRINCIPLES_WORD_CAP, LEAD_PRINCIPLES_HEADER)}${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}
 ## Open work (root tasks by priority; child tasks follow their root)
 ${board}

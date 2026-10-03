@@ -104,12 +104,12 @@ function resolveSelection(s: State, kind: StudioRunKind, given: ModelSelection |
 
 /**
  * Ask for a studio run (the service: the designer's for the lead, pass 4; the PE's after an import). Queued: the
- * scheduler dispatches it in Vision. A PE run reviews an artifact's newest version, in that version's round. Probes'
- * runs come in pass 4. Its provider and model are resolved now and recorded.
+ * scheduler dispatches it, in Vision or while the factory runs (pass 5: a studio run works on the studio and the
+ * draft, which the factory never reads). A PE run reviews an artifact's newest version, in that version's round.
+ * Probes' runs come in pass 4. Its provider and model are resolved now and recorded.
  */
 export function requestStudioRun(state: State, req: StudioRunRequest, now: string): { state: State; runId: string } {
   if (req.kind === "probe") throw new ControlError("Probe runs cannot be asked for yet; they come in ORC-029 pass 4.");
-  if (state.project.stage !== "shaping") throw new ControlError("Studio runs happen in Vision. Go back to vision first.");
   const round = state.studio.rounds.find((r) => r.n === req.round);
   if (!round) throw new ControlError(`There is no round ${req.round}.`);
   if (round.closedAt) throw new ControlError(`Round ${req.round} is closed.`);
@@ -154,13 +154,13 @@ export function requestStudioRun(state: State, req: StudioRunRequest, now: strin
 // ---------- the PE's runs, asked for by the service ----------
 
 /**
- * Whether a version needs the PE now: it is the newest version, in Vision, with its screenshots or recording done, its
- * review waiting (no pass yet, and not ended; never so for a kind the PE does not review), and no PE run on it under
- * way. A PE run that ended without a verdict is asked for again until review ends (`no-review`, studio.ts); a run a
- * pause stopped was asked for again in the same write (retryOf), and that run is among these.
+ * Whether a version needs the PE now: it is the newest version, with its screenshots or recording done, its review
+ * waiting (no pass yet, and not ended; never so for a kind the PE does not review), and no PE run on it under way. A
+ * PE run that ended without a verdict is asked for again until review ends (`no-review`, studio.ts); a run a pause
+ * stopped was asked for again in the same write (retryOf), and that run is among these. In Vision or while the
+ * factory runs alike (pass 5).
  */
 export function peRunDue(s: State, a: StudioArtifact): boolean {
-  if (s.project.stage !== "shaping") return false;
   if (latestVersion(s, a.id)?.version !== a.version) return false;
   // The PE reads the screenshots and the recording: it waits until the service has made them.
   if (a.shots?.status === "pending" || a.demo?.status === "pending") return false;
@@ -173,12 +173,11 @@ export const peBrief = (a: StudioArtifact) =>
   a.provenance ? `PE review of ${artifactName(a)}, a reproduction of the code as it is today: is it faithful, a verdict for each variant.` : `PE review of ${artifactName(a)}: feasibility, scale, longevity and budget, a verdict for each variant.`;
 
 /**
- * Ask for a PE run on every version that needs one (the service, on each cycle: after an import, after the
- * screenshots or recording, and when the project returns to Vision). When no enabled provider can run the PE, its
- * review ends there (`no-provider`, with the reason) and the version goes to the owner unreviewed, never left waiting.
+ * Ask for a PE run on every version that needs one (the service, on each cycle: after an import, and after the
+ * screenshots or recording). When no enabled provider can run the PE, its review ends there (`no-provider`, with the
+ * reason) and the version goes to the owner unreviewed, never left waiting.
  */
 export function askForPeReviews(state: State, now: string): State {
-  if (state.project.stage !== "shaping") return state;
   let s = state;
   for (const a of latestArtifacts(state)) {
     if (!peRunDue(s, a)) continue;
@@ -233,13 +232,14 @@ function fail(s: State, r: StudioRun, note: string, now: string) {
 }
 
 /**
- * Start queued studio runs, oldest first: only in Vision, never while the project is paused or at the building budget
- * (they wait, queued). A run whose round closed, or whose artifact was revised, before it started is refused; one
- * whose provider is unavailable fails with the reason (nothing is substituted). Studio runs share the worker limits
- * with task runs. Returns the runs started, which the scheduler launches.
+ * Start queued studio runs, oldest first: in Vision and while the factory runs (pass 5: they work on the studio and
+ * the draft), never while the project is paused or at the building budget (they wait, queued). A run whose round
+ * closed, or whose artifact was revised, before it started is refused; one whose provider is unavailable fails with
+ * the reason (nothing is substituted). Studio runs share the worker limits with task runs. Returns the runs started,
+ * which the scheduler launches.
  */
 export function dispatchStudioRuns(state: State, now: string, opts: StudioDispatchOptions = {}): { state: State; started: string[] } {
-  if (state.project.hold || state.project.stage !== "shaping" || !state.studio.runs.some((r) => r.status === "queued")) return { state, started: [] };
+  if (state.project.hold || !state.studio.runs.some((r) => r.status === "queued")) return { state, started: [] };
   if (budgetStop(state)) return { state, started: [] };
   const s = draft(state);
   const started: string[] = [];

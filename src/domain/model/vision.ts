@@ -23,7 +23,7 @@ export function editVision(state: State, expectedRev: number, text: string, focu
   const v = currentVision(s);
   if (v.rev !== expectedRev) throw new StaleWriteError(expectedRev, v.rev);
   // A project never builds without a vision. Clearing it is possible while shaping.
-  if (s.project.stage === "building" && !text.trim()) throw new ControlError("The vision cannot be empty while building. Go back to shaping to clear it.");
+  if (s.project.stage === "building" && !text.trim()) throw new ControlError("The vision cannot be empty while building.");
   pushVision(s, { author: "user", text, focus, reason }, now);
   return s;
 }

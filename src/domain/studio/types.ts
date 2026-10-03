@@ -383,8 +383,15 @@ export interface Probe {
 }
 
 /**
- * One item of the blueprint: an artifact the owner approved at a version (and variant), or one still open. An item
- * keeps its id across revisions, so task specs can cite it (`blueprintRefs`); items are never removed.
+ * Where an item stands: approved (the factory builds it), open (not settled: no pick, marked Change, PE review
+ * unfinished, an objection not overruled), or dropped by the owner (the part left the design; pass 5).
+ */
+export type BlueprintItemStatus = "approved" | "open" | "dropped";
+
+/**
+ * One item of the blueprint: an artifact the owner approved at a version (and variant), one still open, or one the
+ * owner dropped. An item keeps its id across revisions, so task specs can cite it (`blueprintRefs`); items are never
+ * removed from what is in force, and a dropped item keeps its id with the status "dropped".
  */
 export interface BlueprintItem {
   id: string;
@@ -394,28 +401,130 @@ export interface BlueprintItem {
   version: number;
   /** The variant approved, for an artifact with several. */
   variant?: string;
-  status: "approved" | "open";
+  status: BlueprintItemStatus;
 }
 
-/** One revision of what the factory builds from: the vision revision it stands on and every item. Made only by the owner's approvals. */
+/**
+ * One revision of what the factory builds from: the vision revision it stands on and every item. The newest revision
+ * is the version in force. Since pass 5 only the owner's Lock in makes one (Start the factory is the first Lock in);
+ * before, each approval made one.
+ */
 export interface BlueprintRevision {
   rev: number;
   at: string;
   visionRev: number;
   reason: string;
   items: BlueprintItem[];
+  /** The owner's Lock in that made it, with the summary they agreed to. Absent on revisions made by approvals before pass 5. */
+  lockIn?: LockInRecord;
 }
 
 /**
- * A blueprint revision made while building, with the tasks whose current spec cites a changed item. Who acts on it
- * first follows the project's `changeOrders` setting: the lead updates the tasks, or it waits for the owner (Needs
- * you). At most one change order per revision, so `rev` identifies it; a revision that touches no task makes none.
+ * The draft (pass 5, spec r10): the owner's working copy of the blueprint. Approvals and drops change it; the
+ * factory never reads it. Its changes are not stored: they are the difference between its items and the version in
+ * force (`draftChanges`, blueprint.ts). Lock in puts the changes into force; open items stay in the draft.
+ * It is always present: with no difference from the version in force and no open item, there is no draft to show.
+ */
+export interface BlueprintDraft {
+  /**
+   * Bumped by every change to the draft and by every Lock in, never reset: a Lock in and Start the factory name the
+   * revision their summary showed (compare-and-set), so a summary shown before any change is refused.
+   */
+  rev: number;
+  /** Every item as the draft has it, in the order they came in: approved, open and dropped. */
+  items: BlueprintItem[];
+}
+
+/** The owner's agreement recorded with a Lock in: who, and the summary they saw (when is the revision's `at`). */
+export interface LockInRecord {
+  by: "user";
+  summary: LockInSummary;
+}
+
+/** A task's state as the Lock in summary says it: not started, started, or finished. */
+export type TouchedTaskState = "queued" | "running" | "landed";
+
+/**
+ * What happens to a task that a Lock in touches (spec r14): queued, the lead updates its spec; running, it finishes
+ * and then the lead revises it; landed, the lead plans a revision; queued and building only dropped items, it is
+ * retired. A running or landed task that builds only dropped items is not retired: running work finishes (r14), and
+ * built work needs a revision to take the part out.
+ */
+export type TaskHandling = "update-spec" | "finish-then-revise" | "plan-revision" | "retire";
+
+/** A task whose current spec cites an item the Lock in adds, changes or drops. */
+export interface TouchedTask {
+  taskId: string;
+  title: string;
+  state: TouchedTaskState;
+  /** The items it cites that the Lock in adds, changes or drops. */
+  items: string[];
+  handling: TaskHandling;
+}
+
+/** A dollar range, low to high. */
+export type UsdRange = [number, number];
+
+/** The PE's estimate for one item the Lock in adds or changes, from its verdict on that version; null: no estimate (never $0). */
+export interface ItemEstimate {
+  itemId: string;
+  estimate: BudgetEstimate | null;
+}
+
+/**
+ * What a Lock in does to the budgets. The building spend so far, with the runs that have no recorded cost counted
+ * apart (never as $0); the maintenance estimate so far (null: not estimated yet). `items`: the PE's estimate for each
+ * added or changed item. `itemsTotal` sums them, each range null when there is no item or one has no figure for it:
+ * an unknown cost is never $0.
+ */
+export interface LockInBudgets {
+  building: { budgetUsd: number | null; spentUsd: number; unknownRuns: number };
+  maintenance: { budgetUsdPerMonth: number | null; estimateUsdPerMonth: number | null };
+  items: ItemEstimate[];
+  itemsTotal: { buildUsd: UsdRange | null; maintenanceUsdPerMonth: UsdRange | null };
+}
+
+/**
+ * The summary before a Lock in (pass 5, screen 3): what changes, the tasks it touches and what happens to each, the
+ * new work, the budgets, and what stays open. A pure function of the state (`lockInSummary`); the Lock in records it.
+ */
+export interface LockInSummary {
+  /** The draft revision it describes: the Lock in names it (compare-and-set). */
+  draftRev: number;
+  /** The revision in force now, which the Lock in replaces; 0 before the first. */
+  inForceRev: number;
+  changes: {
+    /** Approved in the draft, and not approved in force: new to the factory. */
+    added: BlueprintItem[];
+    /** Approved in both, at another version, variant or title: the draft's item, and the one in force it replaces. */
+    changed: { item: BlueprintItem; replaces: BlueprintItem }[];
+    /** Dropped in the draft: the items as they are in force, which leave the design. */
+    dropped: BlueprintItem[];
+  };
+  tasks: TouchedTask[];
+  /** The added items no task cites yet: the lead plans their tasks after the Lock in. */
+  newWork: string[];
+  budgets: LockInBudgets;
+  /** The open items: they stay in the draft, and the factory keeps the version in force (`inForce`), if any. */
+  stillOpen: { item: BlueprintItem; why: string; inForce?: BlueprintItem }[];
+}
+
+/**
+ * A Lock in made while building, when it touches a task or brings new work: what changed, and what the lead does
+ * about it. Who acts first follows the project's `changeOrders` setting: the lead adjusts the tasks, or it waits for
+ * the owner (Needs you). At most one change order per revision, so `rev` identifies it.
  */
 export interface ChangeOrder {
   rev: number;
   at: string;
+  /** The items added or changed: what the factory builds anew. */
   changedItems: string[];
-  affectedTasks: string[];
+  /** The items dropped: what the factory no longer builds (pass 5). */
+  droppedItems: string[];
+  /** The tasks it touches, each with its planned handling (r14). The lead's updates follow it (a later unit). */
+  tasks: { taskId: string; handling: TaskHandling }[];
+  /** The added items no task cites yet: the lead plans their tasks. */
+  newWork: string[];
   /** Open until handled; the handling (the lead's updates through steering, or the owner's answer) comes in pass 5. */
   status: "open" | "done";
   /** Who acts first: the project's `changeOrders` setting when the revision was made. */
@@ -496,9 +605,12 @@ export interface Studio {
 }
 
 export interface Blueprint {
+  /** The versions in force, oldest first; the newest is the one the factory builds from. */
   revisions: BlueprintRevision[];
+  /** The owner's working copy, which the factory never reads. */
+  draft: BlueprintDraft;
   changeOrders: ChangeOrder[];
 }
 
 export const emptyStudio = (): Studio => ({ rounds: [], artifacts: [], feedback: [], verdicts: [], probes: [], runs: [] });
-export const emptyBlueprint = (): Blueprint => ({ revisions: [], changeOrders: [] });
+export const emptyBlueprint = (): Blueprint => ({ revisions: [], draft: { rev: 0, items: [] }, changeOrders: [] });
