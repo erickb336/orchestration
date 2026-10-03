@@ -5,10 +5,13 @@
 import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
 import * as M from "./model";
+import { busyAgents } from "./model/core";
 import { buildSeed } from "./seed";
 import { RESEARCH_RUN_KINDS, type StudioRun } from "./studio/types";
 import { PROBE_KEY, allowSubagentsForStudioRun, markSubagentsSeen, reportSubagent, researchSteps, setResearchHelpers, setSubagentProviders, slippedThrough } from "./subagents";
-import { ControlError, MAX_SUBAGENTS_LISTED, MAX_SUBAGENT_ASK, type ProviderId, type State } from "./types";
+import { ControlError, MAX_SUBAGENTS_LISTED, MAX_SUBAGENT_ASK, type Attempt, type ProviderId, type RunSubagents, type State, type Subagent } from "./types";
+import { HELPER_SLIPPED_THROUGH, needsYouItems } from "./needsYou";
+import { budgetStop, buildingSpend, subagentsCost, type ModelPrice } from "./spend";
 
 const T0 = Date.parse("2026-10-03T12:00:00Z");
 const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -201,5 +204,89 @@ describe("a subagent where none is allowed", () => {
     expect(slippedThrough(seen)).toEqual([]);
     expect(run(seen, runId).subagents!.seenAt).toBe(at(11));
     expect(() => markSubagentsSeen(state, runId, at(12))).toThrow("reported no helper agents");
+  });
+});
+
+describe("the cost of subagents and the budget", () => {
+  const LIST: ModelPrice[] = [
+    { provider: "claude", model: "claude-test", inputPerMTok: 1, outputPerMTok: 5, source: "https://example.test/pricing", checked: "2026-10-03" },
+    { provider: "codex", model: "gpt-test", inputPerMTok: 2, outputPerMTok: 10, source: "https://example.test/pricing", checked: "2026-10-03" },
+  ];
+
+  /** One finished run on `provider` with a known cost of $1 and the given subagents. */
+  function finished(provider: "claude" | "codex", subagents: RunSubagents): State {
+    const s = project();
+    const a: Attempt = {
+      id: "run-x",
+      taskId: "T-x",
+      stepId: "S1",
+      snapshot: { provider, model: provider === "claude" ? "claude-test" : "gpt-test", source: "project-role", routingReason: "", specRev: 1, stepRev: 1, visionRev: 1, workspace: "/w", pipelineRev: 1, purpose: "", inputs: [], allowSubagents: { cap: 3 } },
+      startedAt: at(0),
+      endedAt: at(60),
+      progress: 100,
+      artifacts: [],
+      outcome: "completed",
+      usage: { costUsd: 1 },
+      subagents,
+    };
+    return { ...s, attempts: [a], leadRuns: [], studio: { ...s.studio, runs: [] } };
+  }
+  const item = (over: Partial<Subagent>): Subagent => ({ id: "h", startedAt: at(1), endedAt: at(2), asked: "Search", usageInParent: false, ended: "completed", ...over });
+
+  it("adds subagents whose usage the parent's does not include, priced by their own model", () => {
+    // Codex: 1M input tokens at $2 and 100k output at $10 = $3, apart from the parent's $1.
+    const s = finished("codex", { count: 1, mostAtOnce: 1, items: [item({ usage: { inputTokens: 1_000_000, outputTokens: 100_000 } })] });
+    expect(buildingSpend(s, LIST)).toMatchObject({ usd: 4, runs: 1, unknown: [] });
+    expect(subagentsCost(s.attempts[0], LIST)).toEqual({ usd: 3, inParentUsd: 0, unknown: 0 });
+  });
+
+  it("does not add subagents already inside the parent's reported cost, and still shows what they cost", () => {
+    const s = finished("claude", { count: 1, mostAtOnce: 1, items: [item({ usageInParent: true, usage: { costUsd: 0.4 } })] });
+    expect(buildingSpend(s, LIST).usd).toBe(1);
+    expect(subagentsCost(s.attempts[0], LIST)).toEqual({ usd: 0.4, inParentUsd: 0.4, unknown: 0 });
+  });
+
+  it("counts a subagent with no recorded cost as unknown, never zero, and the stop counts it", () => {
+    const s = finished("codex", { count: 2, mostAtOnce: 1, items: [item({ id: "a" }), item({ id: "b", ended: "refused" })] });
+    const spend = buildingSpend(s, LIST);
+    expect(spend.usd).toBe(1);
+    expect(spend.unknown).toEqual([{ runId: "run-x helper a", provider: "codex", model: "gpt-test", reason: "no-usage" }]);
+    // Codex has no spend limit, so the stop cannot check the spend and holds new work.
+    const budgeted = { ...s, project: { ...s.project, budgets: { ...s.project.budgets, buildingUsd: 100 } } };
+    expect(budgetStop(budgeted, LIST)?.countedUsd).toBeNull();
+    // A refusal never ran: a known $0.
+    expect(subagentsCost(s.attempts[0], LIST)).toEqual({ usd: 0, inParentUsd: 0, unknown: 1 });
+  });
+
+  it("counts each unlisted subagent as unknown", () => {
+    const s = finished("claude", { count: 3, mostAtOnce: 1, items: [item({ usageInParent: true, usage: { costUsd: 0.1 } })], unlisted: 2 });
+    expect(buildingSpend(s, LIST).unknown.map((u) => u.runId)).toEqual(["run-x unlisted helper 1", "run-x unlisted helper 2"]);
+    expect(subagentsCost(s.attempts[0], LIST).unknown).toBe(2);
+  });
+
+  it("does not count a running parent's subagents yet, and Agents at once keeps counting runs", () => {
+    let { state, runId } = investigation(setResearchHelpers(project(), "investigation/S1", 3, at(1)));
+    const busy = busyAgents(state);
+    state = reportSubagent(state, runId, { phase: "started", id: "a", asked: "Search", usageInParent: false }, at(10));
+    state = reportSubagent(state, runId, { phase: "ended", id: "a", how: "completed", usage: { costUsd: 5 } }, at(11));
+    expect(busyAgents(state)).toBe(busy);
+    expect(buildingSpend(state, LIST).usd).toBe(buildingSpend(investigation(project()).state, LIST).usd);
+  });
+});
+
+describe("Needs you", () => {
+  it("lists a run whose agent started a helper where none is allowed, and drops it once seen", () => {
+    const { state, runId } = investigation(project());
+    const s = reportSubagent(state, runId, { phase: "started", id: "x", asked: "Look around", usageInParent: true }, at(10));
+    const entry = needsYouItems(s).find((i) => i.key === `helpers-${runId}`);
+    expect(entry).toMatchObject({ kind: "open", what: HELPER_SLIPPED_THROUGH, action: "Open" });
+    expect(entry?.kind === "open" ? entry.detail : "").toContain("started a helper agent");
+    expect(needsYouItems(markSubagentsSeen(s, runId, at(11))).some((i) => i.key === `helpers-${runId}`)).toBe(false);
+  });
+
+  it("does not list helpers a research step was allowed", () => {
+    const { state, runId } = investigation(setResearchHelpers(project(), "investigation/S1", 3, at(1)));
+    const s = reportSubagent(state, runId, { phase: "started", id: "x", asked: "Look around", usageInParent: true }, at(10));
+    expect(needsYouItems(s).some((i) => i.key.startsWith("helpers-"))).toBe(false);
   });
 });
