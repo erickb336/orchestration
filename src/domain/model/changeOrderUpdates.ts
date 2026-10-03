@@ -452,6 +452,16 @@ function undoneInto(s: State, line: ChangeOrderLine, now: string): string | unde
   return undefined;
 }
 
+/**
+ * The lead revised a task's spec for the PE (`fromRev` → `toRev`, leadOutput.ts): when the spec it revised is a change
+ * order's applied update, or a revision of one, the line records the new revision (review finding 6). Undo then still
+ * restores the spec before the update, and any other edit since, the owner's, keeps it as is. Mutates the draft.
+ */
+export function recordPeRevisionInto(s: State, taskId: string, fromRev: number, toRev: number) {
+  for (const co of s.blueprint.changeOrders)
+    for (const line of co.lines ?? []) if (line.kind === "update-spec" && line.taskId === taskId && line.status === "applied" && line.specRevs?.at(-1) === fromRev) line.specRevs.push(toRev);
+}
+
 /** Undo one applied row of a line kind. Returns why it was left as is, or undefined when undone. Mutates the draft. */
 export function undoChangeOrderRow(s: State, c: SteeringChange, now: string): string | undefined {
   const found = lineOf(s, c.id);

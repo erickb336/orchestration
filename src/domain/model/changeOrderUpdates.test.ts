@@ -351,6 +351,27 @@ describe("Undo, line by line", () => {
     expect(undo(r.state, 0, 34).result.left).toEqual([{ id: lines[0].changeId, why: "already undone" }]);
   });
 
+  it("Undo of a spec update still works after the PE asked a change and the lead revised it (review finding 6)", () => {
+    const f = changeOrdered();
+    const a = answer(f.s, fullAnswer(f), 20);
+    const line = order(a.s).lines![0];
+    const before = task(f.s, f.tasks.queued);
+    // The PE asks a change on the update (r3); the lead's next run revises it for the PE (r4), with no steering row.
+    let s = runCommand(a.s, "recordPeReview", { taskId: f.tasks.queued, specRev: 3, verdict: "feasible-if", reasons: "The days hide the map.", change: "Keep a small map on top." }, at(30)).state;
+    const r = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "pe-review" }, at(31));
+    s = M.completeLeadRun(r.state, r.runId, { reply: "Revised.", proposals: [{ ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), outcome: "A small map on top, then the days.", revises: f.tasks.queued }] } as never, at(32));
+    expect(M.currentSpec(task(s, f.tasks.queued))).toMatchObject({ rev: 4, author: "lead", content: { outcome: "A small map on top, then the days.", decidedBy: "user" } });
+    expect(order(s).lines![0].specRevs).toEqual([3, 4]);
+    // Undo restores the spec before the update, with its PE review as it was.
+    const undone = M.undoSteering(s, a.setId, line.changeId, at(33));
+    expect(undone.result).toEqual({ undone: [line.changeId], left: [] });
+    expect(M.currentSpec(task(undone.state, f.tasks.queued))).toMatchObject({ rev: 5, author: "user", content: M.currentSpec(before).content });
+    expect(task(undone.state, f.tasks.queued).peReview).toEqual(before.peReview);
+    // The owner's edit after a PE revision still keeps the line as is.
+    const edited = run(s, "editSpec", { taskId: f.tasks.queued, expectedRev: 4, content: { ...M.currentSpec(task(s, f.tasks.queued)).content, outcome: "Mine." }, reason: "mine" }, at(33)).state;
+    expect(M.undoSteering(edited, a.setId, line.changeId, at(34)).result.left).toEqual([{ id: line.changeId, why: "its spec changed since (now r5)" }]);
+  });
+
   it("Undo leaves a line as is when the work moved on: a spec changed since, or a new task that started", () => {
     const f = changeOrdered();
     const a = answer(f.s, fullAnswer(f), 20);

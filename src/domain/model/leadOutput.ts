@@ -12,7 +12,7 @@ import { currentSpec, draft, event, getTask, nextId } from "./core";
 import { deferredLeadRoots, getLeadRun, openLeadProposals } from "./lead";
 import { type RunReport } from "./runs";
 import { applyStudioBlock, setRoundLead, type StudioBlockResult } from "../studio/lead";
-import { answerChangeOrderInto } from "./changeOrderUpdates";
+import { answerChangeOrderInto, recordPeRevisionInto } from "./changeOrderUpdates";
 import { draftFromRun, validateCoverage, validateQuestions, validateVisionDraft } from "./shaping";
 import { editSpecInto } from "./specs";
 import { steerFromRun, supersedeSuggestions } from "./steering";
@@ -325,7 +325,8 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
 /**
  * The lead revises a proposal the PE sent back (pass 5): its whole proposal, merged into the current spec
  * (`specUpdateOf`), becomes the task's next spec revision (by the lead, so an objection is not reopened), and the PE
- * reviews it again. The task keeps its flow and priority. Returns why it cannot, or undefined. Mutates the draft.
+ * reviews it again. The task keeps its flow and priority. A revision of a change order's spec update is recorded on
+ * that line, so its Undo still restores the spec before the update. Returns why it cannot, or undefined. Mutates the draft.
  */
 function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: string): string | undefined {
   if (typeof revises !== "string") return '"revises" must be a task id';
@@ -339,6 +340,7 @@ function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: strin
   if (chosen) return `keep option ${chosen.id} (${chosen.name}): the user chose it`;
   const round = t.peReview!.rounds.length;
   editSpecInto(s, getTask(s, t.id), spec.rev, specUpdateOf(s, spec.content, p), `Revised for the PE (round ${round} asked for a change)`, "lead", now);
+  recordPeRevisionInto(s, t.id, spec.rev, currentSpec(getTask(s, t.id)).rev);
   return undefined;
 }
 
