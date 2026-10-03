@@ -59,7 +59,9 @@ It checks the four points and writes a scrubbed record to `docs/real-runs/`. Onl
 
 ## 31c as built: the Codex adapter
 
-**Result.** Codex's `childAgentTracking` stays "unsupported", so "Let research steps start helpers" stays off for Codex. Real runs prove pause, cost and safety. The cap does not hold: Codex limits its sub-agents only at once, not per run. Record: [2026-10-03T08-34-11-166Z](../real-runs/2026-10-03T08-34-11-166Z.json), from `scripts/codex-subagents-real.mjs` (9 of 10 checks).
+**Result.** Real runs prove pause, cost and safety. The cap does not hold per run: Codex limits its sub-agents only at once. Record: [2026-10-03T08-34-11-166Z](../real-runs/2026-10-03T08-34-11-166Z.json), from `scripts/codex-subagents-real.mjs` (9 of 10 checks).
+
+**The owner's choice (ORC-030 r6, option 2 below):** Codex helpers are allowed with the cap "at most N at once". Codex's `childAgentTracking` is "supported" on that record. A Codex run's allowance carries `atOnce`; the setting says beside the cap that Codex counts it at once, a run's Helpers line says "at most N at once", and the activity log flags only more running together than the cap (`HELPER_CAP` in `src/domain/subagents.ts`). Not verified: a real run after the switch (no paid runs in ORC-030 C3).
 
 **What the adapter does** (`server/runtimes/codex.ts`):
 

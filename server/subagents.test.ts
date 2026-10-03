@@ -90,7 +90,8 @@ describe("a research step's run", () => {
     const f = await service(["codex"]);
     f.cmd("setResearchHelpers", { step: "investigation/S1", cap: 2 });
     const { id, run } = f.create("investigation");
-    expect(f.codex.started.find((x) => x.attemptId === run.id)!.allowSubagents).toEqual({ cap: 2 });
+    // Codex limits its sub-agents only at once (agents.max_threads): the allowance says so (ORC-030 r6).
+    expect(f.codex.started.find((x) => x.attemptId === run.id)!.allowSubagents).toEqual({ cap: 2, atOnce: true });
     f.codex.emit({ type: "subagent", attemptId: run.id, subagent: { phase: "started", id: "thread-a", asked: "Find where sync is called", model: "gpt-test", usageInParent: false } });
     f.codex.emit({ type: "subagent", attemptId: run.id, subagent: { phase: "ended", id: "thread-a", how: "completed", usage: { inputTokens: 500, outputTokens: 50 } } });
     f.tick();

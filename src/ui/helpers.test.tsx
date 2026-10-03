@@ -36,7 +36,8 @@ describe("the run's helpers", () => {
     expect(helpersLine(run(state, runId))).toBe("2 helpers · at most 2 at once · $0.25, in the run's cost; 1 still running");
     const t = visible(renderScreen(<RunsSection state={state} task={task(state, taskId)} />, state));
     expect(t).toContain("2 helpers");
-    expect(t).toContain("At most 3 helpers per run, read-only like the step.");
+    // The run is on Codex, which limits helpers only at once (the owner's choice, ORC-030 r6).
+    expect(t).toContain("At most 3 helpers at once, read-only like the step. The provider limits them only at once, so a run may start more over time.");
     expect(t).toContain("Find where sync is called · completed · helper-model");
     expect(t).toContain("Read the sync tests · running");
     expect(t).not.toContain("Mark as seen");
@@ -76,10 +77,23 @@ describe("the setting beside a research step's model", () => {
 
   it("shows the cap when on, and names the providers it applies to", () => {
     const { state, taskId } = investigation(["claude"], 4);
-    expect(helperSetting(state, "investigation/S1")).toMatchObject({ cap: 4, canTurnOn: true, why: "It applies to runs on Claude. Runs on another provider start none." });
+    expect(helperSetting(state, "investigation/S1")).toMatchObject({ cap: 4, canTurnOn: true, why: "It applies to runs on Claude. Runs on another provider start none.", capLabel: "Helpers per run, at most" });
+    expect(helperSetting(state, "investigation/S1")!.capHint).toBeUndefined();
     const t = visible(renderScreen(<ModelsSection state={state} task={task(state, taskId)} />, state));
     expect(t).toContain("Helpers per run, at most");
     expect(t).toContain("For Investigation · S1 Investigate and gather evidence in every task of this project.");
+  });
+
+  it("with Codex, says beside the cap that Codex counts it at once, not per run (the owner's choice, ORC-030 r6)", () => {
+    const { state, taskId } = investigation(["claude", "codex"], 2);
+    expect(helperSetting(state, "investigation/S1")).toMatchObject({
+      why: "It applies to runs on Claude and Codex.",
+      capLabel: "Helpers, at most",
+      capHint: "On Codex: at most this many at once. It limits helpers only at once, not per run, so a run may start more over time. On Claude: at most this many per run.",
+    });
+    const t = visible(renderScreen(<ModelsSection state={state} task={task(state, taskId)} />, state));
+    expect(t).toContain("Helpers, at most");
+    expect(t).toContain("On Codex: at most this many at once.");
   });
 });
 

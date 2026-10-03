@@ -1187,9 +1187,13 @@ export const MAX_SUBAGENT_ASK = 300;
 /** The subagents a run's record lists; past them it keeps counting, and their cost is unknown. */
 export const MAX_SUBAGENTS_LISTED = 100;
 
-/** What a run may start: at most `cap` subagents. */
+/**
+ * What a run may start: at most `cap` subagents in the run, or, with `atOnce`, at most `cap` running at the same time
+ * (Codex limits its sub-agents only at once, so a run may start more over time; the owner accepted that, ORC-030 r6).
+ */
 export interface SubagentAllowance {
   cap: number;
+  atOnce?: true;
 }
 
 /** How a subagent ended. "refused": the parent asked for one past the run's cap and the runtime refused it, so it never ran. */
