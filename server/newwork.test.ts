@@ -69,6 +69,19 @@ describe("the factory link in the briefs", () => {
     expect(code).not.toContain("Start from the approved prototype");
   });
 
+  it("a design the PE sends back runs again with the PE's change in its brief; the first run has none", () => {
+    const { s: built, item } = withPrototype();
+    const { s: cited, id } = featureCiting(built, item);
+    let s = M.dispatchEligible(M.leadPromoteProposals(M.startHeldTask(cited, id, at(8)), at(8)), at(8));
+    const brief = (st: State) => buildEnvelope({ state: st, task: st.tasks.find((x) => x.id === id)!, step: st.tasks.find((x) => x.id === id)!.steps.find((x) => x.id === "S1")!, attemptId: "run-d", access: "write", studioDir: STUDIO });
+    expect(brief(s)).not.toContain("## The PE sent your last design back");
+    s = M.reportCompletion(s, M.activeAttempts(s, id)[0].id, [], at(9), [{ name: "design", summary: "the trip home" }]);
+    s = runCommand(s, "recordPeReview", { taskId: id, stepId: "S1", verdict: "feasible-if", reasons: "The timeline loads every trip.", change: "Page the timeline, 20 trips at a time.", version: 1 }, at(10)).state;
+    expect(brief(s)).toContain(
+      "## The PE sent your last design back (round 1 of 3)\nThe PE reviews new work before it starts. It found your design feasible if changed.\n- The change it asks for: Page the timeline, 20 trips at a time.\n- Its reasons: The timeline loads every trip.\nMake this change and keep the rest. Do not add features or decide product questions: those are the user's. The PE reviews your new design next.\n",
+    );
+  });
+
   it("the UX review step names the approved variant's screenshots to compare with", () => {
     const { s: built, item, artifactId } = withPrototype();
     const { s, id } = featureCiting(built, item);
