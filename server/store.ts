@@ -446,7 +446,6 @@ function stageRefusal(prev: State, next: State, command: string | undefined): st
 function blueprintRefusal(prev: State, next: State, command: string | undefined): string | undefined {
   const before = prev.blueprint.revisions;
   const after = next.blueprint.revisions;
-  if (after === before) return undefined;
   if (command === "resetSampleData" && next.project.sample) return undefined;
   if (command === "initProject" && after.length === 0) return undefined;
   const kept = after.length >= before.length && before.every((r, i) => JSON.stringify(r) === JSON.stringify(after[i]));
@@ -583,6 +582,14 @@ export class Store {
   }
 
   /**
+   * The state as stored before this write, parsed again from its JSON. A command or an update may change the state it
+   * was given in place, so the guards and the event mirror compare against this, never against that object.
+   */
+  private stored(cur: { json: string }): State {
+    return JSON.parse(cur.json) as State;
+  }
+
+  /**
    * Refuse, and log, a write that would start the factory other than by the owner's command (`stageRefusal`), or
    * change what is in force other than by the owner's Lock in (`blueprintRefusal`).
    */
@@ -640,9 +647,11 @@ export class Store {
       const cur = this.load();
       const record = this.db.prepare("INSERT INTO commands (idempotency_key, name, args, at, version, result, error_kind, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
       let outcome: ReturnType<typeof runCommand>;
+      let prev: State;
       try {
         outcome = runCommand(cur.state, name, args, now);
-        this.guardStage(cur.state, outcome.state, name);
+        prev = this.stored(cur);
+        this.guardStage(prev, outcome.state, name);
       } catch (e) {
         failure = classify(e);
         // Record the rejection so a retry with the same key reports the same outcome.
@@ -650,7 +659,7 @@ export class Store {
         return { version: cur.version, replayed: false };
       }
       // Errors from here on are storage failures: they roll the whole transaction back.
-      const version = this.persist(cur.version, cur.state, outcome.state, now);
+      const version = this.persist(cur.version, prev, outcome.state, now);
       record.run(idempotencyKey, name, JSON.stringify(args ?? {}), now, version, outcome.result === undefined ? null : JSON.stringify(outcome.result), null, null);
       return { version, result: outcome.result, replayed: false };
     });
@@ -672,10 +681,10 @@ export class Store {
       }
       const cur = this.load();
       const next = fn(cur.state);
-      this.guardStage(cur.state, next, undefined);
-      const json = JSON.stringify(next);
-      if (json === cur.json) return { version: cur.version, changed: false };
-      return { version: this.persist(cur.version, cur.state, next, now), changed: true };
+      if (JSON.stringify(next) === cur.json) return { version: cur.version, changed: false };
+      const prev = this.stored(cur);
+      this.guardStage(prev, next, undefined);
+      return { version: this.persist(cur.version, prev, next, now), changed: true };
     });
     if (out.changed) this.emit();
     return out;

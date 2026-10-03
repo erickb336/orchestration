@@ -108,6 +108,18 @@ describe("the owner-only start, where state is written", () => {
     );
   });
 
+  it("an internal update that changes the state it was given in place is judged against what is stored", () => {
+    // Review finding 14: the guard compared the state objects, so an in-place change looked like no change.
+    expectRefused(
+      () =>
+        store.update((s) => {
+          s.project.stage = "building";
+          return s;
+        }, iso()),
+      /an internal update tried to/,
+    );
+  });
+
   it("the owner's startFactory is accepted with its one record; a reset to the sample, and every other write are untouched", () => {
     cmd("startFactory", startFactoryArgs(store.read().state));
     expect(stage()).toBe("building");
@@ -216,6 +228,29 @@ describe("the owner-only Lock in, where state is written (pass 5)", () => {
       /an internal update made a revision/,
     );
     expect(blueprint().revisions).toHaveLength(1);
+  });
+
+  it("an internal update that changes or adds a revision in place, on the state it was given, is refused too", () => {
+    approved("Trail search");
+    cmd("startFactory", startFactoryArgs(store.read().state));
+    const inForce = blueprint().revisions;
+    expectRefusedRevision(
+      () =>
+        store.update((s) => {
+          s.blueprint.revisions[0].items = [];
+          return s;
+        }, iso()),
+      /an internal update changed or removed a revision in force/,
+    );
+    expectRefusedRevision(
+      () =>
+        store.update((s) => {
+          sneak(s);
+          return s;
+        }, iso()),
+      /an internal update made a revision/,
+    );
+    expect(blueprint().revisions).toEqual(inForce);
   });
 
   it("a new project and a reset to the sample start a new blueprint: not a Lock in", () => {
