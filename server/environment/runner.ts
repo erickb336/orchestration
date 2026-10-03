@@ -45,6 +45,8 @@ export class EnvironmentChecks extends BaseChecks {
     const stop = new AbortController();
     run.current = () => stop.abort();
     const note = (msg: string) => this.emit({ type: "activity", attemptId: a.attemptId, note: msg.slice(0, 200) });
+    // A dev container the owner has not confirmed was not used: the record names it, for Needs you.
+    const unconfirmed = a.unconfirmed ? { unconfirmed: a.unconfirmed } : {};
     try {
       if (run.stopRequested) stop.abort();
       const out = await this.environments.withPrepared(
@@ -86,11 +88,11 @@ export class EnvironmentChecks extends BaseChecks {
       run.results.unshift(...out.prepare);
       if (!out.ok) {
         for (const c of a.commands) if (c.kind === "check") run.results.push(notRun(c));
-        return this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(out.record ? { environment: out.record } : {}) } });
+        return this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(out.record ? { environment: { ...out.record, ...unconfirmed } } : {}) } });
       }
       const tests = out.value;
       if (tests) note(`Test report ${tests.path}: ${tests.status === "read" ? `${tests.counts.passed} passed, ${tests.counts.failed + tests.counts.error} failed, ${tests.counts.skipped} skipped` : tests.reason}`);
-      this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(tests ? { tests } : {}), environment: out.record } });
+      this.finish(run, { type: "completed", attemptId: a.attemptId, finalText: "", checks: { sha: a.target, results: run.results, durationMs: Date.now() - run.startedAt, sandbox: a.sandbox, ...(tests ? { tests } : {}), environment: { ...out.record, ...unconfirmed } } });
     } catch (e) {
       this.finish(run, { type: "failed", attemptId: a.attemptId, message: redact(e instanceof Error ? e.message : String(e), this.baseEnv).slice(0, 300) });
     }

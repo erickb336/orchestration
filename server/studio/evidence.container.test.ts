@@ -6,12 +6,13 @@
 // Node, Python and Go fixtures and the hostile one. Skipped, with the reason, without Docker or the image.
 
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { IMAGE_TABLE, environmentPlan, environmentSource, parseDevcontainer, type EnvironmentPlan } from "../../src/domain/environment";
+import { IMAGE_TABLE, environmentPlan, environmentSource, type EnvironmentPlan } from "../../src/domain/environment";
+import { readDevcontainer } from "../environment/devcontainer";
 import { DEFAULT_INSTALL, type CaptureItem, type ItemCapture } from "../../src/domain/studio/evidence";
 import type { CheckRunReport } from "../checks";
 import { removeTree } from "../environment/copy";
@@ -272,8 +273,10 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
   it.skipIf(!ready.ok)(
     "Node, from its dev container: its page (served on 127.0.0.1 with ms) and its CLI in a terminal",
     async () => {
-      const found = { file: ".devcontainer/devcontainer.json", parsed: parseDevcontainer(readFileSync(join(ENV_FIXTURES, "node/.devcontainer/devcontainer.json"), "utf8"), ".devcontainer/devcontainer.json") };
-      const plan = environmentPlan(environmentSource(found, undefined).source!, { rev: 1, prepare: [["npm", "ci"]], hosts: [] });
+      // Read as the scheduler reads it, and confirmed by its digest as the owner confirms it (review finding 3).
+      const found = readDevcontainer((p) => (existsSync(join(ENV_FIXTURES, "node", p)) ? { text: readFileSync(join(ENV_FIXTURES, "node", p), "utf8"), truncated: false } : undefined))!;
+      const setting = { rev: 1, prepare: [["npm", "ci"]], hosts: [], devcontainer: { file: found.file, sha256: found.sha256! } };
+      const plan = environmentPlan(environmentSource(found, setting).source!, setting);
       const c = await capture("node", plan, ["node", "server.js"]);
       expect(c.r.path).toMatchObject({ via: "environment", from: "devcontainer", prepare: "ran", imageId: expect.stringMatching(/^sha256:/) });
       const got = expectCaptured(c, "demo.cast", "demo.txt");

@@ -533,6 +533,10 @@ export const COMMANDS = {
         ...(e.image === undefined || e.image === null || e.image === "" ? {} : { image: str(e, "image") }),
         prepare,
         hosts: e.hosts === undefined || e.hosts === null ? [] : strings(e.hosts, "environment.hosts"),
+        ...(e.devcontainer === undefined || e.devcontainer === null ? {} : (() => {
+          const d = obj(e.devcontainer, "environment.devcontainer");
+          return { devcontainer: { file: str(d, "file"), sha256: str(d, "sha256") } };
+        })()),
       },
       now,
     );

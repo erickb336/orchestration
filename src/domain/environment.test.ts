@@ -7,6 +7,7 @@ import * as E from "./environment";
 import { buildSeed } from "./seed";
 import { matchGlob } from "./delivery/pr";
 import { DEFAULT_PR_DELIVERY } from "./types";
+import { needsYouItems } from "./needsYou";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
 const at = (s: number) => new Date(T0 + s * 1000).toISOString();
@@ -91,11 +92,52 @@ describe("the dev container", () => {
 describe("the source of a run's environment", () => {
   const setting: E.EnvironmentSetting = { rev: 1, image: PINNED, prepare: [["make"]], hosts: ["pkgs.example.com"] };
 
-  it("takes the dev container first, then the confirmed image, else none", () => {
-    const found: E.DevcontainerFound = { file: DC, parsed: { image: "node:22" } };
-    expect(E.environmentSource(found, setting)).toEqual({ source: { from: "devcontainer", file: DC, image: "node:22" } });
+  it("takes the dev container the owner confirmed first, then the confirmed image, else none", () => {
+    const text = JSON.stringify({ image: "node:22" });
+    const found: E.DevcontainerFound = { file: DC, parsed: { image: "node:22" }, sha256: E.devcontainerDigest(text) };
+    expect(E.environmentSource(found, { ...setting, devcontainer: { file: DC, sha256: E.devcontainerDigest(text) } })).toEqual({ source: { from: "devcontainer", file: DC, image: "node:22" } });
     expect(E.environmentSource(undefined, setting)).toEqual({ source: { from: "setting", image: PINNED } });
     expect(E.environmentSource(undefined, { ...setting, image: undefined })).toEqual({});
+  });
+
+  it("an agent's merged dev container is not used until the owner confirms its digest (review finding 3)", () => {
+    // The review's scenario: Autopilot merges a dev container that names an unpinned image whose test command always passes.
+    const text = JSON.stringify({ image: "evil/always-pass:latest" });
+    const found: E.DevcontainerFound = { file: DC, parsed: { image: "evil/always-pass:latest" }, sha256: E.devcontainerDigest(text) };
+    const unconfirmed = { file: DC, sha256: found.sha256! };
+    // The owner's confirmed image wins, and the dev container waits for the owner.
+    expect(E.environmentSource(found, setting)).toEqual({ source: { from: "setting", image: PINNED }, unconfirmed, note: expect.stringMatching(/is not confirmed/) });
+    // Without a confirmed image, nothing is used: the checks run on this computer, with the reason.
+    expect(E.environmentSource(found, undefined)).toEqual({ unconfirmed, note: expect.stringMatching(/^The repository's dev container \.devcontainer\/devcontainer\.json is not confirmed/) });
+    // Once the owner confirms that digest, it is used; a later change to it falls back again.
+    const confirmed = { ...setting, devcontainer: unconfirmed };
+    expect(E.environmentSource(found, confirmed).source).toEqual({ from: "devcontainer", file: DC, image: "evil/always-pass:latest" });
+    const changed = { ...found, sha256: E.devcontainerDigest(JSON.stringify({ image: "evil/always-pass:v2" })) };
+    expect(E.environmentSource(changed, confirmed)).toMatchObject({ source: { from: "setting", image: PINNED }, unconfirmed: { file: DC, sha256: changed.sha256 } });
+  });
+
+  it("only the owner's command confirms a dev container, by a file it reads and a 64-hex digest", () => {
+    const s = buildSeed(Date.parse("2026-10-02T12:00:00Z"), { inFlightRuns: false });
+    const sha = "a".repeat(64);
+    const next = E.setEnvironment(s, { devcontainer: { file: DC, sha256: sha } }, "2026-10-02T12:01:00Z");
+    expect(next.project.environment).toMatchObject({ devcontainer: { file: DC, sha256: sha } });
+    expect(next.events.at(-1)?.message).toMatch(/dev container \.devcontainer\/devcontainer\.json confirmed \(sha256 aaaaaaaaaaaa…\)/);
+    expect(() => E.setEnvironment(s, { devcontainer: { file: "evil.json", sha256: sha } }, "t")).toThrow(/not a dev container file/);
+    expect(() => E.setEnvironment(s, { devcontainer: { file: DC, sha256: "abc" } }, "t")).toThrow(/digest/);
+    const viaCommand = runCommand(s, "setEnvironment", { environment: { devcontainer: { file: DC, sha256: sha } } }, "2026-10-02T12:01:00Z").state;
+    expect(viaCommand.project.environment?.devcontainer).toEqual({ file: DC, sha256: sha });
+  });
+
+  it("the owner sees an unconfirmed dev container in Needs you, until the digest is confirmed (review finding 3)", () => {
+    const s = buildSeed(Date.parse("2026-10-02T12:00:00Z"), { inFlightRuns: false });
+    const sha = "b".repeat(64);
+    expect(E.unconfirmedDevcontainer(s)).toBeUndefined();
+    s.artifacts.push({ id: "c-1", taskId: "T1", stepId: "C1", attemptId: "a-1", name: "checks", kind: "check-results", version: 1, summary: "", createdAt: "2026-10-02T12:05:00Z", checkRun: { sha: "c".repeat(40), configRev: 1, sandbox: "codex", touchedInputs: [], results: [], durationMs: 1, environment: { ran: "host", reason: "not confirmed", unconfirmed: { file: DC, sha256: sha } } } } as never);
+    expect(E.unconfirmedDevcontainer(s)).toEqual({ file: DC, sha256: sha, sha: "c".repeat(40) });
+    expect(needsYouItems(s).map((i) => i.key)).toContain("devcontainer");
+    s.project.environment = { rev: 1, prepare: [], hosts: [], devcontainer: { file: DC, sha256: sha } };
+    expect(E.unconfirmedDevcontainer(s)).toBeUndefined();
+    expect(needsYouItems(s).map((i) => i.key)).not.toContain("devcontainer");
   });
 
   it("falls back from a refused dev container to the confirmed image, with the reason", () => {

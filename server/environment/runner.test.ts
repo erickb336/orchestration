@@ -51,9 +51,9 @@ describe("without Docker", () => {
     const dir = mkdtempSync(join(tmpdir(), "orc-env-unit-"));
     const direct = new DirectChecks({});
     const done = new Promise<AdapterEvent>((res) => direct.onEvent((e) => (e.type === "completed" || e.type === "failed") && res(e)));
-    direct.start(assignment(dir, { environment: undefined, hostReason: "Docker is not running" }));
+    direct.start(assignment(dir, { environment: undefined, hostReason: "Docker is not running", unconfirmed: { file: ".devcontainer.json", sha256: "e".repeat(64) } }));
     const e = await done;
-    expect(e).toMatchObject({ type: "completed", checks: { environment: { ran: "host", reason: "Docker is not running" } } });
+    expect(e).toMatchObject({ type: "completed", checks: { environment: { ran: "host", reason: "Docker is not running", unconfirmed: { file: ".devcontainer.json", sha256: "e".repeat(64) } } } });
     removeTree(dir);
   });
 
@@ -192,6 +192,12 @@ describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", { timeou
       const done = events.find((e) => e.attemptId === a.attemptId && e.type === "completed") as Extract<AdapterEvent, { type: "completed" }>;
       return (done.checks as { environment: Record<string, unknown>; results: { id: string; status: string }[] });
     };
+    // Review finding 3: a dev container the owner has not confirmed goes into the record, for Needs you.
+    const waiting = { file: ".devcontainer/devcontainer.json", sha256: "d".repeat(64) };
+    const b = assignment(ws, { commands: [{ id: "test", label: "test", kind: "check", argv: ["fake-exit", "0"], timeoutMs: 8000 }], unconfirmed: waiting, environment: { plan: { ...plan, prepare: [], prepareFrom: "none" }, project: "p1" } });
+    runner.start(b);
+    await ended(b);
+    expect((events.find((e) => e.attemptId === b.attemptId && e.type === "completed") as Extract<AdapterEvent, { type: "completed" }>).checks).toMatchObject({ environment: { ran: "container", unconfirmed: waiting } });
     const none = await record([], "none");
     expect(none.environment).toMatchObject({ ran: "container", prepare: "none", prepareMs: 0 });
     expect(none.environment.prepareFrom).toBeUndefined();

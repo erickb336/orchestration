@@ -4,11 +4,12 @@
 // skipped, with the reason, when it is not running. Pulls official images by digest the first time.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { IMAGE_TABLE, environmentPlan, environmentSource, parseDevcontainer, type EnvironmentPlan, type EnvironmentRunRecord } from "../../src/domain/environment";
+import { IMAGE_TABLE, environmentPlan, environmentSource, type EnvironmentPlan, type EnvironmentRunRecord } from "../../src/domain/environment";
+import { readDevcontainer } from "./devcontainer";
 import type { CheckResult, TestReport } from "../../src/domain/types";
 import type { CheckRunReport } from "../checks";
 import type { AdapterEvent } from "../runtimes/types";
@@ -99,8 +100,10 @@ describe(`the project environment, in Docker${skipReason}`, () => {
   }, 120_000);
 
   it.skipIf(!ready)("Node, from its dev container: npm ci through the proxy, the test with no network, JUnit; the next commit reuses the prepare", async () => {
-    const found = { file: ".devcontainer/devcontainer.json", parsed: parseDevcontainer(readFileSync(join(FIXTURES, "node/.devcontainer/devcontainer.json"), "utf8"), ".devcontainer/devcontainer.json") };
-    const plan = environmentPlan(environmentSource(found, undefined).source!, { rev: 1, prepare: [["npm", "ci"]], hosts: [] });
+    // Read as the scheduler reads it, and confirmed by its digest as the owner confirms it (review finding 3).
+    const found = readDevcontainer((p) => (existsSync(join(FIXTURES, "node", p)) ? { text: readFileSync(join(FIXTURES, "node", p), "utf8"), truncated: false } : undefined))!;
+    const setting = { rev: 1, prepare: [["npm", "ci"]], hosts: [], devcontainer: { file: found.file, sha256: found.sha256! } };
+    const plan = environmentPlan(environmentSource(found, setting).source!, setting);
     expect(plan.source).toMatchObject({ from: "devcontainer", image: PROXY_IMAGE });
     const first = await run("node", plan, ["npm", "test"]);
     expect(statuses(first.results), first.results.map((r) => r.excerpt).join("\n")).toEqual(["env-prepare-1:passed", "test:passed"]);
