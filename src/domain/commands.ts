@@ -657,6 +657,8 @@ export const COMMANDS = {
     return M.setWorkerEnvironment(s, provider(a.provider), env, now);
   }),
   setRunLimits: same((s, now, a) => M.setRunLimits(s, { maxTurns: num(a, "maxTurns"), timeoutMinutes: num(a, "timeoutMinutes"), maxBudgetUsd: num(a, "maxBudgetUsd") }, now)),
+  /** Whether housekeeping also archives Orchestrator's Codex threads and trashes its Claude session folders. */
+  setHousekeepOwnerApps: same((s, now, a) => M.setHousekeepOwnerApps(s, bool(a, "on"), now)),
 
   // the owner's budgets
   /** Both budgets in dollars, each a positive number or null (not set). */

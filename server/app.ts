@@ -8,21 +8,23 @@
 //   ORCHESTRATION_PROTOTYPE_PORT port of the studio's prototype server on 127.0.0.1 (default: the API port + 1)
 
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DEMO_DOC_HASH, DEMO_DOC_TEXT, buildDemo } from "../src/domain/demo";
 import { builtInCatalog } from "../src/domain/flows";
-import { setFlows } from "../src/domain/model";
+import { event, setFlows } from "../src/domain/model";
 import { buildEmptyProject } from "../src/domain/seed";
 import type { ProviderId } from "../src/domain/types";
 import { pruneCheckLogs, type CheckRunner } from "./checks";
 import type { GitHubHost } from "./github";
+import { Housekeeping, SWEEP_EVERY_MS, systemDocker } from "./housekeeping";
 import { createHttpServer } from "./http";
+import type { ArchiveOutcome } from "./runtimes/codex";
 import { FakeAdapter, defaultFakeConfig } from "./runtimes/fake";
 import type { RuntimeAdapter } from "./runtimes/types";
 import { valeChecker } from "./prose/vale";
 import { Scheduler } from "./scheduler";
 import { Store } from "./store";
-import { defaultRecorderRoot, sweepStages } from "./studio/container";
+import { defaultRecorderRoot } from "./studio/container";
 import { ContainerEvidence, type EvidenceRunner } from "./studio/evidence";
 import { systemMedia } from "./studio/media";
 import { createPrototypeServer, projectStudioDir } from "./studio/serve";
@@ -59,12 +61,16 @@ let checks: CheckRunner | undefined;
 let evidence: EvidenceRunner | undefined;
 /** True when Claude workers run with shell access: the app then cannot claim that only the service reaches GitHub. */
 let workerShell = false;
+/** Housekeeping archives the Codex threads runs left through this (real mode only). */
+let archiveThreads: ((ids: string[]) => Promise<Map<string, ArchiveOutcome>>) | undefined;
 const dataDir = dirname(dbPath);
 if (mode === "real") {
   // Loaded only in real mode, so the simulated service never loads provider SDKs.
   const [{ ClaudeAdapter }, { CodexAdapter }, { CheckRunners, CodexSandboxChecks, DirectChecks }] = await Promise.all([import("./runtimes/claude"), import("./runtimes/codex"), import("./checks")]);
   const claude = new ClaudeAdapter({ log });
-  adapters = { claude, codex: new CodexAdapter({ log }) };
+  const codex = new CodexAdapter({ log });
+  adapters = { claude, codex };
+  archiveThreads = (ids) => codex.archiveThreads(ids);
   workerShell = claude.allowShell;
   workspaces = new WorkspaceManager(join(dataDir, "worktrees"));
   // A private, never signed-in CODEX_HOME for the check app-servers: the user's Codex configuration does not apply to them.
@@ -122,13 +128,32 @@ const pruneLogs = () => {
 };
 pruneLogs();
 setInterval(pruneLogs, 24 * 60 * 60_000).unref();
-// A service stopped mid-recording leaves the recorder's stage folder behind; old ones are removed at start.
-{
-  const root = defaultRecorderRoot();
-  const swept = sweepStages(root);
-  if (swept.removed.length) log(`Recorder: removed ${swept.removed.length} stage folder${swept.removed.length === 1 ? "" : "s"} left in ${root}`);
-  if (swept.failed.length) log(`Recorder: could not remove ${swept.failed.join(", ")} in ${root}`);
-}
+// Housekeeping (server/housekeeping.ts): what runs leave on this computer, cleaned once the service listens, every six
+// hours, and when the owner asks in Settings. The recorder's containers and stage folders always; the Codex threads and
+// Claude session folders runs left only in real mode, and only while the owner's setting allows it.
+const housekeeping = new Housekeeping({
+  home: homedir(),
+  env: process.env,
+  // Where runs work: the worktrees and studio folders under the data directory, and this checkout's evidence/ (the
+  // real-run test and the studio trial work there).
+  ownedFolders: [join(dataDir, "worktrees"), join(dataDir, "studio"), join(resolve(import.meta.dirname, ".."), "evidence")],
+  ownerApps: () => store.read().state.project.housekeepOwnerApps,
+  ownerAppsAllowed: mode === "real",
+  archive: archiveThreads,
+  docker: systemDocker(process.env),
+  recorderRoot: defaultRecorderRoot(),
+  record: (message) => {
+    const now = new Date().toISOString();
+    store.update((s) => {
+      const next = structuredClone(s);
+      event(next, now, "system", "runtime", message);
+      return next;
+    }, now);
+  },
+  changed: () => store.emit(),
+  log,
+});
+setInterval(() => void housekeeping.sweep("timer"), SWEEP_EVERY_MS).unref();
 const allowedHosts = [`127.0.0.1:${port}`, `localhost:${port}`];
 if (devUi) allowedHosts.push(devUi, devUi.replace("127.0.0.1", "localhost"));
 const prototypePort = Number(process.env.ORCHESTRATION_PROTOTYPE_PORT ?? port + 1);
@@ -152,6 +177,7 @@ const server = createHttpServer({
   staticDir,
   prototypePort,
   prototypeServer: prototypes,
+  housekeeping,
   log,
 });
 
@@ -178,6 +204,8 @@ server.listen(port, "127.0.0.1", () => {
   } else log("Runtime: fake (simulated). No agent runs. Set ORCHESTRATION_RUNTIME=real to run Claude and Codex.");
   if (staticDir) log(`Open http://127.0.0.1:${port}`);
   scheduler.start();
+  // In the background: the scheduler does not wait for it.
+  void housekeeping.sweep("start");
 });
 
 let stopping = false;

@@ -11,6 +11,7 @@ import { suggestChecks, type RepoFile } from "../src/domain/checks";
 import { SERVICE_COMMANDS } from "../src/domain/commands";
 import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
+import type { Housekeeping } from "./housekeeping";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
 import { evidenceFileKnown } from "../src/domain/studio/evidence";
@@ -43,6 +44,8 @@ interface HttpOptions {
   prototypePort?: number;
   /** The prototype listener itself: while it is listening, the state and health payloads name its port (`service.prototypePort`). */
   prototypeServer?: Server;
+  /** Housekeeping of what runs leave behind: its status is in the service payload, and POST /api/maintenance/housekeeping sweeps now. */
+  housekeeping?: Pick<Housekeeping, "status" | "sweep">;
   log?: (msg: string) => void;
 }
 
@@ -126,6 +129,7 @@ export function createHttpServer(opts: HttpOptions): Server {
     // From the listener, not the configuration: a port that was busy at start serves nothing, and the app says so.
     const proto = opts.prototypeServer?.listening ? opts.prototypeServer.address() : null;
     if (proto && typeof proto === "object") out.prototypePort = proto.port;
+    if (opts.housekeeping) out.housekeeping = opts.housekeeping.status();
     if (real && opts.workspaces) {
       const project = store.read().state.project;
       if (project.sample) out.repo = { ok: false, reason: "This is the sample project; real runs are disabled for it. Start a new project below." };
@@ -377,6 +381,11 @@ export function createHttpServer(opts: HttpOptions): Server {
       if (path === "/api/maintenance/prune") {
         if (!real) return fail(res, 400, "control", "Workspace cleanup applies to real runs only.");
         return send(res, 200, { removed: scheduler.prune() });
+      }
+      // "Clean up now": answers when the sweep ends (or the running one does: two never run at once).
+      if (path === "/api/maintenance/housekeeping") {
+        if (!opts.housekeeping) return fail(res, 400, "control", "This service runs no housekeeping.");
+        return send(res, 200, { report: await opts.housekeeping.sweep("owner") });
       }
       if (path === "/api/health/refresh") {
         await scheduler.refreshHealth();

@@ -355,6 +355,8 @@ function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   // owner turns it on, so loading a database never starts a paid PE run by itself. A new project starts with it on.
   project.peReviewsNewWork ??= false;
   project.budgets ??= { ...NO_BUDGETS };
+  // Housekeeping of the owner's apps (2026-10-03) came after the first format-19 builds: on, as the owner asked.
+  project.housekeepOwnerApps ??= true;
   doc.studio ??= emptyStudio();
   // Studio runs (pass 3a) came after the first format-19 builds: none were recorded before them.
   (doc.studio as { runs?: unknown[] }).runs ??= [];
