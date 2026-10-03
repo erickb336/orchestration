@@ -2,6 +2,7 @@
 // owns dispatch and state, adapters own processes. Adapters never touch the store: they emit events,
 // which the scheduler applies inside lease-checked transactions.
 
+import type { EvidenceRun } from "../../src/domain/studio/evidence";
 import type { CatalogModel, CheckResult, OutputDef, ProviderId, RoleId, TestReport } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 
@@ -93,8 +94,11 @@ export type AdapterEvent =
   | { type: "progress"; attemptId: string; percent: number }
   /** A meaningful milestone for the activity feed (tool used, file changed, message). Keep it short. */
   | { type: "activity"; attemptId: string; note: string }
-  /** The run finished normally. `finalText` is the agent's last message (contains the output block); "" for a check run, which reports `checks`. */
-  | { type: "completed"; attemptId: string; finalText: string; usage?: Usage; model?: string; checks?: CheckRunReport }
+  /**
+   * The run finished normally. `finalText` is the agent's last message (contains the output block); "" for a check run,
+   * which reports `checks`, and for a capture of evidence, which reports `evidence` (ORC-029 pass 5).
+   */
+  | { type: "completed"; attemptId: string; finalText: string; usage?: Usage; model?: string; checks?: CheckRunReport; evidence?: EvidenceRun }
   /** The run is confirmed not running after an interrupt or kill. */
   | { type: "stopped"; attemptId: string; how: "interrupted" | "killed"; usage?: Usage }
   /** The run ended without a usable result (provider error, auth failure, limit reached, crash). */

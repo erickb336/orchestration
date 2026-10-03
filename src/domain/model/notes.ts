@@ -16,6 +16,7 @@ import {
   type Step,
   type Task,
   ControlError,
+  isServiceRole,
   MAX_NOTES,
   MAX_NOTES_PER_RUN,
   MAX_NOTE_LENGTH,
@@ -38,7 +39,7 @@ export function notePermission(s: State, t: Task | undefined, st: Step | undefin
   // The review, fix and check tasks a pull request creates belong to delivery, as for steering.
   if (t.reviewTarget || t.deliverInto || t.checkTarget) return { v: "reject", why: "delivery task: not steerable" };
   if (!st) return { v: "reject", why: `unknown step on ${t.id}` };
-  if (!LEAD_NOTE_ROLES.has(st.role)) return { v: "reject", why: st.role === "checks" ? `${st.id} is a checks step: check runs have no agent` : `${st.id} is a ${st.role.replace("_", " ")} step: notes go to coder and designer steps only` };
+  if (!LEAD_NOTE_ROLES.has(st.role)) return { v: "reject", why: st.role === "checks" ? `${st.id} is a checks step: check runs have no agent` : isServiceRole(st.role) ? `${st.id} captures evidence: the service runs it, with no agent` : `${st.id} is a ${st.role.replace("_", " ")} step: notes go to coder and designer steps only` };
   // A child of a Goal is allowed (the note is about the running stage, not the task's priority); its root says whose task it is.
   const own = rootOf(s, t).specs[0]?.author === "lead";
   if (mode === "apply-own" && !own) return { v: "suggest", why: "your task: suggest-only (Settings)" };
@@ -194,7 +195,7 @@ export function sendNote(state: State, taskId: string, stepId: string, text: str
   const t = getTask(s, taskId);
   assertOpen(t, "Sending a note");
   const st = getStep(t, stepId);
-  if (st.role === "checks") throw new ControlError("Check runs have no agent to read a note.");
+  if (isServiceRole(st.role)) throw new ControlError(st.role === "checks" ? "Check runs have no agent to read a note." : "Evidence is captured by the service; no agent reads a note.");
   const checked = noteTextCheck(text, "user");
   if (!checked.ok) throw new ControlError(`The note was not sent: ${checked.why}.`);
   if (!activeAttempts(s, t.id).some((a) => a.stepId === st.id)) throw new ControlError(`${st.id} is not running; a note goes to a running step.`);

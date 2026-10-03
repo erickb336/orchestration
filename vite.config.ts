@@ -1,11 +1,13 @@
 import react from "@vitejs/plugin-react";
 import { configDefaults, defineConfig } from "vitest/config";
 
-/** Tests that start a real Chrome or a Docker recording: slow, and heavy on CPU and memory (Colima has 2 CPUs and 2 GB). */
+/** Tests that start a real Chrome, a Docker recording or a capture of evidence: slow, and heavy on CPU and memory (Colima has 2 CPUs and 2 GB). */
 const HEAVY_TESTS = [
   "server/http.browser.test.ts",
   "server/studio/container.test.ts",
   "server/studio/escape.test.ts",
+  "server/studio/evidence.container.test.ts",
+  "server/studio/evidence.scheduler.test.ts",
   "server/studio/media.test.ts",
   "server/studio/runs.test.ts",
   "server/studio/shots.test.ts",

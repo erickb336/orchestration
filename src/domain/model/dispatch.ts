@@ -5,10 +5,12 @@ import * as C from "../checks";
 import * as F from "../findings";
 import { peReviewHold } from "../peReview";
 import { budgetStop } from "../spend";
-import { type Attempt, type CheckRunRecord, type ProviderId, type State, type Task, DEFAULT_CHECKS } from "../types";
+import { captureItems, evidenceSummary, notSetUpRun, type EvidenceSnapshot } from "../studio/evidence";
+import { type Attempt, type CheckRunRecord, type ProviderId, type State, type Task, DEFAULT_CHECKS, isServiceRole } from "../types";
 import { acceptedOutput, consumedInputs } from "./artifacts";
 import {
   activeAttempts,
+  activeCaptures,
   activeServiceAttempts,
   busyAgents,
   currentSpec,
@@ -38,8 +40,8 @@ export function leadPromoteProposals(state: State, now: string): State {
     // A deferred proposal stays proposed until the deferral is lifted.
     if (deferredBy(s, t)) continue;
     if (blockedReason(s, t) || waitingOn(s, t)) continue;
-    // A Checks step is run by the service and never resolves to a provider.
-    const unresolved = t.steps.filter((st) => st.role !== "checks").map((st) => resolveStep(s, t, st)).find((r) => !r.ok);
+    // A Checks or Capture evidence step is run by the service and never resolves to a provider.
+    const unresolved = t.steps.filter((st) => !isServiceRole(st.role)).map((st) => resolveStep(s, t, st)).find((r) => !r.ok);
     if (unresolved) continue;
     t.lifecycle = "ready";
     touch(t, now);
@@ -198,6 +200,59 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           const record: CheckRunRecord = { ...structuredClone(reuse.artifact.checkRun!), reusedFrom: reuse.attempt.id };
           const findings = reuse.artifact.findings ? structuredClone(reuse.artifact.findings) : undefined;
           reused.push({ attemptId, outputs: [{ name: st.outputs[0].name, summary: C.runSummary(record), checkRun: record, ...(findings ? { findings } : {}) }] });
+        }
+        continue;
+      }
+      // A Capture evidence step (ORC-029 pass 5) is run by the service too: the screens, terminal demos and TUIs the
+      // task's spec cites, on the newest code change it reads (the commit the checks before it ran on). With nothing to
+      // capture it settles by skipping. Without the project's preview setting it completes in this same transaction,
+      // every item "not set up", and nothing runs. One capture at a time: the recorder runs one container at a time.
+      if (st.role === "evidence") {
+        const target = C.checkTargetOf(s, t, st);
+        const items = target ? captureItems(s, t) : [];
+        if (!target || !items.length) {
+          st.state = "skipped";
+          st.invalidatedBy = undefined;
+          touch(t, now);
+          event(s, now, "lead", "dispatch", `Skipped ${st.id}: nothing to capture: ${!target ? "no code change reached this step" : "the task's spec cites no screen, terminal demo or TUI of the blueprint"}`, t.id);
+          continue;
+        }
+        if (deferred) continue;
+        if (activeCaptures(s).length) continue;
+        const preview = s.project.preview;
+        const snap: EvidenceSnapshot = { target, items, ...(preview ? { preview: structuredClone(preview) } : {}) };
+        const attemptId = nextId(s, "run");
+        s.attempts.push({
+          id: attemptId,
+          taskId: t.id,
+          stepId: st.id,
+          snapshot: {
+            provider: "service",
+            model: "evidence",
+            source: "service",
+            routingReason: preview ? `Run by the service in the recorder's container (preview r${preview.rev})` : "No preview setting: recorded as not set up; nothing runs",
+            specRev: spec.rev,
+            stepRev: st.revision,
+            visionRev: vision.rev,
+            workspace: opts.workspaceFor ? opts.workspaceFor(t.id, st.id, attemptId) : `${s.project.repoPath}/.orchestration/worktrees/${t.id}-${st.id}`,
+            pipelineRev: t.pipelineRev,
+            role: st.role,
+            purpose: st.purpose,
+            inputs: consumedInputs(s, t, st),
+            evidence: snap,
+          },
+          startedAt: now,
+          outcome: "running",
+          progress: 0,
+          artifacts: [],
+        });
+        st.state = "running";
+        if (t.lifecycle === "ready") t.lifecycle = "active";
+        touch(t, now);
+        event(s, now, "lead", "dispatch", `Dispatched ${st.id} (evidence) to the service as ${attemptId} on ${target.ref.slice(0, 12)}: ${items.map((i) => i.itemId).join(", ")}${preview ? "" : "; no preview setting, so every item is recorded as not set up"}`, t.id);
+        if (!preview) {
+          const run = notSetUpRun(snap, now);
+          reused.push({ attemptId, outputs: [{ name: st.outputs[0].name, summary: evidenceSummary(run), evidence: run }] });
         }
         continue;
       }

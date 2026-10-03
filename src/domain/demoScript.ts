@@ -285,6 +285,8 @@ export function neutralSummary(kind: ArtifactKind, o: { found?: number; items?: 
       return "Brief (simulated)";
     case "check-results":
       return "Check results (simulated)";
+    case "evidence":
+      return "Evidence of the built screens and CLIs (simulated)";
   }
 }
 

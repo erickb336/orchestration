@@ -83,7 +83,7 @@ describe("the groups", () => {
 describe("the card's one line", () => {
   it("says what an agent is doing, with the provider and the step", () => {
     const s = buildSeed(T0);
-    expect(cardLine(s, task(s, "EX-001"), T0)).toEqual({ text: "Implementing · Codex · step 2 of 9", tone: "work", provider: "codex" });
+    expect(cardLine(s, task(s, "EX-001"), T0)).toEqual({ text: "Implementing · Codex · step 2 of 10", tone: "work", provider: "codex" });
     expect(line(s, "EX-002")).toBe("Reviewing · Claude · step 3 of 7");
   });
 
@@ -100,7 +100,7 @@ describe("the card's one line", () => {
 
   it("says why nothing moves: up next, paused, deferred, waiting for another task", () => {
     const idle = buildSeed(T0, { inFlightRuns: false });
-    expect(line(idle, "EX-001")).toBe("Up next: step 2 of 9 · Implement");
+    expect(line(idle, "EX-001")).toBe("Up next: step 2 of 10 · Implement");
     expect(line(idle, "EX-005")).toBe("Paused before it started");
     expect(line(idle, "EX-007")).toBe("Waiting for EX-002");
     expect(line(idle, "EX-003")).toBe("Not started · 4 steps"); // an Investigation (ORC-028: four steps)

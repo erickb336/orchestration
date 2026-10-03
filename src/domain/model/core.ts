@@ -75,9 +75,14 @@ export function busyAgents(s: State, provider?: ProviderId): number {
   return tasks + studio;
 }
 
-/** Active check runs (run by the service), bounded by `checks.maxConcurrent`. */
+/** Active check runs (run by the service), bounded by `checks.maxConcurrent`. The service's captures of evidence are not check runs. */
 export function activeServiceAttempts(s: State) {
-  return s.attempts.filter((a) => isActive(a) && a.snapshot.provider === "service");
+  return s.attempts.filter((a) => isActive(a) && a.snapshot.provider === "service" && !a.snapshot.evidence);
+}
+
+/** Active captures of evidence (ORC-029 pass 5): one at a time, as the recorder runs one container at a time. */
+export function activeCaptures(s: State) {
+  return s.attempts.filter((a) => isActive(a) && a.snapshot.provider === "service" && !!a.snapshot.evidence);
 }
 
 /**

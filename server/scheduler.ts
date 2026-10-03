@@ -16,9 +16,10 @@ import * as M from "../src/domain/model";
 import { LEAD_REPLY_SCHEMA } from "../src/domain/model/leadReplySchema";
 import * as P from "../src/domain/peReview";
 import * as R from "../src/domain/studio/runs";
+import { evidenceSummary } from "../src/domain/studio/evidence";
 import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
-import { REVIEW_ROLES, isProvider, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
+import { REVIEW_ROLES, isProvider, type Artifact, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner } from "./checks";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
 import { prototypeFolders, readsPrototypes } from "./factoryLink";
@@ -31,6 +32,7 @@ import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
 import { ManifestError, readStaged, studioRoot, versionDir } from "./studio/artifacts";
+import { SimulatedEvidence, evidenceDir, evidenceInputLines, evidenceReadRoots, type EvidenceRunner } from "./studio/evidence";
 import { makeDemo, makeShots, type StudioMedia } from "./studio/media";
 import { PeAnswerError, checkPeAnswer, newWorkPeEnvelope, peEnvelope, readPeAnswer, recordNewWorkPeRun, recordPeRun } from "./studio/pe";
 import { repoGlance } from "./studio/existing";
@@ -63,6 +65,11 @@ interface SchedulerOptions {
    * and without workspaces (the fake runtime) a simulated runner is used, which spawns nothing.
    */
   checks?: CheckRunner;
+  /**
+   * The runner for the Capture evidence step (ORC-029 pass 5): the recorder's container in real mode. Without one and
+   * without workspaces (the fake runtime) a simulated runner is used, which runs nothing.
+   */
+  evidence?: EvidenceRunner;
   /** The service's data directory (next to the database): check caches and logs live under it. */
   dataDir?: string;
   /**
@@ -152,6 +159,8 @@ export class Scheduler {
   readonly adapters: Record<ProviderId, RuntimeAdapter>;
   /** The check runner, if this service has one. */
   readonly checks?: CheckRunner;
+  /** The capture runner, if this service has one. */
+  readonly evidence?: EvidenceRunner;
   private readonly dataDir?: string;
   /** A sandbox probe in flight (at most one), and how many check runs in a row failed to start. */
   private probing = false;
@@ -192,6 +201,8 @@ export class Scheduler {
     this.prose = opts.prose;
     this.checks = opts.checks ?? (this.workspaces ? undefined : new SimulatedChecks());
     this.checks?.onEvent((e) => this.queue.push(e));
+    this.evidence = opts.evidence ?? (this.workspaces ? undefined : new SimulatedEvidence());
+    this.evidence?.onEvent((e) => this.queue.push(e));
     this.leaseMs = opts.leaseMs ?? 15000;
     this.ackTimeoutMs = opts.ackTimeoutMs ?? (this.isFake ? 8000 : 45000);
     this.log = opts.log ?? (() => {});
@@ -224,9 +235,9 @@ export class Scheduler {
     return { name: SCHEDULER_LEASE, holder: this.holder, nowMs };
   }
 
-  /** Every runner: the provider adapters and the check runner. */
+  /** Every runner: the provider adapters, the check runner and the capture runner. */
   private allRunners(): RuntimeAdapter[] {
-    return [...Object.values(this.adapters), ...(this.checks ? [this.checks as unknown as RuntimeAdapter] : [])];
+    return [...Object.values(this.adapters), ...(this.checks ? [this.checks as unknown as RuntimeAdapter] : []), ...(this.evidence ? [this.evidence as unknown as RuntimeAdapter] : [])];
   }
 
   private killAll() {
@@ -315,7 +326,7 @@ export class Scheduler {
         // Before the runs, so its reason names the restart rather than the lost run.
         let next = M.reconcileNotes(s, now);
         for (const a of M.activeAttempts(next)) {
-          if (!this.runnerFor(a.snapshot.provider)?.has(a.id)) {
+          if (!this.runnerFor(a)?.has(a.id)) {
             next = M.reportRunLost(next, a.id, "No runtime process found after the service restarted or the scheduler changed", now);
           }
         }
@@ -352,11 +363,14 @@ export class Scheduler {
   }
 
   /**
-   * Who runs an attempt: a provider's adapter, or the service's check runner. Undefined for a
-   * service run while this service has no runner, so such a run is reconciled as lost.
+   * Who runs an attempt: a provider's adapter, or the service's check runner, or its capture runner (a service run with
+   * an `evidence` snapshot). Undefined for a service run while this service has no runner, so such a run is
+   * reconciled as lost.
    */
-  private runnerFor(p: Runner): RuntimeAdapter | undefined {
-    return isProvider(p) ? this.adapters[p] : (this.checks as unknown as RuntimeAdapter | undefined);
+  private runnerFor(a: { snapshot: { provider: Runner; evidence?: unknown } }): RuntimeAdapter | undefined {
+    const p = a.snapshot.provider;
+    if (isProvider(p)) return this.adapters[p];
+    return (a.snapshot.evidence ? this.evidence : this.checks) as unknown as RuntimeAdapter | undefined;
   }
 
   /** One scheduling cycle. */
@@ -416,7 +430,7 @@ export class Scheduler {
     const failedToStart: { id: string; reason: string }[] = [];
     const timeouts: string[] = [];
     for (const a of active.values()) {
-      const adapter = this.runnerFor(a.snapshot.provider);
+      const adapter = this.runnerFor(a);
       if (!adapter) {
         lost.push({ id: a.id, reason: "No runner exists for this run in this version" });
         continue;
@@ -437,14 +451,15 @@ export class Scheduler {
           if (err) failedToStart.push({ id: a.id, reason: err });
         } else lost.push({ id: a.id, reason: "No runtime process exists for this run" });
       } else if (a.outcome === "stopping") {
-        if (adapter instanceof FakeAdapter || adapter instanceof SimulatedChecks) adapter.interruptAt(a.id, nowMs);
+        if (adapter instanceof FakeAdapter || adapter instanceof SimulatedChecks || adapter instanceof SimulatedEvidence) adapter.interruptAt(a.id, nowMs);
         else adapter.interrupt(a.id);
         if (a.stopRequestedAt && nowMs - Date.parse(a.stopRequestedAt) >= this.ackTimeoutMs) timeouts.push(a.id);
       }
     }
-    // Two check runs in a row that could not start ask for a new sandbox probe.
-    if (failedToStart.some((f) => active.get(f.id)?.snapshot.provider === "service")) this.failedStarts++;
-    else if (dispatched.size && [...dispatched].some((id) => active.get(id)?.snapshot.provider === "service")) this.failedStarts = 0;
+    // Two check runs in a row that could not start ask for a new sandbox probe. A capture of evidence is not a check run.
+    const checkRun = (id: string) => active.get(id)?.snapshot.provider === "service" && !active.get(id)?.snapshot.evidence;
+    if (failedToStart.some((f) => checkRun(f.id))) this.failedStarts++;
+    else if (dispatched.size && [...dispatched].some(checkRun)) this.failedStarts = 0;
     this.planProbe(state, nowMs);
     // Notes the user sent since the last cycle go to their live runs.
     this.sendNotes(state);
@@ -509,6 +524,7 @@ export class Scheduler {
     // 3. The fake runtime advances on the scheduler's clock; real adapters report on their own.
     for (const adapter of Object.values(this.adapters)) if (adapter instanceof FakeAdapter && this.auto) adapter.tick(nowMs);
     if (this.checks instanceof SimulatedChecks && this.auto) this.checks.tick(nowMs);
+    if (this.evidence instanceof SimulatedEvidence && this.auto) this.evidence.tick(nowMs);
 
     // 4. Drain adapter events. Work that touches git happens here, outside the transaction, and so does reading
     //    what a studio run handed in.
@@ -1137,8 +1153,8 @@ export class Scheduler {
     const a = state.attempts.find((x) => x.id === attemptId)!;
     const task = state.tasks.find((t) => t.id === a.taskId)!;
     const step = task.steps.find((x) => x.id === a.stepId)!;
-    if (a.snapshot.provider === "service") return this.launchChecks(state, a.id, task, step);
-    const adapter = this.runnerFor(a.snapshot.provider);
+    if (a.snapshot.provider === "service") return a.snapshot.evidence ? this.launchEvidence(state, a.id, task, step) : this.launchChecks(state, a.id, task, step);
+    const adapter = this.runnerFor(a);
     if (!adapter) return "This version has no runner for this run";
     const access: "write" | "read" = WRITER_ROLES.has(step.role) ? "write" : "read";
     const limits = state.project.runLimits;
@@ -1206,6 +1222,10 @@ export class Scheduler {
       const protos = studioDir && readsPrototypes(step) ? prototypeFolders(state, task, studioDir) : [];
       // Queued before the run starts, so it is applied no later than any event from the run.
       this.queue.push({ type: "context", attemptId, ...(scope ? { scope } : {}), ...(conventions.length ? { conventions: conventions.map((c) => ({ file: c.file, blob: c.blob, bytes: c.bytes, truncated: c.truncated })) } : {}), ...(decisions.length ? { decisions } : {}) });
+      // A step that reads evidence (the UX review, ORC-029 pass 5) may read the built screenshots and recordings, and the
+      // approved design's own, read-only; its inputs name them.
+      const dataDir = this.dataDir;
+      const evidenceRoots = dataDir ? a.snapshot.inputs.flatMap((i) => state.artifacts.filter((x) => x.id === i.artifactId && x.kind === "evidence").flatMap((x) => evidenceReadRoots(state, x, dataDir))) : [];
       adapter.start({
         attemptId,
         taskId: task.id,
@@ -1213,7 +1233,7 @@ export class Scheduler {
         role: step.role,
         provider: isProvider(a.snapshot.provider) ? a.snapshot.provider : "claude",
         model: a.snapshot.model,
-        workspace: { path: workspace?.path ?? a.snapshot.workspace, access, ...(protos.length ? { readRoots: protos } : {}) },
+        workspace: { path: workspace?.path ?? a.snapshot.workspace, access, ...(protos.length || evidenceRoots.length ? { readRoots: [...new Set([...protos, ...evidenceRoots])] } : {}) },
         environment: a.snapshot.environment ?? "isolated",
         connections: a.snapshot.connections ?? [],
         prompt: buildEnvelope({
@@ -1229,6 +1249,7 @@ export class Scheduler {
           ...(conventions.length ? { conventions } : {}),
           docs: this.visionDocs?.reader(state.project.id),
           ...(studioDir ? { studioDir } : {}),
+          ...(dataDir ? { evidenceFiles: (art: Artifact) => evidenceInputLines(state, art, dataDir) } : {}),
         }),
         outputs: step.outputs,
         limits: { maxTurns: limits.maxTurns, timeoutMs: limits.timeoutMinutes * 60_000, maxBudgetUsd: limits.maxBudgetUsd },
@@ -1302,6 +1323,42 @@ export class Scheduler {
   }
 
   /**
+   * Start a capture of evidence (ORC-029 pass 5): a throwaway worktree detached at the target commit, as for a check
+   * run (removed after the run), handed to the capture runner with the items and the preview setting of the run's
+   * snapshot. The files that come back go to <dataDir>/evidence/<project>/<run>.
+   */
+  private launchEvidence(state: State, attemptId: string, task: Task, step: Step): string | undefined {
+    const a = state.attempts.find((x) => x.id === attemptId)!;
+    const runner = this.evidence;
+    if (!runner) return "This service has no runner for captures of evidence";
+    const snap = a.snapshot.evidence!;
+    // Without a setting the capture completed at dispatch, "not set up"; it is never started.
+    if (!snap.preview) return "The capture has no preview setting in its snapshot";
+    let target = snap.target.ref;
+    let workspace: PreparedWorkspace | undefined;
+    try {
+      if (this.workspaces) {
+        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access: "read", baseRef: target });
+        if (!C.sameSha(workspace.base, target)) {
+          this.workspaces.remove(state.project.repoPath, workspace.path);
+          throw new Error(`the workspace is not at ${target.slice(0, 12)} (it is at ${workspace.base.slice(0, 12)})`);
+        }
+        target = workspace.base;
+      }
+      const path = workspace?.path ?? a.snapshot.workspace;
+      const outDir = evidenceDir(this.dataDir ?? join(this.workspaces?.root ?? path, ".."), state.project.id, attemptId);
+      if (!outDir) throw new Error(`the project id ${state.project.id} cannot name an evidence folder`);
+      this.launched.set(attemptId, { provider: "service", access: "read", workspace, stepId: step.id, taskId: task.id });
+      runner.start({ attemptId, taskId: task.id, stepId: step.id, workspace: path, sha: target, items: structuredClone(snap.items), preview: structuredClone(snap.preview), outDir });
+      return undefined;
+    } catch (e) {
+      this.launched.delete(attemptId);
+      if (workspace && this.workspaces) this.workspaces.remove(state.project.repoPath, workspace.path);
+      return `Could not start the capture: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  /**
    * Probe the sandbox when checks were switched on, on request, every six hours, and after two check
    * runs in a row failed to start. At most one probe at a time; its result is queued and applied under
    * the lease. No probe with the simulated runner beyond its own answer.
@@ -1330,6 +1387,11 @@ export class Scheduler {
     const step = task?.steps.find((x) => x.id === a!.stepId);
     if (!a || !step) return { outputs: [], problems: [] };
     const info = this.launched.get(e.attemptId);
+    // A capture's report (ORC-029 pass 5) is the service's own, never parsed from text; it becomes the step's one output.
+    if (a.snapshot.provider === "service" && a.snapshot.evidence) {
+      if (!e.evidence || !step.outputs[0]) return { outputs: [], problems: ["The capture ended without a report."] };
+      return { outputs: [{ name: step.outputs[0].name, summary: evidenceSummary(e.evidence), evidence: e.evidence }], problems: [] };
+    }
     // A check run's report is never parsed from text; it becomes the step's one output.
     if (a.snapshot.provider === "service") {
       if (!e.checks || !step.outputs[0]) return { outputs: [], problems: ["The check run ended without a report."] };

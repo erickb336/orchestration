@@ -10,7 +10,7 @@ import { BUILT_IN_FILES } from "./builtInFlows";
 import { INTERNAL_FLOWS, internalFlow, isInternalFlowId, type InternalFlow } from "./internalFlows";
 import { downstreamOf, toDef, validatePipeline } from "./pipeline";
 import { isPrincipleId } from "./principles";
-import type { ChosenBy, Flow, FlowRef, InputRef, OutputDef, RoleId, State, StepDef } from "./types";
+import { isServiceRole, type ChosenBy, type Flow, type FlowRef, type InputRef, type OutputDef, type RoleId, type State, type StepDef } from "./types";
 
 // ---------- the file format ----------
 
@@ -85,7 +85,7 @@ function kindOf(steps: StepDef[], r: InputRef) {
 
 /** Roles that read, judge, plan or design: a code change from one of them has no independent review by construction. */
 const NON_CODING_ROLES: readonly RoleId[] = ["code_reviewer", "security_reviewer", "ux_reviewer", "lead", "designer"];
-const ROLE_WORD: Record<RoleId, string> = { lead: "lead", designer: "designer", pe: "PE", coder: "coder", code_reviewer: "code reviewer", security_reviewer: "security reviewer", ux_reviewer: "UX reviewer", checks: "checks" };
+const ROLE_WORD: Record<RoleId, string> = { lead: "lead", designer: "designer", pe: "PE", coder: "coder", code_reviewer: "code reviewer", security_reviewer: "security reviewer", ux_reviewer: "UX reviewer", checks: "checks", evidence: "evidence capture" };
 
 /**
  * Why a flow has no effective independent code review, one line per offending step; empty when every
@@ -210,7 +210,7 @@ export function stepMarkers(st: StepDef): string {
   if (st.waitForChildren) m.push("waits for child tasks");
   if (st.outputs.some((o) => o.kind === "breakdown")) m.push("breakdown");
   if (st.independentOf) m.push("reviewed by the other provider");
-  if (st.role === "checks") m.push("run by the service");
+  if (isServiceRole(st.role)) m.push("run by the service");
   return m.length ? ` (${m.join(", ")})` : "";
 }
 

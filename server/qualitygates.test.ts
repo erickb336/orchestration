@@ -95,7 +95,7 @@ describe("migration 13 → 14", () => {
     expect((s as unknown as { retiredTemplates?: unknown }).retiredTemplates).toBeUndefined();
     expect((s as unknown as { patterns?: unknown }).patterns).toBeUndefined();
     expect(s.project.defaultFlowId).toBe("change");
-    expect(s.flows.find((p) => p.id === "feature")!.steps.map((x) => x.id)).toEqual(["S1", "S2", "C1", "S3", "SR1", "S4", "S5", "C2", "S6"]);
+    expect(s.flows.find((p) => p.id === "feature")!.steps.map((x) => x.id)).toEqual(["S1", "S2", "C1", "E1", "S3", "SR1", "S4", "S5", "C2", "S6"]);
     expect(s.events.some((e) => e.message.startsWith("Template bugfix was edited, so it did not gain the Checks steps"))).toBe(true);
     expect(s.events.some((e) => e.message.startsWith("Template change gained the Checks steps"))).toBe(true);
     expect(s.events.some((e) => e.message.startsWith('Template "Bug fix" was retired'))).toBe(true);

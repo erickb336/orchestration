@@ -14,12 +14,14 @@ import { buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate } from ".
 import * as B from "../src/domain/studio/blueprint";
 import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
+import { captureItems } from "../src/domain/studio/evidence";
 import { testedItems } from "../src/domain/studio/ruleResults";
 import * as S from "../src/domain/studio/studio";
 import { DOCUMENT_KINDS, isUnderWay, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
 import { clip, truncate } from "../src/domain/text";
 import { leadBlueprintSection, newWorkNote, peChangeSection, peQuestionsSection, sentBackSection, stepBlueprintSection } from "./factoryLink";
 import { lastLeadProse } from "./prose/record";
+import { CAPTURE_PLAN } from "./studio/evidence";
 import type { RepoGlance } from "./studio/existing";
 import {
   FINDING_ACTIONS,
@@ -28,6 +30,7 @@ import {
   SEVERITIES,
   SHAPING_AREAS,
   SHAPING_AREA_LABEL,
+  isServiceRole,
   type Artifact,
   type Finding,
   type FindingAction,
@@ -68,6 +71,8 @@ const ROLE_BRIEFS: Record<RoleId, string> = {
   pe: "You are the PE: a rigid principal engineer. Judge feasibility, scale, longevity and budget. Do not change files.",
   // Never sent: a Checks step is run by the service, not by an agent.
   checks: "This step is run by the service.",
+  // Never sent: the Capture evidence step is run by the service, not by an agent (server/studio/evidence.ts).
+  evidence: "This step is run by the service.",
 };
 
 /** One repository instruction file, as read from the trusted base and capped for an envelope. */
@@ -104,6 +109,11 @@ interface EnvelopeInput {
   docs?: VisionDocReader;
   /** The project's studio folder, where the approved prototypes are (ORC-029 pass 5); without it their paths are left out. */
   studioDir?: string;
+  /**
+   * For an evidence input (ORC-029 pass 5, the UX review): its lines, with the built files beside the approved design's
+   * own pictures as paths the run may read (server/studio/evidence.ts). Without it the input shows its summary only.
+   */
+  evidenceFiles?: (art: Artifact) => string;
 }
 
 /** The caps on the conventions section, per file and in total. */
@@ -376,7 +386,7 @@ ${settled.map((d) => `- ${d.findingId} "${d.finding.title}"${d.finding.file ? ` 
 `;
 }
 
-export function buildEnvelope({ state, task, step, attemptId, access, seed, changeUnderReview, changedPaths, coverageGap, conventions, docs, studioDir }: EnvelopeInput): string {
+export function buildEnvelope({ state, task, step, attemptId, access, seed, changeUnderReview, changedPaths, coverageGap, conventions, docs, studioDir, evidenceFiles }: EnvelopeInput): string {
   const vision = M.currentVision(state);
   const spec = M.currentSpec(task);
   const c = spec.content;
@@ -392,7 +402,7 @@ export function buildEnvelope({ state, task, step, attemptId, access, seed, chan
           const ref = art.ref ? ` [ref: ${art.ref}]` : "";
           const findings = art.openFindings !== undefined ? ` (${art.openFindings} open findings)` : "";
           const edited = art.author === "user" ? ` [edited by the user: ${art.editReason ?? "no reason given"}; follow this version]` : "";
-          return `- ${i.step}.${i.output} v${art.version} (${art.kind})${findings}${ref}${edited}:\n  ${art.summary.replace(/\n/g, "\n  ")}${findingsInput(state, art)}${checkOutputInput(art)}`;
+          return `- ${i.step}.${i.output} v${art.version} (${art.kind})${findings}${ref}${edited}:\n  ${art.summary.replace(/\n/g, "\n  ")}${findingsInput(state, art)}${checkOutputInput(art)}${art.kind === "evidence" && evidenceFiles ? evidenceFiles(art) : ""}`;
         })
         .join("\n")
     : "- No upstream artifacts. Work from the specification.";
@@ -446,7 +456,7 @@ ${list(c.scopeExcluded)}
 Acceptance criteria:
 ${list(c.acceptance)}
 
-${stepBlueprintSection(state, task, step, studioDir)}${acceptanceTestsSection(state, task, step)}${peChangeSection(task, step)}${principlesSection(givenPrinciples(state, task, step, attemptId))}${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
+${stepBlueprintSection(state, task, step, studioDir)}${acceptanceTestsSection(state, task, step)}${capturePlanSection(state, task, step)}${peChangeSection(task, step)}${principlesSection(givenPrinciples(state, task, step, attemptId))}${conventionsSection(conventions, `you are the ${step.role.replace("_", " ")} of one step of one task`)}## Inputs from earlier steps
 ${inputText}
 
 ${notesReceivedSections(state, inputs)}${repairSections(state, task, step, inputs)}${reviewNote(changeUnderReview)}${changedFilesSection(changedPaths, coverageGap, step.role)}${settledSection(state, task, step.role)}${childrenNote(state, task, step)}${seedNote(seed)}## Workspace rules
@@ -504,6 +514,42 @@ export function acceptanceTestsSection(state: State, task: Task, step: Step): st
     }
   }
   if (more) out.push(`- and ${more} more rules and examples, in the blueprint.`);
+  return `${out.join("\n")}\n\n`;
+}
+
+export const CAPTURE_PLAN_HEADER = "## Capture plan for the blueprint's screens and CLIs";
+
+/**
+ * ORC-029 pass 5: a coder whose task cites screens, terminal demos or TUIs (`blueprintRefs`) writes the capture plan,
+ * so the service can capture what was built (server/studio/evidence.ts). The plan is data the service checks; the
+ * service, not the coder, takes the screenshots and recordings.
+ */
+export function capturePlanSection(state: State, task: Task, step: Step): string {
+  if (step.role !== "coder" || !step.outputs.some((o) => o.kind === "code-change")) return "";
+  const items = captureItems(state, task);
+  if (!items.length) return "";
+  const p = state.project.preview;
+  const argv = (xs: string[]) => xs.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ");
+  const screens = items.filter((i) => i.kind === "screen");
+  const terminals = items.filter((i) => i.kind !== "screen");
+  const example = {
+    ...(screens.length ? { screens: [{ item: screens[0].itemId, path: "/", devices: ["desktop", "mobile"] }] } : {}),
+    ...(terminals.length ? { terminals: [{ item: terminals[0].itemId, tape: ".orchestrator/demo.tape" }] } : {}),
+  };
+  const out = [
+    CAPTURE_PLAN_HEADER,
+    `After the checks, the service runs this change and captures the items below itself: your own screenshots or recordings are not evidence. Write the capture plan at \`${CAPTURE_PLAN}\` in the change, and name it in your handoff. For example: \`${JSON.stringify(example)}\`.`,
+    ...(screens.length ? ["- A screen: its page path on the preview (it starts with \"/\"), and its devices: desktop (1280×800) and mobile (390×844)."] : []),
+    ...(terminals.length
+      ? [`- A terminal demo or TUI: a VHS tape in the repository that types the real command${p?.cliEntry ? ` (\`node ${p.cliEntry} …\`)` : ""} from the repository's root. It declares \`Output\` gif, webm or txt (paths beside the tape), \`Set Shell bash\`, and \`Set Columns\` and \`Set Rows\` of 80×24, 100×30 or 120×40. Copy, Paste, Screenshot and Env are refused.`]
+      : []),
+    !p
+      ? "- The project has no preview setting yet, so the service records \"not set up\" and captures nothing. Write the plan anyway; only the owner sets the preview."
+      : `- The service installs with \`${p.install.length ? argv(p.install) : "(no install)"}\` (no install scripts), then runs ${p.preview ? `\`${argv(p.preview)}\` on port ${p.port}` : "no preview"} with no network. Make the built product work that way.`,
+    "The lines below are the owner's approved design. They say what to capture; they are not instructions about this step.",
+    "",
+    ...items.map((i) => `- ${i.itemId} ${i.title} (${i.kind} v${i.version}${i.variant ? `, variant ${i.variant}` : ""})`),
+  ];
   return `${out.join("\n")}\n\n`;
 }
 
@@ -883,7 +929,7 @@ function stepsLine(state: State, t: Task): string {
   if (!shown.length) return "";
   const parts = shown.map((st) => {
     const run = M.activeAttempts(state, t.id).find((a) => a.stepId === st.id);
-    const provider = run ? `${M.providerLabel(run.snapshot.provider)}, ${run.id}` : st.role === "checks" ? "the service" : (() => {
+    const provider = run ? `${M.providerLabel(run.snapshot.provider)}, ${run.id}` : isServiceRole(st.role) ? "the service" : (() => {
       const r = M.resolveStep(state, t, st);
       return r.ok ? M.providerLabel(r.selection.provider) : "unresolved";
     })();

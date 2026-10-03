@@ -11,6 +11,7 @@ import * as P from "./peReview";
 import type { PeReviewTarget } from "./peReview";
 import * as B from "./studio/blueprint";
 import { setDomains } from "./studio/domains";
+import { setPreview } from "./studio/evidence";
 import * as R from "./studio/runs";
 import * as S from "./studio/studio";
 import { type Mark, type StudioMaker, type VariantRules, ROUND_FOCUSES, STUDIO_AGENT_ROLES, STUDIO_ARTIFACT_KINDS, STUDIO_RUN_KINDS, VERDICTS } from "./studio/types";
@@ -492,6 +493,25 @@ export const COMMANDS = {
   }),
   /** Probe the checks sandbox now. */
   recheckChecks: same((s, now) => C.recheckChecks(s, now)),
+  /**
+   * How the service runs the built product to capture evidence (ORC-029 pass 5): the install, the preview and its
+   * port, the CLI's entry; `preview: null` clears it. The owner's only: the lead may propose one in its message.
+   */
+  setPreview: same((s, now, a) => {
+    if (a.preview === null) return setPreview(s, null, now);
+    const p = obj(a.preview, "preview");
+    const opt = (k: string) => (p[k] === undefined || p[k] === null ? undefined : p[k]);
+    return setPreview(
+      s,
+      {
+        ...(opt("install") !== undefined ? { install: strings(p.install, "preview.install") } : {}),
+        ...(opt("preview") !== undefined ? { preview: strings(p.preview, "preview.preview") } : {}),
+        ...(opt("port") !== undefined ? { port: num(p, "port") } : {}),
+        ...(opt("cliEntry") !== undefined && p.cliEntry !== "" ? { cliEntry: str(p, "cliEntry") } : {}),
+      },
+      now,
+    );
+  }),
 
   // the lead
   /** A message stops a planning run in progress so it is answered next; `taskId` names the task page it was sent from. */

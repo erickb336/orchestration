@@ -13,6 +13,8 @@ import { exportMarkdown, trustedBaseRef } from "../src/domain/model";
 import type { State } from "../src/domain/types";
 import type { FakeRuntimeConfig } from "./runtimes/fake";
 import type { Scheduler } from "./scheduler";
+import { evidenceFileKnown } from "../src/domain/studio/evidence";
+import { appEvidenceFile } from "./studio/evidence";
 import { APP_FILE_HEADERS, appStudioFile } from "./studio/files";
 import { projectStudioDir } from "./studio/serve";
 import type { VisionDocStore } from "./visiondocs";
@@ -204,7 +206,8 @@ export function createHttpServer(opts: HttpOptions): Server {
   const studioFile = (res: ServerResponse, query: URLSearchParams) => {
     const { state } = store.read();
     const studioDir = opts.dataDir ? projectStudioDir(opts.dataDir, state.project.id) : undefined;
-    const r = appStudioFile(studioDir, query, (id, version) => state.studio.artifacts.some((a) => a.id === id && a.version === version));
+    // A capture of evidence (ORC-029 pass 5) is served the same way: ?evidence=<run>&path=<item>/<file>.
+    const r = query.has("evidence") ? appEvidenceFile(opts.dataDir, state.project.id, query, (run, path) => evidenceFileKnown(state, run, path)) : appStudioFile(studioDir, query, (id, version) => state.studio.artifacts.some((a) => a.id === id && a.version === version));
     if (!r.ok) {
       res.writeHead(r.status, { "Content-Type": "application/json; charset=utf-8", ...APP_FILE_HEADERS });
       return res.end(JSON.stringify({ error: r.error, kind: r.status === 403 ? "forbidden" : "invalid" } satisfies CommandError));

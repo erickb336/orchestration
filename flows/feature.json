@@ -3,7 +3,7 @@
   "$comment": "SR1 is a security review that runs beside the code review (S3) and the UX review (S4); the repair runs when any of them has findings.",
   "id": "feature",
   "name": "Feature",
-  "description": "User-facing change: design, implement, checks, independent code, security and UX review, repair if needed, final checks, verify.",
+  "description": "User-facing change: design, implement, checks, evidence of the built screens and CLIs, independent code, security and UX review, repair if needed, final checks, verify.",
   "whenToUse": "User-facing work with new screens, flows or copy, where a design and a UX review are worth their cost.",
   "steps": [
     {
@@ -37,6 +37,15 @@
       "checks": { "onFail": "findings" }
     },
     {
+      "id": "E1",
+      "purpose": "Capture evidence of the built screens and CLIs",
+      "$comment": "Run by the service in the recorder's container: the screenshots and recordings the coder's capture plan names, of the checked commit. Skipped when the task's spec cites no screen, terminal demo or TUI of the blueprint.",
+      "role": "evidence",
+      "dependsOn": ["S2", "C1"],
+      "inputs": [{ "step": "S2", "output": "change" }],
+      "outputs": [{ "name": "evidence", "kind": "evidence" }]
+    },
+    {
       "id": "S3",
       "purpose": "Code review",
       "role": "code_reviewer",
@@ -68,10 +77,11 @@
       "id": "S4",
       "purpose": "UX review",
       "role": "ux_reviewer",
-      "dependsOn": ["S2"],
+      "dependsOn": ["S2", "E1"],
       "inputs": [
         { "step": "S1", "output": "design" },
-        { "step": "S2", "output": "change" }
+        { "step": "S2", "output": "change" },
+        { "step": "E1", "output": "evidence" }
       ],
       "outputs": [{ "name": "findings", "kind": "review-findings" }],
       "principles": ["experience-first"]
