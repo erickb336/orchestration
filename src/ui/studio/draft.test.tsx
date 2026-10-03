@@ -72,14 +72,19 @@ describe("the draft bar", () => {
     expect(lockInBlocker(locked)).toBe("There is nothing to lock in: the draft holds only open items, which stay in the draft.");
   });
 
-  it("in Vision, before the first Lock in: the bar says Start the factory is the first one", () => {
+  it("in Vision, before the first Lock in: the bar says Start the factory is the first one, and leads to its pre-flight", () => {
     const fresh = M.initProject(buildSeed(Date.parse("2026-10-02T09:00:00Z"), { inFlightRuns: false }), { name: "Trips", repoPath: "/tmp/trips", vision: "Weekend trips.", focus: "" }, "2026-10-02T09:00:00.000Z");
     const r = openRound(fresh, "experience", "2026-10-02T09:01:00.000Z");
+    // With nothing in the draft yet, Vision still offers the way to the pre-flight.
+    expect(studio(r.state).text).toContain("Nothing is in the draft yet. What you approve goes into the draft, and Start the factory is your first Lock in. Start the factory…");
     const a = addScreen(r.state, r.n, "2026-10-02T09:02:00.000Z", { variants: [{ id: "A", label: "Map first", entry: "trip-plan/index.html" }] });
     const s = run(peAgrees(a.state, a.id, 1, [], "2026-10-02T09:03:00.000Z"), "approveArtifact", { artifactId: a.id, version: 1 }, "2026-10-02T09:04:00.000Z").state;
-    expect(draftHeading(s)).toEqual({ title: "Draft · 1 change", since: "Nothing is locked in yet. Start the factory on Home is your first Lock in." });
-    expect(lockInBlocker(s)).toBe("In Vision, Start the factory on Home is your first Lock in.");
+    expect(draftHeading(s)).toEqual({ title: "Draft · 1 change", since: "Nothing is locked in yet. Start the factory is your first Lock in." });
+    expect(lockInBlocker(s)).toBe("In Vision, Start the factory is your first Lock in.");
     expect(place(s, a.id, 1)).toBe("in the draft");
+    const { html } = studio(s);
+    expect(html).toMatch(/<a href="#\/vision\/pre-flight"[^>]*>Start the factory…<\/a>/);
+    expect(html).not.toContain("Review and lock in");
   });
 });
 

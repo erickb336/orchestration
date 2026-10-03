@@ -1,18 +1,16 @@
 // Shaping the vision with the lead before anything is built: the banner on the board and in the shell, the
 // "Shape the vision" panel on Home (the vision so far, its documents, the lead's questions, what is clear, the
-// lead's draft, the planned tasks and Start building), and the Start building button Settings › Project reuses.
+// lead's draft, the planned tasks and the way to Start the factory, the pre-flight).
 // Every control is a keyed command; a draft never applies by itself.
 
 import { useState, type ReactNode } from "react";
 import { diffLines } from "../domain/diff";
 import * as M from "../domain/model";
-import { openBlueprintItems } from "../domain/studio/blueprint";
-import { unfinishedProbes } from "../domain/studio/studio";
 import { SHAPING_AREAS, SHAPING_AREA_LABEL, type LeadQuestion, type State, type VisionDraft } from "../domain/types";
 import { fmtTime, relTime } from "./common";
-import { Banner, Button, ButtonLink, Card, Chip, Field, Input, Row, Rows, SimulatedChip, Textarea, useConfirm, type ButtonVariant } from "./kit";
+import { Banner, Button, ButtonLink, Card, Chip, Field, Input, Row, Rows, SimulatedChip, Textarea } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
-import { factorySettingsText } from "./settingsText";
+import { StartFactoryLink } from "./preflight/StartFactoryLink";
 import { useStore } from "./store";
 import { VisionDocsList } from "./VisionDocs";
 import "./vision.css";
@@ -296,71 +294,6 @@ function VisionDraftCard({ state, draft, onEditing }: { state: State; draft: Vis
   );
 }
 
-/**
- * Start building, or why it cannot start yet. Open areas are named and confirmed, never a block: only an empty
- * vision blocks. The outcome it names is what Start building does with the involvement setting as it is now,
- * counting only the tasks under the roadmap's own hold (a task you set to wait keeps waiting either way).
- */
-export function StartBuildingButton({ variant = "primary" }: { variant?: ButtonVariant }) {
-  const { state, send, disabled } = useStore();
-  const confirm = useConfirm();
-  const [busy, setBusy] = useState(false);
-  const why = M.startFactoryBlocker(state);
-  const plan = M.startFactoryPlan(state);
-  const roadmap = plan.roadmap.length;
-  const held = plan.userHeld.length;
-  const open = M.openAreas(state);
-  const openItems = openBlueprintItems(state);
-  const probes = unfinishedProbes(state);
-  // With no coverage reported, every area is still open, and the confirmation says so.
-  const stillOpen = [
-    !M.coverageOf(state) ? "The lead has not reported which areas are clear yet, so all nine count as open." : open.length ? `Still open: ${open.map((x) => SHAPING_AREA_LABEL[x].toLowerCase()).join(", ")}.` : "",
-    openItems.length ? `Open in the blueprint: ${openItems.map((o) => `${o.item.title} (${o.why})`).join("; ")}.` : "",
-    probes.length ? `Probes without their evidence yet: ${probes.map((p) => `${p.question} (${p.status})`).join("; ")}.` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const outcome = [
-    roadmap ? (plan.release ? `With your involvement set to Autopilot now, the ${roadmap} planned ${plural(roadmap, "task starts", "tasks start")} right away.` : `With your involvement setting as it is now, the ${roadmap} planned ${plural(roadmap, "task waits", "tasks wait")} for your go-ahead.`) : "",
-    held ? `${held} planned ${plural(held, "task")} you set to wait ${plural(held, "keeps", "keep")} waiting for your go-ahead.` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  // The settings the start sends and records, delivery and who merges included: what the owner agrees to.
-  const runs = factorySettingsText(M.currentFactorySettings(state));
-  const explanation = [stillOpen, outcome, runs].filter(Boolean).join(" ");
-  return (
-    <div className="v-start">
-      <Button
-        variant={variant}
-        disabled={disabled || !!why}
-        disabledReason={why}
-        showReason
-        loading={busy}
-        onClick={async () => {
-          // Your agreement on what you see now: these vision and blueprint revisions, the settings as they stand, and
-          // the open items the confirmation lists. A stand-in for the pre-flight screen (ORC-029 pass 6).
-          const request = M.startFactoryRequest(state);
-          if (request.acceptOpen.length) {
-            const ok = await confirm({
-              title: "Start building with areas still open?",
-              text: `${stillOpen}${outcome ? `\n\n${outcome}` : ""}\n\n${runs} Change these in Settings before you start.\n\nThe lead keeps answering you, and Vision stays open while the factory runs.`,
-              primaryLabel: "Start building",
-            });
-            if (!ok) return;
-          }
-          setBusy(true);
-          await send("startFactory", request);
-          setBusy(false);
-        }}
-      >
-        Start building
-      </Button>
-      {!why && explanation && <p className="small muted">{explanation}</p>}
-    </div>
-  );
-}
-
 /** Writing the vision by hand while shaping: the same command as the Focus card's editor, compare-and-set on the revision. */
 function HandEdit() {
   const { state, send, disabled } = useStore();
@@ -441,7 +374,7 @@ function HandEdit() {
 
 const DRAFT_FATE: Record<VisionDraft["status"], string> = { open: "is open", accepted: "was accepted", dismissed: "was dismissed", superseded: "was replaced" };
 
-/** Home's shaping panel: what shaping means, the vision so far, the documents, the lead's questions, what is clear, the latest draft, the planned tasks, and Start building. */
+/** Home's shaping panel: what shaping means, the vision so far, the documents, the lead's questions, what is clear, the latest draft, the planned tasks, and the way to Start the factory. */
 export function ShapingPanel() {
   const { state, service } = useStore();
   const lead = useLeadContext();
@@ -507,7 +440,7 @@ export function ShapingPanel() {
         <section>
           <h3>Planned tasks ({roadmap.length})</h3>
           {roadmap.length === 0 ? (
-            <p className="small muted">None yet. Tasks the lead proposes while shaping wait here until you start building.</p>
+            <p className="small muted">None yet. Tasks the lead proposes while shaping wait here until you start the factory.</p>
           ) : (
             <Rows label="Planned tasks">
               {roadmap.map((t) => (
@@ -520,7 +453,7 @@ export function ShapingPanel() {
                   meta={
                     <>
                       <Chip>P{t.priority}</Chip>
-                      <span>{t.heldForShaping ? `Waits until building, then ${plan.release ? "starts on Autopilot" : "waits for your go-ahead"}` : t.holdBeforeStart ? "Waits for your go-ahead" : "Starts when building starts"}</span>
+                      <span>{t.heldForShaping ? `Waits until the factory starts, then ${plan.release ? "starts on Autopilot" : "waits for your go-ahead"}` : t.holdBeforeStart ? "Waits for your go-ahead" : "Starts when the factory starts"}</span>
                     </>
                   }
                 />
@@ -529,7 +462,7 @@ export function ShapingPanel() {
           )}
         </section>
 
-        <StartBuildingButton />
+        <StartFactoryLink />
       </div>
     </Card>
   );

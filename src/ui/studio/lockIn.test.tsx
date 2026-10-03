@@ -71,7 +71,8 @@ describe("the Lock in summary", () => {
     const vision = structuredClone(s);
     vision.project.stage = "shaping";
     const v = page(vision);
-    expect(v.text).toContain("In Vision, Start the factory is your first Lock in. It puts these changes into force, with the settings it shows you on Home. Go to Start the factory");
+    expect(v.text).toContain("In Vision, Start the factory is your first Lock in. It puts these changes into force, with the settings you choose on its pre-flight. Start the factory…");
+    expect(v.html).toMatch(/<a href="#\/vision\/pre-flight"[^>]*>Start the factory…<\/a>/);
     expect(v.html).not.toContain('type="checkbox"');
   });
 

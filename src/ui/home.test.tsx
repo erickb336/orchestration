@@ -16,7 +16,6 @@ import { LeadButton, ProjectMenu, ResultsBadge, SimBanner, TABS } from "./App";
 import { ConfirmProvider } from "./kit";
 import { Overview, focusProvenance } from "./Overview";
 import { landedVerdict, mergeVerdict, needsYouItems, optionsLine, prsNeedingYou } from "./progress";
-import { StartBuildingButton } from "./Shaping";
 import { StoreContext, type ServiceStore } from "./store";
 
 const T0 = Date.parse("2026-09-30T12:00:00Z");
@@ -272,26 +271,27 @@ describe("the shaping panel", () => {
     return s;
   };
 
-  it("leads Home while shaping, on the kit: a card with the vision, its documents, what is clear, the planned tasks and Start building", () => {
+  it("leads Home while shaping, on the kit: a card with the vision, its documents, what is clear, the planned tasks and the way to Start the factory", () => {
     const markup = render(<Overview />, store(shaping("Hikers find trails without signal.")));
     expect(markup.indexOf(">Shape the vision<")).toBeLessThan(markup.indexOf(">Needs you<"));
     const start = markup.indexOf('class="k-card v-shape"');
     expect(start).toBeGreaterThan(-1);
     const panel = markup.slice(start, markup.indexOf(">Needs you<"));
     expect(panel).toContain('id="shape"');
-    for (const part of [">Vision so far<", "Vision documents (", ">What is clear so far<", "Planned tasks (", ">Start building<"]) expect(panel).toContain(part);
+    for (const part of [">Vision so far<", "Vision documents (", ">What is clear so far<", "Planned tasks ("]) expect(panel).toContain(part);
+    expect(panel).toMatch(/<a href="#\/vision\/pre-flight"[^>]*>Start the factory…<\/a>/);
+    expect(panel).not.toContain("Start building");
     expect(panel).not.toContain("style=");
     expect(panel).not.toContain('class="banner');
     expect(panel).not.toContain('class="chip');
   });
 
-  it("Start building says why it cannot start under the button, and what it will do when it can", () => {
-    const empty = render(<StartBuildingButton />, store(shaping("")));
-    expect(empty).toContain("Write or accept a vision first.");
-    expect(empty).toContain("k-btn-reason");
-    const ready = render(<StartBuildingButton />, store(shaping("Hikers find trails without signal.")));
-    expect(ready).not.toContain("k-btn-reason");
-    expect(ready).toContain("all nine count as open");
+  it("Home leads to the pre-flight, and says under the link why the factory cannot start with an empty vision", () => {
+    const empty = render(<Overview />, store(shaping("")));
+    expect(empty).toMatch(/>Start the factory…<\/a><p class="small muted no-margin">Write or accept a vision first.<\/p>/);
+    const ready = render(<Overview />, store(shaping("Hikers find trails without signal.")));
+    expect(ready).toMatch(/>Start the factory…<\/a><\/div>/);
+    expect(ready).not.toContain("Write or accept a vision first.");
   });
 });
 

@@ -8,6 +8,7 @@ import { itemFactoryStatus } from "../../domain/studio/itemStatus";
 import type { BlueprintItem, StudioArtifact } from "../../domain/studio/types";
 import { Banner, Button, ButtonLink, Chip, useConfirm } from "../kit";
 import { cx } from "../kit/cx";
+import { PREFLIGHT_HASH } from "../preflight/preflightView";
 import { useStore } from "../store";
 import { CHANGE_TONE, CHANGE_WORD, discardConfirm, draftHeading, draftLines, type DraftLine } from "./draftView";
 import { ArtifactPreview } from "./Preview";
@@ -56,8 +57,9 @@ export function DraftBar() {
           <Button size="small" variant="quiet" disabled={disabled} loading={busy} onClick={() => void discard()}>
             Discard the draft
           </Button>
-          <ButtonLink size="small" variant="primary" href={LOCK_IN_HASH}>
-            Review and lock in
+          {/* In Vision, Start the factory is the first Lock in: its pre-flight holds the summary. */}
+          <ButtonLink size="small" variant="primary" href={state.project.stage === "shaping" ? PREFLIGHT_HASH : LOCK_IN_HASH}>
+            {state.project.stage === "shaping" ? "Start the factory…" : "Review and lock in"}
           </ButtonLink>
         </>
       }

@@ -25,6 +25,7 @@ import { SIM_MENU_BUTTON_ID, TourButton, useFirstRunTour } from "./Tour";
 import { Gallery } from "./kit/Gallery";
 import { ChangeOrderPage } from "./changeOrder/ChangeOrder";
 import { factoryPlaceLink } from "./changeOrder/changeOrderView";
+import { PreflightPage } from "./preflight/Preflight";
 import { LockInPage } from "./studio/LockIn";
 import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
@@ -159,7 +160,7 @@ function Shell() {
         </div>
       </header>
       {/* There is no stage chip. While shaping, the banner says so on every page; Home shows the shaping panel, the board its own banner, and the studio is Vision itself. */}
-      {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && route.page !== "lock-in" && (
+      {route.page !== "tasks" && route.page !== "overview" && route.page !== "vision" && route.page !== "lock-in" && route.page !== "preflight" && (
         <div className="shell-banner">
           <ShapingBanner />
         </div>
@@ -174,6 +175,7 @@ function Shell() {
         {route.page === "kit" && <Gallery />}
         {route.page === "vision" && <Studio />}
         {route.page === "lock-in" && <LockInPage />}
+        {route.page === "preflight" && <PreflightPage />}
         {route.page === "reality" && <Reality />}
         {route.page === "change-order" && <ChangeOrderPage key={route.rev} rev={route.rev} />}
       </main>

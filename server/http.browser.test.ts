@@ -230,9 +230,9 @@ describe.skipIf(!browser)("the app's pages in a real browser", () => {
 
   it("every screen of the demo loads under the policy, with no error in the console", async () => {
     const tasks = demo.store.read().state.tasks;
-    const routes = ["#/overview", "#/vision", "#/vision/lock-in", "#/tasks", "#/results", "#/results/design", "#/activity", "#/settings/working-style", "#/settings/project", "#/settings/agents", "#/settings/quality", "#/settings/advanced", "#/kit", `#/task/${encodeURIComponent(tasks[0].id)}`];
+    const routes = ["#/overview", "#/vision", "#/vision/lock-in", "#/vision/pre-flight", "#/tasks", "#/results", "#/results/design", "#/activity", "#/settings/working-style", "#/settings/project", "#/settings/agents", "#/settings/quality", "#/settings/advanced", "#/kit", `#/task/${encodeURIComponent(tasks[0].id)}`];
     const failures: Record<string, string[]> = {};
-    for (const [origin, list] of [[demo.origin, routes], [vision.origin, ["#/vision", "#/settings/project"]]] as const) {
+    for (const [origin, list] of [[demo.origin, routes], [vision.origin, ["#/vision", "#/vision/pre-flight", "#/settings/project"]]] as const) {
       for (const route of list) {
         const { context, page, errors } = await open();
         const response = await page.goto(`${origin}/${route}`);

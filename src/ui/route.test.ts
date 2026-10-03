@@ -22,8 +22,10 @@ describe("routes", () => {
     for (const h of ["", "#", "#/", "#/tasks", "#/nope"]) expect(parseRoute(h)).toEqual({ page: "tasks" });
   });
 
-  it("the Lock in summary is under Vision and Design and reality under Results; each lights its tab", () => {
+  it("the Lock in summary and the pre-flight are under Vision and Design and reality under Results; each lights its tab", () => {
     expect(parseRoute("#/vision/lock-in")).toEqual({ page: "lock-in" });
+    expect(parseRoute("#/vision/pre-flight")).toEqual({ page: "preflight" });
+    expect(tabOf(parseRoute("#/vision/pre-flight"))).toBe("vision");
     expect(parseRoute("#/results/design")).toEqual({ page: "reality" });
     expect(parseRoute("#/review/design?item=bi-3")).toEqual({ page: "reality" });
     expect(parseRoute("#/vision/other")).toEqual({ page: "vision" });

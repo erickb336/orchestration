@@ -1,13 +1,13 @@
 // Settings › Project: the repository, the kind of product (its domains), the preview the service runs for evidence,
-// the stage, and how finished work leaves (the delivery mode, the remote and base, who merges). Settings wait for Save; Start building is an action and acts
-// at once. In real mode, Start a new project is its own form with its own button.
+// the stage, and how finished work leaves (the delivery mode, the remote and base, who merges). Settings wait for Save; Start the factory opens its
+// pre-flight. In real mode, Start a new project is its own form with its own button.
 
 import { useState } from "react";
 import * as M from "../../domain/model";
 import type { ProjectDomain } from "../../domain/types";
 import { Button, Checkbox, Chip, Disclosure, Field, Input, Textarea, useConfirm } from "../kit";
 import { DeliveryCard, deliveryErrors, deliverySteps, liveDelivery, type DeliveryDraft } from "../DeliverySettings";
-import { StartBuildingButton } from "../Shaping";
+import { StartFactoryLink } from "../preflight/StartFactoryLink";
 import { confirmNewProject } from "../settingsText";
 import { DOMAIN_CHOICES, toggleDomain } from "../studio/studioView";
 import { initProjectConfirm } from "../stageChoice";
@@ -55,7 +55,7 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
     <SettingsSection
       id="project"
       title="Project"
-      help="Your repository, the preview for evidence, the stage, and how finished work leaves Orchestrator. Changes here wait for Save; Start building acts at once."
+      help="Your repository, the preview for evidence, the stage, and how finished work leaves Orchestrator. Changes here wait for Save; Start the factory opens its pre-flight."
       current={current}
       draft={draft}
       invalid={invalid}
@@ -116,7 +116,7 @@ export function ProjectSection({ current, onDirty }: { current: boolean; onDirty
 }
 
 /**
- * The stage: shaping (the lead drafts the vision, nothing runs) or building. Start building acts at once. Once
+ * The stage: shaping (the lead drafts the vision, nothing runs) or building. Start the factory opens its pre-flight. Once
  * building, there is no way back: Vision stays open while the factory runs (ORC-029 r12), and Pause stops building.
  */
 function StageCard() {
@@ -133,7 +133,7 @@ function StageCard() {
       help={shaping ? `${M.SHAPING_LABEL}; the lead answers your messages and drafts the vision.` : "Work runs as usual. Vision stays open while the factory runs: revise it there. Pause the project to stop new work."}
     >
       {shaping ? (
-        <StartBuildingButton variant="secondary" />
+        <StartFactoryLink variant="secondary" />
       ) : (
         <p className="small no-margin">
           <a href="#/vision">Open Vision</a>
