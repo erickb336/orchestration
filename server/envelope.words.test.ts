@@ -1,13 +1,14 @@
-// ORC-029 pass 4d (decision 6): "The project's words". Once the owner approves a dictionary into the blueprint, every
-// agent's envelope carries its terms (task agents, the lead, the designer and the PE), capped; before that, none
-// does. The designer's envelope in a flows round asks for rules.json, with every edge case as an "If …, then …" rule.
+// ORC-029 pass 4d (decision 6): "The project's words". Once the owner approves a dictionary into the blueprint's draft,
+// the studio's agents (the lead, the designer and the PE) carry its terms, capped; the factory's task agents carry the
+// dictionary in force, once it is locked in (pass 5: the factory never reads the draft); before that, none does. The
+// designer's envelope in a flows round asks for rules.json, with every edge case as an "If …, then …" rule.
 
 import { describe, expect, it } from "vitest";
 import * as M from "../src/domain/model";
 import { buildSeed } from "../src/domain/seed";
 import * as R from "../src/domain/studio/runs";
 import * as S from "../src/domain/studio/studio";
-import { DESIGNER, addScreen, openRound, run, sha } from "../src/domain/testing/studio";
+import { DESIGNER, addScreen, lockInAsOwner, openRound, run, sha } from "../src/domain/testing/studio";
 import type { State } from "../src/domain/types";
 import { PROJECT_WORDS_HEADER, buildEnvelope, buildLeadEnvelope } from "./envelope";
 import { peEnvelope } from "./studio/pe";
@@ -55,9 +56,12 @@ function taskText(s: State): string {
 }
 
 describe("the project's words in every agent's envelope", () => {
-  it("is in the lead's, the designer's, the PE's and a task agent's envelope once the owner approved the dictionary", () => {
+  it("is in the lead's, the designer's and the PE's envelope once the owner approved the dictionary, and in a task agent's once it is locked in", () => {
     const { s } = withWords(true);
-    for (const text of [leadText(s), designerText(s), peText(s), taskText(s)]) expect(text).toContain(SECTION);
+    for (const text of [leadText(s), designerText(s), peText(s)]) expect(text).toContain(SECTION);
+    expect(taskText(s)).not.toContain(PROJECT_WORDS_HEADER);
+    const locked = lockInAsOwner(s, at(5));
+    for (const text of [leadText(locked), designerText(locked), peText(locked), taskText(locked)]) expect(text).toContain(SECTION);
   });
 
   it("is in no envelope while the dictionary is only handed in, not approved", () => {
