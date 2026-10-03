@@ -196,6 +196,23 @@ describe("rule results per blueprint item", () => {
     expect(R.ruleResults(s, f.itemId)!.results.find((r) => r.id === "R4")).toMatchObject({ status: "failed", message: `${tag("R4")} asks for a new link: shows an empty page again`, from: { taskId: newest(s) } });
   });
 
+  it("a report cut to 400 tests: a tag that lost a test is never a pass and an older run does not stand in for it; a kept failure still fails", () => {
+    const f = approvedFlow(fresh(), 1);
+    const tag = (id: string) => `[${f.itemId} ${id}]`;
+    let s = landed(f.s, 100, report([[`${tag("R1")} shows the trip`, "passed"], [`${tag("R2")} adds them`, "passed"], [`${tag("R4")} asks`, "passed"]]));
+    const cut = report([[`${tag("R1")} shows the trip`, "passed"], [`${tag("R4")} asks`, "failed", "empty page"], [`${tag("R5")} no other trips`, "passed"]]) as Extract<TestReport, { status: "read" }>;
+    s = landed(s, 200, { ...cut, counts: { passed: 801, failed: 1, skipped: 0, error: 0 }, truncated: true, droppedTags: [tag("R1"), tag("R2"), tag("R4")] });
+    expect(statuses(s, f.itemId)).toEqual({ R1: "no-test", R2: "no-test", R4: "failed", R5: "passed", E1: "no-test" });
+    expect(R.ruleResults(s, f.itemId)!.results.find((r) => r.id === "R2")).toMatchObject({
+      tests: 0,
+      message: `The newest checks with ${tag("R2")} wrote 802 tests, more than the service keeps, and left out some with this tag: the result is not known.`,
+      from: { taskId: newest(s), landedAt: at(200) },
+    });
+    // More tags lost a test than the report lists: no line of that run is a pass.
+    s = landed(s, 300, { ...cut, truncated: true, droppedTags: "unlisted" });
+    expect(statuses(s, f.itemId)).toEqual({ R1: "no-test", R2: "no-test", R4: "failed", R5: "no-test", E1: "no-test" });
+  });
+
   it("only the checks of landed work count, on exactly its final change: not work that has not landed, another commit, a person's edit, a report not read; simulated work is labelled", () => {
     const f = approvedFlow(fresh(), 1);
     const passing = report([[`[${f.itemId} R1] shows the trip`, "passed"]]);
