@@ -6,7 +6,7 @@
 // 3. Another tab approves Trip map while the owner reads. The stale banner shows, and the agreement clears.
 // 4. The owner chooses Check-in, agrees and starts. The screen says what it recorded. Home shows the factory floor.
 // 5. The empty case, on a second service: a new project with nothing approved and no budget. The journey reads the
-//    pre-flight, follows its link to Settings › Project › Budgets, sets a building budget, comes back, and starts the
+//    pre-flight, follows its link to Settings › Budgets, sets a building budget, comes back, and starts the
 //    factory.
 //
 // Sample data: the Weekend Trips project in Vision (src/ui/preflight/preflightScene.ts) and a new empty project. Both
@@ -129,16 +129,16 @@ await runJourney(
         j.check(t.includes("Nothing is approved yet. The factory builds from the vision text alone."), "empty: the blueprint says nothing is approved");
         j.check(t.includes("The draft approves nothing yet, so nothing goes into force."), "empty: the first Lock in says nothing goes into force");
         j.check(t.includes("No building budget is set, so the factory does not stop for cost."), "empty: it says no building budget is set");
-        const budgetLink = page.getByRole("link", { name: "Set the budgets in Settings › Project › Budgets" });
-        j.check((await budgetLink.getAttribute("href")) === "#/settings/project/budgets", "empty: beside the budgets, a link to where you set them (Settings › Project › Budgets)");
+        const budgetLink = page.getByRole("link", { name: "Set the budgets in Settings › Budgets" });
+        j.check((await budgetLink.getAttribute("href")) === "#/settings/budgets/budgets", "empty: beside the budgets, a link to where you set them (Settings › Budgets)");
         j.check(!t.includes("the Lock in only changes the vision text"), "empty: the estimate does not say the Lock in changes the vision text (it changes nothing)");
       });
 
       await j.step("Set a building budget", async () => {
-        await page.getByRole("link", { name: "Set the budgets in Settings › Project › Budgets" }).click();
+        await page.getByRole("link", { name: "Set the budgets in Settings › Budgets" }).click();
         const field = page.getByRole("textbox", { name: "Building budget (dollars)" });
         await field.waitFor({ timeout: 10_000 });
-        j.check(page.url().endsWith("#/settings/project/budgets"), "the link opens Settings › Project › Budgets", page.url());
+        j.check(page.url().endsWith("#/settings/budgets/budgets"), "the link opens Settings › Budgets", page.url());
         await field.fill("25");
         await page.getByRole("button", { name: "Save", exact: true }).first().click();
         await empty.until("the budget is saved", (s) => s.project.budgets.buildingUsd === 25, 10_000);

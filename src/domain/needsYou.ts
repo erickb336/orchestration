@@ -117,7 +117,7 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   const items: NeedsYouEntry[] = [];
   // The costs with no full record count at an estimate (spend.ts), which the budgets show: only the stop waits for you.
   const stop = budgetStop(state);
-  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(state, stop.spend.unknown), action: "Settings", href: "#/settings/project/budgets" });
+  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(state, stop.spend.unknown), action: "Settings", href: "#/settings/budgets" });
   // A run's agent started the provider's own subagents where none is allowed (ORC-031): the owner knows, until they mark it as seen.
   for (const x of slippedThrough(state)) {
     const task = x.taskId ? state.tasks.find((t) => t.id === x.taskId) : undefined;
@@ -131,7 +131,7 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   }
   // A dev container that changed (or appeared) at the trusted base is not used until the owner confirms it.
   const dc = unconfirmedDevcontainer(state);
-  if (dc) items.push({ kind: "open", key: "devcontainer", what: "the repository's dev container is not confirmed", detail: `${dc.file} at ${dc.sha.slice(0, 12)} chooses the image the checks and the evidence run in. It is not used until you confirm it (sha256 ${dc.sha256.slice(0, 12)}…): until then they use the image you confirmed, or run on this computer.`, action: "Settings", href: "#/settings/project/environment" });
+  if (dc) items.push({ kind: "open", key: "devcontainer", what: "the repository's dev container is not confirmed", detail: `${dc.file} at ${dc.sha.slice(0, 12)} chooses the image the checks and the evidence run in. It is not used until you confirm what it sets: until then they use the image you confirmed, or the checks run on this computer and no evidence is captured.`, action: "Settings", href: "#/settings/how-it-runs/environment" });
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
     items.push({ kind: "open", key: "gh", what: "GitHub delivery is stopped", detail: gh.problem.message, action: "Settings", href: "#/settings/project/delivery" });

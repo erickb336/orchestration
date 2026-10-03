@@ -235,7 +235,7 @@ function FactoryCard({ state, settings }: { state: State; settings: FactorySetti
       </section>
       <LockInBudgets w={lockInWords(state)} title="The budgets and the PE's estimate" />
       <p className="small no-margin">
-        <a href={cardHref("budgets")}>{state.project.budgets.buildingUsd === null && state.project.budgets.maintenanceUsdPerMonth === null ? "Set the budgets in Settings › Project › Budgets" : "Change them in Settings › Project › Budgets"}</a>
+        <a href={cardHref("budgets")}>{state.project.budgets.buildingUsd === null && state.project.budgets.maintenanceUsdPerMonth === null ? "Set the budgets in Settings › Budgets" : "Change them in Settings › Budgets"}</a>
       </p>
     </Card>
   );

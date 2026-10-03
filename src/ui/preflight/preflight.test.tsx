@@ -63,13 +63,13 @@ describe("the pre-flight", () => {
     expect(page(empty).text).toContain("Nothing is approved yet. The factory builds from the vision text alone.");
   });
 
-  it("beside the budgets, the way to set them: Settings › Project › Budgets (ORC-030 Q-09)", () => {
+  it("beside the budgets, the way to set them: Settings › Budgets (ORC-030 Q-09)", () => {
     const { s, at } = preflightScene();
     const none = M.initProject(s, { name: "Empty", repoPath: "/tmp/empty", vision: "A to-do list.", focus: "" }, at(500));
     const unset = page(none);
-    expect(unset.text).toContain("Building: $0.00 spent. No building budget is set. No part to estimate: the draft approves none. Maintenance: no estimate yet. No maintenance budget is set. Set the budgets in Settings › Project › Budgets");
-    expect(unset.html).toContain('<a href="#/settings/project/budgets">Set the budgets in Settings › Project › Budgets</a>');
-    expect(page(s).html).toContain('<a href="#/settings/project/budgets">Change them in Settings › Project › Budgets</a>');
+    expect(unset.text).toContain("Building: $0.00 spent. No building budget is set. No part to estimate: the draft approves none. Maintenance: no estimate yet. No maintenance budget is set. Set the budgets in Settings › Budgets");
+    expect(unset.html).toContain('<a href="#/settings/budgets/budgets">Set the budgets in Settings › Budgets</a>');
+    expect(page(s).html).toContain('<a href="#/settings/budgets/budgets">Change them in Settings › Budgets</a>');
   });
 
   it("an empty vision blocks: it says why, and Start the factory and the agreement wait", () => {

@@ -1,4 +1,4 @@
-// ORC-029 pass 5's settings forms: the preview the service runs for evidence (Settings › Project), the test report
+// ORC-029 pass 5's settings forms: the preview the service runs for evidence (Settings › How your project runs), the test report
 // the checks read (Settings › Quality, beside the checks), and PE review of new work (Settings › Quality). Each saves
 // through its owner-only command and shows the domain's refusal, in the domain's words, before Save. Rendered
 // statically (there is no DOM test environment): a form's fields are given, and its save is run against the domain.
@@ -15,9 +15,11 @@ import { answerChangeOrder, at, changeOrdered, fullAnswer } from "../../domain/t
 import { sendInOrder } from "./draft";
 import { peReviewSteps, peReviewWords } from "./PeReviewCard";
 import { QualitySection } from "./Quality";
-import { PreviewCard } from "./PreviewCard";
+import { IMAGE_TABLE } from "../../domain/environment";
+import { liveEnvironment } from "./environment";
 import { ProjectSection } from "./Project";
-import { livePreview, previewInput, previewProblem, previewSteps, splitArgv, type PreviewDraft } from "./preview";
+import { evidenceStatus, livePreview, previewInput, previewProblem, previewSteps, splitArgv, type PreviewDraft } from "./preview";
+import { RunsCard, RunsSection } from "./Runs";
 
 const noop = () => {};
 const T = "2026-10-02T10:00:00.000Z";
@@ -120,31 +122,50 @@ describe("Settings › Advanced: the intro", () => {
   });
 });
 
-describe("Settings › Project › Preview for evidence", () => {
-  it("not set up: the form says so, and has no install (the environment's prepare commands install)", () => {
+describe("Settings › How your project runs: one card for the environment and the evidence (ORC-030 C3)", () => {
+  const NODE = IMAGE_TABLE[0].image;
+  const card = (s: State, over: Partial<PreviewDraft> = {}) => visible(renderScreen(<RunsCard v={{ ...liveEnvironment(s), ...livePreview(s), ...over }} set={noop} />, s));
+
+  it("is its own section: the environment first, then the evidence's preview, port and CLI entry; no install field and no Stage", () => {
     const { s } = blueprintScene();
     expect(livePreview(s)).toEqual({ previewCommand: "", previewPort: "", previewCli: "" });
-    const text = visible(renderScreen(<ProjectSection current onDirty={noop} />, s));
-    expect(text).toContain(
-      "Preview for evidence The service runs your built product to show each screen and each CLI demo beside its design. It runs in your project's environment on a copy of the change, with no network. Not set up Capture runs record \"not set up\", and nothing runs.",
-    );
-    for (const label of ["Preview command", "Port", "CLI entry"]) expect(text).toContain(label);
-    expect(text).not.toContain("Install command");
+    const text = visible(renderScreen(<RunsSection current onDirty={noop} />, s));
+    expect(text).toContain("How your project runs Where the checks and the evidence run: your project's own container, for any language. Changes here wait for Save.");
+    // Each part after the one before it, in this order.
+    let from = 0;
+    const missing = ["Environment", "Image", "Prepare commands", "Allowed registries", "Evidence", "Preview command", "Port", "CLI entry", "No unsaved changes"].filter((x) => {
+      const i = text.indexOf(x, from);
+      if (i >= 0) from = i + x.length;
+      return i < 0;
+    });
+    expect(missing).toEqual([]);
+    for (const gone of ["Install command", "npm ci --ignore-scripts", "recorder's container"]) expect(text).not.toContain(gone);
+    // Project keeps the repository, the kind, the devices and delivery; the Stage card is gone (a-settings-stage).
+    const project = visible(renderScreen(<ProjectSection current onDirty={noop} />, s));
+    for (const gone of ["Preview command", "Prepare commands", "Building budget", "Stage", "Open Vision"]) expect(project).not.toContain(gone);
   });
 
-  it("saves through setPreview: the commands as argument lists, the port and the CLI entry; then shows the setting", async () => {
+  it("without an environment, says evidence is not captured and what to set to get it", () => {
     const { s } = blueprintScene();
-    const v: PreviewDraft = { previewCommand: 'npm run preview -- --port 4173 --host "127.0.0.1"', previewPort: "4173", previewCli: "bin/trips.js" };
+    expect(evidenceStatus(s)).toEqual({ tone: "neutral", label: "Not set up", text: 'Give the preview command and its port for screens, or the CLI entry for terminal demos. Evidence also needs an environment above. Until then, each capture records "not set up".' });
+    const preview = runCommand(s, "setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } }, T).state;
+    expect(card(preview)).toContain("Not captured Preview `npm run preview` on port 4173. Nothing is captured until the project has an environment: set an image above, or confirm the repository's dev container.");
+    const both = runCommand(preview, "setEnvironment", { environment: { image: NODE, prepare: [["npm", "ci"]] } }, T).state;
+    expect(card(both)).toContain("Set up (r1) Preview `npm run preview` on port 4173, in this environment with no network.");
+  });
+
+  it("saves through setEnvironment and setPreview: the commands as argument lists, the port and the CLI entry", async () => {
+    const { s } = blueprintScene();
+    const v: PreviewDraft = { previewCommand: 'python3 -m http.server 4173 --bind "127.0.0.1"', previewPort: "4173", previewCli: "bin/trips.js" };
     const r = await save(s, (send) => previewSteps(v, new Set(["previewCommand", "previewPort", "previewCli"]), send));
-    expect(r.sent).toEqual([["setPreview", { preview: { preview: ["npm", "run", "preview", "--", "--port", "4173", "--host", "127.0.0.1"], port: 4173, cliEntry: "bin/trips.js" } }]]);
-    expect(r.state.project.preview).toEqual({ rev: 1, preview: ["npm", "run", "preview", "--", "--port", "4173", "--host", "127.0.0.1"], port: 4173, cliEntry: "bin/trips.js" });
-    expect(visible(renderScreen(<ProjectSection current onDirty={noop} />, r.state))).toContain("Set up (r1) preview `npm run preview -- --port 4173 --host 127.0.0.1` on port 4173, CLI entry `bin/trips.js`");
+    expect(r.sent).toEqual([["setPreview", { preview: { preview: ["python3", "-m", "http.server", "4173", "--bind", "127.0.0.1"], port: 4173, cliEntry: "bin/trips.js" } }]]);
+    expect(r.state.project.preview).toEqual({ rev: 1, preview: ["python3", "-m", "http.server", "4173", "--bind", "127.0.0.1"], port: 4173, cliEntry: "bin/trips.js" });
     // Emptying the preview command, the port and the CLI entry clears the setting.
     const off = await save(r.state, (send) => previewSteps({ ...livePreview(r.state), previewCommand: "", previewPort: "", previewCli: "" }, new Set(["previewCommand"]), send));
     expect(off.sent).toEqual([["setPreview", { preview: null }]]);
     expect(off.state.project.preview).toBeUndefined();
     // No field of the form changed: nothing is sent.
-    expect(previewSteps(v, new Set(["repoPath"]), async () => ({ ok: true }))).toEqual([]);
+    expect(previewSteps(v, new Set(["envImage"]), async () => ({ ok: true }))).toEqual([]);
   });
 
   it("shows the domain's refusal under the fields, the same words the service answers with", () => {
@@ -159,7 +180,7 @@ describe("Settings › Project › Preview for evidence", () => {
       const v = { ...livePreview(s), ...over };
       expect(previewProblem(v)).toBe(words);
       expect(() => runCommand(s, "setPreview", { preview: previewInput(v) }, T)).toThrow(words);
-      expect(visible(renderScreen(<PreviewCard v={v} set={noop} />, s))).toContain(words);
+      expect(card(s, over)).toContain(words);
     }
     expect(previewProblem({ ...livePreview(s), previewCommand: "npm run preview", previewPort: "4173" })).toBeUndefined();
   });

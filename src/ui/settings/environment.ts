@@ -1,10 +1,11 @@
-// Settings › Project › Environment, as pure functions: the form's fields from the project's environment setting, the
-// setEnvironment command they make, the domain's refusal in its own words (normalizeEnvironment), and the lines the
-// card shows: where the environment comes from, and the last prepare's result. Prepare commands are one per line,
-// each a list of arguments (quotes keep an argument with spaces whole).
+// Settings › How your project runs › Environment, as pure functions: the form's fields from the project's environment
+// setting, the setEnvironment command they make, the domain's refusal in its own words (normalizeEnvironment), and the
+// lines the card shows: where the environment comes from, what a dev container sets before the owner confirms it, and
+// the last prepare's result. Prepare commands are one per line, each a list of arguments (quotes keep an argument with
+// spaces whole).
 
 import type { EnvironmentFound } from "../../api";
-import { lastEnvironmentRun, normalizeEnvironment, type EnvironmentInput, type EnvironmentSetting } from "../../domain/environment";
+import { REGISTRY_HOSTS, lastEnvironmentRun, normalizeEnvironment, type EnvironmentInput, type EnvironmentSetting } from "../../domain/environment";
 import type { State } from "../../domain/types";
 import type { SendResult } from "../store";
 import { argvLine, splitArgv } from "./preview";
@@ -23,10 +24,30 @@ export function liveEnvironment(s: State): EnvironmentDraft {
 /** What the form saves: the setting, or null when every field is empty (the setting is cleared). */
 export function environmentInput(v: EnvironmentDraft): EnvironmentInput | null {
   const image = v.envImage.trim();
-  const prepare = v.envPrepare.split("\n").map(splitArgv).filter((a) => a.length);
+  const prepare = preparesOf(v);
   const [file, sha256] = v.envDevcontainer.split(" ");
   if (!image && !prepare.length && !v.envHosts.length && !v.envDevcontainer) return null;
   return { ...(image ? { image } : {}), prepare, hosts: v.envHosts, ...(file && sha256 ? { devcontainer: { file, sha256 } } : {}) };
+}
+
+/** The form's prepare commands as argument lists, one per line; empty lines dropped. */
+const preparesOf = (v: EnvironmentDraft) => v.envPrepare.split("\n").map(splitArgv).filter((a) => a.length);
+
+/**
+ * What a dev container sets, in plain words, for the owner to confirm (a-settings-devcontainer): its image, or the
+ * Dockerfile it builds from and that file's base images; the prepare commands a run would use (the form's, else the
+ * checks' own); and what installs may reach. The digest the confirmation records is not shown: it stays in the record.
+ */
+export function devcontainerFacts(dc: NonNullable<EnvironmentFound["devcontainer"]>, v: EnvironmentDraft, checksPrepare: readonly (readonly string[])[]): { label: string; text: string }[] {
+  const source = dc.image ? { label: "Image", text: dc.image } : { label: "Builds from", text: `${dc.dockerfile}${dc.bases?.length ? `, based on ${dc.bases.join(" and ")}` : ""}` };
+  const own = preparesOf(v);
+  const prepare = own.length
+    ? `${own.map(argvLine).join(", then ")} (yours, below)`
+    : checksPrepare.length
+      ? `${checksPrepare.map((c) => argvLine(c)).join(", then ")} (the checks' own, because you set none below)`
+      : "none: nothing is installed";
+  const added = v.envHosts.length ? ` and ${v.envHosts.join(", ")}` : "";
+  return [source, { label: "Prepare commands", text: prepare }, { label: "Installs may reach", text: `the ${REGISTRY_HOSTS.length} package registries${added}, through a proxy. The checks and the evidence run with no network.` }];
 }
 
 /** "Confirm this dev container": its digest goes into the form; Save confirms it. */

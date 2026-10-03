@@ -1,9 +1,11 @@
-// Settings › Project › Preview for evidence, as pure functions: the form's fields from the project's preview setting,
-// the setPreview command they make, and the domain's refusal (normalizePreview, src/domain/studio/evidence.ts), so the
-// form shows the same words the service would answer with. Commands are lists of arguments: a field is split at
-// spaces, and quotes keep an argument with spaces whole.
+// Settings › How your project runs › the preview for evidence, as pure functions: the form's fields from the project's
+// preview setting, the setPreview command they make, the domain's refusal (normalizePreview,
+// src/domain/studio/evidence.ts), so the form shows the same words the service would answer with, and what the card
+// says about evidence. Commands are lists of arguments: a field is split at spaces, and quotes keep an argument with
+// spaces whole.
 
-import { normalizePreview, type PreviewInput } from "../../domain/studio/evidence";
+import { environmentIsSet } from "../../domain/environment";
+import { normalizePreview, previewWords, type PreviewInput } from "../../domain/studio/evidence";
 import type { State } from "../../domain/types";
 import type { SendResult } from "../store";
 
@@ -67,3 +69,17 @@ export function previewSteps(v: PreviewDraft, changed: ReadonlySet<string>, send
   if (!PREVIEW_KEYS.some((k) => changed.has(k))) return [];
   return [() => send("setPreview", { preview: previewInput(v) })];
 }
+
+/**
+ * Whether the factory's evidence is captured, from the saved settings: it needs the preview setting and an environment
+ * (an image or a dev container the owner confirmed). Without either, the card says what to set.
+ */
+export function evidenceStatus(s: State): { tone: "done" | "neutral" | "fail"; label: string; text: string } {
+  const p = s.project.preview;
+  const env = environmentIsSet(s.project.environment);
+  if (p && env) return { tone: "done", label: `Set up (r${p.rev})`, text: `${capital(previewWords(p))}, in this environment with no network.` };
+  if (p) return { tone: "fail", label: "Not captured", text: `${capital(previewWords(p))}. Nothing is captured until the project has an environment: set an image above, or confirm the repository's dev container.` };
+  return { tone: "neutral", label: "Not set up", text: `Give the preview command and its port for screens, or the CLI entry for terminal demos.${env ? "" : " Evidence also needs an environment above."} Until then, each capture records "not set up".` };
+}
+
+const capital = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
