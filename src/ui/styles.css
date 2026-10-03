@@ -99,10 +99,12 @@ button {
   cursor: pointer;
   transition: background-color var(--ease), border-color var(--ease), color var(--ease);
 }
-button:hover:not(:disabled) { background: var(--surface-2); }
+/* A button disabled either way (the kit keeps one with a reason focusable, as aria-disabled) has no hover look. The
+   aria-disabled test sits in :where() so the rule weighs what it did: the kit's and the screens' hover rules still win. */
+button:hover:not(:disabled):where(:not([aria-disabled="true"])) { background: var(--surface-2); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); font-weight: 560; }
-button.primary:hover:not(:disabled) { filter: brightness(1.07); background: var(--accent); }
+button.primary:hover:not(:disabled):where(:not([aria-disabled="true"])) { filter: brightness(1.07); background: var(--accent); }
 button.danger { color: var(--st-fail); border-color: var(--danger-border); }
 button.link { border: none; background: none; padding: 0; color: var(--accent); text-decoration: underline; text-underline-offset: 0.18em; font-weight: inherit; }
 button.small { padding: 0.15rem 0.55rem; font-size: var(--fs-small); }
@@ -649,7 +651,7 @@ a.button-link:hover { background: var(--surface-2); }
   text-shadow: none;
   transition: background-color var(--ease);
 }
-.driver-popover.orc-tour .driver-popover-footer button:hover { background: var(--surface-2); }
+.driver-popover.orc-tour .driver-popover-footer button:hover:where(:not(:disabled):not([aria-disabled="true"])) { background: var(--surface-2); }
 .driver-popover.orc-tour .driver-popover-footer button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .driver-popover.orc-tour .driver-popover-footer .driver-popover-next-btn { background: var(--accent); border-color: var(--accent); color: var(--accent-contrast); }
 .driver-popover.orc-tour .driver-popover-footer .driver-popover-next-btn:hover { background: var(--accent); filter: brightness(1.07); }
