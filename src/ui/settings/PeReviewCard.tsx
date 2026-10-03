@@ -52,7 +52,9 @@ export function peReviewOffConfirm(s: State): ConfirmOptions | undefined {
 }
 
 /** The owner's command that saves the checkbox, after asking when turning it off releases work; null when you said no. */
-export async function peReviewSteps(s: State, on: boolean, changed: boolean, send: (name: "setPeReviewsNewWork", args: object) => Promise<SendResult>, confirm: (o: ConfirmOptions) => Promise<boolean>): Promise<(() => Promise<SendResult> | null)[] | null> {
+type Confirm = (o: ConfirmOptions) => Promise<boolean>;
+
+export async function peReviewSteps(s: State, on: boolean, changed: boolean, send: (name: "setPeReviewsNewWork", args: object) => Promise<SendResult>, confirm: Confirm): Promise<(() => Promise<SendResult> | null)[] | null> {
   if (!changed) return [];
   const ask = on ? undefined : peReviewOffConfirm(s);
   if (ask && !(await confirm(ask))) return null;
