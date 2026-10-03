@@ -43,6 +43,7 @@ describe("the lead's brief for a change order", () => {
         "The tasks it touches:",
         `- ${f.tasks.running} "Trip plan screen" [${label(f.tasks.running)}]: cites ${f.ids.plan} (changed). Planned at the Lock in: it finishes, then the lead revises it. Your update: "revise".`,
         `- ${f.tasks.queued} "Trip list screen" [${label(f.tasks.queued)}]: cites ${f.ids.plan} (changed), ${f.ids.list} (unchanged). Planned at the Lock in: the lead updates its spec. Your update: "update-spec".`,
+        `  The user chose option "A" of this task: name "As described", approach "y". Keep it in your proposal as it is; an update that leaves it out or changes its name or approach waits for the user's go-ahead.`,
         `- ${f.tasks.retiring} "Outing reminders" [${label(f.tasks.retiring)}]: cites ${f.ids.remind} (dropped). Planned at the Lock in: retired. Your update: "retire".`,
         `- ${f.tasks.early} "Early trip plan" [${label(f.tasks.early)}]: cites ${f.ids.plan} (changed). Planned at the Lock in: the lead plans a revision. Your update: "revise".`,
         "",

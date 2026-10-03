@@ -360,11 +360,19 @@ export function fakeChangeOrder(prompt: string): { rev: number; updates: Record<
   const rev = Number(head[1]);
   const section = prompt.slice(head.index + 3).split("\n## ")[0];
   const updates: Record<string, unknown>[] = [];
-  const tasks = section.matchAll(/^- (\S+) "([^"\n]*)" \[[^\]\n]*\]: cites (.*?)\. Planned at the Lock in: [^\n]*\. Your update: "(update-spec|revise|retire)"\.$/gm);
-  for (const [, task, title, cites, action] of tasks) {
+  const tasks = section.matchAll(/^- (\S+) "([^"\n]*)" \[[^\]\n]*\]: cites (.*?)\. Planned at the Lock in: [^\n]*\. Your update: "(update-spec|revise|retire)"\.$(?:\n {2}The user chose option ("[^"\n]*") of this task: name ("(?:[^"\\\n]|\\.)*"), approach ("(?:[^"\\\n]|\\.)*")\.)?/gm);
+  for (const [, task, title, cites, action, chosenId, chosenName, chosenApproach] of tasks) {
     const approved = [...cites.matchAll(/(\S+) \((?:changed|added|unchanged)\)/g)].map((m) => m[1]);
     if (action === "retire") updates.push({ action, task, why: "Simulated: it builds only parts the owner dropped.", proposal: null });
-    else if (action === "update-spec") updates.push({ action, task, why: "Simulated: its spec now builds the version in force.", proposal: fakeChangeProposal(title, approved, `${title}, as the version in force shows`) });
+    else if (action === "update-spec") {
+      const proposal = fakeChangeProposal(title, approved, `${title}, as the version in force shows`);
+      // The simulated lead keeps the option the owner chose as it is, as its brief asks.
+      if (chosenId) {
+        const kept = { id: JSON.parse(chosenId) as string, name: JSON.parse(chosenName) as string, approach: JSON.parse(chosenApproach) as string };
+        proposal.options = [kept, ...(proposal.options as { id: string }[]).filter((o) => o.id !== kept.id)];
+      }
+      updates.push({ action, task, why: "Simulated: its spec now builds the version in force.", proposal });
+    }
     else updates.push({ action, task, why: "Simulated: a revision builds the change on top of the work.", proposal: fakeChangeProposal(`Revise ${title} (change order r${rev})`, approved, `${title} changed as the version in force shows`) });
   }
   for (const [, item, title] of section.matchAll(/^- (\S+) \S+ "([^"\n]*)" v\d+[^\n]*: no task cites it yet\. Your update: "new-task", citing \S+\.$/gm)) {

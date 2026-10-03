@@ -337,7 +337,7 @@ function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: strin
   const spec = currentSpec(t);
   // A revision edits the spec it revises, as a change order's update does: the owner's decisions on it stay.
   const chosen = ownersChoiceLeftOut(spec.content, p);
-  if (chosen) return `keep option ${chosen.id} (${chosen.name}): the user chose it`;
+  if (chosen) return `keep option ${chosen.id} (${chosen.name}) as it is: the user chose it`;
   const round = t.peReview!.rounds.length;
   editSpecInto(s, getTask(s, t.id), spec.rev, specUpdateOf(s, spec.content, p), `Revised for the PE (round ${round} asked for a change)`, "lead", now);
   recordPeRevisionInto(s, t.id, spec.rev, currentSpec(getTask(s, t.id)).rev);
@@ -410,11 +410,23 @@ export function specContentOf(s: State, p: LeadProposal): SpecContent {
   };
 }
 
-/** The option the owner chose on this spec, when the lead's proposal leaves it out: only the owner overrules it. */
+/**
+ * Whether `options` still hold the option the owner chose as the owner saw it: its id, with the same name and approach
+ * (pass 6 review finding 6). An option that keeps its id but says another thing is another option.
+ */
+function keepsOption(chosen: SpecOption, options: readonly { id: unknown; name: unknown; approach: unknown }[]): boolean {
+  const same = (a: unknown, b: string) => String(a).trim() === b.trim();
+  return options.some((o) => String(o.id).slice(0, 10) === chosen.id && same(o.name, chosen.name) && same(o.approach, chosen.approach));
+}
+
+/**
+ * The option the owner chose on this spec, when the lead's proposal leaves it out or changes its name or approach:
+ * only the owner overrules it.
+ */
 export function ownersChoiceLeftOut(cur: SpecContent, p: LeadProposal): SpecOption | undefined {
   if (cur.decidedBy !== "user") return undefined;
-  if (p.options.some((o) => String(o.id).slice(0, 10) === cur.selectedOptionId)) return undefined;
-  return cur.options.find((o) => o.id === cur.selectedOptionId);
+  const chosen = cur.options.find((o) => o.id === cur.selectedOptionId);
+  return chosen && !keepsOption(chosen, p.options) ? chosen : undefined;
 }
 
 /** The override reason a kept choice gets when the owner had taken the recommendation and the lead now recommends another. */
@@ -424,13 +436,14 @@ const KEPT_CHOICE = "Your choice, kept when the lead's update recommended anothe
  * A spec update's content (a change order's "update-spec", review finding 5): the lead's proposal merged into the
  * current spec. Each field the proposal gives replaces the current one; the rest stays, among them what a proposal
  * never carries: the success criteria, the validation plan, the rollback and the effort. The owner's choice stays
- * where its option still exists, with its reason; an update that leaves it out is the owner's call
- * (`ownersChoiceLeftOut`), and the owner's go-ahead takes the lead's recommendation.
+ * where its option still exists unchanged, with its reason; an update that leaves it out or changes it is the owner's
+ * call (`ownersChoiceLeftOut`), and the owner's go-ahead takes the lead's recommendation.
  */
 export function specUpdateOf(s: State, cur: SpecContent, p: LeadProposal): SpecContent {
   const next = specContentOf(s, p);
   const given = (k: "area" | "whyNow" | "benefit" | "uncertainty" | "scopeIncluded" | "scopeExcluded") => p[k] !== undefined && p[k] !== null;
-  const keep = cur.decidedBy === "user" && next.options.some((o) => o.id === cur.selectedOptionId);
+  const chosen = cur.decidedBy === "user" ? cur.options.find((o) => o.id === cur.selectedOptionId) : undefined;
+  const keep = !!chosen && keepsOption(chosen, next.options);
   return {
     ...next,
     area: given("area") ? next.area : cur.area,

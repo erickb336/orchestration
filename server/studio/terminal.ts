@@ -28,6 +28,7 @@
 
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix } from "node:path";
+import { Worker } from "node:worker_threads";
 import { OUT, WORK, containerArgs, containerName, defaultRecorderRoot, dockerEnv, makeStage, probeRecorder, removeStage, startRecording, type RunningContainer } from "./container";
 
 // ---------- limits ----------
@@ -725,21 +726,82 @@ function durationMs(t: string): number | undefined {
 }
 
 /**
- * Why a Wait pattern is refused, or undefined. The service runs it on a session's output, so only patterns that cannot
- * backtrack for long: no groups (so no nested repeats) and no back-references, at most three repeats, at most 100
- * characters.
+ * Why a Wait pattern is refused, or undefined: at most 100 characters, and a regular expression. A pattern that
+ * backtracks for long is not refused here: no rule on its text finds every such pattern, so WaitMatcher bounds the
+ * time of each test instead (pass 6 review finding 1).
  */
 export function waitPatternRefusal(p: string): string | undefined {
   if (p.length > 100) return "longer than 100 characters";
-  if (/[()]/.test(p)) return "groups are not allowed";
-  if (/\\[1-9k]/.test(p)) return "back-references are not allowed";
-  if ((p.match(/(?<!\\)[*+?{]/g) ?? []).length > 3) return "more than three repeats";
   try {
     new RegExp(p);
   } catch {
     return "not a regular expression";
   }
   return undefined;
+}
+
+/** How long one test of a Wait pattern on a session's output may take. A slower pattern fails its Wait. */
+export const WAIT_TEST_LIMIT_MS = 250;
+
+/** The worker's code: it tests a pattern on a text, and answers true or false (false for a pattern that throws). */
+const WAIT_WORKER = `const { parentPort } = require("node:worker_threads");
+parentPort.on("message", ({ pattern, text }) => {
+  let found = false;
+  try { found = new RegExp(pattern).test(text); } catch {}
+  parentPort.postMessage(found);
+});`;
+
+/**
+ * Tests a tape's Wait patterns in a worker thread, so that a pattern that backtracks for long never blocks the
+ * service's event loop (pass 6 review finding 1: one test took 79 s on the main thread). A test that passes its time
+ * limit ends the worker and answers "slow"; the next test starts a new worker. `close` ends the worker.
+ */
+export class WaitMatcher {
+  private worker?: Worker;
+  private ready?: Promise<void>;
+  constructor(private readonly limitMs = WAIT_TEST_LIMIT_MS) {}
+  async test(pattern: string, text: string): Promise<boolean | "slow"> {
+    if (!this.worker) {
+      const w = new Worker(WAIT_WORKER, { eval: true, resourceLimits: { maxOldGenerationSizeMb: 32 } });
+      w.unref();
+      // An error with no listener would end the service; a test that is waiting hears it too (onEnd below).
+      w.on("error", () => {});
+      this.worker = w;
+      this.ready = new Promise((res) => {
+        for (const e of ["online", "error", "exit"]) w.once(e, () => res());
+      });
+    }
+    const w = this.worker;
+    await this.ready;
+    return new Promise((res) => {
+      const done = (r: boolean | "slow") => {
+        clearTimeout(timer);
+        w.off("message", onMessage);
+        w.off("error", onEnd);
+        w.off("exit", onEnd);
+        res(r);
+      };
+      const onMessage = (m: unknown) => done(m === true);
+      // A worker that failed answers nothing: no match, and the next test starts another.
+      const onEnd = () => {
+        this.close();
+        done(false);
+      };
+      const timer = setTimeout(() => {
+        this.close();
+        done("slow");
+      }, this.limitMs);
+      w.on("message", onMessage);
+      w.once("error", onEnd);
+      w.once("exit", onEnd);
+      w.postMessage({ pattern, text });
+    });
+  }
+  close() {
+    const w = this.worker;
+    this.worker = undefined;
+    if (w) void w.terminate();
+  }
 }
 
 /** A key with modifiers (`Ctrl+C`, `Alt+b`, `Shift+Tab`, `Ctrl+Alt+d`), as the bytes a terminal sends; undefined when it is none. */
@@ -934,14 +996,20 @@ export function sanitizeOutput(s: string): { clean: string; rest: string } {
 /**
  * What a terminal shows, line by line, from sanitized output: text, carriage returns, backspaces, tabs, and the
  * erases and cursor moves within a line. For a session's transcript and its Waits. Moves between lines are not
- * followed, so a full-screen program's transcript is approximate; its cast is exact.
+ * followed, so a full-screen program's transcript is approximate; its cast is exact. As in a terminal, the cursor
+ * stops at the last column and text wraps there, so a line holds at most `cols` characters and the screen at most
+ * `maxLines` lines of them, whatever the output (pass 6 review finding 2).
  */
 export class LineScreen {
   private lines: string[] = [];
   private cur: string[] = [];
   private col = 0;
-  constructor(private readonly maxLines = 20_000) {}
+  constructor(
+    private readonly cols: number,
+    private readonly maxLines = 20_000,
+  ) {}
   write(s: string) {
+    const last = this.cols - 1;
     for (let i = 0; i < s.length; i++) {
       const ch = s[i];
       if (ch === "\x1b") {
@@ -952,18 +1020,26 @@ export class LineScreen {
           if (n === 0) this.cur.length = Math.min(this.cur.length, this.col);
           else if (n === 2) this.cur = [];
           else for (let k = 0; k < Math.min(this.col, this.cur.length); k++) this.cur[k] = " ";
-        } else if (m[2] === "C") this.col += Math.max(1, n);
-        else if (m[2] === "D") this.col = Math.max(0, this.col - Math.max(1, n));
-        else if (m[2] === "G") this.col = Math.max(0, (n || 1) - 1);
+        } else if (m[2] === "C") this.col = Math.min(last, this.col + Math.max(1, n));
+        else if (m[2] === "D") this.col = Math.max(0, Math.min(last, this.col) - Math.max(1, n));
+        else if (m[2] === "G") this.col = Math.min(last, Math.max(0, (n || 1) - 1));
         else if (m[2] === "J" && n >= 2 && this.cur.length) this.newline();
         i += m[0].length - 1;
       } else if (ch === "\n") this.newline();
       else if (ch === "\r") this.col = 0;
-      else if (ch === "\b") this.col = Math.max(0, this.col - 1);
-      else if (ch === "\t") this.col = (Math.floor(this.col / 8) + 1) * 8;
+      else if (ch === "\b") this.col = Math.max(0, Math.min(last, this.col) - 1);
+      else if (ch === "\t") this.col = Math.min(last, (Math.floor(this.col / 8) + 1) * 8);
       else {
+        // A character outside the BMP (an emoji) is two code units: it takes two columns and is never cut at the wrap.
+        const code = ch.charCodeAt(0);
+        const wide = code >= 0xd800 && code <= 0xdbff && /[\udc00-\udfff]/.test(s[i + 1] ?? "");
+        if (this.col + (wide ? 2 : 1) > this.cols) this.newline();
         while (this.cur.length < this.col) this.cur.push(" ");
-        this.cur[this.col++] = ch;
+        this.cur[this.col++] = wide ? s.slice(i, i + 2) : ch;
+        if (wide) {
+          this.cur[this.col++] = "";
+          i++;
+        }
       }
     }
   }
@@ -996,8 +1072,8 @@ export class LineScreen {
  */
 export class CastRecorder {
   /** What the recording shows (its transcript), and what the terminal showed (for Waits, hidden output included). */
-  readonly shown = new LineScreen();
-  readonly all = new LineScreen(500);
+  readonly shown: LineScreen;
+  readonly all: LineScreen;
   hidden = false;
   tooLarge = false;
   private readonly events: string[] = [];
@@ -1010,6 +1086,8 @@ export class CastRecorder {
     const title = o.title?.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").slice(0, 200);
     this.header = JSON.stringify({ version: 2, width: o.cols, height: o.rows, timestamp: Math.floor(o.startedAt / 1000), env: { TERM: "xterm-256color", SHELL: "bash" }, ...(title ? { title } : {}) });
     this.bytes = Buffer.byteLength(this.header) + 1;
+    this.shown = new LineScreen(o.cols);
+    this.all = new LineScreen(o.cols, 500);
   }
   output(chunk: Uint8Array | string, atMs: number) {
     const { clean, rest } = sanitizeOutput(this.pending + (typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true })));
@@ -1091,10 +1169,10 @@ export async function recordSession(o: { stream: SessionStream; session: TapeSes
       sleepers.add(done);
     });
   /** Check `test` every 50 ms for up to `ms`; false when the time ran out, or the session stopped or ended first. */
-  const until = async (test: () => boolean, ms: number) => {
+  const until = async (test: () => boolean | Promise<boolean>, ms: number) => {
     const deadline = now() + ms;
     for (;;) {
-      if (test()) return true;
+      if (await test()) return true;
       if (stopped || ended || now() >= deadline) return false;
       await pause(50);
     }
@@ -1113,7 +1191,9 @@ export async function recordSession(o: { stream: SessionStream; session: TapeSes
   const onAbort = () => halt("failed", "the capture was stopped");
   o.signal?.addEventListener("abort", onAbort);
   if (o.signal?.aborted) onAbort();
+  const matcher = new WaitMatcher();
   try {
+    // The service's own prompt pattern (">$") cannot backtrack: it runs here. A tape's patterns run in the matcher.
     const prompt = new RegExp(SESSION_DEFAULTS.waitPattern);
     const readyMs = o.readyMs ?? SESSION_DEFAULTS.readyMs;
     if (!(await until(() => prompt.test(rec.all.lastLine()), readyMs)) && !stopped) halt("failed", ended ? "the shell ended before its first prompt" : `the shell showed no prompt within ${Math.round(readyMs / 1000)} s`);
@@ -1129,13 +1209,17 @@ export async function recordSession(o: { stream: SessionStream; session: TapeSes
       else if (a.kind === "hide") rec.hidden = true;
       else if (a.kind === "show") rec.hidden = false;
       else {
-        const re = new RegExp(a.pattern);
-        const seen = () => re.test(a.scope === "line" ? rec.all.lastLine().slice(-512) : rec.all.tail(rows).slice(-rows * (cols + 1) * 2));
+        const seen = async () => {
+          const r = await matcher.test(a.pattern, a.scope === "line" ? rec.all.lastLine().slice(-512) : rec.all.tail(rows).slice(-rows * (cols + 1) * 2));
+          if (r === "slow") halt("failed", `Wait /${a.pattern}/ took longer than ${WAIT_TEST_LIMIT_MS / 1000} s to test the output; use a simpler pattern`);
+          return r === true;
+        };
         if (!(await until(seen, a.timeoutMs)) && !stopped && !ended) halt("failed", `Wait /${a.pattern}/ did not match within ${Math.round(a.timeoutMs / 1000)} s`);
       }
     }
     if (!stopped && !ended) await pause(o.settleMs ?? SESSION_DEFAULTS.settleMs);
   } finally {
+    matcher.close();
     clearTimeout(timer);
     o.signal?.removeEventListener("abort", onAbort);
     o.stream.off("data", onData);
