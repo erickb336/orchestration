@@ -2,9 +2,9 @@
 // lead answers, with Undo, at 1280 and 375 wide.
 //
 // What it drives, as the owner sees it:
-// 1. Vision, round 2: the new design. It looks for a way to approve it into the draft, then marks Keep and sends it.
-// 2. The draft bar, with its changes. The UI has no control that approves or drops a part, so the script sends those
-//    two owner commands itself (a stand-in, through the service's command path), and says so.
+// 1. Vision: the owner marks the new design Keep (Trip plan v2 and Packing list, round 2) and Reminders Drop (round 1).
+//    Before Send the feedback says what each does to the draft; Send does it (ORC-030 Q-01: Keep is the approval).
+// 2. The draft bar, with its three changes.
 // 3. Review and lock in: what changes, the tasks it touches and what happens to each, the new work and the budgets.
 //    Then the agreement and Lock in, which makes change order 2.
 // 4. The change order (#/tasks/change-order/2): the simulated lead's updates, one row each. Undo on the retired task,
@@ -22,6 +22,7 @@ import { resolve } from "node:path";
 import * as M from "../../src/domain/model.ts";
 import { buildSeed } from "../../src/domain/seed.ts";
 import * as B from "../../src/domain/studio/blueprint.ts";
+import { waitingForYourMark } from "../../src/ui/studio/studioView.ts";
 import { at, leadTaskCiting, startTask, taskCiting } from "../../src/domain/testing/changeOrders.ts";
 import { startFactoryAsOwner } from "../../src/domain/testing/factory.ts";
 import { addScreen, feedback, openRound, pePass, run } from "../../src/domain/testing/studio.ts";
@@ -75,34 +76,48 @@ async function journeyBody(j, page, service) {
     if (shot) await j.shot(shot);
   };
 
-  // ---------- 1. Vision: the new design, and how the owner approves it ----------
+  // ---------- 1. Vision: the new design, kept; Reminders, dropped ----------
+  const marks = page.getByRole("group", { name: "Your mark", exact: true });
+  /** Open a round and one of its parts in the studio. */
+  const open = async (round, title) => {
+    await page.getByRole("list", { name: "Rounds" }).getByRole("button", { name: new RegExp(`^${round} ·`) }).click();
+    await page.getByRole("list", { name: `Artifacts of round ${round}` }).getByRole("button", { name: new RegExp(`^${title}`) }).click();
+    await page.getByRole("heading", { name: title, level: 2, exact: true }).waitFor({ timeout: 10_000 });
+  };
   await j.step("open Vision", async () => {
     await page.goto(`${service.origin}/#/vision`);
     await page.getByRole("heading", { name: "Vision", level: 1 }).waitFor({ timeout: 15_000 });
     const list = page.getByRole("list", { name: "Artifacts of round 2" });
     const words = await list.innerText();
     j.check(/Packing list/.test(words) && /Trip plan/.test(words), "round 2 lists the new design: Trip plan v2 and Packing list");
-    await list.getByRole("button", { name: /^Packing list/ }).click();
-    await page.getByRole("group", { name: "Your mark" }).waitFor({ timeout: 5_000 });
-    const approve = await page.getByRole("button", { name: /approve|into the draft/i }).count();
-    j.check(approve > 0, "the studio offers a way to approve Packing list into the draft (README: you approve what you want)", "only Keep, Change, Drop and Send to the lead");
     await view("Vision, round 2", "1-studio-new-design");
   });
-  await j.step("mark Keep and send it to the lead", async () => {
-    await page.getByRole("group", { name: "Your mark" }).getByRole("button", { name: "Keep" }).click();
+  await j.step("mark Keep and Drop, and send them to the lead", async () => {
+    await open(2, "Packing list");
+    await marks.getByRole("button", { name: "Keep" }).click();
+    await open(2, "Trip plan");
+    await marks.getByRole("button", { name: "Keep" }).click();
+    await open(1, "Reminders");
+    await marks.getByRole("button", { name: "Drop" }).click();
+    const before = (await page.getByRole("list", { name: "Not sent yet" }).innerText()).replace(/\s+/g, " ");
+    for (const [what, words] of [
+      ["Keep puts Packing list in the draft", "Keep puts Packing list v1 in the draft."],
+      ["Keep puts Trip plan v2 in place of v1", "Keep puts Trip plan v2 in the draft, in place of Trip plan v1."],
+      ["Drop takes Reminders out", "Drop takes Reminders out of the draft: it leaves the design at your next Lock in."],
+    ])
+      j.check(before.includes(words), `before Send, your feedback says: ${what}`, before);
+    j.check((await page.getByRole("button", { name: /^Approve/ }).count()) === 0, "there is no separate Approve button: Keep and Send approve");
+    await page.waitForTimeout(400);
+    await j.shot("2-before-send");
     await page.getByRole("button", { name: "Send to the lead" }).click();
     await page.getByText(/Sent to the lead as one message/).waitFor({ timeout: 10_000 });
-    j.check(B.hasDraft(service.state()), "Keep, then Send to the lead, puts Packing list into the draft (or the studio says how to)", "the draft stays empty: no draft bar, nothing to lock in");
+    const items = B.draftItems(service.state());
+    j.check(items.some((i) => i.artifactId === SC.art.packing && i.status === "approved") && items.some((i) => i.artifactId === SC.art.plan && i.version === 2 && i.status === "approved") && items.find((i) => i.id === SC.ids.remind)?.status === "dropped", "the record: Packing list and Trip plan v2 are in the draft, and Reminders is dropped", items.map((i) => `${i.title} v${i.version} ${i.status}`));
     await view("Vision after Send", "2-after-keep");
   });
 
-  // ---------- 2. The draft (a stand-in for the missing Approve and Drop) ----------
-  service.command("approveArtifact", { artifactId: SC.art.plan, version: 2 });
-  if (!B.draftItems(service.state()).some((i) => i.artifactId === SC.art.packing)) service.command("approveArtifact", { artifactId: SC.art.packing, version: 1 });
-  service.command("dropBlueprintItem", { itemId: SC.ids.remind });
-  j.note("Stand-in: the script approved Trip plan v2 and Packing list, and dropped Reminders, by command: the UI has no control for it.");
+  // ---------- 2. The draft ----------
   await j.step("the draft bar", async () => {
-    await page.reload();
     const bar = page.locator(".st-draftbar");
     await bar.waitFor({ timeout: 10_000 });
     const words = await bar.innerText();
@@ -138,6 +153,12 @@ async function journeyBody(j, page, service) {
     j.check(await done.count(), 'the screen says "Locked in, as Lock in 2."');
     const co = service.state().blueprint.changeOrders.find((c) => c.rev === 2);
     j.check(co?.status === "open", "the record: change order 2 is open", co && { status: co.status });
+    // Trip list is in force with no mark of yours, and Reminders is dropped: neither waits for your mark. (The simulated
+    // lead may open a round meanwhile, whose parts do wait: the badge counts exactly what waits.)
+    const waiting = waitingForYourMark(service.state()).map((a) => a.title);
+    const badge = page.locator(`.tab-badge[aria-label*="waiting for your mark"]`);
+    const label = (await badge.count()) ? await badge.first().getAttribute("aria-label") : "";
+    j.check(!waiting.includes("Trip list") && !waiting.includes("Reminders") && (waiting.length ? label.startsWith(`${waiting.length} artifact`) : !label), "the Vision tab asks for no mark on parts that are in force or dropped", { waiting, label });
     await view("after Lock in", "5-locked-in");
   });
 
@@ -161,6 +182,8 @@ async function journeyBody(j, page, service) {
     await row("Retired").getByText("Undone", { exact: true }).waitFor({ timeout: 10_000 });
     const t = service.state().tasks.find((x) => x.id === SC.tasks.retiring);
     j.check(t && t.lifecycle !== "cancelled", `the record: ${SC.tasks.retiring} is back (not cancelled)`, t?.lifecycle);
+    const words = (await row("Retired").innerText()).replace(/\s+/g, " ");
+    j.check(words.includes(`${SC.tasks.retiring} is back, and it builds Reminders v1, which you dropped at Lock in 2.`), `the line says that ${SC.tasks.retiring} is back and builds a part you dropped`, words);
     await view("after Undo of the retirement", "8-undo-retired");
   });
   await j.step("the task that came back", async () => {
