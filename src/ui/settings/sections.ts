@@ -19,6 +19,7 @@ export const CARD_SECTION = {
   notifications: "working-style",
   repository: "project",
   domains: "project",
+  preview: "project",
   stage: "project",
   delivery: "project",
   "new-project": "project",
