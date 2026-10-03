@@ -1,6 +1,10 @@
 // Studio runs (ORC-029 pass 3): the agent runs of Vision, the designer's and the PE's (probes' come in pass 4).
 // Pure: each operation returns a new State; the service's scheduler dispatches, launches and reports them.
 //
+// One kind runs in the factory instead (pass 5): a PE run on new work (`review`), which has no round. It is asked
+// for by askForNewWorkReviews (src/domain/peReview.ts) and dispatched only while building; everything below about
+// Vision applies to the other runs.
+//
 // The PE's runs. The owner sees a designer's work only after PE review (the loop rule, studio.ts), so once a version
 // is imported, and its screenshots or recording are made, the service asks for a PE run on it (askForPeReviews). The
 // PE reads the version and returns a verdict per variant, which the service records with addPeVerdicts. By default
