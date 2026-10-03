@@ -135,8 +135,11 @@ describe("Send puts each part you mark Keep into the draft, and takes each part 
     const discarded = runCommand(kept, "discardDraft", { draftRev: B.draftRev(kept) }, at(40)).state;
     const a = S.getArtifact(discarded, id, 1);
     expect(keptNotInDraft(discarded, a)).toBe("You marked it Keep, but it is not in the draft. To put it in, mark it Keep again and send.");
-    // Nothing is sent by itself: only a part you marked again is in your answer.
+    // Nothing is sent by itself: only a part you marked again is in your answer. The screen says so, not "Keep puts".
     expect(changedDrafts(discarded, {})).toEqual([]);
+    const text = studioText(discarded);
+    expect(text).toContain("You marked it Keep, but it is not in the draft. To put it in, mark it Keep again and send.");
+    expect(text).not.toContain("Keep puts");
     const again = { [draftKey(a)]: draftFrom(S.currentFeedback(discarded, id, 1)) };
     expect(answerEffects(discarded, changedDrafts(discarded, again)).map((e) => e.will)).toEqual(["Keep puts Trip plan v1 (Map first) in the draft."]);
   });

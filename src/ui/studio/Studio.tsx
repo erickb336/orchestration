@@ -53,7 +53,6 @@ import {
   dictionaryStanding,
   draftFrom,
   draftKey,
-  draftEffect,
   draftSummary,
   keepUnmarked,
   keptNotInDraft,
@@ -142,6 +141,18 @@ export function Studio() {
   const answer = { round: n, questions, answers: roundAnswers, message };
   const changed = changedDrafts(state, drafts);
   const effects = new Map(answerEffects(state, changed).map((e) => [e.key, e]));
+  /**
+   * Under a version's mark: what Send does to the draft for it (Keep puts it in, Drop takes it out, or why Keep cannot),
+   * or, when your answer has nothing on it, why a version you kept is not in the draft.
+   */
+  const effectLine = (a: StudioArtifact): { text: string; needsYou: boolean } | undefined => {
+    if (standing(state, a).kind !== "open") return undefined;
+    const e = effects.get(draftKey(a));
+    if (e) return { text: e.will, needsYou: !!e.refused };
+    if (changed.some((c) => draftKey(c.artifact) === draftKey(a))) return undefined;
+    const kept = keptNotInDraft(state, a);
+    return kept ? { text: kept, needsYou: true } : undefined;
+  };
   const parts = answerParts({ ...answer, changed });
   const blocker = disabled ? "The service is offline. What you marked and wrote stays here until it reconnects." : answerBlocker({ ...answer, changed });
   const sendAll = async () => {
@@ -251,6 +262,7 @@ export function Studio() {
                 pinMode={pinMode}
                 setPinMode={setPinMode}
                 port={service.prototypePort}
+                effectLine={effectLine(artifact)}
               />
             ) : round ? (
               <NoArtifacts n={round.n} />
@@ -451,10 +463,12 @@ interface ArtifactViewProps {
   pinMode: boolean;
   setPinMode: (on: boolean) => void;
   port: number | undefined;
+  /** What Send does to the draft for this version, or why a version you kept is not in it (the Studio's `effectLine`). */
+  effectLine: { text: string; needsYou: boolean } | undefined;
 }
 
 /** The centre: the artifact's toolbar, the stage (a device frame, a terminal window or a plain frame), the variants, your mark, and the pins. */
-function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, onDevice, pinMode, setPinMode, port }: ArtifactViewProps) {
+function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, onDevice, pinMode, setPinMode, port, effectLine }: ArtifactViewProps) {
   const { state, disabled } = useStore();
   const kind = showKind(a);
   const st = standing(state, a);
@@ -564,25 +578,11 @@ function ArtifactView({ artifact: a, draft, update, variant, onVariant, device, 
         </div>
       </div>
 
-      <DraftEffectLine artifact={a} draft={draft} />
+      {effectLine && <p className={cx("small", effectLine.needsYou ? "st-hint" : "muted")}>{effectLine.text}</p>}
       {draft.pins.length > 0 && <PinList artifact={a} draft={draft} update={update} locked={locked} />}
       <p className="micro muted">Artifacts stay on this computer: the studio shows the files the designer wrote, whichever provider wrote them.</p>
     </div>
   );
-}
-
-/**
- * Under your mark: what Send does to the draft for this version (Keep puts it in, Drop takes it out, or why Keep
- * cannot), or, with no change in your answer, why a version you kept is not in the draft.
- */
-function DraftEffectLine({ artifact: a, draft }: { artifact: StudioArtifact; draft: Draft }) {
-  const { state } = useStore();
-  if (standing(state, a).kind !== "open") return null;
-  const inAnswer = changedDrafts(state, { [draftKey(a)]: draft }).length > 0;
-  const effect = inAnswer ? draftEffect(state, a, draft) : undefined;
-  const text = effect ? effect.will : inAnswer ? undefined : keptNotInDraft(state, a);
-  if (!text) return null;
-  return <p className={cx("small", effect && !effect.refused ? "muted" : "st-hint")}>{text}</p>;
 }
 
 /**
