@@ -713,7 +713,8 @@ export class CodexAdapter implements RuntimeAdapter {
     if (!run.threadId || !allowsSubagents(run.a)) return;
     const ids = [run.threadId, ...run.subs.keys()];
     void this.archiveThreads(ids).then((out) => {
-      const left = [...out.values()].filter((o) => o !== "archived").length;
+      // Archiving the parent also archives its sub-agents' threads (seen on 0.159.2): theirs then has no session file.
+      const left = [...out.values()].filter((o) => o !== "archived" && !(typeof o === "object" && /no rollout found/i.test(o.error))).length;
       if (left) this.log(`codex[${run.a.attemptId}]: ${left} of ${ids.length} threads not archived; housekeeping sweeps them later`);
     });
   }
