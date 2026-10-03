@@ -85,6 +85,9 @@ describe("the simulated lead's answer", () => {
     expect(done.steering.find((x) => x.id === `cs-${r.runId}`)).toMatchObject({ simulated: true, reason: `Change order r${co.rev}` });
     expect(done.conversation.at(-1)).toMatchObject({ author: "lead", text: expect.stringMatching(/^I answered change order r\d+ with 5 updates/) });
     expect(done.conversation.at(-1)!.rejected).toBeUndefined();
+    // The lead's next brief lists each line under its recent changes, in the design's words.
+    const next = M.startLeadRun(M.postMessage(done, "How did the change go?", at(30)), { provider: "claude", model: "m", trigger: "message" }, at(30));
+    expect(buildLeadEnvelope(next.state, runOf(next.state, next.runId), "read")).toContain(`- ${co.lines![1].changeId} (${at(21)}): change order r${co.rev}: ${co.lines![1].words} — applied\n`);
   });
 });
 

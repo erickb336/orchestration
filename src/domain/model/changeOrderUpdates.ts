@@ -273,7 +273,7 @@ function applyLineInto(s: State, co: ChangeOrder, line: ChangeOrderLine, row: St
 }
 
 /** The change order and the line a steering row carries. */
-function lineOf(s: State, changeId: string): { co: ChangeOrder; line: ChangeOrderLine } | undefined {
+export function lineOf(s: State, changeId: string): { co: ChangeOrder; line: ChangeOrderLine } | undefined {
   for (const co of s.blueprint.changeOrders) {
     const line = co.lines?.find((l) => l.changeId === changeId);
     if (line) return { co, line };

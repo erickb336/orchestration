@@ -16,7 +16,7 @@ import { domainLines } from "../src/domain/studio/domains";
 import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import { testedItems } from "../src/domain/studio/ruleResults";
 import * as S from "../src/domain/studio/studio";
-import { DOCUMENT_KINDS, isUnderWay, type BlueprintItem, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
+import { DOCUMENT_KINDS, isChangeOrderKind, isUnderWay, type BlueprintItem, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
 import { clip, truncate } from "../src/domain/text";
 import { leadBlueprintSection, newWorkNote, peChangeSection, peQuestionsSection, sentBackSection, stepBlueprintSection } from "./factoryLink";
 import { lastLeadProse } from "./prose/record";
@@ -957,7 +957,9 @@ function recentSteering(state: State): string {
                   ? `${c.taskId} dropped`
                   : c.kind === "note"
                     ? `note to ${c.taskId ?? "?"} ${c.stepId ?? "?"} "${clip(String(c.after ?? ""), 80)}"`
-                    : `${c.taskId ?? "?"} (unreadable entry)`;
+                    : isChangeOrderKind(c.kind)
+                      ? `change order r${M.changeOrderLineOf(state, c.id)?.co.rev ?? "?"}: ${clip(M.changeOrderLineOf(state, c.id)?.line.words ?? `${c.kind} ${c.taskId ?? ""}`, 160)}`
+                      : `${c.taskId ?? "?"} (unreadable entry)`;
       // A sent note shows where it stands (applied means sent).
       const live = c.kind === "note" && c.noteId ? M.noteOf(state, c.noteId) : undefined;
       const status =
