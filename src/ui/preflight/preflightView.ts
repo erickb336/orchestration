@@ -201,13 +201,19 @@ export function budgetsBeside(s: State, building: boolean): { building: string; 
       ? `The PE's estimate for these parts: ${usdRange(b.itemsTotal.buildUsd)}.`
       : `No total estimate from the PE: ${count(missing, "part")} ${missing === 1 ? "has" : "have"} none.`;
   const m = b.maintenance.estimateUsdPerMonth;
+  const missingM = b.items.filter((e) => !e.estimate?.maintenanceUsdPerMonth).length;
+  const parts = b.itemsTotal.maintenanceUsdPerMonth
+    ? `These parts add ${usdRange(b.itemsTotal.maintenanceUsdPerMonth, true)}.`
+    : b.items.length
+      ? `No total estimate from the PE for these parts: ${count(missingM, "part")} ${missingM === 1 ? "has" : "have"} none.`
+      : "";
   return {
     building: [
       building ? "At it, the factory stops and asks you." : "Not set: the factory does not stop for cost.",
       `${usd(b.building.spentUsd)} spent so far${unknown ? `; ${count(unknown, "run")} ${unknown === 1 ? "has" : "have"} no recorded cost, so the spend may be higher` : ""}.`,
       estimate,
     ].join(" "),
-    maintenance: [m === null ? "The PE's estimate: none yet." : `The PE's estimate: ${usd(m)} a month.`, b.itemsTotal.maintenanceUsdPerMonth ? `These parts add ${usdRange(b.itemsTotal.maintenanceUsdPerMonth, true)}.` : ""].filter(Boolean).join(" "),
+    maintenance: [m === null ? (parts ? "" : "No estimate from the PE yet.") : `What is in force costs about ${usd(m)} a month.`, parts].filter(Boolean).join(" "),
   };
 }
 

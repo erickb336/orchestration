@@ -155,7 +155,7 @@ function BlueprintCard({ state, open }: { state: State; open: V.OpenLine[] }) {
   const w = lockInWords(state);
   const newWork = V.newWorkLine(state);
   return (
-    <Card title="The blueprint" count={parts.length} className="pf-card">
+    <Card title="The blueprint" count={parts.length || undefined} className="pf-card">
       <p className="small no-margin">
         {w.changes
           ? `Start the factory is your first Lock in: it puts ${parts.length === 1 ? "this part" : `these ${parts.length} parts`} into force as Lock in ${w.rev}, and records this summary with your agreement.`

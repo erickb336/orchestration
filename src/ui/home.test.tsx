@@ -174,13 +174,18 @@ describe("Home", () => {
     expect(markup).toContain("Choose an approach:");
   });
 
-  it("shows the focus first, where it came from, Undo, and the vision behind Vision and history", () => {
+  it("shows the focus, where it came from and Undo; the vision is one line at the top, with Open Vision (ORC-030 C1)", () => {
     expect(markup).toContain("Offline maps first: the map must work with no signal.");
     expect(markup).toContain("Set by the lead from your message");
     expect(markup).toContain(">Undo<");
-    expect(markup).toContain("Vision and history");
-    expect(markup).toContain(">Edit vision<");
-    expect(markup.indexOf('class="focus-line"')).toBeLessThan(markup.indexOf("Vision and history"));
+    // The vision text, its editor and its history live in Vision: Home has its first line and the way there.
+    expect(markup).not.toContain("Vision and history");
+    expect(markup).not.toContain(">Edit vision<");
+    const from = markup.indexOf('aria-labelledby="st-visionline-h"');
+    const line = visible(markup.slice(markup.indexOf(">", from) + 1, markup.indexOf("</section>", from)));
+    expect(line).toMatch(/^Vision Weekend Trips helps a small group of friends .*… Open Vision$/);
+    expect(markup).toMatch(/<a href="#\/vision" class="k-btn k-btn--small">Open Vision<\/a>/);
+    expect(markup.indexOf('aria-labelledby="st-visionline-h"')).toBeLessThan(markup.indexOf(">Needs you<"));
     expect(focusProvenance({ rev: 1, at: at(0), author: "user", text: "", focus: "", reason: "" })).toBe("Set by you");
   });
 
@@ -269,26 +274,25 @@ describe("Home's latest reply, in the conversation's words", () => {
   });
 });
 
-describe("the shaping panel", () => {
+describe("the vision's line on Home while shaping (ORC-030 C1: the vision text lives in Vision)", () => {
   const shaping = (vision: string) => {
     const s = inVision(buildSeed(T0, { inFlightRuns: false }), at(1));
     s.project.visions[s.project.visions.length - 1].text = vision;
     return s;
   };
 
-  it("leads Home while shaping, on the kit: a card with the vision, its documents, what is clear, the planned tasks and the way to Start the factory", () => {
-    const markup = render(<Overview />, store(shaping("Hikers find trails without signal.")));
-    expect(markup.indexOf(">The vision<")).toBeLessThan(markup.indexOf(">Needs you<"));
-    const start = markup.indexOf('class="k-card v-shape"');
+  it("leads Home, on the kit: one line of the vision, Open Vision and the quiet way to Start the factory; the rest is in Vision", () => {
+    const markup = render(<Overview />, store(shaping("Hikers find trails without signal.\nThey plan offline.")));
+    const start = markup.indexOf('aria-labelledby="st-visionline-h"');
     expect(start).toBeGreaterThan(-1);
-    const panel = markup.slice(start, markup.indexOf(">Needs you<"));
-    expect(panel).toContain('id="shape"');
-    for (const part of [">Vision so far<", "Vision documents (", ">What is clear so far<", "Planned tasks ("]) expect(panel).toContain(part);
-    expect(panel).toMatch(/<a href="#\/vision\/pre-flight"[^>]*>Start the factory…<\/a>/);
-    expect(panel).not.toContain("Start building");
-    expect(panel).not.toContain("style=");
-    expect(panel).not.toContain('class="banner');
-    expect(panel).not.toContain('class="chip');
+    expect(start).toBeLessThan(markup.indexOf(">Needs you<"));
+    const line = markup.slice(markup.indexOf(">", start) + 1, markup.indexOf("</section>", start));
+    expect(visible(line)).toBe("Vision Hikers find trails without signal. Open Vision Start the factory…");
+    expect(line).toMatch(/<a href="#\/vision\/pre-flight" class="k-btn k-btn--quiet k-btn--small">Start the factory…<\/a>/);
+    for (const gone of ["Vision so far", "Vision documents (", "What is clear so far", "Planned tasks (", "Start building"]) expect(markup).not.toContain(gone);
+    expect(line).not.toContain("style=");
+    expect(line).not.toContain('class="banner');
+    expect(line).not.toContain('class="chip');
   });
 
   it("Home leads to the pre-flight, and says under the link why the factory cannot start with an empty vision", () => {
@@ -301,10 +305,10 @@ describe("the shaping panel", () => {
 });
 
 describe("Home in Vision", () => {
-  it("stays as it was: the shaping panel, Needs you and Progress by area, and no factory floor", () => {
+  it("stays as it was: the vision's line, Needs you and Progress by area, and no factory floor", () => {
     const s = inVision(floorScene().s, at(100));
     const markup = render(<Overview />, store(s));
-    for (const part of [">The vision<", ">Needs you<", ">Progress by area<", ">New results<", ">Latest from the lead<"]) expect(markup).toContain(part);
+    for (const part of ['aria-labelledby="st-visionline-h"', ">Needs you<", ">Progress by area<", ">New results<", ">Latest from the lead<"]) expect(markup).toContain(part);
     for (const gone of [">Building budget<", ">The factory<", ">Decided by the PE<", "Open the change order"]) expect(markup).not.toContain(gone);
   });
 });
