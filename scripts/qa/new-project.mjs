@@ -76,8 +76,8 @@ await runJourney(
 
     // 4. The project is there.
     await j.step("the new project", async () => {
-      await page.locator(".brand small", { hasText: NAME }).waitFor({ timeout: 10_000 });
-      j.check(true, `the header names the project "${NAME}"`);
+      await page.locator(".project-menu .menu__label", { hasText: NAME }).waitFor({ timeout: 10_000 });
+      j.check(true, `the header names the project "${NAME}" (its menu)`);
       const s = service.state();
       j.check(s.project.name === NAME && s.project.stage === "shaping" && s.project.repoPath === service.repo, "the record: the project is in Vision, with its repository");
       await page.waitForTimeout(800);
@@ -111,7 +111,8 @@ await runJourney(
       j.check(page.url().endsWith("#/vision"), "Vision opens at #/vision");
       j.check(/Kind of product|kind of product/.test(words), "Vision asks for the kind of product first (the designer's work follows it)");
       j.check(/Message the lead|Ask the lead|Start the studio/.test(words), "Vision offers a way to ask the lead for a first round");
-      j.check((await page.locator(".places").innerText()).includes("Factory not started"), "the places say the factory has not started");
+      const homeItem = (await page.getByRole("navigation", { name: "Main" }).getByRole("link").first().innerText()).replace(/\s+/g, " ");
+      j.check((width < 600 ? /not started/ : /factory not started/).test(homeItem), "Home's menu item says the factory has not started", homeItem);
       await j.shot("5-vision");
       await j.pageChecks("Vision");
       // The kind of product: choose Screen product and see the choice kept.
