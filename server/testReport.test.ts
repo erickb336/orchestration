@@ -90,6 +90,18 @@ describe("the four runners' reports: one result per test", () => {
     ]);
   });
 
+  it("Node's built-in reporter (a real report, written by Node 22.23): top-level tests sit in <testsuites> itself; a failing todo test is a failure", () => {
+    // Node's test runner does not fail the run for a todo test, and writes both <skipped type="todo"> and <failure>.
+    const r = read(fixture("node-test.xml"));
+    expect(r.status === "read" && r.cases.map((c) => [c.name, c.status])).toEqual([
+      ["[bi-3 R1] each person pays an equal share", "passed"],
+      ["[bi-3 R3] the first person pays the cents left over", "failed"],
+      ["[bi-3 E1] a skipped example", "skipped"],
+      ["is refused", "passed"],
+    ]);
+    expect(r.status === "read" && r.counts).toEqual({ passed: 2, failed: 1, skipped: 1, error: 0 });
+  });
+
   it("a <testsuite> root, nested suites (the inner suite's name when a case has no class name) and an empty report", () => {
     const nested = read('<testsuite name="outer"><testsuite name="inner"><testcase name="a"/></testsuite><testcase name="b" classname="k"/></testsuite>');
     expect(nested.status === "read" && nested.cases).toEqual([

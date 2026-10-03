@@ -224,7 +224,8 @@ export function parseJUnit(xml: string, clean: Clean): { ok: true; cases: TestCa
     return { ok: false, reason: /nested/i.test(msg) ? `nests more than ${REPORT_MAX_DEPTH} elements` : `could not be parsed (${clean(msg, 120)})` };
   }
   if (doc.testsuites === undefined && doc.testsuite === undefined) return { ok: false, reason: "has no <testsuites> or <testsuite>: it is not a JUnit report" };
-  const roots = [...list(doc.testsuites).flatMap((x) => list(asNode(x).testsuite)), ...list(doc.testsuite)];
+  // <testsuites> is walked as a suite too: Node's built-in reporter writes top-level tests directly in it.
+  const roots = [...list(doc.testsuites), ...list(doc.testsuite)];
   const out: TestCaseResult[] = [];
   walk(roots, "", clean, out);
   return { ok: true, cases: out };

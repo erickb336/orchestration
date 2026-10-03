@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+	<testcase name="[bi-3 R1] each person pays an equal share" time="0.000291" classname="test"/>
+	<testsuite name="[bi-3 R2] fewer than one person" time="0.000195" disabled="0" errors="0" tests="1" failures="0" skipped="0" hostname="e8d9b104e2e6">
+		<testcase name="is refused" time="0.000109" classname="test"/>
+	</testsuite>
+	<testcase name="[bi-3 R3] the first person pays the cents left over" time="0.000711" classname="test" failure="Expected values to be strictly deep-equal:+ actual - expected  [-   3334,    3333,    3333,+   3333  ]">
+		<skipped type="todo" message="deliberately left failing"/>
+		<failure type="testCodeFailure" message="Expected values to be strictly deep-equal:+ actual - expected  [-   3334,    3333,    3333,+   3333  ]">
+[Error [ERR_TEST_FAILURE]: Expected values to be strictly deep-equal:
++ actual - expected
+
+  [
+-   3334,
+    3333,
+    3333,
++   3333
+  ]
+] {
+  code: 'ERR_TEST_FAILURE',
+  failureType: 'testCodeFailure',
+  cause: AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    [
+  -   3334,
+      3333,
+      3333,
+  +   3333
+    ]
+  
+      at TestContext.&lt;anonymous> (file:///tmp/split.test.mjs:17:10)
+      at Test.runInAsyncScope (node:async_hooks:214:14)
+      at Test.run (node:internal/test_runner/test:1047:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+      at Suite.postRun (node:internal/test_runner/test:1173:19)
+      at Suite.run (node:internal/test_runner/test:1457:10)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:744:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: [ 3333, 3333, 3333 ],
+    expected: [ 3334, 3333, 3333 ],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+}
+		</failure>
+	</testcase>
+	<testcase name="[bi-3 E1] a skipped example" time="0.000903" classname="test">
+		<skipped type="skipped" message="not yet"/>
+	</testcase>
+	<!-- tests 4 -->
+	<!-- suites 1 -->
+	<!-- pass 2 -->
+	<!-- fail 0 -->
+	<!-- cancelled 0 -->
+	<!-- skipped 1 -->
+	<!-- todo 1 -->
+	<!-- duration_ms 32.853999 -->
+</testsuites>
