@@ -105,7 +105,9 @@ const openOf = (v: ItemFactoryView): UxDifference[] => (v.uxReview?.ofLandedWork
 
 /** Why the item stands where it does, in one or two sentences. */
 export function statusWhy(v: ItemFactoryView): string {
-  const running = v.tasks.filter((t) => t.state === "running" || t.state === "finished");
+  const inProgress = v.tasks.filter((t) => t.state === "running" || t.state === "finished");
+  const running = inProgress.filter((t) => t.thisVersion);
+  const runningBefore = inProgress.filter((t) => !t.thisVersion);
   const landedHere = v.tasks.filter((t) => t.state === "landed" && t.thisVersion);
   const landedBefore = v.tasks.filter((t) => t.state === "landed" && !t.thisVersion);
   const landed = `${landedHere.map((t) => t.taskId).join(", ")} landed`;
@@ -139,9 +141,14 @@ export function statusWhy(v: ItemFactoryView): string {
       }
       return `${landed}, and its recording is of the landed commit.`;
     }
-    case "designed":
-      if (landedBefore.length) return `Locked in. The work that landed (${landedBefore.map((t) => t.taskId).join(", ")}) built an earlier version; nothing builds v${v.item.version} yet.`;
+    case "designed": {
+      const earlier = [
+        landedBefore.length ? `The work that landed (${landedBefore.map((t) => t.taskId).join(", ")}) built an earlier version` : "",
+        runningBefore.length ? `${runningBefore.map((t) => t.taskId).join(", ")} ${runningBefore.length === 1 ? "builds" : "build"} an earlier version` : "",
+      ].filter(Boolean);
+      if (earlier.length) return `Locked in. ${earlier.join("; ")}; nothing builds v${v.item.version} yet.`;
       return v.tasks.length ? `Locked in. ${v.tasks.map((t) => t.taskId).join(", ")} ${v.tasks.length === 1 ? "waits" : "wait"} to start.` : "Locked in. No task builds it yet: the lead plans its tasks.";
+    }
   }
 }
 

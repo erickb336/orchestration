@@ -28,7 +28,8 @@ const failure = (fn: () => unknown): Error => {
   throw new Error("expected a refusal");
 };
 const approve = (s: State, artifactId: string, version: number, variant?: string) => run(s, "approveArtifact", { artifactId, version, ...(variant ? { variant } : {}) }, at(50)).state;
-const lockIn = (s: State, sec: number, draftRev = s.blueprint.draft.rev) => run(s, "lockIn", { draftRev }, at(sec)).state;
+/** The owner's Lock in of the summary as it stands (its draft revision and digest); `draftRev` names an older draft. */
+const lockIn = (s: State, sec: number, draftRev = s.blueprint.draft.rev) => run(s, "lockIn", { draftRev, summaryDigest: B.summaryDigest(B.lockInSummary(s)) }, at(sec)).state;
 const drop = (s: State, itemId: string, sec: number) => run(s, "dropBlueprintItem", { itemId }, at(sec)).state;
 const itemOf = (s: State, artifactId: string) => B.draftItems(s).find((i) => i.artifactId === artifactId)!;
 /** Round 1 with the Trip plan screen (three variants) that the PE agreed to. */
@@ -325,6 +326,30 @@ describe("the Lock in summary", () => {
     expect(B.HANDLING_WORDS).toMatchObject({ "finish-then-revise": "it finishes, then the lead revises it" });
   });
 
+  it("is what the Lock in records: a task that starts, or a budget set, after the owner read it makes the Lock in stale", () => {
+    // Review finding 13: the draft revision alone let task states, handling and budgets change unseen.
+    const { s: base, search, searchItem } = locked();
+    const queued = taskCiting(base, [searchItem], 6, "Search, not started");
+    const changed = revised(queued.s, search, 7);
+    const s = approve(changed.s, search, changed.version);
+    const seen = B.lockInSummary(s);
+    const shown = { draftRev: seen.draftRev, summaryDigest: B.summaryDigest(seen) };
+    expect(shown.summaryDigest).toMatch(/^[0-9a-f]{64}$/);
+    const stale = "The Lock in summary changed since you read it (a task, its handling, the budgets or the draft). Read the new summary, and agree again.";
+    // The task starts while the owner reads: the lead no longer updates its spec. The draft did not change.
+    const moved = started(s, queued.id, 8);
+    expect([moved.blueprint.draft.rev, B.lockInSummary(moved).tasks.map((t) => t.handling)]).toEqual([s.blueprint.draft.rev, ["finish-then-revise"]]);
+    const refused = failure(() => run(moved, "lockIn", shown, at(9)));
+    expect([refused instanceof StaleWriteError, refused.message]).toEqual([true, stale]);
+    // A budget set while the owner reads: refused the same way.
+    const budgeted = run(s, "setBudgets", { buildingUsd: 40, maintenanceUsdPerMonth: 10 }, at(9)).state;
+    expect(failure(() => run(budgeted, "lockIn", shown, at(10))).message).toBe(stale);
+    expect(() => runCommand(s, "lockIn", { draftRev: shown.draftRev }, at(10))).toThrow(InvalidCommandError);
+    // Nothing moved: the record holds the summary the owner saw.
+    const done = run(s, "lockIn", shown, at(10)).state;
+    expect(B.currentBlueprint(done)!.lockIn).toEqual({ by: "user", summary: seen });
+  });
+
   it("states the budgets: the spend and maintenance so far, the PE's estimate of each added or changed item, or none (never $0)", () => {
     const { s: base, search } = locked();
     let s = runCommand(base, "setBudgets", { buildingUsd: 40, maintenanceUsdPerMonth: 10 }, at(6)).state;
@@ -361,6 +386,10 @@ describe("Start the factory: the first Lock in", () => {
     const open = itemOf(s, S.latestArtifacts(s)[0].id);
     expect(open.status).toBe("open");
     expect(failure(() => runCommand(s, "startFactory", before, at(11)))).toBeInstanceOf(StaleWriteError);
+    // The pre-flight's Lock in summary changed (a budget set while the owner read it): the start is refused too.
+    const shown = startFactoryArgs(s, MANUAL);
+    const budgeted = run(s, "setBudgets", { buildingUsd: 40, maintenanceUsdPerMonth: 10 }, at(10)).state;
+    expect(failure(() => runCommand(budgeted, "startFactory", { ...shown, acceptOpen: M.preflightOpenItems(budgeted) }, at(11))).message).toMatch(/^The Lock in summary changed since you read it/);
     const areas = M.openAreas(s);
     expect(M.preflightOpenItems(s)).toEqual([...areas, open.id]);
     const args = startFactoryArgs(s, MANUAL);

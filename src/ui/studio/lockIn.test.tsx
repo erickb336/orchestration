@@ -1,12 +1,13 @@
 // ORC-029 pass 5, screen 3: the Lock in summary. What changes; the tasks it touches and what happens to each; the new
 // work; the budgets (no estimate is "no estimate", never $0); what stays open; the agreement; and "Lock in N changes",
-// which names the draft revision the screen showed, so a draft that changed meanwhile is refused.
+// which names the draft revision and the digest of the summary the screen showed, so a draft, a task or a budget that
+// changed meanwhile is refused.
 
 import { describe, expect, it } from "vitest";
 import { runCommand } from "../../domain/commands";
 import * as B from "../../domain/studio/blueprint";
 import { blueprintScene } from "../../domain/testing/blueprintScene";
-import { addScreen, peAgrees, run, sha } from "../../domain/testing/studio";
+import { addScreen, lockInArgs, peAgrees, run, sha } from "../../domain/testing/studio";
 import { StaleWriteError, type State } from "../../domain/types";
 import { renderScreen, visible } from "../testStore";
 import { LockInPage } from "./LockIn";
@@ -45,11 +46,18 @@ describe("the Lock in summary", () => {
     expect(lockInWords(est).estimate.total).toBe("The PE's estimate to build these changes: $5–$9.");
   });
 
-  it("Lock in names the draft revision the screen showed: it succeeds, records the summary; once the draft changes, that revision is refused", () => {
-    const { s, at } = blueprintScene();
+  it("Lock in names the draft revision and the summary the screen showed: it succeeds, records that summary; once the draft, a task or a budget changes, it is refused", () => {
+    const { s, at, tasks } = blueprintScene();
     const shown = lockInWords(s);
-    const req = lockInRequest(shown.draftRev);
-    expect(req).toEqual({ name: "lockIn", args: { draftRev: s.blueprint.draft.rev } });
+    const req = lockInRequest(shown);
+    expect(req).toEqual({ name: "lockIn", args: { draftRev: s.blueprint.draft.rev, summaryDigest: B.summaryDigest(B.lockInSummary(s)) } });
+    // Review finding 13: a touched task cancelled, or a budget set, while the owner reads; the draft is the same.
+    const cancelled = runCommand(s, "cancelTask", { taskId: tasks.reminders }, at(399)).state;
+    const budgeted = runCommand(s, "setBudgets", { buildingUsd: 50, maintenanceUsdPerMonth: 10 }, at(399)).state;
+    for (const changed of [cancelled, budgeted]) {
+      expect(changed.blueprint.draft.rev).toBe(s.blueprint.draft.rev);
+      expect(() => runCommand(changed, req.name, req.args, at(400))).toThrow(/^The Lock in summary changed since you read it/);
+    }
     const locked = runCommand(s, req.name, req.args, at(400)).state;
     expect(B.blueprintRev(locked)).toBe(shown.rev);
     expect(locked.blueprint.revisions.at(-1)!.lockIn).toEqual({ by: "user", summary: B.lockInSummary(s) });
@@ -63,7 +71,7 @@ describe("the Lock in summary", () => {
 
   it("with only open items there is nothing to lock in, and the open item is listed; in Vision, Start the factory is the first Lock in", () => {
     const { s, at } = blueprintScene();
-    const locked = runCommand(s, "lockIn", { draftRev: s.blueprint.draft.rev }, at(400)).state;
+    const locked = runCommand(s, "lockIn", lockInArgs(s), at(400)).state;
     const open = page(locked).text;
     expect(open).toContain("Nothing to lock in The draft has no change to put into force. There is nothing to lock in: the draft holds only open items, which stay in the draft.");
     expect(open).toContain("What stays open Open Trip map v1");

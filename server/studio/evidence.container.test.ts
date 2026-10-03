@@ -158,6 +158,19 @@ describe(`capturing evidence in the recorder's container${skipReason}`, () => {
   );
 
   it.skipIf(!ready.ok)(
+    "a built app that leaves a folder no one can read (mode 000) in its stage: the capture still ends, and its stage folder is gone",
+    async () => {
+      // The review's leak: the clean-up stopped at such a folder (EACCES), and later sweeps failed on it too.
+      const lock = "const fs=require('node:fs');fs.mkdirSync('/work/locked/inner',{recursive:true});fs.writeFileSync('/work/locked/inner/f.txt','x');fs.chmodSync('/work/locked/inner',0);fs.chmodSync('/work/locked',0);process.exit(1);\n";
+      const out = join(dir, "evidence");
+      const r = await captureEvidence({ source: change(APP, { "lock.js": lock }), sha: SHA, items: [SCREEN], preview: { rev: 1, install: [], preview: ["node", "lock.js"], port: 4173 }, outDir: out, root: ROOT });
+      expect(r.items.map((i) => [i.status, i.status === "none" ? i.reason : ""])).toEqual([["none", "preview-did-not-start"]]);
+      // The afterEach checks that the stage folder and the containers are gone.
+    },
+    300_000,
+  );
+
+  it.skipIf(!ready.ok)(
     "a preview that does not start: the screen says so, with the end of its log",
     async () => {
       const out = join(dir, "evidence");

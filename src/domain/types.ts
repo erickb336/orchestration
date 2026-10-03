@@ -665,14 +665,15 @@ export interface TestCaseResult {
 
 /**
  * What the service read from a check run's JUnit report, after the commands ran in the throwaway copy.
- * - read: the test cases (at most 400: the tagged ones first, then the failing ones; `truncated` when more were in the
- *   report) and the counts of every case in the report;
+ * - read: the test cases (at most 400: the failing tagged ones first, then the other tagged ones, then the failing
+ *   ones; `truncated` when more were in the report) and the counts of every case in the report. `droppedTags`, when a
+ *   case with a tag was left out: those tags, each once, or "unlisted" when more than 400 tags lost a case;
  * - missing: the commands wrote no report at the path;
  * - refused: the file is not one the service reads (too large, a DTD or an entity declaration, nested too deep, not
  *   well-formed XML, or a path that leaves the copy), and why.
  */
 export type TestReport =
-  | { status: "read"; path: string; cases: TestCaseResult[]; counts: Record<TestCaseResult["status"], number>; truncated: boolean }
+  | { status: "read"; path: string; cases: TestCaseResult[]; counts: Record<TestCaseResult["status"], number>; truncated: boolean; droppedTags?: string[] | "unlisted" }
   | { status: "missing" | "refused"; path: string; reason: string };
 
 /**
@@ -1750,8 +1751,9 @@ export interface Landed {
 export class StaleWriteError extends Error {
   expected: number;
   actual: number;
-  constructor(expected: number, actual: number) {
-    super(`Stale write: edited revision ${expected}, current is ${actual}. Reload and reconcile.`);
+  /** `message`: what changed, when it is not the revision alone (the revisions may then be equal). */
+  constructor(expected: number, actual: number, message?: string) {
+    super(message ?? `Stale write: edited revision ${expected}, current is ${actual}. Reload and reconcile.`);
     this.name = "StaleWriteError";
     this.expected = expected;
     this.actual = actual;

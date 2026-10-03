@@ -17,6 +17,7 @@ import {
   type ChosenBy,
   ControlError,
   autoModelDefaults,
+  DEFAULT_AUTONOMY,
   DEFAULT_CHECKS,
   DEFAULT_PR_DELIVERY,
   NO_BUDGETS,
@@ -118,6 +119,11 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // and with nothing observed about the previous repository.
   s.project.prDelivery = structuredClone(DEFAULT_PR_DELIVERY);
   delete s.project.github;
+  // Local delivery writes to a branch of the previous repository, and its baseline is a commit there.
+  s.project.autonomy.autoDeliver = { ...DEFAULT_AUTONOMY.autoDeliver };
+  delete s.project.delivery;
+  // The preview runs the previous repository's commands; only the owner sets it for this one.
+  delete s.project.preview;
   // Checks are off until the user turns them on for this repository, and nothing has been probed for it.
   s.project.checks = structuredClone(DEFAULT_CHECKS);
   delete s.project.checksHealth;

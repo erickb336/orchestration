@@ -11,6 +11,7 @@ import { LEAD_REPLY_SCHEMA, schemaMismatch, withNulls } from "../src/domain/mode
 import * as B from "../src/domain/studio/blueprint";
 import { at, changeOrdered } from "../src/domain/testing/changeOrders";
 import { startFactoryArgs } from "../src/domain/testing/factory";
+import { lockInArgs } from "../src/domain/testing/studio";
 import type { LeadRun, SpecContent, State } from "../src/domain/types";
 import { buildLeadEnvelope, parseLeadOutput } from "./envelope";
 import { FakeAdapter, defaultFakeConfig, fakeLeadReply, fakeLeadText } from "./runtimes/fake";
@@ -156,7 +157,7 @@ describe("on the simulated runtime", () => {
     approvedScreen(2, "Trip plan", plan);
     cmd("dropBlueprintItem", { itemId: item(remind) });
     const packing = approvedScreen(2, "Packing list");
-    cmd("lockIn", { draftRev: st().blueprint.draft.rev });
+    cmd("lockIn", lockInArgs(st()));
     const co = () => st().blueprint.changeOrders.at(-1)!;
     expect(co()).toMatchObject({ status: "open", tasks: [{ taskId: queued, handling: "update-spec" }, { taskId: retiring, handling: "retire" }], newWork: [item(packing)] });
     expect(tickUntil(() => st().leadRuns.some((r) => r.trigger === "change-order" && r.outcome === "completed"))).toBe(true);

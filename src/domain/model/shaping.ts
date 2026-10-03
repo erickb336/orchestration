@@ -9,7 +9,7 @@
 
 import { deliveryMode, setDeliveryMode, setPrDelivery } from "../delivery";
 import * as F from "../findings";
-import { blueprintRev, draftChanges, draftRev, openBlueprintItems, putDraftInForce } from "../studio/blueprint";
+import { assertSummarySeen, blueprintRev, draftChanges, draftRev, lockInSummary, openBlueprintItems, putDraftInForce, summaryDigest } from "../studio/blueprint";
 import { unfinishedProbes } from "../studio/studio";
 import {
   type Device,
@@ -104,6 +104,8 @@ export interface FactoryRequest {
    * nothing else changes what is in force, so this one revision covers both.
    */
   draftRev: number;
+  /** The digest of the Lock in summary the pre-flight showed (`summaryDigest`): the start records that summary. */
+  summaryDigest: string;
   /**
    * The vision revision the owner saw (compare-and-set). The blueprint stands on the vision, and the vision changes
    * without a blueprint revision (an edit, an accepted draft, a document), so the agreement checks both.
@@ -131,7 +133,7 @@ export function preflightOpenItems(s: State): string[] {
  * confirmation lists the open items; the pre-flight screen later).
  */
 export function startFactoryRequest(s: State): FactoryRequest {
-  return { agreed: true, draftRev: draftRev(s), visionRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: preflightOpenItems(s) };
+  return { agreed: true, draftRev: draftRev(s), summaryDigest: summaryDigest(lockInSummary(s)), visionRev: currentVision(s).rev, settings: currentFactorySettings(s), acceptOpen: preflightOpenItems(s) };
 }
 
 /**
@@ -198,9 +200,12 @@ export function startFactory(state: State, req: FactoryRequest, now: string): St
   const problem = settingsProblem(req.settings);
   if (problem) throw new ControlError(problem);
   const c = draftChanges(state);
+  const locks = c.added.length + c.changed.length + c.dropped.length > 0;
+  // The start records the Lock in summary: it must be the one the pre-flight showed.
+  if (locks) assertSummarySeen(state, req);
   const locked = draft(state);
   // The first Lock in, while still in Vision: no task is building yet, so it makes no change order.
-  if (c.added.length + c.changed.length + c.dropped.length) putDraftInForce(locked, now);
+  if (locks) putDraftInForce(locked, now);
   const bp = blueprintRev(locked);
   const s = draft(applyFactorySettings(locked, req.settings, now));
   s.project.stage = "building";

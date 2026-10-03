@@ -16,7 +16,7 @@ import { CAPTURE_DEVICES, NO_EVIDENCE_WORDS, noCapture, type CaptureDevice, type
 import { isInsidePath, versionsOf } from "../../src/domain/studio/studio";
 import type { Artifact, State } from "../../src/domain/types";
 import { NO_SCRIPTS_ENV } from "../checks";
-import { OUT, WORK, containerArgs, containerName, defaultRecorderRoot, dockerEnv, makeStage, probeRecorder, startRecording, type RunningContainer } from "./container";
+import { OUT, WORK, containerArgs, containerName, defaultRecorderRoot, dockerEnv, makeStage, probeRecorder, removeStage, startRecording, type RunningContainer } from "./container";
 import type { AdapterEvent } from "../runtimes/types";
 import { MAGIC, projectStudioDir, versionDir as serveVersionDir } from "./serve";
 import { TAPE_CAP, transcriptError, validateTape } from "./terminal";
@@ -710,6 +710,11 @@ export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun
   }
   const cache = join(stage.dir, "cache");
   let running: RunningContainer | undefined;
+  /** Remove a container, and log one Docker still lists (this process kills it when it exits). */
+  const remove = async (run: RunningContainer | undefined) => {
+    const r = await run?.remove();
+    if (r && !r.gone) log(`evidence: ${r.reason}`);
+  };
   const onAbort = () => void running?.stop();
   job.signal?.addEventListener("abort", onAbort);
   try {
@@ -783,7 +788,7 @@ export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun
       }, 5000);
       const r = await run.done;
       clearInterval(watch);
-      await run.remove();
+      await remove(run);
       running = undefined;
       if (job.signal?.aborted) {
         none(open(), "stopped", "The capture was stopped.");
@@ -826,7 +831,7 @@ export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun
     }, 1000);
     const r = await run.done;
     clearInterval(watch);
-    await run.remove();
+    await remove(run);
     running = undefined;
     if (job.signal?.aborted) {
       none(open(), "stopped", "The capture was stopped.");
@@ -850,8 +855,10 @@ export async function captureEvidence(job: CaptureJob): Promise<Omit<EvidenceRun
     return finish();
   } finally {
     job.signal?.removeEventListener("abort", onAbort);
-    await running?.remove();
-    rmSync(stage.dir, { recursive: true, force: true });
+    await remove(running);
+    // The built app may have left a folder no one can read: removeStage opens it up. What stays, the sweep retries.
+    const left = removeStage(stage.dir);
+    if (left) log(`evidence: the stage folder ${stage.dir} stays: ${left}`);
   }
 }
 

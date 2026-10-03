@@ -397,7 +397,9 @@ export abstract class BaseChecks implements CheckRunner {
     } catch {
       /* the command reports it */
     }
-    // A test report the change itself carries never counts: it goes before anything runs, and this run's is read after.
+    // A report file the change itself carries is deleted before anything runs, so only a report this run writes is
+    // read. That stops a stale or committed file, not a false result: the change's own test script writes the report,
+    // so an agent can still make it say what it likes. The code review judges the tests.
     const reportRefused = a.testReport ? clearReport(a.workspace, a.testReport) : undefined;
     for (const planned of a.commands) {
       // What runs is the hardened command; the record keeps the id and label the settings gave it.

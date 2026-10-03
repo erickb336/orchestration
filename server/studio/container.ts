@@ -24,7 +24,7 @@
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -217,18 +217,45 @@ function remember(name: string, docker: string, env: Record<string, string>) {
   LIVE.set(name, { docker, env });
 }
 
+/** Whether the container is gone after its removal: Docker no longer lists it, or why that is not known. */
+export type Removal = { gone: true } | { gone: false; reason: string };
+
 export interface RunningContainer {
   name: string;
   /** When `docker run` exits: its exit code (null when it could not start) and the end of its output. */
   done: Promise<{ code: number | null; output: string }>;
   /** Kill the container by its name, end the docker command, and remove the container. */
   stop(): Promise<void>;
-  /** Make sure the container is gone (it removes itself when it ends; this covers a docker command that did not). */
-  remove(): Promise<void>;
+  /**
+   * Make sure the container is gone (it removes itself when it ends; this covers a docker command that did not). It
+   * waits until Docker no longer lists it (Docker's own removal can still be in progress), at most `goneWithinMs`.
+   */
+  remove(): Promise<Removal>;
+}
+
+/** How long a removal waits for Docker to stop listing the container. */
+const GONE_WITHIN_MS = 5000;
+
+/**
+ * Ask Docker, every quarter second up to `withinMs`, whether it still lists a container of exactly this name (its
+ * name filter matches parts of names, so the answer is compared whole).
+ */
+async function waitGone(docker: string, name: string, env: Record<string, string>, withinMs: number): Promise<Removal> {
+  const until = Date.now() + withinMs;
+  for (;;) {
+    const r = await runDocker(docker, ["ps", "--all", "--filter", `name=${name}`, "--format", "{{.Names}}"], { env, timeoutMs: 15_000 });
+    const listed = r.code !== 0 || r.stdout.split("\n").some((l) => l.trim() === name);
+    if (!listed) return { gone: true };
+    if (Date.now() >= until) {
+      const why = r.code !== 0 ? `Docker could not say whether the container ${name} is gone (exit ${r.code ?? "?"})` : `Docker still lists the container ${name}`;
+      return { gone: false, reason: `${why} ${(withinMs / 1000).toFixed(1)} s after its removal.` };
+    }
+    await new Promise((res) => setTimeout(res, 250));
+  }
 }
 
 /** Start `docker run` with `args` (from containerArgs, whose name is `name`), writing `stdin` to it when given. */
-export function startContainer(docker: string, args: string[], o: { env: Record<string, string>; name: string; stdin?: string; cap?: number }): RunningContainer {
+export function startContainer(docker: string, args: string[], o: { env: Record<string, string>; name: string; stdin?: string; cap?: number; goneWithinMs?: number }): RunningContainer {
   const cap = o.cap ?? 4000;
   remember(o.name, docker, o.env);
   let child: ChildProcess | undefined;
@@ -249,9 +276,12 @@ export function startContainer(docker: string, args: string[], o: { env: Record<
     child.on("error", (e) => res({ code: null, output: tailOf(`${output}\n${e.message}`, cap) }));
     child.on("close", (code) => res({ code, output }));
   });
-  const remove = async () => {
+  const remove = async (): Promise<Removal> => {
     await runDocker(docker, ["rm", "--force", o.name], { env: o.env, timeoutMs: 15_000 });
-    LIVE.delete(o.name);
+    const r = await waitGone(docker, o.name, o.env, o.goneWithinMs ?? GONE_WITHIN_MS);
+    // One Docker still lists stays known, so this process kills it when it exits.
+    if (r.gone) LIVE.delete(o.name);
+    return r;
   };
   const stop = async () => {
     await runDocker(docker, ["kill", o.name], { env: o.env, timeoutMs: 15_000 });
@@ -321,9 +351,9 @@ export function startRecording(docker: string, args: string[], o: { env: Record<
       cancelled = true;
       await run?.stop();
     },
-    remove: async () => {
+    remove: async (): Promise<Removal> => {
       cancelled = true;
-      await run?.remove();
+      return run ? run.remove() : { gone: true };
     },
   };
 }
@@ -558,13 +588,43 @@ export function sweepStages(root: string, o: { minAgeMs?: number; now?: number }
     try {
       const st = lstatSync(dir);
       if (!st.isDirectory() || now - st.mtimeMs < minAge) continue;
-      rmSync(dir, { recursive: true, force: true });
-      out.removed.push(name);
     } catch {
       out.failed.push(name);
+      continue;
     }
+    if (removeStage(dir) === undefined) out.removed.push(name);
+    else out.failed.push(name);
   }
   return out;
+}
+
+/**
+ * Remove a stage folder and everything in it, never following a link. The built app runs as this user on the mounts,
+ * so it can leave a folder this user cannot read or write (mode 000): such a folder is made the owner's again (rwx)
+ * before it is read. Never throws: undefined when the folder is gone, else why not.
+ */
+export function removeStage(dir: string): string | undefined {
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return undefined;
+  } catch {
+    // A folder the removal could not read or empty: open each one up, then remove again.
+  }
+  try {
+    openUp(dir);
+    rmSync(dir, { recursive: true, force: true });
+    return undefined;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** Give this user rwx on every folder under `dir`, by lstat: a link is never followed, nor changed. */
+function openUp(dir: string): void {
+  const st = lstatSync(dir, { throwIfNoEntry: false });
+  if (!st?.isDirectory()) return;
+  if ((st.mode & 0o700) !== 0o700) chmodSync(dir, (st.mode & 0o7777) | 0o700);
+  for (const name of readdirSync(dir)) openUp(join(dir, name));
 }
 
 /** A new stage folder under `root`: `work/` and `out/`, private to this user. */
@@ -628,6 +688,6 @@ async function probe(docker: string, env: Record<string, string>, image: string,
     return { ok: false, detail: `the probe failed: ${e instanceof Error ? e.message : String(e)}`, checks: [] };
   } finally {
     listener?.close();
-    rmSync(stage.dir, { recursive: true, force: true });
+    removeStage(stage.dir);
   }
 }

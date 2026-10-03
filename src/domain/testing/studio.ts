@@ -3,6 +3,7 @@
 
 import { runCommand } from "../commands";
 import { startFactoryAsOwner } from "./factory";
+import * as B from "../studio/blueprint";
 import * as S from "../studio/studio";
 import type { State } from "../types";
 
@@ -57,11 +58,17 @@ export function feedback(s: State, artifactId: string, version: number, entry: R
   return run(s, "sendFeedback", { entries: [{ artifactId, version, mark: null, pins: [], note: "", ...entry }] }, now).state;
 }
 
+/** The `lockIn` arguments for the summary as it stands: its draft revision and digest, as the Lock in screen sends them. */
+export function lockInArgs(s: State): B.SummarySeen {
+  const summary = B.lockInSummary(s);
+  return { draftRev: summary.draftRev, summaryDigest: B.summaryDigest(summary) };
+}
+
 /**
  * The owner puts the draft into force, as they do (pass 5): in Vision by Start the factory (the first Lock in, with
- * the project's settings as they stand), in the factory by Lock in, naming the draft revision they saw.
+ * the project's settings as they stand), in the factory by Lock in, naming the draft revision and the summary they saw.
  */
 export function lockInAsOwner(s: State, now: string): State {
   if (s.project.stage === "shaping") return startFactoryAsOwner(s, now);
-  return runCommand(s, "lockIn", { draftRev: s.blueprint.draft.rev }, now).state;
+  return runCommand(s, "lockIn", lockInArgs(s), now).state;
 }

@@ -10,6 +10,7 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
 import { buildSeed } from "./seed";
+import * as B from "./studio/blueprint";
 import { inVision, startFactoryArgs, startFactoryAsOwner } from "./testing/factory";
 import { ControlError, StaleWriteError, type FactorySettings, type State } from "./types";
 
@@ -56,7 +57,7 @@ describe("Start the factory: the owner's command", () => {
     const open = M.openAreas(s);
     expect(open).toHaveLength(9); // no coverage reported yet: every area is open
     // Nothing approved yet: draft r0, on vision r1.
-    const args = { agreed: true, draftRev: 0, visionRev: 1, settings: MANUAL, acceptOpen: open };
+    const args = { agreed: true, draftRev: 0, summaryDigest: B.summaryDigest(B.lockInSummary(s)), visionRev: 1, settings: MANUAL, acceptOpen: open };
     const started = runCommand(s, "startFactory", args, at(5)).state;
     expect(started.project.stage).toBe("building");
     expect(started.project.factoryStarts).toEqual([{ at: at(5), by: "user", blueprintRev: 0, visionRev: 1, settings: MANUAL, openItems: open }]);
@@ -201,7 +202,8 @@ describe("Start the factory: the owner's command", () => {
   it("the settings as they stand: what the Start building button sends today", () => {
     const s = M.setAutonomy(fresh(), { ...fresh().project.autonomy, enabled: true, holdLeadProposals: true }, at(0));
     expect(M.currentFactorySettings(s)).toEqual({ autonomy: "checkin", delivery: { mode: "off", merge: "user" }, pausePoints: { tradeoffs: "user", changeOrders: "lead", startEachTask: true } });
-    expect(M.startFactoryRequest(s)).toEqual({ agreed: true, draftRev: 0, visionRev: 1, settings: M.currentFactorySettings(s), acceptOpen: M.openAreas(s) });
+    // It names the Lock in summary the pre-flight shows, by its digest.
+    expect(M.startFactoryRequest(s)).toEqual({ agreed: true, draftRev: 0, summaryDigest: B.summaryDigest(B.lockInSummary(s)), visionRev: 1, settings: M.currentFactorySettings(s), acceptOpen: M.openAreas(s) });
     // The change-order choice is the project's setting: the start sets it, and a later start keeps it.
     const started = startFactoryAsOwner(s, at(1), { pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: true } });
     expect(started.project.changeOrders).toBe("user");

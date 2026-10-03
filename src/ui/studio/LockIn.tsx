@@ -1,7 +1,8 @@
 // The Lock in summary (ORC-029 pass 5, screen 3), `#/vision/lock-in`: before a Lock in, one screen says what it does:
 // what changes, the tasks it touches, the new work, the budgets, and what stays open. Only you lock in, and your
-// agreement is recorded with this summary. The Lock in names the draft revision this screen showed; when the draft
-// changes while you read, the screen says so, shows the new summary, and clears your agreement.
+// agreement is recorded with this summary. The Lock in names the draft revision and the digest of the summary this
+// screen showed; when the summary changes while you read (the draft, a task, the budgets), the screen says so, shows
+// the new summary, and clears your agreement.
 
 import { useEffect, useState } from "react";
 import * as B from "../../domain/studio/blueprint";
@@ -16,26 +17,26 @@ import "./studio.css";
 
 export function LockInPage() {
   const { state, send, disabled } = useStore();
-  const rev = B.draftRev(state);
-  /** The draft revision this screen shows, which the Lock in names. */
-  const [seen, setSeen] = useState(rev);
+  const w = lockInWords(state);
+  /** The summary this screen shows (its draft revision and digest), which the Lock in names. */
+  const [seen, setSeen] = useState<B.SummarySeen>({ draftRev: w.draftRev, summaryDigest: w.summaryDigest });
   const [agreed, setAgreed] = useState(false);
   const [stale, setStale] = useState(false);
   const [busy, setBusy] = useState(false);
   /** The Lock in this screen made: its revision. */
   const [done, setDone] = useState<number | null>(null);
-  // The draft changed under the summary (another tab, a round approval, a refused stale Lock in): show the new one.
+  // The summary changed under the owner (another tab, a round approval, a task, a budget, a refused stale Lock in):
+  // show the new one.
   useEffect(() => {
-    if (rev === seen || busy || done !== null) return;
-    setSeen(rev);
+    if (w.summaryDigest === seen.summaryDigest || busy || done !== null) return;
+    setSeen({ draftRev: w.draftRev, summaryDigest: w.summaryDigest });
     setAgreed(false);
     setStale(true);
-  }, [rev, seen, busy, done]);
+  }, [w.draftRev, w.summaryDigest, seen, busy, done]);
 
-  const w = lockInWords(state);
   const blocker = lockInBlocker(state);
   const submit = async () => {
-    if (!agreed || busy || seen !== rev) return;
+    if (!agreed || busy || seen.summaryDigest !== w.summaryDigest) return;
     const req = lockInRequest(seen);
     setBusy(true);
     const r = await send(req.name, req.args);
@@ -56,7 +57,7 @@ export function LockInPage() {
       ) : (
         <>
           {stale && (
-            <Banner tone="you" title="The draft changed while you read the summary.">
+            <Banner tone="you" title="The summary changed while you read it.">
               This is the new summary. Read it again, and agree again to lock it in.
             </Banner>
           )}

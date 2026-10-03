@@ -9,7 +9,8 @@
 // 2. "fails-a-check": a rule or an example of the item has a failing test; or the UX review of the landed work (see
 //    "The landed work's evidence") has an open difference for the item.
 // 3. "in-the-draft": the owner's draft changes or drops the item. The factory keeps the version in force until a Lock in.
-// 4. "being-built": a task that cites the item is running, or finished and not landed yet.
+// 4. "being-built": a task that builds this version is running, or finished and not landed yet. A task that still
+//    builds an earlier version does not count: it is listed with `thisVersion: false`.
 // 5. Work that built this version landed (the lead's decision, 2026-10-03, and the owner's answer, r14: the checks
 //    decide), and the checks prove it, by kind:
 //    - a flow or a contract: every rule and example has a passing test ("No test" and "skipped" are never a proof);
@@ -313,7 +314,7 @@ export function itemFactoryStatus(s: State, itemId: string): ItemFactoryView | u
         ? "fails-a-check"
         : draft
           ? "in-the-draft"
-          : tasks.some((t) => t.state === "running" || t.state === "finished")
+          : tasks.some((t) => t.thisVersion && (t.state === "running" || t.state === "finished"))
             ? "being-built"
             : last
               ? gap

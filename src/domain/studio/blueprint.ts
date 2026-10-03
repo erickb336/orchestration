@@ -12,6 +12,9 @@
 // variant picked, marked Change, PE review unfinished, an objection not overruled) is open, and the pre-flight and
 // the Lock in summary name it. A Lock in while building that touches a task or brings new work is a change order.
 
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
+import canonicalize from "canonicalize";
 import { buildingSpend, maintenanceEstimate } from "../spend";
 import { currentSpec, currentVision, draft, event, nextId } from "../model/core";
 import { pushVision } from "../model/vision";
@@ -320,6 +323,32 @@ export function lockInSummary(s: State): LockInSummary {
 
 // ---------- Lock in ----------
 
+/**
+ * The digest of a Lock in summary: SHA-256 of its RFC 8785 canonical JSON, as hex. Pure, and the same in the app and
+ * the service, so the app sends the digest of the summary it showed and the Lock in compares it with the summary it
+ * would record.
+ */
+export function summaryDigest(summary: LockInSummary): string {
+  return bytesToHex(sha256(utf8ToBytes(canonicalize(summary) ?? "null")));
+}
+
+/** What the owner saw before a Lock in: the draft revision and the digest of the summary (compare-and-set). */
+export interface SummarySeen {
+  draftRev: number;
+  summaryDigest: string;
+}
+
+/**
+ * Refuse a Lock in whose summary is not the one the owner saw: the draft, a touched task's state or handling, the new
+ * work or the budgets changed since. The record then holds exactly what the owner agreed to.
+ */
+export function assertSummarySeen(s: State, seen: SummarySeen): void {
+  const rev = draftRev(s);
+  if (seen.draftRev !== rev) throw new StaleWriteError(seen.draftRev, rev);
+  if (seen.summaryDigest !== summaryDigest(lockInSummary(s)))
+    throw new StaleWriteError(rev, rev, "The Lock in summary changed since you read it (a task, its handling, the budgets or the draft). Read the new summary, and agree again.");
+}
+
 /** "added Packing list v1; changed Trip plan v3 → v4; dropped Reminders flow v1". */
 function changeWords(c: LockInSummary["changes"]): string {
   const name = (i: BlueprintItem) => `${i.title} v${i.version}`;
@@ -386,15 +415,14 @@ export const HANDLING_WORDS: Record<TaskHandling, string> = {
 
 /**
  * Lock in: the owner's command, never the lead's, a setting's or Autopilot's. It puts the whole draft into force as
- * a new blueprint revision and records the owner's agreement with the summary. `draftRev` is the draft revision the
- * summary showed (compare-and-set). Refused in Vision, where Start the factory is the first Lock in, and when the
+ * a new blueprint revision and records the owner's agreement with the summary. `seen` is the draft revision and the
+ * digest of the summary the owner saw (compare-and-set, `assertSummarySeen`). Refused in Vision, where Start the factory is the first Lock in, and when the
  * draft has no change (open items alone stay in the draft). The store allows only this command and Start the factory
  * to make a blueprint revision.
  */
-export function lockIn(state: State, seenRev: number, now: string): State {
+export function lockIn(state: State, seen: SummarySeen, now: string): State {
   if (state.project.stage !== "building") throw new ControlError("In Vision, Start the factory is your first Lock in.");
-  const rev = draftRev(state);
-  if (seenRev !== rev) throw new StaleWriteError(seenRev, rev);
+  assertSummarySeen(state, seen);
   const c = draftChanges(state);
   if (!hasChange(c)) throw new ControlError(c.open.length ? "There is nothing to lock in: the draft holds only open items, which stay in the draft." : "There is nothing to lock in: the draft is the version in force.");
   const s = draft(state);

@@ -23,7 +23,7 @@
 
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix } from "node:path";
-import { OUT, WORK, containerArgs, containerName, defaultRecorderRoot, dockerEnv, makeStage, probeRecorder, startRecording, type RunningContainer } from "./container";
+import { OUT, WORK, containerArgs, containerName, defaultRecorderRoot, dockerEnv, makeStage, probeRecorder, removeStage, startRecording, type RunningContainer } from "./container";
 
 // ---------- limits ----------
 
@@ -517,8 +517,11 @@ export async function recordTape(artifactDir: string, outDir: string, opts: Reco
     for (const f of readdirSync(out)) rmSync(join(out, f), { recursive: true, force: true });
     return done({ sandbox: null, reason: "failed", error: e instanceof Error ? e.message : String(e) });
   } finally {
-    await container?.remove();
-    rmSync(stage.dir, { recursive: true, force: true });
+    const removal = await container?.remove();
+    if (removal && !removal.gone) log(`terminal: ${removal.reason}`);
+    // The recorded CLI may have left a folder no one can read: removeStage opens it up. What stays, the sweep retries.
+    const left = removeStage(stage.dir);
+    if (left) log(`terminal: the stage folder ${stage.dir} stays: ${left}`);
   }
 }
 

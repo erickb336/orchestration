@@ -9,7 +9,7 @@ import { buildSeed } from "../seed";
 import * as B from "../studio/blueprint";
 import { at, changeOrdered, T0 } from "../testing/changeOrders";
 import { startFactoryAsOwner } from "../testing/factory";
-import { addScreen, openRound, pePass, run } from "../testing/studio";
+import { addScreen, lockInArgs, openRound, pePass, run } from "../testing/studio";
 import type { State } from "../types";
 
 const VISION = "Weekend trips for a small group of friends.";
@@ -42,7 +42,7 @@ describe("the vision text and the draft", () => {
     expect(s.events.at(-1)!.message).toBe("The draft: the vision text changed (offline matters); it goes into force at your Lock in");
     expect(B.lockInSummary(s).changes.vision).toEqual({ text: NEW_TEXT, reason: "offline matters", replacesRev: 1 });
     // A vision change alone is a change to lock in; it touches no task, so it makes no change order.
-    s = runCommand(s, "lockIn", { draftRev: s.blueprint.draft.rev }, at(11)).state;
+    s = runCommand(s, "lockIn", lockInArgs(s), at(11)).state;
     expect(M.currentVision(s)).toMatchObject({ rev: 2, author: "user", text: NEW_TEXT, focus: "Plan a trip", reason: "Locked in: offline matters" });
     expect(B.currentBlueprint(s)).toMatchObject({ rev: 2, visionRev: 2, reason: "locked in: changed the vision text", lockIn: { summary: { changes: { vision: { replacesRev: 1 } } } } });
     expect(s.blueprint.draft.vision).toBeUndefined();
@@ -71,7 +71,7 @@ describe("the vision text and the draft", () => {
     s = run(pePass(a.state, a.id, 1, [{ verdict: "feasible" }], at(32)), "approveArtifact", { artifactId: a.id, version: 1 }, at(33)).state;
     expect(s.blueprint.draft.vision?.text).toBe(NEW_TEXT);
     expect(runCommand(s, "discardDraft", { draftRev: s.blueprint.draft.rev }, at(34)).state.blueprint.draft.vision).toBeUndefined();
-    s = runCommand(s, "lockIn", { draftRev: s.blueprint.draft.rev }, at(35)).state;
+    s = runCommand(s, "lockIn", lockInArgs(s), at(35)).state;
     expect(B.currentBlueprint(s)!.reason).toBe("locked in: added Weather v1; changed the vision text");
     expect(B.currentBlueprint(s)!.visionRev).toBe(M.currentVision(s).rev);
     expect(M.currentVision(s).text).toBe(NEW_TEXT);

@@ -114,7 +114,11 @@ describe("the pre-flight", () => {
     // A probe that finishes changes what is open too.
     const done = runCommand(s, "setProbeStatus", { probeId, status: "failed", failure: "no device" }, at(405)).state;
     expect(V.sameSeen(V.seenNow(done), seen)).toBe(false);
-    expect(page(moved, { stale: true }).text).toContain("The draft, the vision or what is open changed while you read. This is the new pre-flight. Read it again, and agree again to start the factory.");
+    // A budget set while the owner reads changes the Lock in summary the start records (review finding 13).
+    const budgeted = runCommand(s, "setBudgets", { buildingUsd: 55, maintenanceUsdPerMonth: 12 }, at(406)).state;
+    expect([budgeted.blueprint.draft.rev, V.sameSeen(V.seenNow(budgeted), seen)]).toEqual([s.blueprint.draft.rev, false]);
+    expect(() => start(budgeted, seen, x, at(407))).toThrow(/^The Lock in summary changed since you read it/);
+    expect(page(moved, { stale: true }).text).toContain("The draft, the vision, the summary or what is open changed while you read. This is the new pre-flight. Read it again, and agree again to start the factory.");
     expect(page(s).text).not.toContain("changed while you read");
   });
 

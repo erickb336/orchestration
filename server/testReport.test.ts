@@ -136,6 +136,26 @@ describe("what reaches the state: no local paths, no secrets, capped, at most 40
     expect(r.cases.slice(-4).map((c) => c.name)).toEqual(["plain 396", "plain but failing", "[bi-3 R1] kept", "[bi-3 R2] kept too"]);
     expect(r.counts).toEqual({ passed: 451, failed: 1, skipped: 0, error: 1 });
     expect(r.truncated).toBe(true);
+    // Only untagged cases were left out: no rule lost a test.
+    expect(r.droppedTags).toBeUndefined();
+  });
+
+  it("over 400 tagged cases: the failing tagged ones are kept first, then the other tagged ones; the tags of the cases left out are listed", () => {
+    // The review's case (finding 11): the failing test came after 450 passing ones with its tag, and was the one dropped.
+    const passing = Array.from({ length: 450 }, (_, i) => `<testcase name="[bi-3 R1] passes ${i}"/>`).join("");
+    const r = read(`<testsuite>${passing}<testcase name="[bi-3 R1] fails"><failure message="no"/></testcase><testcase name="[bi-4 R2] last"/><testcase name="plain"><failure message="x"/></testcase></testsuite>`);
+    if (r.status !== "read") throw new Error(reasonOf(r));
+    expect(r.cases).toHaveLength(MAX_CASES);
+    expect(r.cases.slice(-2).map((c) => c.name)).toEqual(["[bi-3 R1] passes 398", "[bi-3 R1] fails"]);
+    expect(r.droppedTags).toEqual(["[bi-3 R1]", "[bi-4 R2]"]);
+    expect(r.counts).toEqual({ passed: 451, failed: 2, skipped: 0, error: 0 });
+  });
+
+  it("when more than 400 tags lose a test, the report says the left-out tags are unlisted", () => {
+    const r = read(`<testsuite>${Array.from({ length: 801 }, (_, i) => `<testcase name="[bi-${i + 1} R1] t"/>`).join("")}</testsuite>`);
+    if (r.status !== "read") throw new Error(reasonOf(r));
+    expect(r.cases.at(-1)!.name).toBe("[bi-400 R1] t");
+    expect(r.droppedTags).toBe("unlisted");
   });
 });
 
@@ -147,6 +167,17 @@ describe("hostile reports are refused with a clear reason", () => {
     // fast-xml-parser would expand this one; the scan refuses it.
     expect(reasonOf(read('<testsuite><!DOCTYPE x [<!ENTITY e "pwned">]><testcase name="&e;"/></testsuite>'))).toContain("declares <!DOCTYPE");
     expect(reasonOf(read('<testsuite><!ENTITY e "x"><testcase name="a"/></testsuite>'))).toContain("declares <!ENTITY");
+  });
+
+  it("a comment opener inside a processing instruction or an attribute does not hide a DOCTYPE after it", () => {
+    // The review's input (finding 9): the scan read "<!--" in the instruction and skipped to the last "-->".
+    const pi = '<?x <!-- ?><!DOCTYPE t [<!ENTITY e "X">]><testsuite><testcase name="&e;"/></testsuite><!-- -->';
+    expect(read(pi)).toEqual({ status: "refused", path: REL, reason: "reports/junit.xml declares <!DOCTYPE (a DTD, entities or another declaration); the service reads none" });
+    expect(reasonOf(read('<testsuite a="<!--"><!DOCTYPE t [<!ENTITY e "X">]><testcase name="&e;"/></testsuite><!-- -->'))).toContain("declares <!DOCTYPE");
+    expect(reasonOf(read('<?x <![CDATA[ ?><!DOCTYPE t [<!ENTITY e "X">]><testsuite><testcase name="&e;"/></testsuite>]]>'))).toContain("declares <!DOCTYPE");
+    // An instruction inside a comment is text, and a well-formed report with instructions is read.
+    const ok = read('<?xml version="1.0"?><!-- <?x <!DOCTYPE no> --><?style a="<!--"?><testsuite><testcase name="a"/></testsuite>');
+    expect(ok.status === "read" && ok.cases.map((c) => c.name)).toEqual(["a"]);
   });
 
   it("a DOCTYPE inside a CDATA section or a comment is text, not a declaration", () => {

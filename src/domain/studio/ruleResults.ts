@@ -13,6 +13,12 @@
 // tag. All its tests with the tag decide: a failure or an error makes "failed" (with its message); else a skipped test
 // makes "skipped"; else "passed". No such run: "no-test". "skipped" and "no-test" are never a pass.
 //
+// A report of more than 400 tests is cut (server/testReport.ts): failing tagged tests are kept first, and the report
+// lists the tags that lost a test (`droppedTags`). In that run a tag that lost a test is "failed" when a kept test with
+// it failed, else "no-test" with the reason: a left-out test may have failed or been skipped, so it is never a pass.
+// The run still decides for that tag, so an older run's result does not stand in for it. `truncated` alone is not
+// used: it is also true when only untagged tests were left out, and then every tag's result is whole.
+//
 // Known limit: a landed task does not hold the tests of a task that landed while it was being built, so the newest
 // run that has the tag decides, not the newest run. A later change that deletes a test therefore leaves the earlier
 // result standing; the code review judges a deleted acceptance test.
@@ -142,7 +148,7 @@ export interface RuleResult extends RuleLine {
   tests: number;
   /** failed: the first failing test and its message; skipped: the first skipped test and its reason; no-test: why there is none. */
   message?: string;
-  /** The landed work the result comes from. Absent for "no-test". */
+  /** The landed work the result comes from. Absent for "no-test", except when that run left out a test with the tag. */
   from?: { taskId: string; sha: string; landedAt: string; artifactId: string; simulated?: true };
 }
 
@@ -172,6 +178,20 @@ function fromCases(line: RuleLine, run: LandedTestRun, cases: TestCaseResult[]):
   return { ...line, status: "passed", tests: cases.length, from };
 }
 
+/** Did this run's report leave out a test with the tag (a report of more than 400 tests)? */
+function leftOut(run: LandedTestRun, tag: string): boolean {
+  const d = run.report.droppedTags;
+  return d === "unlisted" || !!d?.includes(tag);
+}
+
+/** The result of a line whose tag lost a test in this run: failed when a kept test failed, else not known. */
+function cutFrom(line: RuleLine, run: LandedTestRun, cases: TestCaseResult[]): RuleResult {
+  if (cases.some((c) => c.status === "failed" || c.status === "error")) return fromCases(line, run, cases);
+  const total = Object.values(run.report.counts).reduce((a, b) => a + b, 0);
+  const from = { taskId: run.taskId, sha: run.sha, landedAt: run.landedAt, artifactId: run.artifact.id, ...(run.simulated ? { simulated: true as const } : {}) };
+  return { ...line, status: "no-test", tests: 0, message: `The newest checks with ${line.tag} wrote ${total} tests, more than the service keeps, and left out some with this tag: the result is not known.`, from };
+}
+
 /** Why a line has no test: no report was ever read, its tests ran before its current text, or no test carries its tag. */
 function noTest(s: State, line: RuleLine, runs: LandedTestRun[]): RuleResult {
   const message = !runs.length
@@ -190,6 +210,7 @@ function resultsFor(s: State, item: BlueprintItem, lines: RuleLine[], runs: Land
     for (const run of runs) {
       if (run.artifact.createdAt < since) continue;
       const cases = run.report.cases.filter((c) => carriesTag(c, line.tag));
+      if (leftOut(run, line.tag)) return cutFrom(line, run, cases);
       if (cases.length) return fromCases(line, run, cases);
     }
     return noTest(s, line, runs);

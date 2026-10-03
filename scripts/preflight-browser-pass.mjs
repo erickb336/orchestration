@@ -105,7 +105,7 @@ for (const width of WIDTHS) {
     const now = new Date().toISOString();
     store.command("sendFeedback", { entries: [{ artifactId: map, version: 1, mark: null, pins: [], note: "", rows: [] }] }, "pass-mark", now);
     store.command("approveArtifact", { artifactId: map, version: 1 }, "pass-approve", now);
-    const banner = p.getByText("The draft, the vision or what is open changed while you read.");
+    const banner = p.getByText("The draft, the vision, the summary or what is open changed while you read.");
     await banner.waitFor({ timeout: 10_000 });
     if (await p.getByRole("checkbox", { name: /I have reviewed the blueprint/ }).isChecked()) fail("stale: the agreement was not cleared");
     else ok("stale: the banner shows, and the agreement is cleared");

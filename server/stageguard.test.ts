@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as B from "../src/domain/studio/blueprint";
 import { startFactoryArgs } from "../src/domain/testing/factory";
-import { addScreen, openRound, peAgrees } from "../src/domain/testing/studio";
+import { addScreen, lockInArgs, openRound, peAgrees } from "../src/domain/testing/studio";
 import { ControlError, type State } from "../src/domain/types";
 import { CommandFailure, Store } from "./store";
 
@@ -108,6 +108,18 @@ describe("the owner-only start, where state is written", () => {
     );
   });
 
+  it("an internal update that changes the state it was given in place is judged against what is stored", () => {
+    // Review finding 14: the guard compared the state objects, so an in-place change looked like no change.
+    expectRefused(
+      () =>
+        store.update((s) => {
+          s.project.stage = "building";
+          return s;
+        }, iso()),
+      /an internal update tried to/,
+    );
+  });
+
   it("the owner's startFactory is accepted with its one record; a reset to the sample, and every other write are untouched", () => {
     cmd("startFactory", startFactoryArgs(store.read().state));
     expect(stage()).toBe("building");
@@ -161,7 +173,7 @@ describe("the owner-only Lock in, where state is written (pass 5)", () => {
     expect(blueprint().revisions.map((r) => r.rev)).toEqual([1]);
     approved("Packing list");
     expect(blueprint().revisions).toHaveLength(1); // an approval changes only the draft
-    cmd("lockIn", { draftRev: blueprint().draft.rev });
+    cmd("lockIn", lockInArgs(store.read().state));
     expect(blueprint().revisions.map((r) => r.rev)).toEqual([1, 2]);
     expect(logged).not.toHaveBeenCalled();
   });
@@ -187,7 +199,7 @@ describe("the owner-only Lock in, where state is written (pass 5)", () => {
     cmd("startFactory", startFactoryArgs(store.read().state));
     approved("Packing list");
     bug.current = { command: "lockIn", apply: sneak };
-    expectRefusedRevision(() => cmd("lockIn", { draftRev: blueprint().draft.rev }), /the lockIn command made 2 revisions/);
+    expectRefusedRevision(() => cmd("lockIn", lockInArgs(store.read().state)), /the lockIn command made 2 revisions/);
   });
 
   it("no write may change or remove a revision in force: not the owner's lockIn, not an internal update", () => {
@@ -195,7 +207,7 @@ describe("the owner-only Lock in, where state is written (pass 5)", () => {
     cmd("startFactory", startFactoryArgs(store.read().state));
     approved("Packing list");
     bug.current = { command: "lockIn", apply: (s) => void (s.blueprint.revisions[0].items = []) };
-    expectRefusedRevision(() => cmd("lockIn", { draftRev: blueprint().draft.rev }), /the lockIn command changed or removed a revision in force/);
+    expectRefusedRevision(() => cmd("lockIn", lockInArgs(store.read().state)), /the lockIn command changed or removed a revision in force/);
     expectRefusedRevision(
       () =>
         store.update((s) => {
@@ -216,6 +228,29 @@ describe("the owner-only Lock in, where state is written (pass 5)", () => {
       /an internal update made a revision/,
     );
     expect(blueprint().revisions).toHaveLength(1);
+  });
+
+  it("an internal update that changes or adds a revision in place, on the state it was given, is refused too", () => {
+    approved("Trail search");
+    cmd("startFactory", startFactoryArgs(store.read().state));
+    const inForce = blueprint().revisions;
+    expectRefusedRevision(
+      () =>
+        store.update((s) => {
+          s.blueprint.revisions[0].items = [];
+          return s;
+        }, iso()),
+      /an internal update changed or removed a revision in force/,
+    );
+    expectRefusedRevision(
+      () =>
+        store.update((s) => {
+          sneak(s);
+          return s;
+        }, iso()),
+      /an internal update made a revision/,
+    );
+    expect(blueprint().revisions).toEqual(inForce);
   });
 
   it("a new project and a reset to the sample start a new blueprint: not a Lock in", () => {

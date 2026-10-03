@@ -7,7 +7,7 @@ import { buildSeed } from "../seed";
 import * as B from "../studio/blueprint";
 import type { FactorySettings, SpecContent, State } from "../types";
 import { startFactoryAsOwner } from "./factory";
-import { addScreen, feedback, openRound, pePass, run } from "./studio";
+import { addScreen, feedback, lockInArgs, openRound, pePass, run } from "./studio";
 
 export const T0 = Date.parse("2026-10-02T12:00:00Z");
 export const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
@@ -71,7 +71,7 @@ export function changeOrdered(handler: "lead" | "user" = "lead", retiringBy: "le
   s = run(s, "dropBlueprintItem", { itemId: ids.remind }, at(15)).state;
   const packing = screen(s, 2, "Packing list", 16);
   s = run(packing.s, "approveArtifact", { artifactId: packing.id, version: 1 }, at(17)).state;
-  s = runCommand(s, "lockIn", { draftRev: s.blueprint.draft.rev }, at(18)).state;
+  s = runCommand(s, "lockIn", lockInArgs(s), at(18)).state;
   return { s, ids: { ...ids, packing: item(s, packing.id) }, tasks: { running: running.id, queued: queued.id, retiring: retiring.id, early: early.id } };
 }
 
