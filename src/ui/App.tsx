@@ -24,6 +24,7 @@ import { ShapingBanner } from "./Shaping";
 import { SIM_MENU_BUTTON_ID, TourButton, useFirstRunTour } from "./Tour";
 import { Gallery } from "./kit/Gallery";
 import { LockInPage } from "./studio/LockIn";
+import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
 import { waitingForYourMark } from "./studio/studioView";
 import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm } from "./kit";
@@ -171,6 +172,7 @@ function Shell() {
         {route.page === "kit" && <Gallery />}
         {route.page === "vision" && <Studio />}
         {route.page === "lock-in" && <LockInPage />}
+        {route.page === "reality" && <Reality />}
       </main>
       {leadOpen && <LeadDrawer onClose={closeLead} />}
       <ToastRegion toast={notice ? { tone: notice.kind === "error" ? "fail" : "neutral", onDismiss: () => setNotice(null), children: notice.message } : null} />

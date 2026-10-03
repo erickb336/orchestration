@@ -303,3 +303,38 @@ h6.st-doc__h { font-size: var(--fs-meta); color: var(--muted); }
 .st-lockin__list ul { margin: var(--space-1) 0 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); }
 .st-lockin__agree { padding-top: var(--space-3); border-top: 1px solid var(--border); }
 @media (max-width: 860px) { .st-lockin__grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- Design and reality (ORC-029 pass 5, screen 5): the list with evidence ---------- */
+.st-reality { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: var(--space-4); align-items: start; }
+.st-reality__list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.st-bprow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-1) var(--space-3);
+  align-items: center;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-small);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--ease), background-color var(--ease);
+}
+.st-bprow:hover { background: var(--surface-2); }
+.st-bprow[aria-current="true"] { border-color: var(--st-work); background: var(--surface-2); }
+.st-bprow:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.st-bprow__name { min-width: 0; overflow-wrap: anywhere; }
+.st-bprow__kind { display: block; color: var(--muted); font-size: var(--fs-micro); }
+.st-bprow__tasks, .st-bprow__rules { grid-column: 1 / -1; color: var(--muted); font-size: var(--fs-micro); overflow-wrap: anywhere; }
+.st-reality__card .k-card__body { display: grid; gap: var(--space-3); }
+.st-reality__card .k-card__body > p { margin: 0; }
+/* Where the built part goes: an empty frame that says the factory has captured nothing yet. */
+.st-reality__slot { display: grid; place-items: center; min-height: 10rem; padding: var(--space-4); border: 1px dashed var(--border-strong); border-radius: var(--radius); color: var(--muted); font-size: var(--fs-small); text-align: center; }
+.st-reality__shot { display: block; width: 100%; height: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.st-reality__tasks { margin: 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); }
+.st-reality__rules td .k-chip { margin-bottom: var(--space-1); }
+@media (max-width: 860px) { .st-reality { grid-template-columns: minmax(0, 1fr); } }

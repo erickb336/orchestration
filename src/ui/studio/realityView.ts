@@ -31,10 +31,13 @@ export const STATUS_TONE: Record<ItemFactoryStatus, Tone> = {
 
 const TASK_STATE: Record<CitingTask["state"], string> = { queued: "not started", running: "running", finished: "finished, not landed", landed: "landed" };
 
-/** "T-001 running" or "T-002 landed (built v1)": one task that cites the item, and its state. */
-export function taskWords(t: CitingTask, version: number): string {
-  return `${t.taskId} ${TASK_STATE[t.state]}${t.thisVersion ? "" : ` (from before v${version})`}`;
+/** "running", or "landed (from before v2)" for work that built an earlier version: a citing task's state. */
+export function taskState(t: CitingTask, version: number): string {
+  return `${TASK_STATE[t.state]}${t.thisVersion ? "" : ` (from before v${version})`}`;
 }
+
+/** "T-001 running": one task that cites the item, and its state. */
+export const taskWords = (t: CitingTask, version: number) => `${t.taskId} ${taskState(t, version)}`;
 
 /** "4 of 6 pass · 1 fails · 1 no test": the item's rule results in one line; undefined for an item with no rules. */
 export function rulesLine(v: ItemFactoryView): string | undefined {
