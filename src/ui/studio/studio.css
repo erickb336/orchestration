@@ -349,6 +349,15 @@ h6.st-doc__h { font-size: var(--fs-meta); color: var(--muted); }
 /* A built screenshot fills the device frame it sits in, as the design's page does. */
 .st-reality__img { object-fit: cover; object-position: top left; }
 .st-reality__device { display: grid; gap: var(--space-2); min-width: 0; }
+/* Side by side, the two captions share a row, so the design and the built frame start at the same height. */
+.st-reality__beside { grid-template-rows: auto auto; }
+.st-reality__beside > .st-beside__pane { grid-row: span 2; grid-template-rows: subgrid; }
+.st-reality__beside > .st-beside__pane > .st-beside__cap { align-self: start; }
+.st-reality__beside .st-reality__slot { align-self: start; }
+@media (max-width: 900px) {
+  .st-reality__beside { grid-template-rows: none; }
+  .st-reality__beside > .st-beside__pane { grid-row: auto; grid-template-rows: none; }
+}
 .st-reality__ux { display: grid; gap: var(--space-2); }
 .st-reality__diffs { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--space-2); }
 .st-reality__diffs li { font-size: var(--fs-small); overflow-wrap: anywhere; }

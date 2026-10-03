@@ -89,9 +89,13 @@ describe("Design and reality", () => {
     expect(t).toMatch(/Built · commit \w{7} · design v1 · .* not the current design version \(v2 is in force\)/);
     const sc = realityScene();
     const summary = detail(sc.s, sc.items.summary);
-    expect(summary).toContain(`Trip summary v1 built, not verified screen ${sc.built.summary} landed. The checks do not prove it yet: no evidence yet: the preview did not start.`);
+    expect(summary).toContain(`Trip summary v1 built, not verified screen ${sc.built.summary} landed. The checks do not prove it yet: the preview did not start, so there is no evidence.`);
     expect(summary).toContain("No evidence yet: the preview did not start. Port 4173 did not open within 60 s. > trips@0.1.0 preview > vite preview --port 4173 Error: Cannot find module 'vite'");
     expect(detailHtml(sc.s, sc.items.summary)).toContain('<pre class="st-reality__log" aria-label="The end of the capture&#x27;s log">');
+    // Said once, beside the design on its first device, not on each device.
+    expect(summary.match(/No evidence yet/g)).toHaveLength(1);
+    expect(summary).toContain("Desktop Design · v1, approved");
+    expect(summary).not.toContain("Mobile Design");
   });
 
   it("a terminal demo: the approved demo beside the built recording", () => {
@@ -133,8 +137,8 @@ describe("Design and reality", () => {
     expect(gapWords({ why: "rules-unproved", noTest: 2, skipped: 0 }, "flow")).toBe("2 rules or examples have no test");
     expect(gapWords({ why: "rules-unproved", noTest: 1, skipped: 2 }, "flow")).toBe("1 rule or example has no test, and 2 tests were skipped");
     expect(gapWords({ why: "kind-not-checked" }, "interface")).toBe("no check proves an interface yet");
-    expect(gapWords({ why: "no-evidence", reason: "not-set-up" }, "screen")).toBe("no evidence yet: the preview is not set up");
-    expect(gapWords({ why: "no-evidence", reason: "no-run" }, "screen")).toBe("no evidence yet: no capture has run for it");
+    expect(gapWords({ why: "no-evidence", reason: "not-set-up" }, "screen")).toBe("the preview is not set up, so there is no evidence");
+    expect(gapWords({ why: "no-evidence", reason: "no-run" }, "screen")).toBe("no capture has run for it, so there is no evidence");
     expect(gapWords({ why: "evidence-not-landed" }, "screen")).toBe("only work that has not landed has evidence");
     expect(gapWords({ why: "evidence-earlier-work", taskId: "T-003", landedTaskId: "T-007" }, "screen")).toBe("the evidence is of T-003, and T-007 landed after it");
     expect(gapWords({ why: "evidence-earlier-commit", commit: "ab".repeat(20), landedCommit: "cd".repeat(6) }, "screen")).toBe("the evidence is of commit abababa, not of the commit that landed (cdcdcdc)");

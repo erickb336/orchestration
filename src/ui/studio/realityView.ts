@@ -2,7 +2,7 @@
 // results, its evidence, and one line on why it stands there. The facts come from src/domain/studio/itemStatus.ts,
 // ruleResults.ts and evidence.ts; this module only words them and names the files the app shows.
 
-import { NO_EVIDENCE_WORDS, type CaptureDevice, type EvidenceFile, type ItemEvidence, type NoRunYet } from "../../domain/studio/evidence";
+import type { CaptureDevice, EvidenceFile, ItemEvidence, NoEvidence, NoRunYet } from "../../domain/studio/evidence";
 import type { CitingTask, ItemFactoryStatus, ItemFactoryView, NotVerified, UxDifference } from "../../domain/studio/itemStatus";
 import type { RuleResult, RuleStatus } from "../../domain/studio/ruleResults";
 import { fmtTime } from "../common";
@@ -52,12 +52,24 @@ export function rulesLine(v: ItemFactoryView): string | undefined {
   return [`${c.passed} of ${total} pass`, c.failed ? `${c.failed} ${c.failed === 1 ? "fails" : "fail"}` : "", c.skipped ? `${c.skipped} skipped` : "", c["no-test"] ? `${c["no-test"]} no test` : ""].filter(Boolean).join(" · ");
 }
 
-/** Why there is no evidence, in the words that follow "No evidence yet: ". */
-export function noEvidenceWords(reason: NoRunYet["status"] | Extract<ItemEvidence, { status: "none" }>["reason"]): string {
-  if (reason === "no-run") return "no capture has run for it";
-  if (reason === "not-set-up") return "the preview is not set up";
-  return NO_EVIDENCE_WORDS[reason];
-}
+/**
+ * Why there is no evidence, as a clause: "the preview did not start". The record's own label (NO_EVIDENCE_WORDS in
+ * evidence.ts) is a short tag; a sentence needs a subject and a verb.
+ */
+export const NO_EVIDENCE_CLAUSE: Record<NoRunYet["status"] | NoEvidence, string> = {
+  "no-run": "no capture has run for it",
+  "not-set-up": "the preview is not set up",
+  "no-plan": "the coder wrote no capture plan",
+  "not-in-plan": "the capture plan does not name it",
+  "invalid-plan": "the capture plan was refused",
+  unavailable: "the recorder is not available",
+  "install-failed": "the install failed",
+  "preview-did-not-start": "the preview did not start",
+  "page-errors": "the page did not load",
+  "capture-failed": "the capture failed",
+  stopped: "the capture was stopped",
+  simulated: "the capture was simulated, and nothing ran",
+};
 
 /** The first gap the checks leave in landed work, in the words that follow "The checks do not prove it yet: ". */
 export function gapWords(g: NotVerified, kind: string): string {
@@ -69,7 +81,7 @@ export function gapWords(g: NotVerified, kind: string): string {
     case "kind-not-checked":
       return `no check proves ${/^[aeiou]/.test(kind) ? "an" : "a"} ${kind} yet`;
     case "no-evidence":
-      return `no evidence yet: ${noEvidenceWords(g.reason)}`;
+      return `${NO_EVIDENCE_CLAUSE[g.reason]}, so there is no evidence`;
     case "evidence-not-landed":
       return "only work that has not landed has evidence";
     case "evidence-older-design":

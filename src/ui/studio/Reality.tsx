@@ -15,7 +15,7 @@ import { useStore } from "../store";
 import { ScaledBox, TerminalRecording, TerminalText, TerminalWindow, useServiceText } from "./Frames";
 import { ArtifactPreview, TermsTable } from "./Preview";
 import { renderAnsi } from "./ansi";
-import { STATUS_TONE, STATUS_WORDS, differenceState, evidenceCaption, evidenceFileUrl, noEvidenceWords, recordingOf, ruleCell, rulesLine, shortSha, shotOf, statusWhy, taskState, taskWords } from "./realityView";
+import { NO_EVIDENCE_CLAUSE, STATUS_TONE, STATUS_WORDS, differenceState, evidenceCaption, evidenceFileUrl, recordingOf, ruleCell, rulesLine, shortSha, shotOf, statusWhy, taskState, taskWords } from "./realityView";
 import { DEVICE_LABEL, DEVICE_SIZE, serviceFileUrl, showKind, variantDemo } from "./studioView";
 import "./studio.css";
 
@@ -208,12 +208,14 @@ function ScreenBeside({ view: v, artifact }: { view: ItemFactoryView; artifact: 
   const { state } = useStore();
   const devices = screenDevices(state, v.item);
   const e = v.evidence && v.evidence.status !== "no-run" ? v.evidence : undefined;
+  // Without screenshots, the reason is said once, beside the design on its first device.
+  const shown = devices.length ? (e?.status === "captured" ? devices : devices.slice(0, 1)) : (["desktop"] as const);
   return (
     <div className="k-stack">
-      {(devices.length ? devices : (["desktop"] as const)).map((device) => (
+      {shown.map((device) => (
         <section key={device} className="st-reality__device" aria-label={`${DEVICE_LABEL[device]}: the design beside what was built`}>
           <h3 className="st-label">{DEVICE_LABEL[device]}</h3>
-          <div className="st-beside">
+          <div className="st-beside st-reality__beside">
             <section className="st-beside__pane" aria-label="The approved design">
               <p className="st-beside__cap">
                 <span>Design · v{v.item.version}, approved</span>
@@ -222,7 +224,13 @@ function ScreenBeside({ view: v, artifact }: { view: ItemFactoryView; artifact: 
             </section>
             <section className="st-beside__pane" aria-label="What the factory built">
               <BuiltCaption view={v} evidence={e} />
-              {e?.status === "captured" ? <BuiltShot evidence={e} device={device} title={v.item.title} /> : <NoEvidence view={v} />}
+              {e?.status === "captured" ? (
+                <div className="st-stage">
+                  <BuiltShot evidence={e} device={device} title={v.item.title} />
+                </div>
+              ) : (
+                <NoEvidence view={v} />
+              )}
             </section>
           </div>
         </section>
@@ -235,7 +243,7 @@ function ScreenBeside({ view: v, artifact }: { view: ItemFactoryView; artifact: 
 function DemoBeside({ view: v, artifact }: { view: ItemFactoryView; artifact: StudioArtifact | undefined }) {
   const e = v.evidence && v.evidence.status !== "no-run" ? v.evidence : undefined;
   return (
-    <div className="st-beside">
+    <div className="st-beside st-reality__beside">
       <section className="st-beside__pane" aria-label="The approved demo">
         <p className="st-beside__cap">
           <span>Demo · v{v.item.version}, approved</span>
@@ -244,7 +252,13 @@ function DemoBeside({ view: v, artifact }: { view: ItemFactoryView; artifact: St
       </section>
       <section className="st-beside__pane" aria-label="What the factory built">
         <BuiltCaption view={v} evidence={e} />
-        {e?.status === "captured" ? <BuiltRecording evidence={e} title={v.item.title} /> : <NoEvidence view={v} />}
+        {e?.status === "captured" ? (
+          <div className="st-stage st-stage--terminal">
+            <BuiltRecording evidence={e} title={v.item.title} />
+          </div>
+        ) : (
+          <NoEvidence view={v} />
+        )}
       </section>
     </div>
   );
@@ -336,7 +350,7 @@ function NoEvidence({ view: v }: { view: ItemFactoryView }) {
     const started = v.tasks.some((t) => t.state !== "queued");
     return (
       <div className="st-reality__slot" role="note">
-        {started ? `No evidence yet: ${noEvidenceWords("no-run")}.` : "Not built yet."}
+        {started ? `No evidence yet: ${NO_EVIDENCE_CLAUSE["no-run"]}.` : "Not built yet."}
       </div>
     );
   }
@@ -344,7 +358,7 @@ function NoEvidence({ view: v }: { view: ItemFactoryView }) {
   return (
     <div className="st-reality__slot st-reality__slot--why" role="note">
       <p>
-        <b>No evidence yet: {noEvidenceWords(e.reason)}.</b> {e.detail}
+        <b>No evidence yet: {NO_EVIDENCE_CLAUSE[e.reason]}.</b> {e.detail}
       </p>
       {e.log && (
         <pre className="st-reality__log" aria-label="The end of the capture's log">
