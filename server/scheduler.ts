@@ -575,7 +575,8 @@ export class Scheduler {
           // and its screenshots or recording are made (applied above), and again after a review ended without a verdict.
           // When its pass asks for changes, the designer revises the version, and the PE reviews the new one (the loop).
           // While building, the PE reviews new work before it starts (pass 5): a run for each piece that waits for one.
-          return P.askForNewWorkReviews(askForRevisions(R.askForPeReviews(next, now), now), now);
+          // A change order closes once nothing is left to handle, also when the owner handled it by hand (pass 5).
+          return M.settleChangeOrders(P.askForNewWorkReviews(askForRevisions(R.askForPeReviews(next, now), now), now), now);
         },
         now,
         lease,
@@ -1437,7 +1438,7 @@ export class Scheduler {
         const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
         // The steering block, the vision draft, the decisions, the studio block and any parse problem go through as found; the domain validates them.
         // The final text goes too: the run keeps it when the answer could not be used as sent.
-        const next = M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
+        const next = M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, changeOrder: out.changeOrder, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });
         // The check of its text goes on the run (not on the message: the owner sees no score); the lead's next run is told what it broke.
         const prose = this.leadProse.get(e.attemptId);
         return prose ? withLeadProse(next, e.attemptId, prose) : next;

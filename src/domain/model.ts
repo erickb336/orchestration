@@ -43,8 +43,8 @@ export {
 } from "./model/lead";
 export { completeLeadRun, type LeadProposal, type LeadReplyProblem, leadReplyNote, proposeTask, validateProposal } from "./model/leadOutput";
 export {
-  changeOrderLines, type ChangeOrderLineView, changeOrderNeeds, changeOrderShownTo, changeOrdersDueForLead, closeChangeOrder, leadAnswered, outstanding,
-  settleChangeOrders,
+  changeOrderLines, type ChangeOrderLineView, changeOrderNeeds, changeOrderShownTo, changeOrdersDueForLead, closeChangeOrder, leadAnswered,
+  MAX_CHANGE_ORDER_UPDATES, outstanding, settleChangeOrders,
 } from "./model/changeOrderUpdates";
 export { stripHostile, stripInvisible } from "./model/textSafety";
 export { steerPermission, validateSteer, visionContentMovedSince } from "./model/steering";

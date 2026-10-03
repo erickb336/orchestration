@@ -322,6 +322,55 @@ export function fakeRevisions(prompt: string): Record<string, unknown>[] {
   }));
 }
 
+/** A simulated proposal for a change order's update: the whole proposal, labelled as simulated. */
+function fakeChangeProposal(title: string, refs: string[], outcome: string): Record<string, unknown> {
+  return {
+    title,
+    area: null,
+    whyNow: "The owner locked in a change to the design.",
+    outcome: `${outcome} (simulated: no agent read the design).`,
+    benefit: null,
+    scopeIncluded: ["What the locked-in design changed"],
+    scopeExcluded: ["Anything the design did not change"],
+    options: [
+      { id: "A", name: "Build the change", approach: "Build what the version in force shows", benefit: "The factory builds the design in force", effort: "Small", risks: "Low", reversibility: "High" },
+      { id: "B", name: "Defer", approach: "Do nothing now", benefit: "No cost", effort: "None", risks: "The factory builds an old design", reversibility: "N/A" },
+    ],
+    recommendedOptionId: "A",
+    rationale: "The owner's Lock in changed what this builds (simulated: no real evidence).",
+    uncertainty: "Simulated; no real evidence.",
+    acceptance: ["It matches the version in force"],
+    flowId: null,
+    priority: null,
+    blueprintRefs: refs,
+    revises: null,
+  };
+}
+
+/**
+ * ORC-029 pass 5 (5b): the simulated lead's answer to the change order its brief lists, read only from the brief. Each
+ * touched task gets the update the brief names: one spec update, one revision task, one retirement (and as many of
+ * each as the change order has); each new item gets one new task. Undefined when the brief lists no change order.
+ */
+export function fakeChangeOrder(prompt: string): { rev: number; updates: Record<string, unknown>[] } | undefined {
+  const head = /^## Change order r(\d+): /m.exec(prompt);
+  if (!head) return undefined;
+  const rev = Number(head[1]);
+  const section = prompt.slice(head.index + 3).split("\n## ")[0];
+  const updates: Record<string, unknown>[] = [];
+  const tasks = section.matchAll(/^- (\S+) "([^"\n]*)" \[[^\]\n]*\]: cites (.*?)\. Planned at the Lock in: [^\n]*\. Your update: "(update-spec|revise|retire)"\.$/gm);
+  for (const [, task, title, cites, action] of tasks) {
+    const approved = [...cites.matchAll(/(\S+) \((?:changed|added|unchanged)\)/g)].map((m) => m[1]);
+    if (action === "retire") updates.push({ action, task, why: "Simulated: it builds only parts the owner dropped.", proposal: null });
+    else if (action === "update-spec") updates.push({ action, task, why: "Simulated: its spec now builds the version in force.", proposal: fakeChangeProposal(title, approved, `${title}, as the version in force shows`) });
+    else updates.push({ action, task, why: "Simulated: a revision builds the change on top of the work.", proposal: fakeChangeProposal(`Revise ${title} (change order r${rev})`, approved, `${title} changed as the version in force shows`) });
+  }
+  for (const [, item, title] of section.matchAll(/^- (\S+) \S+ "([^"\n]*)" v\d+[^\n]*: no task cites it yet\. Your update: "new-task", citing \S+\.$/gm)) {
+    updates.push({ action: "new-task", task: null, why: "Simulated: the owner added it, and no task builds it yet.", proposal: fakeChangeProposal(`Build ${title} (change order r${rev})`, [item], `${title}, as the version in force shows`) });
+  }
+  return { rev, updates };
+}
+
 /**
  * ORC-029 pass 5: a simulated PE's verdict on new work in the factory, read only from its envelope. A proposal the lead
  * has not revised yet gets one change and one open case, so the loop shows the lead revising and a question going to
@@ -368,6 +417,8 @@ export function fakeLeadReply(attemptId: string, trigger: LeadTrigger, prompt = 
   const vision = trigger === "message" ? fakeVision(prompt) : undefined;
   const shaping = trigger === "message" ? fakeShaping(prompt) : undefined;
   const studio = trigger === "message" ? fakeStudio(prompt) : undefined;
+  // ORC-029 pass 5 (5b): a run started for a change order answers it with an update per touched task.
+  const changeOrder = trigger === "change-order" ? fakeChangeOrder(prompt) : undefined;
   // ORC-013: the simulated lead accepts every finding routed to it; a real lead weighs each one.
   // ORC-029 2d: the decisions it takes as the PE state their cost; accepting adds none.
   const decisions = [
@@ -388,8 +439,9 @@ export function fakeLeadReply(attemptId: string, trigger: LeadTrigger, prompt = 
     ? ` I opened a round on ${round.focus === "material" ? "the product as it is today" : `the ${round.focus}`} and asked the designer for one run, with one question beside it (simulated).`
     : "";
   // The reply carries the simulated chip; the text says only what happened.
-  const replyText =
-    trigger === "pe-review"
+  const replyText = changeOrder
+    ? `I answered change order r${changeOrder.rev} with ${changeOrder.updates.length} update${changeOrder.updates.length === 1 ? "" : "s"}, one for each task it touches and each new item. The list under this reply shows what the service applied.`
+    : trigger === "pe-review"
       ? `I revised ${revisions.length === 1 ? "the task" : `the ${revisions.length} tasks`} the PE sent back, making the change it asked for; the PE reviews ${revisions.length === 1 ? "it" : "them"} again.`
       : trigger === "planning"
       ? "I reviewed the board and proposed one small task."
@@ -406,7 +458,7 @@ export function fakeLeadReply(attemptId: string, trigger: LeadTrigger, prompt = 
               ? statusAnswer(board, question, nowMs)
               : "Noted; I changed nothing. Ask me what is running, what needs you or how a task is going; tell me what to focus on; or ask me to tell the coder on a task something.";
   const reply = `${replyText}${studioLine}`;
-  return { reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}), ...(studio ? { studio } : {}) };
+  return { reply, proposals, ...(steer ? { steer } : {}), ...(vision ? { vision } : {}), ...(shaping ?? {}), ...(decisions.length ? { decisions } : {}), ...(studio ? { studio } : {}), ...(changeOrder ? { changeOrder } : {}) };
 }
 
 /**
@@ -577,7 +629,15 @@ export class FakeAdapter implements RuntimeAdapter {
   start(a: Assignment) {
     if (a.role === "lead" && a.stepId === "LEAD") {
       if (this.procs.has(a.attemptId)) return;
-      const lead: LeadTrigger = /^# Lead run \S+ \(planning\)/.test(a.prompt) ? "planning" : /^# Lead run \S+ \(decisions on findings\)/.test(a.prompt) ? "decisions" : /^# Lead run \S+ \(revisions for the PE\)/.test(a.prompt) ? "pe-review" : "message";
+      const lead: LeadTrigger = /^# Lead run \S+ \(planning\)/.test(a.prompt)
+        ? "planning"
+        : /^# Lead run \S+ \(decisions on findings\)/.test(a.prompt)
+          ? "decisions"
+          : /^# Lead run \S+ \(revisions for the PE\)/.test(a.prompt)
+            ? "pe-review"
+            : /^# Lead run \S+ \(change order\)/.test(a.prompt)
+              ? "change-order"
+              : "message";
       this.procs.set(a.attemptId, { progress: 0, outputs: [], lead, prompt: a.prompt, ...(a.outputSchema ? { outputSchema: a.outputSchema } : {}) });
       this.emit({ type: "started", attemptId: a.attemptId });
       return;
