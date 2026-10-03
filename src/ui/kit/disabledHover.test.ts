@@ -4,17 +4,20 @@
 // hover background under its dark label, so the label could not be read (ORC-030 QA, Q-11). So every hover rule that
 // can reach a kit button (a bare `button` selector, or `.k-btn`) skips both.
 
-import { readFileSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
+// Read with Node's fs: vitest serves a stylesheet as an empty module (so `?raw` gives ""), and the UI's types have no
+// Node, so the module is named at run time.
+type Fs = { readFileSync(p: URL, encoding: "utf8"): string; readdirSync(p: URL, o: { recursive: true; encoding: "utf8" }): string[] };
+const FS = "node:fs";
+const { readFileSync, readdirSync } = (await import(/* @vite-ignore */ FS)) as Fs;
+
 /** The stylesheets as source text: every .css under src/ui, by its path from there. */
-const UI = fileURLToPath(new URL("..", import.meta.url));
+const UI = new URL("../", import.meta.url);
 const sheets: Record<string, string> = Object.fromEntries(
   readdirSync(UI, { recursive: true, encoding: "utf8" })
     .filter((f) => f.endsWith(".css"))
-    .map((f) => [relative(UI, join(UI, f)), readFileSync(join(UI, f), "utf8")]),
+    .map((f) => [f, readFileSync(new URL(f, UI), "utf8")]),
 );
 
 /** Each selector of each rule, comments removed. */
