@@ -17,6 +17,7 @@
 
 import * as M from "../../src/domain/model";
 import { currentVision } from "../../src/domain/model/core";
+import { draftVisionText } from "../../src/domain/model/vision";
 import * as P from "../../src/domain/peReview";
 import { buildingSpend, fmtUsd } from "../../src/domain/spend";
 import * as S from "../../src/domain/studio/studio";
@@ -78,7 +79,8 @@ function budgetLines(state: State): string[] {
 export function peEnvelope(state: State, run: StudioRun, where: { folder: string; checkout?: string }): string {
   const a = S.getArtifact(state, run.artifactId!, run.baseVersion!);
   const round = state.studio.rounds.find((r) => r.n === run.round)!;
-  const vision = currentVision(state).text.trim();
+  // The studio works on the draft (pass 5): its vision text, which is the one in force until the owner edits it.
+  const vision = draftVisionText(state).trim();
   const ids = a.variants.map((v) => v.id);
   const notes = [S.shotsNote(a), ...a.variants.map((v) => S.demoNote(a, v.id))].filter((x): x is string => !!x);
   const asIs = a.provenance;

@@ -16,6 +16,7 @@ import {
   MAX_NOTE_LENGTH,
 } from "../types";
 import { peReviewKeeps } from "../peReview";
+import { isChangeOrderKind } from "../studio/types";
 import { clearDeferral, deferInto, dropInto, openDependent, started, userHold, userTouched, writePriority } from "./controls";
 import { currentVision, event } from "./core";
 import { rootOf } from "./fanout";
@@ -381,8 +382,10 @@ export function steerFromRun(s: State, r: LeadRun, steer: unknown, now: string, 
 export function supersedeSuggestions(s: State, set: SteeringChangeSet | undefined, now: string) {
   if (!set || set.refused) return;
   const accepted = set.changes.filter((x) => x.status === "applied" || x.status === "suggested");
-  // A note's target is its step; a note never supersedes a task change, nor the other way round.
+  // A note's target is its step; a note never supersedes a task change, nor the other way round. A change order's line
+  // waits for the owner's go-ahead whatever the lead says later: nothing supersedes it (changeOrderUpdates.ts).
   const same = (x: SteeringChange, c: SteeringChange) => {
+    if (isChangeOrderKind(x.kind) || isChangeOrderKind(c.kind)) return false;
     if (x.kind === "focus") return c.kind === "focus";
     if (x.kind === "note") return c.kind === "note" && x.taskId === c.taskId && x.stepId === c.stepId;
     return c.kind !== "note" && x.taskId !== undefined && x.taskId === c.taskId;
@@ -392,7 +395,7 @@ export function supersedeSuggestions(s: State, set: SteeringChangeSet | undefine
     for (const c of cs.changes) {
       if (c.status !== "suggested") continue;
       const sameTarget = accepted.some((x) => same(x, c));
-      if (cs.heldBecause || sameTarget) {
+      if ((cs.heldBecause && !isChangeOrderKind(c.kind)) || sameTarget) {
         c.status = "superseded";
         c.resolvedAt = now;
       }

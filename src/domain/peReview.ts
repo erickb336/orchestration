@@ -5,7 +5,9 @@
 // - the lead's proposals, and the follow-ups it takes out of findings (the review is on the task);
 // - a Goal's breakdown, before its child tasks exist (on the step that made it; the children carry no review of their
 //   own, since the PE agreed to them as a whole);
-// - a design that a coder step builds, which is the Feature flow's design step (on that step).
+// - a design that a coder step builds, which is the Feature flow's design step (on that step);
+// - the lead's updates for a change order (pass 5): a spec it updates waits on its task, and a revision task or a new
+//   task waits like any proposal (src/domain/model/changeOrderUpdates.ts).
 // Code changes are never PE-reviewed: they keep the code and security reviews. A task the owner writes, the roadmap
 // planned in Vision and delivery tasks carry no review of their own (their design or breakdown still has one).
 //
@@ -27,7 +29,7 @@ import { applyBreakdown } from "./model/fanout";
 import { rerunInto } from "./model/retries";
 import { activeStudioRuns, requestStudioRun, requestStudioStop } from "./studio/runs";
 import { checkVerdict, endedWithoutResult, MAX_PE_RUNS, type VerdictInput } from "./studio/studio";
-import { isUnderWay, type ChangeOrder, type NewWorkReviewRef, type StudioRun } from "./studio/types";
+import { isUnderWay, type NewWorkReviewRef, type StudioRun } from "./studio/types";
 import { ControlError, StaleWriteError, type OutputDef, type PeReviewRound, type PeReviewState, type ProviderId, type State, type Step, type StepDef, type Task } from "./types";
 
 /** Rounds of PE review before a change the PE still asks for goes to the owner. */
@@ -75,10 +77,10 @@ export function peReviewKeeps(r: PeReviewState | undefined): string | undefined 
 }
 
 /**
- * The work a verdict or an overrule is about: a task (a lead proposal), a step of a task (the breakdown or the design
- * it made), or a change order's updates.
+ * The work a verdict or an overrule is about: a task (a lead proposal, or a spec a change order updated), or a step of
+ * a task (the breakdown or the design it made).
  */
-export type PeReviewTarget = { taskId: string; stepId?: string } | { changeOrder: number };
+export type PeReviewTarget = { taskId: string; stepId?: string };
 
 /** What the owner reads of the objection: the newest round that sent the work back (its reasons and its change), or why review ended. */
 export function lastObjection(r: PeReviewState): string {
@@ -155,16 +157,11 @@ export function taskReviewHold(t: Task): { step?: Step; review: PeReviewState; h
 
 // ---------- recording a verdict ----------
 
-function located(s: State, target: PeReviewTarget): { name: string; review: PeReviewState | undefined; task?: Task; step?: Step; order?: ChangeOrder } {
-  if ("taskId" in target) {
-    const task = getTask(s, target.taskId);
-    if (target.stepId === undefined) return { name: task.id, review: task.peReview, task };
-    const step = getStep(task, target.stepId);
-    return { name: `${task.id} ${step.id}'s ${reviewedWhat(task, step)}`, review: step.peReview, task, step };
-  }
-  const order = s.blueprint.changeOrders.find((c) => c.rev === target.changeOrder);
-  if (!order) throw new ControlError(`There is no change order for blueprint r${target.changeOrder}.`);
-  return { name: `the updates for change order r${order.rev}`, review: order.peReview, order };
+function located(s: State, target: PeReviewTarget): { name: string; review: PeReviewState | undefined; task: Task; step?: Step } {
+  const task = getTask(s, target.taskId);
+  if (target.stepId === undefined) return { name: task.id, review: task.peReview, task };
+  const step = getStep(task, target.stepId);
+  return { name: `${task.id} ${step.id}'s ${reviewedWhat(task, step)}`, review: step.peReview, task, step };
 }
 
 /** One PE verdict on new work, as its run gave it: the verdict (pass 4e), and what it read. */
@@ -194,18 +191,16 @@ export function recordPeReview(state: State, input: PeReviewInput, now: string):
   const r = found.review;
   if (!r) throw new ControlError(`${found.name} is not PE-reviewed: only new work is (the lead's proposals, a Goal's breakdown, a Feature's design), while PE review of new work is on. Code changes keep the code and security reviews.`);
   if (r.status !== "pending") throw new ControlError(`PE review of ${found.name} is finished (${r.status}).`);
-  if (found.task) {
-    if (!isOpen(found.task)) throw new ControlError(`${found.task.id} is ${found.task.lifecycle}.`);
-    if (found.step) {
-      const v = reviewedVersion(state, found.task, found.step);
-      if (found.step.state !== "done" || v === undefined) throw new ControlError(`${found.step.id} is running again; the PE reviews what it makes next.`);
-      if (input.version === undefined) throw new ControlError(`A verdict on ${found.name} names the version the PE read.`);
-      if (input.version !== v) throw new StaleWriteError(input.version, v);
-    } else {
-      const rev = currentSpec(found.task).rev;
-      if (input.specRev === undefined) throw new ControlError(`A verdict on ${found.task.id} names the spec revision the PE read.`);
-      if (input.specRev !== rev) throw new StaleWriteError(input.specRev, rev);
-    }
+  if (!isOpen(found.task)) throw new ControlError(`${found.task.id} is ${found.task.lifecycle}.`);
+  if (found.step) {
+    const v = reviewedVersion(state, found.task, found.step);
+    if (found.step.state !== "done" || v === undefined) throw new ControlError(`${found.step.id} is running again; the PE reviews what it makes next.`);
+    if (input.version === undefined) throw new ControlError(`A verdict on ${found.name} names the version the PE read.`);
+    if (input.version !== v) throw new StaleWriteError(input.version, v);
+  } else {
+    const rev = currentSpec(found.task).rev;
+    if (input.specRev === undefined) throw new ControlError(`A verdict on ${found.task.id} names the spec revision the PE read.`);
+    if (input.specRev !== rev) throw new StaleWriteError(input.specRev, rev);
   }
   const round = r.rounds.length + 1;
   if (round > MAX_PE_REVIEW_ROUNDS) throw new ControlError(`PE review of ${found.name} had its ${MAX_PE_REVIEW_ROUNDS} rounds.`);
@@ -216,30 +211,28 @@ export function recordPeReview(state: State, input: PeReviewInput, now: string):
   review.rounds.push({
     at: now,
     ...checked,
-    ...(mine.step ? { version: input.version } : mine.task ? { specRev: input.specRev } : {}),
+    ...(mine.step ? { version: input.version } : { specRev: input.specRev }),
     ...(input.by ? { by: { provider: input.by.provider, model: input.by.model, runId: input.by.runId } } : {}),
   });
   let outcome: string;
   if (checked.verdict === "feasible") {
     review.status = "agreed";
     if (mine.step) {
-      releaseStepInto(s, mine.task!, mine.step, now);
+      releaseStepInto(s, mine.task, mine.step, now);
       outcome = mine.step.outputs.some((o) => o.kind === "breakdown") ? "its child tasks are created" : "it is built next";
-    } else outcome = mine.task ? (mine.task.holdBeforeStart ? "it waits for your go-ahead (your involvement setting)" : "it starts under your involvement setting") : "the lead may apply them";
+    } else outcome = mine.task.holdBeforeStart ? "it waits for your go-ahead (your involvement setting)" : "it starts under your involvement setting";
   } else if (round >= MAX_PE_REVIEW_ROUNDS) {
     review.status = "objected";
-    outcome = mine.order
-      ? `it still asks for a change after ${MAX_PE_REVIEW_ROUNDS} rounds, so it needs you: until you overrule the objection, the updates are not applied`
-      : `it still asks for a change after ${MAX_PE_REVIEW_ROUNDS} rounds, so it needs you: overrule the objection, edit the work (the PE reviews it again), or cancel it`;
+    outcome = `it still asks for a change after ${MAX_PE_REVIEW_ROUNDS} rounds, so it needs you: overrule the objection, edit the work (the PE reviews it again), or cancel it`;
   } else if (mine.step) {
     // The step that made it runs again, with the PE's change in its brief; the PE reviews what it makes next.
-    rerunInto(s, mine.task!, mine.step, now, "system", `the PE asks for a change, round ${round} of ${MAX_PE_REVIEW_ROUNDS}`);
+    rerunInto(s, mine.task, mine.step, now, "system", `the PE asks for a change, round ${round} of ${MAX_PE_REVIEW_ROUNDS}`);
     outcome = `round ${round} of ${MAX_PE_REVIEW_ROUNDS}; ${mine.step.id} revises it`;
-  } else outcome = `round ${round} of ${MAX_PE_REVIEW_ROUNDS}; the lead revises ${mine.order ? "them" : "it"}`;
-  if (mine.task) mine.task.updatedAt = now;
+  } else outcome = `round ${round} of ${MAX_PE_REVIEW_ROUNDS}; the lead revises it`;
+  mine.task.updatedAt = now;
   const word = checked.verdict === "feasible" ? "agreed" : checked.verdict === "feasible-if" ? "asks for a change" : "objects";
   const cases = checked.openCases?.length ?? 0;
-  event(s, now, "runtime", "decision", `PE review of ${mine.name}: ${word} (${checked.reasons.split("\n")[0].slice(0, 200)}); ${outcome}${cases ? `; ${cases} question${cases === 1 ? "" : "s"} for you, through the lead` : ""}`, mine.task?.id);
+  event(s, now, "runtime", "decision", `PE review of ${mine.name}: ${word} (${checked.reasons.split("\n")[0].slice(0, 200)}); ${outcome}${cases ? `; ${cases} question${cases === 1 ? "" : "s"} for you, through the lead` : ""}`, mine.task.id);
   return s;
 }
 
@@ -280,9 +273,9 @@ export function overrulePeReview(state: State, target: PeReviewTarget, why: stri
   const s = draft(state);
   const mine = located(s, target);
   mine.review!.overruled = { at: now, why: reason };
-  if (mine.step) releaseStepInto(s, mine.task!, mine.step, now);
-  if (mine.task) mine.task.updatedAt = now;
-  event(s, now, "user", "decision", `You overruled the PE's objection to ${mine.name}: ${reason}`, mine.task?.id);
+  if (mine.step) releaseStepInto(s, mine.task, mine.step, now);
+  mine.task.updatedAt = now;
+  event(s, now, "user", "decision", `You overruled the PE's objection to ${mine.name}: ${reason}`, mine.task.id);
   return s;
 }
 
@@ -316,7 +309,6 @@ export function setPeReviewsNewWork(state: State, on: boolean, now: string): Sta
         if (st.state === "done") releaseStepInto(s, t, st, now);
       }
     }
-    for (const co of s.blueprint.changeOrders) if (co.peReview?.status === "pending") end(co.peReview);
     for (const r of activeStudioRuns(s)) if (r.review) requestStudioStop(s, r, "PE review of new work is off", now);
     for (const r of s.studio.runs) if (r.review && r.status === "queued") Object.assign(r, { status: "failed", endedAt: now, note: "not started: PE review of new work is off" });
   }

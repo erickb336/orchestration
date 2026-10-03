@@ -17,7 +17,7 @@ import { MAX_DESIGNER_RUNS, MAX_RUN_VARIANTS } from "../src/domain/studio/lead";
 import { captureItems } from "../src/domain/studio/evidence";
 import { testedItems } from "../src/domain/studio/ruleResults";
 import * as S from "../src/domain/studio/studio";
-import { DOCUMENT_KINDS, isUnderWay, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
+import { DOCUMENT_KINDS, isChangeOrderKind, isUnderWay, type BlueprintItem, type Feedback, type PeVerdict, type RoundFocus, type StudioArtifact } from "../src/domain/studio/types";
 import { clip, truncate } from "../src/domain/text";
 import { leadBlueprintSection, newWorkNote, peChangeSection, peQuestionsSection, sentBackSection, stepBlueprintSection } from "./factoryLink";
 import { lastLeadProse } from "./prose/record";
@@ -1003,7 +1003,9 @@ function recentSteering(state: State): string {
                   ? `${c.taskId} dropped`
                   : c.kind === "note"
                     ? `note to ${c.taskId ?? "?"} ${c.stepId ?? "?"} "${clip(String(c.after ?? ""), 80)}"`
-                    : `${c.taskId ?? "?"} (unreadable entry)`;
+                    : isChangeOrderKind(c.kind)
+                      ? `change order r${M.changeOrderLineOf(state, c.id)?.co.rev ?? "?"}: ${clip(M.changeOrderLineOf(state, c.id)?.line.words ?? `${c.kind} ${c.taskId ?? ""}`, 160)}`
+                      : `${c.taskId ?? "?"} (unreadable entry)`;
       // A sent note shows where it stands (applied means sent).
       const live = c.kind === "note" && c.noteId ? M.noteOf(state, c.noteId) : undefined;
       const status =
@@ -1242,10 +1244,22 @@ export function studioBriefSection(state: State, repo?: RepoGlance): string {
     .slice(-EARLIER_ROUNDS)
     .map((r) => `- Round ${r.n} (${FOCUS_WORDS[r.focus]}), closed: ${truncate(r.summary, 200) || "(no summary)"} (${latest.filter((a) => a.round === r.n).length} artifacts)`);
   const answers = studioAnswers(state);
+  // While the factory runs (pass 5, r10), the studio works on the draft, and the factory keeps the version in force.
+  const draftVision = state.blueprint.draft.vision;
+  const building =
+    p.stage === "building"
+      ? `
+The factory is running. Vision stays open: when the user's messages are about the design, run the studio as before. What the user approves goes into the draft, not into force: the factory keeps building from the version in force until the user locks the draft in, and then you adjust the tasks it touches (a change order). Opening a round never stops or changes the factory. Leave "studio" out when the user's messages are about the work in the factory, not the design.${
+          draftVision
+            ? `\nThe vision text in the draft (the user changed it; it goes into force at their Lock in, and the factory keeps the text above until then): ${truncate(draftVision.text, 3000)}`
+            : ""
+        }
+`
+      : "";
   return `
 ## The studio
 You run Vision's studio. Each round, the designer makes artifacts the user opens, marks (keep, change, drop), pins comments on and picks between. The PE reviews each design before the user sees it (not dictionaries, material or evidence); when it asks for a change or objects, the designer revises, up to ${S.MAX_PE_PASSES} passes, and then the user sees it with what the PE still says. What the user approves becomes the blueprint the factory builds from. You plan the rounds and brief the designer through "studio" in your output. You never approve, overrule the PE, lock in or start the factory, and you never answer for the user: only the user's own actions do those.
-
+${building}
 Order of focus, aiming at a design that is complete before the factory starts (revisit a focus when the user's answers call for it):
 1. experience: the key screens or commands, or the interface, or the topology, and how they behave;
 2. data: the product's things and how they relate, in plain words with worked examples, and what crosses each boundary. Also ask the designer for the project's dictionary (kind "dictionary"): each word the product uses, with one meaning and the words it replaces. Base it on the vision and, for an existing repository, on the names in the code. When the user approves it, every agent gets its words;
@@ -1271,6 +1285,100 @@ Rules for "studio":
 - "designerRuns": at most ${MAX_DESIGNER_RUNS} per reply. Brief the designer on what to make and why, from the vision, the documents and the user's marks. Ask for 2–${MAX_RUN_VARIANTS} variants only where a real choice is open, otherwise 1. Devices come from the scope; documents (${DOCUMENT_KINDS.join(", ")}) have none. "revises" makes an artifact's next version, carrying the user's open pins.
 - "questions": at most 5, about this round's choices (a variant, an undecided case), each with why and up to 4 options; they show beside the round. Keep "questions" outside "studio" for the vision's areas, and never ask one question in both.
 - The PE's open cases are product questions: a missing feature, an undecided edge case, a rule nobody set. The user decides them. Ask the user about them in "questions" (group related ones), or settle them with the user in the flows round. Never pass them to the designer as changes.
+`;
+}
+
+// ---------- the change order (ORC-029 pass 5, 5b) ----------
+
+const CHANGE_ORDER_WORDS = 600;
+
+/** One blueprint item in a line: `bi-3 screen "Trip plan" v4 (variant B, "Shared list")`. */
+function blueprintItemLine(state: State, i: BlueprintItem): string {
+  const a = B.citedArtifact(state, i);
+  const v = i.variant ? a?.variants.find((x) => x.id === i.variant) : undefined;
+  return `${i.id} ${i.kind} "${truncate(i.title, 80)}" v${i.version}${i.variant ? ` (variant ${i.variant}${v ? `, "${truncate(v.label, 40)}"` : ""})` : ""}`;
+}
+
+/**
+ * What changed between the version in force and the one it replaces, in the design's words: what the user wrote on
+ * the version it replaces (their note and pins), what the lead asked the designer for the new version, and a variant
+ * or title that changed.
+ */
+function whatChanged(state: State, item: BlueprintItem, replaces: BlueprintItem): string {
+  const parts: string[] = [];
+  if (item.artifactId !== replaces.artifactId) parts.push("a new take replaces it");
+  if (item.title !== replaces.title) parts.push(`renamed from "${truncate(replaces.title, 60)}"`);
+  if (item.variant !== replaces.variant) parts.push(`variant ${replaces.variant ?? "(one take)"} → ${item.variant ?? "(one take)"}`);
+  const fb = S.currentFeedback(state, replaces.artifactId, replaces.version);
+  const said = [fb?.note.trim() ? `"${truncate(fb.note.trim().replace(/\s+/g, " "), 300)}"` : "", ...(fb?.pins ?? []).slice(0, 3).map((p) => `pinned "${truncate(p.text.replace(/\s+/g, " "), 160)}"`)].filter(Boolean);
+  parts.push(said.length ? `the user on v${replaces.version}: ${said.join("; ")}` : `the user left no note on v${replaces.version}`);
+  const run = state.studio.runs.find((r) => r.kind === "designer" && r.artifactId === item.artifactId && r.baseVersion === replaces.version && r.status === "completed");
+  if (run?.fromLead) parts.push(`asked of the designer: "${truncate(run.brief.replace(/\s+/g, " "), 200)}"`);
+  return truncate(parts.join("; "), CHANGE_ORDER_WORDS);
+}
+
+/** What the lead does now about a touched task, from its state now (r14): a queued task's spec, or a revision task. */
+function updateFor(state: State, t: Task | undefined, onlyDropped: boolean): string {
+  if (!t || t.lifecycle === "cancelled") return "none (it is cancelled)";
+  const queued = (t.lifecycle === "proposed" || t.lifecycle === "ready") && !state.attempts.some((a) => a.taskId === t.id);
+  if (queued) return onlyDropped ? '"retire"' : '"update-spec"';
+  return '"revise"';
+}
+
+/**
+ * The change order a "change-order" run answers (pass 5): what changed (each changed item with the version it replaces
+ * and what changed in the design's words, each added and dropped item), each touched task with its state now, the
+ * items it cites and the update the lead gives it, and the new work. Then the rules of "changeOrder". No lines for
+ * any other run.
+ */
+export function changeOrderSection(state: State, run: LeadRun): string {
+  const co = M.changeOrderShownTo(state, run.id);
+  if (!co || co.status !== "open") return "";
+  const summary = state.blueprint.revisions.find((r) => r.rev === co.rev)?.lockIn?.summary;
+  const inForce = new Map(B.blueprintItems(state).map((i) => [i.id, i]));
+  const changed = summary?.changes.changed ?? [];
+  const what = [
+    ...changed.map((x) => `- Changed: ${blueprintItemLine(state, x.item)}, replacing v${x.replaces.version}. What changed: ${whatChanged(state, x.item, x.replaces)}.`),
+    ...(summary?.changes.added ?? []).map((i) => `- Added: ${blueprintItemLine(state, i)}.`),
+    ...co.droppedItems.flatMap((id) => (inForce.has(id) ? [`- Dropped: ${blueprintItemLine(state, inForce.get(id)!)}: the factory no longer builds it.`] : [])),
+    ...(summary?.changes.vision ? [`- The vision text changed: ${truncate(summary.changes.vision.reason, 200)}.`] : []),
+  ];
+  const role = (id: string) => (co.droppedItems.includes(id) ? "dropped" : changed.some((x) => x.item.id === id) ? "changed" : co.changedItems.includes(id) ? "added" : "unchanged");
+  const tasks = co.tasks.map(({ taskId, handling }) => {
+    const t = state.tasks.find((x) => x.id === taskId);
+    const refs = t ? (M.currentSpec(t).content.blueprintRefs ?? []) : [];
+    const onlyDropped = refs.length > 0 && refs.every((r) => inForce.get(r)?.status === "dropped");
+    const cites = refs.length ? refs.map((r) => `${r} (${role(r)})`).join(", ") : "nothing";
+    return `- ${taskId} "${t ? truncate(M.currentSpec(t).content.title, 80) : "?"}" [${t ? M.stateLabel(state, t) : "unknown"}]: cites ${cites}. Planned at the Lock in: ${B.HANDLING_WORDS[handling]}. Your update: ${updateFor(state, t, onlyDropped)}.`;
+  });
+  const newWork = co.newWork.map((id) => `- ${inForce.has(id) ? blueprintItemLine(state, inForce.get(id)!) : id}: no task cites it yet. Your update: "new-task", citing ${id}.`);
+  const pe = state.project.peReviewsNewWork ? "\n- PE review of new work is on: an updated spec, a revision task and a new task each wait for the PE before they start. A retirement starts nothing." : "";
+  const who =
+    co.handler === "user"
+      ? "The user asked to see change order updates first: each of your updates waits for the user's go-ahead, and nothing changes until then."
+      : "The service applies each update at once, and the user can undo each one alone.";
+  return `
+## Change order r${co.rev}: adjust the factory to the user's Lock in
+The user locked in blueprint r${co.rev} at ${co.at}. The factory builds from it now. Adjust the tasks it touches and plan its new work, in "changeOrder". Say what each update does in the design's words: what the user sees and does, not the code.
+
+What changed:
+${what.length ? what.join("\n") : "- (the Lock in recorded no summary)"}
+
+The tasks it touches:
+${tasks.length ? tasks.join("\n") : "- None."}
+
+New work:
+${newWork.length ? newWork.join("\n") : "- None."}
+
+Rules for "changeOrder":
+- "rev": ${co.rev}. In "updates", one entry per task above, and one per new task. At most ${M.MAX_CHANGE_ORDER_UPDATES}.
+- "update-spec": a queued task's whole proposal again, revised to build the version in force; keep its title unless the change renames it. Its "blueprintRefs" are the approved items it builds (left out: the ones it cites now that are still approved). The service adds a cited flow's rules to its acceptance from the version in force.
+- "revise": a new task that revises a running or landed task: it builds the change on top of that work, and waits until that task lands. Give its whole proposal, with a title of its own.
+- "retire": a queued task that builds only dropped parts. "proposal" is null.
+- "new-task": "task" is null; the whole proposal of a new task, citing at least one item this change order adds or changes.
+- "why": one sentence, in the design's words.
+- ${who}${pe}
+- The service checks each update against the task as it is now and refuses one that does not fit (for example "update-spec" on a task that started); the user sees why. What you leave out goes to the user.
 `;
 }
 
@@ -1367,10 +1475,12 @@ export function buildLeadEnvelope(state: State, run: LeadRun, access: "read", do
   // Steering is available only to runs that answer user messages, never decided by the trigger.
   const canSteer = run.messageIds.length > 0;
   const mode = p.steeringMode;
-  // The shaping brief and the vision contract go to message runs while shaping. A planning run never
-  // starts while shaping; if one from before finishes now, it cannot draft (the domain refuses).
+  // The shaping brief, coverage and the areas' questions go to message runs while shaping. The studio brief and the
+  // vision draft go to message runs in either stage (ORC-029 pass 5, r10): Vision stays open while the factory runs, on
+  // the draft. A planning run never drafts (the domain refuses).
   const shaping = p.stage === "shaping";
-  const canDraft = shaping && canSteer;
+  const canDraft = canSteer;
+  const canShape = shaping && canSteer;
   const roots = state.tasks.filter((t) => !t.parentTaskId);
   // The review and fix tasks the service creates for a pull request are delivery's, not steerable, and
   // not the lead's to see on its board (`steerPermission` rejects them as well).
@@ -1455,11 +1565,15 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
     "text": "<the whole vision: intent, who it is for, the problem, the outcome and how success is measured, scope in and out, constraints, risks, the first milestone; mark every proposed default (assumption)>",
     "focus": "<the first focus, one line>",
     "reason": "<what in the conversation, the documents or the repository this draft rests on>"
-  },
+  },${
+    canShape
+      ? `
   "coverage": { ${SHAPING_AREAS.map((a) => `"${a}": "clear|partial|open"`).join(", ")} },
   "questions": [
     { "question": "<one targeted question>", "why": "<why it matters, one line>", "area": "<area key>", "options": ["<option A (recommended, because …)>", "<option B>"] }
-  ],
+  ],`
+      : ""
+  }
   "studio": {
     "closeRound": { "summary": "<what came of the open round>" },
     "openRound": { "focus": "material | experience | data | flows", "summary": "<what the round explores>" },
@@ -1471,7 +1585,8 @@ Planning runs cannot steer. Serve the current focus; do not re-propose deferred 
     ]
   }`
     : "";
-  // The studio brief goes to the replies that may run the studio: message runs in Vision.
+  // The studio brief goes to the replies that may run the studio: message runs, in Vision and while the factory runs
+  // (pass 5): when the user talks to the lead about the design, the lead may open rounds on the draft.
   const studioBrief = canDraft ? studioBriefSection(state, repo) : "";
   const shapingBrief = shaping
     ? `
@@ -1489,6 +1604,21 @@ Areas, with the coverage you last reported:
 ${coverageLines(state)}${draftHistory(state)}`
     : "";
 
+  // The change order the run was shown (pass 5): its updates, each with the whole proposal (the shape above) or null.
+  const shownOrder = M.changeOrderShownTo(state, run.id);
+  const changeOrderContract =
+    shownOrder?.status === "open"
+      ? `,
+  "changeOrder": {
+    "rev": ${shownOrder.rev},
+    "updates": [
+      { "action": "update-spec", "task": "<a queued task above>", "why": "<what changes for the user, one sentence>", "proposal": { "<the whole proposal, as above>": "" } },
+      { "action": "revise", "task": "<a running or landed task above>", "why": "...", "proposal": { "<the whole proposal of the revision task>": "" } },
+      { "action": "retire", "task": "<a queued task that builds only dropped parts>", "why": "...", "proposal": null },
+      { "action": "new-task", "task": null, "why": "...", "proposal": { "<the whole proposal of the new task>": "" } }
+    ]
+  }`
+      : "";
   const decisionsContract = decisionsOpen
     ? `,
   "decisions": [
@@ -1496,7 +1626,7 @@ ${coverageLines(state)}${draftHistory(state)}`
   ]`
     : "";
 
-  return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : run.trigger === "decisions" ? "decisions on findings" : run.trigger === "pe-review" ? "revisions for the PE" : "reply to the user"})${canSteer ? `\nSteering mode: ${mode}` : ""}${shaping ? "\nProject stage: shaping" : ""}
+  return `# Lead run ${run.id} (${run.trigger === "planning" ? "planning" : run.trigger === "decisions" ? "decisions on findings" : run.trigger === "pe-review" ? "revisions for the PE" : run.trigger === "change-order" ? "change order" : "reply to the user"})${canSteer ? `\nSteering mode: ${mode}` : ""}${shaping ? "\nProject stage: shaping" : ""}
 
 You are the lead of the project "${p.name}". You own the backlog within the vision below: you decide what is worth doing next, specify it clearly, and pick the approach. Workers (designers, coders, reviewers on Claude or Codex) carry tasks out through each task's pipeline. You do not edit files: ${access === "read" ? "your working directory is a read-only checkout of the repository, which you may read to ground your proposals" : "you have no workspace"}.
 
@@ -1506,7 +1636,7 @@ Current focus: ${vision.focus || "(none)"}${focusLine}
 Focus history (newest first):
 ${focusHistory(state)}
 ${visionDocsSection(state, "lead", docs)}${projectWordsSection(state, "draft")}${leadBlueprintSection(state)}${shapingBrief}${studioBrief}
-${principlesSection(LEAD_PRINCIPLES.map((id) => ({ id })), PRINCIPLES_WORD_CAP, LEAD_PRINCIPLES_HEADER)}${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}${sentBackSection(state, run)}${peQuestionsSection(state)}
+${principlesSection(LEAD_PRINCIPLES.map((id) => ({ id })), PRINCIPLES_WORD_CAP, LEAD_PRINCIPLES_HEADER)}${conventionsSection(conventions, "your role is the lead of this orchestration service")}${decisionsSection(state)}${sentBackSection(state, run)}${changeOrderSection(state, run)}${peQuestionsSection(state)}
 ## Open work (root tasks by priority; child tasks follow their root)
 ${board}
 
@@ -1531,7 +1661,7 @@ ${notesSection(state, Date.parse(run.startedAt))}
 ${convo || "(no messages yet)"}
 
 ## ${pending.length ? "Messages to answer now" : "This run"}
-${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).join("\n") : run.trigger === "planning" ? "Planning check: propose the most useful next work, or nothing if nothing is clearly worth doing." : run.trigger === "decisions" ? `Decide the findings listed under "Decisions waiting for you"${peDecisionsOpen ? ' and "Decisions you make as the PE"' : ""}; work on those tasks waits for you. Propose nothing unless a decision needs a follow-up task.` : run.trigger === "pe-review" ? 'Revise the work listed under "Work the PE sent back", or leave it for the user. Propose nothing new.' : "No new messages."}
+${pending.length ? pending.map((m) => `- ${fromTask(m)}${clip(m.text, 2000)}`).join("\n") : run.trigger === "planning" ? "Planning check: propose the most useful next work, or nothing if nothing is clearly worth doing." : run.trigger === "decisions" ? `Decide the findings listed under "Decisions waiting for you"${peDecisionsOpen ? ' and "Decisions you make as the PE"' : ""}; work on those tasks waits for you. Propose nothing unless a decision needs a follow-up task.` : run.trigger === "pe-review" ? 'Revise the work listed under "Work the PE sent back", or leave it for the user. Propose nothing new.' : run.trigger === "change-order" ? `Adjust the factory to the change order under "Change order r${shownOrder?.rev ?? "?"}": one update per task it touches, and new tasks for its new work, in "changeOrder". Propose nothing else in "proposals".` : "No new messages."}
 
 ## Rules for proposals
 - Propose at most ${maxProposals} task(s). Proposing nothing is fine when nothing is clearly worth doing; say why in your reply.
@@ -1573,7 +1703,7 @@ The fields:
       "blueprintRefs": ["<the id of an approved blueprint item it builds>"],
       "revises": "<only to revise work the PE sent back: its task id>"
     }
-  ]${steerContract}${visionContract}${decisionsContract}
+  ]${steerContract}${visionContract}${decisionsContract}${changeOrderContract}
 }
 \`\`\`
 `;
@@ -1629,15 +1759,15 @@ ${last.length ? `The user's latest notes on landed work:\n${last.map((x) => x.li
  * untrusted data. A null field means "left out" and is removed; the steering block, the vision draft, the studio
  * block and the rest pass through as found.
  */
-export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; studio?: unknown; problem?: M.LeadReplyProblem } {
+export function parseLeadOutput(finalText: string): { reply: string; proposals: M.LeadProposal[]; steer?: unknown; vision?: unknown; coverage?: unknown; questions?: unknown; decisions?: unknown; studio?: unknown; changeOrder?: unknown; problem?: M.LeadReplyProblem } {
   const read = readLeadJson(finalText);
   if (!read.ok) return { reply: read.reply, proposals: [], problem: read.problem };
   const mismatch = schemaMismatch(LEAD_REPLY_SCHEMA, withNulls(LEAD_REPLY_SCHEMA, read.obj));
   const obj = withoutNulls(read.obj) as Record<string, unknown>;
   const reply = typeof obj.reply === "string" ? clip(obj.reply, 8000) : "";
   const proposals = Array.isArray(obj.proposals) ? (obj.proposals.filter(isObject) as unknown as M.LeadProposal[]) : [];
-  const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions" | "studio") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
-  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions"), ...given("studio"), ...(mismatch ? { problem: { kind: "schema" as const, where: mismatch } } : {}) };
+  const given = (k: "steer" | "vision" | "coverage" | "questions" | "decisions" | "studio" | "changeOrder") => (obj[k] !== undefined && obj[k] !== null ? { [k]: obj[k] } : {});
+  return { reply, proposals, ...given("steer"), ...given("vision"), ...given("coverage"), ...given("questions"), ...given("decisions"), ...given("studio"), ...given("changeOrder"), ...(mismatch ? { problem: { kind: "schema" as const, where: mismatch } } : {}) };
 }
 
 /**

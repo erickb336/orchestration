@@ -12,6 +12,7 @@ import { currentSpec, draft, event, getTask, nextId } from "./core";
 import { deferredLeadRoots, getLeadRun, openLeadProposals } from "./lead";
 import { type RunReport } from "./runs";
 import { applyStudioBlock, setRoundLead, type StudioBlockResult } from "../studio/lead";
+import { answerChangeOrderInto } from "./changeOrderUpdates";
 import { draftFromRun, validateCoverage, validateQuestions, validateVisionDraft } from "./shaping";
 import { editSpecInto } from "./specs";
 import { steerFromRun, supersedeSuggestions } from "./steering";
@@ -56,6 +57,8 @@ interface LeadOutput {
   decisions?: unknown;
   /** The lead's studio block in Vision, as found (untrusted; validated in src/domain/studio/lead.ts). */
   studio?: unknown;
+  /** The lead's updates for the change order the run was shown, as found (untrusted; validated in changeOrderUpdates.ts). */
+  changeOrder?: unknown;
   /** Why the answer could not be used as sent: recorded on the run and shown under the reply. */
   problem?: LeadReplyProblem;
   /** The final text as the runtime returned it: kept on the run only with a problem (keepRawAnswer). */
@@ -174,6 +177,11 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     if (s.steering.length > 200) s.steering.splice(0, s.steering.length - 200);
     r.changeSetId = set.id;
   }
+  // The change order the run was shown (ORC-029 pass 5), after steering and before the proposals: each update is a
+  // line of the change order and a row of this reply's change set, so the owner can undo each one.
+  const answered = answerChangeOrderInto(s, r, out.changeOrder, set, now, run.simulated);
+  set = answered.set;
+  rejected.push(...answered.notes.map((n) => `Change order ${n}`));
   // A vision draft. Never applied: it is recorded as a suggestion for the user to accept, edit
   // or dismiss. The run-outcome guard above and the draft id (one per run) make it record once.
   let visionDraft: VisionDraft | undefined;
@@ -330,7 +338,7 @@ function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: strin
  * A proposal's spec content: the lead's fields, the recommended option selected, and (pass 5) the blueprint items it
  * builds, with the acceptance their rules and examples give, after the lead's own checks.
  */
-function specContentOf(s: State, p: LeadProposal): SpecContent {
+export function specContentOf(s: State, p: LeadProposal): SpecContent {
   const list = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => String(x).trim()).filter(Boolean) : []);
   const refs = [...new Set(list(p.blueprintRefs))];
   const fromBlueprint = blueprintAcceptance(s, refs);

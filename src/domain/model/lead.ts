@@ -19,6 +19,7 @@ import {
   ControlError,
   AUTOPILOT,
 } from "../types";
+import { changeOrdersDueForLead, showChangeOrderInto } from "./changeOrderUpdates";
 import { currentVision, draft, event, getTask, isOpen, nextId } from "./core";
 import { deferredBy } from "./presentation";
 import { providerLabel } from "./resolution";
@@ -131,6 +132,9 @@ export function leadDue(s: State, nowMs: number, localMinutes: number): LeadTrig
   // Proposals the PE sent back wait for the lead's revision: like decisions, held work needs neither autonomy nor
   // room under the planning caps. At the building budget it waits too, as nothing it revises could start.
   if (s.project.stage === "building" && !budgetStop(s) && revisionsDueForLead(s).length) return "pe-review";
+  // A change order waits for the lead's updates after the owner's Lock in (pass 5): like held work, it needs neither
+  // autonomy nor room under the planning caps, and it waits at the building budget. One completed run answers it.
+  if (s.project.stage === "building" && !budgetStop(s) && changeOrdersDueForLead(s).length) return "change-order";
   // While shaping the lead only answers messages; planning is off until the user starts building. At the
   // building budget planning stops too: a plan is a run that spends, for work that could not start.
   if (s.project.stage === "shaping" || budgetStop(s)) return null;
@@ -161,14 +165,16 @@ export function startLeadRun(state: State, init: { provider: ProviderId; model: 
   s.leadRuns.push({ id, trigger: init.trigger, provider: init.provider, model: init.model, startedAt: now, outcome: "running", messageIds: pendingMessages(s).map((m) => m.id), visionRev: currentVision(s).rev });
   // Whatever started it, the run is shown the proposals the PE sent back (its envelope lists them), and answers for them.
   showRevisionsInto(s, id);
+  // A run started for a change order is shown the oldest one due; its brief lists it, and its answer updates the tasks.
+  if (init.trigger === "change-order") showChangeOrderInto(s, id);
   if (init.trigger === "planning") s.project.lastPlanningAt = now;
   event(s, now, "lead", "dispatch", `Lead ${leadTriggerLabel(init.trigger)} run ${id} started on ${providerLabel(init.provider)} · ${init.model}`);
   return { state: s, runId: id };
 }
 
-/** "planning", "reply", "decisions" (a run started to decide findings routed to the lead), or "revisions for the PE". */
+/** "planning", "reply", "decisions" (a run started to decide findings routed to the lead), "revisions for the PE", or "change order". */
 function leadTriggerLabel(trigger: LeadTrigger): string {
-  return trigger === "planning" ? "planning" : trigger === "decisions" ? "decisions" : trigger === "pe-review" ? "revisions for the PE" : "reply";
+  return trigger === "planning" ? "planning" : trigger === "decisions" ? "decisions" : trigger === "pe-review" ? "revisions for the PE" : trigger === "change-order" ? "change order" : "reply";
 }
 
 export function requestLeadStop(s: State, r: LeadRun, reason: string, now: string) {

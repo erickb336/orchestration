@@ -1,7 +1,7 @@
 // Core domain types. Pure data: no UI, storage, or runtime dependencies.
 
 import type { EvidenceRun, EvidenceSnapshot, PreviewSetting } from "./studio/evidence";
-import type { AskCheck, Blueprint, BudgetEstimate, OpenCase, Studio, Verdict } from "./studio/types";
+import type { AskCheck, Blueprint, BudgetEstimate, ChangeOrderLineKind, OpenCase, Studio, Verdict } from "./studio/types";
 
 export type ProviderId = "claude" | "codex";
 export const PROVIDERS: ProviderId[] = ["claude", "codex"];
@@ -243,12 +243,16 @@ type SteeringValue = string | number | Deferral | null;
 export interface SteeringChange {
   /** `${setId}.${n}` */
   id: string;
-  /** "invalid": an entry the service could not read as one of the actions (always rejected). "note": a note to a running stage. */
-  kind: "focus" | "priority" | "defer" | "undefer" | "drop" | "note" | "invalid";
+  /**
+   * "invalid": an entry the service could not read as one of the actions (always rejected). "note": a note to a running
+   * stage. A change order's line kind: one of the lead's updates for a change order (ORC-029 pass 5; the line itself is
+   * on the change order, src/domain/model/changeOrderUpdates.ts).
+   */
+  kind: "focus" | "priority" | "defer" | "undefer" | "drop" | "note" | "invalid" | ChangeOrderLineKind;
   taskId?: string;
   /** Notes: the step the note is addressed to. */
   stepId?: string;
-  /** focus text | priority | deferral | lifecycle | note text */
+  /** focus text | priority | deferral | lifecycle | note text; a change order line: spec revision (update-spec), lifecycle (retire), the task made (revise, new-task) */
   before: SteeringValue;
   after: SteeringValue;
   /** The lead's reason (plain text, at most 300 characters). */
@@ -1279,7 +1283,8 @@ export interface Message {
  * "decisions": a run started because findings routed to the lead wait for its decision. "pe-review": a run started
  * because the PE sent new work back for the lead's revision (ORC-029 pass 5).
  */
-export type LeadTrigger = "message" | "planning" | "decisions" | "pe-review";
+/** Why a lead run started. "change-order": to adjust the tasks a Lock in touched (ORC-029 pass 5). */
+export type LeadTrigger = "message" | "planning" | "decisions" | "pe-review" | "change-order";
 
 /** A run of the lead agent. Separate from task attempts: at most one is active at a time. */
 export interface LeadRun {

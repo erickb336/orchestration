@@ -1,7 +1,9 @@
 // What happens to the lead's change sets afterwards: undo an applied row, apply or dismiss a suggestion,
 // and who set a task's priority.
 
+import { isChangeOrderKind } from "../studio/types";
 import { type Deferral, type SteeringChange, type SteeringChangeSet, type State, type Task, ControlError } from "../types";
+import { applyChangeOrderRow, settleChangeOrdersInto, undoChangeOrderRow } from "./changeOrderUpdates";
 import { cancelInto, clearDeferral, deferInto, reopenDropped, writePriority } from "./controls";
 import { currentVision, draft, event, findStep, isOpen, touch } from "./core";
 import { rootOf } from "./fanout";
@@ -78,7 +80,8 @@ function undoRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: strin
       if (c.appliedBy === "user") return "you cancelled it; a cancel cannot be undone";
       return reopenDropped(s, t, set.id, now);
     default:
-      return "not applied";
+      // A change order's line (ORC-029 pass 5): its own module knows what it changed.
+      return isChangeOrderKind(c.kind) ? undoChangeOrderRow(s, set, c, now) : "not applied";
   }
 }
 
@@ -119,6 +122,8 @@ export function undoSteering(state: State, changeSetId: string, changeId: string
   if (result.undone.length || noted) {
     event(s, now, "user", "control", `Undid ${result.undone.length} of the lead's change${result.undone.length === 1 ? "" : "s"} (${set.id})${result.left.length ? `; ${result.left.length} left as is` : ""}`);
   }
+  // Undoing a change order's line settles it: the change order may close.
+  settleChangeOrdersInto(s, now);
   return { state: s, result };
 }
 
@@ -189,7 +194,8 @@ function applyRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: stri
       return undefined;
     }
     default:
-      return "not a suggestion";
+      // The owner's go-ahead on a change order's line (ORC-029 pass 5).
+      return isChangeOrderKind(c.kind) ? applyChangeOrderRow(s, set, c, now) : "not a suggestion";
   }
 }
 
@@ -221,6 +227,7 @@ export function applySteering(state: State, changeSetId: string, changeId: strin
     }
   }
   if (result.applied.length) event(s, now, "user", "control", `Applied ${result.applied.length} of the lead's suggestion(s) (${set.id})${result.left.length ? `; ${result.left.length} left as is` : ""}`);
+  settleChangeOrdersInto(s, now);
   return { state: s, result };
 }
 
@@ -237,6 +244,7 @@ export function dismissSteering(state: State, changeSetId: string, changeId: str
     dismissed.push(c.id);
   }
   if (dismissed.length) event(s, now, "user", "control", `Dismissed ${dismissed.length} of the lead's suggestion(s) (${set.id})`);
+  settleChangeOrdersInto(s, now);
   return { state: s, result: { dismissed } };
 }
 

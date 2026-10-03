@@ -5,7 +5,8 @@
 import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
-import { lastObjection, PE_OBJECTS_HOLD, PE_REVIEW_HOLD, peReviewHold, taskReviewHold } from "./peReview";
+import { changeOrderNeeds } from "./model/changeOrderUpdates";
+import { lastObjection, PE_OBJECTS_HOLD, PE_REVIEW_HOLD, taskReviewHold } from "./peReview";
 import { budgetStop, buildingSpend, type UnknownCost } from "./spend";
 import { blueprintItems, openChangeOrders } from "./studio/blueprint";
 import type { ChangeOrder } from "./studio/types";
@@ -115,13 +116,11 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   // Apart from the stop: while a building budget is set, a run with no recorded cost is the owner's to know about.
   const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
   if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project" });
-  // You asked to see change orders before the lead updates tasks. The Tasks page lists the affected tasks until the blueprint has its own page (ORC-029 pass 6).
-  for (const co of openChangeOrders(state, "user")) items.push({ kind: "open", key: `change-order-${co.rev}`, what: `Change order: blueprint r${co.rev}`, detail: changeOrderDetail(state, co), action: "Open", href: "#/tasks" });
-  // The PE still objects to the lead's updates for a change order after three rounds (2e).
+  // A change order the lead answered that still waits for you: its updates for your go-ahead ("ask me first"), or what
+  // the lead left (pass 5). The Tasks page lists the affected tasks until the change order has its own screen.
   for (const co of openChangeOrders(state)) {
-    const hold = peReviewHold(co.peReview);
-    if (!co.peReview || !hold || hold === PE_REVIEW_HOLD) continue;
-    items.push({ kind: "open", key: `change-order-pe-${co.rev}`, what: `The PE objects to the updates for change order r${co.rev}`, detail: lastObjection(co.peReview), action: "Open", href: "#/tasks" });
+    const needs = changeOrderNeeds(state, co);
+    if (needs) items.push({ kind: "open", key: `change-order-${co.rev}`, what: `Change order: blueprint r${co.rev}`, detail: changeOrderDetail(state, co, needs.words), action: "Open", href: "#/tasks" });
   }
   const gh = state.project.github;
   if (gh?.problem && (state.project.prDelivery.enabled || D.openPrTasks(state).length > 0)) {
@@ -154,8 +153,8 @@ export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[]
   return items;
 }
 
-/** What changed and what it touches: "You changed the blueprint: Invite sheet (v2); dropped Reminders (v1). It touches WT-6 and WT-7. …" */
-function changeOrderDetail(state: State, co: ChangeOrder): string {
+/** What changed, what it touches and what waits: "You changed the blueprint: Invite sheet (v2); dropped Reminders (v1). It touches WT-6, WT-7. …" */
+function changeOrderDetail(state: State, co: ChangeOrder, waits: string): string {
   // The items as the Lock in put them into force.
   const items = state.blueprint.revisions.find((r) => r.rev === co.rev)?.items ?? blueprintItems(state);
   const name = (id: string) => {
@@ -164,7 +163,7 @@ function changeOrderDetail(state: State, co: ChangeOrder): string {
   };
   const what = [co.changedItems.map(name).join(", "), co.droppedItems.length ? `dropped ${co.droppedItems.map(name).join(", ")}` : ""].filter(Boolean).join("; ");
   const touches = co.tasks.length ? `It touches ${co.tasks.map((t) => t.taskId).join(", ")}.` : "No task cites what changed.";
-  return `You changed the blueprint: ${what}. ${touches} You asked to look before the lead updates tasks.`;
+  return `You changed the blueprint: ${what}. ${touches} ${waits[0].toUpperCase()}${waits.slice(1)}.`;
 }
 
 /** What the budget stop means (the runs with no recorded cost have their own item). */

@@ -31,6 +31,19 @@ describe("the lead's reply schema", () => {
     expect(accepts({ proposals: [] })).toEqual([expect.objectContaining({ keyword: "required", params: { missingProperty: "reply" } })]);
   });
 
+  it("accepts a change order's updates, with the whole proposal or null, and refuses an action it does not name (pass 5)", () => {
+    const p = { title: "Trip list", outcome: "x", options: [{ id: "A", name: "a", approach: "a" }, { id: "B", name: "b", approach: "b" }], recommendedOptionId: "A", rationale: "r", acceptance: ["ok"], blueprintRefs: ["bi-1"] };
+    const updates = [
+      { action: "update-spec", task: "T-1", why: "Day list first.", proposal: p },
+      { action: "retire", task: "T-2", why: "Dropped.", proposal: null },
+      { action: "new-task", task: null, why: "New work.", proposal: p },
+    ];
+    expect(accepts({ reply: "ok", proposals: [], changeOrder: { rev: 3, updates } })).toBe(true);
+    expect(accepts({ reply: "ok", proposals: [], changeOrder: { rev: 3, updates: [{ action: "grow", task: "T-1", why: "x", proposal: null }] } })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ instancePath: "/changeOrder/updates/0/action", keyword: "enum" })]),
+    );
+  });
+
   it("refuses fields it does not name and values outside the fixed choices", () => {
     expect(accepts({ reply: "ok", proposals: [], studio: { approve: true } })).toEqual(expect.arrayContaining([expect.objectContaining({ instancePath: "/studio", keyword: "additionalProperties" })]));
     expect(accepts({ reply: "ok", proposals: [], coverage: { intent: "done" } })).toEqual(expect.arrayContaining([expect.objectContaining({ instancePath: "/coverage/intent", keyword: "enum" })]));

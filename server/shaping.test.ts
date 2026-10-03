@@ -143,10 +143,11 @@ describe("A. shaping end to end", () => {
     expect(active.length).toBeGreaterThan(0);
     expect(active.map((a) => a.taskId).sort()).toEqual([planned.id, state().tasks.find((t) => t.specs[0].author === "user")!.id].sort());
     expect(codex.started.length).toBeGreaterThan(0);
-    // The next message run is a building one: no shaping brief, no vision contract.
+    // The next lead run is a building one: no shaping brief and no coverage. (A message run while building still gets
+    // the vision draft and the studio, ORC-029 pass 5: server/envelope.studio.test.ts.)
     const r2 = ask("how is it going?");
     expect(claude.runs.get(r2.id)!.prompt).not.toContain("Project stage: shaping");
-    expect(claude.runs.get(r2.id)!.prompt).not.toContain('"vision": {');
+    expect(claude.runs.get(r2.id)!.prompt).not.toContain('"coverage": {');
   });
 
   it("with manual involvement the roadmap keeps waiting after Start building, as lead proposals do", () => {

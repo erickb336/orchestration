@@ -44,14 +44,16 @@ describe("a document-only revision never invalidates the lead's focus changes", 
     expect(attached.set.notes).toContain("Your vision documents changed while the lead was working; its reply may not reflect them.");
     expect(attached.set.changes[0]).toMatchObject({ kind: "focus", status: "applied", appliedBy: "lead", after: "Speed" });
     expect(M.currentVision(attached.state)).toMatchObject({ rev: 3, author: "lead", focus: "Speed", docIds: [expect.stringMatching(/^doc-/)] });
-    const edited = steerRun(seed(), { reason: "you asked", focus: "Speed" }, (s) => M.editVision(s, 1, "Other text", M.currentVision(s).focus, "hand edit", at(3)));
+    // A text edit in force (in Vision; while building it waits in the draft, and the factory's focus is unaffected).
+    const edited = steerRun(inVision(seed(), at(0)), { reason: "you asked", focus: "Speed" }, (s) => M.editVision(s, 1, "Other text", M.currentVision(s).focus, "hand edit", at(3)));
     expect(edited.set.heldBecause).toBe("You edited the vision while the lead was working.");
     expect(edited.set.changes[0]).toMatchObject({ kind: "focus", status: "rejected", note: "you edited the vision (now r2); your edit stands" });
     expect(edited.set.notes).toEqual([]);
   });
 
   it("Undo of an applied focus change survives documents attached or removed since; a later text edit still leaves it", () => {
-    const { state: s0, set } = steerRun(seed(), { reason: "you asked", focus: "Speed" });
+    // In Vision, where a hand edit of the text goes into force at once.
+    const { state: s0, set } = steerRun(inVision(seed(), at(0)), { reason: "you asked", focus: "Speed" });
     const focusRow = set.changes[0];
     expect(focusRow).toMatchObject({ kind: "focus", status: "applied", visionRev: 2 });
     let s = M.addVisionDoc(s0, doc("a.md", 1), at(5)).state;
@@ -69,7 +71,7 @@ describe("a document-only revision never invalidates the lead's focus changes", 
   });
 
   it("Apply of a suggested focus change survives documents attached since, and is left after a text edit", () => {
-    const { state: s0, set } = steerRun(M.setSteeringMode(seed(), "suggest", at(0)), { reason: "you asked", focus: "Speed" });
+    const { state: s0, set } = steerRun(M.setSteeringMode(inVision(seed(), at(0)), "suggest", at(0)), { reason: "you asked", focus: "Speed" });
     const row = set.changes[0];
     expect(row).toMatchObject({ kind: "focus", status: "suggested", visionRev: 1 });
     const withDoc = M.addVisionDoc(s0, doc("a.md", 1), at(5)).state;
@@ -118,8 +120,10 @@ describe("invisible characters", () => {
     const d = M.openVisionDraft(s)!;
     const accepted = M.acceptVisionDraft(s, d.id, 1, { text: `Edited ${LEGIT.join(" ")}`, focus: `${PERSIAN} ${SCOTLAND}` }, at(4));
     expect(M.currentVision(accepted)).toMatchObject({ text: `Edited ${LEGIT.join(" ")}`, focus: `${PERSIAN} ${SCOTLAND}` });
-    const hand = M.editVision(seed(), 1, `Hand ${LEGIT.join(" ")}`, HEBREW, "by hand", at(5));
+    const hand = M.editVision(inVision(seed(), at(0)), 1, `Hand ${LEGIT.join(" ")}`, HEBREW, "by hand", at(5));
     expect(M.currentVision(hand)).toMatchObject({ text: `Hand ${LEGIT.join(" ")}`, focus: HEBREW });
+    // While building, the text waits in the draft, unaltered too.
+    expect(M.draftVisionText(M.editVision(seed(), 1, `Hand ${LEGIT.join(" ")}`, HEBREW, "by hand", at(5)))).toBe(`Hand ${LEGIT.join(" ")}`);
   });
 
   it("document names: line and paragraph separators, bidi controls and tag characters are refused; legitimate joiners stay; two encodings are one name", () => {

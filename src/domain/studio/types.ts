@@ -434,6 +434,24 @@ export interface BlueprintDraft {
   rev: number;
   /** Every item as the draft has it, in the order they came in: approved, open and dropped. */
   items: BlueprintItem[];
+  /**
+   * The vision text as the draft has it (pass 5, r10: "Edits collect in a draft"), when an edit after the start
+   * changed it; the next Lock in puts it into force with the blueprint. Absent when the draft's text is the text in
+   * force. Before the start an edit goes into force at once, so it is never set in Vision.
+   */
+  vision?: DraftVision;
+}
+
+/** A vision text waiting in the draft for the owner's Lock in (pass 5). */
+export interface DraftVision {
+  text: string;
+  /** Why it changed: the owner's words, or those of the lead's draft the owner accepted. */
+  reason: string;
+  at: string;
+  /** The lead's vision draft the owner accepted into the draft, with its run and the messages it answered. */
+  source?: { draftId: string; leadRunId: string; messageIds: string[] };
+  /** The text came from a draft of the simulated lead. Carried onto the vision revision that Lock in makes. */
+  simulated?: true;
 }
 
 /** The owner's agreement recorded with a Lock in: who, and the summary they saw (when is the revision's `at`). */
@@ -501,6 +519,8 @@ export interface LockInSummary {
     changed: { item: BlueprintItem; replaces: BlueprintItem }[];
     /** Dropped in the draft: the items as they are in force, which leave the design. */
     dropped: BlueprintItem[];
+    /** The draft's vision text, which replaces the text of vision revision `replacesRev` (pass 5). Absent: the text stays. */
+    vision?: { text: string; reason: string; replacesRev: number };
   };
   tasks: TouchedTask[];
   /** The added items no task cites yet: the lead plans their tasks after the Lock in. */
@@ -512,8 +532,9 @@ export interface LockInSummary {
 
 /**
  * A Lock in made while building, when it touches a task or brings new work: what changed, and what the lead does
- * about it. Who acts first follows the project's `changeOrders` setting: the lead adjusts the tasks, or it waits for
- * the owner (Needs you). At most one change order per revision, so `rev` identifies it.
+ * about it (pass 5, screen 4). A lead run answers it (trigger "change-order"): each of its updates is one line, and one
+ * row of that run's steering change set, so the owner can undo each line alone. At most one change order per revision,
+ * so `rev` identifies it. The rules live in src/domain/model/changeOrderUpdates.ts.
  */
 export interface ChangeOrder {
   rev: number;
@@ -522,16 +543,60 @@ export interface ChangeOrder {
   changedItems: string[];
   /** The items dropped: what the factory no longer builds (pass 5). */
   droppedItems: string[];
-  /** The tasks it touches, each with its planned handling (r14). The lead's updates follow it (a later unit). */
+  /** The tasks it touches, each with its planned handling (r14). */
   tasks: { taskId: string; handling: TaskHandling }[];
   /** The added items no task cites yet: the lead plans their tasks. */
   newWork: string[];
-  /** Open until handled; the handling (the lead's updates through steering, or the owner's answer) comes in pass 5. */
+  /** Open until every touched task is handled and the new work is planned (`closed` says what was done). */
   status: "open" | "done";
-  /** Who acts first: the project's `changeOrders` setting when the revision was made. */
+  /**
+   * Who gives the go-ahead: "lead", the lead's updates apply at once and the owner can undo each one; "user" ("ask me
+   * first"), they wait as suggestions for the owner's Apply. The project's `changeOrders` setting when it was made.
+   */
   handler: "lead" | "user";
-  /** PE review of the lead's updates for this change order (2e): the lead applies them once the PE agrees (pass 5). Set while the project has PE review of new work on. */
-  peReview?: PeReviewState;
+  /** The lead run shown it (trigger "change-order"). A run that ends without completing leaves it due for the next one. */
+  leadRunId?: string;
+  /** The lead's updates the service accepted, in the order the lead gave them. Written when the shown run completes. */
+  lines?: ChangeOrderLine[];
+  /** What the lead's answer left out or the domain refused, named for the owner. */
+  notes?: string[];
+  /** When it closed, and what was done per line, in the design's words. */
+  closed?: { at: string; record: string[] };
+}
+
+/**
+ * What one line does (r14): a queued task's spec revised to cite the new versions; a revision task for a running or
+ * landed one (the running task keeps running and the revision waits for it); a queued task retired; or a new task for
+ * the new work. The lead's reply names its updates with these words.
+ */
+export type ChangeOrderLineKind = "update-spec" | "revise" | "retire" | "new-task";
+export const CHANGE_ORDER_LINE_KINDS: ChangeOrderLineKind[] = ["update-spec", "revise", "retire", "new-task"];
+/** A steering row that carries a change order's line, not a steering change. */
+export const isChangeOrderKind = (k: string): k is ChangeOrderLineKind => (CHANGE_ORDER_LINE_KINDS as string[]).includes(k);
+
+/**
+ * One of the lead's updates for a change order, as the service accepted it. Its state (applied, waiting for the owner's
+ * go-ahead, undone, dismissed) is its steering row's (`changeId`); the PE review of its work is the task's own
+ * (`taskId` for an update, `madeTaskId` for a revision or a new task).
+ */
+export interface ChangeOrderLine {
+  /** The steering row that carries it (`${changeSetId}.${n}`): Undo, Apply and Dismiss act on it. */
+  changeId: string;
+  kind: ChangeOrderLineKind;
+  /** The task the change order touches; absent for new work. */
+  taskId?: string;
+  /** The task a revision or new work made, once the line applied. */
+  madeTaskId?: string;
+  /** The blueprint items its work builds, by id: the spec's citations after the line applies. */
+  items: string[];
+  /** What it does, in the design's words: "Updated T-012 → builds Trip plan v4". */
+  words: string;
+  /** The lead's reason, plain text. */
+  why: string;
+  /** The lead's proposal (spec content) while the line waits for the owner's go-ahead. Removed once it applies. */
+  proposal?: Record<string, unknown>;
+  /** An applied spec update: the spec revision and PE review it replaced, which Undo restores. */
+  before?: { specRev: number; peReview?: PeReviewState };
 }
 
 /**

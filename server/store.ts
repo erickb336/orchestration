@@ -370,6 +370,8 @@ function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
     delete co.affectedTasks;
     co.droppedItems ??= [];
     co.newWork ??= [];
+    // Early pass 5 builds put one PE review on a change order's updates; the PE now reviews the work each update makes.
+    delete co.peReview;
   }
   endPass3Reviews(doc.studio as { artifacts: Record<string, unknown>[]; verdicts: Record<string, unknown>[] });
   return doc;
