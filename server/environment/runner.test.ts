@@ -82,7 +82,8 @@ describe("the setup probe's judgement", () => {
   });
 });
 
-describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", () => {
+// Each docker command of the stand-in is a Node process (about 30 per run): on a busy machine a run takes seconds.
+describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", { timeout: 30_000 }, () => {
   const FAKE = new URL("../testing/fake-docker.mjs", import.meta.url).pathname;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const until = async (ok: () => boolean, ms = 10_000) => {
@@ -135,6 +136,48 @@ describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", () => {
     await until(() => !existsSync(run));
     await sleep(900);
     expect(existsSync(run)).toBe(false);
+    removeTree(dir);
+  });
+
+  it("a command that fills the mounted folders past the disk limit is stopped, with the reason (review finding 11)", async () => {
+    const { dir, ws, root, ended, events } = setup();
+    const env = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DOCKER_CONFIG: join(dir, "docker") };
+    const environments = new PreparedEnvironments({ root, docker: FAKE, env, diskBytes: 1024 * 1024, diskCheckMs: 100 });
+    const runner = new EnvironmentChecks({ environments, fallback: () => stub() });
+    runner.onEvent((e) => events.push(e));
+    const a = assignment(ws, {
+      commands: [
+        { id: "fill", label: "fill", kind: "check", argv: ["fake-fill", String(3 * 1024 * 1024)], timeoutMs: 8000 },
+        { id: "next", label: "next", kind: "check", argv: ["fake-exit", "0"], timeoutMs: 8000 },
+      ],
+      environment: { plan: { ...plan, prepare: [] }, project: "p1" },
+    });
+    const t0 = Date.now();
+    runner.start(a);
+    await ended(a);
+    const done = events.find((e) => e.attemptId === a.attemptId && e.type === "completed") as Extract<AdapterEvent, { type: "completed" }> | undefined;
+    const results = (done?.checks as { results: { id: string; status: string; excerpt: string }[] } | undefined)?.results ?? [];
+    expect(results.map((r) => `${r.id}:${r.status}`)).toEqual(["fill:failed", "next:failed"]);
+    expect(results[0].excerpt).toMatch(/the copy and the cache \(\/work and \/cache\) passed the environment's disk limit of 1\.0 MB/);
+    expect(results[1].excerpt).toMatch(/Not run: the copy and the cache/);
+    // Well before the command's own 8 s limit.
+    expect(Date.now() - t0).toBeLessThan(6000);
+    removeTree(dir);
+  });
+
+  it("a project cache past half the disk limit starts again empty before a prepare (review finding 11)", async () => {
+    const { dir, ws, root, ended, events } = setup();
+    const environments = new PreparedEnvironments({ root, docker: FAKE, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", DOCKER_CONFIG: join(dir, "docker") }, diskBytes: 1024 * 1024 });
+    const runner = new EnvironmentChecks({ environments, fallback: () => stub() });
+    runner.onEvent((e) => events.push(e));
+    mkdirSync(join(root, "p1", "cache", "xdg"), { recursive: true });
+    writeFileSync(join(root, "p1", "cache", "xdg", "old"), Buffer.alloc(600 * 1024));
+    const a = assignment(ws, { commands: [{ id: "test", label: "test", kind: "check", argv: ["fake-exit", "0"], timeoutMs: 8000 }], environment: { plan: { ...plan, prepare: [["fake-exit", "0"]] }, project: "p1" } });
+    runner.start(a);
+    await ended(a);
+    expect(existsSync(join(root, "p1", "cache", "xdg", "old"))).toBe(false);
+    expect(events.map((e) => (e.type === "activity" ? e.note : ""))).toContainEqual(expect.stringMatching(/^Emptied the project's cache folder \(0\.6 MB, more than half the disk limit of 1\.0 MB\)/));
+    expect(events.find((e) => e.attemptId === a.attemptId && e.type === "completed")).toBeDefined();
     removeTree(dir);
   });
 });

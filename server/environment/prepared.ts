@@ -16,6 +16,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { lstat, readdir } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -99,7 +100,8 @@ export interface PreparedCopy {
 }
 
 export type PreparedOutcome<T> =
-  | { ok: true; value: T; record: ContainerRecord; prepare: CheckResult[] }
+  /** `diskLimit`: the step's containers were stopped because the copy and the cache passed the disk limit. */
+  | { ok: true; value: T; record: ContainerRecord; prepare: CheckResult[]; diskLimit?: string }
   | { ok: false; reason: "unavailable" | "prepare-failed" | "stopped"; detail: string; log?: string; record?: ContainerRecord; prepare: CheckResult[] };
 
 interface Dirs {
@@ -130,10 +132,48 @@ interface Session {
   mounted: Set<string>;
   /** Why the copy must not be touched again: a container that mounts it did not go away. */
   unsafe?: string;
+  /** Stops the container in flight because the mounted folders passed the disk limit. */
+  limit?: (why: string) => void;
+  /** Why nothing more runs: the mounted folders passed the disk limit. */
+  overDisk?: string;
+  /** Ends the disk watch. */
+  unwatch?: () => void;
 }
 
 /** How long the clean-up waits for Docker to stop listing a container it removed. */
 const GONE_WITHIN_MS = 30_000;
+/**
+ * The disk limit on the folders the containers write on this computer (the copy at /work, the cache at /cache), and
+ * how often they are measured. A Rust project's target folder or a Go module cache can reach a few GB; 8 GB leaves
+ * room for that and still stops a command that would fill the disk.
+ */
+const DISK_BYTES = 8 * 1024 ** 3;
+const DISK_CHECK_MS = 5000;
+const size = (n: number) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${(n / 1024 ** 2).toFixed(1)} MB`);
+
+/** The bytes of the files under `dir`, by lstat (links are not followed), without blocking the service's event loop. */
+async function bytesUnder(dir: string): Promise<number> {
+  let total = 0;
+  const walk = async (d: string) => {
+    let names: string[];
+    try {
+      names = await readdir(d);
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      try {
+        const st = await lstat(join(d, n));
+        if (st.isDirectory()) await walk(join(d, n));
+        else total += st.size;
+      } catch {
+        /* removed meanwhile */
+      }
+    }
+  };
+  await walk(dir);
+  return total;
+}
 
 /** What the probe's client container saw, as it printed it. */
 export interface EnvProbeFacts {
@@ -193,13 +233,41 @@ export class PreparedEnvironments {
   private readonly dockerPath?: string;
   private readonly baseEnv: NodeJS.ProcessEnv;
   private readonly log: (msg: string) => void;
+  private readonly diskBytes: number;
+  private readonly diskCheckMs: number;
   private probed?: Promise<Ready>;
 
-  constructor(o: { root?: string; docker?: string; env?: NodeJS.ProcessEnv; log?: (msg: string) => void } = {}) {
+  constructor(o: { root?: string; docker?: string; env?: NodeJS.ProcessEnv; log?: (msg: string) => void; diskBytes?: number; diskCheckMs?: number } = {}) {
     this.root = o.root ?? defaultEnvironmentRoot();
     this.dockerPath = o.docker;
     this.baseEnv = o.env ?? process.env;
     this.log = o.log ?? (() => {});
+    this.diskBytes = o.diskBytes ?? DISK_BYTES;
+    this.diskCheckMs = o.diskCheckMs ?? DISK_CHECK_MS;
+  }
+
+  /**
+   * Measure the copy and the cache while the step runs; past the disk limit, stop the container in flight and every
+   * container of the step, and run nothing more. Returns the function that ends the watch.
+   */
+  private watchDisk(s: Session, d: Dirs): () => void {
+    let live = true;
+    void (async () => {
+      while (live) {
+        await new Promise((r) => setTimeout(r, this.diskCheckMs));
+        if (!live) return;
+        const used = (await bytesUnder(d.work)) + (await bytesUnder(d.cache));
+        if (!live || used <= this.diskBytes) continue;
+        s.overDisk = `the copy and the cache (/work and /cache) passed the environment's disk limit of ${size(this.diskBytes)} (${size(used)} measured)`;
+        this.note(s, `Stopped: ${s.overDisk}`);
+        s.limit?.(s.overDisk);
+        for (const name of s.mounted) await runDocker(s.docker, ["rm", "--force", name], { env: this.denv, timeoutMs: 30_000 });
+        return;
+      }
+    })();
+    return () => {
+      live = false;
+    };
   }
 
   private get denv() {
@@ -270,9 +338,10 @@ export class PreparedEnvironments {
         // The step removed it; the clean-up still checks that Docker no longer lists it.
         untrack: (name) => void LIVE.delete(name),
       });
-      return { ok: true, value, record: st.record, prepare: s.results };
+      return { ok: true, value, record: st.record, prepare: s.results, ...(s.overDisk ? { diskLimit: s.overDisk } : {}) };
     } finally {
       req.signal?.removeEventListener("abort", onAbort);
+      s.unwatch?.();
       await this.cleanup(s);
       release();
     }
@@ -297,6 +366,7 @@ export class PreparedEnvironments {
     if (!MOUNTABLE.test(d.work) || !MOUNTABLE.test(d.cache)) return { kind: "handoff", reason: `Docker cannot mount ${JSON.stringify(d.run)}` };
     s.d = d;
     copyWorktree(req.workspace, d.work);
+    s.unwatch = this.watchDisk(s, d);
     const image = await this.image(s, d);
     if (s.stopped) return { kind: "stopped" };
     if ("refused" in image) return { kind: "handoff", reason: image.refused };
@@ -315,6 +385,15 @@ export class PreparedEnvironments {
       for (const c of prepCmds) s.results.push({ ...notRun(c), status: "passed", excerpt: `Reused what the prepare made for ${reuse.sha.slice(0, 12)}: the same image, prepare commands, hosts and prepare inputs.` });
       this.note(s, `Reused the prepare of ${reuse.sha.slice(0, 12)} (${image.ref})`);
       return { kind: "prepared", runImage: reuse.imageId, imageEnv, ok: true, record: { ran: "container", from, image: image.ref, imageId: image.id, prepare: "reused", key, reusedFrom: reuse.sha, prepareMs: 0 } };
+    }
+    // The cache is shared by the project's prepares and grows with them: past half the disk limit, it starts again empty.
+    if (prepCmds.length) {
+      const cached = await bytesUnder(d.cache);
+      if (cached > this.diskBytes / 2) {
+        removeTree(d.cache);
+        mkdirSync(join(d.cache, "xdg"), { recursive: true, mode: 0o700 });
+        this.note(s, `Emptied the project's cache folder (${size(cached)}, more than half the disk limit of ${size(this.diskBytes)})`);
+      }
     }
     const out = prepCmds.length ? await this.preparePhase(s, image.id, d, prepCmds) : { ok: true, refused: [] as string[], imageId: image.id };
     if (s.stopped) return { kind: "stopped" };
@@ -355,14 +434,20 @@ export class PreparedEnvironments {
    */
   private async execIn(s: Session, args: string[], timeoutMs: number): Promise<Captured> {
     if (s.unsafe) return { exitCode: undefined, stdout: "", stderr: `Not run: ${s.unsafe}`, timedOut: false, capped: false, ended: true };
+    if (s.overDisk) return { exitCode: undefined, stdout: "", stderr: `Not run: ${s.overDisk}.`, timedOut: false, capped: false, ended: false };
     const name = args[args.indexOf("--name") + 1];
     s.mounted.add(name);
     const c = startContainer(s.docker, args, { env: this.denv, name, cap: OUTPUT_CAP });
     let timedOut = false;
     let ended = false;
+    let limited: string | undefined;
     let stopping: Promise<void> | undefined;
     s.current = () => {
       ended = true;
+      stopping ??= c.stop();
+    };
+    s.limit = (why) => {
+      limited = why;
       stopping ??= c.stop();
     };
     if (s.stopped) s.current();
@@ -373,6 +458,7 @@ export class PreparedEnvironments {
     const r = await c.done;
     clearTimeout(t);
     s.current = undefined;
+    s.limit = undefined;
     // A container that `docker run` saw end (exit 0) has stopped; any other may still run until Docker removed it.
     if (stopping || r.code !== 0) {
       await stopping;
@@ -380,6 +466,7 @@ export class PreparedEnvironments {
       if (!gone.gone) s.unsafe = gone.reason;
     }
     if (!s.unsafe) s.mounted.delete(name);
+    if (limited && !ended) return { exitCode: undefined, stdout: r.output, stderr: `Stopped: ${limited}.`, timedOut: false, capped: r.output.length >= OUTPUT_CAP, ended: false };
     return { exitCode: r.code ?? undefined, stdout: r.output, stderr: "", timedOut, capped: r.output.length >= OUTPUT_CAP, ended };
   }
 

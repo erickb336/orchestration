@@ -762,7 +762,10 @@ async function captureInEnvironment(c: EnvironmentCapture): Promise<void> {
       }
     },
   );
-  if (out.ok) return;
+  if (out.ok) {
+    if (out.diskLimit) c.notes.push(`The capture's containers were stopped: ${out.diskLimit}.`);
+    return;
+  }
   if (out.record) c.setPath(pathOf(out.record));
   const reason: NoEvidence = out.reason === "prepare-failed" ? "install-failed" : out.reason === "stopped" ? "stopped" : "unavailable";
   c.none(c.open(), reason, out.reason === "unavailable" ? `The project's environment could not run: ${out.detail}` : out.detail, out.log);
