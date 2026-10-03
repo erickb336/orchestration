@@ -126,7 +126,7 @@ npm run typecheck
 npm test
 npm run build
 npm run capture    # retake the README images from the demo (needs Chrome and ffmpeg)
-npm run test:integration   # the end-to-end scenario on simulated agents (about 90 s; CI runs it)
+npm run test:integration   # the end-to-end scenario on simulated agents (about 2 minutes; CI runs it)
 npm run test:real          # the same scenario with real Claude and Codex agents (your credentials; about $0.19 last time)
 ```
 
