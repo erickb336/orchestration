@@ -127,6 +127,8 @@ describe("the built-in files", () => {
       // finding is dropped; the lead's step moves to S4 and reads the revised report beside the first.
       if (id === "investigation") {
         const lead = expected.pop()!;
+        // And ORC-031: its evidence step is read-only research.
+        expected[0] = { ...expected[0], research: true };
         expected.push(
           toDef({ id: "S3", purpose: "Revise the report", role: "coder", dependsOn: ["S2"], inputs: [{ step: "S1", output: "report" }, { step: "S2", output: "findings" }], outputs: [{ name: "report", kind: "report" }], runIf: [{ step: "S2", output: "findings" }], iterate: { from: "S2", max: 3 } }),
           { ...lead, id: "S4", dependsOn: ["S3"], inputs: [{ step: "S1", output: "report" }, { step: "S3", output: "report" }, { step: "S2", output: "findings" }] },

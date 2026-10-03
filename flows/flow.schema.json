@@ -57,6 +57,14 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "purpose", "role", "dependsOn", "inputs", "outputs"],
+      "if": { "type": "object", "properties": { "research": { "const": true } }, "required": ["research"] },
+      "then": {
+        "type": "object",
+        "properties": {
+          "role": { "not": { "enum": ["checks", "evidence"] } },
+          "outputs": { "type": "array", "not": { "type": "array", "contains": { "type": "object", "properties": { "kind": { "const": "code-change" } }, "required": ["kind"] } } }
+        }
+      },
       "properties": {
         "$comment": { "type": "string" },
         "id": { "$ref": "#/$defs/stepId" },
@@ -80,6 +88,10 @@
           "required": ["onFail"],
           "properties": { "onFail": { "enum": ["findings", "block"] } },
           "description": "Checks steps only. No `only`: check commands belong to each project; flows run every configured check."
+        },
+        "research": {
+          "const": true,
+          "description": "Read-only research (ORC-031): the step's agent gathers evidence and writes no file, whatever its role; its workspace is read-only. Only a research step may start the provider's own subagents, when the owner allows it. Not on a service step or a step that outputs a code change (below), and the graph rules refuse it on a step whose findings start a repair that writes code."
         },
         "principles": {
           "type": "array",

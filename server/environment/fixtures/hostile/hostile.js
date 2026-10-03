@@ -113,11 +113,12 @@ const PAGE = (server) => `<!doctype html>
     // The Docker VM on its default bridge, on its SSH port: it answers when it is reachable (the tests prove it from a
     // container on the ordinary network), so a refusal here would mean the VM was reached.
     directDockerBridge: await tcp("172.17.0.1", 22),
-    // On a Linux host the default bridge's gateway is this computer itself, where the canary listens.
-    directBridgeCanary: await tcp("172.17.0.1", canary),
     directHostGateway: await tcp("host.docker.internal", canary),
     dnsOutside: await lookup("example.com"),
   });
+  // On a Linux host the default bridge's gateway is this computer itself, where the canary listens. Only the checks'
+  // phases try it: the evidence's line is a page warning, which is cut at 300 characters.
+  if (phase === "prepare" || phase === "run") r.directBridgeCanary = await tcp("172.17.0.1", canary);
   if (phase === "preview" || phase === "cli") {
     Object.assign(r, { directLima: await tcp("host.lima.internal", canary), ownLoopback: await tcp("127.0.0.1", canary), terminal: process.stdout.isTTY ? "a terminal" : "no terminal" });
   }

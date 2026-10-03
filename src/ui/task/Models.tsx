@@ -12,6 +12,8 @@ import { useStore } from "../store";
 import { CONFIRM } from "./confirms";
 import { isOpenTask } from "./needsYouItems";
 import { lastCompletedRun, stepName } from "./stepWords";
+import { HelpersSetting } from "./Helpers";
+import { taskStepKey } from "../../domain/subagents";
 
 export function ModelsSection({ state, task }: { state: State; task: Task }) {
   const { send, disabled, service } = useStore();
@@ -141,11 +143,14 @@ function StepModel({ state, task, st, open }: { state: State; task: Task; st: St
       </>
     );
   }
+  // A read-only research step (ORC-031) has the setting for its helpers; it holds for every task of the project.
+  const helpersKey = taskStepKey(task, st);
   return (
     <div className="t-models__step">
       {head}
       {body}
       {given.length > 0 && <span className="small muted">{principlesText(given)}</span>}
+      {helpersKey && <HelpersSetting state={state} settingKey={helpersKey} />}
     </div>
   );
 }

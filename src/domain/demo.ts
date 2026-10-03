@@ -281,6 +281,8 @@ class DemoBuilder {
         workerEnvironment: { claude: "isolated", codex: "isolated" },
         workerConnections: { claude: [], codex: [] },
         housekeepOwnerApps: true,
+        researchHelpers: {},
+        subagentProviders: [],
         hold: false,
         lastVisitAt: at(240),
         defaultFlowId: "change",

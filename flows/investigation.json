@@ -6,9 +6,11 @@
   "whenToUse": "The cause or the right change is unknown; the result is a spec, not code.",
   "steps": [
     {
+      "$comment": "ORC-031: read-only research. The step changes no file, and its workspace is read-only whatever its role.",
       "id": "S1",
       "purpose": "Investigate and gather evidence",
       "role": "coder",
+      "research": true,
       "dependsOn": [],
       "inputs": [],
       "outputs": [{ "name": "report", "kind": "report" }],

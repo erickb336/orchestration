@@ -447,6 +447,18 @@ export interface Project {
    * folders are cleaned either way.
    */
   housekeepOwnerApps: boolean;
+  /**
+   * "Let research steps start helpers" (ORC-031): the cap per run, by research step ("investigation/S1", "studio/probe",
+   * src/domain/subagents.ts). A step not listed starts none. Only the owner's `setResearchHelpers` writes it, only for
+   * a research step, and it applies only on a provider in `subagentProviders`. Off for every step in a new project.
+   */
+  researchHelpers: Record<string, SubagentAllowance>;
+  /**
+   * The providers whose adapter tracks subagents (its capability map says `childAgentTracking: "supported"`, which
+   * needs real runs as evidence): only their runs may start them. Written by the service at start, from the adapters;
+   * machine-level, like the catalog.
+   */
+  subagentProviders: ProviderId[];
   /** Desired state: project-wide pause. */
   hold: boolean;
   lastVisitAt: string;
@@ -923,6 +935,13 @@ export interface StepDef {
    */
   checks?: { onFail: "findings" | "block"; only?: string[] };
   /**
+   * Read-only research (ORC-031): the step's agent gathers evidence and writes no file, whatever its role, so its
+   * workspace is read-only (`stepAccess`). Only a research step may start the provider's own subagents, and only when
+   * the owner allows it (`project.researchHelpers`). Never on a step that writes: the graph rules refuse it on a step
+   * that outputs a code change, on a service step, and on a step whose findings condition a repair that writes code.
+   */
+  research?: boolean;
+  /**
    * The working principles the step's agent receives, by id (files in principles/), added to its
    * instructions under "Principles for this step". Absent on steps copied before principles existed and
    * on steps that get none (checks steps, for example).
@@ -1092,6 +1111,12 @@ export interface RunSnapshot {
   };
   /** A service capture run (ORC-029 pass 5): the commit, the blueprint items and the preview setting it was started with. */
   evidence?: EvidenceSnapshot;
+  /**
+   * The subagents the run may start (ORC-031), resolved at dispatch: its step is read-only research, the owner lets
+   * that step start helpers, and the provider tracks them. Absent: it may start none. The runtime receives it as
+   * `allowSubagents`.
+   */
+  allowSubagents?: SubagentAllowance;
 }
 
 type AttemptOutcome =
@@ -1134,7 +1159,77 @@ export interface Attempt {
   scope?: { from: string; to: string; paths: string[]; total: number };
   /** The repository instruction files the run was given as project conventions, as evidence. */
   conventions?: { file: string; blob: string; bytes: number; truncated: boolean }[];
+  /** The subagents its agent started, as the runtime reported them (ORC-031). Absent while none was reported. */
+  subagents?: RunSubagents;
 }
+
+// ---------- subagents (ORC-031) ----------
+
+/** The default cap per run of "Let research steps start helpers", and the highest cap the owner may set. */
+export const DEFAULT_SUBAGENT_CAP = 3;
+export const MAX_SUBAGENT_CAP = 10;
+/** The longest "what it was asked" a record keeps, in characters. */
+export const MAX_SUBAGENT_ASK = 300;
+/** The subagents a run's record lists; past them it keeps counting, and their cost is unknown. */
+export const MAX_SUBAGENTS_LISTED = 100;
+
+/** What a run may start: at most `cap` subagents. */
+export interface SubagentAllowance {
+  cap: number;
+}
+
+/** How a subagent ended. "refused": the parent asked for one past the run's cap and the runtime refused it, so it never ran. */
+export type SubagentEnd = "completed" | "failed" | "stopped" | "refused";
+
+/** One subagent (the provider's own helper agent) a run's agent started (ORC-031). */
+export interface Subagent {
+  /** The provider's own id for it, unique within the run: Claude's Agent tool-use id, Codex's sub-thread id. */
+  id: string;
+  startedAt: string;
+  endedAt?: string;
+  /** What the parent asked it to do: the first MAX_SUBAGENT_ASK characters. */
+  asked: string;
+  /** The ask was longer than what is kept. */
+  askedCut?: true;
+  /** The model it ran on, where the provider reports one. */
+  model?: string;
+  /** Its own usage, where the provider reports it. */
+  usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
+  /**
+   * Whether the parent run's own usage already includes this usage (Claude reports one total for the session) or
+   * not (Codex's sub-threads may report apart). The budgets add a subagent's cost only when it is not in the parent's.
+   */
+  usageInParent: boolean;
+  /** How it ended. Absent while it runs, and on a subagent whose end the runtime never reported. */
+  ended?: SubagentEnd;
+}
+
+/** A run's subagents: its count, the most at once, and a list (ORC-031). On task runs, studio runs and lead runs. */
+export interface RunSubagents {
+  /** Every subagent that started, the unlisted ones included; a refusal is not a start. */
+  count: number;
+  /** The most that ran at the same time, among the listed ones. */
+  mostAtOnce: number;
+  /** The first MAX_SUBAGENTS_LISTED subagents and refusals, oldest first. */
+  items: Subagent[];
+  /** Subagents that started past the list: counted, with an unknown cost. */
+  unlisted?: number;
+  /** When the owner marked the subagents that started where none is allowed as seen (they leave Needs you). */
+  seenAt?: string;
+}
+
+/**
+ * What a runtime adapter reports about one subagent of a run (31b Claude, 31c Codex), as the `subagent` event:
+ * - "started": it began, with what it was asked (the adapter may send it whole; the record keeps MAX_SUBAGENT_ASK
+ *   characters), its model where known, and whether the parent's usage includes its usage;
+ * - "ended": it finished, failed or was stopped, with its own usage and model where the provider reports them;
+ * - "refused": the parent asked for one past the run's cap and the adapter refused it; it never ran.
+ * `id` is the provider's own id for it, unique within the run. A report repeated for the same id changes nothing.
+ */
+export type SubagentReport =
+  | { phase: "started"; id: string; asked: string; model?: string; usageInParent: boolean }
+  | { phase: "ended"; id: string; how: Exclude<SubagentEnd, "refused">; model?: string; usage?: Subagent["usage"] }
+  | { phase: "refused"; id: string; asked: string };
 
 type Lifecycle = "proposed" | "ready" | "active" | "done" | "cancelled";
 
@@ -1328,6 +1423,8 @@ export interface LeadRun {
    * first 65,536 characters; only the newest few runs keep one (leadOutput.ts).
    */
   rawAnswer?: { text: string; truncated?: true };
+  /** Subagents the runtime reported for it (ORC-031). A lead run may start none, so any is listed under Needs you. */
+  subagents?: RunSubagents;
   /** The vision revision the run started from. Absent on runs from before steering existed (they cannot steer). */
   visionRev?: number;
   /** The change set this run's reply produced. */

@@ -132,6 +132,9 @@ export function initProject(state: State, init: { name: string; repoPath: string
   // Budgets belong to the project they were set for.
   s.project.budgets = { ...NO_BUDGETS };
   delete s.project.budgetContinued;
+  // Helpers in research steps are the owner's choice for this project (ORC-031); which providers track them is
+  // machine-level and stays.
+  s.project.researchHelpers = {};
   // The catalog is machine-level and stays; the default flow is a project choice.
   s.project.defaultFlowId = "change";
   s.decisions = [];

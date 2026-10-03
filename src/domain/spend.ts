@@ -4,7 +4,7 @@
 
 import pricesJson from "./prices.json";
 import type { BudgetEstimate, StudioRun } from "./studio/types";
-import { type Attempt, type FindingDecision, type LeadRun, type PeCall, type ProviderId, type Runner, type State, isProvider } from "./types";
+import { type Attempt, type FindingDecision, type LeadRun, type PeCall, type ProviderId, type Runner, type State, type Subagent, isProvider } from "./types";
 
 /** One model's published API price, in dollars per million tokens, with where and when it was read. */
 export interface ModelPrice {
@@ -77,13 +77,63 @@ export function estimateUsd(run: Run, prices: readonly ModelPrice[]): RunCost {
   if (u?.costUsd !== undefined) return { basis: "reported", usd: u.costUsd, estimated: true };
   if (neverStarted(run)) return { basis: "not-started", usd: 0, estimated: true };
   if ("simulated" in run && run.simulated) return { basis: "simulated", usd: 0, estimated: true };
-  if (u?.inputTokens === undefined || u.outputTokens === undefined) return { basis: "unknown", usd: null, estimated: true, reason: "no-usage" };
   const { provider, model } = ranOn(run);
+  return priced(provider, model, u, prices);
+}
+
+/** Tokens at the model's published price; unknown without usage or without a price. */
+function priced(provider: Runner, model: string, u: Usage | undefined, prices: readonly ModelPrice[]): RunCost {
+  if (u?.inputTokens === undefined || u.outputTokens === undefined) return { basis: "unknown", usd: null, estimated: true, reason: "no-usage" };
   const price = prices.find((p) => p.provider === provider && p.model === model);
   if (!price) return { basis: "unknown", usd: null, estimated: true, reason: "no-price" };
   const cached = Math.min(Math.max(u.cachedInputTokens ?? 0, 0), u.inputTokens);
   const input = (u.inputTokens - cached) * price.inputPerMTok + cached * (price.cachedInputPerMTok ?? price.inputPerMTok);
   return { basis: "priced", usd: (input + u.outputTokens * price.outputPerMTok) / 1_000_000, estimated: true };
+}
+
+type Usage = Attempt["usage"];
+
+/**
+ * One subagent's cost (ORC-031), priced like a run: its reported cost, else its tokens at its model's price (the
+ * parent's model when it reports none). A refused one never ran, and a simulated parent's helpers did not either: a
+ * known $0. Without usage or a price, unknown, never zero.
+ */
+export function subagentUsd(parent: Run, sub: Subagent, prices: readonly ModelPrice[] = PRICES): RunCost {
+  if (sub.ended === "refused") return { basis: "not-started", usd: 0, estimated: true };
+  if ("simulated" in parent && parent.simulated) return { basis: "simulated", usd: 0, estimated: true };
+  if (sub.usage?.costUsd !== undefined) return { basis: "reported", usd: sub.usage.costUsd, estimated: true };
+  const on = ranOn(parent);
+  return priced(on.provider, sub.model ?? on.model, sub.usage, prices);
+}
+
+/** What a run's subagents cost, as its page shows it. */
+export interface SubagentsCost {
+  /** Estimated dollars of the subagents with a figure. */
+  usd: number;
+  /** Of `usd`, the part already inside the parent run's own cost (Claude reports one total for the session). */
+  inParentUsd: number;
+  /** Subagents with no recorded cost, the unlisted ones included: unknown, never zero. */
+  unknown: number;
+  /** Subagents of a run still under way that have not ended: their cost comes when they end. */
+  running: number;
+}
+
+export function subagentsCost(r: Run, prices: readonly ModelPrice[] = PRICES): SubagentsCost {
+  const out: SubagentsCost = { usd: 0, inParentUsd: 0, unknown: r.subagents?.unlisted ?? 0, running: 0 };
+  const live = ["running", "stopping"].includes(outcomeOf(r));
+  for (const sub of r.subagents?.items ?? []) {
+    if (live && !sub.ended) {
+      out.running++;
+      continue;
+    }
+    const c = subagentUsd(r, sub, prices);
+    if (c.basis === "unknown") out.unknown++;
+    else {
+      out.usd += c.usd;
+      if (sub.usageInParent) out.inParentUsd += c.usd;
+    }
+  }
+  return out;
 }
 
 /** A finished run with no recorded cost, and why. */
@@ -119,8 +169,27 @@ export function buildingSpend(s: State, prices: readonly ModelPrice[] = PRICES):
     const c = estimateUsd(r, prices);
     if (c.basis === "unknown") out.unknown.push({ runId: r.id, ...ranOn(r), reason: c.reason });
     else out.usd += c.usd;
+    addSubagents(out, r, prices);
   }
   return out;
+}
+
+/**
+ * A finished run's subagents (ORC-031) count apart from it where its own usage does not include theirs (Codex's
+ * sub-threads may report apart); where it does (Claude's session total), they are already in the run's cost. One with
+ * no recorded cost is unknown, like a run; so is each unlisted one, whose usage was not kept.
+ */
+function addSubagents(out: Spend, r: Run, prices: readonly ModelPrice[]) {
+  const rec = r.subagents;
+  if (!rec) return;
+  const on = ranOn(r);
+  for (const sub of rec.items) {
+    if (sub.usageInParent) continue;
+    const c = subagentUsd(r, sub, prices);
+    if (c.basis === "unknown") out.unknown.push({ runId: `${r.id} helper ${sub.id}`, provider: on.provider, model: sub.model ?? on.model, reason: c.reason });
+    else out.usd += c.usd;
+  }
+  for (let i = 0; i < (rec.unlisted ?? 0); i++) out.unknown.push({ runId: `${r.id} unlisted helper ${i + 1}`, provider: on.provider, model: on.model, reason: "no-usage" });
 }
 
 /**

@@ -448,6 +448,8 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       workerEnvironment: { claude: "isolated", codex: "isolated" },
       workerConnections: { claude: [], codex: [] },
       housekeepOwnerApps: true,
+      researchHelpers: {},
+      subagentProviders: [],
       hold: false,
       lastVisitAt: at(60),
       defaultFlowId: "change",

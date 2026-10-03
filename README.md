@@ -141,7 +141,7 @@ npm run test:real          # the same scenario with real Claude and Codex agents
 
 ## Status
 
-A personal tool under active development. It was built in milestones ORC-001 to ORC-033, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-four are done, four were dropped, and five are planned or in progress. Later milestones sometimes replaced earlier ones; the last column says what survives.
+A personal tool under active development. It was built in milestones ORC-001 to ORC-033, each with a spec in [`docs/tasks/`](docs/tasks/) giving the options, the decision and the evidence. Twenty-five are done, four were dropped, and four are planned or in progress. Later milestones sometimes replaced earlier ones; the last column says what survives.
 
 **The foundation** (the five milestones in the [project spec](docs/PROJECT_SPEC.md), plus pipelines):
 
@@ -185,7 +185,7 @@ A personal tool under active development. It was built in milestones ORC-001 to 
 | [ORC-028](docs/tasks/ORC-028.md) Fixes from the real run | Investigation revises its report while its review finds something, and a rule keeps every flow from dropping review findings | Done; **verified with real models** |
 | [ORC-029](docs/tasks/ORC-029.md) The vision studio, before the factory | Design the product with the lead on prototypes you can click (demo sites, mobile mockups, terminal demos), inputs and outputs, and flows; the approved blueprint is what the factory builds from | Done |
 | [ORC-030](docs/tasks/ORC-030.md) QA, UI audit and a new demo | Test the product end to end, audit and clean up the UI, then make the new demo | **Planned** (after ORC-033) |
-| [ORC-031](docs/tasks/ORC-031.md) Subagents in research steps | Let agents in explicitly read-only research steps start their provider's own subagents, counted, costed, capped and shown; writers stay single-session; each provider is switched on only after real runs prove pause and cost | **Planned** (after ORC-029) |
+| [ORC-031](docs/tasks/ORC-031.md) Subagents in research steps | Agents in explicitly read-only research steps may start their provider's own subagents, counted, costed, capped and shown; writers stay single-session | Done for Claude, **proven with real models**; Codex's stay off, because Codex has no cap per run |
 | [ORC-032](docs/tasks/ORC-032.md) Import an existing project | Derive an "as it is today" vision from an existing repository, then revise it and build on it | **Planned** (after ORC-031) |
 | [ORC-033](docs/tasks/ORC-033.md) Keep the living vision true | Notice when the code changes outside Orchestrator, keep the vision local, and fix bugs at their root as mismatches with the vision | **Planned** (after ORC-032) |
 

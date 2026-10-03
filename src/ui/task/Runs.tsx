@@ -12,6 +12,8 @@ import { CONFIRM } from "./confirms";
 import { isOpenTask } from "./needsYouItems";
 import { NotesList } from "./Steps";
 import { lastCompletedRun, stepName } from "./stepWords";
+import { RunHelpers } from "./Helpers";
+import { helpersUnseen } from "../helpersView";
 
 const OUTCOME_WORD: Partial<Record<Attempt["outcome"], string>> = { stopped: "stopped (checkpointed)" };
 
@@ -35,6 +37,9 @@ export function RunsSection({ state, task }: { state: State; task: Task }) {
               <>
                 {a.stepId} {st ? stepName(st) : ""} · {selectionText(a.snapshot)} · <strong>{OUTCOME_WORD[a.outcome] ?? a.outcome}</strong>
                 {notes.length > 0 && <Chip title="Notes sent to this run; listed inside">{`${notes.length} note${notes.length === 1 ? "" : "s"}`}</Chip>}
+                {(a.subagents?.count ?? 0) > 0 && (
+                  <Chip tone={helpersUnseen(a) ? "you" : undefined} title="Helper agents (the provider's own subagents) this run started; listed inside">{`${a.subagents!.count} helper${a.subagents!.count === 1 ? "" : "s"}`}</Chip>
+                )}
               </>
             }
           >
@@ -120,6 +125,14 @@ export function RunsSection({ state, task }: { state: State; task: Task }) {
                     ]
                       .filter(Boolean)
                       .join(" · ") || "not reported"}
+                  </dd>
+                </>
+              )}
+              {(a.subagents || a.snapshot.allowSubagents) && (
+                <>
+                  <dt>Helpers</dt>
+                  <dd>
+                    <RunHelpers run={a} />
                   </dd>
                 </>
               )}

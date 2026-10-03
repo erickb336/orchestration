@@ -357,6 +357,10 @@ function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
   project.budgets ??= { ...NO_BUDGETS };
   // Housekeeping of the owner's apps (2026-10-03) came after the first format-19 builds: on, as the owner asked.
   project.housekeepOwnerApps ??= true;
+  // Subagents in research steps (ORC-031) came after the first format-19 builds: off for every step, and no provider
+  // tracks them until the service writes what its adapters say at start. Runs from before recorded none.
+  project.researchHelpers ??= {};
+  project.subagentProviders ??= [];
   doc.studio ??= emptyStudio();
   // Studio runs (pass 3a) came after the first format-19 builds: none were recorded before them.
   (doc.studio as { runs?: unknown[] }).runs ??= [];

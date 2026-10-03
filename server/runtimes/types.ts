@@ -4,7 +4,7 @@
 
 import type { EnvironmentRunRecord } from "../../src/domain/environment";
 import type { EvidenceRun } from "../../src/domain/studio/evidence";
-import type { CatalogModel, CheckResult, OutputDef, ProviderId, RoleId, TestReport } from "../../src/domain/types";
+import type { CatalogModel, CheckResult, OutputDef, ProviderId, RoleId, SubagentAllowance, SubagentReport, TestReport } from "../../src/domain/types";
 import type { CapabilityMap } from "../../src/runtime/adapter";
 
 /** What a service check run (server/checks.ts) reports when it completes. */
@@ -80,6 +80,13 @@ export interface Assignment {
    */
   outputSchema?: Record<string, unknown>;
   limits: AssignmentLimits;
+  /**
+   * The provider's own subagents (ORC-031): set only for a read-only research step (`workspace.access` is then "read")
+   * whose owner allows helpers, on a provider whose capability map says `childAgentTracking: "supported"`. The adapter
+   * then lets the agent start at most `cap` of them, refuses one past the cap, and reports each as `subagent` events.
+   * Undefined: subagents stay switched off, as on every other run.
+   */
+  allowSubagents?: SubagentAllowance;
 }
 
 export interface Usage {
@@ -111,7 +118,12 @@ export type AdapterEvent =
    * (Codex: `turn/steer` accepted; Claude: an assistant message names the note's uuid). Never terminal for the run.
    * `heldForTurn`: the note arrived before the agent's turn existed and the adapter held it until then (Codex).
    */
-  | { type: "note"; attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string; heldForTurn?: true };
+  | { type: "note"; attemptId: string; noteId: string; outcome: "delivered" | "not-delivered"; reason?: string; heldForTurn?: true }
+  /**
+   * One subagent of the run started, ended, or was refused by the cap (ORC-031; SubagentReport in src/domain/types.ts).
+   * Report every one, allowed or not: one where none is allowed is counted and listed under Needs you. Never terminal.
+   */
+  | { type: "subagent"; attemptId: string; subagent: SubagentReport };
 
 /** An MCP server found in the user's own provider configuration (never includes its settings or secrets). */
 export interface Connection {

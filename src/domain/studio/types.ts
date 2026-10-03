@@ -8,7 +8,7 @@
 // (rounds, artifacts, feedback, PE review, probes) and blueprint.ts (approval, the draft, Lock in and its summary,
 // open items, change orders, task specs' references). The containers exist from state format 19.
 
-import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId } from "../types";
+import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId, RunSubagents, SubagentAllowance } from "../types";
 
 /**
  * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
@@ -635,6 +635,15 @@ export interface NewWorkReviewRef {
 export type StudioRunKind = "designer" | "pe" | "probe";
 export const STUDIO_RUN_KINDS: StudioRunKind[] = ["designer", "pe", "probe"];
 
+/**
+ * The studio's read-only research (ORC-031): a probe gathers evidence for the PE and writes no file; its findings come
+ * back as text, and the service records them as evidence. Only these studio runs may start subagents.
+ */
+export const RESEARCH_RUN_KINDS: readonly StudioRunKind[] = ["probe"];
+export const isResearchRun = (kind: StudioRunKind) => RESEARCH_RUN_KINDS.includes(kind);
+/** The workspace a studio run gets: a designer writes in its staging folder; the PE and a probe read only. */
+export const studioRunAccess = (kind: StudioRunKind): "write" | "read" => (kind === "designer" ? "write" : "read");
+
 /** queued → running → (stopping →) stopped, completed, failed or lost. A queued run waits for dispatch, which happens in Vision only. */
 export type StudioRunStatus = "queued" | "running" | "stopping" | "stopped" | "completed" | "failed" | "lost";
 /** A run under way: asked for and not ended (queued, running, or stopping until the runtime confirms the stop). */
@@ -698,6 +707,10 @@ export interface StudioRun {
    * with no such text, and on runs that did not complete.
    */
   prose?: ProseCheck;
+  /** The subagents it may start (ORC-031), resolved at dispatch; absent: none. Only a probe's run may have it. */
+  allowSubagents?: SubagentAllowance;
+  /** The subagents its agent started, as the runtime reported them (ORC-031). */
+  subagents?: RunSubagents;
 }
 
 export interface Studio {
