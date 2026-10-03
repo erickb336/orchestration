@@ -6,6 +6,7 @@ import * as C from "./checks";
 import * as D from "./delivery";
 import * as F from "./findings";
 import { buildDemo } from "./demo";
+import { setEnvironment } from "./environment";
 import * as M from "./model";
 import * as P from "./peReview";
 import type { PeReviewTarget } from "./peReview";
@@ -512,6 +513,26 @@ export const COMMANDS = {
         ...(opt("preview") !== undefined ? { preview: strings(p.preview, "preview.preview") } : {}),
         ...(opt("port") !== undefined ? { port: num(p, "port") } : {}),
         ...(opt("cliEntry") !== undefined && p.cliEntry !== "" ? { cliEntry: str(p, "cliEntry") } : {}),
+      },
+      now,
+    );
+  }),
+
+  /**
+   * The project's environment (docs/design/project-environment.md): the base image the owner confirmed (pinned by
+   * digest), the prepare commands and the hosts added to the registries; `environment: null` clears it. The owner's
+   * only: the lead may propose an image in its message.
+   */
+  setEnvironment: same((s, now, a) => {
+    if (a.environment === null) return setEnvironment(s, null, now);
+    const e = obj(a.environment, "environment");
+    const prepare = e.prepare === undefined || e.prepare === null ? [] : array<unknown>(e.prepare, "environment.prepare").map((c, i) => strings(c, `environment.prepare[${i}]`));
+    return setEnvironment(
+      s,
+      {
+        ...(e.image === undefined || e.image === null || e.image === "" ? {} : { image: str(e, "image") }),
+        prepare,
+        hosts: e.hosts === undefined || e.hosts === null ? [] : strings(e.hosts, "environment.hosts"),
       },
       now,
     );
