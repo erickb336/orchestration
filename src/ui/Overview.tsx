@@ -91,7 +91,7 @@ function FactoryHome({ state }: { state: State }) {
       </div>
       <div className="k-grid-2">
         <NewResultsCard state={state} />
-        <LatestFromLead state={state} />
+        <LatestFromLead state={state} withFocus />
       </div>
       <FocusCard state={state} />
     </div>
@@ -487,8 +487,9 @@ function NewResultsCard({ state }: { state: State }) {
 /**
  * The lead's newest reply, its first lines and what it changed, in the conversation's words: the fold line under a
  * reply ("2 changes, 1 note") and where your newest message stands. The conversation itself opens from the header.
+ * After the start the focus is its first line (`withFocus`); in Vision the shaping panel holds the focus.
  */
-function LatestFromLead({ state }: { state: State }) {
+function LatestFromLead({ state, withFocus = false }: { state: State; withFocus?: boolean }) {
   const { service } = useStore();
   const lead = useLeadContext();
   const latest = latestLeadReply(state);
@@ -503,7 +504,7 @@ function LatestFromLead({ state }: { state: State }) {
         </Button>
       }
     >
-      <FocusLine state={state} />
+      {withFocus && <FocusLine state={state} />}
       {!latest ? (
         <EmptyState title="No reply from the lead yet.">Message the lead; it answers in its next run.</EmptyState>
       ) : (

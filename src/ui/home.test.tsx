@@ -310,7 +310,9 @@ describe("Home in Vision", () => {
     const s = inVision(floorScene().s, at(100));
     const markup = render(<Overview />, store(s));
     for (const part of [">The vision<", ">Needs you<", ">Progress by area<", ">New results<", ">Latest from the lead<"]) expect(markup).toContain(part);
-    for (const gone of [">Building budget<", ">The factory<", ">Decided by the PE<", "Open the change order"]) expect(markup).not.toContain(gone);
+    for (const gone of [">Building budget<", ">Budgets<", ">The factory<", ">Decided by the PE<", "Open the change order"]) expect(markup).not.toContain(gone);
+    // The shaping panel holds the focus in Vision: Latest from the lead does not say it a second time.
+    expect(markup).not.toContain("lead-focus");
   });
 });
 
