@@ -37,6 +37,9 @@ describe("the Vision place", () => {
     expect(visionPlace(s)).toEqual({ state: "draft", changes: 0, openItems: 1 });
     s = runCommand(s, "discardDraft", { draftRev: s.blueprint.draft.rev }, at(6)).state;
     expect(visionPlace(s)).toEqual({ state: "locked-in", rev: 1, at: at(5) });
+    // A vision text edited after the start waits in the draft: one change (pass 5, r10).
+    s = runCommand(s, "editVision", { expectedRev: 1, text: "Weekend trips, offline on the trail.", focus: "", reason: "offline" }, at(7)).state;
+    expect(visionPlace(s)).toEqual({ state: "draft", changes: 1, openItems: 0 });
   });
 });
 

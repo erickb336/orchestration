@@ -29,7 +29,8 @@ export type FactoryPlace = { state: "not-started" } | { state: "paused" } | { st
 
 export function visionPlace(s: State): VisionPlace {
   const c = draftChanges(s);
-  const changes = c.added.length + c.changed.length + c.dropped.length;
+  // A vision text waiting in the draft (an edit after the start, pass 5) is one change.
+  const changes = c.added.length + c.changed.length + c.dropped.length + (c.vision ? 1 : 0);
   if (changes || c.open.length) return { state: "draft", changes, openItems: c.open.length };
   const inForce = currentBlueprint(s);
   return inForce ? { state: "locked-in", rev: blueprintRev(s), at: inForce.at } : { state: "no-draft" };
