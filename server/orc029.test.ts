@@ -387,8 +387,9 @@ describe("in the code, only the owner's command starts the factory", () => {
     const shaping = readFileSync(join(ROOT, "src", "domain", "model", "shaping.ts"), "utf8");
     expect(shaping.match(new RegExp(calls.source, "g"))).toHaveLength(1);
     expect(shaping.lastIndexOf("export function ", shaping.search(calls))).toBe(shaping.indexOf("export function startFactory("));
-    // No code sends the lockIn command yet (its screen is the next unit's); the store names it only to check a write.
-    expect(where(/["']lockIn["']/)).toEqual([join("server", "store.ts")]);
+    // Only the owner's Lock in screen sends the lockIn command (src/ui/studio/lockInView.ts builds it for the owner's
+    // click); the store names it only to check a write.
+    expect(where(/["']lockIn["']/)).toEqual([join("server", "store.ts"), join("src", "ui", "studio", "lockInView.ts")]);
   });
 
   it("the command is sent only by the owner's button and by the test harnesses acting as the owner", () => {

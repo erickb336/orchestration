@@ -32,7 +32,7 @@ export function LockInPage() {
 
   const w = lockInWords(state);
   const blocker = lockInBlocker(state);
-  const lockIn = async () => {
+  const submit = async () => {
     if (!agreed || busy || seen !== rev) return;
     const req = lockInRequest(seen);
     setBusy(true);
@@ -109,7 +109,7 @@ export function LockInPage() {
                 <h3 id="li-open">What stays open</h3>
                 {w.openLines.length ? <ChangeLines lines={w.openLines} label="What stays open" /> : <p className="small muted">Nothing: every part of the draft is settled.</p>}
               </section>
-              {w.changes > 0 && <Agree words={w.agreement} button={w.button} agreed={agreed} onAgree={(v) => (setAgreed(v), setStale(false))} blocker={disabled ? "The service is offline." : blocker} busy={busy} onLockIn={() => void lockIn()} />}
+              {w.changes > 0 && <Agree words={w.agreement} button={w.button} agreed={agreed} onAgree={(v) => (setAgreed(v), setStale(false))} blocker={disabled ? "The service is offline." : blocker} busy={busy} onLockIn={() => void submit()} />}
             </Card>
             <Card title="Who acts next (your settings)" as="h3" className="st-lockin__side">
               <ul className="st-lockin__list small">
