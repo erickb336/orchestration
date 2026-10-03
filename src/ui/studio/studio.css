@@ -303,6 +303,8 @@ h6.st-doc__h { font-size: var(--fs-meta); color: var(--muted); }
 .st-lockin__list ul { margin: var(--space-1) 0 0; padding-left: 1.1rem; display: grid; gap: var(--space-1); }
 .st-lockin__agree { padding-top: var(--space-3); border-top: 1px solid var(--border); }
 .st-lockin__side .k-card__body { display: grid; gap: var(--space-3); }
+.st-lockin__vision { margin-top: var(--space-2); }
+.st-lockin__vision .k-disc__body { display: grid; gap: var(--space-2); }
 @media (max-width: 860px) { .st-lockin__grid { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------- Design and reality (ORC-029 pass 5, screen 5): the list with evidence ---------- */

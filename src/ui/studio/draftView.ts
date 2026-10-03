@@ -37,13 +37,26 @@ export interface DraftLine {
 export const CHANGE_WORD: Record<DraftChangeKind, string> = { added: "Added", changed: "Changed", dropped: "Dropped", open: "Open" };
 export const CHANGE_TONE: Record<DraftChangeKind, Tone> = { added: "done", changed: "work", dropped: "fail", open: "you" };
 
-/** The draft's changes since the last Lock in, then its open items: added, changed, dropped and open, in that order. */
+/** The draft line of a vision text that differs from the text in force: it has no blueprint item, so it has this id. */
+export const VISION_LINE_ID = "vision-text";
+
+/** How many changes a Lock in of the draft puts into force: each added, changed and dropped item, and a new vision text. */
+export function draftChangeCount(s: State): number {
+  const c = B.draftChanges(s);
+  return c.added.length + c.changed.length + c.dropped.length + (c.vision ? 1 : 0);
+}
+
+/**
+ * The draft's changes since the last Lock in, then its open items: the vision text when it changed (pass 5: after the
+ * start an edit of the text waits in the draft), then added, changed, dropped and open items, in that order.
+ */
 export function draftLines(s: State): DraftLine[] {
   const c = B.draftChanges(s);
   const newWork = new Set(B.lockInSummary(s).newWork);
   const why = new Map(B.openBlueprintItems(s).map((o) => [o.item.id, o.why]));
   const inForce = new Map(B.blueprintItems(s).map((i) => [i.id, i]));
   return [
+    ...(c.vision ? [{ kind: "changed" as const, itemId: VISION_LINE_ID, name: "Vision text", note: `"${c.vision.reason}"; it goes into force with the Lock in` }] : []),
     ...c.added.map((i) => ({ kind: "added" as const, itemId: i.id, name: itemName(s, i), note: newWork.has(i.id) ? "new; no task builds it yet" : "new" })),
     ...c.changed.map(({ item, replaces }) => {
       const v = variantLabel(s, replaces);
@@ -61,7 +74,7 @@ export function draftLines(s: State): DraftLine[] {
 /** The draft bar's heading and the line under it: since which Lock in, and what the factory builds from. */
 export function draftHeading(s: State): { title: string; since: string } {
   const c = B.draftChanges(s);
-  const changes = c.added.length + c.changed.length + c.dropped.length;
+  const changes = draftChangeCount(s);
   const title = `Draft · ${[changes ? count(changes, "change") : "", c.open.length ? count(c.open.length, "open item") : ""].filter(Boolean).join(", ")}`;
   const rev = B.blueprintRev(s);
   const since = rev
@@ -73,7 +86,7 @@ export function draftHeading(s: State): { title: string; since: string } {
 /** The confirmation before Discard the draft: what goes, what stays, and what the draft becomes. */
 export function discardConfirm(s: State): { title: string; text: string; primaryLabel: string; danger: true } {
   const c = B.draftChanges(s);
-  const changes = c.added.length + c.changed.length + c.dropped.length;
+  const changes = draftChangeCount(s);
   const what = [changes ? count(changes, "change") : "", c.open.length ? count(c.open.length, "open item") : ""].filter(Boolean).join(" and ");
   const rev = B.blueprintRev(s);
   return {
@@ -88,7 +101,7 @@ export function discardConfirm(s: State): { title: string; text: string; primary
 export function lockInBlocker(s: State): string | undefined {
   if (s.project.stage === "shaping") return "In Vision, Start the factory on Home is your first Lock in.";
   const c = B.draftChanges(s);
-  if (c.added.length + c.changed.length + c.dropped.length === 0) return c.open.length ? "There is nothing to lock in: the draft holds only open items, which stay in the draft." : "There is nothing to lock in: the draft is the version in force.";
+  if (draftChangeCount(s) === 0) return c.open.length ? "There is nothing to lock in: the draft holds only open items, which stay in the draft." : "There is nothing to lock in: the draft is the version in force.";
   return undefined;
 }
 

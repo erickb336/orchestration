@@ -38,6 +38,22 @@ describe("the draft bar", () => {
     expect(text).not.toContain("The factory has started.");
   });
 
+  it("a vision text edited while the factory runs is a change in the bar, with why, until the Lock in; Discard takes it too", () => {
+    const { s, at } = blueprintScene();
+    const v = s.project.visions.at(-1)!;
+    const edited = runCommand(s, "editVision", { expectedRev: v.rev, text: "Weekend trips for friends, with one shared packing list.", focus: v.focus, reason: "Packing is shared" }, at(400)).state;
+    expect(draftLines(edited)[0]).toEqual({ kind: "changed", itemId: "vision-text", name: "Vision text", note: '"Packing is shared"; it goes into force with the Lock in' });
+    const { text } = studio(edited);
+    expect(text).toContain('Draft · 4 changes, 1 open item');
+    expect(text).toContain('Changed Vision text ("Packing is shared"; it goes into force with the Lock in) Added Packing list v1');
+    expect(discardConfirm(edited).text).toBe("Your 4 changes and 1 open item since Lock in 1 go. The draft becomes Lock in 1 again. The artifacts, your marks and your notes stay.");
+    // Only the text in the draft: the bar is there, with one change.
+    const only = runCommand(runCommand(s, "discardDraft", { draftRev: s.blueprint.draft.rev }, at(401)).state, "editVision", { expectedRev: v.rev, text: "Weekend trips for friends.", focus: v.focus, reason: "Shorter" }, at(402)).state;
+    expect(draftHeading(only).title).toBe("Draft · 1 change");
+    expect(lockInBlocker(only)).toBeUndefined();
+    expect(studio(only).text).toContain('Draft · 1 change Since Lock in 1');
+  });
+
   it("is not there without a draft; the factory's banner is", () => {
     const { s } = blueprintScene();
     const none = runCommand(s, "discardDraft", { draftRev: s.blueprint.draft.rev }, "2026-10-02T10:00:00.000Z").state;

@@ -2,11 +2,13 @@
 // each, the new work, the budgets, and what stays open. The facts are the domain's `lockInSummary`, which the Lock in
 // records as the owner's agreement; this module only words them. An unknown cost is "no estimate", never $0.
 
+import { diffLines } from "../../domain/diff";
+import { currentVision } from "../../domain/model";
 import * as B from "../../domain/studio/blueprint";
 import type { BlueprintItem, TaskHandling, TouchedTaskState } from "../../domain/studio/types";
 import type { State } from "../../domain/types";
 import type { Tone } from "../kit";
-import { draftLines, itemName, type DraftLine } from "./draftView";
+import { draftChangeCount, draftLines, itemName, type DraftLine } from "./draftView";
 import { usdRange } from "./studioView";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -44,6 +46,8 @@ export interface LockInWords {
   changes: number;
   heading: string;
   changeLines: DraftLine[];
+  /** The vision text the Lock in puts into force, line by line against the text in force (pass 5). */
+  vision?: { diff: { kind: "same" | "add" | "del"; text: string }[]; replacesRev: number };
   tasks: TouchedTaskLine[];
   newWork: string | undefined;
   building: string;
@@ -57,7 +61,7 @@ export interface LockInWords {
 /** The summary of a Lock in of the draft as it is now, in words. */
 export function lockInWords(s: State): LockInWords {
   const sum = B.lockInSummary(s);
-  const changes = sum.changes.added.length + sum.changes.changed.length + sum.changes.dropped.length;
+  const changes = draftChangeCount(s);
   const byId = new Map<string, BlueprintItem>([...B.blueprintItems(s), ...B.draftItems(s)].map((i) => [i.id, i]));
   const name = (id: string) => (byId.get(id) ? itemName(s, byId.get(id)!) : id);
   const lines = draftLines(s);
@@ -88,7 +92,9 @@ export function lockInWords(s: State): LockInWords {
   });
   const missing = b.items.filter((e) => !e.estimate?.buildUsd).length;
   const total = !b.items.length
-    ? "Nothing new to build: the Lock in only drops parts."
+    ? sum.changes.dropped.length
+      ? `Nothing new to build: the Lock in only drops parts${sum.changes.vision ? " and changes the vision text" : ""}.`
+      : "Nothing new to build: the Lock in only changes the vision text."
     : b.itemsTotal.buildUsd
       ? `The PE's estimate to build these changes: ${usdRange(b.itemsTotal.buildUsd)}.`
       : `No total estimate: ${count(missing, "change")} ${missing === 1 ? "has" : "have"} no estimate from the PE.`;
@@ -107,6 +113,7 @@ export function lockInWords(s: State): LockInWords {
     changes,
     heading: `${changesWord} ${changes === 1 ? "goes" : "go"} into force`,
     changeLines: lines.filter((l) => l.kind !== "open"),
+    ...(sum.changes.vision ? { vision: { diff: diffLines(currentVision(s).text.split("\n"), sum.changes.vision.text.split("\n")), replacesRev: sum.changes.vision.replacesRev } } : {}),
     tasks,
     newWork,
     building,
