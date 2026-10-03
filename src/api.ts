@@ -146,6 +146,18 @@ export interface CheckSuggestions {
   reason?: string;
 }
 
+/**
+ * Body of GET /api/environment/found: what the repository says about its environment, read at `ref` (the trusted
+ * base): its dev container (the first source), and the image the table proposes from its root files. Nothing is saved.
+ */
+export interface EnvironmentFound {
+  ref: string;
+  devcontainer?: { file: string; image?: string; dockerfile?: string; context?: string; refused?: string };
+  proposal?: { label: string; image: string; prepare: string[][]; because: string };
+  /** Why nothing could be read (the sample project, the simulated runtime). */
+  reason?: string;
+}
+
 /** Where the full (redacted) log of one check of one run is served from. */
 export function checkLogUrl(attemptId: string, checkId: string): string {
   return `/api/checks/log?run=${encodeURIComponent(attemptId)}&check=${encodeURIComponent(checkId)}`;
