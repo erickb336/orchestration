@@ -9,6 +9,7 @@ import "./kit.css";
 export { Actions, Button, ButtonLink, type ButtonLinkProps, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
 export { Chip, SIMULATED_TITLE, SimulatedChip, type Tone } from "./Chip";
 export { StatePill } from "./StatePill";
+export { Meter, type MeterProps } from "./Meter";
 export { Card, type CardProps } from "./Card";
 export { Banner, type BannerTone } from "./Banner";
 export { NeedsYouItem, Row, Rows, type NeedsYouItemProps, type RowProps } from "./Row";

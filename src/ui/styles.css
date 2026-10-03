@@ -386,8 +386,10 @@ main { max-width: 1200px; margin: 0 auto; padding: 1.25rem; }
 .lead-excerpt { margin: 0 0 var(--space-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .lead-meta { margin: 0; display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; align-items: center; }
 /* The focus: the line itself first, then where it came from, with Undo and the vision behind one disclosure. */
-.focus-line { margin: 0 0 var(--space-2); font-size: var(--fs-h3); font-weight: 600; text-wrap: balance; overflow-wrap: anywhere; }
-.focus-foot { display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; align-items: center; }
+/* The focus, first in Latest from the lead (ORC-030 a-home-focus), set apart from the reply under it. */
+.lead-focus { display: grid; gap: var(--space-1); padding-bottom: var(--space-3); margin-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+.lead-focus__line { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.focus-foot { display: flex; flex-wrap: wrap; gap: 0.2rem 0.5rem; align-items: center; margin: 0; }
 .focus-foot .k-btn--quiet { min-height: 0; padding: 0; color: var(--text); text-decoration: underline; text-underline-offset: 0.18em; }
 .focus-foot .k-btn--quiet:hover:not(:disabled):not([aria-disabled="true"]) { background: none; }
 .focus-foot > .k-disc { font-size: inherit; }

@@ -15,6 +15,7 @@ import {
   Field,
   InlineConfirm,
   Input,
+  Meter,
   NeedsYouItem,
   Row,
   Rows,
@@ -40,6 +41,7 @@ const SECTIONS = [
   ["buttons", "Button"],
   ["chips", "Chip"],
   ["pills", "StatePill"],
+  ["meter", "Meter"],
   ["cards", "Card"],
   ["banners", "Banner"],
   ["rows", "Row and Needs you"],
@@ -89,6 +91,7 @@ export function Gallery() {
           <ButtonsSection />
           <ChipsSection />
           <PillsSection />
+          <MeterSection />
           <CardsSection />
           <BannersSection />
           <RowsSection />
@@ -296,6 +299,24 @@ function PillsSection() {
             Factory stopped at the budget · needs you
           </StatePill>
         </div>
+      </Demo>
+    </Section>
+  );
+}
+
+function MeterSection() {
+  return (
+    <Section id="meter" title="Meter" note="A figure as a bar: what is used of a whole, and, hatched, what is expected on top of it. It goes with the figure in words, never alone; amber when it waits for you.">
+      <Demo label="Within a budget, with the PE's estimate for the rest">
+        <p className="small no-margin">Building · $8.10 of $40 · about $9–$16 more (the PE)</p>
+        <Meter used={8.1 / 40} more={16 / 40} />
+      </Demo>
+      <Demo label="At the budget: it waits for you">
+        <p className="small no-margin">Building · $41 of $40 · stopped</p>
+        <Meter used={1} tone="you" />
+      </Demo>
+      <Demo label="Alone, with its words for assistive technology">
+        <Meter used={0.7} label="About $35 a month of $50" />
       </Demo>
     </Section>
   );

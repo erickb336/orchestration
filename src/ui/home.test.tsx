@@ -162,11 +162,11 @@ describe("Home", () => {
   const s = buildDemo(T0);
   const markup = render(<Overview />, store(s));
 
-  it("after the start is the factory floor: Needs you, the two budgets, the factory's lines, then New results, the lead's latest reply and Focus, in that order, and nothing else", () => {
-    const order = ["Needs you", "Building budget", "Maintenance budget, estimated", "The factory", "New results", "Latest from the lead", "Focus"].map((t) => markup.indexOf(`>${t}<`));
+  it("after the start is the factory floor: Needs you, the Budgets card, the factory's lines, then New results, the lead's latest reply and the vision, in that order, and nothing else", () => {
+    const order = ["Needs you", "Budgets", "The factory", "New results", "Latest from the lead", "Vision"].map((t) => markup.indexOf(`>${t}<`));
     expect(order.every((i) => i >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
-    for (const gone of ["Progress by area", "Team now", "Since your last visit", ">Usage<", ">Service<", "lead-inline", "Database", "Scheduler role", "Autopilot", "Shaping", "Start building"]) expect(markup).not.toContain(gone);
+    for (const gone of ["Progress by area", "Team now", "Since your last visit", ">Usage<", ">Service<", "lead-inline", "Database", "Scheduler role", "Autopilot", "Shaping", "Start building", ">Focus<", ">Building budget<", "Maintenance budget, estimated"]) expect(markup).not.toContain(gone);
   });
 
   it("takes the demo's decisions in place with the task page's buttons", () => {
@@ -176,14 +176,18 @@ describe("Home", () => {
     expect(markup).toContain("Choose an approach:");
   });
 
-  it("shows the focus first, where it came from, Undo, and the vision behind Vision and history", () => {
-    expect(markup).toContain("Offline maps first: the map must work with no signal.");
-    expect(markup).toContain("Set by the lead from your message");
-    expect(markup).toContain(">Undo<");
+  it("the focus is the first line of Latest from the lead, with where it came from and Undo; there is no Focus card (ORC-030 a-home-focus)", () => {
+    const latest = visible(markup.slice(markup.indexOf(">Latest from the lead<") + 1));
+    expect(latest).toMatch(/^Latest from the lead Open the conversation Focus: Offline maps first: the map must work with no signal\. Set by the lead from your message, \S+ ago · Undo It is still running: Claude is reviewing/);
+    expect(count(markup, ">Undo<")).toBe(1);
+    // The vision stays behind Vision and history (worker C1 moves it into Vision).
     expect(markup).toContain("Vision and history");
     expect(markup).toContain(">Edit vision<");
-    expect(markup.indexOf('class="focus-line"')).toBeLessThan(markup.indexOf("Vision and history"));
     expect(focusProvenance({ rev: 1, at: at(0), author: "user", text: "", focus: "", reason: "" })).toBe("Set by you");
+    // With no focus, the reply comes first.
+    const none = structuredClone(s);
+    none.project.visions[none.project.visions.length - 1].focus = "";
+    expect(visible(render(<Overview />, store(none)))).toContain("Latest from the lead Open the conversation It is still running");
   });
 
   it("shows the lead's latest reply with one simulated chip and a way to open the conversation", () => {
@@ -352,24 +356,49 @@ describe("the factory floor", () => {
     expect(visible(w)).toContain(`${f.tasks.queued} Trip list screen change order`);
   });
 
-  it("shows the two budgets: spent of the budget, the PE's estimate for the rest, the stop, and maintenance a month against its budget", () => {
-    const v = text(sc.s);
-    expect(v).toContain("Building budget Change $8.10 of $40.00 spent PE estimate for the rest: $9.00–$16.00 Within budget At $40.00 the factory stops and asks you.");
-    expect(v).toContain("Maintenance budget, estimated $35.00 a month of your $50.00 The sum of the PE's estimates for the 3 approved parts, and each trade-off call the PE makes.");
+  it("shows one Budgets card with two lines, each a figure and a bar; the reasons open on click (ORC-030 a-home-budgets)", () => {
+    const markup = render(<Overview />, store(sc.s));
+    const v = visible(markup);
+    expect(v).toContain("Budgets Change Building · $8.10 of $40 · about $9–$16 more (the PE) At $40.00 the factory stops and asks you. The PE's estimate for the rest: $9.00–$16.00 for the 3 approved parts not built yet.");
+    expect(v).toContain("Maintenance · about $35 a month of $50 The sum of the PE's estimates for the 3 approved parts, and each trade-off call the PE makes.");
+    // Each line is a closed disclosure: the figure and its bar in the summary, the reasons behind it.
+    const card = markup.slice(markup.indexOf(">Budgets<"), markup.indexOf(">The factory<"));
+    expect(count(card, '<details class="k-disc ff-budget__line">')).toBe(2);
+    expect(card).toContain('<span class="k-meter" aria-hidden="true"><span class="k-meter__used k-meter__used--work" style="width:20.25%"></span><span class="k-meter__more" style="width:40%"></span></span>');
+    expect(card).toContain('href="#/settings/project/budgets"');
   });
 
   it("without an estimate it says so, never $0; at the budget it says the factory stopped; with no budget, that it does not stop", () => {
     const none = structuredClone(sc.s);
     for (const v of none.studio.verdicts) delete v.budget;
     const v = text(none);
-    expect(v).toContain("PE estimate for the rest: none for 3 of 3 parts");
-    expect(v).toContain("Maintenance budget, estimated No estimate yet · your budget is $50.00 a month The PE gave no monthly estimate for 3 of 3 approved parts. Until it does, it is unknown, never $0.");
-    expect(v).not.toMatch(/Maintenance budget, estimated \$0/);
+    expect(v).toContain("Building · $8.10 of $40 · no estimate for the rest yet");
+    expect(v).toContain("The PE's estimate for the rest: none for 3 of 3 parts, so it is unknown, never $0.");
+    expect(v).toContain("Maintenance · no estimate yet · budget $50 a month The PE gave no monthly estimate for 3 of 3 approved parts. Until it does, it is unknown, never $0.");
+    expect(v).not.toMatch(/Maintenance · (about )?\$0/);
     const stopped = M.setBudgets(sc.s, { buildingUsd: 5, maintenanceUsdPerMonth: 50 }, at(40));
-    expect(text(stopped)).toContain("Stopped The building budget is reached: $8.10 of $5.00. Nothing new starts until you raise the budget or continue past it.");
+    const sv = render(<Overview />, store(stopped));
+    expect(visible(sv)).toContain("Building · $8.10 of $5 · about $9–$16 more (the PE) stopped The building budget is reached: $8.10 of $5.00. Nothing new starts until you raise the budget or continue past it.");
+    expect(sv).toContain("k-meter__used--you");
     const unset = M.setBudgets(sc.s, { buildingUsd: null, maintenanceUsdPerMonth: null }, at(40));
-    expect(text(unset)).toContain("$8.10 spent PE estimate for the rest: $9.00–$16.00 No budget No building budget is set, so the factory does not stop for cost.");
-    expect(text(unset)).toContain("$35.00 a month · no budget set");
+    const u = render(<Overview />, store(unset));
+    expect(visible(u)).toContain("Building · $8.10 spent · no budget · about $9–$16 more (the PE) No building budget is set, so the factory does not stop for cost.");
+    expect(visible(u)).toContain("Maintenance · about $35 a month · no budget");
+    expect(u).not.toContain("k-meter");
+    // Before anything is locked in, the PE has nothing to estimate: no "nothing left to build".
+    expect(visible(render(<Overview />, store(buildDemo(T0))))).toContain("Building · $0 spent · no budget No building budget is set, so the factory does not stop for cost. The PE's estimate for the rest: none yet: nothing is locked in, so the PE has no part to estimate.");
+  });
+
+  it("on a phone each area is one row: the area, how many build, wait and landed, and needs you; a tap opens its tasks (ORC-030 a-home-phone)", () => {
+    const markup = render(<Overview />, store(sc.s));
+    const rows = [...markup.matchAll(/<a class="ff-line__row" href="([^"]+)"[^>]*>(.*?)<\/a>/g)].map((m) => [m[1], visible(m[2])]);
+    expect(rows).toEqual([
+      ["#/tasks?area=Trips", "Trips 1 building · 1 waiting · 1 finished needs you"],
+      ["#/tasks?area=Sharing", "Sharing 1 building · 1 landed"],
+      ["#/tasks?area=CLI", "CLI 1 building"],
+      ["#/tasks?area=Offline", "Offline 1 waiting needs you"],
+      ["#/tasks?area=General", "General 1 waiting needs you"],
+    ]);
   });
 
   it("lists the PE's call within budget with Reverse and its reasons; Reverse opens the decision again for you, with your reason", () => {

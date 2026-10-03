@@ -1,9 +1,10 @@
 // Home. While in Vision, the shaping panel leads (the studio is Vision, in the main navigation), then Needs you, with
 // the simple decisions taken in place, and Progress by area beside New results and the lead's latest reply. After the
 // start, Home is the factory floor (floor/FactoryFloor.tsx): Needs you first, then the budgets, one line per area and
-// the PE's calls; New results and the lead's latest reply under it; the Focus card last, with the vision text, its
-// revisions and its documents behind "Vision and history". Usage and the service's details live in Settings
-// (Diagnostics.tsx); the lead conversation opens from the header.
+// the PE's calls; New results and the lead's latest reply under it, the focus as that reply's first line (ORC-030
+// a-home-focus); the vision card last, with the vision text, its revisions and its documents behind "Vision and
+// history". Usage and the service's details live in Settings (Diagnostics.tsx); the lead conversation opens from the
+// header.
 
 import { useEffect, useRef, useState } from "react";
 import * as D from "../domain/delivery";
@@ -74,8 +75,8 @@ export function Overview() {
 
 /**
  * Home after the start: the factory floor (ORC-029 pass 6). Needs you first; then the floor (the change orders the lead
- * is answering, the two budgets, one line per area, the PE's calls); then what landed, the lead's latest reply, and the
- * Focus card with the vision and its draft.
+ * is answering, the budgets, one line per area, the PE's calls); then what landed and the lead's latest reply with the
+ * focus first; and the vision card with its draft.
  */
 function FactoryHome({ state }: { state: State }) {
   return (
@@ -502,6 +503,7 @@ function LatestFromLead({ state }: { state: State }) {
         </Button>
       }
     >
+      <FocusLine state={state} />
       {!latest ? (
         <EmptyState title="No reply from the lead yet.">Message the lead; it answers in its next run.</EmptyState>
       ) : (
@@ -525,21 +527,24 @@ function LatestFromLead({ state }: { state: State }) {
   );
 }
 
-// ---------- Focus ----------
+// ---------- the focus, first in Latest from the lead ----------
 
-/** The focus first; where it came from, with Undo for a lead change; the vision text, its revisions, diff and documents behind "Vision and history". */
-function FocusCard({ state }: { state: State }) {
+/**
+ * The focus as the first line of "Latest from the lead" (ORC-030 a-home-focus): the lead sets it, so it sits with the
+ * lead's reply. Who set it and when, and Undo for the lead's change. Nothing when no focus is set.
+ */
+function FocusLine({ state }: { state: State }) {
   const { send, disabled } = useStore();
   const vision = M.currentVision(state);
   const change = M.currentFocusChange(state);
   const [busy, setBusy] = useState(false);
-  // The Focus banner's History link arrives as `#/overview?history=1` and opens the history.
-  const [open, setOpen] = useState(() => typeof location !== "undefined" && historyRequested(location.hash));
+  if (!vision.focus) return null;
   return (
-    <Card title="Focus">
-      <OpenDraft />
-      <p className="focus-line">{vision.focus || <span className="muted">No focus set.</span>}</p>
-      <div className="focus-foot small muted">
+    <div className="lead-focus">
+      <p className="lead-focus__line">
+        <span className="muted">Focus:</span> {vision.focus}
+      </p>
+      <p className="focus-foot small muted">
         <span>
           {focusProvenance(vision)}, {relTime(vision.at)}
         </span>
@@ -561,7 +566,21 @@ function FocusCard({ state }: { state: State }) {
             </Button>
           </>
         )}
-        <span aria-hidden="true">·</span>
+      </p>
+    </div>
+  );
+}
+
+// ---------- the vision (worker C1 moves its text into Vision and leaves Home one line) ----------
+
+/** The lead's vision draft, if any; the vision text, its revisions, diff and documents behind "Vision and history". The focus is in Latest from the lead. */
+function FocusCard({ state }: { state: State }) {
+  // The Focus banner's History link arrives as `#/overview?history=1` and opens the history.
+  const [open, setOpen] = useState(() => typeof location !== "undefined" && historyRequested(location.hash));
+  return (
+    <Card title="Vision">
+      <OpenDraft />
+      <div className="focus-foot small muted">
         <Disclosure label="Vision and history" count={state.project.visions.length} open={open} onToggle={setOpen}>
           <VisionDetails state={state} scrollToHistory={open && typeof location !== "undefined" && historyRequested(location.hash)} />
         </Disclosure>

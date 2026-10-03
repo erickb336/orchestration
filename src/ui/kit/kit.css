@@ -228,6 +228,15 @@ textarea.k-control { min-height: 4.5rem; resize: vertical; }
 .k-check__hint { display: block; font-size: var(--fs-small); color: var(--muted); }
 .k-check:has(.k-check__box:disabled) { opacity: 0.5; cursor: not-allowed; }
 
+/* ---------- Meter: a figure as a bar (used, then a hatched "more") ---------- */
+.k-meter { display: flex; width: 100%; height: 6px; border-radius: 3px; overflow: hidden; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); }
+.k-meter__used { flex: none; height: 100%; background: currentColor; }
+.k-meter__used--work, .k-meter__used--neutral { color: var(--st-work); }
+.k-meter__used--you { color: var(--st-you); }
+.k-meter__used--done { color: var(--st-done); }
+.k-meter__used--fail { color: var(--st-fail); }
+.k-meter__more { flex: none; height: 100%; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--st-work) 45%, transparent) 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--st-work) 35%, transparent); }
+
 /* ---------- Disclosure ---------- */
 .k-disc { margin: 0; min-width: 0; font-size: var(--fs-meta); }
 .k-disc__summary {

@@ -81,6 +81,8 @@ export interface AreaLine {
   href: string;
   /** "3 tasks · 1 landed". */
   counts: string;
+  /** The line as one row on a phone (ORC-030 a-home-phone): "1 building · 1 waiting · 1 landed", and how many need you. */
+  summary: { counts: string; needsYou: number };
   tasks: FloorTask[];
   /** Tasks past the first `MAX_ON_LINE`, which the task list shows. */
   more: number;
@@ -124,71 +126,113 @@ export function floorLines(s: State, nowMs = Date.now()): AreaLine[] {
       area,
       href: `#/tasks?area=${encodeURIComponent(area)}`,
       counts: [count(all.length, "task"), landed ? `${landed} landed` : ""].filter(Boolean).join(" · "),
+      summary: { counts: summaryCounts(all), needsYou: all.filter((t) => t.needsYou).length },
       tasks: all.slice(0, MAX_ON_LINE),
       more: Math.max(0, all.length - MAX_ON_LINE),
     };
   });
 }
 
-// ---------- the two budgets ----------
-
-export interface BudgetWords {
-  building: {
-    /** "$11.20 of $40.00 spent", or "$11.20 spent". */
-    spent: string;
-    /** The costs with no full record and their estimate, or that the spend cannot be checked (never counted as $0). */
-    unknown?: string;
-    /** "PE estimate for the rest: $9.00–$16.00", "…: none for 2 of 3 parts", or "…: nothing is left to build". */
-    estimate: string;
-    /** What the PE's standing calls commit before their work has run. */
-    committed?: string;
-    /** The stop's state: a pill and one sentence. */
-    stop: { word: string; tone: Tone; text: string };
-  };
-  maintenance: {
-    /** "$30.00 a month of your $50.00", or "No estimate yet". */
-    estimate: string;
-    /** Where the estimate comes from, and what changes it. */
-    basis: string;
-  };
+/**
+ * "2 building · 1 waiting · 1 landed": how many tasks of a line are at work (building, in review, in checks, being
+ * captured), wait, and landed; a finished task that has not landed (nothing to merge, or its pull request is still
+ * open) counts as finished. Only the counts that are not zero.
+ */
+function summaryCounts(tasks: FloorTask[]): string {
+  const n = (stations: Station[]) => tasks.filter((t) => stations.includes(t.station)).length;
+  const parts: [number, string][] = [
+    [n(["building", "review", "checks", "evidence"]), "building"],
+    [n(["waiting"]), "waiting"],
+    [n(["landed"]), "landed"],
+    [n(["finished"]), "finished"],
+  ];
+  return parts
+    .filter(([k]) => k > 0)
+    .map(([k, w]) => `${k} ${w}`)
+    .join(" · ");
 }
 
+// ---------- the budgets ----------
+
 /**
- * The two budgets in words. Building: the spend of the budget, the PE's estimate for the rest (its estimates of the
- * approved parts not built yet), what the PE's calls commit, and where the stop stands. Maintenance: the PE's monthly
- * estimates of the approved parts and the PE calls that stand, against its budget.
+ * One budget as one line on Home's Budgets card (ORC-030 a-home-budgets): its name, a figure and a bar; the reasons
+ * open on click. "Building · $12 of $40 · about $18 more (the PE)", "Maintenance · about $0.80 a month of $10".
+ */
+export interface BudgetLine {
+  name: "Building" | "Maintenance";
+  /** "$8.10 of $40 · about $9–$16 more (the PE)", "$8.10 spent · no budget", "no estimate yet". */
+  figure: string;
+  /** The bar, with a budget only: the share used, and the share the PE's estimate adds on top. */
+  bar?: { used: number; more: number };
+  /** The figure's state when it needs saying: "stopped" (it waits for you), "continued past it". */
+  state?: { word: string; tone: Tone };
+  /** Why the figure is what it is: the stop, the estimate's basis, the costs with no full record, the PE's calls. */
+  reasons: string[];
+}
+
+export interface BudgetWords {
+  building: BudgetLine;
+  maintenance: BudgetLine;
+}
+
+/** "$40", "$8.10", "$0.80": whole dollars without cents, the rest to the cent. */
+export function money(usd: number): string {
+  const cents = Math.round(usd * 100);
+  return cents % 100 === 0 ? `$${cents / 100}` : fmtUsd(usd);
+}
+const moneyRange = ([lo, hi]: UsdRange) => (lo === hi ? money(hi) : `${money(lo)}–${money(hi)}`);
+
+/**
+ * The two budgets in words. Building: the spend of the budget and the PE's estimate for the rest (its estimates of the
+ * approved parts not built yet); the reasons: where the stop stands, the estimate's parts, the costs with no full
+ * record, and what the PE's calls commit. Maintenance: the PE's monthly estimates of the approved parts and the PE
+ * calls that stand, against its budget. An unknown cost is "no estimate", never $0.
  */
 export function budgetWords(s: State): BudgetWords {
   const b = B.lockInSummary(s).budgets;
   const budget = b.building.budgetUsd;
+  const spent = b.building.spentUsd;
   const rest = restOfBuild(s);
   const committed = committedBuildUsd(s);
   const unknown = unrecordedWords(buildingSpend(s));
+  const stop = stopWords(s, budget);
   const m = maintenanceEstimate(s);
   const monthBudget = s.project.budgets.maintenanceUsdPerMonth;
+  const month = m.partsUsd === null ? null : m.partsUsd + m.callsUsd;
+  const more = rest.usd ? rest.usd[1] : 0;
+  const lockedIn = !!B.currentBlueprint(s);
   return {
     building: {
-      spent: budget === null ? `${fmtUsd(b.building.spentUsd)} spent` : `${fmtUsd(b.building.spentUsd)} of ${fmtUsd(budget)} spent`,
-      ...(unknown ? { unknown } : {}),
-      estimate: `PE estimate for the rest: ${restWords(rest)}`,
-      ...(committed > 0 ? { committed: `Up to ${fmtUsd(committed)} is committed to PE calls whose work has not run.` } : {}),
-      stop: stopWords(s, budget),
+      name: "Building",
+      figure: [budget === null ? `${money(spent)} spent` : `${money(spent)} of ${money(budget)}`, budget === null ? "no budget" : "", restFigure(rest, lockedIn)].filter(Boolean).join(" · "),
+      ...(budget ? { bar: { used: spent / budget, more: more / budget } } : {}),
+      ...(stop.state ? { state: stop.state } : {}),
+      reasons: [stop.text, `The PE's estimate for the rest: ${restWords(rest, lockedIn)}.`, ...(unknown ? [unknown] : []), ...(committed > 0 ? [`Up to ${fmtUsd(committed)} is committed to PE calls whose work has not run.`] : [])],
     },
     maintenance: {
-      estimate:
-        m.partsUsd === null
-          ? `No estimate yet${monthBudget === null ? "" : ` · your budget is ${fmtUsd(monthBudget)} a month`}`
-          : `${fmtUsd(m.partsUsd + m.callsUsd)} a month${monthBudget === null ? " · no budget set" : ` of your ${fmtUsd(monthBudget)}`}`,
-      basis: maintenanceBasis(m),
+      name: "Maintenance",
+      figure: month === null ? `no estimate yet${monthBudget === null ? "" : ` · budget ${money(monthBudget)} a month`}` : `about ${money(month)} a month${monthBudget === null ? " · no budget" : ` of ${money(monthBudget)}`}`,
+      ...(month !== null && monthBudget ? { bar: { used: month / monthBudget, more: 0 } } : {}),
+      ...(month !== null && monthBudget !== null && month > monthBudget ? { state: { word: "over", tone: "you" as Tone } } : {}),
+      reasons: [maintenanceBasis(m), monthBudget === null ? "No maintenance budget is set, so a PE call that adds a monthly cost is not held for cost." : `A PE call that would take it past ${money(monthBudget)} a month comes to you.`],
     },
   };
 }
 
-/** "$9.00–$16.00"; with no total, how many parts have no estimate; with nothing left, a known $0. */
-function restWords(rest: PartsSum): string {
+/** "about $9–$16 more (the PE)"; "no estimate for the rest yet"; "nothing left to build"; nothing before a Lock in. */
+function restFigure(rest: PartsSum, lockedIn: boolean): string {
+  if (!lockedIn) return "";
+  if (!rest.parts) return "nothing left to build";
+  if (!rest.usd) return "no estimate for the rest yet";
+  return `about ${moneyRange(rest.usd)} more (the PE)`;
+}
+
+/** "$9.00–$16.00 for 3 parts"; with no total, how many parts have no estimate; with nothing left, a known $0. */
+function restWords(rest: PartsSum, lockedIn: boolean): string {
+  if (!lockedIn) return "none yet: nothing is locked in, so the PE has no part to estimate";
   if (!rest.parts) return "nothing is left to build";
-  if (!rest.usd) return `none for ${rest.missing} of ${count(rest.parts, "part")}`;
-  return range(rest.usd);
+  if (!rest.usd) return `none for ${rest.missing} of ${count(rest.parts, "part")}, so it is unknown, never $0`;
+  return `${range(rest.usd)} for the ${count(rest.parts, "approved part")} not built yet`;
 }
 
 /** Where the maintenance estimate comes from, or why there is none yet (never $0). */
@@ -198,12 +242,13 @@ function maintenanceBasis(m: MaintenanceEstimate): string {
   return "No part of the blueprint is approved, so the PE has nothing to estimate. Until then it is unknown, never $0.";
 }
 
-function stopWords(s: State, budget: number | null): BudgetWords["building"]["stop"] {
-  if (budget === null) return { word: "No budget", tone: "neutral", text: "No building budget is set, so the factory does not stop for cost." };
+/** Where the stop stands: a word on the line only when it needs saying (stopped, continued), and one sentence. */
+function stopWords(s: State, budget: number | null): { state?: { word: string; tone: Tone }; text: string } {
+  if (budget === null) return { text: "No building budget is set, so the factory does not stop for cost." };
   const stop = budgetStop(s);
-  if (stop) return { word: "Stopped", tone: "you", text: `${stop.why}. Nothing new starts until you raise the budget or continue past it.` };
-  if (s.project.budgetContinued?.buildingUsd === budget) return { word: "Continued", tone: "neutral", text: `You continued past the budget. New work starts until you change the budget.` };
-  return { word: "Within budget", tone: "done", text: `At ${fmtUsd(budget)} the factory stops and asks you.` };
+  if (stop) return { state: { word: "stopped", tone: "you" }, text: `${stop.why}. Nothing new starts until you raise the budget or continue past it.` };
+  if (s.project.budgetContinued?.buildingUsd === budget) return { state: { word: "continued past it", tone: "neutral" }, text: "You continued past the budget. New work starts until you change the budget." };
+  return { text: `At ${fmtUsd(budget)} the factory stops and asks you.` };
 }
 
 // ---------- decided by the PE ----------
