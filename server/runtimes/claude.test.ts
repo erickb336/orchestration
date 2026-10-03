@@ -1129,3 +1129,135 @@ describe("studio runs (ORC-029 pass 3a)", () => {
     expect(await use("Read", { file_path: path.join(outside, "secret.txt") })).toBe("deny");
   });
 });
+
+describe("helpers in research runs (ORC-031 31b)", () => {
+  const sig = { signal: new AbortController().signal } as never;
+  const research = (cap = 2) => assignment({ allowSubagents: { cap } }, "read");
+  const subagentEvents = (events: AdapterEvent[]) => events.flatMap((e) => (e.type === "subagent" ? [e.subagent] : []));
+  type HookOut = { hookSpecificOutput: { permissionDecision: string; permissionDecisionReason?: string; updatedInput: Record<string, unknown> } };
+  async function started(a: Assignment) {
+    const s = setup();
+    s.adapter.start(a);
+    await waitFor(() => s.calls.length === 1);
+    const opts = s.calls[0].options;
+    const hook = opts.hooks!.PreToolUse![0].hooks[0];
+    const base = { session_id: "s", transcript_path: "/t", cwd: ws, hook_event_name: "PreToolUse" };
+    const call = (tool_name: string, tool_input: Record<string, unknown>, tool_use_id: string, agent_id?: string) =>
+      hook({ ...base, tool_name, tool_input, tool_use_id, ...(agent_id ? { agent_id, agent_type: "researcher" } : {}) } as never, tool_use_id, sig) as Promise<HookOut>;
+    return { ...s, opts, call };
+  }
+
+  it("offers the subagent tool only to a read-only run allowed helpers; every other run keeps it disallowed", async () => {
+    const allowed = await started(research());
+    expect(allowed.opts.tools).toEqual(["Read", "Glob", "Grep", "Agent"]);
+    expect(allowed.opts.disallowedTools).not.toContain("Agent");
+    expect(allowed.opts.disallowedTools).not.toContain("Task");
+    expect(allowed.opts.disallowedTools).toEqual(expect.arrayContaining(["Write", "Edit", "Bash", "NotebookEdit", "WebFetch", "WebSearch"]));
+    // The one helper type: read tools only, and no subagent tool of its own. The built-in agents stay off.
+    expect(allowed.opts.agents).toEqual({ researcher: expect.objectContaining({ tools: ["Read", "Glob", "Grep"], model: "inherit", maxTurns: 7 }) });
+    expect(allowed.opts.agents!.researcher.disallowedTools).toEqual(expect.arrayContaining(["Agent", "Task", "Write", "Edit", "Bash"]));
+    expect(allowed.opts.env?.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS).toBe("1");
+    allowed.adapter.kill("att-1");
+
+    for (const a of [assignment({}, "read"), assignment({ allowSubagents: { cap: 2 } }, "write"), assignment({ allowSubagents: { cap: 2 }, studio: true, role: "designer" }, "write")]) {
+      const other = await started(a);
+      expect(other.opts.tools).not.toContain("Agent");
+      expect(other.opts.disallowedTools).toEqual(expect.arrayContaining(["Agent", "Task"]));
+      expect(other.opts.agents).toBeUndefined();
+      other.adapter.kill("att-1");
+    }
+  });
+
+  it("counts each Agent call the hook allows, sets it to the read-only helper in the foreground, and refuses one past the cap", async () => {
+    const { adapter, call, events } = await started(research(2));
+    const ask = (n: number) => ({ description: `look ${n}`, prompt: `Read file ${n}`, subagent_type: "general-purpose", run_in_background: true, isolation: "worktree", model: "haiku" });
+    // Two calls of one message, decided in parallel.
+    const [one, two] = await Promise.all([call("Agent", ask(1), "tu-1"), call("Agent", ask(2), "tu-2")]);
+    for (const r of [one, two]) {
+      expect(r.hookSpecificOutput.permissionDecision).toBe("allow");
+      expect(r.hookSpecificOutput.updatedInput).toMatchObject({ subagent_type: "researcher", run_in_background: false, model: "haiku" });
+      expect(r.hookSpecificOutput.updatedInput.isolation).toBeUndefined();
+    }
+    const three = await call("Agent", ask(3), "tu-3");
+    expect(three.hookSpecificOutput).toMatchObject({ permissionDecision: "deny", permissionDecisionReason: expect.stringContaining("at most 2 helper agents") });
+    // The legacy name is the same tool, under the same cap.
+    expect((await call("Task", ask(4), "tu-4")).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(subagentEvents(events)).toEqual([
+      { phase: "started", id: "tu-1", asked: "Read file 1", model: "haiku", usageInParent: true },
+      { phase: "started", id: "tu-2", asked: "Read file 2", model: "haiku", usageInParent: true },
+      { phase: "refused", id: "tu-3", asked: "Read file 3" },
+      { phase: "refused", id: "tu-4", asked: "Read file 4" },
+    ]);
+    adapter.kill("att-1");
+  });
+
+  it("refuses an Agent call where none is allowed, and one from inside a helper, and reports each", async () => {
+    const none = await started(assignment({}, "read"));
+    expect((await none.call("Agent", { prompt: "x" }, "tu-1")).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(subagentEvents(none.events)).toEqual([{ phase: "refused", id: "tu-1", asked: "x" }]);
+    none.adapter.kill("att-1");
+
+    const nested = await started(research(3));
+    expect((await nested.call("Agent", { prompt: "deeper" }, "tu-9", "agent-1")).hookSpecificOutput).toMatchObject({ permissionDecision: "deny", permissionDecisionReason: expect.stringContaining("helpers of its own") });
+    expect(subagentEvents(nested.events)).toEqual([{ phase: "refused", id: "tu-9", asked: "deeper" }]);
+    // canUseTool passes only a call the hook allowed.
+    expect((await nested.opts.canUseTool!("Agent", { prompt: "x" }, { signal: new AbortController().signal, toolUseID: "tu-unknown" } as never))?.behavior).toBe("deny");
+    await nested.call("Agent", { prompt: "ok" }, "tu-10");
+    expect((await nested.opts.canUseTool!("Agent", { prompt: "ok" }, { signal: new AbortController().signal, toolUseID: "tu-10" } as never))?.behavior).toBe("allow");
+    nested.adapter.kill("att-1");
+  });
+
+  it("runs the workspace guard on a helper's own tool calls: its write and its read outside the worktree are refused", async () => {
+    const { adapter, call, events } = await started(research());
+    const write = await call("Write", { file_path: path.join(ws, "note.txt"), content: "x" }, "tu-w", "agent-1");
+    expect(write.hookSpecificOutput).toMatchObject({ permissionDecision: "deny", permissionDecisionReason: expect.stringContaining('"Write" is not permitted') });
+    const out = await call("Read", { file_path: path.join(outside, "secret.txt") }, "tu-r", "agent-1");
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(await call("Read", { file_path: path.join(ws, "src/x.ts") }, "tu-ok", "agent-1")).toEqual({});
+    expect(events.filter((e) => e.type === "activity" && e.note.startsWith("Blocked Write (helper)"))).toHaveLength(1);
+    adapter.kill("att-1");
+  });
+
+  it("ends a helper on its Agent result, with the model and usage the structured result reports; counts one that slipped through", async () => {
+    const { adapter, call, stream, events } = await started(research(2));
+    await call("Agent", { prompt: "Read alpha" }, "tu-1");
+    stream.push(
+      init("claude-haiku-4-5-20251001"),
+      { ...assistant([{ type: "tool_use", id: "inner-1", name: "Read", input: { file_path: "alpha.txt" } }], "msg_sub"), parent_tool_use_id: "tu-1" },
+      // A tagged message for a call the hook never saw.
+      { ...assistant([{ type: "tool_use", id: "inner-2", name: "Read", input: { file_path: "beta.txt" } }], "msg_sub2"), parent_tool_use_id: "tu-x" },
+      {
+        type: "user",
+        parent_tool_use_id: null,
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu-1", content: "lantern" }] },
+        tool_use_result: { status: "completed", agentId: "a1", resolvedModel: "claude-haiku-4-5-20251001", usage: { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 900, cache_creation_input_tokens: 100 } },
+      },
+      result("success"),
+    );
+    await waitFor(() => terminals(events).length === 1);
+    expect(subagentEvents(events)).toEqual([
+      { phase: "started", id: "tu-1", asked: "Read alpha", usageInParent: true },
+      { phase: "started", id: "tu-x", asked: "", usageInParent: true },
+      { phase: "ended", id: "tu-1", how: "completed", model: "claude-haiku-4-5-20251001", usage: { inputTokens: 1010, cachedInputTokens: 900, outputTokens: 40 } },
+      // Still open when the run ended: its session closed with the run.
+      { phase: "ended", id: "tu-x", how: "stopped" },
+    ]);
+    // The session's total (helpers included) is the run's usage, as before.
+    expect(terminals(events)[0]).toMatchObject({ type: "completed", usage: { costUsd: 0.0123 } });
+    adapter.kill("att-1");
+  });
+
+  it("an interrupt ends the open helpers as stopped, before the run's stop", async () => {
+    const { adapter, call, stream, events } = await started(research(2));
+    stream.push(init());
+    await call("Agent", { prompt: "slow search" }, "tu-1");
+    await waitFor(() => events.some((e) => e.type === "started"));
+    adapter.interrupt("att-1");
+    await waitFor(() => stream.interruptCalls === 1);
+    stream.push({ type: "user", parent_tool_use_id: null, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu-1", is_error: true, content: "interrupted" }] } });
+    stream.end();
+    await waitFor(() => terminals(events).length === 1);
+    const tail = events.filter((e) => e.type === "subagent" || TERMINAL.has(e.type)).map((e) => (e.type === "subagent" ? `${e.subagent.phase}:${"how" in e.subagent ? e.subagent.how : ""}` : e.type));
+    expect(tail).toEqual(["started:", "ended:stopped", "stopped"]);
+  });
+});
