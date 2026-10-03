@@ -30,7 +30,7 @@ import { bindQueuedNotes } from "./notes";
 import { blockedReason, deferredBy, waitingOn } from "./presentation";
 import { providerLabel, resolveStep } from "./resolution";
 import { runPrinciples } from "./runPrinciples";
-import { type OutputReport, reportCompletion } from "./runs";
+import { type OutputReport, pausedWorkFor, reportCompletion } from "./runs";
 
 /** The lead promotes proposals whose dependencies and assignments resolve. */
 export function leadPromoteProposals(state: State, now: string): State {
@@ -289,6 +289,8 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       }
       const attemptId = nextId(s, "run");
       const inputs = consumedInputs(s, t, st);
+      // A writer paused mid-change starts from its paused run's changes while they still fit (ORC-030 C4).
+      const startedFrom = pausedWorkFor(s, t, st, inputs, now);
       // Subagents only in read-only research, where the owner allows them, on a provider that tracks them (ORC-031).
       const allowSubagents = allowSubagentsForStep(s, t, st, r.selection.provider);
       const a: Attempt = {
@@ -315,6 +317,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
           // A dedicated delivery review reads a worktree detached at exactly this commit.
           ...(t.reviewTarget ? { reviewedSha: t.reviewTarget.headSha } : {}),
           ...(allowSubagents ? { allowSubagents } : {}),
+          ...(startedFrom ? { startedFrom } : {}),
         },
         startedAt: now,
         outcome: "running",
@@ -325,7 +328,7 @@ export function dispatchEligible(state: State, now: string, opts: DispatchOption
       st.state = "running";
       if (t.lifecycle === "ready") t.lifecycle = "active";
       touch(t, now);
-      event(s, now, "lead", "dispatch", `Dispatched ${st.id} (${st.role}) to ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model} as ${a.id} on spec r${spec.rev}`, t.id);
+      event(s, now, "lead", "dispatch", `Dispatched ${st.id} (${st.role}) to ${providerLabel(a.snapshot.provider)} · ${a.snapshot.model} as ${a.id} on spec r${spec.rev}${startedFrom ? `, from the changes of the paused run ${startedFrom.attemptId}` : ""}`, t.id);
       bindQueuedNotes(s, t, st, a, now);
     }
   }
