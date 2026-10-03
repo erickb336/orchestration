@@ -19,6 +19,7 @@
     "test:integration": "node --import tsx scripts/real-run-test.mjs --fake",
     "test:real": "node --import tsx scripts/real-run-test.mjs",
     "trial:studio": "node --import tsx scripts/studio-trial.mjs",
+    "trial:factory": "node --import tsx scripts/factory-trial.mjs",
     "recorder:build": "docker build --tag orchestrator-recorder:2 docker/recorder",
     "preview": "vite preview",
     "setup": "node scripts/orchestrator.mjs setup",
