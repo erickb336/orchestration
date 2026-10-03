@@ -7,6 +7,7 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +17,7 @@ import { startFactoryArgs } from "../../src/domain/testing/factory";
 import type { AdapterEvent } from "../runtimes/types";
 import type { BlueprintItem } from "../../src/domain/studio/types";
 import type { SpecContent, State } from "../../src/domain/types";
+import { createHttpServer } from "../http";
 import { Scheduler } from "../scheduler";
 import { Store } from "../store";
 import { ScriptedAdapter } from "../testing/scripted";
@@ -194,6 +196,42 @@ describe("the Capture evidence step through the scheduler", () => {
     expect(given.workspace.readRoots).toEqual([join(dir, "evidence", st().project.id, run.id), join(dir, "studio", st().project.id, "artifacts", "sa-1", "v1")]);
     expect(given.prompt).toContain(`- E1.evidence v1 (evidence):\n  Evidence of ${sha.slice(0, 12)}: 1 of 1 item captured.`);
     expect(given.prompt).toContain(`  - bi-1 Trip board (screen v1): built on desktop: ${join(dir, "evidence", st().project.id, run.id, "bi-1/desktop.png")}`);
+  });
+
+  it("the app's file route serves the files the record lists, with the studio files' headers, and nothing else", async () => {
+    cmd("setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } });
+    const id = implemented({ [CAPTURE_PLAN]: PLAN });
+    const run = runOf(id, "E1")!;
+    const runner = evidence as ScriptedEvidence;
+    const outDir = runner.started[0].outDir;
+    runner.finish(run.id);
+    settle();
+    // A file the record does not list, beside the ones it does.
+    writeFileSync(join(outDir, "bi-1", "planted.png"), readFileSync(join(outDir, "bi-1", "desktop.png")));
+    const probe = createHttpServer({ store, scheduler, startedAt: iso(), allowedHosts: [] });
+    await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+    const port = (probe.address() as AddressInfo).port;
+    probe.close();
+    const server = createHttpServer({ store, scheduler, startedAt: iso(), allowedHosts: [`127.0.0.1:${port}`], dataDir: dir });
+    await new Promise<void>((r) => server.listen(port, "127.0.0.1", r));
+    try {
+      const get = (q: string) => fetch(`http://127.0.0.1:${port}/api/studio/file?${q}`);
+      const ok = await get(`evidence=${run.id}&path=${encodeURIComponent("bi-1/desktop.png")}`);
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("content-type")).toBe("image/png");
+      expect({ nosniff: ok.headers.get("x-content-type-options"), cache: ok.headers.get("cache-control"), csp: ok.headers.get("content-security-policy") }).toEqual({ nosniff: "nosniff", cache: "no-store", csp: "default-src 'none'; sandbox" });
+      expect(Buffer.from(await ok.arrayBuffer()).subarray(1, 4).toString("latin1")).toBe("PNG");
+      for (const q of [`evidence=${run.id}&path=${encodeURIComponent("bi-1/planted.png")}`, `evidence=${run.id}&path=${encodeURIComponent("../../../db.sqlite")}`, `evidence=run-9999&path=${encodeURIComponent("bi-1/desktop.png")}`, `evidence=${encodeURIComponent("../x")}&path=${encodeURIComponent("bi-1/desktop.png")}`]) {
+        const r = await get(q);
+        expect(r.status, q).toBe(404);
+        expect(r.headers.get("content-security-policy")).toBe("default-src 'none'; sandbox");
+      }
+      expect((await get(`evidence=${run.id}&path=${encodeURIComponent("bi-1/page.html")}`)).status).toBe(403);
+      expect((await get(`evidence=${run.id}`)).status).toBe(400);
+    } finally {
+      server.closeAllConnections();
+      server.close();
+    }
   });
 
   it("a pause stops a running capture, and Resume runs it again", () => {
