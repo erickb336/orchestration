@@ -28,7 +28,7 @@ export function EnvironmentCard({ v, set }: { v: EnvironmentDraft; set: (p: Part
       live = false;
     };
   }, [real, state.project.repoPath]);
-  const source = sourceLine(found, v);
+  const source = sourceLine(found, state.project.environment?.image);
   const proposal = found?.proposal && found.proposal.image !== v.envImage.trim() ? found.proposal : undefined;
   const problem = environmentProblem(v);
   const last = lastPrepareLine(state);

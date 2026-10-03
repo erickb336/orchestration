@@ -47,9 +47,9 @@ describe("the environment form", () => {
 describe("the card's lines", () => {
   it("the dev container comes first; then the confirmed image; else the checks run on this computer", () => {
     const dc = { ref: "main", devcontainer: { file: ".devcontainer/devcontainer.json", image: "node:22" } };
-    expect(sourceLine(dc, { ...empty, envImage: PINNED })).toMatchObject({ label: "Dev container", tone: "done" });
-    expect(sourceLine({ ref: "main" }, { ...empty, envImage: PINNED })).toMatchObject({ label: "Confirmed image", text: expect.stringMatching(/sha256:bb2988715db2…/) });
-    expect(sourceLine({ ref: "main", devcontainer: { file: ".devcontainer.json", refused: "It uses Docker Compose." } }, empty)).toMatchObject({ label: "Not set up", tone: "fail", text: expect.stringMatching(/^It uses Docker Compose\. Checks run on this computer/) });
+    expect(sourceLine(dc, PINNED)).toMatchObject({ label: "Dev container", tone: "done" });
+    expect(sourceLine({ ref: "main" }, PINNED)).toMatchObject({ label: "Confirmed image", text: expect.stringMatching(/sha256:bb2988715db2…/) });
+    expect(sourceLine({ ref: "main", devcontainer: { file: ".devcontainer.json", refused: "It uses Docker Compose." } }, undefined)).toMatchObject({ label: "Not set up", tone: "fail", text: expect.stringMatching(/^It uses Docker Compose\. Checks run on this computer/) });
   });
 
   it("the last prepare: ran, reused, or on this computer and why", () => {

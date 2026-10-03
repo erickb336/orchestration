@@ -57,12 +57,12 @@ export function addHost(v: EnvironmentDraft, text: string): { hosts: string[] } 
 /** An image reference with its digest shortened, for reading. */
 export const shortImage = (ref: string) => ref.replace(/@sha256:([0-9a-f]{12})[0-9a-f]+$/, "@sha256:$1…");
 
-/** Where the checks' environment comes from, first match wins, as the card's status line. */
-export function sourceLine(found: EnvironmentFound | null, v: EnvironmentDraft): { tone: "done" | "neutral" | "fail"; label: string; text: string } {
+/** Where the checks' environment comes from, first match wins, as the card's status line: the saved setting, not the form. */
+export function sourceLine(found: EnvironmentFound | null, savedImage: string | undefined): { tone: "done" | "neutral" | "fail"; label: string; text: string } {
   const dc = found?.devcontainer;
   if (dc && !dc.refused) return { tone: "done", label: "Dev container", text: `${dc.file}: ${dc.image ? `the image ${shortImage(dc.image)}` : `the Dockerfile ${dc.dockerfile} (context ${dc.context})`}. It comes first; the image below is used only without it.` };
   const why = dc?.refused ? `${dc.refused} ` : "";
-  if (v.envImage.trim()) return { tone: dc?.refused ? "fail" : "done", label: "Confirmed image", text: `${why}The checks use ${shortImage(v.envImage.trim())}.` };
+  if (savedImage) return { tone: dc?.refused ? "fail" : "done", label: "Confirmed image", text: `${why}The checks use ${shortImage(savedImage)}.` };
   return { tone: dc?.refused ? "fail" : "neutral", label: "Not set up", text: `${why}Checks run on this computer as before: only npm, pnpm and yarn installs get the network there.` };
 }
 
