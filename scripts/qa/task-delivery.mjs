@@ -7,8 +7,8 @@
 //    verification, and Done. A finding that comes to the owner is answered from the page ("Fix it").
 // 3. Results: the pull request waits under "Ready to merge"; Merge, confirm, and the result lands under New results.
 //
-// How it moves: the scheduler's timer is off. The script steps the simulated clock (the Simulation menu's Step) until
-// the next stage, then looks at the page. Each check reads what the page shows; the store only confirms a record.
+// How it moves: the simulated clock is frozen (the harness's `freeze`). The script steps it (the Simulation menu's
+// Step) until the next stage, then looks at the page. Each check reads what the page shows; the store only confirms a record.
 //
 // Sample data: the demo project (Weekend Trips) with its open tasks paused before the service starts, so only the new
 // task runs. The runtime, the checks and GitHub are simulated: no agent runs, nothing is pushed.
@@ -166,7 +166,7 @@ await runJourney(
       await mine.getByRole("button", { name: "Merge", exact: true }).click();
       const dialog = page.getByRole("dialog");
       await dialog.waitFor({ timeout: 5_000 });
-      j.check(/Merge/.test(await dialog.innerText()), "Merge asks to confirm, and names the commit", (await dialog.innerText()).slice(0, 200));
+      j.check(/commit \S{6,}/.test(await dialog.innerText()), "Merge asks to confirm, and names the commit", (await dialog.innerText()).slice(0, 200));
       await j.shot("09-merge-confirm", { full: false });
       await dialog.getByRole("button", { name: "Merge", exact: true }).click();
       const results = page.getByRole("region", { name: /^New results/ });
@@ -179,11 +179,11 @@ await runJourney(
       await j.pageChecks("Results, after Merge");
     });
 
-    // The page's own words, for the audit: does Home mention the result?
+    // Home lists the new result too.
     await page.goto(`${sv.origin}/#/overview`);
     await page.waitForTimeout(800);
     j.check((await text(page)).includes(TITLE), "Home lists the new result", null);
     await j.shot("11-home");
   },
-  { service: { progressPerTick: 25 }, ...(process.env.QA_ONLY ? { widths: [Number(process.env.QA_ONLY)] } : {}) },
+  { service: { freeze: true, progressPerTick: 25 }, ...(process.env.QA_ONLY ? { widths: [Number(process.env.QA_ONLY)] } : {}) },
 );

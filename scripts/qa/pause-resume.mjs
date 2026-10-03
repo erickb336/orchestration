@@ -52,8 +52,12 @@ await runJourney(
     const pill = () => page.locator(".t-head__title").innerText();
     const banner = () => page.getByRole("banner").innerText();
     const places = () => page.getByRole("navigation", { name: "Vision and the factory" }).innerText();
-    const openProjectMenu = async () => {
+    /** Open the Project menu, and check that it opens inside the window (`when` names the moment). */
+    const openProjectMenu = async (when) => {
       await page.getByRole("banner").locator("summary", { hasText: "Project" }).click();
+      const box = await page.getByRole("group", { name: "Project" }).boundingBox();
+      const vw = page.viewportSize().width;
+      j.check(box && box.x >= 0 && box.x + box.width <= vw, `the Project menu opens inside the window (${when})`, { left: Math.round(box?.x ?? NaN), right: Math.round((box?.x ?? NaN) + (box?.width ?? 0)), window: vw });
     };
     let id;
 
@@ -98,10 +102,7 @@ await runJourney(
     });
 
     await j.step("Pause project: Pausing…, then Paused", async () => {
-      await openProjectMenu();
-      const box = await page.getByRole("group", { name: "Project" }).boundingBox();
-      const vw = page.viewportSize().width;
-      j.check(box && box.x >= 0 && box.x + box.width <= vw, "the Project menu opens inside the window", { left: Math.round(box?.x ?? NaN), right: Math.round((box?.x ?? NaN) + (box?.width ?? 0)), window: vw });
+      await openProjectMenu("running");
       await j.shot("06a-project-menu", { full: false });
       await page.getByRole("button", { name: "Pause project" }).click();
       await waitFor("Pausing… in the header", async () => /Pausing…/.test(await banner()), 2_000);
@@ -115,7 +116,7 @@ await runJourney(
       j.check(M.activeAttempts(sv.state()).length === 0, "Paused shows once every run has stopped (the record agrees)");
       j.check(/Factory paused/.test(await places()), "the Factory pill says paused", await places());
       j.check(/Paused/.test(await pill()), "the task says Paused", await pill());
-      await openProjectMenu();
+      await openProjectMenu("paused");
       const menu = page.getByRole("group", { name: "Project" });
       j.check(await menu.getByRole("button", { name: "Resume project" }).isVisible(), "the Project menu offers Resume project", await menu.innerText());
       await j.shot("07-project-paused", { full: false });

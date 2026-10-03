@@ -204,7 +204,15 @@ export async function chrome() {
  */
 export async function openPage(browser, width, o = {}) {
   const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 812 : 900 }, deviceScaleFactor: 1 });
-  if (!o.tour) await ctx.addInitScript(() => localStorage.setItem("orc.tour.v1", "done"));
+  // Only in the app's own window: a studio prototype's frame is sandboxed and has no storage.
+  if (!o.tour)
+    await ctx.addInitScript(() => {
+      try {
+        if (window === window.top) localStorage.setItem("orc.tour.v1", "done");
+      } catch {
+        // A sandboxed frame.
+      }
+    });
   const page = await ctx.newPage();
   page.qaErrors = [];
   page.on("console", (m) => m.type() === "error" && page.qaErrors.push(`console: ${m.text()}`));

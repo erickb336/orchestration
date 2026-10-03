@@ -1,7 +1,7 @@
 // `npm run qa` (ORC-030, step 1): every QA journey in scripts/qa/, then the screen inventory, in a real browser at 1280
 // and 375 wide, simulated (the fake runtime: no paid run, no Docker).
 //
-// It builds the UI once (QA_DIST), runs the scripts QA_JOBS at a time (default 3), each on its own pair of ports from
+// It builds the UI once (QA_DIST), runs the scripts QA_JOBS at a time (default 3), each on its own ten ports from
 // ORCHESTRATION_TEST_PORT (default 5950), and writes each script's output to evidence/qa/<journey>/run.log. At the end
 // it prints one line per script and writes evidence/qa/summary.json. It exits 1 when a script fails.
 //
@@ -33,7 +33,8 @@ const queue = [...names];
 async function worker(slot) {
   for (let name = queue.shift(); name; name = queue.shift()) {
     const t0 = Date.now();
-    const port = base + slot * 2;
+    // Ten ports a slot: a script may start a second service on its port + 2 (preflight) or use four (budget-stop).
+    const port = base + slot * 10;
     const out = [];
     const code = await new Promise((resolve) => {
       const child = spawn(process.execPath, ["--import", "tsx", join("scripts", "qa", `${name}.mjs`)], {

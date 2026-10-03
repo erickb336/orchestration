@@ -31,6 +31,11 @@ function visionProject() {
   return runCommand(s, "setDomains", { domains: ["screen"] }, now).state;
 }
 
+/** Whether the prototype frame shows the designer's page (its heading) within 8 s. */
+async function frameShows(page) {
+  return page.frameLocator("iframe.st-viewport__frame").first().getByText("Lake weekend").waitFor({ timeout: 8_000 }).then(() => true, () => false);
+}
+
 /** The harness's init script reads localStorage inside the sandboxed prototype frame: drop that error (see the report). */
 function dropNoise(page) {
   page.qaErrors = page.qaErrors.filter((e) => !(/localStorage/.test(e) && /sandboxed/.test(e)));
@@ -107,8 +112,9 @@ await runJourney(
       j.check(/A · Map first\s*Feasible/.test(t) && /B · Day by day\s*Feasible/.test(t), "PE review: a verdict on each variant");
       j.check(/v1\s*asked for changes/.test(t) && /v2\s*agreed/.test(t), "the versions: v1 asked for changes, v2 agreed");
       j.check(t.includes("Mark it Keep, Change or Drop, and pick a variant."), "PE review says what the owner does next");
-      await page.waitForTimeout(1500);
+      j.check(await frameShows(page), "the prototype shows the designer's page");
       await j.shot("pe-verdict");
+      await j.shot("prototype", { locator: page.locator(".st-stage").first() });
       dropNoise(page);
       await j.pageChecks("Vision with the PE's verdict");
     });
@@ -159,6 +165,7 @@ await runJourney(
       j.check(/Added\s*Trip plan \(simulated sample\) v2/.test(bar), "the draft bar lists the approved part as Added", bar.replace(/\s+/g, " "));
       j.check(bar.includes("Start the factory…"), "in Vision, the draft bar leads to Start the factory…");
       j.check((await page.getByRole("list", { name: "Artifacts of round 1" }).innerText()).includes("in the draft"), "the part says in the draft");
+      j.check(await frameShows(page), "in the draft, the prototype still shows the designer's page");
       await j.shot("draft");
       dropNoise(page);
       await j.pageChecks("Vision with a draft");
