@@ -204,6 +204,9 @@ describe("a subagent where none is allowed", () => {
     expect(slippedThrough(seen)).toEqual([]);
     expect(run(seen, runId).subagents!.seenAt).toBe(at(11));
     expect(() => markSubagentsSeen(state, runId, at(12))).toThrow("reported no helper agents");
+    // Another one after that is listed again.
+    const again = reportSubagent(seen, runId, { ...started, id: "y" }, at(13));
+    expect(slippedThrough(again).map((x) => x.count)).toEqual([2]);
   });
 });
 

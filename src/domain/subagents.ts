@@ -147,6 +147,8 @@ export function reportSubagent(state: State, runId: string, report: SubagentRepo
   if (report.phase === "started" && known) return state;
   if (report.phase === "refused" && known) return state;
   if (report.phase === "ended" && known?.ended) return state;
+  // Past the list, an end for an unknown id is most likely an unlisted one ending, which was counted at its start.
+  if (report.phase === "ended" && !known && (before.subagents?.items.length ?? 0) >= MAX_SUBAGENTS_LISTED) return state;
   const s = draft(state);
   const run = findRun(s, runId)!;
   const rec = (run.subagents ??= { count: 0, mostAtOnce: 0, items: [] });
@@ -170,7 +172,11 @@ export function reportSubagent(state: State, runId: string, report: SubagentRepo
   else rec.items.push({ id: report.id, startedAt: now, endedAt: now, asked: "", ...(report.model ? { model: report.model } : {}), ...(report.usage ? { usage: { ...report.usage } } : {}), usageInParent: false, ended: report.how });
   rec.mostAtOnce = Math.max(rec.mostAtOnce, running(rec), 1);
   const allowed = allowanceOf(run);
-  if (!allowed) event(s, now, "runtime", "blocked", `${runName(run)} started a helper agent where none is allowed`, taskId);
+  if (!allowed) {
+    // A new one after the owner marked the earlier ones as seen is theirs to know about again.
+    delete rec.seenAt;
+    event(s, now, "runtime", "blocked", `${runName(run)} started a helper agent where none is allowed`, taskId);
+  }
   else if (rec.count > allowed.cap) event(s, now, "runtime", "blocked", `${runName(run)} started ${rec.count} helper agents, over its cap of ${allowed.cap}`, taskId);
   return s;
 }
