@@ -94,4 +94,16 @@ describe("removeTree never follows a link", () => {
     expect(existsSync(stage)).toBe(false);
     untouched(victim);
   });
+
+  it("a folder no one can read or enter (mode 000), as a built app can leave one: it goes too (ORC-030 C3)", () => {
+    const { stage, victim } = setup();
+    mkdirSync(join(stage, "locked/inner"), { recursive: true });
+    writeFileSync(join(stage, "locked/inner/f.txt"), "x");
+    chmodSync(join(stage, "locked/inner"), 0);
+    chmodSync(join(stage, "locked"), 0);
+    symlinkSync(victim, join(stage, "link"));
+    removeTree(stage);
+    expect(existsSync(stage)).toBe(false);
+    untouched(victim);
+  });
 });
