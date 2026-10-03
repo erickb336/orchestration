@@ -281,6 +281,22 @@ function PillsSection() {
           <StatePill tone="neutral">Cancelled</StatePill>
         </div>
       </Demo>
+      <Demo label="As a link: the header's two places">
+        <div className="k-tones">
+          <StatePill tone="you" href="#/vision" title="3 changes in the draft wait for your Lock in.">
+            Vision · draft, 3 changes
+          </StatePill>
+          <StatePill tone="work" pulse href="#/tasks">
+            Factory running · 4 agents
+          </StatePill>
+          <StatePill tone="neutral" paused href="#/tasks">
+            Factory paused · by you
+          </StatePill>
+          <StatePill tone="you" href="#/tasks">
+            Factory stopped at the budget · needs you
+          </StatePill>
+        </div>
+      </Demo>
     </Section>
   );
 }
