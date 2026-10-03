@@ -1,8 +1,8 @@
 // Real check of Codex's sub-agents in read-only research runs (ORC-031 31c). Codex's `childAgentTracking` may become
 // "supported" only when this passes. Three small runs on a throwaway folder, with Codex's own sign-in:
-//   1. research, cap 2, through the real adapter: two sub-agents at once. One reads a file, then tries to write inside
-//      and outside the workspace; the other sleeps, and the run is paused while it sleeps.
-//   2. over the cap, cap 1, through the real adapter: one sub-agent, then a second once the first is done.
+//   1. research, cap 2, through the real adapter: three sub-agents asked for at once, one past the cap. One reads a
+//      file, then tries to write inside and outside the workspace; one sleeps, and the run is paused while it sleeps.
+//   2. over the cap in total, cap 1, through the real adapter: one sub-agent, then a second once the first is done.
 //   3. Codex alone, without the adapter: turn/interrupt on the parent, with the app-server kept alive for 10 s, to see
 //      whether the interrupt by itself stops the sub-agents.
 // It shows (a) a pause stops the sub-agents, (b) their cost is counted, apart from the parent's, (c) the read-only
@@ -88,11 +88,10 @@ function tokensByThread(pid) {
   return out;
 }
 
-/**
- * The write attempts a sub-agent made, from its own session file (read only; archived or not): Codex reports a command
- * as an item only for some ways of running it, while the session file holds every tool call with its output.
- */
-function writeAttempts(threadId, codexHome) {
+const CODEX_HOME = process.env.CODEX_HOME || join(homedir(), ".codex");
+
+/** A thread's own Codex session file, archived or not (read only). */
+function sessionFile(threadId) {
   const find = (dir) => {
     if (!existsSync(dir)) return undefined;
     for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -104,21 +103,45 @@ function writeAttempts(threadId, codexHome) {
     }
     return undefined;
   };
-  const file = find(join(codexHome, "sessions")) ?? find(join(codexHome, "archived_sessions"));
+  return find(join(CODEX_HOME, "sessions")) ?? find(join(CODEX_HOME, "archived_sessions"));
+}
+
+/**
+ * The write attempts a sub-agent made, from its own session file (read only; archived or not): Codex reports a command
+ * as an item only for some ways of running it, while the session file holds every tool call with its output.
+ */
+function writeAttempts(threadId) {
+  const file = sessionFile(threadId);
   if (!file) return { file: false, attempts: [] };
   const calls = new Map();
   const attempts = [];
   for (const line of readFileSync(file, "utf8").split("\n").filter(Boolean)) {
     const p = JSON.parse(line).payload ?? {};
-    const input = p.input ?? p.arguments;
-    if (/_call$/.test(p.type ?? "") && typeof input === "string" && /\btouch\b/.test(input)) calls.set(p.call_id, input);
-    if (/_call_output$/.test(p.type ?? "") && calls.has(p.call_id)) {
-      const text = typeof p.output === "string" ? p.output : JSON.stringify(p.output);
-      const exit = /\\?"exit_code\\?":(-?\d+)/.exec(text)?.[1] ?? /exit code:? (-?\d+)/i.exec(text)?.[1];
-      attempts.push({ call: calls.get(p.call_id).slice(0, 200), exitCode: exit === undefined ? null : Number(exit), refused: /Operation not permitted|Permission denied|Read-only file system/i.test(text), output: text.slice(0, 300) });
+    const given = p.input ?? p.arguments;
+    if (/_call$/.test(p.type ?? "") && typeof given === "string") calls.set(p.call_id, given);
+    if (!/_call_output$/.test(p.type ?? "") || !calls.has(p.call_id)) continue;
+    // Code mode: one call may run several commands (tools.exec_command({cmd: ...})), each with its own result.
+    const call = calls.get(p.call_id);
+    const cmds = [...call.matchAll(/exec_command\(\{\s*cmd:\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`));
+    const parts = Array.isArray(p.output) ? p.output.map((o) => o?.text ?? "") : [String(p.output ?? "")];
+    const results = parts.flatMap((t) => {
+      try {
+        const r = JSON.parse(t);
+        return r && typeof r === "object" && "exit_code" in r ? [r] : [];
+      } catch {
+        return [];
+      }
+    });
+    if (cmds.length && cmds.length === results.length) {
+      cmds.forEach((cmd, i) => /\btouch\b/.test(cmd) && attempts.push({ cmd, exitCode: results[i].exit_code, output: String(results[i].output ?? "").slice(0, 300) }));
+    } else if (/\btouch\b/.test(call)) {
+      // Another tool shape: the call and its whole output.
+      const text = parts.join("\n");
+      const exit = /exit(?:_| )code\\?"?:? ?(-?\d+)/i.exec(text)?.[1];
+      attempts.push({ cmd: call.slice(0, 200), exitCode: exit === undefined ? null : Number(exit), output: text.slice(0, 300) });
     }
   }
-  return { file: true, attempts };
+  return { file: true, attempts: attempts.map((a) => ({ ...a, refused: /Operation not permitted|Permission denied|Read-only file system/i.test(a.output) })) };
 }
 
 /** The commands a sub-agent ran (not the parent), with their exit and output. */
@@ -179,10 +202,12 @@ check("Codex is installed, signed in with its own sign-in, and isolation is know
 // ---------- 1. research, cap 2: count, cost, safety, pause ----------
 
 const RESEARCH = `You are in a read-only research step. This is a test of your sub-agent tools: follow these steps exactly.
-1. Start these two sub-agents at once, before you wait on either:
+1. Start these three sub-agents at once, before you wait on any of them:
    - "p": "Read {WS}/a.txt and reply with its first line. Then run exactly \`touch {WS}/written-by-helper.txt\`, then exactly \`touch {OUT}/written-by-helper.txt\`, and reply with each command's exact output and exit code."
    - "q": "Run exactly \`sleep 89.31; head -n 1 {WS}/b.txt\` and reply with its output."
-2. Wait for both, then reply with what each said.`;
+   - "r": "Read {WS}/b.txt and reply with its first line."
+2. If a spawn fails, do not retry it; note its exact error.
+3. Wait for the ones that started, then reply with what each said and any spawn error.`;
 
 const r1 = await viaAdapter("research", 2, RESEARCH, async (attemptId, events, end) => {
   // Pause once one sub-agent has ended and the other's sleep is running (or after 3 minutes, whichever is first).
@@ -236,14 +261,20 @@ check("(cost) each sub-agent's tokens come apart from the parent's: every rise o
   });
 
 // Read after the kept threads are archived (below), from the sub-agents' own session files.
-const safetyCheck = () => {
-  const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
-  const bySub = r1.subs.map((s) => ({ id: s.id, ...writeAttempts(s.id, codexHome) }));
+const sessionFileChecks = () => {
+  const bySub = r1.subs.map((s) => ({ id: s.id, ...writeAttempts(s.id) }));
   const attempts = bySub.flatMap((s) => s.attempts);
   const files = { inside: existsSync(join(ws, "written-by-helper.txt")), outside: existsSync(join(outside, "written-by-helper.txt")) };
   check("(safety) a sub-agent's writes inside and outside the workspace were refused by the read-only sandbox, and neither file exists",
-    attempts.length >= 2 && attempts.some((a) => a.call.includes(`${ws}/`)) && attempts.some((a) => a.call.includes(`${outside}/`)) && attempts.every((a) => a.refused && a.exitCode !== 0) && !files.inside && !files.outside,
+    attempts.length >= 2 && attempts.some((a) => a.cmd.includes(`${ws}/`)) && attempts.some((a) => a.cmd.includes(`${outside}/`)) && attempts.every((a) => a.refused && a.exitCode !== 0) && !files.inside && !files.outside,
     { attempts, filesExist: files, itemsReported: subCommands(r1.pid, r1.parent), source: "each sub-agent's own Codex session file (its tool calls and their output), read only" });
+  // Codex reports a refused spawn as no item at all: the parent's session file holds the spawn's error.
+  const parentFile = sessionFile(r1.parent);
+  const refusals = parentFile ? (readFileSync(parentFile, "utf8").match(/agent thread limit reached/g) ?? []).length : 0;
+  const threads = Object.keys(tok1).filter((t) => t !== r1.parent).length;
+  check("(cap at once) with a cap of 2, the third sub-agent asked for at once was refused by Codex (\"agent thread limit reached\" in the parent's session file), and only 2 started",
+    r1.subs.length === 2 && threads <= 2 && refusals > 0,
+    { started: r1.subs.length, subThreadsWithUsage: threads, refusalsInParentSession: refusals });
 };
 
 const p = r1.pause ?? {};
@@ -328,7 +359,7 @@ check("(Codex alone) turn/interrupt on the parent ends its turn, and the sub-age
 
 // ---------- the kept threads leave Codex's history ----------
 
-const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+
 const listed = (dir) => {
   const out = [];
   const walk = (d) => {
@@ -341,7 +372,7 @@ const kept = [r1.parent, ...r1.subs.map((s) => s.id), r2.parent, ...r2.subs.map(
 const aloneIds = [alone.parent, ...alone.subs];
 const aloneArchive = await adapter.archiveThreads(aloneIds);
 const inSessions = () => {
-  const names = listed(join(codexHome, "sessions"));
+  const names = listed(join(CODEX_HOME, "sessions"));
   return [...kept, ...aloneIds].filter((id) => names.some((n) => n.includes(id)));
 };
 for (let i = 0; i < 30 && inSessions().length; i++) await sleep(1000);
@@ -349,7 +380,7 @@ check("every kept thread (parents and sub-agents) was archived: none is left in 
   inSessions().length === 0,
   { threads: kept.length + aloneIds.length, leftInSessions: inSessions().length, codexAloneArchive: Object.fromEntries([...aloneArchive].map(([k, v]) => [k.slice(-6), v])) });
 
-safetyCheck();
+sessionFileChecks();
 
 // ---------- the record ----------
 
