@@ -1,13 +1,15 @@
 // QA journey "preflight": the pre-flight and Start the factory, as the owner sees them, at 1280 and 375 wide.
 //
 // What it drives, on a fresh service for each width:
-// 1. Home: "Start the factory…" opens the pre-flight.
-// 2. The pre-flight: the blueprint by focus, what is still open, the tasks, and the two budgets.
+// 1. Home: the vision's one line, Open Vision, and "Start the factory…", which opens the pre-flight.
+// 2. The pre-flight: one list of parts (focus, new or changed, the PE's verdict, its estimate), what is still open, the
+//    tasks, the agents in one line, and the two budget fields (ORC-030 C1: a-pre-one-list, a-pre-budgets, a-pre-agents).
 // 3. Another tab approves Trip map while the owner reads. The stale banner shows, and the agreement clears.
 // 4. The owner chooses Check-in, agrees and starts. The screen says what it recorded. Home shows the factory floor.
 // 5. The empty case, on a second service: a new project with nothing approved and no budget. The journey reads the
-//    pre-flight, follows its link to Settings › Project › Budgets, sets a building budget, comes back, and starts the
-//    factory.
+//    pre-flight, ticks the agreement, sets a building budget in the pre-flight's own field and saves it (no stale
+//    banner, the agreement stays), checks Settings › Project › Budgets shows the same budget, comes back, and starts
+//    the factory.
 //
 // Sample data: the Weekend Trips project in Vision (src/ui/preflight/preflightScene.ts) and a new empty project. Both
 // are fixtures built through the real commands. The runtime is the fake one, and no scheduler tick runs.
@@ -40,6 +42,11 @@ await runJourney(
       const link = page.getByRole("link", { name: "Start the factory…" }).first();
       await link.waitFor({ timeout: 10_000 });
       j.check((await link.getAttribute("href")) === "#/vision/pre-flight", "Home: Start the factory… opens the pre-flight");
+      // The vision text lives in Vision: Home keeps one line of it, with Open Vision (ORC-030 C1).
+      const line = page.getByRole("region", { name: "Vision", exact: true });
+      j.check((await line.innerText()).includes("Weekend trips for a small group of friends."), "Home: one line of the vision", (await line.innerText()).replace(/\s+/g, " "));
+      j.check((await line.getByRole("link", { name: "Open Vision" }).getAttribute("href")) === "#/vision", "Home: Open Vision opens Vision");
+      j.check(!(await has("Vision so far")) && !(await has("Vision and history")), "Home: the vision text and its history are not on Home");
       await j.shot("home");
       await link.click();
     });
@@ -51,18 +58,23 @@ await runJourney(
       dropNoise(page);
       await j.pageChecks("the pre-flight");
       const t = await text(page);
-      j.check(["The experience · 2 approved", "Inputs and outputs · 2 approved", "Flows · 1 approved"].every((w) => t.includes(w)), "the blueprint: the approved parts by focus");
-      j.check(/Words v1\s*PE: not reviewed/.test(t) && /Trip plan v1\s*PE: agreed/.test(t), "the blueprint: each part shows its PE review (Words: not reviewed)");
+      const parts = await page.getByRole("list", { name: "The parts" }).getByRole("listitem").allInnerTexts();
+      const flatParts = parts.map((p) => p.replace(/\s+/g, " "));
+      j.check(parts.length === 5, "the blueprint: one list of the 5 parts", flatParts);
+      j.check(flatParts[0]?.startsWith("Trip plan v1 The experience · new PE: agreed") && flatParts.some((p) => /^Words v1 Inputs and outputs · new PE: not reviewed/.test(p)), "each part: its focus, new, and the PE's verdict (Words: not reviewed)", flatParts.slice(0, 4));
+      j.check(flatParts.some((p) => p.includes("Packing list v1") && p.includes("Estimate: building $3–$5, maintenance $0.40–$0.80 a month")) && flatParts.some((p) => p.includes("Trip plan v1") && p.includes("No estimate")), "each part: the PE's estimate, or no estimate (never $0)");
+      j.check(!t.includes("What changes") && !t.includes("Your first Lock in"), "one list: no second list of the same parts");
+      j.check(t.includes("Claude leads, designs and reviews; Codex codes; the PE reviews on the other provider; at most 3 agents at once.") && (await page.getByRole("link", { name: "Change in Settings" }).getAttribute("href")) === "#/settings/agents", "the agents: one line, with Change in Settings");
       const open = page.getByRole("region", { name: "Still open" }).getByRole("listitem");
       const lines = await open.allInnerTexts();
       j.check(lines.length === 3, "still open: 3 items (vision areas, Trip map, the PE probe)", lines);
       j.check(lines.some((l) => l.includes("Trip map v1: you marked it Change")) && lines.some((l) => l.includes("A PE probe is still running")), "still open: Trip map (marked Change) and the running probe, by name");
-      j.check(t.includes("$0.00 spent of $40.00") && t.includes("The factory stops and asks you at $40.00"), "the budgets: building, $40.00, and the stop");
-      j.check(t.includes("The budget is $10.00 a month"), "the budgets: maintenance, $10.00 a month");
+      const building = page.getByRole("textbox", { name: "Building budget (dollars)" });
+      const maintenance = page.getByRole("textbox", { name: "Maintenance budget (dollars a month)" });
+      j.check((await building.inputValue()) === "40" && t.includes("At it, the factory stops and asks you. $0.00 spent so far"), "the budgets: the building field holds $40 from Settings, with the spend under it");
+      j.check((await maintenance.inputValue()) === "10", "the budgets: the maintenance field holds $10 a month from Settings");
       j.check(t.includes("2 planned tasks: 1 Feature and 1 Change."), "the tasks: 2 planned tasks");
       j.check((await start.getAttribute("aria-disabled")) === "true", "Start the factory waits for the agreement");
-      if (/Packing list v1 \(new; no task builds it yet\)/.test(t) && t.includes("Packing list\nFeature"))
-        j.note("What changes says 'Packing list v1 (new; no task builds it yet)' beside a planned task named Packing list: the screen does not say that the task does not cite the part.");
     });
 
     await j.step("The stale banner", async () => {
@@ -74,7 +86,8 @@ await runJourney(
       const banner = page.getByText("The draft, the vision, the summary or what is open changed while you read.");
       await banner.waitFor({ timeout: 10_000 });
       j.check(!(await agreement.isChecked()), "stale: the banner shows, and the agreement is cleared");
-      j.check(!(await has("Trip map v1: you marked it Change")) && (await has("The experience · 3 approved")), "stale: the new pre-flight shows Trip map approved, not open");
+      const parts = await page.getByRole("list", { name: "The parts" }).getByRole("listitem").allInnerTexts();
+      j.check(!(await has("Trip map v1: you marked it Change")) && parts.some((p) => p.startsWith("Trip map v1")), "stale: the new pre-flight lists Trip map as a part, not open", parts.length);
       await banner.scrollIntoViewIfNeeded();
       await j.shot("stale", { full: false });
     });
@@ -127,26 +140,38 @@ await runJourney(
         await j.pageChecks("the empty pre-flight");
         const t = await text(page);
         j.check(t.includes("Nothing is approved yet. The factory builds from the vision text alone."), "empty: the blueprint says nothing is approved");
-        j.check(t.includes("The draft approves nothing yet, so nothing goes into force."), "empty: the first Lock in says nothing goes into force");
         j.check(t.includes("No building budget is set, so the factory does not stop for cost."), "empty: it says no building budget is set");
-        const budgetLink = page.getByRole("link", { name: "Set the budgets in Settings › Project › Budgets" });
-        j.check((await budgetLink.getAttribute("href")) === "#/settings/project/budgets", "empty: beside the budgets, a link to where you set them (Settings › Project › Budgets)");
+        j.check((await page.getByRole("textbox", { name: "Building budget (dollars)" }).inputValue()) === "" && t.includes("Not set: the factory does not stop for cost."), "empty: the building field is empty, and says what that means");
+        const budgetLink = page.getByRole("link", { name: "Settings › Project › Budgets" });
+        j.check((await budgetLink.getAttribute("href")) === "#/settings/project/budgets", "empty: the budgets say they are the same as in Settings › Project › Budgets, with a link");
         j.check(!t.includes("the Lock in only changes the vision text"), "empty: the estimate does not say the Lock in changes the vision text (it changes nothing)");
       });
 
-      await j.step("Set a building budget", async () => {
-        await page.getByRole("link", { name: "Set the budgets in Settings › Project › Budgets" }).click();
+      await j.step("Set a building budget on the pre-flight", async () => {
+        // Agree first: saving a budget here changes the summary, but it is the owner's own change on this screen.
+        await agreement.check();
         const field = page.getByRole("textbox", { name: "Building budget (dollars)" });
-        await field.waitFor({ timeout: 10_000 });
-        j.check(page.url().endsWith("#/settings/project/budgets"), "the link opens Settings › Project › Budgets", page.url());
         await field.fill("25");
-        await page.getByRole("button", { name: "Save", exact: true }).first().click();
-        await empty.until("the budget is saved", (s) => s.project.budgets.buildingUsd === 25, 10_000);
+        const save = page.getByRole("button", { name: "Save the budgets" });
+        await save.waitFor({ timeout: 5_000 });
         await field.scrollIntoViewIfNeeded();
+        await j.shot("empty-budget-typed", { full: false });
+        await save.click();
+        await empty.until("the budget is saved", (s) => s.project.budgets.buildingUsd === 25, 10_000);
+        await page.getByText("It stops at $25.00 and asks you before it spends more.").waitFor({ timeout: 10_000 });
+        await page.waitForTimeout(500);
+        j.check(true, "empty: the pre-flight shows the new building budget, $25.00");
+        j.check(!(await has("changed while you read")), "empty: your own budget on this screen shows no stale banner");
+        j.check(await agreement.isChecked(), "empty: your agreement stays ticked after your own budget");
+        j.check((await field.inputValue()) === "25" && (await save.count()) === 0, "empty: the field holds 25, and Save is gone (nothing left to save)");
         await j.shot("empty-budget-set", { full: false });
+        // The same setting: Settings › Project › Budgets shows it.
+        await page.goto(`${empty.origin}/#/settings/project/budgets`);
+        const settingsField = page.getByRole("textbox", { name: "Building budget (dollars)" });
+        await settingsField.waitFor({ timeout: 10_000 });
+        j.check((await settingsField.inputValue()) === "25", "Settings › Project › Budgets shows the budget set on the pre-flight", await settingsField.inputValue());
         await page.goto(`${empty.origin}/#/vision/pre-flight`);
         await page.getByRole("heading", { name: "Start the factory?" }).waitFor({ timeout: 10_000 });
-        j.check(await has("It stops at $25.00 and asks you before it spends more."), "empty: the pre-flight shows the new building budget, $25.00");
       });
 
       await j.step("Start with nothing approved", async () => {

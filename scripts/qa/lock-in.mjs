@@ -3,15 +3,16 @@
 // In Vision, Lock in is not a button of its own: Start the factory, on the pre-flight, is the first Lock in. After the
 // start, each later change goes through Lock in (#/vision/lock-in), and a Lock in that touches tasks is a change order.
 // So the journey drives both, on a fresh service for each width:
-// 1. Vision: the draft bar lists the two approved parts and leads to Start the factory….
+// 1. Vision: the draft bar is one line ("Draft · 2 changes"); Show lists the two approved parts; it leads to Start
+//    the factory… (ORC-030 a-vision-draft-bar).
 // 2. The Lock in summary (#/vision/lock-in) in Vision: what it shows, and its way to the pre-flight.
 // 3. The first Lock in: Check-in, the agreement, and Start the factory. The draft clears, the parts are in force,
 //    and Results › Design and reality shows Lock in 1.
 // 4. The studio goes on: the designer's Words v2 (sample data, through the service's command), which the owner marks
 //    Keep, and Trip plan, which the owner marks Drop, in the studio. Before Send the feedback says what each does to
 //    the draft; Send does it (ORC-030 Q-01).
-// 5. The draft bar, Review and lock in, the summary, a summary that changes while the owner reads it, the agreement,
-//    and Lock in. The draft clears, and Design and reality shows Lock in 2.
+// 5. The draft bar, Lock in…, the summary, a summary that changes while the owner reads it, the agreement, and Lock in.
+//    The draft clears, and Design and reality shows Lock in 2.
 //
 // Sample data: a new Weekend Trips project in Vision, built through the real commands: round 1 (the experience) with
 // Trip plan, which the PE agreed on, and round 2 (inputs and outputs) with Words, the word list. The owner marked both
@@ -59,7 +60,14 @@ function dropNoise(page) {
 await runJourney("lock-in", visionWithDraft, async (j, page, service) => {
   const has = async (words) => (await text(page)).includes(words);
   const flat = (t) => t.replace(/\s+/g, " ");
-  const draftBar = page.locator(".st-draftbar");
+  // The draft bar with a draft (the empty bar has its own class, st-draftbar--empty).
+  const draftBar = page.locator(".st-draftbar:not(.st-draftbar--empty)");
+  /** Open the draft's list (Show), and read the bar. */
+  const showDraft = async () => {
+    const show = draftBar.getByRole("button", { name: "Show" });
+    if (await show.count()) await show.click();
+    return flat(await draftBar.innerText());
+  };
   const vision = async () => {
     await page.goto(`${service.origin}/#/vision`);
     await page.getByRole("heading", { name: "Vision", exact: true }).waitFor({ timeout: 10_000 });
@@ -73,12 +81,16 @@ await runJourney("lock-in", visionWithDraft, async (j, page, service) => {
 
   await j.step("The draft bar in Vision", async () => {
     await vision();
-    const bar = flat(await draftBar.innerText());
-    j.check(bar.includes("Draft · 2 changes"), "the draft bar: 2 changes", bar);
-    j.check(/Added Trip plan v1/.test(bar) && /Added Words v1/.test(bar), "the draft bar lists Trip plan and Words as Added");
+    const line = flat(await draftBar.innerText());
+    j.check(line === "Draft · 2 changes Show Start the factory…", 'the draft bar is one line: "Draft · 2 changes", Show and Start the factory…', line);
+    const box = await draftBar.boundingBox();
+    j.check(!!box && box.height <= (j.width < 600 ? 110 : 60), "the draft bar is short: one line at 1280, two at 375", box && Math.round(box.height));
+    const bar = await showDraft();
+    j.check(/Added Trip plan v1/.test(bar) && /Added Words v1/.test(bar), "Show lists Trip plan and Words as Added", bar);
+    j.check(bar.includes("Discard the draft"), "Show holds Discard the draft");
     const go = draftBar.getByRole("link", { name: "Start the factory…" });
     j.check((await go.getAttribute("href")) === "#/vision/pre-flight", "in Vision, the draft bar leads to Start the factory… (the first Lock in)");
-    j.check((await draftBar.getByRole("link", { name: "Review and lock in" }).count()) === 0, "in Vision, there is no separate Review and lock in");
+    j.check((await draftBar.getByRole("link", { name: "Lock in…" }).count()) === 0, "in Vision, there is no separate Lock in…");
     await j.shot("draft-bar");
     dropNoise(page);
     await j.pageChecks("Vision with a draft");
@@ -107,7 +119,8 @@ await runJourney("lock-in", visionWithDraft, async (j, page, service) => {
     j.check(await has("from Lock in 1 and vision r1"), "started: from Lock in 1");
     await vision();
     j.check((await draftBar.count()) === 0, "after the start, the draft bar is gone");
-    j.check(await has("The factory has started. Vision stays open"), "Vision says the factory has started and Vision stays open");
+    j.check(await has("Nothing is in the draft. The factory builds from Lock in 1."), "Vision says the draft is empty and the factory builds from Lock in 1");
+    j.check((await page.getByRole("button", { name: "Ask the lead for a round" }).count()) === 1, "with an empty draft, the main button is Ask the lead for a round");
     j.check((await page.getByRole("list", { name: /^Artifacts of round/ }).innerText()).includes("in force"), "the parts say in force");
     await j.shot("in-force");
     dropNoise(page);
@@ -143,10 +156,11 @@ await runJourney("lock-in", visionWithDraft, async (j, page, service) => {
     await pick(2, "Words");
     const frames = await page.evaluate(() => [...document.querySelectorAll("iframe")].map((f) => f.src));
     if (frames.some((u) => u.includes("trip-plan"))) j.note(`Vision loads the dropped Trip plan's prototype in a frame: ${frames.join(", ")}`);
-    const bar = flat(await draftBar.innerText());
-    j.check(bar.includes("Since Lock in 1"), "the draft bar says what it changes since: Lock in 1", bar);
-    j.check(/Changed Words v2 \(replaces v1\)/.test(bar) && /Dropped Trip plan v1/.test(bar), "the draft bar: Words v2 Changed, Trip plan Dropped");
-    j.check((await draftBar.getByRole("link", { name: "Review and lock in" }).count()) === 1, "after the start, the draft bar offers Review and lock in");
+    j.check(flat(await draftBar.innerText()).startsWith("Draft · 2 changes Show Lock in…"), "after the start, the draft bar is one line with Lock in…", flat(await draftBar.innerText()));
+    const bar = await showDraft();
+    j.check(bar.includes("Since Lock in 1"), "Show says what the draft changes since: Lock in 1", bar);
+    j.check(/Changed Words v2 \(replaces v1\)/.test(bar) && /Dropped Trip plan v1/.test(bar), "Show lists Words v2 Changed, Trip plan Dropped");
+    j.check((await draftBar.getByRole("link", { name: "Lock in…" }).count()) === 1, "after the start, the draft bar offers Lock in…");
     // Words v2 shows beside v1, the version in force: each pane keeps its own table and controls.
     const over = await page.evaluate(() => {
       const pane = document.querySelector('section[aria-label$=", in the draft"]')?.getBoundingClientRect();
@@ -159,7 +173,7 @@ await runJourney("lock-in", visionWithDraft, async (j, page, service) => {
   });
 
   await j.step("Lock in 2", async () => {
-    await draftBar.getByRole("link", { name: "Review and lock in" }).click();
+    await draftBar.getByRole("link", { name: "Lock in…" }).click();
     await page.getByRole("heading", { name: "Lock in 2 · the summary" }).waitFor({ timeout: 10_000 });
     const t = await text(page);
     j.check(t.includes("2 changes go into force"), "the summary: 2 changes go into force");

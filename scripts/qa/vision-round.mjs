@@ -1,10 +1,12 @@
 // QA journey "vision-round": a Vision round with PE review, as the owner sees it, at 1280 and 375 wide.
 //
 // What it drives, on a fresh service for each width, with the scheduler running:
-// 1. Vision with no round. The owner opens the lead panel and asks the lead for a round.
+// 1. Vision with no round: the vision text at the top, then an empty draft whose main button is Ask the lead for a
+//    round (ORC-030 a-vision-empty). The owner presses it, and asks the lead for a round in the lead panel.
 // 2. The lead opens round 1. The designer hands in its part. The PE asks for a change, the designer revises it, and
 //    the PE agrees. The journey waits for each stage on the screen and takes a screenshot.
-// 3. The owner marks the part Change, picks a variant, writes a note and sends it to the lead.
+// 3. The owner marks the part Change, picks a variant, writes a note and sends it to the lead, all in one bar under
+//    the part (ORC-030 a-vision-actions); the right column has only what the lead and the PE said.
 //    The journey reads the lead's reply and waits for a revision.
 // 4. The owner marks the part Keep. Before Send, the feedback says that Keep puts it in the draft; Send does it, and the
 //    draft bar lists it (ORC-030 Q-01: Keep is the approval, as the owner's pass 1 screens showed).
@@ -50,7 +52,8 @@ await runJourney(
     const has = async (words) => (await text(page)).includes(words);
     const marks = page.getByRole("group", { name: "Your mark" });
     const sendFeedback = page.getByRole("button", { name: "Send to the lead" });
-    const draftBar = page.locator(".st-draftbar");
+    // The draft bar with a draft (the empty bar has its own class, st-draftbar--empty).
+    const draftBar = page.locator(".st-draftbar:not(.st-draftbar--empty)");
     const closeLead = async () => {
       const close = page.getByRole("button", { name: "Close the lead panel" });
       if (await close.count()) await close.click();
@@ -62,14 +65,24 @@ await runJourney(
       await page.getByRole("heading", { name: "Vision", exact: true }).waitFor({ timeout: 10_000 });
       j.check(await has("No rounds yet."), "Vision: it says there is no round yet");
       j.check(await has("Nothing is in the draft yet."), "Vision: it says the draft is empty");
+      // The vision text lives in Vision, at the top (ORC-030 C1).
+      const top = page.getByRole("region", { name: "The vision" });
+      j.check((await top.innerText()).includes("Weekend trips for a small group of friends."), "Vision: the vision text is at the top");
+      // Until a part is in the draft, the main button is Ask the lead for a round; Start the factory is a quiet link.
+      const ask = page.getByRole("button", { name: "Ask the lead for a round" });
+      j.check((await ask.getAttribute("class"))?.includes("k-btn--primary"), "Vision: the main button is Ask the lead for a round");
+      const start = page.getByRole("main").getByRole("link", { name: "Start the factory…" });
+      j.check((await start.getAttribute("class"))?.includes("k-btn--quiet"), "Vision: Start the factory… is a quiet link");
+      j.check((await page.getByRole("main").getByRole("textbox", { name: "Message the lead" }).count()) === 0, "Vision has no message box of its own");
       await j.shot("empty");
       await j.pageChecks("Vision, no round");
     });
 
-    await j.step("Message the lead", async () => {
-      await page.getByRole("main").getByRole("button", { name: "Message the lead" }).click();
+    await j.step("Ask the lead for a round", async () => {
+      await page.getByRole("button", { name: "Ask the lead for a round" }).click();
       const box = page.getByRole("textbox", { name: "Message to the lead" });
       await box.waitFor({ timeout: 10_000 });
+      j.check(/^Ask for a round:/.test((await box.getAttribute("placeholder")) ?? ""), "the lead panel's box says what to ask for", await box.getAttribute("placeholder"));
       j.check(!narrow || (await page.getByRole("dialog", { name: "Lead" }).count()) === 1, "the lead panel opens (a dialog at 375)");
       await box.fill(ASK);
       await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -126,6 +139,15 @@ await runJourney(
       await page.getByRole("textbox", { name: `Note on ${PART}` }).fill(NOTE);
       const summary = await page.getByRole("list", { name: "Not sent yet" }).innerText();
       j.check(summary.includes("v2: Change, picked A · Map first, a note"), "your feedback lists the mark, the pick and the note before you send", summary);
+      // One bar under the part: the marks, the note and Send together; the right column has none of them.
+      const bar = page.getByRole("region", { name: "Your answer" });
+      j.check((await bar.getByRole("group", { name: "Your mark" }).count()) === 1 && (await bar.getByRole("textbox", { name: `Note on ${PART}` }).count()) === 1 && (await bar.getByRole("button", { name: "Send to the lead" }).count()) === 1, "one bar under the part holds Keep, Change, Drop, the note and Send");
+      const right = page.getByRole("complementary", { name: "What the lead and the PE said" });
+      j.check((await right.getByRole("textbox", { name: /Note on|Message the lead/ }).count()) === 0, "the right column has no note and no message box (only the answers to the lead's questions)");
+      j.check((await right.getByRole("button", { name: /^(Keep|Send to the lead)$/ }).count()) === 0, "the right column has no mark and no Send");
+      const marksBox = await marks.boundingBox();
+      const sendBox = await sendFeedback.boundingBox();
+      j.check(!!marksBox && !!sendBox && Math.abs(sendBox.y - marksBox.y) < (narrow ? 160 : 40), "Send is beside the marks (one row at 1280, a few lines below at 375)", marksBox && sendBox && { marks: Math.round(marksBox.y), send: Math.round(sendBox.y) });
       await j.shot("marked-change");
       await sendFeedback.click();
       await page.getByText("Sent to the lead as one message.").waitFor({ timeout: 10_000 });
@@ -175,9 +197,13 @@ await runJourney(
       const after = await page.getByRole("list", { name: "The draft after Send" }).innerText();
       j.check(after.includes(`${PART} v${v} (A · Map first) is in the draft.`), "after Send, it says the part is in the draft", after);
       await draftBar.waitFor({ timeout: 10_000 });
+      const line = (await draftBar.innerText()).replace(/\s+/g, " ");
+      j.check(line === "Draft · 1 change Show Start the factory…", 'the draft bar is one line: "Draft · 1 change", Show and Start the factory…', line);
+      await draftBar.getByRole("button", { name: "Show" }).click();
       const bar = await draftBar.innerText();
-      j.check(new RegExp(`Added\\s*Trip plan \\(simulated sample\\) v${v}`).test(bar), "the draft bar lists the kept part as Added", bar.replace(/\s+/g, " "));
+      j.check(new RegExp(`Added\\s*Trip plan \\(simulated sample\\) v${v}`).test(bar), "Show lists the kept part as Added", bar.replace(/\s+/g, " "));
       j.check(bar.includes("Start the factory…"), "in Vision, the draft bar leads to Start the factory…");
+      j.check((await page.getByRole("button", { name: "Ask the lead for a round" }).count()) === 0, "with a part in the draft, Ask the lead for a round is no longer the main button");
       j.check((await page.getByRole("list", { name: "Artifacts of round 1" }).innerText()).includes("in the draft"), "the part says in the draft");
       const item = service.state().blueprint.draft.items.find((i) => i.title === PART);
       j.check(item?.status === "approved" && item.version === v && item.variant === "a", "the record: the draft holds the part, with the pick", item && { status: item.status, version: item.version, variant: item.variant });
