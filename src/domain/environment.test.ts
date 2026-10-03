@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "./commands";
 import * as E from "./environment";
 import { buildSeed } from "./seed";
+import { matchGlob } from "./delivery/pr";
+import { DEFAULT_PR_DELIVERY } from "./types";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
 const at = (s: number) => new Date(T0 + s * 1000).toISOString();
@@ -122,5 +124,14 @@ describe("the source of a run's environment", () => {
     expect(E.environmentPlan(dc, undefined, [])).toMatchObject({ prepare: [], prepareFrom: "none" });
     // The checks' commands come from their setting, prepare commands only, in order.
     expect(E.checksPrepareCommands({ commands: [{ id: "deps", label: "deps", kind: "prepare", argv: ["npm", "ci"] }, { id: "test", label: "test", kind: "check", argv: ["npm", "test"] }] })).toEqual([["npm", "ci"]]);
+  });
+});
+
+describe("an agent's change cannot choose the environment (review finding 3)", () => {
+  it("the default protected paths cover the dev container files and Dockerfiles anywhere", () => {
+    const protectedPath = (p: string) => DEFAULT_PR_DELIVERY.protectedPaths.some((g) => matchGlob(g, p));
+    for (const p of [".devcontainer/devcontainer.json", ".devcontainer/Dockerfile", ".devcontainer/scripts/setup.sh", ".devcontainer.json", "Dockerfile", "docker/Dockerfile", "Dockerfile.dev", "build/app.Dockerfile", "ci/app.dockerfile"]) expect(protectedPath(p), p).toBe(true);
+    for (const p of ["src/dockerfiles.ts", "docs/devcontainer.md"]) expect(protectedPath(p), p).toBe(false);
+    expect(DEFAULT_PR_DELIVERY.protectedPaths.length).toBeLessThanOrEqual(20);
   });
 });
