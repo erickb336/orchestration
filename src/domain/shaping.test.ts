@@ -87,6 +87,18 @@ describe("S1 stage and initProject", () => {
     expect(shaped.tasks).toEqual([]);
   });
 
+  it("a new project forgets the old repository's preview, local delivery and delivery baseline", () => {
+    let s = runCommand(quiet(), "setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/trips.js" } }, at(1)).state;
+    s = runCommand(s, "setDeliveryMode", { mode: "local", branch: "old-repo-delivered" }, at(2)).state;
+    s = M.reportDeliveryResult(s, { status: "delivered", message: "delivered", sha: "abc123" }, at(3));
+    expect(s.project.preview?.port).toBe(4173);
+    expect(s.project.delivery?.lastSha).toBe("abc123");
+    const next = M.initProject(s, { name: "N", repoPath: "/tmp/n", vision: "", focus: "" }, at(4));
+    expect(next.project.preview).toBeUndefined();
+    expect(next.project.delivery).toBeUndefined();
+    expect(next.project.autonomy.autoDeliver).toEqual({ enabled: false, branch: "main" });
+  });
+
   it("an old project's drafts do not survive a new project", () => {
     const { state: s } = leadReply(shaping(quiet()), { vision: draft() });
     expect(s.visionDrafts).toHaveLength(1);
