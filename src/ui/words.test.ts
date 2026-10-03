@@ -4,11 +4,12 @@
 // with one fails here. Identifiers (ShapingBanner, heldForShaping) and class names (try-shaping) are not words the
 // owner sees, and do not count.
 
-import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const UI = join(import.meta.dirname);
+/** Every screen file under src/ui as source text, by its path under src/ui; not the tests or the test store. */
+const sources: Record<string, string> = Object.fromEntries(
+  Object.entries(import.meta.glob<string>(["./**/*.ts", "./**/*.tsx", "!./**/*.test.ts", "!./**/*.test.tsx", "!./testStore.tsx"], { query: "?raw", import: "default", eager: true })).map(([path, text]) => [path.replace(/^\.\//, ""), text]),
+);
 
 /**
  * Files with old words left on purpose, by path under src/ui, each with the reason. None today: Home (Overview.tsx,
@@ -20,14 +21,6 @@ const EXCEPTIONS: Record<string, string> = {};
 const OLD = /(?<![A-Za-z0-9_./-])shaping(?![A-Za-z0-9_-])|start building|back to vision/gi;
 /** The domain's stage value, quoted: allowed, in a literal of its own or in code the JSX scan picks up. */
 const STAGE_VALUE = /["'`]shaping["'`]/g;
-
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) return sourceFiles(p);
-    return /\.(ts|tsx)$/.test(e.name) && !/\.test\.(ts|tsx)$/.test(e.name) && !/^test/.test(e.name) ? [p] : [];
-  });
-}
 
 /** The file without its comments: block comments (JSX ones too), then line comments that start a line or follow code. */
 const withoutComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`\\])\/\/.*$/gm, "$1");
@@ -45,9 +38,9 @@ const oldWords = (texts: string[]) => texts.filter((x) => new RegExp(OLD.source,
 
 describe("the words across the app (ORC-029 pass 6)", () => {
   it('no screen says "Shaping", "Start building" or "Back to vision"; the exceptions are listed with a reason', () => {
-    const files = sourceFiles(UI).filter((f) => !Object.hasOwn(EXCEPTIONS, relative(UI, f)));
+    const files = Object.keys(sources).filter((f) => !Object.hasOwn(EXCEPTIONS, f));
     expect(files.length).toBeGreaterThan(50);
-    expect(files.flatMap((f) => oldWords(shownText(readFileSync(f, "utf8"))).map((x) => `${relative(UI, f)}: ${x}`))).toEqual([]);
+    expect(files.flatMap((f) => oldWords(shownText(sources[f])).map((x) => `${f}: ${x}`))).toEqual([]);
   });
 
   it("finds an old word in a string or in JSX text, never in code, a comment, a class name or the quoted stage value", () => {
