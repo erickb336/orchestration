@@ -5,7 +5,7 @@
 import { useConfirm, Chip, Disclosure, Field, Select } from "../kit";
 import { effectiveDefault } from "../../domain/flows";
 import { EVERY_RUN_PRINCIPLE_IDS, LEAD_PRINCIPLE_IDS, PREMISE_ID, PRINCIPLES, PSTACK_COMMIT, principleName } from "../../domain/principles";
-import { ChecksCard, checksProblem, checksSteps, liveChecks, type ChecksDraft } from "../ChecksSettings";
+import { CHECKS_KEYS, ChecksCard, checksProblem, checksSteps, liveChecks, type ChecksDraft } from "../ChecksSettings";
 import { FlowSteps } from "../FlowPicker";
 import { defaultFlowNote } from "../flowView";
 import { useStore } from "../store";
@@ -28,7 +28,7 @@ export function QualitySection({ current, onDirty }: { current: boolean; onDirty
   const live: QualityDraft = { ...liveChecks(state), defaultFlow: flows.some((f) => f.id === stored) ? stored : effective.id };
   const draft = useDraft(live);
   const v = draft.value;
-  const checksChanged = new Set([...draft.changed].filter((k): k is keyof ChecksDraft => k === "enabled" || k === "commands"));
+  const checksChanged = new Set([...draft.changed].filter((k): k is keyof ChecksDraft => (CHECKS_KEYS as readonly string[]).includes(k)));
   const invalid = checksChanged.size ? checksProblem(state, v) : undefined;
   const note = defaultFlowNote(stored, flows, effective);
 

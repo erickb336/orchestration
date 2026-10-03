@@ -9,7 +9,9 @@ import { blueprintScene } from "../../domain/testing/blueprintScene";
 import type { State } from "../../domain/types";
 import type { SendResult } from "../store";
 import { renderScreen, visible } from "../testStore";
+import { ChecksCard, checksProblem, checksSteps, liveChecks } from "../ChecksSettings";
 import { sendInOrder } from "./draft";
+import { QualitySection } from "./Quality";
 import { PreviewCard } from "./PreviewCard";
 import { ProjectSection } from "./Project";
 import { livePreview, previewInput, previewProblem, previewSteps, splitArgv, type PreviewDraft } from "./preview";
@@ -17,18 +19,55 @@ import { livePreview, previewInput, previewProblem, previewSteps, splitArgv, typ
 const noop = () => {};
 const T = "2026-10-02T10:00:00.000Z";
 
+type Send = (name: string, args: object) => Promise<SendResult>;
+type Steps = (() => Promise<SendResult> | null)[];
+
 /** Run a form's save against the domain, as the service would: each command it sends, in order. */
-async function save(s: State, steps: (send: (name: string, args: object) => Promise<SendResult>) => (() => Promise<SendResult> | null)[]): Promise<{ state: State; sent: [string, object][] }> {
+async function save(s: State, steps: (send: Send) => Steps | Promise<Steps>): Promise<{ state: State; sent: [string, object][] }> {
   let state = s;
   const sent: [string, object][] = [];
-  const send = async (name: string, args: object): Promise<SendResult> => {
+  const send: Send = async (name, args) => {
     sent.push([name, args]);
     state = runCommand(state, name as never, args, T).state;
     return { ok: true };
   };
-  expect(await sendInOrder(steps(send))).toBe(true);
+  expect(await sendInOrder(await steps(send))).toBe(true);
   return { state, sent };
 }
+
+describe("Settings › Quality › Checks: the test report", () => {
+  it("sits beside the checks, with the runners' flags as examples", () => {
+    const { s } = blueprintScene();
+    const text = visible(renderScreen(<QualitySection current onDirty={noop} />, s));
+    expect(text).toContain(
+      'Test report (JUnit XML) Where your test run writes its JUnit XML report, inside the repository. The checks read one result per test from it, so each rule of a flow shows passed, failed, skipped or "No test". For example: vitest --reporter=junit --outputFile=reports/junit.xml , jest with jest-junit, or pytest --junitxml=reports/junit.xml . Empty: no report is read.',
+    );
+  });
+
+  it("saves through setChecks with the rest of the checks as they are; empty reads no report", async () => {
+    const { s } = blueprintScene();
+    const on = runCommand(s, "setChecks", { config: { ...s.project.checks, rev: undefined, enabled: true, commands: [{ id: "test", label: "Tests", kind: "check", argv: ["npm", "test"] }] } }, T).state;
+    const v = { ...liveChecks(on), testReport: " reports/junit.xml " };
+    const r = await save(on, (send) => checksStepsNoAsk(on, v, send));
+    expect(r.sent).toHaveLength(1);
+    expect(r.state.project.checks).toMatchObject({ enabled: true, commands: [{ id: "test", argv: ["npm", "test"] }], testReport: "reports/junit.xml" });
+    expect(liveChecks(r.state).testReport).toBe("reports/junit.xml");
+    const cleared = await save(r.state, (send) => checksStepsNoAsk(r.state, { ...liveChecks(r.state), testReport: "" }, send));
+    expect(cleared.state.project.checks.testReport).toBeUndefined();
+  });
+
+  it("shows the domain's refusal of a path outside the repository", () => {
+    const { s } = blueprintScene();
+    const v = { ...liveChecks(s), testReport: "../junit.xml" };
+    const words = 'The test report "../junit.xml" is not a path inside the repository: use letters, digits, ".", "_", "-" and "/", no "..", no .git, ending in ".xml" (for example "reports/junit.xml").';
+    expect(checksProblem(s, v)).toBe(words);
+    expect(visible(renderScreen(<ChecksCard v={v} set={noop} />, s))).toContain(words);
+    expect(() => runCommand(s, "setChecks", { config: { ...s.project.checks, rev: undefined, testReport: "../junit.xml" } }, T)).toThrow(words);
+  });
+});
+
+/** Quality's checks steps for a changed test report (the checks are on already, so nothing asks first). */
+const checksStepsNoAsk = async (s: State, v: ReturnType<typeof liveChecks>, send: Send) => (await checksSteps(s, v, new Set(["testReport"]), send as never, async () => true)) ?? [];
 
 describe("Settings › Project › Preview for evidence", () => {
   it("not set up: the form says so and offers the install the service would use", () => {
