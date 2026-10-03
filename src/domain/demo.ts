@@ -303,6 +303,7 @@ class DemoBuilder {
           outcome: "completed",
           messageIds: [],
           coverage: { intent: "clear", audience: "clear", problem: "clear", outcome: "clear", scope: "clear", constraints: "clear", risks: "clear", priorities: "clear", material: "clear" },
+          simulated: true,
         },
       ],
       steering: [],
@@ -465,6 +466,8 @@ class DemoBuilder {
         outcome: "running",
         progress: 0,
         artifacts: [],
+        // The fake runtime ran it, as the service marks its runs: no agent ran, so it spent a known $0.
+        simulated: true,
         ...(o.scope ? { scope: o.scope } : {}),
       };
       this.event(m, "lead", "dispatch", `Dispatched ${stepId} (${st.role}) to ${M.providerLabel(a.snapshot.provider)} · ${a.snapshot.model} as ${attemptId} on spec r${spec.rev}`, id);

@@ -12,7 +12,8 @@
 //                    (/out), both inside a stage folder the service makes for this one recording. No Docker socket.
 //   read-only root   --read-only, with small tmpfs folders for /tmp and HOME. The VHS image's own volume (/vhs) is
 //                    covered by an empty read-only tmpfs, so Docker makes no volume for it.
-//   no privileges    a non-root user (the image's `recorder`, 10001), --cap-drop ALL, no-new-privileges.
+//   no privileges    this computer's own user, never root (the image's `recorder`, 10001, when the service runs as
+//                    root), --cap-drop ALL, no-new-privileges.
 //   limits           processes, memory (no swap) and CPU; a unique name, so the service can kill it.
 //   own devices      the container's /dev has no device of the host: no /dev/ttys*, so no other terminal session.
 //
@@ -32,12 +33,19 @@ import { createServer, type Server } from "node:net";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import type { Duplex } from "node:stream";
+import { ENV_USER } from "../environment/docker";
 import { killGroup, trackLive } from "../processes";
 
 /** The recorder's image. `npm run recorder:build` tags it; bump both when docker/recorder changes. */
 export const RECORDER_IMAGE = "orchestrator-recorder:2";
-/** The image's user (docker/recorder/Dockerfile). Every container runs as it, never as root. */
-export const RECORDER_USER = "10001:10001";
+/**
+ * Every container runs as this computer's own user, by the environment's rule (environment/docker.ts, envUser): on a
+ * Linux host a bind mount keeps its folder's owner, so only that user can write the copy and the output folder (0700),
+ * and the service can then remove what the container wrote. A service that runs as root uses the image's own user,
+ * 10001 (docker/recorder/Dockerfile). Never root.
+ */
+export const RECORDER_USER = ENV_USER;
+const [HOME_UID, HOME_GID] = RECORDER_USER.split(":");
 export const CONTAINER_HOME = "/home/recorder";
 /** Where the copy of the artifact and the output folder are mounted. */
 export const WORK = "/work";
@@ -112,7 +120,7 @@ export function containerArgs(s: ContainerSpec): string[] {
     "--tmpfs",
     `/tmp:rw,noexec,nosuid,nodev,size=${L.tmpBytes}`,
     "--tmpfs",
-    `${CONTAINER_HOME}:rw,noexec,nosuid,nodev,size=${L.homeBytes},mode=0700,uid=10001,gid=10001`,
+    `${CONTAINER_HOME}:rw,noexec,nosuid,nodev,size=${L.homeBytes},mode=0700,uid=${HOME_UID},gid=${HOME_GID}`,
     "--tmpfs",
     "/vhs:ro,noexec,nosuid,nodev,size=4096",
     "--cap-drop",
@@ -147,7 +155,10 @@ export function containerArgs(s: ContainerSpec): string[] {
   ];
 }
 
-export const containerName = (what: "rec" | "probe" | "ev") => `orc-${what}-${process.pid}-${randomBytes(6).toString("hex")}`;
+/** Every kind of container the recorder names. Housekeeping's test covers each, so a new kind is swept too. */
+export const RECORDER_KINDS = ["rec", "probe", "ev"] as const;
+/** A unique name for a recorder's container: its kind, this service's pid (housekeeping reads it), and 12 hex digits. */
+export const containerName = (what: (typeof RECORDER_KINDS)[number]) => `orc-${what}-${process.pid}-${randomBytes(6).toString("hex")}`;
 
 // ---------- running docker ----------
 

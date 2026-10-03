@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import * as M from "../../domain/model";
 import type { FactorySettings, State } from "../../domain/types";
 import { Banner, Button, ButtonLink, Card, Checkbox, Chip, Row, Rows, SegmentedControl, SimulatedChip } from "../kit";
+import { cardHref } from "../settings/sections";
 import { useStore } from "../store";
 import { LockInBudgets, LockInChanges, LockInNewWork, LockInTasks } from "../studio/LockIn";
 import { lockInWords } from "../studio/lockInView";
@@ -233,6 +234,9 @@ function FactoryCard({ state, settings }: { state: State; settings: FactorySetti
         </p>
       </section>
       <LockInBudgets w={lockInWords(state)} title="The budgets and the PE's estimate" />
+      <p className="small no-margin">
+        <a href={cardHref("budgets")}>{state.project.budgets.buildingUsd === null && state.project.budgets.maintenanceUsdPerMonth === null ? "Set the budgets in Settings › Project › Budgets" : "Change them in Settings › Project › Budgets"}</a>
+      </p>
     </Card>
   );
 }

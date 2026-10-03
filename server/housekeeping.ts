@@ -13,6 +13,10 @@
 //                    character other than a letter or a digit becomes "-"), so a transcript's own `cwd` decides.
 //   Containers       a Docker container the recorder named (orc-rec-, orc-probe-, orc-ev-, then the pid of the
 //                    service that started it) whose service has gone, or that is older than any job runs.
+//   The project      a container or network with the environment's label (orchestrator.environment), whose service
+//   environment's    has gone (its name carries the pid) or that is older than any step (LEFTOVER_AGE_MS); then the
+//   leftovers        scratch folders under the environment's root (scratchFolders) older than that, but only once
+//                    Docker lists no container of the environment that could still mount them.
 //   Stage folders    the recorder's, by sweepStages (studio/container.ts).
 // Not found: a provider process that outlived the service that started it. The service records its children only in
 // memory (processes.ts) and kills them when it exits; nothing on disk proves which process an earlier service started.
@@ -26,6 +30,9 @@ import { constants } from "node:fs";
 import { lstat, open, readdir, realpath, rename } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import type { HousekeepingInfo, SweepReport } from "../src/api";
+import { removeTree } from "./environment/copy";
+import { LABEL } from "./environment/docker";
+import { LEFTOVER_AGE_MS, scratchFolders } from "./environment/prepared";
 import { CODEX_CLIENT_NAME, type ArchiveOutcome } from "./runtimes/codex";
 import { STAGE_SWEEP_AGE_MS, dockerEnv, findDocker, runDocker, sweepStages } from "./studio/container";
 
@@ -50,6 +57,8 @@ export function claudeProjectName(path: string): string {
 
 /** The recorder's container names (studio/container.ts, containerName): what it records, the service's pid, 12 hex digits. */
 const RECORDER_CONTAINER = /^orc-(?:rec|probe|ev)-(\d+)-[0-9a-f]{12}$/;
+/** The environment's names (environment/docker.ts, envName): its kind, the service's pid, 10 hex digits. */
+const ENV_NAME = /^orc-env-[a-z]+-(\d+)-[0-9a-f]{10}$/;
 
 /**
  * Whether a container is one the recorder left: named by the recorder, not this service's (its own end on their own
@@ -64,6 +73,19 @@ export function orphanContainer(name: string, createdMs: number, o: { pid: numbe
   return !o.alive(pid) || o.now - createdMs >= STAGE_SWEEP_AGE_MS;
 }
 
+/**
+ * Whether a container or network is one Orchestrator left: the recorder's by its name (orphanContainer); the project
+ * environment's by its label, which only the service sets, and then by its name's pid or its age. Never this service's
+ * own; a live service's only once it is older than any step (a pid in use may also be a new process with an old number).
+ */
+export function leftover(t: DockerThing, o: { pid: number; alive: (pid: number) => boolean; now: number }): boolean {
+  if (t.environment === undefined) return t.kind === "container" && orphanContainer(t.name, t.createdMs, o);
+  const m = ENV_NAME.exec(t.name);
+  const pid = m ? Number(m[1]) : undefined;
+  if (pid === o.pid) return false;
+  return (pid !== undefined && !o.alive(pid)) || o.now - t.createdMs >= LEFTOVER_AGE_MS;
+}
+
 /** Whether a process with this pid exists (EPERM: it exists, under another user). */
 export function pidAlive(pid: number): boolean {
   try {
@@ -74,12 +96,25 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
+/** A container or a network, as housekeeping sees it. */
+export interface DockerThing {
+  kind: "container" | "network";
+  name: string;
+  /** When Docker made it; NaN when Docker's time could not be read. */
+  createdMs: number;
+  /** The value of the environment's label (orchestrator.environment), when it has one. */
+  environment?: string;
+}
+
 /** The Docker commands housekeeping needs. */
 export interface DockerOps {
-  /** Every container whose name starts with "orc-", with the time it was made; or why Docker could not answer. */
-  list(): Promise<{ name: string; createdMs: number }[] | { unavailable: string }>;
-  /** Removes a container; the reason when it could not. */
-  remove(name: string): Promise<string | undefined>;
+  /**
+   * Every container whose name starts with "orc-" or that has the environment's label, then every network with that
+   * label, each with the time it was made; or why Docker could not answer.
+   */
+  list(): Promise<DockerThing[] | { unavailable: string }>;
+  /** Removes a container or a network; the reason when it could not. */
+  remove(t: DockerThing): Promise<string | undefined>;
 }
 
 /** The docker command on this computer, or undefined when there is none (then there are no containers either). */
@@ -87,36 +122,46 @@ export function systemDocker(env: NodeJS.ProcessEnv): DockerOps | undefined {
   const docker = findDocker(env);
   if (!docker) return undefined;
   const denv = dockerEnv(env);
+  const format = `{{.Names}}\t{{.CreatedAt}}\t{{.Label "${LABEL}"}}`;
+  const parse = (kind: DockerThing["kind"], stdout: string): DockerThing[] =>
+    stdout
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [name, created = "", label = ""] = line.split("\t");
+        return { kind, name, createdMs: dockerTime(created), ...(label ? { environment: label } : {}) };
+      });
   return {
     async list() {
-      const r = await runDocker(docker, ["ps", "--all", "--no-trunc", "--filter", "name=orc-", "--format", "{{.Names}}\t{{.CreatedAt}}"], { env: denv, timeoutMs: 20_000 });
-      if (r.code !== 0) return { unavailable: "Docker did not answer, so the recorder's containers were not checked" };
-      return r.stdout
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => {
-          const [name, created = ""] = line.split("\t");
-          return { name, createdMs: dockerTime(created) };
-        });
+      const unavailable = { unavailable: "Docker did not answer, so its containers and networks were not checked" };
+      // Every container: only their names and labels are read, and only Orchestrator's (by name or label) are kept.
+      const c = await runDocker(docker, ["ps", "--all", "--no-trunc", "--format", format], { env: denv, timeoutMs: 20_000 });
+      if (c.code !== 0) return unavailable;
+      const n = await runDocker(docker, ["network", "ls", "--no-trunc", "--filter", `label=${LABEL}`, "--format", format.replace("{{.Names}}", "{{.Name}}")], { env: denv, timeoutMs: 20_000 });
+      if (n.code !== 0) return unavailable;
+      return [...parse("container", c.stdout).filter((t) => t.name.startsWith("orc-") || t.environment !== undefined), ...parse("network", n.stdout).filter((t) => t.environment !== undefined)];
     },
-    async remove(name) {
-      const r = await runDocker(docker, ["rm", "--force", name], { env: denv, timeoutMs: 30_000 });
-      return r.code === 0 ? undefined : r.stderr.trim().split("\n").at(-1) || `docker rm exited with ${r.code}`;
+    async remove(t) {
+      const r = await runDocker(docker, t.kind === "container" ? ["rm", "--force", t.name] : ["network", "rm", t.name], { env: denv, timeoutMs: 30_000 });
+      return r.code === 0 ? undefined : r.stderr.trim().split("\n").at(-1) || `docker exited with ${r.code}`;
     },
   };
 }
 
-/** Docker's CreatedAt ("2026-10-02 19:48:03 -0700 PDT") as milliseconds; NaN when it is not that shape. */
+/** Docker's CreatedAt ("2026-10-02 19:48:03 -0700 PDT"; a network's has fractions of a second) as milliseconds; NaN when it is not that shape. */
 export function dockerTime(s: string): number {
-  const m = /^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d) ([+-]\d\d)(\d\d)\b/.exec(s.trim());
-  return m ? Date.parse(`${m[1]}T${m[2]}${m[3]}:${m[4]}`) : NaN;
+  const m = /^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d)(\.\d{1,3})?\d* ([+-]\d\d)(\d\d)\b/.exec(s.trim());
+  return m ? Date.parse(`${m[1]}T${m[2]}${m[3] ?? ""}${m[4]}:${m[5]}`) : NaN;
 }
 
 /** What a sweep found: the dry run's answer. */
 export interface Found {
   codexThreads: { id: string; file: string }[];
   claudeFolders: { name: string; path: string }[];
-  containers: string[];
+  /** Containers first, then networks: a network goes only once no container uses it. */
+  docker: DockerThing[];
+  /** The environment's scratch folders old enough to go, and whether no container of the environment remains to mount them. */
+  folders: { paths: string[]; blocked?: string };
   recent: number;
   notes: string[];
 }
@@ -137,6 +182,8 @@ export interface HousekeepingOptions {
   docker?: DockerOps;
   /** Where the recorder stages its folders; without it, stage folders are not swept. */
   recorderRoot?: string;
+  /** The project environment's root (environment/prepared.ts); without it, its scratch folders are not swept. */
+  environmentRoot?: string;
   platform?: NodeJS.Platform;
   now?: () => number;
   pid?: number;
@@ -171,7 +218,7 @@ export class Housekeeping {
     if (this.running) return this.running;
     const run = this.run(trigger)
       .catch((e: unknown) => {
-        const r: SweepReport = { at: new Date(this.now()).toISOString(), trigger, ownerApps: false, archived: 0, trashed: 0, containers: 0, stages: 0, held: 0, recent: 0, notes: [`The sweep stopped: ${e instanceof Error ? e.message : String(e)}`] };
+        const r: SweepReport = { at: new Date(this.now()).toISOString(), trigger, ownerApps: false, archived: 0, trashed: 0, containers: 0, networks: 0, stages: 0, held: 0, recent: 0, notes: [`The sweep stopped: ${e instanceof Error ? e.message : String(e)}`] };
         this.last = r;
         this.o.log?.(`Housekeeping: ${r.notes[0]}`);
         return r;
@@ -187,12 +234,12 @@ export class Housekeeping {
 
   /** What a sweep would clean now, without changing anything (the dry run). */
   async find(): Promise<Found> {
-    const found: Found = { codexThreads: [], claudeFolders: [], containers: [], recent: 0, notes: [] };
+    const found: Found = { codexThreads: [], claudeFolders: [], docker: [], folders: { paths: [] }, recent: 0, notes: [] };
     if (this.ownerApps()) {
       await this.findCodexThreads(found);
       await this.findClaudeFolders(found);
     }
-    await this.findContainers(found);
+    await this.findDocker(found);
     return found;
   }
 
@@ -203,7 +250,7 @@ export class Housekeeping {
   private async run(trigger: SweepReport["trigger"]): Promise<SweepReport> {
     const ownerApps = this.ownerApps();
     const found = await this.find();
-    const r: SweepReport = { at: "", trigger, ownerApps, archived: 0, trashed: 0, containers: 0, stages: 0, held: 0, recent: found.recent, notes: found.notes };
+    const r: SweepReport = { at: "", trigger, ownerApps, archived: 0, trashed: 0, containers: 0, networks: 0, stages: 0, held: 0, recent: found.recent, notes: found.notes };
     if (found.codexThreads.length) {
       if (!this.o.archive) r.notes.push(`${count(found.codexThreads.length, "Codex thread")} left: this service has no Codex app-server to archive them`);
       else {
@@ -227,16 +274,18 @@ export class Housekeeping {
         r.notes.push(`Claude session folder ${f.name} was not moved to the Trash: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    for (const name of found.containers) {
-      const err = await this.o.docker!.remove(name);
-      if (err) r.notes.push(`Container ${name} was not removed: ${err}`);
-      else r.containers++;
+    for (const t of found.docker) {
+      const err = await this.o.docker!.remove(t);
+      if (err) r.notes.push(`${t.kind === "container" ? "Container" : "Network"} ${t.name} was not removed: ${err}`);
+      else if (t.kind === "container") r.containers++;
+      else r.networks++;
     }
     if (this.o.recorderRoot) {
       const swept = sweepStages(this.o.recorderRoot);
       r.stages = swept.removed.length;
       for (const name of swept.failed) r.notes.push(`Stage folder ${name} in ${this.o.recorderRoot} was not removed`);
     }
+    await this.removeFolders(found.folders, r);
     r.at = new Date(this.now()).toISOString();
     this.last = r;
     const message = sweepMessage(r);
@@ -311,28 +360,59 @@ export class Housekeeping {
     throw new Error("the Trash has no free name for it");
   }
 
-  // ---------- containers ----------
+  // ---------- Docker, and the environment's scratch folders ----------
 
-  private async findContainers(found: Found) {
-    if (!this.o.docker) return;
-    const list = await this.o.docker.list();
-    if ("unavailable" in list) {
-      found.notes.push(list.unavailable);
-      return;
+  /**
+   * The containers and networks Orchestrator left (containers first: a network goes only once no container uses it),
+   * and the environment's scratch folders older than any step. A folder may still be mounted by a container of the
+   * environment, so it goes only while Docker lists none that stays, or there is no Docker at all.
+   */
+  private async findDocker(found: Found) {
+    const list = this.o.docker ? await this.o.docker.list() : [];
+    if ("unavailable" in list) found.notes.push(list.unavailable);
+    const o = { pid: this.o.pid ?? process.pid, alive: this.o.alive ?? pidAlive, now: this.now() };
+    const things = "unavailable" in list ? [] : list;
+    found.docker = things.filter((t) => leftover(t, o)).sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "container" ? -1 : 1));
+    if (!this.o.environmentRoot) return;
+    for (const p of scratchFolders(this.o.environmentRoot)) {
+      const st = await lstat(p).catch(() => undefined);
+      if (st?.isDirectory() && o.now - st.mtimeMs >= LEFTOVER_AGE_MS) found.folders.paths.push(p);
     }
-    const now = this.now();
-    const o = { pid: this.o.pid ?? process.pid, alive: this.o.alive ?? pidAlive, now };
-    for (const c of list) if (orphanContainer(c.name, c.createdMs, o)) found.containers.push(c.name);
+    if ("unavailable" in list) found.folders.blocked = "Docker did not answer, so nothing shows that no container uses it";
+    else if (things.some((t) => t.kind === "container" && t.environment !== undefined && !leftover(t, o))) found.folders.blocked = STILL_MOUNTED;
+  }
+
+  /** The folders go only when, after the sweep's own removals, Docker lists no container of the environment. */
+  private async removeFolders(f: Found["folders"], r: SweepReport) {
+    if (!f.paths.length) return;
+    let blocked = f.blocked;
+    if (!blocked && this.o.docker) {
+      const after = await this.o.docker.list();
+      if ("unavailable" in after) blocked = "Docker did not answer, so nothing shows that no container uses it";
+      else if (after.some((t) => t.kind === "container" && t.environment !== undefined)) blocked = STILL_MOUNTED;
+    }
+    if (blocked) return void r.notes.push(`${count(f.paths.length, "work folder")} of the project environment left: ${blocked}`);
+    for (const p of f.paths) {
+      try {
+        removeTree(p);
+        r.stages++;
+      } catch (e) {
+        r.notes.push(`Work folder ${p} was not removed: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
   }
 }
+
+const STILL_MOUNTED = "a container of the environment may still use it";
 
 /** The Activity event of a sweep, or undefined when it changed nothing. */
 export function sweepMessage(r: SweepReport): string | undefined {
   const done = [
     r.archived ? `archived ${count(r.archived, "Codex thread")}` : "",
     r.trashed ? `moved ${count(r.trashed, "Claude session folder")} to the Trash` : "",
-    r.containers ? `removed ${count(r.containers, "recorder container")}` : "",
-    r.stages ? `removed ${count(r.stages, "recorder stage folder")}` : "",
+    r.containers ? `removed ${count(r.containers, "container")}` : "",
+    r.networks ? `removed ${count(r.networks, "Docker network")}` : "",
+    r.stages ? `removed ${count(r.stages, "work folder")}` : "",
   ].filter(Boolean);
   if (!done.length) return undefined;
   const list = done.length === 1 ? done[0] : `${done.slice(0, -1).join(", ")} and ${done.at(-1)}`;

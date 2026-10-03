@@ -9,7 +9,7 @@ import type { BlueprintItem, ChangeOrder, ChangeOrderLineKind } from "../../doma
 import type { PeReviewState, State, Task } from "../../domain/types";
 import type { ConfirmOptions, Tone } from "../kit";
 import { fmtTime } from "../common";
-import { itemName } from "../studio/draftView";
+import { droppedPartsWords, itemName } from "../studio/draftView";
 
 const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 /** "a", "a and b", "a, b and c". */
@@ -97,10 +97,13 @@ function lineWords(s: State, co: ChangeOrder, v: M.ChangeOrderLineView): LineWor
       state = { word: co.status === "open" ? "Waits for your go-ahead" : "Not applied", tone: co.status === "open" ? "you" : "neutral", ...(why && co.status === "open" ? { detail: `The lead may not do it alone: ${why}.` } : {}) };
       break;
     }
-    case "undone":
+    case "undone": {
       when = `Undone by you${at(line.resolvedAt)}.`;
-      state = { word: "Undone", tone: "neutral" };
+      // A retirement you undid brings the task back, and it still builds what you dropped (Q-13).
+      const dropped = line.kind === "retire" && work && work.lifecycle !== "cancelled" && work.lifecycle !== "done" ? droppedPartsWords(s, work) : undefined;
+      state = { word: "Undone", tone: dropped ? "you" : "neutral", ...(dropped && work ? { detail: `${work.id} is back, and it builds ${dropped.names}, which you dropped${dropped.at}. Open it to cancel it or edit its spec.` } : {}) };
       break;
+    }
     case "dismissed":
       when = `Dismissed by you${at(line.resolvedAt)}.`;
       state = { word: "Dismissed", tone: "neutral" };

@@ -167,11 +167,6 @@ export interface FactoryStart {
   settings: FactorySettings;
   /** What was still open, named to the owner and confirmed: the vision's open areas, then the blueprint's open items and the unfinished probes (by id). */
   openItems: string[];
-  /**
-   * The pre-flight's budget estimates. Nothing writes it yet: the PE's pre-flight (ORC-029 pass 6) fills it. While it is
-   * absent the project's maintenance is not yet estimated (unknown, never $0; see `maintenanceEstimate`).
-   */
-  estimate?: { buildUsd?: [number, number]; maintenanceUsdPerMonth?: [number, number]; basis: string };
 }
 
 /** The areas a vision needs to cover; the lead reports how clear each is and asks about the open ones. */
@@ -865,10 +860,15 @@ export const DEFAULT_CHECKS: ChecksConfig = {
   passEnv: [],
 };
 
-/** Observed: whether the checks sandbox works on this machine. Written only by the service. */
+/** Observed: whether the checks can run where they will run. Written only by the service. */
 export interface ChecksHealth {
   sandbox: "codex" | "none";
   status: "ready" | "unavailable" | "unverified";
+  /**
+   * "environment": the checks run in the project's environment (Docker passed its setup probe), and this computer's
+   * sandbox was not probed. Absent: the probe was of this computer's sandbox (`sandbox`).
+   */
+  runsIn?: "environment";
   detail: string;
   checkedAt: string;
   recheck?: true;
@@ -1128,6 +1128,20 @@ type AttemptOutcome =
   | "failed"
   | "lost"; // the run's process no longer exists (for example after a service restart)
 
+/**
+ * What a run used, as its runtime reported it. `cachedInputTokens`: of `inputTokens`, those read from the provider's
+ * prompt cache (Codex reports them). `openRequest`: the run ended before its turn completed, so the turn's last model
+ * request is not in these figures: Codex reports a request's usage only when the request completes. The budgets count
+ * that request at an estimate (src/domain/spend.ts), never as $0.
+ */
+export interface RunUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  costUsd?: number;
+  openRequest?: true;
+}
+
 export interface Attempt {
   id: string;
   taskId: string;
@@ -1148,8 +1162,7 @@ export interface Attempt {
   actualModel?: string;
   /** Latest meaningful milestone reported by the runtime. */
   activity?: string;
-  /** `cachedInputTokens`: of `inputTokens`, those read from the provider's prompt cache (Codex reports them). */
-  usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
+  usage?: RunUsage;
   /** The fake runtime ran it: no agent ran, so it spent a known $0 (src/domain/spend.ts), as a simulated studio run. */
   simulated?: true;
   /**
@@ -1416,6 +1429,8 @@ export interface LeadRun {
   sessionId?: string;
   actualModel?: string;
   usage?: Attempt["usage"];
+  /** The fake runtime ran it: no agent ran, so it spent a known $0 (src/domain/spend.ts), as a simulated task run. */
+  simulated?: true;
   note?: string;
   /**
    * The lead's final text as the runtime returned it, kept when the answer could not be used as sent (no JSON, JSON

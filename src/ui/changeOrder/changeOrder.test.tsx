@@ -16,6 +16,7 @@ import { Board } from "../Board";
 import { fmtTime } from "../common";
 import { parseRoute, tabOf } from "../route";
 import { renderScreen, visible } from "../testStore";
+import { StatusBanners } from "../task/Banners";
 import { ChangeOrderPage } from "./ChangeOrder";
 import { changeOrderWords, factoryPlaceLink } from "./changeOrderView";
 
@@ -126,6 +127,23 @@ describe("the change order screen", () => {
     const edited = run(a.s, "editSpec", { taskId: task.id, expectedRev: 3, content: { ...M.currentSpec(task).content, outcome: "Changed by hand." }, reason: "mine" }, at(30)).state;
     const left = M.undoSteering(edited, a.setId, order(a.s).lines![0].changeId, at(31)).state;
     expect(page(left).rows[0]).toBe(`Updated T-002 → builds Trip plan v2 PE reviewing T-002 Trip list screen Applied by the lead, ${t(21)}. The lead: “Day list first, the map below it.” It waits for the PE's review, then starts. Left as is: Its spec changed since (now r4) Undo`);
+  });
+
+  it("after Undo of a retirement, the line and the task's page say that the task builds a part you dropped (ORC-030 Q-13)", () => {
+    const f = changeOrdered();
+    const a = answerChangeOrder(f.s, fullAnswer(f), 20);
+    const retired = order(a.s).lines!.find((l) => l.kind === "retire")!;
+    const back = M.undoSteering(a.s, a.setId, retired.changeId, at(30)).state;
+    expect(back.tasks.find((x) => x.id === f.tasks.retiring)!.lifecycle).not.toBe("cancelled");
+    expect(page(back).rows[2]).toBe(
+      `Retired T-003: builds only the dropped Reminders screen Undone T-003 Outing reminders Undone by you, ${t(30)}. The lead: “You dropped Reminders.” T-003 is back, and it builds Reminders v1, which you dropped at Lock in 2. Open it to cancel it or edit its spec.`,
+    );
+    const task = back.tasks.find((x) => x.id === f.tasks.retiring)!;
+    const banner = visible(renderScreen(<StatusBanners state={back} task={task} />, back));
+    expect(banner).toBe("It builds a part you dropped. Reminders v1 left the design at Lock in 2. If it should not be built, cancel this task under More, or edit its spec.");
+    // Before the Undo the task is retired: nothing is said on it.
+    const cancelled = a.s.tasks.find((x) => x.id === f.tasks.retiring)!;
+    expect(visible(renderScreen(<StatusBanners state={a.s} task={cancelled} />, a.s))).not.toContain("you dropped");
   });
 
   it("names the tasks it did not touch in one line", () => {

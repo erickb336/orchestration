@@ -175,11 +175,15 @@ export function createHttpServer(opts: HttpOptions): Server {
     return send(res, 200, { taskId, commit, target: landed ? landed.target : `${pr!.repo} ${pr!.base}`, diff: out.diff, truncated: out.truncated } satisfies ChangeResponse);
   };
 
+  /** The sample project has no repository; a project of your own may have none set yet, which is said apart. */
+  const SAMPLE_HAS_NO_REPO = "This is the sample project; start a project of your own to read its repository.";
+
   /** The check commands the repository's own files suggest, read at the trusted base. Nothing is saved. */
   const suggest = (res: ServerResponse) => {
     const { state } = store.read();
     if (!real || !opts.workspaces) return send(res, 200, { commands: [], ref: "", reason: "Suggestions read the repository's files; the simulated runtime has none. The sample project's commands are simulated." } satisfies CheckSuggestions);
-    if (state.project.sample || !state.project.repoPath) return send(res, 200, { commands: [], ref: "", reason: "This is the sample project; start a project of your own to read its repository." } satisfies CheckSuggestions);
+    if (state.project.sample) return send(res, 200, { commands: [], ref: "", reason: SAMPLE_HAS_NO_REPO } satisfies CheckSuggestions);
+    if (!state.project.repoPath) return send(res, 200, { commands: [], ref: "", reason: "No repository is set yet: give its path in Settings › Project." } satisfies CheckSuggestions);
     const ref = trustedBaseRef(state);
     const files: RepoFile[] = [];
     for (const path of ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb", "Cargo.toml", "go.mod", "pyproject.toml"]) {
@@ -198,7 +202,9 @@ export function createHttpServer(opts: HttpOptions): Server {
   const environmentFound = (res: ServerResponse) => {
     const { state } = store.read();
     if (!real || !opts.workspaces) return send(res, 200, { ref: "", reason: "The simulated runtime reads no repository." } satisfies EnvironmentFound);
-    if (state.project.sample || !state.project.repoPath) return send(res, 200, { ref: "", reason: "This is the sample project; start a project of your own to read its repository." } satisfies EnvironmentFound);
+    if (state.project.sample) return send(res, 200, { ref: "", reason: SAMPLE_HAS_NO_REPO } satisfies EnvironmentFound);
+    // The Environment card sits under the Repository card in Settings › Project.
+    if (!state.project.repoPath) return send(res, 200, { ref: "", reason: "No repository is set yet: give its path above." } satisfies EnvironmentFound);
     const ref = trustedBaseRef(state);
     const read = (path: string, maxBytes: number) => {
       try {

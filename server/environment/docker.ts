@@ -65,8 +65,10 @@ const NAME = /^[a-z0-9][a-z0-9_.-]{0,62}$/;
 export const MOUNTABLE = /^\/[^,"\u0000-\u001f\u007f]*$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
-/** A unique name for a container or a network of the environment. */
-export const envName = (what: "net" | "out" | "proxy" | "prep" | "run" | "probe" | "preview" | "session") => `orc-env-${what}-${process.pid}-${randomBytes(5).toString("hex")}`;
+/** Every kind of container and network the environment names. Housekeeping's test covers each, so a new kind is swept too. */
+export const ENV_KINDS = ["net", "out", "proxy", "prep", "run", "probe", "preview", "session"] as const;
+/** A unique name for a container or a network of the environment: its kind, this service's pid (housekeeping reads it), and 10 hex digits. */
+export const envName = (what: (typeof ENV_KINDS)[number]) => `orc-env-${what}-${process.pid}-${randomBytes(5).toString("hex")}`;
 
 function need(ok: boolean, what: string) {
   if (!ok) throw new Error(what);

@@ -5,6 +5,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Button } from "../kit/Button";
 import { cx } from "../kit/cx";
+import { useInWindow } from "../kit/inWindow";
 import { moveIndex } from "../kit/keys";
 
 export type MenuItem =
@@ -15,6 +16,8 @@ export type MenuItem =
 export function MoreMenu({ label = "More", items, menuLabel }: { label?: string; items: MenuItem[]; menuLabel: string }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
+  useInWindow(pop, open);
   const menuId = useId();
   const choices = items.filter((i) => i.kind !== "sep");
 
@@ -59,7 +62,7 @@ export function MoreMenu({ label = "More", items, menuLabel }: { label?: string;
         {label} ▾
       </Button>
       {open && (
-        <div role="menu" id={menuId} aria-label={menuLabel} className="t-menu__pop">
+        <div ref={pop} role="menu" id={menuId} aria-label={menuLabel} className="t-menu__pop">
           {items.map((it) => {
             if (it.kind === "sep") return <div key={it.id} className="t-menu__sep" role="separator" />;
             const check = it.kind === "check";

@@ -179,6 +179,7 @@ export function setEnvironment(state: State, input: EnvironmentInput | null, now
     if (!prev) return state;
     const s = draft(state);
     delete s.project.environment;
+    askForProbe(s, now);
     event(s, now, "user", "config", "Environment cleared: checks use the repository's dev container, or run on this computer as before");
     return s;
   }
@@ -187,8 +188,14 @@ export function setEnvironment(state: State, input: EnvironmentInput | null, now
   if (prev && JSON.stringify({ rev: prev.rev, ...next }) === JSON.stringify(prev)) return state;
   const s = draft(state);
   s.project.environment = { rev: (prev?.rev ?? 0) + 1, ...next };
+  askForProbe(s, now);
   event(s, now, "user", "config", `Environment r${s.project.environment.rev}: ${environmentWords(s.project.environment)}`);
   return s;
+}
+
+/** The setting decides where the checks run, so the last probe may be of the wrong place: ask the service for a new one. */
+function askForProbe(s: State, now: string) {
+  if (s.project.checksHealth) s.project.checksHealth = { ...s.project.checksHealth, recheck: true, requestedAt: now };
 }
 
 // ---------- the proposal ----------

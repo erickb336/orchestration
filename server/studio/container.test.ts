@@ -40,8 +40,11 @@ esac
 
 describe("the docker run arguments", () => {
   const spec = { name: "orc-rec-1-abc", work: "/Users/me/.cache/orchestrator/recorder/orc-rec-x/work", out: "/Users/me/.cache/orchestrator/recorder/orc-rec-x/out", workdir: "/work/cli", command: ["/usr/bin/vhs", "-"], stdin: true };
+  // This computer's user (B-32): on a Linux host a bind mount keeps its folder's owner, so only that user can write the
+  // copy and the output folder. A service that runs as root uses the image's own user instead.
+  const [uid, gid] = process.getuid!() === 0 ? [10001, 10001] : [process.getuid!(), process.getgid!()];
 
-  it("are a fixed list: no network, a read-only root with tmpfs, no capabilities or new privileges, limits, a non-root user, and two mounts", () => {
+  it("are a fixed list: no network, a read-only root with tmpfs, no capabilities or new privileges, limits, this computer's user (never root), and two mounts", () => {
     expect(containerArgs(spec)).toEqual([
       "run",
       "--rm",
@@ -56,7 +59,7 @@ describe("the docker run arguments", () => {
       "--tmpfs",
       "/tmp:rw,noexec,nosuid,nodev,size=536870912",
       "--tmpfs",
-      "/home/recorder:rw,noexec,nosuid,nodev,size=67108864,mode=0700,uid=10001,gid=10001",
+      `/home/recorder:rw,noexec,nosuid,nodev,size=67108864,mode=0700,uid=${uid},gid=${gid}`,
       "--tmpfs",
       "/vhs:ro,noexec,nosuid,nodev,size=4096",
       "--cap-drop",
@@ -72,7 +75,7 @@ describe("the docker run arguments", () => {
       "--cpus",
       "1.5",
       "--user",
-      "10001:10001",
+      `${uid}:${gid}`,
       "--env",
       "HOME=/home/recorder",
       "--env",

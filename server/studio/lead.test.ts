@@ -162,4 +162,32 @@ describe("the simulated lead in Vision", () => {
     expect(readFileSync(join(folder, "doc", "index.md"), "utf8")).toContain("> Simulated sample: the fake runtime made this, not a designer agent.");
     expect(M.activeLeadRun(s2)).toBeUndefined();
   });
+
+  it("answers your marks: a Change brings the part's next version, from your note; it does not redraft the vision from them (ORC-030 QA, Q-07)", () => {
+    service(repo({ "README.md": "# Trips\n" }));
+    cmd("setDomains", { domains: ["screen"] });
+    cmd("postMessage", { text: "A small app to plan weekend trips with friends." });
+    until(settled, "round 1 imported and reviewed");
+    const part = S.latestArtifacts(state())[0];
+    const drafts = state().visionDrafts.length;
+    cmd("sendFeedback", { entries: [{ artifactId: part.id, version: part.version, mark: "change", pickedVariant: "a", pins: [], note: "Show the stops as a list too." }] });
+    cmd("postMessage", { text: "My feedback, recorded on each version: Trip plan, change, a note." });
+    until((x) => x.leadRuns.filter((r) => r.outcome === "completed").length === 2, "the lead's answer");
+    const reply = state().conversation.filter((m) => m.author === "lead").at(-1)!;
+    expect(reply.text).toMatch(/^I asked the designer for the next version of Trip plan \(simulated sample\), with your note\./);
+    expect(state().visionDrafts).toHaveLength(drafts);
+    const ask = state().studio.runs.find((r) => r.kind === "designer" && r.artifactId === part.id && r.fromLead);
+    expect(ask).toMatchObject({ round: 1, baseVersion: part.version });
+    expect(ask!.brief).toContain("Show the stops as a list too.");
+    until((x) => (S.latestVersion(x, part.id)?.version ?? 0) > part.version, "the next version");
+    expect(S.latestVersion(state(), part.id)).toMatchObject({ version: part.version + 1, round: 1 });
+    // Keep and Drop need nothing from the designer.
+    until(settled, "the next version reviewed");
+    const next = S.latestVersion(state(), part.id)!;
+    cmd("sendFeedback", { entries: [{ artifactId: part.id, version: next.version, mark: "keep", pins: [], note: "" }] });
+    cmd("postMessage", { text: "My feedback: Trip plan, keep." });
+    until((x) => x.leadRuns.filter((r) => r.outcome === "completed").length === 3, "the lead's second answer");
+    expect(state().studio.runs.filter((r) => r.kind === "designer" && r.fromLead && r.artifactId === part.id)).toHaveLength(1);
+    expect(state().conversation.filter((m) => m.author === "lead").at(-1)!.text).toMatch(/^Noted your marks: Trip plan \(simulated sample\) stays as it is\./);
+  });
 });

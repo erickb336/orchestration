@@ -49,8 +49,9 @@ export interface SweepReport {
   archived: number;
   /** Claude session folders moved to the Trash. */
   trashed: number;
-  /** The recorder's containers and stage folders removed. */
+  /** The containers (the recorder's and the project environment's), the environment's networks, and the work folders (the recorder's stage folders and the environment's scratch folders) removed. */
   containers: number;
+  networks: number;
   stages: number;
   /** Threads another app holds open: tried again at the next sweep. */
   held: number;

@@ -7,8 +7,9 @@
 
 import * as F from "../../domain/findings";
 import * as M from "../../domain/model";
-import { budgetStop, committedBuildUsd, fmtUsd } from "../../domain/spend";
+import { budgetStop, buildingSpend, committedBuildUsd, fmtUsd, maintenanceEstimate, unrecordedWords, type MaintenanceEstimate, type PartsSum } from "../../domain/spend";
 import * as B from "../../domain/studio/blueprint";
+import { restOfBuild } from "../../domain/studio/itemStatus";
 import type { ChangeOrder, UsdRange } from "../../domain/studio/types";
 import type { FindingDecision, PeCall, State, Step, Task } from "../../domain/types";
 import { relTime } from "../common";
@@ -135,9 +136,9 @@ export interface BudgetWords {
   building: {
     /** "$11.20 of $40.00 spent", or "$11.20 spent". */
     spent: string;
-    /** Runs with no recorded cost: the spend may be higher (never counted as $0). */
+    /** The costs with no full record and their estimate, or that the spend cannot be checked (never counted as $0). */
     unknown?: string;
-    /** "PE estimate for the rest: $9.00–$16.00", or "PE estimate for the rest: no estimate". */
+    /** "PE estimate for the rest: $9.00–$16.00", "…: none for 2 of 3 parts", or "…: nothing is left to build". */
     estimate: string;
     /** What the PE's standing calls commit before their work has run. */
     committed?: string;
@@ -153,33 +154,48 @@ export interface BudgetWords {
 }
 
 /**
- * The two budgets in words. Building: the spend of the budget, the PE's estimate for the rest (the newest start's
- * pre-flight estimate), what the PE's calls commit, and where the stop stands. Maintenance: the PE's estimate a month
- * (the start's estimate and the PE calls that stand) against its budget.
+ * The two budgets in words. Building: the spend of the budget, the PE's estimate for the rest (its estimates of the
+ * approved parts not built yet), what the PE's calls commit, and where the stop stands. Maintenance: the PE's monthly
+ * estimates of the approved parts and the PE calls that stand, against its budget.
  */
 export function budgetWords(s: State): BudgetWords {
   const b = B.lockInSummary(s).budgets;
   const budget = b.building.budgetUsd;
-  const estimate = s.project.factoryStarts.at(-1)?.estimate?.buildUsd;
+  const rest = restOfBuild(s);
   const committed = committedBuildUsd(s);
-  const unknown = b.building.unknownRuns;
-  const m = b.maintenance;
+  const unknown = unrecordedWords(buildingSpend(s));
+  const m = maintenanceEstimate(s);
+  const monthBudget = s.project.budgets.maintenanceUsdPerMonth;
   return {
     building: {
       spent: budget === null ? `${fmtUsd(b.building.spentUsd)} spent` : `${fmtUsd(b.building.spentUsd)} of ${fmtUsd(budget)} spent`,
-      ...(unknown ? { unknown: `${count(unknown, "run")} ${unknown === 1 ? "has" : "have"} no recorded cost, so the spend may be higher.` } : {}),
-      estimate: `PE estimate for the rest: ${estimate ? range(estimate) : "no estimate"}`,
+      ...(unknown ? { unknown } : {}),
+      estimate: `PE estimate for the rest: ${restWords(rest)}`,
       ...(committed > 0 ? { committed: `Up to ${fmtUsd(committed)} is committed to PE calls whose work has not run.` } : {}),
       stop: stopWords(s, budget),
     },
     maintenance: {
       estimate:
-        m.estimateUsdPerMonth === null
-          ? `No estimate yet${m.budgetUsdPerMonth === null ? "" : ` · your budget is ${fmtUsd(m.budgetUsdPerMonth)} a month`}`
-          : `${fmtUsd(m.estimateUsdPerMonth)} a month${m.budgetUsdPerMonth === null ? " · no budget set" : ` of your ${fmtUsd(m.budgetUsdPerMonth)}`}`,
-      basis: m.estimateUsdPerMonth === null ? "The PE estimates it before the factory starts. Until then it is unknown, never $0." : "The PE's estimate at the start, updated by each trade-off call the PE makes.",
+        m.partsUsd === null
+          ? `No estimate yet${monthBudget === null ? "" : ` · your budget is ${fmtUsd(monthBudget)} a month`}`
+          : `${fmtUsd(m.partsUsd + m.callsUsd)} a month${monthBudget === null ? " · no budget set" : ` of your ${fmtUsd(monthBudget)}`}`,
+      basis: maintenanceBasis(m),
     },
   };
+}
+
+/** "$9.00–$16.00"; with no total, how many parts have no estimate; with nothing left, a known $0. */
+function restWords(rest: PartsSum): string {
+  if (!rest.parts) return "nothing is left to build";
+  if (!rest.usd) return `none for ${rest.missing} of ${count(rest.parts, "part")}`;
+  return range(rest.usd);
+}
+
+/** Where the maintenance estimate comes from, or why there is none yet (never $0). */
+function maintenanceBasis(m: MaintenanceEstimate): string {
+  if (m.partsUsd !== null) return `The sum of the PE's estimates for the ${count(m.parts, "approved part")}, and each trade-off call the PE makes.`;
+  if (m.parts) return `The PE gave no monthly estimate for ${m.missing} of ${count(m.parts, "approved part")}. Until it does, it is unknown, never $0.`;
+  return "No part of the blueprint is approved, so the PE has nothing to estimate. Until then it is unknown, never $0.";
 }
 
 function stopWords(s: State, budget: number | null): BudgetWords["building"]["stop"] {

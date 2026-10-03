@@ -39,6 +39,7 @@
 import { sameSha } from "../checks";
 import { decisionFor, isBlocking } from "../findings";
 import { currentSpec } from "../model/core";
+import { estimatedParts, sumOfParts, type PartsSum } from "../spend";
 import type { Artifact, Finding, FindingDecision, State, Task } from "../types";
 import { blueprintItems, citedArtifact, draftChanges, itemIdsIn } from "./blueprint";
 import { CAPTURE_DEVICES, isCapturedKind, itemEvidence, type CaptureDevice, type ItemEvidence, type NoEvidence, type NoRunYet } from "./evidence";
@@ -332,6 +333,20 @@ export function itemFactoryStatus(s: State, itemId: string): ItemFactoryView | u
     ...(status === "built-not-verified" && gap ? { notVerified: gap } : {}),
     ...(draft ? { draft } : {}),
   };
+}
+
+/**
+ * The PE's estimate to build the rest (B-03): its building estimates summed over the parts it estimates
+ * (`estimatedParts`) that no landed work has built in this version yet. Work that runs or waits counts in full; landed
+ * work counts in the building spend instead. Nothing left to build is a known $0; a part with no estimate makes no total.
+ */
+export function restOfBuild(s: State): PartsSum {
+  const built = (id: string) => !!itemFactoryStatus(s, id)?.tasks.some((t) => t.state === "landed" && t.thisVersion);
+  return sumOfParts(
+    s,
+    estimatedParts(s).filter((i) => !built(i.id)),
+    (e) => e.buildUsd,
+  );
 }
 
 /** Every approved item in force, in the blueprint's order, with where it stands. Dropped and open items are left out. */

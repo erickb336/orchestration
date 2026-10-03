@@ -226,6 +226,31 @@ describe("the Change flow end to end", () => {
     expect(runOf(id, "C1")).toBeDefined();
     expect(runOf(id, "C1").snapshot.checks!.sandbox).toBe("codex");
   });
+
+  it("a project environment and no Codex: the probe looks where the checks run, the step runs there, and its run says this computer's sandbox was not probed (B-05)", async () => {
+    const image = "python:3.13-slim-trixie@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81";
+    checks.health = "unavailable";
+    checks.environmentHealth = "ready";
+    checksOn();
+    const id = newTask("In the environment");
+    tick();
+    codex.finish(runOf(id, "S1").id, { write: ["a.txt", "x\n"] });
+    for (let i = 0; i < 4; i++) {
+      tick();
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    // No environment yet: this computer's sandbox decides, and the step waits.
+    expect(st().project.checksHealth).toMatchObject({ sandbox: "codex", status: "unavailable" });
+    expect(M.stateLabel(st(), task(id))).toBe(C.HELD_LABEL);
+    // The owner sets an environment: the next probe looks there, and the hold lifts.
+    cmd("setEnvironment", { environment: { image, prepare: [], hosts: [] } });
+    await probed();
+    expect(st().project.checksHealth).toMatchObject({ sandbox: "codex", status: "ready", runsIn: "environment" });
+    settle();
+    const run = runOf(id, "C1");
+    expect(run).toBeDefined();
+    expect(checks.started.at(-1)).toMatchObject({ attemptId: run.id, environment: { plan: { source: { from: "setting", image } } }, hostUnverified: true });
+  });
 });
 
 describe("interruption", () => {

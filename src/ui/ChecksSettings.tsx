@@ -377,7 +377,7 @@ export function SandboxCard({ v, set, confirm }: { v: SandboxDraft; set: (p: Par
           <>
             <StatePill tone={health.status === "ready" ? "done" : health.status === "unavailable" ? "fail" : "neutral"}>{health.status === "ready" ? "Ready" : health.status === "unavailable" ? "Unavailable" : "Not verified"}</StatePill>
             <span className="muted">
-              {health.sandbox === "codex" ? "Codex sandbox" : "no sandbox"}, checked <span title={fmtTime(health.checkedAt)}>{relTime(health.checkedAt)}</span>
+              {health.runsIn === "environment" ? "the project's environment" : health.sandbox === "codex" ? "Codex sandbox" : "no sandbox"}, checked <span title={fmtTime(health.checkedAt)}>{relTime(health.checkedAt)}</span>
               {health.recheck ? "; a new check is queued" : ""}
             </span>
           </>

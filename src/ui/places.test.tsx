@@ -41,9 +41,11 @@ describe("the header's places", () => {
     expect(places(fresh).text).toBe("Vision · no draft Factory not started");
   });
 
-  it("the factory paused by you, stopped at the budget, and running with no agent at work", () => {
+  it("the factory pausing until its runs confirm, then paused by you; stopped at the budget; running with no agent at work", () => {
     const { s, at } = blueprintScene();
-    const paused = runCommand(s, "pauseProject", {}, at(400)).state;
+    const pausing = runCommand(s, "pauseProject", {}, at(400)).state;
+    expect(places(pausing).text.endsWith("Factory pausing · 1 run stopping")).toBe(true);
+    const paused = M.activeAttempts(pausing).reduce((x, a) => M.acknowledgeStop(x, a.id, at(401)), pausing);
     const p = places(paused);
     expect(p.text.endsWith("Factory paused · by you")).toBe(true);
     expect(p.html).toContain("k-pill__pause");

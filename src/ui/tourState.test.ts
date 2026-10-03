@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { parseRoute } from "./route";
-import { TOUR_DONE, TOUR_KEY, TOUR_STOPS, TOUR_TASK_ID, createTourGate, demoLandingRedirect, readTourDone, tourNeedsNavigation, writeTourDone, type KeyValueStore } from "./tourState";
+import { TOUR_DONE, TOUR_KEY, TOUR_STOPS, TOUR_TASK_ID, createTourGate, readTourDone, tourNeedsNavigation, writeTourDone, type KeyValueStore } from "./tourState";
 
 function memoryStore(initial: Record<string, string> = {}): KeyValueStore & { data: Record<string, string> } {
   const data = { ...initial };
@@ -70,12 +70,9 @@ describe("the tour's seen-state", () => {
     expect(gate.started()).toBe(true);
   });
 
-  it("the demo's bare address goes to the Overview, where the tour starts, before and after the tour; nothing else is redirected", () => {
-    for (const hash of ["", "#", "#/"]) expect(demoLandingRedirect(true, hash), hash).toBe("#/overview");
-    // A link to any page is left alone, and real mode never redirects.
-    expect(demoLandingRedirect(true, "#/tasks")).toBeUndefined();
-    expect(demoLandingRedirect(true, "#/task/WT-002")).toBeUndefined();
-    expect(demoLandingRedirect(false, "")).toBeUndefined();
+  it("the bare address is Home (route.ts), where the tour starts: its first stop needs no navigation there", () => {
+    for (const hash of ["", "#", "#/"]) expect(tourNeedsNavigation(hash, TOUR_STOPS[0], true), hash).toBe(false);
+    expect(tourNeedsNavigation("#/tasks", TOUR_STOPS[0], false)).toBe(true);
   });
 });
 

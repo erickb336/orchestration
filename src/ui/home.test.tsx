@@ -353,15 +353,15 @@ describe("the factory floor", () => {
   it("shows the two budgets: spent of the budget, the PE's estimate for the rest, the stop, and maintenance a month against its budget", () => {
     const v = text(sc.s);
     expect(v).toContain("Building budget Change $8.10 of $40.00 spent PE estimate for the rest: $9.00–$16.00 Within budget At $40.00 the factory stops and asks you.");
-    expect(v).toContain("Maintenance budget, estimated $35.00 a month of your $50.00 The PE's estimate at the start, updated by each trade-off call the PE makes.");
+    expect(v).toContain("Maintenance budget, estimated $35.00 a month of your $50.00 The sum of the PE's estimates for the 3 approved parts, and each trade-off call the PE makes.");
   });
 
   it("without an estimate it says so, never $0; at the budget it says the factory stopped; with no budget, that it does not stop", () => {
     const none = structuredClone(sc.s);
-    delete none.project.factoryStarts.at(-1)!.estimate;
+    for (const v of none.studio.verdicts) delete v.budget;
     const v = text(none);
-    expect(v).toContain("PE estimate for the rest: no estimate");
-    expect(v).toContain("Maintenance budget, estimated No estimate yet · your budget is $50.00 a month The PE estimates it before the factory starts. Until then it is unknown, never $0.");
+    expect(v).toContain("PE estimate for the rest: none for 3 of 3 parts");
+    expect(v).toContain("Maintenance budget, estimated No estimate yet · your budget is $50.00 a month The PE gave no monthly estimate for 3 of 3 approved parts. Until it does, it is unknown, never $0.");
     expect(v).not.toMatch(/Maintenance budget, estimated \$0/);
     const stopped = M.setBudgets(sc.s, { buildingUsd: 5, maintenanceUsdPerMonth: 50 }, at(40));
     expect(text(stopped)).toContain("Stopped The building budget is reached: $8.10 of $5.00. Nothing new starts until you raise the budget or continue past it.");

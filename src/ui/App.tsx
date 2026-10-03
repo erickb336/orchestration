@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as M from "../domain/model";
-import { factoryPlace, visionPlace } from "../domain/places";
+import { factoryPlace, projectPause, visionPlace } from "../domain/places";
 import { StoreContext, useServiceContext, useServiceStore, useStore } from "./store";
 import { Board } from "./Board";
 import { TaskDetail } from "./TaskDetail";
@@ -30,7 +30,7 @@ import { LockInPage } from "./studio/LockIn";
 import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
 import { waitingForYourMark } from "./studio/studioView";
-import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm } from "./kit";
+import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, placeInWindow, useConfirm } from "./kit";
 import { cx } from "./kit/cx";
 
 /**
@@ -187,10 +187,11 @@ function Shell() {
 
 /**
  * A small menu on a button: a native details/summary, so it is keyboard-operable as is. It closes on a click
- * outside, on Escape (focus returns to the button), and when an item calls `close`.
+ * outside, on Escape (focus returns to the button), and when an item calls `close`. Its list stays inside the window.
  */
 function Menu({ label, id, className, children }: { label: string; id?: string; className?: string; children: (close: () => void) => ReactNode }) {
   const ref = useRef<HTMLDetailsElement>(null);
+  const pop = useRef<HTMLDivElement>(null);
   const close = useCallback(() => {
     if (ref.current) ref.current.open = false;
   }, []);
@@ -205,11 +206,21 @@ function Menu({ label, id, className, children }: { label: string; id?: string; 
       el.open = false;
       el.querySelector<HTMLElement>("summary")?.focus();
     };
+    // Placed as soon as it opens (a mutation is seen before the page is drawn; the toggle event comes later), and again
+    // when the window's width changes while it is open.
+    const place = () => {
+      if (el.open && pop.current) placeInWindow(pop.current);
+    };
+    const opened = new MutationObserver(place);
+    opened.observe(el, { attributes: true, attributeFilter: ["open"] });
     document.addEventListener("pointerdown", onPointer);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
     return () => {
+      opened.disconnect();
       document.removeEventListener("pointerdown", onPointer);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
     };
   }, []);
   return (
@@ -218,7 +229,7 @@ function Menu({ label, id, className, children }: { label: string; id?: string; 
         {label}
         <span className="menu__caret" aria-hidden="true" />
       </summary>
-      <div className="menu__pop" role="group" aria-label={label}>
+      <div ref={pop} className="menu__pop" role="group" aria-label={label}>
         {children(close)}
       </div>
     </details>
@@ -404,9 +415,10 @@ function ConnectionBanner() {
 export function ProjectMenu() {
   const { state, send, disabled } = useStore();
   const hold = state.project.hold;
-  // A stopping lead run counts too: the pause is not confirmed until the lead acknowledges as well.
-  const stopping = M.activeAttempts(state).filter((a) => a.outcome === "stopping").length + (M.activeLeadRun(state)?.outcome === "stopping" ? 1 : 0);
-  const status = hold ? (stopping ? `Pausing… ${stopping} run${stopping === 1 ? "" : "s"} still stopping` : "Project paused") : undefined;
+  // Every run the pause stopped counts (the lead's and the studio's too): the Factory place reads the same fact.
+  const pause = projectPause(state);
+  const stopping = pause?.state === "pausing" ? pause.stopping : 0;
+  const status = pause ? (stopping ? `Pausing… ${stopping} run${stopping === 1 ? "" : "s"} still stopping` : "Project paused") : undefined;
   return (
     <>
       <span aria-live="polite">

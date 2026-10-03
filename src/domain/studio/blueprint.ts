@@ -15,13 +15,13 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js";
 import canonicalize from "canonicalize";
-import { buildingSpend, maintenanceEstimate } from "../spend";
+import { buildingSpend, itemEstimate, maintenanceEstimate } from "../spend";
 import { currentSpec, currentVision, draft, event, nextId } from "../model/core";
 import { pushVision } from "../model/vision";
 import { newWorkReview } from "../peReview";
 import { ControlError, StaleWriteError, type Finding, type State, type Task } from "../types";
-import { artifactName, covers, currentFeedback, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
-import type { BlueprintItem, BlueprintRevision, ChangeOrder, DictionaryEntry, DraftVision, ItemEstimate, LockInSummary, StudioArtifact, TaskHandling, TouchedTask, TouchedTaskState, UsdRange } from "./types";
+import { artifactName, currentFeedback, latestArtifacts, latestVersion, openObjections, peReview, readyForOwner, versionsOf } from "./studio";
+import type { BlueprintItem, BlueprintRevision, ChangeOrder, DictionaryEntry, DraftVision, Feedback, ItemEstimate, LockInSummary, StudioArtifact, TaskHandling, TouchedTask, TouchedTaskState, UsdRange } from "./types";
 
 // ---------- the version in force ----------
 
@@ -57,18 +57,62 @@ function chosenVariant(a: StudioArtifact, variant: string | undefined): string |
   return a.variants.length === 1 ? a.variants[0].id : variant;
 }
 
-/** Why the owner cannot approve this version with this variant as it stands, or undefined when they can. */
-function approvalBlocker(s: State, a: StudioArtifact, variant: string | undefined): string | undefined {
+/** The owner's answer on a version, as far as approval reads it. */
+type Answer = Pick<Feedback, "mark" | "pickedVariant" | "rows">;
+
+/**
+ * Why the owner cannot approve this version with this variant as it stands, or undefined when they can. `fb` is their
+ * answer on it: the one recorded, or (the studio, before Send) the one about to be sent.
+ */
+function approvalBlocker(s: State, a: StudioArtifact, variant: string | undefined, fb: Answer | undefined = currentFeedback(s, a.id, a.version)): string | undefined {
   if (!readyForOwner(s, a)) return peReview(s, a).status === "waiting" ? "waiting for PE review" : "the designer is revising it after PE review";
-  if (currentFeedback(s, a.id, a.version)?.mark === "drop") return "you marked it Drop";
+  if (fb?.mark === "drop") return "you marked it Drop";
   const v = chosenVariant(a, variant);
   if (a.variants.length > 1 && v === undefined) return "your pick between its variants is open";
   // A term or a rule marked Change or Drop waits for the next version, which makes the change (pass 4d).
-  const rows = (currentFeedback(s, a.id, a.version)?.rows ?? []).filter((r) => r.mark !== "keep" && (r.variant === undefined || r.variant === v));
+  const rows = (fb?.rows ?? []).filter((r) => r.mark !== "keep" && (r.variant === undefined || r.variant === v));
   if (rows.length) return `you marked ${rows.length} ${a.dictionary ? "term" : "rule"}${rows.length === 1 ? "" : "s"} Change or Drop (${rows.slice(0, 3).map((r) => `"${r.row}"`).join(", ")}${rows.length > 3 ? ", …" : ""}); the next version makes the change, or clear those marks to approve this one`;
   const objection = openObjections(s, a).find((o) => o.variant === undefined || o.variant === v);
   if (objection) return `the PE objects${objection.variant ? ` to ${a.variants.find((x) => x.id === objection.variant)?.label ?? objection.variant}` : ""} (${objection.reasons.split("\n")[0]}); overrule the objection to approve it`;
   return undefined;
+}
+
+/**
+ * Why `approveArtifact` would refuse this version with the owner's answer `fb` on it (their pick names the variant), or
+ * undefined when it would put it in the draft. The studio shows it before Send (ORC-030 Q-01): Keep approves on Send.
+ * A version the draft already holds as it is would be refused too; `inDraftAsIs` says so.
+ */
+export function approvalRefusal(s: State, a: StudioArtifact, fb: Answer | undefined): string | undefined {
+  const latest = latestVersion(s, a.id);
+  if (latest && latest.version !== a.version) return `v${latest.version} replaced it`;
+  return approvalBlocker(s, a, fb?.pickedVariant, fb);
+}
+
+/** Whether the draft holds this version, with this pick (several variants), approved as it is: Keep has nothing to do. */
+export function inDraftAsIs(s: State, a: StudioArtifact, pickedVariant: string | undefined): boolean {
+  const item = itemOf(draftItems(s), a);
+  const v = a.variants.length > 1 ? pickedVariant : undefined;
+  return !!item && item.status === "approved" && item.artifactId === a.id && item.version === a.version && item.variant === v;
+}
+
+/** The draft's item for this artifact (its own, or the one of the artifact it replaces) that a Drop would take out, or undefined. */
+export function droppableItem(s: State, a: StudioArtifact): BlueprintItem | undefined {
+  const item = itemOf(draftItems(s), a);
+  return item && item.status !== "dropped" ? item : undefined;
+}
+
+/**
+ * The parts a task builds that the owner dropped: the items its current spec cites that are dropped in the version in
+ * force, each with the Lock in that dropped it. A task the lead retired for them and the owner brought back with Undo
+ * still builds them, and its page and its change-order line say so (ORC-030 Q-13).
+ */
+export function droppedRefs(s: State, t: Task): { item: BlueprintItem; rev: number }[] {
+  return (currentSpec(t).content.blueprintRefs ?? []).flatMap((id) => {
+    const item = blueprintItems(s).find((i) => i.id === id);
+    if (item?.status !== "dropped") return [];
+    const rev = s.blueprint.revisions.find((r) => r.items.some((i) => i.id === id && i.status === "dropped"))?.rev ?? blueprintRev(s);
+    return [{ item, rev }];
+  });
 }
 
 /** The item that stands for this artifact: its own, or the one of the artifact it replaces. */
@@ -238,12 +282,6 @@ function handlingOf(state: TouchedTaskState, onlyDropped: boolean): TaskHandling
 
 const refsOf = (t: Task) => currentSpec(t).content.blueprintRefs ?? [];
 
-/** The PE's newest estimate on the item's version (and variant), or null: no estimate. */
-function peEstimate(s: State, item: BlueprintItem): ItemEstimate {
-  const v = s.studio.verdicts.filter((x) => x.artifactId === item.artifactId && x.version === item.version && covers(x, item.variant) && x.budget).at(-1);
-  return { itemId: item.id, estimate: v?.budget ? structuredClone(v.budget) : null };
-}
-
 /** The sum of one range over the estimates; null when there is none, or one has no figure for it. */
 function sumRange(estimates: ItemEstimate[], pick: (e: NonNullable<ItemEstimate["estimate"]>) => UsdRange | undefined): UsdRange | null {
   if (!estimates.length) return null;
@@ -301,7 +339,7 @@ export function lockInSummary(s: State): LockInSummary {
     tasks.push({ taskId: t.id, title: currentSpec(t).content.title, state, items, handling: handlingOf(state, refs.every(droppedAfter)) });
   }
   const cited = new Set(s.tasks.filter((t) => t.lifecycle !== "cancelled").flatMap(refsOf));
-  const estimates = [...c.added, ...c.changed.map((x) => x.item)].map((i) => peEstimate(s, i));
+  const estimates = [...c.added, ...c.changed.map((x) => x.item)].map((i) => itemEstimate(s, i));
   const spend = buildingSpend(s);
   const m = maintenanceEstimate(s);
   const why = new Map(openBlueprintItems(s).map((o) => [o.item.id, o.why]));
@@ -313,7 +351,7 @@ export function lockInSummary(s: State): LockInSummary {
     newWork: c.added.filter((i) => !cited.has(i.id)).map((i) => i.id),
     budgets: {
       building: { budgetUsd: s.project.budgets.buildingUsd, spentUsd: spend.usd, unknownRuns: spend.unknown.length },
-      maintenance: { budgetUsdPerMonth: s.project.budgets.maintenanceUsdPerMonth, estimateUsdPerMonth: m.startUsd === null ? null : m.startUsd + m.callsUsd },
+      maintenance: { budgetUsdPerMonth: s.project.budgets.maintenanceUsdPerMonth, estimateUsdPerMonth: m.partsUsd === null ? null : m.partsUsd + m.callsUsd },
       items: estimates,
       itemsTotal: { buildUsd: sumRange(estimates, (e) => e.buildUsd), maintenanceUsdPerMonth: sumRange(estimates, (e) => e.maintenanceUsdPerMonth) },
     },

@@ -20,3 +20,4 @@ export { SideNav, SideNavLayout, type SideNavItem, type SideNavProps } from "./S
 export { STEP_MARK, STEP_WORD, StepList, type StepItem, type StepMark } from "./StepList";
 export { EmptyState } from "./EmptyState";
 export { Toast, ToastRegion, type ToastProps, type ToastTone } from "./Toast";
+export { placeInWindow, useInWindow } from "./inWindow";

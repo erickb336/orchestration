@@ -8,7 +8,7 @@
 // (rounds, artifacts, feedback, PE review, probes) and blueprint.ts (approval, the draft, Lock in and its summary,
 // open items, change orders, task specs' references). The containers exist from state format 19.
 
-import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId, RunSubagents, SubagentAllowance } from "../types";
+import type { Device, GivenPrinciple, PeReviewState, ProseCheck, ProviderId, RunSubagents, RunUsage, SubagentAllowance } from "../types";
 
 /**
  * What a round is about. Round 0 is what already exists (material): what the owner brought, and for an existing
@@ -160,6 +160,11 @@ export interface StudioArtifact {
    * Every other end is read from the verdicts, the runs and the round (studio.ts, `peReview`).
    */
   reviewEnd?: { reason: RecordedEnd; at: string; note?: string };
+  /**
+   * The owner asked the PE again (`askPeAgain`, B-06) after its review of this version ended with no verdict: the PE's
+   * runs on it before then (the first `runsBefore`) no longer end its review.
+   */
+  askedAgain?: { at: string; runsBefore: number };
 }
 
 /**
@@ -682,7 +687,7 @@ export interface StudioRun {
   endedAt?: string;
   /** Its staging folder, relative to the project's studio workspace (`<data>/studio/<projectId>/`): the one place it writes. */
   workspace: string;
-  usage?: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; costUsd?: number };
+  usage?: RunUsage;
   sessionId?: string;
   actualModel?: string;
   stopRequestedAt?: string;

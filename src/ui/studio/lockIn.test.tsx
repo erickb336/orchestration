@@ -5,13 +5,16 @@
 
 import { describe, expect, it } from "vitest";
 import { runCommand } from "../../domain/commands";
+import * as M from "../../domain/model";
+import { buildSeed } from "../../domain/seed";
 import * as B from "../../domain/studio/blueprint";
 import { blueprintScene } from "../../domain/testing/blueprintScene";
-import { addScreen, lockInArgs, peAgrees, run, sha } from "../../domain/testing/studio";
+import { startFactoryAsOwner } from "../../domain/testing/factory";
+import { addScreen, lockInArgs, openRound, peAgrees, run, sha } from "../../domain/testing/studio";
 import { StaleWriteError, type State } from "../../domain/types";
 import { renderScreen, visible } from "../testStore";
 import { LockInPage } from "./LockIn";
-import { lockInRequest, lockInWords } from "./lockInView";
+import { lockInRequest, lockInWords, whoActsNext } from "./lockInView";
 
 const page = (s: State) => {
   const html = renderScreen(<LockInPage />, s);
@@ -104,5 +107,48 @@ describe("the Lock in summary", () => {
     const { s } = blueprintScene();
     const { html } = page(s);
     expect(html).toMatch(/<button[^>]*aria-disabled="true"[^>]*title="Tick the box first: your agreement is recorded with this summary\."[^>]*>Lock in 3 changes<\/button>/);
+  });
+});
+
+describe("the Lock in summary's words agree with the project (ORC-030 Q-18, Q-19, Q-21)", () => {
+  const T0 = Date.parse("2026-10-03T09:00:00Z");
+  const fresh = () => M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: "/tmp/trips", vision: "Weekend trips.", focus: "" }, new Date(T0).toISOString());
+
+  it("a factory that runs with nothing waiting: no Lock in number, and no first Lock in it never had", () => {
+    // A factory started before Lock in existed (the sample): building, nothing in force, an empty draft.
+    const old = structuredClone(fresh());
+    old.project.stage = "building";
+    const { text } = page(old);
+    expect(text).toContain("Lock in · the summary");
+    expect(text).not.toContain("Lock in 1 · the summary");
+    expect(text).not.toContain("first Lock in");
+    // Started by the owner's first Lock in, with nothing new in the draft: that Lock in is named, with no new number.
+    const at = (sec: number) => new Date(T0 + sec * 1000).toISOString();
+    const r = openRound(fresh(), "experience", at(1));
+    const a = addScreen(r.state, r.n, at(2), { variants: [{ id: "A", label: "Map first", entry: "trip-plan/index.html" }] });
+    const started = startFactoryAsOwner(run(peAgrees(a.state, a.id, 1, [], at(3)), "approveArtifact", { artifactId: a.id, version: 1 }, at(4)).state, at(5));
+    const now = page(started).text;
+    expect(now).toContain("Lock in · the summary");
+    expect(now).toContain("Start the factory was your first Lock in (Lock in 1).");
+    // In Vision, Start the factory is still the first one.
+    expect(whoActsNext(fresh())).toContain("Start the factory is your first Lock in. Every later Lock in shows this summary.");
+  });
+
+  it("who acts next follows Autopilot, Check-in and Manual", () => {
+    const line = (enabled: boolean, holdLeadProposals: boolean, pe = true) => {
+      const s = structuredClone(fresh());
+      Object.assign(s.project.autonomy, { enabled, holdLeadProposals });
+      s.project.peReviewsNewWork = pe;
+      return whoActsNext(s)[1];
+    };
+    expect(line(true, false)).toBe("New tasks wait for PE review, then start.");
+    expect(line(true, true)).toBe("On Check-in new tasks wait for PE review, then for your go-ahead.");
+    expect(line(false, false)).toBe("On Manual nothing starts until you start it. New tasks wait for PE review first.");
+    expect(line(true, true, false)).toBe("On Check-in new tasks wait for your go-ahead, without PE review.");
+    expect(line(false, true, false)).toBe("On Manual nothing starts until you start it. New tasks get no PE review.");
+  });
+
+  it("with nothing approved and the vision text unchanged, it does not say the Lock in changes the vision text", () => {
+    expect(lockInWords(fresh()).estimate.total).toBe("No part to estimate: the draft approves none.");
   });
 });

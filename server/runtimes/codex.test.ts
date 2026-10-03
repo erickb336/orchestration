@@ -81,6 +81,10 @@ async function waitFor(pred: () => boolean, ms = 5000) {
   }
 }
 
+/** A run's usage when it made no model request, and when it ended with its first request open (Codex reports none for it). */
+const NO_REQUEST = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 };
+const OPEN_REQUEST = { ...NO_REQUEST, openRequest: true };
+
 const TERMINAL = new Set(["completed", "stopped", "failed"]);
 const terminals = (events: AdapterEvent[]) => events.filter((e) => TERMINAL.has(e.type));
 const noteEvents = (events: AdapterEvent[]) => events.filter((e) => e.type === "note");
@@ -210,7 +214,7 @@ describe("CodexAdapter runs", () => {
     adapter.interrupt("att-1");
     await waitFor(() => terminals(events).length > 0);
     await settle(400);
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "interrupted", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "interrupted", usage: OPEN_REQUEST }]);
     const interrupts = stubLog().filter((l) => l.recv?.method === "turn/interrupt");
     expect(interrupts).toHaveLength(1);
     expect(interrupts[0].recv.params).toEqual({ threadId: "thr_stub_1", turnId: "turn_stub_1" });
@@ -227,18 +231,37 @@ describe("CodexAdapter runs", () => {
     await waitFor(() => terminals(events).length > 0);
     expect(Date.now() - t0).toBeGreaterThanOrEqual(280);
     await settle();
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "killed", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "killed", usage: OPEN_REQUEST }]);
     expect(adapter.has("att-1")).toBe(false);
   });
 
+  it("a stop mid-turn reports the usage of the model requests that completed, and marks the open one Codex never reports (B-02)", async () => {
+    const { adapter, events } = make("usage-interrupt");
+    adapter.start(assignment());
+    await waitFor(() => events.some((e) => e.type === "started"));
+    await settle(80);
+    adapter.interrupt("att-1");
+    await waitFor(() => terminals(events).length > 0);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "interrupted", usage: { inputTokens: 300, cachedInputTokens: 100, outputTokens: 20, openRequest: true } }]);
+  });
+
+  it("a crash mid-turn is a failure whose usage marks the open model request (B-02)", async () => {
+    const { adapter, events } = make("crash");
+    adapter.start(assignment());
+    await waitFor(() => terminals(events).length > 0);
+    expect((terminals(events)[0] as { usage?: unknown }).usage).toEqual(OPEN_REQUEST);
+  });
+
   it("an interrupt before the turn has started kills the process", async () => {
-    const { adapter, events, stubLog } = make("slow-thread");
+    // The gate stays shut: Codex never answers thread/start, so the turn cannot start, however slow the machine.
+    const { adapter, events, stubLog } = make("complete", {}, { CODEX_STUB_THREAD_GATE: join(dir, "gate") });
     adapter.start(assignment());
     await waitFor(() => stubLog().some((l) => l.recv?.method === "thread/start"));
     adapter.interrupt("att-1");
     await waitFor(() => terminals(events).length > 0);
     await settle();
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "killed", usage: undefined }]);
+    // No model request was made: a known zero, not a missing report (B-02).
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-1", how: "killed", usage: NO_REQUEST }]);
     expect(events.some((e) => e.type === "started")).toBe(false);
   });
 
@@ -248,7 +271,7 @@ describe("CodexAdapter runs", () => {
     await waitFor(() => terminals(events).length > 0);
     await settle();
     expect(events.some((e) => e.type === "activity" && e.note === "Time limit reached")).toBe(true);
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-t", how: "interrupted", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-t", how: "interrupted", usage: OPEN_REQUEST }]);
   });
 
   it("maps an authentication failure to login guidance", async () => {
@@ -330,7 +353,7 @@ describe("CodexAdapter runs", () => {
     expect(adapter.ids()).toEqual(["b"]);
     adapter.kill("b");
     await settle();
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "a", how: "interrupted", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "a", how: "interrupted", usage: OPEN_REQUEST }]);
   });
 });
 
@@ -419,7 +442,7 @@ describe("sub-agents (ORC-031)", () => {
       { phase: "started", id: "thr_sub_a", asked: "Codex sub-agent /root/a", usageInParent: false },
       { phase: "ended", id: "thr_sub_a", how: "stopped", model: "stub-sub-model", usage: { inputTokens: 700, cachedInputTokens: 0, outputTokens: 5 } },
     ]);
-    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-i", how: "interrupted", usage: undefined }]);
+    expect(terminals(events)).toEqual([{ type: "stopped", attemptId: "att-i", how: "interrupted", usage: OPEN_REQUEST }]);
     // One interrupt, of the parent's turn.
     expect(recvOf(stubLog, "turn/interrupt").map((m) => m.params)).toEqual([{ threadId: "thr_stub_1", turnId: "turn_stub_1" }]);
   });
@@ -474,7 +497,9 @@ describe("notes", () => {
   });
 
   it("a note before the turn exists is held, then steered once the turn starts (ORC-027 review)", async () => {
-    const { adapter, events, stubLog } = make("steer", {}, { CODEX_STUB_THREAD_DELAY_MS: "300" });
+    // Codex answers thread/start only when the test opens the gate: the note always comes before the turn exists.
+    const gate = join(dir, "gate");
+    const { adapter, events, stubLog } = make("steer", {}, { CODEX_STUB_THREAD_GATE: gate });
     adapter.start(assignment());
     await waitFor(() => stubLog().some((l) => l.recv?.method === "thread/start"));
     adapter.note("att-1", { id: "early", text: NOTE });
@@ -482,6 +507,7 @@ describe("notes", () => {
     // Held: neither settled nor sent while Codex is still starting the thread.
     expect(noteEvents(events)).toEqual([]);
     expect(steers(stubLog)).toHaveLength(0);
+    writeFileSync(gate, "");
     await waitFor(() => noteEvents(events).length === 1);
     // The outcome says the note was held: evidence of this path in a real run's record (ORC-028 review).
     expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "delivered", heldForTurn: true }]);
@@ -492,7 +518,8 @@ describe("notes", () => {
   });
 
   it("a held note whose run is stopped before its turn starts → not-delivered, before the terminal event", async () => {
-    const { adapter, events, stubLog } = make("slow-thread");
+    const gate = join(dir, "gate");
+    const { adapter, events, stubLog } = make("complete", {}, { CODEX_STUB_THREAD_GATE: gate });
     adapter.start(assignment());
     await waitFor(() => stubLog().some((l) => l.recv?.method === "thread/start"));
     adapter.note("att-1", { id: "early", text: NOTE });
@@ -503,7 +530,9 @@ describe("notes", () => {
     expect(noteEvents(events)).toEqual([{ type: "note", attemptId: "att-1", noteId: "early", outcome: "not-delivered", reason: "the run was stopped first", heldForTurn: true }]);
     const types = events.map((e) => e.type);
     expect(types.indexOf("note")).toBeLessThan(types.findIndex((t) => t === "stopped" || t === "failed"));
-    await settle(2200);
+    // Codex may answer late: the stopped run still sends nothing.
+    writeFileSync(gate, "");
+    await settle(200);
     expect(steers(stubLog)).toHaveLength(0);
     expect(noteEvents(events)).toHaveLength(1);
   });

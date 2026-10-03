@@ -384,10 +384,11 @@ describe("the PE's route (ORC-029 2d)", () => {
     const r = M.startLeadRun(M.setBudgets(priced(s0), budgets, at(5)), { provider: "claude", model: "claude-sample-large", trigger: "decisions" }, at(5));
     return { s: r.state, id, art, runId: r.runId };
   }
-  /** The pre-flight estimated the maintenance at `usd` a month (the PE's pre-flight, pass 6, makes this estimate). */
+  /** One approved part in force, whose PE review estimates its maintenance at up to `usd` a month (B-03). */
   function estimated(s0: State, usd: number): State {
     const s = structuredClone(s0);
-    s.project.factoryStarts.push({ at: at(1), by: "user", blueprintRev: 0, visionRev: 1, settings: M.startFactoryRequest(s).settings, openItems: [], estimate: { maintenanceUsdPerMonth: [0, usd], basis: "The pre-flight" } });
+    s.blueprint.revisions.push({ rev: s.blueprint.revisions.length + 1, at: at(1), visionRev: 1, reason: "Lock in", items: [{ id: "bi-900", kind: "screen", title: "Notes list", artifactId: "sa-900", version: 1, status: "approved" }] });
+    s.studio.verdicts.push({ id: "pv-900", artifactId: "sa-900", version: 1, pass: 1, verdict: "feasible", reasons: "Fits.", budget: { maintenanceUsdPerMonth: [0, usd], basis: "Similar screens" }, at: at(1) });
     return s;
   }
   /** The decision run completes, with its own cost recorded. */
@@ -459,11 +460,15 @@ describe("the PE's route (ORC-029 2d)", () => {
     expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "up to $1.00 more would take the building spend to $8.00, past the $5.00 budget ($7.00 spent)" } });
   });
 
-  it("a run with no recorded cost makes the building spend unknown, never $0: a call that adds any building cost goes to the owner (review finding 2)", () => {
+  it("a run with no recorded cost and no spend limit makes the building spend unknown, never $0: a call that adds any building cost goes to the owner (review finding 2)", () => {
     const { s: s0, runId } = peCase(3, { buildingUsd: 50, maintenanceUsdPerMonth: null });
     const s = structuredClone(s0);
-    delete s.attempts.find((a) => a.outcome === "completed" && a.snapshot.provider !== "service")!.usage;
-    expect(buildingSpend(s).unknown).toHaveLength(1);
+    const run = s.attempts.find((a) => a.outcome === "completed" && a.snapshot.provider !== "service")!;
+    delete run.usage;
+    // A Claude run counts at its run limit, its spend cap (B-02); a Codex run has none, so nothing bounds it.
+    expect(buildingSpend({ ...s, attempts: s.attempts.map((a) => (a.id === run.id ? { ...a, snapshot: { ...a.snapshot, provider: "claude" } } : a)) }).unknown).toMatchObject([{ countedUsd: 2 }]);
+    run.snapshot.provider = "codex";
+    expect(buildingSpend(s).unknown).toMatchObject([{ countedUsd: null }]);
     const [d1, d2, d3] = s.decisions;
     const out = complete(s, runId, [
       { id: d1.id, decision: "accept", why: "Nothing to build.", cost: { buildUsd: [0, 0], basis: "Accepting builds nothing" } },
@@ -471,7 +476,7 @@ describe("the PE's route (ORC-029 2d)", () => {
       { id: d3.id, decision: "accept", why: "Fine.", cost: { maintenanceUsdPerMonth: [0, 0], basis: "Nothing runs" } },
     ]);
     expect(out.decisions[0]).toMatchObject({ status: "accept", decidedBy: "pe" });
-    expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "1 run has no recorded cost, so the building spend is unknown, and up to $1.00 more cannot be checked against the $50.00 budget" } });
+    expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "1 run has no recorded cost and no spend limit, so up to $1.00 more cannot be checked against the $50.00 budget" } });
     expect(out.decisions[2].pe?.pastBudget).toBe("it states no building cost, and the building budget is $50.00");
   });
 
@@ -536,10 +541,10 @@ describe("the PE's route (ORC-029 2d)", () => {
     expect(pastBudget(reversed, { buildUsd: [0, 0], maintenanceUsdPerMonth: [0, 20], basis: "x" })).toBeUndefined();
   });
 
-  it("while the pre-flight has not estimated the maintenance, it is unknown, never $0: a call that adds any maintenance cost goes to the owner", () => {
+  it("while the PE has not estimated the approved parts' maintenance, it is unknown, never $0: a call that adds any maintenance cost goes to the owner", () => {
     const { s, runId } = peCase(2, { buildingUsd: null, maintenanceUsdPerMonth: 100 });
-    expect(s.project.factoryStarts.at(-1)?.estimate).toBeUndefined();
-    expect(maintenanceEstimate(s)).toEqual({ startUsd: null, callsUsd: 0 });
+    expect(s.blueprint.revisions).toEqual([]);
+    expect(maintenanceEstimate(s)).toEqual({ partsUsd: null, parts: 0, missing: 0, callsUsd: 0 });
     const [d1, d2] = s.decisions;
     const out = complete(s, runId, [
       { id: d1.id, decision: "accept", why: "Nothing runs.", cost: { maintenanceUsdPerMonth: [0, 0], basis: "Nothing runs" } },
@@ -549,7 +554,7 @@ describe("the PE's route (ORC-029 2d)", () => {
     expect(out.decisions[1]).toMatchObject({ status: "open", routedTo: "user", pe: { pastBudget: "the project's maintenance is not yet estimated, so up to $2.00 more a month cannot be checked against the $100.00 budget" } });
     // Once estimated, the same call is within the budget.
     expect(pastBudget(estimated(out, 10), { maintenanceUsdPerMonth: [1, 2], basis: "x" })).toBeUndefined();
-    expect(maintenanceEstimate(estimated(F.decideFinding(out, d2.id, "accept", undefined, at(7)), 10))).toEqual({ startUsd: 10, callsUsd: 2 });
+    expect(maintenanceEstimate(estimated(F.decideFinding(out, d2.id, "accept", undefined, at(7)), 10))).toEqual({ partsUsd: 10, parts: 1, missing: 0, callsUsd: 2 });
   });
 
   it("a fix suggestion names the PE only when the PE made it, not when an earlier PE call stays on the record (review finding 9)", () => {

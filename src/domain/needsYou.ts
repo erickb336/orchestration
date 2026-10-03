@@ -8,7 +8,7 @@ import * as F from "./findings";
 import * as M from "./model";
 import { changeOrderNeeds } from "./model/changeOrderUpdates";
 import { lastObjection, PE_OBJECTS_HOLD, PE_REVIEW_HOLD, taskReviewHold } from "./peReview";
-import { budgetStop, buildingSpend, type UnknownCost } from "./spend";
+import { budgetStop, type UnknownCost } from "./spend";
 import { blueprintItems, openChangeOrders } from "./studio/blueprint";
 import { slippedThrough } from "./subagents";
 import type { ChangeOrder } from "./studio/types";
@@ -115,11 +115,9 @@ const mergeAsked = (pr: PrDelivery) => pr.mergeRequested?.headSha === pr.headSha
 /** Everything that waits for you, in the order the Needs-you card shows it: project-wide problems first, then tasks by priority. */
 export function needsYouItems(state: State, nowMs = Date.now()): NeedsYouEntry[] {
   const items: NeedsYouEntry[] = [];
+  // The costs with no full record count at an estimate (spend.ts), which the budgets show: only the stop waits for you.
   const stop = budgetStop(state);
-  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(), action: "Settings", href: "#/settings/project/budgets" });
-  // Apart from the stop: while a building budget is set, a run with no recorded cost is the owner's to know about.
-  const unknown = state.project.budgets.buildingUsd === null ? [] : (stop?.spend ?? buildingSpend(state)).unknown;
-  if (unknown.length) items.push({ kind: "open", key: "budget-unknown", what: unknownCostLine(unknown), detail: unknownCostDetail(unknown), action: "Settings", href: "#/settings/project/budgets" });
+  if (stop) items.push({ kind: "open", key: "budget", what: stop.why, detail: budgetDetail(state, stop.spend.unknown), action: "Settings", href: "#/settings/project/budgets" });
   // A run's agent started the provider's own subagents where none is allowed (ORC-031): the owner knows, until they mark it as seen.
   for (const x of slippedThrough(state)) {
     const task = x.taskId ? state.tasks.find((t) => t.id === x.taskId) : undefined;
@@ -186,30 +184,26 @@ function helperDetail(name: string, count: number): string {
   return `${name} started ${count === 1 ? "a helper agent" : `${count} helper agents`}. The provider should have switched them off. They are counted and shown on the run, and their cost counts in the budget. Mark them as seen once you know why.`;
 }
 
-/** What the budget stop means (the runs with no recorded cost have their own item). */
-function budgetDetail(): string {
-  return "Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.";
+/**
+ * A run in the owner's words, never its internal id ("lead-1127"): a task run by its task and step ("WT-002 S1"), a
+ * lead run, a Vision run by its kind; a helper by the run that started it. `UnknownCost.runId` names a helper as
+ * "<run> helper <id>" or "<run> unlisted helper <n>".
+ */
+function runWords(s: State, runId: string): string {
+  const id = runId.split(" ")[0];
+  const helper = id !== runId;
+  const a = s.attempts.find((x) => x.id === id);
+  const studio = a ? undefined : s.studio.runs.find((x) => x.id === id);
+  const run = a ? `${a.taskId} ${a.stepId}` : studio ? `a ${studio.kind === "pe" ? "PE" : studio.kind} run in Vision` : "a lead run";
+  return helper ? `a helper of ${run}` : run;
 }
 
-/** "a", "a and b", "a, b and c". */
-const listed = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
-
-/** "3 runs have no recorded cost (model gpt-x has no price; no usage was recorded for 1)". */
-function unknownCostLine(unknown: UnknownCost[]): string {
-  const n = unknown.length;
-  const models = [...new Set(unknown.filter((u) => u.reason === "no-price").map((u) => u.model))];
-  const noUsage = unknown.filter((u) => u.reason === "no-usage").length;
-  const why = [
-    ...(models.length ? [`${models.length === 1 ? "model" : "models"} ${listed(models)} ${models.length === 1 ? "has" : "have"} no price`] : []),
-    ...(noUsage ? [noUsage === n ? "no usage was recorded" : `no usage was recorded for ${noUsage}`] : []),
-  ].join("; ");
-  return `${n} run${n === 1 ? " has" : "s have"} no recorded cost (${why})`;
-}
-
-/** What it means for the stop (spend.ts, `budgetStop`), and the runs (the first five are named). */
-function unknownCostDetail(unknown: UnknownCost[]): string {
-  const named = unknown.slice(0, 5).map((u) => `${u.runId} (${u.provider} · ${u.model}, ${u.reason === "no-price" ? "no price" : "no usage recorded"})`);
-  return `The budget's stop counts each at its run limit, the most it could cost; one with no spend limit (Codex has none) stops new work until you raise the budget or continue past it. Runs: ${named.join(", ")}${unknown.length > 5 ? ` and ${unknown.length - 5} more` : ""}.`;
+/** What the budget stop means, and the runs it cannot count, if any (the first five are named). */
+function budgetDetail(s: State, unknown: UnknownCost[]): string {
+  const none = unknown.filter((u) => u.countedUsd === null);
+  const named = none.slice(0, 5).map((u) => `${runWords(s, u.runId)} (${M.providerLabel(u.provider)} · ${u.model}, ${u.reason === "no-price" ? "no price" : "no usage recorded"})`);
+  const notCounted = none.length ? ` Not counted: ${named.join(", ")}${none.length > 5 ? ` and ${none.length - 5} more` : ""}.` : "";
+  return `Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.${notCounted}`;
 }
 
 /** The two options as one line: "A, Guest link · B, One-time code". */

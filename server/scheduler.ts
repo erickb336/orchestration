@@ -1321,6 +1321,7 @@ export class Scheduler {
         logDir,
         ...(cfg.testReport ? { testReport: cfg.testReport } : {}),
         ...(runner.simulated ? {} : this.environmentFor(state)),
+        ...(state.project.checksHealth?.runsIn === "environment" ? { hostUnverified: true as const } : {}),
       };
       this.launched.set(attemptId, { provider: "service", access: "read", workspace, stepId: step.id, taskId: task.id, touchedInputs: touched });
       runner.start(assignment);
@@ -1393,20 +1394,22 @@ export class Scheduler {
   }
 
   /**
-   * Probe the sandbox when checks were switched on, on request, every six hours, and after two check
-   * runs in a row failed to start. At most one probe at a time; its result is queued and applied under
-   * the lease. No probe with the simulated runner beyond its own answer.
+   * Probe where the checks run (the project's environment, as a run would get it, or the host sandbox) when checks
+   * were switched on, on request, every six hours, and after two check runs in a row failed to start. At most one
+   * probe at a time; its result is queued and applied under the lease. No probe with the simulated runner beyond its
+   * own answer.
    */
   private planProbe(state: State, nowMs: number) {
     const runner = this.checks;
     if (!runner || this.probing) return;
     if (!C.probeDue(state, nowMs) && this.failedStarts < 2) return;
+    const environment = runner.simulated ? undefined : this.environmentFor(state).environment;
     this.probing = true;
     this.failedStarts = 0;
     const sandbox = state.project.checks.sandbox;
     const startedAt = new Date(nowMs).toISOString();
     void runner
-      .probe(sandbox)
+      .probe(sandbox, environment)
       .catch((e): ChecksHealth => ({ sandbox, status: "unavailable", detail: e instanceof Error ? e.message : String(e), checkedAt: new Date().toISOString() }))
       .then((health) => {
         this.probing = false;
@@ -1474,8 +1477,9 @@ export class Scheduler {
     if (s.leadRuns.some((r) => r.id === e.attemptId)) return this.applyLeadEvent(s, e, now);
     switch (e.type) {
       case "started": {
-        let next = M.reportRunStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
-        const simulated = this.simulatedRun(next, e.attemptId);
+        // The fake runtime's run is marked as it starts, so it is a known $0 however it ends (lost at a restart too).
+        const simulated = this.simulatedRun(s, e.attemptId);
+        let next = M.reportRunStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model, simulated });
         for (const n of M.notesAtStart(next, e.attemptId)) if (n.status === "sending") next = M.reportNoteOutcome(next, { attemptId: e.attemptId, noteId: n.id, outcome: "delivered" }, now, simulated);
         return next;
       }
@@ -1516,9 +1520,12 @@ export class Scheduler {
   }
 
   private applyLeadEvent(s: State, e: Exclude<AdapterEvent, { type: "subagent" }>, now: string): State {
+    const run = s.leadRuns.find((r) => r.id === e.attemptId);
+    // A run of the fake runtime: marked as it starts (a known $0 however it ends), and its reply's changes are labelled.
+    const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
     switch (e.type) {
       case "started":
-        return M.reportLeadStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model });
+        return M.reportLeadStarted(s, e.attemptId, { sessionId: e.sessionId, actualModel: e.model, simulated });
       case "activity":
         return M.reportLeadActivity(s, e.attemptId, e.note);
       case "progress":
@@ -1531,8 +1538,6 @@ export class Scheduler {
       case "completed": {
         const out = parseLeadOutput(e.finalText);
         // A reply from the fake runtime is recorded as simulated on what it changed (the focus, the change set, a draft).
-        const run = s.leadRuns.find((r) => r.id === e.attemptId);
-        const simulated = run && this.adapterFor(run.provider) instanceof FakeAdapter ? (true as const) : undefined;
         // The steering block, the vision draft, the decisions, the studio block and any parse problem go through as found; the domain validates them.
         // The final text goes too: the run keeps it when the answer could not be used as sent.
         const next = M.completeLeadRun(s, e.attemptId, { reply: out.reply, proposals: out.proposals, steer: out.steer, vision: out.vision, coverage: out.coverage, questions: out.questions, decisions: out.decisions, studio: out.studio, changeOrder: out.changeOrder, problem: out.problem, answerText: e.finalText }, now, { usage: e.usage, actualModel: e.model, ...(simulated ? { simulated } : {}) });

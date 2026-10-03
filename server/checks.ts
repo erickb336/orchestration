@@ -11,7 +11,8 @@
 //   EnvironmentChecks   the project's own environment, when the run has one (server/environment/runner.ts): a
 //                       prepare phase whose only way out is an allowlisting proxy, then the checks with no network,
 //                       in containers. Without Docker it hands the run to the host sandbox, with the reason.
-//   CheckRunners        the facade the scheduler talks to; it routes each run by its environment, then its sandbox.
+//   CheckRunners        the facade the scheduler talks to; it routes each run by its environment, then its sandbox, and
+//                       each probe the same way, so the hold of Checks steps follows where the checks really run.
 //
 // Output is redacted and capped (an excerpt in the state, the full log in a file), the command
 // environment is built from an allowlist, and every run ends with exactly one terminal event.
@@ -120,6 +121,11 @@ export interface CheckAssignment {
   environment?: EnvironmentAssignment;
   /** Why a run with an environment ran in the host sandbox instead (set by the environment runner when it hands the run over, or by the scheduler when the dev container is not confirmed and no image is). */
   hostReason?: string;
+  /**
+   * The last probe found that the checks run in the project's environment, so it did not probe this computer's
+   * sandbox. A run that comes to the Codex sandbox anyway (a hand-over) probes it before its first command.
+   */
+  hostUnverified?: true;
   /** A dev container at the trusted base whose digest the owner has not confirmed: not used, and named in the run's record. */
   unconfirmed?: UnconfirmedDevcontainer;
 }
@@ -143,8 +149,11 @@ export interface CheckRunner {
   has(attemptId: string): boolean;
   ids(): string[];
   onEvent(l: (e: AdapterEvent) => void): () => void;
-  /** Whether the sandbox works on this machine. Never touches the repository. */
-  probe(sandbox: "codex" | "none"): Promise<ChecksHealth>;
+  /**
+   * Whether the checks can run where a run with this environment goes: the project's environment, or this computer's
+   * sandbox. Never touches the repository.
+   */
+  probe(sandbox: "codex" | "none", environment?: EnvironmentAssignment): Promise<ChecksHealth>;
   shutdown(): Promise<void>;
 }
 
@@ -675,6 +684,11 @@ export class CodexSandboxChecks extends BaseChecks {
 
   protected async prepare(run: Run): Promise<void> {
     const { a } = run;
+    if (a.hostUnverified) {
+      const h = await this.probe("codex");
+      if (h.status !== "ready") throw new Error(`The checks cannot run: ${a.hostReason ? `the project's environment did not take them (${a.hostReason}), and ` : ""}this computer's sandbox is not ready: ${h.detail}`);
+      if (run.done) return;
+    }
     mkdirSync(a.tmpDir, { recursive: true, mode: 0o700 });
     mkdirSync(a.cacheDir, { recursive: true, mode: 0o700 });
     const server = await this.startServer(a.env, a.workspace);
@@ -915,15 +929,19 @@ export class CheckRunners implements CheckRunner {
     this.all = [codex, direct, ...(environment ? [environment] : [])];
   }
   /** The host sandbox a run goes to without its environment. */
-  hostFor(a: CheckAssignment): CheckRunner {
+  hostFor(a: Pick<CheckAssignment, "sandbox">): CheckRunner {
     return a.sandbox === "codex" ? this.codex : this.direct;
+  }
+  /** Where a run goes, and so what a probe for it must check: its environment's runner, else the host sandbox. */
+  private route(a: Pick<CheckAssignment, "sandbox" | "environment">): CheckRunner {
+    return a.environment && this.environment ? this.environment : this.hostFor(a);
   }
   private owner(id: string): CheckRunner | undefined {
     return this.all.find((r) => r.has(id));
   }
   start(a: CheckAssignment) {
     if (this.owner(a.attemptId)) return;
-    (a.environment && this.environment ? this.environment : this.hostFor(a)).start(a);
+    this.route(a).start(a);
   }
   interrupt(id: string) {
     this.owner(id)?.interrupt(id);
@@ -943,8 +961,8 @@ export class CheckRunners implements CheckRunner {
       for (const off of offs) off();
     };
   }
-  probe(sandbox: "codex" | "none") {
-    return sandbox === "codex" ? this.codex.probe(sandbox) : this.direct.probe(sandbox);
+  probe(sandbox: "codex" | "none", environment?: EnvironmentAssignment) {
+    return this.route({ sandbox, environment }).probe(sandbox, environment);
   }
   async shutdown() {
     await Promise.all(this.all.map((r) => r.shutdown()));

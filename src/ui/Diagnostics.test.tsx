@@ -33,7 +33,7 @@ describe("housekeeping in Usage and service", () => {
       running: false,
       everyHours: 6,
       ownerApps: true,
-      last: { at: "2026-10-03T12:00:00Z", trigger: "start", ownerApps: true, archived: 2, trashed: 1, containers: 0, stages: 0, held: 1, recent: 0, notes: ["Docker did not answer, so the recorder's containers were not checked"] },
+      last: { at: "2026-10-03T12:00:00Z", trigger: "start", ownerApps: true, archived: 2, trashed: 1, containers: 0, networks: 0, stages: 0, held: 1, recent: 0, notes: ["Docker did not answer, so the recorder's containers were not checked"] },
     });
     const t = text(html);
     expect(t).toContain("at start: archived 2 Codex threads, moved 1 Claude session folder to the Trash; 1 thread held open by another app waits for the next sweep.");
@@ -46,7 +46,7 @@ describe("housekeeping in Usage and service", () => {
   });
 
   it("says nothing was there to clean, and the simulated service never touches Codex or Claude", () => {
-    const t = text(render({ running: false, everyHours: 6, ownerApps: false, last: { at: "2026-10-03T12:00:00Z", trigger: "owner", ownerApps: false, archived: 0, trashed: 0, containers: 0, stages: 0, held: 0, recent: 2, notes: [] } }));
+    const t = text(render({ running: false, everyHours: 6, ownerApps: false, last: { at: "2026-10-03T12:00:00Z", trigger: "owner", ownerApps: false, archived: 0, trashed: 0, containers: 0, networks: 0, stages: 0, held: 0, recent: 2, notes: [] } }));
     expect(t).toContain("by you: nothing to clean; 2 items changed in the last hour wait for the next sweep.");
     expect(t).toContain("The simulated service never touches Codex or Claude.");
     expect(t).not.toContain("Notes");

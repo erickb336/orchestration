@@ -129,6 +129,25 @@ describe("the fake runtime, end to end", () => {
     expect(note(f.state(), queued)).toMatchObject({ status: "delivered", via: "start", attemptId: next.id, simulated: true });
   });
 
+  it("a note through the lead reaches the running coder in most tries: the simulated lead answers in a moment, not at a step's pace (ORC-030 QA, Q-14)", () => {
+    // One try for each tick of the coder's step at the demo's own speed: your message comes at each point of the step in turn.
+    const outcomes: string[] = [];
+    for (let offset = 0; offset < 40; offset++) {
+      const f = fakeService(5);
+      f.tick();
+      const run = runOf(f.state(), "EX-001", "S2")!;
+      for (let i = 0; i < offset; i++) f.tick();
+      if (runOf(f.state(), "EX-001", "S2")?.id !== run.id) break; // the step ended: every point of it is covered
+      f.cmd("postMessage", { text: "Tell the coder on EX-001 to keep the README short." });
+      const settledNote = () => f.state().notes.find((n) => n.from.by === "lead" && n.status !== "sending");
+      for (let i = 0; i < 40 && !settledNote(); i++) f.tick();
+      outcomes.push(settledNote()?.status ?? "none");
+    }
+    const delivered = outcomes.filter((o) => o === "delivered").length;
+    expect(outcomes.length).toBeGreaterThanOrEqual(8);
+    expect(delivered / outcomes.length, outcomes.join(", ")).toBeGreaterThan(0.6);
+  });
+
   it("the lead relays a note (simulated lead, a scripted coder so its run outlives the reply): the row is sent live and acknowledged; Undo all leaves it", async () => {
     const store = new Store(join(dir, `mixed-${key}.db`), () => buildSeed(T0, { inFlightRuns: false }));
     opened.push(store);
