@@ -1,29 +1,31 @@
-// Shaping the vision with the lead before anything is built: the banner on the board and in the shell, the
-// "The vision" panel on Home (the vision so far, its documents, the lead's questions, what is clear, the
-// lead's draft, the planned tasks and the way to Start the factory, the pre-flight).
-// Every control is a keyed command; a draft never applies by itself.
+// Shaping the vision with the lead before anything is built: the banner on the board and in the shell, and the parts
+// of the vision card at the top of Vision (studio/VisionCard.tsx): the lead's questions, what is clear, and the
+// lead's draft of the vision. Every control is a keyed command; a draft never applies by itself.
 
 import { useState, type ReactNode } from "react";
 import { diffLines } from "../domain/diff";
 import * as M from "../domain/model";
 import { SHAPING_AREAS, SHAPING_AREA_LABEL, type LeadQuestion, type State, type VisionDraft } from "../domain/types";
-import { fmtTime, relTime } from "./common";
-import { Banner, Button, ButtonLink, Card, Chip, Field, Input, Row, Rows, SimulatedChip, Textarea } from "./kit";
+import { relTime } from "./common";
+import { Banner, Button, ButtonLink, Chip, Field, Input, Textarea } from "./kit";
 import { useLeadContext } from "./LeadDrawer";
-import { StartFactoryLink } from "./preflight/StartFactoryLink";
 import { useStore } from "./store";
-import { VisionDocsList } from "./VisionDocs";
 import "./vision.css";
 
 const COVERAGE_LABEL = { clear: "clear", partial: "partly clear", open: "open" } as const;
 const plural = (n: number, one: string, many = `${one}s`) => (n === 1 ? one : many);
 
+/** "4 of 9 clear", or undefined before the lead reported which areas are clear. */
+export function coverageCount(s: State): string | undefined {
+  const c = M.coverageOf(s);
+  return c ? `${SHAPING_AREAS.filter((a) => c[a] === "clear").length} of ${SHAPING_AREAS.length} clear` : undefined;
+}
+
 /** The nine areas a vision needs, each with the state the lead last reported. */
-function CoverageChecklist({ state }: { state: State }) {
+export function CoverageChecklist({ state }: { state: State }) {
   const c = M.coverageOf(state);
   return (
-    <section>
-      <h3>What is clear so far</h3>
+    <section aria-label="What is clear so far">
       {!c && <p className="small muted">The lead reports this after its first reply.</p>}
       <ul className="checklist v-coverage" aria-label="Coverage of the vision's areas">
         {SHAPING_AREAS.map((a) => {
@@ -49,7 +51,7 @@ function CoverageChecklist({ state }: { state: State }) {
 }
 
 /** The lead's latest questions, answerable in place: a suggested answer fills the box; Send answers posts one message. */
-function QuestionsForm({ questions }: { questions: LeadQuestion[] }) {
+export function QuestionsForm({ questions }: { questions: LeadQuestion[] }) {
   const { send, disabled } = useStore();
   const [answers, setAnswers] = useState<string[]>(() => questions.map(() => ""));
   const [sending, setSending] = useState(false);
@@ -114,7 +116,7 @@ export function ShapingBanner() {
       tone="info"
       title={`${M.SHAPING_LABEL}.`}
       actions={
-        <ButtonLink size="small" href="#/overview">
+        <ButtonLink size="small" href="#/vision">
           Work on the vision
         </ButtonLink>
       }
@@ -291,179 +293,5 @@ function VisionDraftCard({ state, draft, onEditing }: { state: State; draft: Vis
         </>
       )}
     </section>
-  );
-}
-
-/** Writing the vision by hand while shaping: the same command as the Focus card's editor, compare-and-set on the revision. */
-function HandEdit() {
-  const { state, send, disabled } = useStore();
-  const vision = M.currentVision(state);
-  const [open, setOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [baseRev, setBaseRev] = useState(vision.rev);
-  const [text, setText] = useState(vision.text);
-  const [focus, setFocus] = useState(vision.focus);
-  const [reason, setReason] = useState("");
-  if (!open) {
-    return (
-      <div className="k-actions">
-        <Button
-          size="small"
-          disabled={disabled}
-          onClick={() => {
-            setText(vision.text);
-            setFocus(vision.focus);
-            setBaseRev(vision.rev);
-            setOpen(true);
-          }}
-        >
-          {vision.text.trim() ? "Edit the vision by hand" : "Write the vision by hand"}
-        </Button>
-      </div>
-    );
-  }
-  const stale = vision.rev !== baseRev;
-  return (
-    <form
-      className="k-stack k-stack--tight"
-      onSubmit={async (e) => {
-        e.preventDefault();
-        if (saving) return;
-        setSaving(true);
-        const r = await send("editVision", { expectedRev: baseRev, text, focus, reason: reason.trim() || "Written by hand in Vision" });
-        setSaving(false);
-        if (r.ok) {
-          setOpen(false);
-          setReason("");
-        }
-      }}
-    >
-      {stale && (
-        <Banner
-          tone="fail"
-          title={`The vision changed to r${vision.rev} while you were writing`}
-          actions={
-            <Button size="small" onClick={() => setBaseRev(vision.rev)}>
-              Save over r{vision.rev} anyway
-            </Button>
-          }
-        >
-          Your draft is kept.
-        </Banner>
-      )}
-      <Field label="Vision">
-        <Textarea value={text} onChange={(e) => setText(e.target.value)} required rows={6} />
-      </Field>
-      <Field label="Current focus">
-        <Input type="text" value={focus} onChange={(e) => setFocus(e.target.value)} />
-      </Field>
-      <Field label="Reason for change (recorded)">
-        <Input type="text" value={reason} onChange={(e) => setReason(e.target.value)} />
-      </Field>
-      <div className="k-actions">
-        <Button type="submit" variant="primary" disabled={disabled || stale || !text.trim()} loading={saving}>
-          {saving ? "Saving…" : `Save as r${vision.rev + 1}`}
-        </Button>
-        <Button variant="quiet" onClick={() => setOpen(false)}>
-          Cancel
-        </Button>
-      </div>
-    </form>
-  );
-}
-
-const DRAFT_FATE: Record<VisionDraft["status"], string> = { open: "is open", accepted: "was accepted", dismissed: "was dismissed", superseded: "was replaced" };
-
-/** Home's shaping panel: what shaping means, the vision so far, the documents, the lead's questions, what is clear, the latest draft, the planned tasks, and the way to Start the factory. */
-export function ShapingPanel() {
-  const { state, service } = useStore();
-  const lead = useLeadContext();
-  const vision = M.currentVision(state);
-  const roadmap = M.roadmapTasks(state);
-  const plan = M.startFactoryPlan(state);
-  const running = M.activeAttempts(state).length;
-  const last = state.visionDrafts.length ? state.visionDrafts[state.visionDrafts.length - 1] : undefined;
-  const asked = M.latestQuestions(state);
-  const simulated = service.runtime !== "real";
-  // The draft card stays mounted while its editor is open; this is what shows otherwise.
-  const noDraft = (
-    <p className="small muted">
-      {last
-        ? `The latest draft ${DRAFT_FATE[last.status]}${last.status === "accepted" ? ` as r${last.visionRev}` : ""}, ${fmtTime(last.resolvedAt ?? last.at)}. Ask the lead for another when you are ready.`
-        : "No draft yet. The lead drafts one when the conversation gives it enough."}
-    </p>
-  );
-  return (
-    <Card
-      id="shape"
-      title="The vision"
-      className="v-shape"
-      actions={
-        <>
-          {simulated && <SimulatedChip title="Simulated: the demo's lead builds its questions, the coverage and the draft from your message; no model writes them." />}
-          <Button size="small" onClick={() => lead.openLead()}>
-            Message the lead
-          </Button>
-        </>
-      }
-    >
-      <div className="k-stack">
-        <p className="v-shape__intro">
-          Talk the goal through with the lead. It asks a few targeted questions at a time, suggests what you may not have considered, and keeps a living draft of the vision with its assumptions marked; you accept, edit or
-          dismiss each draft. It may also plan a first roadmap. {M.SHAPING_LABEL}.
-          {running ? ` ${running} running ${plural(running, "step")} ${plural(running, "finishes", "finish")} normally.` : ""}
-        </p>
-
-        <section className="k-stack k-stack--tight">
-          <h3>Vision so far</h3>
-          {vision.text.trim() ? (
-            <>
-              <p className="vision-text">{vision.text}</p>
-              <p className="small">
-                <span className="muted">Current focus:</span> {vision.focus || <span className="muted">none</span>}
-              </p>
-            </>
-          ) : (
-            <p className="muted">Not written yet. Tell the lead what you want to build, or write it yourself.</p>
-          )}
-          <HandEdit />
-        </section>
-
-        <VisionDocsList />
-
-        {asked && <QuestionsForm key={asked.message.id} questions={asked.questions} />}
-
-        <CoverageChecklist state={state} />
-
-        <OpenDraft fallback={noDraft} />
-
-        <section>
-          <h3>Planned tasks ({roadmap.length})</h3>
-          {roadmap.length === 0 ? (
-            <p className="small muted">None yet. Tasks the lead proposes in Vision wait here until you start the factory.</p>
-          ) : (
-            <Rows label="Planned tasks">
-              {roadmap.map((t) => (
-                <Row
-                  as="li"
-                  key={t.id}
-                  id={t.id}
-                  title={M.currentSpec(t).content.title}
-                  href={`#/task/${encodeURIComponent(t.id)}`}
-                  meta={
-                    <>
-                      <Chip>P{t.priority}</Chip>
-                      <span>{t.heldForShaping ? `Waits until the factory starts, then ${plan.release ? "starts on Autopilot" : "waits for your go-ahead"}` : t.holdBeforeStart ? "Waits for your go-ahead" : "Starts when the factory starts"}</span>
-                    </>
-                  }
-                />
-              ))}
-            </Rows>
-          )}
-        </section>
-
-        <StartFactoryLink />
-      </div>
-    </Card>
   );
 }

@@ -1,12 +1,6 @@
-/* The vision: the shaping panel on Home, the lead's draft (in the shaping panel and the Focus card) and the vision
-   documents. Layout only: colour and type come from the tokens and the kit. Every class is prefixed v- so nothing
-   collides with other screens. */
-
-/* ---------- the shaping panel ---------- */
-.v-shape .k-card__body > .k-stack { gap: var(--space-5); }
-.v-shape h3 { margin: 0 0 var(--space-2); }
-.v-shape p { margin: 0; }
-.v-shape section.k-stack > h3 { margin: 0; }
+/* The vision's parts in Vision's vision card (studio/VisionCard.tsx): the lead's questions, what is clear, the lead's
+   draft and the vision documents. Layout only: colour and type come from the tokens and the kit. Every class is
+   prefixed v- so nothing collides with other screens. */
 
 /* The lead's questions: each with its suggested answers and a box; a chosen suggestion reads as pressed. */
 .v-questions ol { margin: 0 0 var(--space-3); padding-left: 1.2rem; display: grid; gap: var(--space-3); }

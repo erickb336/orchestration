@@ -101,7 +101,7 @@ export function Preflight(p: PreflightProps) {
       ) : (
         <>
           {blocker && (
-            <Banner tone="fail" title="The factory cannot start yet." actions={<ButtonLink size="small" href="#/overview">Write the vision</ButtonLink>}>
+            <Banner tone="fail" title="The factory cannot start yet." actions={<ButtonLink size="small" href="#/vision">Write the vision</ButtonLink>}>
               {blocker}
             </Banner>
           )}
