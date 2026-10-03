@@ -764,6 +764,8 @@ export class WaitMatcher {
     if (!this.worker) {
       const w = new Worker(WAIT_WORKER, { eval: true, resourceLimits: { maxOldGenerationSizeMb: 32 } });
       w.unref();
+      // An error with no listener would end the service; a test that is waiting hears it too (onEnd below).
+      w.on("error", () => {});
       this.worker = w;
       this.ready = new Promise((res) => {
         for (const e of ["online", "error", "exit"]) w.once(e, () => res());
