@@ -397,7 +397,7 @@ describe("the budget stop", () => {
     const budget = Math.floor(spend.usd * 100) / 100;
     const at2 = M.setBudgets(s, { buildingUsd: budget, maintenanceUsdPerMonth: null }, at(2));
     const [first] = needsYouItems(at2, T0);
-    expect(first).toMatchObject({ kind: "open", key: "budget", what: `The building budget is reached: $${spend.usd.toFixed(2)} of $${budget.toFixed(2)}`, href: "#/settings/project/budgets" });
+    expect(first).toMatchObject({ kind: "open", key: "budget", what: `The building budget is reached: $${spend.usd.toFixed(2)} of $${budget.toFixed(2)}`, href: "#/settings/budgets" });
     expect(first.kind === "open" && first.detail).toBe("Estimated at the providers' published prices. Nothing new starts; running work finishes. Raise the budget, or continue past it.");
     // Below the budget there is nothing to ask about the stop.
     expect(needsYouItems(M.setBudgets(s, { buildingUsd: spend.usd + 1, maintenanceUsdPerMonth: null }, at(2)), T0).some((i) => i.key === "budget")).toBe(false);

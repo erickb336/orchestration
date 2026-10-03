@@ -1,4 +1,4 @@
-// ORC-029 pass 6's settings forms: the budgets and the device scope (Settings › Project), and the overrule of a PE
+// ORC-029 pass 6's settings forms: the budgets (Settings › Budgets) and the device scope (Settings › Project), and the overrule of a PE
 // objection in the factory (Settings › Quality › Overrules, and the task page's Needs you). Each saves through its
 // owner's command and shows the domain's refusal, in the domain's words, before it is sent. At the budget stop,
 // Continue past the budget sends its command at once. Rendered statically (there is no DOM test environment): a form's
@@ -13,6 +13,7 @@ import type { SendResult } from "../store";
 import { renderScreen, visible } from "../testStore";
 import { BUDGET_REFUSED, DEVICES_REFUSED, budgetProblem, budgetWords, budgetsSteps, continuePastConfirm, devicesProblem, devicesSteps, liveBudgets, toggleDevice } from "./budgets";
 import { BudgetsCard } from "./BudgetsCard";
+import { BudgetsSection } from "./BudgetsSection";
 import { DevicesCard } from "./DevicesCard";
 import { sendInOrder } from "./draft";
 import { ProjectSection } from "./Project";
@@ -40,11 +41,15 @@ async function save(s: State, steps: (send: Send) => Steps): Promise<{ state: St
   return { state, sent };
 }
 
-describe("Settings › Project › Budgets", () => {
-  it("says what each budget covers and what was spent so far; no maintenance estimate is never $0", () => {
+describe("Settings › Budgets", () => {
+  it("is a section of its own: says what each budget covers and what was spent so far; no maintenance estimate is never $0", () => {
     const { s } = blueprintScene();
-    const text = visible(renderScreen(<ProjectSection current onDirty={noop} />, s));
-    expect(text).toContain("Budgets Two limits in dollars, at the providers' published prices. Each is an estimate, not a bill.");
+    const text = visible(renderScreen(<BudgetsSection current onDirty={noop} />, s));
+    expect(text).toContain("Budgets Two limits in dollars, at the providers' published prices. Each is an estimate, not a bill. Changes here wait for Save; Continue past the budget acts at once.");
+    expect(text).toContain("Building and maintenance Building budget (dollars)");
+    expect(text).toContain("No unsaved changes");
+    // Project no longer holds them (ORC-030 C3, a-settings-split).
+    expect(visible(renderScreen(<ProjectSection current onDirty={noop} />, s))).not.toContain("Building budget (dollars)");
     expect(text).toContain("Building budget (dollars) What all agent runs may spend to build the product, the studio's runs in Vision included. At it, nothing new starts and the factory asks you. Empty: no limit.");
     expect(text).toContain("Maintenance budget (dollars a month) What the product may cost to run each month. It stops no work: a PE call that could go past it comes to you. Empty: no limit.");
     expect(budgetWords(s).spent).toBe("Spent so far: $9.90 of $40.00 in 9 runs.");

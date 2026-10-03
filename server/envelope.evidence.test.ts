@@ -9,6 +9,7 @@ import { buildSeed } from "../src/domain/seed";
 import { run } from "../src/domain/testing/studio";
 import type { BlueprintItem } from "../src/domain/studio/types";
 import type { SpecContent, State } from "../src/domain/types";
+import { IMAGE_TABLE } from "../src/domain/environment";
 import { CAPTURE_PLAN_HEADER, buildEnvelope } from "./envelope";
 
 const T0 = Date.parse("2026-10-02T12:00:00Z");
@@ -19,11 +20,14 @@ const ITEMS: BlueprintItem[] = [
   { id: "bi-3", kind: "terminal-demo", title: "trips CLI", artifactId: "sa-3", version: 1, status: "approved" },
 ];
 
-function project(preview?: object): State {
+const IMAGE = IMAGE_TABLE[0].image;
+
+function project(preview?: object, environment?: object): State {
   let s = M.initProject(buildSeed(T0, { inFlightRuns: false }), { name: "Trips", repoPath: "/tmp/trips", vision: "Weekend trips.", focus: "" }, at(0));
   s = structuredClone(s);
   s.blueprint.revisions.push({ rev: 1, at: at(1), visionRev: 1, reason: "approved", items: structuredClone(ITEMS) });
-  return preview ? run(s, "setPreview", { preview }, at(2)).state : s;
+  if (preview) s = run(s, "setPreview", { preview }, at(2)).state;
+  return environment ? run(s, "setEnvironment", { environment }, at(3)).state : s;
 }
 
 /** A Feature task citing `refs`; the envelope of its step `stepId`. */
@@ -49,16 +53,19 @@ describe("the coder's capture plan lines", () => {
     expect(text).toContain('Write the capture plan at `.orchestrator/capture.json` in the change, and name it in your handoff. For example: `{"screens":[{"item":"bi-1","path":"/","devices":["desktop","mobile"]}],"terminals":[{"item":"bi-3","tape":".orchestrator/demo.tape"}]}`.');
     expect(text).toContain("- A screen: its page path on the preview");
     expect(text).toContain("- A terminal demo or TUI: a VHS tape in the repository that types the real command from the repository's root.");
-    expect(text).toContain('- The project has no preview setting yet, so the service records "not set up" and captures nothing.');
+    expect(text).toContain('- The project has no preview setting or no environment yet, so the service records "not set up" and captures nothing.');
     expect(text.split("\n").slice(-2)).toEqual(["- bi-1 Trip board (screen v2, variant B)", "- bi-3 trips CLI (terminal-demo v1)"]);
     // A flow is proved by its acceptance tests, not captured.
     expect(text).not.toContain("bi-2");
   });
 
-  it("say how the service runs the product when the owner set the preview", () => {
-    const text = section(envelope(project({ preview: ["npm", "run", "preview", "--", "--port", "4173"], port: 4173, cliEntry: "bin/trips.js" }), ["bi-3", "bi-1"], "S2"));
-    expect(text).toContain("types the real command (`node bin/trips.js …`) from the repository's root");
-    expect(text).toContain("- The service installs with `npm ci --ignore-scripts` (no install scripts), then runs `npm run preview -- --port 4173` on port 4173 with no network.");
+  it("say how the service runs the product when the owner set the preview and the environment", () => {
+    const preview = { preview: ["npm", "run", "preview", "--", "--port", "4173"], port: 4173, cliEntry: "bin/trips.js" };
+    const text = section(envelope(project(preview, { image: IMAGE, prepare: [["npm", "ci"]] }), ["bi-3", "bi-1"], "S2"));
+    expect(text).toContain("types the real command (with `bin/trips.js`) from the repository's root");
+    expect(text).toContain("- The service prepares the change in the project's environment with its prepare commands, then runs `npm run preview -- --port 4173` on port 4173 there with no network.");
+    // A preview with no environment to run it in is not set up.
+    expect(section(envelope(project(preview), ["bi-1"], "S2"))).toContain('no environment yet, so the service records "not set up"');
   });
 
   it("are given to the coder only, and only for screens, demos and TUIs", () => {

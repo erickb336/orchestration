@@ -14,7 +14,7 @@ Each new language would need its own flags and its own image. That does not scal
 1. **The repository's dev container:** `.devcontainer/devcontainer.json`, with `image` or `build.dockerfile` (the open Dev Container specification, containers.dev; many repositories already have one), once the owner confirms it by its digest (review fixes, 3).
 2. **A base image the owner confirmed in Settings:** the lead proposes one from the repository's files, from a table of data (for example `package.json` → a Node image, `pyproject.toml` or `requirements.txt` → a Python image, `go.mod` → Go, `Cargo.toml` → Rust, `Gemfile` → Ruby). Each image in the table is pinned by digest. The table is data, not code paths.
 
-Without Docker, the checks keep today's host sandbox (npm, pnpm and yarn installs only) and say why other languages cannot run; evidence capture says "not set up".
+Without Docker, the checks keep today's host sandbox (npm, pnpm and yarn installs only) and say why other languages cannot run; evidence capture says why nothing ran. Without an environment, evidence capture says "not set up" and what to set (ORC-030 C3).
 
 **2. Two phases, with containment instead of per-tool flags.**
 - **Prepare** (the project's install and setup commands, for example `uv sync`, `npm ci`, `go mod download`, `bundle install`): the network goes only through **an allowlisting egress proxy** to package registries (a data list: npm, PyPI, crates.io, the Go module proxy, RubyGems, Maven Central; the owner can add hosts). Install code may run here, but only inside the container: a copy of the worktree, a non-root user, no capabilities, no host mounts but the copy and a cache, no route to the host or its loopback, and no secrets.
@@ -29,7 +29,7 @@ Rejected:
 - **Screens:** the built app runs in the project's container on a private Docker network with no internet; the recorder's browser container joins that network and takes the screenshots.
 - **CLIs and TUIs:** the tape's commands run in the project's container with a pseudo-terminal, and the service records the session as an asciicast (the app already plays `.cast` files). A GIF from VHS is optional later.
 
-**4. The owner's view.** Settings › Project › Environment: where the environment comes from (the dev container, or the confirmed image), the prepare commands, the allowed registries, and the last prepare's result. The lead proposes, and only the owner's settings command sets it.
+**4. The owner's view.** Settings › How your project runs (ORC-030 C3), one card: where the environment comes from (the dev container, or the confirmed image), the prepare commands, the allowed registries, and the last prepare's result; then how the evidence runs in it (the preview command, its port and the CLI entry) and whether it is captured. "Confirm this dev container" shows what the dev container sets: its image or the Dockerfile's base images, the prepare commands a run would use, and what installs may reach; the digest it records is not shown. The lead proposes, and only the owner's settings commands set it.
 
 ## Units
 
@@ -61,13 +61,13 @@ The Node script is chosen: it is the only option that refuses a listed name reso
 
 **Not done in E1:** Rust, Ruby and Java rows of the table are proposed but not run. (Done in ORC-030 S2: housekeeping sweeps what a crashed service leaves, by the `orchestrator.environment` label, and the hold of checks follows where they run; see `ORC-030-S2.md`.)
 
-Both replace what they supersede: the Node-only evidence path and the npm-only network rule, when Docker is present.
+Both replace what they supersede: the Node-only evidence path (removed in ORC-030 C3) and the npm-only network rule, when Docker is present.
 
 ## E2 decisions
 
-**Which path runs.** A project with an environment (a dev container, or a confirmed image) is captured in it, and only there: the recorder's npm install never runs for it. When the environment cannot run (no Docker, a failed probe, an image that cannot be pulled), every item says why; nothing falls back to the recorder. A project without an environment keeps the recorder's path. The run's record names the path: `{ via: "environment", from, image, imageId, prepare, key }` or `{ via: "recorder", image }`, and the record per blueprint item carries it, with the commit and the design version as before.
+**Which path runs.** A project with an environment (a dev container, or a confirmed image) is captured in it, and only there. When the environment cannot run (no Docker, a failed probe, an image that cannot be pulled), every item says why. A project without an environment gets no capture: its items record "not set up" at dispatch, with what to set (ORC-030 C3; before it, such a project kept the recorder's path). The run's record names the path: `{ via: "environment", from, image, imageId, prepare, key }`; records made before C3 may say `{ via: "recorder", image }`. The record per blueprint item carries it, with the commit and the design version as before.
 
-**The prepare.** The capture borrows the checks' runner (`withPrepared`): the same setup probe, copy, image and prepare, reused by the same key, in the same one-at-a-time turn. The preview setting's install does not run; the record has a note when the setting has one.
+**The prepare.** The capture borrows the checks' runner (`withPrepared`): the same setup probe, copy, image and prepare, reused by the same key, in the same one-at-a-time turn. The preview setting has no install (ORC-030 C3).
 
 **Screens: one loopback, no network.** Compared:
 
@@ -97,11 +97,11 @@ The shell is bash with VHS's prompt (`> `), so the failure scan skips typed comm
 
 **Not done in E2:** images without bash; zsh tapes (the recorder refuses them too); a daemon reached by `tcp://` or `ssh://` (a CLI then says it needs the local socket); mobile shots in the real tests (the browser code is the recorder's, unchanged). (The sweep of preview and session containers is done in ORC-030 S2.)
 
-**Removing the recorder's path.** When the projects that capture evidence have environments (the lead proposes an image from the table; the owner confirms it), migrate, then delete:
-1. Propose an environment for each project that still captures on the recorder's path (the record's `via: "recorder"` finds them).
-2. Remove the recorder's install (`installArgs`, `INSTALL_ENV`, the yarn check in `captureEvidence`), the preview start and the VHS tapes in `CAPTURE_SCRIPT`, and the GIF outputs of evidence.
-3. Drop the preview setting's `install` field, with a state migration, and its form field.
-4. Keep only Chromium and playwright-core in the recorder's image; VHS stays only while studio demos use it.
+**Removing the recorder's path (done in ORC-030 C3, backlog B-08).** The owner agreed to remove it with the Settings cleanup (a-settings-runs):
+1. A project without an environment gets no capture: the domain records "not set up" at dispatch, with what to set (`notSetUpReason`), and the server's capture says the same when the scheduler finds no environment. Projects are not migrated by themselves: Settings › How your project runs says what to set, and the lead may propose an image from the table.
+2. Removed: the recorder's install (`installArgs`, `INSTALL_ENV`, the yarn check), the preview start and the VHS tapes in `CAPTURE_SCRIPT` (it now only waits for the port and takes the screenshots), and the GIF and WebM outputs of evidence. A tape a session cannot type is refused at the plan, for its item only.
+3. Dropped the preview setting's `install` field and its form field. A stored setting loses the field when the state loads (`normalize19`). The preview command runs only in the project's container, so it is checked for its shape only (`argvRefusal`), as the prepare commands are: any language's server works.
+4. Kept: the recorder's image, which still runs the browser for the screenshots and VHS for the studio's demos.
 
 ## Review fixes (2026-10-03)
 

@@ -5,8 +5,8 @@
 import { providerLabel } from "../domain/model/resolution";
 import { fmtUsd, subagentsCost } from "../domain/spend";
 import type { StudioRun } from "../domain/studio/types";
-import { allowanceOf, researchSteps } from "../domain/subagents";
-import { MAX_SUBAGENT_CAP, type Attempt, type LeadRun, type State, type Step, type Subagent, type Task } from "../domain/types";
+import { HELPER_CAP, allowanceOf, researchSteps } from "../domain/subagents";
+import { MAX_SUBAGENT_CAP, PROVIDERS, type Attempt, type LeadRun, type State, type Step, type Subagent, type Task } from "../domain/types";
 
 type AnyRun = Attempt | LeadRun | StudioRun;
 
@@ -33,11 +33,18 @@ export function helpersLine(r: AnyRun): string | undefined {
   return `${plural(rec.count, "helper")} · at most ${rec.mostAtOnce} at once · ${costWords(r)}`;
 }
 
-/** What the run was allowed: "At most 3 helpers per run", with what went past it; "None allowed" when it may start none. */
+/**
+ * What the run was allowed: "At most 3 helpers per run", or on Codex "At most 3 helpers at once" (Codex limits them
+ * only at once), with what went past it; "None allowed" when it may start none.
+ */
 export function allowanceLine(r: AnyRun): string {
   const allowed = allowanceOf(r);
   const count = r.subagents?.count ?? 0;
   if (!allowed) return count ? "None allowed: the provider should have switched helpers off for this run." : "None allowed.";
+  if (allowed.atOnce) {
+    const most = r.subagents?.mostAtOnce ?? 0;
+    return `At most ${plural(allowed.cap, "helper")} at once, read-only like the step. The provider limits them only at once, so a run may start more over time.${most > allowed.cap ? ` ${most} ran at once, over the cap.` : ""}`;
+  }
   const over = count > allowed.cap ? ` ${count} started, over the cap.` : "";
   return `At most ${plural(allowed.cap, "helper")} per run, read-only like the step.${over}`;
 }
@@ -76,6 +83,10 @@ export interface HelperSetting {
   canTurnOn: boolean;
   /** Where it applies, or why it stays off. */
   why: string;
+  /** The cap's field: "Helpers per run, at most", or "Helpers, at most" when a provider counts them at once. */
+  capLabel: string;
+  /** Beside the cap, for a provider that counts it at once (Codex): what the cap means there. */
+  capHint?: string;
 }
 
 /** The setting for one research step, or undefined when the key names none. */
@@ -84,10 +95,16 @@ export function helperSetting(s: State, key: string): HelperSetting | undefined 
   if (!step) return undefined;
   const providers = s.project.subagentProviders;
   const canTurnOn = providers.length > 0;
+  const others = PROVIDERS.some((p) => !providers.includes(p));
   const why = canTurnOn
-    ? `It applies to runs on ${providers.map(providerLabel).join(" and ")}. Runs on another provider start none.`
+    ? `It applies to runs on ${providers.map(providerLabel).join(" and ")}.${others ? " Runs on another provider start none." : ""}`
     : "No provider tracks helper agents yet, so this stays off. A provider is turned on only after real runs prove that pause stops its helpers and that their cost is counted.";
-  return { key, label: step.label, cap: s.project.researchHelpers[key]?.cap ?? null, canTurnOn, why };
+  const atOnce = providers.filter((p) => HELPER_CAP[p] === "at once");
+  const perRun = providers.filter((p) => HELPER_CAP[p] === "per run");
+  const capHint = atOnce.length
+    ? `On ${atOnce.map(providerLabel).join(" and ")}: at most this many at once. ${atOnce.length === 1 ? "It limits" : "They limit"} helpers only at once, not per run, so a run may start more over time.${perRun.length ? ` On ${perRun.map(providerLabel).join(" and ")}: at most this many per run.` : ""}`
+    : undefined;
+  return { key, label: step.label, cap: s.project.researchHelpers[key]?.cap ?? null, canTurnOn, why, capLabel: atOnce.length ? "Helpers, at most" : "Helpers per run, at most", ...(capHint ? { capHint } : {}) };
 }
 
 /** The caps the owner may choose, 1 to MAX_SUBAGENT_CAP. */

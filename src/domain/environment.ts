@@ -121,11 +121,14 @@ export function hostRefusal(h: string): string | undefined {
   return undefined;
 }
 
-/** Why a prepare command is refused, or undefined. The container is the boundary, so any program may run; only the shape is checked. */
-export function prepareRefusal(argv: unknown, n: number): string | undefined {
-  if (!Array.isArray(argv) || argv.length === 0 || argv.length > ENV_LIMITS.argv) return `Prepare command ${n}: 1–${ENV_LIMITS.argv} arguments.`;
-  for (const a of argv) if (typeof a !== "string" || a.length === 0 || a.length > ENV_LIMITS.argLength || /[\0\n\r]/.test(a)) return `Prepare command ${n}: every argument is 1–${ENV_LIMITS.argLength} characters, with no newline.`;
-  if ((argv[0] as string).startsWith("-")) return `Prepare command ${n}: the first argument is the program, not an option.`;
+/**
+ * Why a command that runs in the project's container is refused (a prepare command, the preview), or undefined. The
+ * container is the boundary, so any program may run; only the shape is checked. `what` names it ("Prepare command 2").
+ */
+export function argvRefusal(argv: unknown, what: string): string | undefined {
+  if (!Array.isArray(argv) || argv.length === 0 || argv.length > ENV_LIMITS.argv) return `${what}: 1–${ENV_LIMITS.argv} arguments.`;
+  for (const a of argv) if (typeof a !== "string" || a.length === 0 || a.length > ENV_LIMITS.argLength || /[\0\n\r]/.test(a)) return `${what}: every argument is 1–${ENV_LIMITS.argLength} characters, with no newline.`;
+  if ((argv[0] as string).startsWith("-")) return `${what}: the first argument is the program, not an option.`;
   return undefined;
 }
 
@@ -136,7 +139,7 @@ export function normalizeEnvironment(input: EnvironmentInput): Omit<EnvironmentS
   const prepare = input.prepare ?? [];
   if (!Array.isArray(prepare) || prepare.length > ENV_LIMITS.prepareCommands) return { refused: `At most ${ENV_LIMITS.prepareCommands} prepare commands.` };
   for (let i = 0; i < prepare.length; i++) {
-    const why = prepareRefusal(prepare[i], i + 1);
+    const why = argvRefusal(prepare[i], `Prepare command ${i + 1}`);
     if (why) return { refused: why };
   }
   const hosts: string[] = [];
@@ -154,6 +157,12 @@ export function normalizeEnvironment(input: EnvironmentInput): Omit<EnvironmentS
   }
   return { ...(image ? { image } : {}), prepare: prepare.map((c) => [...c]), hosts, ...(dc ? { devcontainer: { file: dc.file, sha256: dc.sha256 } } : {}) };
 }
+
+/**
+ * Whether the setting gives the project an environment: an image the owner confirmed, or a dev container the owner
+ * confirmed. Prepare commands or hosts alone do not. The evidence runs only in an environment.
+ */
+export const environmentIsSet = (e: EnvironmentSetting | undefined): boolean => !!(e?.image || e?.devcontainer);
 
 const argvText = (argv: readonly string[]) => argv.map((a) => (/[\s"']/.test(a) ? JSON.stringify(a) : a)).join(" ");
 
@@ -349,6 +358,22 @@ export function dockerfileRefusal(text: string, path: string): string | undefine
   return undefined;
 }
 
+/**
+ * The images a Dockerfile builds from, in order: each `FROM` that names an image, not an earlier stage. For the owner
+ * to read before confirming a dev container ("based on node:22-bookworm"). Build arguments stay as written.
+ */
+export function dockerfileBases(text: string): string[] {
+  const stages = new Set<string>();
+  const bases: string[] = [];
+  for (const line of text.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+    const m = /^[ \t]*FROM[ \t]+(?:--platform=\S+[ \t]+)?(\S+)(?:[ \t]+AS[ \t]+(\S+))?/i.exec(line);
+    if (!m) continue;
+    if (!stages.has(m[1].toLowerCase()) && !bases.includes(m[1])) bases.push(m[1]);
+    if (m[2]) stages.add(m[2].toLowerCase());
+  }
+  return bases;
+}
+
 /** A dev container the owner has not confirmed (it is new, or it changed since): its file and its digest. */
 export interface UnconfirmedDevcontainer {
   file: string;
@@ -369,7 +394,7 @@ export function environmentSource(found: DevcontainerFound | undefined, setting:
     const ok = setting?.devcontainer?.file === found.file && setting.devcontainer.sha256 === found.sha256;
     if (ok) return { source: { from: "devcontainer", file: found.file, ...parsed } };
     unconfirmed = { file: found.file, sha256: found.sha256 };
-    note = `The repository's dev container ${found.file} is not confirmed${setting?.devcontainer ? " (it changed since you confirmed it)" : ""}: confirm it in Settings › Project › Environment to use it`;
+    note = `The repository's dev container ${found.file} is not confirmed${setting?.devcontainer ? " (it changed since you confirmed it)" : ""}: confirm it in Settings › How your project runs to use it`;
   }
   const rest = { ...(note ? { note } : {}), ...(unconfirmed ? { unconfirmed } : {}) };
   if (setting?.image) return { source: { from: "setting", image: setting.image }, ...rest };

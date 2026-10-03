@@ -52,7 +52,7 @@ export function HelpersSetting({ state, settingKey }: { state: State; settingKey
         onChange={(e) => void send("setResearchHelpers", { step: v.key, cap: e.target.checked ? DEFAULT_SUBAGENT_CAP : null })}
       />
       {on && (
-        <Field label="Helpers per run, at most" width="short">
+        <Field label={v.capLabel} hint={v.capHint} width="short">
           <Select value={String(v.cap)} disabled={disabled} options={CAP_CHOICES.map((n) => ({ value: String(n), label: String(n) }))} onChange={(e) => void send("setResearchHelpers", { step: v.key, cap: Number(e.target.value) })} />
         </Field>
       )}

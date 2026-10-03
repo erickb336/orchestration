@@ -252,7 +252,7 @@ type Budgets = State["project"]["budgets"];
 
 /**
  * The two budgets on the pre-flight (ORC-030 a-pre-budgets): the fields hold the project's budgets (the same setting as
- * Settings › Project › Budgets, through the same `setBudgets`), each beside the spend and the PE's estimate. Until you
+ * Settings › Budgets, through the same `setBudgets`), each beside the spend and the PE's estimate. Until you
  * type, they follow the setting; Save sends both, and Cancel puts the setting back in the fields.
  */
 function PreflightBudgets({ state, onSaving }: { state: State; onSaving?: (saved: Budgets | null) => void }) {
@@ -298,7 +298,7 @@ function PreflightBudgets({ state, onSaving }: { state: State; onSaving?: (saved
         </div>
       )}
       <p className="micro muted no-margin">
-        The same budgets as in <a href={cardHref("budgets")}>Settings › Project › Budgets</a>. Each is an estimate at the providers' published prices, not a bill.
+        The same budgets as in <a href={cardHref("budgets")}>Settings › Budgets</a>. Each is an estimate at the providers' published prices, not a bill.
       </p>
     </section>
   );

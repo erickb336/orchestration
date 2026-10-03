@@ -750,7 +750,7 @@ export class PreparedEnvironments {
     }))].slice(0, 20);
     // The repair (and the owner) see what the proxy refused, next to the command that failed.
     const failed = s.results.find((r) => r.kind === "prepare" && r.status !== "passed" && r.status !== "not-run");
-    if (failed && refused.length) failed.excerpt = `[The proxy refused: ${refused.join("; ")}. Add a host in Settings › Project › Environment if it is a registry.]\n${failed.excerpt}`;
+    if (failed && refused.length) failed.excerpt = `[The proxy refused: ${refused.join("; ")}. Add a host in Settings › How your project runs if it is a registry.]\n${failed.excerpt}`;
     // A prepare that did not finish leaves no image behind (each command's commit builds on the one before).
     if ((!ok || s.stopped) && imageId !== baseImage) await runDocker(docker, ["image", "rm", imageId], { env: this.denv, timeoutMs: 60_000 });
     return { ok: ok && !s.stopped, refused, ...(ok ? { imageId } : {}) };

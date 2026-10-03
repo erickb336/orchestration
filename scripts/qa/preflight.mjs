@@ -8,7 +8,7 @@
 // 4. The owner chooses Check-in, agrees and starts. The screen says what it recorded. Home shows the factory floor.
 // 5. The empty case, on a second service: a new project with nothing approved and no budget. The journey reads the
 //    pre-flight, ticks the agreement, sets a building budget in the pre-flight's own field and saves it (no stale
-//    banner, the agreement stays), checks Settings › Project › Budgets shows the same budget, comes back, and starts
+//    banner, the agreement stays), checks Settings › Budgets shows the same budget, comes back, and starts
 //    the factory.
 //
 // Sample data: the Weekend Trips project in Vision (src/ui/preflight/preflightScene.ts) and a new empty project. Both
@@ -142,8 +142,8 @@ await runJourney(
         j.check(t.includes("Nothing is approved yet. The factory builds from the vision text alone."), "empty: the blueprint says nothing is approved");
         j.check(t.includes("No building budget is set, so the factory does not stop for cost."), "empty: it says no building budget is set");
         j.check((await page.getByRole("textbox", { name: "Building budget (dollars)" }).inputValue()) === "" && t.includes("Not set: the factory does not stop for cost."), "empty: the building field is empty, and says what that means");
-        const budgetLink = page.getByRole("link", { name: "Settings › Project › Budgets" });
-        j.check((await budgetLink.getAttribute("href")) === "#/settings/project/budgets", "empty: the budgets say they are the same as in Settings › Project › Budgets, with a link");
+        const budgetLink = page.getByRole("link", { name: "Settings › Budgets" });
+        j.check((await budgetLink.getAttribute("href")) === "#/settings/budgets/budgets", "empty: the budgets say they are the same as in Settings › Budgets, with a link");
         j.check(!t.includes("the Lock in only changes the vision text"), "empty: the estimate does not say the Lock in changes the vision text (it changes nothing)");
       });
 
@@ -165,11 +165,11 @@ await runJourney(
         j.check(await agreement.isChecked(), "empty: your agreement stays ticked after your own budget");
         j.check((await field.inputValue()) === "25" && (await save.count()) === 0, "empty: the field holds 25, and Save is gone (nothing left to save)");
         await j.shot("empty-budget-set", { full: false });
-        // The same setting: Settings › Project › Budgets shows it.
-        await page.goto(`${empty.origin}/#/settings/project/budgets`);
+        // The same setting: Settings › Budgets shows it.
+        await page.goto(`${empty.origin}/#/settings/budgets/budgets`);
         const settingsField = page.getByRole("textbox", { name: "Building budget (dollars)" });
         await settingsField.waitFor({ timeout: 10_000 });
-        j.check((await settingsField.inputValue()) === "25", "Settings › Project › Budgets shows the budget set on the pre-flight", await settingsField.inputValue());
+        j.check((await settingsField.inputValue()) === "25", "Settings › Budgets shows the budget set on the pre-flight", await settingsField.inputValue());
         await page.goto(`${empty.origin}/#/vision/pre-flight`);
         await page.getByRole("heading", { name: "Start the factory?" }).waitFor({ timeout: 10_000 });
       });

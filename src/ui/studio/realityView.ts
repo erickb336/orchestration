@@ -58,11 +58,11 @@ export function rulesLine(v: ItemFactoryView): string | undefined {
  */
 export const NO_EVIDENCE_CLAUSE: Record<NoRunYet["status"] | NoEvidence, string> = {
   "no-run": "no capture has run for it",
-  "not-set-up": "the preview is not set up",
+  "not-set-up": "capture is not set up",
   "no-plan": "the coder wrote no capture plan",
   "not-in-plan": "the capture plan does not name it",
   "invalid-plan": "the capture plan was refused",
-  unavailable: "the recorder is not available",
+  unavailable: "Docker or the recorder's browser is not available",
   "install-failed": "the install failed",
   "preview-did-not-start": "the preview did not start",
   "page-errors": "the page did not load",

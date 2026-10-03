@@ -1,4 +1,4 @@
-// Settings in five sections, one involvement card with the numbers it really sets, the developer forms in
+// Settings in seven sections, one involvement card with the numbers it really sets, the developer forms in
 // Advanced, Checks as one line, one Save per section, and visible help instead of "How this works". Rendered
 // statically over the demo (there is no DOM test environment in this repository), plus the pure parts: the
 // addresses, the draft, and a check that no Settings file sizes or colours things inline.
@@ -51,12 +51,16 @@ describe("Settings addresses", () => {
     expect(parseSettingsHash("#/settings/delivery")).toEqual({ section: "project", card: "delivery" });
     expect(parseSettingsHash("#/settings/checks")).toEqual({ section: "quality", card: "checks" });
     expect(parseSettingsHash("#/settings/diagnostics")).toEqual({ section: "advanced", card: "diagnostics" });
-    // A card asked for in the wrong section is not scrolled to; the section opens at its top.
-    expect(parseSettingsHash("#/settings/agents/delivery")).toEqual({ section: "agents" });
+    // A card asked for under another section opens where it is now: an address made before the card moved still works.
+    expect(parseSettingsHash("#/settings/agents/delivery")).toEqual({ section: "project", card: "delivery" });
+    expect(parseSettingsHash("#/settings/project/budgets")).toEqual({ section: "budgets", card: "budgets" });
+    expect(parseSettingsHash("#/settings/project/environment")).toEqual({ section: "how-it-runs", card: "environment" });
+    expect(parseSettingsHash("#/settings/budgets")).toEqual({ section: "budgets" });
     expect(cardHref("sandbox")).toBe("#/settings/advanced/sandbox");
     for (const [card, section] of Object.entries(CARD_SECTION)) {
       expect(SECTIONS.map((s) => s.id)).toContain(section);
-      expect(parseSettingsHash(`#/settings/${card}`)).toEqual({ section, card });
+      // A card named like its section (Budgets) opens the section at its top, where the card is.
+      expect(parseSettingsHash(`#/settings/${card}`)).toEqual(card === section ? { section } : { section, card });
     }
   });
 });
@@ -92,16 +96,16 @@ describe("the Settings page", () => {
   const s = buildDemo(T0);
   const html = render(s, <Settings />);
 
-  it("has five sections in a side menu, each with one heading, one help line and one Save; only the first shows", () => {
-    expect(count(html, 'class="k-sidenav__link"')).toBe(5);
+  it("has seven sections in a side menu, each with one heading, one help line and one Save; only the first shows", () => {
+    expect(count(html, 'class="k-sidenav__link"')).toBe(7);
     expect(html).toContain('href="#/settings/working-style" aria-current="page"');
     const sections = [...html.matchAll(/<section class="s-section"[^>]*>/g)].map((m) => m[0]);
-    expect(sections).toHaveLength(5);
-    expect(sections.filter((x) => x.includes("hidden"))).toHaveLength(4);
-    expect([...html.matchAll(/<h2 id="settings-[a-z-]+-h">([^<]+)<\/h2>/g)].map((m) => m[1])).toEqual(["Working style", "Project", "Agents", "Quality", "Advanced"]);
-    expect(count(html, 'class="s-savebar"')).toBe(5);
-    expect(count(text(html), "No unsaved changes")).toBe(5);
-    expect(count(html, 'class="s-help"')).toBe(5);
+    expect(sections).toHaveLength(7);
+    expect(sections.filter((x) => x.includes("hidden"))).toHaveLength(6);
+    expect([...html.matchAll(/<h2 id="settings-[a-z-]+-h">([^<]+)<\/h2>/g)].map((m) => m[1])).toEqual(["Working style", "Project", "Budgets", "How your project runs", "Agents", "Quality", "Advanced"]);
+    expect(count(html, 'class="s-savebar"')).toBe(7);
+    expect(count(text(html), "No unsaved changes")).toBe(7);
+    expect(count(html, 'class="s-help"')).toBe(7);
   });
 
   it("has no 'How this works' disclosure and no browser confirm text", () => {
@@ -123,9 +127,12 @@ describe("the Settings page", () => {
     expect(t).toContain("Notify me in this browser");
   });
 
-  it("Project holds the repository, the stage and delivery basics; the rest of the pull-request options are in Advanced", () => {
+  it("Project holds the repository, the kind, the devices and delivery basics; the rest of the pull-request options are in Advanced", () => {
     const t = text(render(s, <ProjectSection current onDirty={noop} />));
-    for (const x of ["Repository path", "Stage", "Open Vision", "Delivery", "Off", "Local branch", "GitHub pull requests", "Remote", "Base branch", "You merge", "Merges automatically"]) expect(t).toContain(x);
+    for (const x of ["Repository path", "Kind of product", "Devices", "Delivery", "Off", "Local branch", "GitHub pull requests", "Remote", "Base branch", "You merge", "Merges automatically"]) expect(t).toContain(x);
+    // The Stage card repeated the header and is gone (a-settings-stage); budgets and how the project runs have sections of their own.
+    for (const x of ["Stage", "Open Vision", "Budgets", "Preview for evidence", "Environment"]) expect(t).not.toContain(x);
+    expect(t).toContain("Project Your repository, the kind of product and its devices, and how finished work leaves Orchestrator. Changes here wait for Save.");
     for (const x of ["Review bots", "This repository has no CI", "Protected files", "Re-run a check GitHub cancelled", "Open pull requests at most"]) expect(t).not.toContain(x);
     // No way back from the factory (pass 5): Vision stays open, and only Pause stops building.
     expect(t).not.toMatch(/Back to (shaping|vision)/i);

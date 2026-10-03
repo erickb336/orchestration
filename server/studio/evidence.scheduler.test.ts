@@ -2,8 +2,9 @@
 // on a temporary repository: E1 starts after the checks on a read-only worktree at the coder's commit, with the cited
 // items and the preview setting; its report becomes the evidence artifact; its worktree goes; the UX review then reads
 // the built files beside the approved design's, which its run may read. A pause stops a capture, and Resume runs it
-// again. Without a preview setting nothing starts and every item says "not set up". Where Docker and the recorder's
-// image are there, the same step captures the fixture app for real. No model runs.
+// again. Without a preview setting, or without an environment, nothing starts and every item says "not set up". Where
+// Docker and the recorder's image are there, the same step captures the fixture app for real, in the project's
+// environment. No model runs.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -12,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as M from "../../src/domain/model";
+import { IMAGE_TABLE } from "../../src/domain/environment";
 import * as E from "../../src/domain/studio/evidence";
 import { startFactoryArgs } from "../../src/domain/testing/factory";
 import type { AdapterEvent } from "../runtimes/types";
@@ -163,6 +165,13 @@ function implemented(files: Record<string, string>) {
   return id;
 }
 const PLAN = JSON.stringify({ screens: [{ item: "bi-1", path: "/", devices: ["desktop"] }] });
+/** The Node image of the proposal table, as the owner would confirm it. */
+const NODE = IMAGE_TABLE.find((r) => r.label === "Node")!.image;
+/** The owner's preview and environment: what a capture needs. */
+const setUpEvidence = () => {
+  cmd("setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } });
+  cmd("setEnvironment", { environment: { image: NODE, prepare: [["npm", "ci"]] } });
+};
 
 describe("the Capture evidence step through the scheduler", () => {
   beforeEach(async () => {
@@ -170,7 +179,7 @@ describe("the Capture evidence step through the scheduler", () => {
   });
 
   it("captures the coder's commit after the checks, records the evidence, removes its worktree, and the UX review reads it", () => {
-    cmd("setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } });
+    setUpEvidence();
     const id = implemented({ [CAPTURE_PLAN]: PLAN, "index.html": "<h1>Trip board</h1>" });
     expect(stepOf(id, "C1").state).toBe("skipped");
     const run = runOf(id, "E1")!;
@@ -181,11 +190,11 @@ describe("the Capture evidence step through the scheduler", () => {
     const sha = git("rev-parse", change.ref!.split(" ")[0]);
     const runner = evidence as ScriptedEvidence;
     const a = runner.started[0];
-    expect(a).toMatchObject({ attemptId: run.id, taskId: id, stepId: "E1", sha, items: [E.captureItems(st(), task(id))[0]], preview: { rev: 1, install: E.DEFAULT_INSTALL, preview: ["npm", "run", "preview"], port: 4173 }, outDir: join(dir, "evidence", st().project.id, run.id) });
+    expect(a).toMatchObject({ attemptId: run.id, taskId: id, stepId: "E1", sha, items: [E.captureItems(st(), task(id))[0]], preview: { rev: 1, preview: ["npm", "run", "preview"], port: 4173 }, outDir: join(dir, "evidence", st().project.id, run.id) });
     expect(git("-C", a.workspace, "rev-parse", "HEAD")).toBe(sha);
     expect(readFileSync(join(a.workspace, CAPTURE_PLAN), "utf8")).toBe(PLAN);
-    // No environment: the recorder's path (unit E2).
-    expect(a.environment).toBeUndefined();
+    // The project's environment, as its checks get it (unit E2).
+    expect(a.environment).toMatchObject({ plan: { source: { from: "setting", image: NODE }, prepare: [["npm", "ci"]] } });
 
     runner.finish(run.id);
     settle();
@@ -204,7 +213,7 @@ describe("the Capture evidence step through the scheduler", () => {
   });
 
   it("a project with an environment: the capture gets it, as a check run would (unit E2)", () => {
-    cmd("setPreview", { preview: { preview: ["python3", "serve.py"], port: 8000 }, install: [] });
+    cmd("setPreview", { preview: { preview: ["python3", "serve.py"], port: 8000 } });
     const image = `python:3.13-slim-trixie@sha256:${"b".repeat(64)}`;
     cmd("setEnvironment", { environment: { image, prepare: [["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"]], hosts: ["pkgs.example.com"] } });
     const id = implemented({ [CAPTURE_PLAN]: PLAN });
@@ -214,7 +223,7 @@ describe("the Capture evidence step through the scheduler", () => {
   });
 
   it("the app's file route serves the files the record lists, with the studio files' headers, and nothing else", async () => {
-    cmd("setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } });
+    setUpEvidence();
     const id = implemented({ [CAPTURE_PLAN]: PLAN });
     const run = runOf(id, "E1")!;
     const runner = evidence as ScriptedEvidence;
@@ -250,7 +259,7 @@ describe("the Capture evidence step through the scheduler", () => {
   });
 
   it("a pause stops a running capture, and Resume runs it again", () => {
-    cmd("setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } });
+    setUpEvidence();
     const id = implemented({ [CAPTURE_PLAN]: PLAN });
     const run = runOf(id, "E1")!;
     cmd("pauseTask", { taskId: id });
@@ -277,12 +286,21 @@ describe("the Capture evidence step through the scheduler", () => {
     tick();
     expect(runOf(id, "S4")).toBeDefined();
   });
+
+  it("with a preview but no environment nothing starts: every cited item is not set up, with what to set (ORC-030 C3)", () => {
+    cmd("setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173 } });
+    const id = implemented({ [CAPTURE_PLAN]: PLAN });
+    expect(stepOf(id, "E1").state).toBe("done");
+    expect((evidence as ScriptedEvidence).started).toEqual([]);
+    const [item] = M.acceptedOutput(st(), task(id), "E1", "evidence")!.evidence!.items;
+    expect(item).toMatchObject({ itemId: "bi-1", status: "none", reason: "not-set-up", detail: expect.stringMatching(/no environment.*Set an image, or confirm the repository's dev container, in Settings › How your project runs\.$/) });
+  });
 });
 
 const ready = await dockerReady();
 const APP = resolve(__dirname, "fixtures/evidence-app");
 
-describe(`the Capture evidence step for real, in the recorder's container${ready.ok ? "" : ` (skipped: ${ready.reason})`}`, () => {
+describe(`the Capture evidence step for real, in the project's environment${ready.ok ? "" : ` (skipped: ${ready.reason})`}`, () => {
   it.skipIf(!ready.ok)(
     "captures the fixture app at the coder's commit, and the UX review gets its screenshots",
     async () => {
@@ -290,22 +308,24 @@ describe(`the Capture evidence step for real, in the recorder's container${ready
       for (const rel of ["server.js", "public/index.html", "bin/trips.js", "package.json", "package-lock.json"]) files[rel] = readFileSync(join(APP, rel), "utf8");
       await setUp(new ContainerEvidence({}), files);
       cmd("setPreview", { preview: { preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/trips.js" } });
+      cmd("setEnvironment", { environment: { image: NODE, prepare: [["npm", "ci"]] } });
       const id = implemented({ [CAPTURE_PLAN]: JSON.stringify({ screens: [{ item: "bi-1", path: "/", devices: ["desktop", "mobile"] }] }) });
       const run = runOf(id, "E1")!;
       const t0 = Date.now();
-      for (let i = 0; i < 240 && runOf(id, "E1"); i++) {
+      for (let i = 0; i < 480 && runOf(id, "E1"); i++) {
         await new Promise((r) => setTimeout(r, 500));
         tick();
       }
       settle();
       console.log(`the capture through the scheduler took ${((Date.now() - t0) / 1000).toFixed(1)} s`);
       const art = M.acceptedOutput(st(), task(id), "E1", "evidence")!;
+      expect(art.evidence!.path).toMatchObject({ via: "environment", from: "setting", image: NODE });
       expect(art.evidence!.items).toEqual([expect.objectContaining({ itemId: "bi-1", status: "captured", files: [expect.objectContaining({ path: "bi-1/desktop.png", device: "desktop" }), expect.objectContaining({ path: "bi-1/mobile.png", device: "mobile" })] })]);
       const out = join(dir, "evidence", st().project.id, run.id);
       for (const f of ["bi-1/desktop.png", "bi-1/mobile.png"]) expect(readFileSync(join(out, f)).subarray(1, 4).toString("latin1")).toBe("PNG");
       const ux = runOf(id, "S4")!;
       expect(claude.runs.get(ux.id)!.prompt).toContain(`built on mobile: ${join(out, "bi-1/mobile.png")}`);
     },
-    180_000,
+    300_000,
   );
 });

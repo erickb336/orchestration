@@ -147,7 +147,7 @@ describe("Design and reality", () => {
     expect(gapWords({ why: "rules-unproved", noTest: 2, skipped: 0 }, "flow")).toBe("2 rules or examples have no test");
     expect(gapWords({ why: "rules-unproved", noTest: 1, skipped: 2 }, "flow")).toBe("1 rule or example has no test, and 2 tests were skipped");
     expect(gapWords({ why: "kind-not-checked" }, "interface")).toBe("no check proves an interface yet");
-    expect(gapWords({ why: "no-evidence", reason: "not-set-up" }, "screen")).toBe("the preview is not set up, so there is no evidence");
+    expect(gapWords({ why: "no-evidence", reason: "not-set-up" }, "screen")).toBe("capture is not set up, so there is no evidence");
     expect(gapWords({ why: "no-evidence", reason: "no-run" }, "screen")).toBe("no capture has run for it, so there is no evidence");
     expect(gapWords({ why: "evidence-not-landed" }, "screen")).toBe("only work that has not landed has evidence");
     expect(gapWords({ why: "evidence-earlier-work", taskId: "T-003", landedTaskId: "T-007" }, "screen")).toBe("the evidence is of T-003, and T-007 landed after it");

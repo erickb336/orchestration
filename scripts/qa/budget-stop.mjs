@@ -71,13 +71,13 @@ await runJourney(
       await region(/^Building budget/).waitFor();
       j.check(/of \$40\.00/.test(await region(/^Building budget/).innerText()), "Home: the building budget card shows the spend of $40.00", flat(await region(/^Building budget/).innerText()));
       await j.shot("01-home-before");
-      await page.goto(`${sv.origin}/#/settings/project/budgets`);
+      await page.goto(`${sv.origin}/#/settings/budgets`);
       const field = page.getByLabel("Building budget (dollars)");
       await field.waitFor();
       budget = Math.ceil(counted(sv.state())) + 1;
       await field.fill(String(budget));
-      await page.getByRole("group", { name: "Save Project" }).getByRole("button", { name: "Save" }).click();
-      await page.getByRole("group", { name: "Save Project" }).getByText("Saved").waitFor({ timeout: 5_000 });
+      await page.getByRole("group", { name: "Save Budgets" }).getByRole("button", { name: "Save" }).click();
+      await page.getByRole("group", { name: "Save Budgets" }).getByText("Saved").waitFor({ timeout: 5_000 });
       j.check(sv.state().project.budgets.buildingUsd === budget, `the record: the building budget is $${budget}`, sv.state().project.budgets);
       // The card's spend line reads the live state, which the service sends after the save.
       const note = await waitFor("the spend line", async () => ((t) => (t.includes(`of $${budget}.00`) ? t : ""))(await region("Budgets").innerText()), 4_000).catch(() => region("Budgets").innerText());
@@ -104,13 +104,13 @@ await runJourney(
     });
 
     await j.step("the owner lowers the budget below the spend: the factory stops and asks", async () => {
-      await page.goto(`${sv.origin}/#/settings/project/budgets`);
+      await page.goto(`${sv.origin}/#/settings/budgets`);
       const field = page.getByLabel("Building budget (dollars)");
       await field.waitFor();
       budget = Math.max(1, Math.floor(counted(sv.state())) - 1);
       await field.fill(String(budget));
-      await page.getByRole("group", { name: "Save Project" }).getByRole("button", { name: "Save" }).click();
-      await page.getByRole("group", { name: "Save Project" }).getByText("Saved").waitFor({ timeout: 5_000 });
+      await page.getByRole("group", { name: "Save Budgets" }).getByRole("button", { name: "Save" }).click();
+      await page.getByRole("group", { name: "Save Budgets" }).getByText("Saved").waitFor({ timeout: 5_000 });
       await waitFor("the Factory pill to say stopped at the budget", async () => /stopped at the budget/.test(await places()), 10_000);
       j.check(/Factory stopped at the budget · needs you/.test(await places()), "the Factory pill says it stopped at the budget and needs you", flat(await places()));
       await page.goto(`${sv.origin}/#/overview`);
@@ -142,7 +142,7 @@ await runJourney(
     });
 
     await j.step("Continue past the budget, and work resumes", async () => {
-      await page.goto(`${sv.origin}/#/settings/project/budgets`);
+      await page.goto(`${sv.origin}/#/settings/budgets`);
       const card = region("Budgets");
       await card.getByRole("button", { name: "Continue past the budget" }).click();
       const dialog = page.getByRole("dialog");
@@ -169,10 +169,10 @@ await runJourney(
       const demo = await startService(() => buildDemo(Date.now()), { run: true, tickMs: 500, port, dist: await buildApp() });
       const p = await openPage(page.context().browser(), width);
       try {
-        await p.goto(`${demo.origin}/#/settings/project/budgets`);
+        await p.goto(`${demo.origin}/#/settings/budgets`);
         await p.getByLabel("Building budget (dollars)").fill("50");
-        await p.getByRole("group", { name: "Save Project" }).getByRole("button", { name: "Save" }).click();
-        await p.getByRole("group", { name: "Save Project" }).getByText("Saved").waitFor({ timeout: 5_000 });
+        await p.getByRole("group", { name: "Save Budgets" }).getByRole("button", { name: "Save" }).click();
+        await p.getByRole("group", { name: "Save Budgets" }).getByText("Saved").waitFor({ timeout: 5_000 });
         await sleep(800);
         const pill = flat(await p.getByRole("navigation", { name: "Vision and the factory" }).innerText());
         const note = flat(await p.getByRole("region", { name: "Budgets" }).innerText());

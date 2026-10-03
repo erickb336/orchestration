@@ -502,8 +502,9 @@ export const COMMANDS = {
   /** Probe the checks sandbox now. */
   recheckChecks: same((s, now) => C.recheckChecks(s, now)),
   /**
-   * How the service runs the built product to capture evidence (ORC-029 pass 5): the install, the preview and its
-   * port, the CLI's entry; `preview: null` clears it. The owner's only: the lead may propose one in its message.
+   * How the service runs the built product to capture evidence (ORC-029 pass 5), in the project's environment: the
+   * preview and its port, the CLI's entry; `preview: null` clears it. The owner's only: the lead may propose one in its
+   * message.
    */
   setPreview: same((s, now, a) => {
     if (a.preview === null) return setPreview(s, null, now);
@@ -512,7 +513,6 @@ export const COMMANDS = {
     return setPreview(
       s,
       {
-        ...(opt("install") !== undefined ? { install: strings(p.install, "preview.install") } : {}),
         ...(opt("preview") !== undefined ? { preview: strings(p.preview, "preview.preview") } : {}),
         ...(opt("port") !== undefined ? { port: num(p, "port") } : {}),
         ...(opt("cliEntry") !== undefined && p.cliEntry !== "" ? { cliEntry: str(p, "cliEntry") } : {}),

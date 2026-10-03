@@ -91,14 +91,14 @@ describe("the pre-flight", () => {
     expect(V.agentsLine(x)).toBe("Claude leads and designs, Codex codes and reviews, the PE reviews on Codex; at most 3 agents at once.");
   });
 
-  it("the budgets are set on the pre-flight itself, and they are the setting in Settings › Project › Budgets (ORC-030 Q-09, a-pre-budgets)", () => {
+  it("the budgets are set on the pre-flight itself, and they are the setting in Settings › Budgets (ORC-030 Q-09, a-pre-budgets)", () => {
     const { s, at } = preflightScene();
     const none = M.initProject(s, { name: "Empty", repoPath: "/tmp/empty", vision: "A to-do list.", focus: "" }, at(500));
     const unset = page(none);
     expect(unset.html).toMatch(/>Building budget \(dollars\)<\/label><input type="text" inputMode="decimal" placeholder="Not set"[^>]*value=""/);
     expect(unset.text).toContain("Not set: the factory does not stop for cost. $0.00 spent so far. No part to estimate: the draft approves none.");
-    expect(unset.html).toContain('The same budgets as in <a href="#/settings/project/budgets">Settings › Project › Budgets</a>');
-    // Save sends the same command as Settings › Project › Budgets, and the screen shows the new budget.
+    expect(unset.html).toContain('The same budgets as in <a href="#/settings/budgets/budgets">Settings › Budgets</a>');
+    // Save sends the same command as Settings › Budgets, and the screen shows the new budget.
     const saved = runCommand(none, "setBudgets", { buildingUsd: 25, maintenanceUsdPerMonth: null }, at(501)).state;
     expect(saved.project.budgets).toEqual({ buildingUsd: 25, maintenanceUsdPerMonth: null });
     expect(page(saved).html).toMatch(/>Building budget \(dollars\)<\/label><input type="text" inputMode="decimal"[^>]*value="25"/);

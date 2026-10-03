@@ -1,7 +1,7 @@
-// Settings › Project › Budgets (ORC-029 pass 6): the building budget and the maintenance budget a month, what each
-// covers, and the spend so far. The fields edit the Project section's draft; Save sends setBudgets. At the budget
-// stop, Continue past the budget sends continuePastBudget at once, after the owner confirms. The words are in
-// budgets.ts.
+// Settings › Budgets (ORC-029 pass 6; its own section since ORC-030 C3): the building budget and the maintenance
+// budget a month, what each covers, and the spend so far. The fields edit the Budgets section's draft; Save sends
+// setBudgets. At the budget stop, Continue past the budget sends continuePastBudget at once, after the owner confirms.
+// The words are in budgets.ts.
 
 import { Banner, Button, Field, Input, useConfirm } from "../kit";
 import { useStore } from "../store";
@@ -16,7 +16,7 @@ export function BudgetsCard({ v, set }: { v: BudgetsDraft; set: (p: Partial<Budg
     if (await confirm(continuePastConfirm(state))) await send("continuePastBudget", {});
   };
   return (
-    <SettingsCard id="budgets" title="Budgets" help="Two limits in dollars, at the providers' published prices. Each is an estimate, not a bill.">
+    <SettingsCard id="budgets" title="Building and maintenance">
       {w.stop && (
         <Banner
           tone="you"

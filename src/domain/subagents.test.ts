@@ -8,7 +8,7 @@ import * as M from "./model";
 import { busyAgents } from "./model/core";
 import { buildSeed } from "./seed";
 import { RESEARCH_RUN_KINDS, type StudioRun } from "./studio/types";
-import { PROBE_KEY, allowSubagentsForStudioRun, markSubagentsSeen, reportSubagent, researchSteps, setResearchHelpers, setSubagentProviders, slippedThrough } from "./subagents";
+import { HELPER_CAP, PROBE_KEY, allowSubagentsForStudioRun, capWords, markSubagentsSeen, reportSubagent, researchSteps, setResearchHelpers, setSubagentProviders, slippedThrough } from "./subagents";
 import { ControlError, MAX_SUBAGENTS_LISTED, MAX_SUBAGENT_ASK, type Attempt, type ProviderId, type RunSubagents, type State, type Subagent } from "./types";
 import { HELPER_SLIPPED_THROUGH, needsYouItems } from "./needsYou";
 import { budgetStop, buildingSpend, subagentsCost, type ModelPrice } from "./spend";
@@ -45,11 +45,16 @@ describe("the setting: Let research steps start helpers", () => {
     expect(run(state, runId).snapshot.allowSubagents).toBeUndefined();
   });
 
-  it("turns on with a cap per run, and only a research step's run gets it", () => {
+  it("turns on with a cap, and only a research step's run gets it: per run on Claude, at once on Codex", () => {
     const s = runCommand(project(), "setResearchHelpers", { step: "investigation/S1", cap: 3 }, at(1)).state;
     expect(s.project.researchHelpers).toEqual({ "investigation/S1": { cap: 3 } });
+    expect(s.events.at(-1)!.message).toBe("Investigation · S1 Investigate and gather evidence: helpers on, at most 3 per run on Claude, at most 3 at once on Codex (Claude and Codex only)");
     const { state, runId } = investigation(s);
-    expect(run(state, runId).snapshot.allowSubagents).toEqual({ cap: 3 });
+    // The evidence step's coder runs on Codex here, whose cap holds only at once (the owner's choice, ORC-030 r6).
+    expect(run(state, runId).snapshot.provider).toBe("codex");
+    expect(run(state, runId).snapshot.allowSubagents).toEqual({ cap: 3, atOnce: true });
+    expect(HELPER_CAP).toEqual({ claude: "per run", codex: "at once" });
+    expect(capWords(2, ["claude"])).toBe("at most 2 per run on Claude");
     // Off again: the next run starts none.
     const off = runCommand(state, "setResearchHelpers", { step: "investigation/S1", cap: null }, at(3)).state;
     expect(off.project.researchHelpers).toEqual({});
@@ -86,6 +91,7 @@ describe("the setting: Let research steps start helpers", () => {
   it("gives a probe's run the probes' cap, and no other studio run any", () => {
     const s = setResearchHelpers(project(["claude"]), PROBE_KEY, 4, at(1));
     expect(allowSubagentsForStudioRun(s, { kind: "probe", provider: "claude" })).toEqual({ cap: 4 });
+    expect(allowSubagentsForStudioRun(setSubagentProviders(s, ["claude", "codex"], at(1)), { kind: "probe", provider: "codex" })).toEqual({ cap: 4, atOnce: true });
     expect(allowSubagentsForStudioRun(s, { kind: "probe", provider: "codex" })).toBeUndefined();
     expect(allowSubagentsForStudioRun(s, { kind: "pe", provider: "claude" })).toBeUndefined();
     expect(allowSubagentsForStudioRun(s, { kind: "designer", provider: "claude" })).toBeUndefined();
@@ -170,11 +176,20 @@ describe("the run's record of subagents", () => {
     expect(rec.unlisted).toBe(5);
   });
 
-  it("records a start past the cap and says so in the activity log", () => {
+  it("records a start past the cap and says so in the activity log: per run on Claude, at once on Codex", () => {
+    // Codex (this run's provider): one after another stays within "at most 1 at once"; two together go past it.
     let { state, runId } = allowed(1);
-    state = reportSubagent(reportSubagent(state, runId, started("a"), at(10)), runId, started("b"), at(11));
-    expect(run(state, runId).subagents!.count).toBe(2);
-    expect(state.events.at(-1)!.message).toContain("started 2 helper agents, over its cap of 1");
+    const before = state.events.length;
+    state = reportSubagent(reportSubagent(reportSubagent(state, runId, started("a"), at(10)), runId, ended("a"), at(11)), runId, started("b"), at(12));
+    expect(run(state, runId).subagents).toMatchObject({ count: 2, mostAtOnce: 1 });
+    expect(state.events.slice(before).some((e) => /over its cap/.test(e.message))).toBe(false);
+    state = reportSubagent(state, runId, started("c"), at(13));
+    expect(state.events.at(-1)!.message).toContain("ran 2 helper agents at once, over its cap of 1 at once");
+    // Claude counts per run: a second start goes past a cap of 1.
+    const claude = structuredClone(allowed(1));
+    run(claude.state, claude.runId).snapshot.allowSubagents = { cap: 1 };
+    const s2 = reportSubagent(reportSubagent(reportSubagent(claude.state, claude.runId, started("a"), at(10)), claude.runId, ended("a"), at(11)), claude.runId, started("b"), at(12));
+    expect(s2.events.at(-1)!.message).toContain("started 2 helper agents, over its cap of 1");
   });
 
   it("records on lead runs and studio runs too, and ignores a run that does not exist", () => {
