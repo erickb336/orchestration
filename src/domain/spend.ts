@@ -313,8 +313,11 @@ export const fmtUsd = (usd: number) => `$${usd.toFixed(2)}`;
  * owner, who took a call that went to them). A call the owner reversed or reopened does not stand.
  */
 function standingPeCalls(s: State): (FindingDecision & { pe: PeCall })[] {
-  return s.decisions.filter((d): d is FindingDecision & { pe: PeCall } => !!d.pe && d.status === d.pe.decision);
+  return s.decisions.filter(isStandingPeCall);
 }
+
+/** A PE call that stands: the budgets count it (`maintenanceEstimate`, `committedBuildUsd`), so its record is kept. */
+export const isStandingPeCall = (d: FindingDecision): d is FindingDecision & { pe: PeCall } => !!d.pe && d.status === d.pe.decision;
 
 // ---------- the PE's estimates of the approved parts (B-03) ----------
 

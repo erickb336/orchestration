@@ -9,6 +9,7 @@ import * as D from "./delivery";
 import * as F from "./findings";
 import * as M from "./model";
 import { buildSeed } from "./seed";
+import { maintenanceEstimate } from "./spend";
 import { builtInCatalog } from "./flows";
 import { DEFAULT_PR_DELIVERY, type Finding, type State } from "./types";
 
@@ -183,6 +184,22 @@ describe("pruning and superseding", () => {
     const active: State = { ...s, decisions: Array.from({ length: F.MAX_DECISIONS + 5 }, (_, i) => ({ ...mine, id: `fd-a-${i}` })) };
     const kept = report({ ...active, attempts: active.attempts.map((a) => (a.id === review ? { ...a, outcome: "running" as const } : a)) }, review, 7, [finding({ action: "ask-user" })]);
     expect(kept.decisions.filter((d) => d.id.startsWith("fd-a-"))).toHaveLength(F.MAX_DECISIONS + 5);
+  });
+
+  it("the cap never drops a PE call that stands: the budgets count it, so the maintenance estimate keeps it (B-18)", () => {
+    const { s: s0, id, review } = reviewRunning();
+    let s = report(s0, review, 4, [finding({ action: "ask-user" })]);
+    s = F.decideFinding(s, F.decisionsOf(s, id)[0].id, "accept", undefined, at(5));
+    const mine = F.decisionsOf(s, id)[0];
+    // The oldest decision of a cancelled task is a PE call that stands, and adds up to $30 a month.
+    const call = { ...mine, id: "fd-pe-call", taskId: "EX-005", decidedBy: "pe" as const, pe: { decision: "accept" as const, why: "Keep the index.", cost: { maintenanceUsdPerMonth: [20, 30] as [number, number], basis: "The provider's price list" }, by: "lead-run" as const, leadRunId: "lead-1", at: at(1) } };
+    const filler = Array.from({ length: F.MAX_DECISIONS }, (_, i) => ({ ...mine, id: `fd-filler-${i}`, taskId: "EX-005", createdAt: at(1) }));
+    const crowded: State = { ...s, decisions: [call, ...filler, mine], tasks: s.tasks.map((t) => (t.id === "EX-005" ? { ...t, lifecycle: "cancelled" as const } : t)) };
+    expect(maintenanceEstimate(crowded).callsUsd).toBe(30);
+    const more = report({ ...crowded, attempts: crowded.attempts.map((a) => (a.id === review ? { ...a, outcome: "running" as const } : a)) }, review, 6, [finding({ action: "ask-user" })]);
+    expect(more.decisions.length).toBeLessThanOrEqual(F.MAX_DECISIONS);
+    expect(more.decisions.some((d) => d.id === "fd-pe-call")).toBe(true);
+    expect(maintenanceEstimate(more).callsUsd).toBe(30);
   });
 
   it("open decisions of a cancelled task, and of an artifact a later run replaced, are closed as superseded and leave every list", () => {
