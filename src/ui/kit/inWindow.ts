@@ -18,16 +18,19 @@ export function shiftIntoWindow(box: { left: number; right: number }, width: num
   return 0;
 }
 
-/** Keep the element in `ref` inside the window while `open`: measured at its own place, then moved with `translate`. */
+/** Move a shown pop-up inside the window: measured at its own place, then moved with `translate`. */
+export function placeInWindow(el: HTMLElement) {
+  el.style.translate = "";
+  const shift = shiftIntoWindow(el.getBoundingClientRect(), document.documentElement.clientWidth);
+  if (shift) el.style.translate = `${Math.round(shift)}px 0`;
+}
+
+/** Keep the element in `ref` inside the window while `open` (a pop-up React shows; a native details uses `placeInWindow`). */
 export function useInWindow(ref: RefObject<HTMLElement | null>, open: boolean) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!open || !el) return;
-    const place = () => {
-      el.style.translate = "";
-      const shift = shiftIntoWindow(el.getBoundingClientRect(), document.documentElement.clientWidth);
-      if (shift) el.style.translate = `${Math.round(shift)}px 0`;
-    };
+    const place = () => placeInWindow(el);
     place();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);

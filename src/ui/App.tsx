@@ -30,7 +30,7 @@ import { LockInPage } from "./studio/LockIn";
 import { Reality } from "./studio/Reality";
 import { Studio } from "./studio/Studio";
 import { waitingForYourMark } from "./studio/studioView";
-import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, useConfirm, useInWindow } from "./kit";
+import { Banner, Button, ConfirmProvider, StatePill, ToastRegion, placeInWindow, useConfirm } from "./kit";
 import { cx } from "./kit/cx";
 
 /**
@@ -192,8 +192,6 @@ function Shell() {
 function Menu({ label, id, className, children }: { label: string; id?: string; className?: string; children: (close: () => void) => ReactNode }) {
   const ref = useRef<HTMLDetailsElement>(null);
   const pop = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  useInWindow(pop, open);
   const close = useCallback(() => {
     if (ref.current) ref.current.open = false;
   }, []);
@@ -208,15 +206,25 @@ function Menu({ label, id, className, children }: { label: string; id?: string; 
       el.open = false;
       el.querySelector<HTMLElement>("summary")?.focus();
     };
+    // Placed as soon as it opens (a mutation is seen before the page is drawn; the toggle event comes later), and again
+    // when the window's width changes while it is open.
+    const place = () => {
+      if (el.open && pop.current) placeInWindow(pop.current);
+    };
+    const opened = new MutationObserver(place);
+    opened.observe(el, { attributes: true, attributeFilter: ["open"] });
     document.addEventListener("pointerdown", onPointer);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
     return () => {
+      opened.disconnect();
       document.removeEventListener("pointerdown", onPointer);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
     };
   }, []);
   return (
-    <details ref={ref} className={cx("menu", className)} onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details ref={ref} className={cx("menu", className)}>
       <summary id={id} className="menu__btn">
         {label}
         <span className="menu__caret" aria-hidden="true" />
