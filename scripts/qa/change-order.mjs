@@ -123,7 +123,9 @@ async function journeyBody(j, page, service) {
     const words = await bar.innerText();
     j.check(/Draft · 3 changes/.test(words), 'the draft bar says "Draft · 3 changes"', words.slice(0, 120));
     j.check(/Trip plan/.test(words) && /Packing list/.test(words) && /Reminders/.test(words), "it lists Trip plan, Packing list and Reminders");
-    j.check(/Vision · draft, 3 changes/.test(await text(page)), 'the header says "Vision · draft, 3 changes"');
+    // ORC-030 C2: the state is in Vision's menu item: "Vision · draft · 3 changes", and "draft 3" under it on a phone.
+    const vision = (await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /^Vision/ }).innerText()).replace(/\s+/g, " ");
+    j.check((j.width < 600 ? /draft 3\b/ : /draft · 3 changes/).test(vision), "Vision's menu item says the draft holds 3 changes", vision);
     await view("Vision with a draft", "3-draft-bar");
   });
 
