@@ -27,6 +27,11 @@ export interface ServiceInfo {
   prototypePort?: number;
   /** Housekeeping of what runs leave behind (server/housekeeping.ts), when this service runs it. */
   housekeeping?: HousekeepingInfo;
+  /**
+   * Present where this service keeps the computer awake while runs are active (macOS, real runtime; server/keepAwake.ts):
+   * whether it holds the idle-sleep assertion now, and why it could not, if it could not.
+   */
+  keepAwake?: { holding: boolean; failed?: string };
 }
 
 /** Housekeeping: its last sweep, and whether one runs now. */

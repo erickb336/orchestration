@@ -1071,9 +1071,35 @@ export interface Step extends StepDef {
    * breakdown's children are not created. Absent on steps whose output is not reviewed.
    */
   peReview?: PeReviewState;
+  /**
+   * The changes a writer's run had made when it was paused (ORC-030 C4). The step's next run starts from them. Cleared
+   * when the step finishes, is rerun or is cancelled; set aside at dispatch when the spec, the step's inputs or the
+   * flow changed since the pause.
+   */
+  pausedWork?: PausedWork;
 }
 
-export type SelectionSource = "step" | "task-role" | "independence" | "project-role" | "project-default" | "service";
+/**
+ * What a paused writer's run had changed, recorded once the runtime confirmed the stop (ORC-030 C4). The change is
+ * `base` → `commit`; the commit is on the paused run's own branch and holds its files as the run left them, finished
+ * or not.
+ */
+export interface PausedWork {
+  /** The paused run. */
+  attemptId: string;
+  /** The commit that holds the run's files ("sim-…" in the simulated runtime, where no file changes). */
+  commit: string;
+  /** The commit the paused run started from. */
+  base: string;
+  /** The files the changes touch (the first 20), and how many in all. */
+  files: string[];
+  total: number;
+  at: string;
+  /** The simulated runtime ran it: no file was changed or recorded. */
+  simulated?: true;
+}
+
+export type SelectionSource ="step" | "task-role" | "independence" | "project-role" | "project-default" | "service";
 
 /** Immutable configuration captured at dispatch. Never rewritten. */
 export interface RunSnapshot {
@@ -1118,6 +1144,11 @@ export interface RunSnapshot {
    * `allowSubagents`.
    */
   allowSubagents?: SubagentAllowance;
+  /**
+   * The paused run's changes this run started from (ORC-030 C4): the service applied them, uncommitted, to its
+   * workspace before it started, so its change still compares to the step's base. Absent: it started from the base.
+   */
+  startedFrom?: PausedWork;
 }
 
 type AttemptOutcome =

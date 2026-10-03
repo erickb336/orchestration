@@ -32,6 +32,7 @@ import { PrDriver } from "./prdelivery";
 import { checkLeadText, withLeadProse } from "./prose/record";
 import type { ProseChecker } from "./prose/vale";
 import { projectValeConfig } from "./prose/words";
+import { anyRunActive } from "./keepAwake";
 import { FakeAdapter } from "./runtimes/fake";
 import type { AdapterEvent, Connection, ProviderHealth, RuntimeAdapter } from "./runtimes/types";
 import { LeaseLostError, type Store } from "./store";
@@ -86,6 +87,11 @@ interface SchedulerOptions {
    * controlled-English style (server/prose/): Vale in the service. Without it nothing is checked and the runs record nothing.
    */
   prose?: ProseChecker;
+  /**
+   * Told after each cycle whether any run is active (server/keepAwake.ts holds the Mac awake while one is), and that
+   * none is when this service stops scheduling. Without it nothing is held.
+   */
+  keepAwake?: { set(active: boolean): void };
 }
 
 /** The repository instruction files read from the trusted base as project conventions. */
@@ -175,6 +181,11 @@ export class Scheduler {
   private leadProse = new Map<string, ProseCheck>();
   /** The same for studio runs: a PE's answer, a designer's documents. */
   private studioProse = new Map<string, ProseCheck>();
+  /** Paused writers' work recorded this cycle (ORC-030 C4), by run: recorded before the transaction, kept in it. */
+  private pausedWorks = new Map<string, M.RunReport["pausedWork"]>();
+  /** Runs this cycle that could not start because their paused work could not be applied (C4). */
+  private carryFailed = new Set<string>();
+  private readonly keepAwake?: { set(active: boolean): void };
   /** Studio versions' screenshots and recordings, made one at a time, after the run that handed them in completed. */
   private mediaChain: Promise<void> = Promise.resolve();
   /** The pending ones this instance started (project, version and kind), so each is made once per process. */
@@ -201,6 +212,7 @@ export class Scheduler {
     this.dataDir = opts.dataDir;
     this.media = opts.studioMedia;
     this.prose = opts.prose;
+    this.keepAwake = opts.keepAwake;
     this.checks = opts.checks ?? (this.workspaces ? undefined : new SimulatedChecks());
     this.checks?.onEvent((e) => this.queue.push(e));
     this.evidence = opts.evidence ?? (this.workspaces ? undefined : new SimulatedEvidence());
@@ -262,6 +274,7 @@ export class Scheduler {
     if (this.isActive) this.log(`${reason}; stopping local runs`);
     this.isActive = false;
     this.killAll();
+    this.keepAwake?.set(false);
     this.store.emit();
   }
 
@@ -389,6 +402,7 @@ export class Scheduler {
   private runCycle(nowMs: number) {
     const now = new Date(nowMs).toISOString();
     const lease = this.lease(nowMs);
+    this.carryFailed.clear();
     const { unavailable, deferred } = this.availability();
     const project = this.store.read().state.project;
     const repoPath = project.repoPath;
@@ -536,7 +550,10 @@ export class Scheduler {
     const current = this.store.read().state;
     this.leadProse.clear();
     this.studioProse.clear();
+    this.pausedWorks.clear();
     for (const e of events) {
+      // A paused writer's stop is confirmed: its files are recorded, so its step's next run starts from them (C4).
+      if (e.type === "stopped") this.pausedWorks.set(e.attemptId, this.pausedWork(current, e.attemptId));
       if (e.type !== "completed") continue;
       // A lead reply's text is checked here, outside the transaction (Vale is a process); never blocking the reply.
       if (this.prose && current.leadRuns.some((r) => r.id === e.attemptId)) {
@@ -562,13 +579,15 @@ export class Scheduler {
       } catch (err) {
         completions.set(e.attemptId, { outputs: [], problems: [`Recording the result failed: ${err instanceof Error ? err.message : String(err)}`] });
       }
+      // A writer that finished just as it was paused: its result is not accepted, and its files are its paused work.
+      this.pausedWorks.set(e.attemptId, this.pausedWork(current, e.attemptId));
     }
 
     try {
       this.store.update(
         (s: State) => {
           let next = s;
-          for (const f of failedToStart) next = M.reportRunFailed(next, f.id, f.reason, now);
+          for (const f of failedToStart) next = M.reportRunFailed(next, f.id, f.reason, now, this.carryFailed.has(f.id) ? { pausedWorkUnusable: true } : {});
           for (const l of lost) next = M.reportRunLost(next, l.id, l.reason, now);
           for (const e of events) {
             try {
@@ -617,10 +636,13 @@ export class Scheduler {
       this.launched.delete(e.attemptId);
     }
     this.conventionsCache = undefined;
+    const latest = this.store.read().state;
     // Notes the lead's reply just sent (applied in the drain above) go to their live runs now.
-    this.sendNotes(this.store.read().state);
+    this.sendNotes(latest);
     // Screenshots and recordings of studio versions imported just now, or left pending by an earlier service.
-    this.startMedia(this.store.read().state);
+    this.startMedia(latest);
+    // The Mac stays awake while any run is active, and may sleep once none is (ORC-030 C4).
+    this.keepAwake?.set(anyRunActive(latest));
 
     // 5. Integration: one finished task per cycle, frozen while the project is paused; then delivery.
     this.integrateNext(nowMs, lease);
@@ -1190,13 +1212,23 @@ export class Scheduler {
         // A revert task's first writer (the one that continues no earlier change) starts from the
         // delivery base with the revert of the landed commit already prepared in its worktree. A fix
         // for a conflict starts from the pull request's head with the merge of the base prepared.
-        const seed: WorkspaceSeed | undefined =
-          task.revertOf && access === "write" && !input
+        // A writer paused mid-change starts from its paused run's changes instead (ORC-030 C4): they hold a prepared
+        // revert already. A prepared merge is never carried (pausedWork records none for it).
+        const carry = access === "write" && a.snapshot.startedFrom && !a.snapshot.startedFrom.simulated ? a.snapshot.startedFrom : undefined;
+        const seed: WorkspaceSeed | undefined = carry
+          ? { kind: "carry", commit: carry.commit, base: carry.base }
+          : task.revertOf && access === "write" && !input
             ? { kind: "revert", commit: task.revertOf.commit }
             : target && task.deliverInto!.mergeBase && fetched
               ? { kind: "merge", ref: fetched }
               : undefined;
-        workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access, baseRef, seed });
+        try {
+          workspace = this.workspaces.prepare({ repoPath: state.project.repoPath, projectId: state.project.id, attemptId, taskId: task.id, stepId: step.id, access, baseRef, seed });
+        } catch (e) {
+          // Paused work that cannot be applied would fail every retry the same way: the step lets go of it (C4).
+          if (seed?.kind === "carry") this.carryFailed.add(attemptId);
+          throw e;
+        }
         try {
           if (review && workspace.base !== review.headSha) throw new Error(`the workspace is not at the commit under review (${review.headSha.slice(0, 12)})`);
           // A read-only step that receives a code change (a reviewer, the lead's verification) is
@@ -1417,6 +1449,29 @@ export class Scheduler {
       });
   }
 
+  /**
+   * A paused writer's work once the runtime confirmed its stop (ORC-030 C4): its worktree's files, recorded as a commit
+   * on its own branch, here outside the transaction like every git call; the domain keeps it on the step. Null: the
+   * run changed nothing. Undefined: nothing to record (not a pause, not a writer, a prepared merge, which cannot be
+   * carried, or git failed: the worktree then stays as it was). The fake runtime changes no file: a writer that made
+   * progress reports simulated work.
+   */
+  private pausedWork(state: State, attemptId: string): M.RunReport["pausedWork"] {
+    const a = state.attempts.find((x) => x.id === attemptId);
+    if (!a || a.outcome !== "stopping" || (a.stopReason !== "pause" && a.stopReason !== "project-pause")) return undefined;
+    const step = state.tasks.find((t) => t.id === a.taskId)?.steps.find((x) => x.id === a.stepId);
+    if (!step || stepAccess(step) !== "write") return undefined;
+    if (!this.workspaces) return a.progress > 0 || a.snapshot.startedFrom ? { commit: `sim-${a.id}`, base: "sim-base", files: [], total: 0, simulated: true } : null;
+    const ws = this.launched.get(a.id)?.workspace;
+    if (!ws?.branch || ws.seed?.kind === "merge") return undefined;
+    try {
+      return this.workspaces.keepPaused({ ...ws, message: `${a.taskId} ${a.stepId}: paused work (${a.id})` });
+    } catch (err) {
+      this.log(`Could not record the paused work of ${a.id} (${err instanceof Error ? err.message : String(err)}); it stays in its worktree`);
+      return undefined;
+    }
+  }
+
   /** Turn a completion into output reports: parse the output block; commit a writer's changes. */
   private collectOutputs(state: State, e: Extract<AdapterEvent, { type: "completed" }>) {
     const a = state.attempts.find((x) => x.id === e.attemptId);
@@ -1495,13 +1550,13 @@ export class Scheduler {
           const reason = a.activity === "Time limit reached" ? `It reached the ${s.project.runLimits.timeoutMinutes}-minute time limit` : "The runtime stopped it without a stop request";
           return M.reportRunFailed(s, e.attemptId, `${reason}; partial work was left in its workspace.`, now, { usage: e.usage });
         }
-        return M.acknowledgeStop(s, e.attemptId, now, { usage: e.usage });
+        return M.acknowledgeStop(s, e.attemptId, now, { usage: e.usage, pausedWork: this.pausedWorks.get(e.attemptId) });
       }
       case "failed":
         return M.reportRunFailed(s, e.attemptId, e.message, now, { usage: e.usage });
       case "completed": {
         const c = completions.get(e.attemptId) ?? { outputs: [], problems: [] };
-        let next = M.reportCompletion(s, e.attemptId, [], now, c.outputs, { usage: e.usage, actualModel: e.model, simulated: this.simulatedRun(s, e.attemptId) });
+        let next = M.reportCompletion(s, e.attemptId, [], now, c.outputs, { usage: e.usage, actualModel: e.model, simulated: this.simulatedRun(s, e.attemptId), pausedWork: this.pausedWorks.get(e.attemptId) });
         if (c.problems.length) next = noteProblems(next, e.attemptId, c.problems);
         return next;
       }
@@ -1587,6 +1642,7 @@ export class Scheduler {
     if (this.isActive) this.store.releaseLease(SCHEDULER_LEASE, this.holder);
     this.isActive = false;
     this.killAll();
+    this.keepAwake?.set(false);
     await Promise.all(this.allRunners().map((a) => a.shutdown().catch(() => undefined)));
     // A screenshot or recording in progress is waited for, so Chrome and VHS end with it; its result is dropped with
     // the queue, so the version stays pending and the next service makes it again.

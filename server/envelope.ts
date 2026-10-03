@@ -92,8 +92,8 @@ interface EnvelopeInput {
   step: Step;
   attemptId: string;
   access: "write" | "read";
-  /** A merge or revert the service prepared, uncommitted, in the workspace before the run. */
-  seed?: { kind: "merge" | "revert"; commit: string; conflicted: string[] };
+  /** A merge, a revert or a paused run's changes (a carry, with the files they touch) the service prepared, uncommitted, in the workspace before the run. */
+  seed?: { kind: "merge" | "revert" | "carry"; commit: string; conflicted: string[]; files?: string[]; total?: number };
   /**
    * The changed lines of the change a read-only step reviews, as the service read them from the
    * repository (a stat and a patch, already capped): from the base the change contains to the change.
@@ -701,14 +701,28 @@ ${block}`;
 /** What the service already did in a seeded workspace, and what is left for the coder. */
 function seedNote(seed: EnvelopeInput["seed"]): string {
   if (!seed) return "";
-  const what = seed.kind === "revert" ? `a revert of commit ${seed.commit.slice(0, 12)}` : `a merge of ${seed.commit.slice(0, 12)}`;
-  const rest = seed.conflicted.length
+  const conflicts = seed.conflicted.length
     ? `These files have conflicts, marked with <<<<<<< and >>>>>>> lines:\n${seed.conflicted.slice(0, 20).map((f) => `- ${f}`).join("\n")}${seed.conflicted.length > 20 ? `\n- and ${seed.conflicted.length - 20} more (every file with a conflict marker)` : ""}\nResolve every conflict by editing the files and remove all conflict markers. Keep work that landed later. The result is not recorded while a marker remains.`
-    : "It applied without conflicts. Check that the result is complete and correct, and adjust files only where needed.";
+    : undefined;
+  const noGit = "Do not run git: no commit, merge, revert, reset, or checkout. Edit files only.";
+  if (seed.kind === "carry") {
+    // ORC-030 C4: the step was paused, and this run starts from what the paused run had changed.
+    const files = seed.files ?? [];
+    const total = seed.total ?? files.length;
+    return `## Prepared in this workspace
+This step was paused. This run starts from the changes of the paused run: the orchestration service applied them to the files here and left them uncommitted. They touch ${total} file${total === 1 ? "" : "s"}:
+${files.map((f) => `- ${f}`).join("\n")}${total > files.length ? `\n- and ${total - files.length} more` : ""}
+Review these changes first. They may be incomplete. Keep what is correct, fix what is not, then finish the step.
+${conflicts ? `${conflicts}\n` : ""}${noGit}
+
+`;
+  }
+  const what = seed.kind === "revert" ? `a revert of commit ${seed.commit.slice(0, 12)}` : `a merge of ${seed.commit.slice(0, 12)}`;
+  const rest = conflicts ?? "It applied without conflicts. Check that the result is complete and correct, and adjust files only where needed.";
   return `## Prepared in this workspace
 The orchestration service already applied ${what} to the files here and left it uncommitted.
 ${rest}
-Do not run git: no commit, merge, revert, reset, or checkout. Edit files only.
+${noGit}
 
 `;
 }

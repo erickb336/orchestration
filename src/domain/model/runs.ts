@@ -6,7 +6,8 @@ import * as C from "../checks";
 import { coverageOf as pathCoverageOf, gapText, notRequired } from "../coverage";
 import { prBaseRef } from "../delivery";
 import * as F from "../findings";
-import { type Artifact, type Attempt, type Finding, type State } from "../types";
+import { stepAccess } from "../pipeline";
+import { type Artifact, type Attempt, type ConsumedInput, type Finding, type PausedWork, type State, type Step, type Task } from "../types";
 import {
   activeAttempts,
   beforeFlow,
@@ -56,6 +57,7 @@ export function acknowledgeStop(state: State, attemptId: string, now: string, ru
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
   event(s, now, "runtime", "runtime", `${a.id} acknowledged stop; partial work checkpointed${earlier ? ` (it ran on pipeline r${a.snapshot.pipelineRev}, before the flow changed; its step is untouched)` : ""}`, t.id);
+  if (!earlier) keepPausedWork(s, t, st, a, run.pausedWork, now);
   settleSendingNotes(s, a.id, "the run stopped first", now);
   return s;
 }
@@ -137,6 +139,12 @@ export function reportRunFailed(state: State, attemptId: string, message: string
   if (!activeAttempts(s, t.id).some((x) => x.outcome === "stopping")) t.controlFailure = undefined;
   touch(t, now);
   event(s, now, "runtime", wasStopping ? "runtime" : "blocked", `${a.id} failed: ${message}`, t.id);
+  // Paused work that cannot be applied (its commit is gone) would fail every retry the same way: let go of it.
+  const pw = st?.pausedWork;
+  if (run.pausedWorkUnusable && pw && pw.attemptId === a.snapshot.startedFrom?.attemptId) {
+    delete st!.pausedWork;
+    event(s, now, "system", "control", `${pw.attemptId}'s changes could not be applied; ${st!.id}'s next run starts from the base`, t.id);
+  }
   settleSendingNotes(s, a.id, "the run ended before the runtime answered", now);
   return s;
 }
@@ -189,6 +197,61 @@ export interface RunReport {
    * the lead; a lead run's focus change and steering change set then carry a structured `simulated` flag.
    */
   simulated?: true;
+  /**
+   * A paused writer's changes, as the service recorded them once the runtime confirmed the stop (ORC-030 C4). `null`:
+   * the run changed nothing. Absent: nothing was recorded (not a writer, or the service could not record them).
+   */
+  pausedWork?: Omit<PausedWork, "attemptId" | "at"> | null;
+  /** The paused work a failed run started from could not be applied to its workspace (C4): its step lets go of it. */
+  pausedWorkUnusable?: true;
+}
+
+/** The stops after which a writer's changes are kept for its step's next run: the owner's pauses. */
+const PAUSES: NonNullable<Attempt["stopReason"]>[] = ["pause", "project-pause"];
+
+/**
+ * Keep a paused writer's changes on its step, once the runtime confirmed the stop (ORC-030 C4): only after a pause,
+ * only on a step that writes, and only from the service's report. A run that changed nothing lets go of what the
+ * step had (it started from that work and undid it); without a report the step keeps what it had.
+ */
+function keepPausedWork(s: State, t: Task, st: Step | undefined, a: Attempt, report: RunReport["pausedWork"], now: string) {
+  if (!st || report === undefined || !a.stopReason || !PAUSES.includes(a.stopReason) || stepAccess(st) !== "write") return;
+  if (report === null) {
+    if (st.pausedWork) event(s, now, "runtime", "control", `${a.id} changed nothing; ${st.id}'s next run starts from the base`, t.id);
+    delete st.pausedWork;
+    return;
+  }
+  st.pausedWork = { attemptId: a.id, commit: report.commit, base: report.base, files: report.files.slice(0, 20), total: report.total, at: now, ...(report.simulated ? { simulated: true as const } : {}) };
+  const files = report.total ? ` to ${report.total} file${report.total === 1 ? "" : "s"}` : "";
+  event(s, now, "runtime", "control", `${a.id}'s changes${files} are kept: ${st.id}'s next run starts from them${report.simulated ? " (simulated)" : ""}`, t.id);
+}
+
+/**
+ * The paused work a step's next run starts from (ORC-030 C4), checked as the run is dispatched: it fits only while the
+ * spec, the step's inputs and the flow are the ones the paused run had. Work that no longer fits is let go here, with
+ * the reason on the record (it stays on the paused run's branch).
+ */
+export function pausedWorkFor(s: State, t: Task, st: Step, inputs: ConsumedInput[], now: string): PausedWork | undefined {
+  const pw = st.pausedWork;
+  if (!pw) return undefined;
+  const paused = s.attempts.find((x) => x.id === pw.attemptId);
+  const spec = currentSpec(t).rev;
+  const same = (a: ConsumedInput[], b: ConsumedInput[]) => a.length === b.length && a.every((x) => b.some((y) => y.artifactId === x.artifactId && y.version === x.version));
+  const why = !paused
+    ? "its run is not on the record"
+    : beforeFlow(t, paused)
+      ? "the flow changed"
+      : paused.snapshot.specRev !== spec
+        ? `the spec changed (r${paused.snapshot.specRev} → r${spec})`
+        : !same(paused.snapshot.inputs, inputs)
+          ? "its inputs changed"
+          : stepAccess(st) !== "write"
+            ? "the step no longer writes"
+            : undefined;
+  if (!why) return structuredClone(pw);
+  delete st.pausedWork;
+  event(s, now, "system", "control", `${st.id} starts from the base: ${pw.attemptId}'s changes no longer fit (${why})${pw.simulated ? "" : "; they stay on its branch"}`, t.id);
+  return undefined;
 }
 
 export function reportCompletion(state: State, attemptId: string, artifacts: string[], now: string, outputs: OutputReport[] = [], run: RunReport = {}): State {
@@ -219,10 +282,13 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
     settleStoppedStep(s, t, st);
     event(s, now, "runtime", "integration", `${a.id} finished on superseded revision; result discarded, not integrated`, t.id);
   } else if (a.outcome === "stopping" || t.hold || s.project.hold || t.lifecycle === "cancelled") {
+    const stopping = a.outcome === "stopping";
     a.outcome = "stopped";
     a.note = "Finished after a stop request; kept as a checkpoint, not integrated";
     settleStoppedStep(s, t, st);
     event(s, now, "runtime", "runtime", `${a.id} finished after stop request; kept as checkpoint, not integrated`, t.id);
+    // A writer that finished just as it was paused: its changes are the paused work, as for a confirmed stop.
+    if (stopping) keepPausedWork(s, t, st, a, run.pausedWork, now);
   } else {
     const missing = st.outputs.filter((d) => !outputs.some((o) => o.name === d.name)).map((d) => d.name);
     if (missing.length) {
@@ -281,6 +347,8 @@ export function reportCompletion(state: State, attemptId: string, artifacts: str
     st.state = "done";
     st.invalidatedBy = undefined;
     st.autoRetries = 0;
+    // The step's work is done: paused work, if it started from some, is part of this result.
+    delete st.pausedWork;
     delete st.coverageGap;
     delete st.coverageRetries;
     const produced: string[] = [];

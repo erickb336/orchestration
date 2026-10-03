@@ -32,22 +32,40 @@ export interface PreparedWorkspace {
   gitDir: string;
   /** Exact contents of the worktree's `.git` file at creation (it must not change). */
   gitFile: string;
-  /** Present when the service prepared a merge or revert in the worktree before the run started. */
+  /** Present when the service prepared a merge, a revert or a paused run's changes in the worktree before the run started. */
   seed?: PreparedSeed;
 }
 
 /**
  * Work the service prepares in a writer's worktree before the run starts, left uncommitted:
- * a merge of `ref`, or a revert of `commit`. Conflicts are expected; the coder resolves them.
+ * a merge of `ref`, a revert of `commit`, or a carry: the change a paused run made from `base` to `commit`
+ * (ORC-030 C4). Conflicts are expected; the coder resolves them.
  */
-export type WorkspaceSeed = { kind: "merge"; ref: string } | { kind: "revert"; commit: string };
+export type WorkspaceSeed = { kind: "merge"; ref: string } | { kind: "revert"; commit: string } | { kind: "carry"; commit: string; base: string };
 
 interface PreparedSeed {
   kind: WorkspaceSeed["kind"];
-  /** The full commit that was merged or reverted. */
+  /** The full commit that was merged, reverted or carried. */
   commit: string;
-  /** Every file left with conflicts. None may contain a new conflict marker when the work is recorded. */
+  /**
+   * Every file left with conflicts, and for a carry every file in which the paused run left a conflict marker of its
+   * own. None may contain a new conflict marker when the work is recorded.
+   */
   conflicted: string[];
+  /** A carry: the paused run's base. Its marker lines and the new base's are the only known ones, never the paused work's. */
+  from?: string;
+  /** A carry: the files the paused run's changes touch (the first 20), and how many in all. */
+  files?: string[];
+  total?: number;
+}
+
+/** A paused writer's work, recorded on its own branch (ORC-030 C4): the change from `base` to `commit`. */
+interface KeptWork {
+  commit: string;
+  base: string;
+  /** The files the change touches (the first 20), and how many in all. */
+  files: string[];
+  total: number;
 }
 
 /** A task's final commit prepared as a pull-request head, or why it cannot be one. */
@@ -270,7 +288,7 @@ export class WorkspaceManager {
 
   /**
    * Create the worktree. `baseRef` is a commit to start from (an input change), else HEAD. A writer's
-   * worktree may be seeded with a prepared merge or revert (see WorkspaceSeed).
+   * worktree may be seeded with a prepared merge, a revert or a paused run's changes (see WorkspaceSeed).
    */
   prepare(opts: { repoPath: string; projectId?: string; attemptId: string; taskId: string; stepId: string; access: "write" | "read"; baseRef?: string; seed?: WorkspaceSeed }): PreparedWorkspace {
     const check = this.check(opts.repoPath);
@@ -302,19 +320,28 @@ export class WorkspaceManager {
     return ws;
   }
 
-  /** Prepare a merge or a revert in a fresh writer worktree, as Orchestration, without committing. */
+  /** Prepare a merge, a revert or a carry in a fresh writer worktree, as Orchestration, without committing. */
   private applySeed(repo: string, ws: PreparedWorkspace, seed: WorkspaceSeed): PreparedSeed {
-    const target = seed.kind === "merge" ? seed.ref : seed.commit;
-    let commit: string;
-    try {
-      commit = this.git(repo, ["rev-parse", "--verify", "--end-of-options", `${target}^{commit}`]);
-    } catch {
-      throw new Error(`commit ${target.slice(0, 12)} is no longer in the repository`);
-    }
+    const full = (target: string) => {
+      try {
+        return this.git(repo, ["rev-parse", "--verify", "--end-of-options", `${target}^{commit}`]);
+      } catch {
+        throw new Error(`commit ${target.slice(0, 12)} is no longer in the repository`);
+      }
+    };
+    const commit = full(seed.kind === "merge" ? seed.ref : seed.commit);
     const ident = ["-c", "user.name=Orchestration", "-c", "user.email=orchestration@localhost"];
     let args: string[];
+    let from: string | undefined;
     if (seed.kind === "merge") args = [...ident, "merge", "--no-ff", "--no-commit", commit];
-    else {
+    else if (seed.kind === "carry") {
+      from = full(seed.base);
+      // One commit that holds exactly the paused run's change, from its base: picking it applies that change here, by
+      // a three-way merge when the base moved. Nothing points to it, and it is never part of the recorded work.
+      const tree = this.git(repo, ["rev-parse", "--verify", `${commit}^{tree}`]);
+      const pick = this.git(repo, [...ident, "commit-tree", tree, "-p", from, "-m", "The paused run's changes"]);
+      args = [...ident, "cherry-pick", "--no-commit", pick];
+    } else {
       // Reverting something the base does not contain would produce an unrelated change.
       try {
         this.git(repo, ["merge-base", "--is-ancestor", commit, ws.base]);
@@ -333,8 +360,49 @@ export class WorkspaceManager {
     }
     const conflicted = this.wt(ws, ["diff", "--name-only", "--diff-filter=U"]).split("\n").filter(Boolean);
     // A non-zero exit that leaves conflicts is expected; anything else means nothing was prepared.
-    if (failure && conflicted.length === 0) throw new Error(`could not prepare the ${seed.kind}: ${failure}`);
-    return { kind: seed.kind, commit, conflicted };
+    if (failure && conflicted.length === 0) throw new Error(`could not prepare the ${seed.kind === "carry" ? "paused run's changes" : seed.kind}: ${failure}`);
+    if (seed.kind !== "carry") return { kind: seed.kind, commit, conflicted };
+    const files = this.git(repo, ["diff", "--no-renames", "--name-only", from!, commit]).split("\n").filter(Boolean);
+    // Conflict markers the paused run left unresolved (its own merge, or its agent's edit) must be resolved too.
+    const left = this.newMarkerFiles(repo, from!, commit, new Set(files));
+    return { kind: "carry", commit, from, conflicted: [...new Set([...conflicted, ...left])], files: files.slice(0, 20), total: files.length };
+  }
+
+  /** Files of `files` in which `commit` has a conflict-marker line that `from` does not have as often. Read-only. */
+  private newMarkerFiles(repo: string, from: string, commit: string, files: Set<string>): string[] {
+    const found = this.status(["-C", repo, "grep", "-I", "-l", "-E", "^(<<<<<<<|>>>>>>>) ", commit, "--"]);
+    if (found.status === 1) return [];
+    if (found.status !== 0) throw new Error("could not check the paused run's changes for conflict markers");
+    const prefix = `${commit}:`;
+    const marked = found.stdout.split("\n").filter((l) => l.startsWith(prefix)).map((l) => l.slice(prefix.length)).filter((f) => files.has(f));
+    const at = ["-C", repo];
+    return marked.filter((f) => {
+      const count = (lines: string[]) => lines.reduce((m, l) => m.set(l, (m.get(l) ?? 0) + 1), new Map<string, number>());
+      const before = count(this.markerLinesAt(at, from, f));
+      return [...count(this.markerLinesAt(at, commit, f))].some(([l, n]) => n > (before.get(l) ?? 0));
+    });
+  }
+
+  /**
+   * Record a paused writer's files as a commit on its own branch (ORC-030 C4), once its stop is confirmed: everything
+   * tracked and untracked, as Orchestration, with hooks and fsmonitor off, and without the marker guard (the work is
+   * unfinished). Its change is the worktree's base → the commit. Null when the files are the base's: nothing changed.
+   * Repeating it returns the same commit.
+   */
+  keepPaused(ws: PreparedWorkspace & { message: string }): KeptWork | null {
+    if (!ws.branch) throw new Error("only a writer's worktree has work to keep");
+    this.wt(ws, ["add", "-A"]);
+    const tree = this.wt(ws, ["write-tree"]);
+    if (tree === this.wt(ws, ["rev-parse", "--verify", `${ws.base}^{tree}`])) return null;
+    const head = this.wt(ws, ["rev-parse", "--verify", "HEAD"]);
+    let commit = head;
+    if (this.wt(ws, ["rev-parse", "--verify", "HEAD^{tree}"]) !== tree) {
+      commit = this.wt(ws, ["-c", "user.name=Orchestration", "-c", "user.email=orchestration@localhost", "commit-tree", tree, "-p", head, "-m", ws.message]);
+      const ref = `refs/heads/${ws.branch}`;
+      this.wt(ws, ["update-ref", "-m", "orchestration: paused work", ref, commit, this.wt(ws, ["rev-parse", "--verify", ref])]);
+    }
+    const files = this.wt(ws, ["diff", "--no-renames", "--name-only", ws.base, commit]).split("\n").filter(Boolean);
+    return { commit, base: ws.base, files: files.slice(0, 20), total: files.length };
   }
 
   /** Commit everything a writer changed. Hooks are skipped: they are not part of the agent's work. */
@@ -374,7 +442,11 @@ export class WorkspaceManager {
   /** Conflict-marker lines of one file at a revision (":" is the index). Empty when the file is not there. */
   private markerLines(ws: PreparedWorkspace, rev: string, file: string): string[] {
     this.assertUntouched(ws);
-    const at = ["--git-dir", ws.gitDir, "--work-tree", ws.path];
+    return this.markerLinesAt(["--git-dir", ws.gitDir, "--work-tree", ws.path], rev, file);
+  }
+
+  /** markerLines() for git called with `at` (a worktree's recorded git directory, or `-C <repository>` for commits only). */
+  private markerLinesAt(at: string[], rev: string, file: string): string[] {
     // Is the file there at all? Only a successful listing that names nothing means "absent"; any
     // failure stops the recording instead of passing as clean.
     const listed = rev === "" ? this.status([...at, "ls-files", "--stage", "--", file]) : this.status([...at, "ls-tree", rev, "--", file]);
@@ -388,14 +460,15 @@ export class WorkspaceManager {
   /**
    * Does a seeded file still hold a conflict marker the service's merge or revert wrote? Marker-like
    * lines the file already had (documentation that shows a conflict, for example) do not count: only
-   * lines that were not in the base or in the merged or reverted commit.
+   * lines that were not in the base or in the merged or reverted commit. For a carry, only the base and
+   * the paused run's base count: the paused work is unfinished, and its markers may be unresolved ones.
    */
   private hasNewMarkers(ws: PreparedWorkspace, seed: PreparedSeed, file: string): boolean {
     const staged = this.markerLines(ws, "", file);
     if (staged.length === 0) return false;
     const known = new Map<string, number>();
     const parent = seed.kind === "revert" && this.status(["--git-dir", ws.gitDir, "rev-parse", "--verify", "--quiet", `${seed.commit}^`]).status === 0 ? [`${seed.commit}^`] : [];
-    for (const rev of [ws.base, seed.commit, ...parent]) {
+    for (const rev of seed.kind === "carry" ? [ws.base, seed.from!] : [ws.base, seed.commit, ...parent]) {
       // As many of each marker-like line as the fullest of these versions has, not their sum.
       const here = new Map<string, number>();
       for (const l of this.markerLines(ws, rev, file)) here.set(l, (here.get(l) ?? 0) + 1);
