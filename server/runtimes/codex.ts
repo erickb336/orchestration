@@ -605,6 +605,13 @@ export class CodexAdapter implements RuntimeAdapter {
         if (!run.threadId || n.params.threadId === run.threadId) run.turnId ??= n.params.turn.id;
         this.releaseHeldNotes(run);
         return;
+      case "item/started": {
+        // A spawn's item starts before the sub-agent's own turn does, and completes after it (real run, ORC-031 31c):
+        // its start is taken here, with its task path.
+        const it = n.params.item;
+        if (it.type === "subAgentActivity" && it.kind === "started") this.subStarted(run, it.agentThreadId, `Codex sub-agent ${it.agentPath}`);
+        return;
+      }
       case "item/completed": {
         if (run.turnId && n.params.turnId !== run.turnId) return;
         this.onItem(run, n.params.item);

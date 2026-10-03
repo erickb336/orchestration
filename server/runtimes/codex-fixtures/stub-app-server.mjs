@@ -124,8 +124,11 @@ function runTurn() {
       // the collab form (ask and model), a refused spawn, a sub-thread error, a sub-thread usage after the parent's,
       // and a follow-up turn of A after its end. B is still running when the parent's turn completes.
       later(10, () => {
-        item({ type: "subAgentActivity", id: "call_a", kind: "started", agentThreadId: SUB_A, agentPath: "/root/a" });
+        // As in a real run: the spawn's item starts, the sub-agent's own turn starts, then the spawn's item completes.
+        const spawnA = { type: "subAgentActivity", id: "call_a", kind: "started", agentThreadId: SUB_A, agentPath: "/root/a" };
+        notify("item/started", { item: spawnA, threadId: THREAD, turnId: TURN, startedAtMs: Date.now() });
         notify("turn/started", { threadId: SUB_A, turn: { ...turnObj("inProgress"), id: "turn_sub_a" } });
+        item(spawnA);
       });
       later(60, () => {
         usage(SUB_A, "turn_sub_a", 1000, 200, 50);
