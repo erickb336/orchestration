@@ -1,15 +1,18 @@
-// The "settings" journey (ORC-030 QA): every section and card of Settings, a few changes saved or discarded, and the
-// Environment card's "Confirm this dev container", at 1280 and 375 wide.
+// The "settings" journey (ORC-030 QA; the sections of C3): every section and card of Settings, a few changes saved
+// or discarded, and How your project runs: its evidence status, and "Confirm this dev container", at 1280 and 375 wide.
 //
 // What it drives, as the owner sees it:
-// 1. The demo (fake runtime): #/settings, then each of the five sections from the side menu. Each card of the section
-//    shows. Each card's own link (#/settings/<card>) opens its section and brings the card into view.
-// 2. Changes: one value in Working style, Project (Budgets), Agents and Quality, each with Save and "Saved". Discard
-//    in Run limits. An unsaved change survives a visit to another section. Advanced › Data: Import and Export.
-// 3. The Environment card in the demo, then on a second, real-looking service (the harness's `realLooking`: the
-//    service says "real", while every run stays simulated). That service has an empty project and a throwaway git
-//    repository with a committed .devcontainer/devcontainer.json. The script sets the repository path in the UI,
-//    then uses "Confirm this dev container" and Save.
+// 1. The demo (fake runtime): #/settings, then each of the seven sections from the side menu. Each card of the section
+//    shows. Each card's own link (#/settings/<card>) opens its section and brings the card into view; an address made
+//    before a card moved (#/settings/project/budgets) opens it where it is now. Project has no Stage card.
+// 2. Changes: one value in Working style, Budgets, Agents and Quality, each with Save and "Saved". Discard in Run
+//    limits. An unsaved change survives a visit to another section. Advanced › Data: Import and Export.
+// 3. How your project runs in the demo: a preview with no environment saves, and the card says evidence is not
+//    captured and what to set. Then a second, real-looking service (the harness's `realLooking`: the service says
+//    "real", while every run stays simulated) with an empty project and a throwaway git repository with a committed
+//    .devcontainer/devcontainer.json. The script sets the repository path in Project, then in How your project runs
+//    reads what the dev container sets (no digest on the screen), confirms it, saves, and sets the preview: the card
+//    says evidence is set up.
 // It checks each view for a horizontal scroll and for errors, and takes a screenshot of each stage.
 //
 // Sample data: the demo project (src/domain/demo.ts) and an empty project (src/domain/seed.ts). No model runs.
@@ -76,6 +79,12 @@ async function body(j, page, service, width) {
       if (!(await section(sec).isVisible()) || !box || box.y < -2 || box.y > vh - 40) wrong.push(`${card} (top ${box ? Math.round(box.y) : "none"})`);
     }
     j.check(!wrong.length, "each #/settings/<card> link opens its section with the card in view", wrong);
+    // An address made before the split (ORC-030 C3) opens the card where it is now.
+    await page.evaluate(() => (location.hash = "#/settings/project/budgets"));
+    j.check(await section("budgets").locator('[id="budgets"]').isVisible({ timeout: 2_000 }), "#/settings/project/budgets opens Budgets");
+    await page.evaluate(() => (location.hash = "#/settings/project"));
+    await section("project").waitFor({ timeout: 2_000 });
+    j.check(!(await page.locator('[id="stage"]').count()) && !/Open Vision/.test(await section("project").innerText()), "Project has no Stage card (a-settings-stage)");
   });
 
   // ---------- 2. Change, Save, Discard ----------
@@ -89,10 +98,11 @@ async function body(j, page, service, width) {
     j.check((await save("working-style")) === "Saved", 'Save: the bar says "Saved"');
     j.check(service.state().project.steeringMode === "suggest", "the record: the lead only suggests", service.state().project.steeringMode);
   });
-  await j.step("Project › Budgets: a building budget, Save", async () => {
-    await open("project", "Project");
+  await j.step("Budgets: a building budget, Save", async () => {
+    await open("budgets", "Budgets");
     await page.getByLabel("Building budget (dollars)").fill("40");
-    j.check((await save("project")) === "Saved", 'Save: the bar says "Saved"');
+    j.check((await status("project").innerText()).trim() === "No unsaved changes", "the change is Budgets', not Project's");
+    j.check((await save("budgets")) === "Saved", 'Save: the bar says "Saved"');
     j.check(service.state().project.budgets.buildingUsd === 40, "the record: the building budget is $40", service.state().project.budgets);
     await page.locator('[id="budgets"]').scrollIntoViewIfNeeded();
     await j.shot("3-budgets-saved", { full: false });
@@ -139,15 +149,30 @@ async function body(j, page, service, width) {
     await j.shot("4-data", { full: false });
   });
 
-  // ---------- 3. The Environment card ----------
-  await j.step("Environment in the demo", async () => {
-    await page.goto(`${service.origin}/#/settings/project/environment`);
-    const card = page.locator('[id="environment"]');
-    await card.waitFor({ timeout: 5_000 });
-    const words = await card.innerText();
-    j.note(`Demo: the Environment card says "${words.split("\n").filter(Boolean).slice(2, 4).join(" / ")}"`);
-    j.check(!(await card.getByRole("button", { name: "Confirm this dev container" }).count()), "the demo offers no dev container to confirm (it reads no repository)");
-    await j.shot("5-environment-demo", { locator: card });
+  // ---------- 3. How your project runs ----------
+  const runs = page.locator('[id="environment"]');
+  await j.step("How your project runs in the demo: no environment, so evidence is not captured, and the card says what to set", async () => {
+    await page.goto(`${service.origin}/#/settings/how-it-runs`);
+    await runs.waitFor({ timeout: 5_000 });
+    const words = await runs.innerText();
+    j.check(!(await runs.getByRole("button", { name: "Confirm this dev container" }).count()), "the demo offers no dev container to confirm (it reads no repository)");
+    j.check(!/Install command|npm ci --ignore-scripts/.test(words), "no install field: the environment's prepare commands install (B-08)");
+    let from = 0;
+    const missing = ["Image", "Prepare commands", "Evidence", "Preview command", "Port", "CLI entry"].filter((x) => {
+      const i = words.indexOf(x, from);
+      if (i >= 0) from = i + x.length;
+      return i < 0;
+    });
+    j.check(!missing.length, "one card: the image and the prepare commands, then the preview command, its port and the CLI entry", missing);
+    await page.getByLabel("Preview command").fill("npm run preview");
+    await page.getByLabel("Port", { exact: true }).fill("4173");
+    j.check((await save("how-it-runs")) === "Saved", 'Save: the bar says "Saved"');
+    j.check(service.state().project.preview?.port === 4173 && !("install" in (service.state().project.preview ?? {})), "the record: the preview on 4173, with no install", service.state().project.preview);
+    await runs.getByText("Not captured").waitFor({ timeout: 5_000 }).catch(() => {});
+    const after = await runs.innerText();
+    j.check(/Not captured/.test(after) && /set an image above, or confirm the repository's dev container/.test(after), "the card says evidence is not captured, and what to set to get it", after.split("\n").find((l) => /captured/.test(l)));
+    await j.pageChecks("How your project runs");
+    await j.shot("5-runs-demo");
   });
   const real = await startService(() => buildEmptyProject(Date.now()), { dist: await buildApp(), realLooking: true, port: PORT + 2 });
   try {
@@ -157,40 +182,57 @@ async function body(j, page, service, width) {
     git("add", "-A");
     git("-c", "user.name=QA", "-c", "user.email=qa@localhost", "commit", "-q", "-m", "Add a dev container");
     const card = page.locator('[id="environment"]');
-    await j.step("Environment before a repository", async () => {
-      await page.goto(`${real.origin}/#/settings/project/environment`);
+    await j.step("How your project runs before a repository", async () => {
+      await page.goto(`${real.origin}/#/settings/how-it-runs/environment`);
       await card.waitFor({ timeout: 15_000 });
       await page.waitForTimeout(800);
       const words = await card.innerText();
       j.check(!/This is the sample project/.test(words), "with no repository yet, the card does not call a new project the sample project", words.split("\n").find((l) => /sample|repository/i.test(l)));
-      j.check(words.includes("No repository is set yet: give its path above."), "with no repository yet, the card says to give its path above", words.split("\n").find((l) => /repository/i.test(l)));
+      j.check(words.includes("No repository is set yet: give its path in Settings › Project."), "with no repository yet, the card says where to give its path", words.split("\n").find((l) => /repository/i.test(l)));
       await j.shot("6-environment-no-repo", { locator: card });
     });
     await j.step("set the repository path", async () => {
+      await page.goto(`${real.origin}/#/settings/project/repository`);
       await page.getByLabel("Repository path", { exact: true }).fill(real.repo);
       j.check((await save("project")) === "Saved", 'Save: the bar says "Saved"');
       j.check(real.state().project.repoPath === real.repo, "the record: the repository path is set");
       await page.getByText(/^Ready/).first().waitFor({ timeout: 10_000 }).catch(() => {});
       j.check(/Ready/.test(await page.locator('[id="repository"]').innerText()), 'the Repository card says "Ready"');
     });
-    await j.step("Confirm this dev container", async () => {
+    await j.step("Confirm this dev container: what it sets, in plain words", async () => {
+      await page.goto(`${real.origin}/#/settings/how-it-runs/environment`);
       const button = card.getByRole("button", { name: "Confirm this dev container" });
       await button.waitFor({ timeout: 10_000 });
       const words = await card.innerText();
       j.check(/Dev container not confirmed/.test(words) && /\.devcontainer\/devcontainer\.json/.test(words), "the card finds .devcontainer/devcontainer.json, not confirmed yet", words.slice(0, 300));
+      const facts = await card.locator(".s-facts").innerText();
+      j.check(/Image\s+node:22-bookworm/.test(facts) && /Prepare commands\s+none: nothing is installed/.test(facts) && /Installs may reach\s+the 13 package registries, through a proxy/.test(facts), "it says what it sets: the image, the prepare commands, what installs may reach", facts.replace(/\s+/g, " "));
+      j.check(!/sha256|[0-9a-f]{12}/.test(words), "no digest on the screen (a-settings-devcontainer)", (words.match(/sha256|[0-9a-f]{12}/) ?? [])[0]);
       await card.scrollIntoViewIfNeeded();
       await j.shot("7-environment-found", { locator: card });
       await button.click();
-      j.check((await status("project").innerText()).trim() === "Unsaved changes", 'the confirmation waits for Save ("Unsaved changes")');
+      j.check((await status("how-it-runs").innerText()).trim() === "Unsaved changes", 'the confirmation waits for Save ("Unsaved changes")');
       j.check(!(await button.count()), "the button goes once the form holds this dev container");
-      j.check((await save("project")) === "Saved", 'Save: the bar says "Saved"');
+      j.check((await save("how-it-runs")) === "Saved", 'Save: the bar says "Saved"');
       await card.getByText("Dev container", { exact: true }).waitFor({ timeout: 10_000 }).catch(() => {});
       const after = await card.innerText();
       j.check(/confirmed by you/.test(after), 'the card says the dev container is "confirmed by you"', after.slice(0, 300));
       const dc = real.state().project.environment?.devcontainer;
       j.check(dc?.file === ".devcontainer/devcontainer.json" && /^[0-9a-f]{64}$/.test(dc?.sha256 ?? ""), "the record: the dev container is confirmed by its digest", dc);
+      j.check(!after.includes(dc?.sha256?.slice(0, 12) ?? "-"), "the digest stays in the record, not on the screen");
       await j.pageChecks("Environment, confirmed");
       await j.shot("8-environment-confirmed", { locator: card });
+    });
+    await j.step("with the dev container confirmed, the preview sets up evidence", async () => {
+      await page.getByLabel("Preview command").fill("npm run preview");
+      await page.getByLabel("Port", { exact: true }).fill("4173");
+      await page.getByLabel("CLI entry").fill("bin/trips.js");
+      j.check((await save("how-it-runs")) === "Saved", 'Save: the bar says "Saved"');
+      await card.getByText(/^Set up \(r1\)/).waitFor({ timeout: 5_000 }).catch(() => {});
+      const words = await card.innerText();
+      j.check(/Set up \(r1\)/.test(words) && /in this environment with no network/.test(words), 'the card says "Set up (r1)", in this environment with no network', words.split("\n").find((l) => /environment with no network|Not captured/.test(l)));
+      await j.pageChecks("How your project runs, set up");
+      await j.shot("9-runs-set-up");
     });
     await j.step("the real-mode cards", async () => {
       for (const [card, sec] of REAL_ONLY.map((c) => [c, CARD_SECTION[c]])) {

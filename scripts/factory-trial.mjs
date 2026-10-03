@@ -23,7 +23,8 @@
 // 3. Writes R3's test with the flow's item id in its tag, and checks the fixture before any agent runs: `npm test`
 //    exits 0 and its JUnit report, read by the service's parser, records R3 as failed.
 // 4. Sets the checks (`npm test`, the JUnit report at reports/junit.xml), the preview (`npm run preview` on 4173, the
-//    CLI entry bin/split.js), local delivery to main, and PE review of new work (on for a new project).
+//    CLI entry bin/split.js), the environment the evidence runs in (the table's Node image, `npm ci`; ORC-030 C3
+//    removed the recorder's own install), local delivery to main, and PE review of new work (on for a new project).
 // 5. Creates one Feature task as the owner, citing the three items, and starts it. Its design step waits for a PE run.
 // 6. Waits until the task landed (the fake runtime: finished and integrated), answering each decision put to the
 //    owner with "fix", as the owner would, and recording each answer.
@@ -65,11 +66,12 @@ const loaded = await Promise.all([
   import("../src/domain/studio/itemStatus.ts"),
   import("../src/domain/studio/evidence.ts"),
   import("../src/domain/types.ts"),
+  import("../src/domain/environment.ts"),
 ]).catch((e) => {
   console.error(`Run this with \`npm run trial:factory\` (node --import tsx): ${e instanceof Error ? e.message : e}`);
   process.exit(2);
 });
-const [{ Store }, A, Recorder, { parseJUnit }, M, Spend, C, P, B, S, ST, RR, IS, E, T] = loaded;
+const [{ Store }, A, Recorder, { parseJUnit }, M, Spend, C, P, B, S, ST, RR, IS, E, T, Env] = loaded;
 
 const args = process.argv.slice(2);
 const FAKE = args.includes("--fake");
@@ -101,6 +103,8 @@ const VISION = [
 const TEST_REPORT = "reports/junit.xml";
 const CHECK_COMMANDS = [{ id: "test", label: "Tests", kind: "check", argv: ["npm", "test"] }];
 const PREVIEW = { preview: ["npm", "run", "preview"], port: 4173, cliEntry: "bin/split.js" };
+/** Evidence runs only in the project's environment: the proposal table's Node image, as the owner would confirm it. */
+const ENVIRONMENT = { image: Env.IMAGE_TABLE.find((r) => r.label === "Node").image, prepare: [["npm", "ci"]] };
 /** The files the trial keeps as they are: the frozen core and R3's test. A change that edits them asks the owner. */
 const FROZEN = ["public/split.js", "test/rules-r3.test.js"];
 const SETTINGS = { autonomy: "manual", delivery: { mode: "local", branch: "main", merge: "auto" }, pausePoints: { tradeoffs: "user", changeOrders: "user", startEachTask: false } };
@@ -110,7 +114,7 @@ const MAX_ANSWERS = 4;
 const CHECKS = {
   fixture: "the fixture's R3 test fails on purpose: npm test exits 0, and its JUnit report, read by the service's parser, records R3 as failed",
   blueprint: "the blueprint in force holds the screen with its prototype, the CLI's terminal demo, and the flow with 3 EARS rules and 1 example, locked in by Start the factory",
-  settings: "the checks (npm test, with the JUnit report at reports/junit.xml) and the preview (npm run preview on port 4173, the CLI entry bin/split.js) are set, and the checks sandbox is ready",
+  settings: "the checks (npm test, with the JUnit report at reports/junit.xml), the preview (npm run preview on port 4173, the CLI entry bin/split.js) and the environment (the Node image, npm ci) are set, and the checks sandbox is ready",
   task: "one Feature task cites the three items, and its acceptance carries the tag of each rule and of the example",
   pe: "the PE reviewed the design before the coder started: a PE run agreed to S1's design, and S2 started after its verdict",
   finished: "the task finished: each step done or skipped, and its work integrated",
@@ -345,12 +349,13 @@ async function setUp() {
     },
   });
   await cmd("setPreview", { preview: PREVIEW });
+  await cmd("setEnvironment", { environment: ENVIRONMENT });
   const { s } = await until("the checks sandbox's probe", (x) => {
     const h = x.state.project.checksHealth;
     return !!h && !h.recheck && h.sandbox === "codex";
   }, minutes(3), 1000);
   const h = s.state.project.checksHealth;
-  record("checks and preview set", { checks: { commands: s.state.project.checks.commands.map((c) => c.argv.join(" ")), testReport: s.state.project.checks.testReport, protected: FROZEN }, preview: s.state.project.preview, sandbox: `${h.status}: ${h.detail}` });
+  record("checks, preview and environment set", { checks: { commands: s.state.project.checks.commands.map((c) => c.argv.join(" ")), testReport: s.state.project.checks.testReport, protected: FROZEN }, preview: s.state.project.preview, environment: s.state.project.environment, sandbox: `${h.status}: ${h.detail}` });
   if (h.status !== "ready") throw new Error(`The checks sandbox is ${h.status}: ${h.detail}`);
 }
 
@@ -383,8 +388,8 @@ function checkSettings(s) {
   const p = s.project.preview;
   check(
     "settings",
-    C.checksOn(c) && c.testReport === TEST_REPORT && c.commands.some((x) => x.kind === "check" && x.argv.join(" ") === "npm test") && p?.preview?.join(" ") === PREVIEW.preview.join(" ") && p.port === PREVIEW.port && p.cliEntry === PREVIEW.cliEntry && s.project.checksHealth?.status === "ready",
-    { checks: c.commands.map((x) => `${x.id}: ${x.argv.join(" ")}`), testReport: c.testReport ?? null, preview: p ? E.previewWords(p) : null, sandbox: s.project.checksHealth?.status ?? null, delivery: s.project.autonomy.autoDeliver },
+    C.checksOn(c) && c.testReport === TEST_REPORT && c.commands.some((x) => x.kind === "check" && x.argv.join(" ") === "npm test") && p?.preview?.join(" ") === PREVIEW.preview.join(" ") && p.port === PREVIEW.port && p.cliEntry === PREVIEW.cliEntry && s.project.environment?.image === ENVIRONMENT.image && s.project.checksHealth?.status === "ready",
+    { checks: c.commands.map((x) => `${x.id}: ${x.argv.join(" ")}`), testReport: c.testReport ?? null, preview: p ? E.previewWords(p) : null, environment: s.project.environment ? Env.environmentWords(s.project.environment) : null, sandbox: s.project.checksHealth?.status ?? null, delivery: s.project.autonomy.autoDeliver },
   );
 }
 
