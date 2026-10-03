@@ -278,7 +278,7 @@ describe("the shaping panel", () => {
 
   it("leads Home while shaping, on the kit: a card with the vision, its documents, what is clear, the planned tasks and the way to Start the factory", () => {
     const markup = render(<Overview />, store(shaping("Hikers find trails without signal.")));
-    expect(markup.indexOf(">Shape the vision<")).toBeLessThan(markup.indexOf(">Needs you<"));
+    expect(markup.indexOf(">The vision<")).toBeLessThan(markup.indexOf(">Needs you<"));
     const start = markup.indexOf('class="k-card v-shape"');
     expect(start).toBeGreaterThan(-1);
     const panel = markup.slice(start, markup.indexOf(">Needs you<"));
@@ -304,7 +304,7 @@ describe("Home in Vision", () => {
   it("stays as it was: the shaping panel, Needs you and Progress by area, and no factory floor", () => {
     const s = inVision(floorScene().s, at(100));
     const markup = render(<Overview />, store(s));
-    for (const part of [">Shape the vision<", ">Needs you<", ">Progress by area<", ">New results<", ">Latest from the lead<"]) expect(markup).toContain(part);
+    for (const part of [">The vision<", ">Needs you<", ">Progress by area<", ">New results<", ">Latest from the lead<"]) expect(markup).toContain(part);
     for (const gone of [">Building budget<", ">The factory<", ">Decided by the PE<", "Open the change order"]) expect(markup).not.toContain(gone);
   });
 });

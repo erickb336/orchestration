@@ -1,5 +1,5 @@
 // Shaping the vision with the lead before anything is built: the banner on the board and in the shell, the
-// "Shape the vision" panel on Home (the vision so far, its documents, the lead's questions, what is clear, the
+// "The vision" panel on Home (the vision so far, its documents, the lead's questions, what is clear, the
 // lead's draft, the planned tasks and the way to Start the factory, the pre-flight).
 // Every control is a keyed command; a draft never applies by itself.
 
@@ -396,7 +396,7 @@ export function ShapingPanel() {
   return (
     <Card
       id="shape"
-      title="Shape the vision"
+      title="The vision"
       className="v-shape"
       actions={
         <>
