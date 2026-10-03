@@ -35,7 +35,7 @@ export {
   acceptedOutput, artifactPipelineRev, consumedInputs, editArtifact, fromEarlierFlow, latestArtifact, setReviewEveryStep, staleInputs,
 } from "./model/artifacts";
 export { changeFlow, flowChangeBlocker, flowChangePreview, serviceOwned, setDefaultFlow, setFlows } from "./model/taskFlow";
-export { createTask, initProject, type NewTask, setCatalog, setRepoPath, setRunLimits, setWorkerConnections, setWorkerEnvironment } from "./model/project";
+export { createTask, initProject, type NewTask, setCatalog, setHousekeepOwnerApps, setRepoPath, setRunLimits, setWorkerConnections, setWorkerEnvironment } from "./model/project";
 export {
   activeLeadRun, applyAutopilot, autonomyMode, deferredLeadRoots, deliveryNews, leadDue, messageStatus, openLeadProposals, pendingMessages, postMessage,
   reportLeadActivity, reportLeadFailed, reportLeadStarted, reportLeadStopped, reportLeadStopTimeout, setAutonomy, setLeadSelection, startLeadRun,

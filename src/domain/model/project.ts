@@ -44,6 +44,15 @@ export function setRunLimits(state: State, limits: RunLimits, now: string): Stat
   return s;
 }
 
+/** Whether housekeeping also cleans what runs left in the owner's Codex and Claude (server/housekeeping.ts). */
+export function setHousekeepOwnerApps(state: State, on: boolean, now: string): State {
+  if (state.project.housekeepOwnerApps === on) return state;
+  const s = draft(state);
+  s.project.housekeepOwnerApps = on;
+  event(s, now, "user", "config", on ? "Housekeeping cleans what runs leave in Codex and Claude again" : "Housekeeping no longer touches Codex or Claude; it still removes the service's own containers and stage folders");
+  return s;
+}
+
 export function setWorkerEnvironment(state: State, provider: ProviderId, environment: WorkerEnvironment, now: string): State {
   const s = draft(state);
   s.project.workerEnvironment[provider] = environment;

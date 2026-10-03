@@ -6,10 +6,12 @@
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { SweepReport } from "../src/api";
 import { Housekeeping, MIN_AGE_MS, claudeProjectName, dockerTime, orphanContainer, sweepMessage, transcriptCwd, type DockerOps, type HousekeepingOptions } from "./housekeeping";
 import type { ArchiveOutcome } from "./runtimes/codex";
+import { Store } from "./store";
 import { STAGE_SWEEP_AGE_MS } from "./studio/container";
 
 const NOW = Date.parse("2026-10-03T12:00:00Z");
@@ -312,6 +314,31 @@ describe("the recorder's containers", () => {
   it("reads Docker's creation time", () => {
     expect(dockerTime("2026-10-02 19:48:03 -0700 PDT")).toBe(Date.parse("2026-10-03T02:48:03Z"));
     expect(dockerTime("about an hour ago")).toBeNaN();
+  });
+});
+
+describe("the setting", () => {
+  it("is on by default and after an upgrade, is the owner's to turn off, and outlives a new project", () => {
+    const path = join(home, "db.sqlite");
+    const first = new Store(path);
+    expect(first.read().state.project.housekeepOwnerApps).toBe(true);
+    first.command("setHousekeepOwnerApps", { on: false }, "k1", new Date(NOW).toISOString());
+    expect(first.read().state.project.housekeepOwnerApps).toBe(false);
+    expect(first.read().state.events.at(-1)).toMatchObject({ actor: "user", kind: "config", message: "Housekeeping no longer touches Codex or Claude; it still removes the service's own containers and stage folders" });
+    first.command("initProject", { name: "Trips", repoPath: "/tmp/trips", vision: "v", focus: "" }, "k2", new Date(NOW + 1000).toISOString());
+    expect(first.read().state.project.housekeepOwnerApps).toBe(false);
+    expect(() => first.command("setHousekeepOwnerApps", { on: "yes" }, "k3", new Date(NOW).toISOString())).toThrow();
+    first.close();
+    // As an earlier build of format 19 wrote it: no such field.
+    const db = new DatabaseSync(path);
+    const row = db.prepare("SELECT json FROM state WHERE id = 1").get() as { json: string };
+    const doc = JSON.parse(row.json) as { project: Record<string, unknown> };
+    delete doc.project.housekeepOwnerApps;
+    db.prepare("UPDATE state SET json = ? WHERE id = 1").run(JSON.stringify(doc));
+    db.close();
+    const again = new Store(path);
+    expect(again.read().state.project.housekeepOwnerApps).toBe(true);
+    again.close();
   });
 });
 

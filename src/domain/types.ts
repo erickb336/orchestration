@@ -429,6 +429,13 @@ export interface Project {
   workerEnvironment: Record<ProviderId, WorkerEnvironment>;
   /** MCP servers (by name, from the user's own provider config) isolated workers may use. */
   workerConnections: Record<ProviderId, string[]>;
+  /**
+   * Housekeeping (server/housekeeping.ts) also cleans what runs left in the owner's own apps: it archives Orchestrator's
+   * Codex threads and moves its Claude session folders to the Trash. On by default (the owner asked for it,
+   * 2026-10-03). Machine-level, like the catalog: a new project keeps it. The service's own containers and stage
+   * folders are cleaned either way.
+   */
+  housekeepOwnerApps: boolean;
   /** Desired state: project-wide pause. */
   hold: boolean;
   lastVisitAt: string;

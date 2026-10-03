@@ -280,6 +280,7 @@ class DemoBuilder {
         prDelivery: structuredClone(DEFAULT_PR_DELIVERY),
         workerEnvironment: { claude: "isolated", codex: "isolated" },
         workerConnections: { claude: [], codex: [] },
+        housekeepOwnerApps: true,
         hold: false,
         lastVisitAt: at(240),
         defaultFlowId: "change",

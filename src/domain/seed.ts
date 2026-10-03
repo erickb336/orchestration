@@ -447,6 +447,7 @@ export function buildSeed(nowMs: number = Date.now(), { inFlightRuns = true, che
       conventions: { include: true },
       workerEnvironment: { claude: "isolated", codex: "isolated" },
       workerConnections: { claude: [], codex: [] },
+      housekeepOwnerApps: true,
       hold: false,
       lastVisitAt: at(60),
       defaultFlowId: "change",
