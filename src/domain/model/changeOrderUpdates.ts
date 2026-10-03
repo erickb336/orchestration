@@ -31,7 +31,7 @@ import { CHANGE_ORDER_LINE_KINDS, type BlueprintItem, type ChangeOrder, type Cha
 import { ControlError, type LeadRun, type SteeringChange, type SteeringChangeSet, type State, type Task } from "../types";
 import { cancelInto, dropInto, openDependent, reopenDropped, started, userTouched } from "./controls";
 import { currentSpec, currentVision, draft, event, getTask, isOpen } from "./core";
-import { type LeadProposal, proposeTask, refusedAcceptance, refusedAcceptanceNote, specContentOf, validateProposal } from "./leadOutput";
+import { type LeadProposal, ownersChoiceLeftOut, proposeTask, refusedAcceptance, refusedAcceptanceNote, specUpdateOf, validateProposal } from "./leadOutput";
 import { editSpecInto } from "./specs";
 import { CONTROL_RE, oneLine } from "./textSafety";
 
@@ -230,15 +230,19 @@ const prefixed = (id: string, why: string | undefined) => (why ? `${id}: ${why}`
 
 /**
  * Why the lead's update waits for the owner's go-ahead whatever the change order's handler, or undefined: the lead
- * never does what only the owner may. Steering's rules for a cancel (ORC-009): the owner's own task, or a task the owner
- * changed by hand, is cancelled only by the owner, so the lead's retirement of one is a suggestion. The owner's
- * go-ahead satisfies it. Run after `whyNot`.
+ * never does what only the owner may (ORC-009: a choice the owner made by hand is never overridden; the lead's change
+ * to it is a suggestion). The owner's own task, or a task the owner changed, is cancelled only by the owner; an update
+ * that leaves out the option the owner chose overrules the owner. The owner's go-ahead satisfies it. Run after `whyNot`.
  */
 function ownersCall(s: State, u: Update): string | undefined {
   const t = u.taskId ? getTask(s, u.taskId) : undefined;
   if (u.kind === "retire") {
     if (t!.specs[0]?.author !== "lead") return "your task: only you cancel it";
     if (userTouched(t!)) return "you changed this task";
+  }
+  if (u.kind === "update-spec") {
+    const chosen = ownersChoiceLeftOut(currentSpec(t!).content, u.proposal!);
+    if (chosen) return `you chose option ${chosen.id} (${chosen.name}); the update leaves it out`;
   }
   return undefined;
 }
@@ -261,7 +265,7 @@ function applyLineInto(s: State, co: ChangeOrder, line: ChangeOrderLine, row: St
       case "update-spec": {
         const prev = currentSpec(t!);
         const earlier = t!.peReview;
-        editSpecInto(s, t!, prev.rev, specContentOf(s, proposal!), reason, "lead", now);
+        editSpecInto(s, t!, prev.rev, specUpdateOf(s, prev.content, proposal!), reason, "lead", now);
         // The updated spec is new work: it waits for the PE before it starts, and the earlier review stays on the record.
         // A review under way keeps its rounds: the PE reviews the update as its next round, so the cap of rounds holds.
         const fresh = earlier?.status === "pending" ? undefined : newWorkReview(s);

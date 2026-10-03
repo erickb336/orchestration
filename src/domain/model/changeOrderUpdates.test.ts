@@ -261,6 +261,57 @@ describe("the owner's authority: what the lead may not do (review findings 1 and
 });
 
 describe("the spec a spec update writes", () => {
+  /** The owner's decisions on the queued task: option B over the recommendation, with criteria, a plan and an effort. */
+  function ownersDecisions(f: ReturnType<typeof changeOrdered>) {
+    const t = task(f.s, f.tasks.queued);
+    const cur = M.currentSpec(t).content;
+    const content = { ...cur, selectedOptionId: "B", overrideReason: "Wait for the map.", successCriteria: ["Friends find the list"], validationPlan: "Try it with three friends.", rollback: "Revert the list.", effort: "large" as const };
+    return run(f.s, "editSpec", { taskId: t.id, expectedRev: 2, content, reason: "My call" }, at(19)).state;
+  }
+
+  it("merges the lead's fields into the current spec and keeps the owner's decisions (review finding 5)", () => {
+    const f = changeOrdered();
+    const { s } = answer(ownersDecisions(f), { rev: order(f.s).rev, updates: [fullAnswer(f).updates[0]] }, 20);
+    const spec = M.currentSpec(task(s, f.tasks.queued));
+    expect(spec).toMatchObject({ rev: 4, author: "lead" });
+    expect(spec.content).toMatchObject({
+      // The lead's fields.
+      title: "Trip list screen",
+      outcome: "Trip list screen is built as the blueprint shows.",
+      recommendedOptionId: "A",
+      // The owner's: the chosen option (it still exists), its reason, and what the lead's proposal does not carry.
+      selectedOptionId: "B",
+      decidedBy: "user",
+      overrideReason: "Wait for the map.",
+      successCriteria: ["Friends find the list"],
+      validationPlan: "Try it with three friends.",
+      rollback: "Revert the list.",
+      effort: "large",
+      area: "Trips",
+    });
+  });
+
+  it("the owner's choice stays when the lead recommends another option", () => {
+    const f = changeOrdered();
+    const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), recommendedOptionId: "B" } };
+    const { s } = answer(f.s, { rev: order(f.s).rev, updates: [update] }, 20);
+    expect(M.currentSpec(task(s, f.tasks.queued)).content).toMatchObject({ recommendedOptionId: "B", selectedOptionId: "A", decidedBy: "user", overrideReason: "Your choice, kept when the lead's update recommended another option" });
+  });
+
+  it("an update that leaves out the owner's chosen option waits for the owner's go-ahead", () => {
+    const f = changeOrdered();
+    const options = [
+      { id: "1", name: "List first", approach: "The days, then the map." },
+      { id: "2", name: "Defer", approach: "Wait." },
+    ];
+    const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), options, recommendedOptionId: "1" } };
+    const a = answer(ownersDecisions(f), { rev: order(f.s).rev, updates: [update] }, 20);
+    expect(M.currentSpec(task(a.s, f.tasks.queued)).rev).toBe(3);
+    expect(rowsOf(a.s, a.setId)[0]).toMatchObject({ status: "suggested", note: "you chose option B (Defer); the update leaves it out" });
+    const s = M.applySteering(a.s, a.setId, order(a.s).lines![0].changeId, at(30)).state;
+    expect(M.currentSpec(task(s, f.tasks.queued)).content).toMatchObject({ selectedOptionId: "1", successCriteria: ["Friends find the list"] });
+  });
+
   it("a line with a rule's tag in the lead's acceptance is refused with a note; the update applies (review finding 4)", () => {
     const f = changeOrdered();
     const tagged = `[${f.ids.plan} R1] The map shows the days`;

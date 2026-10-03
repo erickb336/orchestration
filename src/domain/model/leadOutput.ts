@@ -323,9 +323,9 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
 }
 
 /**
- * The lead revises a proposal the PE sent back (pass 5): its whole proposal becomes the task's next spec revision (by
- * the lead, so an objection is not reopened), and the PE reviews it again. The task keeps its flow and priority.
- * Returns why it cannot, or undefined. Mutates the draft.
+ * The lead revises a proposal the PE sent back (pass 5): its whole proposal, merged into the current spec
+ * (`specUpdateOf`), becomes the task's next spec revision (by the lead, so an objection is not reopened), and the PE
+ * reviews it again. The task keeps its flow and priority. Returns why it cannot, or undefined. Mutates the draft.
  */
 function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: string): string | undefined {
   if (typeof revises !== "string") return '"revises" must be a task id';
@@ -334,8 +334,11 @@ function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: strin
   const why = validateProposal(s, p, now, "lead", t.id);
   if (why) return why;
   const spec = currentSpec(t);
+  // A revision edits the spec it revises, as a change order's update does: the owner's decisions on it stay.
+  const chosen = ownersChoiceLeftOut(spec.content, p);
+  if (chosen) return `keep option ${chosen.id} (${chosen.name}): the user chose it`;
   const round = t.peReview!.rounds.length;
-  editSpecInto(s, getTask(s, t.id), spec.rev, specContentOf(s, p), `Revised for the PE (round ${round} asked for a change)`, "lead", now);
+  editSpecInto(s, getTask(s, t.id), spec.rev, specUpdateOf(s, spec.content, p), `Revised for the PE (round ${round} asked for a change)`, "lead", now);
   return undefined;
 }
 
@@ -402,6 +405,43 @@ export function specContentOf(s: State, p: LeadProposal): SpecContent {
     rollback: "Discard the orchestration branch; delivery to your branch happens only if you turned it on.",
     effort: "small",
     ...(refs.length ? { blueprintRefs: refs } : {}),
+  };
+}
+
+/** The option the owner chose on this spec, when the lead's proposal leaves it out: only the owner overrules it. */
+export function ownersChoiceLeftOut(cur: SpecContent, p: LeadProposal): SpecOption | undefined {
+  if (cur.decidedBy !== "user") return undefined;
+  if (p.options.some((o) => String(o.id).slice(0, 10) === cur.selectedOptionId)) return undefined;
+  return cur.options.find((o) => o.id === cur.selectedOptionId);
+}
+
+/** The override reason a kept choice gets when the owner had taken the recommendation and the lead now recommends another. */
+const KEPT_CHOICE = "Your choice, kept when the lead's update recommended another option";
+
+/**
+ * A spec update's content (a change order's "update-spec", review finding 5): the lead's proposal merged into the
+ * current spec. Each field the proposal gives replaces the current one; the rest stays, among them what a proposal
+ * never carries: the success criteria, the validation plan, the rollback and the effort. The owner's choice stays
+ * where its option still exists, with its reason; an update that leaves it out is the owner's call
+ * (`ownersChoiceLeftOut`), and the owner's go-ahead takes the lead's recommendation.
+ */
+export function specUpdateOf(s: State, cur: SpecContent, p: LeadProposal): SpecContent {
+  const next = specContentOf(s, p);
+  const given = (k: "area" | "whyNow" | "benefit" | "uncertainty" | "scopeIncluded" | "scopeExcluded") => p[k] !== undefined && p[k] !== null;
+  const keep = cur.decidedBy === "user" && next.options.some((o) => o.id === cur.selectedOptionId);
+  return {
+    ...next,
+    area: given("area") ? next.area : cur.area,
+    whyNow: given("whyNow") ? next.whyNow : cur.whyNow,
+    benefit: given("benefit") ? next.benefit : cur.benefit,
+    uncertainty: given("uncertainty") ? next.uncertainty : cur.uncertainty,
+    scopeIncluded: given("scopeIncluded") ? next.scopeIncluded : cur.scopeIncluded,
+    scopeExcluded: given("scopeExcluded") ? next.scopeExcluded : cur.scopeExcluded,
+    successCriteria: cur.successCriteria,
+    validationPlan: cur.validationPlan,
+    rollback: cur.rollback,
+    effort: cur.effort,
+    ...(keep ? { selectedOptionId: cur.selectedOptionId, decidedBy: cur.decidedBy, overrideReason: cur.selectedOptionId === next.recommendedOptionId ? "" : cur.overrideReason.trim() || KEPT_CHOICE } : {}),
   };
 }
 
