@@ -10,7 +10,7 @@
 // No language is a code path here or in the runner (server/environment/): languages appear only as rows of data.
 
 import { draft, event } from "./model/core";
-import { ControlError, type State } from "./types";
+import { ControlError, type ChecksConfig, type State } from "./types";
 
 // ---------- data ----------
 
@@ -317,11 +317,26 @@ export function environmentSource(found: DevcontainerFound | undefined, setting:
 export interface EnvironmentPlan {
   source: EnvironmentSource;
   prepare: string[][];
+  /** Where the prepare commands come from: the environment's setting, the checks' own prepare commands, or nowhere. */
+  prepareFrom: "setting" | "checks" | "none";
   hosts: string[];
 }
 
-export function environmentPlan(source: EnvironmentSource, setting: EnvironmentSetting | undefined): EnvironmentPlan {
-  return { source, prepare: (setting?.prepare ?? []).map((c) => [...c]), hosts: [...REGISTRY_HOSTS.map((r) => r.host), ...(setting?.hosts ?? [])] };
+/** The checks' own prepare commands (their setting's "prepare" commands, in order), as argument lists. */
+export function checksPrepareCommands(checks: Pick<ChecksConfig, "commands">): string[][] {
+  return checks.commands.filter((c) => c.kind === "prepare").map((c) => [...c.argv]);
+}
+
+/**
+ * The plan of a run in the environment. The prepare commands are the environment's own; without them, the checks' own
+ * prepare commands run in the prepare phase instead (through the proxy, install scripts included, in the container),
+ * so a project whose environment is a dev container installs what its checks need. With neither, nothing is prepared,
+ * and the run's record says so.
+ */
+export function environmentPlan(source: EnvironmentSource, setting: EnvironmentSetting | undefined, checksPrepare: readonly (readonly string[])[] = []): EnvironmentPlan {
+  const own = setting?.prepare ?? [];
+  const [prepare, prepareFrom] = own.length ? [own, "setting" as const] : checksPrepare.length ? [checksPrepare, "checks" as const] : [[], "none" as const];
+  return { source, prepare: prepare.map((c) => [...c]), prepareFrom, hosts: [...REGISTRY_HOSTS.map((r) => r.host), ...(setting?.hosts ?? [])] };
 }
 
 // ---------- a run's record ----------
@@ -335,8 +350,10 @@ export type EnvironmentRunRecord =
       image: string;
       /** The image Docker ran (its id). */
       imageId?: string;
-      /** The prepare phase: run now, reused from an earlier commit with the same inputs, or failed. */
-      prepare: "ran" | "reused" | "failed";
+      /** The prepare phase: run now, reused from an earlier commit with the same inputs, failed, or none (no command to run). */
+      prepare: "ran" | "reused" | "failed" | "none";
+      /** Where the prepare commands came from, when there were any (EnvironmentPlan.prepareFrom). */
+      prepareFrom?: "setting" | "checks";
       /** The hash of the image, the prepare commands, the hosts and the prepare inputs (16 hex). */
       key: string;
       /** The commit whose prepared copy was reused. */

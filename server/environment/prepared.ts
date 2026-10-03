@@ -413,30 +413,35 @@ export class PreparedEnvironments {
     const key = prepareKey({ imageId: image.id, prepare: env.plan.prepare, hosts: env.plan.hosts, inputs: prepareInputs(d.work, before) });
     const prepCmds: PlannedCheck[] = env.plan.prepare.map((argv, i) => ({ id: `env-prepare-${i + 1}`, label: `Prepare: ${argv.join(" ")}`.slice(0, 60), kind: "prepare", argv, timeoutMs: PREPARE_TIMEOUT_MS }));
     const from = env.plan.source.from;
+    // Where the commands came from, when there are any: the environment's own, or the checks' own (it has none).
+    const prepareFrom = env.plan.prepareFrom === "checks" ? ("checks" as const) : ("setting" as const);
     const t0 = Date.now();
+    if (!prepCmds.length) {
+      this.note(s, "No prepare command: the environment and the checks have none, so nothing is prepared");
+      return { kind: "prepared", runImage: image.id, imageEnv, ok: true, record: { ran: "container", from, image: image.ref, imageId: image.id, prepare: "none", key, prepareMs: 0 } };
+    }
+    if (prepareFrom === "checks") this.note(s, "The environment has no prepare commands: the checks' own prepare commands run in its prepare phase");
     // The steps after the prepare run on the prepared image: the base image plus what the prepare wrote outside the copy.
     const tag = `orc-env-${slug(env.project)}:${key}`;
-    const reuse = prepCmds.length ? await this.preparedOf(docker, d, key, tag) : undefined;
+    const reuse = await this.preparedOf(docker, d, key, tag);
     if (s.stopped) return { kind: "stopped" };
     if (reuse) {
       cloneEntries(join(d.prepared, key, "copy"), d.work, reuse.added);
       for (const c of prepCmds) s.results.push({ ...notRun(c), status: "passed", excerpt: `Reused what the prepare made for ${reuse.sha.slice(0, 12)}: the same image, prepare commands, hosts and prepare inputs.` });
       this.note(s, `Reused the prepare of ${reuse.sha.slice(0, 12)} (${image.ref})`);
-      return { kind: "prepared", runImage: reuse.imageId, imageEnv, ok: true, record: { ran: "container", from, image: image.ref, imageId: image.id, prepare: "reused", key, reusedFrom: reuse.sha, prepareMs: 0 } };
+      return { kind: "prepared", runImage: reuse.imageId, imageEnv, ok: true, record: { ran: "container", from, image: image.ref, imageId: image.id, prepare: "reused", prepareFrom, key, reusedFrom: reuse.sha, prepareMs: 0 } };
     }
     // The cache is shared by the project's prepares and grows with them: past half the disk limit, it starts again empty.
-    if (prepCmds.length) {
-      const cached = await bytesUnder(d.cache);
-      if (cached > this.diskBytes / 2) {
-        removeTree(d.cache);
-        mkdirSync(join(d.cache, "xdg"), { recursive: true, mode: 0o700 });
-        this.note(s, `Emptied the project's cache folder (${size(cached)}, more than half the disk limit of ${size(this.diskBytes)})`);
-      }
+    const cached = await bytesUnder(d.cache);
+    if (cached > this.diskBytes / 2) {
+      removeTree(d.cache);
+      mkdirSync(join(d.cache, "xdg"), { recursive: true, mode: 0o700 });
+      this.note(s, `Emptied the project's cache folder (${size(cached)}, more than half the disk limit of ${size(this.diskBytes)})`);
     }
-    const out = prepCmds.length ? await this.preparePhase(s, image.id, d, prepCmds) : { ok: true, refused: [] as string[], imageId: image.id };
+    const out = await this.preparePhase(s, image.id, d, prepCmds);
     if (s.stopped) return { kind: "stopped" };
-    if (out.ok && out.imageId && prepCmds.length) await this.savePrepared(docker, d, key, tag, out.imageId, before, req.sha);
-    const record: ContainerRecord = { ran: "container", from, image: image.ref, imageId: image.id, prepare: out.ok ? "ran" : "failed", key, prepareMs: Date.now() - t0, ...(out.refused.length ? { refused: out.refused } : {}) };
+    if (out.ok && out.imageId) await this.savePrepared(docker, d, key, tag, out.imageId, before, req.sha);
+    const record: ContainerRecord = { ran: "container", from, image: image.ref, imageId: image.id, prepare: out.ok ? "ran" : "failed", prepareFrom, key, prepareMs: Date.now() - t0, ...(out.refused.length ? { refused: out.refused } : {}) };
     return { kind: "prepared", runImage: out.ok && out.imageId ? out.imageId : image.id, imageEnv, ok: out.ok, record };
   }
 

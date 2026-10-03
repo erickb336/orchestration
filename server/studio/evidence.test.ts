@@ -250,7 +250,7 @@ describe("reading the plan from the copy of the change", () => {
 });
 
 describe("which path a capture takes (unit E2)", () => {
-  const ENV: EnvironmentAssignment = { project: "p-env", plan: { source: { from: "setting", image: `python:3.13-slim@sha256:${"a".repeat(64)}` }, prepare: [["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"]], hosts: ["pypi.org"] } };
+  const ENV: EnvironmentAssignment = { project: "p-env", plan: { source: { from: "setting", image: `python:3.13-slim@sha256:${"a".repeat(64)}` }, prepare: [["python3", "-m", "pip", "install", "--user", "-r", "requirements.txt"]], prepareFrom: "setting", hosts: ["pypi.org"] } };
   const RECORD = { ran: "container" as const, from: "setting" as const, image: ENV.plan.source.from === "setting" ? (ENV.plan.source as { image: string }).image : "", imageId: `sha256:${"c".repeat(64)}`, prepare: "reused" as const, key: "0123456789abcdef", prepareMs: 0 };
   /** A change with a plan for a screen and a CLI. */
   const change = (tape = TAPE) => {

@@ -13,7 +13,7 @@ import { removeTree } from "./copy";
 import { phaseArgs } from "./docker";
 import { runDocker } from "../studio/container";
 
-const plan = { source: { from: "setting" as const, image: "python:3.13@sha256:" + "a".repeat(64) }, prepare: [["make"]], hosts: ["pypi.org"] };
+const plan = { source: { from: "setting" as const, image: "python:3.13@sha256:" + "a".repeat(64) }, prepare: [["make"]], prepareFrom: "setting" as const, hosts: ["pypi.org"] };
 
 function assignment(dir: string, o: Partial<CheckAssignment> = {}): CheckAssignment {
   return {
@@ -180,6 +180,25 @@ describe("with a stand-in for Docker (server/testing/fake-docker.mjs)", { timeou
     expect(results[1].excerpt).toMatch(/Not run: the copy and the cache/);
     // Well before the command's own 8 s limit.
     expect(Date.now() - t0).toBeLessThan(6000);
+    removeTree(dir);
+  });
+
+  it("records where the prepare commands came from, and \"none\" when nothing was prepared (review finding 8)", async () => {
+    const { dir, ws, runner, events, ended } = setup();
+    const record = async (prepare: string[][], prepareFrom: "setting" | "checks" | "none") => {
+      const a = assignment(ws, { commands: [{ id: "test", label: "test", kind: "check", argv: ["fake-exit", "0"], timeoutMs: 8000 }], environment: { plan: { ...plan, prepare, prepareFrom }, project: "p1" } });
+      runner.start(a);
+      await ended(a);
+      const done = events.find((e) => e.attemptId === a.attemptId && e.type === "completed") as Extract<AdapterEvent, { type: "completed" }>;
+      return (done.checks as { environment: Record<string, unknown>; results: { id: string; status: string }[] });
+    };
+    const none = await record([], "none");
+    expect(none.environment).toMatchObject({ ran: "container", prepare: "none", prepareMs: 0 });
+    expect(none.environment.prepareFrom).toBeUndefined();
+    expect(none.results.map((r) => `${r.id}:${r.status}`)).toEqual(["test:passed"]);
+    const checks = await record([["fake-exit", "0"]], "checks");
+    expect(checks.environment).toMatchObject({ ran: "container", prepare: "ran", prepareFrom: "checks" });
+    expect(checks.results.map((r) => `${r.id}:${r.status}`)).toEqual(["env-prepare-1:passed", "test:passed"]);
     removeTree(dir);
   });
 

@@ -21,7 +21,7 @@ import * as S from "../src/domain/studio/studio";
 import { DESIGNER_KINDS } from "../src/domain/studio/types";
 import { REVIEW_ROLES, isProvider, type Artifact, type ChecksHealth, type Integration, type ProseCheck, type ProviderId, type Runner, type State, type Step, type Task } from "../src/domain/types";
 import { SimulatedChecks, checkEnv, type CheckAssignment, type CheckRunner, type EnvironmentAssignment } from "./checks";
-import { DEVCONTAINER_FILES, environmentPlan, environmentSource, parseDevcontainer, type DevcontainerFound } from "../src/domain/environment";
+import { DEVCONTAINER_FILES, checksPrepareCommands, environmentPlan, environmentSource, parseDevcontainer, type DevcontainerFound } from "../src/domain/environment";
 import { buildEnvelope, buildLeadEnvelope, capConventions, parseLeadOutput, parseOutputs, type ConventionsFile } from "./envelope";
 import { prototypeFolders, readsPrototypes } from "./factoryLink";
 import { SimulatedGitHub, type GitHubHost } from "./github";
@@ -1351,7 +1351,7 @@ export class Scheduler {
     const { source } = environmentSource(found, state.project.environment);
     if (!source) return {};
     const dockerfile = "build" in source ? read(source.build.dockerfile) : undefined;
-    return { environment: { plan: environmentPlan(source, state.project.environment), project: state.project.id, ...(dockerfile && !dockerfile.truncated ? { dockerfile: dockerfile.text } : {}) } };
+    return { environment: { plan: environmentPlan(source, state.project.environment, checksPrepareCommands(state.project.checks)), project: state.project.id, ...(dockerfile && !dockerfile.truncated ? { dockerfile: dockerfile.text } : {}) } };
   }
 
   /**

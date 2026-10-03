@@ -73,7 +73,9 @@ export function lastPrepareLine(s: State): string | undefined {
   const r = last.record;
   const when = `${last.sha.slice(0, 12)}, ${new Date(last.at).toLocaleString()}`;
   if (r.ran === "host") return `Last run (${when}): on this computer, because ${r.reason}.`;
-  const what = r.prepare === "reused" ? `reused the prepare of ${r.reusedFrom?.slice(0, 12) ?? "an earlier commit"}` : r.prepare === "ran" ? `prepared in ${(r.prepareMs / 1000).toFixed(1)} s` : "the prepare failed";
-  return `Last run (${when}): ${what}, in ${shortImage(r.image)}.${r.refused?.length ? ` The proxy refused: ${r.refused.join("; ")}.` : ""}`;
+  if (r.prepare === "none") return `Last run (${when}): in ${shortImage(r.image)}; no prepare command ran: the environment and the checks have none. Set them above if the checks need dependencies.`;
+  const fromChecks = r.prepareFrom === "checks" ? " with the checks' own prepare commands, because the environment has none," : "";
+  const what = r.prepare === "reused" ? `reused the prepare of ${r.reusedFrom?.slice(0, 12) ?? "an earlier commit"}${fromChecks}` : r.prepare === "ran" ? `prepared in ${(r.prepareMs / 1000).toFixed(1)} s${fromChecks}` : `the prepare failed${fromChecks}`;
+  return `Last run (${when}): ${what}${fromChecks ? "" : ","} in ${shortImage(r.image)}.${r.refused?.length ? ` The proxy refused: ${r.refused.join("; ")}.` : ""}`;
 }
 

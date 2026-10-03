@@ -108,5 +108,19 @@ describe("the source of a run's environment", () => {
     expect(plan.hosts).toContain("registry.npmjs.org");
     expect(plan.hosts).toContain("files.pythonhosted.org");
     expect(plan.hosts.at(-1)).toBe("pkgs.example.com");
+    expect(plan.prepareFrom).toBe("setting");
+  });
+
+  it("without the environment's own prepare commands, plans the checks' prepare commands, else none (review finding 8)", () => {
+    const checks = [["npm", "ci"], ["npm", "run", "build:deps"]];
+    // A dev container and no environment setting: the checks' own prepare commands run in the prepare phase.
+    const dc = { from: "devcontainer" as const, file: DC, image: "node:22" };
+    expect(E.environmentPlan(dc, undefined, checks)).toMatchObject({ prepare: checks, prepareFrom: "checks" });
+    expect(E.environmentPlan(dc, { ...setting, prepare: [] }, checks)).toMatchObject({ prepare: checks, prepareFrom: "checks" });
+    // The environment's own commands win; with neither, nothing is prepared, and the plan says so.
+    expect(E.environmentPlan(dc, setting, checks)).toMatchObject({ prepare: [["make"]], prepareFrom: "setting" });
+    expect(E.environmentPlan(dc, undefined, [])).toMatchObject({ prepare: [], prepareFrom: "none" });
+    // The checks' commands come from their setting, prepare commands only, in order.
+    expect(E.checksPrepareCommands({ commands: [{ id: "deps", label: "deps", kind: "prepare", argv: ["npm", "ci"] }, { id: "test", label: "test", kind: "check", argv: ["npm", "test"] }] })).toEqual([["npm", "ci"]]);
   });
 });

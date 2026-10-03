@@ -60,5 +60,11 @@ describe("the card's lines", () => {
     expect(lastPrepareLine(s)).toMatch(/prepared in 2\.3 s, in python:3\.13-slim-trixie@sha256:bb2988715db2…\. The proxy refused: example\.com/);
     s.artifacts.push(art("2026-10-02T12:02:00Z", { ran: "host", reason: "Docker is not running" }));
     expect(lastPrepareLine(s)).toMatch(/on this computer, because Docker is not running\.$/);
+    // Review finding 8: the checks' own prepare commands, and no prepare at all, are said as such, never "prepared in 0.0 s".
+    s.artifacts.push(art("2026-10-02T12:03:00Z", { ran: "container", from: "devcontainer", image: PINNED, prepare: "ran", prepareFrom: "checks", key: "0123456789abcdef", prepareMs: 4100 }));
+    expect(lastPrepareLine(s)).toMatch(/prepared in 4\.1 s with the checks' own prepare commands, because the environment has none,/);
+    s.artifacts.push(art("2026-10-02T12:04:00Z", { ran: "container", from: "devcontainer", image: PINNED, prepare: "none", key: "0123456789abcdef", prepareMs: 0 }));
+    expect(lastPrepareLine(s)).toMatch(/no prepare command ran: the environment and the checks have none\. Set them above if the checks need dependencies\./);
+    expect(lastPrepareLine(s)).not.toMatch(/prepared in/);
   });
 });
