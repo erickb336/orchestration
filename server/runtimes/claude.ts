@@ -370,21 +370,6 @@ function addUsage(a: Usage, b: Usage): Usage {
   return out;
 }
 
-/**
- * A helper's own usage, from the Agent tool's structured result (`tool_use_result.usage`, AgentOutput in
- * sdk-tools.d.ts). Shown on the run; the budgets do not add it, since the session's total already includes every
- * helper's calls (`usageInParent`). Whether this covers all of the helper's calls or only its last one is not yet
- * checked against a real run.
- */
-function helperUsage(out: Rec): Usage | undefined {
-  const u = asRec(out.usage);
-  const input = num(u.input_tokens);
-  const output = num(u.output_tokens);
-  if (input === undefined || output === undefined) return undefined;
-  const read = num(u.cache_read_input_tokens) ?? 0;
-  return { inputTokens: input + read + (num(u.cache_creation_input_tokens) ?? 0), cachedInputTokens: read, outputTokens: output };
-}
-
 function describeToolUse(name: string, input: Rec, workspace: string): string {
   const rel = (p: unknown) => {
     if (typeof p !== "string") return "?";
@@ -451,6 +436,15 @@ class InputStream implements AsyncIterable<SDKUserMessage> {
 // ---------------------------------------------------------------------------------------------
 // Adapter
 
+/** One subagent of a run (ORC-031). */
+interface Helper {
+  open: boolean;
+  /** The model its Agent call named, which overrides the helper definition's (the parent's). */
+  named?: string;
+  /** Seen only in tagged messages: the hook never allowed it, so it may not be the run's helper type. */
+  slipped?: true;
+}
+
 interface Run {
   a: Assignment;
   abort: AbortController;
@@ -485,8 +479,8 @@ interface Run {
   done: Promise<void>;
   /** What the run may start (ORC-031): set only for a read-only run whose assignment allows helpers. */
   helperCap?: number;
-  /** Its subagents by Agent tool-use id, started (the hook allowed them) or seen in tagged messages; true while open. */
-  helpers: Map<string, boolean>;
+  /** Its subagents by Agent tool-use id: started (the hook allowed them) or seen in tagged messages. */
+  helpers: Map<string, Helper>;
   /** How many the hook allowed: what the cap counts. */
   helpersAllowed: number;
 }
@@ -579,8 +573,8 @@ export class ClaudeAdapter implements RuntimeAdapter {
     if (!toolUseId) return refuse("The helper call has no tool-use id, so it cannot be tracked.");
     if (run.helpersAllowed >= cap) return refuse(`This run may start at most ${cap} helper agent${cap === 1 ? "" : "s"}, and it has started ${run.helpersAllowed}. Do the rest of the work yourself.`);
     run.helpersAllowed++;
-    run.helpers.set(id, true);
     const model = typeof input.model === "string" ? input.model : undefined;
+    run.helpers.set(id, { open: true, ...(model ? { named: model } : {}) });
     this.helperEvent(run, { phase: "started", id, asked, ...(model ? { model } : {}), usageInParent: true });
     this.activity(run, `Started helper ${run.helpersAllowed} of at most ${cap}`);
     const { isolation: _i, mode: _m, name: _n, team_name: _t, ...rest } = input;
@@ -590,24 +584,34 @@ export class ClaudeAdapter implements RuntimeAdapter {
   /** A message tagged with a tool-use id the hook never allowed: a helper that slipped through. It ran, so it counts. */
   private sawHelper(run: Run, toolUseId: string) {
     if (run.helpers.has(toolUseId)) return;
-    run.helpers.set(toolUseId, true);
+    run.helpers.set(toolUseId, { open: true, slipped: true });
     this.log(`[claude ${run.a.attemptId}] a helper agent ran that the hook never allowed`);
     this.helperEvent(run, { phase: "started", id: toolUseId, asked: "", usageInParent: true });
   }
 
+  /**
+   * A helper ended. Its model: the Agent result's `resolvedModel` when the result ends it; otherwise the model its call
+   * named, else the parent's, since the "researcher" definition inherits the parent's model (`model: "inherit"`). In a
+   * real run (docs/real-runs/2026-10-03T08-25-56-353Z.json) `task_notification` came before the result, so the result
+   * rarely ends it. A helper that slipped through may not be that type: only a reported model is given.
+   * Its usage is never reported, so it stays unknown, never 0. The Agent result's `usage` covers one call: in that run
+   * it held 3,780 and 4,397 tokens, after 2 and 3 calls, while 15,675 tokens were outside the parent's main loop. The
+   * session's total includes the helpers' calls (`usageInParent: true`), so the budgets count them through the parent.
+   */
   private endHelper(run: Run, toolUseId: string, how: "completed" | "failed" | "stopped", out?: Rec) {
-    if (run.helpers.get(toolUseId) !== true) return;
-    run.helpers.set(toolUseId, false);
-    const model = out && typeof out.resolvedModel === "string" ? out.resolvedModel : undefined;
-    const usage = out ? helperUsage(out) : undefined;
-    this.helperEvent(run, { phase: "ended", id: toolUseId, how: run.interruptRequested && how !== "completed" ? "stopped" : how, ...(model ? { model } : {}), ...(usage ? { usage } : {}) });
+    const h = run.helpers.get(toolUseId);
+    if (!h?.open) return;
+    h.open = false;
+    const reported = out && typeof out.resolvedModel === "string" ? out.resolvedModel : undefined;
+    const model = reported ?? (h.slipped ? undefined : (h.named ?? run.model));
+    this.helperEvent(run, { phase: "ended", id: toolUseId, how: run.interruptRequested && how !== "completed" ? "stopped" : how, ...(model ? { model } : {}) });
   }
 
   /** Emit the single terminal event for a run. Later calls are ignored. */
   private finish(run: Run, e: AdapterEvent) {
     if (run.terminal || run.forgotten) return;
     // A helper still open ends with its session: the process exits once this run settles.
-    for (const [id, open] of run.helpers) if (open) this.endHelper(run, id, e.type === "failed" ? "failed" : "stopped");
+    for (const [id, h] of run.helpers) if (h.open) this.endHelper(run, id, e.type === "failed" ? "failed" : "stopped");
     run.terminal = true;
     this.clearTimers(run);
     // Notes still outstanding settle first: nothing acknowledged them, so nothing was delivered.
@@ -846,7 +850,8 @@ export class ClaudeAdapter implements RuntimeAdapter {
     const canUseTool: CanUseTool = async (toolName, input, ctx): Promise<PermissionResult> => {
       if (isSubagentTool(toolName)) {
         // Only a call the hook allowed and counted; any other never reaches the provider's subagents.
-        if (run.helpers.has(ctx?.toolUseID ?? "")) return { behavior: "allow", updatedInput: input };
+        const h = run.helpers.get(ctx?.toolUseID ?? "");
+        if (h && !h.slipped) return { behavior: "allow", updatedInput: input };
         this.activity(run, `Blocked ${toolName}: not allowed by the run's helper check`);
         return { behavior: "deny", message: "This run may not start a helper agent here." };
       }
@@ -950,9 +955,9 @@ export class ClaudeAdapter implements RuntimeAdapter {
     if (typeof m.parent_tool_use_id === "string" && m.parent_tool_use_id !== "") this.sawHelper(run, m.parent_tool_use_id);
     switch (m.type) {
       case "user": {
-        // The Agent call's result ends its helper; the structured result has its model and usage (AgentOutput).
+        // The Agent call's result ends its helper; the structured result names its model (AgentOutput.resolvedModel).
         const content = Array.isArray(asRec(m.message).content) ? (asRec(m.message).content as unknown[]).map(asRec) : [];
-        const results = content.filter((b) => b.type === "tool_result" && typeof b.tool_use_id === "string" && run.helpers.get(b.tool_use_id) === true);
+        const results = content.filter((b) => b.type === "tool_result" && typeof b.tool_use_id === "string" && run.helpers.get(b.tool_use_id)?.open === true);
         for (const b of results) this.endHelper(run, b.tool_use_id as string, b.is_error === true ? "failed" : "completed", results.length === 1 && content.length === 1 ? asRec(m.tool_use_result) : undefined);
         return;
       }

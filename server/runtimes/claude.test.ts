@@ -1218,32 +1218,56 @@ describe("helpers in research runs (ORC-031 31b)", () => {
     adapter.kill("att-1");
   });
 
-  it("ends a helper on its Agent result, with the model and usage the structured result reports; counts one that slipped through", async () => {
-    const { adapter, call, stream, events } = await started(research(2));
+  // The Agent call's structured result, as a real run reported it: its `usage` covers one call of the helper.
+  const agentResult = (toolUseId: string, resolvedModel: string) => ({
+    type: "user",
+    parent_tool_use_id: null,
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: "lantern" }] },
+    tool_use_result: { status: "completed", agentId: "a1", resolvedModel, totalTokens: 3780, usage: { input_tokens: 2, output_tokens: 86, cache_read_input_tokens: 3516, cache_creation_input_tokens: 176 } },
+  });
+  const notification = (toolUseId: string, status = "completed") => ({ type: "system", subtype: "task_notification", task_id: `task-${toolUseId}`, tool_use_id: toolUseId, status, output_file: "", summary: "", session_id: "sess-1", uuid: `n-${toolUseId}` });
+
+  it("ends each helper with its model, the parent's unless its call named one, and its usage unknown, never 0", async () => {
+    const { adapter, call, stream, events } = await started(research(3));
     await call("Agent", { prompt: "Read alpha" }, "tu-1");
+    await call("Agent", { prompt: "Read beta", model: "haiku" }, "tu-2");
+    await call("Agent", { prompt: "Read gamma" }, "tu-3");
     stream.push(
-      init("claude-haiku-4-5-20251001"),
+      init("claude-sonnet-5-5"),
       { ...assistant([{ type: "tool_use", id: "inner-1", name: "Read", input: { file_path: "alpha.txt" } }], "msg_sub"), parent_tool_use_id: "tu-1" },
+      // The order of a real run: the notification ends the helper before its Agent result arrives.
+      notification("tu-1"),
+      agentResult("tu-1", "claude-sonnet-5-5"),
+      notification("tu-2"),
+      // The Agent result ends this one first, and its reported model is used.
+      agentResult("tu-3", "claude-sonnet-5-5-20990101"),
+      result("success"),
+    );
+    await waitFor(() => terminals(events).length === 1);
+    expect(subagentEvents(events).filter((s) => s.phase === "ended")).toEqual([
+      { phase: "ended", id: "tu-1", how: "completed", model: "claude-sonnet-5-5" },
+      { phase: "ended", id: "tu-2", how: "completed", model: "haiku" },
+      { phase: "ended", id: "tu-3", how: "completed", model: "claude-sonnet-5-5-20990101" },
+    ]);
+    // The session's total (helpers included) is the run's usage, as before.
+    expect(terminals(events)[0]).toMatchObject({ type: "completed", usage: { costUsd: 0.0123 } });
+    adapter.kill("att-1");
+  });
+
+  it("counts a helper that slipped through from its tagged messages, with no model it did not report", async () => {
+    const { adapter, stream, events } = await started(research(2));
+    stream.push(
+      init("claude-sonnet-5-5"),
       // A tagged message for a call the hook never saw.
       { ...assistant([{ type: "tool_use", id: "inner-2", name: "Read", input: { file_path: "beta.txt" } }], "msg_sub2"), parent_tool_use_id: "tu-x" },
-      {
-        type: "user",
-        parent_tool_use_id: null,
-        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu-1", content: "lantern" }] },
-        tool_use_result: { status: "completed", agentId: "a1", resolvedModel: "claude-haiku-4-5-20251001", usage: { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 900, cache_creation_input_tokens: 100 } },
-      },
       result("success"),
     );
     await waitFor(() => terminals(events).length === 1);
     expect(subagentEvents(events)).toEqual([
-      { phase: "started", id: "tu-1", asked: "Read alpha", usageInParent: true },
       { phase: "started", id: "tu-x", asked: "", usageInParent: true },
-      { phase: "ended", id: "tu-1", how: "completed", model: "claude-haiku-4-5-20251001", usage: { inputTokens: 1010, cachedInputTokens: 900, outputTokens: 40 } },
       // Still open when the run ended: its session closed with the run.
       { phase: "ended", id: "tu-x", how: "stopped" },
     ]);
-    // The session's total (helpers included) is the run's usage, as before.
-    expect(terminals(events)[0]).toMatchObject({ type: "completed", usage: { costUsd: 0.0123 } });
     adapter.kill("att-1");
   });
 
