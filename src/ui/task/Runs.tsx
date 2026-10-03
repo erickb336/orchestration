@@ -43,8 +43,11 @@ export function RunsSection({ state, task }: { state: State; task: Task }) {
             key={a.id}
             label={
               <>
-                {a.stepId} {st ? stepName(st) : ""} · {selectionText(a.snapshot)} · <strong>{OUTCOME_WORD[a.outcome] ?? a.outcome}</strong>
-                {a.snapshot.startedFrom && ` · started from the paused run's changes${a.snapshot.startedFrom.simulated ? " (simulated)" : ""}`}
+                {/* One flex item, so the line wraps as text on a phone instead of splitting into columns. */}
+                <span>
+                  {a.stepId} {st ? stepName(st) : ""} · {selectionText(a.snapshot)} · <strong>{OUTCOME_WORD[a.outcome] ?? a.outcome}</strong>
+                  {a.snapshot.startedFrom && ` · started from the paused run's changes${a.snapshot.startedFrom.simulated ? " (simulated)" : ""}`}
+                </span>
                 {notes.length > 0 && <Chip title="Notes sent to this run; listed inside">{`${notes.length} note${notes.length === 1 ? "" : "s"}`}</Chip>}
                 {(a.subagents?.count ?? 0) > 0 && (
                   <Chip tone={helpersUnseen(a) ? "you" : undefined} title="Helper agents (the provider's own subagents) this run started; listed inside">{`${a.subagents!.count} helper${a.subagents!.count === 1 ? "" : "s"}`}</Chip>

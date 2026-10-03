@@ -3,7 +3,8 @@
 // What it drives, at 1280 and 375 wide, each on a fresh service:
 // 1. Home: the Factory pill says the factory runs. Tasks: open a running task.
 // 2. The task page: Pause. The state says "Pausing" until the runtime confirms the stop, then "Paused". Resume, and
-//    the task runs again on a fresh run.
+//    the task runs again on a fresh run that starts from the paused run's changes (ORC-030 C4); its run line under
+//    Details › Runs says so.
 // 3. The Project menu: Pause project. The header says "Pausing…" until every run has stopped, then "Paused"; the
 //    Factory pill and the task agree. Resume project, and the work runs again.
 //
@@ -106,6 +107,23 @@ await runJourney(
       const fresh = active(id)[0];
       j.check(!!fresh && fresh.id !== run.id, "after Resume, the task says Running on a fresh run", { before: run.id, after: fresh?.id });
       await j.shot("05-task-resumed");
+      // ORC-030 C4: the fresh run starts from the paused run's changes (simulated here: no file changes), and its run
+      // line under Details › Runs says so.
+      const pausedStep = sv.state().tasks.find((t) => t.id === id)?.steps.find((s) => s.id === run.stepId);
+      j.check(fresh?.snapshot.startedFrom?.attemptId === run.id && fresh.snapshot.startedFrom.simulated === true, "the record: the fresh run started from the paused run's changes, labelled simulated", { startedFrom: fresh?.snapshot.startedFrom, pausedWork: pausedStep?.pausedWork });
+      await page.locator("summary", { hasText: /^Runs/ }).click();
+      const line = page.locator("summary", { hasText: "started from the paused run's changes (simulated)" });
+      await line.first().waitFor({ timeout: 5_000 });
+      const lines = await line.count();
+      const text = await line.first().innerText();
+      j.check(lines === 1 && text.startsWith(run.stepId), "Details › Runs: the fresh run's line says it started from the paused run's changes, and only that line", { lines, text });
+      await line.first().click();
+      const inside = await page.getByText(`the changes of the paused run ${run.id}`).first().innerText();
+      j.check(/simulated: no file changed/.test(inside), "inside the run: the paused run it started from, labelled simulated", inside);
+      await line.first().scrollIntoViewIfNeeded();
+      await j.shot("05a-run-line", { full: false });
+      await j.pageChecks("the task page, resumed, with its runs open");
+      await page.locator("summary", { hasText: /^Runs/ }).click();
     });
 
     await j.step("Pause project: Pausing…, then Paused", async () => {
