@@ -374,9 +374,44 @@ function normalize19(doc: Record<string, unknown>): Record<string, unknown> {
     co.newWork ??= [];
     // Early pass 5 builds put one PE review on a change order's updates; the PE now reviews the work each update makes.
     delete co.peReview;
+    for (const line of (co.lines ?? []) as Record<string, unknown>[]) normalizeLine(doc, co, line);
   }
   endPass3Reviews(doc.studio as { artifacts: Record<string, unknown>[]; verdicts: Record<string, unknown>[] });
   return doc;
+}
+
+const LINE_STATUSES = ["applied", "suggested", "dismissed", "undone"];
+
+/**
+ * A change order's line keeps where it stands (pass 5 review, finding 7). A line an early pass 5 build stored has no
+ * status: it takes its steering row's while the row's set is in the log (a status a line cannot have reads "refused"),
+ * and with the set gone, a line that still carries the lead's proposal never applied, one without it did. An applied
+ * spec update gains the spec revisions the lead wrote for it (finding 6): the update, from its row or the spec record,
+ * then each revision for the PE right after it. Idempotent: a line with a status is left as it is.
+ */
+function normalizeLine(doc: Record<string, unknown>, co: Record<string, unknown>, line: Record<string, unknown>) {
+  if (line.status !== undefined) return;
+  const changeId = line.changeId as string;
+  const set = ((doc.steering ?? []) as { id: string; at: string; changes: Record<string, unknown>[] }[]).find((x) => x.id === changeId.slice(0, changeId.lastIndexOf(".")));
+  const row = set?.changes.find((c) => c.id === changeId);
+  if (row) {
+    line.status = LINE_STATUSES.includes(row.status as string) ? row.status : "refused";
+    if (row.appliedBy) line.appliedBy = row.appliedBy;
+    const at = row.resolvedAt ?? (row.status === "applied" || row.status === "undone" ? set!.at : undefined);
+    if (at) line.resolvedAt = at;
+  } else line.status = line.proposal ? "suggested" : "applied";
+  const before = line.before as { specRev: number } | undefined;
+  if (line.kind !== "update-spec" || !before) return;
+  const specs = ((doc.tasks ?? []) as { id: string; specs: { rev: number; author: string; reason: string }[] }[]).find((t) => t.id === line.taskId)?.specs ?? [];
+  const first = typeof row?.after === "number" ? row.after : specs.find((x) => x.rev > before.specRev && x.author === "lead" && x.reason.startsWith(`Change order r${co.rev as number}`))?.rev;
+  if (first === undefined) return;
+  const revs = [first];
+  for (const x of [...specs].sort((a, b) => a.rev - b.rev)) {
+    if (x.rev <= first) continue;
+    if (x.rev !== revs.at(-1)! + 1 || x.author !== "lead" || !x.reason.startsWith("Revised for the PE")) break;
+    revs.push(x.rev);
+  }
+  line.specRevs = revs;
 }
 
 /**

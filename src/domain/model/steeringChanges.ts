@@ -3,7 +3,7 @@
 
 import { isChangeOrderKind } from "../studio/types";
 import { type Deferral, type SteeringChange, type SteeringChangeSet, type State, type Task, ControlError } from "../types";
-import { applyChangeOrderRow, settleChangeOrdersInto, undoChangeOrderRow } from "./changeOrderUpdates";
+import { applyChangeOrderRow, dismissChangeOrderRow, lineCommandInto, settleChangeOrdersInto, undoChangeOrderRow } from "./changeOrderUpdates";
 import { cancelInto, clearDeferral, deferInto, reopenDropped, writePriority } from "./controls";
 import { currentVision, draft, event, findStep, isOpen, touch } from "./core";
 import { rootOf } from "./fanout";
@@ -23,6 +23,19 @@ function getChangeSet(s: State, changeSetId: string): SteeringChangeSet {
   const set = s.steering.find((x) => x.id === changeSetId);
   if (!set) throw new ControlError(`Unknown change set ${changeSetId}`);
   return set;
+}
+
+/**
+ * One row of a set the steering log no longer holds (it keeps the newest 200): a change order's line still answers
+ * from its own record (ORC-029 pass 5, review finding 7). Undefined when the set is in the log; throws when the row is
+ * no change order's line. Mutates the draft.
+ */
+function evictedLineInto(s: State, op: "undo" | "apply" | "dismiss", changeSetId: string, changeId: string | undefined, now: string): { id: string; why?: string } | undefined {
+  if (s.steering.some((x) => x.id === changeSetId)) return undefined;
+  const r = changeId ? lineCommandInto(s, op, changeSetId, changeId, now) : undefined;
+  if (!r) throw new ControlError(`Unknown change set ${changeSetId}`);
+  settleChangeOrdersInto(s, now);
+  return { id: changeId!, ...r };
 }
 
 function getChange(set: SteeringChangeSet, changeId: string): SteeringChange {
@@ -81,13 +94,15 @@ function undoRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: strin
       return reopenDropped(s, t, set.id, now);
     default:
       // A change order's line (ORC-029 pass 5): its own module knows what it changed.
-      return isChangeOrderKind(c.kind) ? undoChangeOrderRow(s, set, c, now) : "not applied";
+      return isChangeOrderKind(c.kind) ? undoChangeOrderRow(s, c, now) : "not applied";
   }
 }
 
 /** Undo one row, or every applied row of a reply in reverse order. Compare-and-set: anything changed since is left alone and reported. */
 export function undoSteering(state: State, changeSetId: string, changeId: string | undefined, now: string): { state: State; result: UndoResult } {
   const s = draft(state);
+  const line = evictedLineInto(s, "undo", changeSetId, changeId, now);
+  if (line) return { state: s, result: line.why ? { undone: [], left: [{ id: line.id, why: line.why }] } : { undone: [line.id], left: [] } };
   const set = getChangeSet(s, changeSetId);
   const rows = changeId ? [getChange(set, changeId)] : [...set.changes].reverse();
   const result: UndoResult = { undone: [], left: [] };
@@ -195,13 +210,15 @@ function applyRow(s: State, set: SteeringChangeSet, c: SteeringChange, now: stri
     }
     default:
       // The owner's go-ahead on a change order's line (ORC-029 pass 5).
-      return isChangeOrderKind(c.kind) ? applyChangeOrderRow(s, set, c, now) : "not a suggestion";
+      return isChangeOrderKind(c.kind) ? applyChangeOrderRow(s, c, now) : "not a suggestion";
   }
 }
 
 /** Apply one suggestion, or every suggestion of a reply, as the user. Compare-and-set against the recorded `before`. */
 export function applySteering(state: State, changeSetId: string, changeId: string | undefined, now: string): { state: State; result: ApplyResult } {
   const s = draft(state);
+  const line = evictedLineInto(s, "apply", changeSetId, changeId, now);
+  if (line) return { state: s, result: line.why ? { applied: [], left: [{ id: line.id, why: line.why }] } : { applied: [line.id], left: [] } };
   const set = getChangeSet(s, changeSetId);
   const rows = changeId ? [getChange(set, changeId)] : set.changes.filter((c) => c.status === "suggested");
   const result: ApplyResult = { applied: [], left: [] };
@@ -234,6 +251,8 @@ export function applySteering(state: State, changeSetId: string, changeId: strin
 /** Dismiss one suggestion, or every suggestion of a reply. The lead sees dismissed rows in its next envelope. */
 export function dismissSteering(state: State, changeSetId: string, changeId: string | undefined, now: string): { state: State; result: { dismissed: string[] } } {
   const s = draft(state);
+  const line = evictedLineInto(s, "dismiss", changeSetId, changeId, now);
+  if (line) return { state: s, result: { dismissed: line.why ? [] : [line.id] } };
   const set = getChangeSet(s, changeSetId);
   const rows = changeId ? [getChange(set, changeId)] : set.changes.filter((c) => c.status === "suggested");
   const dismissed: string[] = [];
@@ -241,6 +260,7 @@ export function dismissSteering(state: State, changeSetId: string, changeId: str
     if (c.status !== "suggested") continue;
     c.status = "dismissed";
     c.resolvedAt = now;
+    if (isChangeOrderKind(c.kind)) dismissChangeOrderRow(s, c, now);
     dismissed.push(c.id);
   }
   if (dismissed.length) event(s, now, "user", "control", `Dismissed ${dismissed.length} of the lead's suggestion(s) (${set.id})`);

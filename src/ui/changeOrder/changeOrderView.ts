@@ -74,7 +74,8 @@ const LEADING: Record<ChangeOrderLineKind, string> = { "update-spec": "Updated "
 
 function lineWords(s: State, co: ChangeOrder, v: M.ChangeOrderLineView): LineWords {
   const { line } = v;
-  // The steering row that carries the line (`${changeSetId}.${n}`): its state is the line's.
+  // The line keeps where it stands; the steering row that carries it (`${changeSetId}.${n}`) keeps the service's notes
+  // while its set is in the steering log.
   const set = s.steering.find((x) => x.id === line.changeId.slice(0, line.changeId.lastIndexOf(".")));
   const row = set?.changes.find((c) => c.id === line.changeId);
   const work: Task | undefined = v.workTaskId ? s.tasks.find((t) => t.id === v.workTaskId) : undefined;
@@ -85,24 +86,29 @@ function lineWords(s: State, co: ChangeOrder, v: M.ChangeOrderLineView): LineWor
   let when: string;
   switch (v.status) {
     case "applied":
-      when = row?.appliedBy === "user" ? `Applied by you${at(row.resolvedAt)}.` : `Applied by the lead${at(set?.at)}.`;
+      when = line.appliedBy === "user" ? `Applied by you${at(line.resolvedAt)}.` : `Applied by the lead${at(line.resolvedAt)}.`;
       if (line.kind !== "retire") state = peReviewWords(v.review);
       break;
-    case "suggested":
-      // The pill says it waits, or that it was not applied; this says what that means.
+    case "suggested": {
+      // The pill says it waits, or that it was not applied; this says what that means, and why it waits for you when
+      // the lead may not do it ("your task: only you cancel it").
       when = co.status === "open" ? "Nothing changed yet." : "You closed the change order as it stood.";
-      state = { word: co.status === "open" ? "Waits for your go-ahead" : "Not applied", tone: co.status === "open" ? "you" : "neutral" };
+      const why = row?.note?.split("; ").find((p) => p && !p.startsWith("left as is on ") && !p.startsWith("waits for your go-ahead"));
+      state = { word: co.status === "open" ? "Waits for your go-ahead" : "Not applied", tone: co.status === "open" ? "you" : "neutral", ...(why && co.status === "open" ? { detail: `The lead may not do it alone: ${why}.` } : {}) };
       break;
+    }
     case "undone":
-      when = `Undone by you${at(row?.resolvedAt)}.`;
+      when = `Undone by you${at(line.resolvedAt)}.`;
       state = { word: "Undone", tone: "neutral" };
       break;
     case "dismissed":
-      when = `Dismissed by you${at(row?.resolvedAt)}.`;
+      when = `Dismissed by you${at(line.resolvedAt)}.`;
       state = { word: "Dismissed", tone: "neutral" };
       break;
-    default:
-      when = "Its record is not found.";
+    case "refused":
+      when = "The service did not apply it.";
+      state = { word: "Not applied", tone: "neutral" };
+      break;
   }
   // The service's last "left as is" reason, kept on the row: "left as is on undo: T-021 has started; cancel it yourself".
   const left = row?.note
@@ -158,6 +164,7 @@ function summaryLine(s: State, co: ChangeOrder, lines: M.ChangeOrderLineView[]):
     }
     else if (v.status === "undone") n.undone++;
     else if (v.status === "dismissed") n.dismissed++;
+    else if (v.status === "refused") n.notApplied++;
   }
   const parts = [
     n.applied ? `${n.applied} applied` : "",

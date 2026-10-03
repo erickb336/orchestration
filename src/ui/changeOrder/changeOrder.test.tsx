@@ -88,7 +88,7 @@ describe("the change order screen", () => {
     const f = changeOrdered("user");
     const a = answerChangeOrder(f.s, fullAnswer(f), 20);
     const before = page(a.s);
-    expect(before.text).toContain("It waits for you. 5 of the lead's updates wait for your go-ahead. Apply or dismiss each update below, or close it as it stands.");
+    expect(before.text).toContain("It waits for you. 5 of the lead's updates wait for your go-ahead. Apply or dismiss each update below that waits for you, or close it as it stands.");
     expect(before.text).toContain("5 updates: 5 waiting for your go-ahead Waits for you");
     expect(before.rows[0]).toBe("Updated T-002 → builds Trip plan v2 Waits for your go-ahead T-002 Trip list screen Nothing changed yet. The lead: “Day list first, the map below it.” Apply Dismiss");
     expect(before.rows[4]).toBe("New A new task → builds Packing list v1 Waits for your go-ahead Nothing changed yet. The lead: “One shared list per trip.” Apply Dismiss");
@@ -106,6 +106,17 @@ describe("the change order screen", () => {
     expect(count(closed.text, "Apply")).toBe(0);
     expect(closed.text).toContain("5 updates: 1 waiting for PE review, 3 not applied, 1 dismissed Closed");
     expect(closed.text).toContain("Not applied: A new task revises T-004 → builds Trip plan v2 Dismissed by you: A new task → builds Packing list v1 T-001: not handled T-003: not handled T-004: not handled");
+  });
+
+  it("a line the lead may not do alone waits for you and says why; its state stays after the steering log drops its set", () => {
+    const f = changeOrdered("lead", "user");
+    const a = answerChangeOrder(f.s, { rev: 2, updates: [fullAnswer(f).updates[2]] }, 20);
+    const row = "Retired T-003: builds only the dropped Reminders screen Waits for your go-ahead T-003 Outing reminders Nothing changed yet. The lead: “You dropped Reminders.” The lead may not do it alone: your task: only you cancel it. Apply Dismiss";
+    expect(page(a.s).rows[0]).toBe(row);
+    expect(page(a.s).text).toContain("Apply or dismiss each update below that waits for you, or close it as it stands.");
+    // The log keeps the newest 200 sets: without its set, the line keeps its state and Apply; only the reason goes.
+    const evicted = { ...a.s, steering: a.s.steering.filter((x) => x.id !== a.setId) };
+    expect(page(evicted).rows[0]).toBe(row.replace(" The lead may not do it alone: your task: only you cancel it.", ""));
   });
 
   it("an Undo the service left as is says why on the line", () => {

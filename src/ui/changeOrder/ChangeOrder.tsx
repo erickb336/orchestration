@@ -71,7 +71,7 @@ export function ChangeOrderPage({ rev }: { rev: number }) {
             </Button>
           }
         >
-          {w.waits.words} {co.handler === "user" ? "Apply or dismiss each update below, or close it as it stands." : "Close it as it stands, or message the lead."}
+          {w.waits.words} {w.lines.some((l) => l.actions === "apply") ? "Apply or dismiss each update below that waits for you, or close it as it stands." : "Close it as it stands, or message the lead."}
         </Banner>
       )}
       <Card

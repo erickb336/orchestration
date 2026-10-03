@@ -159,9 +159,14 @@ describe("on the simulated runtime", () => {
     cmd("lockIn", { draftRev: st().blueprint.draft.rev });
     const co = () => st().blueprint.changeOrders.at(-1)!;
     expect(co()).toMatchObject({ status: "open", tasks: [{ taskId: queued, handling: "update-spec" }, { taskId: retiring, handling: "retire" }], newWork: [item(packing)] });
-    expect(tickUntil(() => co().status === "done")).toBe(true);
+    expect(tickUntil(() => st().leadRuns.some((r) => r.trigger === "change-order" && r.outcome === "completed"))).toBe(true);
     const lead = st().leadRuns.find((r) => r.trigger === "change-order")!;
     expect(lead).toMatchObject({ outcome: "completed", changeSetId: `cs-${lead.id}` });
+    // The retired task is the owner's: the lead's retirement waits for the owner's go-ahead (steering's rule).
+    const retire = co().lines!.find((l) => l.kind === "retire")!;
+    expect(co().status).toBe("open");
+    cmd("applySteering", { changeSetId: lead.changeSetId, changeId: retire.changeId });
+    expect(co().status).toBe("done");
     const made = co().lines!.find((l) => l.kind === "new-task")!.madeTaskId!;
     expect(co().closed!.record).toEqual([`Updated ${queued} → builds Trip plan v2`, `Retired ${retiring}: builds only the dropped Reminders screen`, `New ${made} → builds Packing list v1`]);
     // Only one change-order run, and the updated and new work went to the PE (simulated).

@@ -8,7 +8,8 @@ import { describe, expect, it } from "vitest";
 import { runCommand } from "../commands";
 import * as M from "../model";
 import { needsYouItems } from "../needsYou";
-import { at, changeOrdered, startTask, T0, taskCiting } from "../testing/changeOrders";
+import { newWorkReviewsDue } from "../peReview";
+import { answerChangeOrder, at, changeOrdered, startTask, T0, taskCiting } from "../testing/changeOrders";
 import { run } from "../testing/studio";
 import type { State } from "../types";
 
@@ -181,6 +182,146 @@ describe("the lead's answer: one line per update", () => {
   });
 });
 
+describe("the owner's authority: what the lead may not do (review findings 1 and 2)", () => {
+  const rev = (f: { s: State }) => order(f.s).rev;
+  /** The state with a task's PE review set as given (the review's own rules are tested in peReview.test.ts). */
+  const withReview = (s: State, id: string, peReview: NonNullable<State["tasks"][number]["peReview"]>) => {
+    const d = structuredClone(s);
+    d.tasks.find((t) => t.id === id)!.peReview = peReview;
+    return d;
+  };
+  const round = (verdict: "feasible-if" | "not-feasible", specRev: number) => ({ at: at(19), verdict, reasons: "The map hides the days.", change: "Put the days first.", specRev });
+
+  it('"retire" applies only to a task the Lock in agreed to retire: the owner\'s task it agreed to update stays', () => {
+    const f = changeOrdered();
+    const { s } = answer(f.s, { rev: rev(f), updates: [{ action: "retire", task: f.tasks.queued, why: "Not needed.", proposal: null }] }, 20);
+    expect(task(s, f.tasks.queued).lifecycle).not.toBe("cancelled");
+    expect(order(s).lines).toBeUndefined();
+    expect(order(s).notes![0]).toBe(`${f.tasks.queued}: the Lock in agreed "the lead updates its spec", not "retired"`);
+  });
+
+  it("the owner's task that the Lock in agreed to retire becomes a suggestion, never a cancel; your go-ahead retires it", () => {
+    const f = changeOrdered("lead", "user");
+    const a = answer(f.s, { rev: rev(f), updates: [{ action: "retire", task: f.tasks.retiring, why: "You dropped Reminders.", proposal: null }] }, 20);
+    expect(task(a.s, f.tasks.retiring).lifecycle).not.toBe("cancelled");
+    const line = order(a.s).lines![0];
+    expect(rowsOf(a.s, a.setId)[0]).toMatchObject({ status: "suggested", note: "your task: only you cancel it" });
+    expect(needsDetail(a.s)).toMatch(/1 of the lead's updates waits for your go-ahead/);
+    const s = M.applySteering(a.s, a.setId, line.changeId, at(30)).state;
+    expect(task(s, f.tasks.retiring).lifecycle).toBe("cancelled");
+  });
+
+  it("the lead's own task that the owner changed becomes a suggestion too", () => {
+    const f = changeOrdered();
+    const changed = runCommand(f.s, "setPriority", { taskId: f.tasks.retiring, priority: 2 }, at(19)).state;
+    const a = answer(changed, { rev: rev(f), updates: [{ action: "retire", task: f.tasks.retiring, why: "You dropped Reminders.", proposal: null }] }, 20);
+    expect(task(a.s, f.tasks.retiring).lifecycle).not.toBe("cancelled");
+    expect(rowsOf(a.s, a.setId)[0]).toMatchObject({ status: "suggested", note: "you changed this task" });
+  });
+
+  it('"retire" is refused while the PE reviews the task, or its objection waits for you', () => {
+    const f = changeOrdered();
+    const retire = { rev: rev(f), updates: [{ action: "retire", task: f.tasks.retiring, why: "You dropped Reminders.", proposal: null }] };
+    const reviewing = answer(withReview(f.s, f.tasks.retiring, { status: "pending", rounds: [] }), retire, 20).s;
+    expect(task(reviewing, f.tasks.retiring).lifecycle).not.toBe("cancelled");
+    expect(order(reviewing).notes![0]).toBe(`${f.tasks.retiring}: the PE is reviewing it; only you cancel it`);
+    const objects = answer(withReview(f.s, f.tasks.retiring, { status: "objected", rounds: [round("not-feasible", 1)] }), retire, 20).s;
+    expect(task(objects, f.tasks.retiring).lifecycle).not.toBe("cancelled");
+    expect(order(objects).notes![0]).toBe(`${f.tasks.retiring}: the PE objects to it; only you overrule the objection or cancel it`);
+  });
+
+  it('"update-spec" never clears a PE objection or an unfinished review that waits for you', () => {
+    const f = changeOrdered();
+    const update = { rev: rev(f), updates: [fullAnswer(f).updates[0]] };
+    for (const [review, note] of [
+      [{ status: "objected", rounds: [round("not-feasible", 2)] }, `${f.tasks.queued}: the PE objects to it; only you edit it, overrule the objection or cancel it`],
+      [{ status: "ended", rounds: [], ended: { at: at(19), why: "the PE run failed twice", by: "service" } }, `${f.tasks.queued}: its PE review could not finish; only you edit it, start it or cancel it`],
+    ] as const) {
+      const held = withReview(f.s, f.tasks.queued, structuredClone(review) as never);
+      const { s } = answer(held, update, 20);
+      expect(M.currentSpec(task(s, f.tasks.queued)).rev).toBe(2);
+      expect(task(s, f.tasks.queued).peReview).toEqual(review);
+      expect(order(s).lines).toBeUndefined();
+      expect(order(s).notes![0]).toBe(note);
+      expect(s.conversation.at(-1)!.rejected![0]).toBe(`Change order r${rev(f)}: ${note}`);
+    }
+  });
+
+  it('"update-spec" while the PE reviews the task keeps its rounds: the PE reviews the update as the next round', () => {
+    const f = changeOrdered();
+    // The PE asked a change on round 1, and the change order's run answers before a run revises it for the PE.
+    const held = withReview(f.s, f.tasks.queued, { status: "pending", rounds: [round("feasible-if", 2)] });
+    const { s } = answerChangeOrder(held, { rev: rev(f), updates: [fullAnswer(f).updates[0]] }, 20);
+    const t = task(s, f.tasks.queued);
+    expect(M.currentSpec(t).rev).toBe(3);
+    expect(t.peReview).toMatchObject({ status: "pending", rounds: [round("feasible-if", 2)] });
+    expect(t.peReview!.earlier).toBeUndefined();
+    expect(newWorkReviewsDue(s)).toContainEqual({ taskId: t.id, specRev: 3 });
+  });
+});
+
+describe("the spec a spec update writes", () => {
+  /** The owner's decisions on the queued task: option B over the recommendation, with criteria, a plan and an effort. */
+  function ownersDecisions(f: ReturnType<typeof changeOrdered>) {
+    const t = task(f.s, f.tasks.queued);
+    const cur = M.currentSpec(t).content;
+    const content = { ...cur, selectedOptionId: "B", overrideReason: "Wait for the map.", successCriteria: ["Friends find the list"], validationPlan: "Try it with three friends.", rollback: "Revert the list.", effort: "large" as const };
+    return run(f.s, "editSpec", { taskId: t.id, expectedRev: 2, content, reason: "My call" }, at(19)).state;
+  }
+
+  it("merges the lead's fields into the current spec and keeps the owner's decisions (review finding 5)", () => {
+    const f = changeOrdered();
+    const { s } = answer(ownersDecisions(f), { rev: order(f.s).rev, updates: [fullAnswer(f).updates[0]] }, 20);
+    const spec = M.currentSpec(task(s, f.tasks.queued));
+    expect(spec).toMatchObject({ rev: 4, author: "lead" });
+    expect(spec.content).toMatchObject({
+      // The lead's fields.
+      title: "Trip list screen",
+      outcome: "Trip list screen is built as the blueprint shows.",
+      recommendedOptionId: "A",
+      // The owner's: the chosen option (it still exists), its reason, and what the lead's proposal does not carry.
+      selectedOptionId: "B",
+      decidedBy: "user",
+      overrideReason: "Wait for the map.",
+      successCriteria: ["Friends find the list"],
+      validationPlan: "Try it with three friends.",
+      rollback: "Revert the list.",
+      effort: "large",
+      area: "Trips",
+    });
+  });
+
+  it("the owner's choice stays when the lead recommends another option", () => {
+    const f = changeOrdered();
+    const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), recommendedOptionId: "B" } };
+    const { s } = answer(f.s, { rev: order(f.s).rev, updates: [update] }, 20);
+    expect(M.currentSpec(task(s, f.tasks.queued)).content).toMatchObject({ recommendedOptionId: "B", selectedOptionId: "A", decidedBy: "user", overrideReason: "Your choice, kept when the lead's update recommended another option" });
+  });
+
+  it("an update that leaves out the owner's chosen option waits for the owner's go-ahead", () => {
+    const f = changeOrdered();
+    const options = [
+      { id: "1", name: "List first", approach: "The days, then the map." },
+      { id: "2", name: "Defer", approach: "Wait." },
+    ];
+    const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), options, recommendedOptionId: "1" } };
+    const a = answer(ownersDecisions(f), { rev: order(f.s).rev, updates: [update] }, 20);
+    expect(M.currentSpec(task(a.s, f.tasks.queued)).rev).toBe(3);
+    expect(rowsOf(a.s, a.setId)[0]).toMatchObject({ status: "suggested", note: "you chose option B (Defer); the update leaves it out" });
+    const s = M.applySteering(a.s, a.setId, order(a.s).lines![0].changeId, at(30)).state;
+    expect(M.currentSpec(task(s, f.tasks.queued)).content).toMatchObject({ selectedOptionId: "1", successCriteria: ["Friends find the list"] });
+  });
+
+  it("a line with a rule's tag in the lead's acceptance is refused with a note; the update applies (review finding 4)", () => {
+    const f = changeOrdered();
+    const tagged = `[${f.ids.plan} R1] The map shows the days`;
+    const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), acceptance: ["The list shows each trip.", tagged] } };
+    const { s } = answer(f.s, { rev: order(f.s).rev, updates: [update] }, 20);
+    expect(M.currentSpec(task(s, f.tasks.queued)).content.acceptance).toEqual(["The list shows each trip."]);
+    expect(order(s).notes![0]).toBe(`${f.tasks.queued}: the acceptance line "${tagged}" is refused: only the blueprint's own line carries a rule's tag`);
+  });
+});
+
 describe("Undo, line by line", () => {
   it("each line can be undone alone, and the others stay", () => {
     const f = changeOrdered();
@@ -208,6 +349,27 @@ describe("Undo, line by line", () => {
     expect(task(r.state, lines[3].madeTaskId!).lifecycle).toBe("proposed");
     // A second Undo of the same line says so.
     expect(undo(r.state, 0, 34).result.left).toEqual([{ id: lines[0].changeId, why: "already undone" }]);
+  });
+
+  it("Undo of a spec update still works after the PE asked a change and the lead revised it (review finding 6)", () => {
+    const f = changeOrdered();
+    const a = answer(f.s, fullAnswer(f), 20);
+    const line = order(a.s).lines![0];
+    const before = task(f.s, f.tasks.queued);
+    // The PE asks a change on the update (r3); the lead's next run revises it for the PE (r4), with no steering row.
+    let s = runCommand(a.s, "recordPeReview", { taskId: f.tasks.queued, specRev: 3, verdict: "feasible-if", reasons: "The days hide the map.", change: "Keep a small map on top." }, at(30)).state;
+    const r = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "pe-review" }, at(31));
+    s = M.completeLeadRun(r.state, r.runId, { reply: "Revised.", proposals: [{ ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), outcome: "A small map on top, then the days.", revises: f.tasks.queued }] } as never, at(32));
+    expect(M.currentSpec(task(s, f.tasks.queued))).toMatchObject({ rev: 4, author: "lead", content: { outcome: "A small map on top, then the days.", decidedBy: "user" } });
+    expect(order(s).lines![0].specRevs).toEqual([3, 4]);
+    // Undo restores the spec before the update, with its PE review as it was.
+    const undone = M.undoSteering(s, a.setId, line.changeId, at(33));
+    expect(undone.result).toEqual({ undone: [line.changeId], left: [] });
+    expect(M.currentSpec(task(undone.state, f.tasks.queued))).toMatchObject({ rev: 5, author: "user", content: M.currentSpec(before).content });
+    expect(task(undone.state, f.tasks.queued).peReview).toEqual(before.peReview);
+    // The owner's edit after a PE revision still keeps the line as is.
+    const edited = run(s, "editSpec", { taskId: f.tasks.queued, expectedRev: 4, content: { ...M.currentSpec(task(s, f.tasks.queued)).content, outcome: "Mine." }, reason: "mine" }, at(33)).state;
+    expect(M.undoSteering(edited, a.setId, line.changeId, at(34)).result.left).toEqual([{ id: line.changeId, why: "its spec changed since (now r5)" }]);
   });
 
   it("Undo leaves a line as is when the work moved on: a spec changed since, or a new task that started", () => {
@@ -297,6 +459,70 @@ describe("ask me first: the updates wait for your go-ahead", () => {
     const cancelled = runCommand(a.s, "cancelTask", { taskId: f.tasks.retiring }, at(30)).state;
     const r = M.applySteering(cancelled, a.setId, line.changeId, at(31));
     expect(r.result.left).toEqual([{ id: line.changeId, why: `${f.tasks.retiring} is cancelled: only a queued task is retired; it is already gone` }]);
+  });
+});
+
+describe("a line keeps its own status (review finding 7)", () => {
+  /** The state after the steering log evicted this set (it keeps the newest 200). */
+  const evicted = (s: State, setId: string) => ({ ...s, steering: s.steering.filter((x) => x.id !== setId) });
+
+  it("each line records where it stands, with steering's Undo, Apply and Dismiss", () => {
+    const f = changeOrdered("user");
+    const a = answer(f.s, fullAnswer(f), 20);
+    expect(order(a.s).lines!.map((l) => l.status)).toEqual(["suggested", "suggested", "suggested", "suggested", "suggested"]);
+    const [first, , , , last] = order(a.s).lines!;
+    let s = M.applySteering(a.s, a.setId, first.changeId, at(30)).state;
+    s = M.dismissSteering(s, a.setId, last.changeId, at(31)).state;
+    expect(order(s).lines![0]).toMatchObject({ status: "applied", appliedBy: "user", resolvedAt: at(30) });
+    expect(order(s).lines![4]).toMatchObject({ status: "dismissed", resolvedAt: at(31) });
+    s = M.undoSteering(s, a.setId, first.changeId, at(32)).state;
+    expect(order(s).lines![0]).toMatchObject({ status: "undone", resolvedAt: at(32) });
+    const g = changeOrdered();
+    const lead = answer(g.s, fullAnswer(g), 20).s;
+    expect(order(lead).lines!.map((l) => [l.status, l.appliedBy, l.resolvedAt])).toEqual(order(lead).lines!.map(() => ["applied", "lead", at(21)]));
+  });
+
+  it("an open change order's lines still work after the steering log evicts their set", () => {
+    const f = changeOrdered("user");
+    const a = answer(f.s, fullAnswer(f), 20);
+    const lines = order(a.s).lines!;
+    let s = evicted(a.s, a.setId);
+    expect(M.changeOrderLines(s, order(s)).map((v) => v.status)).toEqual(["suggested", "suggested", "suggested", "suggested", "suggested"]);
+    expect(needsDetail(s)).toMatch(/ 5 of the lead's updates wait for your go-ahead\.$/);
+    // Apply, Dismiss and Undo name the set the screen knows; the line answers for it.
+    const applied = M.applySteering(s, a.setId, lines[0].changeId, at(30));
+    expect(applied.result).toEqual({ applied: [lines[0].changeId], left: [] });
+    s = applied.state;
+    expect(M.currentSpec(task(s, f.tasks.queued))).toMatchObject({ rev: 3, author: "lead" });
+    const undone = M.undoSteering(s, a.setId, lines[0].changeId, at(31));
+    expect(undone.result).toEqual({ undone: [lines[0].changeId], left: [] });
+    s = undone.state;
+    expect(M.currentSpec(task(s, f.tasks.queued))).toMatchObject({ rev: 4, author: "user" });
+    expect(M.undoSteering(s, a.setId, lines[0].changeId, at(32)).result.left).toEqual([{ id: lines[0].changeId, why: "already undone" }]);
+    s = M.dismissSteering(s, a.setId, lines[4].changeId, at(33)).state;
+    for (const i of [1, 2, 3]) s = M.applySteering(s, a.setId, lines[i].changeId, at(34)).state;
+    expect(order(s).status).toBe("done");
+    expect(order(s).closed!.record).toEqual([`Undone by you: ${order(s).lines![0].words}`, ...order(s).lines!.slice(1, 4).map((l) => l.words), `Dismissed by you: ${order(s).lines![4].words}`]);
+    // A set that is not a change order's is still unknown.
+    expect(() => M.undoSteering(s, "cs-none", undefined, at(35))).toThrow("Unknown change set cs-none");
+  });
+});
+
+describe("a refused steering block (review finding 10)", () => {
+  it("never carries the change order's rows: they go into a set of their own, which keeps the refusal as a note", () => {
+    const f = changeOrdered();
+    const r = M.startLeadRun(f.s, { provider: "claude", model: "m", trigger: "change-order" }, at(20));
+    const reply = (changeOrder: unknown) => M.completeLeadRun(r.state, r.runId, { reply: "", proposals: [], steer: { focus: "Trips first" }, changeOrder } as never, at(21));
+    const s = reply(fullAnswer(f));
+    const sets = s.steering.filter((x) => x.id === `cs-${r.runId}`);
+    expect(sets).toHaveLength(1);
+    expect(sets[0].refused).toBeUndefined();
+    expect(sets[0].changes.map((c) => c.status)).toEqual(["applied", "applied", "applied", "applied", "applied"]);
+    expect(sets[0].notes).toEqual(["The lead's steering block was refused: planning runs cannot steer."]);
+    expect(s.conversation.at(-1)).toMatchObject({ changeSetId: sets[0].id, text: "I made the changes listed below." });
+    // With no update applied, the refused set stays as it was: the reply says nothing was applied, which is true.
+    const none = reply({ rev: order(f.s).rev, updates: [] });
+    expect(none.steering.filter((x) => x.id === `cs-${r.runId}`)).toEqual([expect.objectContaining({ refused: "planning runs cannot steer", changes: [] })]);
   });
 });
 

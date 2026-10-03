@@ -12,7 +12,7 @@ import { currentSpec, draft, event, getTask, nextId } from "./core";
 import { deferredLeadRoots, getLeadRun, openLeadProposals } from "./lead";
 import { type RunReport } from "./runs";
 import { applyStudioBlock, setRoundLead, type StudioBlockResult } from "../studio/lead";
-import { answerChangeOrderInto } from "./changeOrderUpdates";
+import { answerChangeOrderInto, recordPeRevisionInto } from "./changeOrderUpdates";
 import { draftFromRun, validateCoverage, validateQuestions, validateVisionDraft } from "./shaping";
 import { editSpecInto } from "./specs";
 import { steerFromRun, supersedeSuggestions } from "./steering";
@@ -136,6 +136,7 @@ export function validateProposal(s: State, p: LeadProposal, now?: string, who: "
     const why = leadRefsProblem(s, p.blueprintRefs);
     if (why) return why;
   }
+  if (!acceptanceOf(s, p).length) return "it needs one to thirty acceptance checks; a line with a rule's tag is the blueprint's own";
   const title = (p.title as string).trim().toLowerCase();
   if (s.tasks.some((t) => t.id !== revising && t.lifecycle !== "cancelled" && currentSpec(t).content.title.trim().toLowerCase() === title)) return "a task with this title already exists";
   // Work the lead dropped when the focus changed is not proposed again for a week.
@@ -232,7 +233,10 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
     if (revises !== undefined && revises !== null) {
       const why = reviseForPeInto(s, p, revises, now);
       if (why) rejected.push(`"${label(p)}": ${why}`);
-      else revised.push(String(revises));
+      else {
+        revised.push(String(revises));
+        rejected.push(...refusedAcceptance(s, p).map((line) => `"${label(p)}": ${refusedAcceptanceNote(line)}`));
+      }
       continue;
     }
     if (proposed++ >= limit) {
@@ -254,6 +258,7 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
         continue;
       }
       created.push(proposeTask(s, p, now, hold, undefined, shaping));
+      rejected.push(...refusedAcceptance(s, p).map((line) => `"${label(p)}": ${refusedAcceptanceNote(line)}`));
     } catch (err) {
       rejected.push(`"${label(p)}": invalid (${err instanceof Error ? err.message : String(err)})`);
     }
@@ -318,9 +323,10 @@ export function completeLeadRun(state: State, runId: string, out: LeadOutput, no
 }
 
 /**
- * The lead revises a proposal the PE sent back (pass 5): its whole proposal becomes the task's next spec revision (by
- * the lead, so an objection is not reopened), and the PE reviews it again. The task keeps its flow and priority.
- * Returns why it cannot, or undefined. Mutates the draft.
+ * The lead revises a proposal the PE sent back (pass 5): its whole proposal, merged into the current spec
+ * (`specUpdateOf`), becomes the task's next spec revision (by the lead, so an objection is not reopened), and the PE
+ * reviews it again. The task keeps its flow and priority. A revision of a change order's spec update is recorded on
+ * that line, so its Undo still restores the spec before the update. Returns why it cannot, or undefined. Mutates the draft.
  */
 function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: string): string | undefined {
   if (typeof revises !== "string") return '"revises" must be a task id';
@@ -329,21 +335,49 @@ function reviseForPeInto(s: State, p: LeadProposal, revises: unknown, now: strin
   const why = validateProposal(s, p, now, "lead", t.id);
   if (why) return why;
   const spec = currentSpec(t);
+  // A revision edits the spec it revises, as a change order's update does: the owner's decisions on it stay.
+  const chosen = ownersChoiceLeftOut(spec.content, p);
+  if (chosen) return `keep option ${chosen.id} (${chosen.name}): the user chose it`;
   const round = t.peReview!.rounds.length;
-  editSpecInto(s, getTask(s, t.id), spec.rev, specContentOf(s, p), `Revised for the PE (round ${round} asked for a change)`, "lead", now);
+  editSpecInto(s, getTask(s, t.id), spec.rev, specUpdateOf(s, spec.content, p), `Revised for the PE (round ${round} asked for a change)`, "lead", now);
+  recordPeRevisionInto(s, t.id, spec.rev, currentSpec(getTask(s, t.id)).rev);
   return undefined;
 }
+
+const list = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => String(x).trim()).filter(Boolean) : []);
+const refsOf = (p: LeadProposal) => [...new Set(list(p.blueprintRefs))];
+
+/**
+ * A blueprint tag in an acceptance line: a rule's or an example's ("[bi-12 R3]", or "[bi-12_R3]" as ruleResults.ts
+ * reads a test's name) or a contract's ("[bi-12]"). Only the blueprint's own lines carry one (review finding 4): a test
+ * with the tag proves that line, so a line the lead wrote under it would let weaker text pass for the rule.
+ */
+const TAG_RE = /\[bi-\d{1,9}(?:[ _][A-Za-z0-9_-]{1,20})?\]/;
+
+/** A proposal's acceptance: the lead's own lines without a blueprint tag, then every line the cited items give. */
+function acceptanceOf(s: State, p: LeadProposal): string[] {
+  return [...list(p.acceptance).filter((x) => !TAG_RE.test(x)), ...blueprintAcceptance(s, refsOf(p))];
+}
+
+/**
+ * The lead's acceptance lines its spec leaves out, for a note under the reply: each line that carries a blueprint tag
+ * and is not the blueprint's own line (an exact copy of one goes without a note: the spec has it anyway).
+ */
+export function refusedAcceptance(s: State, p: LeadProposal): string[] {
+  const own = new Set(blueprintAcceptance(s, refsOf(p)));
+  return list(p.acceptance).filter((x) => TAG_RE.test(x) && !own.has(x));
+}
+
+/** The note for one refused acceptance line. */
+export const refusedAcceptanceNote = (line: string) => `the acceptance line "${line.length > 120 ? `${line.slice(0, 119)}…` : line}" is refused: only the blueprint's own line carries a rule's tag`;
 
 /**
  * A proposal's spec content: the lead's fields, the recommended option selected, and (pass 5) the blueprint items it
  * builds, with the acceptance their rules and examples give, after the lead's own checks.
  */
 export function specContentOf(s: State, p: LeadProposal): SpecContent {
-  const list = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => String(x).trim()).filter(Boolean) : []);
-  const refs = [...new Set(list(p.blueprintRefs))];
-  const fromBlueprint = blueprintAcceptance(s, refs);
-  // A line the lead already wrote with a rule's tag is not repeated.
-  const acceptance = [...list(p.acceptance), ...fromBlueprint.filter((line) => !list(p.acceptance).some((x) => x.startsWith(line.slice(0, line.indexOf("]") + 1))))];
+  const refs = refsOf(p);
+  const acceptance = acceptanceOf(s, p);
   return {
     title: p.title.trim().slice(0, 200),
     area: (p.area ?? "").trim().slice(0, 60) || "General",
@@ -373,6 +407,43 @@ export function specContentOf(s: State, p: LeadProposal): SpecContent {
     rollback: "Discard the orchestration branch; delivery to your branch happens only if you turned it on.",
     effort: "small",
     ...(refs.length ? { blueprintRefs: refs } : {}),
+  };
+}
+
+/** The option the owner chose on this spec, when the lead's proposal leaves it out: only the owner overrules it. */
+export function ownersChoiceLeftOut(cur: SpecContent, p: LeadProposal): SpecOption | undefined {
+  if (cur.decidedBy !== "user") return undefined;
+  if (p.options.some((o) => String(o.id).slice(0, 10) === cur.selectedOptionId)) return undefined;
+  return cur.options.find((o) => o.id === cur.selectedOptionId);
+}
+
+/** The override reason a kept choice gets when the owner had taken the recommendation and the lead now recommends another. */
+const KEPT_CHOICE = "Your choice, kept when the lead's update recommended another option";
+
+/**
+ * A spec update's content (a change order's "update-spec", review finding 5): the lead's proposal merged into the
+ * current spec. Each field the proposal gives replaces the current one; the rest stays, among them what a proposal
+ * never carries: the success criteria, the validation plan, the rollback and the effort. The owner's choice stays
+ * where its option still exists, with its reason; an update that leaves it out is the owner's call
+ * (`ownersChoiceLeftOut`), and the owner's go-ahead takes the lead's recommendation.
+ */
+export function specUpdateOf(s: State, cur: SpecContent, p: LeadProposal): SpecContent {
+  const next = specContentOf(s, p);
+  const given = (k: "area" | "whyNow" | "benefit" | "uncertainty" | "scopeIncluded" | "scopeExcluded") => p[k] !== undefined && p[k] !== null;
+  const keep = cur.decidedBy === "user" && next.options.some((o) => o.id === cur.selectedOptionId);
+  return {
+    ...next,
+    area: given("area") ? next.area : cur.area,
+    whyNow: given("whyNow") ? next.whyNow : cur.whyNow,
+    benefit: given("benefit") ? next.benefit : cur.benefit,
+    uncertainty: given("uncertainty") ? next.uncertainty : cur.uncertainty,
+    scopeIncluded: given("scopeIncluded") ? next.scopeIncluded : cur.scopeIncluded,
+    scopeExcluded: given("scopeExcluded") ? next.scopeExcluded : cur.scopeExcluded,
+    successCriteria: cur.successCriteria,
+    validationPlan: cur.validationPlan,
+    rollback: cur.rollback,
+    effort: cur.effort,
+    ...(keep ? { selectedOptionId: cur.selectedOptionId, decidedBy: cur.decidedBy, overrideReason: cur.selectedOptionId === next.recommendedOptionId ? "" : cur.overrideReason.trim() || KEPT_CHOICE } : {}),
   };
 }
 

@@ -59,7 +59,9 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
   // The drawer's top line says "simulated" once for the whole demo; a simulated set seen outside the demo says it here.
   const simChip = isSimulated(set) && service.runtime !== "fake" ? <SimulatedChip title="Simulated: written by the demo's lead, not by a model." /> : null;
 
-  if (set.refused) {
+  // A refused set carries no rows (a change order's go into a set of their own); one an earlier build stored with rows
+  // shows them, with its refusal as a note, so the words match what applied (ORC-029 pass 5, review finding 10).
+  if (set.refused && !set.changes.length) {
     return (
       <p className="fold-line muted small" role="note">
         The lead asked for changes, but none were applied: {set.refused}. {simChip}
@@ -99,7 +101,7 @@ export function SteeringChanges({ set }: { set: SteeringChangeSet }) {
           Held as suggestions: {lowerFirst(set.heldBecause)}
         </p>
       )}
-      {set.notes.map((n, i) => (
+      {[...(set.refused ? [`The lead's steering block was refused: ${set.refused}.`] : []), ...set.notes].map((n, i) => (
         <p key={i} className="muted small fold-note">
           {n}
         </p>

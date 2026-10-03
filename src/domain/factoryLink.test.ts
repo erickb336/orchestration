@@ -89,12 +89,21 @@ describe("the lead's specs cite the blueprint items they build", () => {
     expect(spec.acceptance.slice(1, 4).map((line) => tagsIn(line))).toEqual([[`[${b.flow} R1]`], [`[${b.flow} R2]`], [`[${b.flow} E1]`]]);
   });
 
-  it("a line the lead already wrote with a rule's tag is not repeated", () => {
+  it("the blueprint's rule lines are always in the acceptance; a lead line that carries a rule's tag is refused with a note (review finding 4)", () => {
     const b = building();
-    const { s, created } = lead(b.s, [proposal("Join a trip", { blueprintRefs: [b.flow], acceptance: [`[${b.flow} R2] An expired invite offers a new one`] })]);
+    const weaker = `[${b.flow} R2] An expired invite offers a new one`;
+    const own = B.blueprintAcceptance(b.s, [b.flow]);
+    // The lead rewrites R2 under its tag, tags a line of its own with another item's tag, and copies R1 as it is.
+    const { s, created, rejected } = lead(b.s, [proposal("Join a trip", { blueprintRefs: [b.flow], acceptance: ["The invite shows the trip", weaker, `[${b.screen} R1] The home loads`, own[0]] })]);
     const acceptance = M.currentSpec(s.tasks.find((t) => t.id === created[0])!).content.acceptance;
-    expect(acceptance.filter((x) => x.startsWith(`[${b.flow} R2]`))).toEqual([`[${b.flow} R2] An expired invite offers a new one`]);
-    expect(acceptance.map((x) => x.slice(0, x.indexOf("]") + 1))).toEqual([`[${b.flow} R2]`, `[${b.flow} R1]`, `[${b.flow} E1]`]);
+    expect(acceptance).toEqual(["The invite shows the trip", ...own]);
+    expect(rejected).toEqual([
+      `"Join a trip": the acceptance line "${weaker}" is refused: only the blueprint's own line carries a rule's tag`,
+      `"Join a trip": the acceptance line "[${b.screen} R1] The home loads" is refused: only the blueprint's own line carries a rule's tag`,
+    ]);
+    // A proposal left with no acceptance check of its own or the blueprint's is refused.
+    const none = lead(b.s, [proposal("Home page", { blueprintRefs: [b.screen], acceptance: [`[${b.screen} R1] The home loads`] })]);
+    expect([none.created, none.rejected]).toEqual([[], ['"Home page": it needs one to thirty acceptance checks; a line with a rule\'s tag is the blueprint\'s own']]);
   });
 
   it("the domain refuses an id that is not in the blueprint, and an item still open, and creates nothing", () => {

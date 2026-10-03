@@ -148,6 +148,47 @@ describe("format-19 databases written before all of format 19's fields existed (
     expect(stored(path)).toEqual(once);
   });
 
+  it("a change order's lines gain their status from their steering rows while the set is in the log, and an applied spec update its revisions (pass 5 review, findings 6 and 7)", () => {
+    const path = join(dir, "lines.db");
+    const SET_AT = "2026-10-01T11:05:00.000Z";
+    let base = 0;
+    early19(path, (doc) => {
+      const task = (doc.tasks as { id: string; specs: Record<string, unknown>[] }[]).find((t) => t.id === "EX-004")!;
+      const last = task.specs.at(-1)!;
+      base = last.rev as number;
+      // The lead's update (r+1), then a revision it made for the PE (r+2): no steering row records the second.
+      task.specs.push({ ...last, rev: base + 1, author: "lead", reason: "Change order r2: x" }, { ...last, rev: base + 2, author: "lead", reason: "Revised for the PE (round 1 asked for a change)" });
+      const line = (n: number, kind: string, extra: Record<string, unknown> = {}) => ({ changeId: `cs-L1.${n}`, kind, items: [], words: `line ${n}`, why: "", ...extra });
+      (doc.blueprint as Record<string, unknown>).changeOrders = [
+        {
+          ...order(2),
+          lines: [
+            line(1, "update-spec", { taskId: "EX-004", before: { specRev: base } }),
+            line(2, "new-task", { proposal: { title: "x" } }),
+            line(3, "retire", { taskId: "EX-005" }),
+            { ...line(4, "new-task"), changeId: "cs-gone.1", proposal: { title: "y" } },
+            { ...line(5, "new-task"), changeId: "cs-gone.2", madeTaskId: "EX-006" },
+            { ...line(6, "new-task"), status: "undone", resolvedAt: SET_AT },
+          ],
+        },
+      ];
+      const row = (n: number, status: string, extra: Record<string, unknown> = {}) => ({ id: `cs-L1.${n}`, kind: "new-task", before: null, after: null, why: "", status, ...extra });
+      doc.steering = [{ id: "cs-L1", leadRunId: "L1", messageIds: [], at: SET_AT, mode: "apply", basedOnVisionRev: 1, reason: "Change order r2", notes: [], changes: [row(1, "applied", { kind: "update-spec", appliedBy: "lead", before: base, after: base + 1 }), row(2, "dismissed", { resolvedAt: "2026-10-01T12:00:00.000Z" }), row(3, "rejected", { kind: "retire" })] }];
+    });
+    const store = new Store(path);
+    opened.push(store);
+    const lines = store.read().state.blueprint.changeOrders[0].lines!;
+    expect(lines.map((l) => [l.status, l.appliedBy, l.resolvedAt, l.specRevs])).toEqual([
+      ["applied", "lead", SET_AT, [base + 1, base + 2]],
+      ["dismissed", undefined, "2026-10-01T12:00:00.000Z", undefined],
+      ["refused", undefined, undefined, undefined],
+      // The set left the log: a line that still carries the lead's proposal never applied; one without it did.
+      ["suggested", undefined, undefined, undefined],
+      ["applied", undefined, undefined, undefined],
+      ["undone", undefined, SET_AT, undefined],
+    ]);
+  });
+
   it("a change order without a handler takes the project's setting; a document from before the studio gains its containers", () => {
     const path = join(dir, "early-user.db");
     early19(path, (doc) => {
