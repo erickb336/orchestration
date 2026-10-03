@@ -234,7 +234,7 @@ const prefixed = (id: string, why: string | undefined) => (why ? `${id}: ${why}`
  * Why the lead's update waits for the owner's go-ahead whatever the change order's handler, or undefined: the lead
  * never does what only the owner may (ORC-009: a choice the owner made by hand is never overridden; the lead's change
  * to it is a suggestion). The owner's own task, or a task the owner changed, is cancelled only by the owner; an update
- * that leaves out the option the owner chose overrules the owner. The owner's go-ahead satisfies it. Run after `whyNot`.
+ * that leaves out the option the owner chose, or changes its name or approach, overrules the owner. The owner's go-ahead satisfies it. Run after `whyNot`.
  */
 function ownersCall(s: State, u: Update): string | undefined {
   const t = u.taskId ? getTask(s, u.taskId) : undefined;
@@ -244,7 +244,7 @@ function ownersCall(s: State, u: Update): string | undefined {
   }
   if (u.kind === "update-spec") {
     const chosen = ownersChoiceLeftOut(currentSpec(t!).content, u.proposal!);
-    if (chosen) return `you chose option ${chosen.id} (${chosen.name}); the update leaves it out`;
+    if (chosen) return `you chose option ${chosen.id} (${chosen.name}); the update leaves it out or changes it`;
   }
   return undefined;
 }

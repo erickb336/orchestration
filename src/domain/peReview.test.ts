@@ -211,6 +211,24 @@ describe("a lead proposal waits for PE review", () => {
     expect(() => overrule(s, "Again.", 15)).toThrow("You already overruled this objection.");
   });
 
+  it("a revision that keeps the owner's option id but rewrites its approach is refused; one that keeps it as it is applies (pass 6 review finding 6)", () => {
+    const { s: planned, created } = leadPlans(factory(), { proposals: [proposal("Offline maps")] });
+    const id = created[0];
+    const cur = M.currentSpec(task(planned, id));
+    let s = M.editSpec(planned, id, cur.rev, { ...cur.content, selectedOptionId: "B", decidedBy: "user", overrideReason: "Not this month." }, "my call", "user", at(5));
+    s = pe(s, { taskId: id }, "feasible-if", 10);
+    const rev = M.currentSpec(task(s, id)).rev;
+    const options = [
+      { id: "A", name: "Do it", approach: "one way" },
+      { id: "B", name: "Defer", approach: "Ship it next week instead" },
+    ];
+    const refused = leadRevises(s, id, 20, { options });
+    expect(M.currentSpec(task(refused, id)).rev).toBe(rev);
+    expect(refused.conversation.at(-1)!.rejected?.join("\n")).toContain("keep option B (Defer) as it is: the user chose it");
+    const kept = leadRevises(s, id, 20);
+    expect(M.currentSpec(task(kept, id))).toMatchObject({ rev: rev + 1, content: { selectedOptionId: "B", decidedBy: "user", outcome: "Offline maps, with a 200 MB tile cache" } });
+  });
+
   it("your edit of work the PE objects to starts a new review with a fresh count of rounds; the objection stays on the record (review finding 5)", () => {
     const { s: planned, created } = leadPlans(factory(), { proposals: [proposal("Offline maps")] });
     const id = created[0];

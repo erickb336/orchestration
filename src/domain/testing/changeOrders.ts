@@ -89,12 +89,21 @@ export const leadProposal = (title: string, refs?: string[]) => ({
   ...(refs ? { blueprintRefs: refs } : {}),
 });
 
+/**
+ * The lead's proposal for a task's spec update that keeps the task's options as they are, the option the owner chose
+ * among them, as the lead's brief asks (pass 6 review finding 6: an update that changes it waits for the owner).
+ */
+export function keepingOptions<P extends { options: unknown[] }>(s: State, taskId: string, p: P): P {
+  const t = s.tasks.find((x) => x.id === taskId)!;
+  return { ...p, options: M.currentSpec(t).content.options.map(({ id, name, approach }) => ({ id, name, approach })) };
+}
+
 /** The lead's full answer to `changeOrdered`: a spec update, two revisions, a retirement and a new task. */
 export function fullAnswer(f: ReturnType<typeof changeOrdered>) {
   return {
     rev: f.s.blueprint.changeOrders.at(-1)!.rev,
     updates: [
-      { action: "update-spec", task: f.tasks.queued, why: "Day list first, the map below it.", proposal: leadProposal("Trip list screen", [f.ids.plan, f.ids.list]) },
+      { action: "update-spec", task: f.tasks.queued, why: "Day list first, the map below it.", proposal: keepingOptions(f.s, f.tasks.queued, leadProposal("Trip list screen", [f.ids.plan, f.ids.list])) },
       { action: "revise", task: f.tasks.running, why: "The map moves below the days.", proposal: leadProposal("Move the trip plan map below the days", [f.ids.plan]) },
       { action: "retire", task: f.tasks.retiring, why: "You dropped Reminders.", proposal: null },
       { action: "revise", task: f.tasks.early, why: "The early plan shows the map first.", proposal: leadProposal("Revise the early trip plan", [f.ids.plan]) },

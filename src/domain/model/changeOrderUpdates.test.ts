@@ -9,7 +9,7 @@ import { runCommand } from "../commands";
 import * as M from "../model";
 import { needsYouItems } from "../needsYou";
 import { newWorkReviewsDue } from "../peReview";
-import { answerChangeOrder, at, changeOrdered, startTask, T0, taskCiting } from "../testing/changeOrders";
+import { answerChangeOrder, at, changeOrdered, keepingOptions, startTask, T0, taskCiting } from "../testing/changeOrders";
 import { run } from "../testing/studio";
 import type { State } from "../types";
 
@@ -47,7 +47,7 @@ function fullAnswer(f: ReturnType<typeof changeOrdered>) {
   return {
     rev: order(f.s).rev,
     updates: [
-      { action: "update-spec", task: f.tasks.queued, why: "Day list first, the map below it.", proposal: proposal("Trip list screen", [f.ids.plan, f.ids.list]) },
+      { action: "update-spec", task: f.tasks.queued, why: "Day list first, the map below it.", proposal: keepingOptions(f.s, f.tasks.queued, proposal("Trip list screen", [f.ids.plan, f.ids.list])) },
       { action: "revise", task: f.tasks.running, why: "The map moves below the days.", proposal: proposal("Move the trip plan map below the days", [f.ids.plan]) },
       { action: "retire", task: f.tasks.retiring, why: "You dropped Reminders.", proposal: null },
       { action: "revise", task: f.tasks.early, why: "The early plan shows the map first.", proposal: proposal("Revise the early trip plan", [f.ids.plan]) },
@@ -293,7 +293,7 @@ describe("the spec a spec update writes", () => {
 
   it("the owner's choice stays when the lead recommends another option", () => {
     const f = changeOrdered();
-    const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), recommendedOptionId: "B" } };
+    const update = { ...fullAnswer(f).updates[0], proposal: { ...fullAnswer(f).updates[0].proposal!, recommendedOptionId: "B" } };
     const { s } = answer(f.s, { rev: order(f.s).rev, updates: [update] }, 20);
     expect(M.currentSpec(task(s, f.tasks.queued)).content).toMatchObject({ recommendedOptionId: "B", selectedOptionId: "A", decidedBy: "user", overrideReason: "Your choice, kept when the lead's update recommended another option" });
   });
@@ -307,15 +307,44 @@ describe("the spec a spec update writes", () => {
     const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), options, recommendedOptionId: "1" } };
     const a = answer(ownersDecisions(f), { rev: order(f.s).rev, updates: [update] }, 20);
     expect(M.currentSpec(task(a.s, f.tasks.queued)).rev).toBe(3);
-    expect(rowsOf(a.s, a.setId)[0]).toMatchObject({ status: "suggested", note: "you chose option B (Defer); the update leaves it out" });
+    expect(rowsOf(a.s, a.setId)[0]).toMatchObject({ status: "suggested", note: "you chose option B (Defer); the update leaves it out or changes it" });
     const s = M.applySteering(a.s, a.setId, order(a.s).lines![0].changeId, at(30)).state;
     expect(M.currentSpec(task(s, f.tasks.queued)).content).toMatchObject({ selectedOptionId: "1", successCriteria: ["Friends find the list"] });
+  });
+
+  it("an update that keeps the owner's option id but rewrites its name or approach waits for the owner's go-ahead (pass 6 review finding 6)", () => {
+    const f = changeOrdered();
+    const rewrite = (b: { name: string; approach: string }) => {
+      const options = [
+        { id: "A", name: "Build it", approach: "Build what the approved prototype shows." },
+        { id: "B", ...b },
+      ];
+      const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), options } };
+      return answer(ownersDecisions(f), { rev: order(f.s).rev, updates: [update] }, 20);
+    };
+    for (const b of [
+      { name: "Build the map instead", approach: "Wait." },
+      { name: "Defer", approach: "Build the map first, then the list." },
+    ]) {
+      const a = rewrite(b);
+      // The spec still says what the owner chose, as the owner saw it.
+      expect(M.currentSpec(task(a.s, f.tasks.queued))).toMatchObject({ rev: 3, content: { selectedOptionId: "B", decidedBy: "user" } });
+      expect(M.currentSpec(task(a.s, f.tasks.queued)).content.options.find((o) => o.id === "B")).toMatchObject({ name: "Defer", approach: "Do not do this now" });
+      expect(rowsOf(a.s, a.setId)[0]).toMatchObject({ status: "suggested", note: "you chose option B (Defer); the update leaves it out or changes it" });
+      // The owner's go-ahead takes the lead's recommendation: the rewritten B is not recorded as the owner's choice.
+      const s = M.applySteering(a.s, a.setId, order(a.s).lines![0].changeId, at(30)).state;
+      expect(M.currentSpec(task(s, f.tasks.queued)).content).toMatchObject({ selectedOptionId: "A", decidedBy: "lead" });
+    }
+    // Only a change of words around the same content keeps the choice at once.
+    const same = rewrite({ name: " Defer ", approach: "Do not do this now " });
+    expect(M.currentSpec(task(same.s, f.tasks.queued)).content).toMatchObject({ selectedOptionId: "B", decidedBy: "user" });
+    expect(M.currentSpec(task(same.s, f.tasks.queued)).rev).toBe(4);
   });
 
   it("a line with a rule's tag in the lead's acceptance is refused with a note; the update applies (review finding 4)", () => {
     const f = changeOrdered();
     const tagged = `[${f.ids.plan} R1] The map shows the days`;
-    const update = { ...fullAnswer(f).updates[0], proposal: { ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), acceptance: ["The list shows each trip.", tagged] } };
+    const update = { ...fullAnswer(f).updates[0], proposal: { ...fullAnswer(f).updates[0].proposal!, acceptance: ["The list shows each trip.", tagged] } };
     const { s } = answer(f.s, { rev: order(f.s).rev, updates: [update] }, 20);
     expect(M.currentSpec(task(s, f.tasks.queued)).content.acceptance).toEqual(["The list shows each trip."]);
     expect(order(s).notes![0]).toBe(`${f.tasks.queued}: the acceptance line "${tagged}" is refused: only the blueprint's own line carries a rule's tag`);
@@ -359,7 +388,7 @@ describe("Undo, line by line", () => {
     // The PE asks a change on the update (r3); the lead's next run revises it for the PE (r4), with no steering row.
     let s = runCommand(a.s, "recordPeReview", { taskId: f.tasks.queued, specRev: 3, verdict: "feasible-if", reasons: "The days hide the map.", change: "Keep a small map on top." }, at(30)).state;
     const r = M.startLeadRun(s, { provider: "claude", model: "m", trigger: "pe-review" }, at(31));
-    s = M.completeLeadRun(r.state, r.runId, { reply: "Revised.", proposals: [{ ...proposal("Trip list screen", [f.ids.plan, f.ids.list]), outcome: "A small map on top, then the days.", revises: f.tasks.queued }] } as never, at(32));
+    s = M.completeLeadRun(r.state, r.runId, { reply: "Revised.", proposals: [{ ...fullAnswer(f).updates[0].proposal!, outcome: "A small map on top, then the days.", revises: f.tasks.queued }] } as never, at(32));
     expect(M.currentSpec(task(s, f.tasks.queued))).toMatchObject({ rev: 4, author: "lead", content: { outcome: "A small map on top, then the days.", decidedBy: "user" } });
     expect(order(s).lines![0].specRevs).toEqual([3, 4]);
     // Undo restores the spec before the update, with its PE review as it was.

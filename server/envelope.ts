@@ -1351,7 +1351,13 @@ export function changeOrderSection(state: State, run: LeadRun): string {
     const t = state.tasks.find((x) => x.id === taskId);
     const refs = t ? (M.currentSpec(t).content.blueprintRefs ?? []) : [];
     const cites = refs.length ? refs.map((r) => `${r} (${role(r)})`).join(", ") : "nothing";
-    return `- ${taskId} "${t ? truncate(M.currentSpec(t).content.title, 80) : "?"}" [${t ? M.stateLabel(state, t) : "unknown"}]: cites ${cites}. Planned at the Lock in: ${B.HANDLING_WORDS[handling]}. Your update: ${updateFor(state, t, handling)}.`;
+    const line = `- ${taskId} "${t ? truncate(M.currentSpec(t).content.title, 80) : "?"}" [${t ? M.stateLabel(state, t) : "unknown"}]: cites ${cites}. Planned at the Lock in: ${B.HANDLING_WORDS[handling]}. Your update: ${updateFor(state, t, handling)}.`;
+    // The option the user chose stays only as the user saw it (pass 6 review finding 6): the lead needs its exact words.
+    const c = t && updateFor(state, t, handling) === '"update-spec"' ? M.currentSpec(t).content : undefined;
+    const chosen = c?.decidedBy === "user" ? c.options.find((o) => o.id === c.selectedOptionId) : undefined;
+    return chosen
+      ? `${line}\n  The user chose option ${JSON.stringify(chosen.id)} of this task: name ${JSON.stringify(chosen.name)}, approach ${JSON.stringify(chosen.approach)}. Keep it in your proposal as it is; an update that leaves it out or changes its name or approach waits for the user's go-ahead.`
+      : line;
   });
   const newWork = co.newWork.map((id) => `- ${inForce.has(id) ? blueprintItemLine(state, inForce.get(id)!) : id}: no task cites it yet. Your update: "new-task", citing ${id}.`);
   const pe = state.project.peReviewsNewWork ? "\n- PE review of new work is on: an updated spec, a revision task and a new task each wait for the PE before they start. A retirement starts nothing." : "";
