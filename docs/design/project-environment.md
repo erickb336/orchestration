@@ -34,7 +34,7 @@ Rejected:
 ## Units
 
 1. **E1, the environment and the prepare phase (built, 2026-10-02):** the environment's source, the image table, the egress proxy, the two phases, and the checks in the project's container when Docker is present. Real tests with a Node, a Python and a Go fixture, and a hostile fixture whose install code tries to reach a host that is not a registry and the Mac. The decisions it made are below.
-2. **E2, evidence in the project's environment:** screens over the private network, and CLIs recorded as asciicasts, for the same three fixtures.
+2. **E2, evidence in the project's environment (built, 2026-10-03):** screens from a preview with no network, shot by the recorder's browser on the preview's loopback, and CLIs recorded as asciicasts in a pseudo-terminal, for the same three fixtures and the hostile one. The decisions it made are below.
 
 ## E1 decisions
 
@@ -62,3 +62,43 @@ The Node script is chosen: it is the only option that refuses a listed name reso
 **Not done in E1:** a sweep of what a crashed service leaves (labelled networks, containers and `runs/` folders under `~/.cache/orchestrator/environment`); the held state of checks still follows the host sandbox's probe; Rust, Ruby and Java rows of the table are proposed but not run.
 
 Both replace what they supersede: the Node-only evidence path and the npm-only network rule, when Docker is present.
+
+## E2 decisions
+
+**Which path runs.** A project with an environment (a dev container, or a confirmed image) is captured in it, and only there: the recorder's npm install never runs for it. When the environment cannot run (no Docker, a failed probe, an image that cannot be pulled), every item says why; nothing falls back to the recorder. A project without an environment keeps the recorder's path. The run's record names the path: `{ via: "environment", from, image, imageId, prepare, key }` or `{ via: "recorder", image }`, and the record per blueprint item carries it, with the commit and the design version as before.
+
+**The prepare.** The capture borrows the checks' runner (`withPrepared`): the same setup probe, copy, image and prepare, reused by the same key, in the same one-at-a-time turn. The preview setting's install does not run; the record has a note when the setting has one.
+
+**Screens: one loopback, no network.** Compared:
+
+| | (a) A private network, reached by the container's name | (b) No network; the browser shares the preview's loopback (chosen) |
+| --- | --- | --- |
+| The preview's container | `--internal` network, isolated gateway | `--network none` |
+| The browser's container | joins the private network | `--network container:<preview>` |
+| What either can reach | each other and Docker's DNS on that network | one loopback, nothing else |
+| An app that listens on 127.0.0.1 (Vite, Flask, Django and Rails do by default) | cannot be reached | works |
+| The browser's hardening | new: a resolver rule and a proxy exception for the name | unchanged: `app.localhost`, the dead proxy, the resolver rule |
+| Networks to make and remove | one per capture | none |
+
+(b) is chosen: it reaches less and works with more apps. Its risk is the shared loopback: the app can connect to the browser's ports. The browser opens none (Playwright drives Chromium through a pipe); only the dead proxy listens, and a connection to it counts as refused. It also closes U2's known gap: the app no longer runs as the capture's user in the capture's container, and it has no `/out` mount, so it cannot plant a picture.
+
+**CLIs: a pseudo-terminal from Docker itself.** Compared:
+- `docker run -t`: a terminal, but no way to type into it;
+- `docker run -it` with the commands piped in: the docker command refuses ("the input device is not a TTY");
+- `script` from util-linux in the image: not in every image, and nothing is installed into the project's image;
+- `script` or a native pseudo-terminal on the host: different on macOS and Linux, or a native add-on;
+- **chosen:** `docker create --tty --interactive`, then the service attaches to the container's terminal through the daemon's own API on its local socket (as the docker command does), starts it and sets its size.
+
+The shell is bash with VHS's prompt (`> `), so the failure scan skips typed commands as in VHS's transcripts; `TERM` is xterm-256color; `CI` and `NO_COLOR` are emptied. The service types the tape's steps (Type with VHS's speed, keys, Sleep, Wait with `+Screen`, `+Line` and `@time`, Hide and Show, Source); the look of a VHS recording, Output and Require type nothing. Wait patterns that could backtrack for long (groups, back-references, more than three repeats) are refused, because the service runs them on untrusted output. A tape a session cannot type is refused for its item only.
+
+**The recording.** Asciicast v2: one output event per chunk, with its time. Only the escapes the app's player draws stay (the studio's `.cast` rule); titles, modes, bracketed paste and device queries go. It is validated like the studio's `.cast` files (version 2), at most 2 MB, and comes back with a plain transcript, which is scanned for failures. The files take the tape's own name (`demo.gif` becomes `demo.cast` and `demo.txt`). "Design and reality" draws the cast with the studio's terminal renderer. No GIF is made in the environment.
+
+**Real tests** (2026-10-03, Colima with 2 CPUs and 2 GB, each with a fresh prepare): Node from its dev container 27 s, Python 28 s, Go 59 s (it compiles its preview and builds its CLI in the recording), the hostile fixture 31 s. Each page and CLI uses its dependency with no network. The hostile preview and CLI tried 1.1.1.1, 192.168.5.2 (the Mac through Colima), 172.17.0.1, `host.docker.internal`, `host.lima.internal`, their own loopback and an outside name: all refused (`ENETUNREACH`, `EAI_AGAIN`, `ECONNREFUSED`). Its page tried the same from the browser, and WebRTC: all blocked. The canary on the Mac's loopback saw no connection; a control container on Docker's ordinary network did reach it.
+
+**Not done in E2:** images without bash; zsh tapes (the recorder refuses them too); a daemon reached by `tcp://` or `ssh://` (a CLI then says it needs the local socket); mobile shots in the real tests (the browser code is the recorder's, unchanged); a sweep of preview and session containers a crashed service leaves (they are labelled `orchestrator.environment=preview` and `=session`).
+
+**Removing the recorder's path.** When the projects that capture evidence have environments (the lead proposes an image from the table; the owner confirms it), migrate, then delete:
+1. Propose an environment for each project that still captures on the recorder's path (the record's `via: "recorder"` finds them).
+2. Remove the recorder's install (`installArgs`, `INSTALL_ENV`, the yarn check in `captureEvidence`), the preview start and the VHS tapes in `CAPTURE_SCRIPT`, and the GIF outputs of evidence.
+3. Drop the preview setting's `install` field, with a state migration, and its form field.
+4. Keep only Chromium and playwright-core in the recorder's image; VHS stays only while studio demos use it.
