@@ -374,7 +374,8 @@ describe(`capturing evidence in the project's environment${skipReason}`, () => {
         const refused = /^(ENETUNREACH|EHOSTUNREACH|ECONNREFUSED|EAI_AGAIN|ENOTFOUND)$/;
         const preview = JSON.parse(/HOSTILE (\{.*\})/.exec(warning("HOSTILE"))![1]) as Record<string, string>;
         console.log(`hostile preview: ${JSON.stringify(preview)}`);
-        const cliText = readFileSync(join(c.out, "bi-2/hostile.txt"), "utf8");
+        // The transcript shows the terminal's rows: the CLI's one long line wraps at the tape's 120 columns.
+        const cliText = readFileSync(join(c.out, "bi-2/hostile.txt"), "utf8").replace(/^(.{120})\n/gm, "$1");
         const cli = JSON.parse(/HOSTILE (\{.*\})/.exec(cliText)![1]) as Record<string, string>;
         console.log(`hostile CLI: ${JSON.stringify(cli)}`);
         for (const [what, r] of [["preview", preview], ["cli", cli]] as const) {

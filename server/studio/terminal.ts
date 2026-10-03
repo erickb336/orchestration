@@ -934,14 +934,20 @@ export function sanitizeOutput(s: string): { clean: string; rest: string } {
 /**
  * What a terminal shows, line by line, from sanitized output: text, carriage returns, backspaces, tabs, and the
  * erases and cursor moves within a line. For a session's transcript and its Waits. Moves between lines are not
- * followed, so a full-screen program's transcript is approximate; its cast is exact.
+ * followed, so a full-screen program's transcript is approximate; its cast is exact. As in a terminal, the cursor
+ * stops at the last column and text wraps there, so a line holds at most `cols` characters and the screen at most
+ * `maxLines` lines of them, whatever the output (pass 6 review finding 2).
  */
 export class LineScreen {
   private lines: string[] = [];
   private cur: string[] = [];
   private col = 0;
-  constructor(private readonly maxLines = 20_000) {}
+  constructor(
+    private readonly cols: number,
+    private readonly maxLines = 20_000,
+  ) {}
   write(s: string) {
+    const last = this.cols - 1;
     for (let i = 0; i < s.length; i++) {
       const ch = s[i];
       if (ch === "\x1b") {
@@ -952,18 +958,26 @@ export class LineScreen {
           if (n === 0) this.cur.length = Math.min(this.cur.length, this.col);
           else if (n === 2) this.cur = [];
           else for (let k = 0; k < Math.min(this.col, this.cur.length); k++) this.cur[k] = " ";
-        } else if (m[2] === "C") this.col += Math.max(1, n);
-        else if (m[2] === "D") this.col = Math.max(0, this.col - Math.max(1, n));
-        else if (m[2] === "G") this.col = Math.max(0, (n || 1) - 1);
+        } else if (m[2] === "C") this.col = Math.min(last, this.col + Math.max(1, n));
+        else if (m[2] === "D") this.col = Math.max(0, Math.min(last, this.col) - Math.max(1, n));
+        else if (m[2] === "G") this.col = Math.min(last, Math.max(0, (n || 1) - 1));
         else if (m[2] === "J" && n >= 2 && this.cur.length) this.newline();
         i += m[0].length - 1;
       } else if (ch === "\n") this.newline();
       else if (ch === "\r") this.col = 0;
-      else if (ch === "\b") this.col = Math.max(0, this.col - 1);
-      else if (ch === "\t") this.col = (Math.floor(this.col / 8) + 1) * 8;
+      else if (ch === "\b") this.col = Math.max(0, Math.min(last, this.col) - 1);
+      else if (ch === "\t") this.col = Math.min(last, (Math.floor(this.col / 8) + 1) * 8);
       else {
+        // A character outside the BMP (an emoji) is two code units: it takes two columns and is never cut at the wrap.
+        const code = ch.charCodeAt(0);
+        const wide = code >= 0xd800 && code <= 0xdbff && /[\udc00-\udfff]/.test(s[i + 1] ?? "");
+        if (this.col + (wide ? 2 : 1) > this.cols) this.newline();
         while (this.cur.length < this.col) this.cur.push(" ");
-        this.cur[this.col++] = ch;
+        this.cur[this.col++] = wide ? s.slice(i, i + 2) : ch;
+        if (wide) {
+          this.cur[this.col++] = "";
+          i++;
+        }
       }
     }
   }
@@ -996,8 +1010,8 @@ export class LineScreen {
  */
 export class CastRecorder {
   /** What the recording shows (its transcript), and what the terminal showed (for Waits, hidden output included). */
-  readonly shown = new LineScreen();
-  readonly all = new LineScreen(500);
+  readonly shown: LineScreen;
+  readonly all: LineScreen;
   hidden = false;
   tooLarge = false;
   private readonly events: string[] = [];
@@ -1010,6 +1024,8 @@ export class CastRecorder {
     const title = o.title?.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").slice(0, 200);
     this.header = JSON.stringify({ version: 2, width: o.cols, height: o.rows, timestamp: Math.floor(o.startedAt / 1000), env: { TERM: "xterm-256color", SHELL: "bash" }, ...(title ? { title } : {}) });
     this.bytes = Buffer.byteLength(this.header) + 1;
+    this.shown = new LineScreen(o.cols);
+    this.all = new LineScreen(o.cols, 500);
   }
   output(chunk: Uint8Array | string, atMs: number) {
     const { clean, rest } = sanitizeOutput(this.pending + (typeof chunk === "string" ? chunk : this.decoder.decode(chunk, { stream: true })));

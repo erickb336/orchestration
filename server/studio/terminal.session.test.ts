@@ -124,6 +124,34 @@ describe("the recording: asciicast v2", () => {
     expect(transcriptError(rec.transcript())).toBe("Error: boom");
   });
 
+  it("hostile output stays small: the cursor stops at the session's width, so 16,000 bytes of far cursor moves keep one line (pass 6 review finding 2)", () => {
+    const rec = new CastRecorder({ cols: 80, rows: 24, startedAt: 0 });
+    const before = process.memoryUsage().heapUsed;
+    // The review's case: "move 9,999 columns right, write x", 2,000 times. Before the fix: +624 MB of heap.
+    rec.output("\x1b[9999Cx".repeat(2000), 1);
+    expect(process.memoryUsage().heapUsed - before).toBeLessThan(16 * 1024 * 1024);
+    // As a terminal shows it: the cursor stops at the last column, and each x overwrites the one before.
+    expect(rec.transcript()).toBe(`${" ".repeat(79)}x\n`);
+    expect(rec.all.text()).toBe(`${" ".repeat(79)}x`);
+  });
+
+  it("a line wraps at the session's width, and the terminal keeps its last lines, hidden output included (pass 6 review finding 2)", () => {
+    const rec = new CastRecorder({ cols: 80, rows: 24, startedAt: 0 });
+    rec.output(`${"a".repeat(100)}é😀\r\n`, 1);
+    expect(rec.transcript()).toBe(`${"a".repeat(80)}\n${"a".repeat(20)}é😀\n`);
+    // An emoji takes two columns and is never cut in two at the wrap.
+    rec.output(`${"b".repeat(79)}😀\r\n`, 2);
+    expect(rec.transcript().split("\n").slice(2, 4)).toEqual(["b".repeat(79), "😀"]);
+    // Hidden output is not recorded, but the terminal (for Waits) keeps only its last 500 lines of 80 characters.
+    rec.hidden = true;
+    rec.output("y".repeat(1_000_000), 3);
+    rec.output("\x1b[9999Cz\r\n".repeat(20_000), 4);
+    const lines = rec.all.text().split("\n");
+    expect(lines.length).toBeLessThanOrEqual(501);
+    expect(Math.max(...lines.map((l) => l.length))).toBeLessThanOrEqual(80);
+    expect(rec.all.lastLine()).toBe(`${" ".repeat(79)}z`);
+  });
+
   it("v2 validation refuses a time that goes back, another version, an exit event and escapes the player does not draw", () => {
     const head = JSON.stringify({ version: 2, width: 80, height: 24 });
     expect(validateCast(`${head}\n[1,"o","a"]\n[0.5,"o","b"]\n`, 2)).toEqual({ ok: false, error: "line 3: the time goes back (0.5 after 1)" });
