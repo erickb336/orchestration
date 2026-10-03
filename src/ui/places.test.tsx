@@ -22,7 +22,7 @@ describe("the header's places", () => {
   it("with a draft and the factory running: both places, each a link to where it says", () => {
     const { s } = blueprintScene();
     const { html, text } = places(s);
-    expect(text).toBe("Vision · draft, 3 changes, 1 open item Factory running · 1 agent");
+    expect(text).toBe("Vision · draft, 3 changes Factory running · 1 agent");
     expect(html).toContain('href="#/vision" title="3 changes in the draft wait for your Lock in. 1 open item stays in the draft until you settle it. The factory builds from the version in force."');
     expect(html).toContain('href="#/tasks" title="1 agent working. Open the tasks."');
     // The draft waits for you (amber); the factory's agents work (blue, pulsing).

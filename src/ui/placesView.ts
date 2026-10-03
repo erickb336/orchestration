@@ -14,10 +14,13 @@ export interface PlaceWords {
   title: string;
 }
 
-/** "Vision · draft, 3 changes", "Vision · draft, 1 open item", "Vision · locked in 2m ago" or "Vision · no draft". */
+/**
+ * "Vision · draft, 3 changes", "Vision · draft, 1 open item", "Vision · locked in 2m ago" or "Vision · no draft". With
+ * changes and open items, the changes (what a Lock in puts into force); the title names both.
+ */
 export function visionPlaceWords(p: VisionPlace, now = Date.now()): PlaceWords {
   if (p.state === "draft") {
-    const what = [p.changes ? count(p.changes, "change") : "", p.openItems ? count(p.openItems, "open item") : ""].filter(Boolean).join(", ");
+    const what = p.changes ? count(p.changes, "change") : count(p.openItems, "open item");
     const title = [p.changes ? `${count(p.changes, "change")} in the draft ${p.changes === 1 ? "waits" : "wait"} for your Lock in.` : "", p.openItems ? `${count(p.openItems, "open item")} ${p.openItems === 1 ? "stays" : "stay"} in the draft until you settle ${p.openItems === 1 ? "it" : "them"}.` : ""]
       .filter(Boolean)
       .join(" ");

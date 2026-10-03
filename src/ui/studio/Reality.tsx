@@ -10,7 +10,7 @@ import { Card, Chip, EmptyState, StatePill, Tabs } from "../kit";
 import { useStore } from "../store";
 import { ArtifactPreview, TermsTable } from "./Preview";
 import { NO_EVIDENCE, STATUS_TONE, STATUS_WORDS, builtEvidence, ruleCell, rulesLine, statusWhy, taskState, taskWords, type BuiltEvidence } from "./realityView";
-import { deviceOptions, showKind } from "./studioView";
+import { deviceOptions, showKind, type ScreenDevice } from "./studioView";
 import "./studio.css";
 
 /** The two views of Results: the delivered work, and Design and reality. Each is its own address. */
@@ -122,7 +122,7 @@ export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
             </p>
             <div className="st-stage">
               {artifact ? (
-                <ArtifactPreview artifact={artifact} variant={v.item.variant} device={deviceOptions(state.project.devices, artifact)[0] ?? "desktop"} port={service.prototypePort} />
+                <ArtifactPreview artifact={artifact} variant={v.item.variant} device={previewDevice(deviceOptions(state.project.devices, artifact))} port={service.prototypePort} />
               ) : (
                 <EmptyState title="The design is not here.">The studio has no version {v.item.version} of it.</EmptyState>
               )}
@@ -150,6 +150,12 @@ export function ItemDetail({ view: v }: { view: ItemFactoryView }) {
       )}
     </Card>
   );
+}
+
+/** The device to show a design on: Mobile in a phone-sized window when the design has it, as the studio does; else its first. */
+function previewDevice(options: ScreenDevice[]): ScreenDevice {
+  const narrow = typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 600px)").matches;
+  return narrow && options.includes("mobile") ? "mobile" : (options[0] ?? "desktop");
 }
 
 /** What the factory captured of the built part, or the slot that says it has captured nothing yet. */
